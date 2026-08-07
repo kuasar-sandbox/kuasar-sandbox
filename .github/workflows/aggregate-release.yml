@@ -1,0 +1,114 @@
+name: Aggregate Release
+run-name: Aggregate ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Aggregate version in release-vX.Y.Z or release-vX.Y.Z-preview.YYYYMMDD form
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aggregate-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact: ${{ steps.request.outputs.artifact }}
+      version: ${{ steps.request.outputs.version }}
+    steps:
+      - name: Check out exact platform source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate release request
+        id: request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = refs/heads/main ] \
+            || { echo "Aggregate Release must run from platform main" >&2; exit 1; }
+          [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
+          bash release/publish-release.sh check "$VERSION"
+          release/selection.py "$GITHUB_WORKSPACE" "$VERSION" > selection.tsv
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "artifact=aggregate-stage-${VERSION}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
+      - name: Create component release read token
+        id: source-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: accelerator,connector,guest-runtime,orchestrator,sandboxer
+          permission-contents: read
+
+      - name: Fetch and assemble exact release assets
+        env:
+          GH_TOKEN: ${{ steps.source-token.outputs.token }}
+          SOURCE_DATE_EPOCH: ${{ github.event.repository.updated_at }}
+          VERSION: ${{ steps.request.outputs.version }}
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH=$(git show -s --format=%ct "$GITHUB_SHA")
+          export SOURCE_DATE_EPOCH
+          release/aggregate-release.sh fetch "$VERSION" fetched
+          release/aggregate-release.sh assemble "$VERSION" fetched aggregate-stage
+
+      - name: Upload exact aggregate stage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.request.outputs.artifact }}
+          path: aggregate-stage
+          if-no-files-found: error
+          retention-days: 7
+
+  exact-asset-bms:
+    needs: prepare
+    permissions:
+      contents: read
+    uses: ./.github/workflows/bms-e2e.yml
+    with:
+      mode: exact-assets
+      release_version: ${{ needs.prepare.outputs.version }}
+      release_bundle_artifact: ${{ needs.prepare.outputs.artifact }}
+      run_mode: full-e2e
+
+  publish:
+    needs: [prepare, exact-asset-bms]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: Check out exact publish tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download BMS-validated aggregate stage
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.prepare.outputs.artifact }}
+          path: aggregate-stage
+
+      - name: Publish aggregate release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          [ "$(git rev-parse HEAD)" = "$GITHUB_SHA" ]
+          release/publish-release.sh publish "$VERSION" "$GITHUB_SHA" aggregate-stage
