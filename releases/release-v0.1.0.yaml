@@ -1,0 +1,8 @@
+version: release-v0.1.0
+components:
+  accelerator: v0.1.0
+  connector: v0.1.0
+  sandboxer: v0.1.0
+  orchestrator: v0.1.0
+  runtime: runtime-v0.1.0
+  vmlinux: vmlinux-v0.1.0

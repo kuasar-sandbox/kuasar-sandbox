@@ -1,0 +1,58 @@
+name: Platform BMS E2E
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: Type run-full-e2e or run-working-set-perf
+        required: true
+        type: string
+      run_mode:
+        description: Trusted BMS workload
+        required: true
+        default: full-e2e
+        type: choice
+        options: [full-e2e, working-set-perf]
+      pull_request_number:
+        description: Pull request number
+        required: true
+        type: string
+      candidate_sha:
+        description: Exact PR integration commit
+        required: true
+        type: string
+      base_sha:
+        description: Integration commit first parent
+        required: true
+        type: string
+      head_sha:
+        description: Integration commit second parent
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  bms:
+    if: >-
+      (github.event_name != 'pull_request' ||
+       (!github.event.pull_request.draft && github.event.pull_request.head.repo.full_name == github.repository)) &&
+      (github.event_name != 'workflow_dispatch' ||
+       inputs.confirm == (inputs.run_mode == 'working-set-perf' && 'run-working-set-perf' || 'run-full-e2e'))
+    uses: ./.github/workflows/bms-e2e.yml
+    with:
+      mode: source
+      candidate_repository: ${{ github.repository }}
+      pull_request_number: ${{ github.event_name == 'workflow_dispatch' && inputs.pull_request_number || github.event.pull_request.number || '0' }}
+      candidate_sha: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
+      base_sha: ${{ github.event_name == 'workflow_dispatch' && inputs.base_sha || github.event.pull_request.base.sha || github.sha }}
+      head_sha: ${{ github.event_name == 'workflow_dispatch' && inputs.head_sha || github.event.pull_request.head.sha || github.sha }}
+      run_mode: ${{ github.event_name == 'workflow_dispatch' && inputs.run_mode || 'full-e2e' }}
+    secrets:
+      KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
