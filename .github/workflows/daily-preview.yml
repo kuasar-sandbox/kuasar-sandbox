@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 190
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Check out preview controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -37,8 +37,8 @@ jobs:
         id: release-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
-          client-id: ${{ vars.KUASAR_RELEASE_APP_CLIENT_ID }}
-          private-key: ${{ secrets.KUASAR_RELEASE_APP_PRIVATE_KEY }}
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
           owner: kuasar-sandbox
           repositories: accelerator,connector,guest-runtime,orchestrator,platform,sandboxer
           permission-actions: write
@@ -47,6 +47,7 @@ jobs:
       - name: Converge component and aggregate previews
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
+          PLATFORM_TOKEN: ${{ github.token }}
           PREVIEW_POLL_SECONDS: "120"
           PREVIEW_WAIT_SECONDS: "10800"
           REQUESTED_DATE: ${{ inputs.date }}

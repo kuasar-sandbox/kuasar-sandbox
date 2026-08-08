@@ -89,6 +89,11 @@ resolve_selection() {
   done < "$output"
 }
 
+previous_release() {
+  [ "$#" -eq 2 ] || release_fail "usage: previous_release <platform-root> <release-version>"
+  python3 "$1/release/selection.py" "$1" "$2" --previous
+}
+
 is_preview() {
   [[ "$1" == *-preview.* ]]
 }
