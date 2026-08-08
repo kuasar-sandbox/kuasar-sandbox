@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: aggregate-release-${{ inputs.version }}
@@ -79,12 +80,15 @@ jobs:
     needs: prepare
     permissions:
       contents: read
+      pull-requests: read
     uses: ./.github/workflows/bms-e2e.yml
     with:
       mode: exact-assets
       release_version: ${{ needs.prepare.outputs.version }}
       release_bundle_artifact: ${{ needs.prepare.outputs.artifact }}
       run_mode: full-e2e
+    secrets:
+      KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
 
   publish:
     needs: [prepare, exact-asset-bms]
