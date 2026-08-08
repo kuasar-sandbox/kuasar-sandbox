@@ -10,11 +10,16 @@ fetch_components() {
   [ "$#" -eq 2 ] || release_fail "usage: aggregate-release.sh fetch <release-version> <output-dir>"
   local version="$1" output="$2"
   assert_safe_output "$output"
-  mkdir -p "$output/components"
+  mkdir -p "$output/components" "$output/updates"
   resolve_selection "$ROOT" "$version" "$output/selection.tsv"
+  local previous
+  previous="$(previous_release "$ROOT" "$version")"
+  resolve_selection "$ROOT" "$previous" "$output/previous-selection.tsv"
 
-  local unit tag repository archive release_state expected_prerelease unit_dir
+  local unit tag previous_tag repository archive release_state expected_prerelease unit_dir
   while IFS=$'\t' read -r unit tag; do
+    previous_tag="$(awk -F '\t' -v unit="$unit" '$1 == unit {print $2}' \
+      "$output/previous-selection.tsv")"
     repository="$(component_repository "$unit")"
     archive="$(component_archive "$unit" "$tag")"
     unit_dir="$output/components/$unit"
@@ -42,7 +47,49 @@ fetch_components() {
       verify_github_asset "$unit_dir/$name" "$asset"
     done
     validate_component_download "$unit" "$tag" "$unit_dir"
+    write_component_updates "$unit" "$repository" "$previous_tag" "$tag" \
+      "$output/updates/$unit.md"
   done < "$output/selection.tsv"
+}
+
+write_component_updates() {
+  local unit="$1" repository="$2" previous_tag="$3" current_tag="$4" output="$5"
+  if [ "$previous_tag" = "$current_tag" ]; then
+    printf "Selected version unchanged: \`%s\`.\n" "$current_tag" > "$output"
+    return
+  fi
+
+  local comparison status count
+  comparison="$(github_api "repos/$repository/compare/$previous_tag...$current_tag")"
+  status="$(jq -er '.status | select(. == "ahead" or . == "behind" or . == "diverged" or . == "identical")' \
+    <<< "$comparison")" || release_fail "cannot classify $unit update comparison"
+  count="$(jq -er '.total_commits' <<< "$comparison")"
+  {
+    printf "Selected version: \`%s\` → \`%s\`.\n\n" "$previous_tag" "$current_tag"
+    case "$status" in
+      identical)
+        printf 'The version changed without additional repository commits.\n'
+        ;;
+      behind)
+        printf 'The selected version is behind the previous selection; this is a version rollback, not a forward update.\n'
+        ;;
+      ahead|diverged)
+        if [ "$count" -eq 0 ]; then
+          printf 'No repository commits are unique to the selected version.\n'
+        else
+          jq -r '.commits[] |
+            ((.commit.message | split("\n")[0] | gsub("`"; "\u0027")) as $subject |
+             "- `" + (.sha[0:12]) + "` " + $subject + " ([commit](" + .html_url + "))")' \
+            <<< "$comparison"
+          if [ "$count" -gt "$(jq '.commits | length' <<< "$comparison")" ]; then
+            printf -- '- GitHub truncated the commit list; use the full comparison below.\n'
+          fi
+        fi
+        ;;
+    esac
+    printf '\n[Full comparison](https://github.com/%s/compare/%s...%s)\n' \
+      "$repository" "$previous_tag" "$current_tag"
+  } > "$output"
 }
 
 validate_component_download() {
@@ -89,12 +136,17 @@ assemble_release() {
   [ -d "$fetched/components" ] || release_fail "fetched component directory is missing"
   assert_safe_output "$output"
 
-  local work expected_selection platform_bundle platform_name
+  local work expected_selection expected_previous_selection previous platform_bundle platform_name
   work="$(mktemp -d)"
   expected_selection="$work/selection.tsv"
+  expected_previous_selection="$work/previous-selection.tsv"
   resolve_selection "$ROOT" "$version" "$expected_selection"
+  previous="$(previous_release "$ROOT" "$version")"
+  resolve_selection "$ROOT" "$previous" "$expected_previous_selection"
   cmp -s "$expected_selection" "$fetched/selection.tsv" \
     || release_fail "fetched component selection does not match platform main"
+  cmp -s "$expected_previous_selection" "$fetched/previous-selection.tsv" \
+    || release_fail "fetched previous selection does not match platform main"
 
   platform_bundle="$work/platform-bundle"
   "$ROOT/release/package-platform.sh" package "$version" "$platform_bundle"
@@ -113,19 +165,27 @@ assemble_release() {
   find "$output/assets" -maxdepth 1 -type f -printf '%f\n' \
     | LC_ALL=C sort > "$work/asset-names"
   (cd "$output/assets" && xargs sha256sum < "$work/asset-names") > "$output/assets/SHA256SUMS"
-  write_release_notes "$version" "$expected_selection" "$output/release-notes.md"
+  write_release_notes "$version" "$previous" "$expected_selection" \
+    "$fetched/updates" "$output/release-notes.md"
   validate_bundle "$version" "$output"
   rm -rf "$work"
 }
 
 write_release_notes() {
-  local version="$1" selection="$2" output="$3"
+  local version="$1" previous="$2" selection="$3" updates="$4" output="$5"
   {
     printf 'Kuasar Sandbox %s.\n\n' "$version"
     printf 'This aggregate contains the platform documentation/test package and the exact component archives validated together on BMS.\n\n'
+    printf "Previous aggregate selection: \`%s\`.\n\n" "$previous"
     printf 'Component versions:\n\n'
     while IFS=$'\t' read -r unit tag; do
       printf -- "- \`%s\`: \`%s\`\n" "$unit" "$tag"
+    done < "$selection"
+    printf '\nComponent updates:\n'
+    while IFS=$'\t' read -r unit _; do
+      [ -s "$updates/$unit.md" ] || release_fail "component update notes are missing: $unit"
+      printf '\n### %s\n\n' "$unit"
+      cat "$updates/$unit.md"
     done < "$selection"
     printf "\nVerify every explicit asset with \`SHA256SUMS\`. GitHub provides source archives automatically for this tag.\n"
   } > "$output"
@@ -154,6 +214,11 @@ validate_bundle() {
   resolve_selection "$ROOT" "$version" "$expected_selection"
   cmp -s "$expected_selection" "$bundle/selection.tsv" \
     || release_fail "aggregate selection does not match platform main"
+  local unit
+  for unit in "${RELEASE_UNITS[@]}"; do
+    grep -Fqx "### $unit" "$bundle/release-notes.md" \
+      || release_fail "aggregate release notes are missing $unit updates"
+  done
   expected_asset_names "$version" "$expected_selection" | LC_ALL=C sort > "$expected_names"
   find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$actual_names"
   cmp -s "$expected_names" "$actual_names" \
@@ -163,7 +228,7 @@ validate_bundle() {
   "$ROOT/release/package-platform.sh" validate "$version" \
     "$bundle/assets/$(platform_archive "$version")"
 
-  local seen unit tag archive
+  local seen tag archive
   seen="$(mktemp)"
   : > "$seen"
   validate_tar_paths "$bundle/assets/$(platform_archive "$version")" "$seen"
