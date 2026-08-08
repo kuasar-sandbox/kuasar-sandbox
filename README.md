@@ -32,7 +32,7 @@ ci/bms/           BMS 辅助工具与源码缓存维护
 ci/native-cache/  vmlinux、erofs、envd、RocksDB、Cloud Hypervisor 缓存
 ci/runner/        自托管 BMS runner 部署资料
 release/          版本解析、打包、聚合、发布和每日协调器
-releases/         正式聚合版本选择与每日 preview 基线
+releases/         正式及 preview 聚合版本选择与每日 preview 基线
 .github/workflows/唯一的可复用 BMS、聚合发布和每日 preview 工作流
 ```
 
@@ -73,12 +73,14 @@ make -C platform test-perf-tools
 - Guest kernel: `vmlinux-vX.Y.Z`。
 
 本仓只发布聚合版本 `release-vX.Y.Z`。聚合版本可选择不同的组件版本,正式版本选择写入
-`releases/release-vX.Y.Z.yaml`;每日 preview 由 `releases/daily-preview.yaml` 的正式基线和
-上海日期确定性派生,不为每天的版本修改 `main`。
+`releases/release-vX.Y.Z.yaml`;每日协调器先根据组件仓是否存在新提交生成并提交
+`releases/release-vX.Y.Z-preview.YYYYMMDD.yaml`,再按该清单收敛组件与聚合发布。每份清单
+显式记录相对的上一聚合版本及六个组件版本。
 
 组件 Release 的显式资产只有目标 archive 与 `SHA256SUMS`。当前 x86_64 聚合 Release
 精确包含 platform 包、六个组件 archive 和统一 `SHA256SUMS`,不发布项目生成的 release
-metadata JSON,也不重复上传 GitHub 已自动提供的源码归档。
+metadata JSON,也不重复上传 GitHub 已自动提供的源码归档。版本选择 YAML 只在代码库维护,
+既不是 Release 资产,也不进入 platform 包。
 
 人工收敛一个已经配置的聚合版本:
 

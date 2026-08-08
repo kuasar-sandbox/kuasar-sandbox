@@ -144,18 +144,161 @@ ensure_component() {
   ensure_workflow "$repository" "$workflow" "Release $tag" "${args[@]}"
 }
 
+unit_release_pattern() {
+  case "$1" in
+    accelerator|connector|sandboxer|orchestrator)
+      printf '%s\n' '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$'
+      ;;
+    runtime)
+      printf '%s\n' '^runtime-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$'
+      ;;
+    vmlinux)
+      printf '%s\n' '^vmlinux-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$'
+      ;;
+    *) release_fail "unknown release unit: $1" ;;
+  esac
+}
+
+preview_component_tag() {
+  local unit="$1" stable_component="$2" date="$3"
+  case "$unit" in
+    accelerator|connector|sandboxer|orchestrator)
+      printf '%s-preview.%s\n' "$stable_component" "$date"
+      ;;
+    runtime|vmlinux)
+      printf '%s-%s-preview.%s\n' "$unit" "$stable_component" "$date"
+      ;;
+    *) release_fail "unknown release unit: $unit" ;;
+  esac
+}
+
+latest_component_release() {
+  local unit="$1" repository="$2" output="$3" pattern
+  pattern="$(unit_release_pattern "$unit")"
+  gh api --paginate --slurp "repos/$repository/releases?per_page=100" \
+    | jq --arg pattern "$pattern" '
+        [ .[][]
+          | select(.draft == false and .published_at != null)
+          | select(.tag_name | test($pattern)) ]
+        | sort_by(.published_at)
+        | last // empty
+      ' > "$output"
+  [ -s "$output" ] && [ "$(cat "$output")" != null ]
+}
+
+select_preview_unit() {
+  local unit="$1" repository="$2" candidate="$3" output="$4"
+  local state="$TMP/select-candidate-$unit.json"
+  if release_exists "$repository" "$candidate" "$state"; then
+    validate_component_release_state "$unit" "$candidate" "$state"
+    printf '%s\n' "$candidate" > "$output"
+    return
+  fi
+
+  local latest="$TMP/select-latest-$unit.json"
+  if ! latest_component_release "$unit" "$repository" "$latest"; then
+    printf '%s\n' "$candidate" > "$output"
+    return
+  fi
+  local latest_tag head comparison status
+  latest_tag="$(jq -er '.tag_name' "$latest")"
+  validate_component_release_state "$unit" "$latest_tag" "$latest"
+  head="$(github_api "repos/$repository/commits/main" | jq -er '.sha')"
+  comparison="$(github_api "repos/$repository/compare/$latest_tag...$head")"
+  status="$(jq -er '.status' <<< "$comparison")"
+  case "$status" in
+    identical)
+      printf '%s\n' "$latest_tag" > "$output"
+      ;;
+    ahead)
+      printf '%s\n' "$candidate" > "$output"
+      ;;
+    behind|diverged)
+      release_fail "$repository main is $status relative to latest release $latest_tag"
+      ;;
+    *) release_fail "cannot classify $repository main against $latest_tag" ;;
+  esac
+}
+
+latest_platform_aggregate() {
+  local output="$1"
+  gh api --paginate --slurp 'repos/kuasar-sandbox/platform/releases?per_page=100' \
+    | jq '
+        [ .[][]
+          | select(.draft == false and .published_at != null)
+          | select(.tag_name | test("^release-v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-preview\\.[0-9]{8})?$")) ]
+        | sort_by(.published_at)
+        | last // empty
+      ' > "$output"
+  [ -s "$output" ] && [ "$(cat "$output")" != null ]
+}
+
+persist_preview_manifest() {
+  local version="$1" manifest="$2" path="releases/$version.yaml"
+  [ -n "${PLATFORM_TOKEN:-}" ] \
+    || release_fail "PLATFORM_TOKEN is required to commit generated preview manifests"
+  local request="$TMP/manifest-request.json" response="$TMP/manifest-response.json"
+  jq -n \
+    --arg message "release: select daily preview ${version#release-}" \
+    --arg content "$(base64 -w0 "$manifest")" \
+    --arg branch main \
+    '{message: $message, content: $content, branch: $branch}' > "$request"
+  if GH_TOKEN="$PLATFORM_TOKEN" gh api --method PUT \
+      "repos/kuasar-sandbox/platform/contents/$path" --input "$request" > "$response"; then
+    echo "==> committed $path at $(jq -er '.commit.sha' "$response")"
+    return
+  fi
+
+  local remote="$TMP/remote-manifest"
+  GH_TOKEN="$PLATFORM_TOKEN" gh api "repos/kuasar-sandbox/platform/contents/$path?ref=main" \
+    --jq .content | tr -d '\n' | base64 -d > "$remote"
+  cmp -s "$manifest" "$remote" \
+    || release_fail "$path was concurrently committed with a different selection"
+  echo "==> reuse concurrently committed $path"
+}
+
+generate_preview_manifest() {
+  local stable_component="$1" date="$2" version="$3"
+  local previous_state="$TMP/previous-platform.json"
+  latest_platform_aggregate "$previous_state" \
+    || release_fail "cannot generate $version without a published previous platform aggregate"
+  local previous
+  previous="$(jq -er '.tag_name' "$previous_state")"
+  resolve_selection "$ROOT" "$previous" "$TMP/previous-selection-check.tsv"
+
+  local unit repository candidate selected
+  for unit in "${RELEASE_UNITS[@]}"; do
+    repository="$(component_repository "$unit")"
+    candidate="$(preview_component_tag "$unit" "$stable_component" "$date")"
+    selected="$TMP/selected-$unit"
+    select_preview_unit "$unit" "$repository" "$candidate" "$selected"
+  done
+
+  local manifest="$ROOT/releases/$version.yaml"
+  {
+    printf 'version: %s\n' "$version"
+    printf 'previous: %s\n' "$previous"
+    printf 'components:\n'
+    for unit in "${RELEASE_UNITS[@]}"; do
+      printf '  %s: %s\n' "$unit" "$(cat "$TMP/selected-$unit")"
+    done
+  } > "$manifest"
+  resolve_selection "$ROOT" "$version" "$TMP/generated-selection-check.tsv"
+  persist_preview_manifest "$version" "$manifest"
+}
+
 discover_pending_date() {
-  local stable_component="$1" today="$2" runs="$TMP/runs.json" dates="$TMP/dates"
-  gh api --paginate --slurp \
-    "repos/kuasar-sandbox/accelerator/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100" \
-    > "$runs"
-  jq -r --arg prefix "Release $stable_component-preview." '
-      .[].workflow_runs[].display_title
-      | select(startswith($prefix))
-      | sub("^Release .*\\."; "")
-      | select(test("^[0-9]{8}$"))
-    ' "$runs" | LC_ALL=C sort -u > "$dates"
-  local date state
+  local stable_component="$1" today="$2" dates="$TMP/dates"
+  : > "$dates"
+  local manifest version date state
+  for manifest in "$ROOT"/releases/release-"$stable_component"-preview.*.yaml; do
+    [ -f "$manifest" ] || continue
+    version="$(basename "$manifest" .yaml)"
+    date="${version##*.}"
+    [[ "$date" =~ ^[0-9]{8}$ ]] || release_fail "invalid preview manifest name: $manifest"
+    printf '%s\n' "$date" >> "$dates"
+  done
+  LC_ALL=C sort -u -o "$dates" "$dates"
   while IFS= read -r date; do
     [ "$date" -le "$today" ] || continue
     if ! release_exists kuasar-sandbox/platform "release-$stable_component-preview.$date" "$TMP/pending-release.json"; then
@@ -249,6 +392,9 @@ main() {
   fi
   AGGREGATE_VERSION="release-$stable_component-preview.$date"
   validate_aggregate_version "$AGGREGATE_VERSION"
+  if [ ! -f "$ROOT/releases/$AGGREGATE_VERSION.yaml" ]; then
+    generate_preview_manifest "$stable_component" "$date" "$AGGREGATE_VERSION"
+  fi
   SELECTION="$TMP/selection.tsv"
   resolve_selection "$ROOT" "$AGGREGATE_VERSION" "$SELECTION"
   SANDBOXER_TAG="$(awk -F '\t' '$1 == "sandboxer" {print $2}' "$SELECTION")"

@@ -50,39 +50,40 @@ def read_simple_yaml(path: pathlib.Path) -> dict[str, object]:
     return result
 
 
-def resolve(root: pathlib.Path, version: str) -> dict[str, str]:
-    match = AGGREGATE_RE.fullmatch(version)
-    if match is None:
+def resolve(root: pathlib.Path, version: str) -> tuple[str, dict[str, str]]:
+    if AGGREGATE_RE.fullmatch(version) is None:
         fail("invalid aggregate version")
-    base, preview_date = match.groups()
-    if preview_date:
-        suffix = f"-preview.{preview_date}"
-        return {
-            "accelerator": f"{base}{suffix}",
-            "connector": f"{base}{suffix}",
-            "sandboxer": f"{base}{suffix}",
-            "orchestrator": f"{base}{suffix}",
-            "runtime": f"runtime-{base}{suffix}",
-            "vmlinux": f"vmlinux-{base}{suffix}",
-        }
-
     path = root / "releases" / f"{version}.yaml"
     if not path.is_file():
-        fail(f"stable selection not found: {path}")
+        path = root / "releases" / "history" / f"{version}.yaml"
+    if not path.is_file():
+        fail(f"release manifest not found: {path}")
     config = read_simple_yaml(path)
+    if set(config) != {"version", "previous", "components"}:
+        fail(f"top-level keys in {path} must be exactly: version, previous, components")
     if config.get("version") != version:
         fail(f"version in {path} does not match {version}")
+    previous = config.get("previous")
+    if not isinstance(previous, str) or AGGREGATE_RE.fullmatch(previous) is None:
+        fail(f"previous in {path} must be an aggregate version")
+    if previous == version:
+        fail(f"previous in {path} must differ from version")
     components = config["components"]
     assert isinstance(components, dict)
     if set(components) != set(UNITS):
         fail(f"components in {path} must be exactly: {', '.join(UNITS)}")
-    return {unit: str(components[unit]) for unit in UNITS}
+    return previous, {unit: str(components[unit]) for unit in UNITS}
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        fail("usage: selection.py <platform-root> <release-version>")
-    selected = resolve(pathlib.Path(sys.argv[1]), sys.argv[2])
+    if len(sys.argv) not in (3, 4):
+        fail("usage: selection.py <platform-root> <release-version> [--previous]")
+    if len(sys.argv) == 4 and sys.argv[3] != "--previous":
+        fail("usage: selection.py <platform-root> <release-version> [--previous]")
+    previous, selected = resolve(pathlib.Path(sys.argv[1]), sys.argv[2])
+    if len(sys.argv) == 4:
+        print(previous)
+        return
     for unit in UNITS:
         print(f"{unit}\t{selected[unit]}")
 
