@@ -69,12 +69,13 @@ make -C platform test-release-tools
 
 ## 3. 配置
 
-### 3.1 正式版本选择
+### 3.1 聚合版本选择
 
-正式聚合版本选择是 `platform/main` 中的普通源码配置:
+正式和 preview 聚合版本选择都是 `platform/main` 中的普通源码配置:
 
 ```yaml
 version: release-v0.2.1
+previous: release-v0.2.0
 components:
   accelerator: v0.2.0
   connector: v0.1.3
@@ -84,12 +85,16 @@ components:
   vmlinux: vmlinux-v0.1.4
 ```
 
-文件路径为 `releases/release-v0.2.1.yaml`。解析器要求六个 release unit 恰好各出现一次,
+文件路径为 `releases/release-v0.2.1.yaml`。`previous` 显式指定用于生成更新说明的上一
+聚合版本;聚合时会同时解析当前清单和它直接引用的上一清单。解析器要求六个 release unit
+恰好各出现一次,
 并分别校验版本前缀。文件不声明架构:架构是资产维度,同一个聚合版本必须包含平台当前支持
 的全部目标。当前完整构建和 BMS 只覆盖 Linux x86_64,因此当前 Release 只发布该目标。
 
-preview 不生成每日版本选择文件。`release-v0.1.0-preview.20260808` 由
-`releases/daily-preview.yaml` 的 `release-v0.1.0` 基线确定性派生六个同日 tag。
+每日协调器同样先生成 `releases/release-vX.Y.Z-preview.YYYYMMDD.yaml`,通过 GitHub Contents
+API 将它作为普通提交写入 `platform/main`,再触发任何组件或聚合 workflow。清单一旦提交就
+冻结本次选择,恢复任务只重用它,不会重新计算。清单只在代码库维护:不作为 GitHub Release
+资产发布,不写入 platform archive,也不复制进聚合 bundle。
 
 ### 3.2 GitHub App
 
@@ -107,7 +112,8 @@ preview 不生成每日版本选择文件。`release-v0.1.0-preview.20260808` �
 
 release-controller token 只存在于 GitHub-hosted 协调 job。自托管 BMS 不接收仓库写 token;
 源码只读 token 在执行候选代码前显式撤销。组件和聚合 publish job 只使用当前仓的短期
-`GITHUB_TOKEN` 和 `contents:write`。
+`GITHUB_TOKEN` 和 `contents:write`。每日协调 job 仅用 platform 自身的短期 `GITHUB_TOKEN`
+把生成的版本选择清单提交到 `platform/main`,release-controller App 不获得内容写权限。
 
 ## 4. 组件资产契约
 
@@ -164,8 +170,8 @@ SHA256SUMS
 ```
 
 六个组件 archive 从组件 Release 按字节复制,不改名、不重压缩。聚合层丢弃各组件独立
-`SHA256SUMS`,生成覆盖 platform 包与六个 archive 的统一校验文件。Release notes 列出
-所选组件 tag,但不作为机器清单。
+`SHA256SUMS`,生成覆盖 platform 包与六个 archive 的统一校验文件。Release notes 列出所选
+组件 tag,并按清单中的 `previous` 汇总六个组件的 commit 更新清单,但不作为机器清单。
 
 platform 包使用确定性 tar 规则,只包含 `docs/` 与可交付 `test/`;不包含组件二进制、版本
 选择、workflow、runner 配置、cache 或凭据。它没有独立 tag 或独立 Release。
@@ -198,9 +204,14 @@ platform 只保留两个 schedule:
 - 02:13 Asia/Shanghai:主协调;
 - 05:13 Asia/Shanghai:恢复协调。
 
-协调器先并行收敛 accelerator、connector、sandboxer、orchestrator 和 vmlinux; sandboxer
-发布后再收敛 runtime;六个组件完成后触发 aggregate。每一步根据 Release 和 workflow run
-状态幂等处理:
+协调器首先比较每个 release unit 的最新已发布 tag 与仓库 `main`。如果该 unit 自上次发布
+以来有新提交,就在当日清单中选择新的 preview tag;没有新提交时,复用其最新 preview 或正式
+tag。runtime 与 vmlinux 是 `guest-runtime` 仓的两个独立 release unit,各自寻找本版本线的
+最新 tag 并与同一个仓库 `main` 比较。选择结果和显式 `previous` 先提交到 `platform/main`。
+
+清单冻结后,协调器并行收敛 accelerator、connector、sandboxer、orchestrator 和 vmlinux;
+sandboxer 发布后再收敛 runtime;六个组件完成后触发 aggregate。每一步根据 Release 和
+workflow run 状态幂等处理:
 
 - Release 完整存在:复用;
 - run queued/in progress:继续等待;
@@ -209,9 +220,10 @@ platform 只保留两个 schedule:
 - 从未 dispatch:只创建一次 workflow dispatch;
 - aggregate Release 已存在:成功结束。
 
-恢复入口会从已有组件 workflow title 找到尚未形成聚合 Release 的最早 preview 日期,
-因此跨日 pending 不会因当天日期变化而遗失。任一正式组件已经发布但正式聚合尚未完成时,
-每日 preview 暂停,避免正式发布窗口继续创建新 preview;正式聚合发布后 daily 直接成功退出。
+恢复入口扫描代码库中已有但尚未形成 platform Release 的顶层 preview 清单,找到最早日期,
+因此跨日 pending 不会因当天日期变化而遗失,也不会从临时 workflow 状态重建选择。任一正式
+组件已经发布但正式聚合尚未完成时,每日 preview 暂停,避免正式发布窗口继续创建新 preview;
+正式聚合发布后 daily 直接成功退出。
 
 ## 9. 可靠性与安全
 

@@ -55,6 +55,8 @@ def resolve(root: pathlib.Path, version: str) -> tuple[str, dict[str, str]]:
         fail("invalid aggregate version")
     path = root / "releases" / f"{version}.yaml"
     if not path.is_file():
+        path = root / "releases" / "history" / f"{version}.yaml"
+    if not path.is_file():
         fail(f"release manifest not found: {path}")
     config = read_simple_yaml(path)
     if set(config) != {"version", "previous", "components"}:

@@ -26,7 +26,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 190
     permissions:
-      contents: read
+      contents: write
     steps:
       - name: Check out preview controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -47,6 +47,7 @@ jobs:
       - name: Converge component and aggregate previews
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
+          PLATFORM_TOKEN: ${{ github.token }}
           PREVIEW_POLL_SECONDS: "120"
           PREVIEW_WAIT_SECONDS: "10800"
           REQUESTED_DATE: ${{ inputs.date }}

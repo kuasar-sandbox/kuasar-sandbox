@@ -40,6 +40,9 @@ SOURCE_DATE_EPOCH=1700000000 \
 [ "$(find "$TMP/bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 8 ] \
   || release_fail "aggregate bundle must contain exactly eight assets"
 [ ! -e "$TMP/bundle/release.json" ] || release_fail "aggregate bundle contains release.json"
+if find "$TMP/bundle/assets" -maxdepth 1 -type f -name 'release-*.yaml' | grep -q .; then
+  release_fail "aggregate assets contain a release manifest"
+fi
 for unit in "${RELEASE_UNITS[@]}"; do
   grep -Fqx "### $unit" "$TMP/bundle/release-notes.md" \
     || release_fail "aggregate release notes omit $unit updates"
@@ -47,6 +50,10 @@ done
 if tar -tzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
   | grep -E '(^|/)release\.json$|(^|/)release/[^/]+\.json$' >/dev/null; then
   release_fail "platform package contains release metadata JSON"
+fi
+if tar -tzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
+  | grep -E '(^|/)releases/release-v[^/]+\.yaml$' >/dev/null; then
+  release_fail "platform package contains a release manifest"
 fi
 
 "$ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/bundle" "$TMP/install"
@@ -118,5 +125,164 @@ grep -Fqx 'workflow run release.yml --repo kuasar-sandbox/accelerator --ref main
   || release_fail "preview coordinator did not dispatch the expected accelerator release"
 grep -Fq 'preview remains pending' "$TMP/coordinator.out" \
   || release_fail "preview coordinator did not preserve pending convergence"
+
+mkdir -p "$TMP/generated-root" "$TMP/generated-bin" "$TMP/generated-state"
+cp -a "$ROOT/release" "$ROOT/releases" "$TMP/generated-root/"
+cat > "$TMP/generated-bin/gh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+state="${FAKE_COORDINATOR_STATE:?}"
+
+archive_name() {
+  local repository="$1" tag="$2" component="${repository##*/}"
+  case "$component:$tag" in
+    guest-runtime:runtime-*) printf 'sandbox-runtime-x86_64-%s.tar.gz\n' "${tag#runtime-}" ;;
+    guest-runtime:vmlinux-*) printf 'vmlinux-x86_64-%s.tar.gz\n' "${tag#vmlinux-}" ;;
+    *) printf '%s-%s-linux-x86_64.tar.gz\n' "$component" "$tag" ;;
+  esac
+}
+
+component_release() {
+  local repository="$1" tag="$2" archive
+  archive="$(archive_name "$repository" "$tag")"
+  jq -n --arg tag "$tag" --arg archive "$archive" '
+    {tag_name: $tag, draft: false, prerelease: true,
+     published_at: "2026-08-09T00:00:00Z",
+     assets: [{name: $archive}, {name: "SHA256SUMS"}]}'
+}
+
+if [ "${1:-}" = api ]; then
+  shift
+  method=GET
+  endpoint=
+  input=
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --paginate|--slurp) shift ;;
+      --method) method="$2"; shift 2 ;;
+      --input) input="$2"; shift 2 ;;
+      --jq) shift 2 ;;
+      -*) shift ;;
+      *) endpoint="$1"; shift ;;
+    esac
+  done
+
+  if [ "$method" = PUT ] && [[ "$endpoint" == repos/kuasar-sandbox/platform/contents/releases/* ]]; then
+    cp "$input" "$state/manifest-request.json"
+    printf '%s\n' "$endpoint" > "$state/manifest-endpoint"
+    printf '{"commit":{"sha":"2222222222222222222222222222222222222222"}}\n'
+    exit 0
+  fi
+
+  case "$endpoint" in
+    repos/kuasar-sandbox/platform/releases\?*)
+      printf '[[{"tag_name":"release-v0.1.0-preview.20260809","draft":false,"published_at":"2026-08-09T06:00:00Z"}]]\n'
+      ;;
+    repos/*/releases\?*)
+      repository="${endpoint#repos/}"
+      repository="${repository%%/releases*}"
+      if [ "$repository" = kuasar-sandbox/guest-runtime ]; then
+        printf '[[%s,%s]]\n' \
+          "$(component_release "$repository" runtime-v0.1.0-preview.20260809)" \
+          "$(component_release "$repository" vmlinux-v0.1.0-preview.20260809)"
+      else
+        printf '[[%s]]\n' \
+          "$(component_release "$repository" v0.1.0-preview.20260809)"
+      fi
+      ;;
+    repos/*/releases/tags/*)
+      repository="${endpoint#repos/}"
+      repository="${repository%%/releases/tags/*}"
+      tag="${endpoint##*/}"
+      if [[ "$tag" == *preview.20260809 ]]; then
+        component_release "$repository" "$tag"
+      else
+        echo 'gh: Not Found (HTTP 404)' >&2
+        exit 1
+      fi
+      ;;
+    repos/*/actions/workflows/*/runs\?*)
+      printf '[{"workflow_runs":[]}]\n'
+      ;;
+    *)
+      echo "fake generated coordinator gh: unsupported API call: $endpoint" >&2
+      exit 2
+      ;;
+  esac
+  exit 0
+fi
+
+if [ "${1:-}" = workflow ] && [ "${2:-}" = run ]; then
+  printf '%s\n' "$*" >> "$state/dispatches"
+  exit 0
+fi
+
+echo "fake generated coordinator gh: unsupported command: $*" >&2
+exit 2
+EOF
+chmod +x "$TMP/generated-bin/gh"
+
+cat > "$TMP/generated-bin/curl" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+url="${!#}"
+case "$url" in
+  */repos/kuasar-sandbox/*/commits/main)
+    repository="${url#*/repos/}"
+    repository="${repository%/commits/main}"
+    jq -n --arg sha "head-${repository##*/}" '{sha: $sha}'
+    ;;
+  */repos/kuasar-sandbox/*/compare/*)
+    if [[ "$url" == */repos/kuasar-sandbox/accelerator/compare/* ]]; then
+      printf '{"status":"ahead"}\n'
+    else
+      printf '{"status":"identical"}\n'
+    fi
+    ;;
+  *)
+    echo "fake generated coordinator curl: unsupported URL: $url" >&2
+    exit 2
+    ;;
+esac
+EOF
+chmod +x "$TMP/generated-bin/curl"
+
+PATH="$TMP/generated-bin:$PATH" \
+  FAKE_COORDINATOR_STATE="$TMP/generated-state" \
+  GH_TOKEN=read-token PLATFORM_TOKEN=write-token \
+  PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
+  bash "$TMP/generated-root/release/preview-coordinator.sh" 20260810 \
+  > "$TMP/generated-coordinator.out"
+
+GENERATED_VERSION=release-v0.1.0-preview.20260810
+GENERATED_MANIFEST="$TMP/generated-root/releases/$GENERATED_VERSION.yaml"
+[ -f "$GENERATED_MANIFEST" ] || release_fail "daily coordinator did not generate a manifest"
+[ "$(previous_release "$TMP/generated-root" "$GENERATED_VERSION")" = "$VERSION" ] \
+  || release_fail "generated manifest does not name the latest aggregate as previous"
+resolve_selection "$TMP/generated-root" "$GENERATED_VERSION" "$TMP/generated-selection.tsv"
+grep -Fqx $'accelerator\tv0.1.0-preview.20260810' "$TMP/generated-selection.tsv" \
+  || release_fail "changed component did not select a new preview"
+for unit in connector sandboxer orchestrator; do
+  grep -Fqx "$unit"$'\t''v0.1.0-preview.20260809' "$TMP/generated-selection.tsv" \
+    || release_fail "$unit did not reuse its unchanged release"
+done
+grep -Fqx $'runtime\truntime-v0.1.0-preview.20260809' "$TMP/generated-selection.tsv" \
+  || release_fail "runtime did not reuse its unchanged release"
+grep -Fqx $'vmlinux\tvmlinux-v0.1.0-preview.20260809' "$TMP/generated-selection.tsv" \
+  || release_fail "vmlinux did not reuse its unchanged release"
+[ "$(cat "$TMP/generated-state/manifest-endpoint")" = \
+  "repos/kuasar-sandbox/platform/contents/releases/$GENERATED_VERSION.yaml" ] \
+  || release_fail "generated manifest was committed to an unexpected path"
+jq -r .content "$TMP/generated-state/manifest-request.json" | base64 -d \
+  > "$TMP/persisted-manifest"
+cmp -s "$GENERATED_MANIFEST" "$TMP/persisted-manifest" \
+  || release_fail "committed manifest differs from the frozen local selection"
+[ "$(wc -l < "$TMP/generated-state/dispatches")" -eq 1 ] \
+  || release_fail "daily coordinator dispatched an unchanged release unit"
+grep -Fqx 'workflow run release.yml --repo kuasar-sandbox/accelerator --ref main -f version=v0.1.0-preview.20260810' \
+  "$TMP/generated-state/dispatches" \
+  || release_fail "daily coordinator did not dispatch the changed release unit"
 
 echo "test-release: PASS"
