@@ -45,9 +45,10 @@ release_exists() {
     jq -e --arg tag "$tag" '.tag_name == $tag and .draft == false' "$output" >/dev/null \
       || release_fail "$repository $tag exists but is not a published release"
     return 0
+  else
+    local rc=$?
+    [ "$rc" -eq 4 ] || return "$rc"
   fi
-  local rc=$?
-  [ "$rc" -eq 4 ] || exit "$rc"
   return 1
 }
 
