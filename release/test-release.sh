@@ -59,6 +59,22 @@ fi
 "$ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/bundle" "$TMP/install"
 [ -f "$TMP/install/docs/kuasar-sandbox.md" ] || release_fail "platform docs were not extracted"
 [ -x "$TMP/install/test/e2e/run_all.sh" ] || release_fail "platform E2E runner was not extracted"
+
+runner_root="$TMP/runner-root"
+mkdir -p "$runner_root/bin" "$runner_root/test/e2e"
+install -m 0755 "$TMP/install/test/e2e/run_all.sh" "$runner_root/test/e2e/run_all.sh"
+cat > "$runner_root/test/e2e/e2e_binary_paths.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+[ "$FLATTEN_CTL" = "$BIN/flatten-ctl" ]
+[ "$STORE_CTL" = "$BIN/store-ctl" ]
+[ "$MKFS_EROFS_PATH" = "$BIN/mkfs.erofs" ]
+EOF
+chmod +x "$runner_root/test/e2e/e2e_binary_paths.sh"
+BIN="$runner_root/bin" bash "$runner_root/test/e2e/run_all.sh" > "$TMP/runner.out"
+grep -Fq '==> full release e2e: OK' "$TMP/runner.out" \
+  || release_fail "platform E2E runner did not complete its binary-path check"
+
 for unit in "${RELEASE_UNITS[@]}"; do
   [ -x "$TMP/install/bin/$unit" ] || release_fail "$unit fixture was not extracted"
 done
