@@ -98,22 +98,22 @@ API 将它作为普通提交写入 `platform/main`,再触发任何组件或聚�
 
 ### 3.2 GitHub App
 
-源码 BMS 和聚合资产下载使用只读 App:
+源码 BMS、聚合资产下载和每日跨仓调度复用 `kuasar-sandbox-bms-ci` App:
 
 - variable `KUASAR_CI_APP_CLIENT_ID`;
 - secret `KUASAR_CI_APP_PRIVATE_KEY`;
-- 六仓 `Contents: read`。
+- App 安装权限为 `Contents: read` 与 `Actions: write`。
 
-每日协调器使用独立 release-controller App:
+每次签发的 installation token 继续按用途收窄:
 
-- variable `KUASAR_RELEASE_APP_CLIENT_ID`;
-- secret `KUASAR_RELEASE_APP_PRIVATE_KEY`;
-- 六仓 `Actions: write` 与 `Contents: read`。
+- BMS 源码读取和聚合下载 token 只请求 `Contents: read`;
+- 每日协调 token 请求 `Actions: write` 与 `Contents: read`;
+- workflow 签发 token 时把仓库范围显式限制在六个发行仓。
 
-release-controller token 只存在于 GitHub-hosted 协调 job。自托管 BMS 不接收仓库写 token;
-源码只读 token 在执行候选代码前显式撤销。组件和聚合 publish job 只使用当前仓的短期
-`GITHUB_TOKEN` 和 `contents:write`。每日协调 job 仅用 platform 自身的短期 `GITHUB_TOKEN`
-把生成的版本选择清单提交到 `platform/main`,release-controller App 不获得内容写权限。
+协调 token 只存在于 GitHub-hosted 协调 job。自托管 BMS 只接收收窄后的源码只读 token,
+并在执行候选代码前显式撤销。组件和聚合 publish job 只使用当前仓的短期 `GITHUB_TOKEN`
+和 `contents:write`。每日协调 job 仅用 platform 自身的短期 `GITHUB_TOKEN` 把生成的版本
+选择清单提交到 `platform/main`,App 没有内容写权限。
 
 ## 4. 组件资产契约
 
@@ -235,7 +235,7 @@ workflow run 状态幂等处理:
 - reusable workflow 用 `job.workflow_repository` 和 `job.workflow_sha` checkout 自身工具;
 - fork 候选必须由可信 wrapper dispatch 当前 two-parent integration commit;
 - 候选 commit、PR base/head 和当前 merge commit 不一致时拒绝执行;
-- 自托管 job 没有 `contents:write` 或 release-controller token。
+- 自托管 job 没有 `contents:write` 或每日协调 token。
 
 ## 10. See Also
 

@@ -85,7 +85,7 @@ make -C platform test-ci-tools
 
 ## 5. Runner 与网络
 
-runner 安装资料位于 `ci/runner/`。自托管 job 只有 read 权限,release-controller 与
+runner 安装资料位于 `ci/runner/`。自托管 job 只有收窄后的 read token,每日协调 token 与
 `contents:write` token 只在 GitHub-hosted job 使用。runner 代理属于部署配置,不写入仓库
 workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用公开中国大陆镜像降低网络抖动。
 
