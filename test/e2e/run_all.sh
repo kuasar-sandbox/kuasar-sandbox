@@ -11,6 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELEASE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BIN="${BIN:-$RELEASE_ROOT/bin}"
 export BIN
+export FLATTEN_CTL="${FLATTEN_CTL:-$BIN/flatten-ctl}"
+export STORE_CTL="${STORE_CTL:-$BIN/store-ctl}"
+export MKFS_EROFS_PATH="${MKFS_EROFS_PATH:-$BIN/mkfs.erofs}"
 
 export REQUIRE_KVM="${REQUIRE_KVM:-1}"
 export REQUIRE_EXEC="${REQUIRE_EXEC:-1}"
