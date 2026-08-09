@@ -37,6 +37,24 @@ make -C src/platform test-release-tools test-perf-tools
 make -C src/platform test-e2e
 ```
 
+每个组件在自己的 `test/e2e/` 维护用例与唯一入口 `run_all.sh`。platform source BMS 将五个
+组件源码与 `platform/test/e2e/platform/` 中真正跨组件组合本身的用例组装为:
+
+```text
+test/e2e/run_all.sh
+test/e2e/accelerator/run_all.sh
+test/e2e/connector/run_all.sh
+test/e2e/guest-runtime/run_all.sh
+test/e2e/sandboxer/run_all.sh
+test/e2e/orchestrator/run_all.sh
+test/e2e/platform/run_all.sh
+```
+
+顶层入口按 owner 顺序调用六个入口。某组件是候选仓时,组装目录直接采用该 PR integration
+commit 的 `test/e2e/`,所以特性实现与其 E2E 在同一个 PR 评审,组件 PR 的完整 BMS 结果也以
+该组件 `run_all.sh` 在统一环境中通过为准。测试需要其他仓二进制不改变所有权:platform 只
+提供完整 `BIN`、zot、versitygw、KVM 与系统服务环境,不复制用例源码。
+
 working-set 性能模式只运行 `make perf-sandbox-working-set`,并使用独立确认字符串触发。
 
 ## 3. Exact-assets 模式
@@ -50,16 +68,16 @@ release-notes.md    GitHub Release 页面说明
 ```
 
 BMS 重新验证固定资产集合、SHA-256、platform 包范围、tar 安全路径和跨包覆盖,然后解压到
-`release-install/`。执行入口来自 platform archive 本身:
+`release-install/`。组件 archive 只提供运行制品;组件文档与 E2E 已由 aggregate prepare
+从清单所选 tag 的 GitHub 源码归档收集进 platform 包。执行入口来自 platform archive 本身:
 
 ```bash
 cd release-install
 BIN=$PWD/bin bash test/e2e/run_all.sh
 ```
 
-组件 archive 中的 accelerator、connector、guest-runtime 和 orchestrator 模块 E2E 与
-platform 跨仓测试合并到同一目录。该模式不读取组件 `main`,不调用 Go/Rust/native build,
-也不会重新编译 vmlinux。通过后 publish job 原样使用此前的 artifact。
+该模式不读取组件 `main`:文档和用例与二进制一样绑定清单所选 tag。它不调用
+Go/Rust/native build,也不会重新编译 vmlinux。通过后 publish job 原样使用此前的 artifact。
 
 ## 4. Native cache
 

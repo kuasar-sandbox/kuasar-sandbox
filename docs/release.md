@@ -150,9 +150,11 @@ x86_64,因此当前 Release 只发布该目标。
 SHA256SUMS
 ```
 
-archive 只包含实际交付的 `bin/`、`docs/`、可选 `deploy/` 和可选 `test/`。不上传项目生成
-的 release metadata JSON,archive 内也没有 `release/*.json`。源码由 GitHub 根据 tag
-自动提供的 zip/tar.gz 表达,工作流不额外上传,聚合 Release 也不复制。
+archive 只包含实际运行制品:`bin/`、可选 `deploy/` 及不属于 E2E 的运维/性能辅助脚本。
+组件 `docs/` 与 `test/e2e/` 不进入组件包。不上传项目生成的 release metadata JSON,archive
+内也没有 `release/*.json`。源码由 GitHub 根据 tag 自动提供的 zip/tar.gz 表达,工作流不
+额外上传源码包;aggregate prepare 只读取所选 tag 的源码来构建 platform 包,不把源码归档
+作为 Release 资产复制。
 
 publish job 不读取 manifest。它从 workflow version、目标和固定命名规则计算预期资产,
 校验包内必需路径、禁止路径、权限、`SHA256SUMS` 以及 Go build info,随后创建 draft,
@@ -174,7 +176,7 @@ vmlinux-v0.1.0-preview.20260808
 ```
 
 runtime archive 只有一个稳定入口 `bin/sandbox-runtime.bundle`,并同时交付 `flatten-ctl`、
-`mkfs.erofs`、文档和 flatten E2E。vmlinux archive 只有 `bin/vmlinux` 与内核文档。
+`mkfs.erofs`。vmlinux archive 只有 `bin/vmlinux`。
 两个包都不再保留内容相同的版本化文件副本。
 
 runtime workflow 显式选择一个已经发布的 sandboxer tag,因为其 `sandbox-init` 会进入
@@ -199,8 +201,11 @@ SHA256SUMS
 `SHA256SUMS`,生成覆盖 platform 包与六个 archive 的统一校验文件。Release notes 列出所选
 组件 tag,并按两个清单计算出的显式基线汇总六个组件的 commit 更新清单,但不作为机器清单。
 
-platform 包使用确定性 tar 规则,只包含 `docs/` 与可交付 `test/`;不包含组件二进制、版本
-选择、workflow、runner 配置、cache 或凭据。它没有独立 tag 或独立 Release。
+platform 包使用确定性 tar 规则,只包含聚合后的 `docs/` 与可交付 `test/`;不包含组件
+二进制、版本选择、workflow、runner 配置、cache 或凭据。组件 README 与 `docs/` 按仓库
+聚合;E2E 以 `test/e2e/<owner>/run_all.sh` 组织。guest-runtime 的 runtime 文档和 E2E 来自
+所选 runtime tag,`docs/vmlinux.md` 来自所选 vmlinux tag,延续两条独立版本线的内容边界。
+platform 包没有独立 tag 或独立 Release。
 
 ## 7. 聚合与 exact-asset BMS
 
@@ -210,14 +215,15 @@ platform 包使用确定性 tar 规则,只包含 `docs/` 与可交付 `test/`;�
 2. 查询六个已发布、非 draft 的组件 Release;
 3. 要求每个 Release 的显式资产精确等于固定 archive 与 `SHA256SUMS`;
 4. 下载并同时验证 GitHub size/digest 和组件 SHA-256;
-5. 生成确定性 platform 包并按字节复制六个 archive;
-6. 拒绝 archive 中的不安全路径和跨包文件覆盖;
-7. 生成统一 `SHA256SUMS`,上传为当前 workflow 的短期 artifact。
+5. 下载六个所选 tag 的 GitHub 源码归档,只提取组件文档与 `test/e2e/`;
+6. 生成确定性 platform 包并按字节复制六个组件 archive;
+7. 拒绝组件包中的 `docs/`/`test/e2e/`、不安全路径和跨包文件覆盖;
+8. 生成统一 `SHA256SUMS`,上传为当前 workflow 的短期 artifact。
 
 可复用 BMS 在自托管 KVM runner 下载同一个 artifact,重新验证后把七个 archive 解压到
-一个安装目录。测试入口是即将发布的 platform 包中的 `test/e2e/run_all.sh`;组件包携带的
-模块 E2E 也合并到该安装目录。该模式不 checkout 组件 main、不调用 native cache、不重新
-构建组件或 Linux kernel。
+一个安装目录。测试入口是即将发布的 platform 包中的 `test/e2e/run_all.sh`;它依次调用
+platform 包内聚合的各 owner `run_all.sh`。该模式不 checkout 组件 main、不调用 native
+cache、不重新构建组件或 Linux kernel。
 
 BMS 成功后,GitHub-hosted publish job 下载同一个 artifact,以本次 workflow 的
 `github.sha` 创建 `release-vX.Y.Z` tag,验证上传后的八个资产后发布 draft。tag 已存在但

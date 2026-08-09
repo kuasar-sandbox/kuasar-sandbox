@@ -1,9 +1,7 @@
 #!/usr/bin/env bash
 #
-# Full release e2e runner. This script is packaged under test/e2e/ and assumes
-# component archives have been extracted into one release root with a shared
-# bin/ directory. OBS remains the only credential-gated exception; e2e_obs.sh
-# exits 0 when OBS_E2E=1 is not set.
+# Full source and release E2E gate. The source BMS assembler and the platform
+# release packager both create the same test/e2e/<owner>/ directory layout.
 
 set -euo pipefail
 
@@ -11,50 +9,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RELEASE_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BIN="${BIN:-$RELEASE_ROOT/bin}"
 export BIN
-export FLATTEN_CTL="${FLATTEN_CTL:-$BIN/flatten-ctl}"
-export STORE_CTL="${STORE_CTL:-$BIN/store-ctl}"
-export MKFS_EROFS_PATH="${MKFS_EROFS_PATH:-$BIN/mkfs.erofs}"
-
-export REQUIRE_KVM="${REQUIRE_KVM:-1}"
-export REQUIRE_EXEC="${REQUIRE_EXEC:-1}"
-export REQUIRE_CLUSTER_STUB="${REQUIRE_CLUSTER_STUB:-1}"
-export REQUIRE_CLUSTER_REAL="${REQUIRE_CLUSTER_REAL:-1}"
-export REQUIRE_ORCH="${REQUIRE_ORCH:-1}"
-export REQUIRE_PROXY="${REQUIRE_PROXY:-1}"
-export REQUIRE_BUILDER="${REQUIRE_BUILDER:-1}"
-export REQUIRE_RUNTASK="${REQUIRE_RUNTASK:-1}"
-export REQUIRE_CONNECTOR_E2E="${REQUIRE_CONNECTOR_E2E:-1}"
-export REQUIRE_GUEST_RUNTIME="${REQUIRE_GUEST_RUNTIME:-1}"
+: "${ZOT_BIN:?ZOT_BIN must point to the platform-provided registry}"
+: "${VGW_BIN:?VGW_BIN must point to the platform-provided object gateway}"
+export ZOT_BIN VGW_BIN
 
 echo "==> full release e2e"
 echo "==> BIN=$BIN"
 
-shopt -s nullglob
-e2e_scripts=("$SCRIPT_DIR"/e2e_*.sh)
-if [ "${#e2e_scripts[@]}" -eq 0 ]; then
-    echo "==> FAIL: no e2e_*.sh scripts found in $SCRIPT_DIR" >&2
-    exit 1
-fi
-
-for script in "${e2e_scripts[@]}"; do
-    echo
-    echo "========================================="
-    echo "  $(basename "$script")"
-    echo "========================================="
-    bash "$script"
+owners=(accelerator connector guest-runtime sandboxer orchestrator platform)
+for owner in "${owners[@]}"; do
+    runner="$SCRIPT_DIR/$owner/run_all.sh"
+    [ -x "$runner" ] || {
+        echo "==> FAIL: missing executable E2E owner runner: $runner" >&2
+        exit 1
+    }
+    bash "$runner"
 done
-
-connector_dir="$RELEASE_ROOT/test/connector"
-if [ -d "$connector_dir" ]; then
-    for script in "$connector_dir"/*_test.sh; do
-        [ -f "$script" ] || continue
-        echo
-        echo "========================================="
-        echo "  connector/$(basename "$script")"
-        echo "========================================="
-        sudo env REQUIRE_CONNECTOR_E2E=1 bash "$script" all
-    done
-fi
 
 echo
 echo "==> full release e2e: OK"

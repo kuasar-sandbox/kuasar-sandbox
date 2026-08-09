@@ -472,10 +472,27 @@ jobs:
         working-directory: src/platform
         run: make test-release-tools test-perf-tools
 
-      - name: Build and test source workspace
+      - name: Build and test source candidate
         if: inputs.mode == 'source' && inputs.run_mode == 'full-e2e'
         working-directory: src/platform
-        run: make test-e2e
+        run: |
+          set -euo pipefail
+          make build e2e-tools assemble-e2e
+          make test-uffd-performance-gate
+
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          runner="build/e2e-suite/test/e2e/$owner/run_all.sh"
+          if [ "$owner" = platform ]; then
+            runner=build/e2e-suite/test/e2e/run_all.sh
+          fi
+          [ -x "$runner" ] \
+            || { echo "missing E2E runner for candidate owner $owner: $runner" >&2; exit 1; }
+
+          ci/bms/ci-timed.sh "e2e/$owner" env \
+            BIN="$PWD/bin/x86_64" \
+            ZOT_BIN="$E2E_ZOT_BIN" \
+            VGW_BIN="$E2E_VGW_BIN" \
+            bash "$runner"
 
       - name: Run working-set performance matrix
         if: inputs.mode == 'source' && inputs.run_mode == 'working-set-perf'

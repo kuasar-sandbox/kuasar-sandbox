@@ -10,7 +10,7 @@ fetch_components() {
   [ "$#" -eq 2 ] || release_fail "usage: aggregate-release.sh fetch <release-version> <output-dir>"
   local version="$1" output="$2"
   assert_safe_output "$output"
-  mkdir -p "$output/components" "$output/updates"
+  mkdir -p "$output/components" "$output/sources" "$output/updates"
   resolve_selection "$ROOT" "$version" "$output/selection.tsv"
   local previous
   previous="$(previous_release "$ROOT" "$version")"
@@ -50,9 +50,37 @@ fetch_components() {
       verify_github_asset "$unit_dir/$name" "$asset"
     done
     validate_component_download "$unit" "$tag" "$unit_dir"
+    fetch_component_source "$repository" "$tag" "$output/sources/$unit"
     write_component_updates "$unit" "$repository" "$previous_tag" "$tag" \
       "$output/updates/$unit.md"
   done < "$output/selection.tsv"
+}
+
+fetch_component_source() {
+  local repository="$1" tag="$2" output="$3"
+  [ ! -e "$output" ] || release_fail "component source output already exists: $output"
+  local archive listing roots
+  archive="$(mktemp)"
+  listing="$(mktemp)"
+  curl --fail --show-error --silent --location \
+    --retry 4 --retry-all-errors --connect-timeout 10 --max-time 300 \
+    -H "Accept: application/vnd.github+json" \
+    -H "Authorization: Bearer ${GH_TOKEN:?GH_TOKEN is required}" \
+    -H "X-GitHub-Api-Version: 2022-11-28" \
+    "${GITHUB_API_URL:-https://api.github.com}/repos/$repository/tarball/$tag" \
+    > "$archive"
+  tar -tzf "$archive" > "$listing"
+  awk '
+    /^\// { exit 1 }
+    { path=$0; if (path ~ /(^|\/)\.\.($|\/)/) exit 1 }
+  ' "$listing" || release_fail "$repository $tag source archive contains an unsafe path"
+  roots="$(awk -F/ 'NF {print $1}' "$listing" | LC_ALL=C sort -u)"
+  if [ -z "$roots" ] || [ "$(wc -l <<< "$roots")" -ne 1 ]; then
+    release_fail "$repository $tag source archive must contain one root directory"
+  fi
+  mkdir -p "$output"
+  tar -xzf "$archive" --strip-components=1 -C "$output"
+  rm -f "$archive" "$listing"
 }
 
 write_component_updates() {
@@ -114,6 +142,10 @@ validate_component_download() {
   [[ "$checksum_value" =~ ^[0-9a-f]{64}$ ]] || release_fail "$unit SHA256SUMS contains an invalid digest"
   [ "$(sha256sum "$directory/$archive" | awk '{print $1}')" = "$checksum_value" ] \
     || release_fail "$unit archive checksum mismatch"
+  if tar -tzf "$directory/$archive" \
+    | grep -E '(^|/)docs(/|$)|(^|/)test/e2e(/|$)' >/dev/null; then
+    release_fail "$unit archive contains docs/ or test/e2e/ content owned by the platform package"
+  fi
 }
 
 validate_tar_paths() {
@@ -141,6 +173,7 @@ assemble_release() {
   local version="$1" fetched="$2" output="$3"
   validate_aggregate_version "$version"
   [ -d "$fetched/components" ] || release_fail "fetched component directory is missing"
+  [ -d "$fetched/sources" ] || release_fail "fetched component source directory is missing"
   assert_safe_output "$output"
 
   local work expected_selection expected_previous_selection previous platform_bundle platform_name
@@ -159,7 +192,7 @@ assemble_release() {
     || release_fail "fetched previous selection does not match platform main"
 
   platform_bundle="$work/platform-bundle"
-  "$ROOT/release/package-platform.sh" package "$version" "$platform_bundle"
+  "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$platform_bundle"
   platform_name="$(platform_archive "$version")"
   mkdir -p "$output/assets"
   install -m 0644 "$platform_bundle/assets/$platform_name" "$output/assets/$platform_name"

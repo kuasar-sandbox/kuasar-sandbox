@@ -30,7 +30,8 @@
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 . "$REPO_ROOT/test/lib/tarstream.sh"
 BIN="${BIN:-$REPO_ROOT/bin}"
 IMAGE="${IMAGE:-python:3.12-slim}"

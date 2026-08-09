@@ -1,8 +1,9 @@
 # Kuasar Sandbox Platform
 
 `platform` 是 Kuasar Sandbox 的系统集成与发行仓。它与 `accelerator`、`connector`、
-`sandboxer`、`guest-runtime`、`orchestrator` 并列,承载系统级设计文档、跨仓 E2E/perf/demo、
-BMS 公共实现、原生制品缓存和 `release-vX.Y.Z` 聚合发布。组件实现及组件独立版本仍归各自仓库。
+`sandboxer`、`guest-runtime`、`orchestrator` 并列,承载系统级设计文档、E2E 组装与统一环境、
+跨组件组合用例、perf/demo、BMS 公共实现、原生制品缓存和 `release-vX.Y.Z` 聚合发布。组件
+实现、组件 E2E 与组件独立版本仍归各自仓库。
 
 平台面向大规模 Serverless 与 Agent 场景,组合 microVM 生命周期、内容寻址存储与快照恢复、
 eBPF/TC 网络、Guest runtime 及单节点/集群编排能力。整体架构见
@@ -27,7 +28,8 @@ eBPF/TC 网络、Guest runtime 及单节点/集群编排能力。整体架构见
 
 ```text
 docs/             系统总览、部署、性能、CI 与发布设计
-test/             跨组件 E2E、性能和演示脚本
+test/e2e/         owner 套件组装器、统一 run_all.sh 与 platform 组合用例
+test/perf|demo/   平台性能和演示脚本
 ci/bms/           BMS 辅助工具与源码缓存维护
 ci/native-cache/  vmlinux、erofs、envd、RocksDB、Cloud Hypervisor 缓存
 ci/runner/        自托管 BMS runner 部署资料
@@ -49,6 +51,10 @@ make -C platform test-e2e
 make -C platform perf
 make -C platform demo
 ```
+
+组件用例位于各自仓的 `test/e2e/`,入口统一为 `run_all.sh`。`make test-e2e` 先把候选
+组件源码与其余组件源码组装为 `test/e2e/<owner>/` 布局,再运行与 platform 发布包完全相同
+的顶层入口;需要多仓制品的用例仍由其功能所属组件维护。
 
 单仓构建仍从组件仓执行。例如:
 
@@ -83,7 +89,8 @@ preview 则引用上一正式版。第一个正式版本不设置基线,也不�
 组件 Release 的显式资产只有目标 archive 与 `SHA256SUMS`。当前 x86_64 聚合 Release
 精确包含 platform 包、六个组件 archive 和统一 `SHA256SUMS`,不发布项目生成的 release
 metadata JSON,也不重复上传 GitHub 已自动提供的源码归档。版本选择 YAML 只在代码库维护,
-既不是 Release 资产,也不进入 platform 包。
+既不是 Release 资产,也不进入 platform 包。组件 archive 不携带 `docs/` 或 `test/e2e/`;
+aggregate prepare 从所选组件 tag 的 GitHub 源码归档收集它们,统一写入 platform 包。
 
 人工收敛一个已经配置的聚合版本:
 
