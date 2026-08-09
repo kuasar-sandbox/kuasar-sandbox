@@ -14,7 +14,10 @@ fetch_components() {
   resolve_selection "$ROOT" "$version" "$output/selection.tsv"
   local previous
   previous="$(previous_release "$ROOT" "$version")"
-  resolve_selection "$ROOT" "$previous" "$output/previous-selection.tsv"
+  : > "$output/previous-selection.tsv"
+  if [ -n "$previous" ]; then
+    resolve_selection "$ROOT" "$previous" "$output/previous-selection.tsv"
+  fi
 
   local unit tag previous_tag repository archive release_state expected_prerelease unit_dir
   while IFS=$'\t' read -r unit tag; do
@@ -54,6 +57,10 @@ fetch_components() {
 
 write_component_updates() {
   local unit="$1" repository="$2" previous_tag="$3" current_tag="$4" output="$5"
+  if [ -z "$previous_tag" ]; then
+    printf "Initial selected version: \`%s\`.\n" "$current_tag" > "$output"
+    return
+  fi
   if [ "$previous_tag" = "$current_tag" ]; then
     printf "Selected version unchanged: \`%s\`.\n" "$current_tag" > "$output"
     return
@@ -142,7 +149,10 @@ assemble_release() {
   expected_previous_selection="$work/previous-selection.tsv"
   resolve_selection "$ROOT" "$version" "$expected_selection"
   previous="$(previous_release "$ROOT" "$version")"
-  resolve_selection "$ROOT" "$previous" "$expected_previous_selection"
+  : > "$expected_previous_selection"
+  if [ -n "$previous" ]; then
+    resolve_selection "$ROOT" "$previous" "$expected_previous_selection"
+  fi
   cmp -s "$expected_selection" "$fetched/selection.tsv" \
     || release_fail "fetched component selection does not match platform main"
   cmp -s "$expected_previous_selection" "$fetched/previous-selection.tsv" \
@@ -176,7 +186,13 @@ write_release_notes() {
   {
     printf 'Kuasar Sandbox %s.\n\n' "$version"
     printf 'This aggregate contains the platform documentation/test package and the exact component archives validated together on BMS.\n\n'
-    printf "Previous aggregate selection: \`%s\`.\n\n" "$previous"
+    if [ -n "$previous" ]; then
+      printf "Previous aggregate selection: \`%s\`.\n\n" "$previous"
+    elif is_preview "$version"; then
+      printf 'This is the first aggregate preview; no earlier aggregate is used as a comparison baseline.\n\n'
+    else
+      printf 'This is the first formal aggregate release; no preview or repository history is used as a comparison baseline.\n\n'
+    fi
     printf 'Component versions:\n\n'
     while IFS=$'\t' read -r unit tag; do
       printf -- "- \`%s\`: \`%s\`\n" "$unit" "$tag"

@@ -1,5 +1,4 @@
 version: release-v0.1.0
-previous: release-v0.1.0-preview.20260809
 components:
   accelerator: v0.1.0
   connector: v0.1.0

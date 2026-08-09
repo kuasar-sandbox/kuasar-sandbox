@@ -43,7 +43,7 @@ gh workflow run release-vmlinux.yml \
 
 ### 2.2 发布聚合版本
 
-正式版本先在 `platform/main` 增加 `releases/release-vX.Y.Z.yaml`,然后运行:
+正式版本先在 `platform/main` 更新 `releases/release.yaml`,然后运行:
 
 ```bash
 make -C platform release RELEASE_VERSION=release-v0.2.1
@@ -71,11 +71,14 @@ make -C platform test-release-tools
 
 ### 3.1 聚合版本选择
 
-正式和 preview 聚合版本选择都是 `platform/main` 中的普通源码配置:
+正式和 preview 聚合版本选择都是 `platform/main` 中的普通源码配置。代码库只维护当前
+正式选择与当前 preview 选择两个文件。
+
+`releases/release.yaml` 维护当前正式版本:
 
 ```yaml
 version: release-v0.2.1
-previous: release-v0.2.0
+previous_version: release-v0.2.0
 components:
   accelerator: v0.2.0
   connector: v0.1.3
@@ -85,16 +88,39 @@ components:
   vmlinux: vmlinux-v0.1.4
 ```
 
-文件路径为 `releases/release-v0.2.1.yaml`。`previous` 显式指定用于生成更新说明的上一
-聚合版本;聚合时会同时解析当前清单和它直接引用的上一清单。解析器要求六个 release unit
-恰好各出现一次,
-并分别校验版本前缀。文件不声明架构:架构是资产维度,同一个聚合版本必须包含平台当前支持
-的全部目标。当前完整构建和 BMS 只覆盖 Linux x86_64,因此当前 Release 只发布该目标。
+`previous_version` 只允许引用最近的正式版本。第一个正式版本省略该字段;它的发布说明只
+说明这是第一个正式版本并列出本次组合,不从 preview 版本开始比较,也不展开仓库全部历史。
 
-每日协调器同样先生成 `releases/release-vX.Y.Z-preview.YYYYMMDD.yaml`,通过 GitHub Contents
-API 将它作为普通提交写入 `platform/main`,再触发任何组件或聚合 workflow。清单一旦提交就
-冻结本次选择,恢复任务只重用它,不会重新计算。清单只在代码库维护:不作为 GitHub Release
-资产发布,不写入 platform archive,也不复制进聚合 bundle。
+`releases/daily-preview.yaml` 维护当前 preview:
+
+```yaml
+version: release-v0.2.1
+previous_version: release-v0.2.0
+preview_version: preview.20260809
+previous_preview_version: preview.20260808
+components:
+  accelerator: v0.2.0-preview.20260809
+  connector: v0.1.3-preview.20260808
+  sandboxer: v0.2.0-preview.20260809
+  orchestrator: v0.1.5-preview.20260808
+  runtime: runtime-v0.2.1-preview.20260809
+  vmlinux: vmlinux-v0.1.4-preview.20260808
+```
+
+完整 preview 版本由 `version + "-" + preview_version` 组成。存在
+`previous_preview_version` 时,更新说明基线为
+`version + "-" + previous_preview_version`;不存在时使用 `previous_version`。因此同一正式
+版本线的后续 preview 与上一 preview 比较,首个 preview 与上一正式版本比较。如果两项基线
+都不存在,它就是整个项目的首个 preview,不生成历史 diff。
+
+解析器要求六个 release unit 恰好各出现一次并分别校验版本前缀。清单不声明架构:架构是
+资产维度,同一个聚合版本必须包含平台当前支持的全部目标。当前完整构建和 BMS 只覆盖 Linux
+x86_64,因此当前 Release 只发布该目标。
+
+清单更新是普通 Git 提交。同一文件的提交历史保存旧选择;聚合解析器在需要上一版本时直接
+回读 Git 历史,不维护 `releases/history/` 或按版本命名的清单。GitHub Release 不是调度状态
+源,删除历史 Release 不会改变当前选择或提交历史。两个清单都不作为 GitHub Release 资产
+发布,不写入 platform archive,也不复制进聚合 bundle。
 
 ### 3.2 GitHub App
 
@@ -171,7 +197,7 @@ SHA256SUMS
 
 六个组件 archive 从组件 Release 按字节复制,不改名、不重压缩。聚合层丢弃各组件独立
 `SHA256SUMS`,生成覆盖 platform 包与六个 archive 的统一校验文件。Release notes 列出所选
-组件 tag,并按清单中的 `previous` 汇总六个组件的 commit 更新清单,但不作为机器清单。
+组件 tag,并按两个清单计算出的显式基线汇总六个组件的 commit 更新清单,但不作为机器清单。
 
 platform 包使用确定性 tar 规则,只包含 `docs/` 与可交付 `test/`;不包含组件二进制、版本
 选择、workflow、runner 配置、cache 或凭据。它没有独立 tag 或独立 Release。
@@ -204,10 +230,17 @@ platform 只保留两个 schedule:
 - 02:13 Asia/Shanghai:主协调;
 - 05:13 Asia/Shanghai:恢复协调。
 
-协调器首先比较每个 release unit 的最新已发布 tag 与仓库 `main`。如果该 unit 自上次发布
-以来有新提交,就在当日清单中选择新的 preview tag;没有新提交时,复用其最新 preview 或正式
-tag。runtime 与 vmlinux 是 `guest-runtime` 仓的两个独立 release unit,各自寻找本版本线的
-最新 tag 并与同一个仓库 `main` 比较。选择结果和显式 `previous` 先提交到 `platform/main`。
+协调器先读取 `releases/daily-preview.yaml`。如果清单所指的 platform preview 尚未发布,
+本次运行只恢复这一个冻结选择,不会因日期变化重新计算。当前 preview 已发布且请求日期更新
+时,协调器比较每个 release unit 的最新已发布 tag 与仓库 `main`:自该 tag 以来有新提交就
+选择当日 preview tag,没有新提交则复用最新 preview 或正式 tag。runtime 与 vmlinux 是
+`guest-runtime` 仓的两个独立 release unit,各自寻找本版本线的最新 tag 并与同一个仓库
+`main` 比较。
+
+新选择通过 GitHub Contents API 覆盖同一个 `daily-preview.yaml`,请求携带读取时的 blob SHA。
+远端内容与本次 checkout 不一致时停止,避免两个协调任务覆盖彼此;内容提交成功后才触发组件
+或聚合 workflow。文件中的旧 `preview_version` 移入 `previous_preview_version`,所以本次
+发布说明的基线完全由已提交清单确定。
 
 清单冻结后,协调器并行收敛 accelerator、connector、sandboxer、orchestrator 和 vmlinux;
 sandboxer 发布后再收敛 runtime;六个组件完成后触发 aggregate。每一步根据 Release 和
@@ -220,10 +253,10 @@ workflow run 状态幂等处理:
 - 从未 dispatch:只创建一次 workflow dispatch;
 - aggregate Release 已存在:成功结束。
 
-恢复入口扫描代码库中已有但尚未形成 platform Release 的顶层 preview 清单,找到最早日期,
-因此跨日 pending 不会因当天日期变化而遗失,也不会从临时 workflow 状态重建选择。任一正式
-组件已经发布但正式聚合尚未完成时,每日 preview 暂停,避免正式发布窗口继续创建新 preview;
-正式聚合发布后 daily 直接成功退出。
+恢复入口始终先收敛 `daily-preview.yaml` 当前指向的版本,因此跨日 pending 不会因当天日期
+变化而遗失,也不会从临时 workflow 状态重建选择。当前版本成功发布后,下一次调度才推进日期
+和选择。任一正式组件已经发布但正式聚合尚未完成时,每日 preview 暂停,避免正式发布窗口
+继续创建新 preview;正式聚合发布后 daily 直接成功退出。
 
 ## 9. 可靠性与安全
 

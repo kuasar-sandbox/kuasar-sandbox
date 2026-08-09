@@ -10,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       date:
-        description: Optional YYYYMMDD version date; empty resumes the oldest pending preview
+        description: Optional YYYYMMDD version date; empty resumes the maintained preview or advances to today
         required: false
         type: string
 
@@ -31,6 +31,7 @@ jobs:
       - name: Check out preview controller
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Create release controller token
