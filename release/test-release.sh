@@ -107,6 +107,11 @@ if [ "${1:-}" = api ]; then
       *) endpoint="$1"; shift ;;
     esac
   done
+  if [ "${FAKE_RELEASE_API_ERROR:-0}" = 1 ] \
+    && [[ "$endpoint" == repos/*/releases/tags/* ]]; then
+    echo 'Get "https://api.github.com/release": unexpected EOF' >&2
+    exit 1
+  fi
   case "$endpoint" in
     repos/*/releases/tags/*)
       echo 'gh: Not Found (HTTP 404)' >&2
@@ -130,6 +135,18 @@ echo "fake coordinator gh: unsupported command: $*" >&2
 exit 2
 EOF
 chmod +x "$TMP/coordinator-bin/gh"
+
+mkdir -p "$TMP/coordinator-error-state"
+if PATH="$TMP/coordinator-bin:$PATH" \
+  FAKE_COORDINATOR_STATE="$TMP/coordinator-error-state" \
+  FAKE_RELEASE_API_ERROR=1 PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
+  bash "$ROOT/release/preview-coordinator.sh" --version "$VERSION" \
+  > "$TMP/coordinator-error.out" 2>&1; then
+  release_fail "preview coordinator treated a release API error as a missing release"
+fi
+[ ! -e "$TMP/coordinator-error-state/dispatches" ] \
+  || release_fail "preview coordinator dispatched a workflow after a release API error"
+
 PATH="$TMP/coordinator-bin:$PATH" \
   FAKE_COORDINATOR_STATE="$TMP/coordinator-state" \
   PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
