@@ -1,9 +1,0 @@
-version: release-v0.1.0-preview.20260808
-previous: release-v0.1.0-preview.20260807
-components:
-  accelerator: v0.1.0-preview.20260808
-  connector: v0.1.0-preview.20260808
-  sandboxer: v0.1.0-preview.20260808
-  orchestrator: v0.1.0-preview.20260808
-  runtime: runtime-v0.1.0-preview.20260808
-  vmlinux: vmlinux-v0.1.0-preview.20260808

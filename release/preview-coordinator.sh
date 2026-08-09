@@ -39,6 +39,20 @@ stable_base_version() {
   printf '%s\n' "$value"
 }
 
+preview_state_version() {
+  local config="$ROOT/releases/daily-preview.yaml" value
+  value="$(awk '$1 == "preview_version:" {print $2}' "$config")"
+  [ "$(awk '$1 == "preview_version:" {count++} END {print count + 0}' "$config")" -eq 1 ] \
+    || release_fail "daily preview configuration must contain one preview_version"
+  [[ "$value" =~ ^preview\.[0-9]{8}$ ]] \
+    || release_fail "daily preview preview_version must match preview.YYYYMMDD"
+  printf '%s\n' "$value"
+}
+
+current_preview_version() {
+  printf '%s-%s\n' "$(stable_base_version)" "$(preview_state_version)"
+}
+
 release_exists() {
   local repository="$1" tag="$2" output="$3"
   if api_optional "repos/$repository/releases/tags/$tag" "$output"; then
@@ -221,51 +235,49 @@ select_preview_unit() {
   esac
 }
 
-latest_platform_aggregate() {
-  local output="$1"
-  gh api --paginate --slurp 'repos/kuasar-sandbox/platform/releases?per_page=100' \
-    | jq '
-        [ .[][]
-          | select(.draft == false and .published_at != null)
-          | select(.tag_name | test("^release-v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-preview\\.[0-9]{8})?$")) ]
-        | sort_by(.published_at)
-        | last // empty
-      ' > "$output"
-  [ -s "$output" ] && [ "$(cat "$output")" != null ]
-}
-
 persist_preview_manifest() {
-  local version="$1" manifest="$2" path="releases/$version.yaml"
+  local version="$1" manifest="$2" path="releases/daily-preview.yaml"
   [ -n "${PLATFORM_TOKEN:-}" ] \
     || release_fail "PLATFORM_TOKEN is required to commit generated preview manifests"
   local request="$TMP/manifest-request.json" response="$TMP/manifest-response.json"
+  local remote_state="$TMP/manifest-remote.json" remote="$TMP/manifest-remote.yaml" sha
+  GH_TOKEN="$PLATFORM_TOKEN" gh api \
+    "repos/kuasar-sandbox/platform/contents/$path?ref=main" > "$remote_state"
+  jq -er '.content' "$remote_state" | tr -d '\n' | base64 -d > "$remote"
+  sha="$(jq -er '.sha' "$remote_state")"
+  if cmp -s "$manifest" "$remote"; then
+    install -m 0644 "$manifest" "$ROOT/$path"
+    echo "==> reuse concurrently committed $path"
+    return
+  fi
+  cmp -s "$ROOT/$path" "$remote" \
+    || release_fail "$path changed on main while this coordinator was selecting components"
   jq -n \
     --arg message "release: select daily preview ${version#release-}" \
     --arg content "$(base64 -w0 "$manifest")" \
     --arg branch main \
-    '{message: $message, content: $content, branch: $branch}' > "$request"
+    --arg sha "$sha" \
+    '{message: $message, content: $content, branch: $branch, sha: $sha}' > "$request"
   if GH_TOKEN="$PLATFORM_TOKEN" gh api --method PUT \
       "repos/kuasar-sandbox/platform/contents/$path" --input "$request" > "$response"; then
+    install -m 0644 "$manifest" "$ROOT/$path"
     echo "==> committed $path at $(jq -er '.commit.sha' "$response")"
     return
   fi
 
-  local remote="$TMP/remote-manifest"
-  GH_TOKEN="$PLATFORM_TOKEN" gh api "repos/kuasar-sandbox/platform/contents/$path?ref=main" \
-    --jq .content | tr -d '\n' | base64 -d > "$remote"
+  GH_TOKEN="$PLATFORM_TOKEN" gh api \
+    "repos/kuasar-sandbox/platform/contents/$path?ref=main" > "$remote_state"
+  jq -er '.content' "$remote_state" | tr -d '\n' | base64 -d > "$remote"
   cmp -s "$manifest" "$remote" \
     || release_fail "$path was concurrently committed with a different selection"
+  install -m 0644 "$manifest" "$ROOT/$path"
   echo "==> reuse concurrently committed $path"
 }
 
 generate_preview_manifest() {
   local stable_component="$1" date="$2" version="$3"
-  local previous_state="$TMP/previous-platform.json"
-  latest_platform_aggregate "$previous_state" \
-    || release_fail "cannot generate $version without a published previous platform aggregate"
-  local previous
-  previous="$(jq -er '.tag_name' "$previous_state")"
-  resolve_selection "$ROOT" "$previous" "$TMP/previous-selection-check.tsv"
+  local current_preview
+  current_preview="$(preview_state_version)"
 
   local unit repository candidate selected
   for unit in "${RELEASE_UNITS[@]}"; do
@@ -275,39 +287,23 @@ generate_preview_manifest() {
     select_preview_unit "$unit" "$repository" "$candidate" "$selected"
   done
 
-  local manifest="$ROOT/releases/$version.yaml"
+  local manifest="$TMP/daily-preview.yaml" previous_version
+  previous_version="$(awk '$1 == "previous_version:" {print $2}' \
+    "$ROOT/releases/daily-preview.yaml")"
   {
-    printf 'version: %s\n' "$version"
-    printf 'previous: %s\n' "$previous"
+    printf 'version: release-%s\n' "$stable_component"
+    if [ -n "$previous_version" ]; then
+      printf 'previous_version: %s\n' "$previous_version"
+    fi
+    printf 'preview_version: preview.%s\n' "$date"
+    printf 'previous_preview_version: %s\n' "$current_preview"
     printf 'components:\n'
     for unit in "${RELEASE_UNITS[@]}"; do
       printf '  %s: %s\n' "$unit" "$(cat "$TMP/selected-$unit")"
     done
   } > "$manifest"
-  resolve_selection "$ROOT" "$version" "$TMP/generated-selection-check.tsv"
   persist_preview_manifest "$version" "$manifest"
-}
-
-discover_pending_date() {
-  local stable_component="$1" today="$2" dates="$TMP/dates"
-  : > "$dates"
-  local manifest version date state
-  for manifest in "$ROOT"/releases/release-"$stable_component"-preview.*.yaml; do
-    [ -f "$manifest" ] || continue
-    version="$(basename "$manifest" .yaml)"
-    date="${version##*.}"
-    [[ "$date" =~ ^[0-9]{8}$ ]] || release_fail "invalid preview manifest name: $manifest"
-    printf '%s\n' "$date" >> "$dates"
-  done
-  LC_ALL=C sort -u -o "$dates" "$dates"
-  while IFS= read -r date; do
-    [ "$date" -le "$today" ] || continue
-    if ! release_exists kuasar-sandbox/platform "release-$stable_component-preview.$date" "$TMP/pending-release.json"; then
-      printf '%s\n' "$date"
-      return 0
-    fi
-  done < "$dates"
-  printf '%s\n' "$today"
+  resolve_selection "$ROOT" "$version" "$TMP/generated-selection-check.tsv"
 }
 
 formal_release_started() {
@@ -365,7 +361,8 @@ converge_once() {
 }
 
 main() {
-  local requested_date="${1:-}" stable_aggregate stable_component today date deadline
+  local requested_date="${1:-}" stable_aggregate stable_component today date
+  local current_aggregate current_date current_state
   stable_aggregate="$(stable_base_version)"
   stable_component="${stable_aggregate#release-}"
   if [ "$requested_date" = --version ]; then
@@ -381,6 +378,8 @@ main() {
     return
   fi
   [ "$#" -le 1 ] || release_fail "usage: preview-coordinator.sh [YYYYMMDD]"
+  current_aggregate="$(current_preview_version)"
+  resolve_selection "$ROOT" "$current_aggregate" "$TMP/current-selection-check.tsv"
   if formal_release_started "$stable_aggregate"; then
     return 0
   fi
@@ -389,12 +388,27 @@ main() {
     [[ "$requested_date" =~ ^[0-9]{8}$ ]] || release_fail "date must match YYYYMMDD"
     date="$requested_date"
   else
-    date="$(discover_pending_date "$stable_component" "$today")"
+    date="$today"
   fi
-  AGGREGATE_VERSION="release-$stable_component-preview.$date"
-  validate_aggregate_version "$AGGREGATE_VERSION"
-  if [ ! -f "$ROOT/releases/$AGGREGATE_VERSION.yaml" ]; then
-    generate_preview_manifest "$stable_component" "$date" "$AGGREGATE_VERSION"
+
+  current_date="${current_aggregate##*.}"
+  current_state="$TMP/current-platform-release.json"
+  if release_exists kuasar-sandbox/platform "$current_aggregate" "$current_state"; then
+    if [ "$date" -lt "$current_date" ]; then
+      release_fail "requested preview date $date is older than maintained preview $current_date"
+    fi
+    if [ "$date" -gt "$current_date" ]; then
+      AGGREGATE_VERSION="release-$stable_component-preview.$date"
+      validate_aggregate_version "$AGGREGATE_VERSION"
+      generate_preview_manifest "$stable_component" "$date" "$AGGREGATE_VERSION"
+    else
+      AGGREGATE_VERSION="$current_aggregate"
+    fi
+  else
+    AGGREGATE_VERSION="$current_aggregate"
+    if [ "$date" != "$current_date" ]; then
+      echo "==> resume pending $current_aggregate before advancing to preview.$date"
+    fi
   fi
   SELECTION="$TMP/selection.tsv"
   resolve_selection "$ROOT" "$AGGREGATE_VERSION" "$SELECTION"
