@@ -185,10 +185,10 @@ print('    wall={:.0f}ms internal={}ms faults={} errors={} tail={}/{} drop={} la
     for s in $SCENARIOS; do
         case "$s" in
             cold)
-                run_scenario "$REPO_ROOT/test/e2e/e2e_sandbox_cold.sh" "file://"
+                run_scenario "$REPO_ROOT/test/e2e/sandboxer/e2e_sandbox_cold.sh" "file://"
                 ;;
             cold-manifest)
-                run_scenario "$REPO_ROOT/test/e2e/e2e_sandbox_cold_manifest.sh" "manifest://"
+                run_scenario "$REPO_ROOT/test/e2e/sandboxer/e2e_sandbox_cold_manifest.sh" "manifest://"
                 ;;
             *)
                 echo "[$s] unknown scenario; skipping"

@@ -729,7 +729,7 @@ router、placer 和指定数量 stub node,覆盖 N=1、多成员、成员变更�
 ```bash
 go vet ./...
 make test
-bash test/e2e/e2e_cache.sh                # cache-ctl + manifest-ctl 集成(脚本在 accelerator)
+BIN=$PWD/bin bash ../accelerator/test/e2e/e2e_cache.sh
 BENCH_SCENARIO=tiered-shard-l2 CLIENT_CORES=0-1 SERVER_CORES=2-7 \
     CONCS='1 2 4' PREFILL=500 DURATION=30s bash test/scripts/bench_cache.sh
 ```
@@ -740,8 +740,8 @@ BENCH_SCENARIO=tiered-shard-l2 CLIENT_CORES=0-1 SERVER_CORES=2-7 \
 
 ```bash
 make test
-make test-e2e-sandbox-cold
-make test-e2e-sandbox-cold-manifest
+BIN=$PWD/bin bash ../sandboxer/test/e2e/e2e_sandbox_cold.sh
+BIN=$PWD/bin bash ../sandboxer/test/e2e/e2e_sandbox_cold_manifest.sh
 make perf-sandbox
 ```
 
@@ -751,12 +751,12 @@ make perf-sandbox
 改 `pkg/nodectl/*` 或 `pkg/sandbox/*` 中的资源控制路径时:
 
 ```bash
-make -C orchestrator test-e2e-node-ctl   # node-ctl 资源协议 e2e(orchestrator 仓;umbrella test-e2e 经其调用)
-make test-e2e-density
+make -C ../orchestrator test
+BIN=$PWD/bin bash ../orchestrator/test/e2e/e2e_density.sh
 make perf-density
 ```
 
-`test-e2e-density` 的 Phase B 不以 guest OOM 作为静态模式基线。生产
+`e2e_density.sh` 的 Phase B 不以 guest OOM 作为静态模式基线。生产
 vmlinux 在 infeasible balloon target 下会由 guest sticky self-cap 主动归还内存，
 因此 B1 直接验证 self-cap 日志和 workload 最终存活；B2 在相同 floor/workload
 下验证 node controller admit/grant，并要求 workload 在没有 self-cap、guest OOM

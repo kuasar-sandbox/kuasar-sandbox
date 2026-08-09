@@ -21,7 +21,7 @@ PREVIEW_ACCELERATOR_TAG="$(awk -F '\t' '$1 == "accelerator" {print $2}' \
 resolve_selection "$ROOT" "$VERSION" "$TMP/selection.tsv"
 [ -z "$(previous_release "$ROOT" "$VERSION")" ] \
   || release_fail "first formal release unexpectedly has a comparison baseline"
-mkdir -p "$TMP/fetched/components" "$TMP/fetched/updates"
+mkdir -p "$TMP/fetched/components" "$TMP/fetched/sources" "$TMP/fetched/updates"
 install -m 0644 "$TMP/selection.tsv" "$TMP/fetched/selection.tsv"
 : > "$TMP/fetched/previous-selection.tsv"
 
@@ -36,7 +36,20 @@ while IFS=$'\t' read -r unit tag; do
     -czf "$directory/$archive" -C "$stage" .
   (cd "$directory" && sha256sum "$archive" > SHA256SUMS)
   printf "Fixture updates for \`%s\`.\n" "$unit" > "$TMP/fetched/updates/$unit.md"
+
+  source_root="$TMP/fetched/sources/$unit"
+  mkdir -p "$source_root/docs" "$source_root/test/e2e"
+  printf '# %s source fixture\n' "$unit" > "$source_root/README.md"
+  printf '%s docs\n' "$unit" > "$source_root/docs/$unit-detail.md"
+  cat > "$source_root/test/e2e/run_all.sh" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+echo "$unit fixture E2E"
+EOF
+  chmod +x "$source_root/test/e2e/run_all.sh"
 done < "$TMP/selection.tsv"
+printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux.md"
+printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
 
 SOURCE_DATE_EPOCH=1700000000 \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
@@ -68,25 +81,42 @@ if tar -tzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
   | grep -E '(^|/)releases/[^/]+\.yaml$' >/dev/null; then
   release_fail "platform package contains a release manifest"
 fi
+if tar -tzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
+  | grep -F './test/e2e/assemble.sh' >/dev/null; then
+  release_fail "platform package contains the source-only E2E assembler"
+fi
 
 "$ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/bundle" "$TMP/install"
 [ -f "$TMP/install/docs/kuasar-sandbox.md" ] || release_fail "platform docs were not extracted"
 [ -x "$TMP/install/test/e2e/run_all.sh" ] || release_fail "platform E2E runner was not extracted"
+for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
+  [ -x "$TMP/install/test/e2e/$owner/run_all.sh" ] \
+    || release_fail "$owner E2E runner was not aggregated"
+done
+for component in accelerator connector guest-runtime sandboxer orchestrator; do
+  [ -f "$TMP/install/docs/$component.md" ] \
+    || release_fail "$component README was not aggregated"
+done
+grep -Fqx 'selected vmlinux docs' "$TMP/install/docs/vmlinux.md" \
+  || release_fail "vmlinux docs did not come from the selected vmlinux source"
 
 runner_root="$TMP/runner-root"
 mkdir -p "$runner_root/bin" "$runner_root/test/e2e"
 install -m 0755 "$TMP/install/test/e2e/run_all.sh" "$runner_root/test/e2e/run_all.sh"
-cat > "$runner_root/test/e2e/e2e_binary_paths.sh" <<'EOF'
+for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
+  mkdir -p "$runner_root/test/e2e/$owner"
+  cat > "$runner_root/test/e2e/$owner/run_all.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-[ "$FLATTEN_CTL" = "$BIN/flatten-ctl" ]
-[ "$STORE_CTL" = "$BIN/store-ctl" ]
-[ "$MKFS_EROFS_PATH" = "$BIN/mkfs.erofs" ]
+[ "\$BIN" = "$runner_root/bin" ]
+echo "$owner owner runner"
 EOF
-chmod +x "$runner_root/test/e2e/e2e_binary_paths.sh"
-BIN="$runner_root/bin" bash "$runner_root/test/e2e/run_all.sh" > "$TMP/runner.out"
+  chmod +x "$runner_root/test/e2e/$owner/run_all.sh"
+done
+BIN="$runner_root/bin" ZOT_BIN=/bin/true VGW_BIN=/bin/true \
+  bash "$runner_root/test/e2e/run_all.sh" > "$TMP/runner.out"
 grep -Fq '==> full release e2e: OK' "$TMP/runner.out" \
-  || release_fail "platform E2E runner did not complete its binary-path check"
+  || release_fail "platform E2E runner did not complete its owner-runner check"
 
 for unit in "${RELEASE_UNITS[@]}"; do
   [ -x "$TMP/install/bin/$unit" ] || release_fail "$unit fixture was not extracted"

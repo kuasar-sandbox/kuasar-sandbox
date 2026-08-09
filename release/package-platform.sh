@@ -25,6 +25,18 @@ validate_archive() {
     || release_fail "platform archive is missing docs/kuasar-sandbox.md"
   grep -Fx './test/e2e/run_all.sh' "$listing" >/dev/null \
     || release_fail "platform archive is missing test/e2e/run_all.sh"
+  local owner
+  for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
+    grep -Fx "./test/e2e/$owner/run_all.sh" "$listing" >/dev/null \
+      || release_fail "platform archive is missing test/e2e/$owner/run_all.sh"
+  done
+  for owner in accelerator connector guest-runtime sandboxer orchestrator; do
+    grep -Fx "./docs/$owner.md" "$listing" >/dev/null \
+      || release_fail "platform archive is missing docs/$owner.md"
+  done
+  if grep -Fx './test/e2e/assemble.sh' "$listing" >/dev/null; then
+    release_fail "platform archive contains the source-only E2E assembler"
+  fi
   if grep -E '(^|/)release\.json$|(^|/)release/[^/]+\.json$' "$listing" >/dev/null; then
     release_fail "platform archive contains release metadata JSON"
   fi
@@ -40,9 +52,14 @@ validate_archive() {
 }
 
 package_archive() {
-  [ "$#" -eq 2 ] || release_fail "usage: package-platform.sh package <release-version> <output-dir>"
-  local version="$1" output="$2"
+  [ "$#" -eq 3 ] \
+    || release_fail "usage: package-platform.sh package <release-version> <component-source-dir> <output-dir>"
+  local version="$1" sources="$2" output="$3"
   validate_aggregate_version "$version"
+  local unit
+  for unit in accelerator connector runtime vmlinux sandboxer orchestrator; do
+    [ -d "$sources/$unit" ] || release_fail "component source is missing: $sources/$unit"
+  done
   assert_safe_output "$output"
   local epoch="${SOURCE_DATE_EPOCH:-0}"
   [[ "$epoch" =~ ^[0-9]+$ ]] || release_fail "SOURCE_DATE_EPOCH must be an integer"
@@ -50,8 +67,13 @@ package_archive() {
   local work stage archive
   work="$(mktemp -d)"
   stage="$work/stage"
-  mkdir -p "$stage" "$output/assets"
-  cp -a "$ROOT/docs" "$ROOT/test" "$stage/"
+  mkdir -p "$output/assets"
+  "$ROOT/test/e2e/assemble.sh" "$stage" "$ROOT" \
+    "$sources/accelerator" "$sources/connector" "$sources/runtime" \
+    "$sources/sandboxer" "$sources/orchestrator"
+  [ -f "$sources/vmlinux/docs/vmlinux.md" ] \
+    || release_fail "vmlinux source is missing docs/vmlinux.md"
+  install -m 0644 "$sources/vmlinux/docs/vmlinux.md" "$stage/docs/vmlinux.md"
   archive="$(platform_archive "$version")"
   tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
     --pax-option=delete=atime,delete=ctime -czf "$output/assets/$archive" -C "$stage" .
@@ -76,6 +98,6 @@ case "${1:-}" in
     validate_archive "$1" "$2"
     ;;
   *)
-    release_fail "usage: package-platform.sh <package <release-version> <output-dir>|validate <release-version> <archive>>"
+    release_fail "usage: package-platform.sh <package <release-version> <component-source-dir> <output-dir>|validate <release-version> <archive>>"
     ;;
 esac

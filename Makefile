@@ -5,10 +5,9 @@
 # symlinks under bin/). `make release` converges an explicitly selected
 # release-v* version.
 #
-# Cross-repo e2e/perf tests (those that need binaries from multiple sub-repos)
-# live in this repo's test/; per-repo tests live in their own repo's test/.
-# `make test-e2e` aggregates: drives each sub-repo's test-e2e via its Makefile
-# + runs this repo's own cross-repo e2e sub-targets. Same for `perf` and `bench`.
+# Component E2E suites live beside their implementations. `make test-e2e`
+# assembles those suites with the platform-owned cross-product cases and runs
+# the same test/e2e/run_all.sh layout shipped by an aggregate release.
 
 SHELL    := /bin/bash
 ORG      := $(abspath $(CURDIR)/..)
@@ -36,39 +35,17 @@ SBIN           := $(abspath $(BINDIR))
 E2E_TOOL_DIR   := build/e2e-tools/$(TARGET_ARCH)
 E2E_ZOT_BIN    := $(abspath $(E2E_TOOL_DIR)/zot)
 E2E_VGW_BIN    := $(abspath $(E2E_TOOL_DIR)/versitygw)
+E2E_SUITE_DIR  := $(abspath build/e2e-suite)
 BIN_INPUTS_MANIFEST := release/bin-inputs.manifest
 CI_TIMED       := ci/bms/ci-timed.sh
 GO_REPOS       := accelerator sandboxer guest-runtime connector orchestrator
 ZOT_VERSION    ?= v2.1.17
 
-# Cross-repo e2e tests this repo carries (each needs binaries from multiple
-# sub-repos: vmlinux/mkfs.erofs from guest-runtime/native-deps,
-# sandbox-runtime.bundle from guest-runtime,
-# manifest-ctl/store-ctl/cache-ctl from accelerator,
-# sandbox-ctl/sandbox-init/cloud-hypervisor from sandboxer, flatten-ctl from
-# guest-runtime, connector-ctl from connector,
-# node-ctl from orchestrator, etc.).
-#
-# Auto-derived from the filesystem so `make test-e2e` always runs EVERY e2e script
-# (drop an e2e_*.sh into test/e2e/ and it is included — no list to forget). The
-# target name maps to the file with '_' → '-': e2e_sandbox_cold.sh → test-e2e-sandbox-cold
-# (the pattern rule below reverses it). `test-e2e` is the full suite: missing
-# local prerequisites fail the run. e2e_obs is the only environment-gated
-# exception because it needs external OBS credentials/bucket configuration.
-E2E_SCRIPTS  := $(sort $(wildcard test/e2e/e2e_*.sh))
-UMBRELLA_E2E := $(foreach s,$(E2E_SCRIPTS),test-e2e-$(subst _,-,$(patsubst e2e_%.sh,%,$(notdir $(s)))))
-UMBRELLA_E2E_RUN := $(patsubst test-e2e-%,run-e2e-%,$(UMBRELLA_E2E))
-E2E_REQUIRE_ENV := REQUIRE_KVM=1 REQUIRE_EXEC=1 REQUIRE_CLUSTER_STUB=1 \
-	REQUIRE_CLUSTER_REAL=1 REQUIRE_ORCH=1 REQUIRE_PROXY=1 \
-	REQUIRE_BUILDER=1 REQUIRE_RUNTASK=1 REQUIRE_CONNECTOR_E2E=1 \
-	REQUIRE_GUEST_RUNTIME=1
-
 PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf-density
-REPO_E2E_TARGETS := test-e2e-repo-accelerator test-e2e-repo-connector test-e2e-repo-guest-runtime
 
-.PHONY: all build collect e2e-tools release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
+.PHONY: all build collect e2e-tools assemble-e2e release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
 	        bench test-e2e test-e2e-prebuilt perf dedup-report \
-	        $(UMBRELLA_E2E) $(UMBRELLA_E2E_RUN) $(PERF_TARGETS) $(REPO_E2E_TARGETS)
+	        $(PERF_TARGETS)
 
 all: build
 
@@ -126,35 +103,18 @@ release:
 # ---------------------------------------------------------------------------
 # Tests + benchmarks + perf (cross-repo)
 # ---------------------------------------------------------------------------
-# Static pattern rule (bound to $(UMBRELLA_E2E)): `test-e2e-<sub>` runs
-# test/e2e/e2e_<sub>.sh, with dashes in <sub> mapped to underscores so
-# test-e2e-sandbox-cold → e2e_sandbox_cold.sh.
-$(UMBRELLA_E2E): test-e2e-%: build e2e-tools
-	$(MAKE) run-e2e-$*
+assemble-e2e:
+	rm -rf $(E2E_SUITE_DIR)
+	bash test/e2e/assemble.sh $(E2E_SUITE_DIR) $(CURDIR) \
+		$(ORG)/accelerator $(ORG)/connector $(ORG)/guest-runtime \
+		$(ORG)/sandboxer $(ORG)/orchestrator
 
-$(UMBRELLA_E2E_RUN): run-e2e-%:
-	$(CI_TIMED) e2e/orchestrator/$* env $(E2E_REQUIRE_ENV) BIN=$(SBIN) ZOT_BIN=$(E2E_ZOT_BIN) VGW_BIN=$(E2E_VGW_BIN) bash test/e2e/e2e_$(subst -,_,$*).sh
-
-# Accelerator opens many independently selected loopback ports, so keep it
-# separate from guest-runtime's registry tests. Connector's netns/BPF resources
-# are disjoint from guest-runtime's Docker/loopback resources and can overlap.
-test-e2e-repo-accelerator:
-	$(CI_TIMED) e2e/accelerator env $(E2E_REQUIRE_ENV) $(MAKE) -C $(ORG)/accelerator test-e2e SBIN=$(SBIN)
-
-test-e2e-repo-connector:
-	$(CI_TIMED) e2e/connector env $(E2E_REQUIRE_ENV) $(MAKE) -C $(ORG)/connector test-e2e
-
-test-e2e-repo-guest-runtime:
-	$(CI_TIMED) e2e/guest-runtime env $(E2E_REQUIRE_ENV) $(MAKE) -C $(ORG)/guest-runtime test-e2e \
-		FLATTEN_CTL=$(SBIN)/flatten-ctl STORE_CTL=$(SBIN)/store-ctl \
-		ZOT_BIN=$(E2E_ZOT_BIN) MKFS_EROFS_PATH=$(SBIN)/mkfs.erofs
-
-# Aggregate test-e2e: every umbrella sub-target + each sub-repo's test-e2e.
-test-e2e: build e2e-tools
+# Candidate source and exact release assets both pass this owner-aggregated
+# runner. OBS remains opt-in through OBS_E2E=1 in accelerator/test/e2e/run_all.sh.
+test-e2e: build e2e-tools assemble-e2e
 	$(MAKE) test-uffd-performance-gate
-	$(MAKE) -j1 $(UMBRELLA_E2E_RUN)
-	$(MAKE) test-e2e-repo-accelerator
-	$(MAKE) -j2 test-e2e-repo-connector test-e2e-repo-guest-runtime
+	$(CI_TIMED) e2e/run-all env BIN=$(SBIN) ZOT_BIN=$(E2E_ZOT_BIN) \
+		VGW_BIN=$(E2E_VGW_BIN) bash $(E2E_SUITE_DIR)/test/e2e/run_all.sh
 
 # Aggregate releases validate the already-published archives. This target never
 # invokes a component build; bin/<arch>/ must be populated by the release fetcher.
@@ -164,22 +124,13 @@ verify-prebuilt:
 		[ -f "$(SBIN)/$$name" ] || { echo "missing prebuilt release input: $$name" >&2; exit 1; }; \
 	done < $(BIN_INPUTS_MANIFEST)
 
-test-e2e-prebuilt: verify-prebuilt e2e-tools
-	$(MAKE) -j1 $(UMBRELLA_E2E_RUN)
-	$(MAKE) test-e2e-repo-accelerator
-	@cd $(ORG)/connector && for test_script in examples/*_test.sh; do \
-		echo "==> $$test_script"; \
-		sudo env REQUIRE_CONNECTOR_E2E=1 SWITCH_BIN="$(SBIN)/connector-ctl vswitch" \
-			bash "$$test_script" all || exit 1; \
-	done
-	REQUIRE_GUEST_RUNTIME=1 FLATTEN_CTL="$(SBIN)/flatten-ctl" \
-		STORE_CTL="$(SBIN)/store-ctl" ZOT_BIN="$(E2E_ZOT_BIN)" \
-		MKFS_EROFS_PATH="$(SBIN)/mkfs.erofs" \
-		bash $(ORG)/guest-runtime/test/e2e/e2e_flatten.sh
+test-e2e-prebuilt: verify-prebuilt e2e-tools assemble-e2e
+	$(CI_TIMED) e2e/run-all env BIN=$(SBIN) ZOT_BIN=$(E2E_ZOT_BIN) \
+		VGW_BIN=$(E2E_VGW_BIN) bash $(E2E_SUITE_DIR)/test/e2e/run_all.sh
 
 # perf harnesses living in this repo (cross-repo binary use).
-perf-sandbox: build
-	BIN=$(SBIN) bash test/perf/sandbox-perf.sh
+perf-sandbox: build assemble-e2e
+	BIN=$(SBIN) bash $(E2E_SUITE_DIR)/test/perf/sandbox-perf.sh
 perf-sandbox-manifest: build
 	BIN=$(SBIN) bash test/perf/sandbox-perf-manifest.sh
 perf-sandbox-working-set: build
@@ -239,9 +190,9 @@ help:
 	@echo "  collect       re-assemble bin/\$$(TARGET_ARCH)/ from existing sub-repo outputs"
 	@echo "  e2e-tools     ensure local test environment tools under build/e2e-tools/\$$(TARGET_ARCH)/"
 	@echo "  release       publish a selected aggregate (RELEASE_VERSION=release-vX.Y.Z)"
-	@echo "  test-e2e      aggregate: drive each sub-repo's test-e2e + run this repo's cross-repo e2e ($(words $(UMBRELLA_E2E)))"
+	@echo "  assemble-e2e  assemble component-owned and platform-owned suites"
+	@echo "  test-e2e      build and run the complete assembled test/e2e/run_all.sh gate"
 	@echo "  test-e2e-prebuilt  run full compatibility E2E from fetched release binaries without rebuilding"
-	@echo "  test-e2e-<X>  one e2e sub-target (X in {manifest,obs,density,sandbox-{cold,..},orchestrator,run-builder,execute,cluster-real,..})"
 	@echo "  demo          run the e2b end-to-end demo (test/demo/demo_e2b.sh; DEMO_PAUSE=1 to step through)"
 	@echo "  perf          aggregate: accelerator perf-cache + this repo's perf-sandbox/-manifest/-density"
 	@echo "  bench         Go micro-benchmarks across every Go sub-repo"
