@@ -47,7 +47,8 @@ release_exists() {
     return 0
   else
     local rc=$?
-    [ "$rc" -eq 4 ] || return "$rc"
+    [ "$rc" -eq 4 ] \
+      || release_fail "cannot query release state: $repository $tag"
   fi
   return 1
 }
