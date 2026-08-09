@@ -9,7 +9,15 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 VERSION=release-v0.1.0
-PREVIEW_VERSION=release-v0.1.0-preview.20260808
+PREVIEW_BASE="$(awk '$1 == "version:" {print $2}' "$ROOT/releases/daily-preview.yaml")"
+PREVIEW_SUFFIX="$(awk '$1 == "preview_version:" {print $2}' "$ROOT/releases/daily-preview.yaml")"
+PREVIEW_DATE="${PREVIEW_SUFFIX#preview.}"
+NEXT_PREVIEW_DATE="$(date -u -d "$PREVIEW_DATE + 1 day" +%Y%m%d)"
+PREVIEW_VERSION="$PREVIEW_BASE-$PREVIEW_SUFFIX"
+PREVIEW_COMPONENT_VERSION="${PREVIEW_BASE#release-}"
+resolve_selection "$ROOT" "$PREVIEW_VERSION" "$TMP/current-preview-selection.tsv"
+PREVIEW_ACCELERATOR_TAG="$(awk -F '\t' '$1 == "accelerator" {print $2}' \
+  "$TMP/current-preview-selection.tsv")"
 resolve_selection "$ROOT" "$VERSION" "$TMP/selection.tsv"
 [ -z "$(previous_release "$ROOT" "$VERSION")" ] \
   || release_fail "first formal release unexpectedly has a comparison baseline"
@@ -229,10 +237,10 @@ fi
 PATH="$TMP/coordinator-bin:$PATH" \
   FAKE_COORDINATOR_STATE="$TMP/coordinator-state" \
   PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
-  bash "$ROOT/release/preview-coordinator.sh" 20260808 > "$TMP/coordinator.out"
+  bash "$ROOT/release/preview-coordinator.sh" "$PREVIEW_DATE" > "$TMP/coordinator.out"
 [ "$(wc -l < "$TMP/coordinator-state/dispatches")" -eq 5 ] \
   || release_fail "preview coordinator did not dispatch the five independent release units"
-grep -Fqx 'workflow run release.yml --repo kuasar-sandbox/accelerator --ref main -f version=v0.1.0-preview.20260808' \
+grep -Fqx "workflow run release.yml --repo kuasar-sandbox/accelerator --ref main -f version=$PREVIEW_ACCELERATOR_TAG" \
   "$TMP/coordinator-state/dispatches" \
   || release_fail "preview coordinator did not dispatch the expected accelerator release"
 grep -Fq 'preview remains pending' "$TMP/coordinator.out" \
@@ -245,12 +253,20 @@ git -C "$TMP/generated-root" config user.name release-test
 git -C "$TMP/generated-root" config user.email release-test@example.invalid
 git -C "$TMP/generated-root" add release releases
 git -C "$TMP/generated-root" commit -qm 'maintain current preview selection'
+install -m 0644 "$TMP/generated-root/releases/daily-preview.yaml" \
+  "$TMP/generated-state/current-daily-preview.yaml"
 cat > "$TMP/generated-bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
 state="${FAKE_COORDINATOR_STATE:?}"
 root="${FAKE_COORDINATOR_ROOT:?}"
+current_aggregate="${FAKE_CURRENT_AGGREGATE:?}"
+current_manifest="$state/current-daily-preview.yaml"
+
+selected_tag() {
+  awk -v key="$1:" '$1 == key {print $2}' "$current_manifest"
+}
 
 archive_name() {
   local repository="$1" tag="$2" component="${repository##*/}"
@@ -262,10 +278,11 @@ archive_name() {
 }
 
 component_release() {
-  local repository="$1" tag="$2" archive
+  local repository="$1" tag="$2" archive prerelease=false
   archive="$(archive_name "$repository" "$tag")"
-  jq -n --arg tag "$tag" --arg archive "$archive" '
-    {tag_name: $tag, draft: false, prerelease: true,
+  [[ "$tag" == *-preview.* ]] && prerelease=true
+  jq -n --arg tag "$tag" --arg archive "$archive" --argjson prerelease "$prerelease" '
+    {tag_name: $tag, draft: false, prerelease: $prerelease,
      published_at: "2026-08-09T00:00:00Z",
      assets: [{name: $archive}, {name: "SHA256SUMS"}]}'
 }
@@ -303,18 +320,27 @@ if [ "${1:-}" = api ]; then
       repository="${repository%%/releases*}"
       if [ "$repository" = kuasar-sandbox/guest-runtime ]; then
         printf '[[%s,%s]]\n' \
-          "$(component_release "$repository" runtime-v0.1.0-preview.20260808)" \
-          "$(component_release "$repository" vmlinux-v0.1.0-preview.20260808)"
+          "$(component_release "$repository" "$(selected_tag runtime)")" \
+          "$(component_release "$repository" "$(selected_tag vmlinux)")"
       else
+        unit="${repository##*/}"
         printf '[[%s]]\n' \
-          "$(component_release "$repository" v0.1.0-preview.20260808)"
+          "$(component_release "$repository" "$(selected_tag "$unit")")"
       fi
       ;;
     repos/*/releases/tags/*)
       repository="${endpoint#repos/}"
       repository="${repository%%/releases/tags/*}"
       tag="${endpoint##*/}"
-      if [[ "$tag" == *preview.20260808 ]]; then
+      if [ "$repository" = kuasar-sandbox/platform ] && [ "$tag" = "$current_aggregate" ]; then
+        jq -n --arg tag "$tag" \
+          '{tag_name: $tag, draft: false, prerelease: true, published_at: "2026-08-09T00:00:00Z"}'
+      elif [ "$repository" = kuasar-sandbox/guest-runtime ] \
+        && { [ "$tag" = "$(selected_tag runtime)" ] \
+          || [ "$tag" = "$(selected_tag vmlinux)" ]; }; then
+        component_release "$repository" "$tag"
+      elif [ "$repository" != kuasar-sandbox/platform ] \
+        && [ "$tag" = "$(selected_tag "${repository##*/}")" ]; then
         component_release "$repository" "$tag"
       else
         echo 'gh: Not Found (HTTP 404)' >&2
@@ -371,27 +397,33 @@ chmod +x "$TMP/generated-bin/curl"
 PATH="$TMP/generated-bin:$PATH" \
   FAKE_COORDINATOR_STATE="$TMP/generated-state" \
   FAKE_COORDINATOR_ROOT="$TMP/generated-root" \
+  FAKE_CURRENT_AGGREGATE="$PREVIEW_VERSION" \
   GH_TOKEN=read-token PLATFORM_TOKEN=write-token \
   PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
-  bash "$TMP/generated-root/release/preview-coordinator.sh" 20260809 \
+  bash "$TMP/generated-root/release/preview-coordinator.sh" "$NEXT_PREVIEW_DATE" \
   > "$TMP/generated-coordinator.out"
 
-GENERATED_VERSION=release-v0.1.0-preview.20260809
+GENERATED_VERSION="$PREVIEW_BASE-preview.$NEXT_PREVIEW_DATE"
+GENERATED_ACCELERATOR_TAG="$PREVIEW_COMPONENT_VERSION-preview.$NEXT_PREVIEW_DATE"
 GENERATED_MANIFEST="$TMP/generated-root/releases/daily-preview.yaml"
 [ -f "$GENERATED_MANIFEST" ] || release_fail "daily coordinator did not generate a manifest"
 [ "$(previous_release "$TMP/generated-root" "$GENERATED_VERSION")" = "$PREVIEW_VERSION" ] \
   || release_fail "generated manifest does not name the latest aggregate as previous"
 resolve_selection "$TMP/generated-root" "$GENERATED_VERSION" "$TMP/generated-selection.tsv"
-grep -Fqx $'accelerator\tv0.1.0-preview.20260809' "$TMP/generated-selection.tsv" \
+grep -Fqx "accelerator"$'\t'"$GENERATED_ACCELERATOR_TAG" "$TMP/generated-selection.tsv" \
   || release_fail "changed component did not select a new preview"
 for unit in connector sandboxer orchestrator; do
-  grep -Fqx "$unit"$'\t''v0.1.0-preview.20260808' "$TMP/generated-selection.tsv" \
+  current_tag="$(awk -F '\t' -v unit="$unit" '$1 == unit {print $2}' \
+    "$TMP/current-preview-selection.tsv")"
+  grep -Fqx "$unit"$'\t'"$current_tag" "$TMP/generated-selection.tsv" \
     || release_fail "$unit did not reuse its unchanged release"
 done
-grep -Fqx $'runtime\truntime-v0.1.0-preview.20260808' "$TMP/generated-selection.tsv" \
-  || release_fail "runtime did not reuse its unchanged release"
-grep -Fqx $'vmlinux\tvmlinux-v0.1.0-preview.20260808' "$TMP/generated-selection.tsv" \
-  || release_fail "vmlinux did not reuse its unchanged release"
+for unit in runtime vmlinux; do
+  current_tag="$(awk -F '\t' -v unit="$unit" '$1 == unit {print $2}' \
+    "$TMP/current-preview-selection.tsv")"
+  grep -Fqx "$unit"$'\t'"$current_tag" "$TMP/generated-selection.tsv" \
+    || release_fail "$unit did not reuse its unchanged release"
+done
 [ "$(cat "$TMP/generated-state/manifest-endpoint")" = \
   "repos/kuasar-sandbox/platform/contents/releases/daily-preview.yaml" ] \
   || release_fail "generated manifest was committed to an unexpected path"
@@ -404,7 +436,7 @@ cmp -s "$GENERATED_MANIFEST" "$TMP/persisted-manifest" \
   || release_fail "committed manifest differs from the frozen local selection"
 [ "$(wc -l < "$TMP/generated-state/dispatches")" -eq 1 ] \
   || release_fail "daily coordinator dispatched an unchanged release unit"
-grep -Fqx 'workflow run release.yml --repo kuasar-sandbox/accelerator --ref main -f version=v0.1.0-preview.20260809' \
+grep -Fqx "workflow run release.yml --repo kuasar-sandbox/accelerator --ref main -f version=$GENERATED_ACCELERATOR_TAG" \
   "$TMP/generated-state/dispatches" \
   || release_fail "daily coordinator did not dispatch the changed release unit"
 
