@@ -173,26 +173,66 @@ jobs:
           repositories: platform
           permission-contents: read
 
-      - name: Check out trusted platform tooling
-        id: checkout-platform-tooling
-        continue-on-error: true
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: trusted/platform
-          token: ${{ steps.platform-tooling-token.outputs.token }}
-          persist-credentials: false
+      - name: Materialize exact platform sources
+        env:
+          GH_TOKEN: ${{ steps.platform-tooling-token.outputs.token }}
+          TRUSTED_REPOSITORY: ${{ job.workflow_repository }}
+          TRUSTED_SHA: ${{ job.workflow_sha }}
+          PLATFORM_SOURCE_SHA: ${{ inputs.candidate_repository == 'kuasar-sandbox/platform' && inputs.candidate_sha || job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          archive_tmp=""
+          trap 'rm -f "${archive_tmp:-}"' EXIT
 
-      - name: Retry trusted platform tooling checkout
-        if: steps.checkout-platform-tooling.outcome == 'failure'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: trusted/platform
-          token: ${{ steps.platform-tooling-token.outputs.token }}
-          persist-credentials: false
+          materialize() {
+            local repository=$1 sha=$2 destination=$3
+            local entry_type
+            local -a archive_roots=()
+            [[ "$repository" =~ ^kuasar-sandbox/[a-z0-9-]+$ ]]
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            archive_tmp=$(mktemp "$RUNNER_TEMP/kuasar-platform.XXXXXX.tar.gz")
+            curl --fail --show-error --silent --location \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 120 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$repository/tarball/$sha" \
+              -o "$archive_tmp"
+
+            mapfile -t archive_roots < <(tar -tzf "$archive_tmp" \
+              | awk -F/ 'NF { print $1 }' | sort -u)
+            [ "${#archive_roots[@]}" -eq 1 ] && [ -n "${archive_roots[0]}" ] \
+              || { echo "platform archive must contain one top-level directory" >&2; exit 1; }
+            if tar -tzf "$archive_tmp" \
+              | grep -Eq '(^/|(^|/)\.\.(/|$)|(^|/)\.(/|$))'; then
+              echo "platform archive contains an unsafe path" >&2
+              exit 1
+            fi
+            entry_type=$(tar -tvzf "$archive_tmp" | awk '
+              substr($1, 1, 1) !~ /^[-d]$/ && bad == "" { bad = substr($1, 1, 1) }
+              END { print bad }
+            ')
+            [ -z "$entry_type" ] \
+              || { echo "platform archive contains unsupported entry type $entry_type" >&2; exit 1; }
+
+            rm -rf "$destination"
+            install -d -m 0755 "$destination"
+            tar -xzf "$archive_tmp" --strip-components=1 \
+              --no-same-owner --no-same-permissions -C "$destination"
+            rm -f "$archive_tmp"
+            archive_tmp=""
+          }
+
+          materialize "$TRUSTED_REPOSITORY" "$TRUSTED_SHA" trusted/platform
+          if [ "${{ inputs.mode }}" = source ]; then
+            if [ "$PLATFORM_SOURCE_SHA" = "$TRUSTED_SHA" ]; then
+              rm -rf src/platform
+              install -d -m 0755 src/platform
+              cp -a trusted/platform/. src/platform/
+            else
+              materialize kuasar-sandbox/platform "$PLATFORM_SOURCE_SHA" src/platform
+            fi
+          fi
 
       - name: Download exact aggregate bundle
         if: inputs.mode == 'exact-assets'
@@ -258,28 +298,6 @@ jobs:
               and .merge_commit_sha == $candidate
             ' <<< "$pr" >/dev/null \
             || { echo "candidate no longer matches the open pull request" >&2; exit 1; }
-
-      - name: Check out executable platform source
-        if: inputs.mode == 'source'
-        id: checkout-platform-source
-        continue-on-error: true
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kuasar-sandbox/platform
-          ref: ${{ inputs.candidate_repository == 'kuasar-sandbox/platform' && inputs.candidate_sha || job.workflow_sha }}
-          path: src/platform
-          token: ${{ steps.source-token.outputs.token }}
-          persist-credentials: false
-
-      - name: Retry executable platform source checkout
-        if: inputs.mode == 'source' && steps.checkout-platform-source.outcome == 'failure'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kuasar-sandbox/platform
-          ref: ${{ inputs.candidate_repository == 'kuasar-sandbox/platform' && inputs.candidate_sha || job.workflow_sha }}
-          path: src/platform
-          token: ${{ steps.source-token.outputs.token }}
-          persist-credentials: false
 
       - name: Assemble the five component source repositories
         if: inputs.mode == 'source'

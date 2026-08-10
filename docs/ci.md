@@ -41,8 +41,11 @@ integration commit。source 模式没有 `main` push 或手工 dispatch 入口�
 `pull_request_target` workflow check 绑定 PR head commit,不能代替这个 integration-commit
 状态。
 
-源码归档缓存在 `/var/cache/kuasar/sources/<repo>/<sha>.tar.gz`。命中时校验 SHA-256 和 tar
-结构;miss 从 GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每仓以 `flock`
+platform tooling 与 source 使用只读 App token 从 GitHub 官方 archive API 按完整 SHA 获取,
+不依赖 Git smart HTTP;二者 SHA 相同时直接复用已解包的 trusted tree。归档必须只有一个顶层
+目录、不得包含路径穿越或符号链接等非普通条目。五个组件的源码归档缓存在
+`/var/cache/kuasar/sources/<repo>/<sha>.tar.gz`。命中时校验 SHA-256 和 tar 结构;miss 从
+GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每仓以 `flock`
 串行维护,保留最近使用的 32 个 revision。token 在执行候选代码前显式撤销。
 
 随后创建五组件 `go.work`,恢复或构建 native cache,并从候选 platform 源码运行:
