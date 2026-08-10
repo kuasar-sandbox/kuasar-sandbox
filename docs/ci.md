@@ -9,7 +9,7 @@ platform `main` revision 调用 `.github/workflows/bms-e2e.yml`。公共准入�
 
 BMS 有两个明确模式:
 
-- `source`:验证一个仓的 PR integration commit 或 `main` commit 与其余仓当前 `main` 的组合;
+- `source`:验证一个仓的 PR integration commit 与其余仓当前 `main` 的组合;
 - `exact-assets`:验证 aggregate workflow 已下载并校验的发布 archive,不重新构建。
 
 ## 2. Source 模式
@@ -19,12 +19,11 @@ workflow。同仓非 draft PR 自动准入;fork PR 由 GitHub-hosted 控制 job 
 查询当前组织成员关系,仅 `active` 的 owner/member 自动准入。控制 job 同时重新查询当前 PR,
 校验 GitHub 生成的 two-parent integration commit,并在该 commit 上把
 `kuasar/bms-exact-head` 置为 `pending`。事件中的 `author_association` 不作为私有组织成员
-身份来源;draft、外部 fork、冲突或已经变化的事件不会取得自托管 runner。
+身份来源。draft PR 不取得自托管 runner,其 exact-head 保持 `pending`;转为 ready 后由新的
+事件自动运行完整 BMS。外部 fork、冲突或已经变化的事件拒绝准入。
 
 其余五仓 revision 通过一次 GitHub GraphQL 查询解析,候选仓 revision 替换为已准入的
-integration commit。`main` push 使用该 push 的精确 SHA。可信维护者仍可通过
-`workflow_dispatch` 显式输入当前 PR number、candidate/base/head SHA 运行同一个执行路径;
-该入口用于诊断和受控重跑,不会冒充自动 PR exact-head 状态。
+integration commit。source 模式没有 `main` push 或手工 dispatch 入口。
 
 可复用 workflow 验证:
 
@@ -39,7 +38,8 @@ integration commit。`main` push 使用该 push 的精确 SHA。可信维护者�
 结束控制 job 在 GitHub-hosted runner 再次查询 PR。只有 BMS 成功且当前 integration commit
 仍与准入值完全一致时,它才把同一个 `kuasar/bms-exact-head` 状态置为 `success`;测试失败、
 取消、跳过或 PR 已变化都不会生成可用于合入的成功状态。GitHub 自带的
-`pull_request_target` workflow check 绑定 base commit,不能代替这个 exact-head 状态。
+`pull_request_target` workflow check 绑定 PR head commit,不能代替这个 integration-commit
+状态。
 
 源码归档缓存在 `/var/cache/kuasar/sources/<repo>/<sha>.tar.gz`。命中时校验 SHA-256 和 tar
 结构;miss 从 GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每仓以 `flock`

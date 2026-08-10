@@ -13,12 +13,12 @@ on:
         default: ""
         type: string
       pull_request_number:
-        description: Pull request whose integration commit is under test; zero for a main push
+        description: Pull request whose integration commit is under test
         required: false
         default: "0"
         type: string
       candidate_sha:
-        description: Exact source integration or main commit
+        description: Exact source integration commit
         required: false
         default: ""
         type: string
@@ -55,77 +55,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  request:
-    runs-on: ubuntu-latest
-    env:
-      CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
-      CANDIDATE_PR: ${{ inputs.pull_request_number }}
-      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-      CANDIDATE_BASE_SHA: ${{ inputs.base_sha }}
-      CANDIDATE_HEAD_SHA: ${{ inputs.head_sha }}
-      RELEASE_VERSION: ${{ inputs.release_version }}
-      RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
-    steps:
-      - name: Validate reusable workflow request
-        env:
-          TRUSTED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          set -euo pipefail
-          [ "$TRUSTED_WORKFLOW_REPOSITORY" = kuasar-sandbox/platform ] \
-            || { echo "BMS implementation must come from kuasar-sandbox/platform" >&2; exit 1; }
-          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
-          case "${{ inputs.mode }}" in
-            source)
-              [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|orchestrator|platform|sandboxer)$ ]]
-              for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do
-                value=${!variable}
-                [[ "$value" =~ ^[0-9a-f]{40}$ ]] \
-                  || { echo "$variable must be a full lowercase commit SHA" >&2; exit 1; }
-              done
-              [[ "$CANDIDATE_PR" =~ ^[0-9]+$ ]]
-
-              case "$GITHUB_EVENT_NAME" in
-                pull_request_target)
-                  jq -e \
-                    --arg repository "$CANDIDATE_REPOSITORY" \
-                    --argjson number "$CANDIDATE_PR" \
-                    --arg base "$CANDIDATE_BASE_SHA" \
-                    --arg head "$CANDIDATE_HEAD_SHA" '
-                      .repository.full_name == $repository
-                      and .pull_request.number == $number
-                      and .pull_request.state == "open"
-                      and .pull_request.draft == false
-                      and .pull_request.base.ref == "main"
-                      and .pull_request.base.repo.full_name == $repository
-                      and .pull_request.base.sha == $base
-                      and .pull_request.head.sha == $head
-                    ' "$GITHUB_EVENT_PATH" >/dev/null \
-                    || { echo "pull_request_target inputs do not match the admitted event" >&2; exit 1; }
-                  ;;
-                push)
-                  [ "$GITHUB_REF" = refs/heads/main ]
-                  [ "$CANDIDATE_REPOSITORY" = "$GITHUB_REPOSITORY" ]
-                  [ "$CANDIDATE_PR" = 0 ]
-                  [ "$CANDIDATE_SHA" = "$GITHUB_SHA" ]
-                  [ "$CANDIDATE_BASE_SHA" = "$GITHUB_SHA" ]
-                  [ "$CANDIDATE_HEAD_SHA" = "$GITHUB_SHA" ]
-                  ;;
-                workflow_dispatch) ;;
-                *) echo "source BMS rejects event $GITHUB_EVENT_NAME" >&2; exit 1 ;;
-              esac
-              ;;
-            exact-assets)
-              [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] \
-                || { echo "exact-assets BMS requires workflow_dispatch" >&2; exit 1; }
-              [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]]
-              [[ "$RELEASE_BUNDLE_ARTIFACT" =~ ^aggregate-stage-release-v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8})?-[0-9]+$ ]]
-              ;;
-            *) echo "mode must be source or exact-assets" >&2; exit 1 ;;
-          esac
-
   e2e:
-    needs: request
     runs-on:
       - self-hosted
       - Linux
@@ -159,6 +89,51 @@ jobs:
       RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
 
     steps:
+      - name: Validate reusable workflow request
+        env:
+          TRUSTED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [ "$TRUSTED_WORKFLOW_REPOSITORY" = kuasar-sandbox/platform ] \
+            || { echo "BMS implementation must come from kuasar-sandbox/platform" >&2; exit 1; }
+          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "${{ inputs.mode }}" in
+            source)
+              [ "$GITHUB_EVENT_NAME" = pull_request_target ] \
+                || { echo "source BMS requires pull_request_target" >&2; exit 1; }
+              [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|orchestrator|platform|sandboxer)$ ]]
+              for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do
+                value=${!variable}
+                [[ "$value" =~ ^[0-9a-f]{40}$ ]] \
+                  || { echo "$variable must be a full lowercase commit SHA" >&2; exit 1; }
+              done
+              [[ "$CANDIDATE_PR" =~ ^[1-9][0-9]*$ ]]
+              jq -e \
+                --arg repository "$CANDIDATE_REPOSITORY" \
+                --argjson number "$CANDIDATE_PR" \
+                --arg base "$CANDIDATE_BASE_SHA" \
+                --arg head "$CANDIDATE_HEAD_SHA" '
+                  .repository.full_name == $repository
+                  and .pull_request.number == $number
+                  and .pull_request.state == "open"
+                  and .pull_request.draft == false
+                  and .pull_request.base.ref == "main"
+                  and .pull_request.base.repo.full_name == $repository
+                  and .pull_request.base.sha == $base
+                  and .pull_request.head.sha == $head
+                ' "$GITHUB_EVENT_PATH" >/dev/null \
+                || { echo "pull_request_target inputs do not match the admitted event" >&2; exit 1; }
+              ;;
+            exact-assets)
+              [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] \
+                || { echo "exact-assets BMS requires workflow_dispatch" >&2; exit 1; }
+              [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]]
+              [[ "$RELEASE_BUNDLE_ARTIFACT" =~ ^aggregate-stage-release-v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8})?-[0-9]+$ ]]
+              ;;
+            *) echo "mode must be source or exact-assets" >&2; exit 1 ;;
+          esac
+
       - name: Initialize CI metadata
         run: |
           set -euo pipefail
