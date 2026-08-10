@@ -128,12 +128,13 @@ x86_64,因此当前 Release 只发布该目标。
 
 - variable `KUASAR_CI_APP_CLIENT_ID`;
 - secret `KUASAR_CI_APP_PRIVATE_KEY`;
-- App 安装权限为 `Contents: read` 与 `Actions: write`。
+- App 安装权限为仓库 `Contents: read`、`Actions: write` 与组织 `Members: read`。
 
 每次签发的 installation token 继续按用途收窄:
 
 - BMS 源码读取和聚合下载 token 只请求 `Contents: read`;
 - 每日协调 token 请求 `Actions: write` 与 `Contents: read`;
+- fork PR 准入 token 只请求组织 `Members: read`;
 - workflow 签发 token 时把仓库范围显式限制在六个发行仓。
 
 协调 token 只存在于 GitHub-hosted 协调 job。自托管 BMS 只接收收窄后的源码只读 token,
@@ -273,8 +274,9 @@ workflow run 状态幂等处理:
 - BMS 控制面与执行实现只在 platform 维护,组件 wrapper 从 platform `main` 引用可信入口;
 - reusable workflow 用 `job.workflow_repository` 和 `job.workflow_sha` checkout 同一 resolved
   platform revision 的工具;
-- base 仓的 `pull_request_target` 控制 job 只让同仓 PR 或组织 `OWNER/MEMBER` 的 fork PR
-  进入自托管 BMS,候选 workflow 不参与准入;
+- base 仓的 `pull_request_target` 控制 job 使用只读组织成员接口,只让同仓 PR 或当前 active
+  owner/member 的 fork PR 进入自托管 BMS,候选 workflow 与事件 `author_association` 不参与
+  身份判断;
 - 控制 job 在 integration commit 上维护 `kuasar/bms-exact-head`,只有 BMS 成功且结束时
   candidate、PR base/head 和当前 merge commit 仍完全一致才写入成功;
 - `kuasar-e2e` runner group 只允许 platform `main` 的 `bms-e2e.yml`,fork workflow 不转发
