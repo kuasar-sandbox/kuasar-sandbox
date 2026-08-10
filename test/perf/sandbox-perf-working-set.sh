@@ -640,9 +640,6 @@ if revision_manifest:
                     "role": row["role"],
                     "source": "revision-manifest",
                 }
-    # The CI revision manifest pins the five component repositories. The
-    # platform checkout is the harness itself, so record its local revision.
-    repositories["platform"] = git_revision("platform", platform_root)
 else:
     for name in repository_names:
         path = platform_root if name == "platform" else workspace / name

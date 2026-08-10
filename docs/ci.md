@@ -139,7 +139,7 @@ workflow,且候选代码执行前相关 token 已撤销。
 每次 BMS 上传 `ci-metadata-<run>-<attempt>`。source 模式通常包含:
 
 - `run.tsv`:模式、候选仓、PR 与 candidate/base/head SHA;
-- `revisions.tsv`:五组件精确 revision;
+- `revisions.tsv`:platform 测试框架与五组件的精确 revision;
 - `source-cache.tsv`:源码缓存命中和摘要;
 - `native-cache.tsv`:native key、命中和耗时;
 - `timings.tsv`:构建与测试阶段资源数据;

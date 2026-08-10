@@ -316,6 +316,19 @@ jobs:
           printf 'repository\trequested_ref\tresolved_sha\trole\n' > "$KUASAR_REVISION_MANIFEST"
           printf 'repository\tresolved_sha\tstatus\tsha256\n' > "$KUASAR_CI_DIR/source-cache.tsv"
 
+          platform_requested_ref=main
+          platform_resolved_sha=${{ job.workflow_sha }}
+          platform_role=sibling
+          if [ "$CANDIDATE_REPOSITORY" = kuasar-sandbox/platform ]; then
+            platform_requested_ref="$CANDIDATE_SHA"
+            platform_resolved_sha="$CANDIDATE_SHA"
+            platform_role=candidate
+          fi
+          [[ "$platform_resolved_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf 'kuasar-sandbox/platform\t%s\t%s\t%s\n' \
+            "$platform_requested_ref" "$platform_resolved_sha" "$platform_role" \
+            >> "$KUASAR_REVISION_MANIFEST"
+
           revision_query='
           query {
             accelerator: repository(owner: "kuasar-sandbox", name: "accelerator") { ref(qualifiedName: "refs/heads/main") { target { oid } } }
@@ -450,6 +463,7 @@ jobs:
           set -euo pipefail
           while IFS=$'\t' read -r repository _ resolved_sha _; do
             repo=${repository#kuasar-sandbox/}
+            [ "$repo" = platform ] && continue
             source_dir="/var/cache/kuasar/sources/$repo"
             src/platform/ci/bms/source-cache-prune.sh \
               "$source_dir" "$source_dir/$resolved_sha.tar.gz"
