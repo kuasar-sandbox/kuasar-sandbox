@@ -1,0 +1,345 @@
+name: Reusable BMS Entry
+
+on:
+  workflow_call:
+    inputs:
+      confirm:
+        description: Type run-full-e2e for a trusted manual run
+        required: false
+        default: ""
+        type: string
+      pull_request_number:
+        description: Pull request number for a trusted manual run
+        required: false
+        default: "0"
+        type: string
+      candidate_sha:
+        description: Exact PR integration commit for a trusted manual run
+        required: false
+        default: ""
+        type: string
+      base_sha:
+        description: Integration commit first parent for a trusted manual run
+        required: false
+        default: ""
+        type: string
+      head_sha:
+        description: Integration commit second parent for a trusted manual run
+        required: false
+        default: ""
+        type: string
+    secrets:
+      KUASAR_CI_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: bms-entry-${{ github.repository }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pr-admission:
+    if: github.event_name == 'pull_request_target'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      eligible: ${{ steps.admission.outputs.eligible }}
+      pull_request_number: ${{ steps.admission.outputs.pull_request_number }}
+      candidate_sha: ${{ steps.admission.outputs.candidate_sha }}
+      base_sha: ${{ steps.admission.outputs.base_sha }}
+      head_sha: ${{ steps.admission.outputs.head_sha }}
+      reason: ${{ steps.admission.outputs.reason }}
+    steps:
+      - name: Admit the current exact integration commit
+        id: admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STATUS_CONTEXT: kuasar/bms-exact-head
+        run: |
+          set -euo pipefail
+
+          api_get() {
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL$1"
+          }
+
+          post_status() {
+            local sha=$1 state=$2 description=$3
+            jq -cn \
+              --arg state "$state" \
+              --arg context "$STATUS_CONTEXT" \
+              --arg description "$description" \
+              --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              '{state: $state, context: $context, description: $description, target_url: $target_url}' \
+              | curl --fail --show-error --silent \
+                  --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+                  --request POST \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "Authorization: Bearer $GH_TOKEN" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  --data-binary @- \
+                  "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$sha" >/dev/null
+          }
+
+          event_pr=$(jq -er '.pull_request.number' "$GITHUB_EVENT_PATH")
+          event_action=$(jq -er '.action' "$GITHUB_EVENT_PATH")
+          pr=$(api_get "/repos/$GITHUB_REPOSITORY/pulls/$event_pr")
+
+          pull_request_number=$(jq -er '.number' <<< "$pr")
+          candidate_sha=$(jq -er '.merge_commit_sha // ""' <<< "$pr")
+          base_sha=$(jq -er '.base.sha' <<< "$pr")
+          head_sha=$(jq -er '.head.sha' <<< "$pr")
+          association=$(jq -er '.author_association' <<< "$pr")
+          draft=$(jq -er '.draft' <<< "$pr")
+          state=$(jq -er '.state' <<< "$pr")
+          base_ref=$(jq -er '.base.ref' <<< "$pr")
+          base_repository=$(jq -er '.base.repo.full_name' <<< "$pr")
+          head_repository=$(jq -er '.head.repo.full_name' <<< "$pr")
+
+          reason=""
+          case "$event_action" in
+            opened|synchronize|reopened|ready_for_review|converted_to_draft) ;;
+            *) reason="unsupported pull request action" ;;
+          esac
+          if [ -z "$reason" ] && [ "$pull_request_number" != "$event_pr" ]; then
+            reason="pull request changed during admission"
+          fi
+          if [ -z "$reason" ] && [ "$state" != open ]; then
+            reason="pull request is not open"
+          fi
+          if [ -z "$reason" ] && [ "$draft" != false ]; then
+            reason="draft pull request"
+          fi
+          if [ -z "$reason" ] && [ "$base_ref" != main ]; then
+            reason="base branch is not main"
+          fi
+          if [ -z "$reason" ] && [ "$base_repository" != "$GITHUB_REPOSITORY" ]; then
+            reason="base repository does not match the workflow repository"
+          fi
+          if [ -z "$reason" ] \
+            && [ "$head_repository" != "$GITHUB_REPOSITORY" ] \
+            && [ "$association" != OWNER ] \
+            && [ "$association" != MEMBER ]; then
+            reason="fork author is not an organization member"
+          fi
+          if [ -z "$reason" ] && ! [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            reason="GitHub did not provide an integration commit"
+          fi
+          if [ -z "$reason" ]; then
+            for value in "$base_sha" "$head_sha"; do
+              if ! [[ "$value" =~ ^[0-9a-f]{40}$ ]]; then
+                reason="pull request parent SHA is invalid"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$reason" ]; then
+            event_base_sha=$(jq -er '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
+            event_head_sha=$(jq -er '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
+            event_candidate_sha=$(jq -er '.pull_request.merge_commit_sha // ""' "$GITHUB_EVENT_PATH")
+            event_base_repository=$(jq -er '.pull_request.base.repo.full_name' "$GITHUB_EVENT_PATH")
+            event_head_repository=$(jq -er '.pull_request.head.repo.full_name' "$GITHUB_EVENT_PATH")
+            event_association=$(jq -er '.pull_request.author_association' "$GITHUB_EVENT_PATH")
+            event_draft=$(jq -er '.pull_request.draft' "$GITHUB_EVENT_PATH")
+            if [ "$event_base_sha" != "$base_sha" ] \
+              || [ "$event_head_sha" != "$head_sha" ] \
+              || [ "$event_candidate_sha" != "$candidate_sha" ] \
+              || [ "$event_base_repository" != "$base_repository" ] \
+              || [ "$event_head_repository" != "$head_repository" ] \
+              || [ "$event_association" != "$association" ] \
+              || [ "$event_draft" != "$draft" ]; then
+              reason="pull request changed after this event"
+            fi
+          fi
+
+          if [ -z "$reason" ]; then
+            commit=$(api_get "/repos/$GITHUB_REPOSITORY/git/commits/$candidate_sha")
+            if ! jq -e \
+              --arg candidate "$candidate_sha" \
+              --arg base "$base_sha" \
+              --arg head "$head_sha" '
+                .sha == $candidate
+                and (.parents | length) == 2
+                and .parents[0].sha == $base
+                and .parents[1].sha == $head
+              ' <<< "$commit" >/dev/null; then
+              reason="candidate is not the exact two-parent integration commit"
+            fi
+          fi
+
+          eligible=true
+          status_state=pending
+          status_description="BMS is validating this exact integration commit"
+          if [ -n "$reason" ]; then
+            eligible=false
+            status_state=failure
+            status_description="BMS admission rejected: $reason"
+          fi
+
+          {
+            echo "eligible=$eligible"
+            echo "pull_request_number=$pull_request_number"
+            echo "candidate_sha=$candidate_sha"
+            echo "base_sha=$base_sha"
+            echo "head_sha=$head_sha"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            post_status "$candidate_sha" "$status_state" "$status_description"
+          fi
+
+  pr-bms:
+    needs: pr-admission
+    if: github.event_name == 'pull_request_target' && needs.pr-admission.outputs.eligible == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/bms-e2e.yml
+    with:
+      mode: source
+      candidate_repository: ${{ github.repository }}
+      pull_request_number: ${{ needs.pr-admission.outputs.pull_request_number }}
+      candidate_sha: ${{ needs.pr-admission.outputs.candidate_sha }}
+      base_sha: ${{ needs.pr-admission.outputs.base_sha }}
+      head_sha: ${{ needs.pr-admission.outputs.head_sha }}
+    secrets:
+      KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+
+  pr-finalize:
+    needs: [pr-admission, pr-bms]
+    if: github.event_name == 'pull_request_target' && always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATUS_CONTEXT: kuasar/bms-exact-head
+      ADMISSION_RESULT: ${{ needs.pr-admission.result }}
+      ELIGIBLE: ${{ needs.pr-admission.outputs.eligible }}
+      BMS_RESULT: ${{ needs.pr-bms.result }}
+      CANDIDATE_PR: ${{ needs.pr-admission.outputs.pull_request_number }}
+      CANDIDATE_SHA: ${{ needs.pr-admission.outputs.candidate_sha }}
+      CANDIDATE_BASE_SHA: ${{ needs.pr-admission.outputs.base_sha }}
+      CANDIDATE_HEAD_SHA: ${{ needs.pr-admission.outputs.head_sha }}
+      ADMISSION_REASON: ${{ needs.pr-admission.outputs.reason }}
+    steps:
+      - name: Finalize the exact integration status
+        run: |
+          set -euo pipefail
+
+          api_get() {
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL$1"
+          }
+
+          if ! [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "No exact integration commit is available for final status" >&2
+            exit 1
+          fi
+
+          final_state=failure
+          description="BMS did not validate this integration commit"
+          if [ "$ADMISSION_RESULT" != success ]; then
+            description="BMS admission did not complete"
+          elif [ "$ELIGIBLE" != true ]; then
+            description="BMS admission rejected: ${ADMISSION_REASON:-ineligible pull request}"
+          elif [ "$BMS_RESULT" != success ]; then
+            description="BMS result: $BMS_RESULT"
+          else
+            pr=$(api_get "/repos/$GITHUB_REPOSITORY/pulls/$CANDIDATE_PR")
+            commit=$(api_get "/repos/$GITHUB_REPOSITORY/git/commits/$CANDIDATE_SHA")
+            if jq -e \
+              --argjson number "$CANDIDATE_PR" \
+              --arg candidate "$CANDIDATE_SHA" \
+              --arg base "$CANDIDATE_BASE_SHA" \
+              --arg head "$CANDIDATE_HEAD_SHA" '
+                .number == $number
+                and .state == "open"
+                and .draft == false
+                and .base.ref == "main"
+                and .base.repo.full_name == env.GITHUB_REPOSITORY
+                and .base.sha == $base
+                and .head.sha == $head
+                and .merge_commit_sha == $candidate
+              ' <<< "$pr" >/dev/null \
+              && jq -e \
+                --arg candidate "$CANDIDATE_SHA" \
+                --arg base "$CANDIDATE_BASE_SHA" \
+                --arg head "$CANDIDATE_HEAD_SHA" '
+                  .sha == $candidate
+                  and (.parents | length) == 2
+                  and .parents[0].sha == $base
+                  and .parents[1].sha == $head
+                ' <<< "$commit" >/dev/null; then
+              final_state=success
+              description="BMS passed for this exact integration commit"
+            else
+              description="Pull request changed while BMS was running"
+            fi
+          fi
+
+          jq -cn \
+            --arg state "$final_state" \
+            --arg context "$STATUS_CONTEXT" \
+            --arg description "$description" \
+            --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            '{state: $state, context: $context, description: $description, target_url: $target_url}' \
+            | curl --fail --show-error --silent \
+                --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+                --request POST \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                --data-binary @- \
+                "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$CANDIDATE_SHA" >/dev/null
+
+          [ "$final_state" = success ]
+
+  trusted-bms:
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' && inputs.confirm == 'run-full-e2e')
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/bms-e2e.yml
+    with:
+      mode: source
+      candidate_repository: ${{ github.repository }}
+      pull_request_number: ${{ github.event_name == 'workflow_dispatch' && inputs.pull_request_number || '0' }}
+      candidate_sha: ${{ github.event_name == 'workflow_dispatch' && inputs.candidate_sha || github.sha }}
+      base_sha: ${{ github.event_name == 'workflow_dispatch' && inputs.base_sha || github.sha }}
+      head_sha: ${{ github.event_name == 'workflow_dispatch' && inputs.head_sha || github.sha }}
+    secrets:
+      KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+
+  reject-invalid-trigger:
+    if: >-
+      always() &&
+      github.event_name != 'pull_request_target' &&
+      !((github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+        (github.event_name == 'workflow_dispatch' && inputs.confirm == 'run-full-e2e'))
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "BMS entry rejected event $GITHUB_EVENT_NAME" >&2
+          exit 1

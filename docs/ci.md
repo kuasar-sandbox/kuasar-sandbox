@@ -2,9 +2,10 @@
 
 ## 1. 概述
 
-platform 维护唯一的 BMS 可复用 workflow。五个组件仓只保留事件触发和候选参数 wrapper,
-并从 platform `main` 引用 `.github/workflows/bms-e2e.yml`;公共 runner 初始化、源码
-缓存、native cache、完整 E2E 和精确发布资产验证不再复制到各仓。
+platform 维护 BMS 的可信控制面与唯一执行 workflow。五个组件仓只保留事件触发和参数
+wrapper,并从 platform `main` 引用 `.github/workflows/bms-entry.yml`;该入口再从同一个
+platform `main` revision 调用 `.github/workflows/bms-e2e.yml`。公共准入、runner 初始化、
+源码缓存、native cache、完整 E2E 和精确发布资产验证不再复制到各仓。
 
 BMS 有两个明确模式:
 
@@ -13,18 +14,30 @@ BMS 有两个明确模式:
 
 ## 2. Source 模式
 
-同仓非 draft PR 使用 GitHub 生成的 two-parent integration commit。其余五仓 revision 通过
-一次 GitHub GraphQL 查询解析,候选仓 revision 替换为 integration commit。`main` push 使用
-该 push 的精确 SHA。私有 fork 不携带 secret 直接执行;评审后由维护者从可信 wrapper 的
-`workflow_dispatch` 输入当前 PR number、candidate/base/head SHA。
+各仓 `main` 上的可信 wrapper 使用 `pull_request_target` 接收事件,不执行候选仓提供的
+workflow。同仓非 draft PR 自动准入;fork PR 仅在作者的 `author_association` 为 `OWNER` 或
+`MEMBER` 时自动准入。控制 job 在 GitHub-hosted runner 重新查询当前 PR,校验 GitHub 生成的
+two-parent integration commit,并在该 commit 上把 `kuasar/bms-exact-head` 置为 `pending`。
+draft、外部 fork、冲突或已经变化的事件不会取得自托管 runner。
+
+其余五仓 revision 通过一次 GitHub GraphQL 查询解析,候选仓 revision 替换为已准入的
+integration commit。`main` push 使用该 push 的精确 SHA。可信维护者仍可通过
+`workflow_dispatch` 显式输入当前 PR number、candidate/base/head SHA 运行同一个执行路径;
+该入口用于诊断和受控重跑,不会冒充自动 PR exact-head 状态。
 
 可复用 workflow 验证:
 
-1. 公共实现来自 `kuasar-sandbox/platform` 的固定 SHA;
-2. candidate、base 和 head 都是完整 SHA;
+1. 控制面与执行实现都解析自 `kuasar-sandbox/platform` 的 `main`,运行中记录解析后的完整 SHA;
+2. `pull_request_target` event、当前 PR 与 candidate/base/head 输入完全一致;
 3. candidate 是以 base/head 为两个父提交的 integration commit;
-4. 当前开放 PR 的 base/head/merge commit 仍与输入一致;
-5. source App token 只有六仓 `Contents: read`。
+4. 当前开放 PR 的 base/head/merge commit 在执行前与结束后均未变化;
+5. 自托管 job 的 `GITHUB_TOKEN` 只有 `Contents: read` 和 `Pull requests: read`;
+6. source App token 只有六仓 `Contents: read`,并在执行候选代码前撤销。
+
+结束控制 job 在 GitHub-hosted runner 再次查询 PR。只有 BMS 成功且当前 integration commit
+仍与准入值完全一致时,它才把同一个 `kuasar/bms-exact-head` 状态置为 `success`;测试失败、
+取消、跳过或 PR 已变化都不会生成可用于合入的成功状态。GitHub 自带的
+`pull_request_target` workflow check 绑定 base commit,不能代替这个 exact-head 状态。
 
 源码归档缓存在 `/var/cache/kuasar/sources/<repo>/<sha>.tar.gz`。命中时校验 SHA-256 和 tar
 结构;miss 从 GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每仓以 `flock`
@@ -110,7 +123,11 @@ runner 安装资料位于 `ci/runner/`。自托管 job 只有收窄后的 read t
 workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用公开中国大陆镜像降低网络抖动。
 
 每次 job 开始会停止遗留 sandbox systemd unit、删除测试 tap 并重载 systemd。常用 zot 与
-versitygw 从 runner 固定工具目录链接到当前 workspace,不进入发布包。
+versitygw 从 runner 固定工具目录链接到当前 workspace,不进入发布包。`kuasar-e2e` runner
+group 对仓库保持 `visibility=all`,但只允许
+`kuasar-sandbox/platform/.github/workflows/bms-e2e.yml@refs/heads/main` 分配自托管 runner。
+各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于 base 仓可信
+workflow,且候选代码执行前相关 token 已撤销。
 
 ## 6. Run artifacts
 
