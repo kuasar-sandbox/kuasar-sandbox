@@ -9,9 +9,10 @@
 #
 # Output (PERF_OUT_DIR, ignored by git by default):
 #   environment.json  exact revisions, host, image, binaries, workload
-#   samples.jsonl     one machine-readable row per independent restore
-#   report.md         nearest-rank p50/p95/p99 summary
-#   raw/              per-sample snapshot/publisher/restore evidence
+#   samples.jsonl               one machine-readable row per portable restore
+#   local-crypto-samples.jsonl  paired local off/auto cold/warm restores
+#   report.md                   nearest-rank p50/p95/p99 summary
+#   raw/                        per-sample snapshot/publisher/restore evidence
 #
 # Canonical report runs should use PERF_ITERS=30. The default 5 is a smoke run.
 
@@ -61,9 +62,11 @@ fi
 WORK="$(mktemp -d /tmp/perf-working-set-XXXXXX)"
 mkdir -p "$OUT_DIR/raw"
 SAMPLES="$OUT_DIR/samples.jsonl"
+LOCAL_CRYPTO_SAMPLES="$OUT_DIR/local-crypto-samples.jsonl"
 ENVIRONMENT="$OUT_DIR/environment.json"
 REPORT="$OUT_DIR/report.md"
 : >"$SAMPLES"
+: >"$LOCAL_CRYPTO_SAMPLES"
 
 declare -a PIDS=()
 TAP_CREATED=0
@@ -152,13 +155,14 @@ wait_http_ready() { # $1=pid, $2=log, $3=path
 }
 
 drop_host_caches() {
+    local -a extra_paths=("$@")
     sync
     if [ "$HOST_CACHE_RESET_MODE" = global-drop-caches ]; then
         echo 3 >/proc/sys/vm/drop_caches
         return
     fi
 
-    python3 - "$STORE_ROOT" "$B_ARTIFACT" "${B_DISK_TOPS[@]}" \
+    python3 - "$STORE_ROOT" "$B_ARTIFACT" "${B_DISK_TOPS[@]}" "${extra_paths[@]}" \
         "$VMLINUX" "$BIN/sandbox-runtime.bundle" "$BIN/cloud-hypervisor" "$BIN/sandbox-ctl" <<'PY'
 import os
 import pathlib
@@ -243,7 +247,9 @@ origin:
     timeout: 5s
   max_inflight: 16
 EOF
-cat >"$WORK/manifest.yaml" <<EOF
+write_manifest_config() { # $1=path, $2=crypto.local
+    local path="$1" local_policy="$2"
+    cat >"$path" <<EOF
 manifest:
   key: "$MANIFEST_KEY"
 store:
@@ -259,7 +265,12 @@ chunk:
 crypto:
   chunk: aes
   manifest: aes
+  local: $local_policy
 EOF
+}
+
+write_manifest_config "$WORK/manifest.yaml" off
+write_manifest_config "$WORK/manifest-auto.yaml" auto
 
 start_store() {
     "$BIN/store-ctl" serve --config "$WORK/store.yaml" >"$WORK/store.log" 2>&1 &
@@ -391,10 +402,11 @@ restore:
 EOF
 }
 
-start_sandbox() { # $1=sid, $2=config, $3=run root, $4=base root, $5=log, $6=stats, $7=optional restore ref
+start_sandbox() { # $1=sid, $2=config, $3=run root, $4=base root, $5=log, $6=stats, $7=optional restore ref, $8=optional manifest config
     local sid="$1" config="$2" run_root="$3" base_root="$4" log="$5" stats="$6" restore_ref="${7:-}"
+    local manifest_config="${8:-$WORK/manifest.yaml}"
     mkdir -p "$run_root" "$base_root"
-    local args=(run --sandbox-id "$sid" --config "$config" --manifest-config "$WORK/manifest.yaml"
+    local args=(run --sandbox-id "$sid" --config "$config" --manifest-config "$manifest_config"
         --ch-binary "$BIN/cloud-hypervisor" --run-root "$run_root" --base-root "$base_root"
         --stats-json "$stats")
     if [ -n "$restore_ref" ]; then
@@ -403,6 +415,85 @@ start_sandbox() { # $1=sid, $2=config, $3=run root, $4=base root, $5=log, $6=sta
     "$BIN/sandbox-ctl" "${args[@]}" >"$log" 2>&1 &
     ACTIVE_SANDBOX_PID=$!
     PIDS+=("$ACTIVE_SANDBOX_PID")
+}
+
+snapshot_disk_tops() { # $1=info json, $2=artifact directory
+    python3 - "$1" "$2" <<'PY'
+import json
+import os
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    document = json.load(source)
+root = sys.argv[2]
+boot = document["Boot"]
+paths = []
+for node in [boot["Root"], *(boot.get("Disks") or [])]:
+    overlay = node.get("Overlay")
+    ref = overlay["Base"] if overlay else node["Base"]
+    if not ref.startswith("file://"):
+        raise SystemExit(f"B disk top is not local: {ref!r}")
+    path = ref[len("file://"):].split("@", 1)[0]
+    if not os.path.isabs(path):
+        path = os.path.join(root, path)
+    paths.append(os.path.realpath(path))
+if len(set(paths)) != len(paths):
+    raise SystemExit(f"B disk tops are not distinct: {paths!r}")
+print(*paths, sep="\n")
+PY
+}
+
+validate_local_policy() { # $1=off|auto, remaining args=info json files
+    python3 - "$@" <<'PY'
+import json
+import sys
+
+policy, *paths = sys.argv[1:]
+expected = {"off": "sha256", "auto": "hmac"}[policy]
+for path in paths:
+    with open(path, encoding="utf-8") as source:
+        document = json.load(source)
+    refs = list(document.get("FromRefs") or [])
+    boot = document["Boot"]
+    for node in [boot["Root"], *(boot.get("Disks") or [])]:
+        overlay = node.get("Overlay")
+        refs.append(overlay["Base"] if overlay else node["Base"])
+        refs.extend((overlay.get("BaseFromRefs") if overlay else node.get("BaseFromRefs")) or [])
+    local_refs = [ref for ref in refs if ref.startswith("file://")]
+    if not local_refs:
+        raise SystemExit(f"{path}: no local artifact references")
+    for ref in local_refs:
+        if "@" not in ref:
+            raise SystemExit(f"{path}: local artifact has no digest identity: {ref!r}")
+        scheme = ref.rsplit("@", 1)[1].split(":", 1)[0]
+        if scheme != expected:
+            raise SystemExit(
+                f"{path}: crypto.local={policy} artifact scheme={scheme!r}, want {expected!r}: {ref!r}"
+            )
+PY
+}
+
+validate_local_encoding() { # $1=off|auto, remaining args=physical artifact files
+    python3 - "$@" <<'PY'
+import pathlib
+import sys
+
+policy, *paths = sys.argv[1:]
+encrypted_magic = b"\x89KTSENC\n"
+want_encrypted = {"off": False, "auto": True}[policy]
+if not paths:
+    raise SystemExit(f"crypto.local={policy}: no physical artifacts to validate")
+for raw_path in paths:
+    path = pathlib.Path(raw_path)
+    with path.open("rb") as source:
+        encrypted = source.read(len(encrypted_magic)) == encrypted_magic
+    if encrypted != want_encrypted:
+        actual = "encrypted-v1" if encrypted else "plaintext"
+        expected = "encrypted-v1" if want_encrypted else "plaintext"
+        raise SystemExit(
+            f"crypto.local={policy}: {path} encoding={actual}, want {expected}"
+        )
+PY
 }
 
 B_DIR="$WORK/base"
@@ -429,34 +520,13 @@ B="$B_OUT/ws-base.snapshot"
 B_ARTIFACT="$(readlink -f "$B")"
 B_BASENAME="$(basename "$B_ARTIFACT")"
 "$BIN/sandbox-ctl" info --json "$B" >"$B_DIR/info.json"
-mapfile -t B_DISK_TOPS < <(python3 - "$B_DIR/info.json" "$B_OUT" <<'PY'
-import json
-import os
-import sys
-
-with open(sys.argv[1], encoding="utf-8") as source:
-    document = json.load(source)
-root = sys.argv[2]
-boot = document["Boot"]
-paths = []
-for node in [boot["Root"], *(boot.get("Disks") or [])]:
-    overlay = node.get("Overlay")
-    ref = overlay["Base"] if overlay else node["Base"]
-    if not ref.startswith("file://"):
-        raise SystemExit(f"B disk top is not local: {ref!r}")
-    path = ref[len("file://"):].split("@", 1)[0]
-    if not os.path.isabs(path):
-        path = os.path.join(root, path)
-    paths.append(os.path.realpath(path))
-if len(set(paths)) != len(paths):
-    raise SystemExit(f"B disk tops are not distinct: {paths!r}")
-print(*paths, sep="\n")
-PY
-)
+mapfile -t B_DISK_TOPS < <(snapshot_disk_tops "$B_DIR/info.json" "$B_OUT")
 [ "${#B_DISK_TOPS[@]}" -eq 3 ] || fatal "B must contain one root plus two data-disk tops"
 for path in "${B_DISK_TOPS[@]}"; do
     [ -f "$path" ] || fatal "missing B disk top $path"
 done
+validate_local_policy off "$B_DIR/info.json"
+validate_local_encoding off "$B_ARTIFACT" "${B_DISK_TOPS[@]}"
 reset_tap
 stop_cache
 stop_store
@@ -467,6 +537,54 @@ mkdir -p "$OUT_DIR/raw/base"
 cp "$B_DIR/info.json" "$B_DIR/run.log" "$B_DIR/seed.log" "$B_DIR/snapshot.log" \
     "$OUT_DIR/raw/base/"
 echo "==> immutable B: $B_ARTIFACT" >&2
+
+# Build a logically equivalent encrypted B once for the dedicated local
+# tarstream comparison. The active diff targets are deliberately preformatted
+# plaintext files; crypto.local=auto therefore changes only captured local
+# artifacts and does not mix DIFF/XTS cost into the measurement.
+AUTO_B_DIR="$WORK/base-auto"
+AUTO_B_OUT="$AUTO_B_DIR/snapshot"
+mkdir -p "$AUTO_B_OUT"
+write_config "$AUTO_B_DIR/cold.yaml" "$AUTO_B_DIR/cold-diffs" off cold
+reset_sample_storage
+drop_host_caches "$B_OUT"
+start_sandbox ws-base-auto "$AUTO_B_DIR/cold.yaml" "$AUTO_B_DIR/run" "$AUTO_B_DIR/base-root" \
+    "$AUTO_B_DIR/run.log" "$AUTO_B_DIR/stats.json" "" "$WORK/manifest-auto.yaml"
+AUTO_B_PID="$ACTIVE_SANDBOX_PID"
+wait_http_ready "$AUTO_B_PID" "$AUTO_B_DIR/run.log" / || fatal "auto base sandbox did not become ready"
+# The inner shell, not the harness, expands $1.
+# shellcheck disable=SC2016
+"$BIN/sandbox-ctl" exec --sandbox-id ws-base-auto --run-root "$AUTO_B_DIR/run" -- /bin/sh -c \
+    'yes KUASAR-WORKING-SET | head -c "$1" > /scratch/working-set-cache.bin; echo ROOT-B-OK > /root-b; echo S-OK > /scratch/persist; echo D-OK > /data/persist; sync; sha256sum /scratch/working-set-cache.bin' \
+    sh "$WARM_BYTES" >"$AUTO_B_DIR/seed.log" 2>&1 \
+    || { cat "$AUTO_B_DIR/seed.log" >&2; fatal "seed auto B workload"; }
+AUTO_WARM_SHA=$(grep -Eo '^[0-9a-f]{64}' "$AUTO_B_DIR/seed.log" | head -1)
+[ "$AUTO_WARM_SHA" = "$WARM_SHA" ] || fatal "off/auto B workloads have different content"
+"$BIN/sandbox-ctl" snapshot --sandbox-id ws-base-auto --output "$AUTO_B_OUT" --run-root "$AUTO_B_DIR/run" \
+    >"$AUTO_B_DIR/snapshot.log" 2>&1
+wait "$AUTO_B_PID" 2>/dev/null || true
+untrack_pid "$AUTO_B_PID"
+ACTIVE_SANDBOX_PID=""
+grep -Fq 'quiesce: guest acked (drop_caches=succeeded' "$AUTO_B_DIR/run.log" \
+    || { tail -80 "$AUTO_B_DIR/run.log" >&2; fatal "auto B capture did not establish a cold guest cache"; }
+AUTO_B="$AUTO_B_OUT/ws-base-auto.snapshot"
+[ -f "$AUTO_B" ] || fatal "missing auto B snapshot $AUTO_B"
+AUTO_B_ARTIFACT="$(readlink -f "$AUTO_B")"
+AUTO_B_BASENAME="$(basename "$AUTO_B_ARTIFACT")"
+AUTO_B_INFO="$AUTO_B_DIR/info.json"
+"$BIN/sandbox-ctl" info --json --manifest-config "$WORK/manifest-auto.yaml" "$AUTO_B" >"$AUTO_B_INFO"
+mapfile -t AUTO_B_DISK_TOPS < <(snapshot_disk_tops "$AUTO_B_INFO" "$AUTO_B_OUT")
+[ "${#AUTO_B_DISK_TOPS[@]}" -eq 3 ] || fatal "auto B must contain one root plus two data-disk tops"
+for path in "${AUTO_B_DISK_TOPS[@]}"; do
+    [ -f "$path" ] || fatal "missing auto B disk top $path"
+done
+validate_local_policy auto "$AUTO_B_INFO"
+validate_local_encoding auto "$AUTO_B_ARTIFACT" "${AUTO_B_DISK_TOPS[@]}"
+reset_tap
+mkdir -p "$OUT_DIR/raw/local-crypto/base-auto"
+cp "$AUTO_B_INFO" "$AUTO_B_DIR/run.log" "$AUTO_B_DIR/seed.log" "$AUTO_B_DIR/snapshot.log" \
+    "$OUT_DIR/raw/local-crypto/base-auto/"
+echo "==> immutable auto B: $AUTO_B_ARTIFACT" >&2
 
 # Record the complete environment after every binary and image has been used.
 python3 - "$ENVIRONMENT" "$REPO_ROOT" "$BIN" "$VMLINUX" "$IMAGE" "$ITERS" "${MATRIX_GROUPS[*]}" "$WARM_BYTES" "$HOST_CACHE_RESET_MODE" <<'PY'
@@ -482,10 +600,31 @@ import sys
 
 (output, repo_root, bindir, kernel, image, iterations, groups, warm_bytes,
  host_cache_reset_mode) = sys.argv[1:]
-workspace = pathlib.Path(repo_root).parent.parent
-repository_names = ("accelerator", "connector", "guest-runtime", "orchestrator", "sandboxer")
+platform_root = pathlib.Path(repo_root).resolve()
+workspace = platform_root.parent
+repository_names = ("accelerator", "connector", "guest-runtime", "orchestrator", "platform", "sandboxer")
 revision_manifest = os.environ.get("KUASAR_REVISION_MANIFEST")
 repositories = {}
+
+def git_revision(name, path):
+    try:
+        top = pathlib.Path(
+            subprocess.check_output(
+                ["git", "-C", path, "rev-parse", "--show-toplevel"], text=True
+            ).strip()
+        ).resolve()
+        if top != path.resolve():
+            raise RuntimeError(f"{path} resolved to unrelated git root {top}")
+        sha = subprocess.check_output(["git", "-C", path, "rev-parse", "HEAD"], text=True).strip()
+        dirty = bool(
+            subprocess.check_output(
+                ["git", "-C", path, "status", "--porcelain"], text=True
+            ).strip()
+        )
+    except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
+        raise SystemExit(f"cannot resolve exact revision for {name}: {error}") from error
+    return {"sha": sha, "dirty": dirty, "source": "git"}
+
 if revision_manifest:
     manifest_path = pathlib.Path(revision_manifest)
     if not manifest_path.is_file():
@@ -501,26 +640,13 @@ if revision_manifest:
                     "role": row["role"],
                     "source": "revision-manifest",
                 }
+    # The CI revision manifest pins the five component repositories. The
+    # platform checkout is the harness itself, so record its local revision.
+    repositories["platform"] = git_revision("platform", platform_root)
 else:
     for name in repository_names:
-        path = workspace / name
-        try:
-            top = pathlib.Path(
-                subprocess.check_output(
-                    ["git", "-C", path, "rev-parse", "--show-toplevel"], text=True
-                ).strip()
-            ).resolve()
-            if top != path.resolve():
-                raise RuntimeError(f"{path} resolved to unrelated git root {top}")
-            sha = subprocess.check_output(["git", "-C", path, "rev-parse", "HEAD"], text=True).strip()
-            dirty = bool(
-                subprocess.check_output(
-                    ["git", "-C", path, "status", "--porcelain"], text=True
-                ).strip()
-            )
-        except (OSError, subprocess.CalledProcessError, RuntimeError) as error:
-            raise SystemExit(f"cannot resolve exact revision for {name}: {error}") from error
-        repositories[name] = {"sha": sha, "dirty": dirty, "source": "git"}
+        path = platform_root if name == "platform" else workspace / name
+        repositories[name] = git_revision(name, path)
 missing_repositories = sorted(set(repository_names) - set(repositories))
 if missing_repositories:
     raise SystemExit(f"revision set is incomplete: {missing_repositories}")
@@ -603,6 +729,15 @@ environment = {
         "host_cache_reset": host_cache_reset_mode,
         "manifest_cache_reset": "restart cache-ctl with an empty RocksDB before each B and portable restore",
         "manifest_store_reset": "restart store-ctl from the immutable root/dataset baseline before each sample",
+        "local_crypto": {
+            "active_diff_format": "existing plaintext",
+            "cache_states": ["cold", "warm"],
+            "group": "D",
+            "iterations": int(iterations),
+            "policies": ["off", "auto"],
+            "prefetch": "off",
+            "restore_source": "local tarstream",
+        },
     },
     "artifacts": {
         "kernel_sha256": digest(kernel),
@@ -934,6 +1069,288 @@ print(
 PY
 }
 
+local_crypto_restore() { # $1=policy $2=iter $3=cold|warm $4=manifest-config $5=W $6=W-dir $7=B-dir $8=artifact-json $9=sample-root
+    local policy="$1" iteration="$2" cache_state="$3" manifest_config="$4" w="$5" w_dir="$6"
+    local b_dir="$7" artifact_json="$8" sample_root="$9"
+    local restore_dir="$sample_root/restore-$cache_state"
+    local raw_dir="$OUT_DIR/raw/local-crypto/$policy/$iteration/$cache_state"
+    mkdir -p "$restore_dir" "$raw_dir"
+
+    # Every restore gets fresh, preformatted plaintext active diffs. auto opens
+    # those files compatibly, so this comparison contains no DIFF/XTS work.
+    write_config "$restore_dir/config.yaml" "$restore_dir/diffs" off
+    if [ "$cache_state" = cold ]; then
+        reset_sample_storage
+        drop_host_caches "$b_dir" "$w_dir" "$restore_dir/diffs"
+    fi
+    cache_info "$restore_dir/cache-before.json"
+
+    local sid="ws-crypto-${policy}-${iteration}-${cache_state}"
+    local start_ns ready_ns first_seconds first_ms
+    start_ns=$(date +%s%N)
+    start_sandbox "$sid" "$restore_dir/config.yaml" "$restore_dir/run" "$restore_dir/base-root" \
+        "$restore_dir/run.log" "$restore_dir/stats.json" "$w" "$manifest_config"
+    local pid="$ACTIVE_SANDBOX_PID"
+    wait_http_ready "$pid" "$restore_dir/run.log" /persist \
+        || fatal "local crypto $policy/$iteration/$cache_state restore did not become ready"
+    ready_ns=$(date +%s%N)
+
+    first_seconds=$(curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 120 \
+        --output "$restore_dir/first-request.bin" --write-out '%{time_total}' \
+        http://169.254.1.1:8000/working-set-cache.bin)
+    local first_hash
+    first_hash=$(sha256sum "$restore_dir/first-request.bin" | awk '{print $1}')
+    [ "$first_hash" = "$WARM_SHA" ] \
+        || fatal "local crypto $policy/$iteration/$cache_state first request returned the wrong content"
+    rm -f -- "$restore_dir/first-request.bin"
+    first_ms=$(python3 -c 'import sys; print(f"{float(sys.argv[1])*1000:.3f}")' "$first_seconds")
+
+    # The inner shell, not the harness, expands the command substitutions.
+    # shellcheck disable=SC2016
+    "$BIN/sandbox-ctl" exec --sandbox-id "$sid" --run-root "$restore_dir/run" -- /bin/sh -c \
+        'set -eu
+         sync
+         echo 3 > /proc/sys/vm/drop_caches
+         [ "$(cat /root-w)" = ROOT-W-OK ]
+         [ "$(cat /scratch/working-set)" = SCRATCH-W-OK ]
+         [ "$(cat /data/working-set)" = DATA-W-OK ]
+         echo W-DISK-STATE-OK' >"$restore_dir/disk-state.log" 2>&1 \
+        || { cat "$restore_dir/disk-state.log" >&2; fatal "local crypto $policy/$iteration/$cache_state lost W-only disk state"; }
+    grep -Fxq W-DISK-STATE-OK "$restore_dir/disk-state.log" \
+        || fatal "local crypto $policy/$iteration/$cache_state did not confirm W-only disk state"
+    if grep -Fq 'memory prefetch started' "$restore_dir/run.log"; then
+        fatal "local crypto $policy/$iteration/$cache_state unexpectedly started memory prefetch"
+    fi
+
+    cache_info "$restore_dir/cache-after.json"
+    stop_sandbox "$pid"
+    [ -s "$restore_dir/stats.json" ] \
+        || fatal "local crypto $policy/$iteration/$cache_state did not write stats-json"
+
+    local ready_ms
+    ready_ms=$(milliseconds_between "$start_ns" "$ready_ns")
+    python3 - "$artifact_json" "$restore_dir/stats.json" "$restore_dir/run.log" \
+        "$restore_dir/cache-before.json" "$restore_dir/cache-after.json" "$policy" "$iteration" \
+        "$cache_state" "$ready_ms" "$first_ms" "$WARM_BYTES" <<'PY' >"$restore_dir/row.json"
+import json
+import re
+import sys
+
+(artifact_path, stats_path, log_path, cache_before_path, cache_after_path,
+ policy, iteration, cache_state, ready_ms, first_ms, warm_bytes) = sys.argv[1:]
+with open(artifact_path, encoding="utf-8") as source:
+    row = json.load(source)
+with open(stats_path, encoding="utf-8") as source:
+    stats = json.load(source)
+with open(log_path, encoding="utf-8") as source:
+    log = source.read()
+with open(cache_before_path, encoding="utf-8") as source:
+    cache_before = json.load(source)
+with open(cache_after_path, encoding="utf-8") as source:
+    cache_after = json.load(source)
+
+ack = re.search(r"restore notify acked in (\d+)µs", log)
+if not ack:
+    raise SystemExit(f"restore-to-ack log missing from {log_path}")
+
+def origin_hits(document):
+    tiered = document.get("tiered") or {}
+    origin = tiered.get("origin") or {}
+    return origin.get("hits")
+
+before_hits = origin_hits(cache_before)
+after_hits = origin_hits(cache_after)
+origin_requests = None
+if before_hits is not None and after_hits is not None:
+    origin_requests = after_hits - before_hits
+if origin_requests is None or origin_requests < 0:
+    raise SystemExit(
+        f"cache origin counter delta is invalid: before={before_hits!r} after={after_hits!r}"
+    )
+
+uffd = stats.get("uffd") or {}
+required_uffd = (
+    "faults_absent",
+    "pages_copied",
+    "pages_zeroed",
+    "lazy_load_ratio",
+    "source_read_calls",
+    "source_read_bytes",
+    "source_read_ns",
+)
+missing_uffd = [name for name in required_uffd if uffd.get(name) is None]
+if missing_uffd:
+    raise SystemExit(f"stats-json missing UFFD metrics: {missing_uffd}")
+
+source_calls = int(uffd["source_read_calls"])
+source_bytes = int(uffd["source_read_bytes"])
+source_ns = int(uffd["source_read_ns"])
+if source_calls <= 0 or source_bytes <= 0 or source_ns <= 0:
+    raise SystemExit(
+        f"invalid UFFD source metrics: calls={source_calls} bytes={source_bytes} ns={source_ns}"
+    )
+
+disk_reads = {}
+for backend in stats.get("backends") or []:
+    read = backend.get("read") or {}
+    disk_reads[backend["name"]] = {
+        "path": backend.get("path"),
+        "bytes": read.get("bytes"),
+        "p50_us": (read.get("p50_ns") or 0) / 1000,
+        "p99_us": (read.get("p99_ns") or 0) / 1000,
+    }
+disk_roles = {
+    "blk0": "root.base",
+    "blk1": "root.top",
+    "blk2": "scratch.top",
+    "blk3": "dataset.base",
+    "blk4": "dataset.top",
+}
+if set(disk_reads) != set(disk_roles):
+    raise SystemExit(
+        f"stats-json disk backends={sorted(disk_reads)}, want {sorted(disk_roles)}"
+    )
+for name, read in disk_reads.items():
+    if read["bytes"] is None:
+        raise SystemExit(f"stats-json {name} missing read bytes")
+    read["role"] = disk_roles[name]
+
+first_ms_value = float(first_ms)
+warm_mib = int(warm_bytes) / (1024 * 1024)
+source_mib = source_bytes / (1024 * 1024)
+row.update({
+    "active_diff_format": "existing plaintext",
+    "app_ready_ms": float(ready_ms),
+    "cache_origin_requests": origin_requests,
+    "cache_state": cache_state,
+    "crypto_local": policy,
+    "disk_reads": disk_reads,
+    "drop_caches": False,
+    "first_request_mib_per_s": warm_mib / (first_ms_value / 1000),
+    "first_request_ms": first_ms_value,
+    "group": "D",
+    "iteration": int(iteration),
+    "lazy_load_ratio": uffd["lazy_load_ratio"],
+    "merge_ref": False,
+    "prefetch": "off",
+    "restore_ack_ms": int(ack.group(1)) / 1000,
+    "restore_source": "local tarstream",
+    "uffd_faults": uffd["faults_absent"],
+    "uffd_pages_copied": uffd["pages_copied"],
+    "uffd_pages_zeroed": uffd["pages_zeroed"],
+    "uffd_source_read_avg_us": source_ns / source_calls / 1000,
+    "uffd_source_read_bytes": source_bytes,
+    "uffd_source_read_calls": source_calls,
+    "uffd_source_read_mib_per_s": source_mib / (source_ns / 1e9),
+    "uffd_source_read_ms": source_ns / 1e6,
+})
+print(json.dumps(row, sort_keys=True))
+PY
+
+    cat "$restore_dir/row.json" >>"$LOCAL_CRYPTO_SAMPLES"
+    cp "$restore_dir/run.log" "$restore_dir/disk-state.log" "$restore_dir/stats.json" \
+        "$restore_dir/cache-before.json" "$restore_dir/cache-after.json" "$restore_dir/row.json" "$raw_dir/"
+    python3 - "$restore_dir/row.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    row = json.load(source)
+print(
+    f"    local/{row['cache_state']}/{row['crypto_local']} iter={row['iteration']} "
+    f"ack={row['restore_ack_ms']:.1f}ms ready={row['app_ready_ms']:.1f}ms "
+    f"first={row['first_request_ms']:.1f}ms/{row['first_request_mib_per_s']:.1f}MiB/s "
+    f"SourceAt={row['uffd_source_read_ms']:.1f}ms/{row['uffd_source_read_mib_per_s']:.1f}MiB/s"
+)
+PY
+}
+
+capture_local_crypto_w() { # $1=off|auto, $2=iteration
+    local policy="$1" iteration="$2" manifest_config b b_artifact b_basename b_info b_out
+    case "$policy" in
+        off)
+            manifest_config="$WORK/manifest.yaml"
+            b="$B"
+            b_artifact="$B_ARTIFACT"
+            b_basename="$B_BASENAME"
+            b_info="$B_DIR/info.json"
+            b_out="$B_OUT"
+            ;;
+        auto)
+            manifest_config="$WORK/manifest-auto.yaml"
+            b="$AUTO_B"
+            b_artifact="$AUTO_B_ARTIFACT"
+            b_basename="$AUTO_B_BASENAME"
+            b_info="$AUTO_B_INFO"
+            b_out="$AUTO_B_OUT"
+            ;;
+        *) fatal "unknown local crypto policy: $policy" ;;
+    esac
+
+    local sample_root="$WORK/local-crypto-$policy-$iteration"
+    mkdir -p "$sample_root"
+    write_config "$sample_root/restore-b.yaml" "$sample_root/b-diffs" off
+    reset_sample_storage
+    drop_host_caches "$b_out"
+
+    local sid="ws-crypto-${policy}-${iteration}-source"
+    start_sandbox "$sid" "$sample_root/restore-b.yaml" "$sample_root/b-run" "$sample_root/b-base" \
+        "$sample_root/b-run.log" "$sample_root/b-stats.json" "$b" "$manifest_config"
+    local source_pid="$ACTIVE_SANDBOX_PID"
+    wait_http_ready "$source_pid" "$sample_root/b-run.log" /persist \
+        || fatal "local crypto $policy/$iteration B restore did not become ready"
+    local got_warm_sha
+    got_warm_sha=$(curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 120 \
+        http://169.254.1.1:8000/working-set-cache.bin | sha256sum | awk '{print $1}')
+    [ "$got_warm_sha" = "$WARM_SHA" ] || fatal "local crypto $policy/$iteration deterministic warm-up mismatch"
+    "$BIN/sandbox-ctl" exec --sandbox-id "$sid" --run-root "$sample_root/b-run" -- /bin/sh -c \
+        'echo ROOT-W-OK > /root-w; echo SCRATCH-W-OK > /scratch/working-set; echo DATA-W-OK > /data/working-set; sync' \
+        >"$sample_root/writes.log" 2>&1 \
+        || { cat "$sample_root/writes.log" >&2; fatal "local crypto $policy/$iteration W disk writes"; }
+
+    local w_out="$sample_root/w"
+    mkdir -p "$w_out"
+    ln "$b_artifact" "$w_out/$b_basename"
+    local snapshot_start snapshot_end snapshot_wall_ms
+    snapshot_start=$(date +%s%N)
+    "$BIN/sandbox-ctl" snapshot --sandbox-id "$sid" --output "$w_out" --run-root "$sample_root/b-run" \
+        --drop-caches=false --merge-ref=false >"$sample_root/snapshot.log" 2>&1
+    snapshot_end=$(date +%s%N)
+    snapshot_wall_ms=$(milliseconds_between "$snapshot_start" "$snapshot_end")
+    wait "$source_pid" 2>/dev/null || true
+    untrack_pid "$source_pid"
+    ACTIVE_SANDBOX_PID=""
+    grep -Fq 'quiesce: guest acked (drop_caches=skipped' "$sample_root/b-run.log" \
+        || { tail -80 "$sample_root/b-run.log" >&2; fatal "local crypto $policy/$iteration drop_caches result"; }
+    reset_tap
+
+    local w="$w_out/$sid.snapshot"
+    [ -f "$w" ] || fatal "local crypto $policy/$iteration missing W snapshot"
+    local w_artifact
+    w_artifact="$(readlink -f "$w")"
+    "$BIN/sandbox-ctl" info --json --manifest-config "$manifest_config" "$w" >"$sample_root/w-info.json"
+    validate_local_policy "$policy" "$b_info" "$sample_root/w-info.json"
+    local -a w_disk_tops
+    mapfile -t w_disk_tops < <(snapshot_disk_tops "$sample_root/w-info.json" "$w_out")
+    [ "${#w_disk_tops[@]}" -eq 3 ] || fatal "local crypto $policy/$iteration W must contain three disk tops"
+    validate_local_encoding "$policy" "$w_artifact" "${w_disk_tops[@]}"
+    artifact_metrics D "$b_info" "$sample_root/w-info.json" "$b_artifact" "$w_artifact" \
+        "$w_out" "$sample_root/snapshot.log" "$snapshot_wall_ms" "$sample_root/artifact.json"
+
+    local capture_raw="$OUT_DIR/raw/local-crypto/$policy/$iteration/capture"
+    mkdir -p "$capture_raw"
+    cp "$sample_root/b-run.log" "$sample_root/writes.log" "$sample_root/snapshot.log" \
+        "$sample_root/w-info.json" "$sample_root/artifact.json" "$capture_raw/"
+
+    local_crypto_restore "$policy" "$iteration" cold "$manifest_config" "$w" "$w_out" "$b_out" \
+        "$sample_root/artifact.json" "$sample_root"
+    local_crypto_restore "$policy" "$iteration" warm "$manifest_config" "$w" "$w_out" "$b_out" \
+        "$sample_root/artifact.json" "$sample_root"
+    if [ -z "${PERF_KEEP_WORK:-}" ]; then
+        rm -rf -- "$sample_root"
+    fi
+}
+
 for group in "${MATRIX_GROUPS[@]}"; do
     read -r drop_caches merge_ref <<<"$(group_flags "$group")"
     for iteration in $(seq 1 "$ITERS"); do
@@ -1028,7 +1445,21 @@ for group in "${MATRIX_GROUPS[@]}"; do
     done
 done
 
-REPORT_ARGS=(--samples "$SAMPLES" --environment "$ENVIRONMENT" --output "$REPORT")
+echo "==> local crypto D matrix (off/auto x cold/warm)" >&2
+for iteration in $(seq 1 "$ITERS"); do
+    if [ $((iteration % 2)) -eq 1 ]; then
+        CRYPTO_POLICY_ORDER=(off auto)
+    else
+        CRYPTO_POLICY_ORDER=(auto off)
+    fi
+    for policy in "${CRYPTO_POLICY_ORDER[@]}"; do
+        echo "==> [local crypto/$policy] iteration $iteration/$ITERS" >&2
+        capture_local_crypto_w "$policy" "$iteration"
+    done
+done
+
+REPORT_ARGS=(--samples "$SAMPLES" --local-crypto-samples "$LOCAL_CRYPTO_SAMPLES" \
+    --environment "$ENVIRONMENT" --output "$REPORT")
 if [ "$(printf '%s\n' "${MATRIX_GROUPS[@]}" | sort -u | tr '\n' ' ' | sed 's/ $//')" != "A B C D" ]; then
     REPORT_ARGS+=(--allow-partial)
 fi
@@ -1038,4 +1469,5 @@ echo >&2
 echo "==> working-set performance matrix complete" >&2
 echo "    environment: $ENVIRONMENT" >&2
 echo "    raw samples: $SAMPLES" >&2
+echo "    local crypto: $LOCAL_CRYPTO_SAMPLES" >&2
 echo "    report:      $REPORT" >&2

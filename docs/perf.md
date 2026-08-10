@@ -308,6 +308,15 @@ restore 意外回退到本地文件。A/B/C/D 主矩阵固定
 `restore.prefetch: off`，另外为 D 执行一次配对的 `prefetch: memory`，
 并断言只预取 W self，不预取 memory parent 或 disk。
 
+同一次运行还执行独立的本地 tarstream 加密对照。该对照固定 D、
+`prefetch: off` 和 16 MiB HTTP 请求，分别生成逻辑工作负载相同的
+`crypto.local=off` 与 `auto` 本地 B/W artifact set。每个 policy 先从冷 host/
+service cache 恢复，随后立即执行 warm-cache 恢复；奇偶 iteration 交换 policy
+顺序以降低时间漂移。restore 的 active DIFF 都是预先格式化的 plaintext ext4，
+所以 `auto` 只给本地 memory/disk base tarstream 增加 AES-GCM 解密，不混入
+DIFF/XTS 成本。`required` 与 `auto` 的加密读取算法相同，仅多格式拒绝语义，
+不重复作为性能场景。
+
 ```bash
 cd platform
 sudo PERF_ITERS=30 make perf-sandbox-working-set
@@ -316,9 +325,10 @@ sudo PERF_ITERS=30 make perf-sandbox-working-set
 默认 `PERF_ITERS=5` 用于本地 smoke；可用 `PERF_OUT_DIR` 固定输出目录。
 产物包含：
 
-- `environment.json`：五个组件仓库的精确 SHA、binary/kernel digest、
+- `environment.json`：platform 和五个组件仓库的精确 SHA、binary/kernel digest、
   image ID、host 与全部测试参数；
-- `samples.jsonl`：每次独立 restore 的原始结构化样本；
+- `samples.jsonl`：portable A/B/C/D 每次独立 restore 的原始结构化样本；
+- `local-crypto-samples.jsonl`：D 的 `off/auto × cold/warm` 配对样本；
 - `raw/`：snapshot/publisher/restore log、stats-json 与 cache 计数器快照；
 - `report.md`：按 nearest-rank 统计的 p50/p95/p99，不设硬性性能阈值。
 
@@ -336,6 +346,11 @@ scratch disk 和一个 dataset overlay 会展开为五个 CH backend：`blk0=roo
 backend。当前 cache/store pull-only info 接口
 不提供精确传输字节 delta，因此字节数明确记为 `N/A`，不为本报告
 引入新 metrics 协议。
+
+本地加密报告额外输出 restore-to-ack、application ready、固定 16 MiB 首请求
+时延/吞吐，以及 UFFD `source_read_calls/bytes/ns` 派生的 `SourceAt` 平均调用
+时延和吞吐。`auto - off` 使用同 iteration 的两个样本直接计算绝对差与百分比，
+而不是用两个独立分位数相减。正的时延差表示开销，负的吞吐差表示损失。
 
 ### 2.7 UFFD 自动性能门禁
 
