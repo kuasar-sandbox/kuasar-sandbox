@@ -97,11 +97,11 @@ jobs:
           pr=$(api_get "/repos/$GITHUB_REPOSITORY/pulls/$event_pr")
 
           pull_request_number=$(jq -er '.number' <<< "$pr")
-          candidate_sha=$(jq -er '.merge_commit_sha // ""' <<< "$pr")
+          candidate_sha=$(jq -r '.merge_commit_sha // ""' <<< "$pr")
           base_sha=$(jq -er '.base.sha' <<< "$pr")
           head_sha=$(jq -er '.head.sha' <<< "$pr")
           association=$(jq -er '.author_association' <<< "$pr")
-          draft=$(jq -er '.draft' <<< "$pr")
+          draft=$(jq -r '.draft' <<< "$pr")
           state=$(jq -er '.state' <<< "$pr")
           base_ref=$(jq -er '.base.ref' <<< "$pr")
           base_repository=$(jq -er '.base.repo.full_name' <<< "$pr")
@@ -148,11 +148,11 @@ jobs:
           if [ -z "$reason" ]; then
             event_base_sha=$(jq -er '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
             event_head_sha=$(jq -er '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
-            event_candidate_sha=$(jq -er '.pull_request.merge_commit_sha // ""' "$GITHUB_EVENT_PATH")
+            event_candidate_sha=$(jq -r '.pull_request.merge_commit_sha // ""' "$GITHUB_EVENT_PATH")
             event_base_repository=$(jq -er '.pull_request.base.repo.full_name' "$GITHUB_EVENT_PATH")
             event_head_repository=$(jq -er '.pull_request.head.repo.full_name' "$GITHUB_EVENT_PATH")
             event_association=$(jq -er '.pull_request.author_association' "$GITHUB_EVENT_PATH")
-            event_draft=$(jq -er '.pull_request.draft' "$GITHUB_EVENT_PATH")
+            event_draft=$(jq -r '.pull_request.draft' "$GITHUB_EVENT_PATH")
             if [ "$event_base_sha" != "$base_sha" ] \
               || [ "$event_head_sha" != "$head_sha" ] \
               || [ "$event_candidate_sha" != "$candidate_sha" ] \
