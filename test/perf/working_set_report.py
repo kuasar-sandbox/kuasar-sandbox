@@ -25,6 +25,9 @@ EXPECTED_DISK_ROLES = {
     "blk4": "dataset.top",
 }
 
+LOCAL_CRYPTO_POLICIES = ("off", "auto")
+LOCAL_CRYPTO_CACHE_STATES = ("cold", "warm")
+
 
 def percentile(values: Iterable[float], percent: int) -> float | None:
     ordered = sorted(float(value) for value in values if value is not None)
@@ -160,6 +163,116 @@ def validate(rows: list[dict[str, Any]], allow_partial: bool) -> None:
                 )
 
 
+def validate_local_crypto(rows: list[dict[str, Any]]) -> None:
+    required_metrics = (
+        "b_memory_logical_bytes",
+        "b_memory_allocated_bytes",
+        "w_memory_logical_bytes",
+        "w_memory_allocated_bytes",
+        "w_disk_logical_bytes",
+        "w_disk_allocated_bytes",
+        "w_memory_resident_bytes",
+        "w_memory_resident_ratio",
+        "snapshot_pause_ms",
+        "snapshot_dump_ms",
+        "snapshot_wall_ms",
+        "restore_ack_ms",
+        "app_ready_ms",
+        "first_request_ms",
+        "first_request_mib_per_s",
+        "uffd_faults",
+        "uffd_pages_copied",
+        "uffd_pages_zeroed",
+        "lazy_load_ratio",
+        "uffd_source_read_calls",
+        "uffd_source_read_bytes",
+        "uffd_source_read_ms",
+        "uffd_source_read_avg_us",
+        "uffd_source_read_mib_per_s",
+        "cache_origin_requests",
+    )
+    seen_scenarios: set[tuple[str, str]] = set()
+    seen_samples: set[tuple[str, str, int]] = set()
+    for row in rows:
+        policy = row.get("crypto_local")
+        cache_state = row.get("cache_state")
+        if policy not in LOCAL_CRYPTO_POLICIES:
+            raise SystemExit(f"unknown crypto.local policy in sample: {policy!r}")
+        if cache_state not in LOCAL_CRYPTO_CACHE_STATES:
+            raise SystemExit(f"unknown local crypto cache state in sample: {cache_state!r}")
+        if (
+            row.get("group") != "D"
+            or row.get("drop_caches") is not False
+            or row.get("merge_ref") is not False
+            or row.get("prefetch") != "off"
+        ):
+            raise SystemExit(
+                f"local crypto {policy}/{cache_state} must use D with "
+                "drop_caches=false, merge_ref=false, prefetch=off"
+            )
+        if row.get("restore_source") != "local tarstream":
+            raise SystemExit(f"local crypto {policy}/{cache_state} did not restore a local tarstream")
+        if row.get("active_diff_format") != "existing plaintext":
+            raise SystemExit(f"local crypto {policy}/{cache_state} mixed active DIFF encryption")
+        iteration = row.get("iteration")
+        if not isinstance(iteration, int) or isinstance(iteration, bool) or iteration < 1:
+            raise SystemExit(
+                f"invalid local crypto iteration for {policy}/{cache_state}: {iteration!r}"
+            )
+        sample = (policy, cache_state, iteration)
+        if sample in seen_samples:
+            raise SystemExit(f"duplicate local crypto sample: {sample}")
+        seen_samples.add(sample)
+        missing_metrics = [name for name in required_metrics if row.get(name) is None]
+        if missing_metrics:
+            raise SystemExit(f"local crypto sample {sample} missing metrics: {missing_metrics}")
+        for name in (
+            "first_request_mib_per_s",
+            "uffd_source_read_calls",
+            "uffd_source_read_bytes",
+            "uffd_source_read_ms",
+            "uffd_source_read_avg_us",
+            "uffd_source_read_mib_per_s",
+        ):
+            if row[name] <= 0:
+                raise SystemExit(f"local crypto sample {sample} has non-positive {name}")
+        disk_reads = row.get("disk_reads")
+        if not isinstance(disk_reads, dict) or set(disk_reads) != set(EXPECTED_DISK_ROLES):
+            raise SystemExit(f"local crypto sample {sample} has invalid disk_reads")
+        for name, role in EXPECTED_DISK_ROLES.items():
+            entry = disk_reads[name]
+            if not isinstance(entry, dict) or entry.get("role") != role:
+                raise SystemExit(f"local crypto sample {sample} has invalid disk role for {name}")
+            if any(entry.get(metric) is None for metric in ("bytes", "p50_us", "p99_us")):
+                raise SystemExit(f"local crypto sample {sample} has incomplete disk metrics for {name}")
+        seen_scenarios.add((cache_state, policy))
+
+    required_scenarios = {
+        (cache_state, policy)
+        for cache_state in LOCAL_CRYPTO_CACHE_STATES
+        for policy in LOCAL_CRYPTO_POLICIES
+    }
+    missing = sorted(required_scenarios - seen_scenarios)
+    if missing:
+        raise SystemExit(f"incomplete local crypto matrix, missing samples: {missing}")
+    expected_iterations = {
+        iteration
+        for policy, cache_state, iteration in seen_samples
+        if (cache_state, policy) == ("cold", "off")
+    }
+    for cache_state, policy in sorted(required_scenarios):
+        iterations = {
+            iteration
+            for sample_policy, sample_cache, iteration in seen_samples
+            if (sample_cache, sample_policy) == (cache_state, policy)
+        }
+        if iterations != expected_iterations:
+            raise SystemExit(
+                f"local crypto scenario {(cache_state, policy)} iterations={sorted(iterations)}, "
+                f"want {sorted(expected_iterations)}"
+            )
+
+
 def scenario_rows(rows: list[dict[str, Any]]) -> list[tuple[str, list[dict[str, Any]]]]:
     result: list[tuple[str, list[dict[str, Any]]]] = []
     for group in EXPECTED:
@@ -232,7 +345,112 @@ def disk_table(scenarios: list[tuple[str, list[dict[str, Any]]]]) -> list[str]:
     return lines
 
 
-def render(environment: dict[str, Any], rows: list[dict[str, Any]], samples_path: Path) -> str:
+def local_crypto_scenario_rows(
+    rows: list[dict[str, Any]],
+) -> list[tuple[str, list[dict[str, Any]]]]:
+    result: list[tuple[str, list[dict[str, Any]]]] = []
+    for cache_state in LOCAL_CRYPTO_CACHE_STATES:
+        for policy in LOCAL_CRYPTO_POLICIES:
+            selected = [
+                row
+                for row in rows
+                if row["cache_state"] == cache_state and row["crypto_local"] == policy
+            ]
+            result.append((f"{cache_state}/{policy}", selected))
+    return result
+
+
+def local_crypto_metric_table(
+    scenarios: list[tuple[str, list[dict[str, Any]]]],
+) -> list[str]:
+    metrics = [
+        ("restore-to-ack", "restore_ack_ms", " ms", 1),
+        ("application ready", "app_ready_ms", " ms", 1),
+        ("first 16 MiB request", "first_request_ms", " ms", 1),
+        ("first 16 MiB request throughput", "first_request_mib_per_s", " MiB/s", 1),
+        ("UFFD source ReadAt calls", "uffd_source_read_calls", "", 1),
+        ("UFFD source ReadAt bytes", "uffd_source_read_bytes", " MiB", 1024 * 1024),
+        ("UFFD source ReadAt aggregate time", "uffd_source_read_ms", " ms", 1),
+        ("UFFD source ReadAt average", "uffd_source_read_avg_us", " µs/call", 1),
+        ("UFFD source ReadAt throughput", "uffd_source_read_mib_per_s", " MiB/s", 1),
+        ("UFFD faults", "uffd_faults", "", 1),
+        ("UFFD pages copied", "uffd_pages_copied", "", 1),
+        ("lazy-load ratio", "lazy_load_ratio", "%", 0.01),
+        ("cache origin requests", "cache_origin_requests", "", 1),
+    ]
+    lines = [
+        "| Metric (p50/p95/p99) | " + " | ".join(name for name, _ in scenarios) + " |",
+        "|---|" + "---:|" * len(scenarios),
+    ]
+    for label, key, unit, scale in metrics:
+        lines.append(
+            f"| {label} | "
+            + " | ".join(triplet(selected, key, unit, scale) for _, selected in scenarios)
+            + " |"
+        )
+    return lines
+
+
+def paired_metric_values(
+    rows: list[dict[str, Any]], cache_state: str, key: str
+) -> tuple[list[float], list[float], list[float], list[float]]:
+    by_policy: dict[str, dict[int, float]] = {}
+    for policy in LOCAL_CRYPTO_POLICIES:
+        by_policy[policy] = {
+            int(row["iteration"]): float(row[key])
+            for row in rows
+            if row["cache_state"] == cache_state and row["crypto_local"] == policy
+        }
+    iterations = sorted(set(by_policy["off"]) & set(by_policy["auto"]))
+    off = [by_policy["off"][iteration] for iteration in iterations]
+    auto = [by_policy["auto"][iteration] for iteration in iterations]
+    delta = [auto_value - off_value for off_value, auto_value in zip(off, auto)]
+    delta_percent = [
+        (auto_value / off_value - 1) * 100
+        for off_value, auto_value in zip(off, auto)
+        if off_value != 0
+    ]
+    return off, auto, delta, delta_percent
+
+
+def values_triplet(
+    values: list[float], unit: str = "", scale: float = 1.0
+) -> str:
+    return "/".join(fmt(percentile(values, p), unit, scale) for p in (50, 95, 99))
+
+
+def local_crypto_paired_table(rows: list[dict[str, Any]]) -> list[str]:
+    metrics = [
+        ("restore-to-ack", "restore_ack_ms", " ms"),
+        ("application ready", "app_ready_ms", " ms"),
+        ("first 16 MiB request", "first_request_ms", " ms"),
+        ("first request throughput", "first_request_mib_per_s", " MiB/s"),
+        ("UFFD source ReadAt aggregate time", "uffd_source_read_ms", " ms"),
+        ("UFFD source ReadAt average", "uffd_source_read_avg_us", " µs/call"),
+        ("UFFD source ReadAt throughput", "uffd_source_read_mib_per_s", " MiB/s"),
+    ]
+    lines = [
+        "| Cache | Metric | off p50 | auto p50 | paired auto-off p50/p95/p99 | paired change p50/p95/p99 |",
+        "|---|---|---:|---:|---:|---:|",
+    ]
+    for cache_state in LOCAL_CRYPTO_CACHE_STATES:
+        for label, key, unit in metrics:
+            off, auto, delta, delta_percent = paired_metric_values(rows, cache_state, key)
+            lines.append(
+                f"| {cache_state} | {label} | {fmt(percentile(off, 50), unit)} | "
+                f"{fmt(percentile(auto, 50), unit)} | {values_triplet(delta, unit)} | "
+                f"{values_triplet(delta_percent, '%')} |"
+            )
+    return lines
+
+
+def render(
+    environment: dict[str, Any],
+    rows: list[dict[str, Any]],
+    samples_path: Path,
+    local_crypto_rows: list[dict[str, Any]] | None = None,
+    local_crypto_samples_path: Path | None = None,
+) -> str:
     scenarios = scenario_rows(rows)
     lines = [
         "# Working-set snapshot A/B/C/D performance report",
@@ -251,6 +469,58 @@ def render(environment: dict[str, Any], rows: list[dict[str, Any]], samples_path
         )
     lines.extend(["", "## Artifact, capture, publication, and restore", "", *metric_table(scenarios)])
     lines.extend(["", "## Disk reads", "", *disk_table(scenarios)])
+    if local_crypto_rows:
+        local_scenarios = local_crypto_scenario_rows(local_crypto_rows)
+        lines.extend(
+            [
+                "",
+                "## Local tarstream crypto overhead",
+                "",
+                "This paired D matrix restores local W artifacts directly. It is separate from the "
+                "portable `manifest://` A/B/C/D matrix above, which does not traverse the local "
+                "tarstream codec.",
+                "",
+                "| Scenario | crypto.local | host/service cache | drop-caches | merge-ref | prefetch | active DIFF | N |",
+                "|---|---|---|---:|---:|---|---|---:|",
+            ]
+        )
+        for name, selected in local_scenarios:
+            row = selected[0]
+            lines.append(
+                f"| {name} | {row['crypto_local']} | {row['cache_state']} | "
+                f"{str(row['drop_caches']).lower()} | {str(row['merge_ref']).lower()} | "
+                f"{row['prefetch']} | {row['active_diff_format']} | {len(selected)} |"
+            )
+        lines.extend(["", *local_crypto_metric_table(local_scenarios)])
+        lines.extend(
+            [
+                "",
+                "### Paired auto - off change",
+                "",
+                "Each delta pairs the same iteration number. Positive latency/time means overhead; "
+                "negative throughput means loss.",
+                "",
+                *local_crypto_paired_table(local_crypto_rows),
+                "",
+                "### Local-crypto disk reads",
+                "",
+                *disk_table(local_scenarios),
+                "",
+                "### Local-crypto scope",
+                "",
+                "- Both policies use D (`drop-caches=false`, `merge-ref=false`) and `prefetch=off`; "
+                "the fixed 16 MiB HTTP request preserves the existing client access model.",
+                "- `cold` resets manifest store/cache processes and evicts host page cache. `warm` "
+                "immediately repeats the same logical restore without either reset.",
+                "- All active DIFF targets are existing plaintext ext4 files. `crypto.local=auto` "
+                "therefore exercises encrypted local tarstream memory/disk bases without adding "
+                "DIFF/XTS cost.",
+                "- `required` is excluded because it uses the same encrypted read algorithm as "
+                "`auto`; its additional behavior is format rejection, not a performance path.",
+                "- UFFD source ReadAt throughput is source bytes divided by the handler's aggregate "
+                "source-read time; first-request throughput is 16 MiB divided by HTTP wall time.",
+            ]
+        )
     lines.extend(
         [
             "",
@@ -268,6 +538,11 @@ def render(environment: dict[str, Any], rows: list[dict[str, Any]], samples_path
             "```",
             "",
             f"Raw samples: `{samples_path.name}`",
+            *(
+                [f"Local crypto samples: `{local_crypto_samples_path.name}`"]
+                if local_crypto_samples_path is not None
+                else []
+            ),
             "",
         ]
     )
@@ -277,6 +552,7 @@ def render(environment: dict[str, Any], rows: list[dict[str, Any]], samples_path
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--samples", required=True, type=Path)
+    parser.add_argument("--local-crypto-samples", type=Path)
     parser.add_argument("--environment", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--allow-partial", action="store_true")
@@ -284,11 +560,24 @@ def main() -> None:
 
     rows = load_jsonl(args.samples)
     validate(rows, args.allow_partial)
+    local_crypto_rows = None
+    if args.local_crypto_samples is not None:
+        local_crypto_rows = load_jsonl(args.local_crypto_samples)
+        validate_local_crypto(local_crypto_rows)
     environment = json.loads(args.environment.read_text(encoding="utf-8"))
     if not isinstance(environment, dict):
         raise SystemExit("environment must be a JSON object")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(render(environment, rows, args.samples), encoding="utf-8")
+    args.output.write_text(
+        render(
+            environment,
+            rows,
+            args.samples,
+            local_crypto_rows,
+            args.local_crypto_samples,
+        ),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":
