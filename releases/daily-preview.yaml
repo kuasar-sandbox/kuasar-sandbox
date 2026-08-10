@@ -1,10 +1,10 @@
 version: release-v0.1.0
-preview_version: preview.20260810
-previous_preview_version: preview.20260809
+preview_version: preview.20260811
+previous_preview_version: preview.20260810
 components:
-  accelerator: v0.1.0-preview.20260810
-  connector: v0.1.0-preview.20260810
-  sandboxer: v0.1.0-preview.20260810
-  orchestrator: v0.1.0-preview.20260810
-  runtime: runtime-v0.1.0-preview.20260810
-  vmlinux: vmlinux-v0.1.0-preview.20260810
+  accelerator: v0.1.0-preview.20260811
+  connector: v0.1.0-preview.20260811
+  sandboxer: v0.1.0-preview.20260811
+  orchestrator: v0.1.0-preview.20260811
+  runtime: runtime-v0.1.0-preview.20260811
+  vmlinux: vmlinux-v0.1.0-preview.20260811
