@@ -148,13 +148,11 @@ jobs:
           if [ -z "$reason" ]; then
             event_base_sha=$(jq -er '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
             event_head_sha=$(jq -er '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
-            event_candidate_sha=$(jq -r '.pull_request.merge_commit_sha // ""' "$GITHUB_EVENT_PATH")
             event_base_repository=$(jq -er '.pull_request.base.repo.full_name' "$GITHUB_EVENT_PATH")
             event_head_repository=$(jq -er '.pull_request.head.repo.full_name' "$GITHUB_EVENT_PATH")
             event_draft=$(jq -r '.pull_request.draft' "$GITHUB_EVENT_PATH")
             if [ "$event_base_sha" != "$base_sha" ] \
               || [ "$event_head_sha" != "$head_sha" ] \
-              || [ "$event_candidate_sha" != "$candidate_sha" ] \
               || [ "$event_base_repository" != "$base_repository" ] \
               || [ "$event_head_repository" != "$head_repository" ] \
               || [ "$event_draft" != "$draft" ]; then

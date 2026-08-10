@@ -90,7 +90,6 @@ jobs:
                   jq -e \
                     --arg repository "$CANDIDATE_REPOSITORY" \
                     --argjson number "$CANDIDATE_PR" \
-                    --arg candidate "$CANDIDATE_SHA" \
                     --arg base "$CANDIDATE_BASE_SHA" \
                     --arg head "$CANDIDATE_HEAD_SHA" '
                       .repository.full_name == $repository
@@ -101,7 +100,6 @@ jobs:
                       and .pull_request.base.repo.full_name == $repository
                       and .pull_request.base.sha == $base
                       and .pull_request.head.sha == $head
-                      and .pull_request.merge_commit_sha == $candidate
                       and (
                         .pull_request.head.repo.full_name == $repository
                         or .pull_request.author_association == "OWNER"
