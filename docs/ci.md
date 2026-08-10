@@ -1,5 +1,7 @@
 # BMS CI
 
+<!-- Temporary PR workflow validation; this branch is not intended to merge. -->
+
 ## 1. 概述
 
 platform 维护 BMS 的可信控制面与唯一执行 workflow。五个组件仓只保留事件触发和参数
