@@ -87,7 +87,6 @@ jobs:
       mode: exact-assets
       release_version: ${{ needs.prepare.outputs.version }}
       release_bundle_artifact: ${{ needs.prepare.outputs.artifact }}
-      run_mode: full-e2e
     secrets:
       KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
 

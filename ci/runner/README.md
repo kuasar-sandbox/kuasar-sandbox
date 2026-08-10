@@ -181,8 +181,11 @@ environment when no proxy is configured.
 
 All runners join the existing `kuasar-e2e` organization group with labels
 `kuasar-e2e,kvm,cgroup-v2` plus a slot label. The group must remain
-organization-wide (`visibility=all`) with no selected-repository or workflow
-restriction.
+organization-wide (`visibility=all`) so all six private repositories can call
+it. Its workflow restriction must allow only
+`kuasar-sandbox/platform/.github/workflows/bms-e2e.yml@refs/heads/main`;
+component wrappers and the trusted platform entry cannot allocate these runners
+through any other workflow implementation.
 
 Start and verify infrastructure isolation:
 

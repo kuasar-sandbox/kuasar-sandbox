@@ -32,11 +32,6 @@ on:
         required: false
         default: ""
         type: string
-      run_mode:
-        description: full-e2e or working-set-perf
-        required: false
-        default: full-e2e
-        type: string
       release_version:
         description: Aggregate release-v* version for exact-assets mode
         required: false
@@ -60,7 +55,84 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  request:
+    runs-on: ubuntu-latest
+    env:
+      CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
+      CANDIDATE_PR: ${{ inputs.pull_request_number }}
+      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+      CANDIDATE_BASE_SHA: ${{ inputs.base_sha }}
+      CANDIDATE_HEAD_SHA: ${{ inputs.head_sha }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
+      RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
+    steps:
+      - name: Validate reusable workflow request
+        env:
+          TRUSTED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [ "$TRUSTED_WORKFLOW_REPOSITORY" = kuasar-sandbox/platform ] \
+            || { echo "BMS implementation must come from kuasar-sandbox/platform" >&2; exit 1; }
+          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "${{ inputs.mode }}" in
+            source)
+              [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|orchestrator|platform|sandboxer)$ ]]
+              for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do
+                value=${!variable}
+                [[ "$value" =~ ^[0-9a-f]{40}$ ]] \
+                  || { echo "$variable must be a full lowercase commit SHA" >&2; exit 1; }
+              done
+              [[ "$CANDIDATE_PR" =~ ^[0-9]+$ ]]
+
+              case "$GITHUB_EVENT_NAME" in
+                pull_request_target)
+                  jq -e \
+                    --arg repository "$CANDIDATE_REPOSITORY" \
+                    --argjson number "$CANDIDATE_PR" \
+                    --arg candidate "$CANDIDATE_SHA" \
+                    --arg base "$CANDIDATE_BASE_SHA" \
+                    --arg head "$CANDIDATE_HEAD_SHA" '
+                      .repository.full_name == $repository
+                      and .pull_request.number == $number
+                      and .pull_request.state == "open"
+                      and .pull_request.draft == false
+                      and .pull_request.base.ref == "main"
+                      and .pull_request.base.repo.full_name == $repository
+                      and .pull_request.base.sha == $base
+                      and .pull_request.head.sha == $head
+                      and .pull_request.merge_commit_sha == $candidate
+                      and (
+                        .pull_request.head.repo.full_name == $repository
+                        or .pull_request.author_association == "OWNER"
+                        or .pull_request.author_association == "MEMBER"
+                      )
+                    ' "$GITHUB_EVENT_PATH" >/dev/null \
+                    || { echo "pull_request_target inputs do not match the admitted event" >&2; exit 1; }
+                  ;;
+                push)
+                  [ "$GITHUB_REF" = refs/heads/main ]
+                  [ "$CANDIDATE_REPOSITORY" = "$GITHUB_REPOSITORY" ]
+                  [ "$CANDIDATE_PR" = 0 ]
+                  [ "$CANDIDATE_SHA" = "$GITHUB_SHA" ]
+                  [ "$CANDIDATE_BASE_SHA" = "$GITHUB_SHA" ]
+                  [ "$CANDIDATE_HEAD_SHA" = "$GITHUB_SHA" ]
+                  ;;
+                workflow_dispatch) ;;
+                *) echo "source BMS rejects event $GITHUB_EVENT_NAME" >&2; exit 1 ;;
+              esac
+              ;;
+            exact-assets)
+              [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] \
+                || { echo "exact-assets BMS requires workflow_dispatch" >&2; exit 1; }
+              [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]]
+              [[ "$RELEASE_BUNDLE_ARTIFACT" =~ ^aggregate-stage-release-v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8})?-[0-9]+$ ]]
+              ;;
+            *) echo "mode must be source or exact-assets" >&2; exit 1 ;;
+          esac
+
   e2e:
+    needs: request
     runs-on:
       - self-hosted
       - Linux
@@ -68,7 +140,7 @@ jobs:
       - kuasar-e2e
       - kvm
       - cgroup-v2
-    timeout-minutes: ${{ inputs.run_mode == 'working-set-perf' && 180 || inputs.mode == 'exact-assets' && 120 || 45 }}
+    timeout-minutes: ${{ inputs.mode == 'exact-assets' && 120 || 45 }}
     env:
       TARGET_ARCH: x86_64
       GOPROXY: https://goproxy.cn,direct
@@ -90,39 +162,10 @@ jobs:
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       CANDIDATE_BASE_SHA: ${{ inputs.base_sha }}
       CANDIDATE_HEAD_SHA: ${{ inputs.head_sha }}
-      RUN_MODE: ${{ inputs.run_mode }}
       RELEASE_VERSION: ${{ inputs.release_version }}
       RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
 
     steps:
-      - name: Validate reusable workflow request
-        env:
-          TRUSTED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          set -euo pipefail
-          [ "$TRUSTED_WORKFLOW_REPOSITORY" = kuasar-sandbox/platform ] \
-            || { echo "BMS implementation must come from kuasar-sandbox/platform" >&2; exit 1; }
-          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
-          case "${{ inputs.mode }}" in
-            source)
-              [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|orchestrator|platform|sandboxer)$ ]]
-              for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do
-                value=${!variable}
-                [[ "$value" =~ ^[0-9a-f]{40}$ ]] \
-                  || { echo "$variable must be a full lowercase commit SHA" >&2; exit 1; }
-              done
-              [[ "$CANDIDATE_PR" =~ ^[0-9]+$ ]]
-              case "$RUN_MODE" in full-e2e|working-set-perf) ;; *) exit 1 ;; esac
-              ;;
-            exact-assets)
-              [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]]
-              [[ "$RELEASE_BUNDLE_ARTIFACT" =~ ^aggregate-stage-release-v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8})?-[0-9]+$ ]]
-              [ "$RUN_MODE" = full-e2e ]
-              ;;
-            *) echo "mode must be source or exact-assets" >&2; exit 1 ;;
-          esac
-
       - name: Initialize CI metadata
         run: |
           set -euo pipefail
@@ -473,7 +516,7 @@ jobs:
         run: make test-release-tools test-perf-tools
 
       - name: Build and test source candidate
-        if: inputs.mode == 'source' && inputs.run_mode == 'full-e2e'
+        if: inputs.mode == 'source'
         working-directory: src/platform
         run: |
           set -euo pipefail
@@ -494,13 +537,18 @@ jobs:
             VGW_BIN="$E2E_VGW_BIN" \
             bash "$runner"
 
-      - name: Run working-set performance matrix
-        if: inputs.mode == 'source' && inputs.run_mode == 'working-set-perf'
+      - name: Run working-set performance smoke
+        if: inputs.mode == 'source'
         working-directory: src/platform
         env:
-          PERF_ITERS: "30"
+          PERF_ITERS: "1"
           PERF_OUT_DIR: ${{ env.KUASAR_CI_DIR }}/working-set-perf
-        run: make perf-sandbox-working-set
+        run: |
+          ci/bms/ci-timed.sh perf/working-set-smoke env \
+            BIN="$PWD/bin/x86_64" \
+            PERF_ITERS="$PERF_ITERS" \
+            PERF_OUT_DIR="$PERF_OUT_DIR" \
+            bash test/perf/sandbox-perf-working-set.sh
 
       - name: Test exact published assets from the platform package
         if: inputs.mode == 'exact-assets'
