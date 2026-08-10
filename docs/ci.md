@@ -3,7 +3,7 @@
 ## 1. 概述
 
 platform 维护唯一的 BMS 可复用 workflow。五个组件仓只保留事件触发和候选参数 wrapper,
-并以完整 platform commit SHA 引用 `.github/workflows/bms-e2e.yml`;公共 runner 初始化、源码
+并从 platform `main` 引用 `.github/workflows/bms-e2e.yml`;公共 runner 初始化、源码
 缓存、native cache、完整 E2E 和精确发布资产验证不再复制到各仓。
 
 BMS 有两个明确模式:
@@ -55,7 +55,9 @@ commit 的 `test/e2e/`,所以特性实现与其 E2E 在同一个 PR 评审,组�
 该组件 `run_all.sh` 在统一环境中通过为准。测试需要其他仓二进制不改变所有权:platform 只
 提供完整 `BIN`、zot、versitygw、KVM 与系统服务环境,不复制用例源码。
 
-working-set 性能模式只运行 `make perf-sandbox-working-set`,并使用独立确认字符串触发。
+完整 source BMS 还会固定执行 1 轮 working-set smoke,覆盖 A/B/C/D 以及本地加密
+`off/auto × cold/warm`。30 轮 canonical 测量用于生成稳定的描述性性能报告,不作为
+workflow 的独立模式或 PR 必跑轮数。
 
 ## 3. Exact-assets 模式
 

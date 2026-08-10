@@ -323,6 +323,8 @@ sudo PERF_ITERS=30 make perf-sandbox-working-set
 ```
 
 默认 `PERF_ITERS=5` 用于本地 smoke；可用 `PERF_OUT_DIR` 固定输出目录。
+source BMS 固定设置 `PERF_ITERS=1`,以单轮完整矩阵验证用例可运行且指标可采集;
+30 轮仍只用于 canonical 描述性报告。
 产物包含：
 
 - `environment.json`：platform 和五个组件仓库的精确 SHA、binary/kernel digest、

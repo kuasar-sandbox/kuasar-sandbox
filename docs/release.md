@@ -270,9 +270,10 @@ workflow run 状态幂等处理:
 - 失败的 draft 可按 Release ID 删除并重建,已发布 Release 不可替换;
 - 同版本 workflow concurrency 不取消正在发布的 run;
 - 所有外部下载使用有限重试、连接超时和总超时;
-- BMS 公共实现只在 platform 维护,组件 wrapper 以完整 platform commit SHA 引用;
+- BMS 公共实现只在 platform 维护,组件 wrapper 从 platform `main` 引用;
 - reusable workflow 用 `job.workflow_repository` 和 `job.workflow_sha` checkout 自身工具;
-- fork 候选必须由可信 wrapper dispatch 当前 two-parent integration commit;
+- fork 候选只接受组织 `OWNER/MEMBER`,并由 base 仓可信 wrapper 验证当前 two-parent
+  integration commit;
 - 候选 commit、PR base/head 和当前 merge commit 不一致时拒绝执行;
 - 自托管 job 没有 `contents:write` 或每日协调 token。
 
