@@ -94,13 +94,13 @@ jobs:
 
           event_pr=$(jq -er '.pull_request.number' "$GITHUB_EVENT_PATH")
           event_action=$(jq -er '.action' "$GITHUB_EVENT_PATH")
+          event_association=$(jq -er '.pull_request.author_association' "$GITHUB_EVENT_PATH")
           pr=$(api_get "/repos/$GITHUB_REPOSITORY/pulls/$event_pr")
 
           pull_request_number=$(jq -er '.number' <<< "$pr")
           candidate_sha=$(jq -r '.merge_commit_sha // ""' <<< "$pr")
           base_sha=$(jq -er '.base.sha' <<< "$pr")
           head_sha=$(jq -er '.head.sha' <<< "$pr")
-          association=$(jq -er '.author_association' <<< "$pr")
           draft=$(jq -r '.draft' <<< "$pr")
           state=$(jq -er '.state' <<< "$pr")
           base_ref=$(jq -er '.base.ref' <<< "$pr")
@@ -129,8 +129,8 @@ jobs:
           fi
           if [ -z "$reason" ] \
             && [ "$head_repository" != "$GITHUB_REPOSITORY" ] \
-            && [ "$association" != OWNER ] \
-            && [ "$association" != MEMBER ]; then
+            && [ "$event_association" != OWNER ] \
+            && [ "$event_association" != MEMBER ]; then
             reason="fork author is not an organization member"
           fi
           if [ -z "$reason" ] && ! [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]; then
@@ -148,17 +148,13 @@ jobs:
           if [ -z "$reason" ]; then
             event_base_sha=$(jq -er '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
             event_head_sha=$(jq -er '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
-            event_candidate_sha=$(jq -r '.pull_request.merge_commit_sha // ""' "$GITHUB_EVENT_PATH")
             event_base_repository=$(jq -er '.pull_request.base.repo.full_name' "$GITHUB_EVENT_PATH")
             event_head_repository=$(jq -er '.pull_request.head.repo.full_name' "$GITHUB_EVENT_PATH")
-            event_association=$(jq -er '.pull_request.author_association' "$GITHUB_EVENT_PATH")
             event_draft=$(jq -r '.pull_request.draft' "$GITHUB_EVENT_PATH")
             if [ "$event_base_sha" != "$base_sha" ] \
               || [ "$event_head_sha" != "$head_sha" ] \
-              || [ "$event_candidate_sha" != "$candidate_sha" ] \
               || [ "$event_base_repository" != "$base_repository" ] \
               || [ "$event_head_repository" != "$head_repository" ] \
-              || [ "$event_association" != "$association" ] \
               || [ "$event_draft" != "$draft" ]; then
               reason="pull request changed after this event"
             fi
