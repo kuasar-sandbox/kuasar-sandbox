@@ -13,12 +13,12 @@ on:
         default: ""
         type: string
       pull_request_number:
-        description: Pull request whose integration commit is under test; zero for a main push
+        description: Pull request whose integration commit is under test
         required: false
         default: "0"
         type: string
       candidate_sha:
-        description: Exact source integration or main commit
+        description: Exact source integration commit
         required: false
         default: ""
         type: string
@@ -55,77 +55,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  request:
-    runs-on: ubuntu-latest
-    env:
-      CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
-      CANDIDATE_PR: ${{ inputs.pull_request_number }}
-      CANDIDATE_SHA: ${{ inputs.candidate_sha }}
-      CANDIDATE_BASE_SHA: ${{ inputs.base_sha }}
-      CANDIDATE_HEAD_SHA: ${{ inputs.head_sha }}
-      RELEASE_VERSION: ${{ inputs.release_version }}
-      RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
-    steps:
-      - name: Validate reusable workflow request
-        env:
-          TRUSTED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
-          TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: |
-          set -euo pipefail
-          [ "$TRUSTED_WORKFLOW_REPOSITORY" = kuasar-sandbox/platform ] \
-            || { echo "BMS implementation must come from kuasar-sandbox/platform" >&2; exit 1; }
-          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
-          case "${{ inputs.mode }}" in
-            source)
-              [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|orchestrator|platform|sandboxer)$ ]]
-              for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do
-                value=${!variable}
-                [[ "$value" =~ ^[0-9a-f]{40}$ ]] \
-                  || { echo "$variable must be a full lowercase commit SHA" >&2; exit 1; }
-              done
-              [[ "$CANDIDATE_PR" =~ ^[0-9]+$ ]]
-
-              case "$GITHUB_EVENT_NAME" in
-                pull_request_target)
-                  jq -e \
-                    --arg repository "$CANDIDATE_REPOSITORY" \
-                    --argjson number "$CANDIDATE_PR" \
-                    --arg base "$CANDIDATE_BASE_SHA" \
-                    --arg head "$CANDIDATE_HEAD_SHA" '
-                      .repository.full_name == $repository
-                      and .pull_request.number == $number
-                      and .pull_request.state == "open"
-                      and .pull_request.draft == false
-                      and .pull_request.base.ref == "main"
-                      and .pull_request.base.repo.full_name == $repository
-                      and .pull_request.base.sha == $base
-                      and .pull_request.head.sha == $head
-                    ' "$GITHUB_EVENT_PATH" >/dev/null \
-                    || { echo "pull_request_target inputs do not match the admitted event" >&2; exit 1; }
-                  ;;
-                push)
-                  [ "$GITHUB_REF" = refs/heads/main ]
-                  [ "$CANDIDATE_REPOSITORY" = "$GITHUB_REPOSITORY" ]
-                  [ "$CANDIDATE_PR" = 0 ]
-                  [ "$CANDIDATE_SHA" = "$GITHUB_SHA" ]
-                  [ "$CANDIDATE_BASE_SHA" = "$GITHUB_SHA" ]
-                  [ "$CANDIDATE_HEAD_SHA" = "$GITHUB_SHA" ]
-                  ;;
-                workflow_dispatch) ;;
-                *) echo "source BMS rejects event $GITHUB_EVENT_NAME" >&2; exit 1 ;;
-              esac
-              ;;
-            exact-assets)
-              [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] \
-                || { echo "exact-assets BMS requires workflow_dispatch" >&2; exit 1; }
-              [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]]
-              [[ "$RELEASE_BUNDLE_ARTIFACT" =~ ^aggregate-stage-release-v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8})?-[0-9]+$ ]]
-              ;;
-            *) echo "mode must be source or exact-assets" >&2; exit 1 ;;
-          esac
-
   e2e:
-    needs: request
     runs-on:
       - self-hosted
       - Linux
@@ -159,6 +89,51 @@ jobs:
       RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
 
     steps:
+      - name: Validate reusable workflow request
+        env:
+          TRUSTED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
+          TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          [ "$TRUSTED_WORKFLOW_REPOSITORY" = kuasar-sandbox/platform ] \
+            || { echo "BMS implementation must come from kuasar-sandbox/platform" >&2; exit 1; }
+          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "${{ inputs.mode }}" in
+            source)
+              [ "$GITHUB_EVENT_NAME" = pull_request_target ] \
+                || { echo "source BMS requires pull_request_target" >&2; exit 1; }
+              [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|orchestrator|platform|sandboxer)$ ]]
+              for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do
+                value=${!variable}
+                [[ "$value" =~ ^[0-9a-f]{40}$ ]] \
+                  || { echo "$variable must be a full lowercase commit SHA" >&2; exit 1; }
+              done
+              [[ "$CANDIDATE_PR" =~ ^[1-9][0-9]*$ ]]
+              jq -e \
+                --arg repository "$CANDIDATE_REPOSITORY" \
+                --argjson number "$CANDIDATE_PR" \
+                --arg base "$CANDIDATE_BASE_SHA" \
+                --arg head "$CANDIDATE_HEAD_SHA" '
+                  .repository.full_name == $repository
+                  and .pull_request.number == $number
+                  and .pull_request.state == "open"
+                  and .pull_request.draft == false
+                  and .pull_request.base.ref == "main"
+                  and .pull_request.base.repo.full_name == $repository
+                  and .pull_request.base.sha == $base
+                  and .pull_request.head.sha == $head
+                ' "$GITHUB_EVENT_PATH" >/dev/null \
+                || { echo "pull_request_target inputs do not match the admitted event" >&2; exit 1; }
+              ;;
+            exact-assets)
+              [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] \
+                || { echo "exact-assets BMS requires workflow_dispatch" >&2; exit 1; }
+              [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]]
+              [[ "$RELEASE_BUNDLE_ARTIFACT" =~ ^aggregate-stage-release-v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8})?-[0-9]+$ ]]
+              ;;
+            *) echo "mode must be source or exact-assets" >&2; exit 1 ;;
+          esac
+
       - name: Initialize CI metadata
         run: |
           set -euo pipefail
@@ -198,26 +173,66 @@ jobs:
           repositories: platform
           permission-contents: read
 
-      - name: Check out trusted platform tooling
-        id: checkout-platform-tooling
-        continue-on-error: true
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: trusted/platform
-          token: ${{ steps.platform-tooling-token.outputs.token }}
-          persist-credentials: false
+      - name: Materialize exact platform sources
+        env:
+          GH_TOKEN: ${{ steps.platform-tooling-token.outputs.token }}
+          TRUSTED_REPOSITORY: ${{ job.workflow_repository }}
+          TRUSTED_SHA: ${{ job.workflow_sha }}
+          PLATFORM_SOURCE_SHA: ${{ inputs.candidate_repository == 'kuasar-sandbox/platform' && inputs.candidate_sha || job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          archive_tmp=""
+          trap 'rm -f "${archive_tmp:-}"' EXIT
 
-      - name: Retry trusted platform tooling checkout
-        if: steps.checkout-platform-tooling.outcome == 'failure'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: ${{ job.workflow_repository }}
-          ref: ${{ job.workflow_sha }}
-          path: trusted/platform
-          token: ${{ steps.platform-tooling-token.outputs.token }}
-          persist-credentials: false
+          materialize() {
+            local repository=$1 sha=$2 destination=$3
+            local entry_type
+            local -a archive_roots=()
+            [[ "$repository" =~ ^kuasar-sandbox/[a-z0-9-]+$ ]]
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            archive_tmp=$(mktemp "$RUNNER_TEMP/kuasar-platform.XXXXXX.tar.gz")
+            curl --fail --show-error --silent --location \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 120 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$repository/tarball/$sha" \
+              -o "$archive_tmp"
+
+            mapfile -t archive_roots < <(tar -tzf "$archive_tmp" \
+              | awk -F/ 'NF { print $1 }' | sort -u)
+            [ "${#archive_roots[@]}" -eq 1 ] && [ -n "${archive_roots[0]}" ] \
+              || { echo "platform archive must contain one top-level directory" >&2; exit 1; }
+            if tar -tzf "$archive_tmp" \
+              | grep -Eq '(^/|(^|/)\.\.(/|$)|(^|/)\.(/|$))'; then
+              echo "platform archive contains an unsafe path" >&2
+              exit 1
+            fi
+            entry_type=$(tar -tvzf "$archive_tmp" | awk '
+              substr($1, 1, 1) !~ /^[-d]$/ && bad == "" { bad = substr($1, 1, 1) }
+              END { print bad }
+            ')
+            [ -z "$entry_type" ] \
+              || { echo "platform archive contains unsupported entry type $entry_type" >&2; exit 1; }
+
+            rm -rf "$destination"
+            install -d -m 0755 "$destination"
+            tar -xzf "$archive_tmp" --strip-components=1 \
+              --no-same-owner --no-same-permissions -C "$destination"
+            rm -f "$archive_tmp"
+            archive_tmp=""
+          }
+
+          materialize "$TRUSTED_REPOSITORY" "$TRUSTED_SHA" trusted/platform
+          if [ "${{ inputs.mode }}" = source ]; then
+            if [ "$PLATFORM_SOURCE_SHA" = "$TRUSTED_SHA" ]; then
+              rm -rf src/platform
+              install -d -m 0755 src/platform
+              cp -a trusted/platform/. src/platform/
+            else
+              materialize kuasar-sandbox/platform "$PLATFORM_SOURCE_SHA" src/platform
+            fi
+          fi
 
       - name: Download exact aggregate bundle
         if: inputs.mode == 'exact-assets'
@@ -283,28 +298,6 @@ jobs:
               and .merge_commit_sha == $candidate
             ' <<< "$pr" >/dev/null \
             || { echo "candidate no longer matches the open pull request" >&2; exit 1; }
-
-      - name: Check out executable platform source
-        if: inputs.mode == 'source'
-        id: checkout-platform-source
-        continue-on-error: true
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kuasar-sandbox/platform
-          ref: ${{ inputs.candidate_repository == 'kuasar-sandbox/platform' && inputs.candidate_sha || job.workflow_sha }}
-          path: src/platform
-          token: ${{ steps.source-token.outputs.token }}
-          persist-credentials: false
-
-      - name: Retry executable platform source checkout
-        if: inputs.mode == 'source' && steps.checkout-platform-source.outcome == 'failure'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kuasar-sandbox/platform
-          ref: ${{ inputs.candidate_repository == 'kuasar-sandbox/platform' && inputs.candidate_sha || job.workflow_sha }}
-          path: src/platform
-          token: ${{ steps.source-token.outputs.token }}
-          persist-credentials: false
 
       - name: Assemble the five component source repositories
         if: inputs.mode == 'source'
