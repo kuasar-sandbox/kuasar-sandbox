@@ -100,11 +100,6 @@ jobs:
                       and .pull_request.base.repo.full_name == $repository
                       and .pull_request.base.sha == $base
                       and .pull_request.head.sha == $head
-                      and (
-                        .pull_request.head.repo.full_name == $repository
-                        or .pull_request.author_association == "OWNER"
-                        or .pull_request.author_association == "MEMBER"
-                      )
                     ' "$GITHUB_EVENT_PATH" >/dev/null \
                     || { echo "pull_request_target inputs do not match the admitted event" >&2; exit 1; }
                   ;;

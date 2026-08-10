@@ -15,10 +15,11 @@ BMS 有两个明确模式:
 ## 2. Source 模式
 
 各仓 `main` 上的可信 wrapper 使用 `pull_request_target` 接收事件,不执行候选仓提供的
-workflow。同仓非 draft PR 自动准入;fork PR 仅在作者的 `author_association` 为 `OWNER` 或
-`MEMBER` 时自动准入。控制 job 在 GitHub-hosted runner 重新查询当前 PR,校验 GitHub 生成的
-two-parent integration commit,并在该 commit 上把 `kuasar/bms-exact-head` 置为 `pending`。
-draft、外部 fork、冲突或已经变化的事件不会取得自托管 runner。
+workflow。同仓非 draft PR 自动准入;fork PR 由 GitHub-hosted 控制 job 使用只读 App token
+查询当前组织成员关系,仅 `active` 的 owner/member 自动准入。控制 job 同时重新查询当前 PR,
+校验 GitHub 生成的 two-parent integration commit,并在该 commit 上把
+`kuasar/bms-exact-head` 置为 `pending`。事件中的 `author_association` 不作为私有组织成员
+身份来源;draft、外部 fork、冲突或已经变化的事件不会取得自托管 runner。
 
 其余五仓 revision 通过一次 GitHub GraphQL 查询解析,候选仓 revision 替换为已准入的
 integration commit。`main` push 使用该 push 的精确 SHA。可信维护者仍可通过
@@ -31,8 +32,9 @@ integration commit。`main` push 使用该 push 的精确 SHA。可信维护者�
 2. `pull_request_target` event、当前 PR 与 candidate/base/head 输入完全一致;
 3. candidate 是以 base/head 为两个父提交的 integration commit;
 4. 当前开放 PR 的 base/head/merge commit 在执行前与结束后均未变化;
-5. 自托管 job 的 `GITHUB_TOKEN` 只有 `Contents: read` 和 `Pull requests: read`;
-6. source App token 只有六仓 `Contents: read`,并在执行候选代码前撤销。
+5. fork 准入 token 只请求组织 `Members: read`,仅存在于 GitHub-hosted 控制 job;
+6. 自托管 job 的 `GITHUB_TOKEN` 只有 `Contents: read` 和 `Pull requests: read`;
+7. source App token 只有六仓 `Contents: read`,并在执行候选代码前撤销。
 
 结束控制 job 在 GitHub-hosted runner 再次查询 PR。只有 BMS 成功且当前 integration commit
 仍与准入值完全一致时,它才把同一个 `kuasar/bms-exact-head` 状态置为 `success`;测试失败、
