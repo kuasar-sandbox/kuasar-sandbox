@@ -232,10 +232,9 @@ BMS 成功后,GitHub-hosted publish job 下载同一个 artifact,以本次 workf
 
 ## 8. 每日 preview
 
-platform 只保留两个 schedule:
-
-- 02:13 Asia/Shanghai:主协调;
-- 05:13 Asia/Shanghai:恢复协调。
+platform 在每日 02:13 至 06:13(Asia/Shanghai)每小时运行一次协调器。每次运行只在
+GitHub App installation token 的有效期内等待 50 分钟;若版本仍在构建,本次成功结束并由
+下一小时的协调器继续收敛同一份冻结清单。
 
 协调器先读取 `releases/daily-preview.yaml`。如果清单所指的 platform preview 尚未发布,
 本次运行只恢复这一个冻结选择,不会因日期变化重新计算。当前 preview 已发布且请求日期更新
@@ -279,8 +278,8 @@ workflow run 状态幂等处理:
   身份判断;
 - 控制 job 在 integration commit 上维护 `kuasar/bms-exact-head`,只有 BMS 成功且结束时
   candidate、PR base/head 和当前 merge commit 仍完全一致才写入成功;
-- `kuasar-e2e` runner group 只允许 platform `main` 的 `bms-e2e.yml`,fork workflow 不转发
-  secrets;
+- `kuasar-e2e` runner group 对组织仓库可见且不设置 workflow allowlist;fork workflow 不转发
+  secrets,自托管入口的 admission 和只读 token 边界由各仓可信 workflow 维护;
 - 自托管 job 没有 `statuses:write`、`contents:write` 或每日协调 token。
 
 ## 10. See Also

@@ -15,6 +15,15 @@ PREVIEW_DATE="${PREVIEW_SUFFIX#preview.}"
 NEXT_PREVIEW_DATE="$(date -u -d "$PREVIEW_DATE + 1 day" +%Y%m%d)"
 PREVIEW_VERSION="$PREVIEW_BASE-$PREVIEW_SUFFIX"
 PREVIEW_COMPONENT_VERSION="${PREVIEW_BASE#release-}"
+PREVIEW_WORKFLOW="$ROOT/.github/workflows/daily-preview.yml"
+WORKFLOW_WAIT_SECONDS="$(awk -F '"' '/PREVIEW_WAIT_SECONDS:/ {print $2}' "$PREVIEW_WORKFLOW")"
+WORKFLOW_TIMEOUT_MINUTES="$(awk '/timeout-minutes:/ {print $2; exit}' "$PREVIEW_WORKFLOW")"
+[[ "$WORKFLOW_WAIT_SECONDS" =~ ^[0-9]+$ ]]
+[[ "$WORKFLOW_TIMEOUT_MINUTES" =~ ^[0-9]+$ ]]
+[ "$WORKFLOW_WAIT_SECONDS" -lt 3600 ] \
+  || release_fail "daily preview wait exceeds the GitHub App token lifetime"
+[ "$WORKFLOW_WAIT_SECONDS" -lt "$((WORKFLOW_TIMEOUT_MINUTES * 60))" ] \
+  || release_fail "daily preview wait must fit within the coordinator job timeout"
 resolve_selection "$ROOT" "$PREVIEW_VERSION" "$TMP/current-preview-selection.tsv"
 PREVIEW_ACCELERATOR_TAG="$(awk -F '\t' '$1 == "accelerator" {print $2}' \
   "$TMP/current-preview-selection.tsv")"

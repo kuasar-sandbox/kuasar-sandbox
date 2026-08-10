@@ -129,10 +129,9 @@ workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用公开中�
 
 每次 job 开始会停止遗留 sandbox systemd unit、删除测试 tap 并重载 systemd。常用 zot 与
 versitygw 从 runner 固定工具目录链接到当前 workspace,不进入发布包。`kuasar-e2e` runner
-group 对仓库保持 `visibility=all`,但只允许
-`kuasar-sandbox/platform/.github/workflows/bms-e2e.yml@refs/heads/main` 分配自托管 runner。
-各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于 base 仓可信
-workflow,且候选代码执行前相关 token 已撤销。
+group 对组织仓库保持 `visibility=all`,不设置 workflow allowlist,使组件发布与 BMS 均可分配
+自托管 runner。各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于
+base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
 
 ## 6. Run artifacts
 

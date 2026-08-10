@@ -3,9 +3,7 @@ run-name: Daily preview convergence
 
 on:
   schedule:
-    - cron: "13 2 * * *"
-      timezone: Asia/Shanghai
-    - cron: "13 5 * * *"
+    - cron: "13 2-6 * * *"
       timezone: Asia/Shanghai
   workflow_dispatch:
     inputs:
@@ -24,7 +22,7 @@ concurrency:
 jobs:
   converge:
     runs-on: ubuntu-latest
-    timeout-minutes: 190
+    timeout-minutes: 55
     permissions:
       contents: write
     steps:
@@ -50,7 +48,7 @@ jobs:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
           PLATFORM_TOKEN: ${{ github.token }}
           PREVIEW_POLL_SECONDS: "120"
-          PREVIEW_WAIT_SECONDS: "10800"
+          PREVIEW_WAIT_SECONDS: "3000"
           REQUESTED_DATE: ${{ inputs.date }}
         run: |
           set -euo pipefail
