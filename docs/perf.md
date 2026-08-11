@@ -334,10 +334,14 @@ source BMS 固定设置 `PERF_ITERS=1`,以单轮完整矩阵验证用例可运�
 - `raw/`：snapshot/publisher/restore log、stats-json 与 cache 计数器快照；
 - `report.md`：按 nearest-rank 统计的 p50/p95/p99，不设硬性性能阈值。
 
-首轮 canonical 30 次/场景报告及原始结构化样本已固化在
-[`docs/results/working-set-2026-08-04/`](results/working-set-2026-08-04/README.md)，
-对应候选 `d5c77bacaaf303852047ddb627e1b1ccc86cad24` 和 BMS run
-[`30907661187`](https://github.com/kuasar-sandbox/orchestrator/actions/runs/30907661187)。
+首轮 30 次/场景验证形成以下设计结论。这些数据只用于比较同一环境中的策略，
+不作为跨机器性能基线或 pass/fail 阈值：
+
+| 对照 | p50 观测 | 结论 |
+|---|---|---|
+| `drop-caches=true -> false` | 首次代表性请求从约 17.7 s 降至 0.32-0.34 s | 保留 guest cache 是 working-set 路径降低恢复后首请求时延的主要来源 |
+| `merge-ref=true -> false` | W self 从 98.0 MiB 降至 71.8-71.9 MiB，本地 capture 从 434-435 ms 降至 348 ms；manifest publish 从约 1.04 s 增至 1.41 s | 独立 memory self 减少本地产物与停顿后的捕获工作，但会把更多分层工作留给发布路径 |
+| D/off -> D/memory | 首次请求从 323 ms 降至 299 ms，application ready 从 942 ms 降至 899 ms | self-only prefetch 收益有限，继续保持异步、fail-open 和显式启用 |
 
 报告覆盖 artifact 逻辑/物理大小、`MemoryResident`、snapshot/publish
 耗时、restore-to-ack、application ready、首次代表性 HTTP 请求、UFFD、
