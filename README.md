@@ -117,3 +117,8 @@ gh workflow run aggregate-release.yml \
 - [docs/ci.md](docs/ci.md):可复用 BMS、缓存、候选 revision 和 exact-asset 模式;
 - [docs/release.md](docs/release.md):组件版本、聚合选择、资产与发布事务;
 - [test/QUICKSTART.md](test/QUICKSTART.md):发布包解压、环境准备与 E2E 入口。
+
+## License
+
+本仓库的项目原创内容采用 [Apache License 2.0](LICENSE).
+贡献授权说明见 [CONTRIBUTING.md](CONTRIBUTING.md).
