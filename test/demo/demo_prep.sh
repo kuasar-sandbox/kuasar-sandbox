@@ -96,12 +96,11 @@ else
     [ -n "$ZOT_BIN" ] && [ -x "$ZOT_BIN" ] || die "no REGISTRY set and zot not found — set REGISTRY=<host:port>, set ZOT_BIN, or install zot on PATH"
     ZOT_PORT="${ZOT_PORT:-5000}"
     REGISTRY="127.0.0.1:$ZOT_PORT"; REGISTRY_INSECURE=1
-    # 0.0.0.0: builds pull IN-GUEST — the build sandbox reaches this zot via the
-    # vswitch mgmt VIP (169.254.169.254), which a loopback bind would refuse.
-    # The host still pushes/pulls via 127.0.0.1.
+    # Keep the demo registry host-local. demo_e2b.sh exposes it to build guests
+    # through a vswitch --mgmt-service VIP-to-loopback mapping.
     cat > "$DEMO_DATA_DIR/zot.json" <<EOF
 { "storage": { "rootDirectory": "$DEMO_DATA_DIR/zot", "dedupe": false, "gc": false },
-  "http": { "address": "0.0.0.0", "port": "$ZOT_PORT", "compat": ["docker2s2"] },
+  "http": { "address": "127.0.0.1", "port": "$ZOT_PORT", "compat": ["docker2s2"] },
   "log": { "level": "warn" } }
 EOF
     start zot "$ZOT_BIN" serve "$DEMO_DATA_DIR/zot.json"
