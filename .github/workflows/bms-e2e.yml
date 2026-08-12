@@ -431,8 +431,7 @@ jobs:
             fi
             archive_sha=$(sha256sum "$archive" | awk '{print $1}')
             touch "$archive" "$checksum"
-            mkdir -p "src/$repo"
-            tar -xzf "$archive" --strip-components=1 -C "src/$repo"
+            trusted/platform/ci/bms/materialize-source.sh "$archive" "src/$repo"
             flock -u "$source_lock_fd"
             exec {source_lock_fd}>&-
             printf '%s\t%s\t%s\t%s\n' "$repo" "$resolved_sha" "$cache_status" "$archive_sha" \
@@ -517,7 +516,7 @@ jobs:
       - name: Validate platform tooling
         if: inputs.mode == 'source'
         working-directory: src/platform
-        run: make test-release-tools test-perf-tools
+        run: make test-ci-tools test-release-tools test-perf-tools
 
       - name: Build and test source candidate
         if: inputs.mode == 'source'

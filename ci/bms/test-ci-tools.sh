@@ -410,4 +410,56 @@ KUASAR_SOURCE_CACHE_MAX_ENTRIES=2 \
 [ ! -e "$source_cache/stale.lock" ] || fail "legacy source cache lock was not pruned"
 [ ! -e "$source_cache/orphan.tar.gz.sha256" ] || fail "orphan source checksum was not pruned"
 
+source_archives="$TMP/source-archives"
+source_destination="$TMP/source-workspace/component"
+mkdir -p "$source_archives/v1/repository/subdir" "$source_archives/v2/repository"
+printf 'first\n' >"$source_archives/v1/repository/current.txt"
+printf 'stale\n' >"$source_archives/v1/repository/subdir/stale.txt"
+printf 'second\n' >"$source_archives/v2/repository/current.txt"
+tar -czf "$source_archives/v1.tar.gz" -C "$source_archives/v1" repository
+tar -czf "$source_archives/v2.tar.gz" -C "$source_archives/v2" repository
+
+"$SCRIPT_DIR/materialize-source.sh" "$source_archives/v1.tar.gz" "$source_destination"
+[ "$(cat "$source_destination/current.txt")" = first ] \
+    || fail "initial source archive was not materialized"
+[ -f "$source_destination/subdir/stale.txt" ] \
+    || fail "initial source archive fixture is incomplete"
+
+"$SCRIPT_DIR/materialize-source.sh" "$source_archives/v2.tar.gz" "$source_destination"
+[ "$(cat "$source_destination/current.txt")" = second ] \
+    || fail "replacement source archive was not materialized"
+[ ! -e "$source_destination/subdir/stale.txt" ] \
+    || fail "replacement source archive retained a stale file"
+
+mkdir -p "$source_archives/invalid/repository"
+ln -s current.txt "$source_archives/invalid/repository/unsupported-link"
+tar -czf "$source_archives/invalid.tar.gz" -C "$source_archives/invalid" repository
+if "$SCRIPT_DIR/materialize-source.sh" \
+    "$source_archives/invalid.tar.gz" "$source_destination" >/dev/null 2>&1; then
+    fail "source materializer accepted an unsupported archive entry"
+fi
+[ "$(cat "$source_destination/current.txt")" = second ] \
+    || fail "failed source materialization modified the existing destination"
+
+mkdir -p "$source_archives/conflict-file/repository" \
+    "$source_archives/conflict-child/repository/conflict"
+printf 'file\n' >"$source_archives/conflict-file/repository/conflict"
+printf 'child\n' >"$source_archives/conflict-child/repository/conflict/child"
+tar -cf "$source_archives/extract-failure.tar" \
+    -C "$source_archives/conflict-file" repository/conflict
+tar -rf "$source_archives/extract-failure.tar" \
+    -C "$source_archives/conflict-child" repository/conflict/child
+gzip -c "$source_archives/extract-failure.tar" >"$source_archives/extract-failure.tar.gz"
+if "$SCRIPT_DIR/materialize-source.sh" \
+    "$source_archives/extract-failure.tar.gz" "$source_destination" >/dev/null 2>&1; then
+    fail "source materializer unexpectedly completed a conflicting extraction"
+fi
+[ "$(cat "$source_destination/current.txt")" = second ] \
+    || fail "failed staged extraction modified the existing destination"
+if find "$TMP/source-workspace" -maxdepth 1 \
+    \( -name '.component.stage.*' -o -name '.component.previous.*' \) -print -quit \
+    | grep -q .; then
+    fail "source materializer left a staging directory behind"
+fi
+
 echo "test-ci-tools: PASS"
