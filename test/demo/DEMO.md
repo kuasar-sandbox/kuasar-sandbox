@@ -35,8 +35,8 @@ SDK 零修改,仅靠环境变量 + 本机 `/etc/hosts` + 自签 TLS(`SSL_CERT_FI
 - 工具:`python3`、`openssl`、`iproute2(ip)`、`curl`、`sqlite3`、`iptables`;`demo_prep.sh` 另需 `docker`(一次性把
   base 镜像 seed 进仓库)和(无第三方仓库时)`zot`。
 - **镜像仓库**:`REGISTRY=<host:port>`(+ `REGISTRY_USER`/`REGISTRY_PASS`/`REGISTRY_INSECURE`)指向第三方仓库;
-  或不设 `REGISTRY` 让 `demo_prep.sh` 起一个**持久本地 zot**。base 镜像默认 `e2bdev/code-interpreter:latest`
-  (`E2E_IMAGE=` 覆盖)。
+  或不设 `REGISTRY` 让 `demo_prep.sh` 起一个仅监听 `127.0.0.1` 的**持久本地 zot**。构建沙箱经
+  vswitch `--mgmt-service` 访问它。base 镜像默认 `e2bdev/code-interpreter:latest`(`E2E_IMAGE=` 覆盖)。
 
 ## 运行
 
@@ -65,7 +65,7 @@ sudo bash test/demo/demo_e2b.sh
 
 e2b profile 的 guest 网卡是一个 link-local **inner IP** `169.254.0.21/30`、默认路由 nexthop `169.254.0.22`
 (/30+网关让 envd 端口转发可用;所有 e2b 沙箱相同——唯一身份是 floatingip);host 与外网都不在该网段。
-三处配置把"host↔沙箱"与"沙箱→外网"打通——脚本已自动完成:
+四项配置把"host↔沙箱"、"沙箱→host 服务"与"沙箱→外网"打通——脚本已自动完成:
 
 ```
   host (root netns)                       vswitch (netns sw0)                 guest microVM
@@ -75,13 +75,18 @@ e2b profile 的 guest 网卡是一个 link-local **inner IP** `169.254.0.21/30`�
 
   egress: guest ─(default via 169.254.0.22)─► nx extract 0.0.0.0/0 ─► sw0m0
           ─► host NAT MASQUERADE (-s 100.100.96.0/20, ip_forward=1) ─► internet
+
+  local registry: guest ─► 169.254.169.254:<port> ─mgmt-service─► 127.0.0.1:<port>
 ```
 
 1. **`connector-ctl vswitch start … --mgmt-extract=:sw0m0:169.254.169.254,0.0.0.0/0`** 在 host(root netns) 建管理网卡
-   `sw0m0`、自动加路由 `100.100.96.0/20 dev sw0m0`。eBPF 在 sw0m0 侧 ARP 代答 + 把 host 发往 floatingip 的包
+   `sw0m0`、自动加路由 `100.100.96.0/20 dev sw0m0`;其中 CIDR 只用于流量分类,不是接口地址。脚本另给 `sw0m0`
+   配置不承载服务的保留地址 `169.254.1.0/31`。eBPF 在 sw0m0 侧 ARP 代答 + 把 host 发往 floatingip 的包
    **DNAT** 成沙箱 inner IP、重定向到对应 tap,回包再 **SNAT** 回 floatingip;`mgmt_cidrs` 含 `0.0.0.0/0` ⇒ 出网入口。
-2. **host NAT**(脚本幂等加、退出删):`iptables -A FORWARD -{i,o} sw0m0 …` + `-t nat -A POSTROUTING -s 100.100.96.0/20 -j MASQUERADE`。
-3. **guest inner IP + 默认路由 + `/etc/hosts`/`/etc/resolv.conf`** 由 orchestrator 经 SANDBOX_CONFIG `files:` 自动下发
+2. **本地服务映射**:`--mgmt-service=169.254.169.254:<port>:127.0.0.1:<port>` 把构建沙箱对管理 VIP 的访问
+   转到仅监听 host loopback 的 zot;脚本在 `sw0m0` 开启 `route_localnet`。可选 MMDS 也使用相同机制映射端口 80。
+3. **host NAT**(脚本幂等加、退出删):`iptables -A FORWARD -{i,o} sw0m0 …` + `-t nat -A POSTROUTING -s 100.100.96.0/20 -j MASQUERADE`。
+4. **guest inner IP + 默认路由 + `/etc/hosts`/`/etc/resolv.conf`** 由 orchestrator 经 SANDBOX_CONFIG `files:` 自动下发
    (hostname 治 getfqdn 卡顿、见 node.md §11;guest DNS `169.254.169.253` 经 demo 的 iptables DNAT 路由到本机首个 nameserver)。
 
 两条访问沙箱端口的路径(步骤 6 均验证):**直连** host 经 `sw0m0` 直达 `http://<floatingip>:<port>`;**e2b 暴露端口**
@@ -101,8 +106,8 @@ e2b SDK 用 `E2B_DOMAIN` 推出控制面 `https://api.<domain>` 与数据面 `ht
 
 - `E2B_DOMAIN`/`E2B_API_KEY` 指向本节点;**构建直接 `from_image(<registry>/<image>)`**——构建沙箱内拉取并展平
   (凭据来自租户默认或任务级 token,见 node.md §12),**不再有客户端 docker build/push 或 `E2B_IMAGE_URI_MASK`**。
-  镜像 ref 须**从构建沙箱可达**:本地 zot 经 vswitch mgmt VIP(`169.254.169.254:<port>`)寻址(脚本自动改写),
-  第三方仓库经 NAT 出网直达。
+  镜像 ref 须**从构建沙箱可达**:本地 zot 的 ref 由脚本自动改写为 vswitch mgmt VIP
+  (`169.254.169.254:<port>`),再由 `--mgmt-service` 转到 `127.0.0.1:<port>`;第三方仓库经 NAT 出网直达。
 - 自签 `*.<domain>` 证书 + **`SSL_CERT_FILE=<cert>`**(httpx 信任)让 SDK 接受 TLS。
 - `/etc/hosts` 把 `api.<domain>` 与每个沙箱的 `49983/49999/<port>-<sid>.<domain>` 解析到 `127.0.0.1`(创建后加、退出删)。
 

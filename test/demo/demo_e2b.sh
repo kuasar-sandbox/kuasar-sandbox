@@ -36,6 +36,7 @@ TLS_PORT="${TLS_PORT:-443}"
 SWITCH="${SWITCH:-sw0}"; SW_NETNS="${SW_NETNS:-demo_sw}"
 SW_MGMT="${SW_MGMT:-sw0m0}"; FIP_CIDR="${FIP_CIDR:-100.100.96.0/20}"
 GUEST_DNS="${GUEST_DNS:-169.254.169.253}"; HOST_DNS=""
+MGMT_VIP="169.254.169.254"; SW_MGMT_ADDR="169.254.1.0/31"
 DEMO_DATA_DIR="${DEMO_DATA_DIR:-$HOME/.cache/kuasar-demo}"
 
 # Pull in the persistent-prep handoff (REGISTRY / sockets / BASE_REF).
@@ -129,15 +130,29 @@ crypto: { chunk: aes, manifest: aes }
 EOF
 INSECURE=false; [ -n "${REGISTRY_INSECURE:-}" ] && INSECURE=true
 MK="$("$BIN/e2b-key-ctl" gen-key)"; ENC="$("$BIN/e2b-key-ctl" gen-key)"
+# A build microVM cannot use the host's loopback address directly. Keep a local
+# registry on 127.0.0.1 and let the vswitch translate the guest-visible VIP to it.
+GUEST_BASE_REF="$BASE_REF"
+LOCAL_REGISTRY_PORT=""
+declare -a MGMT_SERVICE_ARGS=()
+case "$BASE_REF" in
+  127.0.0.1:*|localhost:*)
+    LOCAL_REGISTRY_PORT="${REGISTRY##*:}"
+    [[ "$LOCAL_REGISTRY_PORT" =~ ^[0-9]+$ ]] \
+      || die "local registry must use <host>:<port>, got $REGISTRY"
+    GUEST_BASE_REF="$MGMT_VIP:${BASE_REF#*:}"
+    MGMT_SERVICE_ARGS+=("--mgmt-service=$MGMT_VIP:$LOCAL_REGISTRY_PORT:127.0.0.1:$LOCAL_REGISTRY_PORT")
+    ;;
+esac
 # DEMO_MMDS=1: envd runs in FC mode + the orchestrator re-keys it via the metadata
 # service (envd-enforced, defense-in-depth). Unset: envd runs non-secure, the proxy is
 # the sole data-plane gate. Both modes make snapshot forks SDK-usable.
-MMDS_CFG=""; MMDS_SVC=""
+MMDS_CFG=""
 if [ -n "${DEMO_MMDS:-}" ]; then
     MMDS_CFG='mmds: { enabled: true, listen: "127.0.0.1:19254" }'
-    # vswitch translates the guest's 169.254.169.254:80 VIP to the orchestrator's
+    # vswitch translates the guest's management VIP to the orchestrator's
     # loopback MMDS — no iptables (the eBPF datapath does it + rewrites replies).
-    MMDS_SVC="--mgmt-service=169.254.169.254:80:127.0.0.1:19254"
+    MGMT_SERVICE_ARGS+=("--mgmt-service=$MGMT_VIP:80:127.0.0.1:19254")
 fi
 # builder.files_storage backs COPY build contexts (the e2b SDK direct-uploads the
 # context via a presigned PUT; the build fetches it via presigned GET). Wired only
@@ -177,10 +192,19 @@ EOF
 # eBPF/TC switch + host NAT (per run; the storage tier is persistent, not the network).
 "$BIN/connector-ctl" vswitch stop "$SWITCH" --force >/dev/null 2>&1 || true; ip netns del "$SW_NETNS" 2>/dev/null || true
 ip netns add "$SW_NETNS" 2>/dev/null || true
-say "connector-ctl vswitch start — eBPF/TC switch; --mgmt-extract adds host NIC $SW_MGMT (169.254.169.254)"
+say "connector-ctl vswitch start — eBPF/TC switch; --mgmt-extract adds host NIC $SW_MGMT (traffic match only)"
 "$BIN/connector-ctl" vswitch start "$SWITCH" --netns="$SW_NETNS" --ports=64 --mac-addr=02:00:00:00:00:01 \
     --floating-ip-base=100.100.96.0 --mode=tap \
-    --mgmt-extract=:$SW_MGMT:169.254.169.254,0.0.0.0/0 $MMDS_SVC >"$WORK/vswitch.log" 2>&1 || { cat "$WORK/vswitch.log"; die "vswitch start"; }
+    "--mgmt-extract=:$SW_MGMT:$MGMT_VIP,0.0.0.0/0" \
+    "${MGMT_SERVICE_ARGS[@]}" >"$WORK/vswitch.log" 2>&1 || { cat "$WORK/vswitch.log"; die "vswitch start"; }
+ip link set dev "$SW_MGMT" up || die "bring up management interface $SW_MGMT"
+ip addr replace "$SW_MGMT_ADDR" dev "$SW_MGMT" || die "assign $SW_MGMT_ADDR to $SW_MGMT"
+if [ "${#MGMT_SERVICE_ARGS[@]}" -gt 0 ]; then
+    # Every demo management service currently targets host loopback. Packets
+    # arrive through the management veth after the eBPF DNAT.
+    sysctl -q -w "net.ipv4.conf.$SW_MGMT.route_localnet=1" >/dev/null \
+      || die "enable route_localnet on $SW_MGMT"
+fi
 iptables -C FORWARD -o "$SW_MGMT" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null \
   || { iptables -A FORWARD -o "$SW_MGMT" -m state --state RELATED,ESTABLISHED -j ACCEPT && NAT_ADDED+=(r1); }
 iptables -C FORWARD -i "$SW_MGMT" -j ACCEPT 2>/dev/null \
@@ -192,13 +216,14 @@ if [ -n "$HOST_DNS" ]; then for pr in udp tcp; do
     iptables -t nat -C PREROUTING -d "$GUEST_DNS" -p $pr --dport 53 -j DNAT --to-destination "$HOST_DNS:53" 2>/dev/null \
       || { iptables -t nat -A PREROUTING -d "$GUEST_DNS" -p $pr --dport 53 -j DNAT --to-destination "$HOST_DNS:53" && NAT_ADDED+=(dns-$pr); }
 done; fi
-ok "switch + NAT ready (guest DNS $GUEST_DNS → host ${HOST_DNS:-unrouted})"
+ok "switch + NAT ready ($SW_MGMT $SW_MGMT_ADDR; guest DNS $GUEST_DNS → host ${HOST_DNS:-unrouted})"
+if [ -n "$LOCAL_REGISTRY_PORT" ]; then
+    curl -fs --max-time 3 --noproxy '*' -o /dev/null "http://127.0.0.1:$LOCAL_REGISTRY_PORT/v2/" \
+      || die "local registry $REGISTRY is not healthy on 127.0.0.1:$LOCAL_REGISTRY_PORT"
+    ok "local registry service: guest $MGMT_VIP:$LOCAL_REGISTRY_PORT → host 127.0.0.1:$LOCAL_REGISTRY_PORT"
+fi
 if [ -n "${DEMO_MMDS:-}" ]; then
-    # vswitch --mgmt-service already translates 169.254.169.254:80 -> the loopback MMDS in
-    # the eBPF datapath (no iptables); a loopback target just needs route_localnet on the
-    # mgmt dev so the kernel accepts the redirected packet.
-    sysctl -q -w "net.ipv4.conf.$SW_MGMT.route_localnet=1" 2>/dev/null || true
-    ok "MMDS mode: envd re-keyed via metadata service (vswitch mgmt-service 169.254.169.254:80 → 127.0.0.1:19254)"
+    ok "MMDS mode: envd re-keyed via metadata service (vswitch mgmt-service $MGMT_VIP:80 → 127.0.0.1:19254)"
 fi
 
 hosts_add "api.$DOMAIN"
@@ -230,17 +255,8 @@ pause
 # ===========================================================================
 banner "Build a template — full pipeline (from_image + COPY + RUN + ENV + WORKDIR + startCmd→snapshot)"
 # ---------------------------------------------------------------------------
-# The pull runs INSIDE the build microVM (tenant network), so the image ref
-# must be guest-reachable: a loopback-bound local zot is addressed via the
-# vswitch mgmt VIP instead (same host); third-party registries pass through.
-GUEST_BASE_REF="$BASE_REF"
-case "$BASE_REF" in
-  127.0.0.1:*|localhost:*)
-    GUEST_BASE_REF="169.254.169.254:${BASE_REF#*:}"
-    curl -fs --max-time 3 --noproxy '*' -o /dev/null "http://${GUEST_BASE_REF%%/*}/v2/" \
-      || die "registry $REGISTRY unreachable on the mgmt VIP — zot must bind 0.0.0.0; restart prep: demo_prep.sh stop && bash demo_prep.sh"
-    ;;
-esac
+# The pull runs INSIDE the build microVM (tenant network). Local registries use
+# the guest-visible mgmt-service ref prepared above; third-party refs pass through.
 
 # A tiny local build context for the COPY step: a static site the template's
 # start command will serve. BUILT_MARKER threads through the whole demo — it is
