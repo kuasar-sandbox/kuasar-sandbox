@@ -325,6 +325,15 @@ sudo PERF_ITERS=30 make perf-sandbox-working-set
 默认 `PERF_ITERS=5` 用于本地 smoke；可用 `PERF_OUT_DIR` 固定输出目录。
 source BMS 固定设置 `PERF_ITERS=1`,以单轮完整矩阵验证用例可运行且指标可采集;
 30 轮仍只用于 canonical 描述性报告。
+
+每次运行默认从唯一工作目录派生一个 `kws-XXXXXX` TAP。脚本只使用自己创建的
+TAP:同名接口已存在时立即失败,创建后校验 TAP 类型、`UP` 状态、唯一 host 地址
+`169.254.1.0/31` 以及到 guest `169.254.1.1` 的实际路由,退出时删除该接口。
+首次 base 与 auto base 的 HTTP readiness 各限时 30 秒;测量 restore 保持独立的
+300 秒上限。readiness 失败会把探测前后 packet counter、link/address/route/
+neighbour、sandbox/Cloud Hypervisor 进程状态和完整运行日志保存在
+`raw/readiness-*/`,同时输出到 job log。
+
 产物包含：
 
 - `environment.json`：platform 和五个组件仓库的精确 SHA、binary/kernel digest、

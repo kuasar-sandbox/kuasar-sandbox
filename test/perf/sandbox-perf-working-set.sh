@@ -19,10 +19,16 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+# shellcheck source=test/lib/working_set_tap.sh
+. "$REPO_ROOT/test/lib/working_set_tap.sh"
 BIN="${BIN:-$REPO_ROOT/bin}"
 VMLINUX="${VMLINUX:-$BIN/vmlinux}"
 IMAGE="${IMAGE:-python:3.12-slim}"
-TAP_NAME="${TAP_NAME:-sb-tap0}"
+TAP_NAME="${TAP_NAME:-}"
+TAP_HOST_CIDR=169.254.1.0/31
+GUEST_HTTP_IP=169.254.1.1
+BASE_READY_TIMEOUT_SECONDS=30
+RESTORE_READY_TIMEOUT_SECONDS=300
 ITERS="${PERF_ITERS:-5}"
 MATRIX_GROUPS_RAW="${PERF_GROUPS:-A B C D}"
 read -r -a MATRIX_GROUPS <<<"$MATRIX_GROUPS_RAW"
@@ -50,7 +56,7 @@ for binary in cloud-hypervisor sandbox-ctl sandbox-init sandbox-runtime.bundle f
     [ -e "$BIN/$binary" ] || fatal "missing $BIN/$binary"
 done
 [ -f "$VMLINUX" ] || fatal "missing kernel $VMLINUX"
-for command in curl docker ip mkfs.ext4 python3 sha256sum; do
+for command in curl docker ip mkfs.ext4 ps python3 sha256sum; do
     command -v "$command" >/dev/null 2>&1 || fatal "missing host command: $command"
 done
 docker info >/dev/null 2>&1 || fatal "docker is not usable"
@@ -60,6 +66,7 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 
 WORK="$(mktemp -d /tmp/perf-working-set-XXXXXX)"
+[ -n "$TAP_NAME" ] || TAP_NAME="$(working_set_tap_name "$WORK")"
 mkdir -p "$OUT_DIR/raw"
 SAMPLES="$OUT_DIR/samples.jsonl"
 LOCAL_CRYPTO_SAMPLES="$OUT_DIR/local-crypto-samples.jsonl"
@@ -114,6 +121,49 @@ reset_tap() {
     ip link set "$TAP_NAME" down 2>/dev/null || true
     ip link set "$TAP_NAME" up 2>/dev/null || true
     sleep 0.3
+    require_working_set_tap
+}
+
+require_working_set_tap() {
+    if working_set_validate_tap "$TAP_NAME" "$TAP_HOST_CIDR" "$GUEST_HTTP_IP"; then
+        return 0
+    fi
+    working_set_dump_network_state "$TAP_NAME" "$GUEST_HTTP_IP" >&2
+    fatal "working-set TAP $TAP_NAME failed validation"
+}
+
+dump_readiness_diagnostics() { # $1=label, $2=pid, $3=log, $4=before counters, $5=reason
+    local label="$1" pid="$2" log="$3" before_counters="$4" reason="$5"
+    local safe_label="${label//[^[:alnum:]_.-]/_}"
+    local diagnostic_dir="$OUT_DIR/raw/readiness-$safe_label"
+    local host_state="$diagnostic_dir/host-state.log"
+    mkdir -p "$diagnostic_dir"
+
+    if [ -f "$log" ]; then
+        cp -- "$log" "$diagnostic_dir/run.log" 2>/dev/null || true
+    fi
+    {
+        echo "readiness failure: $reason"
+        echo "sandbox pid: $pid"
+        echo "TAP: $TAP_NAME"
+        echo "counters before probe:"
+        cat "$before_counters" 2>/dev/null || echo unavailable
+        echo "counters after probe:"
+        working_set_tap_counters "$TAP_NAME"
+        working_set_dump_network_state "$TAP_NAME" "$GUEST_HTTP_IP"
+        echo "== sandbox and Cloud Hypervisor processes =="
+        ps -ww -eo pid,ppid,stat,etimes,args | awk -v target="$pid" \
+            'NR == 1 || $1 == target || $2 == target || /sandbox-ctl|cloud-hypervisor/'
+    } >"$host_state" 2>&1
+
+    echo "== readiness diagnostics: $diagnostic_dir ==" >&2
+    cat "$host_state" >&2
+    echo "== complete sandbox run log: $log ==" >&2
+    if [ -f "$log" ]; then
+        cat "$log" >&2
+    else
+        echo "missing" >&2
+    fi
 }
 
 stop_sandbox() { # $1=pid
@@ -140,17 +190,26 @@ stop_sandbox() { # $1=pid
     reset_tap
 }
 
-wait_http_ready() { # $1=pid, $2=log, $3=path
-    local pid="$1" log="$2" path="$3"
-    for _ in $(seq 1 1200); do
+wait_http_ready() { # $1=pid, $2=log, $3=path, $4=timeout seconds, $5=label
+    local pid="$1" log="$2" path="$3" timeout_seconds="$4" label="$5"
+    local deadline=$((SECONDS + timeout_seconds))
+    local safe_label="${label//[^[:alnum:]_.-]/_}"
+    local before_counters="$WORK/readiness-$safe_label-before.txt"
+    working_set_tap_counters "$TAP_NAME" >"$before_counters"
+    while [ "$SECONDS" -lt "$deadline" ]; do
         if curl --noproxy '*' --fail --silent --show-error --connect-timeout 0.2 --max-time 0.5 \
-            "http://169.254.1.1:8000$path" >/dev/null 2>&1; then
+            "http://$GUEST_HTTP_IP:8000$path" >/dev/null 2>&1; then
             return 0
         fi
-        kill -0 "$pid" 2>/dev/null || { tail -80 "$log" >&2; return 1; }
+        if ! kill -0 "$pid" 2>/dev/null; then
+            dump_readiness_diagnostics "$label" "$pid" "$log" "$before_counters" \
+                "sandbox process exited before HTTP readiness"
+            return 1
+        fi
         sleep 0.05
     done
-    tail -80 "$log" >&2
+    dump_readiness_diagnostics "$label" "$pid" "$log" "$before_counters" \
+        "HTTP readiness timed out after ${timeout_seconds}s"
     return 1
 }
 
@@ -201,12 +260,24 @@ for path in paths:
 PY
 }
 
-if ! ip link show "$TAP_NAME" >/dev/null 2>&1; then
-    ip tuntap add dev "$TAP_NAME" mode tap
-    ip addr add 169.254.1.0/31 dev "$TAP_NAME"
-    ip link set "$TAP_NAME" up
-    TAP_CREATED=1
+if ip link show dev "$TAP_NAME" >/dev/null 2>&1; then
+    working_set_dump_network_state "$TAP_NAME" "$GUEST_HTTP_IP" >&2
+    fatal "working-set TAP $TAP_NAME already exists; the harness requires a fresh, owned TAP"
 fi
+if ! ip tuntap add dev "$TAP_NAME" mode tap; then
+    working_set_dump_network_state "$TAP_NAME" "$GUEST_HTTP_IP" >&2
+    fatal "cannot create working-set TAP $TAP_NAME"
+fi
+TAP_CREATED=1
+if ! ip address add "$TAP_HOST_CIDR" dev "$TAP_NAME"; then
+    working_set_dump_network_state "$TAP_NAME" "$GUEST_HTTP_IP" >&2
+    fatal "cannot configure $TAP_HOST_CIDR on working-set TAP $TAP_NAME"
+fi
+if ! ip link set "$TAP_NAME" up; then
+    working_set_dump_network_state "$TAP_NAME" "$GUEST_HTTP_IP" >&2
+    fatal "cannot bring working-set TAP $TAP_NAME UP"
+fi
+require_working_set_tap
 
 # ---- manifest store and cold-resettable cache ---------------------------
 
@@ -373,7 +444,7 @@ write_config() { # $1=path, $2=diff dir, $3=prefetch, $4=cold|restore
     format_diff "$dir/dataset.ext4" 512M
     cat >"$path" <<EOF
 resources: { capacity: { cpu: 1, memory: 512MiB }, allocatable: { cpu: 1, memory: 512MiB } }
-network: { tap: $TAP_NAME, interface: eth0, ip: 169.254.1.1/31, hostname: perf-working-set }
+network: { tap: $TAP_NAME, interface: eth0, ip: $GUEST_HTTP_IP/31, hostname: perf-working-set }
 boot:
   kernel: file://$VMLINUX
   runtime: file://$BIN/sandbox-runtime.bundle
@@ -500,9 +571,11 @@ B_DIR="$WORK/base"
 B_OUT="$B_DIR/snapshot"
 mkdir -p "$B_OUT"
 write_config "$B_DIR/cold.yaml" "$B_DIR/cold-diffs" off cold
+require_working_set_tap
 start_sandbox ws-base "$B_DIR/cold.yaml" "$B_DIR/run" "$B_DIR/base-root" "$B_DIR/run.log" "$B_DIR/stats.json"
 B_PID="$ACTIVE_SANDBOX_PID"
-wait_http_ready "$B_PID" "$B_DIR/run.log" / || fatal "base sandbox did not become ready"
+wait_http_ready "$B_PID" "$B_DIR/run.log" / "$BASE_READY_TIMEOUT_SECONDS" base \
+    || fatal "base sandbox did not become ready"
 "$BIN/sandbox-ctl" exec --sandbox-id ws-base --run-root "$B_DIR/run" -- /bin/sh -c \
     'yes KUASAR-WORKING-SET | head -c "$1" > /scratch/working-set-cache.bin; echo ROOT-B-OK > /root-b; echo S-OK > /scratch/persist; echo D-OK > /data/persist; sync; sha256sum /scratch/working-set-cache.bin' \
     sh "$WARM_BYTES" >"$B_DIR/seed.log" 2>&1 || { cat "$B_DIR/seed.log" >&2; fatal "seed B workload"; }
@@ -551,7 +624,8 @@ drop_host_caches "$B_OUT"
 start_sandbox ws-base-auto "$AUTO_B_DIR/cold.yaml" "$AUTO_B_DIR/run" "$AUTO_B_DIR/base-root" \
     "$AUTO_B_DIR/run.log" "$AUTO_B_DIR/stats.json" "" "$WORK/manifest-auto.yaml"
 AUTO_B_PID="$ACTIVE_SANDBOX_PID"
-wait_http_ready "$AUTO_B_PID" "$AUTO_B_DIR/run.log" / || fatal "auto base sandbox did not become ready"
+wait_http_ready "$AUTO_B_PID" "$AUTO_B_DIR/run.log" / "$BASE_READY_TIMEOUT_SECONDS" base-auto \
+    || fatal "auto base sandbox did not become ready"
 # The inner shell, not the harness, expands $1.
 # shellcheck disable=SC2016
 "$BIN/sandbox-ctl" exec --sandbox-id ws-base-auto --run-root "$AUTO_B_DIR/run" -- /bin/sh -c \
@@ -858,12 +932,14 @@ portable_restore() { # $1=group $2=iter $3=prefetch $4=portable-ref $5=artifact-
     start_sandbox "$sid" "$restore_dir/config.yaml" "$restore_dir/run" "$restore_dir/base-root" \
         "$restore_dir/run.log" "$restore_dir/stats.json" "$portable_ref"
     local pid="$ACTIVE_SANDBOX_PID"
-    wait_http_ready "$pid" "$restore_dir/run.log" /persist || fatal "$group/$iteration/$prefetch restore did not become ready"
+    wait_http_ready "$pid" "$restore_dir/run.log" /persist "$RESTORE_READY_TIMEOUT_SECONDS" \
+        "$group-$iteration-$prefetch" \
+        || fatal "$group/$iteration/$prefetch restore did not become ready"
     ready_ns=$(date +%s%N)
 
     first_seconds=$(curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 120 \
         --output "$restore_dir/first-request.bin" --write-out '%{time_total}' \
-        http://169.254.1.1:8000/working-set-cache.bin)
+        "http://$GUEST_HTTP_IP:8000/working-set-cache.bin")
     local first_hash
     first_hash=$(sha256sum "$restore_dir/first-request.bin" | awk '{print $1}')
     [ "$first_hash" = "$WARM_SHA" ] || fatal "$group/$iteration/$prefetch first request returned the wrong content"
@@ -1088,13 +1164,14 @@ local_crypto_restore() { # $1=policy $2=iter $3=cold|warm $4=manifest-config $5=
     start_sandbox "$sid" "$restore_dir/config.yaml" "$restore_dir/run" "$restore_dir/base-root" \
         "$restore_dir/run.log" "$restore_dir/stats.json" "$w" "$manifest_config"
     local pid="$ACTIVE_SANDBOX_PID"
-    wait_http_ready "$pid" "$restore_dir/run.log" /persist \
+    wait_http_ready "$pid" "$restore_dir/run.log" /persist "$RESTORE_READY_TIMEOUT_SECONDS" \
+        "local-$policy-$iteration-$cache_state" \
         || fatal "local crypto $policy/$iteration/$cache_state restore did not become ready"
     ready_ns=$(date +%s%N)
 
     first_seconds=$(curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 120 \
         --output "$restore_dir/first-request.bin" --write-out '%{time_total}' \
-        http://169.254.1.1:8000/working-set-cache.bin)
+        "http://$GUEST_HTTP_IP:8000/working-set-cache.bin")
     local first_hash
     first_hash=$(sha256sum "$restore_dir/first-request.bin" | awk '{print $1}')
     [ "$first_hash" = "$WARM_SHA" ] \
@@ -1295,10 +1372,11 @@ capture_local_crypto_w() { # $1=off|auto, $2=iteration
         "$sample_root/b-run.log" "$sample_root/b-stats.json" "$b" "$manifest_config"
     local source_pid="$ACTIVE_SANDBOX_PID"
     wait_http_ready "$source_pid" "$sample_root/b-run.log" /persist \
+        "$RESTORE_READY_TIMEOUT_SECONDS" "local-$policy-$iteration-source" \
         || fatal "local crypto $policy/$iteration B restore did not become ready"
     local got_warm_sha
     got_warm_sha=$(curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 120 \
-        http://169.254.1.1:8000/working-set-cache.bin | sha256sum | awk '{print $1}')
+        "http://$GUEST_HTTP_IP:8000/working-set-cache.bin" | sha256sum | awk '{print $1}')
     [ "$got_warm_sha" = "$WARM_SHA" ] || fatal "local crypto $policy/$iteration deterministic warm-up mismatch"
     "$BIN/sandbox-ctl" exec --sandbox-id "$sid" --run-root "$sample_root/b-run" -- /bin/sh -c \
         'echo ROOT-W-OK > /root-w; echo SCRATCH-W-OK > /scratch/working-set; echo DATA-W-OK > /data/working-set; sync' \
@@ -1361,9 +1439,11 @@ for group in "${MATRIX_GROUPS[@]}"; do
         start_sandbox "$SID" "$SAMPLE_DIR/restore-b.yaml" "$SAMPLE_DIR/b-run" "$SAMPLE_DIR/b-base" \
             "$SAMPLE_DIR/b-run.log" "$SAMPLE_DIR/b-stats.json" "$B"
         SOURCE_PID="$ACTIVE_SANDBOX_PID"
-        wait_http_ready "$SOURCE_PID" "$SAMPLE_DIR/b-run.log" /persist || fatal "$group/$iteration B restore did not become ready"
+        wait_http_ready "$SOURCE_PID" "$SAMPLE_DIR/b-run.log" /persist \
+            "$RESTORE_READY_TIMEOUT_SECONDS" "$group-$iteration-source" \
+            || fatal "$group/$iteration B restore did not become ready"
         GOT_WARM_SHA=$(curl --noproxy '*' --fail --silent --show-error --connect-timeout 1 --max-time 120 \
-            http://169.254.1.1:8000/working-set-cache.bin | sha256sum | awk '{print $1}')
+            "http://$GUEST_HTTP_IP:8000/working-set-cache.bin" | sha256sum | awk '{print $1}')
         [ "$GOT_WARM_SHA" = "$WARM_SHA" ] || fatal "$group/$iteration deterministic warm-up mismatch"
         "$BIN/sandbox-ctl" exec --sandbox-id "$SID" --run-root "$SAMPLE_DIR/b-run" -- /bin/sh -c \
             'echo ROOT-W-OK > /root-w; echo SCRATCH-W-OK > /scratch/working-set; echo DATA-W-OK > /data/working-set; sync' \
