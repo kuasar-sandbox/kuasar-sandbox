@@ -26,6 +26,7 @@ VMLINUX="${VMLINUX:-$BIN/vmlinux}"
 IMAGE="${IMAGE:-python:3.12-slim}"
 TAP_NAME="${TAP_NAME:-}"
 TAP_HOST_CIDR=169.254.1.0/31
+TAP_HOST_IP="${TAP_HOST_CIDR%/*}"
 GUEST_HTTP_IP=169.254.1.1
 BASE_READY_TIMEOUT_SECONDS=30
 RESTORE_READY_TIMEOUT_SECONDS=300
@@ -276,6 +277,10 @@ fi
 if ! ip link set "$TAP_NAME" up; then
     working_set_dump_network_state "$TAP_NAME" "$GUEST_HTTP_IP" >&2
     fatal "cannot bring working-set TAP $TAP_NAME UP"
+fi
+if ! ip route add "$GUEST_HTTP_IP/32" dev "$TAP_NAME" src "$TAP_HOST_IP"; then
+    working_set_dump_network_state "$TAP_NAME" "$GUEST_HTTP_IP" >&2
+    fatal "cannot install the working-set guest route on TAP $TAP_NAME"
 fi
 require_working_set_tap
 

@@ -75,8 +75,9 @@ commit 的 `test/e2e/`,所以特性实现与其 E2E 在同一个 PR 评审,组�
 
 完整 source BMS 还会固定执行 1 轮 working-set smoke,覆盖 A/B/C/D 以及本地加密
 `off/auto × cold/warm`。该 smoke 每次创建并独占一个新的 TAP,不复用前序 E2E 的
-默认接口;readiness 失败诊断随 CI metadata 上传。30 轮 canonical 测量用于生成
-稳定的描述性性能报告,不作为 workflow 的独立模式或 PR 必跑轮数。
+默认接口,并用本轮 `/32` host route 隔离同网段的残留 connected route;
+readiness 失败诊断随 CI metadata 上传。30 轮 canonical 测量用于生成稳定的
+描述性性能报告,不作为 workflow 的独立模式或 PR 必跑轮数。
 
 ## 3. Exact-assets 模式
 
