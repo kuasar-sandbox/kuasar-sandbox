@@ -24,6 +24,25 @@ WORKFLOW_TIMEOUT_MINUTES="$(awk '/timeout-minutes:/ {print $2; exit}' "$PREVIEW_
   || release_fail "daily preview wait exceeds the GitHub App token lifetime"
 [ "$WORKFLOW_WAIT_SECONDS" -lt "$((WORKFLOW_TIMEOUT_MINUTES * 60))" ] \
   || release_fail "daily preview wait must fit within the coordinator job timeout"
+COORDINATOR_INFRA_RE="$(sed -n \
+  "s/^readonly INFRA_FAILURE_RE='\\(.*\\)'$/\\1/p" \
+  "$ROOT/release/preview-coordinator.sh")"
+[ -n "$COORDINATOR_INFRA_RE" ] \
+  || release_fail "daily preview infrastructure failure classifier is missing"
+printf '%s\n' 'e2e: timed out waiting for zot (127.0.0.1:37806)' \
+  | grep -Eiq "$COORDINATOR_INFRA_RE" \
+  || release_fail "daily preview does not retry a zot startup timeout"
+printf '%s\n' 'e2e: zot failed to start after 2 attempts' \
+  | grep -Eiq "$COORDINATOR_INFRA_RE" \
+  || release_fail "daily preview does not retry an exhausted zot startup"
+if printf '%s\n' 'E2E FAILED: product assertion mismatch' \
+  | grep -Eiq "$COORDINATOR_INFRA_RE"; then
+  release_fail "daily preview retries an ordinary product test failure"
+fi
+if printf '%s\n' 'zot startup attempt timed out on 127.0.0.1:37806' \
+  | grep -Eiq "$COORDINATOR_INFRA_RE"; then
+  release_fail "daily preview treats a recovered zot attempt as a workflow failure"
+fi
 resolve_selection "$ROOT" "$PREVIEW_VERSION" "$TMP/current-preview-selection.tsv"
 PREVIEW_ACCELERATOR_TAG="$(awk -F '\t' '$1 == "accelerator" {print $2}' \
   "$TMP/current-preview-selection.tsv")"

@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=release/lib.sh
 source "$ROOT/release/lib.sh"
 
-readonly INFRA_FAILURE_RE='(The self-hosted runner.*lost communication|runner.*(offline|lost)|No space left on device|Connection (timed out|reset)|TLS handshake timeout|Temporary failure|Could not resolve host|unexpected EOF|HTTP (429|500|502|503|504)|failed to download|rate limit)'
+readonly INFRA_FAILURE_RE='(The self-hosted runner.*lost communication|runner.*(offline|lost)|No space left on device|Connection (timed out|reset)|TLS handshake timeout|Temporary failure|Could not resolve host|unexpected EOF|HTTP (429|500|502|503|504)|failed to download|rate limit|e2e: (timed out waiting for zot|zot failed to start after [0-9]+ attempts))'
 readonly COMPONENT_ROWS=(
   'accelerator|kuasar-sandbox/accelerator|release.yml'
   'connector|kuasar-sandbox/connector|release.yml'
