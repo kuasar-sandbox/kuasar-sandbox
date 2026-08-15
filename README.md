@@ -1,12 +1,13 @@
-# Kuasar Sandbox Platform
+# Kuasar Sandbox
 
-`platform` 是 Kuasar Sandbox 的系统集成与发行仓。它与 `accelerator`、`connector`、
-`sandboxer`、`guest-runtime`、`orchestrator` 并列,承载系统级设计文档、E2E 组装与统一环境、
-跨组件组合用例、perf/demo、BMS 公共实现、原生制品缓存和 `release-vX.Y.Z` 聚合发布。组件
-实现、组件 E2E 与组件独立版本仍归各自仓库。
+Kuasar Sandbox 面向大规模 Agent、Serverless 与 RL 场景，提供高密度 microVM 隔离、
+按需镜像和快照加载、内容级去重、eBPF/TC 网络，以及单节点和集群编排能力。
 
-平台面向大规模 Serverless 与 Agent 场景,组合 microVM 生命周期、内容寻址存储与快照恢复、
-eBPF/TC 网络、Guest runtime 及单节点/集群编排能力。整体架构见
+本仓 `kuasar-sandbox/kuasar-sandbox` 是 Kuasar Sandbox 的 canonical project repository
+（项目主仓），承载系统级设计文档、E2E 组装与统一环境、跨组件组合用例、perf/demo、
+BMS 公共实现、原生制品缓存和 `release-vX.Y.Z` 聚合发布。`accelerator`、`connector`、
+`sandboxer`、`guest-runtime`、`orchestrator` 五个组件仓继续独立演进，并各自维护实现、
+组件 E2E 和版本线。整体架构见
 [docs/kuasar-sandbox.md](docs/kuasar-sandbox.md),部署与验证入口分别见
 [docs/deployment.md](docs/deployment.md) 和 [test/QUICKSTART.md](test/QUICKSTART.md)。
 
@@ -16,7 +17,7 @@ eBPF/TC 网络、Guest runtime 及单节点/集群编排能力。整体架构见
 
 ```text
 <workspace>/
-├── platform/
+├── kuasar-sandbox/
 ├── accelerator/
 ├── connector/
 ├── sandboxer/
@@ -45,11 +46,11 @@ releases/         当前正式版与每日 preview 的两个聚合选择清单
 `bin/<arch>/`:
 
 ```bash
-make -C platform build
-make -C platform test
-make -C platform test-e2e
-make -C platform perf
-make -C platform demo
+make -C kuasar-sandbox build
+make -C kuasar-sandbox test
+make -C kuasar-sandbox test-e2e
+make -C kuasar-sandbox perf
+make -C kuasar-sandbox demo
 ```
 
 组件用例位于各自仓的 `test/e2e/`,入口统一为 `run_all.sh`。`make test-e2e` 先把候选
@@ -65,9 +66,9 @@ GOWORK=off make -C sandboxer build
 本地发布工具测试不访问 GitHub,也不构建真实 native 依赖:
 
 ```bash
-make -C platform test-release-tools
-make -C platform test-ci-tools
-make -C platform test-perf-tools
+make -C kuasar-sandbox test-release-tools
+make -C kuasar-sandbox test-ci-tools
+make -C kuasar-sandbox test-perf-tools
 ```
 
 ## 版本与发布
@@ -95,14 +96,14 @@ aggregate prepare 从所选组件 tag 的 GitHub 源码归档收集它们,统一
 人工收敛一个已经配置的聚合版本:
 
 ```bash
-make -C platform release RELEASE_VERSION=release-v0.1.0
+make -C kuasar-sandbox release RELEASE_VERSION=release-v0.1.0
 ```
 
 也可以在组件版本已发布后只触发聚合验证与发布:
 
 ```bash
 gh workflow run aggregate-release.yml \
-  --repo kuasar-sandbox/platform --ref main \
+  --repo kuasar-sandbox/kuasar-sandbox --ref main \
   -f version=release-v0.1.0
 ```
 

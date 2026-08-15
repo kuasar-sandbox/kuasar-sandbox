@@ -4,7 +4,7 @@
 # zot is a host-side test tool, not a guest-runtime artifact.
 #
 # Inputs:
-#   BINDIR            Destination directory, usually platform/build/e2e-tools/<arch>.
+#   BINDIR            Destination directory, usually kuasar-sandbox/build/e2e-tools/<arch>.
 #   TARGET_ARCH       x86_64 | aarch64. Default: uname -m.
 #   ZOT_VERSION       Release tag. Default: v2.1.17.
 #   ZOT_URL           Optional explicit binary URL.

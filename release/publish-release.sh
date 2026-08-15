@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=release/lib.sh
 source "$ROOT/release/lib.sh"
 
-REPOSITORY="${GH_REPO:-${GITHUB_REPOSITORY:-kuasar-sandbox/platform}}"
+REPOSITORY="${GH_REPO:-${GITHUB_REPOSITORY:-kuasar-sandbox/kuasar-sandbox}}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 

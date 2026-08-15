@@ -3,7 +3,7 @@
 ## 1. 概述
 
 Kuasar Sandbox 把组件发布与平台聚合发布分开。组件版本回答某个组件仓交付了什么,
-聚合版本回答哪些已发布组件作为一个平台组合完成了精确制品验证。`platform` 不建立独立
+聚合版本回答哪些已发布组件作为一个平台组合完成了精确制品验证。项目主仓不建立独立
 `vX.Y.Z` 版本线,platform 文档与测试包只作为 `release-vX.Y.Z` 的一个资产。
 
 版本线为:
@@ -11,7 +11,7 @@ Kuasar Sandbox 把组件发布与平台聚合发布分开。组件版本回答�
 - `accelerator`、`connector`、`sandboxer`、`orchestrator`: `vX.Y.Z`;
 - `guest-runtime` runtime: `runtime-vX.Y.Z`;
 - `guest-runtime` kernel: `vmlinux-vX.Y.Z`;
-- `platform`: `release-vX.Y.Z`。
+- project repository: `release-vX.Y.Z`。
 
 所有版本线都接受 `-preview.YYYYMMDD` 后缀。preview 是 GitHub prerelease,不更新
 Latest;正式版本使用新的 tag 和 workflow run,不重命名或覆盖 preview。
@@ -43,25 +43,25 @@ gh workflow run release-vmlinux.yml \
 
 ### 2.2 发布聚合版本
 
-正式版本先在 `platform/main` 更新 `releases/release.yaml`,然后运行:
+正式版本先在项目主仓 `main` 更新 `releases/release.yaml`,然后运行:
 
 ```bash
-make -C platform release RELEASE_VERSION=release-v0.2.1
+make -C kuasar-sandbox release RELEASE_VERSION=release-v0.2.1
 ```
 
 该入口复用已发布组件,触发缺失的组件 workflow,等待 runtime 的 sandboxer 前置版本,
-最后触发 platform `Aggregate Release`。若六个组件已经发布,可以直接运行:
+最后触发项目主仓 `Aggregate Release`。若六个组件已经发布,可以直接运行:
 
 ```bash
 gh workflow run aggregate-release.yml \
-  --repo kuasar-sandbox/platform --ref main \
+  --repo kuasar-sandbox/kuasar-sandbox --ref main \
   -f version=release-v0.2.1
 ```
 
 ### 2.3 本地验证发布工具
 
 ```bash
-make -C platform test-release-tools
+make -C kuasar-sandbox test-release-tools
 ```
 
 该测试建立六个本地组件 fixture,验证版本选择、固定资产名、platform 包、组件原包复制、
@@ -71,7 +71,7 @@ make -C platform test-release-tools
 
 ### 3.1 聚合版本选择
 
-正式和 preview 聚合版本选择都是 `platform/main` 中的普通源码配置。代码库只维护当前
+正式和 preview 聚合版本选择都是项目主仓 `main` 中的普通源码配置。代码库只维护当前
 正式选择与当前 preview 选择两个文件。
 
 `releases/release.yaml` 维护当前正式版本:
@@ -139,8 +139,8 @@ x86_64,因此当前 Release 只发布该目标。
 
 协调 token 只存在于 GitHub-hosted 协调 job。自托管 BMS 只接收收窄后的源码只读 token,
 并在执行候选代码前显式撤销。组件和聚合 publish job 只使用当前仓的短期 `GITHUB_TOKEN`
-和 `contents:write`。每日协调 job 仅用 platform 自身的短期 `GITHUB_TOKEN` 把生成的版本
-选择清单提交到 `platform/main`,App 没有内容写权限。
+和 `contents:write`。每日协调 job 仅用项目主仓自身的短期 `GITHUB_TOKEN` 把生成的版本
+选择清单提交到项目主仓 `main`,App 没有内容写权限。
 
 ## 4. 组件资产契约
 
@@ -270,7 +270,7 @@ workflow run 状态幂等处理:
 - 失败的 draft 可按 Release ID 删除并重建,已发布 Release 不可替换;
 - 同版本 workflow concurrency 不取消正在发布的 run;
 - 所有外部下载使用有限重试、连接超时和总超时;
-- BMS 控制面与执行实现只在 platform 维护,组件 wrapper 从 platform `main` 引用可信入口;
+- BMS 控制面与执行实现只在项目主仓维护,组件 wrapper 从项目主仓 `main` 引用可信入口;
 - reusable workflow 用 `job.workflow_repository` 和 `job.workflow_sha` checkout 同一 resolved
   platform revision 的工具;
 - base 仓的 `pull_request_target` 控制 job 使用只读组织成员接口,只让同仓 PR 或当前 active

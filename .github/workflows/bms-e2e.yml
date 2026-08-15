@@ -95,14 +95,14 @@ jobs:
           TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
           set -euo pipefail
-          [ "$TRUSTED_WORKFLOW_REPOSITORY" = kuasar-sandbox/platform ] \
-            || { echo "BMS implementation must come from kuasar-sandbox/platform" >&2; exit 1; }
+          [ "$TRUSTED_WORKFLOW_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ] \
+            || { echo "BMS implementation must come from kuasar-sandbox/kuasar-sandbox" >&2; exit 1; }
           [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
           case "${{ inputs.mode }}" in
             source)
               [ "$GITHUB_EVENT_NAME" = pull_request_target ] \
                 || { echo "source BMS requires pull_request_target" >&2; exit 1; }
-              [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|orchestrator|platform|sandboxer)$ ]]
+              [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$ ]]
               for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do
                 value=${!variable}
                 [[ "$value" =~ ^[0-9a-f]{40}$ ]] \
@@ -170,7 +170,7 @@ jobs:
           client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
           private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
           owner: kuasar-sandbox
-          repositories: platform
+          repositories: kuasar-sandbox
           permission-contents: read
 
       - name: Materialize exact platform sources
@@ -178,7 +178,7 @@ jobs:
           GH_TOKEN: ${{ steps.platform-tooling-token.outputs.token }}
           TRUSTED_REPOSITORY: ${{ job.workflow_repository }}
           TRUSTED_SHA: ${{ job.workflow_sha }}
-          PLATFORM_SOURCE_SHA: ${{ inputs.candidate_repository == 'kuasar-sandbox/platform' && inputs.candidate_sha || job.workflow_sha }}
+          PLATFORM_SOURCE_SHA: ${{ inputs.candidate_repository == 'kuasar-sandbox/kuasar-sandbox' && inputs.candidate_sha || job.workflow_sha }}
         run: |
           set -euo pipefail
           archive_tmp=""
@@ -230,7 +230,7 @@ jobs:
               install -d -m 0755 src/platform
               cp -a trusted/platform/. src/platform/
             else
-              materialize kuasar-sandbox/platform "$PLATFORM_SOURCE_SHA" src/platform
+              materialize kuasar-sandbox/kuasar-sandbox "$PLATFORM_SOURCE_SHA" src/platform
             fi
           fi
 
@@ -262,7 +262,7 @@ jobs:
           client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
           private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
           owner: kuasar-sandbox
-          repositories: accelerator,connector,guest-runtime,orchestrator,platform,sandboxer
+          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
           permission-contents: read
           skip-token-revoke: true
 
@@ -323,13 +323,13 @@ jobs:
           platform_requested_ref=main
           platform_resolved_sha=${{ job.workflow_sha }}
           platform_role=sibling
-          if [ "$CANDIDATE_REPOSITORY" = kuasar-sandbox/platform ]; then
+          if [ "$CANDIDATE_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ]; then
             platform_requested_ref="$CANDIDATE_SHA"
             platform_resolved_sha="$CANDIDATE_SHA"
             platform_role=candidate
           fi
           [[ "$platform_resolved_sha" =~ ^[0-9a-f]{40}$ ]]
-          printf 'kuasar-sandbox/platform\t%s\t%s\t%s\n' \
+          printf 'kuasar-sandbox/kuasar-sandbox\t%s\t%s\t%s\n' \
             "$platform_requested_ref" "$platform_resolved_sha" "$platform_role" \
             >> "$KUASAR_REVISION_MANIFEST"
 
@@ -466,7 +466,7 @@ jobs:
           set -euo pipefail
           while IFS=$'\t' read -r repository _ resolved_sha _; do
             repo=${repository#kuasar-sandbox/}
-            [ "$repo" = platform ] && continue
+            [ "$repo" = kuasar-sandbox ] && continue
             source_dir="/var/cache/kuasar/sources/$repo"
             src/platform/ci/bms/source-cache-prune.sh \
               "$source_dir" "$source_dir/$resolved_sha.tar.gz"
@@ -528,7 +528,7 @@ jobs:
 
           owner="${CANDIDATE_REPOSITORY##*/}"
           runner="build/e2e-suite/test/e2e/$owner/run_all.sh"
-          if [ "$owner" = platform ]; then
+          if [ "$owner" = kuasar-sandbox ]; then
             runner=build/e2e-suite/test/e2e/run_all.sh
           fi
           [ -x "$runner" ] \

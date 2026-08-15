@@ -1,5 +1,5 @@
 # repo path followed by the binary/runtime file name under bin/<arch>/.
-# This manifest only drives platform/bin/<arch>/ assembly for local E2E,
+# This manifest only drives kuasar-sandbox/bin/<arch>/ assembly for local E2E,
 # demos, and release packaging. It is not the release package layout.
 guest-runtime/native-deps mkfs.erofs
 guest-runtime/native-deps vmlinux
