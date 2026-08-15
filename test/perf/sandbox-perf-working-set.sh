@@ -682,6 +682,14 @@ import sys
 platform_root = pathlib.Path(repo_root).resolve()
 workspace = platform_root.parent
 repository_names = ("accelerator", "connector", "guest-runtime", "orchestrator", "platform", "sandboxer")
+manifest_repository_names = {
+    "accelerator": "accelerator",
+    "connector": "connector",
+    "guest-runtime": "guest-runtime",
+    "kuasar-sandbox": "platform",
+    "orchestrator": "orchestrator",
+    "sandboxer": "sandboxer",
+}
 revision_manifest = os.environ.get("KUASAR_REVISION_MANIFEST")
 repositories = {}
 
@@ -710,8 +718,9 @@ if revision_manifest:
         raise SystemExit(f"revision manifest is missing: {manifest_path}")
     with manifest_path.open(newline="", encoding="utf-8") as source:
         for row in csv.DictReader(source, delimiter="\t"):
-            name = row["repository"].removeprefix("kuasar-sandbox/")
-            if name in repository_names:
+            repository_identity = row["repository"].removeprefix("kuasar-sandbox/")
+            name = manifest_repository_names.get(repository_identity)
+            if name is not None:
                 repositories[name] = {
                     "sha": row["resolved_sha"],
                     "dirty": False,

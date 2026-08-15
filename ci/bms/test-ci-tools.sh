@@ -20,6 +20,7 @@ workflow="$SCRIPT_DIR/../../.github/workflows/bms-e2e.yml"
 daily_workflow="$SCRIPT_DIR/../../.github/workflows/daily-preview.yml"
 legacy_repository="kuasar-sandbox/platform"
 candidate_pattern='^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$'
+working_set_perf="$SCRIPT_DIR/../../test/perf/sandbox-perf-working-set.sh"
 
 grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = kuasar-sandbox/kuasar-sandbox ]" "$workflow" \
     || fail "trusted workflow repository does not use the project repository identity"
@@ -38,6 +39,11 @@ grep -Fq 'repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orche
 grep -Fq 'repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer' \
     "$daily_workflow" \
     || fail "release token repository list does not contain the project repository slug"
+grep -Fq '"kuasar-sandbox": "platform"' "$working_set_perf" \
+    || fail "working-set revision reports do not map the renamed repository identity to the platform report key"
+if grep -Fq '"platform": "platform"' "$working_set_perf"; then
+    fail "working-set revision reports still accept the legacy repository slug"
+fi
 if grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = $legacy_repository ]" "$workflow"; then
     fail "legacy repository identity is still accepted as the trusted BMS implementation"
 fi
