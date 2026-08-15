@@ -2,9 +2,9 @@
 
 ## 1. 概述
 
-platform 维护 BMS 的可信控制面与唯一执行 workflow。五个组件仓只保留事件触发和参数
-wrapper,并从 platform `main` 引用 `.github/workflows/bms-entry.yml`;该入口再从同一个
-platform `main` revision 调用 `.github/workflows/bms-e2e.yml`。公共准入、runner 初始化、
+项目主仓维护 BMS 的可信控制面与唯一执行 workflow。五个组件仓只保留事件触发和参数
+wrapper,并从项目主仓 `main` 引用 `.github/workflows/bms-entry.yml`;该入口再从同一个
+项目主仓 `main` revision 调用 `.github/workflows/bms-e2e.yml`。公共准入、runner 初始化、
 源码缓存、native cache、完整 E2E 和精确发布资产验证不再复制到各仓。
 
 BMS 有两个明确模式:
@@ -27,7 +27,7 @@ integration commit。source 模式没有 `main` push 或手工 dispatch 入口�
 
 可复用 workflow 验证:
 
-1. 控制面与执行实现都解析自 `kuasar-sandbox/platform` 的 `main`,运行中记录解析后的完整 SHA;
+1. 控制面与执行实现都解析自 `kuasar-sandbox/kuasar-sandbox` 的 `main`,运行中记录解析后的完整 SHA;
 2. `pull_request_target` event、当前 PR 与 candidate/base/head 输入完全一致;
 3. candidate 是以 base/head 为两个父提交的 integration commit;
 4. 当前开放 PR 的 base/head/merge commit 在执行前与结束后均未变化;
@@ -48,15 +48,15 @@ platform tooling 与 source 使用只读 App token 从 GitHub 官方 archive API
 GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每仓以 `flock`
 串行维护,保留最近使用的 32 个 revision。token 在执行候选代码前显式撤销。
 
-随后创建五组件 `go.work`,恢复或构建 native cache,并从候选 platform 源码运行:
+随后创建五组件 `go.work`,恢复或构建 native cache,并从候选项目主仓源码运行:
 
 ```bash
 make -C src/platform test-release-tools test-perf-tools
 make -C src/platform test-e2e
 ```
 
-每个组件在自己的 `test/e2e/` 维护用例与唯一入口 `run_all.sh`。platform source BMS 将五个
-组件源码与 `platform/test/e2e/platform/` 中真正跨组件组合本身的用例组装为:
+每个组件在自己的 `test/e2e/` 维护用例与唯一入口 `run_all.sh`。Platform BMS 将五个
+组件源码与 `kuasar-sandbox/test/e2e/platform/` 中真正跨组件组合本身的用例组装为:
 
 ```text
 test/e2e/run_all.sh
@@ -120,7 +120,7 @@ tar 路径。损坏条目失败,不会在原目录修补。
 非阻塞取得锁的条目。缓存测试入口:
 
 ```bash
-make -C platform test-ci-tools
+make -C kuasar-sandbox test-ci-tools
 ```
 
 ## 5. Runner 与网络
@@ -147,7 +147,7 @@ base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
 - UFFD 与 working-set 报告(仅对应测试运行时)。
 
 exact-assets 模式只记录 run 与测试输出,不创建伪造的源码或 native cache 元数据。发布版本
-组合由 platform main 选择、组件 tag 和 GitHub Release notes 表达。
+组合由项目主仓 `main` 选择、组件 tag 和 GitHub Release notes 表达。
 
 ## 7. See Also
 

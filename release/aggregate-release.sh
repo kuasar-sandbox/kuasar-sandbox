@@ -187,9 +187,9 @@ assemble_release() {
     resolve_selection "$ROOT" "$previous" "$expected_previous_selection"
   fi
   cmp -s "$expected_selection" "$fetched/selection.tsv" \
-    || release_fail "fetched component selection does not match platform main"
+    || release_fail "fetched component selection does not match project repository main"
   cmp -s "$expected_previous_selection" "$fetched/previous-selection.tsv" \
-    || release_fail "fetched previous selection does not match platform main"
+    || release_fail "fetched previous selection does not match project repository main"
 
   platform_bundle="$work/platform-bundle"
   "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$platform_bundle"
@@ -262,7 +262,7 @@ validate_bundle() {
   actual_names="$(mktemp)"
   resolve_selection "$ROOT" "$version" "$expected_selection"
   cmp -s "$expected_selection" "$bundle/selection.tsv" \
-    || release_fail "aggregate selection does not match platform main"
+    || release_fail "aggregate selection does not match project repository main"
   local unit
   for unit in "${RELEASE_UNITS[@]}"; do
     grep -Fqx "### $unit" "$bundle/release-notes.md" \

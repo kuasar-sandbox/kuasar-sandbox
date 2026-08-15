@@ -39,7 +39,7 @@ jobs:
           client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
           private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
           owner: kuasar-sandbox
-          repositories: accelerator,connector,guest-runtime,orchestrator,platform,sandboxer
+          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
           permission-actions: write
           permission-contents: read
 

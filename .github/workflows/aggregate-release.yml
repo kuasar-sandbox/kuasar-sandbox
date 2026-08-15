@@ -40,7 +40,7 @@ jobs:
         run: |
           set -euo pipefail
           [ "$GITHUB_REF" = refs/heads/main ] \
-            || { echo "Aggregate Release must run from platform main" >&2; exit 1; }
+            || { echo "Aggregate Release must run from project repository main" >&2; exit 1; }
           [[ "$GITHUB_SHA" =~ ^[0-9a-f]{40}$ ]]
           bash release/publish-release.sh check "$VERSION"
           release/selection.py "$GITHUB_WORKSPACE" "$VERSION" > selection.tsv

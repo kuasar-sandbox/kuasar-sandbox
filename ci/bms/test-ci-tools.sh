@@ -16,6 +16,32 @@ fail() {
     exit 1
 }
 
+workflow="$SCRIPT_DIR/../../.github/workflows/bms-e2e.yml"
+daily_workflow="$SCRIPT_DIR/../../.github/workflows/daily-preview.yml"
+legacy_repository="kuasar-sandbox/platform"
+candidate_pattern='^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$'
+
+grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = kuasar-sandbox/kuasar-sandbox ]" "$workflow" \
+    || fail "trusted workflow repository does not use the project repository identity"
+grep -Fq "$candidate_pattern" "$workflow" \
+    || fail "candidate repository allowlist does not contain the project repository slug"
+[[ kuasar-sandbox/kuasar-sandbox =~ $candidate_pattern ]] \
+    || fail "project repository is rejected by the candidate allowlist"
+if [[ $legacy_repository =~ $candidate_pattern ]]; then
+    fail "legacy repository slug is still accepted by the candidate allowlist"
+fi
+grep -Fq 'repositories: kuasar-sandbox' "$workflow" \
+    || fail "platform tooling token does not select the project repository slug"
+grep -Fq 'repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer' \
+    "$workflow" \
+    || fail "source token repository list does not contain the project repository slug"
+grep -Fq 'repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer' \
+    "$daily_workflow" \
+    || fail "release token repository list does not contain the project repository slug"
+if grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = $legacy_repository ]" "$workflow"; then
+    fail "legacy repository identity is still accepted as the trusted BMS implementation"
+fi
+
 setup_workspace() {
     local root=$1
     mkdir -p "$root/guest-runtime/native-deps/deps"

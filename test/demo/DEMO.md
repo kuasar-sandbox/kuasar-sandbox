@@ -28,7 +28,7 @@ SDK 零修改,仅靠环境变量 + 本机 `/etc/hosts` + 自签 TLS(`SSL_CERT_FI
 
 ## 前置条件
 
-- 二进制(源码树中执行 `make -C platform build`;release 包内已自带):`node-ctl`、`store-ctl`、**`cache-ctl`**(CGO/rocksdb)、
+- 二进制(源码树中执行 `make -C kuasar-sandbox build`;release 包内已自带):`node-ctl`、`store-ctl`、**`cache-ctl`**(CGO/rocksdb)、
   `flatten-ctl`、`e2b-key-ctl`、`connector-ctl vswitch`、`cloud-hypervisor`、`vmlinux`、`sandbox-runtime.bundle`。
 - 主机:**systemd 为 PID1 + root**(编排经 D-Bus 驱动单元;TLS :443;KVM);可读写 `/dev/kvm`。
 - **e2b Python SDK**:`pip install e2b e2b-code-interpreter`。
@@ -43,12 +43,12 @@ SDK 零修改,仅靠环境变量 + 本机 `/etc/hosts` + 自签 TLS(`SSL_CERT_FI
 ```bash
 # 源码树(从 org root 运行)
 # ① 一次性 / 持久前置:起 store(UDS) + cache(UDS) + 仓库,seed base 镜像(重复运行幂等、跳过已起的)
-REGISTRY=registry.example.com REGISTRY_USER=u REGISTRY_PASS=p  bash platform/test/demo/demo_prep.sh
-bash platform/test/demo/demo_prep.sh            # 或不设 REGISTRY → 起持久本地 zot
+REGISTRY=registry.example.com REGISTRY_USER=u REGISTRY_PASS=p  bash kuasar-sandbox/test/demo/demo_prep.sh
+bash kuasar-sandbox/test/demo/demo_prep.sh            # 或不设 REGISTRY → 起持久本地 zot
 #   停服务: demo_prep.sh stop   ·   停并清数据: demo_prep.sh reset
 
 # ② 每次演示(读取 demo_prep 写出的 ~/.cache/kuasar-demo/prep.env)
-sudo bash platform/test/demo/demo_e2b.sh        # 普通用户也行:会自动 sudo 重入
+sudo bash kuasar-sandbox/test/demo/demo_e2b.sh        # 普通用户也行:会自动 sudo 重入
 DEMO_PAUSE=1   sudo bash …/demo_e2b.sh                # 每步回车暂停(适合逐步讲解 / 另开终端操作)
 DEMO_KEEP=1    sudo bash …/demo_e2b.sh                # 保留每次工作目录排查
 DEMO_NETDIAG=1 sudo bash …/demo_e2b.sh                # 网络步失败不中止
@@ -122,5 +122,5 @@ e2b SDK 用 `E2B_DOMAIN` 推出控制面 `https://api.<domain>` 与数据面 `ht
   跨多次演示去重缓存 → 复跑快;`demo_prep.sh reset` 清空重来。
 - **自签 TLS** 仅为本机演示;生产用通配 `*.<domain>` 正式证书(见 `orchestrator/docs/node.md` §13)。
 
-自动化回归(断言版、非讲解版)见 `platform/test/e2e/`:`e2e_run_builder.sh`(三阶段构建流水线:
+自动化回归(断言版、非讲解版)见 `kuasar-sandbox/test/e2e/`:`e2e_run_builder.sh`(三阶段构建流水线:
 guest 内拉取展平 → steps → 模板快照 → 从产物模板 create)与 `e2e_execute.sh`(启动+执行+暂停/恢复状态存活)。

@@ -83,7 +83,7 @@ SOURCE_DATE_EPOCH=1700000000 \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
 "$ROOT/release/aggregate-release.sh" validate "$VERSION" "$TMP/bundle"
 "$ROOT/release/test-publisher.sh" "$ROOT/release/publish-release.sh" \
-  "$TMP/bundle" kuasar-sandbox/platform "$VERSION" \
+  "$TMP/bundle" kuasar-sandbox/kuasar-sandbox "$VERSION" \
   1111111111111111111111111111111111111111
 
 [ "$(find "$TMP/bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 8 ] \
@@ -361,7 +361,7 @@ if [ "${1:-}" = api ]; then
     esac
   done
 
-  if [ "$method" = PUT ] && [[ "$endpoint" == repos/kuasar-sandbox/platform/contents/releases/* ]]; then
+  if [ "$method" = PUT ] && [[ "$endpoint" == repos/kuasar-sandbox/kuasar-sandbox/contents/releases/* ]]; then
     cp "$input" "$state/manifest-request.json"
     printf '%s\n' "$endpoint" > "$state/manifest-endpoint"
     printf '{"commit":{"sha":"2222222222222222222222222222222222222222"}}\n'
@@ -369,7 +369,7 @@ if [ "${1:-}" = api ]; then
   fi
 
   case "$endpoint" in
-    repos/kuasar-sandbox/platform/contents/releases/daily-preview.yaml\?ref=main)
+    repos/kuasar-sandbox/kuasar-sandbox/contents/releases/daily-preview.yaml\?ref=main)
       jq -n --arg content "$(base64 -w0 "$root/releases/daily-preview.yaml")" \
         '{sha: "1111111111111111111111111111111111111111", content: $content}'
       ;;
@@ -390,14 +390,14 @@ if [ "${1:-}" = api ]; then
       repository="${endpoint#repos/}"
       repository="${repository%%/releases/tags/*}"
       tag="${endpoint##*/}"
-      if [ "$repository" = kuasar-sandbox/platform ] && [ "$tag" = "$current_aggregate" ]; then
+      if [ "$repository" = kuasar-sandbox/kuasar-sandbox ] && [ "$tag" = "$current_aggregate" ]; then
         jq -n --arg tag "$tag" \
           '{tag_name: $tag, draft: false, prerelease: true, published_at: "2026-08-09T00:00:00Z"}'
       elif [ "$repository" = kuasar-sandbox/guest-runtime ] \
         && { [ "$tag" = "$(selected_tag runtime)" ] \
           || [ "$tag" = "$(selected_tag vmlinux)" ]; }; then
         component_release "$repository" "$tag"
-      elif [ "$repository" != kuasar-sandbox/platform ] \
+      elif [ "$repository" != kuasar-sandbox/kuasar-sandbox ] \
         && [ "$tag" = "$(selected_tag "${repository##*/}")" ]; then
         component_release "$repository" "$tag"
       else
@@ -483,7 +483,7 @@ for unit in runtime vmlinux; do
     || release_fail "$unit did not reuse its unchanged release"
 done
 [ "$(cat "$TMP/generated-state/manifest-endpoint")" = \
-  "repos/kuasar-sandbox/platform/contents/releases/daily-preview.yaml" ] \
+  "repos/kuasar-sandbox/kuasar-sandbox/contents/releases/daily-preview.yaml" ] \
   || release_fail "generated manifest was committed to an unexpected path"
 jq -e '.sha == "1111111111111111111111111111111111111111"' \
   "$TMP/generated-state/manifest-request.json" >/dev/null \

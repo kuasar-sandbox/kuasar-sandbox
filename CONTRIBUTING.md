@@ -1,6 +1,7 @@
 # Contributing
 
-Thank you for contributing to `kuasar-sandbox/platform`.
+Thank you for contributing to the Kuasar Sandbox project repository,
+`kuasar-sandbox/kuasar-sandbox`.
 
 ## Licensing of contributions
 

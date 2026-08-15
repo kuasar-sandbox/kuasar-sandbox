@@ -242,7 +242,7 @@ persist_preview_manifest() {
   local request="$TMP/manifest-request.json" response="$TMP/manifest-response.json"
   local remote_state="$TMP/manifest-remote.json" remote="$TMP/manifest-remote.yaml" sha
   GH_TOKEN="$PLATFORM_TOKEN" gh api \
-    "repos/kuasar-sandbox/platform/contents/$path?ref=main" > "$remote_state"
+    "repos/kuasar-sandbox/kuasar-sandbox/contents/$path?ref=main" > "$remote_state"
   jq -er '.content' "$remote_state" | tr -d '\n' | base64 -d > "$remote"
   sha="$(jq -er '.sha' "$remote_state")"
   if cmp -s "$manifest" "$remote"; then
@@ -259,14 +259,14 @@ persist_preview_manifest() {
     --arg sha "$sha" \
     '{message: $message, content: $content, branch: $branch, sha: $sha}' > "$request"
   if GH_TOKEN="$PLATFORM_TOKEN" gh api --method PUT \
-      "repos/kuasar-sandbox/platform/contents/$path" --input "$request" > "$response"; then
+      "repos/kuasar-sandbox/kuasar-sandbox/contents/$path" --input "$request" > "$response"; then
     install -m 0644 "$manifest" "$ROOT/$path"
     echo "==> committed $path at $(jq -er '.commit.sha' "$response")"
     return
   fi
 
   GH_TOKEN="$PLATFORM_TOKEN" gh api \
-    "repos/kuasar-sandbox/platform/contents/$path?ref=main" > "$remote_state"
+    "repos/kuasar-sandbox/kuasar-sandbox/contents/$path?ref=main" > "$remote_state"
   jq -er '.content' "$remote_state" | tr -d '\n' | base64 -d > "$remote"
   cmp -s "$manifest" "$remote" \
     || release_fail "$path was concurrently committed with a different selection"
@@ -309,7 +309,7 @@ generate_preview_manifest() {
 formal_release_started() {
   local stable_aggregate="$1" selection="$TMP/stable-selection.tsv" unit tag repository
   resolve_selection "$ROOT" "$stable_aggregate" "$selection"
-  if release_exists kuasar-sandbox/platform "$stable_aggregate" "$TMP/stable-platform.json"; then
+  if release_exists kuasar-sandbox/kuasar-sandbox "$stable_aggregate" "$TMP/stable-platform.json"; then
     echo "==> stable aggregate $stable_aggregate is published; daily previews are complete"
     return 0
   fi
@@ -347,12 +347,12 @@ converge_once() {
   fi
 
   local platform_state="$TMP/platform-release.json"
-  if release_exists kuasar-sandbox/platform "$AGGREGATE_VERSION" "$platform_state"; then
+  if release_exists kuasar-sandbox/kuasar-sandbox "$AGGREGATE_VERSION" "$platform_state"; then
     echo "==> aggregate $AGGREGATE_VERSION is published"
     return 0
   fi
   rc=0
-  ensure_workflow kuasar-sandbox/platform aggregate-release.yml \
+  ensure_workflow kuasar-sandbox/kuasar-sandbox aggregate-release.yml \
     "Aggregate $AGGREGATE_VERSION" -f "version=$AGGREGATE_VERSION" || rc=$?
   if [ "$rc" -ne 0 ]; then
     [ "$rc" -eq 10 ] || return "$rc"
@@ -393,7 +393,7 @@ main() {
 
   current_date="${current_aggregate##*.}"
   current_state="$TMP/current-platform-release.json"
-  if release_exists kuasar-sandbox/platform "$current_aggregate" "$current_state"; then
+  if release_exists kuasar-sandbox/kuasar-sandbox "$current_aggregate" "$current_state"; then
     if [ "$date" -lt "$current_date" ]; then
       release_fail "requested preview date $date is older than maintained preview $current_date"
     fi
