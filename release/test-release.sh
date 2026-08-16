@@ -438,11 +438,12 @@ case "$url" in
     jq -n --arg sha "head-${repository##*/}" '{sha: $sha}'
     ;;
   */repos/kuasar-sandbox/*/compare/*)
-    if [[ "$url" == */repos/kuasar-sandbox/accelerator/compare/* ]]; then
-      printf '{"status":"ahead"}\n'
-    else
-      printf '{"status":"identical"}\n'
-    fi
+    repository="${url#*/repos/kuasar-sandbox/}"
+    repository="${repository%%/compare/*}"
+    case ",${FAKE_CHANGED_REPOSITORIES-accelerator}," in
+      *",$repository,"*) printf '{"status":"ahead"}\n' ;;
+      *) printf '{"status":"identical"}\n' ;;
+    esac
     ;;
   *)
     echo "fake generated coordinator curl: unsupported URL: $url" >&2
@@ -452,10 +453,36 @@ esac
 EOF
 chmod +x "$TMP/generated-bin/curl"
 
+mkdir -p "$TMP/unchanged-state"
+install -m 0644 "$TMP/generated-root/releases/daily-preview.yaml" \
+  "$TMP/unchanged-state/current-daily-preview.yaml"
+PATH="$TMP/generated-bin:$PATH" \
+  FAKE_COORDINATOR_STATE="$TMP/unchanged-state" \
+  FAKE_COORDINATOR_ROOT="$TMP/generated-root" \
+  FAKE_CURRENT_AGGREGATE="$PREVIEW_VERSION" \
+  FAKE_CHANGED_REPOSITORIES='' \
+  GH_TOKEN=read-token PLATFORM_TOKEN=write-token \
+  PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
+  bash "$TMP/generated-root/release/preview-coordinator.sh" "$NEXT_PREVIEW_DATE" \
+  > "$TMP/unchanged-coordinator.out"
+cmp -s "$TMP/generated-root/releases/daily-preview.yaml" \
+  "$TMP/unchanged-state/current-daily-preview.yaml" \
+  || release_fail "unchanged components advanced the daily preview manifest"
+[ ! -e "$TMP/unchanged-state/manifest-request.json" ] \
+  || release_fail "unchanged components committed a daily preview manifest"
+[ ! -e "$TMP/unchanged-state/dispatches" ] \
+  || release_fail "unchanged components dispatched a release workflow"
+grep -Fq "no component changes since $PREVIEW_VERSION; keep maintained preview" \
+  "$TMP/unchanged-coordinator.out" \
+  || release_fail "daily coordinator did not report the unchanged preview no-op"
+[ -z "$(git -C "$TMP/generated-root" status --porcelain)" ] \
+  || release_fail "unchanged components modified the preview checkout"
+
 PATH="$TMP/generated-bin:$PATH" \
   FAKE_COORDINATOR_STATE="$TMP/generated-state" \
   FAKE_COORDINATOR_ROOT="$TMP/generated-root" \
   FAKE_CURRENT_AGGREGATE="$PREVIEW_VERSION" \
+  FAKE_CHANGED_REPOSITORIES=accelerator \
   GH_TOKEN=read-token PLATFORM_TOKEN=write-token \
   PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
   bash "$TMP/generated-root/release/preview-coordinator.sh" "$NEXT_PREVIEW_DATE" \
@@ -497,5 +524,21 @@ cmp -s "$GENERATED_MANIFEST" "$TMP/persisted-manifest" \
 grep -Fqx "workflow run release.yml --repo kuasar-sandbox/accelerator --ref main -f version=$GENERATED_ACCELERATOR_TAG" \
   "$TMP/generated-state/dispatches" \
   || release_fail "daily coordinator did not dispatch the changed release unit"
+
+install -m 0644 "$GENERATED_MANIFEST" "$TMP/generated-state/current-daily-preview.yaml"
+PATH="$TMP/generated-bin:$PATH" \
+  FAKE_COORDINATOR_STATE="$TMP/generated-state" \
+  FAKE_COORDINATOR_ROOT="$TMP/generated-root" \
+  FAKE_CURRENT_AGGREGATE="$PREVIEW_VERSION" \
+  FAKE_CHANGED_REPOSITORIES=accelerator \
+  GH_TOKEN=read-token PLATFORM_TOKEN=write-token \
+  PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
+  bash "$TMP/generated-root/release/preview-coordinator.sh" "$NEXT_PREVIEW_DATE" \
+  > "$TMP/generated-aggregate-coordinator.out"
+[ "$(wc -l < "$TMP/generated-state/dispatches")" -eq 2 ] \
+  || release_fail "daily coordinator did not dispatch exactly one changed component and one aggregate"
+grep -Fqx "workflow run aggregate-release.yml --repo kuasar-sandbox/kuasar-sandbox --ref main -f version=$GENERATED_VERSION" \
+  "$TMP/generated-state/dispatches" \
+  || release_fail "daily coordinator did not dispatch an aggregate for the changed selection"
 
 echo "test-release: PASS"

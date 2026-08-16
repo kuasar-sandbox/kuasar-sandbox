@@ -275,7 +275,7 @@ persist_preview_manifest() {
 }
 
 generate_preview_manifest() {
-  local stable_component="$1" date="$2" version="$3"
+  local stable_component="$1" date="$2" version="$3" current_selection="$4" result="$5"
   local current_preview
   current_preview="$(preview_state_version)"
 
@@ -286,6 +286,20 @@ generate_preview_manifest() {
     selected="$TMP/selected-$unit"
     select_preview_unit "$unit" "$repository" "$candidate" "$selected"
   done
+
+  local selection_changed=false selected_tag current_tag
+  for unit in "${RELEASE_UNITS[@]}"; do
+    selected_tag="$(cat "$TMP/selected-$unit")"
+    current_tag="$(awk -F '\t' -v unit="$unit" '$1 == unit {print $2}' "$current_selection")"
+    if [ "$selected_tag" != "$current_tag" ]; then
+      selection_changed=true
+    fi
+  done
+  if [ "$selection_changed" = false ]; then
+    printf 'unchanged\n' > "$result"
+    echo "==> no component changes since $(current_preview_version); keep maintained preview"
+    return
+  fi
 
   local manifest="$TMP/daily-preview.yaml" previous_version
   previous_version="$(awk '$1 == "previous_version:" {print $2}' \
@@ -304,6 +318,7 @@ generate_preview_manifest() {
   } > "$manifest"
   persist_preview_manifest "$version" "$manifest"
   resolve_selection "$ROOT" "$version" "$TMP/generated-selection-check.tsv"
+  printf 'changed\n' > "$result"
 }
 
 formal_release_started() {
@@ -400,7 +415,14 @@ main() {
     if [ "$date" -gt "$current_date" ]; then
       AGGREGATE_VERSION="release-$stable_component-preview.$date"
       validate_aggregate_version "$AGGREGATE_VERSION"
-      generate_preview_manifest "$stable_component" "$date" "$AGGREGATE_VERSION"
+      local generation_result="$TMP/preview-generation-result"
+      generate_preview_manifest "$stable_component" "$date" "$AGGREGATE_VERSION" \
+        "$TMP/current-selection-check.tsv" "$generation_result"
+      case "$(cat "$generation_result")" in
+        changed) ;;
+        unchanged) AGGREGATE_VERSION="$current_aggregate" ;;
+        *) release_fail "unexpected preview generation result" ;;
+      esac
     else
       AGGREGATE_VERSION="$current_aggregate"
     fi
