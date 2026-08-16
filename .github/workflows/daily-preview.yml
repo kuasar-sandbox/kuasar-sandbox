@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       date:
-        description: Optional YYYYMMDD version date; empty resumes the maintained preview or advances to today
+        description: Optional YYYYMMDD date; empty resumes the maintained preview or checks today's component updates
         required: false
         type: string
 

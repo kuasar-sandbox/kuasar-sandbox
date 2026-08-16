@@ -243,6 +243,11 @@ GitHub App installation token 的有效期内等待 50 分钟;若版本仍在构
 `guest-runtime` 仓的两个独立 release unit,各自寻找本版本线的最新 tag 并与同一个仓库
 `main` 比较。
 
+日历日期变化本身不创建版本。只有至少一个 release unit 的最终选择与当前 preview 清单
+不同,协调器才冻结当日 `preview_version`、提交新清单并在组件完成后发布新的聚合版本。如果
+六个 unit 都复用当前选择,本次运行直接保留当前 preview,不提交清单、不 dispatch 组件或
+aggregate workflow,也不创建新的聚合 Release。
+
 新选择通过 GitHub Contents API 覆盖同一个 `daily-preview.yaml`,请求携带读取时的 blob SHA。
 远端内容与本次 checkout 不一致时停止,避免两个协调任务覆盖彼此;内容提交成功后才触发组件
 或聚合 workflow。文件中的旧 `preview_version` 移入 `previous_preview_version`,所以本次
@@ -260,9 +265,9 @@ workflow run 状态幂等处理:
 - aggregate Release 已存在:成功结束。
 
 恢复入口始终先收敛 `daily-preview.yaml` 当前指向的版本,因此跨日 pending 不会因当天日期
-变化而遗失,也不会从临时 workflow 状态重建选择。当前版本成功发布后,下一次调度才推进日期
-和选择。任一正式组件已经发布但正式聚合尚未完成时,每日 preview 暂停,避免正式发布窗口
-继续创建新 preview;正式聚合发布后 daily 直接成功退出。
+变化而遗失,也不会从临时 workflow 状态重建选择。当前版本成功发布后,下一次调度仅在组件
+选择发生变化时才推进日期和选择。任一正式组件已经发布但正式聚合尚未完成时,每日 preview
+暂停,避免正式发布窗口继续创建新 preview;正式聚合发布后 daily 直接成功退出。
 
 ## 9. 可靠性与安全
 
