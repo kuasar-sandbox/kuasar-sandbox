@@ -7,11 +7,9 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/release/lib.sh"
 
 readonly INFRA_FAILURE_RE='(The self-hosted runner.*lost communication|runner.*(offline|lost)|No space left on device|Connection (timed out|reset)|TLS handshake timeout|Temporary failure|Could not resolve host|unexpected EOF|HTTP (429|500|502|503|504)|failed to download|rate limit|e2e: (timed out waiting for zot|zot failed to start after [0-9]+ attempts))'
-readonly COMPONENT_ROWS=(
+readonly FOUNDATION_ROWS=(
   'accelerator|kuasar-sandbox/accelerator|release.yml'
   'connector|kuasar-sandbox/connector|release.yml'
-  'sandboxer|kuasar-sandbox/sandboxer|release.yml'
-  'orchestrator|kuasar-sandbox/orchestrator|component-release.yml'
   'vmlinux|kuasar-sandbox/guest-runtime|release-vmlinux.yml'
 )
 
@@ -146,6 +144,7 @@ ensure_workflow() {
 
 ensure_component() {
   local unit="$1" tag="$2" repository="$3" workflow="$4"
+  shift 4
   local state="$TMP/release-$unit.json"
   if release_exists "$repository" "$tag" "$state"; then
     validate_component_release_state "$unit" "$tag" "$state"
@@ -153,9 +152,7 @@ ensure_component() {
     return 0
   fi
   local args=(-f "version=$tag")
-  if [ "$unit" = runtime ]; then
-    args+=(-f "sandboxer_version=$SANDBOXER_TAG")
-  fi
+  args+=("$@")
   ensure_workflow "$repository" "$workflow" "Release $tag" "${args[@]}"
 }
 
@@ -235,6 +232,41 @@ select_preview_unit() {
   esac
 }
 
+selection_differs() {
+  local unit="$1" current_selection="$2" current_tag
+  current_tag="$(awk -F '\t' -v unit="$unit" '$1 == unit {print $2}' \
+    "$current_selection")"
+  [ "$(cat "$TMP/selected-$unit")" != "$current_tag" ]
+}
+
+force_preview_unit() {
+  local unit="$1" stable_component="$2" date="$3" reason="$4"
+  local candidate selected
+  candidate="$(preview_component_tag "$unit" "$stable_component" "$date")"
+  selected="$TMP/selected-$unit"
+  if [ "$(cat "$selected")" != "$candidate" ]; then
+    echo "==> rebuild $unit as $candidate because $reason changed"
+    printf '%s\n' "$candidate" > "$selected"
+  fi
+}
+
+propagate_preview_dependencies() {
+  local stable_component="$1" date="$2" current_selection="$3"
+  if selection_differs accelerator "$current_selection" \
+    || selection_differs connector "$current_selection"; then
+    force_preview_unit sandboxer "$stable_component" "$date" \
+      'an accelerator or connector dependency'
+  fi
+  if selection_differs accelerator "$current_selection" \
+    || selection_differs connector "$current_selection" \
+    || selection_differs sandboxer "$current_selection"; then
+    force_preview_unit orchestrator "$stable_component" "$date" \
+      'an accelerator, connector, or sandboxer dependency'
+    force_preview_unit runtime "$stable_component" "$date" \
+      'an accelerator, connector, or sandboxer dependency'
+  fi
+}
+
 persist_preview_manifest() {
   local version="$1" manifest="$2" path="releases/daily-preview.yaml"
   [ -n "${PLATFORM_TOKEN:-}" ] \
@@ -286,6 +318,7 @@ generate_preview_manifest() {
     selected="$TMP/selected-$unit"
     select_preview_unit "$unit" "$repository" "$candidate" "$selected"
   done
+  propagate_preview_dependencies "$stable_component" "$date" "$current_selection"
 
   local selection_changed=false selected_tag current_tag
   for unit in "${RELEASE_UNITS[@]}"; do
@@ -340,7 +373,7 @@ formal_release_started() {
 
 converge_once() {
   local pending=0 row unit repository workflow tag rc
-  for row in "${COMPONENT_ROWS[@]}"; do
+  for row in "${FOUNDATION_ROWS[@]}"; do
     IFS='|' read -r unit repository workflow <<< "$row"
     tag="$(awk -F '\t' -v unit="$unit" '$1 == unit {print $2}' "$SELECTION")"
     rc=0
@@ -355,9 +388,35 @@ converge_once() {
   fi
 
   rc=0
-  ensure_component runtime "$RUNTIME_TAG" kuasar-sandbox/guest-runtime release-runtime.yml || rc=$?
+  ensure_component sandboxer "$SANDBOXER_TAG" kuasar-sandbox/sandboxer release.yml \
+    -f "accelerator_version=$ACCELERATOR_TAG" \
+    -f "connector_version=$CONNECTOR_TAG" || rc=$?
   if [ "$rc" -ne 0 ]; then
     [ "$rc" -eq 10 ] || return "$rc"
+    return 10
+  fi
+
+  pending=0
+  rc=0
+  ensure_component orchestrator "$ORCHESTRATOR_TAG" kuasar-sandbox/orchestrator \
+    component-release.yml \
+    -f "accelerator_version=$ACCELERATOR_TAG" \
+    -f "connector_version=$CONNECTOR_TAG" \
+    -f "sandboxer_version=$SANDBOXER_TAG" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ "$rc" -eq 10 ] || return "$rc"
+    pending=1
+  fi
+  rc=0
+  ensure_component runtime "$RUNTIME_TAG" kuasar-sandbox/guest-runtime release-runtime.yml \
+    -f "accelerator_version=$ACCELERATOR_TAG" \
+    -f "connector_version=$CONNECTOR_TAG" \
+    -f "sandboxer_version=$SANDBOXER_TAG" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    [ "$rc" -eq 10 ] || return "$rc"
+    pending=1
+  fi
+  if [ "$pending" -ne 0 ]; then
     return 10
   fi
 
@@ -375,6 +434,14 @@ converge_once() {
   fi
 }
 
+load_selection_tags() {
+  ACCELERATOR_TAG="$(awk -F '\t' '$1 == "accelerator" {print $2}' "$SELECTION")"
+  CONNECTOR_TAG="$(awk -F '\t' '$1 == "connector" {print $2}' "$SELECTION")"
+  SANDBOXER_TAG="$(awk -F '\t' '$1 == "sandboxer" {print $2}' "$SELECTION")"
+  ORCHESTRATOR_TAG="$(awk -F '\t' '$1 == "orchestrator" {print $2}' "$SELECTION")"
+  RUNTIME_TAG="$(awk -F '\t' '$1 == "runtime" {print $2}' "$SELECTION")"
+}
+
 main() {
   local requested_date="${1:-}" stable_aggregate stable_component today date
   local current_aggregate current_date current_state
@@ -386,8 +453,7 @@ main() {
     validate_aggregate_version "$AGGREGATE_VERSION"
     SELECTION="$TMP/selection.tsv"
     resolve_selection "$ROOT" "$AGGREGATE_VERSION" "$SELECTION"
-    SANDBOXER_TAG="$(awk -F '\t' '$1 == "sandboxer" {print $2}' "$SELECTION")"
-    RUNTIME_TAG="$(awk -F '\t' '$1 == "runtime" {print $2}' "$SELECTION")"
+    load_selection_tags
     echo "==> converge $AGGREGATE_VERSION"
     converge_until_deadline
     return
@@ -434,8 +500,7 @@ main() {
   fi
   SELECTION="$TMP/selection.tsv"
   resolve_selection "$ROOT" "$AGGREGATE_VERSION" "$SELECTION"
-  SANDBOXER_TAG="$(awk -F '\t' '$1 == "sandboxer" {print $2}' "$SELECTION")"
-  RUNTIME_TAG="$(awk -F '\t' '$1 == "runtime" {print $2}' "$SELECTION")"
+  load_selection_tags
   echo "==> converge $AGGREGATE_VERSION"
 
   converge_until_deadline
