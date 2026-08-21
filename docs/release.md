@@ -20,26 +20,35 @@ Latest;正式版本使用新的 tag 和 workflow run,不重命名或覆盖 previ
 
 ### 2.1 发布组件
 
-组件 workflow 只接受显式 `workflow_dispatch(version)`,没有独立 schedule:
+组件 workflow 只接受显式 `workflow_dispatch`,没有独立 schedule。含跨仓构建依赖的组件还
+必须传入清单选定的依赖版本:
 
 ```bash
 gh workflow run release.yml \
   --repo kuasar-sandbox/accelerator --ref main -f version=v0.2.0
 
+gh workflow run release.yml \
+  --repo kuasar-sandbox/sandboxer --ref main -f version=v0.2.0 \
+  -f accelerator_version=v0.2.0 -f connector_version=v0.1.3
+
 gh workflow run component-release.yml \
-  --repo kuasar-sandbox/orchestrator --ref main -f version=v0.1.5
+  --repo kuasar-sandbox/orchestrator --ref main -f version=v0.1.5 \
+  -f accelerator_version=v0.2.0 -f connector_version=v0.1.3 \
+  -f sandboxer_version=v0.2.0
 
 gh workflow run release-runtime.yml \
   --repo kuasar-sandbox/guest-runtime --ref main \
-  -f version=runtime-v0.2.1 -f sandboxer_version=v0.2.0
+  -f version=runtime-v0.2.1 -f accelerator_version=v0.2.0 \
+  -f connector_version=v0.1.3 -f sandboxer_version=v0.2.0
 
 gh workflow run release-vmlinux.yml \
   --repo kuasar-sandbox/guest-runtime --ref main -f version=vmlinux-v0.1.4
 ```
 
 `connector`、`sandboxer` 与 `accelerator` 均使用 `release.yml`。每个 run 固定 dispatch
-时的组件 `main` commit,依次完成构建、测试、打包和发布。已发布的同名 Release 或指向
-其他 commit 的同名 tag 都会失败,不会覆盖。
+时的组件 `main` commit;依赖参数必须是已发布的正式或 preview tag,构建 checkout 这些
+精确 tag,而不读取依赖仓当时的 `main`。已发布的同名 Release 或指向其他 commit 的同名
+tag 都会失败,不会覆盖。
 
 ### 2.2 发布聚合版本
 
@@ -239,9 +248,11 @@ GitHub App installation token 的有效期内等待 50 分钟;若版本仍在构
 协调器先读取 `releases/daily-preview.yaml`。如果清单所指的 platform preview 尚未发布,
 本次运行只恢复这一个冻结选择,不会因日期变化重新计算。当前 preview 已发布且请求日期更新
 时,协调器比较每个 release unit 的最新已发布 tag 与仓库 `main`:自该 tag 以来有新提交就
-选择当日 preview tag,没有新提交则复用最新 preview 或正式 tag。runtime 与 vmlinux 是
-`guest-runtime` 仓的两个独立 release unit,各自寻找本版本线的最新 tag 并与同一个仓库
-`main` 比较。
+选择当日 preview tag,没有新提交则先复用最新 preview 或正式 tag。随后按构建依赖传播
+重建:accelerator 或 connector 变化会重建 sandboxer、orchestrator 和 runtime;sandboxer
+变化会重建 orchestrator 和 runtime。runtime 与 vmlinux 是 `guest-runtime` 仓的两个独立
+release unit,各自寻找本版本线的最新 tag 并与同一个仓库 `main` 比较;依赖传播只影响
+runtime,不重建无关的 vmlinux。
 
 日历日期变化本身不创建版本。只有至少一个 release unit 的最终选择与当前 preview 清单
 不同,协调器才冻结当日 `preview_version`、提交新清单并在组件完成后发布新的聚合版本。如果
@@ -253,8 +264,9 @@ aggregate workflow,也不创建新的聚合 Release。
 或聚合 workflow。文件中的旧 `preview_version` 移入 `previous_preview_version`,所以本次
 发布说明的基线完全由已提交清单确定。
 
-清单冻结后,协调器并行收敛 accelerator、connector、sandboxer、orchestrator 和 vmlinux;
-sandboxer 发布后再收敛 runtime;六个组件完成后触发 aggregate。每一步根据 Release 和
+清单冻结后,协调器先并行收敛 accelerator、connector 和 vmlinux;再以清单中的精确
+accelerator/connector tag 构建 sandboxer;随后以精确 accelerator/connector/sandboxer tag
+并行构建 orchestrator 和 runtime;六个组件完成后触发 aggregate。每一步根据 Release 和
 workflow run 状态幂等处理:
 
 - Release 完整存在:复用;

@@ -296,8 +296,8 @@ PATH="$TMP/coordinator-bin:$PATH" \
   FAKE_COORDINATOR_STATE="$TMP/coordinator-state" \
   PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
   bash "$ROOT/release/preview-coordinator.sh" "$PREVIEW_DATE" > "$TMP/coordinator.out"
-[ "$(wc -l < "$TMP/coordinator-state/dispatches")" -eq 5 ] \
-  || release_fail "preview coordinator did not dispatch the five independent release units"
+[ "$(wc -l < "$TMP/coordinator-state/dispatches")" -eq 3 ] \
+  || release_fail "preview coordinator did not dispatch the three foundation release units first"
 grep -Fqx "workflow run release.yml --repo kuasar-sandbox/accelerator --ref main -f version=$PREVIEW_ACCELERATOR_TAG" \
   "$TMP/coordinator-state/dispatches" \
   || release_fail "preview coordinator did not dispatch the expected accelerator release"
@@ -390,7 +390,21 @@ if [ "${1:-}" = api ]; then
       repository="${endpoint#repos/}"
       repository="${repository%%/releases/tags/*}"
       tag="${endpoint##*/}"
-      if [ "$repository" = kuasar-sandbox/kuasar-sandbox ] && [ "$tag" = "$current_aggregate" ]; then
+      unit="${repository##*/}"
+      if [ "$repository" = kuasar-sandbox/guest-runtime ]; then
+        case "$tag" in
+          runtime-*) unit=runtime ;;
+          vmlinux-*) unit=vmlinux ;;
+        esac
+      fi
+      missing=false
+      case ",${FAKE_MISSING_UNITS:-}," in
+        *",$unit,"*) missing=true ;;
+      esac
+      if [ "$missing" = true ]; then
+        echo 'gh: Not Found (HTTP 404)' >&2
+        exit 1
+      elif [ "$repository" = kuasar-sandbox/kuasar-sandbox ] && [ "$tag" = "$current_aggregate" ]; then
         jq -n --arg tag "$tag" \
           '{tag_name: $tag, draft: false, prerelease: true, published_at: "2026-08-09T00:00:00Z"}'
       elif [ "$repository" = kuasar-sandbox/guest-runtime ] \
@@ -490,6 +504,9 @@ PATH="$TMP/generated-bin:$PATH" \
 
 GENERATED_VERSION="$PREVIEW_BASE-preview.$NEXT_PREVIEW_DATE"
 GENERATED_ACCELERATOR_TAG="$PREVIEW_COMPONENT_VERSION-preview.$NEXT_PREVIEW_DATE"
+GENERATED_SANDBOXER_TAG="$PREVIEW_COMPONENT_VERSION-preview.$NEXT_PREVIEW_DATE"
+GENERATED_ORCHESTRATOR_TAG="$PREVIEW_COMPONENT_VERSION-preview.$NEXT_PREVIEW_DATE"
+GENERATED_RUNTIME_TAG="runtime-$PREVIEW_COMPONENT_VERSION-preview.$NEXT_PREVIEW_DATE"
 GENERATED_MANIFEST="$TMP/generated-root/releases/daily-preview.yaml"
 [ -f "$GENERATED_MANIFEST" ] || release_fail "daily coordinator did not generate a manifest"
 [ "$(previous_release "$TMP/generated-root" "$GENERATED_VERSION")" = "$PREVIEW_VERSION" ] \
@@ -497,13 +514,13 @@ GENERATED_MANIFEST="$TMP/generated-root/releases/daily-preview.yaml"
 resolve_selection "$TMP/generated-root" "$GENERATED_VERSION" "$TMP/generated-selection.tsv"
 grep -Fqx "accelerator"$'\t'"$GENERATED_ACCELERATOR_TAG" "$TMP/generated-selection.tsv" \
   || release_fail "changed component did not select a new preview"
-for unit in connector sandboxer orchestrator; do
-  current_tag="$(awk -F '\t' -v unit="$unit" '$1 == unit {print $2}' \
-    "$TMP/current-preview-selection.tsv")"
-  grep -Fqx "$unit"$'\t'"$current_tag" "$TMP/generated-selection.tsv" \
-    || release_fail "$unit did not reuse its unchanged release"
-done
-for unit in runtime vmlinux; do
+grep -Fqx "sandboxer"$'\t'"$GENERATED_SANDBOXER_TAG" "$TMP/generated-selection.tsv" \
+  || release_fail "accelerator change did not rebuild sandboxer"
+grep -Fqx "orchestrator"$'\t'"$GENERATED_ORCHESTRATOR_TAG" "$TMP/generated-selection.tsv" \
+  || release_fail "accelerator change did not rebuild orchestrator"
+grep -Fqx "runtime"$'\t'"$GENERATED_RUNTIME_TAG" "$TMP/generated-selection.tsv" \
+  || release_fail "accelerator change did not rebuild runtime"
+for unit in connector vmlinux; do
   current_tag="$(awk -F '\t' -v unit="$unit" '$1 == unit {print $2}' \
     "$TMP/current-preview-selection.tsv")"
   grep -Fqx "$unit"$'\t'"$current_tag" "$TMP/generated-selection.tsv" \
@@ -526,6 +543,48 @@ grep -Fqx "workflow run release.yml --repo kuasar-sandbox/accelerator --ref main
   || release_fail "daily coordinator did not dispatch the changed release unit"
 
 install -m 0644 "$GENERATED_MANIFEST" "$TMP/generated-state/current-daily-preview.yaml"
+GENERATED_CONNECTOR_TAG="$(awk -F '\t' '$1 == "connector" {print $2}' \
+  "$TMP/generated-selection.tsv")"
+
+mkdir -p "$TMP/sandboxer-stage-state"
+install -m 0644 "$GENERATED_MANIFEST" \
+  "$TMP/sandboxer-stage-state/current-daily-preview.yaml"
+PATH="$TMP/generated-bin:$PATH" \
+  FAKE_COORDINATOR_STATE="$TMP/sandboxer-stage-state" \
+  FAKE_COORDINATOR_ROOT="$TMP/generated-root" \
+  FAKE_CURRENT_AGGREGATE="$PREVIEW_VERSION" \
+  FAKE_MISSING_UNITS=sandboxer,orchestrator,runtime \
+  GH_TOKEN=read-token PLATFORM_TOKEN=write-token \
+  PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
+  bash "$TMP/generated-root/release/preview-coordinator.sh" \
+    --version "$GENERATED_VERSION" > "$TMP/sandboxer-stage.out"
+[ "$(wc -l < "$TMP/sandboxer-stage-state/dispatches")" -eq 1 ] \
+  || release_fail "dependency convergence did not isolate the sandboxer stage"
+grep -Fqx "workflow run release.yml --repo kuasar-sandbox/sandboxer --ref main -f version=$GENERATED_SANDBOXER_TAG -f accelerator_version=$GENERATED_ACCELERATOR_TAG -f connector_version=$GENERATED_CONNECTOR_TAG" \
+  "$TMP/sandboxer-stage-state/dispatches" \
+  || release_fail "sandboxer dispatch did not pin selected dependency versions"
+
+mkdir -p "$TMP/downstream-stage-state"
+install -m 0644 "$GENERATED_MANIFEST" \
+  "$TMP/downstream-stage-state/current-daily-preview.yaml"
+PATH="$TMP/generated-bin:$PATH" \
+  FAKE_COORDINATOR_STATE="$TMP/downstream-stage-state" \
+  FAKE_COORDINATOR_ROOT="$TMP/generated-root" \
+  FAKE_CURRENT_AGGREGATE="$PREVIEW_VERSION" \
+  FAKE_MISSING_UNITS=orchestrator,runtime \
+  GH_TOKEN=read-token PLATFORM_TOKEN=write-token \
+  PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
+  bash "$TMP/generated-root/release/preview-coordinator.sh" \
+    --version "$GENERATED_VERSION" > "$TMP/downstream-stage.out"
+[ "$(wc -l < "$TMP/downstream-stage-state/dispatches")" -eq 2 ] \
+  || release_fail "dependency convergence did not isolate the final downstream stage"
+grep -Fqx "workflow run component-release.yml --repo kuasar-sandbox/orchestrator --ref main -f version=$GENERATED_ORCHESTRATOR_TAG -f accelerator_version=$GENERATED_ACCELERATOR_TAG -f connector_version=$GENERATED_CONNECTOR_TAG -f sandboxer_version=$GENERATED_SANDBOXER_TAG" \
+  "$TMP/downstream-stage-state/dispatches" \
+  || release_fail "orchestrator dispatch did not pin selected dependency versions"
+grep -Fqx "workflow run release-runtime.yml --repo kuasar-sandbox/guest-runtime --ref main -f version=$GENERATED_RUNTIME_TAG -f accelerator_version=$GENERATED_ACCELERATOR_TAG -f connector_version=$GENERATED_CONNECTOR_TAG -f sandboxer_version=$GENERATED_SANDBOXER_TAG" \
+  "$TMP/downstream-stage-state/dispatches" \
+  || release_fail "runtime dispatch did not pin selected dependency versions"
+
 PATH="$TMP/generated-bin:$PATH" \
   FAKE_COORDINATOR_STATE="$TMP/generated-state" \
   FAKE_COORDINATOR_ROOT="$TMP/generated-root" \
