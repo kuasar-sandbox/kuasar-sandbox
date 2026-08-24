@@ -133,6 +133,11 @@ milliseconds_between() { # $1=start ns, $2=end ns
 reset_tap() {
     ip link set "$TAP_NAME" down 2>/dev/null || true
     ip link set "$TAP_NAME" up 2>/dev/null || true
+    # Bringing the link down withdraws the admin-installed guest /32 route;
+    # the kernel re-adds only the connected /31 on up. Re-install the /32 so
+    # route selection stays pinned for the whole measurement phase, which
+    # otherwise runs with only the shared-subnet connected route (#43).
+    ip route replace "$GUEST_HTTP_IP/32" dev "$TAP_NAME" src "$TAP_HOST_IP" 2>/dev/null || true
     sleep 0.3
     require_working_set_tap
 }
