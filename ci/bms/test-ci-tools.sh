@@ -17,6 +17,7 @@ fail() {
 }
 
 workflow="$SCRIPT_DIR/../../.github/workflows/bms-e2e.yml"
+entry_workflow="$SCRIPT_DIR/../../.github/workflows/bms-entry.yml"
 daily_workflow="$SCRIPT_DIR/../../.github/workflows/daily-preview.yml"
 legacy_repository="kuasar-sandbox/platform"
 candidate_pattern='^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$'
@@ -47,6 +48,101 @@ fi
 if grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = $legacy_repository ]" "$workflow"; then
     fail "legacy repository identity is still accepted as the trusted BMS implementation"
 fi
+
+grep -Fq 'companion_candidates:' "$workflow" \
+    || fail "BMS execution workflow does not accept the resolved companion set"
+# shellcheck disable=SC2016 # Match a literal GitHub Actions expression.
+grep -Fq 'companion_candidates: ${{ needs.admission.outputs.companion_candidates }}' \
+    "$entry_workflow" \
+    || fail "BMS entry does not pass the admitted companion set to execution"
+if grep -Fq 'permission-pull-requests: read' "$workflow" "$entry_workflow"; then
+    fail "companion validation unnecessarily expands the source App permissions"
+fi
+# shellcheck disable=SC2016 # Match the literal workflow-local variable.
+grep -Fq 'git/ref/pull/$companion_pr/merge' "$entry_workflow" \
+    || fail "companion admission does not require a live integration ref"
+grep -Fq 'git/ref/heads/main' "$entry_workflow" \
+    || fail "companion admission does not bind the integration to current main"
+grep -Fq 'branches-where-head' "$entry_workflow" \
+    || fail "companion admission does not require an organization repository branch head"
+grep -Fq 'branches-where-head' "$workflow" \
+    || fail "runner validation does not recheck the companion branch provenance"
+grep -Fq 'source-set.tsv' "$workflow" \
+    || fail "exact source-set metadata is not recorded"
+grep -Fq 'platform_role=companion' "$workflow" \
+    || fail "platform companion revision is not distinguished in the revision manifest"
+grep -Fq 'role=companion' "$workflow" \
+    || fail "component companion revisions are not distinguished in the revision manifest"
+grep -Fq 'Pull request or companion source set changed while BMS was running' "$entry_workflow" \
+    || fail "finalization does not fail closed when a companion changes"
+grep -Fq 'companion_count=' "$entry_workflow" \
+    || fail "companion admission does not enforce its limit before resolving refs"
+grep -Fq "grep -Fq '<!-- kuasar-bms-companions'" "$entry_workflow" \
+    || fail "a malformed companion marker prefix can be treated as an absent marker"
+
+companion_parser="$TMP/companion-parser.awk"
+sed -n '/# BEGIN kuasar-bms-companion-parser/,/# END kuasar-bms-companion-parser/p' \
+    "$entry_workflow" | sed '1d;$d' >"$companion_parser"
+[ -s "$companion_parser" ] || fail "cannot extract the production companion marker parser"
+
+valid_companions="$TMP/valid-companions.md"
+cat >"$valid_companions" <<'EOF'
+ordinary pull request text
+<!-- kuasar-bms-companions
+kuasar-sandbox/orchestrator#227
+kuasar-sandbox/guest-runtime#34
+-->
+more prose
+EOF
+mapfile -t parsed_companions < <(awk -f "$companion_parser" "$valid_companions")
+if [ "${#parsed_companions[@]}" -ne 2 ] \
+    || [ "${parsed_companions[0]}" != kuasar-sandbox/orchestrator#227 ] \
+    || [ "${parsed_companions[1]}" != kuasar-sandbox/guest-runtime#34 ]; then
+    fail "valid companion marker did not produce the exact ordered references"
+fi
+
+printf 'ordinary pull request text\n' >"$TMP/no-companions.md"
+set +e
+awk -f "$companion_parser" "$TMP/no-companions.md" >/dev/null
+parser_status=$?
+set -e
+[ "$parser_status" -eq 3 ] || fail "missing companion marker did not return the absence status"
+
+cat >"$TMP/duplicate-companions.md" <<'EOF'
+<!-- kuasar-bms-companions
+kuasar-sandbox/orchestrator#227
+-->
+<!-- kuasar-bms-companions
+kuasar-sandbox/guest-runtime#34
+-->
+EOF
+set +e
+awk -f "$companion_parser" "$TMP/duplicate-companions.md" >/dev/null
+parser_status=$?
+set -e
+[ "$parser_status" -eq 2 ] || fail "duplicate companion markers were accepted"
+
+cat >"$TMP/unclosed-companions.md" <<'EOF'
+<!-- kuasar-bms-companions
+kuasar-sandbox/orchestrator#227
+EOF
+set +e
+awk -f "$companion_parser" "$TMP/unclosed-companions.md" >/dev/null
+parser_status=$?
+set -e
+[ "$parser_status" -eq 2 ] || fail "unclosed companion marker was accepted"
+
+cat >"$TMP/malformed-prefix-companions.md" <<'EOF'
+prose <!-- kuasar-bms-companions
+kuasar-sandbox/orchestrator#227
+-->
+EOF
+set +e
+awk -f "$companion_parser" "$TMP/malformed-prefix-companions.md" >/dev/null
+parser_status=$?
+set -e
+[ "$parser_status" -eq 3 ] \
+    || fail "malformed marker prefix must take the production absence branch"
 
 setup_workspace() {
     local root=$1
