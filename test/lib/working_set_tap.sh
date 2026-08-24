@@ -110,12 +110,24 @@ working_set_stale_taps() { # $1=host CIDR; prints stale names
 }
 
 # Delete leftover TAPs that hold the working-set host subnet as their only
-# IPv4 address, so unrelated host networking is preserved. Prints one
-# "removed <name>" line per successful deletion.
-working_set_remove_stale_taps() { # $1=host CIDR
-    local host_cidr="$1" name details addresses
+# IPv4 address. Only test-suite-owned names (working_set_list_test_taps) are
+# deleted, so unrelated host networking is preserved; an unrecognized
+# interface holding the CIDR is reported and left alone for a human, because
+# deleting it could break networking this harness does not own.
+# Prints one "removed <name>" line per successful deletion. Returns non-zero
+# if an unrecognized conflicting interface remains.
+working_set_remove_stale_taps() { # $1=host CIDR, $2=optional exclude name
+    local host_cidr="$1" exclude="${2:-}" name details addresses status=0
+    local -a owned=()
+    mapfile -t owned < <(working_set_list_test_taps)
     while IFS= read -r name; do
         [ -n "$name" ] || continue
+        [ "$name" = "$exclude" ] && continue
+        if [[ " ${owned[*]-} " != *" $name "* ]]; then
+            printf 'unrecognized interface %s holds %s; not deleting\n' "$name" "$host_cidr" >&2
+            status=1
+            continue
+        fi
         details="$(command ip -details link show dev "$name" 2>/dev/null || true)"
         grep -Eq '(^|[[:space:]])tun type tap([[:space:]]|$)' <<<"$details" || continue
         addresses="$(command ip -o -4 address show dev "$name" 2>/dev/null || true)"
@@ -127,8 +139,10 @@ working_set_remove_stale_taps() { # $1=host CIDR
             printf 'removed %s\n' "$name"
         else
             printf 'failed to remove %s\n' "$name" >&2
+            status=1
         fi
     done < <(working_set_stale_taps "$host_cidr")
+    return "$status"
 }
 
 # Names of TAP interfaces created by this repository's test suites. Used by

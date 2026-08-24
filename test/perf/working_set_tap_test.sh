@@ -86,11 +86,18 @@ done
 # The ip() mock above only covers the validate path; the list/remove checks
 # below need the real command and root TAP creation, otherwise skip them.
 real_ip() { command ip "$@"; }
-if [ "$(id -u)" -eq 0 ] \
-    && real_ip tuntap add dev kws-stale9 mode tap >/dev/null 2>&1 \
-    && real_ip address add "$HOST_CIDR" dev kws-stale9 >/dev/null 2>&1 \
-    && real_ip link set kws-stale9 up >/dev/null 2>&1; then
+if [ "$(id -u)" -ne 0 ]; then
+    echo "working_set_tap_test: stale TAP reset check skipped (needs root TAP)" >&2
+elif ! real_ip tuntap add dev kws-stale9 mode tap >/dev/null 2>&1; then
+    echo "working_set_tap_test: stale TAP reset check skipped (cannot create TAP)" >&2
+else
+    # TAP now exists: every later failure is a real test failure, and the
+    # trap guarantees the interface cannot leak even then.
     trap 'rm -rf "$WORK"; real_ip link del kws-stale9 2>/dev/null || true' EXIT
+    real_ip address add "$HOST_CIDR" dev kws-stale9 \
+        || fail "cannot configure $HOST_CIDR on kws-stale9"
+    real_ip link set kws-stale9 up \
+        || fail "cannot bring kws-stale9 UP"
 
     case " $(working_set_list_test_taps | tr '\n' ' ') " in
         *" kws-stale9 "*) ;;
@@ -104,8 +111,6 @@ if [ "$(id -u)" -eq 0 ] \
     esac
     real_ip link show dev kws-stale9 >/dev/null 2>&1 \
         && fail "kws-stale9 still exists after working_set_remove_stale_taps"
-else
-    echo "working_set_tap_test: stale TAP reset check skipped (needs root TAP)" >&2
 fi
 
 echo "working_set_tap_test: PASS"

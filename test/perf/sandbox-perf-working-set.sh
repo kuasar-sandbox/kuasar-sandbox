@@ -86,13 +86,17 @@ STORE_BASELINE="$WORK/store-baseline"
 
 cleanup() {
     set +e
+    # Delete the owned TAP first: during job cancellation this process can be
+    # killed at any moment, and a leaked TAP keeps its 169.254.1.0/31
+    # connected route alive to break later runs (#43). Child teardown and
+    # work-directory removal can safely come after.
+    [ "$TAP_CREATED" = 1 ] && ip link del "$TAP_NAME" 2>/dev/null
     for pid in "${PIDS[@]}"; do
         [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && kill -TERM "$pid" 2>/dev/null
     done
     for pid in "${PIDS[@]}"; do
         [ -n "$pid" ] && wait "$pid" 2>/dev/null
     done
-    [ "$TAP_CREATED" = 1 ] && ip link del "$TAP_NAME" 2>/dev/null
     if [ -n "${PERF_KEEP_WORK:-}" ]; then
         echo "kept work directory: $WORK" >&2
     else
@@ -102,8 +106,12 @@ cleanup() {
 trap cleanup EXIT
 # A cancelled job delivers SIGINT/SIGTERM to the whole process group; bash
 # would then die without running the EXIT trap and leak the per-run TAP that
-# issue #43 chased. Run the same cleanup on those signals and re-raise.
-trap 'trap - EXIT; cleanup; exit 143' HUP INT TERM PIPE
+# issue #43 chased. Run the same cleanup on those signals, then die with the
+# conventional status of that signal.
+trap 'trap - EXIT; cleanup; exit 129' HUP
+trap 'trap - EXIT; cleanup; exit 130' INT
+trap 'trap - EXIT; cleanup; exit 143' TERM
+trap 'trap - EXIT; cleanup; exit 141' PIPE
 
 untrack_pid() { # $1=pid
     local target="$1" pid
@@ -271,8 +279,11 @@ if ip link show dev "$TAP_NAME" >/dev/null 2>&1; then
 fi
 # A previous run interrupted before its cleanup can leave a TAP holding the
 # shared 169.254.1.0/31 connected route; that route can win route selection
-# over this run's TAP (#43). Remove such leftovers before creating ours.
-stale_removed="$(working_set_remove_stale_taps "$TAP_HOST_CIDR")"
+# over this run's TAP (#43). Remove test-owned leftovers before creating
+# ours; an unrecognized interface holding the subnet fails fast instead of
+# being deleted.
+stale_removed="$(working_set_remove_stale_taps "$TAP_HOST_CIDR")" \
+    || fatal "an interface this harness does not own holds $TAP_HOST_CIDR; resolve it manually"
 if [ -n "$stale_removed" ]; then
     echo "removed stale working-set TAPs from prior runs:" >&2
     printf '  %s\n' $stale_removed >&2
