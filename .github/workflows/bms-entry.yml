@@ -28,6 +28,7 @@ jobs:
       candidate_sha: ${{ steps.admission.outputs.candidate_sha }}
       base_sha: ${{ steps.admission.outputs.base_sha }}
       head_sha: ${{ steps.admission.outputs.head_sha }}
+      companion_candidates: ${{ steps.admission.outputs.companion_candidates }}
     steps:
       - name: Create organization membership token
         if: >-
@@ -43,11 +44,26 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-members: read
 
+      - name: Create companion validation token
+        if: >-
+          github.event_name == 'pull_request_target' &&
+          github.event.pull_request.draft == false &&
+          contains(github.event.pull_request.body || '', '<!-- kuasar-bms-companions')
+        id: companion-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
+          permission-contents: read
+
       - name: Admit the current exact integration commit
         id: admission
         env:
           GH_TOKEN: ${{ github.token }}
           MEMBERSHIP_TOKEN: ${{ steps.membership-token.outputs.token }}
+          COMPANION_TOKEN: ${{ steps.companion-token.outputs.token }}
           STATUS_CONTEXT: kuasar/bms-exact-head
         run: |
           set -euo pipefail
@@ -62,6 +78,16 @@ jobs:
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               "$GITHUB_API_URL$1"
+          }
+
+          api_get_with_token() {
+            local token=$1 path=$2
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $token" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL$path"
           }
 
           check_org_membership() {
@@ -128,6 +154,7 @@ jobs:
           base_repository=$(jq -er '.base.repo.full_name' <<< "$pr")
           head_repository=$(jq -er '.head.repo.full_name' <<< "$pr")
           author=$(jq -er '.user.login' <<< "$pr")
+          companion_candidates='[]'
 
           reason=""
           deferred=false
@@ -213,12 +240,156 @@ jobs:
             fi
           fi
 
+          if [ -z "$reason" ] && [ "$deferred" = false ]; then
+            body=$(jq -r '.body // ""' <<< "$pr" | tr -d '\r')
+            companion_lines=""
+            companion_parse=0
+            companion_lines=$(awk '
+              # BEGIN kuasar-bms-companion-parser
+              BEGIN { inside=0; starts=0; ends=0 }
+              /^<!--[[:space:]]*kuasar-bms-companions[[:space:]]*$/ {
+                starts++
+                if (inside) exit 2
+                inside=1
+                next
+              }
+              inside && /^[[:space:]]*-->[[:space:]]*$/ {
+                ends++
+                inside=0
+                next
+              }
+              inside { print }
+              END {
+                if (starts == 0) exit 3
+                if (starts != 1 || ends != 1 || inside) exit 2
+              }
+              # END kuasar-bms-companion-parser
+            ' <<< "$body") || companion_parse=$?
+
+            case "$companion_parse" in
+              0)
+                if [ -z "$COMPANION_TOKEN" ]; then
+                  reason="companion validation token is unavailable"
+                else
+                  companion_count=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+                    -e '/^$/d' <<< "$companion_lines" | wc -l)
+                  if [ "$companion_count" -gt 5 ]; then
+                    reason="too many companion repositories"
+                  fi
+                  declare -A seen_companion_repositories=()
+                  while [ -z "$reason" ] && IFS= read -r companion_ref; do
+                    companion_ref=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+                      <<< "$companion_ref")
+                    [ -n "$companion_ref" ] || continue
+                    if ! [[ "$companion_ref" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)#([1-9][0-9]*)$ ]]; then
+                      reason="invalid kuasar-bms-companions entry"
+                      break
+                    fi
+                    companion_repository="kuasar-sandbox/${BASH_REMATCH[1]}"
+                    companion_pr=${BASH_REMATCH[2]}
+                    if [ "$companion_repository" = "$GITHUB_REPOSITORY" ]; then
+                      reason="candidate repository cannot also be a companion"
+                      break
+                    fi
+                    if [ -n "${seen_companion_repositories[$companion_repository]:-}" ]; then
+                      reason="duplicate companion repository"
+                      break
+                    fi
+                    seen_companion_repositories[$companion_repository]=1
+
+                    if ! companion_merge_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/git/ref/pull/$companion_pr/merge"); then
+                      reason="companion does not have an open merge ref"
+                      break
+                    fi
+                    if ! companion_head_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/git/ref/pull/$companion_pr/head"); then
+                      reason="companion head ref is unavailable"
+                      break
+                    fi
+                    companion_candidate=$(jq -r '.object.sha // ""' <<< "$companion_merge_ref")
+                    companion_head=$(jq -r '.object.sha // ""' <<< "$companion_head_ref")
+                    if ! companion_commit=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/git/commits/$companion_candidate"); then
+                      reason="companion integration commit is unavailable"
+                      break
+                    fi
+                    if ! companion_main_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/git/ref/heads/main"); then
+                      reason="companion main ref is unavailable"
+                      break
+                    fi
+                    if ! companion_head_branches=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/commits/$companion_head/branches-where-head"); then
+                      reason="companion head branch lookup failed"
+                      break
+                    fi
+                    companion_base=$(jq -r '.parents[0].sha // ""' <<< "$companion_commit")
+                    if ! jq -e \
+                      --arg merge_ref "refs/pull/$companion_pr/merge" \
+                      --arg head_ref "refs/pull/$companion_pr/head" \
+                      --arg candidate "$companion_candidate" \
+                      --arg base "$companion_base" \
+                      --arg head "$companion_head" '
+                        .merge.ref == $merge_ref
+                        and .merge.object.sha == $candidate
+                        and .head_ref.ref == $head_ref
+                        and .head_ref.object.sha == $head
+                        and .commit.sha == $candidate
+                        and (.commit.parents | length) == 2
+                        and .commit.parents[0].sha == $base
+                        and .commit.parents[1].sha == $head
+                        and .main.object.sha == $base
+                        and (.branches | type == "array" and length > 0)
+                      ' <<< "$(jq -cn \
+                        --argjson merge "$companion_merge_ref" \
+                        --argjson head_ref "$companion_head_ref" \
+                        --argjson commit "$companion_commit" \
+                        --argjson main "$companion_main_ref" \
+                        --argjson branches "$companion_head_branches" \
+                        '{merge: $merge, head_ref: $head_ref, commit: $commit,
+                          main: $main, branches: $branches}')" >/dev/null; then
+                      reason="companion refs do not form the current same-repository main integration"
+                      break
+                    fi
+                    companion_record=$(jq -cn \
+                      --arg repository "$companion_repository" \
+                      --argjson pull_request_number "$companion_pr" \
+                      --arg candidate_sha "$companion_candidate" \
+                      --arg base_sha "$companion_base" \
+                      --arg head_sha "$companion_head" \
+                      '{repository: $repository, pull_request_number: $pull_request_number,
+                        candidate_sha: $candidate_sha, base_sha: $base_sha, head_sha: $head_sha}')
+                    companion_candidates=$(jq -c --argjson record "$companion_record" \
+                      '. + [$record]' <<< "$companion_candidates")
+                  done <<< "$companion_lines"
+                  companion_candidates=$(jq -c 'sort_by(.repository)' \
+                    <<< "$companion_candidates")
+                  if [ -z "$reason" ] && [ "$(jq 'length' <<< "$companion_candidates")" -eq 0 ]; then
+                    reason="kuasar-bms-companions block is empty"
+                  fi
+                fi
+                ;;
+              2) reason="malformed kuasar-bms-companions block" ;;
+              3)
+                if grep -Fq '<!-- kuasar-bms-companions' <<< "$body"; then
+                  reason="malformed kuasar-bms-companions block"
+                fi
+                ;;
+              *) reason="failed to parse kuasar-bms-companions block" ;;
+            esac
+          fi
+
           eligible=false
           status_state=pending
           status_description="BMS is deferred while this pull request is draft"
           if [ "$deferred" = false ] && [ -z "$reason" ]; then
             eligible=true
-            status_description="BMS is validating this exact integration commit"
+            if [ "$companion_candidates" = '[]' ]; then
+              status_description="BMS is validating this exact integration commit"
+            else
+              status_description="BMS is validating this exact source set"
+            fi
           elif [ -n "$reason" ]; then
             status_state=failure
             status_description="BMS admission rejected: $reason"
@@ -230,6 +401,7 @@ jobs:
             echo "candidate_sha=$candidate_sha"
             echo "base_sha=$base_sha"
             echo "head_sha=$head_sha"
+            echo "companion_candidates=$companion_candidates"
           } >> "$GITHUB_OUTPUT"
 
           if [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]; then
@@ -255,6 +427,7 @@ jobs:
       candidate_sha: ${{ needs.admission.outputs.candidate_sha }}
       base_sha: ${{ needs.admission.outputs.base_sha }}
       head_sha: ${{ needs.admission.outputs.head_sha }}
+      companion_candidates: ${{ needs.admission.outputs.companion_candidates }}
     secrets:
       KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
 
@@ -276,8 +449,24 @@ jobs:
       CANDIDATE_SHA: ${{ needs.admission.outputs.candidate_sha }}
       CANDIDATE_BASE_SHA: ${{ needs.admission.outputs.base_sha }}
       CANDIDATE_HEAD_SHA: ${{ needs.admission.outputs.head_sha }}
+      COMPANION_CANDIDATES: ${{ needs.admission.outputs.companion_candidates }}
     steps:
+      - name: Create companion finalization token
+        if: >-
+          needs.admission.result == 'success' &&
+          needs.admission.outputs.companion_candidates != '[]'
+        id: companion-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
+          permission-contents: read
+
       - name: Finalize the exact integration status
+        env:
+          COMPANION_TOKEN: ${{ steps.companion-token.outputs.token }}
         run: |
           set -euo pipefail
 
@@ -288,6 +477,63 @@ jobs:
               -H "Authorization: Bearer $GH_TOKEN" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               "$GITHUB_API_URL$1"
+          }
+
+          api_get_with_token() {
+            local token=$1 path=$2
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $token" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL$path"
+          }
+
+          validate_companion() {
+            local record=$1
+            local repository number candidate base head merge_ref head_ref commit main branches snapshot
+            repository=$(jq -r '.repository' <<< "$record")
+            number=$(jq -r '.pull_request_number' <<< "$record")
+            candidate=$(jq -r '.candidate_sha' <<< "$record")
+            base=$(jq -r '.base_sha' <<< "$record")
+            head=$(jq -r '.head_sha' <<< "$record")
+            merge_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/git/ref/pull/$number/merge") \
+              || return 1
+            head_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/git/ref/pull/$number/head") \
+              || return 1
+            commit=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/git/commits/$candidate") || return 1
+            main=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/git/ref/heads/main") || return 1
+            branches=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/commits/$head/branches-where-head") || return 1
+            snapshot=$(jq -cn \
+              --argjson merge "$merge_ref" \
+              --argjson head_ref "$head_ref" \
+              --argjson commit "$commit" \
+              --argjson main "$main" \
+              --argjson branches "$branches" \
+              '{merge: $merge, head_ref: $head_ref, commit: $commit,
+                main: $main, branches: $branches}')
+            jq -e \
+              --arg merge_ref "refs/pull/$number/merge" \
+              --arg head_ref "refs/pull/$number/head" \
+              --arg candidate "$candidate" \
+              --arg base "$base" \
+              --arg head "$head" '
+                .merge.ref == $merge_ref
+                and .merge.object.sha == $candidate
+                and .head_ref.ref == $head_ref
+                and .head_ref.object.sha == $head
+                and .commit.sha == $candidate
+                and (.commit.parents | length) == 2
+                and .commit.parents[0].sha == $base
+                and .commit.parents[1].sha == $head
+                and .main.object.sha == $base
+                and (.branches | type == "array" and length > 0)
+              ' <<< "$snapshot" >/dev/null
           }
 
           post_status() {
@@ -375,6 +621,19 @@ jobs:
             description="BMS result: $BMS_RESULT"
           else
             commit=$(api_get "/repos/$GITHUB_REPOSITORY/git/commits/$CANDIDATE_SHA")
+            source_set_valid=true
+            if [ "$COMPANION_CANDIDATES" != '[]' ]; then
+              if [ -z "$COMPANION_TOKEN" ]; then
+                source_set_valid=false
+              else
+                while IFS= read -r companion; do
+                  if ! validate_companion "$companion"; then
+                    source_set_valid=false
+                    break
+                  fi
+                done < <(jq -c '.[]' <<< "$COMPANION_CANDIDATES")
+              fi
+            fi
             if jq -e \
               --argjson number "$CANDIDATE_PR" \
               --arg candidate "$CANDIDATE_SHA" \
@@ -397,11 +656,16 @@ jobs:
                   and (.parents | length) == 2
                   and .parents[0].sha == $base
                   and .parents[1].sha == $head
-                ' <<< "$commit" >/dev/null; then
+                ' <<< "$commit" >/dev/null \
+              && [ "$source_set_valid" = true ]; then
               final_state=success
-              description="BMS passed for this exact integration commit"
+              if [ "$COMPANION_CANDIDATES" = '[]' ]; then
+                description="BMS passed for this exact integration commit"
+              else
+                description="BMS passed for this exact source set"
+              fi
             else
-              description="Pull request changed while BMS was running"
+              description="Pull request or companion source set changed while BMS was running"
             fi
           fi
 
