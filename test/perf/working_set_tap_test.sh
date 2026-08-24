@@ -82,4 +82,30 @@ for metric in rx_packets rx_bytes tx_packets tx_bytes; do
     esac
 done
 
+# ---- stale TAP enumeration and reset (#43) ------------------------------
+# The ip() mock above only covers the validate path; the list/remove checks
+# below need the real command and root TAP creation, otherwise skip them.
+real_ip() { command ip "$@"; }
+if [ "$(id -u)" -eq 0 ] \
+    && real_ip tuntap add dev kws-stale9 mode tap >/dev/null 2>&1 \
+    && real_ip address add "$HOST_CIDR" dev kws-stale9 >/dev/null 2>&1 \
+    && real_ip link set kws-stale9 up >/dev/null 2>&1; then
+    trap 'rm -rf "$WORK"; real_ip link del kws-stale9 2>/dev/null || true' EXIT
+
+    case " $(working_set_list_test_taps | tr '\n' ' ') " in
+        *" kws-stale9 "*) ;;
+        *) fail "working_set_list_test_taps did not list stale kws-stale9" ;;
+    esac
+
+    removed="$(working_set_remove_stale_taps "$HOST_CIDR")"
+    case "$removed" in
+        *"kws-stale9"*) ;;
+        *) fail "working_set_remove_stale_taps did not remove kws-stale9: ${removed:-(none)}" ;;
+    esac
+    real_ip link show dev kws-stale9 >/dev/null 2>&1 \
+        && fail "kws-stale9 still exists after working_set_remove_stale_taps"
+else
+    echo "working_set_tap_test: stale TAP reset check skipped (needs root TAP)" >&2
+fi
+
 echo "working_set_tap_test: PASS"

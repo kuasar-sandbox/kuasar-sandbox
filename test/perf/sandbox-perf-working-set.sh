@@ -100,6 +100,10 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
+# A cancelled job delivers SIGINT/SIGTERM to the whole process group; bash
+# would then die without running the EXIT trap and leak the per-run TAP that
+# issue #43 chased. Run the same cleanup on those signals and re-raise.
+trap 'trap - EXIT; cleanup; exit 143' HUP INT TERM PIPE
 
 untrack_pid() { # $1=pid
     local target="$1" pid
@@ -264,6 +268,14 @@ PY
 if ip link show dev "$TAP_NAME" >/dev/null 2>&1; then
     working_set_dump_network_state "$TAP_NAME" "$GUEST_HTTP_IP" >&2
     fatal "working-set TAP $TAP_NAME already exists; the harness requires a fresh, owned TAP"
+fi
+# A previous run interrupted before its cleanup can leave a TAP holding the
+# shared 169.254.1.0/31 connected route; that route can win route selection
+# over this run's TAP (#43). Remove such leftovers before creating ours.
+stale_removed="$(working_set_remove_stale_taps "$TAP_HOST_CIDR")"
+if [ -n "$stale_removed" ]; then
+    echo "removed stale working-set TAPs from prior runs:" >&2
+    printf '  %s\n' $stale_removed >&2
 fi
 if ! ip tuntap add dev "$TAP_NAME" mode tap; then
     working_set_dump_network_state "$TAP_NAME" "$GUEST_HTTP_IP" >&2

@@ -152,9 +152,20 @@ jobs:
           privileged=()
           if [ "$(id -u)" -ne 0 ]; then privileged=(sudo -n); fi
           "${privileged[@]}" systemctl stop 'sandbox-runner@*.service' 'sandbox-builder@*.service'
+          # shellcheck source=test/lib/working_set_tap.sh
+          . "$PWD/test/lib/working_set_tap.sh"
           if ip link show sb-tap0 >/dev/null 2>&1; then
             "${privileged[@]}" ip link del sb-tap0
           fi
+          # Interrupted runs can leave uniquely named TAPs behind (#43); each
+          # one keeps a 169.254.1.0/31 connected route that can win route
+          # selection against the current run's TAP. Remove every test-suite
+          # TAP leftover before this job starts.
+          while IFS= read -r stale; do
+            [ -n "$stale" ] || continue
+            echo "removing stale test TAP: $stale"
+            "${privileged[@]}" ip link del "$stale" || true
+          done < <(working_set_list_test_taps)
           "${privileged[@]}" rm -f \
             /run/systemd/system/sandbox-runner@.service \
             /run/systemd/system/sandbox-builder@.service \
