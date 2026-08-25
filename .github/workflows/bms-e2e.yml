@@ -155,6 +155,27 @@ jobs:
           if ip link show sb-tap0 >/dev/null 2>&1; then
             "${privileged[@]}" ip link del sb-tap0
           fi
+          # Recover this runner's working-set network namespace left behind
+          # by an interrupted run (#43, #53). The name is derived from
+          # RUNNER_NAME, so recovery is exact-ownership: no other runner's
+          # namespace, and no other host interface, is ever touched. This
+          # stays self-contained because no checkout has happened yet.
+          ws_netns="kuasar-ws-$(printf '%s' "$RUNNER_NAME" | sha256sum | cut -c1-8)"
+          if "${privileged[@]}" ip netns list | awk '{print $1}' | grep -Fxq "$ws_netns"; then
+            echo "recovering interrupted working-set namespace: $ws_netns"
+            "${privileged[@]}" ip netns pids "$ws_netns" | while read -r pid; do
+              [ -n "$pid" ] && "${privileged[@]}" kill -TERM "$pid" 2>/dev/null || true
+            done
+            sleep 2
+            "${privileged[@]}" ip netns pids "$ws_netns" | while read -r pid; do
+              [ -n "$pid" ] && "${privileged[@]}" kill -KILL "$pid" 2>/dev/null || true
+            done
+            sleep 1
+            if [ -n "$("${privileged[@]}" ip netns pids "$ws_netns")" ]; then
+              echo "::warning::processes in $ws_netns survived KILL; job may lack a clean working-set network" >&2
+            fi
+            "${privileged[@]}" ip netns del "$ws_netns" || true
+          fi
           "${privileged[@]}" rm -f \
             /run/systemd/system/sandbox-runner@.service \
             /run/systemd/system/sandbox-builder@.service \
@@ -551,7 +572,7 @@ jobs:
             BIN="$PWD/bin/x86_64" \
             PERF_ITERS="$PERF_ITERS" \
             PERF_OUT_DIR="$PERF_OUT_DIR" \
-            bash test/perf/sandbox-perf-working-set.sh
+            bash test/perf/working-set-netns.sh test/perf/sandbox-perf-working-set.sh
 
       - name: Test exact published assets from the platform package
         if: inputs.mode == 'exact-assets'

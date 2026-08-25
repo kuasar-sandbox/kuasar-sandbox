@@ -82,4 +82,29 @@ for metric in rx_packets rx_bytes tx_packets tx_bytes; do
     esac
 done
 
+# ---- reset_tap /32 restoration (#43) ------------------------------------
+# The ip() mock above only covers the validate path; the flap/replace check
+# below needs the real command and root TAP creation, otherwise skip it.
+real_ip() { command ip "$@"; }
+if [ "$(id -u)" -ne 0 ]; then
+    echo "working_set_tap_test: reset_tap check skipped (needs root TAP)" >&2
+elif ! real_ip tuntap add dev kws-flap0 mode tap >/dev/null 2>&1; then
+    echo "working_set_tap_test: reset_tap check skipped (cannot create TAP)" >&2
+else
+    # TAP now exists: every later failure is a real test failure, and the
+    # trap guarantees the interface cannot leak even then.
+    trap 'rm -rf "$WORK"; real_ip link del kws-flap0 2>/dev/null || true' EXIT
+    real_ip address add "$HOST_CIDR" dev kws-flap0 \
+        || fail "cannot configure $HOST_CIDR on kws-flap0"
+    real_ip link set kws-flap0 up \
+        || fail "cannot bring kws-flap0 UP"
+    real_ip route add "$GUEST_IP/32" dev kws-flap0 src "${HOST_CIDR%/*}" \
+        || fail "cannot install the guest /32 on kws-flap0"
+
+    working_set_reset_tap kws-flap0 "$HOST_CIDR" "${HOST_CIDR%/*}" "$GUEST_IP"
+
+    real_ip -o route show dev kws-flap0 | grep -q "^$GUEST_IP " \
+        || fail "guest /32 route missing after working_set_reset_tap: $(real_ip -o route show dev kws-flap0)"
+fi
+
 echo "working_set_tap_test: PASS"
