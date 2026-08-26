@@ -167,24 +167,29 @@ fi
 [ ! -e "$DELS_A" ] || fail "reclaim deleted the namespace name despite failed enumeration"
 
 # ---- 8b. post-KILL verification failure: reclaim fails closed, no delete ----
-# First enumeration succeeds (non-empty), every later query fails: the wait
-# loop and the final verify must both fail closed instead of timing out into
-# a delete.
+# Call 1 succeeds with a PID; every later query fails at the command level.
+# The call count MUST live in a file: production reads pids through command
+# substitution (working_set_netns_pids runs `output="$(ip netns pids ...)"`
+# inside its own subshell), so a plain shell variable would reset on every
+# call and the mock would degenerate into a permanent-survivor simulation.
 DELS_B="$WORK/del-b.calls"
+CALLS_B="$WORK/wsnt-vfyfail.calls"
 rm -f "$DELS_B"
+printf '0\n' >"$CALLS_B"
 if (
-    WSNT_CALLS=0
     ip() {
         case "$*" in
             "netns list"*) echo "wsnt-vfyfail (id: 0)"; command ip netns list ;;
             *"netns pids wsnt-vfyfail"*)
-                WSNT_CALLS=$((WSNT_CALLS + 1))
-                if [ "$WSNT_CALLS" -le 1 ]; then
+                n="$(cat "$CALLS_B")"
+                n=$((n + 1))
+                printf '%s\n' "$n" >"$CALLS_B"
+                if [ "$n" -eq 1 ]; then
                     echo 424242
-                    exit 0
+                    return 0
                 fi
                 echo "Cannot open network namespace" >&2
-                exit 1
+                return 1
                 ;;
             *"netns del wsnt-vfyfail"*) echo called >>"$DELS_B"; exit 0 ;;
             *) command ip "$@" ;;
@@ -194,6 +199,8 @@ if (
 ) </dev/null >/dev/null 2>&1; then
     fail "reclaim succeeded although post-TERM/KILL verification failed"
 fi
+[ "$(cat "$CALLS_B")" -ge 2 ] \
+    || fail "post-KILL failure scenario never reached a second enumeration (calls=$(cat "$CALLS_B"))"
 [ ! -e "$DELS_B" ] || fail "reclaim deleted the namespace name despite failed verification"
 
 # teardown with an unreliable query stays best-effort and keeps the name:
