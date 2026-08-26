@@ -587,6 +587,7 @@ wait_http_ready "$B_PID" "$B_DIR/run.log" / "$BASE_READY_TIMEOUT_SECONDS" base \
 WARM_SHA=$(grep -Eo '^[0-9a-f]{64}' "$B_DIR/seed.log" | head -1)
 [[ "$WARM_SHA" =~ ^[0-9a-f]{64}$ ]] || fatal "could not extract warm-up checksum"
 "$BIN/sandbox-ctl" snapshot --sandbox-id ws-base --output "$B_OUT" --run-root "$B_DIR/run" \
+    --drop-caches=true \
     >"$B_DIR/snapshot.log" 2>&1
 wait "$B_PID" 2>/dev/null || true
 untrack_pid "$B_PID"
@@ -640,6 +641,7 @@ wait_http_ready "$AUTO_B_PID" "$AUTO_B_DIR/run.log" / "$BASE_READY_TIMEOUT_SECON
 AUTO_WARM_SHA=$(grep -Eo '^[0-9a-f]{64}' "$AUTO_B_DIR/seed.log" | head -1)
 [ "$AUTO_WARM_SHA" = "$WARM_SHA" ] || fatal "off/auto B workloads have different content"
 "$BIN/sandbox-ctl" snapshot --sandbox-id ws-base-auto --output "$AUTO_B_OUT" --run-root "$AUTO_B_DIR/run" \
+    --drop-caches=true \
     >"$AUTO_B_DIR/snapshot.log" 2>&1
 wait "$AUTO_B_PID" 2>/dev/null || true
 untrack_pid "$AUTO_B_PID"
