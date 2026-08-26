@@ -125,7 +125,15 @@ if [ "${WORKING_SET_NETNS_SOURCED:-}" = 1 ]; then
     return 0 2>/dev/null || true
 fi
 
-[ "$(id -u)" -eq 0 ] || fatal "must run as root (the smoke itself re-execs sudo)"
+# Privilege bootstrap: the BMS workflow invokes this wrapper directly, without
+# sudo, and the inner smoke's own sudo re-exec would never run because this
+# wrapper needs root for `ip netns` long before the smoke starts. Re-exec
+# ourselves through sudo -nE (non-interactive, environment preserved so
+# RUNNER_NAME / PERF_* / BIN / PATH survive); a failed sudo propagates its
+# non-zero status naturally instead of a silent fallback.
+if [ "$(id -u)" -ne 0 ]; then
+    exec sudo -nE "$0" "$@"
+fi
 
 SMOKE_SCRIPT="${1:-}"
 [ -n "$SMOKE_SCRIPT" ] && [ -f "$SMOKE_SCRIPT" ] \

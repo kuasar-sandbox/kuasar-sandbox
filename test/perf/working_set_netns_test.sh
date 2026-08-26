@@ -146,16 +146,28 @@ if (
     fail "reclaim succeeded although namespace deletion failed"
 fi
 
-# ---- 9. another runner's namespace and host TAP stay untouched -------------
+# ---- 9. reclaim A spares a concurrently live B and the host TAP ------------
+# Both namespaces must exist with live processes for this to prove anything:
+# reclaim(A) must kill A's tenant and delete only A, leaving B and its tenant
+# untouched. Ownership comes solely from the deterministic name.
+ip netns add "$A"; track "$A"
+ip netns exec "$A" ip link set lo up
+ip netns exec "$A" setsid sleep 300 >/dev/null 2>&1 < /dev/null &
+sleep 0.2
 ip netns add "$B"; track "$B"
 ip netns exec "$B" ip link set lo up
 ip netns exec "$B" setsid sleep 300 >/dev/null 2>&1 < /dev/null &
-sleep 0.3
 # host-side stale TAP on the shared subnet, same name the smoke uses inside
 ip tuntap add dev kws0 mode tap
 ip address add 169.254.1.0/31 dev kws0
 ip link set kws0 up
-working_set_netns_reclaim "$A"
+sleep 0.3
+# both tenants live before the reclaim
+[ -n "$(ip netns pids "$A")" ] || fail "A's tenant was not running before reclaim"
+[ -n "$(ip netns pids "$B")" ] || fail "B's tenant was not running before reclaim"
+working_set_netns_reclaim "$A" || fail "reclaim of a live A failed"
+netns_exists "$A" && fail "reclaim left A's namespace behind"
+[ -z "$(ip netns pids "$A" 2>/dev/null)" ] || fail "reclaim left A's tenant alive"
 netns_exists "$B" || fail "reclaiming runner A deleted runner B's namespace"
 [ -n "$(ip netns pids "$B")" ] || fail "reclaiming runner A killed runner B's process"
 ip link show dev kws0 >/dev/null 2>&1 || fail "reclaiming runner A deleted the host kws0"
@@ -197,5 +209,39 @@ ip netns exec "$A" ip -o route show dev kws0 | grep -q "^169.254.1.1 " \
     || fail "guest /32 missing after flap+replace inside the namespace"
 working_set_netns_kill_all "$A"
 ip netns del "$A"
+
+# ---- 12. non-root direct invocation sudo re-execs, no premature fatal ------
+# Pin the production bootstrap: a non-root direct run must attempt
+# `sudo -nE <self> <args>` BEFORE any root check or namespace mutation, and
+# must not print the old "must run as root" fatal. Mock sudo (records argv,
+# exits 0) via PATH injection; mock id to report a non-root uid.
+MOCKBIN="$WORK/mockbin"
+mkdir -p "$MOCKBIN"
+cat >"$MOCKBIN/id" <<'EOF'
+#!/usr/bin/env bash
+case "$*" in
+    -u) echo 1000 ;;
+    *) echo "uid=1000(mock)" ;;
+esac
+EOF
+cat >"$MOCKBIN/sudo" <<'EOF'
+#!/usr/bin/env bash
+echo "SUDO-REEXEC argv: $*"
+exit 0
+EOF
+chmod +x "$MOCKBIN/id" "$MOCKBIN/sudo"
+# The mock sudo exits 0, so the wrapper (exec'd into it) exits 0 and prints
+# the recorded re-exec line. Env preservation is pinned by checking -nE.
+out="$(PATH="$MOCKBIN:$PATH" bash "$REPO_ROOT/test/perf/working-set-netns.sh" /some/smoke.sh arg1 2>&1)" || true
+case "$out" in
+    *"SUDO-REEXEC argv: -nE $REPO_ROOT/test/perf/working-set-netns.sh /some/smoke.sh arg1"*) ;;
+    *) fail "non-root wrapper did not sudo re-exec itself with -nE and original args: $out" ;;
+esac
+case "$out" in
+    *"must run as root"*) fail "non-root wrapper hit the old premature root fatal" ;;
+esac
+# and no namespace may have been created before the re-exec
+netns_exists "$(working_set_netns_name local)" \
+    && fail "non-root wrapper mutated namespaces before privilege escalation"
 
 echo "working_set_netns_test: PASS"
