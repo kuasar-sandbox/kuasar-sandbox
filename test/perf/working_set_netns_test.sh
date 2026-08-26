@@ -433,7 +433,7 @@ if (
         case "$*" in
             "netns list"*) echo "$WS_PROBE (id: 0)"; command ip netns list ;;
             *"netns pids $WS_PROBE"*) echo 424242 ;;
-            *"netns del $WS_PROBE"*) echo called >>"$DELS_D"; exit 0 ;;
+            *"netns del $WS_PROBE"*) echo called >>"$DELS_D"; return 0 ;;
             *) command ip "$@" ;;
         esac
     }
@@ -509,7 +509,7 @@ if ! (
         case "$*" in
             "netns list"*) echo "wsnt-tsurv (id: 0)"; command ip netns list ;;
             *"netns pids wsnt-tsurv"*) echo 424242 ;;
-            *"netns del wsnt-tsurv"*) echo called >>"$DELS_E"; exit 0 ;;
+            *"netns del wsnt-tsurv"*) echo called >>"$DELS_E"; return 0 ;;
             *) command ip "$@" ;;
         esac
     }
