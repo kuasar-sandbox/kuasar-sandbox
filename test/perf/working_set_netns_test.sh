@@ -9,23 +9,45 @@ fail() {
     exit 1
 }
 
-# Non-root / no-netns environments: the skip must be reachable WITHOUT the
-# wrapper's own root check firing first (the root check lives below the
-# SOURCED guard precisely for this).
-if [ "$(id -u)" -ne 0 ] || ! ip netns add wsnt-probe >/dev/null 2>&1; then
+# Non-root environments: the skip must be reachable WITHOUT the wrapper's
+# own root check firing first (the root check lives below the SOURCED guard
+# precisely for this).
+if [ "$(id -u)" -ne 0 ]; then
     echo "working_set_netns_test: skipped (needs root network namespaces)" >&2
     exit 0
 fi
-ip netns del wsnt-probe
+
+WORK="$(mktemp -d /tmp/working-set-netns-test-XXXXXX)"
+# Every live resource this test creates (capability probe, namespaces, host
+# TAPs) is derived from this unique per-run suffix, so a concurrent run can
+# neither see nor delete this run's resources, and leftovers from a killed
+# run cannot poison a later one by name collision.
+WS_SUFFIX="${WORK##*-}"
+WS_PROBE="wsnt-$WS_SUFFIX-probe"
+
+# An EEXIST on the probe only means a recycled mktemp suffix from a killed
+# earlier run — namespaces ARE supported in that case. Reclaim the exact
+# name and retry; only a second failure is a genuine capability skip.
+if ! ip netns add "$WS_PROBE" >/dev/null 2>&1; then
+    ip netns del "$WS_PROBE" 2>/dev/null || true
+    if ! ip netns add "$WS_PROBE" >/dev/null 2>&1; then
+        echo "working_set_netns_test: skipped (needs root network namespaces)" >&2
+        exit 0
+    fi
+fi
+ip netns del "$WS_PROBE"
 
 # shellcheck source=test/perf/working-set-netns.sh
 WORKING_SET_NETNS_SOURCED=1
 . "$REPO_ROOT/test/perf/working-set-netns.sh"
 
-WORK="$(mktemp -d /tmp/working-set-netns-test-XXXXXX)"
 CLEANED_NETNSES=()
+CLEANED_TAPS=()
 cleanup() {
     set +e
+    for tap in "${CLEANED_TAPS[@]}"; do
+        ip link del "$tap" 2>/dev/null
+    done
     for netns in "${CLEANED_NETNSES[@]}"; do
         ip netns pids "$netns" 2>/dev/null | while read -r pid; do
             [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null
@@ -35,18 +57,36 @@ cleanup() {
     rm -rf "$WORK"
 }
 trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 track() { CLEANED_NETNSES+=("$1"); }
+track_tap() { CLEANED_TAPS+=("$1"); }
+
+create_host_tap() { # $1=name — created TAPs are always tracked for cleanup
+    ip tuntap add dev "$1" mode tap || fail "cannot create host TAP $1"
+    track_tap "$1"
+}
 
 netns_exists() { ip netns list | awk '{print $1}' | grep -Fxq "$1"; }
 
 # ---- 1. deterministic naming ----------------------------------------------
-A="$(working_set_netns_name runner-alpha)"
-B="$(working_set_netns_name runner-beta)"
+A="$(working_set_netns_name "wsnt-$WS_SUFFIX-alpha")"
+B="$(working_set_netns_name "wsnt-$WS_SUFFIX-beta")"
 [ "$A" != "$B" ] || fail "two runners derived the same namespace name"
-[ "$(working_set_netns_name runner-alpha)" = "$A" ] \
+[ "$(working_set_netns_name "wsnt-$WS_SUFFIX-alpha")" = "$A" ] \
     || fail "namespace name is not deterministic across calls"
 case "$A" in kuasar-ws-????????) ;; *) fail "unexpected namespace name format: $A" ;; esac
+
+# Reclaim exactly the names this run will use before any scenario runs:
+# leftovers of a killed prior run with a recycled suffix must be recovered
+# fail-closed here rather than colliding mid-test.
+for _ns in "$A" "$B" \
+    "$(working_set_netns_name "wsnt-$WS_SUFFIX-wrapper")" \
+    "$(working_set_netns_name "wsnt-$WS_SUFFIX-sigterm")"; do
+    working_set_netns_reclaim "$_ns" || fail "cannot reclaim pre-existing $_ns"
+done
 
 # ---- 2-4. wrapper contract: exit status + teardown, invoked as executable --
 # A fake smoke that records its namespace, so we can assert the wrapper tore
@@ -60,35 +100,35 @@ exit "${FAKE_EXIT:-0}"
 EOF
 chmod +x "$FAKE"
 
-RUNNER_NAME=wsnt-wrapper-a bash "$REPO_ROOT/test/perf/working-set-netns.sh" "$FAKE" \
+RUNNER_NAME="wsnt-$WS_SUFFIX-wrapper" bash "$REPO_ROOT/test/perf/working-set-netns.sh" "$FAKE" \
     >"$WORK/wrap-ok.out" 2>&1 \
     || fail "wrapper failed for a green smoke: $(cat "$WORK/wrap-ok.out")"
 grep -q FAKE-NETNS "$WORK/wrap-ok.out" \
     || fail "green smoke did not run inside the namespace"
 ok_netns="$(sed -n 's/^FAKE-NETNS=//p' "$WORK/wrap-ok.out")"
 rc=0
-FAKE_EXIT=42 RUNNER_NAME=wsnt-wrapper-a bash "$REPO_ROOT/test/perf/working-set-netns.sh" \
+FAKE_EXIT=42 RUNNER_NAME="wsnt-$WS_SUFFIX-wrapper" bash "$REPO_ROOT/test/perf/working-set-netns.sh" \
     "$FAKE" >/dev/null 2>&1 || rc=$?
 [ "$rc" -eq 42 ] \
     || fail "wrapper did not propagate smoke exit 42 (got $rc)"
 [ -n "$ok_netns" ] || fail "missing green-run netns inode"
 # both runs must have torn their namespace down (same deterministic name)
-netns_exists "$(working_set_netns_name wsnt-wrapper-a)" \
+netns_exists "$(working_set_netns_name "wsnt-$WS_SUFFIX-wrapper")" \
     && fail "wrapper left its namespace behind after exit"
 
 # smoke failure path also tears down: run once more exiting 1 and check
-RUNNER_NAME=wsnt-wrapper-a FAKE_EXIT=1 bash "$REPO_ROOT/test/perf/working-set-netns.sh" "$FAKE" \
+RUNNER_NAME="wsnt-$WS_SUFFIX-wrapper" FAKE_EXIT=1 bash "$REPO_ROOT/test/perf/working-set-netns.sh" "$FAKE" \
     >/dev/null 2>&1 && fail "wrapper swallowed smoke failure (exit 0)"
-netns_exists "$(working_set_netns_name wsnt-wrapper-a)" \
+netns_exists "$(working_set_netns_name "wsnt-$WS_SUFFIX-wrapper")" \
     && fail "wrapper left its namespace behind after failed smoke"
 
 # ---- 5. SIGTERM to the wrapper triggers teardown ---------------------------
 WRAPPER="$REPO_ROOT/test/perf/working-set-netns.sh"
-FAKE_SLEEP=30 FAKE_EXIT=0 RUNNER_NAME=wsnt-sigterm setsid bash "$WRAPPER" "$FAKE" \
+FAKE_SLEEP=30 FAKE_EXIT=0 RUNNER_NAME="wsnt-$WS_SUFFIX-sigterm" setsid bash "$WRAPPER" "$FAKE" \
     >/dev/null 2>&1 &
 WRAP_PID=$!
 # give the wrapper time to create its namespace, then TERM it
-sig_ns="$(working_set_netns_name wsnt-sigterm)"
+sig_ns="$(working_set_netns_name "wsnt-$WS_SUFFIX-sigterm")"
 for _ in $(seq 1 20); do netns_exists "$sig_ns" && break; sleep 0.1; done
 netns_exists "$sig_ns" || fail "wrapper did not create its namespace before TERM"
 kill -TERM -- -"$WRAP_PID" 2>/dev/null || kill -TERM "$WRAP_PID" 2>/dev/null || true
@@ -233,10 +273,12 @@ sleep 0.2
 ip netns add "$B"; track "$B"
 ip netns exec "$B" ip link set lo up
 ip netns exec "$B" setsid sleep 300 >/dev/null 2>&1 < /dev/null &
-# host-side stale TAP on the shared subnet, same name the smoke uses inside
-ip tuntap add dev kws0 mode tap
-ip address add 169.254.1.0/31 dev kws0
-ip link set kws0 up
+# host-side TAP on the shared subnet, with this run's unique name; the
+# reclaim of A must neither see nor touch it (same-subnet invisibility)
+HOST_TAP="kws-$WS_SUFFIX"
+create_host_tap "$HOST_TAP"
+ip address add 169.254.1.0/31 dev "$HOST_TAP"
+ip link set "$HOST_TAP" up
 sleep 0.3
 # both tenants live before the reclaim
 [ -n "$(ip netns pids "$A")" ] || fail "A's tenant was not running before reclaim"
@@ -246,15 +288,15 @@ netns_exists "$A" && fail "reclaim left A's namespace behind"
 [ -z "$(ip netns pids "$A" 2>/dev/null)" ] || fail "reclaim left A's tenant alive"
 netns_exists "$B" || fail "reclaiming runner A deleted runner B's namespace"
 [ -n "$(ip netns pids "$B")" ] || fail "reclaiming runner A killed runner B's process"
-ip link show dev kws0 >/dev/null 2>&1 || fail "reclaiming runner A deleted the host kws0"
+ip link show dev "$HOST_TAP" >/dev/null 2>&1 || fail "reclaiming runner A deleted the host TAP $HOST_TAP"
 working_set_netns_kill_all "$B"
 ip netns del "$B"
-ip link del kws0
+ip link del "$HOST_TAP"
 
 # ---- 10. host same-name same-subnet TAP invisible to namespaced runs --------
-ip tuntap add dev kws0 mode tap
-ip address add 169.254.1.0/31 dev kws0
-ip link set kws0 up
+create_host_tap "$HOST_TAP"
+ip address add 169.254.1.0/31 dev "$HOST_TAP"
+ip link set "$HOST_TAP" up
 ip netns add "$A"; track "$A"
 ip netns exec "$A" ip link set lo up
 ip netns exec "$A" ip tuntap add dev kws0 mode tap
@@ -265,10 +307,10 @@ case "$ns_route" in
     *dev\ kws0*) ;;
     *) fail "namespaced route does not use the namespaced TAP: $ns_route" ;;
 esac
-ip link show dev kws0 >/dev/null 2>&1 || fail "host kws0 vanished after namespaced run"
+ip link show dev "$HOST_TAP" >/dev/null 2>&1 || fail "host TAP $HOST_TAP vanished after namespaced run"
 working_set_netns_kill_all "$A"
 ip netns del "$A"
-ip link del kws0
+ip link del "$HOST_TAP"
 
 # ---- 11. flap keeps the /32 (working_set_reset_tap) --------------------------
 ip netns add "$A"; track "$A"
