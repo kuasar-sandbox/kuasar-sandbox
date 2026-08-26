@@ -160,21 +160,34 @@ jobs:
           # RUNNER_NAME, so recovery is exact-ownership: no other runner's
           # namespace, and no other host interface, is ever touched. This
           # stays self-contained because no checkout has happened yet.
+          #
+          # Fail-closed: kill (TERM -> bounded wait -> KILL -> bounded wait),
+          # verify the namespace holds no process, and only then delete its
+          # name. Deleting while a process still holds the namespace would
+          # orphan it beyond exact-name recovery; a survivor or a failed
+          # deletion must fail the job before any measurement runs.
           ws_netns="kuasar-ws-$(printf '%s' "$RUNNER_NAME" | sha256sum | cut -c1-8)"
           if "${privileged[@]}" ip netns list | awk '{print $1}' | grep -Fxq "$ws_netns"; then
             echo "recovering interrupted working-set namespace: $ws_netns"
             "${privileged[@]}" ip netns pids "$ws_netns" | while read -r pid; do
               [ -n "$pid" ] && "${privileged[@]}" kill -TERM "$pid" 2>/dev/null || true
             done
-            sleep 2
+            for _ in $(seq 1 20); do
+              [ -z "$("${privileged[@]}" ip netns pids "$ws_netns")" ] && break
+              sleep 0.5
+            done
             "${privileged[@]}" ip netns pids "$ws_netns" | while read -r pid; do
               [ -n "$pid" ] && "${privileged[@]}" kill -KILL "$pid" 2>/dev/null || true
             done
-            sleep 1
+            for _ in $(seq 1 10); do
+              [ -z "$("${privileged[@]}" ip netns pids "$ws_netns")" ] && break
+              sleep 0.5
+            done
             if [ -n "$("${privileged[@]}" ip netns pids "$ws_netns")" ]; then
-              echo "::warning::processes in $ws_netns survived KILL; job may lack a clean working-set network" >&2
+              echo "processes in $ws_netns survived TERM and KILL; refusing to continue" >&2
+              exit 1
             fi
-            "${privileged[@]}" ip netns del "$ws_netns" || true
+            "${privileged[@]}" ip netns del "$ws_netns"
           fi
           "${privileged[@]}" rm -f \
             /run/systemd/system/sandbox-runner@.service \
