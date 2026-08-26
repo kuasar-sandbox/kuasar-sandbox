@@ -108,31 +108,31 @@ else
     if ! real_ip tuntap add dev "$FLAP_TAP" mode tap >/dev/null 2>&1; then
         echo "working_set_tap_test: reset_tap check skipped (cannot create TAP)" >&2
     else
-    # TAP now exists: every later failure is a real test failure, and the
-    # trap guarantees the interface cannot leak even then.
-    trap 'rm -rf "$WORK"; real_ip link del "$FLAP_TAP" 2>/dev/null || true' EXIT
-    real_ip address add "$HOST_CIDR" dev "$FLAP_TAP" \
-        || fail "cannot configure $HOST_CIDR on $FLAP_TAP"
-    real_ip link set "$FLAP_TAP" up \
-        || fail "cannot bring $FLAP_TAP UP"
-    real_ip route add "$GUEST_IP/32" dev "$FLAP_TAP" src "${HOST_CIDR%/*}" \
-        || fail "cannot install the guest /32 on $FLAP_TAP"
+        # TAP now exists: every later failure is a real test failure, and the
+        # trap guarantees the interface cannot leak even then.
+        trap 'rm -rf "$WORK"; real_ip link del "$FLAP_TAP" 2>/dev/null || true' EXIT
+        real_ip address add "$HOST_CIDR" dev "$FLAP_TAP" \
+            || fail "cannot configure $HOST_CIDR on $FLAP_TAP"
+        real_ip link set "$FLAP_TAP" up \
+            || fail "cannot bring $FLAP_TAP UP"
+        real_ip route add "$GUEST_IP/32" dev "$FLAP_TAP" src "${HOST_CIDR%/*}" \
+            || fail "cannot install the guest /32 on $FLAP_TAP"
 
-    unset -f ip
+        unset -f ip
 
-    # Control: a plain down/up flap must withdraw the admin-installed /32
-    # (the kernel re-adds only the connected /31 on up). This is what gives
-    # the final assertion teeth — without it, a no-op reset_tap would pass.
-    real_ip link set "$FLAP_TAP" down
-    real_ip link set "$FLAP_TAP" up
-    if real_ip -o route show dev "$FLAP_TAP" | grep -q "^$GUEST_IP "; then
-        fail "plain flap did not withdraw the guest /32; final check has no teeth"
-    fi
+        # Control: a plain down/up flap must withdraw the admin-installed /32
+        # (the kernel re-adds only the connected /31 on up). This is what gives
+        # the final assertion teeth — without it, a no-op reset_tap would pass.
+        real_ip link set "$FLAP_TAP" down
+        real_ip link set "$FLAP_TAP" up
+        if real_ip -o route show dev "$FLAP_TAP" | grep -q "^$GUEST_IP "; then
+            fail "plain flap did not withdraw the guest /32; final check has no teeth"
+        fi
 
-    working_set_reset_tap "$FLAP_TAP" "$HOST_CIDR" "${HOST_CIDR%/*}" "$GUEST_IP"
+        working_set_reset_tap "$FLAP_TAP" "$HOST_CIDR" "${HOST_CIDR%/*}" "$GUEST_IP"
 
-    real_ip -o route show dev "$FLAP_TAP" | grep -q "^$GUEST_IP " \
-        || fail "guest /32 route missing after working_set_reset_tap: $(real_ip -o route show dev "$FLAP_TAP")"
+        real_ip -o route show dev "$FLAP_TAP" | grep -q "^$GUEST_IP " \
+            || fail "guest /32 route missing after working_set_reset_tap: $(real_ip -o route show dev "$FLAP_TAP")"
     fi
 fi
 

@@ -311,7 +311,12 @@ working_set_netns_kill_all "$B"
 ip netns del "$B"
 ip link del "$HOST_TAP"
 
-# ---- 10. host same-name same-subnet TAP invisible to namespaced runs --------
+# ---- 10. same-subnet host TAP invisible to namespaced runs ------------------
+# The host TAP carries the shared working-set subnet under this run's unique
+# name; a namespaced kws0 must route over its own stack regardless. (A host
+# TAP literally named kws0 would be un-reclaimable state — see the owner
+# identity above — and name-level invisibility is guaranteed by the netns
+# boundary itself.)
 create_host_tap "$HOST_TAP"
 ip address add 169.254.1.0/31 dev "$HOST_TAP"
 ip link set "$HOST_TAP" up

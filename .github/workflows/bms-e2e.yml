@@ -201,7 +201,9 @@ jobs:
           # a failed query means "unknown", never "empty"; a survivor, an
           # enumeration failure, or a failed deletion fails the job before
           # any measurement runs.
-          ws_netns="kuasar-ws-$(printf '%s' "$RUNNER_NAME" | sha256sum | cut -c1-8)"
+          # Same derivation as the wrapper (including its "local" fallback), so
+          # the reset always reclaims exactly the namespace the wrapper creates.
+          ws_netns="kuasar-ws-$(printf '%s' "${RUNNER_NAME:-local}" | sha256sum | cut -c1-8)"
           ws_pids() {
             local output
             if ! output="$("${privileged[@]}" ip netns pids "$ws_netns" 2>&1)"; then
