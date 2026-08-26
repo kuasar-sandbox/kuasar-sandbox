@@ -39,18 +39,6 @@ WS_LOCK="/tmp/wsnt-$WS_OWNER_HASH.lock"
 exec 9>"$WS_LOCK"
 flock -w 60 9 || fail "another working_set_netns_test run for owner $WS_OWNER holds $WS_LOCK"
 
-# EEXIST on the deterministic probe name is a SIGKILLed prior run's
-# leftover, not a missing capability: reclaim the exact name and retry;
-# only a second failure is a genuine capability skip.
-if ! ip netns add "$WS_PROBE" >/dev/null 2>&1; then
-    ip netns del "$WS_PROBE" 2>/dev/null || true
-    if ! ip netns add "$WS_PROBE" >/dev/null 2>&1; then
-        echo "working_set_netns_test: skipped (needs root network namespaces)" >&2
-        exit 0
-    fi
-fi
-ip netns del "$WS_PROBE"
-
 # shellcheck source=test/perf/working-set-netns.sh
 WORKING_SET_NETNS_SOURCED=1
 . "$REPO_ROOT/test/perf/working-set-netns.sh"
@@ -58,17 +46,20 @@ WORKING_SET_NETNS_SOURCED=1
 CLEANED_NETNSES=()
 CLEANED_TAPS=()
 cleanup() {
+    # Best-effort, but never weaker than the production teardown invariant:
+    # a raw kill+del here could delete the bind name while a KILL-surviving
+    # tenant (e.g. D-state) is still inside, producing an anonymous orphan
+    # that exact-name recovery can never find again. Delegating keeps every
+    # failure mode NAMED and reclaimable; teardown always returns 0, so the
+    # test's own exit status is never disturbed.
     set +e
     for tap in "${CLEANED_TAPS[@]}"; do
         ip link del "$tap" 2>/dev/null
     done
     for netns in "${CLEANED_NETNSES[@]}"; do
-        ip netns pids "$netns" 2>/dev/null | while read -r pid; do
-            [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null
-        done
-        ip netns del "$netns" 2>/dev/null
+        working_set_netns_teardown "$netns"
     done
-    rm -rf "$WORK"
+    rm -rf -- "$WORK"
 }
 trap cleanup EXIT
 trap 'exit 129' HUP
@@ -84,6 +75,31 @@ create_host_tap() { # $1=name — created TAPs are always tracked for cleanup
 }
 
 netns_exists() { ip netns list | awk '{print $1}' | grep -Fxq "$1"; }
+
+# Capability probe. A fresh `ip netns add` is the support test. An EEXIST on
+# the deterministic probe name is a killed prior run's OWNED leftover: it
+# must go through the fail-closed production reclaim — never a raw delete,
+# and never a silent capability skip that would turn an unreclaimable owned
+# resource into a false green. A leftover also PROVES netns support, so a
+# re-add failure after a successful reclaim is a failure, not a skip.
+probe_netns_support() {
+    local existed=0
+    if netns_exists "$WS_PROBE"; then
+        existed=1
+        working_set_netns_reclaim "$WS_PROBE"   # fatal on any failure: FAIL, not skip
+    fi
+    if ! ip netns add "$WS_PROBE" >/dev/null 2>&1; then
+        if [ "$existed" = 1 ]; then
+            fail "cannot recreate probe namespace $WS_PROBE after reclaim (netns support was demonstrated by the leftover)"
+        fi
+        return 1   # no owned leftover and add fails: genuine capability skip
+    fi
+    ip netns del "$WS_PROBE"
+}
+if ! probe_netns_support; then
+    echo "working_set_netns_test: skipped (needs root network namespaces)" >&2
+    exit 0
+fi
 
 # ---- 1. deterministic naming ----------------------------------------------
 A="$(working_set_netns_name "wsnt-$WS_OWNER_HASH-alpha")"
@@ -384,5 +400,66 @@ esac
 # and no namespace may have been created before the re-exec
 netns_exists "$(working_set_netns_name local)" \
     && fail "non-root wrapper mutated namespaces before privilege escalation"
+
+# ---- 13. probe: owned collision is reclaimed, never a skip ------------------
+# A SIGKILLed prior run's probe leftover (with a live tenant) must be
+# reclaimed fail-closed and the suite must continue, not skip.
+ip netns add "$WS_PROBE" >/dev/null 2>&1 || fail "cannot create probe leftover"
+ip netns exec "$WS_PROBE" setsid sleep 300 >/dev/null 2>&1 < /dev/null 9>&- &
+sleep 0.3
+probe_netns_support || fail "probe treated an owned leftover as a capability skip"
+netns_exists "$WS_PROBE" && fail "probe collision left the namespace behind"
+
+# reclaim failure inside the probe is a FAIL, never a skip: an occupied
+# probe that survives TERM+KILL must fatal (subshell) without deleting.
+DELS_D="$WORK/del-d.calls"
+rm -f "$DELS_D"
+if (
+    ip() {
+        case "$*" in
+            "netns list"*) echo "$WS_PROBE (id: 0)"; command ip netns list ;;
+            *"netns pids $WS_PROBE"*) echo 424242 ;;
+            *"netns del $WS_PROBE"*) echo called >>"$DELS_D"; exit 0 ;;
+            *) command ip "$@" ;;
+        esac
+    }
+    probe_netns_support
+) </dev/null >/dev/null 2>&1; then
+    fail "probe succeeded although the owned leftover was unreclaimable"
+fi
+[ ! -e "$DELS_D" ] || fail "probe deleted an unreclaimable leftover's name"
+
+# genuine capability lack (no leftover, add always fails) is the only skip:
+if (
+    ip() {
+        case "$*" in
+            "netns add $WS_PROBE"*) exit 1 ;;
+            *) command ip "$@" ;;
+        esac
+    }
+    probe_netns_support
+) </dev/null >/dev/null 2>&1; then
+    fail "probe reported support although netns add always fails"
+fi
+
+# ---- 14. teardown with a surviving tenant stays best-effort, keeps the name -
+# The cleanup path delegates to teardown; an unkillable tenant must not
+# delete the deterministic name (it stays reclaimable by the next run).
+DELS_E="$WORK/del-e.calls"
+rm -f "$DELS_E"
+if ! (
+    ip() {
+        case "$*" in
+            "netns list"*) echo "wsnt-tsurv (id: 0)"; command ip netns list ;;
+            *"netns pids wsnt-tsurv"*) echo 424242 ;;
+            *"netns del wsnt-tsurv"*) echo called >>"$DELS_E"; exit 0 ;;
+            *) command ip "$@" ;;
+        esac
+    }
+    working_set_netns_teardown wsnt-tsurv
+) </dev/null >/dev/null 2>&1; then
+    fail "teardown returned non-zero on a surviving tenant (must stay best-effort)"
+fi
+[ ! -e "$DELS_E" ] || fail "teardown deleted the namespace name despite a survivor"
 
 echo "working_set_netns_test: PASS"
