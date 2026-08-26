@@ -146,6 +146,75 @@ if (
     fail "reclaim succeeded although namespace deletion failed"
 fi
 
+# ---- 8a. initial enumeration failure: reclaim fails closed, no delete -------
+# `ip netns pids` failing must never be read as "namespace is empty"; the
+# name must survive for the next reset.
+DELS_A="$WORK/del-a.calls"
+rm -f "$DELS_A"
+if (
+    ip() {
+        case "$*" in
+            "netns list"*) echo "wsnt-pidsfail (id: 0)"; command ip netns list ;;
+            *"netns pids wsnt-pidsfail"*) echo "Cannot open network namespace" >&2; exit 1 ;;
+            *"netns del wsnt-pidsfail"*) echo called >>"$DELS_A"; exit 0 ;;
+            *) command ip "$@" ;;
+        esac
+    }
+    working_set_netns_reclaim wsnt-pidsfail
+) </dev/null >/dev/null 2>&1; then
+    fail "reclaim succeeded although the initial pids enumeration failed"
+fi
+[ ! -e "$DELS_A" ] || fail "reclaim deleted the namespace name despite failed enumeration"
+
+# ---- 8b. post-KILL verification failure: reclaim fails closed, no delete ----
+# First enumeration succeeds (non-empty), every later query fails: the wait
+# loop and the final verify must both fail closed instead of timing out into
+# a delete.
+DELS_B="$WORK/del-b.calls"
+rm -f "$DELS_B"
+if (
+    WSNT_CALLS=0
+    ip() {
+        case "$*" in
+            "netns list"*) echo "wsnt-vfyfail (id: 0)"; command ip netns list ;;
+            *"netns pids wsnt-vfyfail"*)
+                WSNT_CALLS=$((WSNT_CALLS + 1))
+                if [ "$WSNT_CALLS" -le 1 ]; then
+                    echo 424242
+                    exit 0
+                fi
+                echo "Cannot open network namespace" >&2
+                exit 1
+                ;;
+            *"netns del wsnt-vfyfail"*) echo called >>"$DELS_B"; exit 0 ;;
+            *) command ip "$@" ;;
+        esac
+    }
+    working_set_netns_reclaim wsnt-vfyfail
+) </dev/null >/dev/null 2>&1; then
+    fail "reclaim succeeded although post-TERM/KILL verification failed"
+fi
+[ ! -e "$DELS_B" ] || fail "reclaim deleted the namespace name despite failed verification"
+
+# teardown with an unreliable query stays best-effort and keeps the name:
+# it must return 0 (never touch a caller's exit status) and must not delete.
+DELS_C="$WORK/del-c.calls"
+rm -f "$DELS_C"
+if ! (
+    ip() {
+        case "$*" in
+            "netns list"*) echo "wsnt-tdfail (id: 0)"; command ip netns list ;;
+            *"netns pids wsnt-tdfail"*) echo "Cannot open network namespace" >&2; exit 1 ;;
+            *"netns del wsnt-tdfail"*) echo called >>"$DELS_C"; exit 0 ;;
+            *) command ip "$@" ;;
+        esac
+    }
+    working_set_netns_teardown wsnt-tdfail
+) </dev/null >/dev/null 2>&1; then
+    fail "teardown returned non-zero on enumeration failure (must stay best-effort)"
+fi
+[ ! -e "$DELS_C" ] || fail "teardown deleted the namespace name despite failed enumeration"
+
 # ---- 9. reclaim A spares a concurrently live B and the host TAP ------------
 # Both namespaces must exist with live processes for this to prove anything:
 # reclaim(A) must kill A's tenant and delete only A, leaving B and its tenant

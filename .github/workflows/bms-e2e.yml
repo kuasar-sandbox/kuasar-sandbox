@@ -196,26 +196,42 @@ jobs:
           # Fail-closed: kill (TERM -> bounded wait -> KILL -> bounded wait),
           # verify the namespace holds no process, and only then delete its
           # name. Deleting while a process still holds the namespace would
-          # orphan it beyond exact-name recovery; a survivor or a failed
-          # deletion must fail the job before any measurement runs.
+          # orphan it beyond exact-name recovery. An "empty" verdict is only
+          # ever drawn from a SUCCESSFUL `ip netns pids` returning nothing —
+          # a failed query means "unknown", never "empty"; a survivor, an
+          # enumeration failure, or a failed deletion fails the job before
+          # any measurement runs.
           ws_netns="kuasar-ws-$(printf '%s' "$RUNNER_NAME" | sha256sum | cut -c1-8)"
+          ws_pids() {
+            local output
+            if ! output="$("${privileged[@]}" ip netns pids "$ws_netns" 2>&1)"; then
+              echo "cannot enumerate processes in $ws_netns: $output" >&2
+              return 1
+            fi
+            printf '%s\n' "$output"
+          }
           if "${privileged[@]}" ip netns list | awk '{print $1}' | grep -Fxq "$ws_netns"; then
             echo "recovering interrupted working-set namespace: $ws_netns"
-            "${privileged[@]}" ip netns pids "$ws_netns" | while read -r pid; do
+            if ! ws_out="$(ws_pids)"; then exit 1; fi
+            while read -r pid; do
               [ -n "$pid" ] && "${privileged[@]}" kill -TERM "$pid" 2>/dev/null || true
-            done
+            done <<<"$ws_out"
             for _ in $(seq 1 20); do
-              [ -z "$("${privileged[@]}" ip netns pids "$ws_netns")" ] && break
+              if ! ws_out="$(ws_pids)"; then exit 1; fi
+              [ -z "$ws_out" ] && break
               sleep 0.5
             done
-            "${privileged[@]}" ip netns pids "$ws_netns" | while read -r pid; do
+            if ! ws_out="$(ws_pids)"; then exit 1; fi
+            while read -r pid; do
               [ -n "$pid" ] && "${privileged[@]}" kill -KILL "$pid" 2>/dev/null || true
-            done
+            done <<<"$ws_out"
             for _ in $(seq 1 10); do
-              [ -z "$("${privileged[@]}" ip netns pids "$ws_netns")" ] && break
+              if ! ws_out="$(ws_pids)"; then exit 1; fi
+              [ -z "$ws_out" ] && break
               sleep 0.5
             done
-            if [ -n "$("${privileged[@]}" ip netns pids "$ws_netns")" ]; then
+            if ! ws_out="$(ws_pids)"; then exit 1; fi
+            if [ -n "$ws_out" ]; then
               echo "processes in $ws_netns survived TERM and KILL; refusing to continue" >&2
               exit 1
             fi

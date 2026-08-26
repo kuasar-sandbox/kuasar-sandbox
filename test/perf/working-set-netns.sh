@@ -48,37 +48,69 @@ NETNS_NAME="$(working_set_netns_name "${RUNNER_NAME:-local}")"
 TERM_WAIT_SECONDS="${WORKING_SET_NETNS_TERM_WAIT:-10}"
 KILL_WAIT_SECONDS="${WORKING_SET_NETNS_KILL_WAIT:-5}"
 
+# Enumerate the PIDs inside a namespace. Returns 1 (printing nothing) when
+# `ip netns pids` itself fails: an empty namespace may only ever be concluded
+# from a SUCCESSFUL empty query. Treating a failed query as "no processes"
+# would let the caller delete the namespace name while a holder may still
+# exist, orphaning it beyond exact-name recovery.
+working_set_netns_pids() { # $1=netns name; prints PIDs, one per line
+    local netns="$1" output
+    if ! output="$(ip netns pids "$netns" 2>&1)"; then
+        echo "working-set-netns: cannot enumerate processes in $netns: $output" >&2
+        return 1
+    fi
+    printf '%s\n' "$output"
+}
+
+# True only when the namespace was positively confirmed empty: the query
+# succeeded AND produced no PID. A failed query is "unknown", not "empty".
+working_set_netns_empty() { # $1=netns name
+    local netns="$1" output
+    if ! output="$(ip netns pids "$netns" 2>&1)"; then
+        echo "working-set-netns: cannot enumerate processes in $netns: $output" >&2
+        return 1
+    fi
+    [ -z "$output" ]
+}
+
 # Kill every process inside the namespace, then verify it is empty. Any
-# survivor means the namespace cannot be reclaimed safely; deleting the name
-# while processes hold the namespace would orphan it beyond exact-name
-# recovery, so the caller must fail instead.
+# survivor — or any inability to enumerate processes — means the namespace
+# cannot be reclaimed safely; deleting the name while processes hold the
+# namespace would orphan it beyond exact-name recovery, so the caller must
+# fail instead.
 working_set_netns_kill_all() { # $1=netns name
-    local netns="$1" pid deadline
+    local netns="$1" pid deadline pids_out
     local -a pids=()
 
-    mapfile -t pids < <(ip netns pids "$netns" 2>/dev/null)
+    if ! pids_out="$(working_set_netns_pids "$netns")"; then
+        return 1
+    fi
+    mapfile -t pids <<<"$pids_out"
     for pid in "${pids[@]}"; do
         [ -n "$pid" ] && kill -TERM "$pid" 2>/dev/null || true
     done
 
     deadline=$((SECONDS + TERM_WAIT_SECONDS))
     while [ "$SECONDS" -lt "$deadline" ]; do
-        [ -z "$(ip netns pids "$netns" 2>/dev/null)" ] && return 0
+        working_set_netns_empty "$netns" && return 0
         sleep 0.5
     done
 
-    mapfile -t pids < <(ip netns pids "$netns" 2>/dev/null)
+    if ! pids_out="$(working_set_netns_pids "$netns")"; then
+        return 1
+    fi
+    mapfile -t pids <<<"$pids_out"
     for pid in "${pids[@]}"; do
         [ -n "$pid" ] && kill -KILL "$pid" 2>/dev/null || true
     done
 
     deadline=$((SECONDS + KILL_WAIT_SECONDS))
     while [ "$SECONDS" -lt "$deadline" ]; do
-        [ -z "$(ip netns pids "$netns" 2>/dev/null)" ] && return 0
+        working_set_netns_empty "$netns" && return 0
         sleep 0.5
     done
 
-    [ -z "$(ip netns pids "$netns" 2>/dev/null)" ]
+    working_set_netns_empty "$netns"
 }
 
 # Fail-closed: used before the smoke starts. A namespace that cannot be
@@ -93,7 +125,7 @@ working_set_netns_reclaim() { # $1=netns name
     fi
     echo "working-set-netns: reclaiming leftover namespace $netns" >&2
     working_set_netns_kill_all "$netns" \
-        || fatal "processes in $netns survived TERM and KILL; refusing to measure"
+        || fatal "cannot confirm $netns is empty (survivor or enumeration failure); refusing to measure"
     ip netns del "$netns" \
         || fatal "cannot delete leftover namespace $netns"
 }
