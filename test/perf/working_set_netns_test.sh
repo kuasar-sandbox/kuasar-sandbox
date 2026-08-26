@@ -76,12 +76,20 @@ create_host_tap() { # $1=name — created TAPs are always tracked for cleanup
 
 netns_exists() { ip netns list | awk '{print $1}' | grep -Fxq "$1"; }
 
-# Capability probe. A fresh `ip netns add` is the support test. An EEXIST on
-# the deterministic probe name is a killed prior run's OWNED leftover: it
-# must go through the fail-closed production reclaim — never a raw delete,
-# and never a silent capability skip that would turn an unreclaimable owned
-# resource into a false green. A leftover also PROVES netns support, so a
-# re-add failure after a successful reclaim is a failure, not a skip.
+# Capability probe, with an explicit return contract:
+#   return 0  — netns support confirmed and the probe fully cleaned up
+#   return 1  — GENUINE capability absence only (the one skip path)
+#   fail      — any owned-collision, operational, or cleanup failure
+# The caller runs this inside `if !`, which suppresses set -e for the whole
+# call, so every failure inside must be handled explicitly — never let a
+# command status fall through to the return value.
+#
+# State machine: no leftover + add ok + del ok          → 0
+#                no leftover + add fails                → 1 (capability skip)
+#                leftover + reclaim ok + re-add ok + del ok → 0
+#                leftover reclaim fails                 → FAIL (never skip)
+#                leftover + reclaim ok + re-add fails   → FAIL (never skip)
+#                add ok + final del fails               → FAIL (never skip)
 probe_netns_support() {
     local existed=0
     if netns_exists "$WS_PROBE"; then
@@ -94,7 +102,13 @@ probe_netns_support() {
         fi
         return 1   # no owned leftover and add fails: genuine capability skip
     fi
-    ip netns del "$WS_PROBE"
+    # The add succeeded, so netns support is PROVEN: a delete failure here is
+    # a cleanup failure, not a capability statement. Without this explicit
+    # check the del status would become the function's return value and the
+    # caller would misread it as "unsupported" — a false-green skip.
+    if ! ip netns del "$WS_PROBE"; then
+        fail "cannot delete fresh probe namespace $WS_PROBE (netns support was demonstrated by the successful add)"
+    fi
 }
 if ! probe_netns_support; then
     echo "working_set_netns_test: skipped (needs root network namespaces)" >&2
@@ -429,11 +443,14 @@ if (
 fi
 [ ! -e "$DELS_D" ] || fail "probe deleted an unreclaimable leftover's name"
 
-# genuine capability lack (no leftover, add always fails) is the only skip:
+# genuine capability lack (no leftover, add always fails) is the only skip.
+# (mocks use `return`, not `exit`: these ip calls run directly in condition
+# contexts, where an `exit` inside the function would kill the whole test
+# subshell before the assertion could observe the probe's own return path)
 if (
     ip() {
         case "$*" in
-            "netns add $WS_PROBE"*) exit 1 ;;
+            "netns add $WS_PROBE"*) return 1 ;;
             *) command ip "$@" ;;
         esac
     }
@@ -441,6 +458,46 @@ if (
 ) </dev/null >/dev/null 2>&1; then
     fail "probe reported support although netns add always fails"
 fi
+
+# leftover reclaimed cleanly but the re-add fails: FAIL, never a skip
+# (the leftover's existence demonstrated netns support).
+probe_rc=0
+probe_out="$( (
+    ip() {
+        case "$*" in
+            "netns list"*) echo "$WS_PROBE (id: 0)"; command ip netns list ;;
+            *"netns pids $WS_PROBE"*) : ;;
+            "netns del $WS_PROBE"*) return 0 ;;
+            "netns add $WS_PROBE"*) return 1 ;;
+            *) command ip "$@" ;;
+        esac
+    }
+    probe_netns_support
+) </dev/null 2>&1 )" || probe_rc=$?
+[ "$probe_rc" -ne 0 ] || fail "probe succeeded although the post-reclaim re-add failed"
+case "$probe_out" in
+    *FAIL*) ;;
+    *) fail "post-reclaim re-add failure was misread as a capability skip: $probe_out" ;;
+esac
+
+# fresh probe created but the final delete fails: FAIL, never a skip —
+# a cleanup failure is not a capability statement.
+probe_rc=0
+probe_out="$( (
+    ip() {
+        case "$*" in
+            "netns add $WS_PROBE"*) return 0 ;;
+            "netns del $WS_PROBE"*) echo "delete failed" >&2; return 1 ;;
+            *) command ip "$@" ;;
+        esac
+    }
+    probe_netns_support
+) </dev/null 2>&1 )" || probe_rc=$?
+[ "$probe_rc" -ne 0 ] || fail "probe succeeded although the fresh probe delete failed"
+case "$probe_out" in
+    *FAIL*) ;;
+    *) fail "probe delete failure was misread as a capability skip: $probe_out" ;;
+esac
 
 # ---- 14. teardown with a surviving tenant stays best-effort, keeps the name -
 # The cleanup path delegates to teardown; an unkillable tenant must not
