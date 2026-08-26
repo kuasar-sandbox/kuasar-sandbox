@@ -9,7 +9,8 @@ wrapper,并从项目主仓 `main` 引用 `.github/workflows/bms-entry.yml`;该�
 
 BMS 有两个明确模式:
 
-- `source`:验证一个仓的 PR integration commit 与其余仓当前 `main` 的组合;
+- `source`:验证触发仓的 PR integration commit、可选 exact companion PR 集合与其余仓
+  当前 `main` 的组合;
 - `exact-assets`:验证 aggregate workflow 已下载并校验的发布 archive,不重新构建。
 
 ## 2. Source 模式
@@ -23,17 +24,47 @@ workflow。同仓非 draft PR 自动准入;fork PR 由 GitHub-hosted 控制 job 
 事件自动运行完整 BMS。外部 fork、冲突或已经变化的事件拒绝准入。
 
 其余五仓 revision 通过一次 GitHub GraphQL 查询解析,候选仓 revision 替换为已准入的
-integration commit。source 模式没有 `main` push 或手工 dispatch 入口。
+integration commit。普通 PR 不声明 companion,行为与单候选模式相同。不能由任一仓
+`main` 单独编译的原子跨仓变更可在两个 PR body 中互相声明:
+
+```text
+<!-- kuasar-bms-companions
+kuasar-sandbox/orchestrator#227
+-->
+```
+
+marker 最多出现一次,其中每个非空行必须是允许仓库的 `owner/repository#PR`。同一仓只能
+出现一次,不能引用触发仓自身,空块、重复块和未闭合块均拒绝准入。companion 必须保有
+`refs/pull/N/merge`,其 integration 的第一 parent 必须等于该仓当前 `main`,第二 parent 必须等于
+`refs/pull/N/head`,且该 head 必须仍是组织仓某个 branch 的 head。这样 fork 只能作为已通过既有
+成员准入的触发 PR,不能经 companion 间接进入特权 runner。每个 companion 还必须在自身
+Ready 状态下运行 BMS 并取得自己的 exact-head status;一条 primary status 不能替代另一个 PR
+的门禁。编辑 PR body 不属于组件 wrapper 订阅的事件,因此修改 marker 后需 push 新 head,或执行
+draft → ready 触发新运行。准备合入时必须把 status 所链接 run 的 `source-set.tsv` 与当前 marker
+逐项比较;body 在该 run 之后发生过 marker 变更时,即使 commit status 仍显示 success 也视为失效。
+
+GitHub-hosted admission 使用仅限六仓 `Contents: read` 的短期 App token,通过 PR refs、main ref、
+commit parents 与 `branches-where-head` 把每个 companion 解析成 PR number、candidate/base/head
+SHA。自托管 job 不信任 PR body 原文,只接收 admission 输出的已解析记录,在执行候选代码前
+重新查询全部 refs/commit,按 exact integration SHA 组装源码并撤销 token。结束控制 job第三次
+查询全部记录;任一 merge ref 消失、main/head/integration SHA 变化或 head 不再属于组织仓 branch,
+触发 PR 的 exact-head status 均失败。
+
+status 仍只写触发 PR 的 integration commit。跨仓变更需要各 PR 互相声明并各运行一次,从而
+分别覆盖各组件拥有的 E2E 入口并取得各自 status。合入第一个 PR 后,后续 PR 删除已合入的
+companion marker,再以新的 sibling `main` 重跑。该流程只冻结源码验证集合,不增加产品版本
+协商、兼容 alias 或临时 runtime gate。source 模式仍没有 `main` push 或手工 dispatch 入口。
 
 可复用 workflow 验证:
 
 1. 控制面与执行实现都解析自 `kuasar-sandbox/kuasar-sandbox` 的 `main`,运行中记录解析后的完整 SHA;
 2. `pull_request_target` event、当前 PR 与 candidate/base/head 输入完全一致;
-3. candidate 是以 base/head 为两个父提交的 integration commit;
-4. 当前开放 PR 的 base/head/merge commit 在执行前与结束后均未变化;
+3. candidate 和所有 companion 均是以各自 base/head 为两个父提交的 integration commit;
+4. 当前开放 PR 与全部 companion refs 的 base/head/merge commit 在执行前与结束后均未变化;
 5. fork 准入 token 只请求组织 `Members: read`,仅存在于 GitHub-hosted 控制 job;
 6. 自托管 job 的 `GITHUB_TOKEN` 只有 `Contents: read` 和 `Pull requests: read`;
-7. source App token 只有六仓 `Contents: read`,并在执行候选代码前撤销。
+7. companion/source App token 只有六仓 `Contents: read`,其中 runner 上的 token 在执行候选
+   代码前撤销。
 
 结束控制 job 在 GitHub-hosted runner 再次查询 PR。只有 BMS 成功且当前 integration commit
 仍与准入值完全一致时,它才把同一个 `kuasar/bms-exact-head` 状态置为 `success`;测试失败、
@@ -144,6 +175,7 @@ base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
 每次 BMS 上传 `ci-metadata-<run>-<attempt>`。source 模式通常包含:
 
 - `run.tsv`:模式、候选仓、PR 与 candidate/base/head SHA;
+- `source-set.tsv`:触发 candidate 与所有 companion 的 PR、candidate/base/head SHA 和角色;
 - `revisions.tsv`:platform 测试框架与五组件的精确 revision;
 - `source-cache.tsv`:源码缓存命中和摘要;
 - `native-cache.tsv`:native key、命中和耗时;
