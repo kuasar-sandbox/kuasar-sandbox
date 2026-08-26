@@ -17,17 +17,31 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 0
 fi
 
-WORK="$(mktemp -d /tmp/working-set-netns-test-XXXXXX)"
-# Every live resource this test creates (capability probe, namespaces, host
-# TAPs) is derived from this unique per-run suffix, so a concurrent run can
-# neither see nor delete this run's resources, and leftovers from a killed
-# run cannot poison a later one by name collision.
-WS_SUFFIX="${WORK##*-}"
-WS_PROBE="wsnt-$WS_SUFFIX-probe"
+WORK="$(mktemp -d /tmp/working-set-netns-test-XXXXXX)"  # scratch files only
 
-# An EEXIST on the probe only means a recycled mktemp suffix from a killed
-# earlier run — namespaces ARE supported in that case. Reclaim the exact
-# name and retry; only a second failure is a genuine capability skip.
+# ---- test-owned resource identity ------------------------------------------
+# Live resources use a DETERMINISTIC owner identity — RUNNER_NAME in CI,
+# hostname locally — exactly like the production wrapper's runner-owned
+# namespaces. A SIGKILLed run executes no trap at all, so the only reliable
+# recovery is the NEXT run deriving the same names and reclaiming them at
+# startup. Random per-run names would leak the killed run's namespaces and
+# host TAP forever: nothing else can ever derive them.
+WS_OWNER="${RUNNER_NAME:-$(hostname)}"
+WS_OWNER_HASH="$(printf '%s' "$WS_OWNER" | sha256sum | cut -c1-8)"
+WS_PROBE="wsnt-$WS_OWNER_HASH-probe"
+HOST_TAP="kws-$WS_OWNER_HASH"
+WS_LOCK="/tmp/wsnt-$WS_OWNER_HASH.lock"
+
+# Deterministic names are shared state, so same-owner runs must serialize:
+# without the lock two instances would reclaim each other's namespaces
+# mid-run. flock is released automatically when the process dies (including
+# SIGKILL); the wait bound only covers transient holders.
+exec 9>"$WS_LOCK"
+flock -w 60 9 || fail "another working_set_netns_test run for owner $WS_OWNER holds $WS_LOCK"
+
+# EEXIST on the deterministic probe name is a SIGKILLed prior run's
+# leftover, not a missing capability: reclaim the exact name and retry;
+# only a second failure is a genuine capability skip.
 if ! ip netns add "$WS_PROBE" >/dev/null 2>&1; then
     ip netns del "$WS_PROBE" 2>/dev/null || true
     if ! ip netns add "$WS_PROBE" >/dev/null 2>&1; then
@@ -72,21 +86,26 @@ create_host_tap() { # $1=name — created TAPs are always tracked for cleanup
 netns_exists() { ip netns list | awk '{print $1}' | grep -Fxq "$1"; }
 
 # ---- 1. deterministic naming ----------------------------------------------
-A="$(working_set_netns_name "wsnt-$WS_SUFFIX-alpha")"
-B="$(working_set_netns_name "wsnt-$WS_SUFFIX-beta")"
+A="$(working_set_netns_name "wsnt-$WS_OWNER_HASH-alpha")"
+B="$(working_set_netns_name "wsnt-$WS_OWNER_HASH-beta")"
 [ "$A" != "$B" ] || fail "two runners derived the same namespace name"
-[ "$(working_set_netns_name "wsnt-$WS_SUFFIX-alpha")" = "$A" ] \
+[ "$(working_set_netns_name "wsnt-$WS_OWNER_HASH-alpha")" = "$A" ] \
     || fail "namespace name is not deterministic across calls"
 case "$A" in kuasar-ws-????????) ;; *) fail "unexpected namespace name format: $A" ;; esac
 
-# Reclaim exactly the names this run will use before any scenario runs:
-# leftovers of a killed prior run with a recycled suffix must be recovered
-# fail-closed here rather than colliding mid-test.
+# ---- startup recovery of test-owned leftovers ------------------------------
+# Reclaim exactly the names this run will use: a SIGKILLed prior same-owner
+# run cannot run any trap, so its namespaces (tenants included) and host TAP
+# are recovered here, fail-closed, by derivation. Nothing outside these
+# exact names is ever touched.
 for _ns in "$A" "$B" \
-    "$(working_set_netns_name "wsnt-$WS_SUFFIX-wrapper")" \
-    "$(working_set_netns_name "wsnt-$WS_SUFFIX-sigterm")"; do
+    "$(working_set_netns_name "wsnt-$WS_OWNER_HASH-wrapper")" \
+    "$(working_set_netns_name "wsnt-$WS_OWNER_HASH-sigterm")"; do
     working_set_netns_reclaim "$_ns" || fail "cannot reclaim pre-existing $_ns"
 done
+if ip link show dev "$HOST_TAP" >/dev/null 2>&1; then
+    ip link del "$HOST_TAP" || fail "cannot delete leftover host TAP $HOST_TAP"
+fi
 
 # ---- 2-4. wrapper contract: exit status + teardown, invoked as executable --
 # A fake smoke that records its namespace, so we can assert the wrapper tore
@@ -100,35 +119,35 @@ exit "${FAKE_EXIT:-0}"
 EOF
 chmod +x "$FAKE"
 
-RUNNER_NAME="wsnt-$WS_SUFFIX-wrapper" bash "$REPO_ROOT/test/perf/working-set-netns.sh" "$FAKE" \
+RUNNER_NAME="wsnt-$WS_OWNER_HASH-wrapper" bash "$REPO_ROOT/test/perf/working-set-netns.sh" "$FAKE" \
     >"$WORK/wrap-ok.out" 2>&1 \
     || fail "wrapper failed for a green smoke: $(cat "$WORK/wrap-ok.out")"
 grep -q FAKE-NETNS "$WORK/wrap-ok.out" \
     || fail "green smoke did not run inside the namespace"
 ok_netns="$(sed -n 's/^FAKE-NETNS=//p' "$WORK/wrap-ok.out")"
 rc=0
-FAKE_EXIT=42 RUNNER_NAME="wsnt-$WS_SUFFIX-wrapper" bash "$REPO_ROOT/test/perf/working-set-netns.sh" \
+FAKE_EXIT=42 RUNNER_NAME="wsnt-$WS_OWNER_HASH-wrapper" bash "$REPO_ROOT/test/perf/working-set-netns.sh" \
     "$FAKE" >/dev/null 2>&1 || rc=$?
 [ "$rc" -eq 42 ] \
     || fail "wrapper did not propagate smoke exit 42 (got $rc)"
 [ -n "$ok_netns" ] || fail "missing green-run netns inode"
 # both runs must have torn their namespace down (same deterministic name)
-netns_exists "$(working_set_netns_name "wsnt-$WS_SUFFIX-wrapper")" \
+netns_exists "$(working_set_netns_name "wsnt-$WS_OWNER_HASH-wrapper")" \
     && fail "wrapper left its namespace behind after exit"
 
 # smoke failure path also tears down: run once more exiting 1 and check
-RUNNER_NAME="wsnt-$WS_SUFFIX-wrapper" FAKE_EXIT=1 bash "$REPO_ROOT/test/perf/working-set-netns.sh" "$FAKE" \
+RUNNER_NAME="wsnt-$WS_OWNER_HASH-wrapper" FAKE_EXIT=1 bash "$REPO_ROOT/test/perf/working-set-netns.sh" "$FAKE" \
     >/dev/null 2>&1 && fail "wrapper swallowed smoke failure (exit 0)"
-netns_exists "$(working_set_netns_name "wsnt-$WS_SUFFIX-wrapper")" \
+netns_exists "$(working_set_netns_name "wsnt-$WS_OWNER_HASH-wrapper")" \
     && fail "wrapper left its namespace behind after failed smoke"
 
 # ---- 5. SIGTERM to the wrapper triggers teardown ---------------------------
 WRAPPER="$REPO_ROOT/test/perf/working-set-netns.sh"
-FAKE_SLEEP=30 FAKE_EXIT=0 RUNNER_NAME="wsnt-$WS_SUFFIX-sigterm" setsid bash "$WRAPPER" "$FAKE" \
+FAKE_SLEEP=30 FAKE_EXIT=0 RUNNER_NAME="wsnt-$WS_OWNER_HASH-sigterm" setsid bash "$WRAPPER" "$FAKE" 9>&- \
     >/dev/null 2>&1 &
 WRAP_PID=$!
 # give the wrapper time to create its namespace, then TERM it
-sig_ns="$(working_set_netns_name "wsnt-$WS_SUFFIX-sigterm")"
+sig_ns="$(working_set_netns_name "wsnt-$WS_OWNER_HASH-sigterm")"
 for _ in $(seq 1 20); do netns_exists "$sig_ns" && break; sleep 0.1; done
 netns_exists "$sig_ns" || fail "wrapper did not create its namespace before TERM"
 kill -TERM -- -"$WRAP_PID" 2>/dev/null || kill -TERM "$WRAP_PID" 2>/dev/null || true
@@ -143,7 +162,7 @@ netns_exists "$sig_ns" && fail "wrapper left its namespace behind after SIGTERM"
 # ---- 6. simulated SIGKILL leftover -> exact-name reclaim -------------------
 ip netns add "$sig_ns"; track "$sig_ns"
 ip netns exec "$sig_ns" ip link set lo up
-ip netns exec "$sig_ns" setsid sleep 300 >/dev/null 2>&1 < /dev/null &
+ip netns exec "$sig_ns" setsid sleep 300 >/dev/null 2>&1 < /dev/null 9>&- &
 sleep 0.3
 # (wrapper was SIGKILLed: nothing cleaned up; the next pre-job/pre-smoke
 # reset reclaims by exact name)
@@ -268,14 +287,13 @@ fi
 # untouched. Ownership comes solely from the deterministic name.
 ip netns add "$A"; track "$A"
 ip netns exec "$A" ip link set lo up
-ip netns exec "$A" setsid sleep 300 >/dev/null 2>&1 < /dev/null &
+ip netns exec "$A" setsid sleep 300 >/dev/null 2>&1 < /dev/null 9>&- &
 sleep 0.2
 ip netns add "$B"; track "$B"
 ip netns exec "$B" ip link set lo up
-ip netns exec "$B" setsid sleep 300 >/dev/null 2>&1 < /dev/null &
+ip netns exec "$B" setsid sleep 300 >/dev/null 2>&1 < /dev/null 9>&- &
 # host-side TAP on the shared subnet, with this run's unique name; the
 # reclaim of A must neither see nor touch it (same-subnet invisibility)
-HOST_TAP="kws-$WS_SUFFIX"
 create_host_tap "$HOST_TAP"
 ip address add 169.254.1.0/31 dev "$HOST_TAP"
 ip link set "$HOST_TAP" up
