@@ -177,6 +177,7 @@ test-perf-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/perf -p '*_test.py'
 	bash test/perf/uffd_performance_gate_test.sh
 	bash test/perf/working_set_tap_test.sh
+	bash test/perf/working_set_netns_test.sh
 
 test-uffd-performance-gate:
 	$(CI_TIMED) perf/uffd-gate env ORG="$(ORG)" bash test/perf/uffd-performance-gate.sh

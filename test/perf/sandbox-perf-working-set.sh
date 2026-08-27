@@ -100,6 +100,15 @@ cleanup() {
     fi
 }
 trap cleanup EXIT
+# A cancelled job delivers SIGINT/SIGTERM to the whole process group; bash
+# would then die without running the EXIT trap and leak the per-run TAP that
+# issue #43 chased. Run the same cleanup on those signals, then die with the
+# conventional status of that signal. PIPE is deliberately not trapped: this
+# script does not write to pipes whose readers disappear, and a global PIPE
+# cleanup would conflate unrelated early exits with resource teardown.
+trap 'trap - EXIT; cleanup; exit 129' HUP
+trap 'trap - EXIT; cleanup; exit 130' INT
+trap 'trap - EXIT; cleanup; exit 143' TERM
 
 untrack_pid() { # $1=pid
     local target="$1" pid
@@ -119,9 +128,7 @@ milliseconds_between() { # $1=start ns, $2=end ns
 }
 
 reset_tap() {
-    ip link set "$TAP_NAME" down 2>/dev/null || true
-    ip link set "$TAP_NAME" up 2>/dev/null || true
-    sleep 0.3
+    working_set_reset_tap "$TAP_NAME" "$TAP_HOST_CIDR" "$TAP_HOST_IP" "$GUEST_HTTP_IP"
     require_working_set_tap
 }
 

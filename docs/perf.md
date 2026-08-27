@@ -326,10 +326,21 @@ sudo PERF_ITERS=30 make perf-sandbox-working-set
 source BMS 固定设置 `PERF_ITERS=1`,以单轮完整矩阵验证用例可运行且指标可采集;
 30 轮仍只用于 canonical 描述性报告。
 
-每次运行默认从唯一工作目录派生一个 `kws-XXXXXX` TAP。脚本只使用自己创建的
-TAP:同名接口已存在时立即失败,创建后校验 TAP 类型、`UP` 状态、唯一 host 地址
-`169.254.1.0/31`,并为 guest `169.254.1.1` 安装随 TAP 删除的 `/32` host route。
-脚本在启动 base 前确认实际路由使用本轮 TAP,退出时删除该接口。
+BMS 中 working-set smoke 整体运行在按 `RUNNER_NAME` 派生命名的 runner 独占网络
+namespace 内(`test/perf/working-set-netns.sh`,名称 `kuasar-ws-<hash8>`),namespace 内
+固定 `TAP_NAME=kws0`。宿主上同子网、同名甚至同地址的残留接口都在 namespace 路由表
+之外,互不可见,因此不需要前缀式清理(#43、#53)。wrapper 在启动前 fail-closed 回收
+本 runner 的遗留 namespace(TERM→限时 KILL→验证为空→删除,任何失败即终止 job);测量
+结束后的退出清理是 best-effort——失败只输出 `::warning::` 并保留按名可回收的 namespace,
+不改变已完成的测量结论;wrapper 被 SIGKILL 的场景由下一个 job 的 pre-job reset 按
+精确名称兜底。手工在宿主上直接运行脚本时,默认仍从唯一工作目录派生 `kws-XXXXXX`
+随机 TAP 名。
+
+脚本只使用自己创建的 TAP:同名接口已存在时立即失败,创建后校验 TAP 类型、`UP` 状态、
+唯一 host 地址`169.254.1.0/31`,并为 guest `169.254.1.1` 安装 `/32` host route。测量阶段
+之间 flap TAP 会撤销该 `/32`(内核 up 时只恢复 connected `/31`),`reset_tap` 因此在 flap
+后用 `ip route replace` 重新安装。脚本在启动 base 前确认实际路由使用本轮 TAP,退出时删除
+该接口;EXIT 之外,HUP/INT/TERM 信号同样触发清理,使 job 取消不会泄漏本轮 TAP。
 首次 base 与 auto base 的 HTTP readiness 各限时 30 秒;测量 restore 保持独立的
 300 秒上限。readiness 失败会把探测前后 packet counter、link/address/route/
 neighbour、sandbox/Cloud Hypervisor 进程状态和完整运行日志保存在

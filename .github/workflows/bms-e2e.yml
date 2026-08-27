@@ -187,6 +187,58 @@ jobs:
           if ip link show sb-tap0 >/dev/null 2>&1; then
             "${privileged[@]}" ip link del sb-tap0
           fi
+          # Recover this runner's working-set network namespace left behind
+          # by an interrupted run (#43, #53). The name is derived from
+          # RUNNER_NAME, so recovery is exact-ownership: no other runner's
+          # namespace, and no other host interface, is ever touched. This
+          # stays self-contained because no checkout has happened yet.
+          #
+          # Fail-closed: kill (TERM -> bounded wait -> KILL -> bounded wait),
+          # verify the namespace holds no process, and only then delete its
+          # name. Deleting while a process still holds the namespace would
+          # orphan it beyond exact-name recovery. An "empty" verdict is only
+          # ever drawn from a SUCCESSFUL `ip netns pids` returning nothing —
+          # a failed query means "unknown", never "empty"; a survivor, an
+          # enumeration failure, or a failed deletion fails the job before
+          # any measurement runs.
+          # Same derivation as the wrapper (including its "local" fallback), so
+          # the reset always reclaims exactly the namespace the wrapper creates.
+          ws_netns="kuasar-ws-$(printf '%s' "${RUNNER_NAME:-local}" | sha256sum | cut -c1-8)"
+          ws_pids() {
+            local output
+            if ! output="$("${privileged[@]}" ip netns pids "$ws_netns" 2>&1)"; then
+              echo "cannot enumerate processes in $ws_netns: $output" >&2
+              return 1
+            fi
+            printf '%s\n' "$output"
+          }
+          if "${privileged[@]}" ip netns list | awk '{print $1}' | grep -Fxq "$ws_netns"; then
+            echo "recovering interrupted working-set namespace: $ws_netns"
+            if ! ws_out="$(ws_pids)"; then exit 1; fi
+            while read -r pid; do
+              [ -n "$pid" ] && "${privileged[@]}" kill -TERM "$pid" 2>/dev/null || true
+            done <<<"$ws_out"
+            for _ in $(seq 1 20); do
+              if ! ws_out="$(ws_pids)"; then exit 1; fi
+              [ -z "$ws_out" ] && break
+              sleep 0.5
+            done
+            if ! ws_out="$(ws_pids)"; then exit 1; fi
+            while read -r pid; do
+              [ -n "$pid" ] && "${privileged[@]}" kill -KILL "$pid" 2>/dev/null || true
+            done <<<"$ws_out"
+            for _ in $(seq 1 10); do
+              if ! ws_out="$(ws_pids)"; then exit 1; fi
+              [ -z "$ws_out" ] && break
+              sleep 0.5
+            done
+            if ! ws_out="$(ws_pids)"; then exit 1; fi
+            if [ -n "$ws_out" ]; then
+              echo "processes in $ws_netns survived TERM and KILL; refusing to continue" >&2
+              exit 1
+            fi
+            "${privileged[@]}" ip netns del "$ws_netns"
+          fi
           "${privileged[@]}" rm -f \
             /run/systemd/system/sandbox-runner@.service \
             /run/systemd/system/sandbox-builder@.service \
@@ -681,7 +733,7 @@ jobs:
             BIN="$PWD/bin/x86_64" \
             PERF_ITERS="$PERF_ITERS" \
             PERF_OUT_DIR="$PERF_OUT_DIR" \
-            bash test/perf/sandbox-perf-working-set.sh
+            bash test/perf/working-set-netns.sh test/perf/sandbox-perf-working-set.sh
 
       - name: Test exact published assets from the platform package
         if: inputs.mode == 'exact-assets'

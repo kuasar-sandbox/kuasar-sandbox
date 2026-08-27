@@ -91,3 +91,17 @@ working_set_dump_network_state() { # $1=name, $2=guest IP
     echo "== Route to guest =="
     ip route get "$guest_ip" 2>&1 || true
 }
+
+# Reset the working-set TAP between measured phases: flap the link to drop
+# guest-side neighbour and qdisc state, then restore the admin-installed /32
+# guest route. Bringing a link down withdraws admin-installed routes and the
+# kernel re-adds only the connected /31 on up, so without the replace the
+# whole measurement phase would run with only the shared-subnet connected
+# route (#43).
+working_set_reset_tap() { # $1=name, $2=host CIDR, $3=host IP, $4=guest IP
+    local name="$1" host_cidr="$2" host_ip="$3" guest_ip="$4"
+    ip link set "$name" down 2>/dev/null || true
+    ip link set "$name" up 2>/dev/null || true
+    ip route replace "$guest_ip/32" dev "$name" src "$host_ip" 2>/dev/null || true
+    sleep 0.3
+}

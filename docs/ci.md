@@ -160,7 +160,11 @@ runner 安装资料位于 `ci/runner/`。自托管 job 只有收窄后的 read t
 `contents:write` token 只在 GitHub-hosted job 使用。runner 代理属于部署配置,不写入仓库
 workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用公开中国大陆镜像降低网络抖动。
 
-每次 job 开始会停止遗留 sandbox systemd unit、删除测试 tap 并重载 systemd。常用 zot 与
+每次 job 开始会停止遗留 sandbox systemd unit、删除测试 tap 并重载 systemd。reset 还会按
+`RUNNER_NAME` 派生的确定名称(`kuasar-ws-<hash8>`)回收本 runner 的 working-set 网络
+namespace:先对其内进程 TERM、限时后 KILL,确认无存活进程后删除。名称派生保证同宿主多
+runner 互不影响,也使被 SIGKILL 中断的运行能在下一个 job 按精确名称回收,无需猜测接口
+所有权(#43、#53)。常用 zot 与
 versitygw 从 runner 固定工具目录链接到当前 workspace,不进入发布包。`kuasar-e2e` runner
 group 对组织仓库保持 `visibility=all`,不设置 workflow allowlist,使组件发布与 BMS 均可分配
 自托管 runner。各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于
