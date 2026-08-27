@@ -460,6 +460,9 @@ network: { tap: $TAP_NAME, interface: eth0, ip: $GUEST_HTTP_IP/31, hostname: per
 boot:
   kernel: file://$VMLINUX
   runtime: file://$BIN/sandbox-runtime.bundle
+EOF
+    if [ "$mode" = cold ]; then
+        cat >>"$path" <<EOF
   cmdline: "console=hvc0 printk.time=1"
   root:
     base: manifest://$ROOT_KEY
@@ -468,7 +471,6 @@ boot:
     - { name: scratch, diff: file://$dir/scratch.ext4, diff_size: 512MiB }
     - { name: dataset, base: manifest://$DATASET_KEY, overlay: { diff: file://$dir/dataset.ext4, size: 512MiB } }
 EOF
-    if [ "$mode" = cold ]; then
         cat >>"$path" <<'EOF'
 mounts:
   - { target: /scratch, type: disk, source: scratch }
@@ -477,6 +479,14 @@ launch:
   exec: /usr/local/bin/python3
   args: ["-m", "http.server", "8000", "--bind", "0.0.0.0", "--directory", "/scratch"]
   restart: never
+EOF
+    else
+        cat >>"$path" <<EOF
+  root:
+    overlay: { diff: file://$dir/root.ext4, size: 1GiB }
+  disks:
+    - { name: scratch, diff: file://$dir/scratch.ext4, diff_size: 512MiB }
+    - { name: dataset, overlay: { diff: file://$dir/dataset.ext4, size: 512MiB } }
 EOF
     fi
     cat >>"$path" <<EOF
@@ -500,7 +510,70 @@ start_sandbox() { # $1=sid, $2=config, $3=run root, $4=base root, $5=log, $6=sta
     PIDS+=("$ACTIVE_SANDBOX_PID")
 }
 
-snapshot_disk_tops() { # $1=info json, $2=artifact directory
+snapshot_graph_info() { # $1=S ref/path, $2=artifact directory, $3=output JSON, $4=optional manifest config
+    local snapshot_input="$1" artifact_dir="$2" output="$3" manifest_config="${4:-}"
+    local snapshot_json="$output.snapshot.tmp" sandbox_json="$output.sandbox.tmp"
+    local sandbox_ref sandbox_input locator artifact_path suffix
+    local -a info_args=(info --json)
+    if [ -n "$manifest_config" ]; then
+        info_args+=(--manifest-config "$manifest_config")
+    fi
+
+    "$BIN/sandbox-ctl" "${info_args[@]}" "$snapshot_input" >"$snapshot_json"
+    sandbox_ref=$(python3 - "$snapshot_json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    document = json.load(source)
+ref = document.get("SandboxRef")
+if not isinstance(ref, str) or not ref:
+    raise SystemExit(f"Snapshot S has no sandbox_ref: {document!r}")
+print(ref)
+PY
+)
+
+    sandbox_input="$sandbox_ref"
+    if [[ "$sandbox_ref" == file://* ]]; then
+        locator=${sandbox_ref#file://}
+        artifact_path=${locator%%@*}
+        suffix=${locator#"$artifact_path"}
+        if [[ "$artifact_path" != /* ]]; then
+            [ -n "$artifact_dir" ] || fatal "relative Sandbox E ref has no artifact directory: $sandbox_ref"
+            sandbox_input="file://$artifact_dir/$artifact_path$suffix"
+        fi
+    fi
+    "$BIN/sandbox-ctl" "${info_args[@]}" "$sandbox_input" >"$sandbox_json"
+
+    python3 - "$snapshot_json" "$sandbox_json" >"$output.tmp" <<'PY'
+import copy
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as source:
+    snapshot = json.load(source)
+with open(sys.argv[2], encoding="utf-8") as source:
+    sandbox = json.load(source)
+
+# This is an in-process test inspection view, not snapshot.cfg. Snapshot S
+# remains memory-only; its SandboxRef is followed to E for the disk graph.
+document = copy.deepcopy(sandbox)
+document["SnapshotVersion"] = snapshot["Version"]
+document["SandboxRef"] = snapshot["SandboxRef"]
+document["FromRefs"] = snapshot.get("FromRefs") or []
+root = document["Boot"]["Root"]
+target = root.get("Overlay") or root
+if target.get("Base") != "self":
+    raise SystemExit(f"Sandbox E root does not contain self at its top: {root!r}")
+target["Base"] = snapshot["SandboxRef"]
+json.dump(document, sys.stdout, indent=2)
+sys.stdout.write("\n")
+PY
+    mv -- "$output.tmp" "$output"
+    rm -f -- "$snapshot_json" "$sandbox_json"
+}
+
+snapshot_disk_tops() { # $1=derived graph info JSON, $2=artifact directory
     python3 - "$1" "$2" <<'PY'
 import json
 import os
@@ -536,7 +609,7 @@ expected = {"off": "sha256", "auto": "hmac"}[policy]
 for path in paths:
     with open(path, encoding="utf-8") as source:
         document = json.load(source)
-    refs = list(document.get("FromRefs") or [])
+    refs = [document["SandboxRef"], *(document.get("FromRefs") or [])]
     boot = document["Boot"]
     for node in [boot["Root"], *(boot.get("Disks") or [])]:
         overlay = node.get("Overlay")
@@ -605,7 +678,7 @@ B="$B_OUT/ws-base.snapshot"
 [ -f "$B" ] || fatal "missing B snapshot $B"
 B_ARTIFACT="$(readlink -f "$B")"
 B_BASENAME="$(basename "$B_ARTIFACT")"
-"$BIN/sandbox-ctl" info --json "$B" >"$B_DIR/info.json"
+snapshot_graph_info "$B" "$B_OUT" "$B_DIR/info.json"
 mapfile -t B_DISK_TOPS < <(snapshot_disk_tops "$B_DIR/info.json" "$B_OUT")
 [ "${#B_DISK_TOPS[@]}" -eq 3 ] || fatal "B must contain one root plus two data-disk tops"
 for path in "${B_DISK_TOPS[@]}"; do
@@ -660,7 +733,7 @@ AUTO_B="$AUTO_B_OUT/ws-base-auto.snapshot"
 AUTO_B_ARTIFACT="$(readlink -f "$AUTO_B")"
 AUTO_B_BASENAME="$(basename "$AUTO_B_ARTIFACT")"
 AUTO_B_INFO="$AUTO_B_DIR/info.json"
-"$BIN/sandbox-ctl" info --json --manifest-config "$WORK/manifest-auto.yaml" "$AUTO_B" >"$AUTO_B_INFO"
+snapshot_graph_info "$AUTO_B" "$AUTO_B_OUT" "$AUTO_B_INFO" "$WORK/manifest-auto.yaml"
 mapfile -t AUTO_B_DISK_TOPS < <(snapshot_disk_tops "$AUTO_B_INFO" "$AUTO_B_OUT")
 [ "${#AUTO_B_DISK_TOPS[@]}" -eq 3 ] || fatal "auto B must contain one root plus two data-disk tops"
 for path in "${AUTO_B_DISK_TOPS[@]}"; do
@@ -1426,7 +1499,7 @@ capture_local_crypto_w() { # $1=off|auto, $2=iteration
     [ -f "$w" ] || fatal "local crypto $policy/$iteration missing W snapshot"
     local w_artifact
     w_artifact="$(readlink -f "$w")"
-    "$BIN/sandbox-ctl" info --json --manifest-config "$manifest_config" "$w" >"$sample_root/w-info.json"
+    snapshot_graph_info "$w" "$w_out" "$sample_root/w-info.json" "$manifest_config"
     validate_local_policy "$policy" "$b_info" "$sample_root/w-info.json"
     local -a w_disk_tops
     mapfile -t w_disk_tops < <(snapshot_disk_tops "$sample_root/w-info.json" "$w_out")
@@ -1497,7 +1570,7 @@ for group in "${MATRIX_GROUPS[@]}"; do
         W="$W_OUT/$SID.snapshot"
         [ -f "$W" ] || fatal "$group/$iteration missing W snapshot"
         W_ARTIFACT="$(readlink -f "$W")"
-        "$BIN/sandbox-ctl" info --json "$W" >"$SAMPLE_DIR/w-info.json"
+        snapshot_graph_info "$W" "$W_OUT" "$SAMPLE_DIR/w-info.json"
         artifact_metrics "$group" "$B_DIR/info.json" "$SAMPLE_DIR/w-info.json" "$B_ARTIFACT" \
             "$W_ARTIFACT" "$W_OUT" "$SAMPLE_DIR/snapshot.log" "$SNAPSHOT_WALL_MS" "$SAMPLE_DIR/artifact.json"
 
@@ -1519,8 +1592,7 @@ for group in "${MATRIX_GROUPS[@]}"; do
             mv -- "${HIDDEN_B_DISK_TOPS[$index]}" "${B_DISK_TOPS[$index]}"
         done
         [[ "$PORTABLE_REF" =~ ^manifest://[0-9a-f]{64}$ ]] || { cat "$SAMPLE_DIR/publish.log" >&2; fatal "$group/$iteration invalid portable ref: $PORTABLE_REF"; }
-        "$BIN/sandbox-ctl" info --json --manifest-config "$WORK/manifest.yaml" "$PORTABLE_REF" \
-            >"$SAMPLE_DIR/portable-info.json"
+        snapshot_graph_info "$PORTABLE_REF" "" "$SAMPLE_DIR/portable-info.json" "$WORK/manifest.yaml"
 
         mkdir -p "$OUT_DIR/raw/$group/$iteration/capture"
         cp "$SAMPLE_DIR/b-run.log" "$SAMPLE_DIR/writes.log" "$SAMPLE_DIR/snapshot.log" \
