@@ -16,7 +16,7 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 
 | 角色 | 职责 | 关键进程 |
 |---|---|---|
-| Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行(§5) | `node-ctl serve`(含可选 `resource_listen`;external proxy 模式另启 master + workers)、`sandbox-ctl × N`;Manifest 路径按需部署 `cache-ctl` 和 `store-ctl` |
+| Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行(§5) | `node-ctl conductor serve`(含可选 `resource_listen`;external proxy 模式另启 master + workers)、`sandbox-ctl × N`;Manifest 路径按需部署 `cache-ctl` 和 `store-ctl` |
 | Shared Storage | 为命名 `file://` location 提供跨节点原生文件访问 | 部署方提供的 NAS、NFS 或共享文件系统 |
 | L2 Cache Cluster(可选) | 为 Manifest 路径提供分布式 EC 缓存,未部署时 cache 可以本地命中或直接回源 | `cache-ctl shard` |
 | Cluster Control Plane(可选) | E2B 兼容多节点控制面:registry 维护执行态,router 提供统一入口,placer 导入 group 并放置;生命周期仍由 node 执行 | `cluster-ctl registry`、`cluster-ctl router`、`cluster-ctl placer` |

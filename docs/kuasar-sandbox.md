@@ -52,7 +52,7 @@ Kuasar Sandbox 提供 MicroVM 生命周期、数据访问、节点网络和单�
 
 ### 2.1 用户入口
 
-单节点部署由 `node-ctl serve` 提供 E2B 兼容控制面和数据面入口.多节点部署由
+单节点部署由 `node-ctl conductor serve` 提供 E2B 兼容控制面和数据面入口.多节点部署由
 `cluster-ctl router` 提供统一入口,通过 registry 和 placer 将 group-scoped 请求路由到
 目标 node.两种模式都支持未修改的 E2B SDK 所使用的创建、执行、暂停、连接/恢复和销毁
 语义.
@@ -289,7 +289,7 @@ OOM 和有效工作丢失.应用仍可能因为自身资源声明、内存上限
 
 ### 8.1 单节点和集群
 
-单节点由 `node-ctl serve` 管理本机沙箱、构建、数据面代理和可选 Reservation Controller.
+单节点由 `node-ctl conductor serve` 管理本机沙箱、构建、数据面代理和可选 Reservation Controller.
 集群由三个独立 `cluster-ctl` 角色组成:
 
 - `registry`:维护 node、route 和 placer 的可靠执行态;

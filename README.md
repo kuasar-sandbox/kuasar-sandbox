@@ -32,7 +32,7 @@ Serverless 与强化学习工作负载,提供独立 Guest Kernel 隔离、快照
   准入、动态预算、水位和安全余量保护并发活跃工作负载.
 - **隔离网络基础**:快速分配和回收沙箱网络资源,以内核态数据路径转发,默认隔离
   沙箱,并向外部策略网关传递可信沙箱身份.
-- **E2B 兼容入口**:`node-ctl serve` 提供单节点 E2B 兼容服务,集群 router 提供
+- **E2B 兼容入口**:`node-ctl conductor serve` 提供单节点 E2B 兼容服务,集群 router 提供
   多节点统一入口,均可由未修改的 E2B SDK 使用.
 - **单节点与集群部署**:组件既可以组成单机平台,也可以通过 registry、router 和
   placer 组成 group-scoped 多节点控制面.
