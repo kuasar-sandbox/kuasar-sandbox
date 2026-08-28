@@ -9,21 +9,24 @@ vsock / UDS)协作。本文档定义这些进程在生产部署中的归属、�
 
 ## 1. 角色概览
 
-资源分两个尺度:
+部署角色按数据路径和控制面拓扑选择.本地文件,共享文件存储与
+Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署的强制前提.
 
-**AZ 级集群**
+**节点与集群角色**
 
-| 角色 | 集群规模 | 职责 | 关键进程 |
-|---|---|---|---|
-| Compute Node | 每 AZ 一集群,~5,000 节点 | 承载客户沙箱(microVM),每节点 ~3K microVM;e2b 模板构建也在本节点的构建沙箱内进行(§5) | `node-ctl`(serve, 含 resource_listen;external 模式另启 proxy master + workers)、`cache-ctl tiered`、`store-ctl`(sidecar)、`sandbox-ctl × N` |
-| L2 Cache Cluster | 每 AZ 一集群,100-200 节点 | 分布式 EC 缓存(RS 4+1,Maglev 一致性哈希),吸收 L1 miss 把 L3 请求压到 < 0.1% | `cache-ctl shard` |
-| Cluster Control Plane | 每 AZ 一组(小规模可单机)| e2b 兼容机群控制面:registry(自聚簇注册表 + 节点通道枢纽)/ router(统一入口 + 路由缓存)/ placer(放置调度 + group provider);显式创建沙箱后按 sandbox-group + route-key + 稳定 sandbox_id 路由请求,Router 在 node 边界替换为 NodeSandboxID,并按需激活已知的非 READY 沙箱 | `cluster-ctl registry`、`cluster-ctl router`、`cluster-ctl placer` |
+| 角色 | 职责 | 关键进程 |
+|---|---|---|
+| Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行(§5) | `node-ctl conductor serve`(含可选 `resource_listen`;external proxy 模式另启 master + workers),`sandbox-ctl × N`;Manifest 数据路径按需部署 `cache-ctl`,Manifest 数据路径或产生镜像的构建需要 `store-ctl` |
+| Shared Storage | 为命名 `file://` location 提供跨节点原生文件访问 | 部署方提供的 NAS,NFS 或共享文件系统 |
+| L2 Cache Cluster(可选) | 为 Manifest 路径提供分布式 EC 缓存,未部署时 cache 可以本地命中或直接回源 | `cache-ctl shard` |
+| Cluster Control Plane(可选) | E2B 兼容多节点控制面:registry 维护执行态,router 提供统一入口,placer 导入 group 并放置;生命周期仍由 node 执行 | `cluster-ctl registry`,`cluster-ctl router`,`cluster-ctl placer` |
 
-**Region 级共享资源**(由各自的平台管理面运营,平台外)
+**外部共享资源**(由部署方运营,平台外)
 
 | 资源 | 用途 |
 |---|---|
-| OBS 桶 | L3 chunk 与 Manifest 持久化(`store-ctl` 后端) |
+| Local/NAS/NFS | 本地或跨节点原生文件工件,不要求转换为内容分片 |
+| FS 或 S3-compatible store | Manifest 与 chunk 的远程持久化后端 |
 | 平台管理面 | 沙箱实例调度、配置、租户管控、模板构建凭据(registry 拉取令牌 / 客户密钥);通过 **cluster 控制面**向 placer/provider 导入 sandbox-group 配置,或在单机部署中直接调用 `node-ctl` e2b API |
 | 容器镜像仓库 | 租户镜像来源;构建沙箱内 `flatten-ctl` 按需拉取(OCI v1.1,支持 Referrers) |
 
@@ -35,9 +38,9 @@ vsock / UDS)协作。本文档定义这些进程在生产部署中的归属、�
 |---|---|---|---|---|
 | `node-ctl`(`serve`)| 本机沙箱编排 + e2b 兼容控制面 + 节点级资源仲裁(`resource_listen`)+ node-link 集群接入客户端;经 run-id 模板单元 `sandbox-runner@<run-id>`/`sandbox-builder@<run-id>` 驱动 sandbox-ctl;`proxy.mode=internal` 时还在本进程承载数据面 proxy | 单实例 | systemd | 平台内,`orchestrator/docs/node.md`(资源协议见 node-resource.md)|
 | `node-ctl proxy`(`serve`,external 仅)| proxy master 经 config-socket 订阅路由与 conductor-owned MMDS policy、绑定独立数据/MMDS入口并管理 worker;worker 用 mmap 读取固定路由,经 master 本机 RPC 查询可变 MMDS route/value/service,执行数据面鉴权、反代及 native exec gate | 1 master + `workers` 个 worker | systemd | 平台内,`orchestrator/docs/node-proxy.md` |
-| `cache-ctl`(`mode: tiered`)| 节点本地数据入口:L1 RocksDB + EC 客户端(→ L2)+ L3 origin | 单实例 | systemd,先于 node-ctl | 平台内,`docs/cache.md` |
-| `store-ctl` | 本机 OBS 读写代理(sidecar);**所有**远端 OBS 流量走这里 | 单实例 | systemd | 平台内,`docs/store.md` |
-| `sandbox-ctl`(`run`) | 单个沙箱的控制平面(类 `runc run`);非 daemon | 每沙箱一个,~3K | 由 node-ctl 经 `sandbox-runner@<run-id>` 单元(`run-sandbox`)assignment 后启动 | 平台内,`docs/sandbox.md` |
+| `cache-ctl`(`mode: local|tiered`,可选)| Manifest 数据入口:节点本地 L1,可选 EC L2 和 store origin | 每节点至多一个实例 | systemd,使用 Manifest 路径时先于 node-ctl | 平台内,`docs/cache.md` |
+| `store-ctl`(可选) | Manifest store 的节点侧 FS/S3-compatible 读写服务 | 每节点至多一个实例 | systemd,使用 Manifest 数据路径或执行产生镜像的构建时启动 | 平台内,`docs/store.md` |
+| `sandbox-ctl`(`run`) | 单个沙箱的控制平面(类 `runc run`);非 daemon | 每沙箱一个 | 由 node-ctl 经 `sandbox-runner@<run-id>` 单元(`run-sandbox`)assignment 后启动 | 平台内,`docs/sandbox.md` |
 | `cloud-hypervisor` | VMM(patched);`sandbox-ctl` 子进程 | 每沙箱一个 | `sandbox-ctl` 派生 | 平台内,`docs/cloud-hypervisor.md` |
 
 ### 2.2 端口与套接字
@@ -58,8 +61,9 @@ vsock / UDS)协作。本文档定义这些进程在生产部署中的归属、�
 | MMDS local service | `mmds.services.<name>.endpoint` | HTTP/1.1 over UDS | conductor-only registry;V1 为 `unix://` absolute path,internal 直拨,external worker 经 master 取得解析后的 socket path |
 | `node-ctl`(`serve`) | `/run/sandbox/node-ctl.socket` | UDS,HTTP/h2c + framed JSON stream | config-socket(run/task/admin/plugin/api 五平面):启动器取 LaunchSpec/BuildSpec;admin 管 manifest key 与 sandbox MMDS value;external proxy/platform agent 经 plugin 平面注册并同步受控路由(SO_PEERCRED + `<id>.pid`/pidfile 鉴别)|
 
-`cache-ctl tiered` 的 EC 客户端通过节点对外网络拨号 L2 cluster 节点的 `7070`
-端口(详见 §3)。internal 模式下,conductor 进程内 proxy 与控制面共用 handler;
+使用 tiered cache 时,EC 客户端通过节点对外网络拨号 L2 cluster 节点的 `7070`
+端口(详见 §3);local cache 或直接 store 路径不需要 L2.internal 模式下,conductor
+进程内 proxy 与控制面共用 handler;
 external 模式下,`node-ctl proxy serve` 启动 1 个 master 和配置数量的 workers,正常数据面流量进入
 `proxy.yaml.data_listen`,而控制面仍由 conductor 的 `api.listen` 承载。external worker 使用自身
 `proxy.yaml` 中必填的 `paths.run_root` 定位 `<run_root>/<NodeSandboxID>/ctl.sock`;该值是节点本地部署配置,
@@ -88,8 +92,8 @@ standalone,cluster和external-proxy真实guest E2E的必需客户端;这些测�
 ### 2.3 持久化与运行时目录
 
 ```
-/var/store/                          store-ctl 用 fs backend 时的本地数据(开发用;生产用 obs)
-/var/cache/accel-l1/                 cache-ctl tiered 的 L1 RocksDB(典型 SSD 1 TiB)
+/var/store/                          store-ctl fs-backend data (local or shared filesystem)
+/var/cache/accel-l1/                 cache-ctl local/tiered L1 RocksDB (working-set-sized)
 /run/node-ctl/                       node-ctl audit + state(tmpfs)
 /run/sandbox/<sid>/                  每沙箱运行时目录:socket + snap-stage/snap-state(CH 元数据中转,tmpfs)
 /var/lib/sandbox/<sid>/              每沙箱磁盘目录:overlay 写层 <sid>.overlay.diff(本地 NVMe)
@@ -137,13 +141,14 @@ RAM 工作集)。**overlay 写层**是沙箱独占、运行期被修改的可写
 ### 2.5 per-sandbox 配置下发
 
 每个沙箱由 `node-ctl` 在启动单元前写一份 per-sandbox **`SANDBOX_CONFIG`**
-(`<sid>.yaml`,非密),搭配**共享**的 **`MANIFEST_CONFIG`**(`manifest.key` 留空)+
-per-沙箱 `MANIFEST_KEY` env;经 `run-sandbox`(单元)以 flag 传入 sandbox-ctl:
+(`<sid>.yaml`,非密).使用 Manifest 路径时,再搭配共享的 **`MANIFEST_CONFIG`**
+(`manifest.key` 留空)+ per-沙箱 `MANIFEST_KEY` env;本地文件或命名共享文件引用
+不要求先建立 Manifest 配置.配置经 `run-sandbox`(单元)以 flag 传入 sandbox-ctl:
 
 | 文件 | 内容 | 传入方式 | 文档 |
 |---|---|---|---|
 | `SANDBOX_CONFIG` | 该沙箱的资源 / 启动 / 网络 / launch 配置 | `sandbox-ctl run --config <path>`,等价 `SANDBOX_CONFIG` env | `docs/sandbox.md` §3 |
-| `MANIFEST_CONFIG` | 客户密钥 + 本机 store-ctl + cache-ctl 端点 + 分块 / 加密参数 | `sandbox-ctl run --manifest-config <path>`,等价 `MANIFEST_CONFIG` env;`manifest-ctl` 也吃同一份格式 | `docs/manifest.md` §3 |
+| `MANIFEST_CONFIG`(按需) | Manifest 路径使用的本机 store/cache 端点与内容保护参数 | `sandbox-ctl run --manifest-config <path>`,等价 `MANIFEST_CONFIG` env;`manifest-ctl` 使用同一格式 | `docs/manifest.md` §3 |
 
 要点:
 
@@ -153,9 +158,8 @@ per-沙箱 `MANIFEST_KEY` env;经 `run-sandbox`(单元)以 flag 传入 sandbox-c
   凭据对中解出;**api_key 由 APISecret 签发**,见 `orchestrator/docs/node.md` §7)。
   外部管理面若选择直接对接单机
   `node-ctl`,也必须按同一 per-sandbox 生命周期落地 manifest 配置
-- **共享格式**:`manifest-ctl` 与 `sandbox-ctl` 用**同一**配置格式;两者都
-  **只**连本机 store-ctl(`127.0.0.1:7100`)+ 本机 cache-ctl(`127.0.0.1:7070`),
-  yaml 里的 endpoint 写 loopback
+- **共享格式**:选择 Manifest 路径时,`manifest-ctl` 与 `sandbox-ctl` 使用同一
+  配置格式,并按部署拓扑连接本机 store/cache 端点;命名文件路径不经过该数据面
 - **不**走 env、不走全局默认:loader 要求显式 flag 指定路径(详见
   `docs/manifest.md` §3 loader 契约)
 
@@ -197,18 +201,19 @@ guest/application memory,包含内存的 Pause/snapshot 可能捕获该普通 wo
 
 ## 3. L2 Cache Cluster
 
+L2 是 Manifest 数据路径的可选加速层.部署可以只使用 local cache + store origin,
+也可以按工作集和故障域部署 shard 集群.它不参与本地文件或命名共享文件读取.
+
 ### 3.1 集群规格
 
-- **规模**:每 AZ 一集群,100-200 节点
-- **编码**:RS 4+1(`data_shards: 4, parity_shards: 1`)→ 每个 chunk 编码为
+- **规模**:由工作集,命中率目标,SSD 容量,网络和故障域实测决定
+- **编码**:配置 RS 4+1(`data_shards: 4, parity_shards: 1`)时,每个 chunk 编码为
   5 个 shard
-- **放置**:Maglev 一致性哈希。每个 chunk 的 5 个 shard 由 chunk hash 通过
-  `LocateN(key, 5)` 在全集群 100-200 peer 池中确定性选出。5 peer 是 RS 4+1
-  的**最小集群规模**;集群可任意扩到 100-200,placement 算法不变。详见
+- **放置**:Maglev 一致性哈希.每个 chunk 的 5 个 shard 由 chunk hash 通过
+  `LocateN(key, 5)` 在配置的 peer 池中确定性选出.5 peer 是该 RS 配置的
+  最小集群规模,扩容不改变 placement 算法.详见
   `docs/cache.md` §4.9
-- **机型**:大盘 SSD(~5 TiB / 节点);RAM 占 8%(`mem_ratio: 0.08`)作 RocksDB
-  BlockCache
-- **网络**:同 AZ 内 10/25 GbE
+- **资源**:SSD,RocksDB BlockCache(`mem_ratio`)和网络规格按部署测量选择
 - **隔离**:不同应用域(镜像 chunk / 快照 chunk)可独立部署集群实例,同一套
   软件配置不同 RocksDB path + 不同集群成员
 - **持久化**:RocksDB on `/mnt/ssd/accel-l2`,daemon 进程崩溃可热重启不丢数据
@@ -233,23 +238,18 @@ yaml 里(`tiers[].cluster.peers`)。增减节点是 compute node 端的**配置�
 
 shard 节点本身无须感知集群成员;它只是个 KV。
 
-## 4. Region 级资源
+## 4. 外部持久化与管理资源
 
-### 4.1 OBS 桶
+### 4.1 存储后端
 
-`store-ctl` 的最终持久化后端。一个 region 配一个或一组 OBS 桶,按 AZ 流量分
-不分桶取决于运营策略(单桶跨 AZ dedup 最佳,多桶有故障域隔离收益)。桶内目录
-结构由 `store-ctl` 维护:`__meta/generations/`、`chunk/<gen>/<hash[:2]>/...`、
-`manifest/<gen>/<hash[:2]>/...`,详见 `docs/store.md`。
+本地和命名共享文件工件由文件系统直接承载.Manifest 路径的 `store-ctl` 支持
+FS 和 S3-compatible 后端:FS root 可以位于本地盘或共享文件系统,S3-compatible
+后端可以使用一个或多个 bucket.后端的容量,故障域和共享范围由部署方选择.
+store 内部路径由 `store-ctl` 维护,详见 `docs/store.md`.
 
-凭据获取顺序(`store-ctl` 配置):
-
-```
-yaml 显式 access_key/secret_key  →  ~/.obsconfig  →  AWS SDK 默认凭证链(IMDS)
-```
-
-每节点的 `store-ctl` sidecar 通过同一套凭据访问同一个桶——节点本身**无状态**,
-重启不丢数据。
+S3-compatible 后端使用部署配置或 SDK 默认凭据链.凭据只进入可信 host 服务,
+不写入 Guest 或文档示例.每个节点可以运行本地 `store-ctl` sidecar 并连接同一
+持久化后端;FS backend 也可以直接使用节点本地或共享目录.
 
 ### 4.2 外部管理面接口
 
@@ -258,7 +258,7 @@ region 级、独立运营,平台外。与平台的接口:
 - 多节点部署:平台管理面向 `cluster-ctl placer` 的 provider/importer 侧导入
   sandbox-group 配置、selector、客户密钥引用和模板构建凭据。
 - 单节点部署:平台管理面可直接调用 `node-ctl` e2b API,并按 §2.2 的配置契约
-  提供 per-sandbox manifest 配置。
+  提供 per-sandbox 启动配置;使用 Manifest 路径时再提供对应内容保护配置.
 - 节点侧桥接进程若由外部系统提供,不属于本发布件,也不改变本页列出的进程、
   配置和启动依赖。
 
@@ -290,11 +290,12 @@ e2b 模板构建在 compute 节点上进行,**无独立展平池**:每个构建�
 ### 5.2 收尾上传(平台凭据唯一出现点)
 
 阶段产物经宿主 workdir 顺序交接;终态:img ⇒ `manifest-ctl store image.img` 后形成
-canonical manifest ref;快照 ⇒ 一条 `sandbox-ctl upload-snapshot <bundle>`。未配置
-named location 时发布到 manifest;配置 `checkpoint.remote.ref_location_parent` 时发布到
-共享文件 location。持久 id 为
-`<profile>-<kind>-<base64url(canonical-portable-ref)>`。manifest 模式由本机
-`store-ctl`(§2.1 sidecar)承载远端写。
+canonical manifest ref;快照 ⇒ 一条 `sandbox-ctl upload-snapshot <bundle>`.产生镜像的
+构建始终需要可用的 `store-ctl`;`checkpoint.remote.ref_location_parent` 只选择快照
+发布位置.未配置 named location 时快照发布到 Manifest;配置后发布到共享文件 location.
+持久 id 为
+`<profile>-<kind>-<base64url(canonical-portable-ref)>`.Manifest 模式由本机
+`store-ctl`(§2.1 sidecar)承载远端写.
 
 ### 5.3 凭据与隔离
 
@@ -389,14 +390,14 @@ cluster-ctl placer
 ### 7.1 Compute Node
 
 ```
-   ┌─ Compute Node  ( × ~5,000 per AZ ) ──────────────────────────────────────────────────────────────┐
+   ┌─ Compute Node ───────────────────────────────────────────────────────────────────────────────────┐
    │                                                                                                  │
    │   ── process tree ──                                                                             │
    │                                                                                                  │
    │   (Platform Mgmt Plane, region)                                                                  │
-   │           │  attach + per-sandbox SANDBOX_CONFIG / MANIFEST_CONFIG                               │
+   │           │  per-sandbox SANDBOX_CONFIG / optional MANIFEST_CONFIG                              │
    │           ▼                                                                                      │
-   │   node-ctl            ── StartUnit ──►  sandbox-ctl × ~3K  ── spawns ──►  cloud-hypervisor       │
+   │   node-ctl            ── StartUnit ──►  sandbox-ctl × N    ── spawns ──►  cloud-hypervisor       │
    │                                                │                                  │              │
    │                                                │                                  ▼              │
    │                                                │                              guest VM           │
@@ -405,13 +406,15 @@ cluster-ctl placer
    │                                                                                                  │
    │   ── data path ──                                                                                │
    │                                                                                                  │
-   │   sandbox-ctl  ── wire ObjectGet :7070 ──►  cache-ctl  tiered                                    │
+   │   sandbox-ctl ──► Local File / NAS / NFS                                                         │
+   │        │                                                                                         │
+   │        └── optional Manifest ObjectGet :7070 ──► cache-ctl local/tiered                          │
    │                                                  │   L1 RocksDB                                  │
    │                                                  ├── wire EC fan-out (5 shards) ──► (L2 cluster) │
    │                                                  └── origin gRPC :7100 ──► store-ctl  (sidecar)  │
    │                                                                                       │          │
    │                                                                                       ▼  HTTPS   │
-   │                                                                                   (OBS bucket)   │
+   │                                                                      (FS / S3-compatible store)  │
    │                                                                                                  │
    └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -423,13 +426,13 @@ cluster-ctl placer
                             from every Compute Node's cache-ctl tiered
                                                 │
                                                 ▼
-   ┌─ L2 Cache Cluster  ( 100-200 nodes per AZ ) ─────────────────────────────────────────────────────┐
+   ┌─ Optional L2 Cache Cluster ──────────────────────────────────────────────────────────────────────┐
    │                                                                                                  │
    │      cache-ctl  shard      wire :7070   /   gRPC :7071                                           │
    │      RocksDB on SSD                                                                              │
    │      Maglev placement:   LocateN( chunk_hash, 5 )  over full peer pool   (RS 4+1)                │
    │                                                                                                  │
-   │      no L3 / no OBS from here — L3 origin is each Compute Node's local store-ctl                 │
+   │      no origin credentials here - origin access stays in each Compute Node's store-ctl           │
    │                                                                                                  │
    └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -445,47 +448,54 @@ cluster-ctl placer
    │     A import ──► B steps ──► C template      ( guest: flatten-ctl / envd; tenant net stays in VM )│
    │                                              │  image.img / snapshot bundle  (host workdir)       │
    │                                              ▼                                                    │
-   │   manifest-ctl store  /  sandbox-ctl upload-snapshot  ──►  store-ctl  (sidecar)  ──► (OBS bucket) │
+   │   image ──► manifest-ctl store ──► store-ctl ──► FS / S3-compatible store                        │
+   │   snapshot ──► local/named file location                                                         │
+   │            └──► Manifest ──► store-ctl ──► FS / S3-compatible store                              │
    │                                                                                                  │
    └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-构建复用 compute 节点既有的 `store-ctl`(收尾上传)与 vswitch 网络槽(guest 拉取出网);
-无独立池、无额外常驻进程(§5)。
+构建复用 compute 节点既有的 vswitch 网络槽(guest 拉取出网).产生镜像的构建始终经
+`manifest-ctl store` 复用 `store-ctl`;本地或命名共享文件 location 只改变快照发布路径.
+两种快照路径都无独立构建池或额外常驻进程(§5).
 
 ## 8. 启停依赖
 
 ### 8.1 启动顺序
 
-**Region 级(一次性)**
+**外部依赖(按部署选择)**
 
-1. OBS 桶就绪;`store-ctl` 凭据可达
+1. 本地/共享文件路径已挂载并可访问;若使用 Manifest 数据路径或执行产生镜像的构建,
+   对应 FS 或 S3-compatible store 后端已就绪
 
-**L2 Cache Cluster(在 compute 之前)**
+**L2 Cache Cluster(可选,在使用它的 compute 之前)**
 
-2. `cache-ctl shard` × 100-200 全部启动并健康
+2. 配置的 `cache-ctl shard` 成员启动并健康
 3. 集群成员清单(`tiers[].cluster.peers`)落到 compute node 配置仓
 
 **Compute Node(每节点独立)**
 
-4. `store-ctl`(sidecar)→ active generation 已 init,gRPC 健康
-5. `cache-ctl tiered` → 与 L2 peer 拨号、与本机 `store-ctl` origin 拨号成功
+4. 使用 Manifest 数据路径或执行产生镜像的构建时启动 `store-ctl`,确认 active
+   generation 已 init 且 gRPC 健康
+5. 使用 cache 时启动 `cache-ctl local|tiered`;tiered 模式确认 L2 peer 和 store
+   origin 可达
 6. `node-ctl conductor serve`(`resource_listen`)→ state 恢复或冷启;e2b SDK
    直连或 cluster registry 接入后开始接受新沙箱
 
 注:`cache-ctl tiered` 启动**不需要**等 L2 全员在线——tier chain 把瞬时
 故障层视作 miss 下穿(详见 `docs/cache.md` §错误模型)。**写**路径
-(`manifest-ctl store` 直连 `store-ctl`)在 OBS / store-ctl 不可达时会失败。
+(`manifest-ctl store` 直连 `store-ctl`)在所选持久化后端 / store-ctl 不可达时会失败.
 
-模板构建复用 compute 节点的常驻进程(`node-ctl` + `store-ctl`),无独立启停依赖;
-`node-ctl` 就绪后即可经 e2b API 接受构建(§5)。
+模板构建复用 compute 节点的 `node-ctl`;产生镜像的构建还需要 `store-ctl`,没有产生
+镜像时只按所选快照路径准备数据后端.`node-ctl` 与所需数据后端就绪后即可经 e2b API
+接受构建(§5).
 
 ### 8.2 关闭顺序(自顶向下)
 
 1. 平台管理面 / cluster / 客户端停止向该节点 `node-ctl` 调度新沙箱
 2. `node-ctl` 等待存量沙箱自然退出 / 主动 snapshot,然后 SIGTERM,persist 状态(含资源预算)后退出
-3. `cache-ctl tiered` → SIGTERM,等 in-flight 请求结束,RocksDB flush
-4. `store-ctl` → 同上
+3. 若部署 `cache-ctl`,则 SIGTERM,等待 in-flight 请求结束和 RocksDB flush
+4. 若部署 `store-ctl`,则最后停止该服务
 
 L2 cluster 的关闭与 compute node 关闭无强序——每个 compute node 的 `cache-ctl
 tiered` 自己处理 L2 不可达。
@@ -494,14 +504,14 @@ tiered` 自己处理 L2 不可达。
 
 | 故障 | 直接影响 | 自愈 |
 |---|---|---|
-| 单 compute node `store-ctl` 崩溃 | 本机 L3 read/write 停;L1+L2 命中不受影响 | systemd 重启;无状态前端,秒级恢复 |
+| 单 compute node `store-ctl` 崩溃 | 本机 Manifest origin read/write 停;L1/L2 命中和文件路径不受影响 | systemd 重启后恢复 origin 访问 |
 | 单 compute node `cache-ctl tiered` 崩溃 | 本机沙箱新 fault 卡 wire dial | systemd 重启;RocksDB 持久化 ⇒ L1 命中不丢 |
 | 单 `cache-ctl shard` 节点崩溃 | RS 4+1 容 1 节点故障;L2 仍服务 | systemd 重启;tiered 端 Maglev 表在该 peer 不可达期间把请求路由到其余 4 + 1 parity |
 | 同 RS 组中 ≥ 2 `cache-ctl shard` 同时崩溃 | 部分 `(chunk, idx)` 落到 ≥ 2 故障 peer 上,该 chunk L2 miss | 读路径 fallthrough origin(慢但正确);避免方式:成员变更**一次只动 1 peer** |
 | `node-ctl` 崩溃 | 北向 API 中断,新沙箱无法拉起 / admit 失败;存量沙箱保持上次 grant 继续跑(资源仲裁随进程在本机) | systemd 重启;状态在 sqlite(`db_path`,默认 `<base_root>/node-ctl.db`)持久化 + 资源 `state.json` 在 tmpfs(扫 cgroup 重建),以 `ListUnitsByPatterns("sandbox-runner@*.service")` 的存活单元对账 sqlite `sandboxes` 表重挂(active+running⇒adopt 重武装 TTL;running 无单元⇒标 dead;`paused`/snapshot 记录保留可被 connect/auto-resume 拉起) |
-| OBS 区域不可达 | 整 region L3 不可达 | 已 L1/L2 命中的沙箱继续跑;依赖新 L3 的写路径 / cold-image fault / 展平上传失败 |
-| compute node 整机故障 | 该节点全部沙箱失效 | 平台管理面调度走 |
-| L2 cluster > parity 同时故障 | L2 整体不可用 | tiered fallthrough origin(slow path 持续);恢复后自然恢复 |
+| S3-compatible 后端不可达 | 使用该 origin 的 Manifest 读写受影响 | 已 L1/L2 命中的沙箱继续跑;依赖新 origin 的写路径 / cold-image fault / 展平上传失败;本地或共享文件路径不受影响 |
+| compute node 整机故障 | 该节点运行中的沙箱中断 | 平台隔离故障节点;已发布到命名共享文件或 Manifest 的暂停工件可由 cluster 在其他节点导入恢复,仅本地工件仍依赖原节点 |
+| L2 cluster > parity 同时故障 | 相关 L2 读取 miss | tiered fallthrough origin(slow path 持续);恢复后自然恢复 |
 
 ## 10. 部署规模示例
 
@@ -513,27 +523,31 @@ tiered` 自己处理 L2 不可达。
        sandbox-ctl × N (node-ctl 可省,手工 run)
 ```
 
-无 L2 cluster、无 OBS、无独立资源控制器(资源仲裁随 `node-ctl conductor serve` 内置,`resource_listen`
+无 L2 cluster,无远程对象存储,无独立资源控制器(资源仲裁随 `node-ctl conductor serve` 内置,`resource_listen`
 未配则静态 cgroup);`manifest-ctl` 走本机 `store-ctl` + `cache-ctl`。对应 `docs/cache.md`
 §3.2 (local 模式)。**单机直供 e2b SDK,无需 cluster 层(`node-ctl conductor serve` 即北向面)**。
 
 ### 10.2 生产单 AZ
 
 ```
-Compute:           ~5,000 节点(每节点 ~3K microVM;e2b 模板构建在构建沙箱内)
-L2 Cache Cluster:  100-200 节点(RS 4+1,Maglev 全池放置)
-Region 级:         OBS 桶 + 平台管理面
+Compute:           scale by peak working set, active ratio, restore cost, and safety margin
+Storage:           Local NVMe / NAS / NFS / FS or S3-compatible store
+Optional cache:    local cache or an L2 shard cluster sized by hit rate and failure domain
+Control plane:     node-ctl standalone or registry + router + placer
 ```
 
-每 compute 节点跑:`store-ctl` + `cache-ctl tiered` + `node-ctl`(serve,含
-`resource_listen`)+ `sandbox-ctl × ~3K`。
-Cluster Control Plane:  registry 自聚簇(N 副本,按 group/node 逻辑分片)+ router(N 副本 LB 后)+ placer(N 副本)。
+每个 compute 节点运行 `node-ctl` 和当前沙箱对应的 `sandbox-ctl`;使用 Manifest
+数据路径时再部署 `store-ctl` 与可选 `cache-ctl`.节点数量,单节点并发和 cache
+容量必须用目标版本,硬件,沙箱规格与 workload 实测,不能由架构图中的固定值推导.
+Cluster Control Plane 由 registry 自聚簇,LB 后的 router 和 placer 组成,副本数按
+可用性与负载选择.
 
 ### 10.3 多 AZ
 
-每 AZ 独立 compute 集群 + L2 cluster;region 级共享同一组 OBS 桶。Compute
-节点的 `cache-ctl tiered` 配置只列本 AZ L2 peer,最小化跨 AZ 流量。
-跨 AZ 去重在 OBS 桶级别天然达成(同 manifest → 同 chunk 密文哈希)。
+每个 AZ 可以独立运行 compute 和可选 L2 cache,并按故障域选择共享文件系统或
+S3-compatible store.使用 tiered cache 时,compute 节点通常优先连接本 AZ peer,
+减少跨 AZ 热路径流量.是否跨 AZ 共享内容由内容密钥,安全域和后端配置共同决定,
+不能仅因内容相同自动跨租户或跨故障域共享.
 
 ## 11. 配置入口速查
 
@@ -542,7 +556,7 @@ Cluster Control Plane:  registry 自聚簇(N 副本,按 group/node 逻辑分片)
 | 进程 | 配置位置 | 部署惯例 | Schema 文档 |
 |---|---|---|---|
 | `store-ctl` | `--config <path>` | `listen: 127.0.0.1:7100`(节点本机)| 源仓 `accelerator/docs/store.md` §3;发布包 `docs/store.md` |
-| `cache-ctl tiered` | `--config <path>` | `listen: 127.0.0.1:7070`(节点本机);`tiers[].cluster.peers` 写本 AZ L2 全集群 | 源仓 `accelerator/docs/cache.md` §3.4;发布包 `docs/cache.md` |
+| `cache-ctl tiered` | `--config <path>` | `listen: 127.0.0.1:7070`(节点本机);`tiers[].cluster.peers` 写所选 L2 成员 | 源仓 `accelerator/docs/cache.md` §3.4;发布包 `docs/cache.md` |
 | `cache-ctl shard` | `--config <path>` | `listen: 0.0.0.0:7070`(对外服务)| 源仓 `accelerator/docs/cache.md` §3.3;发布包 `docs/cache.md` |
 | `node-ctl conductor serve` | `/etc/node-ctl/conductor.yaml` | `mmds.listen/routes/services` 是 MMDS 唯一配置源;service 仅 `unix://` absolute path | 源仓 `orchestrator/docs/node.md` §3/§4.6;`node-proxy.md` §7 |
 | `node-ctl proxy serve` | `/etc/node-ctl/proxy.yaml` | external data listener/worker/shm bootstrap;不重复配置 MMDS listen/services | 源仓 `orchestrator/docs/node-proxy.md` §2 |
@@ -550,8 +564,8 @@ Cluster Control Plane:  registry 自聚簇(N 副本,按 group/node 逻辑分片)
 | `cluster-ctl registry` | `--config /etc/cluster-ctl/registry.yaml` | `member.id/listen`;`membership.active/versions[].members[].advertise/node_advertise/owners`;`node_link`、`route_link`、`node_list`、`placer_link` | 源仓 `orchestrator/docs/cluster.md`;发布包 `docs/cluster.md` |
 | `cluster-ctl router` | `--config /etc/cluster-ctl/router.yaml` | `registry.bootstrap` 指向 registry 控制面;router `:443`(LB 后 N 副本);请求必须带 `X-Kuasar-Sandbox-Group` | 源仓 `orchestrator/docs/cluster-router.md`;发布包 `docs/cluster-router.md` |
 | `cluster-ctl placer` | `--config /etc/cluster-ctl/placer.yaml` | `placer.id/listen/advertise/memberlist_label`;`registry.bootstrap`;`import_groups[]`;`placement` | 源仓 `orchestrator/docs/cluster-placer.md`;发布包 `docs/cluster-placer.md` |
-| `sandbox-ctl run` | `--config <path>`(`SANDBOX_CONFIG`)+ `--manifest-config <path>`(`MANIFEST_CONFIG`)| **per-sandbox**,由 `node-ctl` 生成,落在 `/run/sandbox/<sid>/` | 源仓 `sandboxer/docs/sandbox.md` §3;发布包 `docs/sandbox.md` |
-| `manifest-ctl` | `--manifest-config <path>`(`MANIFEST_CONFIG`)| 与 `sandbox-ctl` 共享格式;只连本机 store-ctl + cache-ctl | 源仓 `accelerator/docs/manifest.md` §3;发布包 `docs/manifest.md` |
+| `sandbox-ctl run` | `--config <path>`(`SANDBOX_CONFIG`);Manifest 路径另加 `--manifest-config <path>` | **per-sandbox**,由 `node-ctl` 生成,落在 `/run/sandbox/<sid>/` | 源仓 `sandboxer/docs/sandbox.md` §3;发布包 `docs/sandbox.md` |
+| `manifest-ctl` | `--manifest-config <path>`(`MANIFEST_CONFIG`)| 与 `sandbox-ctl` 共享 Manifest 配置和 store/cache 端点 | 源仓 `accelerator/docs/manifest.md` §3;发布包 `docs/manifest.md` |
 | `flatten-ctl` | CLI flag + `--manifest-config`(`MANIFEST_CONFIG`,`--upload` 时)+ `--config`(`FLATTEN_CONFIG`,registry 源时);凭据走 `FLATTEN_REGISTRY_*` env | 经单一 guest runtime 在构建沙箱 guest 内运行(`run-builder` 驱动,§5)| 源仓 `guest-runtime/docs/flatten.md` §2;发布包 `docs/flatten.md` |
 
 构建产物路径、跨架构和独立/聚合发布见 `kuasar-sandbox/README.md`
@@ -563,7 +577,7 @@ Cluster Control Plane:  registry 自聚簇(N 副本,按 group/node 逻辑分片)
 - [`docs/kuasar-sandbox.md`](kuasar-sandbox.md) — 系统设计总览:业务目标、子系统分工、端到端数据流
 - `sandboxer/docs/sandbox.md`(发布包:`docs/sandbox.md`) — compute node 上 `sandbox-ctl` 的完整生命周期
 - `accelerator/docs/cache.md`(发布包:`docs/cache.md`) §3.1 — `local` / `shard` / `tiered` 三形态选择;§4.9 Maglev 一致性哈希
-- `accelerator/docs/store.md`(发布包:`docs/store.md`) — 后端选择(fs / obs)与代轮转
+- `accelerator/docs/store.md`(发布包:`docs/store.md`) - 后端选择(FS / S3-compatible)与内部存储组织
 - `orchestrator/docs/node-resource.md`(发布包:`docs/node-resource.md`) — 节点资源控制协议
 - `orchestrator/docs/node.md` — e2b 兼容控制面与节点主机;`cluster.md` — 集群级注册表 / 路由 / 放置
 - `accelerator/docs/manifest.md`(发布包:`docs/manifest.md`) — `MANIFEST_CONFIG` 格式与 loader 契约
