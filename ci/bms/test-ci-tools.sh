@@ -22,6 +22,13 @@ daily_workflow="$SCRIPT_DIR/../../.github/workflows/daily-preview.yml"
 legacy_repository="kuasar-sandbox/platform"
 candidate_pattern='^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$'
 working_set_perf="$SCRIPT_DIR/../../test/perf/sandbox-perf-working-set.sh"
+private_control_runner="    runs-on: \${{ github.event.repository.private && 'kuasar-e2e' || 'ubuntu-latest' }}"
+
+[ "$(grep -Fxc "$private_control_runner" "$entry_workflow")" -eq 2 ] \
+    || fail "BMS admission and finalization do not select the private caller runner pool"
+if grep -Fqx '    runs-on: ubuntu-latest' "$entry_workflow"; then
+    fail "BMS entry still unconditionally bills control jobs to hosted runners"
+fi
 
 grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = kuasar-sandbox/kuasar-sandbox ]" "$workflow" \
     || fail "trusted workflow repository does not use the project repository identity"

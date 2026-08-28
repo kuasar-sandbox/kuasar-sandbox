@@ -182,10 +182,12 @@ environment when no proxy is configured.
 All runners join the existing `kuasar-e2e` organization group with labels
 `kuasar-e2e,kvm,cgroup-v2` plus a slot label. The group must remain
 organization-wide (`visibility=all`) so all six private repositories can call
-it. Its workflow restriction must allow only
-`kuasar-sandbox/kuasar-sandbox/.github/workflows/bms-e2e.yml@refs/heads/main`;
-component wrappers and the trusted platform entry cannot allocate these runners
-through any other workflow implementation.
+it. The group does not use a workflow allowlist because the trusted central BMS
+entry and private component release workflows also allocate this pool. Jobs that
+execute pull request source retain read-only credentials; status and release
+write credentials are limited to control jobs that do not execute candidate
+source. These privileged containers are still not a security boundary, so the
+pool must be operated as trusted infrastructure and periodically reprovisioned.
 
 Start and verify infrastructure isolation:
 
