@@ -9,17 +9,17 @@ vsock / UDS)协作。本文档定义这些进程在生产部署中的归属、�
 
 ## 1. 角色概览
 
-部署角色按数据路径和控制面拓扑选择.本地文件、共享文件存储与
+部署角色按数据路径和控制面拓扑选择.本地文件,共享文件存储与
 Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署的强制前提.
 
 **节点与集群角色**
 
 | 角色 | 职责 | 关键进程 |
 |---|---|---|
-| Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行(§5) | `node-ctl conductor serve`(含可选 `resource_listen`;external proxy 模式另启 master + workers)、`sandbox-ctl × N`;Manifest 路径按需部署 `cache-ctl` 和 `store-ctl` |
-| Shared Storage | 为命名 `file://` location 提供跨节点原生文件访问 | 部署方提供的 NAS、NFS 或共享文件系统 |
+| Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行(§5) | `node-ctl conductor serve`(含可选 `resource_listen`;external proxy 模式另启 master + workers),`sandbox-ctl × N`;Manifest 路径按需部署 `cache-ctl` 和 `store-ctl` |
+| Shared Storage | 为命名 `file://` location 提供跨节点原生文件访问 | 部署方提供的 NAS,NFS 或共享文件系统 |
 | L2 Cache Cluster(可选) | 为 Manifest 路径提供分布式 EC 缓存,未部署时 cache 可以本地命中或直接回源 | `cache-ctl shard` |
-| Cluster Control Plane(可选) | E2B 兼容多节点控制面:registry 维护执行态,router 提供统一入口,placer 导入 group 并放置;生命周期仍由 node 执行 | `cluster-ctl registry`、`cluster-ctl router`、`cluster-ctl placer` |
+| Cluster Control Plane(可选) | E2B 兼容多节点控制面:registry 维护执行态,router 提供统一入口,placer 导入 group 并放置;生命周期仍由 node 执行 | `cluster-ctl registry`,`cluster-ctl router`,`cluster-ctl placer` |
 
 **外部共享资源**(由部署方运营,平台外)
 
@@ -92,8 +92,8 @@ standalone,cluster和external-proxy真实guest E2E的必需客户端;这些测�
 ### 2.3 持久化与运行时目录
 
 ```
-/var/store/                          store-ctl 使用 fs backend 时的数据目录(可位于本地或共享文件系统)
-/var/cache/accel-l1/                 cache-ctl local/tiered 的 L1 RocksDB(容量由工作集决定)
+/var/store/                          store-ctl fs-backend data (local or shared filesystem)
+/var/cache/accel-l1/                 cache-ctl local/tiered L1 RocksDB (working-set-sized)
 /run/node-ctl/                       node-ctl audit + state(tmpfs)
 /run/sandbox/<sid>/                  每沙箱运行时目录:socket + snap-stage/snap-state(CH 元数据中转,tmpfs)
 /var/lib/sandbox/<sid>/              每沙箱磁盘目录:overlay 写层 <sid>.overlay.diff(本地 NVMe)
@@ -206,14 +206,14 @@ L2 是 Manifest 数据路径的可选加速层.部署可以只使用 local cache
 
 ### 3.1 集群规格
 
-- **规模**:由工作集、命中率目标、SSD 容量、网络和故障域实测决定
+- **规模**:由工作集,命中率目标,SSD 容量,网络和故障域实测决定
 - **编码**:配置 RS 4+1(`data_shards: 4, parity_shards: 1`)时,每个 chunk 编码为
   5 个 shard
 - **放置**:Maglev 一致性哈希.每个 chunk 的 5 个 shard 由 chunk hash 通过
   `LocateN(key, 5)` 在配置的 peer 池中确定性选出.5 peer 是该 RS 配置的
   最小集群规模,扩容不改变 placement 算法.详见
   `docs/cache.md` §4.9
-- **资源**:SSD、RocksDB BlockCache(`mem_ratio`)和网络规格按部署测量选择
+- **资源**:SSD,RocksDB BlockCache(`mem_ratio`)和网络规格按部署测量选择
 - **隔离**:不同应用域(镜像 chunk / 快照 chunk)可独立部署集群实例,同一套
   软件配置不同 RocksDB path + 不同集群成员
 - **持久化**:RocksDB on `/mnt/ssd/accel-l2`,daemon 进程崩溃可热重启不丢数据
@@ -244,7 +244,7 @@ shard 节点本身无须感知集群成员;它只是个 KV。
 
 本地和命名共享文件工件由文件系统直接承载.Manifest 路径的 `store-ctl` 支持
 FS 和 S3-compatible 后端:FS root 可以位于本地盘或共享文件系统,S3-compatible
-后端可以使用一个或多个 bucket.后端的容量、故障域和共享范围由部署方选择.
+后端可以使用一个或多个 bucket.后端的容量,故障域和共享范围由部署方选择.
 store 内部路径由 `store-ctl` 维护,详见 `docs/store.md`.
 
 S3-compatible 后端使用部署配置或 SDK 默认凭据链.凭据只进入可信 host 服务,
@@ -431,7 +431,7 @@ cluster-ctl placer
    │      RocksDB on SSD                                                                              │
    │      Maglev placement:   LocateN( chunk_hash, 5 )  over full peer pool   (RS 4+1)                │
    │                                                                                                  │
-   │      no origin credentials here — origin access stays in each Compute Node's store-ctl           │
+   │      no origin credentials here - origin access stays in each Compute Node's store-ctl           │
    │                                                                                                  │
    └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -518,30 +518,30 @@ tiered` 自己处理 L2 不可达。
        sandbox-ctl × N (node-ctl 可省,手工 run)
 ```
 
-无 L2 cluster、无远程对象存储、无独立资源控制器(资源仲裁随 `node-ctl conductor serve` 内置,`resource_listen`
+无 L2 cluster,无远程对象存储,无独立资源控制器(资源仲裁随 `node-ctl conductor serve` 内置,`resource_listen`
 未配则静态 cgroup);`manifest-ctl` 走本机 `store-ctl` + `cache-ctl`。对应 `docs/cache.md`
 §3.2 (local 模式)。**单机直供 e2b SDK,无需 cluster 层(`node-ctl conductor serve` 即北向面)**。
 
 ### 10.2 生产单 AZ
 
 ```
-Compute:           按峰值 working set、活跃比例、恢复成本和安全余量扩展
+Compute:           scale by peak working set, active ratio, restore cost, and safety margin
 Storage:           Local NVMe / NAS / NFS / FS or S3-compatible store
-Optional cache:    local cache,或按命中率与故障域扩展的 L2 shard cluster
-Control plane:     node-ctl standalone,或 registry + router + placer
+Optional cache:    local cache or an L2 shard cluster sized by hit rate and failure domain
+Control plane:     node-ctl standalone or registry + router + placer
 ```
 
 每个 compute 节点运行 `node-ctl` 和当前沙箱对应的 `sandbox-ctl`;使用 Manifest
-数据路径时再部署 `store-ctl` 与可选 `cache-ctl`.节点数量、单节点并发和 cache
-容量必须用目标版本、硬件、沙箱规格与 workload 实测,不能由架构图中的固定值推导.
-Cluster Control Plane 由 registry 自聚簇、LB 后的 router 和 placer 组成,副本数按
+数据路径时再部署 `store-ctl` 与可选 `cache-ctl`.节点数量,单节点并发和 cache
+容量必须用目标版本,硬件,沙箱规格与 workload 实测,不能由架构图中的固定值推导.
+Cluster Control Plane 由 registry 自聚簇,LB 后的 router 和 placer 组成,副本数按
 可用性与负载选择.
 
 ### 10.3 多 AZ
 
 每个 AZ 可以独立运行 compute 和可选 L2 cache,并按故障域选择共享文件系统或
 S3-compatible store.使用 tiered cache 时,compute 节点通常优先连接本 AZ peer,
-减少跨 AZ 热路径流量.是否跨 AZ 共享内容由内容密钥、安全域和后端配置共同决定,
+减少跨 AZ 热路径流量.是否跨 AZ 共享内容由内容密钥,安全域和后端配置共同决定,
 不能仅因内容相同自动跨租户或跨故障域共享.
 
 ## 11. 配置入口速查
@@ -572,7 +572,7 @@ S3-compatible store.使用 tiered cache 时,compute 节点通常优先连接本 
 - [`docs/kuasar-sandbox.md`](kuasar-sandbox.md) — 系统设计总览:业务目标、子系统分工、端到端数据流
 - `sandboxer/docs/sandbox.md`(发布包:`docs/sandbox.md`) — compute node 上 `sandbox-ctl` 的完整生命周期
 - `accelerator/docs/cache.md`(发布包:`docs/cache.md`) §3.1 — `local` / `shard` / `tiered` 三形态选择;§4.9 Maglev 一致性哈希
-- `accelerator/docs/store.md`(发布包:`docs/store.md`) — 后端选择(FS / S3-compatible)与内部存储组织
+- `accelerator/docs/store.md`(发布包:`docs/store.md`) - 后端选择(FS / S3-compatible)与内部存储组织
 - `orchestrator/docs/node-resource.md`(发布包:`docs/node-resource.md`) — 节点资源控制协议
 - `orchestrator/docs/node.md` — e2b 兼容控制面与节点主机;`cluster.md` — 集群级注册表 / 路由 / 放置
 - `accelerator/docs/manifest.md`(发布包:`docs/manifest.md`) — `MANIFEST_CONFIG` 格式与 loader 契约
