@@ -48,6 +48,11 @@ Manifest 和 density harness 还会按脚本检查 Docker,网络与文件系统�
 | Timing | 起止事件,是否包含下载/构建/导入,时钟来源和 timeout |
 | Source | harness 命令,环境变量,原始日志,machine-readable samples 和 CI Run URL |
 
+当前 `sandbox-perf.sh` 和 `sandbox-perf-manifest.sh` 的聚合输出只保留成功迭代并报告
+成功样本数 `N`;失败迭代只出现在完整运行日志中.使用这些入口时必须同时保存请求的
+`ITERS`,完整日志以及成功/失败/skip 计数.无法恢复总分母和失败率的聚合输出不能单独
+作为性能证据.
+
 结果缺少任一必要维度时,可以用于本地诊断,但不能作为项目级性能事实.设计阈值必须标注
 为 target 或 regression gate;门禁通过只说明该候选满足该测试合同,不自动形成生产 SLO.
 
@@ -95,7 +100,7 @@ restore 场景.报告应至少包含:
 - sandboxer 内部阶段,VMM 和 Guest ready 证据;
 - 按需读取的请求,字节,错误和 cache 来源;
 - snapshot publish,父层解析和 restore 的独立时长;
-- 每个场景的全部样本,失败率与分位数.
+- 请求迭代数,成功样本,失败/skip 计数与失败率,以及成功样本的分位数.
 
 `<run-root>/<sid>/ctl.sock` 只证明 host 控制 socket 存在.性能 harness 必须使用实际
 Guest 命令,健康检查或 workload ready 条件作为完成信号.
@@ -145,8 +150,8 @@ floor/startup/capacity,workload 参数,观察窗口和随机种子.
 - 每个沙箱的 admission,settled,grant,reject 和终态;
 - host `MemAvailable` 与 sandbox cgroup `memory.current/events.local`;
 - Guest workload 是否完成,以及 Guest/cgroup OOM;
-- 启动,活跃,回收,暂停和恢复阶段的时间线;
-- Reservation pool 的水位,startup reserve,operational margin 和恢复状态.
+- 启动,活跃,回收和终止阶段的时间线;
+- Reservation pool 的水位,startup reserve 和 operational margin.
 
 ### 5.2 解释边界
 

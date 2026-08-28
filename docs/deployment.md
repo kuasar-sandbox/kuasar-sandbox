@@ -16,7 +16,7 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 
 | 角色 | 职责 | 关键进程 |
 |---|---|---|
-| Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行(§5) | `node-ctl conductor serve`(含可选 `resource_listen`;external proxy 模式另启 master + workers),`sandbox-ctl × N`;Manifest 路径按需部署 `cache-ctl` 和 `store-ctl` |
+| Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行(§5) | `node-ctl conductor serve`(含可选 `resource_listen`;external proxy 模式另启 master + workers),`sandbox-ctl × N`;Manifest 数据路径按需部署 `cache-ctl`,Manifest 数据路径或产生镜像的构建需要 `store-ctl` |
 | Shared Storage | 为命名 `file://` location 提供跨节点原生文件访问 | 部署方提供的 NAS,NFS 或共享文件系统 |
 | L2 Cache Cluster(可选) | 为 Manifest 路径提供分布式 EC 缓存,未部署时 cache 可以本地命中或直接回源 | `cache-ctl shard` |
 | Cluster Control Plane(可选) | E2B 兼容多节点控制面:registry 维护执行态,router 提供统一入口,placer 导入 group 并放置;生命周期仍由 node 执行 | `cluster-ctl registry`,`cluster-ctl router`,`cluster-ctl placer` |
@@ -39,7 +39,7 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 | `node-ctl`(`serve`)| 本机沙箱编排 + e2b 兼容控制面 + 节点级资源仲裁(`resource_listen`)+ node-link 集群接入客户端;经 run-id 模板单元 `sandbox-runner@<run-id>`/`sandbox-builder@<run-id>` 驱动 sandbox-ctl;`proxy.mode=internal` 时还在本进程承载数据面 proxy | 单实例 | systemd | 平台内,`orchestrator/docs/node.md`(资源协议见 node-resource.md)|
 | `node-ctl proxy`(`serve`,external 仅)| proxy master 经 config-socket 订阅路由与 conductor-owned MMDS policy、绑定独立数据/MMDS入口并管理 worker;worker 用 mmap 读取固定路由,经 master 本机 RPC 查询可变 MMDS route/value/service,执行数据面鉴权、反代及 native exec gate | 1 master + `workers` 个 worker | systemd | 平台内,`orchestrator/docs/node-proxy.md` |
 | `cache-ctl`(`mode: local|tiered`,可选)| Manifest 数据入口:节点本地 L1,可选 EC L2 和 store origin | 每节点至多一个实例 | systemd,使用 Manifest 路径时先于 node-ctl | 平台内,`docs/cache.md` |
-| `store-ctl`(可选) | Manifest store 的节点侧 FS/S3-compatible 读写服务 | 每节点至多一个实例 | systemd,使用 Manifest 路径时启动 | 平台内,`docs/store.md` |
+| `store-ctl`(可选) | Manifest store 的节点侧 FS/S3-compatible 读写服务 | 每节点至多一个实例 | systemd,使用 Manifest 数据路径或执行产生镜像的构建时启动 | 平台内,`docs/store.md` |
 | `sandbox-ctl`(`run`) | 单个沙箱的控制平面(类 `runc run`);非 daemon | 每沙箱一个 | 由 node-ctl 经 `sandbox-runner@<run-id>` 单元(`run-sandbox`)assignment 后启动 | 平台内,`docs/sandbox.md` |
 | `cloud-hypervisor` | VMM(patched);`sandbox-ctl` 子进程 | 每沙箱一个 | `sandbox-ctl` 派生 | 平台内,`docs/cloud-hypervisor.md` |
 
@@ -290,11 +290,12 @@ e2b 模板构建在 compute 节点上进行,**无独立展平池**:每个构建�
 ### 5.2 收尾上传(平台凭据唯一出现点)
 
 阶段产物经宿主 workdir 顺序交接;终态:img ⇒ `manifest-ctl store image.img` 后形成
-canonical manifest ref;快照 ⇒ 一条 `sandbox-ctl upload-snapshot <bundle>`。未配置
-named location 时发布到 manifest;配置 `checkpoint.remote.ref_location_parent` 时发布到
-共享文件 location。持久 id 为
-`<profile>-<kind>-<base64url(canonical-portable-ref)>`。manifest 模式由本机
-`store-ctl`(§2.1 sidecar)承载远端写。
+canonical manifest ref;快照 ⇒ 一条 `sandbox-ctl upload-snapshot <bundle>`.产生镜像的
+构建始终需要可用的 `store-ctl`;`checkpoint.remote.ref_location_parent` 只选择快照
+发布位置.未配置 named location 时快照发布到 Manifest;配置后发布到共享文件 location.
+持久 id 为
+`<profile>-<kind>-<base64url(canonical-portable-ref)>`.Manifest 模式由本机
+`store-ctl`(§2.1 sidecar)承载远端写.
 
 ### 5.3 凭据与隔离
 
@@ -447,14 +448,16 @@ cluster-ctl placer
    │     A import ──► B steps ──► C template      ( guest: flatten-ctl / envd; tenant net stays in VM )│
    │                                              │  image.img / snapshot bundle  (host workdir)       │
    │                                              ▼                                                    │
-   │   publish ──► local/named file location, or Manifest ──► store-ctl ──► (FS / S3-compatible store) │
+   │   image ──► manifest-ctl store ──► store-ctl ──► FS / S3-compatible store                        │
+   │   snapshot ──► local/named file location                                                         │
+   │            └──► Manifest ──► store-ctl ──► FS / S3-compatible store                              │
    │                                                                                                  │
    └──────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-构建复用 compute 节点既有的 vswitch 网络槽(guest 拉取出网).选择 Manifest 发布时
-复用 `store-ctl`;选择本地或命名共享文件 location 时直接发布文件.两种路径都无
-独立构建池或额外常驻进程(§5).
+构建复用 compute 节点既有的 vswitch 网络槽(guest 拉取出网).产生镜像的构建始终经
+`manifest-ctl store` 复用 `store-ctl`;本地或命名共享文件 location 只改变快照发布路径.
+两种快照路径都无独立构建池或额外常驻进程(§5).
 
 ## 8. 启停依赖
 
@@ -462,8 +465,8 @@ cluster-ctl placer
 
 **外部依赖(按部署选择)**
 
-1. 本地/共享文件路径已挂载并可访问;若使用 Manifest,对应 FS 或 S3-compatible
-   store 后端已就绪
+1. 本地/共享文件路径已挂载并可访问;若使用 Manifest 数据路径或执行产生镜像的构建,
+   对应 FS 或 S3-compatible store 后端已就绪
 
 **L2 Cache Cluster(可选,在使用它的 compute 之前)**
 
@@ -472,7 +475,8 @@ cluster-ctl placer
 
 **Compute Node(每节点独立)**
 
-4. 使用 Manifest 时启动 `store-ctl`,确认 active generation 已 init 且 gRPC 健康
+4. 使用 Manifest 数据路径或执行产生镜像的构建时启动 `store-ctl`,确认 active
+   generation 已 init 且 gRPC 健康
 5. 使用 cache 时启动 `cache-ctl local|tiered`;tiered 模式确认 L2 peer 和 store
    origin 可达
 6. `node-ctl conductor serve`(`resource_listen`)→ state 恢复或冷启;e2b SDK
@@ -482,8 +486,9 @@ cluster-ctl placer
 故障层视作 miss 下穿(详见 `docs/cache.md` §错误模型)。**写**路径
 (`manifest-ctl store` 直连 `store-ctl`)在所选持久化后端 / store-ctl 不可达时会失败.
 
-模板构建复用 compute 节点的 `node-ctl`;选择 Manifest 输出时再复用 `store-ctl`,
-无独立启停依赖.`node-ctl` 与所选数据后端就绪后即可经 e2b API 接受构建(§5).
+模板构建复用 compute 节点的 `node-ctl`;产生镜像的构建还需要 `store-ctl`,没有产生
+镜像时只按所选快照路径准备数据后端.`node-ctl` 与所需数据后端就绪后即可经 e2b API
+接受构建(§5).
 
 ### 8.2 关闭顺序(自顶向下)
 
