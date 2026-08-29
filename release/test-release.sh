@@ -93,9 +93,32 @@ if find "$TMP/bundle/assets" -maxdepth 1 -type f -name 'release-*.yaml' | grep -
   release_fail "aggregate assets contain a release manifest"
 fi
 for unit in "${RELEASE_UNITS[@]}"; do
+  tag="$(awk -F '\t' -v unit="$unit" '$1 == unit {print $2}' "$TMP/selection.tsv")"
+  grep -Fqx "| \`$unit\` | \`$tag\` |" "$TMP/bundle/release-notes.md" \
+    || release_fail "aggregate release notes omit $unit from the version table"
   grep -Fqx "### $unit" "$TMP/bundle/release-notes.md" \
     || release_fail "aggregate release notes omit $unit updates"
 done
+for heading in \
+  '## Highlights' \
+  '## Supported environment' \
+  '## Quick Start' \
+  '## Production deployment' \
+  '## Known limitations' \
+  '## Security' \
+  '## Versioning and release channels'; do
+  grep -Fqx "$heading" "$TMP/bundle/release-notes.md" \
+    || release_fail "aggregate release notes omit $heading"
+done
+grep -Fq 'This aggregate is a Stable, non-prerelease release.' \
+  "$TMP/bundle/release-notes.md" \
+  || release_fail "formal release notes do not identify the Stable channel"
+grep -Fq 'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.0/docs/quickstart.md' \
+  "$TMP/bundle/release-notes.md" \
+  || release_fail "formal release notes omit the Quick Start link"
+grep -Fq 'https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new' \
+  "$TMP/bundle/release-notes.md" \
+  || release_fail "formal release notes omit the private security reporting link"
 grep -Fq 'This is the first formal aggregate release' "$TMP/bundle/release-notes.md" \
   || release_fail "first formal release notes do not identify the missing baseline"
 if grep -Fq 'Previous aggregate selection:' "$TMP/bundle/release-notes.md"; then

@@ -215,10 +215,42 @@ assemble_release() {
 }
 
 write_release_notes() {
-  local version="$1" previous="$2" selection="$3" updates="$4" output="$5"
+  local version="$1" previous="$2" selection="$3" updates="$4" output="$5" unit tag
   {
-    printf 'Kuasar Sandbox %s.\n\n' "$version"
-    printf 'This aggregate contains the platform documentation/test package and the exact component archives validated together on BMS.\n\n'
+    printf '# Kuasar Sandbox %s\n\n' "$version"
+    printf 'Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains the platform documentation/test package and the exact component archives validated together on real-KVM BMS.\n\n'
+    printf '## Highlights\n\n'
+    printf '%s\n' \
+      '- Independent Guest Kernel isolation for each MicroVM sandbox.' \
+      '- Snapshot templates for creating independent instances, plus stateful pause and resume for the same logical sandbox.' \
+      '- Local files, shared file storage, and object storage with layered caches as selectable data paths.' \
+      '- Node admission and resource reclamation for safely improving effective sandbox density.' \
+      '- Isolated high-speed networking, an E2B-compatible API, and single-node or multi-node deployment.'
+    printf '\n## Component versions\n\n'
+    printf '| Release unit | Version |\n|---|---|\n'
+    while IFS=$'\t' read -r unit tag; do
+      printf '| `%s` | `%s` |\n' "$unit" "$tag"
+    done < "$selection"
+    printf '\nThe five component repositories version and publish independently. `guest-runtime` supplies the `runtime` and `vmlinux` release units but remains one component repository. This aggregate pins all six units as one tested platform combination.\n\n'
+    printf '## Supported environment\n\n'
+    printf 'Prebuilt assets target Linux x86_64 with glibc 2.38 or newer. A host needs systemd, cgroup v2, writable `/dev/kvm`, and root or non-interactive sudo. Source builds also support `TARGET_ARCH=aarch64`; aarch64 is not part of this prebuilt release.\n\n'
+    printf '## Quick Start\n\n'
+    printf 'Follow the [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/quickstart.md) to download all eight explicit assets from this aggregate, verify `SHA256SUMS`, prepare a template, and exercise create, guest exec, pause, reconnect/resume, kill, and cleanup with the unmodified E2B Python SDK.\n\n' "$version"
+    printf '## Production deployment\n\n'
+    printf 'The system supports production deployment. Operators should complete workload-specific capacity validation and configure production TLS, durable storage, network policy, credentials, monitoring, and recovery for their topology. See [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/deployment.md).\n\n' "$version"
+    printf '## Known limitations\n\n'
+    printf '%s\n' \
+      '- Multi-node clusters and centralized network policy require their documented supporting infrastructure.' \
+      '- The Quick Start self-signed certificates, local registry, and demo credentials are for evaluation only.' \
+      '- Node-local lightweight Egress and OpenTelemetry remain Proposed and are not release prerequisites.'
+    printf '\n## Security\n\n'
+    printf 'Report vulnerabilities privately through [Report a vulnerability](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new). Do not disclose unpatched vulnerabilities in public issues.\n\n'
+    printf '## Versioning and release channels\n\n'
+    if is_preview "$version"; then
+      printf 'This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.\n\n'
+    else
+      printf 'This aggregate is a Stable, non-prerelease release. Preview continues as the development and evaluation channel. Production readiness and public release-channel stability are separate dimensions.\n\n'
+    fi
     if [ -n "$previous" ]; then
       printf "Previous aggregate selection: \`%s\`.\n\n" "$previous"
     elif is_preview "$version"; then
@@ -226,11 +258,7 @@ write_release_notes() {
     else
       printf 'This is the first formal aggregate release; no preview or repository history is used as a comparison baseline.\n\n'
     fi
-    printf 'Component versions:\n\n'
-    while IFS=$'\t' read -r unit tag; do
-      printf -- "- \`%s\`: \`%s\`\n" "$unit" "$tag"
-    done < "$selection"
-    printf '\nComponent updates:\n'
+    printf '## Component updates\n'
     while IFS=$'\t' read -r unit _; do
       [ -s "$updates/$unit.md" ] || release_fail "component update notes are missing: $unit"
       printf '\n### %s\n\n' "$unit"
@@ -263,11 +291,28 @@ validate_bundle() {
   resolve_selection "$ROOT" "$version" "$expected_selection"
   cmp -s "$expected_selection" "$bundle/selection.tsv" \
     || release_fail "aggregate selection does not match project repository main"
-  local unit
-  for unit in "${RELEASE_UNITS[@]}"; do
+  local heading
+  for heading in \
+    "# Kuasar Sandbox $version" \
+    '## Highlights' \
+    '## Component versions' \
+    '## Supported environment' \
+    '## Quick Start' \
+    '## Production deployment' \
+    '## Known limitations' \
+    '## Security' \
+    '## Versioning and release channels' \
+    '## Component updates'; do
+    grep -Fqx "$heading" "$bundle/release-notes.md" \
+      || release_fail "aggregate release notes are missing $heading"
+  done
+  local unit tag
+  while IFS=$'\t' read -r unit tag; do
+    grep -Fqx "| \`$unit\` | \`$tag\` |" "$bundle/release-notes.md" \
+      || release_fail "aggregate release notes are missing the $unit version"
     grep -Fqx "### $unit" "$bundle/release-notes.md" \
       || release_fail "aggregate release notes are missing $unit updates"
-  done
+  done < "$expected_selection"
   expected_asset_names "$version" "$expected_selection" | LC_ALL=C sort > "$expected_names"
   find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$actual_names"
   cmp -s "$expected_names" "$actual_names" \

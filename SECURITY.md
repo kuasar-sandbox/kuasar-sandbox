@@ -5,15 +5,17 @@ Kuasar Sandbox 通过项目主仓统一接收系统级和跨组件安全报告,�
 
 ## 当前支持范围
 
-当前公开聚合发行通道为 Preview,尚未发布 Stable 聚合版本.请报告影响最新已发布
-Aggregate Preview 或当前 `main` 的漏洞,并提供实际受影响的精确聚合版本和组件版本.
-较早 Preview 中的问题会根据是否仍影响最新 Preview 或 `main` 进行评估.
+当前支持的公开 Stable 聚合版本是
+[`release-v0.1.0`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.0).
+请报告影响该版本,最新已发布 Aggregate Preview 或当前 `main` 的漏洞,并提供实际受影响的
+精确聚合版本和组件版本.较早 Preview 中的问题会根据是否仍影响当前 Stable,
+最新 Preview 或 `main` 进行评估.
 
 | 版本范围 | 当前状态 |
 |---|---|
-| 最新已发布 Aggregate Preview | 当前公开安全报告范围 |
+| `release-v0.1.0` | 当前 Stable 支持版本 |
+| 最新已发布 Aggregate Preview | 接受预发布通道问题报告 |
 | 当前 `main` | 接受源码问题报告 |
-| Stable 聚合版本 | 尚未发布 |
 
 Preview 是 GitHub prerelease;系统是否支持生产部署与公开发行通道的稳定性标记是
 两个不同维度.

@@ -209,8 +209,9 @@ SHA256SUMS
 ```
 
 六个组件 archive 从组件 Release 按字节复制,不改名、不重压缩。聚合层丢弃各组件独立
-`SHA256SUMS`,生成覆盖 platform 包与六个 archive 的统一校验文件。Release notes 列出所选
-组件 tag,并按两个清单计算出的显式基线汇总六个组件的 commit 更新清单,但不作为机器清单。
+`SHA256SUMS`,生成覆盖 platform 包与六个 archive 的统一校验文件。Release notes 说明项目定位,
+核心能力,支持环境,Quick Start,已知限制,安全报告和发行通道,列出所选的六个发布单元
+tag,并按两个清单计算出的显式基线汇总六个发布单元的 commit 更新清单,但不作为机器清单.
 
 platform 包使用确定性 tar 规则,只包含聚合后的 `docs/` 与可交付 `test/`;不包含组件
 二进制、版本选择、workflow、runner 配置、cache 或凭据。组件 README 与 `docs/` 按仓库
