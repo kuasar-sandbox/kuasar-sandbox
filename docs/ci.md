@@ -160,8 +160,8 @@ make -C kuasar-sandbox test-ci-tools
 runner 安装资料位于 `ci/runner/`。私有组件仓的 BMS 控制 job 和 release 控制 job 使用
 专用 `kuasar-control` 池;执行候选代码的 E2E job 继续使用 `kuasar-e2e` 池和收窄后的 read
 token。两组 runner 使用不同 rootfs、工作目录、标签和 GitHub runner group;角色变更必须先
-清空并从可信模板重建,不能原地改标签。`kuasar-control` 仅向五个私有组件仓开放,拒绝公共仓,
-并用 workflow allowlist 只允许中央 `bms-entry.yml` 和各组件 `main` 上的 release workflow。
+清空并从可信模板重建,不能原地改标签。`kuasar-control` 对组织内全部仓库可见并允许 public,
+同时用 workflow allowlist 只允许中央 `bms-entry.yml` 和各组件 `main` 上的 release workflow。
 公开项目主仓的 BMS 控制 job、每日协调和 aggregate release 控制 job 仍使用 GitHub-hosted runner。runner
 代理属于部署配置,不写入仓库 workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用
 公开中国大陆镜像降低网络抖动。

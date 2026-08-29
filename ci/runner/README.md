@@ -203,12 +203,13 @@ credentials.
 
 Slots 3 and 5 instead join `kuasar-control`, carry only `kuasar-control` and a
 control-slot label, and have separate root filesystems and work directories.
-The control group uses `visibility=selected` for the five private component
-repositories, rejects public repositories, and restricts allocation to the
-trusted central `bms-entry.yml` plus those repositories' release workflows on
-`main`. BMS admission/finalization and release control jobs may hold write
-credentials but never execute candidate source. Candidate E2E jobs cannot
-select the control group, and control jobs cannot select an E2E slot.
+The control group uses organization-wide visibility and permits public
+organization repositories, so new or public repositories do not require a
+runner-group membership update. An exact workflow allowlist still restricts
+allocation to the trusted central `bms-entry.yml` plus the component release
+workflows on `main`. BMS admission/finalization and release control jobs may
+hold write credentials but never execute candidate source. Candidate E2E jobs
+cannot select the control group, and control jobs cannot select an E2E slot.
 
 The containers share a physical host and are deliberately privileged resource
 isolation, not a boundary against a malicious host-level escape. Operate the
