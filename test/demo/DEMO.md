@@ -4,7 +4,7 @@
 `orchestrator` 的全链路跑一遍:`Template().from_image()` 构建模板(**拉取 + 展平在构建沙箱
 microVM 内进行,客户端不再 docker build/push**)→ 启动真实 microVM → guest 内执行命令 →
 **端口转发 + 出网** → 暂停/恢复 → **暂停态转模板扇出** → **一步迁移**(import+resume)→ 销毁。
-SDK 零修改,仅靠环境变量 + 本机 `/etc/hosts` + 自签 TLS(`SSL_CERT_FILE`)指向本节点
+SDK 零修改,仅靠环境变量 + 本机 `/etc/hosts` + 本地 Demo CA 签发的 TLS(`SSL_CERT_FILE`)指向本节点
 (与指向 e2b.dev 的方式一致)。
 
 **存储层是持久化前置**:内容存储(store-ctl)、本地 L1 缓存(cache-ctl,tiered rocksdb)、镜像仓库
@@ -31,6 +31,7 @@ SDK 零修改,仅靠环境变量 + 本机 `/etc/hosts` + 自签 TLS(`SSL_CERT_FI
 - 二进制(源码树中执行 `make -C kuasar-sandbox build`;release 包内已自带):`node-ctl`、`store-ctl`、**`cache-ctl`**(CGO/rocksdb)、
   `flatten-ctl`、`e2b-key-ctl`、`connector-ctl vswitch`、`cloud-hypervisor`、`vmlinux`、`sandbox-runtime.bundle`。
 - 主机:**systemd 为 PID1 + root**(编排经 D-Bus 驱动单元;TLS :443;KVM);可读写 `/dev/kvm`。
+- 资源:Demo 构建沙箱使用 2 vCPU,6 GiB capacity 和 4 GiB allocatable;主机还需为系统服务和运行沙箱留余量.
 - **e2b Python SDK**:`pip install e2b e2b-code-interpreter`。
 - 工具:`python3`、`openssl`、`iproute2(ip)`、`curl`、`sqlite3`、`iptables`;`demo_prep.sh` 另需 `docker`(一次性把
   base 镜像 seed 进仓库)和(无第三方仓库时)`zot`。
@@ -49,6 +50,7 @@ bash kuasar-sandbox/test/demo/demo_prep.sh            # 或不设 REGISTRY → �
 
 # ② 每次演示(读取 demo_prep 写出的 ~/.cache/kuasar-demo/prep.env)
 sudo bash kuasar-sandbox/test/demo/demo_e2b.sh        # 普通用户也行:会自动 sudo 重入
+DEMO_QUICKSTART=1 sudo bash …/demo_e2b.sh             # pause/resume + kill 后结束,跳过扇出与迁移
 DEMO_PAUSE=1   sudo bash …/demo_e2b.sh                # 每步回车暂停(适合逐步讲解 / 另开终端操作)
 DEMO_KEEP=1    sudo bash …/demo_e2b.sh                # 保留每次工作目录排查
 DEMO_NETDIAG=1 sudo bash …/demo_e2b.sh                # 网络步失败不中止
@@ -108,7 +110,8 @@ e2b SDK 用 `E2B_DOMAIN` 推出控制面 `https://api.<domain>` 与数据面 `ht
   (凭据来自租户默认或任务级 token,见 node.md §12),**不再有客户端 docker build/push 或 `E2B_IMAGE_URI_MASK`**。
   镜像 ref 须**从构建沙箱可达**:本地 zot 的 ref 由脚本自动改写为 vswitch mgmt VIP
   (`169.254.169.254:<port>`),再由 `--mgmt-service` 转到 `127.0.0.1:<port>`;第三方仓库经 NAT 出网直达。
-- 自签 `*.<domain>` 证书 + **`SSL_CERT_FILE=<cert>`**(httpx 信任)让 SDK 接受 TLS。
+- 本地 Demo CA 签发 `CA:FALSE` 的 `*.<domain>` 服务器证书 +
+  **`SSL_CERT_FILE=<ca.crt>`** 让 SDK 验证 TLS.
 - `/etc/hosts` 把 `api.<domain>` 与每个沙箱的 `49983/49999/<port>-<sid>.<domain>` 解析到 `127.0.0.1`(创建后加、退出删)。
 
 ## 说明与注意
@@ -120,7 +123,7 @@ e2b SDK 用 `E2B_DOMAIN` 推出控制面 `https://api.<domain>` 与数据面 `ht
   `launch.user=0:0`,不沿用镜像 `Config.User`)。
 - **持久存储复用**:`demo_prep.sh` 的 store/cache/仓库常驻、数据落 `DEMO_DATA_DIR`(默认 `~/.cache/kuasar-demo`),
   跨多次演示去重缓存 → 复跑快;`demo_prep.sh reset` 清空重来。
-- **自签 TLS** 仅为本机演示;生产用通配 `*.<domain>` 正式证书(见 `orchestrator/docs/node.md` §13)。
+- **本地 Demo CA 签发的 TLS** 仅为本机演示;生产用通配 `*.<domain>` 正式证书(见 `orchestrator/docs/node.md` §13).
 
 自动化回归(断言版、非讲解版)见 `kuasar-sandbox/test/e2e/`:`e2e_run_builder.sh`(三阶段构建流水线:
 guest 内拉取展平 → steps → 模板快照 → 从产物模板 create)与 `e2e_execute.sh`(启动+执行+暂停/恢复状态存活)。

@@ -21,7 +21,7 @@
 #
 # The SDK reaches this node exactly as it reaches e2b.dev: control plane at
 # https://api.<domain>, data plane at https://<port>-<sid>.<domain>. We resolve those
-# locally (/etc/hosts + a self-signed *.<domain> cert; SSL_CERT_FILE so httpx trusts
+# locally (/etc/hosts + a demo-CA-signed *.<domain> cert; SSL_CERT_FILE so httpx trusts
 # it) and point the SDK with E2B_DOMAIN / E2B_API_KEY. Nothing about the SDK changes.
 #
 # Requires: demo_prep.sh already run; e2b Python SDK; systemd+root; /dev/kvm; openssl,
@@ -99,9 +99,9 @@ trap cleanup EXIT
 hosts_add() { local fqdn="$1"; grep -q "[[:space:]]$fqdn\b" /etc/hosts 2>/dev/null || echo "127.0.0.1 $fqdn # demo-e2b-$$" >> /etc/hosts; }
 free_port() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1]);s.close()'; }
 
-# py — run a Python SDK snippet with the node env (control plane + self-signed TLS trust).
+# py — run a Python SDK snippet with the node env (control plane + demo CA trust).
 py() { HOME="$WORK/home" E2B_DOMAIN="$DOMAIN" E2B_API_KEY="$AK" E2B_ACCESS_TOKEN="sk_demo" \
-       SSL_CERT_FILE="$WORK/tls.crt" REQUESTS_CA_BUNDLE="$WORK/tls.crt" NO_PROXY='*' python3 - "$@"; }
+       SSL_CERT_FILE="$WORK/demo-ca.crt" REQUESTS_CA_BUNDLE="$WORK/demo-ca.crt" NO_PROXY='*' python3 - "$@"; }
 
 # ===========================================================================
 banner "Per-run node stack (orchestrator + eBPF switch; storage tier already up)"
@@ -116,9 +116,38 @@ say "builder diff_template — build-sandbox writable disk (pull cache + steps d
 # chunk staging can coexist. 24 GiB sparse covers a code-interpreter (~3 GB) build.
 BLD="$WORK/builder-24G.ext4"; truncate -s 24G "$BLD"; "$MKFS_EXT4" -F -q -b 4096 "$BLD" >/dev/null 2>&1 || die "mkfs.ext4 (builder)"
 
-say "self-signed *.$DOMAIN cert (SDK trusts it via SSL_CERT_FILE; data plane is https)"
-openssl req -x509 -newkey rsa:2048 -nodes -keyout "$WORK/tls.key" -out "$WORK/tls.crt" -days 2 \
-    -subj "/CN=*.$DOMAIN" -addext "subjectAltName=DNS:*.$DOMAIN,DNS:$DOMAIN" >/dev/null 2>&1 || die "openssl"
+say "local demo CA + *.$DOMAIN server cert (SDK trusts the CA via SSL_CERT_FILE; data plane is https)"
+cat > "$WORK/ca.cnf" <<EOF
+[req]
+distinguished_name=dn
+prompt=no
+x509_extensions=v3_ca
+[dn]
+CN=Kuasar Demo CA
+[v3_ca]
+basicConstraints=critical,CA:TRUE,pathlen:0
+keyUsage=critical,keyCertSign,cRLSign
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid:always,issuer
+EOF
+openssl req -x509 -newkey rsa:2048 -nodes \
+    -keyout "$WORK/demo-ca.key" -out "$WORK/demo-ca.crt" -days 2 \
+    -config "$WORK/ca.cnf" >/dev/null 2>&1 || die "openssl demo CA"
+openssl req -newkey rsa:2048 -nodes -keyout "$WORK/tls.key" -out "$WORK/tls.csr" \
+    -subj "/CN=*.$DOMAIN" >/dev/null 2>&1 || die "openssl server request"
+cat > "$WORK/tls.ext" <<EOF
+[server_cert]
+basicConstraints=critical,CA:FALSE
+keyUsage=critical,digitalSignature,keyEncipherment
+extendedKeyUsage=serverAuth
+subjectKeyIdentifier=hash
+authorityKeyIdentifier=keyid,issuer
+subjectAltName=DNS:*.$DOMAIN,DNS:$DOMAIN
+EOF
+openssl x509 -req -in "$WORK/tls.csr" \
+    -CA "$WORK/demo-ca.crt" -CAkey "$WORK/demo-ca.key" -CAcreateserial \
+    -out "$WORK/tls.crt" -days 2 -sha256 \
+    -extfile "$WORK/tls.ext" -extensions server_cert >/dev/null 2>&1 || die "openssl server cert"
 
 # manifest store/cache point at the persistent UDS daemons (demo_prep.sh).
 cat > "$WORK/manifest.yaml" <<EOF
@@ -172,19 +201,21 @@ paths: { run_root: $WORK/run, base_root: $WORK/lib, config_socket: $WORK/node-ct
 units: { dir: $UNIT_DIR }
 sandbox:
   network: { switch: $SWITCH }            # e2b defaults: ip 169.254.0.21/30 nexthop .22; hostname/dns injected via files:
+  resources:
+    capacity: { cpu: 2, memory: 6GiB }     # phase VM peak; Template.build resources remain admission inputs
+    allocatable: { cpu: 2, memory: 4GiB }  # preserve peak headroom while retaining Balloon reclaim semantics
+    watermark_high: { ratio: 0.95 }        # single-node demo leaves build working-set headroom below hard max
   boot:
     kernel: $BIN/vmlinux
     runtime: $BIN/sandbox-runtime.bundle
     overlay_diff_template: $OVL
-builder:                                    # no image_uri_mask: from_image names the image directly
+builder:                                    # Template.build supplies resources; from_image names the image directly
   insecure_registry: $INSECURE
   diff_template: $BLD
-  vcpu: 2                                   # build-VM budget: flatten streams, page cache reclaims —
-  memory: 2GiB                              # 2GiB suffices for a ~3GB base on a small demo host
-  pull_timeout_sec: 600                     # full A+B+C build on a ~3GB base: generous per-phase budgets
+  pull_timeout_sec: 1800                    # pull + flatten can be CPU/storage bound on a first run
   step_timeout_sec: 300
   ready_timeout_sec: 120
-  total_timeout_sec: 1800
+  total_timeout_sec: 2400
 $FILES_STORAGE_CFG
 checkpoint: { mode: local, local_dir: $WORK/saved }
 EOF
@@ -246,7 +277,7 @@ ok "tenant ready — e2b API key ${AK:0:16}…  (format e2b_<hex>)"
 # world-readable env for another terminal to drive the Python SDK against this node
 cat > "$CLI_ENV_FILE" <<EOF
 export E2B_DOMAIN='$DOMAIN' E2B_API_KEY='$AK' E2B_ACCESS_TOKEN='sk_demo'
-export SSL_CERT_FILE='$WORK/tls.crt' REQUESTS_CA_BUNDLE='$WORK/tls.crt' NO_PROXY='*'
+export SSL_CERT_FILE='$WORK/demo-ca.crt' REQUESTS_CA_BUNDLE='$WORK/demo-ca.crt' NO_PROXY='*'
 EOF
 chmod 644 "$CLI_ENV_FILE"
 say "another terminal can drive the SDK: ${c_cmd}source $CLI_ENV_FILE${c_off}${c_dim} then python3 -c 'from e2b import Sandbox; …'${c_off}"
@@ -302,7 +333,7 @@ tpl = (tpl
     .set_workdir("/home/user/site")                    # B: WORKDIR
     .set_start_cmd("python3 -m http.server 8000 --directory /home/user/site",   # C: startCmd → snapshot
                    wait_for_url("http://localhost:8000/")))                     # C: readyCmd (curl; base lacks ss)
-info = Template.build(tpl, name="demo-app", cpu_count=2, memory_mb=2048, on_build_logs=show)
+info = Template.build(tpl, name="demo-app", cpu_count=2, memory_mb=6144, on_build_logs=show)
 print(info.template_id)
 PY
 )" || die "template build failed (see $WORK/orch.log)"
@@ -403,6 +434,20 @@ print("state survived:", s.commands.run("cat /home/user/state.txt").stdout.rstri
 PY
 ok "pause/resume preserved guest state"
 pause
+
+# Quick Start intentionally stops at the shortest user lifecycle. The default
+# full Demo continues with template fan-out and migration below.
+if [ -n "${DEMO_QUICKSTART:-}" ]; then
+    banner "Lifecycle: kill"
+    py <<PY || die "kill failed"
+from e2b import Sandbox
+Sandbox.connect("$SID").kill()
+print("killed $SID")
+PY
+    ok "sandbox killed"
+    echo; echo "${c_ok}══════ quick start complete — built, created, ran, paused/resumed, and killed via the e2b Python SDK ══════${c_off}"
+    exit 0
+fi
 
 # ===========================================================================
 banner "暂停态转模板 (export-sandbox --to-template) → 从模板扇出新沙箱"
