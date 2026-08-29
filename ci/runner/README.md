@@ -1,9 +1,10 @@
 # BMS runner slots
 
-This directory provisions six privileged `systemd-nspawn` system containers on
-the openEuler 24.03 BMS host. Each container owns its systemd, journald, PID,
-mount, network, cgroup, Docker daemon, runner credentials, and Actions work
-directory. The containers share only:
+This directory provisions four candidate E2E slots and two control slots as
+separate `systemd-nspawn` system containers on the openEuler 24.03 BMS host.
+Each container owns its systemd, journald, PID, mount, network, cgroup, Docker
+daemon, runner credentials, and Actions work directory. The containers share
+only:
 
 - `/var/cache/kuasar`, for exact-SHA source archives and immutable native
   artifacts protected by repository-owned locks;
@@ -39,14 +40,14 @@ connector datapath.
 
 ## Host layout
 
-| Slot | Runner name | CPU/NUMA | Memory | Address |
-| --- | --- | --- | --- | --- |
-| 1 | `bms-tmp-kuasar-e2e-1` | NUMA0: `0-6,44-50` | high 52 GiB, max 56 GiB | `10.203.0.11/24` |
-| 2 | `bms-tmp-kuasar-e2e-2` | NUMA0: `7-13,51-57` | high 52 GiB, max 56 GiB | `10.203.0.12/24` |
-| 3 | `bms-tmp-kuasar-e2e-3` | NUMA0: `14-20,58-64` | high 52 GiB, max 56 GiB | `10.203.0.13/24` |
-| 4 | `bms-tmp-kuasar-e2e-4` | NUMA1: `22-28,66-72` | high 52 GiB, max 56 GiB | `10.203.0.14/24` |
-| 5 | `bms-tmp-kuasar-e2e-5` | NUMA1: `29-35,73-79` | high 52 GiB, max 56 GiB | `10.203.0.15/24` |
-| 6 | `bms-tmp-kuasar-e2e-6` | NUMA1: `36-42,80-86` | high 52 GiB, max 56 GiB | `10.203.0.16/24` |
+| Slot | Role | Runner name | CPU/NUMA | Memory | Address |
+| --- | --- | --- | --- | --- | --- |
+| 1 | E2E | `bms-tmp-kuasar-e2e-1` | NUMA0: `0-6,44-50` | high 52 GiB, max 56 GiB | `10.203.0.11/24` |
+| 2 | E2E | `bms-tmp-kuasar-e2e-2` | NUMA0: `7-13,51-57` | high 52 GiB, max 56 GiB | `10.203.0.12/24` |
+| 3 | control | `bms-tmp-kuasar-control-3` | NUMA0: `14-20,58-64` | high 52 GiB, max 56 GiB | `10.203.0.13/24` |
+| 4 | E2E | `bms-tmp-kuasar-e2e-4` | NUMA1: `22-28,66-72` | high 52 GiB, max 56 GiB | `10.203.0.14/24` |
+| 5 | control | `bms-tmp-kuasar-control-5` | NUMA1: `29-35,73-79` | high 52 GiB, max 56 GiB | `10.203.0.15/24` |
+| 6 | E2E | `bms-tmp-kuasar-e2e-6` | NUMA1: `36-42,80-86` | high 52 GiB, max 56 GiB | `10.203.0.16/24` |
 
 The layout reserves one physical core per NUMA node (`21,65` and `43,87`) and
 about 39 GiB of host memory when every slot reaches `MemoryMax`. It targets
@@ -144,6 +145,21 @@ the fixed PATH, and service enablement all succeed. Supplying a fresh token
 retries any markerless partial registration through the runner's `--replace`
 flow; a completed registration is left unchanged.
 
+Changing a slot between E2E and control roles is never an in-place label
+change. Drain and remove its GitHub runner registration, stop its container,
+update `CONTROL_SLOTS`, then rebuild it from the trusted template before using
+a fresh registration token:
+
+```bash
+ssh bms.tmp '/usr/local/sbin/kuasar-ci-runner-provision rebuild 3'
+```
+
+`rebuild` refuses an active or unowned slot. It first moves the old rootfs to a
+private quarantine path, restores it if fresh preparation fails, and removes
+the quarantine only after a distinct machine ID and complete replacement root
+have been verified. This discards the prior Actions work directory, runner
+credentials, diagnostics, and any other state left by candidate jobs.
+
 ## GitHub outbound proxy
 
 When direct GitHub connectivity from mainland China is unreliable, configure
@@ -179,15 +195,25 @@ networks, and internal registries so E2E traffic remains local. Workflows do
 not override these variables, which also preserves a runner's direct network
 environment when no proxy is configured.
 
-All runners join the existing `kuasar-e2e` organization group with labels
-`kuasar-e2e,kvm,cgroup-v2` plus a slot label. The group must remain
-organization-wide (`visibility=all`) so all six private repositories can call
-it. The group does not use a workflow allowlist because the trusted central BMS
-entry and private component release workflows also allocate this pool. Jobs that
-execute pull request source retain read-only credentials; status and release
-write credentials are limited to control jobs that do not execute candidate
-source. These privileged containers are still not a security boundary, so the
-pool must be operated as trusted infrastructure and periodically reprovisioned.
+Slots 1, 2, 4, and 6 join the `kuasar-e2e` organization group with labels
+`kuasar-e2e,kvm,cgroup-v2` plus a slot label. That group remains
+organization-wide (`visibility=all`) and has no workflow allowlist because the
+central BMS execution workflow runs candidate source there with read-only
+credentials.
+
+Slots 3 and 5 instead join `kuasar-control`, carry only `kuasar-control` and a
+control-slot label, and have separate root filesystems and work directories.
+The control group uses `visibility=selected` for the five private component
+repositories, rejects public repositories, and restricts allocation to the
+trusted central `bms-entry.yml` plus those repositories' release workflows on
+`main`. BMS admission/finalization and release control jobs may hold write
+credentials but never execute candidate source. Candidate E2E jobs cannot
+select the control group, and control jobs cannot select an E2E slot.
+
+The containers share a physical host and are deliberately privileged resource
+isolation, not a boundary against a malicious host-level escape. Operate the
+BMS host as trusted infrastructure, keep control runner workflow/repository
+allowlists exact, and rebuild rather than relabel any slot whose role changes.
 
 Start and verify infrastructure isolation:
 

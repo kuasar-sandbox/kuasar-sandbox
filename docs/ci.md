@@ -18,7 +18,7 @@ BMS 有两个明确模式:
 各仓 `main` 上的可信 wrapper 使用 `pull_request_target` 接收事件,不执行候选仓提供的
 workflow。同仓非 draft PR 自动准入;fork PR 由可信控制 job 使用只读 App token
 查询当前组织成员关系,仅 `active` 的 owner/member 自动准入。私有组件仓的控制 job 使用
-`kuasar-e2e` 池,公开的项目主仓仍使用 GitHub-hosted runner。控制 job 同时重新查询当前 PR,
+专用 `kuasar-control` 池,公开的项目主仓仍使用 GitHub-hosted runner。控制 job 同时重新查询当前 PR,
 校验 GitHub 生成的 two-parent integration commit,并在该 commit 上把
 `kuasar/bms-exact-head` 置为 `pending`。事件中的 `author_association` 不作为私有组织成员
 身份来源。draft PR 只运行 admission/finalize 控制步骤,不运行完整 E2E,其 exact-head 保持
@@ -157,9 +157,12 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runner 与网络
 
-runner 安装资料位于 `ci/runner/`。私有组件仓的 BMS 控制 job 和 release job 与 E2E 共用
-`kuasar-e2e` 池;只有执行候选代码的 E2E job 被限制为收窄后的 read token。公开项目主仓的
-BMS 控制 job、每日协调和 aggregate release 控制 job 仍使用 GitHub-hosted runner。runner
+runner 安装资料位于 `ci/runner/`。私有组件仓的 BMS 控制 job 和 release 控制 job 使用
+专用 `kuasar-control` 池;执行候选代码的 E2E job 继续使用 `kuasar-e2e` 池和收窄后的 read
+token。两组 runner 使用不同 rootfs、工作目录、标签和 GitHub runner group;角色变更必须先
+清空并从可信模板重建,不能原地改标签。`kuasar-control` 仅向五个私有组件仓开放,拒绝公共仓,
+并用 workflow allowlist 只允许中央 `bms-entry.yml` 和各组件 `main` 上的 release workflow。
+公开项目主仓的 BMS 控制 job、每日协调和 aggregate release 控制 job 仍使用 GitHub-hosted runner。runner
 代理属于部署配置,不写入仓库 workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用
 公开中国大陆镜像降低网络抖动。
 
@@ -169,8 +172,8 @@ namespace:先对其内进程 TERM、限时后 KILL,确认无存活进程后删�
 runner 互不影响,也使被 SIGKILL 中断的运行能在下一个 job 按精确名称回收,无需猜测接口
 所有权(#43、#53)。常用 zot 与
 versitygw 从 runner 固定工具目录链接到当前 workspace,不进入发布包。`kuasar-e2e` runner
-group 对组织仓库保持 `visibility=all`,不设置 workflow allowlist,使组件发布与 BMS 均可分配
-自托管 runner。各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于
+group 对组织仓库保持 `visibility=all`,不设置 workflow allowlist,只承载候选 E2E。
+各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于
 base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
 
 ## 6. Run artifacts

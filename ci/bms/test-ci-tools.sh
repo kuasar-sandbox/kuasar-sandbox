@@ -22,13 +22,37 @@ daily_workflow="$SCRIPT_DIR/../../.github/workflows/daily-preview.yml"
 legacy_repository="kuasar-sandbox/platform"
 candidate_pattern='^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$'
 working_set_perf="$SCRIPT_DIR/../../test/perf/sandbox-perf-working-set.sh"
-private_control_runner="    runs-on: \${{ github.event.repository.private && 'kuasar-e2e' || 'ubuntu-latest' }}"
+private_control_runner="    runs-on: \${{ github.event.repository.private && 'kuasar-control' || 'ubuntu-latest' }}"
 
 [ "$(grep -Fxc "$private_control_runner" "$entry_workflow")" -eq 2 ] \
     || fail "BMS admission and finalization do not select the private caller runner pool"
 if grep -Fqx '    runs-on: ubuntu-latest' "$entry_workflow"; then
     fail "BMS entry still unconditionally bills control jobs to hosted runners"
 fi
+
+provisioner="$SCRIPT_DIR/../runner/provision.sh"
+for slot in 1 2 4 6; do
+    actual=$(bash -c '. "$1"; printf "%s\t%s\t%s\t%s" \
+        "$(slot_role "$2")" "$(runner_name "$2")" \
+        "$(runner_group "$2")" "$(runner_labels "$2")"' \
+        test-runner-role "$provisioner" "$slot")
+    expected=$(printf 'e2e\tbms-tmp-kuasar-e2e-%s\tkuasar-e2e\tkuasar-e2e,kvm,cgroup-v2,bms-slot-%s' \
+        "$slot" "$slot")
+    [ "$actual" = "$expected" ] \
+        || fail "slot $slot does not retain the E2E runner identity"
+done
+for slot in 3 5; do
+    actual=$(bash -c '. "$1"; printf "%s\t%s\t%s\t%s" \
+        "$(slot_role "$2")" "$(runner_name "$2")" \
+        "$(runner_group "$2")" "$(runner_labels "$2")"' \
+        test-runner-role "$provisioner" "$slot")
+    expected=$(printf 'control\tbms-tmp-kuasar-control-%s\tkuasar-control\tkuasar-control,control-slot-%s' \
+        "$slot" "$slot")
+    [ "$actual" = "$expected" ] \
+        || fail "slot $slot does not use the isolated control runner identity"
+done
+grep -Fq 'rebuild) shift; rebuild_slot "${1:-}" ;;' "$provisioner" \
+    || fail "provisioner does not expose the explicit slot rebuild operation"
 
 grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = kuasar-sandbox/kuasar-sandbox ]" "$workflow" \
     || fail "trusted workflow repository does not use the project repository identity"
