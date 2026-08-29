@@ -146,10 +146,11 @@ x86_64,因此当前 Release 只发布该目标。
 - fork PR 准入 token 只请求组织 `Members: read`;
 - workflow 签发 token 时把仓库范围显式限制在六个发行仓。
 
-协调 token 只存在于 GitHub-hosted 协调 job。自托管 BMS 只接收收窄后的源码只读 token,
-并在执行候选代码前显式撤销。组件和聚合 publish job 只使用当前仓的短期 `GITHUB_TOKEN`
-和 `contents:write`。每日协调 job 仅用项目主仓自身的短期 `GITHUB_TOKEN` 把生成的版本
-选择清单提交到项目主仓 `main`,App 没有内容写权限。
+私有组件仓的 BMS 控制 job 与 release 控制 job 使用专用 `kuasar-control` 池;公开项目主仓的每日协调、
+aggregate release 和 BMS 控制 job 仍使用 GitHub-hosted runner。执行候选代码的 E2E job
+只接收收窄后的源码只读 token,并在执行候选代码前显式撤销。组件和聚合 publish job 只使用
+当前仓的短期 `GITHUB_TOKEN` 和 `contents:write`。每日协调 job 仅用项目主仓自身的短期
+`GITHUB_TOKEN` 把生成的版本选择清单提交到项目主仓 `main`,App 没有内容写权限。
 
 ## 4. 组件资产契约
 
@@ -295,9 +296,11 @@ workflow run 状态幂等处理:
   身份判断;
 - 控制 job 在 integration commit 上维护 `kuasar/bms-exact-head`,只有 BMS 成功且结束时
   candidate、PR base/head 和当前 merge commit 仍完全一致才写入成功;
-- `kuasar-e2e` runner group 对组织仓库可见且不设置 workflow allowlist;fork workflow 不转发
-  secrets,自托管入口的 admission 和只读 token 边界由各仓可信 workflow 维护;
-- 自托管 job 没有 `statuses:write`、`contents:write` 或每日协调 token。
+- `kuasar-e2e` runner group 对组织仓库可见且不设置 workflow allowlist,只执行持有只读权限的
+  候选 E2E;`kuasar-control` 使用独立 rootfs 和工作目录,对组织内全部仓库(含 public)可见,
+  并只允许中央 BMS entry 与各组件 `main` release workflow;fork workflow 不转发 secrets;
+- 只有不执行候选代码的 BMS 控制 job 可获得 `statuses:write`;只有从受信任 `main` 启动的
+  release publish job 可获得 `contents:write`;执行候选代码的 E2E job 仍只有只读权限。
 
 ## 10. See Also
 

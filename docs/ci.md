@@ -16,12 +16,13 @@ BMS 有两个明确模式:
 ## 2. Source 模式
 
 各仓 `main` 上的可信 wrapper 使用 `pull_request_target` 接收事件,不执行候选仓提供的
-workflow。同仓非 draft PR 自动准入;fork PR 由 GitHub-hosted 控制 job 使用只读 App token
-查询当前组织成员关系,仅 `active` 的 owner/member 自动准入。控制 job 同时重新查询当前 PR,
+workflow。同仓非 draft PR 自动准入;fork PR 由可信控制 job 使用只读 App token
+查询当前组织成员关系,仅 `active` 的 owner/member 自动准入。私有组件仓的控制 job 使用
+专用 `kuasar-control` 池,公开的项目主仓仍使用 GitHub-hosted runner。控制 job 同时重新查询当前 PR,
 校验 GitHub 生成的 two-parent integration commit,并在该 commit 上把
 `kuasar/bms-exact-head` 置为 `pending`。事件中的 `author_association` 不作为私有组织成员
-身份来源。draft PR 不取得自托管 runner,其 exact-head 保持 `pending`;转为 ready 后由新的
-事件自动运行完整 BMS。外部 fork、冲突或已经变化的事件拒绝准入。
+身份来源。draft PR 只运行 admission/finalize 控制步骤,不运行完整 E2E,其 exact-head 保持
+`pending`;转为 ready 后由新的事件自动运行完整 BMS。外部 fork、冲突或已经变化的事件拒绝准入。
 
 其余五仓 revision 通过一次 GitHub GraphQL 查询解析,候选仓 revision 替换为已准入的
 integration commit。普通 PR 不声明 companion,行为与单候选模式相同。不能由任一仓
@@ -43,7 +44,7 @@ Ready 状态下运行 BMS 并取得自己的 exact-head status;一条 primary st
 draft → ready 触发新运行。准备合入时必须把 status 所链接 run 的 `source-set.tsv` 与当前 marker
 逐项比较;body 在该 run 之后发生过 marker 变更时,即使 commit status 仍显示 success 也视为失效。
 
-GitHub-hosted admission 使用仅限六仓 `Contents: read` 的短期 App token,通过 PR refs、main ref、
+admission 使用仅限六仓 `Contents: read` 的短期 App token,通过 PR refs、main ref、
 commit parents 与 `branches-where-head` 把每个 companion 解析成 PR number、candidate/base/head
 SHA。自托管 job 不信任 PR body 原文,只接收 admission 输出的已解析记录,在执行候选代码前
 重新查询全部 refs/commit,按 exact integration SHA 组装源码并撤销 token。结束控制 job第三次
@@ -61,12 +62,12 @@ companion marker,再以新的 sibling `main` 重跑。该流程只冻结源码�
 2. `pull_request_target` event、当前 PR 与 candidate/base/head 输入完全一致;
 3. candidate 和所有 companion 均是以各自 base/head 为两个父提交的 integration commit;
 4. 当前开放 PR 与全部 companion refs 的 base/head/merge commit 在执行前与结束后均未变化;
-5. fork 准入 token 只请求组织 `Members: read`,仅存在于 GitHub-hosted 控制 job;
-6. 自托管 job 的 `GITHUB_TOKEN` 只有 `Contents: read` 和 `Pull requests: read`;
+5. fork 准入 token 只请求组织 `Members: read`,仅存在于 admission 控制 job;
+6. 执行候选代码的 E2E job 的 `GITHUB_TOKEN` 只有 `Contents: read` 和 `Pull requests: read`;
 7. companion/source App token 只有六仓 `Contents: read`,其中 runner 上的 token 在执行候选
    代码前撤销。
 
-结束控制 job 在 GitHub-hosted runner 再次查询 PR。只有 BMS 成功且当前 integration commit
+结束控制 job 再次查询 PR。只有 BMS 成功且当前 integration commit
 仍与准入值完全一致时,它才把同一个 `kuasar/bms-exact-head` 状态置为 `success`;测试失败、
 取消、跳过或 PR 已变化都不会生成可用于合入的成功状态。GitHub 自带的
 `pull_request_target` workflow check 绑定 PR head commit,不能代替这个 integration-commit
@@ -156,9 +157,14 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runner 与网络
 
-runner 安装资料位于 `ci/runner/`。自托管 job 只有收窄后的 read token,每日协调 token 与
-`contents:write` token 只在 GitHub-hosted job 使用。runner 代理属于部署配置,不写入仓库
-workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用公开中国大陆镜像降低网络抖动。
+runner 安装资料位于 `ci/runner/`。私有组件仓的 BMS 控制 job 和 release 控制 job 使用
+专用 `kuasar-control` 池;执行候选代码的 E2E job 继续使用 `kuasar-e2e` 池和收窄后的 read
+token。两组 runner 使用不同 rootfs、工作目录、标签和 GitHub runner group;角色变更必须先
+清空并从可信模板重建,不能原地改标签。`kuasar-control` 对组织内全部仓库可见并允许 public,
+同时用 workflow allowlist 只允许中央 `bms-entry.yml` 和各组件 `main` 上的 release workflow。
+公开项目主仓的 BMS 控制 job、每日协调和 aggregate release 控制 job 仍使用 GitHub-hosted runner。runner
+代理属于部署配置,不写入仓库 workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用
+公开中国大陆镜像降低网络抖动。
 
 每次 job 开始会停止遗留 sandbox systemd unit、删除测试 tap 并重载 systemd。reset 还会按
 `RUNNER_NAME` 派生的确定名称(`kuasar-ws-<hash8>`)回收本 runner 的 working-set 网络
@@ -166,8 +172,8 @@ namespace:先对其内进程 TERM、限时后 KILL,确认无存活进程后删�
 runner 互不影响,也使被 SIGKILL 中断的运行能在下一个 job 按精确名称回收,无需猜测接口
 所有权(#43、#53)。常用 zot 与
 versitygw 从 runner 固定工具目录链接到当前 workspace,不进入发布包。`kuasar-e2e` runner
-group 对组织仓库保持 `visibility=all`,不设置 workflow allowlist,使组件发布与 BMS 均可分配
-自托管 runner。各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于
+group 对组织仓库保持 `visibility=all`,不设置 workflow allowlist,只承载候选 E2E。
+各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于
 base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
 
 ## 6. Run artifacts

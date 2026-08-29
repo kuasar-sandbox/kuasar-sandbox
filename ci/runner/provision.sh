@@ -4,7 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ORG=${KUASAR_ORG:-kuasar-sandbox}
-RUNNER_GROUP=${KUASAR_RUNNER_GROUP:-kuasar-e2e}
+E2E_RUNNER_GROUP=${KUASAR_E2E_RUNNER_GROUP:-kuasar-e2e}
+CONTROL_RUNNER_GROUP=${KUASAR_CONTROL_RUNNER_GROUP:-kuasar-control}
 RUNNER_SOURCE=${KUASAR_RUNNER_SOURCE:-/opt/actions-runner}
 TEMPLATE_ROOT=/var/lib/kuasar-ci/rootfs-template
 MACHINE_ROOT=/var/lib/machines
@@ -33,6 +34,7 @@ RUNNER_REGISTRATION_MARKER=.kuasar-ci-registration-complete
 PROVISION_LOCK=/run/lock/kuasar-ci-runner-provision.lock
 
 SLOTS=(1 2 3 4 5 6)
+CONTROL_SLOTS=(3 5)
 SLOT1_CPUS=${KUASAR_SLOT1_CPUS:-0-6,44-50}
 SLOT2_CPUS=${KUASAR_SLOT2_CPUS:-7-13,51-57}
 SLOT3_CPUS=${KUASAR_SLOT3_CPUS:-14-20,58-64}
@@ -101,6 +103,44 @@ slot_is_valid() {
         [ "$1" = "$expected" ] && return 0
     done
     return 1
+}
+
+slot_is_control() {
+    local control
+    for control in "${CONTROL_SLOTS[@]}"; do
+        [ "$1" = "$control" ] && return 0
+    done
+    return 1
+}
+
+slot_role() {
+    if slot_is_control "$1"; then
+        printf 'control'
+    else
+        printf 'e2e'
+    fi
+}
+
+runner_name() {
+    local slot=$1
+    printf 'bms-tmp-kuasar-%s-%s' "$(slot_role "$slot")" "$slot"
+}
+
+runner_group() {
+    if slot_is_control "$1"; then
+        printf '%s' "$CONTROL_RUNNER_GROUP"
+    else
+        printf '%s' "$E2E_RUNNER_GROUP"
+    fi
+}
+
+runner_labels() {
+    local slot=$1
+    if slot_is_control "$slot"; then
+        printf 'kuasar-control,control-slot-%s' "$slot"
+    else
+        printf 'kuasar-e2e,kvm,cgroup-v2,bms-slot-%s' "$slot"
+    fi
 }
 
 slot_root() {
@@ -713,16 +753,58 @@ install_slots() {
     log "slots installed but not started; register each slot next"
 }
 
+rebuild_slot() {
+    require_root
+    acquire_provision_lock
+    local slot=${1:-} machine root quarantine target
+    slot_is_valid "$slot" || die "rebuild requires slot 1 through 6"
+    machine="$(machine_name "$slot")"
+    root="$(slot_root "$slot")"
+    quarantine="$MACHINE_ROOT/.${machine}.quarantine.$$"
+
+    assert_slot_root_owned "$slot"
+    systemctl is-active --quiet "systemd-nspawn@$machine.service" \
+        && die "$machine must be stopped before rebuild"
+    [ -f "$TEMPLATE_ROOT/.kuasar-ci-template" ] \
+        || die "runner rootfs template is unavailable"
+    [ ! -e "$quarantine" ] || die "quarantine path already exists: $quarantine"
+    while IFS= read -r target; do
+        case "$target" in
+            "$root"|"$root"/*) die "$machine still has mounted paths under $root" ;;
+        esac
+    done < <(findmnt -rn -o TARGET)
+
+    mv -T -- "$root" "$quarantine"
+    if ! (prepare_slot "$slot" && assert_distinct_slot_machine_ids); then
+        if [ -e "$root" ]; then
+            slot_root_owned "$root" \
+                || die "rebuild failed and replacement root is not owned: $root"
+            rm -rf --one-file-system -- "$root"
+        fi
+        mv -T -- "$quarantine" "$root"
+        die "$machine rebuild failed; restored the previous rootfs"
+    fi
+
+    slot_root_owned "$quarantine" \
+        || die "refusing to remove unowned quarantined root $quarantine"
+    rm -rf --one-file-system -- "$quarantine"
+    systemctl daemon-reload
+    log "$machine rebuilt for the $(slot_role "$slot") role; register it before start"
+}
+
 register_slot() {
     require_root
     acquire_provision_lock
-    local slot=${1:-} token machine root runner
+    local slot=${1:-} token machine root runner name group labels
     slot_is_valid "$slot" || die "register requires slot 1 through 6"
     IFS= read -r token
     [ -n "$token" ] || die "registration token must be provided on stdin"
     machine="$(machine_name "$slot")"
     root="$(slot_root "$slot")"
     runner="$root/opt/actions-runner"
+    name="$(runner_name "$slot")"
+    group="$(runner_group "$slot")"
+    labels="$(runner_labels "$slot")"
     assert_slot_root_owned "$slot"
     [ -f "$root/.kuasar-ci-slot" ] || die "slot $slot is not installed"
     systemctl is-active --quiet "systemd-nspawn@$machine.service" \
@@ -748,8 +830,7 @@ register_slot() {
                 exec ./config.sh --unattended --replace --disableupdate \
                     --url "$1" --name "$2" --runnergroup "$3" \
                     --labels "$4" --work _work
-            ' register-runner "https://github.com/$ORG" "bms-tmp-kuasar-e2e-$slot" \
-            "$RUNNER_GROUP" "kuasar-e2e,kvm,cgroup-v2,bms-slot-$slot"
+            ' register-runner "https://github.com/$ORG" "$name" "$group" "$labels"
     [ -s "$runner/.runner" ] || die "$machine registration did not produce runner metadata"
     printf '/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin\n' \
         >"$runner/.path"
@@ -757,7 +838,7 @@ register_slot() {
     touch "$runner/$RUNNER_REGISTRATION_MARKER"
     runner_registration_complete "$root" \
         || die "$machine registration did not complete"
-    log "$machine registered"
+    log "$machine registered as $name in $group"
 }
 
 start_slots() {
@@ -864,12 +945,19 @@ wait_slot_ready() {
 
 verify_slots() {
     require_root
-    local slot machine
+    local slot machine root expected_name expected_group
     for slot in "${SLOTS[@]}"; do
         machine="$(machine_name "$slot")"
+        root="$(slot_root "$slot")"
+        expected_name="$(runner_name "$slot")"
+        expected_group="$(runner_group "$slot")"
         assert_slot_root_owned "$slot"
-        runner_registration_complete "$(slot_root "$slot")" \
+        runner_registration_complete "$root" \
             || die "$machine registration is incomplete"
+        jq -e --arg name "$expected_name" --arg group "$expected_group" \
+            '.agentName == $name and .poolName == $group' \
+            "$root/opt/actions-runner/.runner" >/dev/null \
+            || die "$machine is registered with the wrong name or runner group"
         wait_slot_ready "$slot" \
             || die "$machine did not become network, Docker, and runner ready within 60s"
         [ "$(machinectl show "$machine" -p State --value)" = running ] || die "$machine is not running"
@@ -956,6 +1044,7 @@ usage() {
     cat <<'EOF'
 usage: provision.sh install
        provision.sh check
+       provision.sh rebuild 1..6
        provision.sh register 1..6  # registration token on stdin
        provision.sh start
        provision.sh stop
@@ -964,9 +1053,14 @@ usage: provision.sh install
 EOF
 }
 
+if [ "${BASH_SOURCE[0]}" != "$0" ]; then
+    return 0
+fi
+
 case "${1:-}" in
     check) check_host ;;
     install) install_slots ;;
+    rebuild) shift; rebuild_slot "${1:-}" ;;
     register) shift; register_slot "${1:-}" ;;
     start) start_slots ;;
     stop) stop_slots ;;

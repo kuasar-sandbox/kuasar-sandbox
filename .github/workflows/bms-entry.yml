@@ -17,7 +17,10 @@ concurrency:
 
 jobs:
   admission:
-    runs-on: ubuntu-latest
+    # GitHub bills reusable workflow jobs to the caller. Keep the public platform
+    # caller on hosted capacity and route private component callers to the
+    # dedicated control pool. It never executes candidate source.
+    runs-on: ${{ github.event.repository.private && 'kuasar-control' || 'ubuntu-latest' }}
     permissions:
       contents: read
       pull-requests: read
@@ -434,7 +437,7 @@ jobs:
   finalize:
     needs: [admission, e2e]
     if: always()
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && 'kuasar-control' || 'ubuntu-latest' }}
     permissions:
       contents: read
       pull-requests: read
