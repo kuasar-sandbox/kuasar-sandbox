@@ -1,5 +1,8 @@
 # Platform release 测试指南
 
+> 本文是 Aggregate Release Validation Guide,用于完整 E2E 和发布验收,不是首次安装指南.
+> 普通用户请先阅读 [Quick Start](../docs/quickstart.md).
+
 本文件位于 `platform-release-vX.Y.Z.tar.gz` 的 `test/QUICKSTART.md`。platform 包集中交付
 系统及组件文档、组件 E2E、platform 组合用例、性能脚本和 demo;六个组件包只交付运行制品。
 把同一个聚合 Release 的七个 archive 解压到同一目录后即可执行完整验证。

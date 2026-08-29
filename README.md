@@ -10,13 +10,13 @@ Serverless 与强化学习工作负载,提供独立 Guest Kernel 隔离,快照�
 
 ## 快速导航
 
-- Quick Start:当前最短体验路径见 [Demo](test/demo/DEMO.md),首次安装指南将在后续文档更新中提供;
+- [Quick Start](docs/quickstart.md):从同一聚合 Release 下载资产,校验并用 E2B SDK 运行首个真实 MicroVM;
 - [Architecture](docs/kuasar-sandbox.md):系统能力,组件边界和关键语义;
 - [Deployment](docs/deployment.md):单节点,集群拓扑与进程依赖;
 - [Releases](docs/release.md):组件版本,聚合版本和资产契约;
 - [Demo](test/demo/DEMO.md):本地体验环境和 E2B SDK 演示;
 - [Full validation](test/QUICKSTART.md):完整 Aggregate Release E2E 验收;
-- [Security](https://github.com/kuasar-sandbox/kuasar-sandbox/security):仓库安全入口.
+- [Security](SECURITY.md):支持范围和私密漏洞报告入口.
 
 ## 核心能力
 
@@ -68,12 +68,26 @@ KVM / Local File / NAS / Object Storage / Network
 
 ## 发行状态
 
-- **公开聚合通道**:当前为 Preview;尚未发布 Stable 聚合版本.
-- **正式发布资产架构**:当前 GitHub Release 提供 Linux x86_64 预构建资产.
+- **公开聚合通道**:当前为 Preview,尚未发布 Stable 聚合版本.
+- **预构建 Release 架构**:当前 GitHub Release 提供 Linux x86_64 资产.
 - **源码构建架构**:当前 Makefile 支持 `TARGET_ARCH=x86_64` 和
-  `TARGET_ARCH=aarch64`;源码可构建不代表该架构已经提供正式预构建资产.
+  `TARGET_ARCH=aarch64`;源码可构建不表示该架构已经作为预构建 Release 资产发布.
 - **版本关系**:组件独立发布版本,聚合版本固定选择一组精确组件版本并在真实 KVM
   上完成跨组件验证.
+
+`Stable` 表示非 prerelease 的公开聚合版本,`Preview` 表示用于开发和评估的
+prerelease 聚合版本,`Proposed` 表示仍在 Issue 或设计阶段且不能作为已交付能力
+使用.当前主要支持范围为:
+
+| 范围 | 当前状态 |
+|---|---|
+| 单节点 | Available;`node-ctl conductor serve` 提供 E2B 兼容入口 |
+| 多节点集群 | Available;需要 registry,router,placer 和集群基础设施 |
+| 本地文件,共享文件,对象存储 | Available;部署方按节点亲和,共享访问和远程持久化需求选择 |
+| 基础 vSwitch 和沙箱隔离 | Available |
+| 外部集中式策略网关 | Integration supported;已有可信沙箱身份传递和接入基础 |
+| 节点本地轻量 Egress | [Proposed](https://github.com/kuasar-sandbox/connector/issues/9) |
+| OpenTelemetry | [Proposed](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/52) |
 
 最新可用资产和 prerelease 状态以
 [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 为准.
@@ -185,8 +199,10 @@ gh workflow run aggregate-release.yml \
 - [Performance](docs/perf.md):带测试上下文的性能基线,回归门禁与调优方法;
 - [CI](docs/ci.md):可复用 BMS,缓存,候选 revision 和 exact-asset 模式;
 - [Releases](docs/release.md):组件版本,聚合选择,资产与发布事务;
+- [Quick Start](docs/quickstart.md):从聚合 Release 到真实 MicroVM 的首次使用路径;
 - [Demo](test/demo/DEMO.md):本地体验环境与 SDK 演示;
 - [Full validation](test/QUICKSTART.md):发布包解压,环境准备与完整 E2E 入口.
+- [Security](SECURITY.md):支持范围和私密漏洞报告方式.
 
 ## License
 
