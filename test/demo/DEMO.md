@@ -50,7 +50,7 @@ bash kuasar-sandbox/test/demo/demo_prep.sh            # 或不设 REGISTRY → �
 
 # ② 每次演示(读取 demo_prep 写出的 ~/.cache/kuasar-demo/prep.env)
 sudo bash kuasar-sandbox/test/demo/demo_e2b.sh        # 普通用户也行:会自动 sudo 重入
-DEMO_QUICKSTART=1 sudo bash …/demo_e2b.sh             # pause/resume + kill 后结束,跳过扇出与迁移
+sudo env DEMO_QUICKSTART=1 bash …/demo_e2b.sh         # pause/resume + kill 后结束,跳过扇出与迁移
 DEMO_PAUSE=1   sudo bash …/demo_e2b.sh                # 每步回车暂停(适合逐步讲解 / 另开终端操作)
 DEMO_KEEP=1    sudo bash …/demo_e2b.sh                # 保留每次工作目录排查
 DEMO_NETDIAG=1 sudo bash …/demo_e2b.sh                # 网络步失败不中止

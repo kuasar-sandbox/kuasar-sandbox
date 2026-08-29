@@ -225,4 +225,5 @@ sudo -n docker rm -f kuasar-quickstart-registry
   本地 Registry 和演示凭据只用于体验.
 
 更完整的单节点和集群拓扑见 [Deployment](deployment.md),组件版本与聚合发布关系见
-[Releases](release.md),安全漏洞报告方式见 [Security](../SECURITY.md).
+[Releases](release.md),安全漏洞报告方式见
+[Security](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/SECURITY.md).
