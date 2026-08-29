@@ -27,6 +27,8 @@ sudo apt-get install -y \
 ```
 
 ```bash
+(
+set -e
 test "$(uname -s)" = Linux
 test "$(uname -m)" = x86_64
 test "$(ps -p 1 -o comm=)" = systemd
@@ -42,7 +44,10 @@ for tool in gh tar sha256sum python3 openssl ip curl sqlite3 iptables mkfs.ext4 
 done
 gh auth status
 sudo -n docker info >/dev/null
+)
 ```
+
+上述代码块只在所有检查通过时返回成功;任一命令失败时不要继续.
 
 Docker 只用于为本 Quick Start 准备本地 OCI Registry 并导入基础镜像,不是所有 Kuasar
 Sandbox 部署的运行时依赖.如果已有从构建 MicroVM 可访问的 OCI Registry,可以按
@@ -54,11 +59,13 @@ GitHub Release 的预构建资产发布.
 
 ## 2. 下载,校验和解压聚合 Release
 
-PR3 完成前,当前公开聚合通道仍为 Preview.以下标签已真实发布;后续版本可以从
-[GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 选择.
+PR3 完成前,当前公开聚合通道仍为 Preview.从
+[GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 选择一个已发布的
+聚合 Preview,并确认它的 platform 包已包含本指南和 `DEMO_QUICKSTART`
+支持.不得将旧 platform 脚本与新组件资产混用.在执行前显式设置选定的标签:
 
 ```bash
-RELEASE_VERSION=release-v0.1.0-preview.20260827
+RELEASE_VERSION="${RELEASE_VERSION:?set RELEASE_VERSION to a compatible aggregate Preview tag}"
 DOWNLOAD_DIR="$PWD/kuasar-download-$RELEASE_VERSION"
 INSTALL_DIR="$PWD/kuasar-$RELEASE_VERSION"
 
@@ -81,23 +88,25 @@ archive,六个组件发布单元 archive 和一个 `SHA256SUMS`.组件 archive �
 
 ```bash
 (
+    set -e
     cd "$DOWNLOAD_DIR"
     test "$(find . -maxdepth 1 -type f -name '*.tar.gz' | wc -l)" -eq 7
     test -f SHA256SUMS
     sha256sum --quiet -c SHA256SUMS
+    for archive in ./*.tar.gz; do
+        tar -xzf "$archive" -C "$INSTALL_DIR"
+    done
+    cd "$INSTALL_DIR"
+    test -d bin && test -d deploy && test -d docs && test -d test
+    grep -q 'DEMO_QUICKSTART' test/demo/demo_e2b.sh
+    for executable in bin/cache-ctl bin/cloud-hypervisor; do
+        ldd_output="$(ldd "$executable" 2>&1)" || { printf '%s\n' "$ldd_output" >&2; exit 1; }
+        if printf '%s\n' "$ldd_output" | grep -q 'not found'; then
+            printf '%s\n' "$ldd_output" >&2
+            exit 1
+        fi
+    done
 )
-for archive in "$DOWNLOAD_DIR"/*.tar.gz; do
-    tar -xzf "$archive" -C "$INSTALL_DIR"
-done
-cd "$INSTALL_DIR"
-test -d bin && test -d deploy && test -d docs && test -d test
-for executable in bin/cache-ctl bin/cloud-hypervisor; do
-    ldd_output="$(ldd "$executable" 2>&1)" || { printf '%s\n' "$ldd_output" >&2; exit 1; }
-    if printf '%s\n' "$ldd_output" | grep -q 'not found'; then
-        printf '%s\n' "$ldd_output" >&2
-        exit 1
-    fi
-done
 ```
 
 `sha256sum` 成功时不输出内容.解压后,`bin/` 和 `deploy/` 来自组件包,`docs/` 和
@@ -106,6 +115,7 @@ done
 ## 3. 安装未修改的 E2B SDK
 
 ```bash
+cd "$INSTALL_DIR"
 python3 -m venv .venv
 . .venv/bin/activate
 python -m pip install e2b e2b-code-interpreter
