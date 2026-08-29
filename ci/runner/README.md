@@ -213,8 +213,9 @@ cannot select the control group, and control jobs cannot select an E2E slot.
 
 The containers share a physical host and are deliberately privileged resource
 isolation, not a boundary against a malicious host-level escape. Operate the
-BMS host as trusted infrastructure, keep control runner workflow/repository
-allowlists exact, and rebuild rather than relabel any slot whose role changes.
+BMS host as trusted infrastructure, keep the control runner's exact workflow
+allowlist up to date, and rebuild rather than relabel any slot whose role
+changes.
 
 Start and verify infrastructure isolation:
 
