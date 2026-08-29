@@ -59,13 +59,13 @@ GitHub Release 的预构建资产发布.
 
 ## 2. 下载,校验和解压聚合 Release
 
-PR3 完成前,当前公开聚合通道仍为 Preview.从
-[GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 选择一个已发布的
-聚合 Preview,并确认它的 platform 包已包含本指南和 `DEMO_QUICKSTART`
-支持.不得将旧 platform 脚本与新组件资产混用.在执行前显式设置选定的标签:
+当前 Stable 聚合版本是
+[`release-v0.1.0`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.0).
+本指南固定使用该聚合 Release 中的 platform 包和六个组件发布单元;不得将旧 platform
+脚本与新组件资产混用.
 
 ```bash
-RELEASE_VERSION="${RELEASE_VERSION:?set RELEASE_VERSION to a compatible aggregate Preview tag}"
+RELEASE_VERSION=release-v0.1.0
 DOWNLOAD_DIR="$PWD/kuasar-download-$RELEASE_VERSION"
 INSTALL_DIR="$PWD/kuasar-$RELEASE_VERSION"
 
@@ -221,8 +221,8 @@ sudo -n docker rm -f kuasar-quickstart-registry
 
 ## 8. 支持范围和生产部署
 
-- 当前公开聚合通道是 Preview,Preview 提供可验证的精确组件组合,但仍是 GitHub
-  prerelease.Stable 表示非 prerelease 的公开聚合版本.
+- 当前 Stable 聚合版本是 `release-v0.1.0`,它是非 prerelease 的公开发行版本.
+  Preview 仍提供可验证的精确组件组合,但作为 GitHub prerelease 用于开发和评估.
 - 单节点模式可直接使用;集群模式需要 registry,router,placer,可达的节点服务,
   共享或远程持久化数据路径和集群网络.
 - 镜像和快照可以按部署环境使用本地文件,NAS/NFS 等共享文件路径,或 Manifest,
