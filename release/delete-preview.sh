@@ -34,12 +34,24 @@ BASE="$(awk '/^version:[[:space:]]+/ {print $2}' "$TMP/daily-preview.yaml")"
 PREVIEW="$(awk '/^preview_version:[[:space:]]+/ {print $2}' \
   "$TMP/daily-preview.yaml")"
 if [ "$BASE-$PREVIEW" = "$TAG" ]; then
+  [ "$(awk '/^components:[[:space:]]*$/ {count++} END {print count + 0}' \
+    "$TMP/daily-preview.yaml")" -eq 1 ] \
+    || fail "manifest must contain components exactly once"
   : > "$TMP/selection.tsv"
   for unit in "${RELEASE_UNITS[@]}"; do
-    selected="$(awk -v key="$unit:" '$1 == key {print $2}' \
-      "$TMP/daily-preview.yaml")"
-    [ "$(awk -v key="$unit:" '$1 == key {count++} END {print count + 0}' \
-      "$TMP/daily-preview.yaml")" -eq 1 ] \
+    selected="$(awk -v key="$unit:" '
+      /^components:[[:space:]]*$/ {inside = 1; next}
+      /^[^[:space:]]/ {inside = 0}
+      inside && substr($0, 1, 2) == "  " &&
+        substr($0, 3, 1) !~ /[[:space:]]/ && $1 == key {print $2}
+    ' "$TMP/daily-preview.yaml")"
+    [ "$(awk -v key="$unit:" '
+      /^components:[[:space:]]*$/ {inside = 1; next}
+      /^[^[:space:]]/ {inside = 0}
+      inside && substr($0, 1, 2) == "  " &&
+        substr($0, 3, 1) !~ /[[:space:]]/ && $1 == key {count++}
+      END {print count + 0}
+    ' "$TMP/daily-preview.yaml")" -eq 1 ] \
       || fail "manifest must select $unit exactly once"
     validate_unit_version "$unit" "$selected"
     printf '%s\t%s\n' "$unit" "$selected" >> "$TMP/selection.tsv"

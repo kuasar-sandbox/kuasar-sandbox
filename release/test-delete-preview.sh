@@ -56,6 +56,26 @@ if PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=kuasar-sandbox/kuasar-sandbox \
 fi
 [ ! -e "$DELETE_LOG" ]
 
+OUTSIDE_COMPONENT_MANIFEST="$(printf '%s\n' \
+  'version: release-v9.8.7' \
+  'preview_version: preview.20260831' \
+  'metadata:' \
+  '  accelerator: v1.0.1-preview.20260831' \
+  'components:' \
+  '  connector: v1.0.2-preview.20260831' \
+  '  sandboxer: v1.0.3-preview.20260831' \
+  '  orchestrator: v1.0.4-preview.20260831' \
+  '  runtime: runtime-v1.0.5-preview.20260831' \
+  '  vmlinux: vmlinux-v1.0.6-preview.20260831' | base64 -w0)"
+if PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=kuasar-sandbox/kuasar-sandbox \
+  FAKE_TAG="$TAG" FAKE_TARGET="$SOURCE_SHA" FAKE_DELETE_LOG="$DELETE_LOG" \
+  FAKE_MANIFEST="$OUTSIDE_COMPONENT_MANIFEST" \
+  bash "$SCRIPT_DIR/delete-preview.sh" "$TAG" "$SOURCE_SHA" incomplete \
+  >/dev/null 2>&1; then
+  echo "test-delete-preview: accepted a unit outside components" >&2
+  exit 1
+fi
+
 PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=kuasar-sandbox/kuasar-sandbox \
   FAKE_TAG="$TAG" FAKE_TARGET="$SOURCE_SHA" FAKE_DELETE_LOG="$DELETE_LOG" \
   FAKE_MANIFEST="$FAKE_MANIFEST" \
