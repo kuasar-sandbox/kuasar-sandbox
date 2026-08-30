@@ -113,7 +113,9 @@ readiness 失败诊断随 CI metadata 上传。30 轮 canonical 测量用于生�
 
 ## 3. Exact-assets 模式
 
-aggregate prepare job 上传包含以下内容的短期 Actions artifact:
+aggregate workflow 从受信任的 `main` 加载发布工具,但 prepare checkout 调度器明确选择的
+平台 `main` 或 `release/vMAJOR.MINOR.x` 分支 HEAD 完整 SHA。该 job 上传包含以下内容的
+短期 Actions artifact:
 
 ```text
 assets/             platform 包、六个组件 archive、统一 SHA256SUMS
@@ -130,7 +132,8 @@ cd release-install
 BIN=$PWD/bin bash test/e2e/run_all.sh
 ```
 
-该模式不读取组件 `main`:文档和用例与二进制一样绑定清单所选 tag。它不调用
+该模式不推导或读取组件 `main`:每个 unit 的文档、用例和二进制一样绑定清单所选的独立
+tag,所以平台维护分支可以组合彼此不同的组件维护版本线。它不调用
 Go/Rust/native build,也不会重新编译 vmlinux。通过后 publish job 原样使用此前的 artifact。
 
 ## 4. Native cache
