@@ -329,11 +329,32 @@ grep -Fq 'preview remains pending' "$TMP/coordinator.out" \
 
 mkdir -p "$TMP/generated-root" "$TMP/generated-bin" "$TMP/generated-state"
 cp -a "$ROOT/release" "$ROOT/releases" "$TMP/generated-root/"
+current_formal_manifest="$TMP/current-release.yaml"
+install -m 0644 "$ROOT/releases/release.yaml" "$current_formal_manifest"
+preview_base_commit=
+while read -r commit; do
+  candidate_version="$(git -C "$ROOT" show "$commit:releases/release.yaml" \
+    | awk '$1 == "version:" {print $2}')"
+  if [ "$candidate_version" = "$PREVIEW_BASE" ]; then
+    preview_base_commit="$commit"
+    break
+  fi
+done < <(git -C "$ROOT" log --format=%H -- releases/release.yaml)
+[ -n "$preview_base_commit" ] \
+  || release_fail "daily preview base selection is missing from release history"
+git -C "$ROOT" show "$preview_base_commit:releases/release.yaml" \
+  > "$TMP/generated-root/releases/release.yaml"
 git -C "$TMP/generated-root" init -q
 git -C "$TMP/generated-root" config user.name release-test
 git -C "$TMP/generated-root" config user.email release-test@example.invalid
 git -C "$TMP/generated-root" add release releases
-git -C "$TMP/generated-root" commit -qm 'maintain current preview selection'
+git -C "$TMP/generated-root" commit -qm 'maintain preview base selection'
+install -m 0644 "$current_formal_manifest" \
+  "$TMP/generated-root/releases/release.yaml"
+if ! git -C "$TMP/generated-root" diff --quiet -- releases/release.yaml; then
+  git -C "$TMP/generated-root" add releases/release.yaml
+  git -C "$TMP/generated-root" commit -qm 'advance formal release selection'
+fi
 install -m 0644 "$TMP/generated-root/releases/daily-preview.yaml" \
   "$TMP/generated-state/current-daily-preview.yaml"
 cat > "$TMP/generated-bin/gh" <<'EOF'
