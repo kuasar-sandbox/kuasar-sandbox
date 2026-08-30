@@ -73,11 +73,22 @@ def main() -> None:
             unit, tag, candidate_ref, candidate_sha, tag, tag, "publish"
         )
 
-    deadline = time.monotonic() + int(os.environ.get("RELEASE_WAIT_SECONDS", "10800"))
+    wait_for_convergence(plans, version, source_sha)
+
+
+def wait_for_convergence(
+    plans: dict[str, coordinator.Plan], version: str, source_sha: str
+) -> None:
+    deadline = time.monotonic() + int(
+        os.environ.get("RELEASE_WAIT_SECONDS", "10800")
+    )
     poll = int(os.environ.get("RELEASE_POLL_SECONDS", "120"))
     while True:
-        if coordinator.converge(plans, version, source_sha):
-            return
+        try:
+            if coordinator.converge(plans, version, source_sha):
+                return
+        except coordinator.Pending as error:
+            print(f"==> pending: {error}")
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 "Stable convergence remains pending; rerun the same committed selection"

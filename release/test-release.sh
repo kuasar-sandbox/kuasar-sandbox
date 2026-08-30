@@ -300,6 +300,13 @@ grep -Fq 'PLATFORM_SOURCE_ROOT:' "$ROOT/.github/workflows/aggregate-release.yml"
   || release_fail "aggregate workflow does not separate target platform source"
 grep -Fq 'PLATFORM_REF:' "$ROOT/.github/workflows/daily-preview-branch.yml" \
   || release_fail "branch converger does not pass the selected platform ref"
+for workflow in daily-preview-branch.yml preview-gc.yml; do
+  grep -Fq 'group: preview-manifest-selection-and-gc' \
+    "$ROOT/.github/workflows/$workflow" \
+    || release_fail "$workflow does not serialize manifest selection with GC"
+  grep -Fq 'queue: max' "$ROOT/.github/workflows/$workflow" \
+    || release_fail "$workflow does not preserve queued manifest operations"
+done
 grep -Fq 'queue: max' "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate publisher does not preserve queued mutations"
 grep -Fq 'queue: max' "$ROOT/.github/workflows/delete-preview.yml" \

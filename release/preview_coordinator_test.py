@@ -158,6 +158,24 @@ class PreviewCoordinatorTest(unittest.TestCase):
             formal.main()
         branch_sha.assert_not_called()
 
+    def test_formal_coordinator_polls_after_pending_api_convergence(self) -> None:
+        plans: dict[str, coordinator.Plan] = {}
+        with (
+            mock.patch.dict(
+                formal.os.environ,
+                {"RELEASE_WAIT_SECONDS": "60", "RELEASE_POLL_SECONDS": "1"},
+            ),
+            mock.patch.object(
+                formal.coordinator,
+                "converge",
+                side_effect=(coordinator.Pending("API convergence"), True),
+            ) as converge,
+            mock.patch.object(formal.time, "sleep") as sleep,
+        ):
+            formal.wait_for_convergence(plans, "release-v1.2.3", "a" * 40)
+        self.assertEqual(converge.call_count, 2)
+        sleep.assert_called_once_with(1)
+
     def test_cancelled_workflow_uses_full_rerun(self) -> None:
         state = {"id": 17, "conclusion": "cancelled"}
         with mock.patch.object(coordinator, "gh") as gh:

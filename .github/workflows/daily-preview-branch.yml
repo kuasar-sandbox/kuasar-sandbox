@@ -22,8 +22,9 @@ permissions:
   contents: write
 
 concurrency:
-  group: daily-preview-${{ inputs.platform_ref }}
+  group: preview-manifest-selection-and-gc
   cancel-in-progress: false
+  queue: max
 
 jobs:
   converge:

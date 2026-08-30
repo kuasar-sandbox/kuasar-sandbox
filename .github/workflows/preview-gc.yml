@@ -22,8 +22,9 @@ permissions:
   contents: write
 
 concurrency:
-  group: preview-release-gc-${{ inputs.stable_version || 'scheduled' }}
+  group: preview-manifest-selection-and-gc
   cancel-in-progress: false
+  queue: max
 
 jobs:
   collect:
