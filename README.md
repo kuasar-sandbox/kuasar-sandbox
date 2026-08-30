@@ -5,7 +5,7 @@ Serverless 与强化学习工作负载,提供独立 Guest Kernel 隔离,快照�
 有状态暂停恢复,按需数据加载,高密资源治理,以及从单节点到多节点集群的完整能力.
 
 系统支持生产部署.当前 Stable 聚合版本为
-[`release-v0.1.0`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.0);
+[`release-v0.1.1`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.1);
 Preview 继续用于开发和评估.生产就绪描述系统的部署能力,公开发行通道标记描述资产
 和接口的稳定性,两者是不同维度.生产部署仍应结合工作负载完成容量验证,
 并配置正式 TLS,可靠存储,网络策略和安全凭据.
@@ -70,7 +70,7 @@ KVM / Local File / NAS / Object Storage / Network
 
 ## 发行状态
 
-- **Current stable release**:[`release-v0.1.0`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.0).
+- **Current stable release**:[`release-v0.1.1`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.1).
 - **Preview 通道**:作为 GitHub prerelease 保留,用于开发和评估,不替代当前 Stable.
 - **预构建 Release 架构**:当前 GitHub Release 提供 Linux x86_64 资产.
 - **源码构建架构**:当前 Makefile 支持 `TARGET_ARCH=x86_64` 和
@@ -181,7 +181,7 @@ platform 包.
 人工收敛一个已经配置的聚合版本:
 
 ```bash
-make -C kuasar-sandbox release RELEASE_VERSION=release-v0.1.0
+make -C kuasar-sandbox release RELEASE_VERSION=release-v0.1.1
 ```
 
 也可以在组件版本已发布后只触发聚合验证与发布:
@@ -189,7 +189,7 @@ make -C kuasar-sandbox release RELEASE_VERSION=release-v0.1.0
 ```bash
 gh workflow run aggregate-release.yml \
   --repo kuasar-sandbox/kuasar-sandbox --ref main \
-  -f version=release-v0.1.0
+  -f version=release-v0.1.1
 ```
 
 详细资产契约,权限边界,失败恢复和每日 Preview 状态机见
