@@ -243,6 +243,10 @@ Release ID、可恢复源码 SHA 和 active run,并输出稳定排序计划及 S
 字段、引用或归属异常都会在零删除状态停止。手工 dry-run 不受 7 天限制,但 apply 不能
 绕过窗口。
 
+早期聚合 Preview 在引入“Tag 直接指向清单提交”契约前发布。GC 只对这类历史对象使用
+Stable Tag 可达的 first-parent 清单历史证明归属和精确组件选择;当前发布、残缺恢复和
+所有新 Preview 仍必须满足 Tag Commit 与清单 Commit 相同的严格契约。
+
 Apply 先 dispatch 五个组件仓的本地删除 wrapper。每个 wrapper 仅使用本仓短期
 `GITHUB_TOKEN contents:write`,再次核对精确 Preview Tag 和源码 SHA,然后将 Release、
 所有资产与 Tag 一并删除。所有组件候选消失后,平台才删除聚合 Preview。中途失败不会

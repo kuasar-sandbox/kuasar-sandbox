@@ -124,6 +124,29 @@ class PreviewGCTest(unittest.TestCase):
         self.assertEqual(candidate.source_sha, "4" * 40)
         self.assertEqual(candidate.asset_count, 1)
 
+    def test_precontract_canonical_aggregate_remains_collectable(self) -> None:
+        release = {
+            "id": 43,
+            "draft": False,
+            "prerelease": True,
+            "target_commitish": "5" * 40,
+            "assets": [{"name": "legacy", "size": 19}],
+        }
+        with mock.patch.object(
+            preview_gc.coordinator,
+            "platform_asset_names",
+            side_effect=preview_gc.coordinator.Deferred("legacy manifest"),
+        ):
+            candidate = preview_gc.release_candidate(
+                preview_gc.coordinator.PLATFORM_REPOSITORY,
+                "platform",
+                "release-v1.2.3-preview.20260831",
+                platform_release=release,
+                platform_sha="5" * 40,
+            )
+        assert candidate is not None
+        self.assertEqual(candidate.source_sha, "5" * 40)
+
 
 if __name__ == "__main__":
     unittest.main()

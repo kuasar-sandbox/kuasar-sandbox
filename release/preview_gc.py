@@ -86,11 +86,19 @@ def platform_release_status(
     if release is None:
         return coordinator.ReleaseStatus(None, sha, False)
     assets = release.get("assets")
-    expected = coordinator.platform_asset_names(tag, sha) if sha is not None else set()
+    expected: set[str] | None = None
+    if sha is not None:
+        try:
+            expected = coordinator.platform_asset_names(tag, sha)
+        except coordinator.Deferred:
+            # Pre-contract aggregate Previews remain collectable only when the
+            # canonical manifest history independently proves ownership.
+            expected = None
     complete = (
         release.get("draft") is False
         and release.get("prerelease") is ("-preview." in tag)
         and isinstance(assets, list)
+        and expected is not None
         and {str(asset.get("name")) for asset in assets} == expected
         and all(asset.get("state") == "uploaded" for asset in assets)
         and sha is not None

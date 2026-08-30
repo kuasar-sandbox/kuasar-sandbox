@@ -33,18 +33,30 @@ gh api \
 BASE="$(awk '/^version:[[:space:]]+/ {print $2}' "$TMP/daily-preview.yaml")"
 PREVIEW="$(awk '/^preview_version:[[:space:]]+/ {print $2}' \
   "$TMP/daily-preview.yaml")"
-[ "$BASE-$PREVIEW" = "$TAG" ] \
-  || fail "$SOURCE_SHA does not select aggregate Preview $TAG"
-{
-  printf '%s\n' SHA256SUMS "$(platform_archive "$TAG")"
+if [ "$BASE-$PREVIEW" = "$TAG" ]; then
+  : > "$TMP/selection.tsv"
   for unit in "${RELEASE_UNITS[@]}"; do
     selected="$(awk -v key="$unit:" '$1 == key {print $2}' \
       "$TMP/daily-preview.yaml")"
     [ "$(awk -v key="$unit:" '$1 == key {count++} END {print count + 0}' \
       "$TMP/daily-preview.yaml")" -eq 1 ] \
       || fail "manifest must select $unit exactly once"
-    component_archive "$unit" "$selected"
+    validate_unit_version "$unit" "$selected"
+    printf '%s\t%s\n' "$unit" "$selected" >> "$TMP/selection.tsv"
   done
+elif [ "$MODE" = gc ]; then
+  # Early aggregate Previews predate exact manifest-commit tagging. Their
+  # ownership is still provable from the canonical first-parent manifest
+  # history used to build the GC plan.
+  resolve_selection "$ROOT" "$TAG" "$TMP/selection.tsv"
+else
+  fail "$SOURCE_SHA does not select aggregate Preview $TAG"
+fi
+{
+  printf '%s\n' SHA256SUMS "$(platform_archive "$TAG")"
+  while IFS=$'\t' read -r unit selected; do
+    component_archive "$unit" "$selected"
+  done < "$TMP/selection.tsv"
 } | LC_ALL=C sort > "$TMP/expected-assets"
 
 gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" \
