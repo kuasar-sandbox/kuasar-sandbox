@@ -2,6 +2,7 @@
 
 set -euo pipefail
 
+readonly RELEASE_TOOL_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 readonly RELEASE_ORGANIZATION=kuasar-sandbox
 readonly RELEASE_TARGET=x86_64
 readonly RELEASE_UNITS=(accelerator connector sandboxer orchestrator runtime vmlinux)
@@ -76,7 +77,7 @@ platform_archive() {
 resolve_selection() {
   local root="$1" version="$2" output="$3"
   validate_aggregate_version "$version"
-  python3 "$root/release/selection.py" "$root" "$version" > "$output"
+  python3 "$RELEASE_TOOL_ROOT/release/selection.py" "$root" "$version" > "$output"
   local expected actual
   expected="$(printf '%s\n' "${RELEASE_UNITS[@]}" | LC_ALL=C sort)"
   actual="$(cut -f1 "$output" | LC_ALL=C sort)"
@@ -91,7 +92,7 @@ resolve_selection() {
 
 previous_release() {
   [ "$#" -eq 2 ] || release_fail "usage: previous_release <platform-root> <release-version>"
-  python3 "$1/release/selection.py" "$1" "$2" --previous
+  python3 "$RELEASE_TOOL_ROOT/release/selection.py" "$1" "$2" --previous
 }
 
 is_preview() {

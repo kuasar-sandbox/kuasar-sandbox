@@ -1,0 +1,73 @@
+name: Daily Preview Branch
+run-name: Daily preview ${{ inputs.platform_ref }}@${{ inputs.platform_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      platform_ref:
+        description: Exact maintained platform branch
+        required: true
+        type: string
+      platform_sha:
+        description: Exact platform branch HEAD selected by the scanner
+        required: true
+        type: string
+      date:
+        description: YYYYMMDD selection date
+        required: true
+        type: string
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: daily-preview-${{ inputs.platform_ref }}
+  cancel-in-progress: false
+
+jobs:
+  converge:
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Check out trusted release controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          path: control
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check out exact maintained platform source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.platform_sha }}
+          path: platform
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned GitHub CLI
+        run: bash control/release/install-gh-cli.sh
+
+      - name: Create cross-repository release token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
+          permission-actions: write
+          permission-contents: read
+
+      - name: Converge branch Preview
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+          PLATFORM_TOKEN: ${{ github.token }}
+          PLATFORM_ROOT: ${{ github.workspace }}/platform
+          PLATFORM_REF: ${{ inputs.platform_ref }}
+          PLATFORM_SHA: ${{ inputs.platform_sha }}
+          PREVIEW_DATE: ${{ inputs.date }}
+          PREVIEW_POLL_SECONDS: "120"
+          PREVIEW_WAIT_SECONDS: "3000"
+        run: python3 control/release/preview_coordinator.py

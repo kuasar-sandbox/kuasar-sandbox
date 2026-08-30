@@ -96,9 +96,12 @@ collect:
 
 # Publish any missing selected component versions, then publish the aggregate.
 RELEASE_VERSION ?=
+PLATFORM_REF ?= $(shell git branch --show-current)
+PLATFORM_SHA ?= $(shell git rev-parse HEAD)
 release:
 	@[ -n "$(RELEASE_VERSION)" ] || { echo "RELEASE_VERSION=release-vX.Y.Z is required" >&2; exit 1; }
-	bash release/preview-coordinator.sh --version "$(RELEASE_VERSION)"
+	RELEASE_VERSION="$(RELEASE_VERSION)" PLATFORM_REF="$(PLATFORM_REF)" \
+	  PLATFORM_SHA="$(PLATFORM_SHA)" python3 release/formal_coordinator.py
 
 # ---------------------------------------------------------------------------
 # Tests + benchmarks + perf (cross-repo)
@@ -171,6 +174,9 @@ test-ci-tools:
 	bash ci/bms/test-ci-tools.sh
 
 test-release-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_selection_test.py
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_coordinator_test.py
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_gc_test.py
 	bash release/test-release.sh
 
 test-perf-tools:

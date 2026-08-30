@@ -1,0 +1,58 @@
+name: Preview GC
+run-name: Preview GC ${{ inputs.stable_version || 'all eligible Stable releases' }}
+
+on:
+  schedule:
+    - cron: "43 7 * * *"
+      timezone: Asia/Shanghai
+  workflow_dispatch:
+    inputs:
+      stable_version:
+        description: Optional release-vMAJOR.MINOR.PATCH; empty scans every Stable release
+        required: false
+        type: string
+      dry_run:
+        description: Plan and validate without deletion
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  actions: write
+  contents: write
+
+concurrency:
+  group: preview-release-gc-${{ inputs.stable_version || 'scheduled' }}
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out canonical platform history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Install pinned GitHub CLI
+        run: bash release/install-gh-cli.sh
+
+      - name: Create read-only planning and dispatch token
+        id: gc-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
+          permission-actions: write
+          permission-contents: read
+
+      - name: Plan or converge Preview garbage collection
+        env:
+          GH_TOKEN: ${{ steps.gc-token.outputs.token }}
+          PLATFORM_TOKEN: ${{ github.token }}
+          STABLE_VERSION: ${{ inputs.stable_version }}
+          DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || inputs.dry_run }}
+        run: python3 release/preview_gc.py | tee -a "$GITHUB_STEP_SUMMARY"

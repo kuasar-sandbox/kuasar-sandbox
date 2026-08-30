@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLATFORM_SOURCE_ROOT="$(cd "${PLATFORM_SOURCE_ROOT:-$ROOT}" && pwd)"
 # shellcheck source=release/lib.sh
 source "$ROOT/release/lib.sh"
 
@@ -68,7 +69,7 @@ package_archive() {
   work="$(mktemp -d)"
   stage="$work/stage"
   mkdir -p "$output/assets"
-  "$ROOT/test/e2e/assemble.sh" "$stage" "$ROOT" \
+  "$ROOT/test/e2e/assemble.sh" "$stage" "$PLATFORM_SOURCE_ROOT" \
     "$sources/accelerator" "$sources/connector" "$sources/runtime" \
     "$sources/sandboxer" "$sources/orchestrator"
   [ -f "$sources/vmlinux/docs/vmlinux.md" ] \

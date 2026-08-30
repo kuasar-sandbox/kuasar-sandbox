@@ -8,6 +8,7 @@ import pathlib
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from typing import NoReturn
 
 
@@ -20,6 +21,27 @@ AGGREGATE_RE = re.compile(
     r"(?:-preview\.[0-9]{8})?$"
 )
 PREVIEW_RE = re.compile(r"^preview\.[0-9]{8}$")
+COMPONENT_RE = re.compile(
+    r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-preview\.[0-9]{8})?$"
+)
+RUNTIME_RE = re.compile(
+    r"^runtime-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-preview\.[0-9]{8})?$"
+)
+VMLINUX_RE = re.compile(
+    r"^vmlinux-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
+    r"(?:-preview\.[0-9]{8})?$"
+)
+
+
+@dataclass(frozen=True, order=True)
+class AggregateVersion:
+    """A stable aggregate version used for maintained-state ordering."""
+
+    major: int
+    minor: int
+    patch: int
 
 
 class ManifestError(ValueError):
@@ -66,12 +88,36 @@ def require_stable(value: object, field: str, source: str) -> str:
     return value
 
 
-def validate_components(config: dict[str, object], source: str) -> dict[str, str]:
+def aggregate_version(value: str) -> AggregateVersion:
+    match = re.fullmatch(r"release-v([0-9]+)\.([0-9]+)\.([0-9]+)", value)
+    if match is None:
+        raise ManifestError(f"invalid stable aggregate version: {value}")
+    return AggregateVersion(*(int(part) for part in match.groups()))
+
+
+def validate_components(
+    config: dict[str, object], source: str, preview: bool
+) -> dict[str, str]:
     components = config["components"]
     assert isinstance(components, dict)
     if set(components) != set(UNITS):
         raise ManifestError(f"components in {source} must be exactly: {', '.join(UNITS)}")
-    return {unit: str(components[unit]) for unit in UNITS}
+    selected = {unit: str(components[unit]) for unit in UNITS}
+    for unit, value in selected.items():
+        pattern = (
+            COMPONENT_RE
+            if unit in ("accelerator", "connector", "sandboxer", "orchestrator")
+            else RUNTIME_RE
+            if unit == "runtime"
+            else VMLINUX_RE
+        )
+        if pattern.fullmatch(value) is None:
+            raise ManifestError(f"invalid {unit} version in {source}: {value}")
+        if not preview and "-preview." in value:
+            raise ManifestError(
+                f"formal selection in {source} must use a stable {unit} version"
+            )
+    return selected
 
 
 def parse_manifest(
@@ -92,8 +138,8 @@ def parse_manifest(
     previous_version: str | None = None
     if "previous_version" in config:
         previous_version = require_stable(config["previous_version"], "previous_version", source)
-        if previous_version == version:
-            raise ManifestError(f"previous_version in {source} must differ from version")
+        if aggregate_version(previous_version) >= aggregate_version(version):
+            raise ManifestError(f"previous_version in {source} must be older than version")
 
     aggregate = version
     previous = previous_version
@@ -112,14 +158,46 @@ def parse_manifest(
                 raise ManifestError(
                     f"previous_preview_version in {source} must differ from preview_version"
                 )
+            if previous_preview >= preview_version:
+                raise ManifestError(
+                    f"previous_preview_version in {source} must be older than preview_version"
+                )
             previous = f"{version}-{previous_preview}"
 
-    return aggregate, previous, validate_components(config, source)
+    return aggregate, previous, validate_components(config, source, preview)
+
+
+def validate_current_manifests(root: pathlib.Path) -> None:
+    release_path = root / "releases/release.yaml"
+    preview_path = root / "releases/daily-preview.yaml"
+    if not release_path.is_file() or not preview_path.is_file():
+        raise ManifestError("both maintained release manifests must exist")
+    release = parse_manifest(
+        release_path.read_text(encoding="utf-8"), str(release_path), False
+    )
+    preview = parse_manifest(
+        preview_path.read_text(encoding="utf-8"), str(preview_path), True
+    )
+    release_base = release[0]
+    preview_base = preview[0].split("-preview.", 1)[0]
+    if aggregate_version(preview_base) < aggregate_version(release_base):
+        raise ManifestError(
+            "daily-preview.yaml version must not be older than release.yaml version"
+        )
 
 
 def git_snapshots(root: pathlib.Path, relative: pathlib.Path) -> list[tuple[str, str]]:
     log = subprocess.run(
-        ["git", "-C", str(root), "log", "--format=%H", "--", relative.as_posix()],
+        [
+            "git",
+            "-C",
+            str(root),
+            "log",
+            "--first-parent",
+            "--format=%H",
+            "--",
+            relative.as_posix(),
+        ],
         check=False,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -144,6 +222,10 @@ def git_snapshots(root: pathlib.Path, relative: pathlib.Path) -> list[tuple[str,
 def resolve(root: pathlib.Path, version: str) -> tuple[str | None, dict[str, str]]:
     if AGGREGATE_RE.fullmatch(version) is None:
         fail("invalid aggregate version")
+    try:
+        validate_current_manifests(root)
+    except ManifestError as error:
+        fail(str(error))
     preview = "-preview." in version
     relative = pathlib.Path("releases/daily-preview.yaml" if preview else "releases/release.yaml")
     path = root / relative
@@ -170,8 +252,17 @@ def resolve(root: pathlib.Path, version: str) -> tuple[str | None, dict[str, str
 
 
 def main() -> None:
+    if len(sys.argv) == 3 and sys.argv[2] == "--validate-current":
+        try:
+            validate_current_manifests(pathlib.Path(sys.argv[1]))
+        except ManifestError as error:
+            fail(str(error))
+        return
     if len(sys.argv) not in (3, 4):
-        fail("usage: selection.py <platform-root> <release-version> [--previous]")
+        fail(
+            "usage: selection.py <platform-root> "
+            "<release-version> [--previous] | --validate-current"
+        )
     if len(sys.argv) == 4 and sys.argv[3] != "--previous":
         fail("usage: selection.py <platform-root> <release-version> [--previous]")
     previous, selected = resolve(pathlib.Path(sys.argv[1]), sys.argv[2])

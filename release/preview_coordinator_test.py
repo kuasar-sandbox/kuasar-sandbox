@@ -1,0 +1,268 @@
+#!/usr/bin/env python3
+
+"""Unit tests for Daily Preview convergence state transitions."""
+
+from __future__ import annotations
+
+import base64
+import importlib.util
+import pathlib
+import sys
+import unittest
+from unittest import mock
+
+
+MODULE_PATH = pathlib.Path(__file__).with_name("preview_coordinator.py")
+SPEC = importlib.util.spec_from_file_location("preview_coordinator", MODULE_PATH)
+assert SPEC is not None and SPEC.loader is not None
+coordinator = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = coordinator
+SPEC.loader.exec_module(coordinator)
+
+
+class PreviewCoordinatorTest(unittest.TestCase):
+    def test_branch_sha_resolves_only_heads_namespace(self) -> None:
+        with mock.patch.object(
+            coordinator,
+            "api_optional",
+            return_value={"object": {"type": "commit", "sha": "a" * 40}},
+        ) as query:
+            sha = coordinator.branch_sha(
+                "kuasar-sandbox/sandboxer", "release/v0.3.x"
+            )
+        self.assertEqual(sha, "a" * 40)
+        query.assert_called_once_with(
+            "repos/kuasar-sandbox/sandboxer/git/ref/heads/release/v0.3.x"
+        )
+
+    def test_branch_sha_rejects_non_commit_ref(self) -> None:
+        with (
+            mock.patch.object(
+                coordinator,
+                "api_optional",
+                return_value={"object": {"type": "tag", "sha": "a" * 40}},
+            ),
+            self.assertRaisesRegex(RuntimeError, "not a commit branch ref"),
+        ):
+            coordinator.branch_sha("kuasar-sandbox/sandboxer", "main")
+
+    def test_validation_defers_when_scanned_platform_branch_moves(self) -> None:
+        selected = "a" * 40
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+            mock.patch.object(coordinator, "PLATFORM_SHA", selected),
+            mock.patch.object(coordinator, "TODAY", "20260831"),
+            mock.patch.object(
+                coordinator, "run", return_value=mock.Mock(stdout=selected + "\n")
+            ),
+            mock.patch.object(coordinator, "branch_sha", return_value="b" * 40),
+            mock.patch.object(coordinator.selection, "validate_current_manifests"),
+            self.assertRaisesRegex(coordinator.Deferred, "moved after the scanner"),
+        ):
+            coordinator.validate_environment()
+
+    def test_release_contract_rejects_incomplete_assets(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["accelerator"]
+        state = coordinator.RepositoryState.__new__(coordinator.RepositoryState)
+        state.unit = unit
+        state._statuses = {}
+        state.tag_shas = {"v1.2.3-preview.20260831": "1" * 40}
+        state.invalid_tags = set()
+        state.releases = {
+            "v1.2.3-preview.20260831": {
+                "draft": False,
+                "prerelease": True,
+                "target_commitish": "1" * 40,
+                "assets": [
+                    {"name": "SHA256SUMS", "state": "uploaded"},
+                ],
+            }
+        }
+        status = state.status("v1.2.3-preview.20260831")
+        self.assertTrue(status.partial)
+        self.assertFalse(status.complete)
+
+    def test_release_contract_accepts_exact_component_assets(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["runtime"]
+        state = coordinator.RepositoryState.__new__(coordinator.RepositoryState)
+        state.unit = unit
+        state._statuses = {}
+        state.tag_shas = {"runtime-v1.2.3-preview.20260831": "2" * 40}
+        state.invalid_tags = set()
+        state.releases = {
+            "runtime-v1.2.3-preview.20260831": {
+                "draft": False,
+                "prerelease": True,
+                "target_commitish": "2" * 40,
+                "assets": [
+                    {"name": "SHA256SUMS", "state": "uploaded"},
+                    {
+                        "name": "sandbox-runtime-x86_64-v1.2.3-preview.20260831.tar.gz",
+                        "state": "uploaded",
+                    },
+                ],
+            }
+        }
+        status = state.status("runtime-v1.2.3-preview.20260831")
+        self.assertTrue(status.complete)
+
+    def test_platform_assets_are_derived_from_exact_manifest_commit(self) -> None:
+        manifest = """version: release-v9.8.7
+preview_version: preview.20260831
+components:
+  accelerator: v1.0.1-preview.20260831
+  connector: v1.0.2
+  sandboxer: v1.0.3-preview.20260831
+  orchestrator: v1.0.4
+  runtime: runtime-v1.0.5
+  vmlinux: vmlinux-v1.0.6
+"""
+        response = {"content": base64.b64encode(manifest.encode()).decode()}
+        with mock.patch.object(coordinator, "api_optional", return_value=response):
+            assets = coordinator.platform_asset_names(
+                "release-v9.8.7-preview.20260831", "d" * 40
+            )
+        self.assertEqual(len(assets), 8)
+        self.assertIn("connector-v1.0.2-linux-x86_64.tar.gz", assets)
+        self.assertIn("sandbox-runtime-x86_64-v1.0.5.tar.gz", assets)
+
+    def test_tagless_release_target_is_recoverable(self) -> None:
+        status = coordinator.ReleaseStatus(
+            {"target_commitish": "c" * 40}, None, False
+        )
+        self.assertEqual(coordinator.recoverable_source_sha(status), "c" * 40)
+
+    def test_configured_tagless_preview_dispatches_cleanup(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["connector"]
+        tag = "v1.2.3-preview.20260831"
+        state = mock.Mock()
+        state.status.return_value = coordinator.ReleaseStatus(
+            {"target_commitish": "c" * 40}, None, False
+        )
+        with (
+            mock.patch.object(coordinator, "latest_run", return_value=None),
+            mock.patch.object(coordinator, "dispatch_cleanup") as cleanup,
+        ):
+            coordinator.ensure_configured_state(unit, tag, state)
+        self.assertEqual(cleanup.call_args.args[0].source_sha, "c" * 40)
+        self.assertEqual(cleanup.call_args.args[1], "incomplete")
+
+    def test_missing_component_maintenance_branch_freezes_exact_selection(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["sandboxer"]
+        stable = coordinator.ReleaseStatus(
+            {"tag_name": "v0.3.5"}, "3" * 40, True
+        )
+        fake_state = mock.Mock()
+        fake_state.status.return_value = stable
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "release/v0.5.x"),
+            mock.patch.object(coordinator, "RepositoryState", return_value=fake_state),
+            mock.patch.object(coordinator, "ensure_configured_state"),
+            mock.patch.object(coordinator, "branch_sha", return_value=None),
+        ):
+            plan = coordinator.make_plan(
+                unit, "v0.3.5", "20260831", pathlib.Path("/unused")
+            )
+        self.assertIsNone(plan.source_ref)
+        self.assertEqual(plan.selected, "v0.3.5")
+        self.assertEqual(plan.action, "fixed")
+
+    def test_dependency_rebuild_cannot_reuse_same_day_preview(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["sandboxer"]
+        plan = coordinator.Plan(
+            unit,
+            "v0.3.6-preview.20260831",
+            "release/v0.3.x",
+            "4" * 40,
+            "v0.3.6-preview.20260831",
+            "v0.3.6-preview.20260831",
+            "reuse",
+        )
+        state = mock.Mock()
+        state.status.return_value = coordinator.ReleaseStatus(
+            {"tag_name": plan.selected}, plan.source_sha, True
+        )
+        with self.assertRaisesRegex(coordinator.Deferred, "same Preview date"):
+            coordinator.force_dependency_preview(plan, "20260831", state)
+
+    def test_manifest_keeps_independent_component_versions(self) -> None:
+        plans = {
+            name: coordinator.Plan(
+                coordinator.UNIT_BY_NAME[name],
+                tag,
+                "main",
+                str(index) * 40,
+                tag,
+                tag,
+                "reuse",
+            )
+            for index, (name, tag) in enumerate(
+                {
+                    "accelerator": "v0.2.1",
+                    "connector": "v0.1.9",
+                    "sandboxer": "v0.3.6-preview.20260831",
+                    "orchestrator": "v0.4.3",
+                    "runtime": "runtime-v0.1.2",
+                    "vmlinux": "vmlinux-v0.1.0",
+                }.items(),
+                1,
+            )
+        }
+        content = coordinator.render_manifest(
+            "release-v0.5.7",
+            "release-v0.5.6",
+            "20260831",
+            "preview.20260830",
+            plans,
+        )
+        self.assertIn("  sandboxer: v0.3.6-preview.20260831\n", content)
+        self.assertIn("  orchestrator: v0.4.3\n", content)
+        self.assertIn("previous_preview_version: preview.20260830\n", content)
+
+    def test_component_dispatch_carries_aggregate_commit(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["accelerator"]
+        plan = coordinator.Plan(
+            unit,
+            "v0.2.0",
+            "main",
+            "a" * 40,
+            "v0.2.1-preview.20260831",
+            "v0.2.1-preview.20260831",
+            "publish",
+        )
+        values = coordinator.release_inputs(
+            plan,
+            {"accelerator": plan},
+            "release-v0.3.0-preview.20260831",
+            "b" * 40,
+        )
+        self.assertIn("aggregate_sha=" + "b" * 40, values)
+
+    def test_cleanup_does_not_start_a_fourth_attempt(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["connector"]
+        plan = coordinator.Plan(
+            unit,
+            "v1.2.3-preview.20260831",
+            "main",
+            "c" * 40,
+            "v1.2.3-preview.20260831",
+            "v1.2.3-preview.20260831",
+            "cleanup",
+        )
+        failed = {
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 3,
+            "html_url": "https://example.invalid/run/1",
+        }
+        with (
+            mock.patch.object(coordinator, "latest_run", return_value=failed),
+            mock.patch.object(coordinator, "gh") as gh,
+            self.assertRaisesRegex(coordinator.Deferred, "three attempts"),
+        ):
+            coordinator.dispatch_cleanup(plan, "incomplete")
+        gh.assert_not_called()
+
+
+if __name__ == "__main__":
+    unittest.main()
