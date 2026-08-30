@@ -448,7 +448,10 @@ def plan(version: str) -> tuple[list[Candidate], dict[str, Any]]:
             platform_snapshot=snapshots[tag],
         )
         if candidate is not None:
-            if f"Aggregate {tag}" in platform_active:
+            if any(
+                coordinator.aggregate_title_matches(title, tag)
+                for title in platform_active
+            ):
                 raise GCError(f"aggregate release workflow is active: {tag}")
             candidates.append(candidate)
     metadata = {
@@ -537,9 +540,7 @@ def apply(candidates: list[Candidate]) -> bool:
             attempt = int(state.get("run_attempt", 1))
             if attempt >= 3:
                 raise GCError(f"component GC failed: {state.get('html_url')}")
-            coordinator.gh(
-                "run", "rerun", str(state["id"]), "--repo", item.repository, "--failed"
-            )
+            coordinator.rerun_workflow(item.repository, state)
             pending = True
             continue
         if state is None:
@@ -581,14 +582,7 @@ def apply(candidates: list[Candidate]) -> bool:
             attempt = int(state.get("run_attempt", 1))
             if attempt >= 3:
                 raise GCError(f"aggregate GC failed: {state.get('html_url')}")
-            coordinator.gh(
-                "run",
-                "rerun",
-                str(state["id"]),
-                "--repo",
-                coordinator.PLATFORM_REPOSITORY,
-                "--failed",
-            )
+            coordinator.rerun_workflow(coordinator.PLATFORM_REPOSITORY, state)
             return False
         return False
     return True

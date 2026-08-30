@@ -1,5 +1,5 @@
 name: Aggregate Release
-run-name: Aggregate ${{ inputs.version }}
+run-name: Aggregate ${{ inputs.version }} @${{ inputs.source_sha }}
 
 on:
   workflow_dispatch:

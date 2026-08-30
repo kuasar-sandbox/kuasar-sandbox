@@ -445,6 +445,29 @@ def latest_release_run(
     return max(matching, key=lambda item: str(item.get("created_at", "")), default=None)
 
 
+def aggregate_run_title(version: str, source_sha: str) -> str:
+    return f"Aggregate {version} @{source_sha}"
+
+
+def aggregate_title_matches(title: object, version: str) -> bool:
+    legacy = f"Aggregate {version}"
+    return title == legacy or str(title).startswith(f"{legacy} @")
+
+
+def latest_aggregate_run(version: str) -> dict[str, Any] | None:
+    runs = paginated(
+        f"repos/{PLATFORM_REPOSITORY}/actions/workflows/aggregate-release.yml/runs?"
+        "event=workflow_dispatch&per_page=100",
+        "workflow_runs",
+    )
+    matching = [
+        item
+        for item in runs
+        if aggregate_title_matches(item.get("display_title"), version)
+    ]
+    return max(matching, key=lambda item: str(item.get("created_at", "")), default=None)
+
+
 def run_active(state: dict[str, Any]) -> bool:
     return state.get("status") in {
         "queued",
@@ -455,6 +478,13 @@ def run_active(state: dict[str, Any]) -> bool:
     }
 
 
+def rerun_workflow(repository: str, state: dict[str, Any]) -> None:
+    args = ["run", "rerun", str(state["id"]), "--repo", repository]
+    if state.get("conclusion") == "failure":
+        args.append("--failed")
+    gh(*args)
+
+
 def dispatch_cleanup(plan: Plan, mode: str) -> None:
     title = f"Delete {plan.selected} ({mode})"
     state = latest_run(plan.unit.repository, "delete-preview.yml", title)
@@ -463,7 +493,7 @@ def dispatch_cleanup(plan: Plan, mode: str) -> None:
     if state is not None and state.get("conclusion") == "success":
         raise Pending(f"cleanup completed and API state is converging: {state.get('html_url')}")
     if state is not None and int(state.get("run_attempt", 1)) < 3:
-        gh("run", "rerun", str(state["id"]), "--repo", plan.unit.repository, "--failed")
+        rerun_workflow(plan.unit.repository, state)
         raise Pending(f"reran cleanup: {state.get('html_url')}")
     if state is not None:
         raise Deferred(f"cleanup remains failed after three attempts: {state.get('html_url')}")
@@ -815,23 +845,14 @@ def ensure_unit(
         raise Pending(f"successful run is waiting for Release API convergence: {title}")
     attempt = int(state_run.get("run_attempt", 1))
     if attempt < 3:
-        gh(
-            "run",
-            "rerun",
-            str(state_run["id"]),
-            "--repo",
-            plan.unit.repository,
-            "--failed",
-        )
-        print(f"==> reran failed publication: {state_run.get('html_url')}")
+        rerun_workflow(plan.unit.repository, state_run)
+        print(f"==> reran publication: {state_run.get('html_url')}")
         return False
     raise Deferred(f"publication remains failed after three attempts: {state_run.get('html_url')}")
 
 
 def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
-    release_state = latest_run(
-        PLATFORM_REPOSITORY, "aggregate-release.yml", f"Aggregate {tag}"
-    )
+    release_state = latest_aggregate_run(tag)
     if release_state is not None and run_active(release_state):
         raise Pending(f"aggregate release is active: {release_state.get('html_url')}")
     title = f"Delete {tag} (incomplete)"
@@ -841,7 +862,7 @@ def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
     if state is not None and state.get("conclusion") == "success":
         raise Pending("platform cleanup completed and API state is converging")
     if state is not None and int(state.get("run_attempt", 1)) < 3:
-        gh("run", "rerun", str(state["id"]), "--repo", PLATFORM_REPOSITORY, "--failed")
+        rerun_workflow(PLATFORM_REPOSITORY, state)
         raise Pending(f"reran platform cleanup: {state.get('html_url')}")
     if state is not None:
         raise Deferred(
@@ -877,7 +898,7 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
         if recovery_sha is None:
             raise Deferred(f"aggregate {version} has no recoverable source target")
         dispatch_platform_cleanup(version, recovery_sha)
-    title = f"Aggregate {version}"
+    title = aggregate_run_title(version, source_sha)
     state = latest_run(PLATFORM_REPOSITORY, "aggregate-release.yml", title)
     if state is None:
         gh(
@@ -904,7 +925,7 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
         raise Pending("aggregate run is waiting for Release API convergence")
     attempt = int(state.get("run_attempt", 1))
     if attempt < 3:
-        gh("run", "rerun", str(state["id"]), "--repo", PLATFORM_REPOSITORY, "--failed")
+        rerun_workflow(PLATFORM_REPOSITORY, state)
         return False
     raise Deferred(f"aggregate publication failed: {state.get('html_url')}")
 
@@ -970,6 +991,13 @@ def main() -> None:
             return
         date = TODAY
         next_previous_preview = preview
+
+    active_aggregate = latest_aggregate_run(current_aggregate)
+    if active_aggregate is not None and run_active(active_aggregate):
+        raise Pending(
+            f"aggregate release is active; keep its manifest immutable: "
+            f"{active_aggregate.get('html_url')}"
+        )
 
     plans = plan_units(configured, date)
     changed = any(plans[name].selected != configured[name] for name in configured)

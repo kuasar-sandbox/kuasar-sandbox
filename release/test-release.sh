@@ -291,6 +291,9 @@ grep -Fq "grep -E '^release/v" "$ROOT/.github/workflows/daily-preview.yml" \
   || release_fail "Daily scanner does not discover maintenance branches"
 grep -Fq 'source_sha:' "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate workflow does not pin its source commit"
+grep -Fq 'run-name: Aggregate ${{ inputs.version }} @${{ inputs.source_sha }}' \
+  "$ROOT/.github/workflows/aggregate-release.yml" \
+  || release_fail "aggregate workflow run identity does not pin its source commit"
 grep -Fq 'path: control' "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate prepare does not isolate trusted main tooling"
 grep -Fq 'PLATFORM_SOURCE_ROOT:' "$ROOT/.github/workflows/aggregate-release.yml" \

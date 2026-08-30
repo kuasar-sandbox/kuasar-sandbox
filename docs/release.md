@@ -139,6 +139,8 @@ vmlinux 不因这些依赖变化而重建。若同一 unit 在同一天已经发
 流程延后到下一个 Preview 日期,不复用带有旧依赖的资产,也不发明同日序号格式。
 
 平台自身在所选分支上的代码变化同样会产生新的聚合 Preview,即使六个组件都复用。
+同一聚合版本的 workflow run 名同时绑定平台源码 SHA。旧 run 仍在运行时,控制器保持当前
+Daily 清单不变;分支产生新 HEAD 后使用新的 run 身份,不会用旧输入重跑或改写运行中清单。
 
 ## 5. 残缺发布恢复
 
@@ -152,7 +154,8 @@ vmlinux 不因这些依赖变化而重建。若同一 unit 在同一天已经发
   删除 Release、资产和 Tag,再重扫并重新走正常 Daily 发布;
 - 外来残缺 Preview 或残缺 Stable:忽略,不作为候选,也不自动删除;
 - 无组件维护分支的固定版本不完整:延后,不派生替代版本;
-- 确定性失败最多重跑三次,超过后保持 deferred,不会靠覆盖 Tag 或手工拼资产恢复。
+- 确定性失败最多重跑三次,超过后保持 deferred,不会靠覆盖 Tag 或手工拼资产恢复。普通
+  failure 只重跑失败 job;cancelled、timed out 等没有失败 job 的状态重跑完整 workflow。
 
 恢复的目标是恢复 Daily 流程,不是修补或重建残缺 Release 的资产。同名完整 Release 永远
 不会被 `incomplete` 模式删除。若 Tag 已经缺失但 draft 或 prerelease 仍在,只有

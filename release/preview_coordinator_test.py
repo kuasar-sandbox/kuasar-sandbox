@@ -158,6 +158,90 @@ class PreviewCoordinatorTest(unittest.TestCase):
             formal.main()
         branch_sha.assert_not_called()
 
+    def test_cancelled_workflow_uses_full_rerun(self) -> None:
+        state = {"id": 17, "conclusion": "cancelled"}
+        with mock.patch.object(coordinator, "gh") as gh:
+            coordinator.rerun_workflow("kuasar-sandbox/accelerator", state)
+        gh.assert_called_once_with(
+            "run", "rerun", "17", "--repo", "kuasar-sandbox/accelerator"
+        )
+
+    def test_failed_workflow_uses_failed_job_rerun(self) -> None:
+        state = {"id": 18, "conclusion": "failure"}
+        with mock.patch.object(coordinator, "gh") as gh:
+            coordinator.rerun_workflow("kuasar-sandbox/accelerator", state)
+        gh.assert_called_once_with(
+            "run",
+            "rerun",
+            "18",
+            "--repo",
+            "kuasar-sandbox/accelerator",
+            "--failed",
+        )
+
+    def test_aggregate_run_identity_includes_selected_source(self) -> None:
+        sha = "c" * 40
+        title = coordinator.aggregate_run_title(
+            "release-v0.1.2-preview.20260831", sha
+        )
+        self.assertEqual(
+            title, f"Aggregate release-v0.1.2-preview.20260831 @{sha}"
+        )
+        self.assertTrue(
+            coordinator.aggregate_title_matches(
+                title, "release-v0.1.2-preview.20260831"
+            )
+        )
+
+    def test_active_aggregate_keeps_current_manifest_immutable(self) -> None:
+        empty = coordinator.ReleaseStatus(None, None, False)
+        active = {
+            "status": "in_progress",
+            "html_url": "https://example.invalid/run/19",
+        }
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+            mock.patch.object(coordinator, "validate_environment"),
+            mock.patch.object(
+                coordinator,
+                "manifest_values",
+                return_value=(
+                    "release-v0.1.2",
+                    "release-v0.1.1",
+                    "preview.20260831",
+                    None,
+                    {},
+                ),
+            ),
+            mock.patch.object(
+                coordinator, "release_version", return_value="release-v0.1.1"
+            ),
+            mock.patch.object(coordinator, "platform_release", return_value=empty),
+            mock.patch.object(
+                coordinator, "latest_aggregate_run", return_value=active
+            ),
+            mock.patch.object(coordinator, "plan_units") as plan_units,
+            self.assertRaisesRegex(coordinator.Pending, "manifest immutable"),
+        ):
+            coordinator.main()
+        plan_units.assert_not_called()
+
+    def test_aggregate_lookup_is_exact_for_selected_source(self) -> None:
+        version = "release-v0.1.2-preview.20260831"
+        sha = "d" * 40
+        empty = coordinator.ReleaseStatus(None, None, False)
+        with (
+            mock.patch.object(coordinator, "platform_release", return_value=empty),
+            mock.patch.object(coordinator, "latest_run", return_value=None) as latest,
+            mock.patch.object(coordinator, "gh"),
+        ):
+            self.assertFalse(coordinator.ensure_aggregate(version, sha))
+        latest.assert_called_once_with(
+            coordinator.PLATFORM_REPOSITORY,
+            "aggregate-release.yml",
+            coordinator.aggregate_run_title(version, sha),
+        )
+
     def test_validation_defers_when_scanned_platform_branch_moves(self) -> None:
         selected = "a" * 40
         with (
