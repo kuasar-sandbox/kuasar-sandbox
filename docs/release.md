@@ -88,8 +88,11 @@ Tag 尚不完整,Daily 同样在任何清单或组件变更前延后,不在残�
 `v0.1.2`,再从较晚的补丁点建立 `release/v0.1.x`。建立维护分支之后,主线与维护线各自
 维护自己的两个清单。
 
-GitHub Latest 只由平台 `main` 的 Stable 聚合发布更新。组件 Release 由聚合清单通过精确
-Tag 选择,不竞争项目级 Latest;维护分支 Stable 和任何 Preview 也不更新 Latest。
+平台仓的 GitHub Latest 只由平台 `main` 的 Stable 聚合发布更新。每个组件仓仍独立维护
+自己的 Latest:组件 `main` 的 Stable 发布记录源码分支和精确提交,发布后在该仓所有已
+发布的主线 Stable 中按源码提交先后重新选择 Latest;同一提交存在多个 Tag 时才比较
+SemVer。组件维护分支 Stable 和任何 Preview 不更新 Latest。平台聚合始终通过清单中的
+精确 Tag 选择组件,不依赖组件仓的 Latest。
 
 平台维护分支与组件维护分支不存在同名约束。平台 `release/v0.5.x` 可以聚合
 `sandboxer release/v0.3.x`、`orchestrator release/v0.4.x` 和只在 `main` 发布的
@@ -144,6 +147,8 @@ vmlinux 不因这些依赖变化而重建。若同一 unit 在同一天已经发
 同一聚合版本的 workflow run 名同时绑定平台源码 SHA。只要任意匹配 run 仍在运行,即使
 更新的 run 已取消或结束,控制器也保持当前 Daily 清单不变;分支产生新 HEAD 后使用新的
 run 身份,不会用旧输入重跑或改写运行中清单。
+分支协调任务的身份还包含请求日期,因此相同平台 SHA 的不同日期扫描不会错误复用彼此的
+结果。
 
 ## 5. 残缺发布恢复
 
@@ -159,6 +164,11 @@ run 身份,不会用旧输入重跑或改写运行中清单。
 - 无组件维护分支的固定版本不完整:延后,不派生替代版本;
 - 确定性失败最多重跑三次,超过后保持 deferred,不会靠覆盖 Tag 或手工拼资产恢复。普通
   failure 只重跑失败 job;cancelled、timed out 等没有失败 job 的状态重跑完整 workflow。
+
+若未完成的聚合选择跨过了新的上海日期,控制器不再用旧日期 Tag 绑定新的组件 HEAD。
+残缺聚合对象先通过受保护入口删除;随后清单滚到新日期并重新选择。旧选择中已经完整发布
+但未被任何保留聚合引用的组件 Preview 交给 GC 按回退窗口统一删除。若仍在同一天,控制器
+保持 deferred,避免覆盖已经公开的完整 Preview Tag。
 
 恢复的目标是恢复 Daily 流程,不是修补或重建残缺 Release 的资产。同名完整 Release 永远
 不会被 `incomplete` 模式删除。若 Tag 已经缺失但 draft 或 prerelease 仍在,只有
@@ -194,8 +204,9 @@ SHA。依赖参数必须对应已经完整发布的精确 Release。
 Preview 还要求 `aggregate_sha` 所指平台提交中的
 `daily-preview.yaml/version + preview_version` 精确等于聚合版本,且
 `components.<unit>` 精确等于待发布 Tag。该绑定和 Stable 封线检查在构建前及取得
-publish concurrency lock 后各执行一次。Preview Release notes 同时记录源码 SHA、原始
-聚合清单 SHA 和实际依赖版本绑定;已有 Preview 只有在源码与依赖绑定都一致时才可复用。
+publish concurrency lock 后各执行一次。所有组件 Release notes 都记录源码分支、源码
+SHA 和发布单元。Preview 还记录原始聚合清单 SHA 和实际依赖版本绑定;已有 Preview 只有
+在源码与依赖绑定都一致时才可复用。
 
 workflow run name 包含源码 SHA 和依赖版本元组。控制器只重跑相同输入元组的失败 run;
 分支 HEAD 或依赖选择已经改变时创建新的 dispatch,不会用旧输入消耗三次恢复机会。
@@ -298,8 +309,9 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 - Preview Release 的构建绑定防止相同 Tag/源码在不同依赖闭包之间被错误复用;
 - scanner 使用独立 concurrency key;所有平台分支协调器与 GC 共用全局
   `preview-manifest-selection-and-gc` concurrency group。scanner 顺序等待每个分支,不同时
-  填入多个 pending slot。组件 publish 与 delete 对同一精确版本共用 mutation group;
-  平台聚合 publish 与 delete 也使用同一精确版本组。不同版本不共享 pending slot。只有
+  填入多个 pending slot。组件完整构建/发布 workflow 与 delete 对同一精确版本共用
+  mutation group;平台聚合完整 prepare/BMS/publish workflow 与 delete 也使用同一精确
+  版本组。不同版本不共享 pending slot。只有
   当前平台 `main` HEAD 的 `release.yaml` 所选 Stable 聚合能更新 Latest,且发布前后都会
   重新验证分支 HEAD、清单选择和既有 Release。
 

@@ -1040,6 +1040,16 @@ def main() -> None:
             return
         date = TODAY
         next_previous_preview = preview
+    elif TODAY > current_date:
+        if current_status.partial:
+            recovery_sha = recoverable_source_sha(current_status)
+            if recovery_sha is None:
+                raise Deferred(
+                    f"{current_aggregate} has no recoverable source target"
+                )
+            dispatch_platform_cleanup(current_aggregate, recovery_sha)
+        date = TODAY
+        next_previous_preview = preview
 
     active_aggregate = active_aggregate_run(current_aggregate)
     if active_aggregate is not None:
@@ -1055,6 +1065,23 @@ def main() -> None:
             f"aggregate cleanup is active; keep its manifest immutable: "
             f"{active_aggregate_cleanup.get('html_url')}"
         )
+
+    for name, configured_version in configured.items():
+        unit = UNIT_BY_NAME[name]
+        active_release = active_release_run(
+            unit.repository, unit.workflow, configured_version
+        )
+        if active_release is not None:
+            raise Pending(
+                f"configured component release is active; keep its manifest immutable: "
+                f"{active_release.get('html_url')}"
+            )
+        active_cleanup = active_delete_run(unit.repository, configured_version)
+        if active_cleanup is not None:
+            raise Pending(
+                f"configured component cleanup is active; keep its manifest immutable: "
+                f"{active_cleanup.get('html_url')}"
+            )
 
     plans = plan_units(configured, date)
     for plan in plans.values():

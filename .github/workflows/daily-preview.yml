@@ -100,7 +100,7 @@ jobs:
             sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$ref" \
               --jq 'select(.object.type == "commit") | .object.sha')
             [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-            title="Daily preview $ref@$sha"
+            title="Daily preview $ref@$sha for $date"
             converged=false
             for attempt in 1 2 3; do
               wait_for_gc

@@ -244,6 +244,89 @@ class PreviewCoordinatorTest(unittest.TestCase):
             coordinator.main()
         plan_units.assert_not_called()
 
+    def test_stale_incomplete_selection_rolls_to_requested_date(self) -> None:
+        empty = coordinator.ReleaseStatus(None, None, False)
+        selected = "a" * 40
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+            mock.patch.object(coordinator, "PLATFORM_SHA", selected),
+            mock.patch.object(coordinator, "TODAY", "20260831"),
+            mock.patch.object(coordinator, "validate_environment"),
+            mock.patch.object(
+                coordinator,
+                "manifest_values",
+                return_value=(
+                    "release-v1.2.3",
+                    "release-v1.2.2",
+                    "preview.20260830",
+                    "preview.20260829",
+                    {},
+                ),
+            ),
+            mock.patch.object(
+                coordinator, "release_version", return_value="release-v1.2.2"
+            ),
+            mock.patch.object(coordinator, "platform_release", return_value=empty),
+            mock.patch.object(coordinator, "active_aggregate_run", return_value=None),
+            mock.patch.object(coordinator, "active_delete_run", return_value=None),
+            mock.patch.object(
+                coordinator, "plan_units", return_value={}
+            ) as plan_units,
+            mock.patch.object(
+                coordinator, "render_manifest", return_value="updated"
+            ) as render_manifest,
+            mock.patch.object(
+                coordinator, "persist_manifest", return_value=selected
+            ),
+            mock.patch.object(coordinator, "converge", return_value=True),
+        ):
+            coordinator.main()
+        plan_units.assert_called_once_with({}, "20260831")
+        self.assertEqual(
+            render_manifest.call_args.args[2:4],
+            ("20260831", "preview.20260830"),
+        )
+
+    def test_stale_partial_aggregate_is_cleaned_before_rollover(self) -> None:
+        empty = coordinator.ReleaseStatus(None, None, False)
+        partial = coordinator.ReleaseStatus(
+            {"target_commitish": "b" * 40}, "b" * 40, False
+        )
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+            mock.patch.object(coordinator, "TODAY", "20260831"),
+            mock.patch.object(coordinator, "validate_environment"),
+            mock.patch.object(
+                coordinator,
+                "manifest_values",
+                return_value=(
+                    "release-v1.2.3",
+                    "release-v1.2.2",
+                    "preview.20260830",
+                    None,
+                    {},
+                ),
+            ),
+            mock.patch.object(
+                coordinator, "release_version", return_value="release-v1.2.2"
+            ),
+            mock.patch.object(
+                coordinator, "platform_release", side_effect=(empty, partial)
+            ),
+            mock.patch.object(
+                coordinator,
+                "dispatch_platform_cleanup",
+                side_effect=coordinator.Pending("cleanup"),
+            ) as cleanup,
+            mock.patch.object(coordinator, "plan_units") as plan_units,
+            self.assertRaisesRegex(coordinator.Pending, "cleanup"),
+        ):
+            coordinator.main()
+        cleanup.assert_called_once_with(
+            "release-v1.2.3-preview.20260830", "b" * 40
+        )
+        plan_units.assert_not_called()
+
     def test_aggregate_lookup_is_exact_for_selected_source(self) -> None:
         version = "release-v0.1.2-preview.20260831"
         sha = "d" * 40

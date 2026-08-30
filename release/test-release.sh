@@ -310,14 +310,19 @@ if grep -R -Fq 'queue: max' "$ROOT/.github/workflows"; then
 fi
 grep -Fq 'matching_run()' "$ROOT/.github/workflows/daily-preview.yml" \
   || release_fail "Daily scanner does not wait for exact branch runs"
+grep -Fq 'title="Daily preview $ref@$sha for $date"' \
+  "$ROOT/.github/workflows/daily-preview.yml" \
+  || release_fail "Daily scanner run identity does not include the requested date"
 grep -Fq 'wait_for_gc()' "$ROOT/.github/workflows/daily-preview.yml" \
   || release_fail "Daily scanner does not preserve a pending GC operation"
-grep -Fq 'group: aggregate-mutation-${{ github.repository }}-${{ needs.prepare.outputs.version }}' \
+for workflow in aggregate-release.yml delete-preview.yml; do
+  [ "$(grep -Fc 'group: aggregate-mutation-${{ github.repository }}-${{ inputs.version }}' \
+    "$ROOT/.github/workflows/$workflow")" -eq 1 ] \
+    || release_fail "$workflow does not hold exactly one full-workflow mutation lock"
+done
+grep -Fq 'moved while exact-asset BMS was running' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
-  || release_fail "aggregate publisher does not use its exact-version mutation group"
-grep -Fq 'group: aggregate-mutation-${{ github.repository }}-${{ inputs.version }}' \
-  "$ROOT/.github/workflows/delete-preview.yml" \
-  || release_fail "aggregate cleanup does not share the publisher mutation group"
+  || release_fail "aggregate publisher does not recheck source branch HEAD"
 grep -Fq 'platform_source_sha: ${{ needs.prepare.outputs.source_sha }}' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate BMS does not receive the selected platform source"

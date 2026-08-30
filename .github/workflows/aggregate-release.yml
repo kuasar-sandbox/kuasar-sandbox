@@ -22,7 +22,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: aggregate-release-${{ inputs.version }}
+  group: aggregate-mutation-${{ github.repository }}-${{ inputs.version }}
   cancel-in-progress: false
 
 jobs:
@@ -137,9 +137,6 @@ jobs:
   publish:
     needs: [prepare, exact-asset-bms]
     runs-on: ubuntu-latest
-    concurrency:
-      group: aggregate-mutation-${{ github.repository }}-${{ needs.prepare.outputs.version }}
-      cancel-in-progress: false
     permissions:
       actions: read
       contents: write
@@ -176,6 +173,9 @@ jobs:
           PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
         run: |
           set -euo pipefail
+          [ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$SOURCE_REF" \
+            --jq 'select(.object.type == "commit") | .object.sha')" = "$SOURCE_SHA" ] \
+            || { echo "$SOURCE_REF moved while exact-asset BMS was running" >&2; exit 1; }
           bash release/validate-preview-line.sh "$VERSION" "$SOURCE_SHA"
           release/publish-release.sh publish \
             "$VERSION" "$SOURCE_SHA" aggregate-stage "$SOURCE_REF"

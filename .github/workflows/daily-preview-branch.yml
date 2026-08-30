@@ -1,5 +1,5 @@
 name: Daily Preview Branch
-run-name: Daily preview ${{ inputs.platform_ref }}@${{ inputs.platform_sha }}
+run-name: Daily preview ${{ inputs.platform_ref }}@${{ inputs.platform_sha }} for ${{ inputs.date }}
 
 on:
   workflow_dispatch:
