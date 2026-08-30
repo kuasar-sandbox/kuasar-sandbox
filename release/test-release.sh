@@ -283,5 +283,8 @@ grep -Fq 'queue: max' "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate publisher does not preserve queued mutations"
 grep -Fq 'queue: max' "$ROOT/.github/workflows/delete-preview.yml" \
   || release_fail "aggregate cleanup does not preserve queued mutations"
+grep -Fq 'validate-preview-line.sh" "$version" "$commit"' \
+  "$ROOT/release/publish-release.sh" \
+  || release_fail "aggregate publisher does not recheck Preview closure before undraft"
 
 echo "test-release: PASS"

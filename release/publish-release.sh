@@ -122,6 +122,9 @@ publish_bundle() {
   local prerelease=false make_latest=false
   is_preview "$version" && prerelease=true
   [ "$prerelease" = true ] || [ "$source_ref" != main ] || make_latest=true
+  if [ "$prerelease" = true ]; then
+    "$ROOT/release/validate-preview-line.sh" "$version" "$commit"
+  fi
   jq -n --argjson prerelease "$prerelease" --argjson make_latest "$make_latest" '
       {draft: false, prerelease: $prerelease,
        make_latest: ($make_latest | tostring)}
