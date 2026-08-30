@@ -63,7 +63,7 @@ resolve_selection "$ROOT" "$CURRENT_FORMAL_VERSION" \
 
 FORMAL_ROOT="$TMP/formal-root"
 mkdir -p "$FORMAL_ROOT"
-git -C "$ROOT" archive HEAD | tar -x -C "$FORMAL_ROOT"
+tar -C "$ROOT" --exclude='./.git' -cf - . | tar -x -C "$FORMAL_ROOT"
 write_preview_base_fixture "$FORMAL_ROOT/releases/release.yaml"
 git -C "$FORMAL_ROOT" init -q
 git -C "$FORMAL_ROOT" config user.name release-test
