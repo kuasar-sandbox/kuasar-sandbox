@@ -273,7 +273,8 @@ sed -i '/^preview_version:/a previous_preview_version: preview.20260810' \
 "$history_root/release/selection.py" "$history_root" release-v0.2.0-preview.20260810 \
   > "$TMP/historical-preview-selection.tsv"
 
-bash -n "$ROOT/release/preview-coordinator.sh" "$ROOT/release/delete-preview.sh"
+bash -n "$ROOT/release/preview-coordinator.sh" "$ROOT/release/delete-preview.sh" \
+  "$ROOT/release/install-gh-cli.sh"
 python3 -m py_compile "$ROOT/release/selection.py" \
   "$ROOT/release/preview-selection.py" "$ROOT/release/preview_coordinator.py" \
   "$ROOT/release/formal_coordinator.py" "$ROOT/release/preview_gc.py"
@@ -282,6 +283,8 @@ for workflow in daily-preview.yml daily-preview-branch.yml aggregate-release.yml
   [ -f "$ROOT/.github/workflows/$workflow" ] \
     || release_fail "missing release workflow: $workflow"
 done
+[ -x "$ROOT/release/install-gh-cli.sh" ] \
+  || release_fail "missing executable pinned GitHub CLI installer"
 grep -Fq 'refs+=(main)' "$ROOT/.github/workflows/daily-preview.yml" \
   || release_fail "Daily scanner does not include platform main"
 grep -Fq "grep -E '^release/v" "$ROOT/.github/workflows/daily-preview.yml" \
