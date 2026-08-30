@@ -139,8 +139,9 @@ vmlinux 不因这些依赖变化而重建。若同一 unit 在同一天已经发
 流程延后到下一个 Preview 日期,不复用带有旧依赖的资产,也不发明同日序号格式。
 
 平台自身在所选分支上的代码变化同样会产生新的聚合 Preview,即使六个组件都复用。
-同一聚合版本的 workflow run 名同时绑定平台源码 SHA。旧 run 仍在运行时,控制器保持当前
-Daily 清单不变;分支产生新 HEAD 后使用新的 run 身份,不会用旧输入重跑或改写运行中清单。
+同一聚合版本的 workflow run 名同时绑定平台源码 SHA。只要任意匹配 run 仍在运行,即使
+更新的 run 已取消或结束,控制器也保持当前 Daily 清单不变;分支产生新 HEAD 后使用新的
+run 身份,不会用旧输入重跑或改写运行中清单。
 
 ## 5. 残缺发布恢复
 
@@ -159,7 +160,8 @@ Daily 清单不变;分支产生新 HEAD 后使用新的 run 身份,不会用旧�
 
 恢复的目标是恢复 Daily 流程,不是修补或重建残缺 Release 的资产。同名完整 Release 永远
 不会被 `incomplete` 模式删除。若 Tag 已经缺失但 draft 或 prerelease 仍在,只有
-Release 的 `target_commitish` 是完整且匹配的源码 SHA 时才允许恢复删除。
+Release 的 `target_commitish` 是完整且匹配的源码 SHA 时才允许恢复删除。若同名残缺对象
+在一次成功清理后再次出现,控制器创建新的清理 run,不把历史成功结果当作当前对象已收敛。
 
 ## 6. 组件发布 CLI
 
@@ -251,6 +253,10 @@ Release ID、可恢复源码 SHA 和 active run,并输出稳定排序计划及 S
 字段、引用或归属异常都会在零删除状态停止。手工 dry-run 不受 7 天限制,但 apply 不能
 绕过窗口。
 
+Apply 在派发任何组件删除前重新读取所有平台分支的当前 Daily 清单;计划后新增的引用会使
+本轮零删除停止。反向地,Daily 控制器在提交新清单前检查所有匹配的组件/聚合发布 run 和
+删除 run,任意一个仍活跃都保持清单不变。两侧门禁避免清单选择与异步删除交叉执行。
+
 历史聚合 Preview 在“Tag 直接指向清单提交”契约建立和完全执行前发布。GC 只对这些历史
 对象使用 Stable Tag 可达的 first-parent 清单历史证明归属和精确组件选择:Release
 `target_commitish` 必须与 Tag 一致;Tag 提交已有 Daily 清单时必须精确选择该 Preview,且
@@ -263,8 +269,9 @@ Apply 先 dispatch 五个组件仓的本地删除 wrapper。每个 wrapper 仅�
 `GITHUB_TOKEN contents:write`,再次核对精确 Preview Tag 和源码 SHA,然后将 Release、
 所有资产与 Tag 一并删除。所有组件候选消失后,平台才删除聚合 Preview。中途失败不会
 重建已经删除的对象;组件和聚合删除的确定性失败都最多重跑三次,下一次根据 canonical
-历史重算并继续收敛。Stable Release、Stable Tag、Actions artifacts、非 canonical
-orphan 都不属于 GC 删除集合。
+历史重算并继续收敛。若一次成功清理后同名对象仍可见或被重新创建,下一次 Apply 会派发
+新的清理 run。Stable Release、Stable Tag、Actions artifacts、非 canonical orphan 都
+不属于 GC 删除集合。
 
 ```bash
 # 只读真实计划

@@ -222,6 +222,12 @@ class PreviewGCTest(unittest.TestCase):
         }
         with (
             mock.patch.object(
+                preview_gc, "live_manifest_protection", return_value=set()
+            ),
+            mock.patch.object(
+                preview_gc.coordinator, "active_delete_run", return_value=None
+            ),
+            mock.patch.object(
                 preview_gc.coordinator, "latest_run", return_value=failed
             ),
             mock.patch.object(preview_gc.coordinator, "gh") as gh,
@@ -255,6 +261,12 @@ class PreviewGCTest(unittest.TestCase):
         }
         with (
             mock.patch.object(
+                preview_gc, "live_manifest_protection", return_value=set()
+            ),
+            mock.patch.object(
+                preview_gc.coordinator, "active_delete_run", return_value=None
+            ),
+            mock.patch.object(
                 preview_gc.coordinator, "latest_run", return_value=failed
             ),
             mock.patch.object(preview_gc.coordinator, "gh") as gh,
@@ -262,6 +274,87 @@ class PreviewGCTest(unittest.TestCase):
         ):
             preview_gc.apply([candidate])
         gh.assert_not_called()
+
+    def test_apply_rechecks_live_manifest_protection_before_dispatch(self) -> None:
+        candidate = preview_gc.Candidate(
+            "kuasar-sandbox/connector",
+            "connector",
+            "v1.2.3-preview.20260831",
+            "5" * 40,
+            43,
+            2,
+            200,
+        )
+        with (
+            mock.patch.object(
+                preview_gc,
+                "live_manifest_protection",
+                return_value={(candidate.unit, candidate.tag)},
+            ),
+            mock.patch.object(preview_gc, "dispatch_component") as dispatch,
+            self.assertRaisesRegex(preview_gc.GCError, "now protects"),
+        ):
+            preview_gc.apply([candidate])
+        dispatch.assert_not_called()
+
+    def test_successful_old_component_gc_is_redispatched(self) -> None:
+        candidate = preview_gc.Candidate(
+            "kuasar-sandbox/connector",
+            "connector",
+            "v1.2.3-preview.20260831",
+            "5" * 40,
+            43,
+            2,
+            200,
+        )
+        completed = {
+            "status": "completed",
+            "conclusion": "success",
+            "run_attempt": 1,
+        }
+        with (
+            mock.patch.object(
+                preview_gc, "live_manifest_protection", return_value=set()
+            ),
+            mock.patch.object(
+                preview_gc.coordinator, "active_delete_run", return_value=None
+            ),
+            mock.patch.object(
+                preview_gc.coordinator, "latest_run", return_value=completed
+            ),
+            mock.patch.object(preview_gc, "dispatch_component") as dispatch,
+        ):
+            self.assertFalse(preview_gc.apply([candidate]))
+        dispatch.assert_called_once_with(candidate)
+
+    def test_successful_old_aggregate_gc_is_redispatched(self) -> None:
+        candidate = preview_gc.Candidate(
+            preview_gc.coordinator.PLATFORM_REPOSITORY,
+            "platform",
+            "release-v1.2.3-preview.20260831",
+            "5" * 40,
+            43,
+            8,
+            200,
+        )
+        completed = {
+            "status": "completed",
+            "conclusion": "success",
+            "run_attempt": 1,
+        }
+        with (
+            mock.patch.object(
+                preview_gc.coordinator, "active_delete_run", return_value=None
+            ),
+            mock.patch.object(
+                preview_gc.coordinator, "latest_run", return_value=completed
+            ),
+            mock.patch.object(preview_gc.coordinator, "gh") as gh,
+        ):
+            self.assertFalse(preview_gc.apply([candidate]))
+        self.assertEqual(
+            gh.call_args.args[:3], ("workflow", "run", "delete-preview.yml")
+        )
 
 
 if __name__ == "__main__":

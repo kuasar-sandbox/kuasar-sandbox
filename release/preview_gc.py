@@ -300,6 +300,26 @@ def current_manifest_protection(
     return protected
 
 
+def live_manifest_protection() -> set[tuple[str, str]]:
+    platform_releases = {
+        item["tag_name"]: item
+        for item in coordinator.paginated(
+            f"repos/{coordinator.PLATFORM_REPOSITORY}/releases?per_page=100"
+        )
+        if isinstance(item.get("tag_name"), str)
+    }
+    platform_tags = tag_index(coordinator.PLATFORM_REPOSITORY)
+    closed_stables = {
+        tag
+        for tag, item in platform_releases.items()
+        if STABLE_RE.fullmatch(tag)
+        and item.get("draft") is False
+        and item.get("prerelease") is False
+        and platform_release_status(tag, item, platform_tags.get(tag)).complete
+    }
+    return current_manifest_protection(closed_stables)
+
+
 def release_candidate(
     repository: str,
     unit: str,
@@ -528,8 +548,23 @@ def dispatch_component(candidate: Candidate) -> None:
 def apply(candidates: list[Candidate]) -> bool:
     components = [item for item in candidates if item.unit != "platform"]
     aggregates = [item for item in candidates if item.unit == "platform"]
+    protected = live_manifest_protection() if components else set()
+    newly_protected = sorted(
+        (item.unit, item.tag)
+        for item in components
+        if (item.unit, item.tag) in protected
+    )
+    if newly_protected:
+        rendered = ", ".join(f"{unit}={tag}" for unit, tag in newly_protected)
+        raise GCError(f"current Daily manifest now protects GC candidate: {rendered}")
+
     pending = False
     for item in components:
+        active = coordinator.active_delete_run(item.repository, item.tag)
+        if active is not None:
+            print(f"==> pending {active.get('html_url')}")
+            pending = True
+            continue
         title = f"Delete {item.tag} (gc)"
         state = coordinator.latest_run(item.repository, "delete-preview.yml", title)
         if state is not None and coordinator.run_active(state):
@@ -543,24 +578,29 @@ def apply(candidates: list[Candidate]) -> bool:
             coordinator.rerun_workflow(item.repository, state)
             pending = True
             continue
-        if state is None:
+        if state is None or state.get("conclusion") == "success":
             dispatch_component(item)
-            print(f"==> dispatched component GC: {item.repository} {item.tag}")
+            action = "redispatched" if state is not None else "dispatched"
+            print(f"==> {action} component GC: {item.repository} {item.tag}")
             pending = True
             continue
-        # A successful run with a still-visible candidate is treated as eventual consistency.
-        pending = True
     if pending or components:
         return False
 
     for item in aggregates:
+        active = coordinator.active_delete_run(
+            coordinator.PLATFORM_REPOSITORY, item.tag
+        )
+        if active is not None:
+            print(f"==> pending {active.get('html_url')}")
+            return False
         title = f"Delete {item.tag} (gc)"
         state = coordinator.latest_run(
             coordinator.PLATFORM_REPOSITORY, "delete-preview.yml", title
         )
         if state is not None and coordinator.run_active(state):
             return False
-        if state is None:
+        if state is None or state.get("conclusion") == "success":
             coordinator.gh(
                 "workflow",
                 "run",
@@ -576,7 +616,8 @@ def apply(candidates: list[Candidate]) -> bool:
                 "-f",
                 "mode=gc",
             )
-            print(f"==> dispatched aggregate GC: {item.tag}")
+            action = "redispatched" if state is not None else "dispatched"
+            print(f"==> {action} aggregate GC: {item.tag}")
             return False
         if state.get("conclusion") != "success":
             attempt = int(state.get("run_attempt", 1))
@@ -584,7 +625,6 @@ def apply(candidates: list[Candidate]) -> bool:
                 raise GCError(f"aggregate GC failed: {state.get('html_url')}")
             coordinator.rerun_workflow(coordinator.PLATFORM_REPOSITORY, state)
             return False
-        return False
     return True
 
 

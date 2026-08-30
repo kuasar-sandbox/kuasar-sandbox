@@ -430,19 +430,29 @@ def release_title_matches(title: object, version: str) -> bool:
     return title == legacy or str(title).startswith(f"{legacy} @")
 
 
-def latest_release_run(
+def release_runs(
     repository: str, workflow: str, version: str
-) -> dict[str, Any] | None:
+) -> list[dict[str, Any]]:
     runs = paginated(
         f"repos/{repository}/actions/workflows/{workflow}/runs?event=workflow_dispatch&per_page=100",
         "workflow_runs",
     )
-    matching = [
+    return [
         item
         for item in runs
         if release_title_matches(item.get("display_title"), version)
     ]
-    return max(matching, key=lambda item: str(item.get("created_at", "")), default=None)
+
+
+def active_release_run(
+    repository: str, workflow: str, version: str
+) -> dict[str, Any] | None:
+    active = [
+        item
+        for item in release_runs(repository, workflow, version)
+        if run_active(item)
+    ]
+    return max(active, key=lambda item: str(item.get("created_at", "")), default=None)
 
 
 def aggregate_run_title(version: str, source_sha: str) -> str:
@@ -454,18 +464,22 @@ def aggregate_title_matches(title: object, version: str) -> bool:
     return title == legacy or str(title).startswith(f"{legacy} @")
 
 
-def latest_aggregate_run(version: str) -> dict[str, Any] | None:
+def aggregate_runs(version: str) -> list[dict[str, Any]]:
     runs = paginated(
         f"repos/{PLATFORM_REPOSITORY}/actions/workflows/aggregate-release.yml/runs?"
         "event=workflow_dispatch&per_page=100",
         "workflow_runs",
     )
-    matching = [
+    return [
         item
         for item in runs
         if aggregate_title_matches(item.get("display_title"), version)
     ]
-    return max(matching, key=lambda item: str(item.get("created_at", "")), default=None)
+
+
+def active_aggregate_run(version: str) -> dict[str, Any] | None:
+    active = [item for item in aggregate_runs(version) if run_active(item)]
+    return max(active, key=lambda item: str(item.get("created_at", "")), default=None)
 
 
 def run_active(state: dict[str, Any]) -> bool:
@@ -478,6 +492,21 @@ def run_active(state: dict[str, Any]) -> bool:
     }
 
 
+def active_delete_run(repository: str, version: str) -> dict[str, Any] | None:
+    titles = {f"Delete {version} (gc)", f"Delete {version} (incomplete)"}
+    runs = paginated(
+        f"repos/{repository}/actions/workflows/delete-preview.yml/runs?"
+        "event=workflow_dispatch&per_page=100",
+        "workflow_runs",
+    )
+    active = [
+        item
+        for item in runs
+        if item.get("display_title") in titles and run_active(item)
+    ]
+    return max(active, key=lambda item: str(item.get("created_at", "")), default=None)
+
+
 def rerun_workflow(repository: str, state: dict[str, Any]) -> None:
     args = ["run", "rerun", str(state["id"]), "--repo", repository]
     if state.get("conclusion") == "failure":
@@ -486,16 +515,21 @@ def rerun_workflow(repository: str, state: dict[str, Any]) -> None:
 
 
 def dispatch_cleanup(plan: Plan, mode: str) -> None:
+    active = active_delete_run(plan.unit.repository, plan.selected)
+    if active is not None:
+        raise Pending(f"cleanup is active: {active.get('html_url')}")
     title = f"Delete {plan.selected} ({mode})"
     state = latest_run(plan.unit.repository, "delete-preview.yml", title)
     if state is not None and run_active(state):
         raise Pending(f"cleanup is active: {state.get('html_url')}")
-    if state is not None and state.get("conclusion") == "success":
-        raise Pending(f"cleanup completed and API state is converging: {state.get('html_url')}")
-    if state is not None and int(state.get("run_attempt", 1)) < 3:
+    if (
+        state is not None
+        and state.get("conclusion") != "success"
+        and int(state.get("run_attempt", 1)) < 3
+    ):
         rerun_workflow(plan.unit.repository, state)
         raise Pending(f"reran cleanup: {state.get('html_url')}")
-    if state is not None:
+    if state is not None and state.get("conclusion") != "success":
         raise Deferred(f"cleanup remains failed after three attempts: {state.get('html_url')}")
     args = [
         "workflow",
@@ -515,7 +549,8 @@ def dispatch_cleanup(plan: Plan, mode: str) -> None:
     if plan.unit.repository.endswith("/guest-runtime"):
         args.extend(("-f", f"unit={plan.unit.name}"))
     gh(*args)
-    raise Pending(f"dispatched {mode} cleanup for {plan.unit.name} {plan.selected}")
+    action = "redispatched" if state is not None else "dispatched"
+    raise Pending(f"{action} {mode} cleanup for {plan.unit.name} {plan.selected}")
 
 
 def ensure_configured_state(
@@ -530,15 +565,15 @@ def ensure_configured_state(
         raise Deferred(f"fixed Stable selection is incomplete: {unit.name} {configured}")
     source_sha = recoverable_source_sha(status)
     if source_sha is None:
-        run_state = latest_release_run(unit.repository, unit.workflow, configured)
-        if run_state is not None and run_active(run_state):
+        run_state = active_release_run(unit.repository, unit.workflow, configured)
+        if run_state is not None:
             raise Pending(f"release is active: {run_state.get('html_url')}")
         raise Deferred(
             f"{unit.name} {configured} has no recoverable source target; keep it deferred"
         )
     plan = Plan(unit, configured, None, source_sha, configured, configured, "cleanup")
-    run_state = latest_release_run(unit.repository, unit.workflow, configured)
-    if run_state is not None and run_active(run_state):
+    run_state = active_release_run(unit.repository, unit.workflow, configured)
+    if run_state is not None:
         raise Pending(f"release is active: {run_state.get('html_url')}")
     dispatch_cleanup(plan, "incomplete")
 
@@ -809,14 +844,16 @@ def ensure_unit(
         validate_preview_reuse(plan, plans, status)
         print(f"==> reuse {plan.unit.repository} {plan.selected}")
         return True
+    active_release = active_release_run(
+        plan.unit.repository, plan.unit.workflow, plan.selected
+    )
+    if active_release is not None:
+        print(f"==> pending {active_release.get('html_url')}")
+        return False
     if plan.source_ref is None:
         raise Deferred(f"fixed selection is unavailable: {plan.unit.name} {plan.selected}")
     title = release_run_title(plan, plans)
     if status.partial and "-preview." in plan.selected:
-        state_run = latest_run(plan.unit.repository, plan.unit.workflow, title)
-        if state_run is not None and run_active(state_run):
-            print(f"==> pending {state_run.get('html_url')}")
-            return False
         recovery_sha = recoverable_source_sha(status)
         if recovery_sha is None:
             raise Deferred(
@@ -852,19 +889,24 @@ def ensure_unit(
 
 
 def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
-    release_state = latest_aggregate_run(tag)
-    if release_state is not None and run_active(release_state):
+    release_state = active_aggregate_run(tag)
+    if release_state is not None:
         raise Pending(f"aggregate release is active: {release_state.get('html_url')}")
+    active_cleanup = active_delete_run(PLATFORM_REPOSITORY, tag)
+    if active_cleanup is not None:
+        raise Pending(f"platform cleanup is active: {active_cleanup.get('html_url')}")
     title = f"Delete {tag} (incomplete)"
     state = latest_run(PLATFORM_REPOSITORY, "delete-preview.yml", title)
     if state is not None and run_active(state):
         raise Pending(f"platform cleanup is active: {state.get('html_url')}")
-    if state is not None and state.get("conclusion") == "success":
-        raise Pending("platform cleanup completed and API state is converging")
-    if state is not None and int(state.get("run_attempt", 1)) < 3:
+    if (
+        state is not None
+        and state.get("conclusion") != "success"
+        and int(state.get("run_attempt", 1)) < 3
+    ):
         rerun_workflow(PLATFORM_REPOSITORY, state)
         raise Pending(f"reran platform cleanup: {state.get('html_url')}")
-    if state is not None:
+    if state is not None and state.get("conclusion") != "success":
         raise Deferred(
             f"platform cleanup remains failed after three attempts: {state.get('html_url')}"
         )
@@ -883,7 +925,8 @@ def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
         "-f",
         "mode=incomplete",
     )
-    raise Pending(f"dispatched incomplete aggregate cleanup for {tag}")
+    action = "redispatched" if state is not None else "dispatched"
+    raise Pending(f"{action} incomplete aggregate cleanup for {tag}")
 
 
 def ensure_aggregate(version: str, source_sha: str) -> bool:
@@ -899,7 +942,16 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
             raise Deferred(f"aggregate {version} has no recoverable source target")
         dispatch_platform_cleanup(version, recovery_sha)
     title = aggregate_run_title(version, source_sha)
-    state = latest_run(PLATFORM_REPOSITORY, "aggregate-release.yml", title)
+    runs = aggregate_runs(version)
+    active = [item for item in runs if run_active(item)]
+    if active:
+        state = max(active, key=lambda item: str(item.get("created_at", "")))
+        print(f"==> pending {state.get('html_url')}")
+        return False
+    exact = [item for item in runs if item.get("display_title") == title]
+    state = max(
+        exact, key=lambda item: str(item.get("created_at", "")), default=None
+    )
     if state is None:
         gh(
             "workflow",
@@ -917,9 +969,6 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
             f"source_sha={source_sha}",
         )
         print(f"==> dispatched aggregate {version} from {PLATFORM_REF}")
-        return False
-    if run_active(state):
-        print(f"==> pending {state.get('html_url')}")
         return False
     if state.get("conclusion") == "success":
         raise Pending("aggregate run is waiting for Release API convergence")
@@ -992,14 +1041,37 @@ def main() -> None:
         date = TODAY
         next_previous_preview = preview
 
-    active_aggregate = latest_aggregate_run(current_aggregate)
-    if active_aggregate is not None and run_active(active_aggregate):
+    active_aggregate = active_aggregate_run(current_aggregate)
+    if active_aggregate is not None:
         raise Pending(
             f"aggregate release is active; keep its manifest immutable: "
             f"{active_aggregate.get('html_url')}"
         )
+    active_aggregate_cleanup = active_delete_run(
+        PLATFORM_REPOSITORY, current_aggregate
+    )
+    if active_aggregate_cleanup is not None:
+        raise Pending(
+            f"aggregate cleanup is active; keep its manifest immutable: "
+            f"{active_aggregate_cleanup.get('html_url')}"
+        )
 
     plans = plan_units(configured, date)
+    for plan in plans.values():
+        active_release = active_release_run(
+            plan.unit.repository, plan.unit.workflow, plan.selected
+        )
+        if active_release is not None:
+            raise Pending(
+                f"component release is active; keep its manifest immutable: "
+                f"{active_release.get('html_url')}"
+            )
+        active_cleanup = active_delete_run(plan.unit.repository, plan.selected)
+        if active_cleanup is not None:
+            raise Pending(
+                f"component cleanup is active; keep its manifest immutable: "
+                f"{active_cleanup.get('html_url')}"
+            )
     changed = any(plans[name].selected != configured[name] for name in configured)
     if current_status.complete:
         changed = changed or platform_changed_since(current_aggregate)

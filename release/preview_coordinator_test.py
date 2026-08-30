@@ -218,7 +218,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
             ),
             mock.patch.object(coordinator, "platform_release", return_value=empty),
             mock.patch.object(
-                coordinator, "latest_aggregate_run", return_value=active
+                coordinator, "active_aggregate_run", return_value=active
             ),
             mock.patch.object(coordinator, "plan_units") as plan_units,
             self.assertRaisesRegex(coordinator.Pending, "manifest immutable"),
@@ -230,17 +230,51 @@ class PreviewCoordinatorTest(unittest.TestCase):
         version = "release-v0.1.2-preview.20260831"
         sha = "d" * 40
         empty = coordinator.ReleaseStatus(None, None, False)
+        other = {
+            "status": "completed",
+            "conclusion": "cancelled",
+            "created_at": "2026-08-31T08:00:00Z",
+            "display_title": coordinator.aggregate_run_title(version, "e" * 40),
+        }
         with (
             mock.patch.object(coordinator, "platform_release", return_value=empty),
-            mock.patch.object(coordinator, "latest_run", return_value=None) as latest,
-            mock.patch.object(coordinator, "gh"),
+            mock.patch.object(coordinator, "aggregate_runs", return_value=[other]),
+            mock.patch.object(coordinator, "gh") as gh,
         ):
             self.assertFalse(coordinator.ensure_aggregate(version, sha))
-        latest.assert_called_once_with(
-            coordinator.PLATFORM_REPOSITORY,
+        gh.assert_called_once_with(
+            "workflow",
+            "run",
             "aggregate-release.yml",
-            coordinator.aggregate_run_title(version, sha),
+            "--repo",
+            coordinator.PLATFORM_REPOSITORY,
+            "--ref",
+            "main",
+            "-f",
+            f"version={version}",
+            "-f",
+            f"source_ref={coordinator.PLATFORM_REF}",
+            "-f",
+            f"source_sha={sha}",
         )
+
+    def test_older_active_aggregate_is_not_hidden_by_newer_cancelled_run(self) -> None:
+        version = "release-v0.1.2-preview.20260831"
+        older_active = {
+            "status": "in_progress",
+            "created_at": "2026-08-31T07:00:00Z",
+        }
+        newer_cancelled = {
+            "status": "completed",
+            "conclusion": "cancelled",
+            "created_at": "2026-08-31T08:00:00Z",
+        }
+        with mock.patch.object(
+            coordinator,
+            "aggregate_runs",
+            return_value=[older_active, newer_cancelled],
+        ):
+            self.assertIs(coordinator.active_aggregate_run(version), older_active)
 
     def test_validation_defers_when_scanned_platform_branch_moves(self) -> None:
         selected = "a" * 40
@@ -337,7 +371,7 @@ components:
         )
         with (
             mock.patch.object(
-                coordinator, "latest_release_run", return_value=None
+                coordinator, "active_release_run", return_value=None
             ),
             mock.patch.object(coordinator, "dispatch_cleanup") as cleanup,
         ):
@@ -548,12 +582,119 @@ components:
             "html_url": "https://example.invalid/run/1",
         }
         with (
+            mock.patch.object(coordinator, "active_delete_run", return_value=None),
             mock.patch.object(coordinator, "latest_run", return_value=failed),
             mock.patch.object(coordinator, "gh") as gh,
             self.assertRaisesRegex(coordinator.Deferred, "three attempts"),
         ):
             coordinator.dispatch_cleanup(plan, "incomplete")
         gh.assert_not_called()
+
+    def test_successful_old_cleanup_is_redispatched_for_recreated_preview(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["connector"]
+        plan = coordinator.Plan(
+            unit,
+            "v1.2.3-preview.20260831",
+            "main",
+            "c" * 40,
+            "v1.2.3-preview.20260831",
+            "v1.2.3-preview.20260831",
+            "cleanup",
+        )
+        completed = {
+            "status": "completed",
+            "conclusion": "success",
+            "run_attempt": 1,
+            "html_url": "https://example.invalid/run/2",
+        }
+        with (
+            mock.patch.object(coordinator, "active_delete_run", return_value=None),
+            mock.patch.object(coordinator, "latest_run", return_value=completed),
+            mock.patch.object(coordinator, "gh") as gh,
+            self.assertRaisesRegex(coordinator.Pending, "redispatched"),
+        ):
+            coordinator.dispatch_cleanup(plan, "incomplete")
+        self.assertEqual(
+            gh.call_args.args[:3], ("workflow", "run", "delete-preview.yml")
+        )
+
+    def test_successful_old_platform_cleanup_is_redispatched(self) -> None:
+        tag = "release-v1.2.3-preview.20260831"
+        completed = {
+            "status": "completed",
+            "conclusion": "success",
+            "run_attempt": 1,
+            "html_url": "https://example.invalid/run/4",
+        }
+        with (
+            mock.patch.object(coordinator, "active_aggregate_run", return_value=None),
+            mock.patch.object(coordinator, "active_delete_run", return_value=None),
+            mock.patch.object(coordinator, "latest_run", return_value=completed),
+            mock.patch.object(coordinator, "gh") as gh,
+            self.assertRaisesRegex(coordinator.Pending, "redispatched"),
+        ):
+            coordinator.dispatch_platform_cleanup(tag, "d" * 40)
+        self.assertEqual(
+            gh.call_args.args[:3], ("workflow", "run", "delete-preview.yml")
+        )
+
+    def test_active_component_cleanup_blocks_manifest_commit(self) -> None:
+        tag = "v1.2.3-preview.20260831"
+        plan = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["connector"],
+            tag,
+            "main",
+            "c" * 40,
+            tag,
+            tag,
+            "reuse",
+        )
+        active = {
+            "status": "queued",
+            "html_url": "https://example.invalid/run/3",
+        }
+
+        def delete_state(repository: str, version: str) -> dict[str, object] | None:
+            if repository == coordinator.PLATFORM_REPOSITORY:
+                return None
+            self.assertEqual((repository, version), (plan.unit.repository, tag))
+            return active
+
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+            mock.patch.object(coordinator, "validate_environment"),
+            mock.patch.object(
+                coordinator,
+                "manifest_values",
+                return_value=(
+                    "release-v1.2.3",
+                    "release-v1.2.2",
+                    "preview.20260831",
+                    None,
+                    {"connector": tag},
+                ),
+            ),
+            mock.patch.object(
+                coordinator, "release_version", return_value="release-v1.2.2"
+            ),
+            mock.patch.object(
+                coordinator,
+                "platform_release",
+                return_value=coordinator.ReleaseStatus(None, None, False),
+            ),
+            mock.patch.object(coordinator, "active_aggregate_run", return_value=None),
+            mock.patch.object(
+                coordinator, "active_delete_run", side_effect=delete_state
+            ),
+            mock.patch.object(
+                coordinator, "plan_units", return_value={"connector": plan}
+            ),
+            mock.patch.object(coordinator, "active_release_run", return_value=None),
+            mock.patch.object(coordinator, "persist_manifest") as persist,
+            self.assertRaisesRegex(coordinator.Pending, "cleanup is active"),
+        ):
+            coordinator.main()
+        persist.assert_not_called()
 
 
 if __name__ == "__main__":
