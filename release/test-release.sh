@@ -312,12 +312,12 @@ grep -Fq 'matching_run()' "$ROOT/.github/workflows/daily-preview.yml" \
   || release_fail "Daily scanner does not wait for exact branch runs"
 grep -Fq 'wait_for_gc()' "$ROOT/.github/workflows/daily-preview.yml" \
   || release_fail "Daily scanner does not preserve a pending GC operation"
-grep -Fq "&& 'stable-main' || needs.prepare.outputs.version" \
+grep -Fq 'group: aggregate-mutation-${{ github.repository }}-${{ needs.prepare.outputs.version }}' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
-  || release_fail "main Stable aggregate does not serialize Latest updates"
-grep -Fq 'group: aggregate-delete-${{ github.repository }}-${{ inputs.version }}' \
+  || release_fail "aggregate publisher does not use its exact-version mutation group"
+grep -Fq 'group: aggregate-mutation-${{ github.repository }}-${{ inputs.version }}' \
   "$ROOT/.github/workflows/delete-preview.yml" \
-  || release_fail "aggregate cleanup does not use its version-scoped mutation group"
+  || release_fail "aggregate cleanup does not share the publisher mutation group"
 grep -Fq 'platform_source_sha: ${{ needs.prepare.outputs.source_sha }}' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate BMS does not receive the selected platform source"

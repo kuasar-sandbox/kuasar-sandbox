@@ -88,8 +88,8 @@ Tag 尚不完整,Daily 同样在任何清单或组件变更前延后,不在残�
 `v0.1.2`,再从较晚的补丁点建立 `release/v0.1.x`。建立维护分支之后,主线与维护线各自
 维护自己的两个清单。
 
-GitHub Latest 只由平台 `main` 的 Stable 发布更新。维护分支 Stable、任何 Preview 都不
-更新 Latest。
+GitHub Latest 只由平台 `main` 的 Stable 聚合发布更新。组件 Release 由聚合清单通过精确
+Tag 选择,不竞争项目级 Latest;维护分支 Stable 和任何 Preview 也不更新 Latest。
 
 平台维护分支与组件维护分支不存在同名约束。平台 `release/v0.5.x` 可以聚合
 `sandboxer release/v0.3.x`、`orchestrator release/v0.4.x` 和只在 `main` 发布的
@@ -298,9 +298,10 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 - Preview Release 的构建绑定防止相同 Tag/源码在不同依赖闭包之间被错误复用;
 - scanner 使用独立 concurrency key;所有平台分支协调器与 GC 共用全局
   `preview-manifest-selection-and-gc` concurrency group。scanner 顺序等待每个分支,不同时
-  填入多个 pending slot。会更新仓库 Latest 的 `main` Stable 发布共用 `stable-main` 发布
-  组;Preview 和维护分支 Stable 的发布按精确版本分组。删除使用独立的精确版本组,不会替换
-  pending publish;发布/删除工作流的不可覆盖校验与控制器 active-run 门禁负责冲突恢复。
+  填入多个 pending slot。组件 publish 与 delete 对同一精确版本共用 mutation group;
+  平台聚合 publish 与 delete 也使用同一精确版本组。不同版本不共享 pending slot。只有
+  当前平台 `main` HEAD 的 `release.yaml` 所选 Stable 聚合能更新 Latest,且发布前后都会
+  重新验证分支 HEAD、清单选择和既有 Release。
 
 ## 11. See Also
 
