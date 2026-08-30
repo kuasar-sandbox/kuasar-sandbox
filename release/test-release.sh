@@ -8,7 +8,6 @@ source "$ROOT/release/lib.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-VERSION=release-v0.1.0
 PREVIEW_BASE="$(awk '$1 == "version:" {print $2}' "$ROOT/releases/daily-preview.yaml")"
 PREVIEW_SUFFIX="$(awk '$1 == "preview_version:" {print $2}' "$ROOT/releases/daily-preview.yaml")"
 PREVIEW_DATE="${PREVIEW_SUFFIX#preview.}"
@@ -46,8 +45,35 @@ fi
 resolve_selection "$ROOT" "$PREVIEW_VERSION" "$TMP/current-preview-selection.tsv"
 PREVIEW_ACCELERATOR_TAG="$(awk -F '\t' '$1 == "accelerator" {print $2}' \
   "$TMP/current-preview-selection.tsv")"
-resolve_selection "$ROOT" "$VERSION" "$TMP/selection.tsv"
-[ -z "$(previous_release "$ROOT" "$VERSION")" ] \
+
+write_preview_base_fixture() {
+  local output="$1" unit tag
+  {
+    printf 'version: %s\ncomponents:\n' "$PREVIEW_BASE"
+    while IFS=$'\t' read -r unit tag; do
+      printf '  %s: %s\n' "$unit" "${tag%%-preview.*}"
+    done < "$TMP/current-preview-selection.tsv"
+  } > "$output"
+}
+
+CURRENT_FORMAL_VERSION="$(awk '$1 == "version:" {print $2}' \
+  "$ROOT/releases/release.yaml")"
+resolve_selection "$ROOT" "$CURRENT_FORMAL_VERSION" \
+  "$TMP/current-formal-selection.tsv"
+
+FORMAL_ROOT="$TMP/formal-root"
+mkdir -p "$FORMAL_ROOT"
+git -C "$ROOT" archive HEAD | tar -x -C "$FORMAL_ROOT"
+write_preview_base_fixture "$FORMAL_ROOT/releases/release.yaml"
+git -C "$FORMAL_ROOT" init -q
+git -C "$FORMAL_ROOT" config user.name release-test
+git -C "$FORMAL_ROOT" config user.email release-test@example.invalid
+git -C "$FORMAL_ROOT" add .
+git -C "$FORMAL_ROOT" commit -qm 'maintain first formal release fixture'
+
+VERSION="$PREVIEW_BASE"
+resolve_selection "$FORMAL_ROOT" "$VERSION" "$TMP/selection.tsv"
+[ -z "$(previous_release "$FORMAL_ROOT" "$VERSION")" ] \
   || release_fail "first formal release unexpectedly has a comparison baseline"
 mkdir -p "$TMP/fetched/components" "$TMP/fetched/sources" "$TMP/fetched/updates"
 install -m 0644 "$TMP/selection.tsv" "$TMP/fetched/selection.tsv"
@@ -80,9 +106,9 @@ printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vml
 printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
 
 SOURCE_DATE_EPOCH=1700000000 \
-  "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
-"$ROOT/release/aggregate-release.sh" validate "$VERSION" "$TMP/bundle"
-"$ROOT/release/test-publisher.sh" "$ROOT/release/publish-release.sh" \
+  "$FORMAL_ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
+"$FORMAL_ROOT/release/aggregate-release.sh" validate "$VERSION" "$TMP/bundle"
+"$FORMAL_ROOT/release/test-publisher.sh" "$FORMAL_ROOT/release/publish-release.sh" \
   "$TMP/bundle" kuasar-sandbox/kuasar-sandbox "$VERSION" \
   1111111111111111111111111111111111111111
 
@@ -113,7 +139,7 @@ done
 grep -Fq 'This aggregate is a Stable, non-prerelease release.' \
   "$TMP/bundle/release-notes.md" \
   || release_fail "formal release notes do not identify the Stable channel"
-grep -Fq 'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.0/docs/quickstart.md' \
+grep -Fq "https://github.com/kuasar-sandbox/kuasar-sandbox/blob/$VERSION/docs/quickstart.md" \
   "$TMP/bundle/release-notes.md" \
   || release_fail "formal release notes omit the Quick Start link"
 grep -Fq 'https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new' \
@@ -137,7 +163,7 @@ if tar -tzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
   release_fail "platform package contains the source-only E2E assembler"
 fi
 
-"$ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/bundle" "$TMP/install"
+"$FORMAL_ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/bundle" "$TMP/install"
 [ -f "$TMP/install/docs/kuasar-sandbox.md" ] || release_fail "platform docs were not extracted"
 [ -x "$TMP/install/test/e2e/run_all.sh" ] || release_fail "platform E2E runner was not extracted"
 for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
@@ -308,7 +334,7 @@ mkdir -p "$TMP/coordinator-error-state"
 if PATH="$TMP/coordinator-bin:$PATH" \
   FAKE_COORDINATOR_STATE="$TMP/coordinator-error-state" \
   FAKE_RELEASE_API_ERROR=1 PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
-  bash "$ROOT/release/preview-coordinator.sh" --version "$PREVIEW_VERSION" \
+  bash "$FORMAL_ROOT/release/preview-coordinator.sh" --version "$PREVIEW_VERSION" \
   > "$TMP/coordinator-error.out" 2>&1; then
   release_fail "preview coordinator treated a release API error as a missing release"
 fi
@@ -318,7 +344,8 @@ fi
 PATH="$TMP/coordinator-bin:$PATH" \
   FAKE_COORDINATOR_STATE="$TMP/coordinator-state" \
   PREVIEW_POLL_SECONDS=0 PREVIEW_WAIT_SECONDS=0 \
-  bash "$ROOT/release/preview-coordinator.sh" "$PREVIEW_DATE" > "$TMP/coordinator.out"
+  bash "$FORMAL_ROOT/release/preview-coordinator.sh" "$PREVIEW_DATE" \
+  > "$TMP/coordinator.out"
 [ "$(wc -l < "$TMP/coordinator-state/dispatches")" -eq 3 ] \
   || release_fail "preview coordinator did not dispatch the three foundation release units first"
 grep -Fqx "workflow run release.yml --repo kuasar-sandbox/accelerator --ref main -f version=$PREVIEW_ACCELERATOR_TAG" \
@@ -331,19 +358,7 @@ mkdir -p "$TMP/generated-root" "$TMP/generated-bin" "$TMP/generated-state"
 cp -a "$ROOT/release" "$ROOT/releases" "$TMP/generated-root/"
 current_formal_manifest="$TMP/current-release.yaml"
 install -m 0644 "$ROOT/releases/release.yaml" "$current_formal_manifest"
-preview_base_commit=
-while read -r commit; do
-  candidate_version="$(git -C "$ROOT" show "$commit:releases/release.yaml" \
-    | awk '$1 == "version:" {print $2}')"
-  if [ "$candidate_version" = "$PREVIEW_BASE" ]; then
-    preview_base_commit="$commit"
-    break
-  fi
-done < <(git -C "$ROOT" log --format=%H -- releases/release.yaml)
-[ -n "$preview_base_commit" ] \
-  || release_fail "daily preview base selection is missing from release history"
-git -C "$ROOT" show "$preview_base_commit:releases/release.yaml" \
-  > "$TMP/generated-root/releases/release.yaml"
+write_preview_base_fixture "$TMP/generated-root/releases/release.yaml"
 git -C "$TMP/generated-root" init -q
 git -C "$TMP/generated-root" config user.name release-test
 git -C "$TMP/generated-root" config user.email release-test@example.invalid
