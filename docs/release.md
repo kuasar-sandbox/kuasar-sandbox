@@ -89,9 +89,10 @@ Tag 尚不完整,Daily 同样在任何清单或组件变更前延后,不在残�
 维护自己的两个清单。
 
 平台仓的 GitHub Latest 只由平台 `main` 的 Stable 聚合发布更新。每个组件仓仍独立维护
-自己的 Latest:组件 `main` 的 Stable 发布记录源码分支和精确提交,发布后在该仓所有已
-发布的主线 Stable 中按源码提交先后重新选择 Latest;同一提交存在多个 Tag 时才比较
-SemVer。组件维护分支 Stable 和任何 Preview 不更新 Latest。平台聚合始终通过清单中的
+自己的 Latest:组件 `main` 的 Stable 发布记录源码分支和精确提交;独立的幂等协调工作流
+在该仓所有已发布的主线 Stable 中按源码提交先后重新选择 Latest,同一提交存在多个 Tag
+时才比较 SemVer。协调工作流由任一组件发布完成触发,跨版本串行,失败可独立重跑,并有
+定时自愈。组件维护分支 Stable 和任何 Preview 不更新 Latest。平台聚合始终通过清单中的
 精确 Tag 选择组件,不依赖组件仓的 Latest。
 
 平台维护分支与组件维护分支不存在同名约束。平台 `release/v0.5.x` 可以聚合
@@ -311,7 +312,9 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
   `preview-manifest-selection-and-gc` concurrency group。scanner 顺序等待每个分支,不同时
   填入多个 pending slot。组件完整构建/发布 workflow 与 delete 对同一精确版本共用
   mutation group;平台聚合完整 prepare/BMS/publish workflow 与 delete 也使用同一精确
-  版本组。不同版本不共享 pending slot。只有
+  版本组。不同版本不共享 pending slot。组件 Latest 协调器是例外:其操作幂等且每次都
+  扫描完整主线 Stable 集合,因此使用全仓串行组并允许多个触发合并;保留下来的最后一次
+  运行仍能收敛完整状态。只有
   当前平台 `main` HEAD 的 `release.yaml` 所选 Stable 聚合能更新 Latest,且发布前后都会
   重新验证分支 HEAD、清单选择和既有 Release。
 
