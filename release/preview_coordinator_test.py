@@ -159,7 +159,9 @@ components:
             {"target_commitish": "c" * 40}, None, False
         )
         with (
-            mock.patch.object(coordinator, "latest_run", return_value=None),
+            mock.patch.object(
+                coordinator, "latest_release_run", return_value=None
+            ),
             mock.patch.object(coordinator, "dispatch_cleanup") as cleanup,
         ):
             coordinator.ensure_configured_state(unit, tag, state)
