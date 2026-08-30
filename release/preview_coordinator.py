@@ -406,6 +406,7 @@ def clone_repository(unit: Unit, source_ref: str, destination: pathlib.Path) -> 
         [
             "git",
             "fetch",
+            "--update-head-ok",
             "--force",
             "origin",
             f"refs/heads/{source_ref}:refs/heads/{source_ref}",
@@ -942,11 +943,21 @@ def main() -> None:
     global PLATFORM_SHA
     validate_environment()
     base, previous, preview, previous_preview, configured = manifest_values()
+    if PLATFORM_REF != "main":
+        branch = re.fullmatch(r"release/v([0-9]+)\.([0-9]+)\.x", PLATFORM_REF)
+        version = re.fullmatch(r"release-v([0-9]+)\.([0-9]+)\.[0-9]+", base)
+        assert branch is not None and version is not None
+        if branch.groups() != version.groups():
+            raise RuntimeError(f"{base} does not belong to {PLATFORM_REF}")
     current_date = preview.removeprefix("preview.")
     current_aggregate = f"{base}-{preview}"
     formal = release_version()
     formal_status = platform_release(formal)
-    if formal == base and formal_status.complete:
+    if formal == base and formal_status.release is not None:
+        if not formal_status.complete:
+            raise Deferred(
+                f"{base} has an incomplete Stable Release; its Preview line is closed"
+            )
         print(f"==> {base} is closed by its Stable aggregate; no Preview may be published")
         return
 

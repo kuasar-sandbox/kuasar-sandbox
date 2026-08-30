@@ -35,6 +35,11 @@ def main() -> None:
             coordinator.fail(f"{version} does not belong to {source_ref}")
     if re.fullmatch(r"[0-9a-f]{40}", source_sha) is None:
         coordinator.fail("PLATFORM_SHA must be a full lowercase SHA")
+    local_sha = coordinator.run(
+        ["git", "rev-parse", "HEAD"], cwd=ROOT
+    ).stdout.strip()
+    if local_sha != source_sha:
+        coordinator.fail("platform checkout does not match PLATFORM_SHA")
     if coordinator.branch_sha(coordinator.PLATFORM_REPOSITORY, source_ref) != source_sha:
         raise coordinator.Deferred(f"platform {source_ref} moved after selection")
     coordinator.selection.validate_current_manifests(ROOT)

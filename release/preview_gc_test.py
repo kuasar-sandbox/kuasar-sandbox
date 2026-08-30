@@ -203,6 +203,66 @@ class PreviewGCTest(unittest.TestCase):
             )
         self.assertEqual(selected, snapshot)
 
+    def test_failed_aggregate_deletion_is_retried_before_third_attempt(self) -> None:
+        candidate = preview_gc.Candidate(
+            preview_gc.coordinator.PLATFORM_REPOSITORY,
+            "platform",
+            "release-v1.2.3-preview.20260831",
+            "5" * 40,
+            43,
+            8,
+            200,
+        )
+        failed = {
+            "id": 99,
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 1,
+            "html_url": "https://example.invalid/run/99",
+        }
+        with (
+            mock.patch.object(
+                preview_gc.coordinator, "latest_run", return_value=failed
+            ),
+            mock.patch.object(preview_gc.coordinator, "gh") as gh,
+        ):
+            self.assertFalse(preview_gc.apply([candidate]))
+        gh.assert_called_once_with(
+            "run",
+            "rerun",
+            "99",
+            "--repo",
+            preview_gc.coordinator.PLATFORM_REPOSITORY,
+            "--failed",
+        )
+
+    def test_failed_aggregate_deletion_stops_after_third_attempt(self) -> None:
+        candidate = preview_gc.Candidate(
+            preview_gc.coordinator.PLATFORM_REPOSITORY,
+            "platform",
+            "release-v1.2.3-preview.20260831",
+            "5" * 40,
+            43,
+            8,
+            200,
+        )
+        failed = {
+            "id": 99,
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 3,
+            "html_url": "https://example.invalid/run/99",
+        }
+        with (
+            mock.patch.object(
+                preview_gc.coordinator, "latest_run", return_value=failed
+            ),
+            mock.patch.object(preview_gc.coordinator, "gh") as gh,
+            self.assertRaisesRegex(preview_gc.GCError, "aggregate GC failed"),
+        ):
+            preview_gc.apply([candidate])
+        gh.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

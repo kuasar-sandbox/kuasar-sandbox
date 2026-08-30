@@ -20,6 +20,15 @@ coordinator = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = coordinator
 SPEC.loader.exec_module(coordinator)
 
+FORMAL_PATH = pathlib.Path(__file__).with_name("formal_coordinator.py")
+FORMAL_SPEC = importlib.util.spec_from_file_location(
+    "formal_coordinator_test_subject", FORMAL_PATH
+)
+assert FORMAL_SPEC is not None and FORMAL_SPEC.loader is not None
+formal = importlib.util.module_from_spec(FORMAL_SPEC)
+sys.modules[FORMAL_SPEC.name] = formal
+FORMAL_SPEC.loader.exec_module(formal)
+
 
 class PreviewCoordinatorTest(unittest.TestCase):
     @staticmethod
@@ -64,6 +73,90 @@ class PreviewCoordinatorTest(unittest.TestCase):
             self.assertRaisesRegex(RuntimeError, "not a commit branch ref"),
         ):
             coordinator.branch_sha("kuasar-sandbox/sandboxer", "main")
+
+    def test_clone_fetch_allows_updating_attached_default_branch(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["accelerator"]
+        with (
+            mock.patch.object(coordinator, "gh"),
+            mock.patch.object(coordinator, "run") as run,
+        ):
+            coordinator.clone_repository(unit, "main", pathlib.Path("unused"))
+        command = run.call_args.args[0]
+        self.assertIn("--update-head-ok", command)
+        self.assertIn("refs/heads/main:refs/heads/main", command)
+
+    def test_maintenance_branch_rejects_another_platform_version_line(self) -> None:
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "release/v0.1.x"),
+            mock.patch.object(coordinator, "validate_environment"),
+            mock.patch.object(
+                coordinator,
+                "manifest_values",
+                return_value=(
+                    "release-v0.2.0",
+                    "release-v0.1.9",
+                    "preview.20260831",
+                    None,
+                    {},
+                ),
+            ),
+            mock.patch.object(coordinator, "platform_release") as platform_release,
+            mock.patch.object(coordinator, "plan_units") as plan_units,
+            self.assertRaisesRegex(RuntimeError, "does not belong"),
+        ):
+            coordinator.main()
+        platform_release.assert_not_called()
+        plan_units.assert_not_called()
+
+    def test_incomplete_stable_release_closes_preview_before_planning(self) -> None:
+        partial = coordinator.ReleaseStatus(
+            {"tag_name": "release-v0.1.2", "assets": []}, None, False
+        )
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+            mock.patch.object(coordinator, "validate_environment"),
+            mock.patch.object(
+                coordinator,
+                "manifest_values",
+                return_value=(
+                    "release-v0.1.2",
+                    "release-v0.1.1",
+                    "preview.20260831",
+                    None,
+                    {},
+                ),
+            ),
+            mock.patch.object(
+                coordinator, "release_version", return_value="release-v0.1.2"
+            ),
+            mock.patch.object(coordinator, "platform_release", return_value=partial),
+            mock.patch.object(coordinator, "plan_units") as plan_units,
+            self.assertRaisesRegex(coordinator.Deferred, "incomplete Stable Release"),
+        ):
+            coordinator.main()
+        plan_units.assert_not_called()
+
+    def test_formal_coordinator_rejects_stale_local_checkout(self) -> None:
+        selected = "a" * 40
+        with (
+            mock.patch.dict(
+                formal.os.environ,
+                {
+                    "RELEASE_VERSION": "release-v0.1.2",
+                    "PLATFORM_REF": "main",
+                    "PLATFORM_SHA": selected,
+                },
+            ),
+            mock.patch.object(
+                formal.coordinator,
+                "run",
+                return_value=mock.Mock(stdout="b" * 40 + "\n"),
+            ),
+            mock.patch.object(formal.coordinator, "branch_sha") as branch_sha,
+            self.assertRaisesRegex(SystemExit, "checkout does not match"),
+        ):
+            formal.main()
+        branch_sha.assert_not_called()
 
     def test_validation_defers_when_scanned_platform_branch_moves(self) -> None:
         selected = "a" * 40

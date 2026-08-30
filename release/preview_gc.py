@@ -578,7 +578,18 @@ def apply(candidates: list[Candidate]) -> bool:
             print(f"==> dispatched aggregate GC: {item.tag}")
             return False
         if state.get("conclusion") != "success":
-            raise GCError(f"aggregate GC failed: {state.get('html_url')}")
+            attempt = int(state.get("run_attempt", 1))
+            if attempt >= 3:
+                raise GCError(f"aggregate GC failed: {state.get('html_url')}")
+            coordinator.gh(
+                "run",
+                "rerun",
+                str(state["id"]),
+                "--repo",
+                coordinator.PLATFORM_REPOSITORY,
+                "--failed",
+            )
+            return False
         return False
     return True
 

@@ -75,7 +75,8 @@ components:
 Stable `V1` 发布后,如果继续在同一分支开发,必须先将 Daily 清单推进为 `V2`,并设置
 `previous_version: V1`。准备 `V2` 时再推进 Stable 清单。`V2` 发布后两个清单继续推进
 到 `V3`,以此类推。Daily 与 Stable 清单版本相等且该 Stable 聚合已经发布时,该版本线
-关闭:禁止新建 Preview,也禁止重复发布 Stable。
+关闭:禁止新建 Preview,也禁止重复发布 Stable。若同版本 Stable Release 已出现但资产或
+Tag 尚不完整,Daily 同样在任何清单或组件变更前延后,不在残缺 Stable 旁继续发布 Preview。
 
 ## 3. 分支与版本线
 
@@ -258,8 +259,9 @@ canonical 提交的 first-parent 祖先。旁支、指向其他清单和无法�
 Apply 先 dispatch 五个组件仓的本地删除 wrapper。每个 wrapper 仅使用本仓短期
 `GITHUB_TOKEN contents:write`,再次核对精确 Preview Tag 和源码 SHA,然后将 Release、
 所有资产与 Tag 一并删除。所有组件候选消失后,平台才删除聚合 Preview。中途失败不会
-重建已经删除的对象;下一次根据 canonical 历史重算并继续收敛。Stable Release、Stable
-Tag、Actions artifacts、非 canonical orphan 都不属于 GC 删除集合。
+重建已经删除的对象;组件和聚合删除的确定性失败都最多重跑三次,下一次根据 canonical
+历史重算并继续收敛。Stable Release、Stable Tag、Actions artifacts、非 canonical
+orphan 都不属于 GC 删除集合。
 
 ```bash
 # 只读真实计划
