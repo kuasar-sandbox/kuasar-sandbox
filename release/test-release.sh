@@ -184,6 +184,21 @@ if "$ROOT/release/selection.py" "$ROOT" release-v1.2.3-preview.20260808 >/dev/nu
   release_fail "selection resolver derived a preview without a release manifest"
 fi
 
+nongit_root="$TMP/nongit-selection"
+mkdir -p "$nongit_root/release" "$nongit_root/releases"
+install -m 0755 "$ROOT/release/selection.py" "$nongit_root/release/selection.py"
+install -m 0644 "$ROOT/releases/release.yaml" "$nongit_root/releases/release.yaml"
+install -m 0644 "$ROOT/releases/daily-preview.yaml" \
+  "$nongit_root/releases/daily-preview.yaml"
+"$nongit_root/release/selection.py" "$nongit_root" "$PREVIEW_VERSION" \
+  > "$TMP/nongit-selection.tsv"
+[ "$(wc -l < "$TMP/nongit-selection.tsv")" -eq 6 ] \
+  || release_fail "current manifest selection unexpectedly requires Git metadata"
+if "$nongit_root/release/selection.py" "$nongit_root" "$PREVIEW_VERSION" --commit \
+  >/dev/null 2>&1; then
+  release_fail "commit proof succeeded without Git metadata"
+fi
+
 history_root="$TMP/selection-history"
 mkdir -p "$history_root/release" "$history_root/releases"
 install -m 0755 "$ROOT/release/selection.py" "$history_root/release/selection.py"

@@ -254,10 +254,7 @@ def resolve_record(
     except ManifestError as error:
         fail(str(error))
     if current[0] == version:
-        commit = git_commit(root, "HEAD")
-        if commit is None:
-            fail("cannot resolve current platform commit")
-        return commit, current[1], current[2]
+        return git_commit(root, "HEAD") or "", current[1], current[2]
 
     history_ref = "HEAD"
     if preview:
@@ -303,6 +300,8 @@ def main() -> None:
     )
     if len(sys.argv) == 4:
         if sys.argv[3] == "--commit":
+            if not commit:
+                fail("cannot resolve current platform commit")
             print(commit)
         elif previous is not None:
             print(previous)
