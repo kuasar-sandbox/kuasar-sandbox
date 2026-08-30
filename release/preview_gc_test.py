@@ -82,7 +82,8 @@ class PreviewGCTest(unittest.TestCase):
         ):
             snapshots = preview_gc.canonical_snapshots("f" * 40, "release-v1.2.3")
         self.assertEqual(
-            snapshots[aggregate]["connector"], "v1.0.2-preview.20260831"
+            snapshots[aggregate].components["connector"],
+            "v1.0.2-preview.20260831",
         )
 
     def test_missing_release_and_tag_is_already_converged(self) -> None:
@@ -125,6 +126,14 @@ class PreviewGCTest(unittest.TestCase):
         self.assertEqual(candidate.asset_count, 1)
 
     def test_precontract_canonical_aggregate_remains_collectable(self) -> None:
+        components = {
+            "accelerator": "v1.0.0-preview.20260831",
+            "connector": "v1.0.0-preview.20260831",
+            "sandboxer": "v1.0.0-preview.20260831",
+            "orchestrator": "v1.0.0-preview.20260831",
+            "runtime": "runtime-v1.0.0-preview.20260831",
+            "vmlinux": "vmlinux-v1.0.0-preview.20260831",
+        }
         release = {
             "id": 43,
             "draft": False,
@@ -136,6 +145,10 @@ class PreviewGCTest(unittest.TestCase):
             preview_gc.coordinator,
             "platform_asset_names",
             side_effect=preview_gc.coordinator.Deferred("legacy manifest"),
+        ), mock.patch.object(
+            preview_gc, "parse_snapshot", return_value=None
+        ), mock.patch.object(
+            preview_gc, "first_parent_contains", return_value=True
         ):
             candidate = preview_gc.release_candidate(
                 preview_gc.coordinator.PLATFORM_REPOSITORY,
@@ -143,9 +156,52 @@ class PreviewGCTest(unittest.TestCase):
                 "release-v1.2.3-preview.20260831",
                 platform_release=release,
                 platform_sha="5" * 40,
+                platform_snapshot=preview_gc.CanonicalSnapshot(
+                    "6" * 40, components
+                ),
             )
         assert candidate is not None
         self.assertEqual(candidate.source_sha, "5" * 40)
+
+    def test_moved_precontract_tag_is_rejected(self) -> None:
+        release = {
+            "id": 43,
+            "draft": False,
+            "prerelease": True,
+            "target_commitish": "4" * 40,
+            "assets": [],
+        }
+        snapshot = preview_gc.CanonicalSnapshot("6" * 40, {})
+        with self.assertRaisesRegex(preview_gc.GCError, "Release and Tag disagree"):
+            preview_gc.validate_platform_ownership(
+                "release-v1.2.3-preview.20260831",
+                release,
+                "5" * 40,
+                snapshot,
+            )
+
+    def test_retained_precontract_preview_uses_stable_canonical_history(self) -> None:
+        tag = "release-v1.2.3-preview.20260831"
+        release = {"target_commitish": "5" * 40}
+        snapshot = preview_gc.CanonicalSnapshot(
+            "6" * 40, {"connector": "v1.0.1-preview.20260831"}
+        )
+        with (
+            mock.patch.object(preview_gc, "parse_snapshot", return_value=None),
+            mock.patch.object(
+                preview_gc,
+                "canonical_snapshots",
+                return_value={tag: snapshot},
+            ),
+            mock.patch.object(preview_gc, "first_parent_contains", return_value=True),
+        ):
+            selected = preview_gc.retained_snapshot(
+                tag,
+                release,
+                {tag: "5" * 40, "release-v1.2.3": "7" * 40},
+                {},
+            )
+        self.assertEqual(selected, snapshot)
 
 
 if __name__ == "__main__":

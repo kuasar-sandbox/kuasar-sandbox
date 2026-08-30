@@ -186,7 +186,11 @@ SHA。依赖参数必须对应已经完整发布的精确 Release。
 Preview 还要求 `aggregate_sha` 所指平台提交中的
 `daily-preview.yaml/version + preview_version` 精确等于聚合版本,且
 `components.<unit>` 精确等于待发布 Tag。该绑定和 Stable 封线检查在构建前及取得
-publish concurrency lock 后各执行一次。
+publish concurrency lock 后各执行一次。Preview Release notes 同时记录源码 SHA、原始
+聚合清单 SHA 和实际依赖版本绑定;已有 Preview 只有在源码与依赖绑定都一致时才可复用。
+
+workflow run name 包含源码 SHA 和依赖版本元组。控制器只重跑相同输入元组的失败 run;
+分支 HEAD 或依赖选择已经改变时创建新的 dispatch,不会用旧输入消耗三次恢复机会。
 
 ## 7. 聚合发布 CLI
 
@@ -243,9 +247,13 @@ Release ID、可恢复源码 SHA 和 active run,并输出稳定排序计划及 S
 字段、引用或归属异常都会在零删除状态停止。手工 dry-run 不受 7 天限制,但 apply 不能
 绕过窗口。
 
-早期聚合 Preview 在引入“Tag 直接指向清单提交”契约前发布。GC 只对这类历史对象使用
-Stable Tag 可达的 first-parent 清单历史证明归属和精确组件选择;当前发布、残缺恢复和
-所有新 Preview 仍必须满足 Tag Commit 与清单 Commit 相同的严格契约。
+历史聚合 Preview 在“Tag 直接指向清单提交”契约建立和完全执行前发布。GC 只对这些历史
+对象使用 Stable Tag 可达的 first-parent 清单历史证明归属和精确组件选择:Release
+`target_commitish` 必须与 Tag 一致;Tag 提交已有 Daily 清单时必须精确选择该 Preview,且
+canonical 清单提交必须位于它的 first-parent 历史;更早的无选择清单提交则必须是
+canonical 提交的 first-parent 祖先。旁支、指向其他清单和无法证明关联的移动 Tag 全部
+拒绝。当前发布、残缺恢复和所有新 Preview 仍执行 Tag Commit 与清单 Commit 相同的严格
+契约。
 
 Apply 先 dispatch 五个组件仓的本地删除 wrapper。每个 wrapper 仅使用本仓短期
 `GITHUB_TOKEN contents:write`,再次核对精确 Preview Tag 和源码 SHA,然后将 Release、
@@ -272,6 +280,7 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 - 发布先创建 draft、上传并复核 digest,全部一致后才公开;
 - 已发布 Tag 或 Release 不由发布器覆盖;残缺 Preview 只能经受保护删除入口恢复;
 - 分支 HEAD、Tag commit、清单 blob SHA 和 exact-asset BMS 共同固定一次发布;
+- Preview Release 的构建绑定防止相同 Tag/源码在不同依赖闭包之间被错误复用;
 - scanner 和每条平台分支使用各自的 concurrency key;同一组件发布单元的 publish 与
   delete 共用 `queue: max` 变更队列,平台聚合 publish 与 delete 也共用对应队列。队列
   保留最多 100 个 pending 任务且不取消运行中任务,避免 GC 或恢复请求替换其他待发布

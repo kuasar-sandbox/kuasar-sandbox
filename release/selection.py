@@ -186,13 +186,16 @@ def validate_current_manifests(root: pathlib.Path) -> None:
         )
 
 
-def git_snapshots(root: pathlib.Path, relative: pathlib.Path) -> list[tuple[str, str]]:
+def git_snapshots(
+    root: pathlib.Path, relative: pathlib.Path, ref: str = "HEAD"
+) -> list[tuple[str, str]]:
     log = subprocess.run(
         [
             "git",
             "-C",
             str(root),
             "log",
+            ref,
             "--first-parent",
             "--format=%H",
             "--",
@@ -219,7 +222,21 @@ def git_snapshots(root: pathlib.Path, relative: pathlib.Path) -> list[tuple[str,
     return snapshots
 
 
-def resolve(root: pathlib.Path, version: str) -> tuple[str | None, dict[str, str]]:
+def git_commit(root: pathlib.Path, ref: str) -> str | None:
+    result = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "--verify", f"{ref}^{{commit}}"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    value = result.stdout.strip()
+    return value if result.returncode == 0 and re.fullmatch(r"[0-9a-f]{40}", value) else None
+
+
+def resolve_record(
+    root: pathlib.Path, version: str
+) -> tuple[str, str | None, dict[str, str]]:
     if AGGREGATE_RE.fullmatch(version) is None:
         fail("invalid aggregate version")
     try:
@@ -237,9 +254,17 @@ def resolve(root: pathlib.Path, version: str) -> tuple[str | None, dict[str, str
     except ManifestError as error:
         fail(str(error))
     if current[0] == version:
-        return current[1], current[2]
+        commit = git_commit(root, "HEAD")
+        if commit is None:
+            fail("cannot resolve current platform commit")
+        return commit, current[1], current[2]
 
-    for commit, text in git_snapshots(root, relative):
+    history_ref = "HEAD"
+    if preview:
+        stable_ref = version.split("-preview.", 1)[0]
+        if git_commit(root, stable_ref) is not None:
+            history_ref = stable_ref
+    for commit, text in git_snapshots(root, relative, history_ref):
         source = f"{commit}:{relative.as_posix()}"
         try:
             historical = parse_manifest(text, source, preview)
@@ -247,8 +272,13 @@ def resolve(root: pathlib.Path, version: str) -> tuple[str | None, dict[str, str
             # Commits before the two-file model are not release-state snapshots.
             continue
         if historical[0] == version:
-            return historical[1], historical[2]
+            return commit, historical[1], historical[2]
     fail(f"aggregate selection not found in {relative.as_posix()} history: {version}")
+
+
+def resolve(root: pathlib.Path, version: str) -> tuple[str | None, dict[str, str]]:
+    _, previous, components = resolve_record(root, version)
+    return previous, components
 
 
 def main() -> None:
@@ -261,13 +291,20 @@ def main() -> None:
     if len(sys.argv) not in (3, 4):
         fail(
             "usage: selection.py <platform-root> "
-            "<release-version> [--previous] | --validate-current"
+            "<release-version> [--previous|--commit] | --validate-current"
         )
-    if len(sys.argv) == 4 and sys.argv[3] != "--previous":
-        fail("usage: selection.py <platform-root> <release-version> [--previous]")
-    previous, selected = resolve(pathlib.Path(sys.argv[1]), sys.argv[2])
+    if len(sys.argv) == 4 and sys.argv[3] not in ("--previous", "--commit"):
+        fail(
+            "usage: selection.py <platform-root> "
+            "<release-version> [--previous|--commit]"
+        )
+    commit, previous, selected = resolve_record(
+        pathlib.Path(sys.argv[1]), sys.argv[2]
+    )
     if len(sys.argv) == 4:
-        if previous is not None:
+        if sys.argv[3] == "--commit":
+            print(commit)
+        elif previous is not None:
             print(previous)
         return
     for unit in UNITS:

@@ -40,6 +40,12 @@ class Candidate:
     asset_bytes: int
 
 
+@dataclass(frozen=True)
+class CanonicalSnapshot:
+    commit: str
+    components: dict[str, str]
+
+
 class GCError(RuntimeError):
     pass
 
@@ -82,6 +88,7 @@ def platform_release_status(
     tag: str,
     release: dict[str, Any] | None,
     sha: str | None,
+    canonical: CanonicalSnapshot | None = None,
 ) -> coordinator.ReleaseStatus:
     if release is None:
         return coordinator.ReleaseStatus(None, sha, False)
@@ -91,9 +98,11 @@ def platform_release_status(
         try:
             expected = coordinator.platform_asset_names(tag, sha)
         except coordinator.Deferred:
-            # Pre-contract aggregate Previews remain collectable only when the
-            # canonical manifest history independently proves ownership.
-            expected = None
+            if canonical is not None:
+                validate_platform_ownership(tag, release, sha, canonical)
+                expected = coordinator.platform_asset_names_for_components(
+                    tag, canonical.components
+                )
     complete = (
         release.get("draft") is False
         and release.get("prerelease") is ("-preview." in tag)
@@ -151,7 +160,9 @@ def parse_snapshot(commit: str) -> tuple[str, dict[str, str]] | None:
     return aggregate, components
 
 
-def canonical_snapshots(stable_sha: str, version: str) -> dict[str, dict[str, str]]:
+def canonical_snapshots(
+    stable_sha: str, version: str
+) -> dict[str, CanonicalSnapshot]:
     commits = git(
         "log",
         "--first-parent",
@@ -160,7 +171,7 @@ def canonical_snapshots(stable_sha: str, version: str) -> dict[str, dict[str, st
         "--",
         "releases/daily-preview.yaml",
     ).splitlines()
-    snapshots: dict[str, dict[str, str]] = {}
+    snapshots: dict[str, CanonicalSnapshot] = {}
     for commit in commits:
         snapshot = parse_snapshot(commit)
         if snapshot is None:
@@ -169,8 +180,61 @@ def canonical_snapshots(stable_sha: str, version: str) -> dict[str, dict[str, st
         if aggregate.startswith(f"{version}-preview."):
             # git log is newest first; keep the final canonical selection when
             # one Preview date was committed more than once.
-            snapshots.setdefault(aggregate, components)
+            snapshots.setdefault(aggregate, CanonicalSnapshot(commit, components))
     return snapshots
+
+
+def first_parent_contains(source_sha: str, canonical_sha: str) -> bool:
+    return source_sha in set(git("rev-list", "--first-parent", canonical_sha).splitlines())
+
+
+def validate_platform_ownership(
+    tag: str,
+    release: dict[str, Any] | None,
+    source_sha: str,
+    canonical: CanonicalSnapshot,
+) -> None:
+    if release is not None and release.get("target_commitish") != source_sha:
+        raise GCError(f"platform Preview Release and Tag disagree: {tag}")
+    source_snapshot = parse_snapshot(source_sha)
+    if source_snapshot is not None:
+        if source_snapshot[0] != tag:
+            raise GCError(f"platform Preview Tag selects another manifest: {tag}")
+        associated = first_parent_contains(canonical.commit, source_sha)
+    else:
+        # The oldest aggregate tags precede the commit that introduced their
+        # canonical two-file selection. They must still be on that commit's
+        # first-parent line; an unrelated or side-branch target is never owned.
+        associated = first_parent_contains(source_sha, canonical.commit)
+    if not associated:
+        raise GCError(f"platform Preview Tag is outside its canonical history: {tag}")
+
+
+def retained_snapshot(
+    tag: str,
+    release: dict[str, Any],
+    platform_tags: dict[str, str],
+    history_cache: dict[str, dict[str, CanonicalSnapshot]],
+) -> CanonicalSnapshot:
+    source_sha = platform_tags.get(tag)
+    if source_sha is None:
+        raise GCError(f"retained aggregate Preview has no tag: {tag}")
+    stable = tag.split("-preview.", 1)[0]
+    stable_sha = platform_tags.get(stable)
+    if stable_sha is not None:
+        snapshots = history_cache.setdefault(
+            stable, canonical_snapshots(stable_sha, stable)
+        )
+        canonical = snapshots.get(tag)
+        if canonical is None:
+            raise GCError(f"retained aggregate Preview has no canonical manifest: {tag}")
+    else:
+        snapshot = parse_snapshot(source_sha)
+        if snapshot is None or snapshot[0] != tag:
+            raise GCError(f"retained pre-contract Preview has no Stable history: {tag}")
+        canonical = CanonicalSnapshot(source_sha, snapshot[1])
+    validate_platform_ownership(tag, release, source_sha, canonical)
+    return canonical
 
 
 def all_platform_previews(
@@ -192,16 +256,14 @@ def protected_component_tags(
     candidates: set[str],
 ) -> set[tuple[str, str]]:
     protected: set[tuple[str, str]] = set()
+    history_cache: dict[str, dict[str, CanonicalSnapshot]] = {}
     for tag in platform_previews:
         if tag in candidates:
             continue
-        sha = platform_tags.get(tag)
-        if sha is None:
-            raise GCError(f"retained aggregate Preview has no tag: {tag}")
-        snapshot = parse_snapshot(sha)
-        if snapshot is None or snapshot[0] != tag:
-            raise GCError(f"retained aggregate Preview has no canonical manifest: {tag}")
-        for unit, component_tag in snapshot[1].items():
+        snapshot = retained_snapshot(
+            tag, platform_previews[tag], platform_tags, history_cache
+        )
+        for unit, component_tag in snapshot.components.items():
             if "-preview." in component_tag:
                 protected.add((unit, component_tag))
     return protected
@@ -245,12 +307,13 @@ def release_candidate(
     component_state: coordinator.RepositoryState | None = None,
     platform_release: dict[str, Any] | None = None,
     platform_sha: str | None = None,
+    platform_snapshot: CanonicalSnapshot | None = None,
 ) -> Candidate | None:
     spec = coordinator.UNIT_BY_NAME.get(unit)
     if unit == "platform":
         release = platform_release
         sha = platform_sha
-        status = platform_release_status(tag, release, sha)
+        status = platform_release_status(tag, release, sha, platform_snapshot)
     else:
         if spec is None:
             raise GCError(f"unknown release unit: {unit}")
@@ -267,6 +330,12 @@ def release_candidate(
             raise GCError(f"refusing non-Preview GC candidate: {repository} {tag}")
         if release.get("immutable") is True:
             raise GCError(f"immutable Preview cannot be collected: {repository} {tag}")
+        if sha is not None and release.get("target_commitish") != sha:
+            raise GCError(f"Preview Release and Tag disagree: {repository} {tag}")
+    if unit == "platform" and sha is not None:
+        if platform_snapshot is None:
+            raise GCError(f"platform Preview has no canonical snapshot: {tag}")
+        validate_platform_ownership(tag, release, sha, platform_snapshot)
     source_sha = coordinator.recoverable_source_sha(status)
     if source_sha is None:
         raise GCError(f"Preview candidate has no recoverable source target: {repository} {tag}")
@@ -335,8 +404,8 @@ def plan(version: str) -> tuple[list[Candidate], dict[str, Any]]:
     protected.update(current_manifest_protection(closed_stables))
 
     component_refs: set[tuple[str, str]] = set()
-    for components in snapshots.values():
-        for unit, tag in components.items():
+    for snapshot in snapshots.values():
+        for unit, tag in snapshot.components.items():
             if "-preview." in tag and (unit, tag) not in protected:
                 component_refs.add((unit, tag))
 
@@ -360,7 +429,10 @@ def plan(version: str) -> tuple[list[Candidate], dict[str, Any]]:
             spec.repository, unit, tag, component_states[unit]
         )
         if candidate is not None:
-            if f"Release {tag}" in active_titles[(spec.repository, spec.workflow)]:
+            if any(
+                coordinator.release_title_matches(title, tag)
+                for title in active_titles[(spec.repository, spec.workflow)]
+            ):
                 raise GCError(f"release workflow is active: {spec.repository} {tag}")
             candidates.append(candidate)
     platform_active = active_release_titles(
@@ -373,6 +445,7 @@ def plan(version: str) -> tuple[list[Candidate], dict[str, Any]]:
             tag,
             platform_release=platform_releases.get(tag),
             platform_sha=platform_tags.get(tag),
+            platform_snapshot=snapshots[tag],
         )
         if candidate is not None:
             if f"Aggregate {tag}" in platform_active:

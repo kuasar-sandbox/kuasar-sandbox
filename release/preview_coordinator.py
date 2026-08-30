@@ -28,6 +28,9 @@ PLATFORM_SHA = os.environ.get("PLATFORM_SHA", "")
 TODAY = os.environ.get("PREVIEW_DATE", "")
 WAIT_SECONDS = int(os.environ.get("PREVIEW_WAIT_SECONDS", "3000"))
 POLL_SECONDS = int(os.environ.get("PREVIEW_POLL_SECONDS", "120"))
+PREVIEW_BINDING_RE = re.compile(
+    r"<!-- kuasar-preview-binding (?P<value>\{[^\r\n]*\}) -->"
+)
 
 
 def load_module(name: str, path: pathlib.Path) -> Any:
@@ -199,6 +202,16 @@ def archive_name(unit: str, tag: str) -> str:
     return f"{unit}-{tag}-linux-x86_64.tar.gz"
 
 
+def platform_asset_names_for_components(
+    tag: str, components: dict[str, str]
+) -> set[str]:
+    return {
+        "SHA256SUMS",
+        archive_name("platform", tag),
+        *(archive_name(unit, components[unit]) for unit in selection.UNITS),
+    }
+
+
 def platform_asset_names(tag: str, sha: str) -> set[str]:
     relative = (
         "releases/daily-preview.yaml"
@@ -219,11 +232,7 @@ def platform_asset_names(tag: str, sha: str) -> set[str]:
         raise Deferred(f"platform {tag} has an invalid release manifest at {sha}") from error
     if aggregate != tag:
         raise Deferred(f"platform manifest at {sha} selects {aggregate}, not {tag}")
-    return {
-        "SHA256SUMS",
-        archive_name("platform", tag),
-        *(archive_name(unit, components[unit]) for unit in selection.UNITS),
-    }
+    return platform_asset_names_for_components(tag, components)
 
 
 def tag_sha(repository: str, tag: str) -> str | None:
@@ -309,6 +318,67 @@ def recoverable_source_sha(status: ReleaseStatus) -> str | None:
     return None
 
 
+def dependency_binding(plan: Plan, plans: dict[str, Plan]) -> str:
+    return ",".join(
+        f"{name}={plans[name].selected}" for name in plan.unit.dependencies
+    )
+
+
+def preview_binding(status: ReleaseStatus, tag: str) -> dict[str, str]:
+    if status.release is None:
+        raise Deferred(f"{tag} has no Release metadata binding")
+    body = status.release.get("body")
+    if not isinstance(body, str):
+        raise Deferred(f"{tag} has no Preview build binding")
+    matches = list(PREVIEW_BINDING_RE.finditer(body))
+    if len(matches) != 1:
+        raise Deferred(f"{tag} must contain exactly one Preview build binding")
+    try:
+        value = json.loads(matches[0].group("value"))
+    except json.JSONDecodeError as error:
+        raise Deferred(f"{tag} has an invalid Preview build binding") from error
+    fields = {
+        "aggregate_sha",
+        "aggregate_version",
+        "dependencies",
+        "source_ref",
+        "source_sha",
+        "unit",
+    }
+    if not isinstance(value, dict) or set(value) != fields or any(
+        not isinstance(value[field], str) for field in fields
+    ):
+        raise Deferred(f"{tag} has an invalid Preview build binding schema")
+    assert isinstance(value, dict)
+    return {field: value[field] for field in fields}
+
+
+def validate_preview_reuse(
+    plan: Plan, plans: dict[str, Plan], status: ReleaseStatus
+) -> None:
+    if "-preview." not in plan.selected:
+        return
+    binding = preview_binding(status, plan.selected)
+    date = plan.selected.rsplit("-preview.", 1)[1]
+    if re.fullmatch(
+        rf"release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.{date}",
+        binding["aggregate_version"],
+    ) is None or re.fullmatch(r"[0-9a-f]{40}", binding["aggregate_sha"]) is None:
+        raise Deferred(f"{plan.unit.name} {plan.selected} has invalid aggregate provenance")
+    if binding["unit"] != plan.unit.name:
+        raise Deferred(f"{plan.unit.name} {plan.selected} has another unit binding")
+    if binding["source_sha"] != plan.source_sha:
+        raise Deferred(f"{plan.unit.name} {plan.selected} has another source binding")
+    if binding["dependencies"] != dependency_binding(plan, plans):
+        raise Deferred(f"{plan.unit.name} {plan.selected} has another dependency binding")
+
+
+def release_run_title(plan: Plan, plans: dict[str, Plan]) -> str:
+    title = f"Release {plan.selected} @{plan.source_sha}"
+    dependencies = dependency_binding(plan, plans)
+    return f"{title} [{dependencies}]" if dependencies else title
+
+
 def branch_sha(repository: str, source_ref: str) -> str | None:
     state = api_optional(f"repos/{repository}/git/ref/heads/{source_ref}")
     if state is None:
@@ -351,6 +421,26 @@ def latest_run(repository: str, workflow: str, title: str) -> dict[str, Any] | N
         "workflow_runs",
     )
     matching = [item for item in runs if item.get("display_title") == title]
+    return max(matching, key=lambda item: str(item.get("created_at", "")), default=None)
+
+
+def release_title_matches(title: object, version: str) -> bool:
+    legacy = f"Release {version}"
+    return title == legacy or str(title).startswith(f"{legacy} @")
+
+
+def latest_release_run(
+    repository: str, workflow: str, version: str
+) -> dict[str, Any] | None:
+    runs = paginated(
+        f"repos/{repository}/actions/workflows/{workflow}/runs?event=workflow_dispatch&per_page=100",
+        "workflow_runs",
+    )
+    matching = [
+        item
+        for item in runs
+        if release_title_matches(item.get("display_title"), version)
+    ]
     return max(matching, key=lambda item: str(item.get("created_at", "")), default=None)
 
 
@@ -409,14 +499,14 @@ def ensure_configured_state(
         raise Deferred(f"fixed Stable selection is incomplete: {unit.name} {configured}")
     source_sha = recoverable_source_sha(status)
     if source_sha is None:
-        run_state = latest_run(unit.repository, unit.workflow, f"Release {configured}")
+        run_state = latest_release_run(unit.repository, unit.workflow, configured)
         if run_state is not None and run_active(run_state):
             raise Pending(f"release is active: {run_state.get('html_url')}")
         raise Deferred(
             f"{unit.name} {configured} has no recoverable source target; keep it deferred"
         )
     plan = Plan(unit, configured, None, source_sha, configured, configured, "cleanup")
-    run_state = latest_run(unit.repository, unit.workflow, f"Release {configured}")
+    run_state = latest_release_run(unit.repository, unit.workflow, configured)
     if run_state is not None and run_active(run_state):
         raise Pending(f"release is active: {run_state.get('html_url')}")
     dispatch_cleanup(plan, "incomplete")
@@ -533,6 +623,9 @@ def plan_units(configured: dict[str, str], date: str) -> dict[str, Plan]:
             if dependency_changed and plan.action != "publish":
                 plan = force_dependency_preview(plan, date, RepositoryState(unit))
             plans[unit.name] = plan
+            status = RepositoryState(unit).status(plan.selected)
+            if status.complete:
+                validate_preview_reuse(plan, plans, status)
     return plans
 
 
@@ -682,11 +775,12 @@ def ensure_unit(
     if status.complete:
         if status.tag_sha != plan.source_sha:
             raise Deferred(f"{plan.unit.name} {plan.selected} moved to another commit")
+        validate_preview_reuse(plan, plans, status)
         print(f"==> reuse {plan.unit.repository} {plan.selected}")
         return True
     if plan.source_ref is None:
         raise Deferred(f"fixed selection is unavailable: {plan.unit.name} {plan.selected}")
-    title = f"Release {plan.selected}"
+    title = release_run_title(plan, plans)
     if status.partial and "-preview." in plan.selected:
         state_run = latest_run(plan.unit.repository, plan.unit.workflow, title)
         if state_run is not None and run_active(state_run):

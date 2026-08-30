@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import json
 import pathlib
 import sys
 import unittest
@@ -21,6 +22,24 @@ SPEC.loader.exec_module(coordinator)
 
 
 class PreviewCoordinatorTest(unittest.TestCase):
+    @staticmethod
+    def binding_body(
+        unit: str, source_sha: str, dependencies: str = ""
+    ) -> str:
+        value = json.dumps(
+            {
+                "aggregate_sha": "f" * 40,
+                "aggregate_version": "release-v9.8.7-preview.20260831",
+                "dependencies": dependencies,
+                "source_ref": "main",
+                "source_sha": source_sha,
+                "unit": unit,
+            },
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+        return f"<!-- kuasar-preview-binding {value} -->"
+
     def test_branch_sha_resolves_only_heads_namespace(self) -> None:
         with mock.patch.object(
             coordinator,
@@ -237,6 +256,100 @@ components:
             "b" * 40,
         )
         self.assertIn("aggregate_sha=" + "b" * 40, values)
+
+    def test_release_run_title_pins_source_and_dependency_tuple(self) -> None:
+        accelerator = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["accelerator"],
+            "v1.0.0",
+            "main",
+            "a" * 40,
+            "v1.0.1-preview.20260831",
+            "v1.0.1-preview.20260831",
+            "publish",
+        )
+        connector = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["connector"],
+            "v1.0.0",
+            "main",
+            "b" * 40,
+            "v1.0.1-preview.20260831",
+            "v1.0.1-preview.20260831",
+            "publish",
+        )
+        sandboxer = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["sandboxer"],
+            "v2.0.0",
+            "main",
+            "c" * 40,
+            "v2.0.1-preview.20260831",
+            "v2.0.1-preview.20260831",
+            "publish",
+        )
+        title = coordinator.release_run_title(
+            sandboxer,
+            {
+                "accelerator": accelerator,
+                "connector": connector,
+                "sandboxer": sandboxer,
+            },
+        )
+        self.assertEqual(
+            title,
+            "Release v2.0.1-preview.20260831 @"
+            + "c" * 40
+            + " [accelerator=v1.0.1-preview.20260831,"
+            "connector=v1.0.1-preview.20260831]",
+        )
+
+    def test_preview_reuse_rejects_another_dependency_binding(self) -> None:
+        accelerator = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["accelerator"],
+            "v1.0.0",
+            "main",
+            "a" * 40,
+            "v1.0.1-preview.20260831",
+            "v1.0.1-preview.20260831",
+            "reuse",
+        )
+        connector = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["connector"],
+            "v1.0.0",
+            "main",
+            "b" * 40,
+            "v1.0.1-preview.20260831",
+            "v1.0.1-preview.20260831",
+            "reuse",
+        )
+        sandboxer = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["sandboxer"],
+            "v2.0.1-preview.20260831",
+            "main",
+            "c" * 40,
+            "v2.0.1-preview.20260831",
+            "v2.0.1-preview.20260831",
+            "reuse",
+        )
+        status = coordinator.ReleaseStatus(
+            {
+                "body": self.binding_body(
+                    "sandboxer",
+                    sandboxer.source_sha,
+                    "accelerator=v1.0.1-preview.20260831,connector=v1.0.0",
+                )
+            },
+            sandboxer.source_sha,
+            True,
+        )
+        with self.assertRaisesRegex(coordinator.Deferred, "dependency binding"):
+            coordinator.validate_preview_reuse(
+                sandboxer,
+                {
+                    "accelerator": accelerator,
+                    "connector": connector,
+                    "sandboxer": sandboxer,
+                },
+                status,
+            )
 
     def test_cleanup_does_not_start_a_fourth_attempt(self) -> None:
         unit = coordinator.UNIT_BY_NAME["connector"]
