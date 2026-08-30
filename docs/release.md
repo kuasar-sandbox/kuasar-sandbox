@@ -298,8 +298,9 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 - Preview Release 的构建绑定防止相同 Tag/源码在不同依赖闭包之间被错误复用;
 - scanner 使用独立 concurrency key;所有平台分支协调器与 GC 共用全局
   `preview-manifest-selection-and-gc` concurrency group。scanner 顺序等待每个分支,不同时
-  填入多个 pending slot。同一组件发布单元的 publish 与 delete 共用包含精确版本的
-  concurrency group,平台聚合 publish 与 delete 也按精确版本串行;不同版本不会互相替换。
+  填入多个 pending slot。会更新仓库 Latest 的 `main` Stable 发布共用 `stable-main` 发布
+  组;Preview 和维护分支 Stable 的发布按精确版本分组。删除使用独立的精确版本组,不会替换
+  pending publish;发布/删除工作流的不可覆盖校验与控制器 active-run 门禁负责冲突恢复。
 
 ## 11. See Also
 

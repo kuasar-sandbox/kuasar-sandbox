@@ -138,7 +138,7 @@ jobs:
     needs: [prepare, exact-asset-bms]
     runs-on: ubuntu-latest
     concurrency:
-      group: aggregate-publish-${{ github.repository }}-${{ needs.prepare.outputs.version }}
+      group: aggregate-publish-${{ github.repository }}-${{ (!contains(needs.prepare.outputs.version, '-preview.') && needs.prepare.outputs.source_ref == 'main') && 'stable-main' || needs.prepare.outputs.version }}
       cancel-in-progress: false
     permissions:
       actions: read
