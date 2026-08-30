@@ -19,12 +19,11 @@ on:
 
 permissions:
   actions: write
-  contents: write
+  contents: read
 
 concurrency:
   group: preview-manifest-selection-and-gc
   cancel-in-progress: false
-  queue: max
 
 jobs:
   collect:
@@ -33,8 +32,15 @@ jobs:
       - name: Check out canonical platform history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: main
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Require trusted GC controller
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = refs/heads/main ] \
+            || { echo "Preview GC must run from main" >&2; exit 1; }
 
       - name: Install pinned GitHub CLI
         run: bash release/install-gh-cli.sh
@@ -53,7 +59,6 @@ jobs:
       - name: Plan or converge Preview garbage collection
         env:
           GH_TOKEN: ${{ steps.gc-token.outputs.token }}
-          PLATFORM_TOKEN: ${{ github.token }}
           STABLE_VERSION: ${{ inputs.stable_version }}
           DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || inputs.dry_run }}
         run: python3 release/preview_gc.py | tee -a "$GITHUB_STEP_SUMMARY"

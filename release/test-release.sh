@@ -304,13 +304,30 @@ for workflow in daily-preview-branch.yml preview-gc.yml; do
   grep -Fq 'group: preview-manifest-selection-and-gc' \
     "$ROOT/.github/workflows/$workflow" \
     || release_fail "$workflow does not serialize manifest selection with GC"
-  grep -Fq 'queue: max' "$ROOT/.github/workflows/$workflow" \
-    || release_fail "$workflow does not preserve queued manifest operations"
 done
-grep -Fq 'queue: max' "$ROOT/.github/workflows/aggregate-release.yml" \
-  || release_fail "aggregate publisher does not preserve queued mutations"
-grep -Fq 'queue: max' "$ROOT/.github/workflows/delete-preview.yml" \
-  || release_fail "aggregate cleanup does not preserve queued mutations"
+if grep -R -Fq 'queue: max' "$ROOT/.github/workflows"; then
+  release_fail "release workflows use the unsupported concurrency queue key"
+fi
+grep -Fq 'matching_run()' "$ROOT/.github/workflows/daily-preview.yml" \
+  || release_fail "Daily scanner does not wait for exact branch runs"
+grep -Fq 'wait_for_gc()' "$ROOT/.github/workflows/daily-preview.yml" \
+  || release_fail "Daily scanner does not preserve a pending GC operation"
+grep -Fq 'group: aggregate-publish-${{ github.repository }}-${{ needs.prepare.outputs.version }}' \
+  "$ROOT/.github/workflows/aggregate-release.yml" \
+  || release_fail "aggregate publisher does not serialize the exact version"
+grep -Fq 'group: aggregate-publish-${{ github.repository }}-${{ inputs.version }}' \
+  "$ROOT/.github/workflows/delete-preview.yml" \
+  || release_fail "aggregate cleanup does not serialize the exact version"
+grep -Fq 'platform_source_sha: ${{ needs.prepare.outputs.source_sha }}' \
+  "$ROOT/.github/workflows/aggregate-release.yml" \
+  || release_fail "aggregate BMS does not receive the selected platform source"
+grep -Fq 'PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/src/platform' \
+  "$ROOT/.github/workflows/bms-e2e.yml" \
+  || release_fail "exact-asset BMS does not validate against selected platform source"
+grep -Fq 'ref: main' "$ROOT/.github/workflows/preview-gc.yml" \
+  || release_fail "Preview GC does not pin trusted main tooling"
+grep -Fq 'Preview GC must run from main' "$ROOT/.github/workflows/preview-gc.yml" \
+  || release_fail "Preview GC accepts a non-main workflow ref"
 grep -Fq 'validate-preview-line.sh" "$version" "$commit"' \
   "$ROOT/release/publish-release.sh" \
   || release_fail "aggregate publisher does not recheck Preview closure before undraft"

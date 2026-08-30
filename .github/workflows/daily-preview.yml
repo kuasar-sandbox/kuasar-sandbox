@@ -27,6 +27,7 @@ concurrency:
 jobs:
   scan:
     runs-on: ubuntu-latest
+    timeout-minutes: 360
     steps:
       - name: Check out trusted scanner
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,22 +65,91 @@ jobs:
             refs+=("${maintenance_refs[@]}")
           fi
 
+          runs_endpoint="repos/$GITHUB_REPOSITORY/actions/workflows/daily-preview-branch.yml/runs?event=workflow_dispatch&per_page=100"
+
+          matching_run() {
+            local title=$1 state=$2
+            gh api --paginate --slurp "$runs_endpoint" \
+              | jq -r --arg title "$title" --arg state "$state" '
+                  [.[] | .workflow_runs[]?
+                   | select(.display_title == $title)
+                   | select($state == "any"
+                            or ($state == "active" and .status != "completed")
+                            or .status == $state)]
+                  | max_by(.id) // empty | .id // empty
+                '
+          }
+
+          wait_for_gc() {
+            local run_id status
+            while true; do
+              run_id=$(gh api --paginate --slurp \
+                "repos/$GITHUB_REPOSITORY/actions/workflows/preview-gc.yml/runs?per_page=100" \
+                | jq -r '[.[] | .workflow_runs[]? | select(.status != "completed")]
+                         | max_by(.id) // empty | .id // empty')
+              [ -n "$run_id" ] || return 0
+              status=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
+                --jq .status)
+              [ "$status" != completed ] || continue
+              echo "==> wait for Preview GC run $run_id"
+              sleep 30
+            done
+          }
+
           for ref in "${refs[@]}"; do
             sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$ref" \
               --jq 'select(.object.type == "commit") | .object.sha')
             [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
             title="Daily preview $ref@$sha"
-            active=$(gh api --paginate \
-              "repos/$GITHUB_REPOSITORY/actions/workflows/daily-preview-branch.yml/runs?event=workflow_dispatch&per_page=100" \
-              --jq ".workflow_runs[] | select(.display_title == \"$title\") | select(.status != \"completed\") | .id" \
-              | wc -l)
-            if [ "$active" -ne 0 ]; then
-              echo "==> reuse active $title"
-              continue
+            converged=false
+            for attempt in 1 2 3; do
+              wait_for_gc
+              run_id=$(matching_run "$title" active)
+              if [ -n "$run_id" ]; then
+                echo "==> reuse active $title ($run_id)"
+              else
+                previous_id=$(matching_run "$title" any)
+                gh workflow run daily-preview-branch.yml --ref main \
+                  -f "platform_ref=$ref" \
+                  -f "platform_sha=$sha" \
+                  -f "date=$date"
+                run_id=""
+                for _ in {1..30}; do
+                  candidate_id=$(matching_run "$title" any)
+                  if [ -n "$candidate_id" ] && [ "$candidate_id" != "$previous_id" ]; then
+                    run_id=$candidate_id
+                    break
+                  fi
+                  sleep 2
+                done
+                [ -n "$run_id" ] \
+                  || { echo "cannot locate dispatched $title" >&2; exit 1; }
+                echo "==> dispatched $title ($run_id)"
+              fi
+
+              while true; do
+                state=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id")
+                status=$(jq -r .status <<< "$state")
+                [ "$status" = completed ] || { sleep 30; continue; }
+                conclusion=$(jq -r .conclusion <<< "$state")
+                case "$conclusion" in
+                  success)
+                    converged=true
+                    break
+                    ;;
+                  cancelled|timed_out|stale)
+                    echo "==> $title was $conclusion; retry $attempt/3"
+                    break
+                    ;;
+                  *)
+                    echo "$title failed: $conclusion" >&2
+                    exit 1
+                    ;;
+                esac
+              done
+              [ "$converged" = false ] || break
+            done
+            if [ "$converged" = false ]; then
+              echo "==> defer $title after three interrupted attempts; next scan resumes"
             fi
-            gh workflow run daily-preview-branch.yml --ref main \
-              -f "platform_ref=$ref" \
-              -f "platform_sha=$sha" \
-              -f "date=$date"
-            echo "==> dispatched $title"
           done

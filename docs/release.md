@@ -103,9 +103,10 @@ vmlinux 固定版本。
 - 所有符合 `release/vMAJOR.MINOR.x` 的平台分支。
 
 scanner 固定每个分支的 HEAD SHA,再从平台 `main` 加载受信任的控制器处理该 SHA。
-所有分支协调器与 Preview GC 共用一个保留排队任务的 concurrency key,因此清单选择和
-GC 计划/派发不会重叠。分支在选择或提交清单期间移动时,本次不覆盖远端状态,下一次从新
-HEAD 重扫。
+所有分支协调器与 Preview GC 共用一个 GitHub Actions concurrency key,因此清单选择和
+GC 计划/派发不会重叠。scanner 按分支顺序派发并等待;被取消或超时的分支任务在本轮最多
+重试三次,仍未完成则由下一次扫描恢复。分支在选择或提交清单期间移动时,本次不覆盖远端
+状态,下一次从新 HEAD 重扫。
 
 ### 4.1 源分支映射
 
@@ -255,10 +256,9 @@ Release ID、可恢复源码 SHA 和 active run,并输出稳定排序计划及 S
 绕过窗口。
 
 Apply 在派发任何组件删除前重新读取所有平台分支的当前 Daily 清单;计划后新增的引用会使
-本轮零删除停止。所有平台分支协调器和 GC 还由同一个 `queue: max` concurrency key 串行
-执行。GC 派发删除后,Daily 控制器在提交新清单前检查所有匹配的组件/聚合发布 run 和删除
-run,任意一个仍活跃都保持清单不变。全局串行点和两侧门禁共同避免清单选择与异步删除交叉
-执行。
+本轮零删除停止。所有平台分支协调器和 GC 还由同一个受支持的 concurrency key 串行执行。
+GC 派发删除后,Daily 控制器在提交新清单前检查所有匹配的组件/聚合发布 run 和删除 run,
+任意一个仍活跃都保持清单不变。全局串行点和两侧门禁共同避免清单选择与异步删除交叉执行。
 
 历史聚合 Preview 在“Tag 直接指向清单提交”契约建立和完全执行前发布。GC 只对这些历史
 对象使用 Stable Tag 可达的 first-parent 清单历史证明归属和精确组件选择:Release
@@ -297,10 +297,9 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 - 分支 HEAD、Tag commit、清单 blob SHA 和 exact-asset BMS 共同固定一次发布;
 - Preview Release 的构建绑定防止相同 Tag/源码在不同依赖闭包之间被错误复用;
 - scanner 使用独立 concurrency key;所有平台分支协调器与 GC 共用全局
-  `preview-manifest-selection-and-gc` 队列。同一组件发布单元的 publish 与 delete 共用
-  `queue: max` 变更队列,平台聚合 publish 与 delete 也共用对应队列。各队列保留最多
-  100 个 pending 任务且不取消运行中任务,避免 GC、恢复或分支扫描请求替换其他待处理
-  版本。
+  `preview-manifest-selection-and-gc` concurrency group。scanner 顺序等待每个分支,不同时
+  填入多个 pending slot。同一组件发布单元的 publish 与 delete 共用包含精确版本的
+  concurrency group,平台聚合 publish 与 delete 也按精确版本串行;不同版本不会互相替换。
 
 ## 11. See Also
 

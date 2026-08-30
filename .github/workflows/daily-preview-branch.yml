@@ -24,7 +24,6 @@ permissions:
 concurrency:
   group: preview-manifest-selection-and-gc
   cancel-in-progress: false
-  queue: max
 
 jobs:
   converge:

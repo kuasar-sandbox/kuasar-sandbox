@@ -130,6 +130,7 @@ jobs:
       mode: exact-assets
       release_version: ${{ needs.prepare.outputs.version }}
       release_bundle_artifact: ${{ needs.prepare.outputs.artifact }}
+      platform_source_sha: ${{ needs.prepare.outputs.source_sha }}
     secrets:
       KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
 
@@ -137,9 +138,8 @@ jobs:
     needs: [prepare, exact-asset-bms]
     runs-on: ubuntu-latest
     concurrency:
-      group: aggregate-publish-${{ github.repository }}
+      group: aggregate-publish-${{ github.repository }}-${{ needs.prepare.outputs.version }}
       cancel-in-progress: false
-      queue: max
     permissions:
       actions: read
       contents: write
