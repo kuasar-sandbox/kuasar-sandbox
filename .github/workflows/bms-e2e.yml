@@ -47,6 +47,11 @@ on:
         required: false
         default: ""
         type: string
+      platform_source_sha:
+        description: Exact platform selection source for exact-assets mode
+        required: false
+        default: ""
+        type: string
     secrets:
       KUASAR_CI_APP_PRIVATE_KEY:
         required: false
@@ -93,6 +98,7 @@ jobs:
       COMPANION_CANDIDATES: ${{ inputs.companion_candidates }}
       RELEASE_VERSION: ${{ inputs.release_version }}
       RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
+      PLATFORM_SOURCE_SHA: ${{ inputs.platform_source_sha }}
 
     steps:
       - name: Validate reusable workflow request
@@ -151,6 +157,7 @@ jobs:
                 || { echo "exact-assets BMS requires workflow_dispatch" >&2; exit 1; }
               [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]]
               [[ "$RELEASE_BUNDLE_ARTIFACT" =~ ^aggregate-stage-release-v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8})?-[0-9]+$ ]]
+              [[ "$PLATFORM_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
               ;;
             *) echo "mode must be source or exact-assets" >&2; exit 1 ;;
           esac
@@ -326,6 +333,13 @@ jobs:
             else
               materialize kuasar-sandbox/kuasar-sandbox "$platform_source_sha" src/platform
             fi
+          elif [ "$PLATFORM_SOURCE_SHA" = "$TRUSTED_SHA" ]; then
+            rm -rf src/platform
+            install -d -m 0755 src/platform
+            cp -a trusted/platform/. src/platform/
+          else
+            materialize kuasar-sandbox/kuasar-sandbox \
+              "$PLATFORM_SOURCE_SHA" src/platform
           fi
 
       - name: Reset exact aggregate workspace
@@ -341,6 +355,8 @@ jobs:
 
       - name: Validate and extract exact aggregate bundle
         if: inputs.mode == 'exact-assets'
+        env:
+          PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/src/platform
         run: |
           set -euo pipefail
           trusted/platform/release/aggregate-release.sh validate "$RELEASE_VERSION" release-bundle

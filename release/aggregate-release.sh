@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLATFORM_SOURCE_ROOT="$(cd "${PLATFORM_SOURCE_ROOT:-$ROOT}" && pwd)"
 # shellcheck source=release/lib.sh
 source "$ROOT/release/lib.sh"
 
@@ -11,12 +12,12 @@ fetch_components() {
   local version="$1" output="$2"
   assert_safe_output "$output"
   mkdir -p "$output/components" "$output/sources" "$output/updates"
-  resolve_selection "$ROOT" "$version" "$output/selection.tsv"
+  resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$output/selection.tsv"
   local previous
-  previous="$(previous_release "$ROOT" "$version")"
+  previous="$(previous_release "$PLATFORM_SOURCE_ROOT" "$version")"
   : > "$output/previous-selection.tsv"
   if [ -n "$previous" ]; then
-    resolve_selection "$ROOT" "$previous" "$output/previous-selection.tsv"
+    resolve_selection "$PLATFORM_SOURCE_ROOT" "$previous" "$output/previous-selection.tsv"
   fi
 
   local unit tag previous_tag repository archive release_state expected_prerelease unit_dir
@@ -180,16 +181,16 @@ assemble_release() {
   work="$(mktemp -d)"
   expected_selection="$work/selection.tsv"
   expected_previous_selection="$work/previous-selection.tsv"
-  resolve_selection "$ROOT" "$version" "$expected_selection"
-  previous="$(previous_release "$ROOT" "$version")"
+  resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$expected_selection"
+  previous="$(previous_release "$PLATFORM_SOURCE_ROOT" "$version")"
   : > "$expected_previous_selection"
   if [ -n "$previous" ]; then
-    resolve_selection "$ROOT" "$previous" "$expected_previous_selection"
+    resolve_selection "$PLATFORM_SOURCE_ROOT" "$previous" "$expected_previous_selection"
   fi
   cmp -s "$expected_selection" "$fetched/selection.tsv" \
-    || release_fail "fetched component selection does not match project repository main"
+    || release_fail "fetched component selection does not match the selected platform source"
   cmp -s "$expected_previous_selection" "$fetched/previous-selection.tsv" \
-    || release_fail "fetched previous selection does not match project repository main"
+    || release_fail "fetched previous selection does not match the selected platform source"
 
   platform_bundle="$work/platform-bundle"
   "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$platform_bundle"
@@ -288,7 +289,7 @@ validate_bundle() {
   expected_selection="$(mktemp)"
   expected_names="$(mktemp)"
   actual_names="$(mktemp)"
-  resolve_selection "$ROOT" "$version" "$expected_selection"
+  resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$expected_selection"
   cmp -s "$expected_selection" "$bundle/selection.tsv" \
     || release_fail "aggregate selection does not match project repository main"
   local heading

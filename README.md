@@ -163,13 +163,20 @@ make -C kuasar-sandbox test-perf-tools
 - Guest runtime: `runtime-vX.Y.Z`;
 - Guest kernel: `vmlinux-vX.Y.Z`.
 
-主仓只发布聚合版本 `release-vX.Y.Z`.聚合版本可以选择不同的组件版本,正式版本选择
-写入 `releases/release.yaml`;每日协调器根据组件仓是否存在新提交更新
-`releases/daily-preview.yaml`,再按冻结后的选择收敛组件与聚合发布.代码库只维护这两个
-当前清单;历史选择由同一文件的 Git 提交历史保存,不建立第二套 history 目录或版本文件.
+主仓只发布聚合版本 `release-vX.Y.Z`.聚合版本可以选择不同的组件版本.每个受维护平台
+分支以 `releases/release.yaml` 描述下一 Stable,以 `releases/daily-preview.yaml` 描述
+当前 Daily Preview,并强制 `daily version >= release version`.代码库只维护这两个当前
+清单;历史选择由同一文件的 first-parent Git 提交历史保存,不建立第二套 history 目录或
+版本文件.
 正式版只引用上一正式版;Preview 优先引用同一正式版本线的上一 Preview,该版本线的
 首个 Preview 则引用上一正式版.第一个正式版本不设置基线,也不把 Preview 或全部提交
 历史作为发布说明 diff.
+
+Daily scanner 自动处理平台 `main` 和全部 `release/vMAJOR.MINOR.x`.主线只扫描各组件
+`main`;平台维护分支按每个 unit 在 Daily 清单中的独立版本映射组件
+`release/vMAJOR.MINOR.x`,分支不存在时固定复用该 unit 的完整 Release.Tag 选择按
+first-parent 上最近的带 Tag 提交,仅同一提交上的多个 Tag 比较 SemVer.残缺 Daily-owned
+Preview 会连同资产和 Tag 一起清理后重扫;外来残缺版本只忽略.
 
 组件 Release 的显式资产只有目标 archive 与 `SHA256SUMS`.当前 x86_64 聚合 Release
 精确包含 platform 包,六个发布单元 archive 和统一 `SHA256SUMS`,不发布项目生成的
@@ -181,7 +188,12 @@ platform 包.
 人工收敛一个已经配置的聚合版本:
 
 ```bash
-make -C kuasar-sandbox release RELEASE_VERSION=release-v0.1.1
+RELEASE_VERSION=$(awk '$1 == "version:" {print $2}' \
+  kuasar-sandbox/releases/release.yaml)
+PLATFORM_REF=$(git -C kuasar-sandbox branch --show-current)
+PLATFORM_SHA=$(git -C kuasar-sandbox rev-parse HEAD)
+make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
+  PLATFORM_REF="$PLATFORM_REF" PLATFORM_SHA="$PLATFORM_SHA"
 ```
 
 也可以在组件版本已发布后只触发聚合验证与发布:
@@ -189,7 +201,8 @@ make -C kuasar-sandbox release RELEASE_VERSION=release-v0.1.1
 ```bash
 gh workflow run aggregate-release.yml \
   --repo kuasar-sandbox/kuasar-sandbox --ref main \
-  -f version=release-v0.1.1
+  -f version="$RELEASE_VERSION" \
+  -f source_ref="$PLATFORM_REF" -f source_sha="$PLATFORM_SHA"
 ```
 
 详细资产契约,权限边界,失败恢复和每日 Preview 状态机见

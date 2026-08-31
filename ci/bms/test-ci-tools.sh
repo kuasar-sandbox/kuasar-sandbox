@@ -18,7 +18,7 @@ fail() {
 
 workflow="$SCRIPT_DIR/../../.github/workflows/bms-e2e.yml"
 entry_workflow="$SCRIPT_DIR/../../.github/workflows/bms-entry.yml"
-daily_workflow="$SCRIPT_DIR/../../.github/workflows/daily-preview.yml"
+daily_workflow="$SCRIPT_DIR/../../.github/workflows/daily-preview-branch.yml"
 legacy_repository="kuasar-sandbox/platform"
 candidate_pattern='^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$'
 working_set_perf="$SCRIPT_DIR/../../test/perf/sandbox-perf-working-set.sh"

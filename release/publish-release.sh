@@ -75,11 +75,13 @@ verify_uploaded_assets() {
 }
 
 publish_bundle() {
-  [ "$#" -eq 3 ] \
-    || release_fail "usage: publish-release.sh publish <release-version> <commit> <bundle-dir>"
-  local version="$1" commit="$2" bundle="$3"
+  [ "$#" -eq 4 ] \
+    || release_fail "usage: publish-release.sh publish <release-version> <commit> <bundle-dir> <source-ref>"
+  local version="$1" commit="$2" bundle="$3" source_ref="$4"
   validate_aggregate_version "$version"
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || release_fail "commit must be a full lowercase SHA"
+  [[ "$source_ref" = main || "$source_ref" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]] \
+    || release_fail "source-ref must be main or release/vMAJOR.MINOR.x"
   "$ROOT/release/aggregate-release.sh" validate "$version" "$bundle"
 
   local tag_state="$TMP/tag"
@@ -117,11 +119,15 @@ publish_bundle() {
   wait_for_draft_release "$version" "$drafts"
   jq '.[0]' "$drafts" > "$release_state"
   verify_uploaded_assets "$release_state" "$bundle"
-  local prerelease=false
+  local prerelease=false make_latest=false
   is_preview "$version" && prerelease=true
-  jq -n --argjson prerelease "$prerelease" '
+  [ "$prerelease" = true ] || [ "$source_ref" != main ] || make_latest=true
+  if [ "$prerelease" = true ]; then
+    "$ROOT/release/validate-preview-line.sh" "$version" "$commit"
+  fi
+  jq -n --argjson prerelease "$prerelease" --argjson make_latest "$make_latest" '
       {draft: false, prerelease: $prerelease,
-       make_latest: (if $prerelease then "false" else "true" end)}
+       make_latest: ($make_latest | tostring)}
     ' \
     | gh api --method PATCH \
       "repos/$REPOSITORY/releases/$(jq -er '.id' "$release_state")" --input - >/dev/null

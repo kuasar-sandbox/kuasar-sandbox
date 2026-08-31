@@ -2,310 +2,334 @@
 
 ## 1. 概述
 
-Kuasar Sandbox 把组件发布与平台聚合发布分开。组件版本回答某个组件仓交付了什么,
-聚合版本回答哪些已发布组件作为一个平台组合完成了精确制品验证。项目主仓不建立独立
-`vX.Y.Z` 版本线,platform 文档与测试包只作为 `release-vX.Y.Z` 的一个资产。
+Kuasar Sandbox 将组件发布与平台聚合发布分开。组件版本描述一个组件仓的独立交付,
+聚合版本描述一组已经发布并共同通过精确资产验证的组件。平台聚合版本与组件版本互不
+推导,也不要求同名。
 
-版本线为:
+发布单元为:
 
 - `accelerator`、`connector`、`sandboxer`、`orchestrator`: `vX.Y.Z`;
 - `guest-runtime` runtime: `runtime-vX.Y.Z`;
 - `guest-runtime` kernel: `vmlinux-vX.Y.Z`;
-- project repository: `release-vX.Y.Z`。
+- 平台聚合: `release-vX.Y.Z`。
 
-所有版本线都接受 `-preview.YYYYMMDD` 后缀。preview 是 GitHub prerelease,不更新
-Latest;正式版本使用新的 tag 和 workflow run,不重命名或覆盖 preview。
+`guest-runtime` 有 runtime 和 vmlinux 两个发布单元,但仍然是一个组件仓。所有版本线都
+接受 `-preview.YYYYMMDD` 后缀。Preview 是 GitHub prerelease,Stable 是非 prerelease;
+任何已发布版本都不覆盖、不改名、不重建。
 
-## 2. CLI
+## 2. 配置规约
 
-### 2.1 发布组件
+每个受维护的平台分支恰好使用两个清单:
 
-组件 workflow 只接受显式 `workflow_dispatch`,没有独立 schedule。含跨仓构建依赖的组件还
-必须传入清单选定的依赖版本:
+- `releases/release.yaml`:该分支计划发布的下一个 Stable 聚合版本;
+- `releases/daily-preview.yaml`:该分支当前维护的 Daily Preview 版本。
+
+这是正式发布状态规约,不增加第二套版本元数据或历史目录。旧选择由清单的 first-parent
+Git 历史保存。解析器始终要求:
+
+```text
+daily-preview.yaml/version >= release.yaml/version
+```
+
+比较对象是数值化的聚合 `MAJOR.MINOR.PATCH`,不是字符串。Stable 清单只能选择 Stable
+组件;Preview 清单可以混合选择 Stable 和 Preview 组件。两个清单都必须精确列出六个发布
+单元,并使用各自正确的 Tag 前缀。
+
+### 2.1 Stable 清单
+
+```yaml
+version: release-v0.5.7
+previous_version: release-v0.5.6
+components:
+  accelerator: v0.2.1
+  connector: v0.1.9
+  sandboxer: v0.3.5
+  orchestrator: v0.4.3
+  runtime: runtime-v0.1.2
+  vmlinux: vmlinux-v0.1.0
+```
+
+`previous_version` 必须严格早于 `version`。正式聚合可以选择彼此不同、也与聚合版本不同
+的组件版本。
+
+### 2.2 Daily Preview 清单
+
+```yaml
+version: release-v0.5.7
+previous_version: release-v0.5.6
+preview_version: preview.20260831
+previous_preview_version: preview.20260830
+components:
+  accelerator: v0.2.2-preview.20260831
+  connector: v0.1.9
+  sandboxer: v0.3.6-preview.20260831
+  orchestrator: v0.4.3
+  runtime: runtime-v0.1.2
+  vmlinux: vmlinux-v0.1.0
+```
+
+完整聚合 Tag 是 `version + "-" + preview_version`。同一聚合版本线的后续 Preview 以
+`previous_preview_version` 为更新基线;该版本线的首个 Preview 以 `previous_version`
+为基线。
+
+Stable `V1` 发布后,如果继续在同一分支开发,必须先将 Daily 清单推进为 `V2`,并设置
+`previous_version: V1`。准备 `V2` 时再推进 Stable 清单。`V2` 发布后两个清单继续推进
+到 `V3`,以此类推。Daily 与 Stable 清单版本相等且该 Stable 聚合已经发布时,该版本线
+关闭:禁止新建 Preview,也禁止重复发布 Stable。若同版本 Stable Release 已出现但资产或
+Tag 尚不完整,Daily 同样在任何清单或组件变更前延后,不在残缺 Stable 旁继续发布 Preview。
+
+## 3. 分支与版本线
+
+平台 `main` 发布最新主线版本。维护补丁使用平台 `release/vMAJOR.MINOR.x`。例如主线发布
+`release-v0.1.0` 后,可以从该 Tag 建立 `release/v0.1.x`;维护分支发布
+`release-v0.1.1`、`release-v0.1.2`,主线随后可以发布 `release-v0.2.0`。
+
+若 `v0.2.0` 尚未规划而 `v0.1.0` 立即需要补丁,允许先在 `main` 发布 `v0.1.1`、
+`v0.1.2`,再从较晚的补丁点建立 `release/v0.1.x`。建立维护分支之后,主线与维护线各自
+维护自己的两个清单。
+
+平台仓的 GitHub Latest 只由平台 `main` 的 Stable 聚合发布更新。每个组件仓仍独立维护
+自己的 Latest:组件 `main` 的 Stable 发布记录源码分支和精确提交;独立的幂等协调工作流
+在该仓所有已发布的主线 Stable 中按源码提交先后重新选择 Latest,同一提交存在多个 Tag
+时才比较 SemVer。协调工作流由任一组件发布完成触发,跨版本串行,失败可独立重跑,并有
+定时自愈。组件维护分支 Stable 和任何 Preview 不更新 Latest。平台聚合始终通过清单中的
+精确 Tag 选择组件,不依赖组件仓的 Latest。
+
+平台维护分支与组件维护分支不存在同名约束。平台 `release/v0.5.x` 可以聚合
+`sandboxer release/v0.3.x`、`orchestrator release/v0.4.x` 和只在 `main` 发布的
+vmlinux 固定版本。
+
+## 4. Daily 分支扫描与组件选择
+
+`Daily Preview Scanner` 每天按 Asia/Shanghai 时区定时扫描:
+
+- 平台 `main`;
+- 所有符合 `release/vMAJOR.MINOR.x` 的平台分支。
+
+scanner 固定每个分支的 HEAD SHA,再从平台 `main` 加载受信任的控制器处理该 SHA。
+所有分支协调器与 Preview GC 共用一个 GitHub Actions concurrency key,因此清单选择和
+GC 计划/派发不会重叠。scanner 按分支顺序派发并等待;被取消或超时的分支任务在本轮最多
+重试三次,仍未完成则由下一次扫描恢复。分支在选择或提交清单期间移动时,本次不覆盖远端
+状态,下一次从新 HEAD 重扫。某个分支确定性失败时,scanner 记录失败但继续处理其余分支,
+最后统一返回失败,避免一条损坏的维护线长期阻塞其他分支。
+
+### 4.1 源分支映射
+
+- 平台 `main` 总是选择每个组件仓的 `main`;
+- 平台维护分支从 Daily 清单中该 unit 的版本派生组件分支。`v0.3.5`、
+  `v0.3.6-preview.*` 都映射到组件 `release/v0.3.x`;
+- runtime 与 vmlinux 分别从 `runtime-vX.Y.Z`、`vmlinux-vX.Y.Z` 派生
+  `release/vX.Y.x`;
+- 派生分支不存在时,该 unit 固定复用清单指定的完整 Release,不自动修改版本。
+  如果上游依赖在本轮改变而该 unit 必须重建,则整次选择 deferred,不会把旧下游二进制与
+  新依赖版本写进同一个聚合清单。
+
+因此同一个平台维护分支中的六个 unit 可以来自六条彼此不同的组件版本线。
+
+### 4.2 Tag 选择
+
+Tag 选择不在整个分支历史上比较最大 SemVer。算法从所选分支 HEAD 沿 first-parent 向后
+扫描,第一个带有完整可用 Release Tag 的提交获胜。仅当同一个提交存在多个合法 Tag 时,
+才以 SemVer 选择最大者。维护分支还会忽略不属于其 `MAJOR.MINOR` 的 Tag。
+
+Daily 清单中指定的 Tag 也参加提交位置比较:
+
+- 位于更近 HEAD 的提交者获胜;
+- 位于同一提交时取最大 SemVer;
+- 不在所选分支 first-parent 上时停止,不把旁支或历史大版本误选进来。
+
+获胜 Tag 已在 HEAD 时直接复用。获胜 Stable Tag 落后于 HEAD 时,Patch 只自增一次并产生
+`vX.Y.(Z+1)-preview.YYYYMMDD`;获胜 Preview 落后于 HEAD 时保持其 core 版本,只换成
+本次日期。下一次扫描会看到这个 Preview,不会反复增加 Patch。
+
+依赖改变也需要重建实际链接依赖的 unit:accelerator 或 connector 改变会重建
+sandboxer、orchestrator 和 runtime;sandboxer 改变会重建 orchestrator 和 runtime。
+vmlinux 不因这些依赖变化而重建。若同一 unit 在同一天已经发布 Preview 后依赖再次改变,
+流程延后到下一个 Preview 日期,不复用带有旧依赖的资产,也不发明同日序号格式。
+
+平台自身在所选分支上的代码变化同样会产生新的聚合 Preview,即使六个组件都复用。
+同一聚合版本的 workflow run 名同时绑定平台源码 SHA。只要任意匹配 run 仍在运行,即使
+更新的 run 已取消或结束,控制器也保持当前 Daily 清单不变;分支产生新 HEAD 后使用新的
+run 身份,不会用旧输入重跑或改写运行中清单。
+分支协调任务的身份还包含请求日期,因此相同平台 SHA 的不同日期扫描不会错误复用彼此的
+结果。
+
+## 5. 残缺发布恢复
+
+完整组件 Release 必须是非 draft、prerelease 状态与 Tag 一致,只包含约定 archive 和
+`SHA256SUMS`,且两个资产都处于 uploaded 状态。完整聚合 Release 必须满足八资产契约。
+
+选择器仅把完整 Release 的 Tag 当作候选。残缺状态不让整条 Daily schedule 失败:
+
+- 匹配的发布 run 仍在 queued/in progress:延后并在后续扫描恢复;
+- 当前 Daily 清单拥有的残缺 Preview:先调用组件本仓的删除工作流,核对精确源码 SHA 后
+  删除 Release、资产和 Tag,再重扫并重新走正常 Daily 发布;
+- 外来残缺 Preview 或残缺 Stable:忽略,不作为候选,也不自动删除;
+- 无组件维护分支的固定版本不完整:延后,不派生替代版本;
+- 确定性失败最多重跑三次,超过后保持 deferred,不会靠覆盖 Tag 或手工拼资产恢复。普通
+  failure 只重跑失败 job;cancelled、timed out 等没有失败 job 的状态重跑完整 workflow。
+
+若未完成的聚合选择跨过了新的上海日期,控制器不再用旧日期 Tag 绑定新的组件 HEAD。
+残缺聚合对象先通过受保护入口删除;随后清单滚到新日期并重新选择。旧选择中已经完整发布
+但未被任何保留聚合引用的组件 Preview 交给 GC 按回退窗口统一删除。若仍在同一天,控制器
+保持 deferred,避免覆盖已经公开的完整 Preview Tag。
+
+恢复的目标是恢复 Daily 流程,不是修补或重建残缺 Release 的资产。同名完整 Release 永远
+不会被 `incomplete` 模式删除。若 Tag 已经缺失但 draft 或 prerelease 仍在,只有
+Release 的 `target_commitish` 是完整且匹配的源码 SHA 时才允许恢复删除。若同名残缺对象
+在一次成功清理后再次出现,控制器创建新的清理 run,不把历史成功结果当作当前对象已收敛。
+
+## 6. 组件发布 CLI
+
+组件 workflow 始终从仓库 `main` 加载受信任工具,但必须显式传入实际源码分支和精确
+分支 HEAD SHA。下面只展示参数形态;自动 Daily 由控制器填写这些值:
 
 ```bash
 gh workflow run release.yml \
-  --repo kuasar-sandbox/accelerator --ref main -f version=v0.2.0
+  --repo kuasar-sandbox/accelerator --ref main \
+  -f version=v0.2.2-preview.20260831 \
+  -f source_ref=release/v0.2.x -f source_sha=<full-sha> \
+  -f aggregate_version=release-v0.5.7-preview.20260831 \
+  -f aggregate_sha=<platform-manifest-commit>
 
 gh workflow run release.yml \
-  --repo kuasar-sandbox/sandboxer --ref main -f version=v0.2.0 \
-  -f accelerator_version=v0.2.0 -f connector_version=v0.1.3
-
-gh workflow run component-release.yml \
-  --repo kuasar-sandbox/orchestrator --ref main -f version=v0.1.5 \
-  -f accelerator_version=v0.2.0 -f connector_version=v0.1.3 \
-  -f sandboxer_version=v0.2.0
-
-gh workflow run release-runtime.yml \
-  --repo kuasar-sandbox/guest-runtime --ref main \
-  -f version=runtime-v0.2.1 -f accelerator_version=v0.2.0 \
-  -f connector_version=v0.1.3 -f sandboxer_version=v0.2.0
-
-gh workflow run release-vmlinux.yml \
-  --repo kuasar-sandbox/guest-runtime --ref main -f version=vmlinux-v0.1.4
+  --repo kuasar-sandbox/sandboxer --ref main \
+  -f version=v0.3.6-preview.20260831 \
+  -f source_ref=release/v0.3.x -f source_sha=<full-sha> \
+  -f aggregate_version=release-v0.5.7-preview.20260831 \
+  -f aggregate_sha=<platform-manifest-commit> \
+  -f accelerator_version=v0.2.2-preview.20260831 \
+  -f connector_version=v0.1.9
 ```
 
-`connector`、`sandboxer` 与 `accelerator` 均使用 `release.yml`。每个 run 固定 dispatch
-时的组件 `main` commit;依赖参数必须是已发布的正式或 preview tag,构建 checkout 这些
-精确 tag,而不读取依赖仓当时的 `main`。已发布的同名 Release 或指向其他 commit 的同名
-tag 都会失败,不会覆盖。
+orchestrator 和 runtime 还接收 `sandboxer_version`;runtime 与 vmlinux 使用各自工作流。
+预检要求 `source_sha` 仍是 `source_ref` 的 HEAD,构建 checkout 该 SHA,最终 Tag 也指向该
+SHA。依赖参数必须对应已经完整发布的精确 Release。
+Preview 还要求 `aggregate_sha` 所指平台提交中的
+`daily-preview.yaml/version + preview_version` 精确等于聚合版本,且
+`components.<unit>` 精确等于待发布 Tag。该绑定和 Stable 封线检查在构建前及取得
+publish concurrency lock 后各执行一次。所有组件 Release notes 都记录源码分支、源码
+SHA 和发布单元。Preview 还记录原始聚合清单 SHA 和实际依赖版本绑定;已有 Preview 只有
+在源码与依赖绑定都一致时才可复用。
 
-### 2.2 发布聚合版本
+workflow run name 包含源码 SHA 和依赖版本元组。控制器只重跑相同输入元组的失败 run;
+分支 HEAD 或依赖选择已经改变时创建新的 dispatch,不会用旧输入消耗三次恢复机会。
 
-正式版本先在项目主仓 `main` 更新 `releases/release.yaml`,然后运行:
+## 7. 聚合发布 CLI
 
-```bash
-make -C kuasar-sandbox release RELEASE_VERSION=release-v0.2.1
-```
-
-该入口复用已发布组件,触发缺失的组件 workflow,等待 runtime 的 sandboxer 前置版本,
-最后触发项目主仓 `Aggregate Release`。若六个组件已经发布,可以直接运行:
+聚合工作流同样从平台 `main` 加载受信任工具,但版本选择、系统文档、平台用例和打包
+内容来自所选平台分支的精确 HEAD。目标分支中的旧发布脚本不会作为控制器执行:
 
 ```bash
 gh workflow run aggregate-release.yml \
   --repo kuasar-sandbox/kuasar-sandbox --ref main \
-  -f version=release-v0.2.1
+  -f version=release-v0.5.7 \
+  -f source_ref=release/v0.5.x \
+  -f source_sha=<full-sha>
 ```
 
-### 2.3 本地验证发布工具
+正式发布前先在目标分支提交 `release.yaml`,发布所缺的 Stable 组件单元,再从目标分支最新
+HEAD 触发聚合。主线 Stable 成功后成为 Latest;维护分支 Stable 保留为可发现的正式版本,
+但不抢占主线 Latest。Stable 与 Preview 都必须由该 HEAD 当前清单直接选择;历史清单只
+用于解析已存在 Release 和 GC,不能通过手工 dispatch 回填成新的聚合发布。
+
+本地发布工具验证入口为:
 
 ```bash
-make -C kuasar-sandbox test-release-tools
+make test-release-tools
+make test-ci-tools
 ```
 
-该测试建立六个本地组件 fixture,验证版本选择、固定资产名、platform 包、组件原包复制、
-统一 `SHA256SUMS`、安全解压、篡改拒绝、draft 重试和 prerelease 状态,不访问远程仓库。
+## 8. 资产与 BMS
 
-## 3. 配置
+每个普通组件 Release 精确包含组件 archive 和 `SHA256SUMS`。runtime、vmlinux 使用各自
+独立 archive 名。聚合 Release 精确包含 platform archive、六个原样复制的组件 archive
+和统一 `SHA256SUMS`,共八项显式资产。
 
-### 3.1 聚合版本选择
+组件工作流在选定源码 SHA 上运行组件构建和测试。聚合 prepare 下载清单指定的六个完整
+Release,校验 GitHub size/digest、组件 SHA-256、包内路径与跨包覆盖,生成确定性 platform
+包。随后 exact-asset BMS 在真实 KVM runner 解压同一个短期 artifact,执行六个 owner
+套件及平台组合套件。只有该 BMS 成功,聚合 publish job 才能创建 Tag 和 Release。
 
-正式和 preview 聚合版本选择都是项目主仓 `main` 中的普通源码配置。代码库只维护当前
-正式选择与当前 preview 选择两个文件。
+Preview、维护分支 Stable 和主线 Stable 使用相同资产与 BMS 门禁;差别只在发行状态与
+Latest 策略。
 
-`releases/release.yaml` 维护当前正式版本:
+## 9. Preview GC
 
-```yaml
-version: release-v0.2.1
-previous_version: release-v0.2.0
-components:
-  accelerator: v0.2.0
-  connector: v0.1.3
-  sandboxer: v0.2.0
-  orchestrator: v0.1.5
-  runtime: runtime-v0.2.1
-  vmlinux: vmlinux-v0.1.4
+Stable 聚合发布后,该版本线进入 7 天回退窗口。`Preview GC` 从 Stable Tag 可达的
+`daily-preview.yaml` first-parent 历史生成精确 allowlist,不使用宽泛版本 glob。它还会
+保护:
+
+- 任何其他仍保留的聚合 Preview 所引用的组件 Preview;
+- `main` 和所有平台维护分支当前 Daily 清单引用的组件 Preview;
+- 正在运行发布或删除工作流的对象。
+
+计划阶段验证 Stable Release、Tag、八资产 digest、canonical 清单、Preview 归属、
+Release ID、可恢复源码 SHA 和 active run,并输出稳定排序计划及 SHA-256 digest。正式版
+已经关闭的当前 Daily 清单不再保护同版本 Preview;其他仍开放分支和保留聚合 Preview 的
+引用继续受保护。完整或残缺的 canonical Preview 都由本仓删除 wrapper 收敛。任何分页、
+字段、引用或归属异常都会在零删除状态停止。手工 dry-run 不受 7 天限制,但 apply 不能
+绕过窗口。
+
+Apply 在派发任何组件删除前重新读取所有平台分支的当前 Daily 清单;计划后新增的引用会使
+本轮零删除停止。所有平台分支协调器和 GC 还由同一个受支持的 concurrency key 串行执行。
+GC 派发删除后,Daily 控制器在提交新清单前检查所有匹配的组件/聚合发布 run 和删除 run,
+任意一个仍活跃都保持清单不变。全局串行点和两侧门禁共同避免清单选择与异步删除交叉执行。
+
+历史聚合 Preview 在“Tag 直接指向清单提交”契约建立和完全执行前发布。GC 只对这些历史
+对象使用 Stable Tag 可达的 first-parent 清单历史证明归属和精确组件选择:Release
+`target_commitish` 必须与 Tag 一致;Tag 提交已有 Daily 清单时必须精确选择该 Preview,且
+canonical 清单提交必须位于它的 first-parent 历史;更早的无选择清单提交则必须是
+canonical 提交的 first-parent 祖先。旁支、指向其他清单和无法证明关联的移动 Tag 全部
+拒绝。当前发布、残缺恢复和所有新 Preview 仍执行 Tag Commit 与清单 Commit 相同的严格
+契约。
+
+Apply 先 dispatch 五个组件仓的本地删除 wrapper。每个 wrapper 仅使用本仓短期
+`GITHUB_TOKEN contents:write`,再次核对精确 Preview Tag 和源码 SHA,然后将 Release、
+所有资产与 Tag 一并删除。所有组件候选消失后,平台才删除聚合 Preview。中途失败不会
+重建已经删除的对象;组件和聚合删除的确定性失败都最多重跑三次,下一次根据 canonical
+历史重算并继续收敛。若一次成功清理后同名对象仍可见或被重新创建,下一次 Apply 会派发
+新的清理 run。Stable Release、Stable Tag、Actions artifacts、非 canonical orphan 都
+不属于 GC 删除集合。
+
+```bash
+# 只读真实计划
+gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
+  -f stable_version=release-v0.5.7 -f dry_run=true
+
+# 到达 7 天窗口后收敛
+gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
+  -f stable_version=release-v0.5.7 -f dry_run=false
 ```
 
-`previous_version` 只允许引用最近的正式版本。第一个正式版本省略该字段;它的发布说明只
-说明这是第一个正式版本并列出本次组合,不从 preview 版本开始比较,也不展开仓库全部历史。
+## 10. 权限与可靠性
 
-`releases/daily-preview.yaml` 维护当前 preview:
+- 跨仓 GitHub App token 只有 `Contents: read` 和 `Actions: write`;
+- 组件发布、组件删除、聚合发布和平台删除只使用各仓本次 workflow 的短期
+  `GITHUB_TOKEN contents:write`;
+- 执行候选代码的 runner 只接收源码只读 token,并在执行前撤销;
+- 发布先创建 draft、上传并复核 digest,全部一致后才公开;
+- 已发布 Tag 或 Release 不由发布器覆盖;残缺 Preview 只能经受保护删除入口恢复;
+- 分支 HEAD、Tag commit、清单 blob SHA 和 exact-asset BMS 共同固定一次发布;
+- 即使渲染后的 Daily 清单无需写入,协调器仍复核远端分支 HEAD 与清单 blob,不会用陈旧
+  checkout 派发组件;
+- Preview Release 的构建绑定防止相同 Tag/源码在不同依赖闭包之间被错误复用;
+- scanner 使用独立 concurrency key;所有平台分支协调器与 GC 共用全局
+  `preview-manifest-selection-and-gc` concurrency group。scanner 顺序等待每个分支,不同时
+  填入多个 pending slot。组件完整构建/发布 workflow 与 delete 对同一精确版本共用
+  mutation group;平台聚合完整 prepare/BMS/publish workflow 与 delete 也使用同一精确
+  版本组。GitHub 可能合并该组内的 pending 请求;Daily 协调器和 GC 不把 cancelled 当作
+  成功,而是按同一精确输入重跑完整 workflow,最多三次后才 deferred。因此互斥不会把
+  发布或删除的目标状态静默丢失。不同版本不共享 pending slot。组件 Latest 协调器是
+  例外:其操作幂等且每次都
+  扫描完整主线 Stable 集合,因此使用全仓串行组并允许多个触发合并;保留下来的最后一次
+  运行仍能收敛完整状态。只有
+  当前平台 `main` HEAD 的 `release.yaml` 所选 Stable 聚合能更新 Latest,且发布前后都会
+  重新验证分支 HEAD、清单选择和既有 Release。
 
-```yaml
-version: release-v0.2.1
-previous_version: release-v0.2.0
-preview_version: preview.20260809
-previous_preview_version: preview.20260808
-components:
-  accelerator: v0.2.0-preview.20260809
-  connector: v0.1.3-preview.20260808
-  sandboxer: v0.2.0-preview.20260809
-  orchestrator: v0.1.5-preview.20260808
-  runtime: runtime-v0.2.1-preview.20260809
-  vmlinux: vmlinux-v0.1.4-preview.20260808
-```
+## 11. See Also
 
-完整 preview 版本由 `version + "-" + preview_version` 组成。存在
-`previous_preview_version` 时,更新说明基线为
-`version + "-" + previous_preview_version`;不存在时使用 `previous_version`。因此同一正式
-版本线的后续 preview 与上一 preview 比较,首个 preview 与上一正式版本比较。如果两项基线
-都不存在,它就是整个项目的首个 preview,不生成历史 diff。
-
-解析器要求六个 release unit 恰好各出现一次并分别校验版本前缀。清单不声明架构:架构是
-资产维度,同一个聚合版本必须包含平台当前支持的全部目标。当前完整构建和 BMS 只覆盖 Linux
-x86_64,因此当前 Release 只发布该目标。
-
-清单更新是普通 Git 提交。同一文件的提交历史保存旧选择;聚合解析器在需要上一版本时直接
-回读 Git 历史,不维护 `releases/history/` 或按版本命名的清单。GitHub Release 不是调度状态
-源,删除历史 Release 不会改变当前选择或提交历史。两个清单都不作为 GitHub Release 资产
-发布,不写入 platform archive,也不复制进聚合 bundle。
-
-### 3.2 GitHub App
-
-源码 BMS、聚合资产下载和每日跨仓调度复用 `kuasar-sandbox-bms-ci` App:
-
-- variable `KUASAR_CI_APP_CLIENT_ID`;
-- secret `KUASAR_CI_APP_PRIVATE_KEY`;
-- App 安装权限为仓库 `Contents: read`、`Actions: write` 与组织 `Members: read`。
-
-每次签发的 installation token 继续按用途收窄:
-
-- BMS 源码读取和聚合下载 token 只请求 `Contents: read`;
-- 每日协调 token 请求 `Actions: write` 与 `Contents: read`;
-- fork PR 准入 token 只请求组织 `Members: read`;
-- workflow 签发 token 时把仓库范围显式限制在六个发行仓。
-
-私有组件仓的 BMS 控制 job 与 release 控制 job 使用专用 `kuasar-control` 池;公开项目主仓的每日协调、
-aggregate release 和 BMS 控制 job 仍使用 GitHub-hosted runner。执行候选代码的 E2E job
-只接收收窄后的源码只读 token,并在执行候选代码前显式撤销。组件和聚合 publish job 只使用
-当前仓的短期 `GITHUB_TOKEN` 和 `contents:write`。每日协调 job 仅用项目主仓自身的短期
-`GITHUB_TOKEN` 把生成的版本选择清单提交到项目主仓 `main`,App 没有内容写权限。
-
-## 4. 组件资产契约
-
-当前 x86_64 普通组件 Release 的显式资产只有:
-
-```text
-<component>-vX.Y.Z-linux-x86_64.tar.gz
-SHA256SUMS
-```
-
-archive 只包含实际运行制品:`bin/`、可选 `deploy/` 及不属于 E2E 的运维/性能辅助脚本。
-组件 `docs/` 与 `test/e2e/` 不进入组件包。不上传项目生成的 release metadata JSON,archive
-内也没有 `release/*.json`。源码由 GitHub 根据 tag 自动提供的 zip/tar.gz 表达,工作流不
-额外上传源码包;aggregate prepare 只读取所选 tag 的源码来构建 platform 包,不把源码归档
-作为 Release 资产复制。
-
-publish job 不读取 manifest。它从 workflow version、目标和固定命名规则计算预期资产,
-校验包内必需路径、禁止路径、权限、`SHA256SUMS` 以及 Go build info,随后创建 draft,
-上传两个资产并用 GitHub API 对比名称、大小与 `sha256:` digest。全部一致后才发布 draft。
-
-Go 二进制使用标准 `go version -m` 检查。通过兄弟仓本地 `replace` 构建的模块可能显示
-`(devel)`,这是当前接受的构建边界;发布流程不维护另一份跨仓 revision 图。
-
-## 5. Guest runtime 资产
-
-tag 前缀保持不变,资产名不重复 tag 已表达的类型前缀:
-
-```text
-runtime-v0.1.0-preview.20260808
-  -> sandbox-runtime-x86_64-v0.1.0-preview.20260808.tar.gz
-
-vmlinux-v0.1.0-preview.20260808
-  -> vmlinux-x86_64-v0.1.0-preview.20260808.tar.gz
-```
-
-runtime archive 只有一个稳定入口 `bin/sandbox-runtime.bundle`,并同时交付 `flatten-ctl`、
-`mkfs.erofs`。vmlinux archive 只有 `bin/vmlinux`。
-两个包都不再保留内容相同的版本化文件副本。
-
-runtime workflow 显式选择一个已经发布的 sandboxer tag,因为其 `sandbox-init` 会进入
-runtime image。聚合可选择另一个 sandboxer 版本;组合兼容性由 exact-asset BMS 判断。
-
-## 6. Platform 聚合资产
-
-当前 `release-vX.Y.Z` 精确包含八个显式资产:
-
-```text
-platform-release-vX.Y.Z.tar.gz
-accelerator-<selected>-linux-x86_64.tar.gz
-connector-<selected>-linux-x86_64.tar.gz
-sandboxer-<selected>-linux-x86_64.tar.gz
-orchestrator-<selected>-linux-x86_64.tar.gz
-sandbox-runtime-x86_64-<selected-without-runtime-prefix>.tar.gz
-vmlinux-x86_64-<selected-without-vmlinux-prefix>.tar.gz
-SHA256SUMS
-```
-
-六个组件 archive 从组件 Release 按字节复制,不改名、不重压缩。聚合层丢弃各组件独立
-`SHA256SUMS`,生成覆盖 platform 包与六个 archive 的统一校验文件。Release notes 说明项目定位,
-核心能力,支持环境,Quick Start,已知限制,安全报告和发行通道,列出所选的六个发布单元
-tag,并按两个清单计算出的显式基线汇总六个发布单元的 commit 更新清单,但不作为机器清单.
-
-platform 包使用确定性 tar 规则,只包含聚合后的 `docs/` 与可交付 `test/`;不包含组件
-二进制、版本选择、workflow、runner 配置、cache 或凭据。组件 README 与 `docs/` 按仓库
-聚合;E2E 以 `test/e2e/<owner>/run_all.sh` 组织。guest-runtime 的 runtime 文档和 E2E 来自
-所选 runtime tag,`docs/vmlinux.md` 来自所选 vmlinux tag,延续两条独立版本线的内容边界。
-platform 包没有独立 tag 或独立 Release。
-
-## 7. 聚合与 exact-asset BMS
-
-`Aggregate Release` 在 GitHub-hosted prepare job 中完成:
-
-1. 从当前 platform commit 解析版本选择;
-2. 查询六个已发布、非 draft 的组件 Release;
-3. 要求每个 Release 的显式资产精确等于固定 archive 与 `SHA256SUMS`;
-4. 下载并同时验证 GitHub size/digest 和组件 SHA-256;
-5. 下载六个所选 tag 的 GitHub 源码归档,只提取组件文档与 `test/e2e/`;
-6. 生成确定性 platform 包并按字节复制六个组件 archive;
-7. 拒绝组件包中的 `docs/`/`test/e2e/`、不安全路径和跨包文件覆盖;
-8. 生成统一 `SHA256SUMS`,上传为当前 workflow 的短期 artifact。
-
-可复用 BMS 在自托管 KVM runner 下载同一个 artifact,重新验证后把七个 archive 解压到
-一个安装目录。测试入口是即将发布的 platform 包中的 `test/e2e/run_all.sh`;它依次调用
-platform 包内聚合的各 owner `run_all.sh`。该模式不 checkout 组件 main、不调用 native
-cache、不重新构建组件或 Linux kernel。
-
-BMS 成功后,GitHub-hosted publish job 下载同一个 artifact,以本次 workflow 的
-`github.sha` 创建 `release-vX.Y.Z` tag,验证上传后的八个资产后发布 draft。tag 已存在但
-指向另一个 commit 时立即失败。
-
-## 8. 每日 preview
-
-platform 在每日 02:13 至 06:13(Asia/Shanghai)每小时运行一次协调器。每次运行只在
-GitHub App installation token 的有效期内等待 50 分钟;若版本仍在构建,本次成功结束并由
-下一小时的协调器继续收敛同一份冻结清单。
-
-协调器先读取 `releases/daily-preview.yaml`。如果清单所指的 platform preview 尚未发布,
-本次运行只恢复这一个冻结选择,不会因日期变化重新计算。当前 preview 已发布且请求日期更新
-时,协调器比较每个 release unit 的最新已发布 tag 与仓库 `main`:自该 tag 以来有新提交就
-选择当日 preview tag,没有新提交则先复用最新 preview 或正式 tag。随后按构建依赖传播
-重建:accelerator 或 connector 变化会重建 sandboxer、orchestrator 和 runtime;sandboxer
-变化会重建 orchestrator 和 runtime。runtime 与 vmlinux 是 `guest-runtime` 仓的两个独立
-release unit,各自寻找本版本线的最新 tag 并与同一个仓库 `main` 比较;依赖传播只影响
-runtime,不重建无关的 vmlinux。
-
-日历日期变化本身不创建版本。只有至少一个 release unit 的最终选择与当前 preview 清单
-不同,协调器才冻结当日 `preview_version`、提交新清单并在组件完成后发布新的聚合版本。如果
-六个 unit 都复用当前选择,本次运行直接保留当前 preview,不提交清单、不 dispatch 组件或
-aggregate workflow,也不创建新的聚合 Release。
-
-新选择通过 GitHub Contents API 覆盖同一个 `daily-preview.yaml`,请求携带读取时的 blob SHA。
-远端内容与本次 checkout 不一致时停止,避免两个协调任务覆盖彼此;内容提交成功后才触发组件
-或聚合 workflow。文件中的旧 `preview_version` 移入 `previous_preview_version`,所以本次
-发布说明的基线完全由已提交清单确定。
-
-清单冻结后,协调器先并行收敛 accelerator、connector 和 vmlinux;再以清单中的精确
-accelerator/connector tag 构建 sandboxer;随后以精确 accelerator/connector/sandboxer tag
-并行构建 orchestrator 和 runtime;六个组件完成后触发 aggregate。每一步根据 Release 和
-workflow run 状态幂等处理:
-
-- Release 完整存在:复用;
-- run queued/in progress:继续等待;
-- runner 离线、超时、网络错误等基础设施失败:最多复跑同一 run 两次,保留原 `GITHUB_SHA`;
-- 构建、测试、资产或 BMS 的确定性失败:停止并报告,不无限重试;
-- 从未 dispatch:只创建一次 workflow dispatch;
-- aggregate Release 已存在:成功结束。
-
-恢复入口始终先收敛 `daily-preview.yaml` 当前指向的版本,因此跨日 pending 不会因当天日期
-变化而遗失,也不会从临时 workflow 状态重建选择。当前版本成功发布后,下一次调度仅在组件
-选择发生变化时才推进日期和选择。任一正式组件已经发布但正式聚合尚未完成时,每日 preview
-暂停,避免正式发布窗口继续创建新 preview;正式聚合发布后 daily 直接成功退出。
-
-## 9. 可靠性与安全
-
-- 组件、platform 包和聚合包先在本地校验,再创建 draft;
-- 失败的 draft 可按 Release ID 删除并重建,已发布 Release 不可替换;
-- 同版本 workflow concurrency 不取消正在发布的 run;
-- 所有外部下载使用有限重试、连接超时和总超时;
-- BMS 控制面与执行实现只在项目主仓维护,组件 wrapper 从项目主仓 `main` 引用可信入口;
-- reusable workflow 用 `job.workflow_repository` 和 `job.workflow_sha` checkout 同一 resolved
-  platform revision 的工具;
-- base 仓的 `pull_request_target` 控制 job 使用只读组织成员接口,只让同仓 PR 或当前 active
-  owner/member 的 fork PR 进入自托管 BMS,候选 workflow 与事件 `author_association` 不参与
-  身份判断;
-- 控制 job 在 integration commit 上维护 `kuasar/bms-exact-head`,只有 BMS 成功且结束时
-  candidate、PR base/head 和当前 merge commit 仍完全一致才写入成功;
-- `kuasar-e2e` runner group 对组织仓库可见且不设置 workflow allowlist,只执行持有只读权限的
-  候选 E2E;`kuasar-control` 使用独立 rootfs 和工作目录,对组织内全部仓库(含 public)可见,
-  并只允许中央 BMS entry 与各组件 `main` release workflow;fork workflow 不转发 secrets;
-- 只有不执行候选代码的 BMS 控制 job 可获得 `statuses:write`;只有从受信任 `main` 启动的
-  release publish job 可获得 `contents:write`;执行候选代码的 E2E job 仍只有只读权限。
-
-## 10. See Also
-
-- [ci.md](ci.md):BMS revision、缓存与两种执行模式;
-- [deployment.md](deployment.md):平台部署与运行前置条件;
-- [../test/QUICKSTART.md](../test/QUICKSTART.md):发布包验证和 E2E 操作;
-- [../release/](../release/):版本选择、打包、发布与协调器实现。
+- [ci.md](ci.md):BMS revision、缓存和执行模式;
+- [deployment.md](deployment.md):部署与运行前置条件;
+- [../test/QUICKSTART.md](../test/QUICKSTART.md):完整聚合 Release 验证;
+- [../release/](../release/):选择、打包、协调、恢复和 GC 实现。
