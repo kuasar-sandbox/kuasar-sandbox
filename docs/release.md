@@ -107,6 +107,8 @@ vmlinux 固定版本。
 - 所有符合 `release/vMAJOR.MINOR.x` 的平台分支。
 
 scanner 固定每个分支的 HEAD SHA,再从平台 `main` 加载受信任的控制器处理该 SHA。
+控制器使用 GitHub App 的只读 contents Token 访问私有组件仓;Token 只通过子进程级 Git
+HTTP authorization header 传递,不写入 remote URL、仓库配置或日志。
 所有分支协调器与 Preview GC 共用一个 GitHub Actions concurrency key,因此清单选择和
 GC 计划/派发不会重叠。scanner 按分支顺序派发并等待;被取消或超时的分支任务在本轮最多
 重试三次,仍未完成则由下一次扫描恢复。分支在选择或提交清单期间移动时,本次不覆盖远端
