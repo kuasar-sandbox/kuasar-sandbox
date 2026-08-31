@@ -9,14 +9,14 @@ wrapper,并从项目主仓 `main` 引用 `.github/workflows/bms-entry.yml`;该�
 
 BMS 有两个明确模式:
 
-- `source`:验证触发仓的 PR integration commit、可选 exact companion PR 集合与其余仓
-  当前 `main` 的组合;
+- `source`:验证触发仓的 PR integration commit、可选 exact companion PR 集合与按照
+  目标平台分支解析的其余源码组合;
 - `exact-assets`:验证 aggregate workflow 已下载并校验的发布 archive,不重新构建。
 
 ## 2. Source 模式
 
-各仓 `main` 上的可信 wrapper 使用 `pull_request_target` 接收事件,不执行候选仓提供的
-workflow。同仓非 draft PR 自动准入;fork PR 由可信控制 job 使用只读 App token
+各仓可信 wrapper 使用 `pull_request_target` 接收事件,不执行候选仓提供的 workflow。它只接受
+目标为 `main` 或 `release/vMAJOR.MINOR.x` 的 PR。同仓非 draft PR 自动准入;fork PR 由可信控制 job 使用只读 App token
 查询当前组织成员关系,仅 `active` 的 owner/member 自动准入。私有组件仓的控制 job 使用
 专用 `kuasar-control` 池,公开的项目主仓仍使用 GitHub-hosted runner。控制 job 同时重新查询当前 PR,
 校验 GitHub 生成的 two-parent integration commit,并在该 commit 上把
@@ -36,7 +36,7 @@ kuasar-sandbox/orchestrator#227
 
 marker 最多出现一次,其中每个非空行必须是允许仓库的 `owner/repository#PR`。同一仓只能
 出现一次,不能引用触发仓自身,空块、重复块和未闭合块均拒绝准入。companion 必须保有
-`refs/pull/N/merge`,其 integration 的第一 parent 必须等于该仓当前 `main`,第二 parent 必须等于
+`refs/pull/N/merge`,其 integration 的第一 parent 必须等于该 PR 当前目标分支,第二 parent 必须等于
 `refs/pull/N/head`,且该 head 必须仍是组织仓某个 branch 的 head。这样 fork 只能作为已通过既有
 成员准入的触发 PR,不能经 companion 间接进入特权 runner。每个 companion 还必须在自身
 Ready 状态下运行 BMS 并取得自己的 exact-head status;一条 primary status 不能替代另一个 PR
@@ -44,16 +44,16 @@ Ready 状态下运行 BMS 并取得自己的 exact-head status;一条 primary st
 draft → ready 触发新运行。准备合入时必须把 status 所链接 run 的 `source-set.tsv` 与当前 marker
 逐项比较;body 在该 run 之后发生过 marker 变更时,即使 commit status 仍显示 success 也视为失效。
 
-admission 使用仅限六仓 `Contents: read` 的短期 App token,通过 PR refs、main ref、
-commit parents 与 `branches-where-head` 把每个 companion 解析成 PR number、candidate/base/head
+admission 使用仅限六仓 `Contents: read` 的短期 App token,通过 PR refs、目标 branch ref、
+commit parents 与 `branches-where-head` 把每个 companion 解析成 PR number、candidate/base/base-ref/head
 SHA。自托管 job 不信任 PR body 原文,只接收 admission 输出的已解析记录,在执行候选代码前
 重新查询全部 refs/commit,按 exact integration SHA 组装源码并撤销 token。结束控制 job第三次
-查询全部记录;任一 merge ref 消失、main/head/integration SHA 变化或 head 不再属于组织仓 branch,
+查询全部记录;任一 merge ref 消失、目标 branch/head/integration SHA 变化或 head 不再属于组织仓 branch,
 触发 PR 的 exact-head status 均失败。
 
 status 仍只写触发 PR 的 integration commit。跨仓变更需要各 PR 互相声明并各运行一次,从而
 分别覆盖各组件拥有的 E2E 入口并取得各自 status。合入第一个 PR 后,后续 PR 删除已合入的
-companion marker,再以新的 sibling `main` 重跑。该流程只冻结源码验证集合,不增加产品版本
+companion marker,再以该 PR 目标版本线的新 sibling 重跑。该流程只冻结源码验证集合,不增加产品版本
 协商、兼容 alias 或临时 runtime gate。source 模式仍没有 `main` push 或手工 dispatch 入口。
 
 可复用 workflow 验证:
@@ -79,6 +79,15 @@ platform tooling 与 source 使用只读 App token 从 GitHub 官方 archive API
 `/var/cache/kuasar/sources/<repo>/<sha>.tar.gz`。命中时校验 SHA-256 和 tar 结构;miss 从
 GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每仓以 `flock`
 串行维护,保留最近使用的 32 个 revision。token 在执行候选代码前显式撤销。
+
+当 platform PR 的目标是 `main`,六个 unit 都从各组件 `main` 解析。当目标是平台
+`release/vMAJOR.MINOR.x`,执行 job 先读取该 PR integration 中的
+`releases/daily-preview.yaml`,再对六个 unit 分别用正式 Daily 规则派生组件
+`release/vX.Y.x`;不存在该组件维护分支时固定为清单中的精确 tag。`release-units.tsv`
+保留这六项独立的配置版本、请求 ref 与解析 SHA。源码 workspace 仍只有一个
+`guest-runtime` checkout,它采用 runtime unit 的解析 SHA;vmlinux 的独立 archive、校验和
+运行组合由正式发布前的 exact-assets BMS 按清单精确验证,不会被这个源码 checkout 合并成
+一个发布单元。
 
 随后创建五组件 `go.work`,恢复或构建 native cache,并从候选项目主仓源码运行:
 
@@ -183,9 +192,10 @@ base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
 
 每次 BMS 上传 `ci-metadata-<run>-<attempt>`。source 模式通常包含:
 
-- `run.tsv`:模式、候选仓、PR 与 candidate/base/head SHA;
-- `source-set.tsv`:触发 candidate 与所有 companion 的 PR、candidate/base/head SHA 和角色;
+- `run.tsv`:模式、候选仓、PR 与 candidate/base/base-ref/head SHA;
+- `source-set.tsv`:触发 candidate 与所有 companion 的 PR、candidate/base/base-ref/head SHA 和角色;
 - `revisions.tsv`:platform 测试框架与五组件的精确 revision;
+- `release-units.tsv`:六个 Daily 发布单元的配置版本、派生 ref 与解析 SHA;
 - `source-cache.tsv`:源码缓存命中和摘要;
 - `native-cache.tsv`:native key、命中和耗时;
 - `timings.tsv`:构建与测试阶段资源数据;

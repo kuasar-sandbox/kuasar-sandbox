@@ -302,6 +302,17 @@ grep -Fq 'PLATFORM_SOURCE_ROOT:' "$ROOT/.github/workflows/aggregate-release.yml"
   || release_fail "aggregate workflow does not separate target platform source"
 grep -Fq 'PLATFORM_REF:' "$ROOT/.github/workflows/daily-preview-branch.yml" \
   || release_fail "branch converger does not pass the selected platform ref"
+grep -Fq 'id: platform-writer-token' "$ROOT/.github/workflows/daily-preview-branch.yml" \
+  || release_fail "branch converger does not request a dedicated platform writer token"
+grep -Fq 'permission-contents: write' "$ROOT/.github/workflows/daily-preview-branch.yml" \
+  || release_fail "branch converger cannot request platform write permission"
+grep -Fq 'PLATFORM_TOKEN: ${{ steps.platform-writer-token.outputs.token }}' \
+  "$ROOT/.github/workflows/daily-preview-branch.yml" \
+  || release_fail "branch converger does not use the dedicated platform writer token"
+if grep -Fq 'PLATFORM_TOKEN: ${{ github.token }}' \
+  "$ROOT/.github/workflows/daily-preview-branch.yml"; then
+  release_fail "branch converger still writes with the generic GitHub Actions token"
+fi
 for workflow in daily-preview-branch.yml preview-gc.yml; do
   grep -Fq 'group: preview-manifest-selection-and-gc' \
     "$ROOT/.github/workflows/$workflow" \

@@ -18,8 +18,7 @@ on:
         type: string
 
 permissions:
-  actions: write
-  contents: write
+  contents: read
 
 concurrency:
   group: preview-manifest-selection-and-gc
@@ -60,10 +59,20 @@ jobs:
           permission-actions: write
           permission-contents: read
 
+      - name: Create platform manifest writer token
+        id: platform-writer-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: kuasar-sandbox
+          permission-contents: write
+
       - name: Converge branch Preview
         env:
           GH_TOKEN: ${{ steps.release-token.outputs.token }}
-          PLATFORM_TOKEN: ${{ github.token }}
+          PLATFORM_TOKEN: ${{ steps.platform-writer-token.outputs.token }}
           PLATFORM_ROOT: ${{ github.workspace }}/platform
           PLATFORM_REF: ${{ inputs.platform_ref }}
           PLATFORM_SHA: ${{ inputs.platform_sha }}
