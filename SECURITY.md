@@ -6,14 +6,14 @@ Kuasar Sandbox 通过项目主仓统一接收系统级和跨组件安全报告,�
 ## 当前支持范围
 
 当前支持的公开 Stable 聚合版本是
-[`release-v0.1.1`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.1).
+[`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2).
 请报告影响该版本,最新已发布 Aggregate Preview 或当前 `main` 的漏洞,并提供实际受影响的
 精确聚合版本和组件版本.较早 Preview 中的问题会根据是否仍影响当前 Stable,
 最新 Preview 或 `main` 进行评估.
 
 | 版本范围 | 当前状态 |
 |---|---|
-| `release-v0.1.1` | 当前 Stable 支持版本 |
+| `release-v0.1.2` | 当前 Stable 支持版本 |
 | 最新已发布 Aggregate Preview | 接受预发布通道问题报告 |
 | 当前 `main` | 接受源码问题报告 |
 

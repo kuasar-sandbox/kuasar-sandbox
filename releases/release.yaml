@@ -1,9 +1,9 @@
-version: release-v0.1.1
-previous_version: release-v0.1.0
+version: release-v0.1.2
+previous_version: release-v0.1.1
 components:
-  accelerator: v0.1.1
-  connector: v0.1.0
-  sandboxer: v0.1.1
-  orchestrator: v0.1.1
-  runtime: runtime-v0.1.1
-  vmlinux: vmlinux-v0.1.0
+  accelerator: v0.1.2
+  connector: v0.1.1
+  sandboxer: v0.1.2
+  orchestrator: v0.1.2
+  runtime: runtime-v0.1.2
+  vmlinux: vmlinux-v0.1.1
