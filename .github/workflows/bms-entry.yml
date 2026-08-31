@@ -30,6 +30,7 @@ jobs:
       pull_request_number: ${{ steps.admission.outputs.pull_request_number }}
       candidate_sha: ${{ steps.admission.outputs.candidate_sha }}
       base_sha: ${{ steps.admission.outputs.base_sha }}
+      base_ref: ${{ steps.admission.outputs.base_ref }}
       head_sha: ${{ steps.admission.outputs.head_sha }}
       companion_candidates: ${{ steps.admission.outputs.companion_candidates }}
     steps:
@@ -91,6 +92,11 @@ jobs:
               -H "Authorization: Bearer $token" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
               "$GITHUB_API_URL$path"
+          }
+
+          supported_base_ref() {
+            [ "$1" = main ] \
+              || [[ "$1" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]]
           }
 
           check_org_membership() {
@@ -171,8 +177,8 @@ jobs:
           if [ -z "$reason" ] && [ "$state" != open ]; then
             reason="pull request is not open"
           fi
-          if [ -z "$reason" ] && [ "$base_ref" != main ]; then
-            reason="base branch is not main"
+          if [ -z "$reason" ] && ! supported_base_ref "$base_ref"; then
+            reason="base branch is not main or release/vMAJOR.MINOR.x"
           fi
           if [ -z "$reason" ] && [ "$base_repository" != "$GITHUB_REPOSITORY" ]; then
             reason="base repository does not match the workflow repository"
@@ -182,12 +188,14 @@ jobs:
           fi
           if [ -z "$reason" ]; then
             event_base_sha=$(jq -er '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
+            event_base_ref=$(jq -er '.pull_request.base.ref' "$GITHUB_EVENT_PATH")
             event_head_sha=$(jq -er '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
             event_base_repository=$(jq -er '.pull_request.base.repo.full_name' "$GITHUB_EVENT_PATH")
             event_head_repository=$(jq -er '.pull_request.head.repo.full_name' "$GITHUB_EVENT_PATH")
             event_author=$(jq -er '.pull_request.user.login' "$GITHUB_EVENT_PATH")
             event_draft=$(jq -r '.pull_request.draft' "$GITHUB_EVENT_PATH")
             if [ "$event_base_sha" != "$base_sha" ] \
+              || [ "$event_base_ref" != "$base_ref" ] \
               || [ "$event_head_sha" != "$head_sha" ] \
               || [ "$event_base_repository" != "$base_repository" ] \
               || [ "$event_head_repository" != "$head_repository" ] \
@@ -317,9 +325,19 @@ jobs:
                       reason="companion integration commit is unavailable"
                       break
                     fi
-                    if ! companion_main_ref=$(api_get_with_token "$COMPANION_TOKEN" \
-                      "/repos/$companion_repository/git/ref/heads/main"); then
-                      reason="companion main ref is unavailable"
+                    if ! companion_pr_data=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/pulls/$companion_pr"); then
+                      reason="companion pull request is unavailable"
+                      break
+                    fi
+                    companion_base_ref=$(jq -r '.base.ref // ""' <<< "$companion_pr_data")
+                    if ! supported_base_ref "$companion_base_ref"; then
+                      reason="companion base branch is not main or release/vMAJOR.MINOR.x"
+                      break
+                    fi
+                    if ! companion_base_branch_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/git/ref/heads/$companion_base_ref"); then
+                      reason="companion base branch ref is unavailable"
                       break
                     fi
                     if ! companion_head_branches=$(api_get_with_token "$COMPANION_TOKEN" \
@@ -333,7 +351,10 @@ jobs:
                       --arg head_ref "refs/pull/$companion_pr/head" \
                       --arg candidate "$companion_candidate" \
                       --arg base "$companion_base" \
-                      --arg head "$companion_head" '
+                      --arg base_ref "$companion_base_ref" \
+                      --arg head "$companion_head" \
+                      --arg repository "$companion_repository" \
+                      --argjson number "$companion_pr" '
                         .merge.ref == $merge_ref
                         and .merge.object.sha == $candidate
                         and .head_ref.ref == $head_ref
@@ -342,17 +363,25 @@ jobs:
                         and (.commit.parents | length) == 2
                         and .commit.parents[0].sha == $base
                         and .commit.parents[1].sha == $head
-                        and .main.object.sha == $base
+                        and .pr.number == $number
+                        and .pr.state == "open"
+                        and .pr.draft == false
+                        and .pr.base.ref == $base_ref
+                        and .pr.base.repo.full_name == $repository
+                        and .pr.base.sha == $base
+                        and .pr.head.sha == $head
+                        and .base_branch.object.sha == $base
                         and (.branches | type == "array" and length > 0)
                       ' <<< "$(jq -cn \
                         --argjson merge "$companion_merge_ref" \
                         --argjson head_ref "$companion_head_ref" \
                         --argjson commit "$companion_commit" \
-                        --argjson main "$companion_main_ref" \
+                        --argjson pr "$companion_pr_data" \
+                        --argjson base_branch "$companion_base_branch_ref" \
                         --argjson branches "$companion_head_branches" \
                         '{merge: $merge, head_ref: $head_ref, commit: $commit,
-                          main: $main, branches: $branches}')" >/dev/null; then
-                      reason="companion refs do not form the current same-repository main integration"
+                          pr: $pr, base_branch: $base_branch, branches: $branches}')" >/dev/null; then
+                      reason="companion refs do not form the current same-repository branch integration"
                       break
                     fi
                     companion_record=$(jq -cn \
@@ -360,9 +389,11 @@ jobs:
                       --argjson pull_request_number "$companion_pr" \
                       --arg candidate_sha "$companion_candidate" \
                       --arg base_sha "$companion_base" \
+                      --arg base_ref "$companion_base_ref" \
                       --arg head_sha "$companion_head" \
                       '{repository: $repository, pull_request_number: $pull_request_number,
-                        candidate_sha: $candidate_sha, base_sha: $base_sha, head_sha: $head_sha}')
+                        candidate_sha: $candidate_sha, base_sha: $base_sha, base_ref: $base_ref,
+                        head_sha: $head_sha}')
                     companion_candidates=$(jq -c --argjson record "$companion_record" \
                       '. + [$record]' <<< "$companion_candidates")
                   done <<< "$companion_lines"
@@ -403,6 +434,7 @@ jobs:
             echo "pull_request_number=$pull_request_number"
             echo "candidate_sha=$candidate_sha"
             echo "base_sha=$base_sha"
+            echo "base_ref=$base_ref"
             echo "head_sha=$head_sha"
             echo "companion_candidates=$companion_candidates"
           } >> "$GITHUB_OUTPUT"
@@ -429,6 +461,7 @@ jobs:
       pull_request_number: ${{ needs.admission.outputs.pull_request_number }}
       candidate_sha: ${{ needs.admission.outputs.candidate_sha }}
       base_sha: ${{ needs.admission.outputs.base_sha }}
+      base_ref: ${{ needs.admission.outputs.base_ref }}
       head_sha: ${{ needs.admission.outputs.head_sha }}
       companion_candidates: ${{ needs.admission.outputs.companion_candidates }}
     secrets:
@@ -451,6 +484,7 @@ jobs:
       CANDIDATE_PR: ${{ needs.admission.outputs.pull_request_number }}
       CANDIDATE_SHA: ${{ needs.admission.outputs.candidate_sha }}
       CANDIDATE_BASE_SHA: ${{ needs.admission.outputs.base_sha }}
+      CANDIDATE_BASE_REF: ${{ needs.admission.outputs.base_ref }}
       CANDIDATE_HEAD_SHA: ${{ needs.admission.outputs.head_sha }}
       COMPANION_CANDIDATES: ${{ needs.admission.outputs.companion_candidates }}
     steps:
@@ -494,11 +528,12 @@ jobs:
 
           validate_companion() {
             local record=$1
-            local repository number candidate base head merge_ref head_ref commit main branches snapshot
+            local repository number candidate base base_ref head merge_ref head_ref commit pr base_branch branches snapshot
             repository=$(jq -r '.repository' <<< "$record")
             number=$(jq -r '.pull_request_number' <<< "$record")
             candidate=$(jq -r '.candidate_sha' <<< "$record")
             base=$(jq -r '.base_sha' <<< "$record")
+            base_ref=$(jq -r '.base_ref' <<< "$record")
             head=$(jq -r '.head_sha' <<< "$record")
             merge_ref=$(api_get_with_token "$COMPANION_TOKEN" \
               "/repos/$repository/git/ref/pull/$number/merge") \
@@ -508,23 +543,27 @@ jobs:
               || return 1
             commit=$(api_get_with_token "$COMPANION_TOKEN" \
               "/repos/$repository/git/commits/$candidate") || return 1
-            main=$(api_get_with_token "$COMPANION_TOKEN" \
-              "/repos/$repository/git/ref/heads/main") || return 1
+            pr=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/pulls/$number") || return 1
+            base_branch=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/git/ref/heads/$base_ref") || return 1
             branches=$(api_get_with_token "$COMPANION_TOKEN" \
               "/repos/$repository/commits/$head/branches-where-head") || return 1
             snapshot=$(jq -cn \
               --argjson merge "$merge_ref" \
               --argjson head_ref "$head_ref" \
               --argjson commit "$commit" \
-              --argjson main "$main" \
+              --argjson pr "$pr" \
+              --argjson base_branch "$base_branch" \
               --argjson branches "$branches" \
               '{merge: $merge, head_ref: $head_ref, commit: $commit,
-                main: $main, branches: $branches}')
+                pr: $pr, base_branch: $base_branch, branches: $branches}')
             jq -e \
               --arg merge_ref "refs/pull/$number/merge" \
               --arg head_ref "refs/pull/$number/head" \
               --arg candidate "$candidate" \
               --arg base "$base" \
+              --arg base_ref "$base_ref" \
               --arg head "$head" '
                 .merge.ref == $merge_ref
                 and .merge.object.sha == $candidate
@@ -534,7 +573,14 @@ jobs:
                 and (.commit.parents | length) == 2
                 and .commit.parents[0].sha == $base
                 and .commit.parents[1].sha == $head
-                and .main.object.sha == $base
+                and .pr.number == $number
+                and .pr.state == "open"
+                and .pr.draft == false
+                and .pr.base.ref == $base_ref
+                and .pr.base.repo.full_name == $repository
+                and .pr.base.sha == $base
+                and .pr.head.sha == $head
+                and .base_branch.object.sha == $base
                 and (.branches | type == "array" and length > 0)
               ' <<< "$snapshot" >/dev/null
           }
@@ -573,11 +619,12 @@ jobs:
               --argjson number "$CANDIDATE_PR" \
               --arg candidate "$CANDIDATE_SHA" \
               --arg base "$CANDIDATE_BASE_SHA" \
+              --arg base_ref "$CANDIDATE_BASE_REF" \
               --arg head "$CANDIDATE_HEAD_SHA" '
                 .number == $number
                 and .state == "open"
                 and .draft == true
-                and .base.ref == "main"
+                and .base.ref == $base_ref
                 and .base.repo.full_name == env.GITHUB_REPOSITORY
                 and .base.sha == $base
                 and .head.sha == $head
@@ -602,11 +649,12 @@ jobs:
             --argjson number "$CANDIDATE_PR" \
             --arg candidate "$CANDIDATE_SHA" \
             --arg base "$CANDIDATE_BASE_SHA" \
+            --arg base_ref "$CANDIDATE_BASE_REF" \
             --arg head "$CANDIDATE_HEAD_SHA" '
               .number == $number
               and .state == "open"
               and .draft == true
-              and .base.ref == "main"
+              and .base.ref == $base_ref
               and .base.repo.full_name == env.GITHUB_REPOSITORY
               and .base.sha == $base
               and .head.sha == $head
@@ -641,11 +689,12 @@ jobs:
               --argjson number "$CANDIDATE_PR" \
               --arg candidate "$CANDIDATE_SHA" \
               --arg base "$CANDIDATE_BASE_SHA" \
+              --arg base_ref "$CANDIDATE_BASE_REF" \
               --arg head "$CANDIDATE_HEAD_SHA" '
                 .number == $number
                 and .state == "open"
                 and .draft == false
-                and .base.ref == "main"
+                and .base.ref == $base_ref
                 and .base.repo.full_name == env.GITHUB_REPOSITORY
                 and .base.sha == $base
                 and .head.sha == $head

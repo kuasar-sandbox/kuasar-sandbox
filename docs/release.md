@@ -307,6 +307,9 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 ## 10. 权限与可靠性
 
 - 跨仓 GitHub App token 只有 `Contents: read` 和 `Actions: write`;
+- Daily 清单提交使用同一个 App 仅面向 `kuasar-sandbox` 仓的独立短期
+  `Contents: write` token;它不具有其他组件仓写入权,也不复用通用
+  `github-actions` 身份;
 - 组件发布、组件删除、聚合发布和平台删除只使用各仓本次 workflow 的短期
   `GITHUB_TOKEN contents:write`;
 - 执行候选代码的 runner 只接收源码只读 token,并在执行前撤销;
@@ -329,7 +332,24 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
   当前平台 `main` HEAD 的 `release.yaml` 所选 Stable 聚合能更新 Latest,且发布前后都会
   重新验证分支 HEAD、清单选择和既有 Release。
 
-## 11. See Also
+## 11. 受保护分支
+
+项目仓使用一个处于 active 状态的 repository ruleset,目标只匹配 `refs/heads/main` 与
+`refs/heads/release/v*`。它要求 PR、至少一个批准、dismiss stale approval、所有讨论
+已解决、严格匹配 `bms / finalize`、线性历史,并阻止 force push 与分支删除。不使用
+管理员默认绕过、签名提交、CODEOWNERS 或 merge queue。
+
+状态检查规则对新建 branch 使用 `do_not_enforce_on_create: true`,因此可以从已经发布的
+Stable Tag 建立一条新的维护线;创建后的任何更新立即回到同一套 PR 与 BMS 门禁，不能借此
+绕过后续提交检查。
+
+Daily Preview 必须直接把收敛后的清单提交到受保护目标分支,因此 ruleset 只为
+`kuasar-sandbox-bms-ci` GitHub App (ID `4283831`) 配置 `always` bypass。该 App 的
+唯一写入用途是上述本仓短期 token;人工维护、普通 `github-actions` 与所有其他 App 都不在
+bypass 列表。BMS 对 PR 始终重新验证精确 integration commit 与目标 branch,所以 bypass 不替代
+`bms / finalize` 门禁。
+
+## 12. See Also
 
 - [ci.md](ci.md):BMS revision、缓存和执行模式;
 - [deployment.md](deployment.md):部署与运行前置条件;

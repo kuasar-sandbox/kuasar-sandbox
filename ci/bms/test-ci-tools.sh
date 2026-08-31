@@ -92,8 +92,18 @@ fi
 # shellcheck disable=SC2016 # Match the literal workflow-local variable.
 grep -Fq 'git/ref/pull/$companion_pr/merge' "$entry_workflow" \
     || fail "companion admission does not require a live integration ref"
-grep -Fq 'git/ref/heads/main' "$entry_workflow" \
-    || fail "companion admission does not bind the integration to current main"
+grep -Fq 'git/ref/heads/$companion_base_ref' "$entry_workflow" \
+    || fail "companion admission does not bind the integration to its current target branch"
+grep -Fq 'supported_base_ref()' "$entry_workflow" \
+    || fail "BMS admission does not allow the maintained branch contract"
+grep -Fq 'base_ref: ${{ needs.admission.outputs.base_ref }}' "$entry_workflow" \
+    || fail "BMS entry does not pass the admitted target branch to execution"
+grep -Fq 'CANDIDATE_BASE_REF' "$workflow" \
+    || fail "BMS execution does not retain the exact primary target branch"
+grep -Fq 'release-units.tsv' "$workflow" \
+    || fail "BMS execution does not record independent Daily release-unit selection"
+grep -Fq 'preview-selection.py source-ref' "$workflow" \
+    || fail "BMS execution does not derive maintenance component source branches"
 grep -Fq 'branches-where-head' "$entry_workflow" \
     || fail "companion admission does not require an organization repository branch head"
 grep -Fq 'branches-where-head' "$workflow" \
@@ -110,6 +120,21 @@ grep -Fq 'companion_count=' "$entry_workflow" \
     || fail "companion admission does not enforce its limit before resolving refs"
 grep -Fq "grep -Fq '<!-- kuasar-bms-companions'" "$entry_workflow" \
     || fail "a malformed companion marker prefix can be treated as an absent marker"
+if grep -Fq '.base.ref == "main"' "$workflow" "$entry_workflow"; then
+    fail "BMS still hard-codes main as the only PR target branch"
+fi
+
+grep -Fq 'id: platform-writer-token' "$daily_workflow" \
+    || fail "Daily manifest writes do not use a dedicated App token"
+grep -Fq 'repositories: kuasar-sandbox' "$daily_workflow" \
+    || fail "Daily manifest writer token is not limited to the platform repository"
+grep -Fq 'permission-contents: write' "$daily_workflow" \
+    || fail "Daily manifest writer token cannot update the maintained branch"
+grep -Fq 'PLATFORM_TOKEN: ${{ steps.platform-writer-token.outputs.token }}' "$daily_workflow" \
+    || fail "Daily coordinator does not use the dedicated platform writer token"
+if grep -Fq 'PLATFORM_TOKEN: ${{ github.token }}' "$daily_workflow"; then
+    fail "Daily coordinator still writes with the generic GitHub Actions token"
+fi
 
 companion_parser="$TMP/companion-parser.awk"
 sed -n '/# BEGIN kuasar-bms-companion-parser/,/# END kuasar-bms-companion-parser/p' \

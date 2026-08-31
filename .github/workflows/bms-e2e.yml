@@ -27,6 +27,11 @@ on:
         required: false
         default: ""
         type: string
+      base_ref:
+        description: Exact target branch of the pull request under test
+        required: false
+        default: ""
+        type: string
       head_sha:
         description: Integration commit second parent
         required: false
@@ -94,6 +99,7 @@ jobs:
       CANDIDATE_PR: ${{ inputs.pull_request_number }}
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
       CANDIDATE_BASE_SHA: ${{ inputs.base_sha }}
+      CANDIDATE_BASE_REF: ${{ inputs.base_ref }}
       CANDIDATE_HEAD_SHA: ${{ inputs.head_sha }}
       COMPANION_CANDIDATES: ${{ inputs.companion_candidates }}
       RELEASE_VERSION: ${{ inputs.release_version }}
@@ -120,18 +126,22 @@ jobs:
                 [[ "$value" =~ ^[0-9a-f]{40}$ ]] \
                   || { echo "$variable must be a full lowercase commit SHA" >&2; exit 1; }
               done
+              [[ "$CANDIDATE_BASE_REF" = main \
+                || "$CANDIDATE_BASE_REF" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]] \
+                || { echo "CANDIDATE_BASE_REF must be main or release/vMAJOR.MINOR.x" >&2; exit 1; }
               [[ "$CANDIDATE_PR" =~ ^[1-9][0-9]*$ ]]
               jq -e --arg primary "$CANDIDATE_REPOSITORY" '
                 type == "array"
                 and length <= 5
                 and ([.[].repository] | length == (unique | length))
                 and all(.[];
-                  (keys == ["base_sha", "candidate_sha", "head_sha", "pull_request_number", "repository"])
+                  (keys == ["base_ref", "base_sha", "candidate_sha", "head_sha", "pull_request_number", "repository"])
                   and (.repository | test("^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$"))
                   and .repository != $primary
                   and (.pull_request_number | type == "number" and . >= 1 and . == floor)
                   and (.candidate_sha | type == "string" and test("^[0-9a-f]{40}$"))
                   and (.base_sha | type == "string" and test("^[0-9a-f]{40}$"))
+                  and (.base_ref == "main" or (.base_ref | test("^release/v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.x$")))
                   and (.head_sha | type == "string" and test("^[0-9a-f]{40}$"))
                 )
               ' <<< "$COMPANION_CANDIDATES" >/dev/null \
@@ -140,12 +150,13 @@ jobs:
                 --arg repository "$CANDIDATE_REPOSITORY" \
                 --argjson number "$CANDIDATE_PR" \
                 --arg base "$CANDIDATE_BASE_SHA" \
+                --arg base_ref "$CANDIDATE_BASE_REF" \
                 --arg head "$CANDIDATE_HEAD_SHA" '
                   .repository.full_name == $repository
                   and .pull_request.number == $number
                   and .pull_request.state == "open"
                   and .pull_request.draft == false
-                  and .pull_request.base.ref == "main"
+                  and .pull_request.base.ref == $base_ref
                   and .pull_request.base.repo.full_name == $repository
                   and .pull_request.base.sha == $base
                   and .pull_request.head.sha == $head
@@ -167,21 +178,21 @@ jobs:
           set -euo pipefail
           rm -rf "${KUASAR_CI_DIR%/*}"
           mkdir -p "$KUASAR_CI_DIR"
-          printf 'mode\tcandidate_repository\tpull_request\tcandidate_sha\tbase_sha\thead_sha\trelease_version\n' \
+          printf 'mode\tcandidate_repository\tpull_request\tcandidate_sha\tbase_sha\tbase_ref\thead_sha\trelease_version\n' \
             > "$KUASAR_CI_DIR/run.tsv"
-          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
             "${{ inputs.mode }}" "$CANDIDATE_REPOSITORY" "$CANDIDATE_PR" "$CANDIDATE_SHA" \
-            "$CANDIDATE_BASE_SHA" "$CANDIDATE_HEAD_SHA" "$RELEASE_VERSION" \
+            "$CANDIDATE_BASE_SHA" "$CANDIDATE_BASE_REF" "$CANDIDATE_HEAD_SHA" "$RELEASE_VERSION" \
             >> "$KUASAR_CI_DIR/run.tsv"
           if [ "${{ inputs.mode }}" = source ]; then
-            printf 'repository\tpull_request\tcandidate_sha\tbase_sha\thead_sha\trole\n' \
+            printf 'repository\tpull_request\tcandidate_sha\tbase_sha\tbase_ref\thead_sha\trole\n' \
               > "$KUASAR_CI_DIR/source-set.tsv"
-            printf '%s\t%s\t%s\t%s\t%s\tcandidate\n' \
+            printf '%s\t%s\t%s\t%s\t%s\t%s\tcandidate\n' \
               "$CANDIDATE_REPOSITORY" "$CANDIDATE_PR" "$CANDIDATE_SHA" \
-              "$CANDIDATE_BASE_SHA" "$CANDIDATE_HEAD_SHA" \
+              "$CANDIDATE_BASE_SHA" "$CANDIDATE_BASE_REF" "$CANDIDATE_HEAD_SHA" \
               >> "$KUASAR_CI_DIR/source-set.tsv"
             jq -r '.[] | [.repository, .pull_request_number, .candidate_sha,
-              .base_sha, .head_sha, "companion"] | @tsv' \
+              .base_sha, .base_ref, .head_sha, "companion"] | @tsv' \
               <<< "$COMPANION_CANDIDATES" >> "$KUASAR_CI_DIR/source-set.tsv"
           fi
 
@@ -419,11 +430,12 @@ jobs:
                 --argjson number "$CANDIDATE_PR" \
                 --arg candidate "$CANDIDATE_SHA" \
                 --arg base "$CANDIDATE_BASE_SHA" \
+                --arg base_ref "$CANDIDATE_BASE_REF" \
                 --arg head "$CANDIDATE_HEAD_SHA" '
                   .number == $number
                   and .state == "open"
                   and .draft == false
-                  and .base.ref == "main"
+                  and .base.ref == $base_ref
                   and .base.repo.full_name == $repository
                   and .base.sha == $base
                   and .head.sha == $head
@@ -432,12 +444,13 @@ jobs:
           }
 
           validate_companion() {
-            local record=$1 repository number candidate base head
-            local merge_ref head_ref commit main branches snapshot
+            local record=$1 repository number candidate base base_ref head
+            local merge_ref head_ref commit pr base_branch branches snapshot
             repository=$(jq -r '.repository' <<< "$record")
             number=$(jq -r '.pull_request_number' <<< "$record")
             candidate=$(jq -r '.candidate_sha' <<< "$record")
             base=$(jq -r '.base_sha' <<< "$record")
+            base_ref=$(jq -r '.base_ref' <<< "$record")
             head=$(jq -r '.head_sha' <<< "$record")
             merge_ref=$(source_api_get "/repos/$repository/git/ref/pull/$number/merge") \
               || return 1
@@ -445,7 +458,9 @@ jobs:
               || return 1
             commit=$(source_api_get "/repos/$repository/git/commits/$candidate") \
               || return 1
-            main=$(source_api_get "/repos/$repository/git/ref/heads/main") \
+            pr=$(source_api_get "/repos/$repository/pulls/$number") \
+              || return 1
+            base_branch=$(source_api_get "/repos/$repository/git/ref/heads/$base_ref") \
               || return 1
             branches=$(source_api_get "/repos/$repository/commits/$head/branches-where-head") \
               || return 1
@@ -453,15 +468,17 @@ jobs:
               --argjson merge "$merge_ref" \
               --argjson head_ref "$head_ref" \
               --argjson commit "$commit" \
-              --argjson main "$main" \
+              --argjson pr "$pr" \
+              --argjson base_branch "$base_branch" \
               --argjson branches "$branches" \
               '{merge: $merge, head_ref: $head_ref, commit: $commit,
-                main: $main, branches: $branches}')
+                pr: $pr, base_branch: $base_branch, branches: $branches}')
             jq -e \
               --arg merge_ref "refs/pull/$number/merge" \
               --arg head_ref "refs/pull/$number/head" \
               --arg candidate "$candidate" \
               --arg base "$base" \
+              --arg base_ref "$base_ref" \
               --arg head "$head" '
                 .merge.ref == $merge_ref
                 and .merge.object.sha == $candidate
@@ -471,7 +488,14 @@ jobs:
                 and (.commit.parents | length) == 2
                 and .commit.parents[0].sha == $base
                 and .commit.parents[1].sha == $head
-                and .main.object.sha == $base
+                and .pr.number == $number
+                and .pr.state == "open"
+                and .pr.draft == false
+                and .pr.base.ref == $base_ref
+                and .pr.base.repo.full_name == $repository
+                and .pr.base.sha == $base
+                and .pr.head.sha == $head
+                and .base_branch.object.sha == $base
                 and (.branches | type == "array" and length > 0)
               ' <<< "$snapshot" >/dev/null
           }
@@ -500,7 +524,21 @@ jobs:
           printf 'repository\trequested_ref\tresolved_sha\trole\n' > "$KUASAR_REVISION_MANIFEST"
           printf 'repository\tresolved_sha\tstatus\tsha256\n' > "$KUASAR_CI_DIR/source-cache.tsv"
 
-          platform_requested_ref=main
+          platform_base_ref=main
+          if [ "$CANDIDATE_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ]; then
+            platform_base_ref=$CANDIDATE_BASE_REF
+          else
+            companion_platform=$(jq -c '
+              first(.[] | select(.repository == "kuasar-sandbox/kuasar-sandbox")) // empty
+            ' <<< "$COMPANION_CANDIDATES")
+            if [ -n "$companion_platform" ]; then
+              platform_base_ref=$(jq -r '.base_ref' <<< "$companion_platform")
+            fi
+          fi
+          [[ "$platform_base_ref" = main \
+            || "$platform_base_ref" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]]
+
+          platform_requested_ref=$platform_base_ref
           platform_resolved_sha=${{ job.workflow_sha }}
           platform_role=sibling
           if [ "$CANDIDATE_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ]; then
@@ -522,36 +560,115 @@ jobs:
             "$platform_requested_ref" "$platform_resolved_sha" "$platform_role" \
             >> "$KUASAR_REVISION_MANIFEST"
 
-          revision_query='
-          query {
-            accelerator: repository(owner: "kuasar-sandbox", name: "accelerator") { ref(qualifiedName: "refs/heads/main") { target { oid } } }
-            connector: repository(owner: "kuasar-sandbox", name: "connector") { ref(qualifiedName: "refs/heads/main") { target { oid } } }
-            guest_runtime: repository(owner: "kuasar-sandbox", name: "guest-runtime") { ref(qualifiedName: "refs/heads/main") { target { oid } } }
-            orchestrator: repository(owner: "kuasar-sandbox", name: "orchestrator") { ref(qualifiedName: "refs/heads/main") { target { oid } } }
-            sandboxer: repository(owner: "kuasar-sandbox", name: "sandboxer") { ref(qualifiedName: "refs/heads/main") { target { oid } } }
-          }'
-          revision_response=$(jq -cn --arg query "$revision_query" '{query: $query}' \
-            | curl --fail --show-error --silent \
+          source_api_get() {
+            curl --fail --show-error --silent \
               --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
               -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Content-Type: application/json" \
               -H "X-GitHub-Api-Version: 2022-11-28" \
-              --data-binary @- https://api.github.com/graphql)
-          jq -e '
-            .errors == null and ([
-              .data.accelerator.ref.target.oid,
-              .data.connector.ref.target.oid,
-              .data.guest_runtime.ref.target.oid,
-              .data.orchestrator.ref.target.oid,
-              .data.sandboxer.ref.target.oid
-            ] | all(type == "string" and test("^[0-9a-f]{40}$")))
-          ' <<< "$revision_response" >/dev/null \
-            || { echo "revision resolution did not return all five component repositories" >&2; exit 1; }
+              "https://api.github.com$1"
+          }
+
+          source_api_get_optional() {
+            local path=$1 response status
+            response=$(mktemp "$RUNNER_TEMP/kuasar-ref.XXXXXX")
+            status=$(curl --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              --output "$response" --write-out '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com$path") \
+              || { rm -f "$response"; return 1; }
+            case "$status" in
+              200) cat "$response"; rm -f "$response"; return 0 ;;
+              404) rm -f "$response"; return 2 ;;
+              *)
+                cat "$response" >&2
+                rm -f "$response"
+                echo "GitHub API returned HTTP $status for $path" >&2
+                return 1
+                ;;
+            esac
+          }
+
+          daily_version=$(awk '$1 == "version:" { print $2; exit }' \
+            src/platform/releases/daily-preview.yaml)
+          daily_suffix=$(awk '$1 == "preview_version:" { print $2; exit }' \
+            src/platform/releases/daily-preview.yaml)
+          [[ "$daily_version" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$daily_suffix" =~ ^preview\.[0-9]{8}$ ]]
+
+          declare -A configured_versions=()
+          while IFS=$'\t' read -r unit configured; do
+            case "$unit" in
+              accelerator|connector|sandboxer|orchestrator|runtime|vmlinux) ;;
+              *) echo "unexpected release unit in Daily manifest: $unit" >&2; exit 1 ;;
+            esac
+            [ -n "$configured" ] || { echo "Daily manifest has an empty $unit selection" >&2; exit 1; }
+            configured_versions["$unit"]=$configured
+          done < <(trusted/platform/release/selection.py src/platform \
+            "$daily_version-$daily_suffix")
+          [ "${#configured_versions[@]}" -eq 6 ] \
+            || { echo "Daily manifest did not resolve exactly six release units" >&2; exit 1; }
+
+          resolve_unit() {
+            local unit=$1 repository=$2 configured=$3 source_ref=$4 branch commit status
+            if branch=$(source_api_get_optional \
+              "/repos/kuasar-sandbox/$repository/git/ref/heads/$source_ref"); then
+              commit=$(jq -r '.object.sha // ""' <<< "$branch")
+            else
+              status=$?
+              [ "$status" -eq 2 ] \
+                || { echo "cannot resolve $repository $source_ref" >&2; return 1; }
+              [ "$source_ref" != main ] \
+                || { echo "component main branch is unavailable: $repository" >&2; return 1; }
+              commit=$(source_api_get \
+                "/repos/kuasar-sandbox/$repository/commits/$configured" \
+                | jq -r '.sha // ""')
+              source_ref=$configured
+            fi
+            [[ "$commit" =~ ^[0-9a-f]{40}$ ]] \
+              || { echo "invalid source commit for $unit" >&2; return 1; }
+            printf '%s\t%s\n' "$source_ref" "$commit"
+          }
+
+          declare -A unit_repositories=(
+            [accelerator]=accelerator [connector]=connector [sandboxer]=sandboxer
+            [orchestrator]=orchestrator [runtime]=guest-runtime [vmlinux]=guest-runtime
+          )
+          declare -A unit_requested_refs=()
+          declare -A unit_resolved_shas=()
+          printf 'unit\trepository\tconfigured_version\trequested_ref\tresolved_sha\n' \
+            > "$KUASAR_CI_DIR/release-units.tsv"
+          for unit in accelerator connector sandboxer orchestrator runtime vmlinux; do
+            configured=${configured_versions[$unit]}
+            source_ref=$(trusted/platform/release/preview-selection.py source-ref \
+              "$platform_base_ref" "$unit" "$configured")
+            IFS=$'\t' read -r requested_ref resolved_sha < <(resolve_unit "$unit" \
+              "${unit_repositories[$unit]}" "$configured" "$source_ref")
+            unit_requested_refs["$unit"]=$requested_ref
+            unit_resolved_shas["$unit"]=$resolved_sha
+            printf '%s\tkuasar-sandbox/%s\t%s\t%s\t%s\n' \
+              "$unit" "${unit_repositories[$unit]}" "$configured" \
+              "$requested_ref" "$resolved_sha" >> "$KUASAR_CI_DIR/release-units.tsv"
+          done
 
           for repo in "${repos[@]}"; do
-            requested_ref=main
+            case "$repo" in
+              accelerator|connector|sandboxer|orchestrator) unit=$repo ;;
+              guest-runtime) unit=runtime ;;
+              *) echo "unexpected component repository: $repo" >&2; exit 1 ;;
+            esac
+            requested_ref=${unit_requested_refs[$unit]}
+            resolved_sha=${unit_resolved_shas[$unit]}
             role=sibling
             if [ "kuasar-sandbox/$repo" = "$CANDIDATE_REPOSITORY" ]; then
+              if [ "$platform_base_ref" != main ] \
+                && [ "$CANDIDATE_BASE_REF" != "$requested_ref" ]; then
+                echo "candidate $CANDIDATE_REPOSITORY targets $CANDIDATE_BASE_REF, not selected $requested_ref" >&2
+                exit 1
+              fi
               requested_ref="$CANDIDATE_SHA"
               resolved_sha="$CANDIDATE_SHA"
               role=candidate
@@ -560,13 +677,15 @@ jobs:
                 first(.[] | select(.repository == $repository)) // empty
               ' <<< "$COMPANION_CANDIDATES")
               if [ -n "$companion_record" ]; then
+                companion_base_ref=$(jq -r '.base_ref' <<< "$companion_record")
+                if [ "$platform_base_ref" != main ] \
+                  && [ "$companion_base_ref" != "$requested_ref" ]; then
+                  echo "companion kuasar-sandbox/$repo targets $companion_base_ref, not selected $requested_ref" >&2
+                  exit 1
+                fi
                 requested_ref=$(jq -r '.candidate_sha' <<< "$companion_record")
                 resolved_sha=$requested_ref
                 role=companion
-              else
-                revision_key=${repo//-/_}
-                resolved_sha=$(jq -r --arg key "$revision_key" '.data[$key].ref.target.oid // empty' \
-                  <<< "$revision_response")
               fi
             fi
             [[ "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]
