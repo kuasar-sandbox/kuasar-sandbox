@@ -66,6 +66,7 @@ jobs:
           fi
 
           runs_endpoint="repos/$GITHUB_REPOSITORY/actions/workflows/daily-preview-branch.yml/runs?event=workflow_dispatch&per_page=100"
+          failures=()
 
           matching_run() {
             local title=$1 state=$2
@@ -102,6 +103,7 @@ jobs:
             [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
             title="Daily preview $ref@$sha for $date"
             converged=false
+            failed=false
             for attempt in 1 2 3; do
               wait_for_gc
               run_id=$(matching_run "$title" active)
@@ -142,14 +144,24 @@ jobs:
                     break
                     ;;
                   *)
-                    echo "$title failed: $conclusion" >&2
-                    exit 1
+                    failures+=("$title: $conclusion")
+                    failed=true
+                    break
                     ;;
                 esac
               done
+              [ "$failed" = false ] || break
               [ "$converged" = false ] || break
             done
+            if [ "$failed" = true ]; then
+              echo "==> record branch failure and continue: $title"
+              continue
+            fi
             if [ "$converged" = false ]; then
               echo "==> defer $title after three interrupted attempts; next scan resumes"
             fi
           done
+          if [ "${#failures[@]}" -ne 0 ]; then
+            printf 'Daily Preview branch failure: %s\n' "${failures[@]}" >&2
+            exit 1
+          fi

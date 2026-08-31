@@ -650,7 +650,10 @@ def make_plan(
 
 def force_dependency_preview(plan: Plan, date: str, state: RepositoryState) -> Plan:
     if plan.source_ref is None:
-        return plan
+        raise Deferred(
+            f"{plan.unit.name} has no derived source branch for a required "
+            "dependency rebuild"
+        )
     selected = preview_selection.preview_candidate(plan.unit.name, plan.winner, date)
     status = state.status(selected)
     if status.partial and not status.complete:
@@ -776,8 +779,6 @@ def persist_manifest(content: str, aggregate: str) -> str:
     relative = "releases/daily-preview.yaml"
     local_path = PLATFORM_ROOT / relative
     current = local_path.read_text(encoding="utf-8")
-    if current == content:
-        return PLATFORM_SHA
     head = branch_sha(PLATFORM_REPOSITORY, PLATFORM_REF)
     if head != PLATFORM_SHA:
         raise Pending(f"platform {PLATFORM_REF} moved; rescan the new head")
@@ -787,6 +788,8 @@ def persist_manifest(content: str, aggregate: str) -> str:
     decoded = base64.b64decode(str(remote["content"]).replace("\n", "")).decode()
     if decoded != current:
         raise Pending("daily-preview.yaml changed concurrently; rescan")
+    if current == content:
+        return PLATFORM_SHA
     request = {
         "message": f"release: select daily preview {aggregate.removeprefix('release-')}",
         "content": base64.b64encode(content.encode()).decode(),

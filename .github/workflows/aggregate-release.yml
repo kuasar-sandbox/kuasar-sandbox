@@ -80,12 +80,18 @@ jobs:
           fi
           bash control/release/validate-preview-line.sh "$VERSION" "$SOURCE_SHA"
           bash control/release/publish-release.sh check "$VERSION"
+          manifest_commit=$(control/release/selection.py \
+            "$GITHUB_WORKSPACE/platform" "$VERSION" --commit)
+          [ "$manifest_commit" = "$SOURCE_SHA" ] \
+            || { echo "$VERSION is not selected by $SOURCE_REF HEAD" >&2; exit 1; }
           control/release/selection.py "$GITHUB_WORKSPACE/platform" \
             "$VERSION" > selection.tsv
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "source_ref=$SOURCE_REF" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$SOURCE_SHA" >> "$GITHUB_OUTPUT"
-          echo "artifact=aggregate-stage-${VERSION}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=$VERSION"
+            echo "source_ref=$SOURCE_REF"
+            echo "source_sha=$SOURCE_SHA"
+            echo "artifact=aggregate-stage-${VERSION}-${GITHUB_RUN_ID}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Create component release read token
         id: source-token

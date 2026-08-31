@@ -291,6 +291,8 @@ grep -Fq "grep -E '^release/v" "$ROOT/.github/workflows/daily-preview.yml" \
   || release_fail "Daily scanner does not discover maintenance branches"
 grep -Fq 'source_sha:' "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate workflow does not pin its source commit"
+grep -Fq '"$VERSION" --commit' "$ROOT/.github/workflows/aggregate-release.yml" \
+  || release_fail "aggregate workflow accepts a historical Stable selection"
 grep -Fq 'run-name: Aggregate ${{ inputs.version }} @${{ inputs.source_sha }}' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate workflow run identity does not pin its source commit"
@@ -310,6 +312,9 @@ if grep -R -Fq 'queue: max' "$ROOT/.github/workflows"; then
 fi
 grep -Fq 'matching_run()' "$ROOT/.github/workflows/daily-preview.yml" \
   || release_fail "Daily scanner does not wait for exact branch runs"
+grep -Fq 'record branch failure and continue' \
+  "$ROOT/.github/workflows/daily-preview.yml" \
+  || release_fail "Daily scanner lets one branch starve later branches"
 grep -Fq 'title="Daily preview $ref@$sha for $date"' \
   "$ROOT/.github/workflows/daily-preview.yml" \
   || release_fail "Daily scanner run identity does not include the requested date"

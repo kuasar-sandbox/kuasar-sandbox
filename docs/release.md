@@ -110,7 +110,8 @@ scanner 固定每个分支的 HEAD SHA,再从平台 `main` 加载受信任的控
 所有分支协调器与 Preview GC 共用一个 GitHub Actions concurrency key,因此清单选择和
 GC 计划/派发不会重叠。scanner 按分支顺序派发并等待;被取消或超时的分支任务在本轮最多
 重试三次,仍未完成则由下一次扫描恢复。分支在选择或提交清单期间移动时,本次不覆盖远端
-状态,下一次从新 HEAD 重扫。
+状态,下一次从新 HEAD 重扫。某个分支确定性失败时,scanner 记录失败但继续处理其余分支,
+最后统一返回失败,避免一条损坏的维护线长期阻塞其他分支。
 
 ### 4.1 源分支映射
 
@@ -120,6 +121,8 @@ GC 计划/派发不会重叠。scanner 按分支顺序派发并等待;被取消�
 - runtime 与 vmlinux 分别从 `runtime-vX.Y.Z`、`vmlinux-vX.Y.Z` 派生
   `release/vX.Y.x`;
 - 派生分支不存在时,该 unit 固定复用清单指定的完整 Release,不自动修改版本。
+  如果上游依赖在本轮改变而该 unit 必须重建,则整次选择 deferred,不会把旧下游二进制与
+  新依赖版本写进同一个聚合清单。
 
 因此同一个平台维护分支中的六个 unit 可以来自六条彼此不同的组件版本线。
 
@@ -227,7 +230,8 @@ gh workflow run aggregate-release.yml \
 
 正式发布前先在目标分支提交 `release.yaml`,发布所缺的 Stable 组件单元,再从目标分支最新
 HEAD 触发聚合。主线 Stable 成功后成为 Latest;维护分支 Stable 保留为可发现的正式版本,
-但不抢占主线 Latest。
+但不抢占主线 Latest。Stable 与 Preview 都必须由该 HEAD 当前清单直接选择;历史清单只
+用于解析已存在 Release 和 GC,不能通过手工 dispatch 回填成新的聚合发布。
 
 本地发布工具验证入口为:
 
@@ -307,12 +311,17 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 - 发布先创建 draft、上传并复核 digest,全部一致后才公开;
 - 已发布 Tag 或 Release 不由发布器覆盖;残缺 Preview 只能经受保护删除入口恢复;
 - 分支 HEAD、Tag commit、清单 blob SHA 和 exact-asset BMS 共同固定一次发布;
+- 即使渲染后的 Daily 清单无需写入,协调器仍复核远端分支 HEAD 与清单 blob,不会用陈旧
+  checkout 派发组件;
 - Preview Release 的构建绑定防止相同 Tag/源码在不同依赖闭包之间被错误复用;
 - scanner 使用独立 concurrency key;所有平台分支协调器与 GC 共用全局
   `preview-manifest-selection-and-gc` concurrency group。scanner 顺序等待每个分支,不同时
   填入多个 pending slot。组件完整构建/发布 workflow 与 delete 对同一精确版本共用
   mutation group;平台聚合完整 prepare/BMS/publish workflow 与 delete 也使用同一精确
-  版本组。不同版本不共享 pending slot。组件 Latest 协调器是例外:其操作幂等且每次都
+  版本组。GitHub 可能合并该组内的 pending 请求;Daily 协调器和 GC 不把 cancelled 当作
+  成功,而是按同一精确输入重跑完整 workflow,最多三次后才 deferred。因此互斥不会把
+  发布或删除的目标状态静默丢失。不同版本不共享 pending slot。组件 Latest 协调器是
+  例外:其操作幂等且每次都
   扫描完整主线 Stable 集合,因此使用全仓串行组并允许多个触发合并;保留下来的最后一次
   运行仍能收敛完整状态。只有
   当前平台 `main` HEAD 的 `release.yaml` 所选 Stable 聚合能更新 Latest,且发布前后都会

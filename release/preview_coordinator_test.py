@@ -9,6 +9,7 @@ import importlib.util
 import json
 import pathlib
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -518,6 +519,66 @@ components:
         with self.assertRaisesRegex(coordinator.Deferred, "same Preview date"):
             coordinator.force_dependency_preview(plan, "20260831", state)
 
+    def test_dependency_change_defers_when_dependent_branch_is_missing(self) -> None:
+        plan = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["sandboxer"],
+            "v0.3.5",
+            None,
+            "4" * 40,
+            "v0.3.5",
+            "v0.3.5",
+            "fixed",
+        )
+        with self.assertRaisesRegex(
+            coordinator.Deferred, "no derived source branch"
+        ):
+            coordinator.force_dependency_preview(
+                plan, "20260831", mock.Mock()
+            )
+
+    def test_unchanged_manifest_still_rechecks_remote_branch_and_blob(self) -> None:
+        content = """version: release-v1.2.3
+preview_version: preview.20260831
+components:
+  accelerator: v1.0.0
+  connector: v1.0.0
+  sandboxer: v1.0.0
+  orchestrator: v1.0.0
+  runtime: runtime-v1.0.0
+  vmlinux: vmlinux-v1.0.0
+"""
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "releases").mkdir()
+            (root / "releases/daily-preview.yaml").write_text(
+                content, encoding="utf-8"
+            )
+            remote = {
+                "content": base64.b64encode(content.encode()).decode(),
+                "sha": "blob",
+            }
+            with (
+                mock.patch.object(coordinator, "PLATFORM_ROOT", root),
+                mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+                mock.patch.object(coordinator, "PLATFORM_SHA", "a" * 40),
+                mock.patch.object(
+                    coordinator, "branch_sha", return_value="a" * 40
+                ) as branch_sha,
+                mock.patch.object(
+                    coordinator, "api", return_value=remote
+                ) as api,
+                mock.patch.object(coordinator, "gh_platform") as gh_platform,
+            ):
+                result = coordinator.persist_manifest(
+                    content, "release-v1.2.3-preview.20260831"
+                )
+        self.assertEqual(result, "a" * 40)
+        branch_sha.assert_called_once_with(
+            coordinator.PLATFORM_REPOSITORY, "main"
+        )
+        api.assert_called_once()
+        gh_platform.assert_not_called()
+
     def test_manifest_keeps_independent_component_versions(self) -> None:
         plans = {
             name: coordinator.Plan(
@@ -690,6 +751,82 @@ components:
         ):
             coordinator.dispatch_cleanup(plan, "incomplete")
         gh.assert_not_called()
+
+    def test_cancelled_cleanup_is_retried_after_concurrency_coalescing(self) -> None:
+        plan = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["connector"],
+            "v1.2.3-preview.20260831",
+            "main",
+            "c" * 40,
+            "v1.2.3-preview.20260831",
+            "v1.2.3-preview.20260831",
+            "cleanup",
+        )
+        cancelled = {
+            "id": 23,
+            "status": "completed",
+            "conclusion": "cancelled",
+            "run_attempt": 1,
+            "html_url": "https://example.invalid/run/23",
+        }
+        with (
+            mock.patch.object(coordinator, "active_delete_run", return_value=None),
+            mock.patch.object(coordinator, "latest_run", return_value=cancelled),
+            mock.patch.object(coordinator, "gh") as gh,
+            self.assertRaisesRegex(coordinator.Pending, "reran cleanup"),
+        ):
+            coordinator.dispatch_cleanup(plan, "incomplete")
+        gh.assert_called_once_with(
+            "run",
+            "rerun",
+            "23",
+            "--repo",
+            plan.unit.repository,
+        )
+
+    def test_cancelled_publication_is_retried_after_mutation_coalescing(self) -> None:
+        plan = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["accelerator"],
+            "v1.2.3-preview.20260831",
+            "main",
+            "c" * 40,
+            "v1.2.3",
+            "v1.2.3-preview.20260831",
+            "publish",
+        )
+        state = mock.Mock()
+        state.status.return_value = coordinator.ReleaseStatus(None, None, False)
+        cancelled = {
+            "id": 24,
+            "status": "completed",
+            "conclusion": "cancelled",
+            "run_attempt": 1,
+            "html_url": "https://example.invalid/run/24",
+            "display_title": coordinator.release_run_title(
+                plan, {"accelerator": plan}
+            ),
+        }
+        with (
+            mock.patch.object(coordinator, "RepositoryState", return_value=state),
+            mock.patch.object(coordinator, "active_release_run", return_value=None),
+            mock.patch.object(coordinator, "latest_run", return_value=cancelled),
+            mock.patch.object(coordinator, "gh") as gh,
+        ):
+            self.assertFalse(
+                coordinator.ensure_unit(
+                    plan,
+                    {"accelerator": plan},
+                    "release-v9.8.7-preview.20260831",
+                    "d" * 40,
+                )
+            )
+        gh.assert_called_once_with(
+            "run",
+            "rerun",
+            "24",
+            "--repo",
+            plan.unit.repository,
+        )
 
     def test_successful_old_cleanup_is_redispatched_for_recreated_preview(self) -> None:
         unit = coordinator.UNIT_BY_NAME["connector"]

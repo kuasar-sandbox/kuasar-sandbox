@@ -242,6 +242,44 @@ class PreviewGCTest(unittest.TestCase):
             "--failed",
         )
 
+    def test_cancelled_component_gc_is_retried_as_a_full_workflow(self) -> None:
+        candidate = preview_gc.Candidate(
+            "kuasar-sandbox/connector",
+            "connector",
+            "v1.2.3-preview.20260831",
+            "5" * 40,
+            43,
+            2,
+            100,
+        )
+        cancelled = {
+            "id": 100,
+            "status": "completed",
+            "conclusion": "cancelled",
+            "run_attempt": 1,
+            "html_url": "https://example.invalid/run/100",
+        }
+        with (
+            mock.patch.object(
+                preview_gc, "live_manifest_protection", return_value=set()
+            ),
+            mock.patch.object(
+                preview_gc.coordinator, "active_delete_run", return_value=None
+            ),
+            mock.patch.object(
+                preview_gc.coordinator, "latest_run", return_value=cancelled
+            ),
+            mock.patch.object(preview_gc.coordinator, "gh") as gh,
+        ):
+            self.assertFalse(preview_gc.apply([candidate]))
+        gh.assert_called_once_with(
+            "run",
+            "rerun",
+            "100",
+            "--repo",
+            "kuasar-sandbox/connector",
+        )
+
     def test_failed_aggregate_deletion_stops_after_third_attempt(self) -> None:
         candidate = preview_gc.Candidate(
             preview_gc.coordinator.PLATFORM_REPOSITORY,
