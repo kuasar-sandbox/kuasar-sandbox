@@ -78,6 +78,10 @@ class PreviewCoordinatorTest(unittest.TestCase):
     def test_clone_fetch_allows_updating_attached_default_branch(self) -> None:
         unit = coordinator.UNIT_BY_NAME["accelerator"]
         with (
+            mock.patch.dict(
+                coordinator.os.environ,
+                {"GH_TOKEN": "test-component-token", "GIT_CONFIG_COUNT": "0"},
+            ),
             mock.patch.object(coordinator, "gh"),
             mock.patch.object(coordinator, "run") as run,
         ):
@@ -85,6 +89,32 @@ class PreviewCoordinatorTest(unittest.TestCase):
         command = run.call_args.args[0]
         self.assertIn("--update-head-ok", command)
         self.assertIn("refs/heads/main:refs/heads/main", command)
+        self.assertNotIn("test-component-token", " ".join(command))
+        environment = run.call_args.kwargs["environment"]
+        self.assertEqual(environment["GIT_CONFIG_COUNT"], "1")
+        self.assertEqual(
+            environment["GIT_CONFIG_KEY_0"],
+            "http.https://github.com/.extraheader",
+        )
+        header = environment["GIT_CONFIG_VALUE_0"]
+        encoded = header.removeprefix("AUTHORIZATION: basic ")
+        self.assertEqual(
+            base64.b64decode(encoded).decode(),
+            "x-access-token:test-component-token",
+        )
+        self.assertEqual(environment["GIT_TERMINAL_PROMPT"], "0")
+
+    def test_clone_requires_component_git_token_before_fetch(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["accelerator"]
+        with (
+            mock.patch.dict(coordinator.os.environ, {}, clear=True),
+            mock.patch.object(coordinator, "gh") as gh,
+            mock.patch.object(coordinator, "run") as run,
+            self.assertRaisesRegex(RuntimeError, "GH_TOKEN is required"),
+        ):
+            coordinator.clone_repository(unit, "main", pathlib.Path("unused"))
+        gh.assert_not_called()
+        run.assert_not_called()
 
     def test_maintenance_branch_rejects_another_platform_version_line(self) -> None:
         with (

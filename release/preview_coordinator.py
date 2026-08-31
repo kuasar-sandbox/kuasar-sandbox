@@ -122,6 +122,7 @@ def run(
     *,
     cwd: pathlib.Path | None = None,
     check: bool = True,
+    environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     result = subprocess.run(
         command,
@@ -130,11 +131,33 @@ def run(
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        env=environment,
     )
     if check and result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "command failed"
         raise RuntimeError(f"{' '.join(command)}: {detail}")
     return result
+
+
+def git_auth_environment() -> dict[str, str]:
+    token = os.environ.get("GH_TOKEN", "")
+    if not token:
+        raise RuntimeError("GH_TOKEN is required for private component Git access")
+    environment = os.environ.copy()
+    try:
+        index = int(environment.get("GIT_CONFIG_COUNT", "0"))
+    except ValueError as error:
+        raise RuntimeError("GIT_CONFIG_COUNT must be numeric") from error
+    credential = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    environment["GIT_CONFIG_COUNT"] = str(index + 1)
+    environment[f"GIT_CONFIG_KEY_{index}"] = (
+        "http.https://github.com/.extraheader"
+    )
+    environment[f"GIT_CONFIG_VALUE_{index}"] = (
+        f"AUTHORIZATION: basic {credential}"
+    )
+    environment["GIT_TERMINAL_PROMPT"] = "0"
+    return environment
 
 
 def gh(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -393,6 +416,7 @@ def branch_sha(repository: str, source_ref: str) -> str | None:
 
 
 def clone_repository(unit: Unit, source_ref: str, destination: pathlib.Path) -> None:
+    environment = git_auth_environment()
     gh(
         "repo",
         "clone",
@@ -413,6 +437,7 @@ def clone_repository(unit: Unit, source_ref: str, destination: pathlib.Path) -> 
             "+refs/tags/*:refs/tags/*",
         ],
         cwd=destination,
+        environment=environment,
     )
 
 
