@@ -475,6 +475,8 @@ jobs:
               '{merge: $merge, head_ref: $head_ref, commit: $commit,
                 pr: $pr, base_branch: $base_branch, branches: $branches}')
             jq -e \
+              --arg repository "$repository" \
+              --argjson number "$number" \
               --arg merge_ref "refs/pull/$number/merge" \
               --arg head_ref "refs/pull/$number/head" \
               --arg candidate "$candidate" \
