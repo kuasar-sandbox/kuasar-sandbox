@@ -306,7 +306,8 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 
 ## 10. 权限与可靠性
 
-- 跨仓 GitHub App token 只有 `Contents: read` 和 `Actions: write`;
+- 跨仓 GitHub App 安装只允许 `Contents: read`、`Pull requests: read` 和 `Actions: write`,
+  每个短期 token 只请求当前步骤需要的子集;
 - Daily 清单提交使用同一个 App 仅面向 `kuasar-sandbox` 仓的独立短期
   `Contents: write` token;它不具有其他组件仓写入权,也不复用通用
   `github-actions` 身份;
