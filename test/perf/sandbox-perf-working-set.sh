@@ -605,7 +605,7 @@ import json
 import sys
 
 policy, *paths = sys.argv[1:]
-expected = {"off": "sha256", "auto": "hmac"}[policy]
+expected = {"off": "digest", "auto": "hmac"}[policy]
 for path in paths:
     with open(path, encoding="utf-8") as source:
         document = json.load(source)
