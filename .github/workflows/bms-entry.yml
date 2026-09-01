@@ -61,6 +61,7 @@ jobs:
           owner: kuasar-sandbox
           repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
           permission-contents: read
+          permission-pull-requests: read
 
       - name: Admit the current exact integration commit
         id: admission
@@ -500,6 +501,7 @@ jobs:
           owner: kuasar-sandbox
           repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
           permission-contents: read
+          permission-pull-requests: read
 
       - name: Finalize the exact integration status
         env:
