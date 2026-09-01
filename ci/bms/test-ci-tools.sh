@@ -121,6 +121,15 @@ runner_companion_validation=$(sed -n \
     || fail "runner companion validation does not bind the repository identity"
 [ "$(grep -Fc -- '--argjson number "$number"' <<< "$runner_companion_validation")" -eq 1 ] \
     || fail "runner companion validation does not bind the pull request number"
+finalizer_companion_validation=$(sed -n \
+    '/^[[:space:]]*validate_companion() {$/,/^[[:space:]]*post_status() {$/p' \
+    "$entry_workflow")
+[ -n "$finalizer_companion_validation" ] \
+    || fail "cannot extract the finalizer companion validation function"
+[ "$(grep -Fc -- '--arg repository "$repository"' <<< "$finalizer_companion_validation")" -eq 1 ] \
+    || fail "finalizer companion validation does not bind the repository identity"
+[ "$(grep -Fc -- '--argjson number "$number"' <<< "$finalizer_companion_validation")" -eq 1 ] \
+    || fail "finalizer companion validation does not bind the pull request number"
 grep -Fq 'source-set.tsv' "$workflow" \
     || fail "exact source-set metadata is not recorded"
 grep -Fq 'platform_role=companion' "$workflow" \
