@@ -385,6 +385,7 @@ jobs:
           owner: kuasar-sandbox
           repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
           permission-contents: read
+          permission-pull-requests: read
           skip-token-revoke: true
 
       - name: Validate pull request integration set

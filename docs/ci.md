@@ -44,7 +44,8 @@ Ready 状态下运行 BMS 并取得自己的 exact-head status;一条 primary st
 draft → ready 触发新运行。准备合入时必须把 status 所链接 run 的 `source-set.tsv` 与当前 marker
 逐项比较;body 在该 run 之后发生过 marker 变更时,即使 commit status 仍显示 success 也视为失效。
 
-admission 使用仅限六仓 `Contents: read` 的短期 App token,通过 PR refs、目标 branch ref、
+admission 和 finalization 使用仅限六仓 `Contents: read`、`Pull requests: read` 的短期 App
+token,通过 PR refs、目标 branch ref、
 commit parents 与 `branches-where-head` 把每个 companion 解析成 PR number、candidate/base/base-ref/head
 SHA。自托管 job 不信任 PR body 原文,只接收 admission 输出的已解析记录,在执行候选代码前
 重新查询全部 refs/commit,按 exact integration SHA 组装源码并撤销 token。结束控制 job第三次
@@ -64,8 +65,8 @@ companion marker,再以该 PR 目标版本线的新 sibling 重跑。该流程�
 4. 当前开放 PR 与全部 companion refs 的 base/head/merge commit 在执行前与结束后均未变化;
 5. fork 准入 token 只请求组织 `Members: read`,仅存在于 admission 控制 job;
 6. 执行候选代码的 E2E job 的 `GITHUB_TOKEN` 只有 `Contents: read` 和 `Pull requests: read`;
-7. companion/source App token 只有六仓 `Contents: read`,其中 runner 上的 token 在执行候选
-   代码前撤销。
+7. companion/source App token 只有六仓 `Contents: read`、`Pull requests: read`,其中 runner
+   上的 token 在执行候选代码前撤销。
 
 结束控制 job 再次查询 PR。只有 BMS 成功且当前 integration commit
 仍与准入值完全一致时,它才把同一个 `kuasar/bms-exact-head` 状态置为 `success`;测试失败、

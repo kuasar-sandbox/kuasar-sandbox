@@ -86,8 +86,12 @@ grep -Fq 'companion_candidates:' "$workflow" \
 grep -Fq 'companion_candidates: ${{ needs.admission.outputs.companion_candidates }}' \
     "$entry_workflow" \
     || fail "BMS entry does not pass the admitted companion set to execution"
-if grep -Fq 'permission-pull-requests: read' "$workflow" "$entry_workflow"; then
-    fail "companion validation unnecessarily expands the source App permissions"
+[ "$(grep -Fc 'permission-pull-requests: read' "$entry_workflow")" -eq 2 ] \
+    || fail "companion admission and finalization tokens cannot read companion pull requests"
+[ "$(grep -Fc 'permission-pull-requests: read' "$workflow")" -eq 1 ] \
+    || fail "BMS source token cannot revalidate companion pull requests"
+if grep -Fq 'permission-pull-requests: write' "$workflow" "$entry_workflow"; then
+    fail "companion validation requests pull request write access"
 fi
 # shellcheck disable=SC2016 # Match the literal workflow-local variable.
 grep -Fq 'git/ref/pull/$companion_pr/merge' "$entry_workflow" \
