@@ -112,6 +112,15 @@ grep -Fq 'branches-where-head' "$entry_workflow" \
     || fail "companion admission does not require an organization repository branch head"
 grep -Fq 'branches-where-head' "$workflow" \
     || fail "runner validation does not recheck the companion branch provenance"
+runner_companion_validation=$(sed -n \
+    '/^[[:space:]]*validate_companion() {$/,/^[[:space:]]*validate_primary \\/p' \
+    "$workflow")
+[ -n "$runner_companion_validation" ] \
+    || fail "cannot extract the runner companion validation function"
+[ "$(grep -Fc -- '--arg repository "$repository"' <<< "$runner_companion_validation")" -eq 1 ] \
+    || fail "runner companion validation does not bind the repository identity"
+[ "$(grep -Fc -- '--argjson number "$number"' <<< "$runner_companion_validation")" -eq 1 ] \
+    || fail "runner companion validation does not bind the pull request number"
 grep -Fq 'source-set.tsv' "$workflow" \
     || fail "exact source-set metadata is not recorded"
 grep -Fq 'platform_role=companion' "$workflow" \
