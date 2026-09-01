@@ -335,9 +335,14 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 ## 11. 受保护分支
 
 项目仓的分支保护以一个 repository ruleset 为准。启用该 ruleset 时,它只匹配
-`refs/heads/main` 与 `refs/heads/release/v*`。它要求 PR、至少一个批准、dismiss stale
-approval、所有讨论已解决、严格匹配 `bms / finalize`、线性历史,并阻止 force push 与分支
-删除。不使用管理员默认绕过、签名提交、CODEOWNERS 或 merge queue。
+`refs/heads/main` 与 `refs/heads/release/v*`。它要求 PR、所有讨论已解决、严格匹配
+`bms / finalize`、线性历史,并阻止 force push 与分支删除。不使用管理员默认绕过、签名
+提交、CODEOWNERS 或 merge queue。
+
+当前 `required_approving_review_count` 为 0。GitHub 只计入拥有 write 权限且不是 PR 作者的
+approval;仓库没有独立的 write reviewer 时,强制一个 approval 会让维护者自己的所有 PR
+无法按 ruleset 合入。代码检视仍通过完整 diff 自检、resolved review threads 和精确 BMS
+门禁执行。
 
 启用前必须确认 `kuasar-sandbox-bms-ci` 的安装已获批 `Contents: write`。未满足此条件时
 不得激活 ruleset: Daily Preview 无法提交收敛后的清单,会被唯一的 bypass 设计反向阻断。
