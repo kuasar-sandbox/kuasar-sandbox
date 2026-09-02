@@ -67,7 +67,24 @@ cleanup() {
     [ "${KEEP_WORK:-0}" = "1" ] || rm -rf "$WORK"
     set -e
 }
-trap cleanup EXIT INT TERM
+trap "cleanup; audit" EXIT INT TERM
+
+# ---- hygiene + failure-class audit (post-teardown: true leak counts) ------
+audit() {
+    echo; echo "==> Soak complete: $WAVE waves"
+    echo "  host oom_kill delta: $(( $(read_oom_kills) - OOM0 ))"
+    echo "  leaked CH processes:    $(pgrep -fc '[c]loud-hypervisor' || true)"
+    echo "  leaked conductors:      $(pgrep -fc 'conductor [s]erve' || true)"
+    echo "  leaked sandbox-ctl:     $(pgrep -fc 'sandbox-ctl [r]un' || true)"
+    echo "  zombies:                $(ps -eo stat | grep -c '^Z' || true)"
+    echo "  leftover TAPs:          $(ip link | grep -cE 'tap[0-9r]' || true)"
+    echo "  leftover cgroups:       $(ls /sys/fs/cgroup/sandboxes/ 2>/dev/null | grep -c '^oc-' || true)"
+    echo "  guest SIGKILL events:   $(grep -l 'signal=9\|code=137' "$WORK"/oc-*.log 2>/dev/null | wc -l)"
+    echo "  admission rejections:   $(grep -l 'admit rejected' "$WORK"/oc-*.log 2>/dev/null | wc -l)"
+    echo "  uffd handler errors:    $(grep -h 'errors  *[1-9]' "$WORK"/oc-*.log 2>/dev/null | wc -l)"
+    echo "  CH nonzero exits:       $(grep -h 'CH exited code=[^0]' "$WORK"/oc-*.log 2>/dev/null | wc -l)"
+    echo "  CSV: $CSV"
+}
 
 read_avail_mib() { awk '/MemAvailable:/ {printf "%d", $2/1024}' /proc/meminfo; }
 read_oom_kills() { awk '/^oom_kill /{print $2}' /proc/vmstat 2>/dev/null || echo 0; }
@@ -200,35 +217,41 @@ while [ "$SECONDS" -lt "$T_END" ]; do
       while :; do a=$(read_avail_mib); if [ "$a" -lt "$min" ]; then min=$a; echo "$min" > "$mf"; fi; sleep 0.2; done ) &
     sampler=$!
 
-    # lifecycle churn: pause/resume all sockets once mid-wave
+    # lifecycle churn: pause/resume sockets of the long-lived types mid-wave
     sleep 3
     paused=0; resumed=0
     for sid in "${local_sids[@]}"; do
+        case "$sid" in *-heavy-*|*-idle-*|*-tool-*) ;; *) continue;; esac
         sock="$WORK/run/$sid/ch.sock"
         [ -S "$sock" ] || continue
         curl -sf -X PUT --unix-socket "$sock" http://ch/api/v1/vm.pause >/dev/null 2>&1 && paused=$((paused+1))
     done
     sleep 2
     for sid in "${local_sids[@]}"; do
+        case "$sid" in *-heavy-*|*-idle-*|*-tool-*) ;; *) continue;; esac
         sock="$WORK/run/$sid/ch.sock"
         [ -S "$sock" ] || continue
         curl -sf -X PUT --unix-socket "$sock" http://ch/api/v1/vm.resume >/dev/null 2>&1 && resumed=$((resumed+1))
     done
 
-    # snapshot/restore churn every CHURN_EVERY waves (first 4 fast-type sandboxes)
+    # snapshot/restore churn every CHURN_EVERY waves on the slow-type fleet
+    # (fast-type sandboxes have usually exited by churn time)
     snap_ok=0; rest_ready=0
     declare -A SREF=()
-    if [ $(( WAVE % CHURN_EVERY )) -eq 0 ]; then
+    if [ $(( WAVE % CHURN_EVERY )) -eq 0 ] && [ "$SECONDS" -lt "$T_END" ]; then
         for k in 1 2 3 4; do
-            sid="oc-w${WAVE}-fast-${k}"
+            sid="oc-w${WAVE}-heavy-${k}"
             [ -S "$WORK/run/$sid/ch.sock" ] || continue
             mkdir -p "$WORK/snapshots/$sid"
-            if "$BIN/sandbox-ctl" snapshot --sandbox-id "$sid" --run-root "$WORK/run" \
+            if timeout 30 "$BIN/sandbox-ctl" snapshot --sandbox-id "$sid" --run-root "$WORK/run" \
                 --output "$WORK/snapshots/$sid" > "$WORK/$sid.snap.log" 2>&1; then
                 snap_ok=$((snap_ok+1))
                 SREF[$k]=$(grep -oE '/[^ ]+\.snapshot' "$WORK/$sid.snap.log" | head -1)
+            else
+                echo "  ! snapshot of $sid failed/timed out" >&2
             fi
         done
+        rest_pids=()
         for k in 1 2 3 4; do
             [ -n "${SREF[$k]:-}" ] || continue
             sid="oc-w${WAVE}-rest-${k}"; rtap="tapr${WAVE}-${k}"; rdiff="$WORK/$sid.diff"
@@ -240,7 +263,7 @@ while [ "$SECONDS" -lt "$T_END" ]; do
             truncate -s 64M "$rdiff"; mkfs.ext4 -q -F -O ^has_journal -b 4096 "$rdiff"
             cat > "$WORK/$sid.yaml" <<EOF
 resources:
-  capacity: { cpu: 1, memory: 192MiB }
+  capacity: { cpu: 1, memory: 512MiB }
   allocatable: { cpu: 1, memory: 64MiB }
 network: { tap: $rtap }
 boot:
@@ -252,24 +275,45 @@ EOF
             "$BIN/sandbox-ctl" run --restore "${SREF[$k]}" --config "$WORK/$sid.yaml" \
                 --sandbox-id "$sid" --ch-binary "$CH_BIN" --run-root "$WORK/run" --ready-fd 3 \
                 > "$WORK/$sid.log" 2>&1 3> "$WORK/$sid.ready" &
+            rest_pids+=("$!")
             SANDBOX_PIDS+=("$!")
         done
-        for k in 1 2 3 4; do
-            sid="oc-w${WAVE}-rest-${k}"
+        for idx in "${!rest_pids[@]}"; do
+            k=$((idx+1)); sid="oc-w${WAVE}-rest-$((idx+1))"
             dl=$(( SECONDS + 30 ))
-            until [ -s "$WORK/$sid.ready" ] || [ "$SECONDS" -ge "$dl" ]; do sleep 0.1; done
-            [ -s "$WORK/$sid.ready" ] && rest_ready=$((rest_ready+1))
+            # abort early if the restore process exited (failure) instead of
+            # burning the full 30s timeout per dead restore
+            until [ -s "$WORK/$sid.ready" ] || ! kill -0 "${rest_pids[$idx]}" 2>/dev/null || [ "$SECONDS" -ge "$dl" ]; do
+                sleep 0.1
+            done
+            [ -s "$WORK/$sid.ready" ] && rest_ready=$((rest_ready+1)) || echo "  ! restore $sid failed to reach ready state" >&2
         done
-        rm -f "$WORK/snapshots"/*/mem* 2>/dev/null || true   # bound disk churn
+        # reap restored sessions (they continue their interrupted turn loop)
+        rdl=$(( SECONDS + 40 ))
+        for rp in "${rest_pids[@]:-}"; do
+            while kill -0 "$rp" 2>/dev/null && [ "$SECONDS" -lt "$rdl" ]; do sleep 0.2; done
+            kill -9 "$rp" 2>/dev/null || true
+            wait "$rp" 2>/dev/null || true
+        done
+        unset rest_pids
     fi
 
-    # wait for wave drain (timeout 150s)
+    # non-blocking wave drain with real timeout: poll liveness, then reap
     wtimeout=$(( SECONDS + 150 ))
-    for p in "${local_pids[@]}"; do
-        kill -0 "$p" 2>/dev/null || continue
-        wait "$p" 2>/dev/null || true
-        [ "$SECONDS" -ge "$wtimeout" ] && break
+    while :; do
+        alive=0
+        for p in "${local_pids[@]}"; do
+            kill -0 "$p" 2>/dev/null && alive=$((alive+1))
+        done
+        [ "$alive" -eq 0 ] && break
+        if [ "$SECONDS" -ge "$wtimeout" ]; then
+            echo "  ! wave $WAVE drain timeout with $alive sandboxes still alive; SIGKILLing stragglers" >&2
+            for p in "${local_pids[@]}"; do kill -9 "$p" 2>/dev/null || true; done
+            break
+        fi
+        sleep 0.2
     done
+    for p in "${local_pids[@]}"; do wait "$p" 2>/dev/null || true; done
     kill "$sampler" 2>/dev/null || true; wait "$sampler" 2>/dev/null || true
 
     exit_ok=0; exit_fail=0; vpass=0; sigkill=0; arej=0
@@ -289,19 +333,7 @@ EOF
     rm -f "$WORK"/oc-w${WAVE}-*.diff "$WORK"/oc-w${WAVE}-*.yaml 2>/dev/null || true
     SANDBOX_PIDS=()
     echo "  wave $WAVE: $vpass/${#local_sids[@]} verified | pause $paused/resume $resumed | snap $snap_ok/restore $rest_ready | mem_min ${mem_min}MiB | ${wave_s}ms"
+    # stop launching new waves once the budget is exhausted
+    [ "$SECONDS" -lt "$T_END" ] || break
 done
 
-# ---- final hygiene + failure-class audit ----------------------------------
-echo; echo "==> Soak complete: $WAVE waves in ${DURATION}s"
-echo "  host oom_kill delta: $(( $(read_oom_kills) - OOM0 ))"
-echo "  leaked CH processes:    $(pgrep -fc '[c]loud-hypervisor' || true)"
-echo "  leaked conductors:      $(pgrep -fc 'conductor [s]erve' || true)"
-echo "  leaked sandbox-ctl:     $(pgrep -fc 'sandbox-ctl [r]un' || true)"
-echo "  zombies:                $(ps -eo stat | grep -c '^Z' || true)"
-echo "  leftover TAPs:          $(ip link | grep -cE 'tap[0-9r]' || true)"
-echo "  leftover cgroups:       $(ls /sys/fs/cgroup/sandboxes/ 2>/dev/null | grep -c '^oc-' || true)"
-echo "  guest SIGKILL events:   $(grep -l 'signal=9\|code=137' "$WORK"/oc-*.log 2>/dev/null | wc -l)"
-echo "  admission rejections:   $(grep -l 'admit rejected' "$WORK"/oc-*.log 2>/dev/null | wc -l)"
-echo "  uffd handler errors:    $(grep -h 'errors  *[1-9]' "$WORK"/oc-*.log 2>/dev/null | wc -l)"
-echo "  CH nonzero exits:       $(grep -h 'CH exited code=[^0]' "$WORK"/oc-*.log 2>/dev/null | wc -l)"
-echo "  CSV: $CSV"
