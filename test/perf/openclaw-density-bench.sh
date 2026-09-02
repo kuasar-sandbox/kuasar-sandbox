@@ -73,7 +73,8 @@ cleanup() {
     for tap in "${CREATED_TAPS[@]:-}"; do
         ip link delete "$tap" 2>/dev/null || true
     done
-    rm -rf "$WORK" 2>/dev/null || true
+    # KEEP_WORK=1 preserves snapshots/scratch for post-run analysis (dedup, etc.)
+    [ "${KEEP_WORK:-0}" = "1" ] || rm -rf "$WORK" 2>/dev/null || true
     set -e
 }
 trap cleanup EXIT INT TERM
