@@ -238,7 +238,10 @@ while [ "$SECONDS" -lt "$T_END" ]; do
     # (fast-type sandboxes have usually exited by churn time)
     snap_ok=0; rest_ready=0
     declare -A SREF=()
-    if [ $(( WAVE % CHURN_EVERY )) -eq 0 ] && [ "$SECONDS" -lt "$T_END" ]; then
+    # disk guard: each churn wave stages ~4 × 1.6 GiB of snapshot artifacts;
+    # ENOSPC here degrades running guests (vdb write errors), not just churn
+    free_kb=$(df --output=avail -k /var/tmp | tail -1)
+    if [ $(( WAVE % CHURN_EVERY )) -eq 0 ] && [ "$SECONDS" -lt "$T_END" ] && [ "$free_kb" -gt 8388608 ]; then
         for k in 1 2 3 4; do
             sid="oc-w${WAVE}-heavy-${k}"
             [ -S "$WORK/run/$sid/ch.sock" ] || continue
@@ -296,6 +299,10 @@ EOF
             wait "$rp" 2>/dev/null || true
         done
         unset rest_pids
+        # churn consumed the snapshot artifacts; free the disk for the next wave
+        rm -rf "$WORK/snapshots"/* 2>/dev/null || true
+    elif [ $(( WAVE % CHURN_EVERY )) -eq 0 ]; then
+        echo "  ! churn wave $WAVE skipped: only $(( free_kb / 1048576 )) GiB free on /var/tmp" >&2
     fi
 
     # non-blocking wave drain with real timeout: poll liveness, then reap
