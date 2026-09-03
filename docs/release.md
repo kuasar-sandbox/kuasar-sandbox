@@ -168,8 +168,11 @@ run 身份,不会用旧输入重跑或改写运行中清单。
   删除 Release、资产和 Tag,再重扫并重新走正常 Daily 发布;
 - 外来残缺 Preview 或残缺 Stable:忽略,不作为候选,也不自动删除;
 - 无组件维护分支的固定版本不完整:延后,不派生替代版本;
-- 确定性失败最多重跑三次,超过后保持 deferred,不会靠覆盖 Tag 或手工拼资产恢复。普通
-  failure 只重跑失败 job;cancelled、timed out 等没有失败 job 的状态重跑完整 workflow。
+- 确定性失败最多尝试三次,超过后保持 deferred,不会靠覆盖 Tag 或手工拼资产恢复。组件
+  发布和删除的普通 failure 只重跑失败 job;cancelled、timed out 等没有失败 job 的状态
+  重跑完整 workflow。聚合发布的任何非成功结果都创建同一精确输入的新 workflow run,
+  让 prepare 重新拉取组件 Release 并生成新的 exact stage;三次预算按这些 run 的
+  `run_attempt` 总数累计。
 
 若未完成的聚合选择跨过了新的上海日期,控制器不再用旧日期 Tag 绑定新的组件 HEAD。
 残缺聚合对象先通过受保护入口删除;随后清单滚到新日期并重新选择。旧选择中已经完整发布
@@ -234,6 +237,11 @@ gh workflow run aggregate-release.yml \
 HEAD 触发聚合。主线 Stable 成功后成为 Latest;维护分支 Stable 保留为可发现的正式版本,
 但不抢占主线 Latest。Stable 与 Preview 都必须由该 HEAD 当前清单直接选择;历史清单只
 用于解析已存在 Release 和 GC,不能通过手工 dispatch 回填成新的聚合发布。
+
+聚合 prepare 生成的短期 artifact 是一次 run 的不可变发布证据。聚合失败后不对旧 run
+执行 failed-job 或 full rerun,而是重新 dispatch 相同版本、源码分支和源码 SHA,确保新的
+prepare 重新下载当前组件 Release。控制器按精确 run name 汇总新旧 run 的尝试次数,总计
+三次后保持 deferred。
 
 本地发布工具验证入口为:
 
@@ -325,8 +333,9 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
   填入多个 pending slot。组件完整构建/发布 workflow 与 delete 对同一精确版本共用
   mutation group;平台聚合完整 prepare/BMS/publish workflow 与 delete 也使用同一精确
   版本组。GitHub 可能合并该组内的 pending 请求;Daily 协调器和 GC 不把 cancelled 当作
-  成功,而是按同一精确输入重跑完整 workflow,最多三次后才 deferred。因此互斥不会把
-  发布或删除的目标状态静默丢失。不同版本不共享 pending slot。组件 Latest 协调器是
+  成功。组件发布和删除按同一精确输入重跑相应 job 或完整 workflow;聚合发布创建新的
+  workflow run 和 exact stage。各路径最多尝试三次后才 deferred。因此互斥不会把发布或
+  删除的目标状态静默丢失。不同版本不共享 pending slot。组件 Latest 协调器是
   例外:其操作幂等且每次都
   扫描完整主线 Stable 集合,因此使用全仓串行组并允许多个触发合并;保留下来的最后一次
   运行仍能收敛完整状态。只有

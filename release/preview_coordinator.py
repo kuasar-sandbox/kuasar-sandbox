@@ -507,6 +507,24 @@ def active_aggregate_run(version: str) -> dict[str, Any] | None:
     return max(active, key=lambda item: str(item.get("created_at", "")), default=None)
 
 
+def dispatch_aggregate_run(version: str, source_sha: str) -> None:
+    gh(
+        "workflow",
+        "run",
+        "aggregate-release.yml",
+        "--repo",
+        PLATFORM_REPOSITORY,
+        "--ref",
+        "main",
+        "-f",
+        f"version={version}",
+        "-f",
+        f"source_ref={PLATFORM_REF}",
+        "-f",
+        f"source_sha={source_sha}",
+    )
+
+
 def run_active(state: dict[str, Any]) -> bool:
     return state.get("status") in {
         "queued",
@@ -981,28 +999,19 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
         exact, key=lambda item: str(item.get("created_at", "")), default=None
     )
     if state is None:
-        gh(
-            "workflow",
-            "run",
-            "aggregate-release.yml",
-            "--repo",
-            PLATFORM_REPOSITORY,
-            "--ref",
-            "main",
-            "-f",
-            f"version={version}",
-            "-f",
-            f"source_ref={PLATFORM_REF}",
-            "-f",
-            f"source_sha={source_sha}",
-        )
+        dispatch_aggregate_run(version, source_sha)
         print(f"==> dispatched aggregate {version} from {PLATFORM_REF}")
         return False
     if state.get("conclusion") == "success":
         raise Pending("aggregate run is waiting for Release API convergence")
-    attempt = int(state.get("run_attempt", 1))
-    if attempt < 3:
-        rerun_workflow(PLATFORM_REPOSITORY, state)
+    attempts = sum(int(item.get("run_attempt", 1)) for item in exact)
+    if attempts < 3:
+        # prepare owns the immutable exact-stage artifact. A failed-job rerun
+        # reuses that stage, while a full rerun keeps its GITHUB_RUN_ID artifact
+        # identity. A fresh run guarantees that prepare fetches component assets
+        # again without overwriting another attempt's evidence.
+        dispatch_aggregate_run(version, source_sha)
+        print(f"==> redispatched aggregate {version} with a fresh exact stage")
         return False
     raise Deferred(f"aggregate publication failed: {state.get('html_url')}")
 
