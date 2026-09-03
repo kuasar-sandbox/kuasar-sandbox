@@ -62,8 +62,18 @@ cleanup() {
     mkdir -p "$raw"; cp -a "$WORK"/*.log "$WORK"/*.csv "$WORK"/*.yaml "$raw"/ 2>/dev/null || true
     for p in "${PROXY_PIDS[@]:-}"; do kill -TERM "$p" 2>/dev/null || true; done
     for spid in "${SANDBOX_PIDS[@]:-}"; do kill -9 "$spid" 2>/dev/null || true; done
-    pkill -9 -f "cloud-hypervisor.*openclaw-soak" 2>/dev/null || true
-    [ -n "$DAEMON_PID" ] && { kill -TERM "$DAEMON_PID" 2>/dev/null || true; wait "$DAEMON_PID" 2>/dev/null || true; }
+    pkill -9 -f "cloud-hypervisor.*$RUN_ROOT" 2>/dev/null || true
+    pkill -9 -f "cloud-hypervisor.*$WORK" 2>/dev/null || true
+    pkill -9 -f "sandbox-ctl.*$RUN_ROOT" 2>/dev/null || true
+    if [ -n "$DAEMON_PID" ]; then
+        kill -TERM "$DAEMON_PID" 2>/dev/null || true
+        for _ in {1..20}; do
+            kill -0 "$DAEMON_PID" 2>/dev/null || break
+            sleep 0.1
+        done
+        kill -9 "$DAEMON_PID" 2>/dev/null || true
+        wait "$DAEMON_PID" 2>/dev/null || true
+    fi
     for tap in "${CREATED_TAPS[@]:-}"; do ip link delete "$tap" 2>/dev/null || true; done
     [ "${KEEP_WORK:-0}" = "1" ] || rm -rf "$WORK" "$RUN_ROOT"
     set -e
@@ -300,9 +310,12 @@ EOF
         rdl=$(( SECONDS + 40 ))
         for rp in "${rest_pids[@]:-}"; do
             while kill -0 "$rp" 2>/dev/null && [ "$SECONDS" -lt "$rdl" ]; do sleep 0.2; done
+            kill -TERM "$rp" 2>/dev/null || true
+            sleep 0.1
             kill -9 "$rp" 2>/dev/null || true
             wait "$rp" 2>/dev/null || true
         done
+        pkill -9 -f "cloud-hypervisor.*oc-w.*-rest" 2>/dev/null || true
         unset rest_pids
         # churn consumed the snapshot artifacts; free the disk for the next wave
         rm -rf "$WORK/snapshots"/* 2>/dev/null || true

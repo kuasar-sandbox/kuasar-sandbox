@@ -65,9 +65,16 @@ cleanup() {
     for spid in "${SANDBOX_PIDS[@]:-}"; do
         kill -9 "$spid" 2>/dev/null || true
     done
+    pkill -9 -f "cloud-hypervisor.*$RUN_ROOT" 2>/dev/null || true
     pkill -9 -f "cloud-hypervisor.*$WORK" 2>/dev/null || true
+    pkill -9 -f "sandbox-ctl.*$RUN_ROOT" 2>/dev/null || true
     if [ -n "$DAEMON_PID" ]; then
         kill -TERM "$DAEMON_PID" 2>/dev/null || true
+        for _ in {1..20}; do
+            kill -0 "$DAEMON_PID" 2>/dev/null || break
+            sleep 0.1
+        done
+        kill -9 "$DAEMON_PID" 2>/dev/null || true
         wait "$DAEMON_PID" 2>/dev/null || true
     fi
     for tap in "${CREATED_TAPS[@]:-}"; do
