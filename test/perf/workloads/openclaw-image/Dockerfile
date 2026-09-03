@@ -11,9 +11,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install openclaw globally
-RUN npm install -g openclaw@2026.8.1 --omit=dev --no-audit --no-fund
-
 # Create benchmark workspace with a git repository and code files
 WORKDIR /workspace/repo
 RUN git config --global user.email "agent@openclaw.local" && \

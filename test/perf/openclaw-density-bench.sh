@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 #
-# openclaw-density-bench.sh — Real OpenClaw Autonomous Agent Benchmark Suite
+# openclaw-density-bench.sh — Autonomous Coding-Agent (OpenClaw-style) Benchmark Suite
 #
-# Tests Kuasar Sandbox under genuine Node.js 22 + OpenClaw agent workloads:
+# Tests Kuasar Sandbox under OpenClaw-style autonomous coding-agent workloads
+# (deterministic mock-LLM agent loop; the `openclaw` npm package is not used):
 #   1. Calibration (P1-OpenClaw): Baseline RSS, peak tool execution RSS, V8 heap
 #   2. In-Memory Pause/Resume (Warm Freeze): vm.pause/vm.resume latency at N=30
 #   3. Cold Snapshot/Restore (Scale-to-Zero): Memory dump + lazy UFFD restore
@@ -323,7 +324,7 @@ declare -A RAMP_MEM=()
 # ============================================================================
 run_calibration() {
     echo "============================================================"
-    echo " PHASE 1: Real OpenClaw Single-Sandbox Calibration"
+    echo " PHASE 1: Autonomous Agent Single-Sandbox Calibration (P1-OpenClaw)"
     echo "============================================================"
     start_proxy 0.0
     prepare_blk0
@@ -759,7 +760,7 @@ generate_report() {
 # OpenClaw Autonomous Agent Benchmark Report
 **Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
 **Platform**: Kuasar Sandbox Runtime & Hypervisor Platform  
-**Workload**: Real Autonomous Agent (\`openclaw@2026.8.1\` on Node.js 22 + Python 3.12 + Git + Ripgrep)  
+**Workload**: OpenClaw-style autonomous coding-agent loop (deterministic mock LLM; Node.js 22 + Python 3.12 + Git + Ripgrep; the \`openclaw\` npm package is not used)  
 **Host Specs**: 32 vCPUs (AMD Zen 5), 61.2 GiB RAM, Linux x86_64, NVMe Storage  
 
 > Every value in this report is measured live by \`openclaw-density-bench.sh\` during
@@ -771,7 +772,7 @@ generate_report() {
 
 ## 1. Executive Summary
 
-We evaluated the **Kuasar Sandbox** platform under genuine autonomous coding agent workloads using the real **OpenClaw** (\`openclaw@2026.8.1\`) runtime. Unlike synthetic scripts, this benchmark runs the full Node.js V8 execution engine, multi-turn LLM tool-calling loops, git tree mutations, unit test executions, and dynamic memory allocations across a spectrum of agent duty cycles.
+We evaluated the **Kuasar Sandbox** platform under autonomous coding-agent workloads: an OpenClaw-style multi-turn tool-calling agent loop executed by the full Node.js V8 runtime against a deterministic local mock LLM (the \`openclaw\` npm package itself is not part of the workload). Compared to synthetic scripts, this exercises the complete agent execution profile — V8 heap dynamics, bash/git/unittest child processes, LLM-wait duty cycles, git tree mutations, and dynamic memory allocations.
 
 ### Key Highlights
 - **In-Memory VM Pause/Resume**: Freezing agent microVMs during the LLM inference wait window averaged **${PAUSE_AVG_MS} ms** pause / **${RESUME_AVG_MS} ms** resume per VM; host CPU sampled at **${PAUSE_CPU_PCT:-n/a}%** while frozen.
@@ -782,7 +783,7 @@ We evaluated the **Kuasar Sandbox** platform under genuine autonomous coding age
 
 ## 2. Benchmark Phase Results
 
-### Phase 1: Real OpenClaw Calibration (\`P1-OpenClaw\`)
+### Phase 1: Autonomous Agent Calibration (\`P1-OpenClaw\`)
 Single microVM executing a 4-turn autonomous software engineering task (git inspect $\to$ unittest run $\to$ code patch $\to$ git diff verification):
 
 | Metric | Measured Value | Target SLA | Verdict |

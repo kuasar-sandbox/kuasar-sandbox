@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 /**
- * run_openclaw_session.mjs — Real OpenClaw Agent Session Driver
+ * run_openclaw_session.mjs — Autonomous Coding-Agent Session Driver (OpenClaw-style)
  *
- * Runs an autonomous agent turn-taking loop inside the Kuasar Sandbox:
+ * An OpenClaw-STYLE agent workload: a self-contained turn-taking coding-agent
+ * loop (not the `openclaw` npm package, which is not invoked anywhere). The
+ * LLM is a deterministic local mock proxy, making the workload reproducible:
  * 1. Connects to the agent LLM proxy via OPENAI_BASE_URL
  * 2. Receives tool-calling plans (bash / workspace inspection / testing / patching)
  * 3. Executes tools locally in /workspace/repo using Node.js child_process
@@ -27,7 +29,7 @@ async function postChat(messages, tools) {
       'Authorization': `Bearer ${API_KEY}`,
     },
     body: JSON.stringify({
-      model: 'openclaw-gpt4',
+      model: 'agent-mock-gpt4',
       messages,
       tools,
       tool_choice: 'auto',
@@ -74,8 +76,8 @@ async function runAgentSession() {
   const sessionStart = performance.now();
   const memInitial = process.memoryUsage();
 
-  console.log(`[OpenClaw] Starting agent session (mode=${MODE}, repo=${REPO_DIR})`);
-  console.log(`[OpenClaw] Initial V8 Memory: RSS=${(memInitial.rss / 1024 / 1024).toFixed(1)}MB HeapUsed=${(memInitial.heapUsed / 1024 / 1024).toFixed(1)}MB`);
+  console.log(`[AgentSession] Starting agent session (mode=${MODE}, repo=${REPO_DIR})`);
+  console.log(`[AgentSession] Initial V8 Memory: RSS=${(memInitial.rss / 1024 / 1024).toFixed(1)}MB HeapUsed=${(memInitial.heapUsed / 1024 / 1024).toFixed(1)}MB`);
 
   const tools = [
     {
@@ -97,7 +99,7 @@ async function runAgentSession() {
   const messages = [
     {
       role: 'system',
-      content: 'You are OpenClaw, an autonomous software engineering agent. Inspect the codebase, run tests, implement requested changes, and verify git diffs.',
+      content: 'You are an autonomous software engineering agent. Inspect the codebase, run tests, implement requested changes, and verify git diffs.',
     },
     {
       role: 'user',
@@ -121,7 +123,7 @@ async function runAgentSession() {
     messages.push(assistantMsg);
 
     if (choice.finish_reason === 'stop' || !assistantMsg.tool_calls) {
-      console.log(`[OpenClaw] Assistant: ${assistantMsg.content}`);
+      console.log(`[AgentSession] Assistant: ${assistantMsg.content}`);
       break;
     }
 
@@ -129,10 +131,10 @@ async function runAgentSession() {
     for (const toolCall of assistantMsg.tool_calls) {
       const toolName = toolCall.function.name;
       const toolArgs = toolCall.function.arguments;
-      console.log(`[OpenClaw Tool Dispatch] -> ${toolName}(${toolArgs.trim()})`);
+      console.log(`[AgentSession Tool Dispatch] -> ${toolName}(${toolArgs.trim()})`);
 
       const { stdout, stderr, exitCode, durationMs: toolLatency } = executeTool(toolName, toolArgs);
-      console.log(`[OpenClaw Tool Result] (exit=${exitCode}, ${toolLatency.toFixed(1)}ms):`);
+      console.log(`[AgentSession Tool Result] (exit=${exitCode}, ${toolLatency.toFixed(1)}ms):`);
       if (stdout.trim()) console.log(stdout.trim().split('\n').map(l => '  ' + l).join('\n'));
       if (stderr.trim()) console.error(stderr.trim().split('\n').map(l => '  [err] ' + l).join('\n'));
 
@@ -173,7 +175,7 @@ async function runAgentSession() {
   };
 
   console.log(`\n============================================================`);
-  console.log(`[OpenClaw Session Complete] Verdict: PASS (${sessionDurationMs.toFixed(1)}ms)`);
+  console.log(`[AgentSession Complete] Verdict: PASS (${sessionDurationMs.toFixed(1)}ms)`);
   console.log(`  Peak RSS: ${report.peak_rss_mib} MiB | Final Heap: ${report.final_heap_used_mib} MiB`);
   console.log(`============================================================`);
 
@@ -182,7 +184,7 @@ async function runAgentSession() {
 }
 
 runAgentSession().catch(err => {
-  console.error(`[OpenClaw Fatal Error]`, err);
+  console.error(`[AgentSession Fatal Error]`, err);
   const failReport = { verdict: 'FAIL', error: err.message, stack: err.stack };
   writeFileSync('/tmp/openclaw-result.json', JSON.stringify(failReport, null, 2));
   process.exit(1);

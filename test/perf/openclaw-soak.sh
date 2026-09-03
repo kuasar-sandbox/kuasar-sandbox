@@ -2,7 +2,7 @@
 #
 # openclaw-soak.sh — Long-Running Mixed-Fleet OpenClaw Sustainment Soak
 #
-# Churns a mixed fleet of real OpenClaw agent sandboxes in waves until the
+# Churns a mixed fleet of OpenClaw-style agent sandboxes in waves until the
 # time budget expires, mixing three agent "types" (fast / medium / slow
 # thinking delays) with periodic lifecycle churn (vm.pause/vm.resume every
 # wave, snapshot→restore every SOAK_CHURN_EVERY waves) to surface bugs that
