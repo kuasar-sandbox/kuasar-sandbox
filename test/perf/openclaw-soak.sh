@@ -27,7 +27,8 @@ DURATION="${1:-1200}"
 WAVE_N="${SOAK_WAVE_N:-24}"
 CHURN_EVERY="${SOAK_CHURN_EVERY:-3}"
 WORK="${WORK:-/var/tmp/openclaw-soak-$(date +%Y%m%d-%H%M%S)}"
-mkdir -p "$OUT_BASE" "$WORK/run" "$WORK/lib" "$WORK/units" "$WORK/snapshots"
+RUN_ROOT="${RUN_ROOT:-/run/oc-soak-$$}"
+mkdir -p "$OUT_BASE" "$WORK" "$RUN_ROOT" "$WORK/lib" "$WORK/units" "$WORK/snapshots"
 
 VMLINUX="$BIN/vmlinux"
 BUNDLE="$BIN/sandbox-runtime.bundle"
@@ -64,7 +65,7 @@ cleanup() {
     pkill -9 -f "cloud-hypervisor.*openclaw-soak" 2>/dev/null || true
     [ -n "$DAEMON_PID" ] && { kill -TERM "$DAEMON_PID" 2>/dev/null || true; wait "$DAEMON_PID" 2>/dev/null || true; }
     for tap in "${CREATED_TAPS[@]:-}"; do ip link delete "$tap" 2>/dev/null || true; done
-    [ "${KEEP_WORK:-0}" = "1" ] || rm -rf "$WORK"
+    [ "${KEEP_WORK:-0}" = "1" ] || rm -rf "$WORK" "$RUN_ROOT"
     set -e
 }
 trap "cleanup; audit" EXIT INT TERM
@@ -106,19 +107,18 @@ phys_mem="$(awk '/MemTotal:/ {printf "%d", $2/1024}' /proc/meminfo)MiB"
 cat > "$WORK/conductor.yaml" <<EOF
 api: { domain: soak.local, listen: "127.0.0.1:0" }
 encryption_key: "0000000000000000000000000000000000000000000000000000000000000000"
-proxy: { mode: internal, auth: enforce }
+proxy: { auth: enforce }
 sandbox:
   boot: { kernel: $VMLINUX, runtime: $BUNDLE }
 paths:
-  run_root: $WORK/run
+  run_root: $RUN_ROOT
   base_root: $WORK/lib
-  config_socket: $WORK/node-ctl.socket
+  config_socket: $RUN_ROOT/node-ctl.socket
   db_path: $WORK/node-ctl.db
 units: { dir: $WORK/units, install: false }
 resource_listen:
   enabled: true
-  socket: $WORK/sandbox-resource.sock
-  audit_path: $WORK/audit.log
+  socket: $RUN_ROOT/sandbox-resource.sock
   cgroup_scan_paths:
     - /sys/fs/cgroup/sandboxes
   resources:
@@ -139,7 +139,12 @@ EOF
 echo "+memory +cpu" > /sys/fs/cgroup/sandboxes/cgroup.subtree_control 2>/dev/null || true
 "$BIN/node-ctl" conductor serve --config "$WORK/conductor.yaml" > "$WORK/conductor.log" 2>&1 &
 DAEMON_PID=$!
-for _ in {1..50}; do [ -S "$WORK/sandbox-resource.sock" ] && break; sleep 0.05; done
+for _ in {1..50}; do [ -S "$RUN_ROOT/sandbox-resource.sock" ] && break; sleep 0.05; done
+if [ ! -S "$RUN_ROOT/sandbox-resource.sock" ]; then
+    echo "Error: node-ctl conductor failed to bind $RUN_ROOT/sandbox-resource.sock" >&2
+    cat "$WORK/conductor.log" >&2
+    exit 1
+fi
 echo "==> Conductor + 4 agent-type proxies up. Soak budget: ${DURATION}s, wave size: $WAVE_N"
 
 setup_sb() { # sid cap proxy_port mode idx
@@ -161,7 +166,7 @@ resources:
   allocatable: { cpu: 1, memory: 64MiB, deflate_on_oom: true }
   control:
     cgroup_path: /sys/fs/cgroup/sandboxes/$sid
-    controller: $WORK/sandbox-resource.sock
+    controller: $RUN_ROOT/sandbox-resource.sock
   startup: { memory: 64MiB }
 network: { tap: $tap, ip: $gip/30, gateway: $hip }
 boot:
@@ -183,7 +188,7 @@ EOF
 
 launch() { # sid
     "$BIN/sandbox-ctl" run --config "$WORK/$1.yaml" --sandbox-id "$1" \
-        --ch-binary "$CH_BIN" --run-root "$WORK/run" > "$WORK/$1.log" 2>&1 &
+        --ch-binary "$CH_BIN" --run-root "$RUN_ROOT" > "$WORK/$1.log" 2>&1 &
     SANDBOX_PIDS+=("$!")
 }
 
@@ -222,14 +227,14 @@ while [ "$SECONDS" -lt "$T_END" ]; do
     paused=0; resumed=0
     for sid in "${local_sids[@]}"; do
         case "$sid" in *-heavy-*|*-idle-*|*-tool-*) ;; *) continue;; esac
-        sock="$WORK/run/$sid/ch.sock"
+        sock="$RUN_ROOT/$sid/ch.sock"
         [ -S "$sock" ] || continue
         curl -sf -X PUT --unix-socket "$sock" http://ch/api/v1/vm.pause >/dev/null 2>&1 && paused=$((paused+1))
     done
     sleep 2
     for sid in "${local_sids[@]}"; do
         case "$sid" in *-heavy-*|*-idle-*|*-tool-*) ;; *) continue;; esac
-        sock="$WORK/run/$sid/ch.sock"
+        sock="$RUN_ROOT/$sid/ch.sock"
         [ -S "$sock" ] || continue
         curl -sf -X PUT --unix-socket "$sock" http://ch/api/v1/vm.resume >/dev/null 2>&1 && resumed=$((resumed+1))
     done
@@ -244,9 +249,9 @@ while [ "$SECONDS" -lt "$T_END" ]; do
     if [ $(( WAVE % CHURN_EVERY )) -eq 0 ] && [ "$SECONDS" -lt "$T_END" ] && [ "$free_kb" -gt 8388608 ]; then
         for k in 1 2 3 4; do
             sid="oc-w${WAVE}-heavy-${k}"
-            [ -S "$WORK/run/$sid/ch.sock" ] || continue
+            [ -S "$RUN_ROOT/$sid/ch.sock" ] || continue
             mkdir -p "$WORK/snapshots/$sid"
-            if timeout 30 "$BIN/sandbox-ctl" snapshot --sandbox-id "$sid" --run-root "$WORK/run" \
+            if timeout 30 "$BIN/sandbox-ctl" snapshot --sandbox-id "$sid" --run-root "$RUN_ROOT" \
                 --output "$WORK/snapshots/$sid" > "$WORK/$sid.snap.log" 2>&1; then
                 snap_ok=$((snap_ok+1))
                 SREF[$k]=$(grep -oE '/[^ ]+\.snapshot' "$WORK/$sid.snap.log" | head -1)
@@ -276,7 +281,7 @@ boot:
 EOF
             rm -f "$WORK/$sid.ready"
             "$BIN/sandbox-ctl" run --restore "${SREF[$k]}" --config "$WORK/$sid.yaml" \
-                --sandbox-id "$sid" --ch-binary "$CH_BIN" --run-root "$WORK/run" --ready-fd 3 \
+                --sandbox-id "$sid" --ch-binary "$CH_BIN" --run-root "$RUN_ROOT" --ready-fd 3 \
                 > "$WORK/$sid.log" 2>&1 3> "$WORK/$sid.ready" &
             rest_pids+=("$!")
             SANDBOX_PIDS+=("$!")

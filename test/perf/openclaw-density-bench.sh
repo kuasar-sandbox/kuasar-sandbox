@@ -27,12 +27,12 @@ PERF_OUT="${PERF_OUT:-$OUT_BASE/OPENCLAW_BENCHMARK_REPORT.md}"
 RAW_DIR="$OUT_BASE/raw_logs"
 # Scratch (VM run-roots, sockets, snapshots) lives on disk-backed /var/tmp:
 # (a) unix socket paths must stay under the 108-byte sockaddr_un limit, and
-# (b) snapshot churn (~1.6 GiB/VM) must not land on tmpfs.
 WORK="${WORK:-/var/tmp/openclaw-bench/run-$(date +%Y%m%d-%H%M%S)-$$}"
+RUN_ROOT="${RUN_ROOT:-/run/oc-$$}"
 PROXY_PORT=8088
 IMAGE="openclaw-agent:latest"
 
-mkdir -p "$WORK" "$RAW_DIR" "$WORK/run" "$WORK/lib" "$WORK/units"
+mkdir -p "$WORK" "$RAW_DIR" "$RUN_ROOT" "$WORK/lib" "$WORK/units"
 
 VMLINUX="$BIN/vmlinux"
 BUNDLE="$BIN/sandbox-runtime.bundle"
@@ -74,7 +74,7 @@ cleanup() {
         ip link delete "$tap" 2>/dev/null || true
     done
     # KEEP_WORK=1 preserves snapshots/scratch for post-run analysis (dedup, etc.)
-    [ "${KEEP_WORK:-0}" = "1" ] || rm -rf "$WORK" 2>/dev/null || true
+    [ "${KEEP_WORK:-0}" = "1" ] || rm -rf "$WORK" "$RUN_ROOT" 2>/dev/null || true
     set -e
 }
 trap cleanup EXIT INT TERM
@@ -166,22 +166,21 @@ start_node_ctl() {
     cat > "$WORK/node-ctl.yaml" <<EOF
 api: { domain: density.local, listen: "127.0.0.1:0" }
 encryption_key: "0000000000000000000000000000000000000000000000000000000000000000"
-proxy: { mode: internal, auth: enforce }
+proxy: { auth: enforce }
 sandbox:
   boot:
     kernel: $VMLINUX
     runtime: $BUNDLE
 paths:
-  run_root: $WORK/run
+  run_root: $RUN_ROOT
   base_root: $WORK/lib
-  config_socket: $WORK/node-ctl.socket
+  config_socket: $RUN_ROOT/node-ctl.socket
   db_path: $WORK/node-ctl.db
 units: { dir: $WORK/units, install: false }
 resource_listen:
   enabled: true
-  socket: $WORK/sandbox-resource.sock
+  socket: $RUN_ROOT/sandbox-resource.sock
   state_path: $WORK/state.json
-  audit_path: $WORK/audit.log
   cgroup_scan_paths:
     - /sys/fs/cgroup/sandboxes
   resources:
@@ -215,9 +214,14 @@ EOF
     "$BIN/node-ctl" conductor serve --config "$WORK/node-ctl.yaml" > "$WORK/node-ctl.log" 2>&1 &
     DAEMON_PID=$!
     for _ in {1..50}; do
-        [ -S "$WORK/sandbox-resource.sock" ] && break
+        [ -S "$RUN_ROOT/sandbox-resource.sock" ] && break
         sleep 0.05
     done
+    if [ ! -S "$RUN_ROOT/sandbox-resource.sock" ]; then
+        echo "Error: node-ctl conductor failed to bind $RUN_ROOT/sandbox-resource.sock" >&2
+        cat "$WORK/node-ctl.log" >&2
+        exit 1
+    fi
 }
 
 setup_sandbox_resources() {
@@ -252,7 +256,7 @@ resources:
     deflate_on_oom: true
   control:
     cgroup_path: /sys/fs/cgroup/sandboxes/${sid}
-    controller: $WORK/sandbox-resource.sock
+    controller: $RUN_ROOT/sandbox-resource.sock
   startup:
     memory: ${burst}MiB
 network:
@@ -326,7 +330,7 @@ run_calibration() {
     local t0=$(date +%s%N)
     
     "$BIN/sandbox-ctl" run --config "$WORK/$sid.yaml" --sandbox-id "$sid" \
-        --ch-binary "$CH_BIN" --run-root "$WORK/run" > "$WORK/$sid.log" 2>&1 &
+        --ch-binary "$CH_BIN" --run-root "$RUN_ROOT" > "$WORK/$sid.log" 2>&1 &
     local s_pid=$!
     SANDBOX_PIDS+=("$s_pid")
 
@@ -370,16 +374,16 @@ run_pause_resume() {
         local sid="oc-pause-$i"
         setup_sandbox_resources "$sid" 384 64 64 "$i"
         "$BIN/sandbox-ctl" run --config "$WORK/$sid.yaml" --sandbox-id "$sid" \
-            --ch-binary "$CH_BIN" --run-root "$WORK/run" > "$WORK/$sid.log" 2>&1 &
+            --ch-binary "$CH_BIN" --run-root "$RUN_ROOT" > "$WORK/$sid.log" 2>&1 &
         SANDBOX_PIDS+=("$!")
         sleep 0.02
     done
 
     echo "  -> Waiting for all $N sandboxes to reach ready state (ch.sock)..."
-    if wait_for_sockets "$WORK/run/oc-pause-*/ch.sock" "$N" 30; then
+    if wait_for_sockets "$RUN_ROOT/oc-pause-*/ch.sock" "$N" 30; then
         echo "  ✓ All $N VMs ready"
     else
-        echo "  ! Only $(count_matches "$WORK/run/oc-pause-*/ch.sock")/$N VMs ready after 30s (admission shedding or boot contention)"
+        echo "  ! Only $(count_matches "$RUN_ROOT/oc-pause-*/ch.sock")/$N VMs ready after 30s (admission shedding or boot contention)"
     fi
 
     echo "  -> Issuing /api/v1/vm.pause to active sandboxes..."
@@ -387,7 +391,7 @@ run_pause_resume() {
     local paused_count=0
     for i in $(seq 1 $N); do
         local sid="oc-pause-$i"
-        local sock="$WORK/run/$sid/ch.sock"
+        local sock="$RUN_ROOT/$sid/ch.sock"
         if [ -S "$sock" ]; then
             if curl -sf -X PUT --unix-socket "$sock" http://ch/api/v1/vm.pause >/dev/null 2>&1; then
                 paused_count=$((paused_count + 1))
@@ -411,7 +415,7 @@ run_pause_resume() {
     local resumed_count=0
     for i in $(seq 1 $N); do
         local sid="oc-pause-$i"
-        local sock="$WORK/run/$sid/ch.sock"
+        local sock="$RUN_ROOT/$sid/ch.sock"
         if [ -S "$sock" ]; then
             if curl -sf -X PUT --unix-socket "$sock" http://ch/api/v1/vm.resume >/dev/null 2>&1; then
                 resumed_count=$((resumed_count + 1))
@@ -452,16 +456,16 @@ run_cold_snapshot_restore() {
         local sid="oc-snap-$i"
         setup_sandbox_resources "$sid" 384 64 64 "$i"
         "$BIN/sandbox-ctl" run --config "$WORK/$sid.yaml" --sandbox-id "$sid" \
-            --ch-binary "$CH_BIN" --run-root "$WORK/run" > "$WORK/$sid.log" 2>&1 &
+            --ch-binary "$CH_BIN" --run-root "$RUN_ROOT" > "$WORK/$sid.log" 2>&1 &
         SANDBOX_PIDS+=("$!")
         sleep 0.02
     done
 
     echo "  -> Waiting for all $N sandboxes to reach ready state (ch.sock)..."
-    if wait_for_sockets "$WORK/run/oc-snap-*/ch.sock" "$N" 30; then
+    if wait_for_sockets "$RUN_ROOT/oc-snap-*/ch.sock" "$N" 30; then
         echo "  ✓ All $N VMs ready"
     else
-        echo "  ! Only $(count_matches "$WORK/run/oc-snap-*/ch.sock")/$N VMs ready after 30s (admission shedding or boot contention)"
+        echo "  ! Only $(count_matches "$RUN_ROOT/oc-snap-*/ch.sock")/$N VMs ready after 30s (admission shedding or boot contention)"
     fi
 
     echo "  -> Snapshotting $N OpenClaw sandboxes to disk..."
@@ -471,7 +475,7 @@ run_cold_snapshot_restore() {
     for i in $(seq 1 $N); do
         local sid="oc-snap-$i"
         mkdir -p "$WORK/snapshots/$sid"
-        if "$BIN/sandbox-ctl" snapshot --sandbox-id "$sid" --run-root "$WORK/run" \
+        if "$BIN/sandbox-ctl" snapshot --sandbox-id "$sid" --run-root "$RUN_ROOT" \
             --output "$WORK/snapshots/$sid" > "$WORK/$sid.snap.log" 2>&1; then
             snap_ok=$((snap_ok + 1))
             SNAP_REF[$i]=$(grep -oE '/[^ ]+\.snapshot' "$WORK/$sid.snap.log" | head -1)
@@ -541,7 +545,7 @@ EOF
         rm -f "$WORK/$sid.ready"
         "$BIN/sandbox-ctl" run --restore "${SNAP_REF[$i]}" \
             --config "$WORK/$sid.yaml" --sandbox-id "$sid" \
-            --ch-binary "$CH_BIN" --run-root "$WORK/run" --ready-fd 3 \
+            --ch-binary "$CH_BIN" --run-root "$RUN_ROOT" --ready-fd 3 \
             > "$WORK/$sid.log" 2>&1 3> "$WORK/$sid.ready" &
         REST_PIDS+=("$!")
     done
@@ -626,7 +630,7 @@ run_concurrency_ramp() {
             fi
 
             "$BIN/sandbox-ctl" run --config "$WORK/$sid.yaml" --sandbox-id "$sid" \
-                --ch-binary "$CH_BIN" --run-root "$WORK/run" > "$WORK/$sid.log" 2>&1 &
+                --ch-binary "$CH_BIN" --run-root "$RUN_ROOT" > "$WORK/$sid.log" 2>&1 &
             PIDS+=("$!")
             sleep 0.02
         done
@@ -702,7 +706,7 @@ run_production_stress() {
         local sid="oc-stress-$i"
         setup_sandbox_resources "$sid" 384 64 64 "$i"
         "$BIN/sandbox-ctl" run --config "$WORK/$sid.yaml" --sandbox-id "$sid" \
-            --ch-binary "$CH_BIN" --run-root "$WORK/run" > "$WORK/$sid.log" 2>&1 &
+            --ch-binary "$CH_BIN" --run-root "$RUN_ROOT" > "$WORK/$sid.log" 2>&1 &
         PIDS+=("$!")
         sleep 0.02
     done
