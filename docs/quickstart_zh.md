@@ -1,3 +1,5 @@
+[English](quickstart.md) | [简体中文](quickstart_zh.md)
+
 # Quick Start
 
 本文面向第一次使用 Kuasar Sandbox 的用户,从一个聚合 Release 启动单节点,
@@ -235,5 +237,4 @@ sudo -n docker rm -f kuasar-quickstart-registry
   本地 Registry 和演示凭据只用于体验.
 
 更完整的单节点和集群拓扑见 [Deployment](deployment.md),组件版本与聚合发布关系见
-[Releases](release.md),安全漏洞报告方式见
-[Security](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/SECURITY.md).
+[Releases](release.md),安全漏洞报告方式见 [安全策略](../SECURITY_zh.md).
