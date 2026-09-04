@@ -390,6 +390,75 @@ class PreviewCoordinatorTest(unittest.TestCase):
             f"source_sha={sha}",
         )
 
+    def test_failed_aggregate_redispatches_a_fresh_exact_stage(self) -> None:
+        version = "release-v0.1.2-preview.20260831"
+        sha = "d" * 40
+        empty = coordinator.ReleaseStatus(None, None, False)
+        failed = {
+            "id": 20,
+            "status": "completed",
+            "conclusion": "failure",
+            "run_attempt": 2,
+            "created_at": "2026-08-31T08:00:00Z",
+            "display_title": coordinator.aggregate_run_title(version, sha),
+            "html_url": "https://example.invalid/run/20",
+        }
+        with (
+            mock.patch.object(coordinator, "platform_release", return_value=empty),
+            mock.patch.object(coordinator, "aggregate_runs", return_value=[failed]),
+            mock.patch.object(coordinator, "gh") as gh,
+        ):
+            self.assertFalse(coordinator.ensure_aggregate(version, sha))
+        gh.assert_called_once_with(
+            "workflow",
+            "run",
+            "aggregate-release.yml",
+            "--repo",
+            coordinator.PLATFORM_REPOSITORY,
+            "--ref",
+            "main",
+            "-f",
+            f"version={version}",
+            "-f",
+            f"source_ref={coordinator.PLATFORM_REF}",
+            "-f",
+            f"source_sha={sha}",
+        )
+
+    def test_aggregate_fresh_runs_share_the_three_attempt_budget(self) -> None:
+        version = "release-v0.1.2-preview.20260831"
+        sha = "d" * 40
+        title = coordinator.aggregate_run_title(version, sha)
+        empty = coordinator.ReleaseStatus(None, None, False)
+        failed = [
+            {
+                "id": 20,
+                "status": "completed",
+                "conclusion": "failure",
+                "run_attempt": 2,
+                "created_at": "2026-08-31T08:00:00Z",
+                "display_title": title,
+                "html_url": "https://example.invalid/run/20",
+            },
+            {
+                "id": 21,
+                "status": "completed",
+                "conclusion": "failure",
+                "run_attempt": 1,
+                "created_at": "2026-08-31T09:00:00Z",
+                "display_title": title,
+                "html_url": "https://example.invalid/run/21",
+            },
+        ]
+        with (
+            mock.patch.object(coordinator, "platform_release", return_value=empty),
+            mock.patch.object(coordinator, "aggregate_runs", return_value=failed),
+            mock.patch.object(coordinator, "gh") as gh,
+            self.assertRaisesRegex(coordinator.Deferred, "aggregate publication failed"),
+        ):
+            coordinator.ensure_aggregate(version, sha)
+        gh.assert_not_called()
+
     def test_older_active_aggregate_is_not_hidden_by_newer_cancelled_run(self) -> None:
         version = "release-v0.1.2-preview.20260831"
         older_active = {
