@@ -170,6 +170,35 @@ Balloon 不是唯一弹性来源.空闲 CPU 调度,非活跃内存回收,Cgroup 
 
 高密度是资源利用率提高后的结果,不是预先指定的实例数量承诺.
 
+### 5.3 Capacity sizing(实测校准)
+
+zone/capacity 只约束应用峰值是不够的:guest 内核,page table,slab 与
+`sandbox-init` 另有 ~50 MiB 的常驻开销.当 zone 只按应用 P99 × 1.2 规划时,
+突发峰值期间 guest 内核 direct reclaim 会先于 balloon deflate 路径触发
+guest 内 OOM(应用被 SIGKILL,exit code 137).该失败**不会体现在 cgroup
+`memory.events` 中**(host cgroup OOM 计数为 0),只有检查 guest 应用退出码
+才能发现:实测在 herded cycles 负载下 35–53% 的沙箱应用被静默杀灭.
+
+实测校准后的容量公式:
+
+```text
+capacity = (App_P99_RSS × 1.2) + Guest_OS_Overhead(≈ 50 MiB)
+```
+
+ zone 为 lazy memfd,未被 fault 的部分不消耗 host 物理页,因此按此公式放大
+zone 不降低密度;实测相同负载下 guest OOM 从 35–53% 降为 0,而每沙箱
+host 占用不变.标准剖面(实测校准):
+
+| 剖面 | 应用 RSS 区间 | zone/capacity | floor |
+|---|---|---|---|
+| light agent | 16–64 MiB | 192 MiB | 64 MiB |
+| interactive tool agent | 64–128 MiB | 320 MiB | 64 MiB |
+| heavy SWE agent | 128–256 MiB | 512 MiB | 64 MiB |
+
+配套要求:密度结论必须统计 guest 应用非零退出(exit 137 等),不能只看
+host cgroup OOM 计数;`deflate_on_oom` 在 zone 紧张时可能输给 guest OOM
+killer 的竞速,上述余量就是为该竞速窗口预留的.
+
 ## 6. Cluster 控制面
 
 cluster 性能必须区分热路径和冷路径:
