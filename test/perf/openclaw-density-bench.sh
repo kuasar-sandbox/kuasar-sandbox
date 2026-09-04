@@ -51,6 +51,7 @@ PROXY_PID=""
 DAEMON_PID=""
 SANDBOX_PIDS=()
 CREATED_TAPS=()
+CREATED_CGROUPS=()
 
 cleanup() {
     set +e
@@ -80,6 +81,12 @@ cleanup() {
     fi
     for tap in "${CREATED_TAPS[@]:-}"; do
         ip link delete "$tap" 2>/dev/null || true
+    done
+    for cg in "${CREATED_CGROUPS[@]:-}"; do
+        rmdir "$cg" 2>/dev/null || true
+    done
+    for cg in /sys/fs/cgroup/sandboxes/oc-*; do
+        [ -d "$cg" ] && rmdir "$cg" 2>/dev/null || true
     done
     # KEEP_WORK=1 preserves snapshots/scratch for post-run analysis (dedup, etc.)
     [ "${KEEP_WORK:-0}" = "1" ] || rm -rf "$WORK" "$RUN_ROOT" 2>/dev/null || true
@@ -236,6 +243,7 @@ setup_sandbox_resources() {
     local sid="$1" cap="$2" floor="$3" burst="$4" idx="${5:-1}"
     local tap_name="tap${idx}"
     mkdir -p "/sys/fs/cgroup/sandboxes/$sid"
+    CREATED_CGROUPS+=("/sys/fs/cgroup/sandboxes/$sid")
     
     local subnet_base=$(( (idx % 60) * 4 ))
     local block=$(( idx / 60 ))
@@ -361,6 +369,7 @@ run_calibration() {
         cat "$WORK/$sid.log" >&2
         exit 1
     fi
+    rmdir "/sys/fs/cgroup/sandboxes/$sid" 2>/dev/null || true
 }
 
 # ============================================================================
@@ -440,6 +449,9 @@ run_pause_resume() {
         wait "$spid" 2>/dev/null || true
     done
     SANDBOX_PIDS=()
+    for i in $(seq 1 $N); do
+        rmdir "/sys/fs/cgroup/sandboxes/oc-pause-$i" 2>/dev/null || true
+    done
     echo "  ✓ In-Memory Pause / Resume Benchmark Completed Successfully"
 }
 
@@ -500,6 +512,9 @@ run_cold_snapshot_restore() {
         wait "$spid" 2>/dev/null || true
     done
     SANDBOX_PIDS=()
+    for i in $(seq 1 $N); do
+        rmdir "/sys/fs/cgroup/sandboxes/oc-snap-$i" 2>/dev/null || true
+    done
 
     local post_snap_avail=$(read_avail_mib)
     RECLAIMED_MIB=$(( post_snap_avail - base_avail ))
@@ -532,7 +547,11 @@ run_cold_snapshot_restore() {
         fi
         ip tuntap add "$rtap" mode tap 2>/dev/null || true
         ip addr flush dev "$rtap" 2>/dev/null || true
-        ip addr add "10.200.1.$(( 2 * i + 1 ))/31" dev "$rtap" 2>/dev/null || true
+        # preserve the ORIGINAL sandbox gateway: the restored guest keeps its
+        # pre-snapshot IP stack (kernel state), so a fresh tap with a different
+        # host IP leaves the guest without a reachable gateway (asymmetric
+        # routing — responses never leave the guest)
+        ip addr add "10.$((100+i/60)).1.$(((i%60)*4+1))/30" dev "$rtap" 2>/dev/null || true
         ip link set "$rtap" up
         CREATED_TAPS+=("$rtap")
         truncate -s 64M "$rdiff"
@@ -689,6 +708,9 @@ run_concurrency_ramp() {
 
         # Free disk from COW overlay images only; keep logs for the audit archive
         rm -f "$WORK"/oc-ramp-${N}-*.diff 2>/dev/null || true
+        for i in $(seq 1 $N); do
+            rmdir "/sys/fs/cgroup/sandboxes/oc-ramp-${N}-$i" 2>/dev/null || true
+        done
     done
     HOST_OOMS=$(( $(read_oom_kills) - oom_base ))
 }
@@ -731,6 +753,9 @@ run_production_stress() {
         grep -q "Verdict: PASS" "$WORK/$sid.log" 2>/dev/null && stress_pass=$((stress_pass + 1))
     done
     STRESS_PASS=$stress_pass
+    for i in $(seq 1 $N); do
+        rmdir "/sys/fs/cgroup/sandboxes/oc-stress-$i" 2>/dev/null || true
+    done
     echo "  ✓ Executed tool operations across $N sandboxes in ${STRESS_DUR_MS} ms (verified session verdicts: ${STRESS_PASS}/${N})"
 }
 

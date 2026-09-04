@@ -75,6 +75,7 @@ cleanup() {
         wait "$DAEMON_PID" 2>/dev/null || true
     fi
     for tap in "${CREATED_TAPS[@]:-}"; do ip link delete "$tap" 2>/dev/null || true; done
+    for cg in /sys/fs/cgroup/sandboxes/oc-*; do [ -d "$cg" ] && rmdir "$cg" 2>/dev/null || true; done
     [ "${KEEP_WORK:-0}" = "1" ] || rm -rf "$WORK" "$RUN_ROOT"
     set -e
 }
@@ -356,6 +357,9 @@ EOF
     oom_now=$(read_oom_kills)
     echo "$WAVE,${#local_sids[@]},$exit_ok,$exit_fail,$vpass,$sigkill,$arej,$paused,$resumed,$snap_ok,$rest_ready,$mem_min,$((oom_now-OOM0)),$wave_s" >> "$CSV"
     rm -f "$WORK"/oc-w${WAVE}-*.diff "$WORK"/oc-w${WAVE}-*.yaml 2>/dev/null || true
+    for sid in "${local_sids[@]}"; do
+        rmdir "/sys/fs/cgroup/sandboxes/$sid" 2>/dev/null || true
+    done
     SANDBOX_PIDS=()
     echo "  wave $WAVE: $vpass/${#local_sids[@]} verified | pause $paused/resume $resumed | snap $snap_ok/restore $rest_ready | mem_min ${mem_min}MiB | ${wave_s}ms"
     # stop launching new waves once the budget is exhausted
