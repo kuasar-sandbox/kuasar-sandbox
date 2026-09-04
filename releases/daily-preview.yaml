@@ -1,11 +1,11 @@
 version: release-v0.1.3
 previous_version: release-v0.1.2
-preview_version: preview.20260904
-previous_preview_version: preview.20260903
+preview_version: preview.20260905
+previous_preview_version: preview.20260904
 components:
-  accelerator: v0.1.3-preview.20260902
-  connector: v0.1.1
-  sandboxer: v0.1.3-preview.20260904
-  orchestrator: v0.1.3-preview.20260904
-  runtime: runtime-v0.1.3-preview.20260904
-  vmlinux: vmlinux-v0.1.2-preview.20260902
+  accelerator: v0.1.3-preview.20260905
+  connector: v0.1.2-preview.20260905
+  sandboxer: v0.1.3-preview.20260905
+  orchestrator: v0.1.3-preview.20260905
+  runtime: runtime-v0.1.3-preview.20260905
+  vmlinux: vmlinux-v0.1.2-preview.20260905
