@@ -1,22 +1,24 @@
+[English](quickstart.md) | [简体中文](quickstart_zh.md)
+
 # Quick Start
 
-本文面向第一次使用 Kuasar Sandbox 的用户,从一个聚合 Release 启动单节点,
-并用未修改的 E2B Python SDK 构建模板,创建真实 MicroVM,执行命令,暂停,恢复和
-销毁沙箱.
+This guide is for first-time Kuasar Sandbox users. It starts a standalone node from one aggregate release, then uses the unmodified E2B Python SDK to build a template, create a real MicroVM, execute a command, pause the sandbox, reconnect and resume it, and finally terminate it.
 
-这是最短使用路径,不是完整发布验收.网络,TLS,Registry 和内部数据路径的详细
-说明见 [Demo](../test/demo/DEMO.md);六个 owner 套件和平台组合门禁见
-[Aggregate Release Validation Guide](../test/QUICKSTART.md).
+This is the shortest supported experience path, not the complete release-validation procedure. For detailed networking, TLS, registry, and internal data-path setup, see the [Demo](../test/demo/DEMO.md). For all six owner suites and the platform integration gate, see the [Aggregate Release Validation Guide](../test/QUICKSTART.md).
 
-## 1. 检查环境
+## 1. Check the host
 
-当前公开聚合 Release 的预构建资产支持 Linux x86_64,并需要 glibc 2.38 或更高
-(例如 glibc 2.39 的 Ubuntu 24.04).主机还需要 systemd 作为 PID 1,cgroup v2,可读写的
-`/dev/kvm`,root 或无交互 `sudo`,以及 Python 3.下载阶段使用 GitHub CLI 和可用的
-GitHub 登录态;MicroVM 运行本身不依赖它.示例的构建沙箱请求 2 vCPU 和 6 GiB 内存,
-节点还需要为系统服务和后续运行沙箱保留余量.
+Current prebuilt aggregate-release assets support Linux x86_64 and require glibc 2.38 or newer, such as Ubuntu 24.04 with glibc 2.39. The host also needs:
 
-Ubuntu 24.04 可以用以下命令安装本 Quick Start 需要的 host 工具和动态库:
+- systemd as PID 1;
+- cgroup v2;
+- read/write access to `/dev/kvm`;
+- root or passwordless `sudo`;
+- Python 3.
+
+The download steps use GitHub CLI and an authenticated GitHub session. Running the MicroVM does not depend on GitHub CLI. The example build sandbox requests 2 vCPUs and 6 GiB of memory, so the node also needs capacity for system services and the sandbox created from the resulting template.
+
+On Ubuntu 24.04, install the host tools and shared libraries used by this Quick Start:
 
 ```bash
 sudo apt-get update
@@ -25,6 +27,8 @@ sudo apt-get install -y \
     libgcc-s1 liblz4-1 libsnappy1v5 libstdc++6 libzstd1 openssl \
     procps python3 python3-venv sqlite3 tar util-linux zlib1g
 ```
+
+Run the preflight checks:
 
 ```bash
 (
@@ -47,22 +51,15 @@ sudo -n docker info >/dev/null
 )
 ```
 
-上述代码块只在所有检查通过时返回成功;任一命令失败时不要继续.
+The block succeeds only when every check passes. Do not continue after a failed command.
 
-Docker 只用于为本 Quick Start 准备本地 OCI Registry 并导入基础镜像,不是所有 Kuasar
-Sandbox 部署的运行时依赖.如果已有从构建 MicroVM 可访问的 OCI Registry,可以按
-[Demo 的 Registry 配置](../test/demo/DEMO.md)复用它.Zot 只在选择由
-`demo_prep.sh` 启动本地 Zot 时需要;versitygw 只在演示 `COPY` 构建步骤时需要.
+Docker is used here only to prepare a local OCI registry and import a base image. It is not a runtime dependency of every Kuasar Sandbox deployment. When an existing OCI registry is reachable from the build MicroVM, configure it as described in the [Demo registry section](../test/demo/DEMO.md). Zot is needed only when `demo_prep.sh` is configured to start a local Zot registry; VersityGW is needed only for the optional `COPY` build-step demonstration.
 
-从源码构建时,Makefile 还支持 `TARGET_ARCH=aarch64`,但这不表示 aarch64 已作为当前
-GitHub Release 的预构建资产发布.
+The source Makefiles also accept `TARGET_ARCH=aarch64`, but that does not mean aarch64 is currently published as a prebuilt GitHub release asset.
 
-## 2. 下载,校验和解压聚合 Release
+## 2. Download, verify, and extract one aggregate release
 
-当前 Stable 聚合版本是
-[`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2).
-本指南固定使用该聚合 Release 中的 platform 包和六个组件发布单元;不得将旧 platform
-脚本与新组件资产混用.
+The current stable aggregate release is [`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2). This guide uses the platform archive and all six release-unit archives from that exact aggregate release. Do not combine older platform scripts with newer component assets.
 
 ```bash
 RELEASE_VERSION=release-v0.1.2
@@ -80,11 +77,9 @@ gh release download "$RELEASE_VERSION" \
     --dir "$DOWNLOAD_DIR"
 ```
 
-`gh release download` 在空目录中下载该聚合 Release 的全部显式资产:一个 platform
-archive,六个组件发布单元 archive 和一个 `SHA256SUMS`.组件 archive 的内部版本可以
-不同,但它们必须全部来自同一个聚合 Release;不要混用不同日期或聚合版本的资产.
+In a new directory, `gh release download` retrieves every explicit asset from the aggregate release: one platform archive, six component release-unit archives, and one `SHA256SUMS`. The internal component versions may differ, but every archive must come from the same aggregate release.
 
-先校验 SHA256,再将七个 archive 解压到同一目录:
+Verify the checksums before extracting all seven archives into the same directory:
 
 ```bash
 (
@@ -109,10 +104,9 @@ archive,六个组件发布单元 archive 和一个 `SHA256SUMS`.组件 archive �
 )
 ```
 
-`sha256sum` 成功时不输出内容.解压后,`bin/` 和 `deploy/` 来自组件包,`docs/` 和
-`test/` 来自 platform 包.
+A successful `sha256sum --quiet -c` prints nothing. After extraction, `bin/` and `deploy/` are supplied by component archives, while `docs/` and `test/` come from the platform archive.
 
-## 3. 安装未修改的 E2B SDK
+## 3. Install the unmodified E2B SDK
 
 ```bash
 cd "$INSTALL_DIR"
@@ -122,12 +116,11 @@ python -m pip install e2b e2b-code-interpreter
 python -c 'import e2b; print(e2b.__file__)'
 ```
 
-本项目使用上游 Python 包,SDK 不需要 fork 或本地补丁.
+Kuasar Sandbox uses the upstream Python packages. No SDK fork or local patch is required.
 
-## 4. 准备单节点服务
+## 4. Prepare standalone services
 
-以下命令起一个只监听 host loopback 的临时 Registry,然后复用 Release 中的
-`demo_prep.sh` 启动持久的 store/cache 服务并导入基础镜像:
+The following commands start a temporary OCI registry bound only to host loopback, then reuse the release-provided `demo_prep.sh` to start the persistent store/cache services and import a base image:
 
 ```bash
 sudo -n docker run -d --name kuasar-quickstart-registry \
@@ -145,13 +138,13 @@ sudo -n env \
     bash test/demo/demo_prep.sh
 ```
 
-首次执行需要拉取并导入基础镜像,耗时取决于网络和存储.成功结尾为:
+The first run downloads and imports a base image, so its duration depends on network and storage performance. A successful preparation ends with:
 
 ```text
 prep ready
 ```
 
-## 5. 构建模板并运行 MicroVM
+## 5. Build a template and run a MicroVM
 
 ```bash
 sudo -n env \
@@ -161,8 +154,7 @@ sudo -n env \
     bash test/demo/demo_e2b.sh
 ```
 
-该脚本准备单节点 TLS,凭据,网络和 E2B 兼容入口,然后用未修改的 SDK 执行
-如下核心调用:
+The script prepares standalone TLS, credentials, networking, and the E2B-compatible endpoints, then performs the following core calls through the unmodified SDK:
 
 ```python
 from e2b import Sandbox, Template
@@ -178,62 +170,48 @@ print(sandbox.commands.run("echo resumed").stdout)
 sandbox.kill()
 ```
 
-SDK 没有独立的 `resume()` 方法;`Sandbox.connect(sandbox_id)` 会重新连接并自动恢复已暂停
-的同一逻辑实例.Quick Start 模式还验证 Guest 内执行,状态跨 pause/resume 保留和网络,
-并最终调用 `kill()`.完整 Demo 另行覆盖模板扇出和迁移.成功结尾为:
+The SDK does not expose a separate `resume()` method. `Sandbox.connect(sandbox_id)` reconnects to and automatically resumes the same paused logical instance. Quick Start mode also checks in-guest execution, state retention across pause/resume, and networking, then calls `kill()`. The complete Demo additionally covers template fan-out and migration.
+
+A successful run ends with:
 
 ```text
 quick start complete
 ```
 
-## 6. 清理
+## 6. Clean up
 
-`demo_e2b.sh` 正常或失败退出时都会清理本次的 systemd unit,vSwitch,NAT 规则,
-`/etc/hosts` 临时项和沙箱.停止 store/cache 服务并保留其数据;临时 Registry 没有挂载
-持久卷,删除容器会丢弃其中的数据:
+Whether `demo_e2b.sh` succeeds or fails, it removes the systemd units, vSwitch state, NAT rules, temporary `/etc/hosts` entries, and sandboxes owned by that run.
+
+Stop the store/cache services while preserving their data. The temporary registry uses no persistent volume, so removing the container discards its registry data:
 
 ```bash
 sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" bash test/demo/demo_prep.sh stop
 sudo -n docker rm -f kuasar-quickstart-registry
 ```
 
-停止服务并删除本 Quick Start 的 store,cache 和 Registry 索引数据:
+Stop the services and also delete this Quick Start's store, cache, and registry-index data:
 
 ```bash
 sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" bash test/demo/demo_prep.sh reset
 sudo -n docker rm -f kuasar-quickstart-registry
 ```
 
-## 7. 常见问题
+## 7. Troubleshooting
 
-- `systemd is not PID1`:请在使用 systemd 的 Linux 主机上运行,而不是普通容器内.
-- `/dev/kvm not available (rw)`:启用主机虚拟化,加载 KVM,并确认 root 可读写设备.
-- `GLIBC_... not found`:当前预构建资产需要 glibc 2.38 或更高;请改用满足条件的
-  Linux 主机,不要手工替换系统 libc.
-- `missing ... in bin`:确认已下载同一聚合 Release 的全部显式资产,并将七个
-  archive 解压到同一目录.
-- `e2b Python SDK not installed`:确认 `PATH` 中的 `python3` 来自前述 virtual environment,
-  并将同一 `PATH` 传给 `sudo env`.
-- Registry 或镜像拉取失败:确认 Docker 能够拉取基础镜像,Registry 端口未被占用;
-  使用外部 Registry 时按 [Demo](../test/demo/DEMO.md) 传入访问凭据.
-- TLS,网络或端口冲突:检查 TCP 443,Registry 端口,iptables 和本机路由;
-  详细数据路径见 [Demo](../test/demo/DEMO.md).
+- **`systemd is not PID1`** — run on a Linux host that boots with systemd, not in a regular container.
+- **`/dev/kvm not available (rw)`** — enable hardware virtualization, load KVM, and ensure root can read and write the device.
+- **`GLIBC_... not found`** — the current prebuilt assets require glibc 2.38 or newer. Use a compatible host instead of replacing the system C library manually.
+- **`missing ... in bin`** — confirm that every explicit asset from the same aggregate release was downloaded and that all seven archives were extracted into one directory.
+- **`e2b Python SDK not installed`** — ensure that `python3` in `PATH` comes from the virtual environment and pass the same `PATH` through `sudo env`.
+- **Registry or image-pull failure** — ensure Docker can pull the base image and the registry port is free. For an external registry, provide credentials as described in the [Demo](../test/demo/DEMO.md).
+- **TLS, network, or port conflict** — check TCP 443, the registry port, iptables, and local routes. See the [Demo](../test/demo/DEMO.md) for the complete data path.
 
-## 8. 支持范围和生产部署
+## 8. Support scope and production deployment
 
-- 当前 Stable 聚合版本是 `release-v0.1.2`,它是非 prerelease 的公开发行版本.
-  Preview 仍提供可验证的精确组件组合,但作为 GitHub prerelease 用于开发和评估.
-- 单节点模式可直接使用;集群模式需要 registry,router,placer,可达的节点服务,
-  共享或远程持久化数据路径和集群网络.
-- 镜像和快照可以按部署环境使用本地文件,NAS/NFS 等共享文件路径,或 Manifest,
-  S3-compatible 对象存储和分层缓存.
-- 基础 vSwitch,沙箱隔离和外部策略网关接入基础已交付.节点本地轻量
-  [Egress](https://github.com/kuasar-sandbox/connector/issues/9) 和
-  [OpenTelemetry](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/52) 是 Proposed,
-  不是本 Quick Start 的前提.
-- 生产环境必须使用正式 TLS,可靠存储,网络策略和安全凭据.Demo 生成的本地 CA 和服务器证书,
-  本地 Registry 和演示凭据只用于体验.
+- `release-v0.1.2` is the current non-prerelease stable aggregate version. Preview releases contain exact, verifiable component selections but remain GitHub prereleases for development and evaluation.
+- Standalone mode can be used directly. Cluster mode additionally requires Registry, Router, Placer, reachable node services, shared or remotely durable data paths, and cluster networking.
+- Images and snapshots can use local files, NAS/NFS or another shared filesystem, or Manifest-backed S3-compatible object storage with tiered caches.
+- The base vSwitch, sandbox isolation, and the integration foundation for external policy gateways are delivered. The node-local lightweight [Egress plane](https://github.com/kuasar-sandbox/connector/issues/9) and [OpenTelemetry](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/52) remain Proposed and are not prerequisites for this guide.
+- Production deployments must configure production TLS, durable storage, network policy, and secure credentials. The local CA, server certificate, local registry, and demonstration credentials created by this guide are for evaluation only.
 
-更完整的单节点和集群拓扑见 [Deployment](deployment.md),组件版本与聚合发布关系见
-[Releases](release.md),安全漏洞报告方式见
-[Security](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/SECURITY.md).
+See [Deployment](deployment.md) for complete standalone and cluster topologies, [Releases](release.md) for component and aggregate version relationships, and the [Security Policy](../SECURITY.md) for private vulnerability reporting.
