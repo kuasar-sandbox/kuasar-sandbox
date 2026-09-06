@@ -1,46 +1,48 @@
+[English](SECURITY.md) | [简体中文](SECURITY_zh.md)
+
 # Security Policy
 
-Kuasar Sandbox 通过项目主仓统一接收系统级和跨组件安全报告,并在私密流程中路由给
-`orchestrator`,`sandboxer`,`accelerator`,`connector` 或 `guest-runtime` 维护者.
+Kuasar Sandbox receives system-level and cross-component security reports through the project repository. Reports are coordinated privately and routed to the maintainers of `orchestrator`, `sandboxer`, `accelerator`, `connector`, or `guest-runtime` as needed.
 
-## 当前支持范围
+## Supported versions
 
-当前支持的公开 Stable 聚合版本是
-[`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2).
-请报告影响该版本,最新已发布 Aggregate Preview 或当前 `main` 的漏洞,并提供实际受影响的
-精确聚合版本和组件版本.较早 Preview 中的问题会根据是否仍影响当前 Stable,
-最新 Preview 或 `main` 进行评估.
+The current supported stable aggregate release is [`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2).
 
-| 版本范围 | 当前状态 |
-|---|---|
-| `release-v0.1.2` | 当前 Stable 支持版本 |
-| 最新已发布 Aggregate Preview | 接受预发布通道问题报告 |
-| 当前 `main` | 接受源码问题报告 |
+Please report vulnerabilities that affect the current Stable release, the latest published aggregate Preview, or the current `main` branch. Include the exact aggregate and component versions that are affected. Reports about older Preview releases are evaluated according to whether the issue still affects the current Stable release, the latest Preview, or `main`.
 
-Preview 是 GitHub prerelease;系统是否支持生产部署与公开发行通道的稳定性标记是
-两个不同维度.
+| Version range | Status |
+| --- | --- |
+| `release-v0.1.2` | Current supported Stable release |
+| Latest published aggregate Preview | Prerelease reports accepted |
+| Current `main` | Source reports accepted |
 
-## 私密报告漏洞
+Preview is a GitHub prerelease channel. The production readiness of the system and the stability label of a public release channel are separate concerns.
 
-请使用本仓库 Security 页面的 **Report a vulnerability** 提交
-[private vulnerability report](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new).
-不要在公开 Issue,Discussion 或 Pull Request 中披露尚未修复的安全漏洞.
+## Report a vulnerability privately
 
-报告建议包含:
+Use **Report a vulnerability** on this repository's Security page to submit a [private vulnerability report](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new).
 
-- 受影响的聚合 Release 标签;
-- 受影响的组件和精确组件版本;
-- 部署模式,架构,存储路径和相关网络拓扑;
-- 复现前置,操作步骤和是否需要特定权限;
-- 可观察影响和预期安全边界;
-- 已去除敏感信息的日志,错误输出或最小复现.
+Do not disclose an unpatched vulnerability in a public issue, discussion, pull request, or external post.
 
-不要提交真实凭据,密钥,客户数据,未公开镜像,内部主机地址或其他敏感信息.
-请用最小化和可撤销的测试数据替代.
+A useful report includes:
 
-## 处理流程
+- the affected aggregate release tag;
+- the affected component and exact component version;
+- deployment mode, CPU architecture, storage path, and relevant network topology;
+- prerequisites, reproduction steps, and required privileges;
+- the observed impact and the expected security boundary;
+- sanitized logs, error output, or a minimal reproduction.
 
-维护者会先在私密 advisory 中确认收到报告,检查复现条件,影响范围和所属组件.
-如果问题横跨多仓,项目主仓会在不公开细节的前提下协调相关组件维护者.后续流程包括
-验证修复,准备所需的组件和聚合发布,并与报告者协调公开时间和可披露内容.
-确认前不承诺固定响应或修复时间;复杂度,受影响版本和跨组件范围会影响协调周期.
+Do not submit real credentials, keys, customer data, unpublished images, internal host addresses, or other sensitive information. Use minimal and revocable test data instead.
+
+## What happens after a report
+
+Maintainers will acknowledge the report in the private advisory, review the reproduction conditions and impact, and identify the responsible component or components. For cross-repository issues, the project repository coordinates the affected component maintainers without publishing the vulnerability details.
+
+The response may include validating a fix, preparing component and aggregate releases, and coordinating disclosure timing and content with the reporter. We do not promise a fixed response or remediation time before triage; complexity, affected versions, and cross-component scope can change the coordination required.
+
+## Scope
+
+Security reports may cover the MicroVM boundary, host/guest control paths, identity and scoped credentials, snapshot and image data protection, storage and cache trust boundaries, sandbox networking, node resource isolation, build and release supply chains, and cross-component integration.
+
+General bugs, feature requests, deployment questions, and performance reports should use the appropriate public issue or discussion after removing sensitive information.
