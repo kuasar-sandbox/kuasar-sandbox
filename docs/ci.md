@@ -153,8 +153,10 @@ Go/Rust/native build,也不会重新编译 vmlinux。通过后 publish job 原�
 - guest `vmlinux`;
 - `mkfs.erofs` 与 `fsck.erofs`;
 - guest `envd`;
-- RocksDB headers 与 `librocksdb.a`;
 - patched `cloud-hypervisor`。
+
+accelerator 无原生组件:`cache-ctl` 为纯 Go,物理缓存后端是独立部署的
+Redis-compatible 服务,不经过本缓存。
 
 缓存路径为 `/var/cache/kuasar/native/v1/<arch>/<component>/<input-hash>/`。input hash 覆盖
 构建脚本、patch/config、上游摘要、架构、Go/Cargo/C/C++ 工具链和 pkg-config 解析结果。

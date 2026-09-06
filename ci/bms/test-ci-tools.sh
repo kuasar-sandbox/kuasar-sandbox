@@ -274,14 +274,6 @@ setup_cloud_hypervisor_workspace() {
     printf 'patch fixture\n' >"$root/sandboxer/native-deps/deps/ch-patches/test.patch"
 }
 
-setup_rocksdb_workspace() {
-    local root=$1
-    mkdir -p "$root/accelerator/deps"
-    printf 'rocksdb target fixture\n' >"$root/accelerator/Makefile"
-    printf 'common fixture\n' >"$root/accelerator/deps/common.sh"
-    printf 'build rocksdb fixture\n' >"$root/accelerator/deps/build-rocksdb.sh"
-}
-
 mkdir -p "$TMP/bin"
 cat >"$TMP/bin/make" <<'EOF'
 #!/usr/bin/env bash
@@ -495,24 +487,11 @@ cloud_key_config="$(env PATH="$TMP/bin:$PATH" CARGO_HOME="$cargo_home" \
 [ "$cloud_key_plain" != "$cloud_key_config" ] \
     || fail "Cargo config did not invalidate the Cloud Hypervisor key"
 
-rocks_workspace="$TMP/rocks-workspace"
-setup_rocksdb_workspace "$rocks_workspace"
-for tool in clang clang++; do
-    cat >"$TMP/bin/$tool" <<EOF
-#!/usr/bin/env bash
-printf '$tool v1\\n'
-EOF
-    chmod +x "$TMP/bin/$tool"
-done
-rocks_key_v1="$(env PATH="$TMP/bin:$PATH" CC=clang CXX=clang++ \
-    KUASAR_WORKSPACE_ROOT="$rocks_workspace" \
-    "$SCRIPT_DIR/../native-cache/native-cache.sh" key rocksdb | cut -f2)"
-printf '# compiler update\n' >>"$TMP/bin/clang"
-rocks_key_v2="$(env PATH="$TMP/bin:$PATH" CC=clang CXX=clang++ \
-    KUASAR_WORKSPACE_ROOT="$rocks_workspace" \
-    "$SCRIPT_DIR/../native-cache/native-cache.sh" key rocksdb | cut -f2)"
-[ "$rocks_key_v1" != "$rocks_key_v2" ] \
-    || fail "selected RocksDB compiler did not invalidate the key"
+# NOTE: the removed RocksDB component was the only one honoring CC/CXX env
+# overrides, so its "selected compiler invalidates the key" test was dropped
+# with it. Tool-identity keying stays covered by envd (go-env/GOFLAGS),
+# erofs (pkg-config selection, CROSS_PREFIX), cloud-hypervisor (rustc/cargo,
+# Cargo config), and vmlinux (Kbuild overrides).
 
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
     KUASAR_WORKSPACE_ROOT="$workspace" KUASAR_NATIVE_CACHE_ROOT="$cache" \

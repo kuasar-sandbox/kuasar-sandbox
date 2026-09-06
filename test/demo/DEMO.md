@@ -7,7 +7,7 @@ microVM 内进行,客户端不再 docker build/push**)→ 启动真实 microVM �
 SDK 零修改,仅靠环境变量 + 本机 `/etc/hosts` + 本地 Demo CA 签发的 TLS(`SSL_CERT_FILE`)指向本节点
 (与指向 e2b.dev 的方式一致)。
 
-**存储层是持久化前置**:内容存储(store-ctl)、本地 L1 缓存(cache-ctl,tiered rocksdb)、镜像仓库
+**存储层是持久化前置**:内容存储(store-ctl)、本地 L1 缓存(cache-ctl,tiered Redis)、镜像仓库
 三者由 `demo_prep.sh` **起一次、常驻复用**(store/cache 监听 **UNIX socket**、不占端口;数据落
 `DEMO_DATA_DIR`、跨多次演示复用并缓存镜像与 chunk)。`demo_e2b.sh` 每次只起编排 + eBPF 交换机。
 
@@ -28,7 +28,7 @@ SDK 零修改,仅靠环境变量 + 本机 `/etc/hosts` + 本地 Demo CA 签发�
 
 ## 前置条件
 
-- 二进制(源码树中执行 `make -C kuasar-sandbox build`;release 包内已自带):`node-ctl`、`store-ctl`、**`cache-ctl`**(CGO/rocksdb)、
+- 二进制(源码树中执行 `make -C kuasar-sandbox build`;release 包内已自带):`node-ctl`、`store-ctl`、**`cache-ctl`**(纯 Go,外部 Redis-compatible 后端)、
   `flatten-ctl`、`e2b-key-ctl`、`connector-ctl vswitch`、`cloud-hypervisor`、`vmlinux`、`sandbox-runtime.bundle`。
 - 主机:**systemd 为 PID1 + root**(编排经 D-Bus 驱动单元;TLS :443;KVM);可读写 `/dev/kvm`。
 - 资源:Demo 构建沙箱使用 2 vCPU,6 GiB capacity 和 4 GiB allocatable;主机还需为系统服务和运行沙箱留余量.

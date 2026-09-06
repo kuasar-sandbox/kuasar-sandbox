@@ -4,7 +4,7 @@
 # running so repeated demo runs reuse them (no per-run startup; image + chunk caching):
 #
 #   • content store  (store-ctl)  on a UNIX socket  $STORE_SOCK
-#   • local L1 cache (cache-ctl, tiered rocksdb L1 → store origin) on  $CACHE_SOCK
+#   • local L1 cache (cache-ctl, tiered Redis L1 → store origin) on  $CACHE_SOCK
 #   • an image registry — either a third-party REGISTRY you point at, or a persistent
 #     local zot this script spins up — seeded once with the e2b base image.
 #   • versitygw (S3 gateway) on 127.0.0.1:$VGW_PORT, backing COPY build contexts
@@ -77,10 +77,11 @@ case "${1:-up}" in
 esac
 
 # ---- prerequisites --------------------------------------------------------
-for b in store-ctl cache-ctl; do [ -x "$BIN/$b" ] || die "missing $BIN/$b — run 'make build' (cache-ctl needs CGO/rocksdb)"; done
+for b in store-ctl cache-ctl; do [ -x "$BIN/$b" ] || die "missing $BIN/$b — run 'make build' (all pure Go)"; done
+command -v redis-server >/dev/null 2>&1 || die "redis-server not on PATH (backs the cache-ctl L1 tier)"
 command -v docker >/dev/null 2>&1 || die "docker not on PATH (needed once to seed the base image into the registry)"
 [ "$(id -u)" -eq 0 ] || say "note: $RUN_DIR usually needs root; re-run under sudo if socket creation fails"
-mkdir -p "$DEMO_DATA_DIR" "$PID_DIR" "$LOG_DIR" "$DEMO_DATA_DIR/store" "$DEMO_DATA_DIR/cache-rocks" "$DEMO_DATA_DIR/zot" "$DEMO_DATA_DIR/vgw" "$RUN_DIR"
+mkdir -p "$DEMO_DATA_DIR" "$PID_DIR" "$LOG_DIR" "$DEMO_DATA_DIR/store" "$DEMO_DATA_DIR/redis" "$DEMO_DATA_DIR/zot" "$DEMO_DATA_DIR/vgw" "$RUN_DIR"
 
 # ---- registry: third-party (REGISTRY set) or a persistent local zot -------
 REGISTRY_INSECURE="${REGISTRY_INSECURE:-}"
@@ -123,16 +124,27 @@ fi
 [ -S "$STORE_SOCK" ] || die "store-ctl did not bind $STORE_SOCK (see $LOG_DIR/store.log)"
 ok "store-ctl on $STORE_SOCK (data $DEMO_DATA_DIR/store)"
 
-# ---- cache-ctl: local L1 (tiered rocksdb → store origin) on UDS ------------
+# ---- cache-ctl: local L1 (tiered redis → store origin) on UDS -------------
+# Dedicated no-persistence redis-server under DEMO_DATA_DIR backs the L1 tier;
+# cache-ctl's physical backend is always an external Redis-compatible service.
+REDIS_SOCK="$RUN_DIR/demo-redis.sock"
+if ! alive redis; then
+    start redis redis-server \
+        --bind 127.0.0.1 --port 0 \
+        --unixsocket "$REDIS_SOCK" --unixsocketperm 700 \
+        --save "" --appendonly no --dir "$DEMO_DATA_DIR/redis"
+fi
+for _ in $(seq 1 40); do [ -S "$REDIS_SOCK" ] && break; sleep 0.25; done
+[ -S "$REDIS_SOCK" ] || die "redis-server did not bind $REDIS_SOCK (see $LOG_DIR/redis.log)"
+
 cat > "$DEMO_DATA_DIR/cache.yaml" <<EOF
 mode: tiered
 listen: unix://$CACHE_SOCK
 health_listen: unix://$CACHE_HEALTH_SOCK
 rpc_timeout: 5s
-freq: { counters: 1M, reset_after: 100K }
 tiers:
-  - type: embedded
-    rocks: { path: $DEMO_DATA_DIR/cache-rocks, disk_bytes: 4GiB, mem_ratio: 0.1, direct_reads: true, bloom_bits: 10 }
+  - type: redis
+    redis: { endpoint: unix://$REDIS_SOCK, get_pool: 32, set_pool: 8, timeout: 5s }
 origin:
   type: store
   store: { endpoint: unix://$STORE_SOCK, pool: 4, timeout: 5s }
@@ -143,7 +155,7 @@ if ! alive cache; then
     for _ in $(seq 1 40); do [ -S "$CACHE_SOCK" ] && break; sleep 0.25; done
 fi
 [ -S "$CACHE_SOCK" ] || die "cache-ctl did not bind $CACHE_SOCK (see $LOG_DIR/cache.log)"
-ok "cache-ctl (L1 tiered) on $CACHE_SOCK (rocks $DEMO_DATA_DIR/cache-rocks)"
+ok "cache-ctl (L1 tiered) on $CACHE_SOCK (redis $REDIS_SOCK)"
 
 # ---- versitygw: S3 gateway for COPY build contexts (persistent; posix backend) --
 # The e2b SDK direct-uploads a COPY context here (presigned PUT) and the build

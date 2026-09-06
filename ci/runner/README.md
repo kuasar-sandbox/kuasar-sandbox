@@ -78,9 +78,9 @@ openEuler does not package the static `libuuid.a` required by the guest
 `mkfs.erofs`, the provisioner builds it inside the install root from the pinned
 openEuler `util-linux` source RPM. Both the source RPM and its upstream tarball
 are SHA-256 verified; the 8 MiB RPM is cached under `/var/cache/kuasar/sources`
-and downloaded from Huawei Cloud. The packaged `libstdc++-static` dependency
-used by the RocksDB-linked `cache-ctl` and the Redis server used by Accelerator
-E2E are installed from the same mirror. GNU `time` provides per-stage CPU,
+and downloaded from Huawei Cloud. The Redis server used by Accelerator
+E2E and the `libstdc++-static` package kept for toolchain parity are
+installed from the same mirror. GNU `time` provides per-stage CPU,
 memory, and I/O metrics. Every install reconciles the package manifest so
 existing slots receive newly added build dependencies.
 

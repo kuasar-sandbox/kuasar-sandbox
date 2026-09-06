@@ -296,7 +296,8 @@ require_working_set_tap
 STORE_PORT="$(free_port)"
 CACHE_PORT="$(free_port)"
 CACHE_HEALTH_PORT="$(free_port)"
-CACHE_ROCKS="$WORK/cache-rocks"
+CACHE_REDIS_DIR="$WORK/cache-redis"
+REDIS_SERVER_BIN="${REDIS_SERVER:-$(command -v redis-server || true)}"
 MANIFEST_KEY="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
 
 cat >"$WORK/store.yaml" <<EOF
@@ -311,17 +312,13 @@ mode: tiered
 listen: 127.0.0.1:$CACHE_PORT
 health_listen: 127.0.0.1:$CACHE_HEALTH_PORT
 rpc_timeout: 5s
-freq:
-  counters: 1M
-  reset_after: 100K
 tiers:
-  - type: embedded
-    rocks:
-      path: $CACHE_ROCKS
-      disk_bytes: 2GiB
-      mem_ratio: 0.1
-      direct_reads: false
-      bloom_bits: 10
+  - type: redis
+    redis:
+      endpoint: unix://$CACHE_REDIS_DIR/redis.sock
+      get_pool: 32
+      set_pool: 8
+      timeout: 5s
 origin:
   type: store
   store:
@@ -383,6 +380,34 @@ reset_store() {
     start_store
 }
 
+start_redis() {
+    [ -n "$REDIS_SERVER_BIN" ] || fatal "redis-server not found (set REDIS_SERVER)"
+    mkdir -p "$CACHE_REDIS_DIR"
+    "$REDIS_SERVER_BIN" \
+        --bind 127.0.0.1 --port 0 \
+        --unixsocket "$CACHE_REDIS_DIR/redis.sock" --unixsocketperm 700 \
+        --save "" --appendonly no --dir "$CACHE_REDIS_DIR" \
+        --daemonize no >"$WORK/redis.log" 2>&1 &
+    REDIS_PID=$!
+    PIDS+=("$REDIS_PID")
+    for _ in $(seq 1 100); do
+        [ -S "$CACHE_REDIS_DIR/redis.sock" ] && return 0
+        kill -0 "$REDIS_PID" 2>/dev/null || break
+        sleep 0.05
+    done
+    tail -80 "$WORK/redis.log" >&2
+    fatal "redis-server did not expose $CACHE_REDIS_DIR/redis.sock"
+}
+
+stop_redis() {
+    if [ -n "$REDIS_PID" ]; then
+        kill -TERM "$REDIS_PID" 2>/dev/null || true
+        wait "$REDIS_PID" 2>/dev/null || true
+        untrack_pid "$REDIS_PID"
+        REDIS_PID=""
+    fi
+}
+
 start_cache() {
     "$BIN/cache-ctl" serve --config "$WORK/cache.yaml" >"$WORK/cache.log" 2>&1 &
     CACHE_PID=$!
@@ -407,14 +432,18 @@ stop_cache() {
 
 reset_cache() {
     stop_cache
-    rm -rf -- "$CACHE_ROCKS"
+    stop_redis
+    rm -rf -- "$CACHE_REDIS_DIR"
+    start_redis
     start_cache
 }
 
 reset_sample_storage() {
     stop_cache
     reset_store
-    rm -rf -- "$CACHE_ROCKS"
+    stop_redis
+    rm -rf -- "$CACHE_REDIS_DIR"
+    start_redis
     start_cache
 }
 
@@ -424,6 +453,7 @@ cache_info() { # $1=output
 
 "$BIN/store-ctl" init --config "$WORK/store.yaml" --generation G1 >"$WORK/store-init.log" 2>&1
 start_store
+start_redis
 start_cache
 
 # ---- immutable base artifacts and B ------------------------------------
@@ -894,7 +924,7 @@ environment = {
         "main_prefetch": "off",
         "paired_prefetch": "D/memory",
         "host_cache_reset": host_cache_reset_mode,
-        "manifest_cache_reset": "restart cache-ctl with an empty RocksDB before each B and portable restore",
+        "manifest_cache_reset": "restart cache-ctl and its Redis L1 backend from an empty data dir before each B and portable restore",
         "manifest_store_reset": "restart store-ctl from the immutable root/dataset baseline before each sample",
         "local_crypto": {
             "active_diff_format": "existing plaintext",

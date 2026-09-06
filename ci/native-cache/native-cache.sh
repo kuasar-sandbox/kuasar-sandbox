@@ -101,11 +101,6 @@ component_input_paths() {
             required_file guest-runtime/native-deps/deps/common.sh
             required_file guest-runtime/native-deps/deps/build-envd.sh
             ;;
-        rocksdb)
-            required_file accelerator/Makefile
-            required_file accelerator/deps/common.sh
-            required_file accelerator/deps/build-rocksdb.sh
-            ;;
         cloud-hypervisor)
             required_file sandboxer/native-deps/Makefile
             required_file sandboxer/native-deps/deps/common.sh
@@ -265,12 +260,6 @@ component_environment() {
                 GOEXPERIMENT GOAMD64 GOARM64
             )
             ;;
-        rocksdb)
-            names+=(
-                ROCKSDB_TARBALL ROCKSDB_TARBALL_SHA256 ROCKSDB_SOURCE_SHA256 CROSS_PREFIX
-                CC CXX CFLAGS CXXFLAGS LDFLAGS
-            )
-            ;;
         cloud-hypervisor)
             names+=(
                 CLOUD_HYPERVISOR_TARBALL CLOUD_HYPERVISOR_TARBALL_SHA256 CH_BASE_TAG
@@ -346,18 +335,6 @@ component_toolchain() {
             tool_identity go-env go env GOOS GOARCH GOVERSION GOEXPERIMENT GOFLAGS GOAMD64 GOARM64 CGO_ENABLED
             package_identities 'golang' 'golang-go'
             ;;
-        rocksdb)
-            if [ -z "$cross_prefix" ]; then
-                cc=${CC:-gcc}
-                cxx=${CXX:-g++}
-            fi
-            tool_identity cc "$cc" --version
-            tool_identity cxx "$cxx" --version
-            tool_identity ar "$ar" --version
-            tool_identity cmake cmake --version
-            tool_identity make make --version
-            package_identities 'gcc gcc-c++ cmake make glibc-devel' 'gcc g++ cmake make libc6-dev'
-            ;;
         cloud-hypervisor)
             tool_identity rustc rustc -vV
             tool_identity cargo cargo -Vv
@@ -402,10 +379,6 @@ component_outputs() {
         envd)
             printf 'guest-runtime/native-deps/bin/%s/envd\n' "$TARGET_ARCH"
             ;;
-        rocksdb)
-            printf 'accelerator/build/%s/rocksdb/include\n' "$TARGET_ARCH"
-            printf 'accelerator/build/%s/rocksdb/lib/librocksdb.a\n' "$TARGET_ARCH"
-            ;;
         cloud-hypervisor)
             printf 'sandboxer/native-deps/bin/%s/cloud-hypervisor\n' "$TARGET_ARCH"
             ;;
@@ -433,7 +406,6 @@ assert_clean_source_tree() {
         vmlinux) source_dir="$WORKSPACE_ROOT/guest-runtime/native-deps/build/src/linux" ;;
         erofs) source_dir="$WORKSPACE_ROOT/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils" ;;
         envd) source_dir="$WORKSPACE_ROOT/guest-runtime/native-deps/build/src/e2b-infra" ;;
-        rocksdb) source_dir="$WORKSPACE_ROOT/accelerator/build/src/rocksdb" ;;
         cloud-hypervisor) source_dir="$WORKSPACE_ROOT/sandboxer/native-deps/build/src/cloud-hypervisor" ;;
     esac
     if [ -e "$source_dir" ]; then
@@ -450,7 +422,6 @@ build_component() {
         vmlinux) make -C "$WORKSPACE_ROOT/guest-runtime/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" vmlinux ;;
         erofs) make -C "$WORKSPACE_ROOT/guest-runtime/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" erofs ;;
         envd) make -C "$WORKSPACE_ROOT/guest-runtime/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" envd ;;
-        rocksdb) make -C "$WORKSPACE_ROOT/accelerator" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" deps-rocksdb ;;
         cloud-hypervisor) make -C "$WORKSPACE_ROOT/sandboxer/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" cloud-hypervisor ;;
     esac
     validate_outputs "$component"
@@ -674,7 +645,7 @@ usage() {
 usage: native-cache.sh restore-or-build [component ...]
        native-cache.sh key [component ...]
 
-components: vmlinux erofs envd rocksdb cloud-hypervisor
+components: vmlinux erofs envd cloud-hypervisor
 EOF
 }
 
@@ -684,7 +655,7 @@ main() {
     shift
     local components=("$@") component
     if [ "${#components[@]}" -eq 0 ]; then
-        components=(vmlinux erofs envd rocksdb cloud-hypervisor)
+        components=(vmlinux erofs envd cloud-hypervisor)
     fi
     case "$command" in
         restore-or-build)

@@ -116,7 +116,7 @@ docs/             System design, deployment, performance, CI, and release docs
 test/e2e/         Owner suites, run_all.sh, and platform integration cases
 test/perf|demo/   Platform performance and demo scripts
 ci/bms/           BMS helpers and source-cache maintenance
-ci/native-cache/  vmlinux, erofs, envd, RocksDB, and Cloud Hypervisor cache
+ci/native-cache/  vmlinux, erofs, envd, and Cloud Hypervisor cache
 ci/runner/        Self-hosted BMS runner deployment
 release/          Version resolution, packaging, aggregation, and publishing
 releases/         Stable and daily Preview aggregate selections

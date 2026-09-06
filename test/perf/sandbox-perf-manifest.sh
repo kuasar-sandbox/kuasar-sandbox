@@ -6,10 +6,10 @@
 #
 # Daemon model:
 #   store-ctl + cache-ctl tiered live for the entire run (one per
-#   process). Cache "cold" vs "hot" is controlled by clearing the
-#   rocksdb path between iterations:
-#     cold-L1:  rm -rf cache-rocks; restart cache-ctl
-#     hot-L1:   keep cache-ctl alive; rocks retains chunks across iters
+#   process). Cache "cold" vs "hot" is controlled by resetting the
+#   dedicated Redis-compatible L1 backend between iterations:
+#     cold-L1:  stop redis + cache-ctl; wipe the redis dir; restart both
+#     hot-L1:   keep cache-ctl alive; redis retains chunks across iters
 #
 # Scenarios driven (each runs N iterations, median + min/max reported):
 #   1. cold-start manifest://  (cold L1)   — first VM ever
@@ -174,7 +174,8 @@ KEY=$(openssl rand -hex 32)
 STORE_PORT=$(free_port)
 CACHE_PORT=$(free_port)
 CACHE_HEALTH_PORT=$(free_port)
-CACHE_ROCKS="$WORK/cache-rocks"
+CACHE_REDIS_DIR="$WORK/cache-redis"
+REDIS_SERVER_BIN="${REDIS_SERVER:-$(command -v redis-server || true)}"
 
 cat > "$WORK/store-ctl.yaml" <<EOF
 listen: 127.0.0.1:$STORE_PORT
@@ -188,17 +189,13 @@ mode: tiered
 listen: 127.0.0.1:$CACHE_PORT
 health_listen: 127.0.0.1:$CACHE_HEALTH_PORT
 rpc_timeout: 5s
-freq:
-  counters: 1M
-  reset_after: 100K
 tiers:
-  - type: embedded
-    rocks:
-      path: $CACHE_ROCKS
-      disk_bytes: 2GiB
-      mem_ratio: 0.1
-      direct_reads: false
-      bloom_bits: 10
+  - type: redis
+    redis:
+      endpoint: unix://$WORK/cache-redis/redis.sock
+      get_pool: 32
+      set_pool: 8
+      timeout: 5s
 origin:
   type: store
   store:
@@ -237,6 +234,24 @@ start_store_ctl() {
     return 1
 }
 
+start_redis() {
+    [ -n "$REDIS_SERVER_BIN" ] || { echo "redis-server not found (set REDIS_SERVER)" >&2; return 1; }
+    mkdir -p "$CACHE_REDIS_DIR"
+    "$REDIS_SERVER_BIN" \
+        --bind 127.0.0.1 --port 0 \
+        --unixsocket "$CACHE_REDIS_DIR/redis.sock" --unixsocketperm 700 \
+        --save "" --appendonly no --dir "$CACHE_REDIS_DIR" \
+        --daemonize no >"$WORK/redis.log" 2>&1 &
+    REDIS_PID=$!
+    PIDS+=("$REDIS_PID")
+    for _ in $(seq 1 50); do
+        [ -S "$CACHE_REDIS_DIR/redis.sock" ] && return 0
+        sleep 0.1
+    done
+    echo "redis-server did not expose $CACHE_REDIS_DIR/redis.sock" >&2
+    return 1
+}
+
 start_cache_ctl() {
     "$BIN/cache-ctl" serve --config "$WORK/cache-ctl.yaml" >"$WORK/cache.log" 2>&1 &
     CACHE_PID=$!
@@ -262,13 +277,19 @@ restart_cache_ctl_clean() {
         fi
         wait "$CACHE_PID" 2>/dev/null || true
     fi
-    rm -rf "$CACHE_ROCKS"
+    if [ -n "${REDIS_PID:-}" ]; then
+        kill "$REDIS_PID" 2>/dev/null || true
+        wait "$REDIS_PID" 2>/dev/null || true
+    fi
+    rm -rf "$CACHE_REDIS_DIR"
+    start_redis || return 1
     start_cache_ctl
 }
 
 echo "==> spin up store-ctl + cache-ctl tiered" >&2
 "$BIN/store-ctl" init --config "$WORK/store-ctl.yaml" --generation G1 >>"$WORK/store.log" 2>&1
 start_store_ctl || exit 1
+start_redis || exit 1
 start_cache_ctl || exit 1
 
 # ---- prepare blk0 manifest ----------------------------------------------

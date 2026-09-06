@@ -93,7 +93,8 @@ standalone,cluster和external-proxy真实guest E2E的必需客户端;这些测�
 
 ```
 /var/store/                          store-ctl fs-backend data (local or shared filesystem)
-/var/cache/accel-l1/                 cache-ctl local/tiered L1 RocksDB (working-set-sized)
+/var/lib/kuasar-cache/redis/         Redis-compatible L1 backend for cache-ctl (dedicated, no-persistence)
+/run/kuasar-cache/redis.sock         UDS endpoint of the L1 backend
 /run/node-ctl/                       node-ctl audit + state(tmpfs)
 /run/sandbox/<sid>/                  每沙箱运行时目录:socket + snap-stage/snap-state(CH 元数据中转,tmpfs)
 /var/lib/sandbox/<sid>/              每沙箱磁盘目录:overlay 写层 <sid>.overlay.diff(本地 NVMe)
@@ -213,10 +214,13 @@ L2 是 Manifest 数据路径的可选加速层.部署可以只使用 local cache
   `LocateN(key, 5)` 在配置的 peer 池中确定性选出.5 peer 是该 RS 配置的
   最小集群规模,扩容不改变 placement 算法.详见
   `docs/cache.md` §4.9
-- **资源**:SSD,RocksDB BlockCache(`mem_ratio`)和网络规格按部署测量选择
+- **资源**:SSD,后端服务内存预算和网络规格按部署测量选择(容量、淘汰与
+  SSD 分层属于 Redis-compatible 服务自身的配置)
 - **隔离**:不同应用域(镜像 chunk / 快照 chunk)可独立部署集群实例,同一套
-  软件配置不同 RocksDB path + 不同集群成员
-- **持久化**:RocksDB on `/mnt/ssd/accel-l2`,daemon 进程崩溃可热重启不丢数据
+  软件配置不同后端 endpoint/namespace + 不同集群成员;每个 EC shard peer 必须
+  独立物理 endpoint/namespace
+- **持久化**:无 — cache 数据非权威,后端按 cache 语义运行(无 AOF/RDB),
+  淘汰或冷启动后由 origin 回填
 
 ### 3.2 端口
 
@@ -409,7 +413,7 @@ cluster-ctl placer
    │   sandbox-ctl ──► Local File / NAS / NFS                                                         │
    │        │                                                                                         │
    │        └── optional Manifest ObjectGet :7070 ──► cache-ctl local/tiered                          │
-   │                                                  │   L1 RocksDB                                  │
+   │                                                  │   L1 Redis-compatible backend (UDS)            │
    │                                                  ├── wire EC fan-out (5 shards) ──► (L2 cluster) │
    │                                                  └── origin gRPC :7100 ──► store-ctl  (sidecar)  │
    │                                                                                       │          │
@@ -429,7 +433,7 @@ cluster-ctl placer
    ┌─ Optional L2 Cache Cluster ──────────────────────────────────────────────────────────────────────┐
    │                                                                                                  │
    │      cache-ctl  shard      wire :7070   /   gRPC :7071                                           │
-   │      RocksDB on SSD                                                                              │
+   │      Redis-compatible backend on SSD (dedicated, per-peer)                                       │
    │      Maglev placement:   LocateN( chunk_hash, 5 )  over full peer pool   (RS 4+1)                │
    │                                                                                                  │
    │      no origin credentials here - origin access stays in each Compute Node's store-ctl           │

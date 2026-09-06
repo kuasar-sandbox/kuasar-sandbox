@@ -109,7 +109,27 @@ for _ in $(seq 1 50); do
     sleep 0.1
 done
 
-echo "==> spin up cache-ctl (tiered: rocksdb L1 + store origin)"
+echo "==> spin up cache-ctl (tiered: Redis L1 + store origin)"
+# Dedicated, no-persistence redis-server backs the L1 tier. cache-ctl's
+# physical backend is always an external Redis-compatible service.
+REDIS_SERVER="${REDIS_SERVER:-$(command -v redis-server || true)}"
+[ -n "$REDIS_SERVER" ] || { echo "FAIL: redis-server is required for the cache L1" >&2; exit 1; }
+REDIS_DIR="$WORK/redis"
+REDIS_SOCKET="$REDIS_DIR/redis.sock"
+REDIS_TCP_PORT=$(free_port)
+mkdir -p "$REDIS_DIR"
+"$REDIS_SERVER" \
+    --bind 127.0.0.1 --port "$REDIS_TCP_PORT" \
+    --unixsocket "$REDIS_SOCKET" --unixsocketperm 700 \
+    --save "" --appendonly no --dir "$REDIS_DIR" \
+    --daemonize no >"$WORK/redis.log" 2>&1 &
+PIDS+=($!)
+for _ in $(seq 1 50); do
+    if [ -S "$REDIS_SOCKET" ]; then break; fi
+    sleep 0.1
+done
+[ -S "$REDIS_SOCKET" ] || { echo "FAIL: redis-server did not expose $REDIS_SOCKET" >&2; cat "$WORK/redis.log" >&2; exit 1; }
+
 CACHE_PORT=$(free_port)
 CACHE_HEALTH_PORT=$(free_port)
 cat > "$WORK/cache-ctl.yaml" <<EOF
@@ -117,17 +137,13 @@ mode: tiered
 listen: 127.0.0.1:$CACHE_PORT
 health_listen: 127.0.0.1:$CACHE_HEALTH_PORT
 rpc_timeout: 5s
-freq:
-  counters: 1M
-  reset_after: 100K
 tiers:
-  - type: embedded
-    rocks:
-      path: $WORK/cache-rocks
-      disk_bytes: 2GiB
-      mem_ratio: 0.1
-      direct_reads: false
-      bloom_bits: 10
+  - type: redis
+    redis:
+      endpoint: unix://$REDIS_SOCKET
+      get_pool: 8
+      set_pool: 4
+      timeout: 5s
 origin:
   type: store
   store:
