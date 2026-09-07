@@ -102,7 +102,11 @@ def replace_exact(text: str, replacements: list[dict]) -> str:
     return text
 
 
-def read_input(root: Path, name: str) -> str:
+def read_input(root: Path, name: str | list[str]) -> str:
+    if isinstance(name, list):
+        if not name or not all(isinstance(part, str) for part in name):
+            raise ValueError("draft fragments must be a nonempty list of paths")
+        return "".join(read_input(root, part) for part in name)
     raw = root / name
     p = raw.resolve()
     if not name.startswith('.docs-edit/') or not p.is_relative_to(root.resolve()) or not p.is_file() or raw.is_symlink():
@@ -221,7 +225,11 @@ def main():
             obj = api(repo, 'blobs', {'content': base64.b64encode(data).decode(), 'encoding': 'base64'})
             if obj['sha'] != hashes[path]:
                 raise ValueError('GitHub returned a different blob SHA')
-            entries.append({'path': path, 'mode': '100644', 'type': 'blob', 'sha': obj['sha']})
+            prior = subprocess.check_output(['git', 'ls-tree', plan['parent_sha'], '--', path], text=True).strip()
+            mode = prior.split()[0] if prior else '100644'
+            if mode not in ('100644', '100755'):
+                raise ValueError(f'{path}: refusing to overwrite a non-regular Git entry')
+            entries.append({'path': path, 'mode': mode, 'type': 'blob', 'sha': obj['sha']})
         base_tree = subprocess.check_output(['git','rev-parse',f"{plan['parent_sha']}^{{tree}}"],text=True).strip()
         tree = api(repo,'trees',{'base_tree':base_tree,'tree':entries})
         commit = api(repo,'commits',{'message':plan['message'],'tree':tree['sha'],'parents':[plan['parent_sha']]})
