@@ -5,11 +5,11 @@
 ## 用户与系统文档
 
 - [快速开始](quickstart_zh.md)
-- [系统总览](kuasar-sandbox.md)
+- [系统总览](kuasar-sandbox_zh.md)
 - [部署](deployment.md)
-- [性能方法](perf.md)
-- [发布契约](release.md)
-- [CI 与 BMS](ci.md)
+- [性能方法](perf_zh.md)
+- [发布契约](release_zh.md)
+- [CI 与 BMS](ci_zh.md)
 - [完整发布验证](../test/QUICKSTART_zh.md)
 - [演示](../test/demo/DEMO_zh.md)
 - [Runner 运维（英文）](../ci/runner/README.md)

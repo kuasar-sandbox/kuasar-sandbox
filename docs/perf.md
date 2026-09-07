@@ -1,16 +1,16 @@
-# perf - 性能验证与调优
+[English](perf.md) | [简体中文](perf_zh.md)
 
-本文定义 Kuasar Sandbox 性能测试的口径,入口,证据要求和回归方法.性能结果只对
-记录的版本,硬件,数据路径,cache 状态,沙箱规格和 workload 有效,不能从一次开发
-环境测试外推为所有生产部署的能力.
+<a id="perf---性能验证与调优"></a>
+# perf - Performance validation and tuning
 
-早期文档中的历史绝对值没有同时保存精确聚合/组件版本,完整硬件,失败率和原始报告
-位置,因此不再作为公开基线保留.当前文档不发布无证据链的启动延迟,恢复延迟,cache
-命中率,单节点容量或存储收益数字.
+This document defines measurement boundaries, entry points, evidence requirements and regression methods for Kuasar Sandbox performance testing. Results apply only to the recorded versions, hardware, data path, cache state, sandbox specification and workload. A development-environment measurement cannot be extrapolated to all production deployments.
 
-## 1. 测量入口
+Historical absolute numbers in earlier documentation did not retain exact aggregate/component versions, complete hardware details, failure rates and locations of raw reports together. They are therefore no longer retained as public baselines. This document does not publish startup or restore latency, cache hit rates, node capacity or storage savings without an evidence chain.
 
-主仓聚合入口:
+<a id="1-测量入口"></a>
+## 1. Measurement entry points
+
+Project-level aggregate entry points:
 
 ```bash
 make perf
@@ -22,93 +22,85 @@ make test-uffd-performance-gate
 make test-perf-tools
 ```
 
-`make perf` 先构建当前兄弟仓源码,再运行 accelerator cache benchmark 和主仓的 sandbox,
-Manifest,working-set 与 density harness.单独运行 cache benchmark:
+`make perf` first builds the current sibling-repository sources, then runs accelerator's cache benchmark and the project's sandbox, Manifest, working-set and density harnesses. To run the cache benchmark separately:
 
 ```bash
 make -C ../accelerator perf-cache
 ```
 
-真实 MicroVM 路径需要可读写的 `/dev/kvm`,root 或无交互 sudo,所需镜像与运行制品.
-Manifest 和 density harness 还会按脚本检查 Docker,网络与文件系统工具.缺少这些条件时
-产生的 skip 不是性能验证成功;发布证据必须记录实际退出状态和所有失败样本.
+Real MicroVM paths require read/write access to `/dev/kvm`, root or noninteractive sudo, and the necessary images and runtime artifacts. Manifest and density harnesses additionally check Docker, networking and filesystem tools as specified by their scripts. A skip caused by missing prerequisites is not successful performance validation. Release evidence must record actual exit status and every failed sample.
 
-## 2. 结果证据合同
+<a id="2-结果证据合同"></a>
+## 2. Result evidence contract
 
-任何准备写入文档,Release Notes 或容量规划的结果,至少同时保存:
+Any result intended for documentation, release notes or capacity planning must retain at least:
 
-| 维度 | 必需证据 |
-|---|---|
-| Version | 聚合 tag/commit,以及 accelerator,connector,sandboxer,orchestrator,runtime,vmlinux 的精确 tag/commit |
-| Host | CPU 型号与拓扑,内存,磁盘,网络,Linux,KVM/VMM,裸金属或嵌套虚拟化 |
-| Data path | local file,named shared file 或 Manifest;FS/S3-compatible backend;cache 层级和 cold/hot 状态 |
-| Sandbox | vCPU,memory zone,资源声明,磁盘,kernel/runtime,template 或 snapshot 来源 |
-| Workload | 镜像 digest,启动/恢复步骤,输入数据,并发,持续时间和随机种子 |
-| Statistics | 样本总数,成功/失败/skip 数,失败率,聚合方法以及报告的分位数 |
-| Timing | 起止事件,是否包含下载/构建/导入,时钟来源和 timeout |
-| Source | harness 命令,环境变量,原始日志,machine-readable samples 和 CI Run URL |
+| Dimension | Required evidence |
+| --- | --- |
+| Version | Aggregate tag/commit and exact tags/commits for accelerator, connector, sandboxer, orchestrator, runtime and vmlinux |
+| Host | CPU model and topology, memory, disk, network, Linux, KVM/VMM, and bare-metal or nested-virtualization environment |
+| Data path | Local file, named shared file or Manifest; FS/S3-compatible backend; cache levels and cold/hot state |
+| Sandbox | vCPU, memory zone, declared resources, disks, kernel/runtime and template or snapshot source |
+| Workload | Image digest, startup/restore steps, input data, concurrency, duration and random seed |
+| Statistics | Total samples, successful/failed/skipped counts, failure rate, aggregation method and reported percentiles |
+| Timing | Start/end events, whether download/build/import is included, clock source and timeout |
+| Source | Harness command, environment variables, raw logs, machine-readable samples and CI run URL |
 
-当前 `sandbox-perf.sh` 和 `sandbox-perf-manifest.sh` 的聚合输出只保留成功迭代并报告
-成功样本数 `N`;失败迭代只出现在完整运行日志中.使用这些入口时必须同时保存请求的
-`ITERS`,完整日志以及成功/失败/skip 计数.无法恢复总分母和失败率的聚合输出不能单独
-作为性能证据.
+The aggregate outputs of the current `sandbox-perf.sh` and `sandbox-perf-manifest.sh` retain only successful iterations and report the successful sample count `N`. Failed iterations appear only in the complete run log. When using these entry points, also retain the requested `ITERS`, complete logs and successful/failed/skipped counts. Aggregate output that cannot recover the total denominator and failure rate is insufficient on its own as performance evidence.
 
-结果缺少任一必要维度时,可以用于本地诊断,但不能作为项目级性能事实.设计阈值必须标注
-为 target 或 regression gate;门禁通过只说明该候选满足该测试合同,不自动形成生产 SLO.
+A result missing a necessary dimension can support local diagnosis, but cannot be presented as a project-wide performance fact. Design thresholds must be labeled as a target or regression gate. Passing a gate only establishes that the candidate meets that test contract; it does not automatically establish a production SLO.
 
-## 3. Cache 与数据路径
+<a id="3-cache-与数据路径"></a>
+## 3. Cache and data paths
 
-### 3.1 测量对象
+<a id="31-测量对象"></a>
+### 3.1 Measurement subjects
 
-accelerator cache benchmark 分别观察 local cache,tiered cache,shard fan-out 和 store
-origin.至少区分:
+The accelerator cache benchmark observes local cache, tiered cache, shard fan-out and store origin separately. Distinguish at least:
 
-- value size,prefill 数量,并发和运行时长;
-- client/server CPU 绑定与网络传输方式;
-- L1/L2 cold,warm 和部分命中状态;
-- FS 或 S3-compatible origin;
-- Get/Put 的 p50,p95,p99,吞吐,错误和回源比例.
+- value size, prefill count, concurrency and run duration;
+- client/server CPU affinity and network transport;
+- L1/L2 cold, warm and partial-hit states;
+- FS or S3-compatible origin;
+- Get/Put p50, p95, p99, throughput, errors and origin-access fraction.
 
-`CACHE_CTL_TIMING=1` 可以提供 cache 内部分段诊断;pprof 和 trace 用于定位 CPU,分配,
-网络与调度开销.这些内部计时不能替代从客户端观察的端到端口径.
+`CACHE_CTL_TIMING=1` supplies internal cache-stage diagnostics. Use pprof and tracing to locate CPU, allocation, network and scheduling costs. Internal timings do not replace the client's end-to-end measurement.
 
-### 3.2 路径解释
+<a id="32-路径解释"></a>
+### 3.2 Interpreting paths
 
-三种工件路径必须分开比较:
+Compare these three artifact paths separately:
 
-| 路径 | 跨节点条件 | Cache 条件 | 恢复依赖 |
-|---|---|---|---|
-| Local file | 节点亲和或部署方复制 | 依赖文件系统 page cache | 需要原节点文件仍存在 |
-| Named shared file | NAS/NFS/共享文件系统对目标节点可见 | 依赖共享文件系统和 host page cache | 不要求转换为 Manifest |
-| Manifest | FS/S3-compatible store 对目标节点可达 | 可直接回源,也可使用 local/tiered cache | 由完整 Manifest 父链定位内容 |
+| Path | Cross-node requirement | Cache behavior | Restore dependency |
+| --- | --- | --- | --- |
+| Local file | Node affinity or operator-managed copying | Filesystem page cache | Original node files must remain available |
+| Named shared file | NAS/NFS/shared filesystem visible to the target node | Shared-filesystem and host page caches | Conversion to Manifest is not required |
+| Manifest | FS/S3-compatible store reachable from the target node | Direct origin access or local/tiered cache | Content located through the complete Manifest parent chain |
 
-不能把普通 `file://` 统一解释为"不支持共享".当命名 location 位于共享文件系统时,
-它可以跨节点访问.也不能把 Manifest 的一次 cold-cache 成本写成所有后续请求的固定成本.
+Do not interpret every ordinary `file://` reference as incapable of sharing. A named location on a shared filesystem can be accessible across nodes. Nor is a Manifest cold-cache measurement a fixed cost for every subsequent request.
 
-内容复用结果只能解释为该数据集,安全域和父层关系下的观测.同模板实例的首要共享来自
-明确只读父层;不同虚机运行后偶然相同的内存字节不是快照效率前提.
+Content-reuse results describe observations for the particular dataset, security domain and parent relationships. Instances of a common template primarily share explicit read-only parents. Coincidentally identical memory bytes in different running VMs are not a prerequisite for snapshot efficiency.
 
-## 4. Sandbox 启动,快照与恢复
+<a id="4-sandbox-启动快照与恢复"></a>
+## 4. Sandbox startup, snapshots and restoration
 
-### 4.1 基础矩阵
+<a id="41-基础矩阵"></a>
+### 4.1 Basic matrix
 
-`test/perf/sandbox-perf.sh` 比较 file 和 Manifest cold-start 路径,
-`test/perf/sandbox-perf-manifest.sh` 展开 Manifest cold/hot cache,snapshot publish 和
-restore 场景.报告应至少包含:
+`test/perf/sandbox-perf.sh` compares file and Manifest cold-start paths. `test/perf/sandbox-perf-manifest.sh` expands the matrix to Manifest cold/hot cache, snapshot publication and restoration. Reports should include at least:
 
-- 从启动请求到 Guest 应用 ready 的 wallclock;
-- sandboxer 内部阶段,VMM 和 Guest ready 证据;
-- 按需读取的请求,字节,错误和 cache 来源;
-- snapshot publish,父层解析和 restore 的独立时长;
-- 请求迭代数,成功样本,失败/skip 计数与失败率,以及成功样本的分位数.
+- wall-clock time from the start request to guest-application readiness;
+- sandboxer internal stages, VMM and guest-readiness evidence;
+- on-demand read requests, bytes, errors and cache sources;
+- separate durations for snapshot publication, parent resolution and restoration;
+- requested iterations, successful samples, failed/skipped counts and failure rate, plus percentiles of successful samples.
 
-`<run-root>/<sid>/ctl.sock` 只证明 host 控制 socket 存在.性能 harness 必须使用实际
-Guest 命令,健康检查或 workload ready 条件作为完成信号.
+`<run-root>/<sid>/ctl.sock` proves only that the host control socket exists. A performance harness must use an actual guest command, health check or workload-readiness condition as its completion signal.
 
-### 4.2 Working-set 矩阵
+<a id="42-working-set-矩阵"></a>
+### 4.2 Working-set matrix
 
-`test/perf/sandbox-perf-working-set.sh` 对同一个不可变父层执行配对的 capture,publish,
-cold restore 和可选 prefetch 比较.它输出:
+`test/perf/sandbox-perf-working-set.sh` performs paired capture, publication, cold restore and optional prefetch comparisons against the same immutable parent. It produces:
 
 ```text
 environment.json
@@ -118,61 +110,59 @@ report.md
 raw/
 ```
 
-`environment.json` 记录 revisions,host,image,binaries 和 workload;`samples.jsonl`
-保留逐样本事实;`raw/` 保存 snapshot,publisher,restore 和 cache 证据.对外引用必须保留
-完整目录并给出对应 CI Run URL,不能只摘录 `report.md` 的某个分位数.
+`environment.json` records revisions, host, image, binaries and workload. `samples.jsonl` retains individual sample facts. `raw/` retains snapshot, publisher, restore and cache evidence. External citations must preserve the complete directory and provide the corresponding CI run URL, rather than extracting one percentile from `report.md`.
 
-主线 BMS 的 working-set 项是 smoke,用于发现明显回归.正式性能报告应显式设置样本数,
-保存所有样本,并将 smoke 与统计报告分开命名.
+The mainline BMS working-set step is a smoke test for obvious regressions. A formal performance report must explicitly set sample counts, retain all samples and label smoke tests separately from statistical reports.
 
-### 4.3 快照语义
+<a id="43-快照语义"></a>
+### 4.3 Snapshot semantics
 
-测量应分别覆盖:
+Measurements should separately cover:
 
-- 从同一模板父层创建多个独立实例的 1:N 场景;
-- 暂停并恢复同一稳定 Sandbox ID 的 1:1 场景;
-- 本地恢复,命名共享文件恢复和 Manifest 远程恢复;
-- memory/disk 父链完整时的成功路径,以及父层缺失或校验失败的错误路径;
-- cold cache,warm cache和显式 prefetch.
+- 1:N creation of independent instances from a shared template parent;
+- 1:1 pause and resume of the same stable Sandbox ID;
+- local restoration, named shared-file restoration and remote Manifest restoration;
+- successful memory/disk parent-chain resolution, and failures from missing parents or integrity checks;
+- cold cache, warm cache and explicit prefetch.
 
-快照层级,数据载体和 cache 状态是三个独立变量,不能用其中一个结果替代另外两个.
+Snapshot layering, data carrier and cache state are three independent variables. A result for one cannot substitute for the other two.
 
-## 5. 节点资源与密度
+<a id="5-节点资源与密度"></a>
+## 5. Node resources and density
 
-### 5.1 Workload 模型
+<a id="51-workload-模型"></a>
+### 5.1 Workload model
 
-`test/perf/workload.py` 提供 `idle`,确定性的 grow/rest cycles 和重尾 active/idle
-三类负载.运行 `test/perf/density-perf.sh` 时应显式记录并发,memory zone,resource
-floor/startup/capacity,workload 参数,观察窗口和随机种子.
+`test/perf/workload.py` provides three workload classes: `idle`, deterministic grow/rest cycles and heavy-tailed active/idle activity. When running `test/perf/density-perf.sh`, explicitly record concurrency, memory zone, resource floor/startup/capacity, workload parameters, observation window and random seed.
 
-报告同时观察:
+Reports observe all of the following:
 
-- 每个沙箱的 admission,settled,grant,reject 和终态;
-- host `MemAvailable` 与 sandbox cgroup `memory.current/events.local`;
-- Guest workload 是否完成,以及 Guest/cgroup OOM;
-- 启动,活跃,回收和终止阶段的时间线;
-- Reservation pool 的水位,startup reserve 和 operational margin.
+- admission, settled, grant, reject and terminal state for every sandbox;
+- host `MemAvailable` and sandbox cgroup `memory.current/events.local`;
+- guest workload completion and both guest/cgroup OOM;
+- timelines for startup, activity, reclamation and termination;
+- Reservation-pool watermarks, startup reserve and operational margin.
 
-### 5.2 解释边界
+<a id="52-解释边界"></a>
+### 5.2 Interpretation boundaries
 
-密度由 workload 峰值 working set,活跃比例,VMM/Guest 常驻开销,回收时延,暂停策略
-和节点安全余量共同决定.memory zone 是上限,不是可直接换算为物理占用或实例数的常数.
+Density depends on workload peak working set, active fraction, resident VMM/guest overhead, reclamation latency, pause policy and node safety margin. The memory zone is a limit, not a constant that can be directly converted into physical occupancy or instance count.
 
-资源职责必须分开解释:
+Capacity planning must include guest kernel, page tables, slab and guest-service memory in addition to application RSS, with headroom measured for the workload. An OOM inside the guest is distinct from a host cgroup OOM; zero host `memory.events` OOM counters do not prove that the guest application survived. Record application completion, exits and guest evidence as well. Exit 137 identifies a SIGKILL-style exit, not by itself its cause. No universal guest-overhead number or fixed capacity multiplier is established by this document.
 
-- sandboxer 执行单沙箱 Balloon,Cgroup,VMM 以及 pause/resume 协同;
-- node-ctl Reservation Controller 执行 admission,共享池,水位,Grant,Inventory
-  和恢复,不直接接管单沙箱闭环.
+Explain resource responsibilities separately:
 
-Balloon 不是唯一弹性来源.空闲 CPU 调度,非活跃内存回收,Cgroup 限制,节点准入以及
-长等待实例的 pause 都影响有效利用率.任何容量结论都必须在声明资源和准入模型范围内
-报告 OOM 与有效工作丢失,不能把 OOM 当作超卖成功.
+- sandboxer coordinates Balloon, Cgroup, VMM and pause/resume for an individual sandbox;
+- the node-ctl Reservation Controller manages admission, the shared pool, watermarks, Grant, Inventory and recovery, without taking over the individual sandbox loop.
 
-高密度是资源利用率提高后的结果,不是预先指定的实例数量承诺.
+Balloon is not the only source of elasticity. Idle-CPU scheduling, inactive-memory reclaim, Cgroup limits, node admission and pausing long waits all affect effective utilization. Every capacity conclusion must report OOM and loss of useful work within the declared-resource and admission model. OOM must not be counted as successful overcommit.
 
-## 6. Cluster 控制面
+High density is a result of improved resource utilization, not a promise of a predetermined instance count.
 
-cluster 性能必须区分热路径和冷路径:
+<a id="6-cluster-控制面"></a>
+## 6. Cluster control plane
+
+Cluster performance must distinguish hot and cold paths:
 
 ```text
 hot path:
@@ -184,41 +174,34 @@ node   ──► registry node_link/node_list
 placer ──► group import and placement
 ```
 
-热路径验证 route cache 命中后不进入 Resolve/Reserve.冷路径分别测量 create,connect,
-exec-session,data activation,node 状态变化,group import 和成员切换.每个结果必须记录
-registry 副本/owner 配置,sandbox-group 数量,route cache 状态,node 数量,请求完成条件
-和失败率.
+Hot-path validation checks that a route-cache hit does not enter Resolve/Reserve. Measure create, connect, exec-session, data activation, node-state changes, group import and membership changes separately on cold paths. Every result must record registry replica/owner configuration, sandbox-group count, route-cache state, node count, request-completion conditions and failure rate.
 
-placer 只做 group 导入和放置建议,最终资源确认在 node admission.测量不能把 placer
-吞吐解释为已创建 MicroVM 的吞吐.
+Placer only imports groups and recommends placement. Node admission performs final resource confirmation. Placer throughput must not be described as the throughput of completed MicroVM creation.
 
-## 7. Release 与 CI 证据
+<a id="7-release-与-ci-证据"></a>
+## 7. Release and CI evidence
 
-源码候选 BMS 会构建精确 revision,运行 owner E2E,UFFD regression gate 和 working-set
-smoke,并上传 `ci-metadata-<run-id>-<attempt>` artifact.聚合 Release 的 exact-assets 模式
-从同一个聚合包解压所有资产,在真实 KVM 上运行完整 `test/e2e/run_all.sh`.
+Source-candidate BMS builds exact revisions, runs owner E2E, the UFFD regression gate and working-set smoke, and uploads a `ci-metadata-<run-id>-<attempt>` artifact. Aggregate-release exact-assets mode extracts all assets from the same aggregate package and runs the complete `test/e2e/run_all.sh` on real KVM.
 
-工作流与证据入口:
+Workflow and evidence entry points:
 
-- [`.github/workflows/bms-e2e.yml`](../.github/workflows/bms-e2e.yml):源码候选与
-  exact-assets BMS;
-- [`test/perf/`](../test/perf/):主仓性能 harness 与报告生成器;
-- [`test/e2e/run_all.sh`](../test/e2e/run_all.sh):聚合预构建 owner + platform E2E.
+- [`.github/workflows/bms-e2e.yml`](../.github/workflows/bms-e2e.yml): source-candidate and exact-assets BMS;
+- [`test/perf/`](../test/perf/): project performance harnesses and report generators;
+- [`test/e2e/run_all.sh`](../test/e2e/run_all.sh): aggregate prebuilt owner and platform E2E.
 
-绿色聚合状态本身不是某个性能结论的证据.引用结果时必须给出 Run URL,base/head SHA,
-运行模式,相关 job log 和下载后的原始 artifact.如果 workflow 只运行 smoke,必须明确写
-`smoke`,不能改称完整统计验证.
+A green aggregate status alone is not evidence for a performance claim. Cite the run URL, base/head SHA, mode, relevant job log and downloaded raw artifact. If a workflow ran only smoke tests, identify it as `smoke`; do not relabel it as complete statistical validation.
 
-## 8. 回归检查
+<a id="8-回归检查"></a>
+## 8. Regression checks
 
-修改 cache 路径时:
+For cache-path changes:
 
 ```bash
 GOWORK=off make -C ../accelerator test
 make -C ../accelerator perf-cache
 ```
 
-修改 sandbox snapshot/restore/按需读取路径时:
+For sandbox snapshot/restore/on-demand-read changes:
 
 ```bash
 GOWORK=off make -C ../sandboxer test
@@ -228,28 +211,26 @@ make perf-sandbox-working-set
 make test-uffd-performance-gate
 ```
 
-修改节点资源控制路径时:
+For node-resource-control changes:
 
 ```bash
 GOWORK=off make -C ../orchestrator test
 make perf-density
 ```
 
-修改报告脚本或门禁解析时:
+For report-script or gate-parser changes:
 
 ```bash
 make test-perf-tools
 ```
 
-每次对比使用相同 harness 参数和环境,同时查看成功样本,失败/skip,原始日志与
-machine-readable 输出.超过已批准 gate 的候选必须先定位根因;没有完整证据时不更新
-公开基线.
+Use identical harness parameters and environments for each comparison, and inspect successful samples, failures/skips, raw logs and machine-readable output together. A candidate exceeding an approved gate must first have its root cause identified. Do not update a public baseline without complete evidence.
 
-## 9. See Also
+## 9. See also
 
-- [`kuasar-sandbox.md`](kuasar-sandbox.md) - 系统语义,组件边界与性能证据要求
-- [`deployment.md`](deployment.md) - 数据后端,进程拓扑和部署选择
-- `accelerator/docs/cache.md`(发布包:`docs/cache.md`) - cache 架构和组件 benchmark
-- `sandboxer/docs/sandbox.md`(发布包:`docs/sandbox.md`) - snapshot/restore 和统计字段
-- `orchestrator/docs/node-resource.md`(发布包:`docs/node-resource.md`) - 节点资源控制协议
-- `orchestrator/docs/cluster.md`(发布包:`docs/cluster.md`) - registry/router/placer 设计
+- [`kuasar-sandbox.md`](kuasar-sandbox.md) - system semantics, component boundaries and performance-evidence requirements
+- [`deployment.md`](deployment.md) - data backends, process topology and deployment choices
+- [accelerator Cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md) (archive: `docs/cache.md`) - cache architecture and component benchmark
+- [sandboxer lifecycle](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md) (archive: `docs/sandbox.md`) - snapshot/restore and statistics fields
+- [node resources](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md) (archive: `docs/node-resource.md`) - node resource-control protocol
+- [cluster design](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md) (archive: `docs/cluster.md`) - registry/router/placer design

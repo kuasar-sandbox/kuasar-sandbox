@@ -1,41 +1,39 @@
+[English](release.md) | [简体中文](release_zh.md)
+
 # Release
 
-## 1. 概述
+<a id="1-概述"></a>
+## 1. Overview
 
-Kuasar Sandbox 将组件发布与平台聚合发布分开。组件版本描述一个组件仓的独立交付,
-聚合版本描述一组已经发布并共同通过精确资产验证的组件。平台聚合版本与组件版本互不
-推导,也不要求同名。
+Kuasar Sandbox separates component publication from platform aggregate publication. A component version describes an independent component delivery; an aggregate version describes a set of already-published components that passed exact-asset validation together. Neither version is derived from the other, and they need not have matching names.
 
-发布单元为:
+The release units are:
 
-- `accelerator`、`connector`、`sandboxer`、`orchestrator`: `vX.Y.Z`;
+- `accelerator`, `connector`, `sandboxer`, `orchestrator`: `vX.Y.Z`;
 - `guest-runtime` runtime: `runtime-vX.Y.Z`;
 - `guest-runtime` kernel: `vmlinux-vX.Y.Z`;
-- 平台聚合: `release-vX.Y.Z`。
+- platform aggregate: `release-vX.Y.Z`.
 
-`guest-runtime` 有 runtime 和 vmlinux 两个发布单元,但仍然是一个组件仓。所有版本线都
-接受 `-preview.YYYYMMDD` 后缀。Preview 是 GitHub prerelease,Stable 是非 prerelease;
-任何已发布版本都不覆盖、不改名、不重建。
+`guest-runtime` has runtime and vmlinux release units but remains one component repository. Every version line accepts the `-preview.YYYYMMDD` suffix. Preview is a GitHub prerelease; Stable is not a prerelease. Published versions are never overwritten, renamed or rebuilt.
 
-## 2. 配置规约
+<a id="2-配置规约"></a>
+## 2. Configuration contract
 
-每个受维护的平台分支恰好使用两个清单:
+Each maintained platform branch uses exactly two manifests:
 
-- `releases/release.yaml`:该分支计划发布的下一个 Stable 聚合版本;
-- `releases/daily-preview.yaml`:该分支当前维护的 Daily Preview 版本。
+- `releases/release.yaml`: the next planned Stable aggregate version on that branch;
+- `releases/daily-preview.yaml`: the branch's currently maintained Daily Preview version.
 
-这是正式发布状态规约,不增加第二套版本元数据或历史目录。旧选择由清单的 first-parent
-Git 历史保存。解析器始终要求:
+This is the release-state contract, not a second version-metadata system or historical directory. Earlier selections remain in each manifest's first-parent Git history. The parser always requires:
 
 ```text
 daily-preview.yaml/version >= release.yaml/version
 ```
 
-比较对象是数值化的聚合 `MAJOR.MINOR.PATCH`,不是字符串。Stable 清单只能选择 Stable
-组件;Preview 清单可以混合选择 Stable 和 Preview 组件。两个清单都必须精确列出六个发布
-单元,并使用各自正确的 Tag 前缀。
+The comparison uses numeric aggregate `MAJOR.MINOR.PATCH` values, not string ordering. A Stable manifest can select only Stable components. A Preview manifest can mix Stable and Preview components. Both manifests must list exactly six release units with their respective correct tag prefixes.
 
-### 2.1 Stable 清单
+<a id="21-stable-清单"></a>
+### 2.1 Stable manifest
 
 ```yaml
 version: release-v0.5.7
@@ -49,10 +47,10 @@ components:
   vmlinux: vmlinux-v0.1.0
 ```
 
-`previous_version` 必须严格早于 `version`。正式聚合可以选择彼此不同、也与聚合版本不同
-的组件版本。
+`previous_version` must be strictly earlier than `version`. A formal aggregate can select component versions that differ from one another and from the aggregate version.
 
-### 2.2 Daily Preview 清单
+<a id="22-daily-preview-清单"></a>
+### 2.2 Daily Preview manifest
 
 ```yaml
 version: release-v0.5.7
@@ -68,126 +66,79 @@ components:
   vmlinux: vmlinux-v0.1.0
 ```
 
-完整聚合 Tag 是 `version + "-" + preview_version`。同一聚合版本线的后续 Preview 以
-`previous_preview_version` 为更新基线;该版本线的首个 Preview 以 `previous_version`
-为基线。
+The complete aggregate tag is `version + "-" + preview_version`. Later Previews on the same aggregate line use `previous_preview_version` as their update baseline. The first Preview on that line uses `previous_version`.
 
-Stable `V1` 发布后,如果继续在同一分支开发,必须先将 Daily 清单推进为 `V2`,并设置
-`previous_version: V1`。准备 `V2` 时再推进 Stable 清单。`V2` 发布后两个清单继续推进
-到 `V3`,以此类推。Daily 与 Stable 清单版本相等且该 Stable 聚合已经发布时,该版本线
-关闭:禁止新建 Preview,也禁止重复发布 Stable。若同版本 Stable Release 已出现但资产或
-Tag 尚不完整,Daily 同样在任何清单或组件变更前延后,不在残缺 Stable 旁继续发布 Preview。
+After Stable `V1` is published, continued development on the same branch must first advance Daily to `V2` and set `previous_version: V1`. Advance the Stable manifest when preparing `V2`. After `V2`, advance both toward `V3`, and so on. When Daily and Stable name the same version and that Stable aggregate has already been published, the line is closed: no new Preview and no repeated Stable publication. If the same-version Stable Release exists but its assets or tag are incomplete, Daily also defers before any manifest or component changes; it does not publish a Preview alongside an incomplete Stable.
 
-## 3. 分支与版本线
+<a id="3-分支与版本线"></a>
+## 3. Branches and version lines
 
-平台 `main` 发布最新主线版本。维护补丁使用平台 `release/vMAJOR.MINOR.x`。例如主线发布
-`release-v0.1.0` 后,可以从该 Tag 建立 `release/v0.1.x`;维护分支发布
-`release-v0.1.1`、`release-v0.1.2`,主线随后可以发布 `release-v0.2.0`。
+Platform `main` publishes the latest mainline version. Maintenance patches use platform `release/vMAJOR.MINOR.x`. For example, after publishing `release-v0.1.0`, a `release/v0.1.x` branch can be created from that tag. Maintenance then publishes `release-v0.1.1` and `release-v0.1.2`, while mainline can later publish `release-v0.2.0`.
 
-若 `v0.2.0` 尚未规划而 `v0.1.0` 立即需要补丁,允许先在 `main` 发布 `v0.1.1`、
-`v0.1.2`,再从较晚的补丁点建立 `release/v0.1.x`。建立维护分支之后,主线与维护线各自
-维护自己的两个清单。
+If `release-v0.2.0` is not yet planned and `release-v0.1.0` immediately needs patches, `main` can first publish `release-v0.1.1` and `release-v0.1.2`, then create `release/v0.1.x` from a later patch point. Once that branch exists, mainline and maintenance each manage their own two manifests.
 
-平台仓的 GitHub Latest 只由平台 `main` 的 Stable 聚合发布更新。每个组件仓仍独立维护
-自己的 Latest:组件 `main` 的 Stable 发布记录源码分支和精确提交;独立的幂等协调工作流
-在该仓所有已发布的主线 Stable 中按源码提交先后重新选择 Latest,同一提交存在多个 Tag
-时才比较 SemVer。协调工作流由任一组件发布完成触发,跨版本串行,失败可独立重跑,并有
-定时自愈。组件维护分支 Stable 和任何 Preview 不更新 Latest。平台聚合始终通过清单中的
-精确 Tag 选择组件,不依赖组件仓的 Latest。
+Platform GitHub Latest is updated only by a Stable aggregate published from platform `main`. Each component repository independently manages its own Latest. A Stable publication from component `main` records its source branch and exact commit. A separate idempotent reconciliation workflow selects Latest from all published mainline Stable releases by source-commit order, comparing SemVer only when multiple tags refer to the same commit. Any completed component publication triggers reconciliation. It is serialized across versions, can be rerun independently after failure and has scheduled self-healing. Component maintenance Stable releases and all Previews do not update Latest. Platform aggregates always select components by exact manifest tags, not by component Latest.
 
-平台维护分支与组件维护分支不存在同名约束。平台 `release/v0.5.x` 可以聚合
-`sandboxer release/v0.3.x`、`orchestrator release/v0.4.x` 和只在 `main` 发布的
-vmlinux 固定版本。
+Platform and component maintenance branches need not have matching names. Platform `release/v0.5.x` can aggregate `sandboxer release/v0.3.x`, `orchestrator release/v0.4.x` and a fixed vmlinux version released only from `main`.
 
-## 4. Daily 分支扫描与组件选择
+<a id="4-daily-分支扫描与组件选择"></a>
+## 4. Daily branch scanning and component selection
 
-`Daily Preview Scanner` 每天按 Asia/Shanghai 时区定时扫描:
+`Daily Preview Scanner` runs daily on an Asia/Shanghai schedule, scanning:
 
-- 平台 `main`;
-- 所有符合 `release/vMAJOR.MINOR.x` 的平台分支。
+- platform `main`;
+- every platform branch matching `release/vMAJOR.MINOR.x`.
 
-scanner 固定每个分支的 HEAD SHA,再从平台 `main` 加载受信任的控制器处理该 SHA。
-控制器使用 GitHub App 的只读 contents Token 访问私有组件仓;Token 只通过子进程级 Git
-HTTP authorization header 传递,不写入 remote URL、仓库配置或日志。
-所有分支协调器与 Preview GC 共用一个 GitHub Actions concurrency key,因此清单选择和
-GC 计划/派发不会重叠。scanner 按分支顺序派发并等待;被取消或超时的分支任务在本轮最多
-重试三次,仍未完成则由下一次扫描恢复。分支在选择或提交清单期间移动时,本次不覆盖远端
-状态,下一次从新 HEAD 重扫。某个分支确定性失败时,scanner 记录失败但继续处理其余分支,
-最后统一返回失败,避免一条损坏的维护线长期阻塞其他分支。
+The scanner pins each branch HEAD SHA, then loads the trusted controller from platform `main` to process that SHA. The controller accesses private component repositories with a read-only contents GitHub App token. The token is passed only through a subprocess-scoped Git HTTP authorization header, never through remote URLs, repository configuration or logs. All branch coordinators and Preview GC share one GitHub Actions concurrency key, preventing manifest selection from overlapping GC planning/dispatch. The scanner dispatches and waits for branches in order. Cancelled or timed-out branch tasks receive at most three attempts in that scan; later scans recover work that remains incomplete. If a branch moves during selection or manifest commit, the current run does not overwrite remote state; the next run starts from the new HEAD. A deterministic failure is recorded while other branches continue, and the scanner reports failure at the end. One broken maintenance line therefore cannot indefinitely starve other branches.
 
-### 4.1 源分支映射
+<a id="41-源分支映射"></a>
+### 4.1 Source-branch mapping
 
-- 平台 `main` 总是选择每个组件仓的 `main`;
-- 平台维护分支从 Daily 清单中该 unit 的版本派生组件分支。`v0.3.5`、
-  `v0.3.6-preview.*` 都映射到组件 `release/v0.3.x`;
-- runtime 与 vmlinux 分别从 `runtime-vX.Y.Z`、`vmlinux-vX.Y.Z` 派生
-  `release/vX.Y.x`;
-- 派生分支不存在时,该 unit 固定复用清单指定的完整 Release,不自动修改版本。
-  如果上游依赖在本轮改变而该 unit 必须重建,则整次选择 deferred,不会把旧下游二进制与
-  新依赖版本写进同一个聚合清单。
+- Platform `main` always selects every component repository's `main`.
+- A platform maintenance branch derives the component branch from that unit's Daily-manifest version. Both `v0.3.5` and `v0.3.6-preview.*` map to component `release/v0.3.x`.
+- Runtime and vmlinux independently derive `release/vX.Y.x` from `runtime-vX.Y.Z` and `vmlinux-vX.Y.Z`.
+- If the derived branch is absent, that unit reuses the manifest's complete Release without automatically changing its version. If an upstream dependency changes in the current round and the unit needs rebuilding, the entire selection is deferred. It does not write an aggregate manifest combining the old downstream binary with new dependency versions.
 
-因此同一个平台维护分支中的六个 unit 可以来自六条彼此不同的组件版本线。
+The six units in one platform maintenance branch can therefore come from six different component version lines.
 
-### 4.2 Tag 选择
+<a id="42-tag-选择"></a>
+### 4.2 Tag selection
 
-Tag 选择不在整个分支历史上比较最大 SemVer。算法从所选分支 HEAD 沿 first-parent 向后
-扫描,第一个带有完整可用 Release Tag 的提交获胜。仅当同一个提交存在多个合法 Tag 时,
-才以 SemVer 选择最大者。维护分支还会忽略不属于其 `MAJOR.MINOR` 的 Tag。
+Tag selection does not choose the largest SemVer across all branch history. It walks backward from the selected branch HEAD along first-parent history. The first commit with a complete usable Release tag wins. SemVer selects the largest valid tag only among tags on that same commit. A maintenance branch also ignores tags outside its `MAJOR.MINOR` line.
 
-Daily 清单中指定的 Tag 也参加提交位置比较:
+The Daily manifest's configured tag participates in the same commit-position comparison:
 
-- 位于更近 HEAD 的提交者获胜;
-- 位于同一提交时取最大 SemVer;
-- 不在所选分支 first-parent 上时停止,不把旁支或历史大版本误选进来。
+- the commit closer to HEAD wins;
+- on the same commit, the largest SemVer wins;
+- a configured tag outside the selected branch's first-parent history stops selection, preventing accidental selection of a side branch or historical major version.
 
-获胜 Tag 已在 HEAD 时直接复用。获胜 Stable Tag 落后于 HEAD 时,Patch 只自增一次并产生
-`vX.Y.(Z+1)-preview.YYYYMMDD`;获胜 Preview 落后于 HEAD 时保持其 core 版本,只换成
-本次日期。下一次扫描会看到这个 Preview,不会反复增加 Patch。
+A winning tag already at HEAD is reused. If a winning Stable tag is behind HEAD, Patch is incremented once to produce `vX.Y.(Z+1)-preview.YYYYMMDD`. If a winning Preview is behind HEAD, its core version is retained and only the date changes. The next scan sees that Preview and does not repeatedly increment Patch.
 
-依赖改变也需要重建实际链接依赖的 unit:accelerator 或 connector 改变会重建
-sandboxer、orchestrator 和 runtime;sandboxer 改变会重建 orchestrator 和 runtime。
-vmlinux 不因这些依赖变化而重建。若同一 unit 在同一天已经发布 Preview 后依赖再次改变,
-流程延后到下一个 Preview 日期,不复用带有旧依赖的资产,也不发明同日序号格式。
+Dependency changes also rebuild units that actually link those dependencies. An accelerator or connector change rebuilds sandboxer, orchestrator and runtime. A sandboxer change rebuilds orchestrator and runtime. These changes do not rebuild vmlinux. If a unit already published a Preview that day and dependencies change again, the process defers until the next Preview date. It neither reuses assets built with old dependencies nor invents a same-day sequence-number format.
 
-平台自身在所选分支上的代码变化同样会产生新的聚合 Preview,即使六个组件都复用。
-同一聚合版本的 workflow run 名同时绑定平台源码 SHA。只要任意匹配 run 仍在运行,即使
-更新的 run 已取消或结束,控制器也保持当前 Daily 清单不变;分支产生新 HEAD 后使用新的
-run 身份,不会用旧输入重跑或改写运行中清单。
-分支协调任务的身份还包含请求日期,因此相同平台 SHA 的不同日期扫描不会错误复用彼此的
-结果。
+A code change on the selected platform branch also creates a new aggregate Preview even if all six components are reused. Workflow run names for an aggregate version bind its platform source SHA. While any matching run remains active, the controller leaves the current Daily manifest unchanged, even if a newer run was cancelled or finished. A new branch HEAD gets a new run identity; old inputs are not rerun and an in-flight manifest is not rewritten. A branch-coordination task's identity also includes its requested date, so scans on different dates at the same platform SHA cannot incorrectly reuse each other's results.
 
-## 5. 残缺发布恢复
+<a id="5-残缺发布恢复"></a>
+## 5. Recovering incomplete publication
 
-完整组件 Release 必须是非 draft、prerelease 状态与 Tag 一致,只包含约定 archive 和
-`SHA256SUMS`,且两个资产都处于 uploaded 状态。完整聚合 Release 必须满足八资产契约。
+A complete component Release must be non-draft, have a prerelease state consistent with its tag, contain only the contracted archive and `SHA256SUMS`, and have both assets in uploaded state. A complete aggregate Release must meet the eight-asset contract.
 
-选择器仅把完整 Release 的 Tag 当作候选。残缺状态不让整条 Daily schedule 失败:
+Only tags with complete Releases are selection candidates. Incomplete states do not fail the entire Daily schedule:
 
-- 匹配的发布 run 仍在 queued/in progress:延后并在后续扫描恢复;
-- 当前 Daily 清单拥有的残缺 Preview:先调用组件本仓的删除工作流,核对精确源码 SHA 后
-  删除 Release、资产和 Tag,再重扫并重新走正常 Daily 发布;
-- 外来残缺 Preview 或残缺 Stable:忽略,不作为候选,也不自动删除;
-- 无组件维护分支的固定版本不完整:延后,不派生替代版本;
-- 确定性失败最多尝试三次,超过后保持 deferred,不会靠覆盖 Tag 或手工拼资产恢复。组件
-  发布和删除的普通 failure 只重跑失败 job;cancelled、timed out 等没有失败 job 的状态
-  重跑完整 workflow。聚合发布的任何非成功结果都创建同一精确输入的新 workflow run,
-  让 prepare 重新拉取组件 Release 并生成新的 exact stage;三次预算按这些 run 的
-  `run_attempt` 总数累计。
+- If a matching publication run is queued or in progress, defer and recover in a later scan.
+- For an incomplete Preview owned by the current Daily manifest, first call the owning component repository's deletion workflow. Verify the exact source SHA, delete the Release, assets and tag, then rescan and follow ordinary Daily publication.
+- Ignore foreign incomplete Previews and incomplete Stable releases; neither select nor automatically delete them.
+- If an incomplete fixed version has no component maintenance branch, defer rather than derive a substitute version.
+- Deterministic failures receive at most three attempts, then remain deferred. Recovery does not overwrite tags or manually assemble assets. Ordinary component-publication/deletion failures rerun only failed jobs. Cancelled, timed-out or similar states without failed jobs rerun the full workflow. Every unsuccessful aggregate publication instead creates a new workflow run with the same exact inputs, letting prepare fetch component Releases again and create a fresh exact stage. The three-attempt budget counts the sum of `run_attempt` across those runs.
 
-若未完成的聚合选择跨过了新的上海日期,控制器不再用旧日期 Tag 绑定新的组件 HEAD。
-残缺聚合对象先通过受保护入口删除;随后清单滚到新日期并重新选择。旧选择中已经完整发布
-但未被任何保留聚合引用的组件 Preview 交给 GC 按回退窗口统一删除。若仍在同一天,控制器
-保持 deferred,避免覆盖已经公开的完整 Preview Tag。
+When an unfinished aggregate selection crosses into a new Shanghai date, the controller no longer binds the old date's tags to new component HEADs. It first deletes incomplete aggregate objects through the protected entry, then advances the manifest date and reselects. Complete component Previews in the old selection that no retained aggregate references are left for GC after the rollback window. Within the same day, the controller stays deferred rather than overwriting already-public complete Preview tags.
 
-恢复的目标是恢复 Daily 流程,不是修补或重建残缺 Release 的资产。同名完整 Release 永远
-不会被 `incomplete` 模式删除。若 Tag 已经缺失但 draft 或 prerelease 仍在,只有
-Release 的 `target_commitish` 是完整且匹配的源码 SHA 时才允许恢复删除。若同名残缺对象
-在一次成功清理后再次出现,控制器创建新的清理 run,不把历史成功结果当作当前对象已收敛。
+Recovery restores the Daily process; it does not patch or rebuild assets of incomplete Releases. The `incomplete` mode never deletes a complete same-name Release. When a tag is already missing but its draft or prerelease remains, recovery deletion is allowed only if `target_commitish` is a full source SHA matching the expected source. If a same-name incomplete object reappears after successful cleanup, the controller starts a new cleanup run instead of treating historical success as proof of current convergence.
 
-## 6. 组件发布 CLI
+<a id="6-组件发布-cli"></a>
+## 6. Component publication CLI
 
-组件 workflow 始终从仓库 `main` 加载受信任工具,但必须显式传入实际源码分支和精确
-分支 HEAD SHA。下面只展示参数形态;自动 Daily 由控制器填写这些值:
+Component workflows always load trusted tooling from repository `main`, but require the actual source branch and its exact HEAD SHA as explicit inputs. The following shows parameter shapes only; automatic Daily fills these values:
 
 ```bash
 gh workflow run release.yml \
@@ -207,23 +158,16 @@ gh workflow run release.yml \
   -f connector_version=v0.1.9
 ```
 
-orchestrator 和 runtime 还接收 `sandboxer_version`;runtime 与 vmlinux 使用各自工作流。
-预检要求 `source_sha` 仍是 `source_ref` 的 HEAD,构建 checkout 该 SHA,最终 Tag 也指向该
-SHA。依赖参数必须对应已经完整发布的精确 Release。
-Preview 还要求 `aggregate_sha` 所指平台提交中的
-`daily-preview.yaml/version + preview_version` 精确等于聚合版本,且
-`components.<unit>` 精确等于待发布 Tag。该绑定和 Stable 封线检查在构建前及取得
-publish concurrency lock 后各执行一次。所有组件 Release notes 都记录源码分支、源码
-SHA 和发布单元。Preview 还记录原始聚合清单 SHA 和实际依赖版本绑定;已有 Preview 只有
-在源码与依赖绑定都一致时才可复用。
+Orchestrator and runtime also receive `sandboxer_version`; runtime and vmlinux use their own workflows. Preflight requires `source_sha` still to be the HEAD of `source_ref`. Build checks out that SHA, and the final tag points to it. Dependency inputs must name exact, already-complete Releases.
 
-workflow run name 包含源码 SHA 和依赖版本元组。控制器只重跑相同输入元组的失败 run;
-分支 HEAD 或依赖选择已经改变时创建新的 dispatch,不会用旧输入消耗三次恢复机会。
+Preview additionally requires that `daily-preview.yaml/version + preview_version` at the platform commit identified by `aggregate_sha` exactly matches the aggregate version, and that `components.<unit>` exactly matches the tag being published. This binding and the Stable-line-closure check run before build and again after acquiring the publication concurrency lock. Every component's release notes record source branch, source SHA and release unit. Preview notes also record the original aggregate-manifest SHA and actual dependency-version bindings. An existing Preview can be reused only when both source and dependency bindings match.
 
-## 7. 聚合发布 CLI
+Workflow run names include source SHA and the dependency-version tuple. The controller reruns failed runs only for identical input tuples. Changed branch HEADs or dependency selections create a new dispatch rather than consuming the three recovery attempts with obsolete inputs.
 
-聚合工作流同样从平台 `main` 加载受信任工具,但版本选择、系统文档、平台用例和打包
-内容来自所选平台分支的精确 HEAD。目标分支中的旧发布脚本不会作为控制器执行:
+<a id="7-聚合发布-cli"></a>
+## 7. Aggregate publication CLI
+
+The aggregate workflow also loads trusted tooling from platform `main`, but version selection, system documentation, platform cases and package content come from the exact HEAD of the selected platform branch. Old release scripts on that target branch are not executed as the controller:
 
 ```bash
 gh workflow run aggregate-release.yml \
@@ -233,143 +177,82 @@ gh workflow run aggregate-release.yml \
   -f source_sha=<full-sha>
 ```
 
-正式发布前先在目标分支提交 `release.yaml`,发布所缺的 Stable 组件单元,再从目标分支最新
-HEAD 触发聚合。主线 Stable 成功后成为 Latest;维护分支 Stable 保留为可发现的正式版本,
-但不抢占主线 Latest。Stable 与 Preview 都必须由该 HEAD 当前清单直接选择;历史清单只
-用于解析已存在 Release 和 GC,不能通过手工 dispatch 回填成新的聚合发布。
+Before formal publication, commit `release.yaml` on the target branch, publish missing Stable component units, then trigger the aggregate from that branch's latest HEAD. A successful mainline Stable becomes Latest. A maintenance Stable remains a discoverable formal release without displacing mainline Latest. Both Stable and Preview must be directly selected by that HEAD's current manifest. Historical manifests are only for resolving existing Releases and GC; manual dispatch cannot backfill them as new aggregate publications.
 
-聚合 prepare 生成的短期 artifact 是一次 run 的不可变发布证据。聚合失败后不对旧 run
-执行 failed-job 或 full rerun,而是重新 dispatch 相同版本、源码分支和源码 SHA,确保新的
-prepare 重新下载当前组件 Release。控制器按精确 run name 汇总新旧 run 的尝试次数,总计
-三次后保持 deferred。
+The short-lived artifact produced by aggregate prepare is immutable publication evidence for that run. After aggregate failure, do not rerun failed jobs or the full old workflow. Redispatch the same version, source branch and source SHA so a new prepare downloads current component Releases. The controller totals attempts across old and new runs with the exact run name, staying deferred after three attempts.
 
-本地发布工具验证入口为:
+Local release-tool validation:
 
 ```bash
 make test-release-tools
 make test-ci-tools
 ```
 
-## 8. 资产与 BMS
+<a id="8-资产与-bms"></a>
+## 8. Assets and BMS
 
-每个普通组件 Release 精确包含组件 archive 和 `SHA256SUMS`。runtime、vmlinux 使用各自
-独立 archive 名。聚合 Release 精确包含 platform archive、六个原样复制的组件 archive
-和统一 `SHA256SUMS`,共八项显式资产。
+Each ordinary component Release contains exactly its component archive and `SHA256SUMS`. Runtime and vmlinux have independent archive names. An aggregate Release contains exactly a platform archive, six unchanged component archives and one unified `SHA256SUMS`: eight explicit assets.
 
-组件工作流在选定源码 SHA 上运行组件构建和测试。聚合 prepare 下载清单指定的六个完整
-Release,校验 GitHub size/digest、组件 SHA-256、包内路径与跨包覆盖,生成确定性 platform
-包。随后 exact-asset BMS 在真实 KVM runner 解压同一个短期 artifact,执行六个 owner
-套件及平台组合套件。只有该 BMS 成功,聚合 publish job 才能创建 Tag 和 Release。
+Component workflows build and test at the selected source SHA. Aggregate prepare downloads the six complete manifest-selected Releases, validates GitHub size/digest, component SHA-256, internal paths and cross-package collisions, then creates a deterministic platform package. Exact-asset BMS extracts the same short-lived artifact on a real KVM runner and runs the five component-owned suites plus the platform combination suite, six owner entries in total. Only successful BMS permits aggregate publish to create the tag and Release.
 
-Preview、维护分支 Stable 和主线 Stable 使用相同资产与 BMS 门禁;差别只在发行状态与
-Latest 策略。
+Preview, maintenance Stable and mainline Stable use identical asset contracts and BMS gates. They differ only in release state and Latest policy.
 
 ## 9. Preview GC
 
-Stable 聚合发布后,该版本线进入 7 天回退窗口。`Preview GC` 从 Stable Tag 可达的
-`daily-preview.yaml` first-parent 历史生成精确 allowlist,不使用宽泛版本 glob。它还会
-保护:
+After a Stable aggregate is published, its version line enters a seven-day rollback window. `Preview GC` generates an exact allowlist from first-parent `daily-preview.yaml` history reachable from the Stable tag, not from broad version globs. It also protects:
 
-- 任何其他仍保留的聚合 Preview 所引用的组件 Preview;
-- `main` 和所有平台维护分支当前 Daily 清单引用的组件 Preview;
-- 正在运行发布或删除工作流的对象。
+- component Previews referenced by any other retained aggregate Preview;
+- component Previews referenced by current Daily manifests on `main` or any platform maintenance branch;
+- objects with active publication or deletion workflows.
 
-计划阶段验证 Stable Release、Tag、八资产 digest、canonical 清单、Preview 归属、
-Release ID、可恢复源码 SHA 和 active run,并输出稳定排序计划及 SHA-256 digest。正式版
-已经关闭的当前 Daily 清单不再保护同版本 Preview;其他仍开放分支和保留聚合 Preview 的
-引用继续受保护。完整或残缺的 canonical Preview 都由本仓删除 wrapper 收敛。任何分页、
-字段、引用或归属异常都会在零删除状态停止。手工 dry-run 不受 7 天限制,但 apply 不能
-绕过窗口。
+Planning validates the Stable Release, tag, eight asset digests, canonical manifest, Preview ownership, Release ID, recoverable source SHA and active runs, producing a stably ordered plan and SHA-256 digest. A current Daily manifest whose same-version Stable has closed the line no longer protects those Previews. References from other open branches and retained aggregate Previews remain protected. Owning-repository deletion wrappers converge both complete and incomplete canonical Previews. Any pagination, field, reference or ownership inconsistency stops with zero deletions. Manual dry runs are not restricted by the seven-day window, but apply cannot bypass it.
 
-Apply 在派发任何组件删除前重新读取所有平台分支的当前 Daily 清单;计划后新增的引用会使
-本轮零删除停止。所有平台分支协调器和 GC 还由同一个受支持的 concurrency key 串行执行。
-GC 派发删除后,Daily 控制器在提交新清单前检查所有匹配的组件/聚合发布 run 和删除 run,
-任意一个仍活跃都保持清单不变。全局串行点和两侧门禁共同避免清单选择与异步删除交叉执行。
+Before dispatching any component deletion, apply re-reads current Daily manifests on every platform branch. A reference added since planning stops the run with zero deletions. The same supported concurrency key also serializes all platform branch coordinators and GC. After GC dispatches deletion, Daily checks every matching component/aggregate publication and deletion run before committing a new manifest. Any active run keeps the manifest unchanged. Global serialization and checks on both sides prevent manifest selection from crossing asynchronous deletion.
 
-历史聚合 Preview 在“Tag 直接指向清单提交”契约建立和完全执行前发布。GC 只对这些历史
-对象使用 Stable Tag 可达的 first-parent 清单历史证明归属和精确组件选择:Release
-`target_commitish` 必须与 Tag 一致;Tag 提交已有 Daily 清单时必须精确选择该 Preview,且
-canonical 清单提交必须位于它的 first-parent 历史;更早的无选择清单提交则必须是
-canonical 提交的 first-parent 祖先。旁支、指向其他清单和无法证明关联的移动 Tag 全部
-拒绝。当前发布、残缺恢复和所有新 Preview 仍执行 Tag Commit 与清单 Commit 相同的严格
-契约。
+Historical aggregate Previews were published before the contract requiring tags to point directly to manifest commits was established and fully enforced. Only for those historical objects, GC uses first-parent manifest history reachable from a Stable tag to prove ownership and exact component selection. Release `target_commitish` must agree with the tag. If the tag commit already has a Daily manifest, it must select that exact Preview and the canonical manifest commit must lie in its first-parent history. An earlier commit without a selection manifest must instead be a first-parent ancestor of the canonical commit. Side branches, tags pointing to other manifests and moved tags without provable relationships are rejected. Current publication, incomplete recovery and all new Previews retain the strict contract that tag commit and manifest commit are identical.
 
-Apply 先 dispatch 五个组件仓的本地删除 wrapper。每个 wrapper 仅使用本仓短期
-`GITHUB_TOKEN contents:write`,再次核对精确 Preview Tag 和源码 SHA,然后将 Release、
-所有资产与 Tag 一并删除。所有组件候选消失后,平台才删除聚合 Preview。中途失败不会
-重建已经删除的对象;组件和聚合删除的确定性失败都最多重跑三次,下一次根据 canonical
-历史重算并继续收敛。若一次成功清理后同名对象仍可见或被重新创建,下一次 Apply 会派发
-新的清理 run。Stable Release、Stable Tag、Actions artifacts、非 canonical orphan 都
-不属于 GC 删除集合。
+Apply first dispatches the five component repositories' local deletion wrappers. Each uses only its own short-lived `GITHUB_TOKEN contents:write`, verifies the exact Preview tag and source SHA again, then deletes the Release, all assets and tag together. Platform deletes aggregate Previews only after all component candidates disappear. Partial failure does not recreate deleted objects. Deterministic component and aggregate deletion failures each receive at most three attempts; the next run recomputes canonical history and continues convergence. If a same-name object remains visible or is recreated after successful cleanup, the next apply dispatches a fresh cleanup run. Stable Releases, Stable tags, Actions artifacts and noncanonical orphans are outside the GC deletion set.
 
 ```bash
-# 只读真实计划
+# Read-only plan against actual release state.
 gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
   -f stable_version=release-v0.5.7 -f dry_run=true
 
-# 到达 7 天窗口后收敛
+# Converge after the seven-day window.
 gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
   -f stable_version=release-v0.5.7 -f dry_run=false
 ```
 
-## 10. 权限与可靠性
+<a id="10-权限与可靠性"></a>
+## 10. Permissions and reliability
 
-- 跨仓 GitHub App 安装只允许 `Contents: read`、`Pull requests: read` 和 `Actions: write`,
-  每个短期 token 只请求当前步骤需要的子集;
-- Daily 清单提交使用同一个 App 仅面向 `kuasar-sandbox` 仓的独立短期
-  `Contents: write` token;它不具有其他组件仓写入权,也不复用通用
-  `github-actions` 身份;
-- 组件发布、组件删除、聚合发布和平台删除只使用各仓本次 workflow 的短期
-  `GITHUB_TOKEN contents:write`;
-- 执行候选代码的 runner 只接收源码只读 token,并在执行前撤销;
-- 发布先创建 draft、上传并复核 digest,全部一致后才公开;
-- 已发布 Tag 或 Release 不由发布器覆盖;残缺 Preview 只能经受保护删除入口恢复;
-- 分支 HEAD、Tag commit、清单 blob SHA 和 exact-asset BMS 共同固定一次发布;
-- 即使渲染后的 Daily 清单无需写入,协调器仍复核远端分支 HEAD 与清单 blob,不会用陈旧
-  checkout 派发组件;
-- Preview Release 的构建绑定防止相同 Tag/源码在不同依赖闭包之间被错误复用;
-- scanner 使用独立 concurrency key;所有平台分支协调器与 GC 共用全局
-  `preview-manifest-selection-and-gc` concurrency group。scanner 顺序等待每个分支,不同时
-  填入多个 pending slot。组件完整构建/发布 workflow 与 delete 对同一精确版本共用
-  mutation group;平台聚合完整 prepare/BMS/publish workflow 与 delete 也使用同一精确
-  版本组。GitHub 可能合并该组内的 pending 请求;Daily 协调器和 GC 不把 cancelled 当作
-  成功。组件发布和删除按同一精确输入重跑相应 job 或完整 workflow;聚合发布创建新的
-  workflow run 和 exact stage。各路径最多尝试三次后才 deferred。因此互斥不会把发布或
-  删除的目标状态静默丢失。不同版本不共享 pending slot。组件 Latest 协调器是
-  例外:其操作幂等且每次都
-  扫描完整主线 Stable 集合,因此使用全仓串行组并允许多个触发合并;保留下来的最后一次
-  运行仍能收敛完整状态。只有
-  当前平台 `main` HEAD 的 `release.yaml` 所选 Stable 聚合能更新 Latest,且发布前后都会
-  重新验证分支 HEAD、清单选择和既有 Release。
+- Cross-repository GitHub App access is limited to `Contents: read`, `Pull requests: read` and `Actions: write`. Each short-lived token requests only the subset required for its current step.
+- Daily manifest commits use the same App's separate short-lived `Contents: write` token scoped only to the `kuasar-sandbox` repository. It has no component-repository write access and does not reuse the generic `github-actions` identity.
+- Component publication, component deletion, aggregate publication and platform deletion use only their respective workflow's short-lived repository `GITHUB_TOKEN contents:write`.
+- Candidate-executing runners receive only read-only source tokens, revoked before execution.
+- Publication first creates a draft, uploads assets and verifies digests; it becomes public only after every check agrees.
+- Publishers never overwrite published tags or Releases. Incomplete Preview recovery uses only the protected deletion entry.
+- Branch HEAD, tag commit, manifest blob SHA and exact-asset BMS together pin a publication.
+- Even when the rendered Daily manifest needs no write, the coordinator rechecks remote branch HEAD and manifest blob rather than dispatching components from a stale checkout.
+- Preview build bindings prevent incorrect reuse of the same tag/source across different dependency closures.
+- The scanner has a separate concurrency key. All platform branch coordinators and GC share the global `preview-manifest-selection-and-gc` group. The scanner waits for each branch in sequence rather than filling multiple pending slots. A component's complete build/publication workflow and deletion share a mutation group for the same exact version; the platform's complete prepare/BMS/publish workflow and deletion also share an exact-version group. GitHub can coalesce pending requests in a group. Daily and GC do not treat cancellation as success. Component publication/deletion rerun the appropriate jobs or full workflow with identical inputs; aggregate publication creates a new workflow run and exact stage. Each path allows at most three attempts before deferring, so exclusion does not silently lose the desired publication or deletion state. Different versions do not share pending slots. Component Latest reconciliation is an exception: it is idempotent and scans the complete mainline Stable set every time, so it uses repository-wide serialization and allows triggers to coalesce. The last retained run can still converge the full state. Only the Stable aggregate selected by `release.yaml` at current platform `main` HEAD can update Latest, and branch HEAD, manifest selection and existing Release are revalidated before and after publication.
 
-## 11. 受保护分支
+<a id="11-受保护分支"></a>
+## 11. Protected branches
 
-项目仓的分支保护以一个 repository ruleset 为准。启用该 ruleset 时,它只匹配
-`refs/heads/main` 与 `refs/heads/release/v*`。它要求 PR、所有讨论已解决、严格匹配
-`bms / finalize`、线性历史,并阻止 force push 与分支删除。不使用管理员默认绕过、签名
-提交、CODEOWNERS 或 merge queue。
+One repository ruleset governs project-branch protection. The active ruleset matches only `refs/heads/main` and `refs/heads/release/v*`. It requires a PR, resolved discussions, strict `bms / finalize` status checks and linear history, and blocks force pushes and branch deletion. It does not use default administrator bypass, signed-commit requirements, CODEOWNERS or a merge queue.
 
-当前 `required_approving_review_count` 为 0。GitHub 只计入拥有 write 权限且不是 PR 作者的
-approval;仓库没有独立的 write reviewer 时,强制一个 approval 会让维护者自己的所有 PR
-无法按 ruleset 合入。代码检视仍通过完整 diff 自检、resolved review threads 和精确 BMS
-门禁执行。
+The current `required_approving_review_count` is 0. GitHub counts approvals only from writers other than the PR author. Without an independent write reviewer, requiring one approval would prevent maintainers' own PRs from merging under the ruleset. Review still requires complete diff inspection, resolved review threads and exact BMS evidence.
 
-启用前必须确认 `kuasar-sandbox-bms-ci` 的安装已获批 `Contents: write`。未满足此条件时
-不得激活 ruleset: Daily Preview 无法提交收敛后的清单,会被唯一的 bypass 设计反向阻断。
+Before enabling this ruleset, confirm that the `kuasar-sandbox-bms-ci` installation has approved `Contents: write`. It must not be activated without that permission: Daily Preview could not commit its converged manifest and would be blocked by the deliberately exclusive bypass design.
 
-状态检查规则对新建 branch 使用 `do_not_enforce_on_create: true`,因此可以从已经发布的
-Stable Tag 建立一条新的维护线;创建后的任何更新立即回到同一套 PR 与 BMS 门禁，不能借此
-绕过后续提交检查。
+Status checks use `do_not_enforce_on_create: true` for a new branch, allowing a maintenance line to be created from an already-published Stable tag. Every subsequent update immediately returns to the same PR and BMS gates; branch creation cannot bypass later commit checks.
 
-Daily Preview 必须直接把收敛后的清单提交到受保护目标分支,因此启用后的 ruleset 只为
-`kuasar-sandbox-bms-ci` GitHub App (ID `4283831`) 配置 `always` bypass。该 App 的唯一写入
-用途是上述本仓短期 token;人工维护、普通 `github-actions` 与所有其他 App 都不在 bypass
-列表。BMS 对 PR 始终重新验证精确 integration commit 与目标 branch,所以 bypass 不替代
-`bms / finalize` 门禁。
+Daily Preview must commit its converged manifest directly to the protected target branch. The active ruleset therefore grants `always` bypass only to the `kuasar-sandbox-bms-ci` GitHub App, ID `4283831`. That App's only write use is the repository-scoped short-lived token described above. Human maintenance, ordinary `github-actions` and all other Apps are absent from the bypass list. BMS always revalidates the PR's exact integration commit and target branch; this bypass does not replace the `bms / finalize` gate for PRs.
 
-## 12. See Also
+## 12. See also
 
-- [ci.md](ci.md):BMS revision、缓存和执行模式;
-- [deployment.md](deployment.md):部署与运行前置条件;
-- [../test/QUICKSTART.md](../test/QUICKSTART.md):完整聚合 Release 验证;
-- [../release/](../release/):选择、打包、协调、恢复和 GC 实现。
+- [ci.md](ci.md): BMS revisions, caches and execution modes;
+- [deployment.md](deployment.md): deployment and runtime prerequisites;
+- [../test/QUICKSTART.md](../test/QUICKSTART.md): complete aggregate-release validation;
+- [../release/](../release/): selection, packaging, coordination, recovery and GC implementation.
