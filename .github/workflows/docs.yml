@@ -1,0 +1,28 @@
+name: Documentation
+
+on:
+  pull_request:
+    paths:
+      - '**.md'
+      - 'ci/check_docs.py'
+      - 'ci/test_check_docs.py'
+      - '.github/workflows/docs.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  documentation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Test documentation checker
+        run: python3 -m unittest discover -s ci -p 'test_check_docs.py'
+      - name: Check changed documentation
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 ci/check_docs.py --root . --changed-base "$BASE_SHA"
