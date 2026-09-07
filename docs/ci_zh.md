@@ -211,6 +211,6 @@ exact-assets 模式只记录 run 与测试输出,不创建伪造的源码或 nat
 ## 7. See Also
 
 - [release.md](release_zh.md):发布资产、aggregate BMS 和权限边界;
-- [deployment.md](deployment.md):BMS 所需系统服务与运行环境;
-- [../ci/runner/README.md](../ci/runner/README.md):runner 安装与维护;
+- [deployment_zh.md](deployment_zh.md):BMS 所需系统服务与运行环境;
+- [../ci/runner/README.md（英文）](../ci/runner/README.md):runner 安装与维护;
 - [../test/QUICKSTART.md](../test/QUICKSTART_zh.md):E2E 前置条件与排错。

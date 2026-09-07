@@ -372,6 +372,6 @@ Daily Preview 必须直接把收敛后的清单提交到受保护目标分支,�
 ## 12. See Also
 
 - [ci.md](ci_zh.md):BMS revision、缓存和执行模式;
-- [deployment.md](deployment.md):部署与运行前置条件;
+- [deployment_zh.md](deployment_zh.md):部署与运行前置条件;
 - [../test/QUICKSTART.md](../test/QUICKSTART_zh.md):完整聚合 Release 验证;
 - [../release/](../release/):选择、打包、协调、恢复和 GC 实现。

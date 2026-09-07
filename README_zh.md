@@ -225,4 +225,4 @@ gh workflow run aggregate-release.yml \
 ## License
 
 本仓库的项目原创内容采用 [Apache License 2.0](LICENSE).
-贡献授权说明见 [CONTRIBUTING.md](CONTRIBUTING.md).
+贡献授权说明见 [CONTRIBUTING.md（英文）](CONTRIBUTING.md).

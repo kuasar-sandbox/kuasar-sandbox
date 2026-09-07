@@ -77,7 +77,7 @@ Kuasar Sandbox 提供 MicroVM 生命周期,数据访问,节点网络和单节点
 | vSwitch 和网络身份传递 | `connector/docs/vswitch.md` |
 | Guest runtime 和 kernel | `guest-runtime/docs/*.md` |
 
-部署拓扑,进程依赖和端口见 [deployment.md](deployment.md).顶层文档不复制组件内部
+部署拓扑,进程依赖和端口见 [deployment_zh.md](deployment_zh.md).顶层文档不复制组件内部
 字段或 wire contract,避免用旧设计推演替代当前实现.
 
 ## 3. 系统架构
@@ -356,17 +356,17 @@ Kuasar Sandbox 具备单节点和集群拓扑,节点资源准入与恢复,独立
 Preview 继续用于开发和评估.当前 GitHub Release 提供 Linux x86_64 预构建资产;
 源码构建支持 x86_64 和 aarch64,但源码可构建架构不能自动视为已发布资产架构.最新状态以
 [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 和
-[release.md](release.md) 为准.
+[release_zh.md](release_zh.md) 为准.
 
 ## 11. See Also
 
-- [deployment.md](deployment.md) - 部署拓扑,进程,端口和启停依赖
+- [deployment_zh.md](deployment_zh.md) - 部署拓扑,进程,端口和启停依赖
 - [perf.md](perf_zh.md) - 带环境口径的组件性能基线与回归方法
-- [release.md](release.md) - 组件/聚合版本,资产和发布事务
+- [release_zh.md](release_zh.md) - 组件/聚合版本,资产和发布事务
 - [Demo](../test/demo/DEMO_zh.md) - 本地体验环境与 E2B SDK 演示
 - [Full validation](../test/QUICKSTART_zh.md) - Aggregate Release 完整验证入口
 - [`orchestrator`](https://github.com/kuasar-sandbox/orchestrator/tree/main/docs) - node,资源和 cluster 设计
 - [`sandboxer`](https://github.com/kuasar-sandbox/sandboxer/tree/main/docs) - MicroVM,snapshot 和 Guest 协同
 - [`accelerator`](https://github.com/kuasar-sandbox/accelerator/tree/main/docs) - Manifest,store 和 cache
-- [`connector`](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch.md) - vSwitch 实现与网络细节
+- [`connector`](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch_zh.md) - vSwitch 实现与网络细节
 - [`guest-runtime`](https://github.com/kuasar-sandbox/guest-runtime/tree/main/docs) - runtime,vmlinux 和 flatten

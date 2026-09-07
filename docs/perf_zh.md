@@ -256,8 +256,8 @@ machine-readable 输出.超过已批准 gate 的候选必须先定位根因;没�
 ## 9. See Also
 
 - [`kuasar-sandbox.md`](kuasar-sandbox_zh.md) - 系统语义,组件边界与性能证据要求
-- [`deployment.md`](deployment.md) - 数据后端,进程拓扑和部署选择
-- [accelerator Cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md)(发布包:`docs/cache.md`) - cache 架构和组件 benchmark
-- [sandboxer 生命周期](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md)(发布包:`docs/sandbox.md`) - snapshot/restore 和统计字段
-- [节点资源](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md)(发布包:`docs/node-resource.md`) - 节点资源控制协议
-- [集群设计](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md)(发布包:`docs/cluster.md`) - registry/router/placer 设计
+- [`deployment_zh.md`](deployment_zh.md) - 数据后端,进程拓扑和部署选择
+- [accelerator Cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md)(发布包:`docs/cache.md`) - cache 架构和组件 benchmark
+- [sandboxer 生命周期](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox_zh.md)(发布包:`docs/sandbox.md`) - snapshot/restore 和统计字段
+- [节点资源](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource_zh.md)(发布包:`docs/node-resource.md`) - 节点资源控制协议
+- [集群设计](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md)(发布包:`docs/cluster.md`) - registry/router/placer 设计
