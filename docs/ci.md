@@ -1,32 +1,23 @@
+[English](ci.md) | [简体中文](ci_zh.md)
+
 # BMS CI
 
-## 1. 概述
+<a id="1-概述"></a>
+## 1. Overview
 
-项目主仓维护 BMS 的可信控制面与唯一执行 workflow。五个组件仓只保留事件触发和参数
-wrapper,并从项目主仓 `main` 引用 `.github/workflows/bms-entry.yml`;该入口再从同一个
-项目主仓 `main` revision 调用 `.github/workflows/bms-e2e.yml`。公共准入、runner 初始化、
-源码缓存、native cache、完整 E2E 和精确发布资产验证不再复制到各仓。
+The project repository owns the trusted BMS control plane and the shared execution workflows. The five component repositories retain only event triggers and parameter wrappers, referencing `.github/workflows/bms-entry.yml` from project `main`. That entry calls `.github/workflows/bms-e2e.yml` from the same resolved project `main` revision. Common admission, runner initialization, source caching, native caching, full E2E and exact released-asset validation are not duplicated across repositories.
 
-BMS 有两个明确模式:
+BMS has two explicit modes:
 
-- `source`:验证触发仓的 PR integration commit、可选 exact companion PR 集合与按照
-  目标平台分支解析的其余源码组合;
-- `exact-assets`:验证 aggregate workflow 已下载并校验的发布 archive,不重新构建。
+- `source`: validates the triggering repository's PR integration commit, an optional exact companion-PR set and the other sources resolved for the target platform branch;
+- `exact-assets`: validates release archives already downloaded and verified by the aggregate workflow, without rebuilding them.
 
-## 2. Source 模式
+<a id="2-source-模式"></a>
+## 2. Source mode
 
-各仓可信 wrapper 使用 `pull_request_target` 接收事件,不执行候选仓提供的 workflow。它只接受
-目标为 `main` 或 `release/vMAJOR.MINOR.x` 的 PR。同仓非 draft PR 自动准入;fork PR 由可信控制 job 使用只读 App token
-查询当前组织成员关系,仅 `active` 的 owner/member 自动准入。私有组件仓的控制 job 使用
-专用 `kuasar-control` 池,公开的项目主仓仍使用 GitHub-hosted runner。控制 job 同时重新查询当前 PR,
-校验 GitHub 生成的 two-parent integration commit,并在该 commit 上把
-`kuasar/bms-exact-head` 置为 `pending`。事件中的 `author_association` 不作为私有组织成员
-身份来源。draft PR 只运行 admission/finalize 控制步骤,不运行完整 E2E,其 exact-head 保持
-`pending`;转为 ready 后由新的事件自动运行完整 BMS。外部 fork、冲突或已经变化的事件拒绝准入。
+Each repository's trusted wrapper receives `pull_request_target` events without executing workflows supplied by the candidate repository. It accepts only PRs targeting `main` or `release/vMAJOR.MINOR.x`. Non-draft same-repository PRs are admitted automatically. For fork PRs, a trusted control job queries current organization membership using a read-only App token; only an `active` owner/member is admitted automatically. Private component control jobs use the dedicated `kuasar-control` pool, while the public project repository uses GitHub-hosted runners. The control job also re-queries the current PR, validates GitHub's generated two-parent integration commit and sets `kuasar/bms-exact-head` to `pending` on that commit. Event `author_association` is not the source of private-organization membership. Draft PRs run only admission/finalize control steps, not full E2E, and retain a `pending` exact-head status. Marking a draft ready causes a new event to run full BMS. External forks, conflicts and events whose inputs have changed are rejected.
 
-其余五仓 revision 通过一次 GitHub GraphQL 查询解析,候选仓 revision 替换为已准入的
-integration commit。普通 PR 不声明 companion,行为与单候选模式相同。不能由任一仓
-`main` 单独编译的原子跨仓变更可在两个 PR body 中互相声明:
+The other five repositories' revisions are resolved through one GitHub GraphQL query. The candidate repository's revision is replaced with its admitted integration commit. An ordinary PR declares no companions and retains single-candidate behavior. Atomic cross-repository changes that cannot build against the other repositories' `main` can declare one another in both PR bodies:
 
 ```text
 <!-- kuasar-bms-companions
@@ -34,71 +25,36 @@ kuasar-sandbox/orchestrator#227
 -->
 ```
 
-marker 最多出现一次,其中每个非空行必须是允许仓库的 `owner/repository#PR`。同一仓只能
-出现一次,不能引用触发仓自身,空块、重复块和未闭合块均拒绝准入。companion 必须保有
-`refs/pull/N/merge`,其 integration 的第一 parent 必须等于该 PR 当前目标分支,第二 parent 必须等于
-`refs/pull/N/head`,且该 head 必须仍是组织仓某个 branch 的 head。这样 fork 只能作为已通过既有
-成员准入的触发 PR,不能经 companion 间接进入特权 runner。每个 companion 还必须在自身
-Ready 状态下运行 BMS 并取得自己的 exact-head status;一条 primary status 不能替代另一个 PR
-的门禁。编辑 PR body 不属于组件 wrapper 订阅的事件,因此修改 marker 后需 push 新 head,或执行
-draft → ready 触发新运行。准备合入时必须把 status 所链接 run 的 `source-set.tsv` 与当前 marker
-逐项比较;body 在该 run 之后发生过 marker 变更时,即使 commit status 仍显示 success 也视为失效。
+The marker may occur at most once. Each nonempty line must be an allowed `owner/repository#PR`. A repository may appear only once, and a PR cannot reference its triggering repository. Empty, duplicate and unclosed blocks are rejected. A companion must retain `refs/pull/N/merge`; the integration commit's first parent must equal the PR's current target branch and its second parent must equal `refs/pull/N/head`. That head must still be the head of a branch in the organization repository. A fork can therefore enter only as the triggering PR after existing membership admission, not indirectly as a companion on a privileged runner. Every companion must run BMS in its own Ready state and obtain its own exact-head status: the primary PR's status cannot replace another PR's gate. Component wrappers do not subscribe to PR-body edits, so a marker change requires pushing a new head or a draft-to-ready transition. Before merging, compare the linked run's `source-set.tsv` against the current marker item by item. A marker changed after that run invalidates its evidence even if the commit status still displays success.
 
-admission 和 finalization 使用仅限六仓 `Contents: read`、`Pull requests: read` 的短期 App
-token,通过 PR refs、目标 branch ref、
-commit parents 与 `branches-where-head` 把每个 companion 解析成 PR number、candidate/base/base-ref/head
-SHA。自托管 job 不信任 PR body 原文,只接收 admission 输出的已解析记录,在执行候选代码前
-重新查询全部 refs/commit,按 exact integration SHA 组装源码并撤销 token。结束控制 job第三次
-查询全部记录;任一 merge ref 消失、目标 branch/head/integration SHA 变化或 head 不再属于组织仓 branch,
-触发 PR 的 exact-head status 均失败。
+Admission and finalization use short-lived App tokens restricted to the six repositories with `Contents: read` and `Pull requests: read`. PR refs, target branch refs, commit parents and `branches-where-head` resolve each companion into PR number, candidate/base/base-ref/head SHA. The self-hosted job does not trust raw PR-body text; it receives the resolved admission records, re-queries all refs/commits before executing candidate code, assembles sources by exact integration SHA and revokes the token. Finalization queries every record a third time. A missing merge ref, changed target branch/head/integration SHA or head that no longer belongs to an organization-repository branch makes the triggering PR's exact-head status fail.
 
-status 仍只写触发 PR 的 integration commit。跨仓变更需要各 PR 互相声明并各运行一次,从而
-分别覆盖各组件拥有的 E2E 入口并取得各自 status。合入第一个 PR 后,后续 PR 删除已合入的
-companion marker,再以该 PR 目标版本线的新 sibling 重跑。该流程只冻结源码验证集合,不增加产品版本
-协商、兼容 alias 或临时 runtime gate。source 模式仍没有 `main` push 或手工 dispatch 入口。
+The status is written only to the triggering PR's integration commit. Cross-repository changes must declare their companions reciprocally and each run BMS, covering each owning component's E2E entry and obtaining separate statuses. After merging the first PR, remove its companion marker from subsequent PRs and rerun against the new sibling revision on the target version line. This freezes the source-validation set without adding product-version negotiation, compatibility aliases or temporary runtime gates. Source mode still has no `main` push or manual-dispatch entry.
 
-可复用 workflow 验证:
+Reusable-workflow validation requires:
 
-1. 控制面与执行实现都解析自 `kuasar-sandbox/kuasar-sandbox` 的 `main`,运行中记录解析后的完整 SHA;
-2. `pull_request_target` event、当前 PR 与 candidate/base/head 输入完全一致;
-3. candidate 和所有 companion 均是以各自 base/head 为两个父提交的 integration commit;
-4. 当前开放 PR 与全部 companion refs 的 base/head/merge commit 在执行前与结束后均未变化;
-5. fork 准入 token 只请求组织 `Members: read`,仅存在于 admission 控制 job;
-6. 执行候选代码的 E2E job 的 `GITHUB_TOKEN` 只有 `Contents: read` 和 `Pull requests: read`;
-7. companion/source App token 只有六仓 `Contents: read`、`Pull requests: read`,其中 runner
-   上的 token 在执行候选代码前撤销。
+1. The control plane and execution implementation both resolve from project `main`, with the resolved full SHA recorded during the run.
+2. The `pull_request_target` event, current PR and candidate/base/head inputs agree exactly.
+3. The candidate and every companion have their respective base/head as their two integration-commit parents.
+4. The current open PR and all companion refs retain the same base/head/merge commits before execution and after completion.
+5. The fork-admission token requests only organization `Members: read` and exists only in the admission control job.
+6. The E2E job that executes candidate code has a `GITHUB_TOKEN` with only `Contents: read` and `Pull requests: read`.
+7. Companion/source App tokens have only six-repository `Contents: read` and `Pull requests: read`; runner-side tokens are revoked before candidate execution.
 
-结束控制 job 再次查询 PR。只有 BMS 成功且当前 integration commit
-仍与准入值完全一致时,它才把同一个 `kuasar/bms-exact-head` 状态置为 `success`;测试失败、
-取消、跳过或 PR 已变化都不会生成可用于合入的成功状态。GitHub 自带的
-`pull_request_target` workflow check 绑定 PR head commit,不能代替这个 integration-commit
-状态。
+The final control job re-queries the PR. It sets the same `kuasar/bms-exact-head` status to `success` only when BMS succeeded and the current integration commit still exactly matches admission. Test failure, cancellation, skips and a changed PR cannot produce successful merge evidence. GitHub's ordinary `pull_request_target` workflow check attaches to the PR head commit and cannot replace this integration-commit status.
 
-platform tooling 与 source 使用只读 App token 从 GitHub 官方 archive API 按完整 SHA 获取,
-不依赖 Git smart HTTP;二者 SHA 相同时直接复用已解包的 trusted tree。归档必须只有一个顶层
-目录、不得包含路径穿越或符号链接等非普通条目。五个组件的源码归档缓存在
-`/var/cache/kuasar/sources/<repo>/<sha>.tar.gz`。命中时校验 SHA-256 和 tar 结构;miss 从
-GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每仓以 `flock`
-串行维护,保留最近使用的 32 个 revision。token 在执行候选代码前显式撤销。
+Platform tooling and source are retrieved through GitHub's official archive API at full SHAs with read-only App tokens, without depending on Git smart HTTP. When their SHAs match, the already-extracted trusted tree is reused. Archives must have exactly one top-level directory and no path traversal, symbolic links or other nonregular entries. The five component source archives are cached at `/var/cache/kuasar/sources/<repo>/<sha>.tar.gz`. Hits validate SHA-256 and tar structure. Misses download GitHub's official tarball, falling back to the official zipball and local conversion on failure. Per-repository `flock` serializes maintenance, retaining the 32 most recently used revisions. Tokens are explicitly revoked before candidate code runs.
 
-当 platform PR 的目标是 `main`,六个 unit 都从各组件 `main` 解析。当目标是平台
-`release/vMAJOR.MINOR.x`,执行 job 先读取该 PR integration 中的
-`releases/daily-preview.yaml`,再对六个 unit 分别用正式 Daily 规则派生组件
-`release/vX.Y.x`;不存在该组件维护分支时固定为清单中的精确 tag。`release-units.tsv`
-保留这六项独立的配置版本、请求 ref 与解析 SHA。源码 workspace 仍只有一个
-`guest-runtime` checkout,它采用 runtime unit 的解析 SHA;vmlinux 的独立 archive、校验和
-运行组合由正式发布前的 exact-assets BMS 按清单精确验证,不会被这个源码 checkout 合并成
-一个发布单元。
+For a platform PR targeting `main`, all six units resolve from component `main`. For a target of `release/vMAJOR.MINOR.x`, the execution job first reads `releases/daily-preview.yaml` from the PR integration, then applies the formal Daily rules independently to derive each component's `release/vX.Y.x`. If that maintenance branch is absent, the unit stays pinned to the manifest's exact tag. `release-units.tsv` records the six independent configured versions, requested refs and resolved SHAs. The source workspace still has one `guest-runtime` checkout, using the runtime unit's SHA. The independent vmlinux archive, checksum and runtime combination are verified against the manifest by exact-assets BMS before formal publication. A single source checkout does not combine these two release units.
 
-随后创建五组件 `go.work`,恢复或构建 native cache,并从候选项目主仓源码运行:
+The job then creates a five-component `go.work`, restores or builds native cache, and runs the following from candidate project sources:
 
 ```bash
 make -C src/platform test-release-tools test-perf-tools
 make -C src/platform test-e2e
 ```
 
-每个组件在自己的 `test/e2e/` 维护用例与唯一入口 `run_all.sh`。Platform BMS 将五个
-组件源码与 `kuasar-sandbox/test/e2e/platform/` 中真正跨组件组合本身的用例组装为:
+Each component maintains cases and a single `run_all.sh` entry in its own `test/e2e/`. Platform BMS assembles the five component sources and the genuinely cross-component cases in `kuasar-sandbox/test/e2e/platform/` into:
 
 ```text
 test/e2e/run_all.sh
@@ -110,104 +66,73 @@ test/e2e/orchestrator/run_all.sh
 test/e2e/platform/run_all.sh
 ```
 
-顶层入口按 owner 顺序调用六个入口。某组件是候选仓时,组装目录直接采用该 PR integration
-commit 的 `test/e2e/`,所以特性实现与其 E2E 在同一个 PR 评审,组件 PR 的完整 BMS 结果也以
-该组件 `run_all.sh` 在统一环境中通过为准。测试需要其他仓二进制不改变所有权:platform 只
-提供完整 `BIN`、zot、versitygw、KVM 与系统服务环境,不复制用例源码。
+The top-level runner invokes the six owner entries in order. When a component is the candidate repository, its assembled directory comes directly from that PR integration's `test/e2e/`. Feature implementation and its E2E are therefore reviewed together, and the component PR's full BMS result depends on that component's `run_all.sh` passing in the unified environment. Needing another repository's binaries does not change test ownership: platform supplies the complete `BIN`, zot, versitygw, KVM and system-service environment without copying ownership of test sources.
 
-完整 source BMS 还会固定执行 1 轮 working-set smoke,覆盖 A/B/C/D 以及本地加密
-`off/auto × cold/warm`。该 smoke 每次创建并独占一个新的 TAP,不复用前序 E2E 的
-默认接口,并用本轮 `/32` host route 隔离同网段的残留 connected route;
-readiness 失败诊断随 CI metadata 上传。30 轮 canonical 测量用于生成稳定的
-描述性性能报告,不作为 workflow 的独立模式或 PR 必跑轮数。
+Full source BMS also runs one working-set smoke round covering A/B/C/D and local encryption `off/auto × cold/warm`. Each smoke run creates and exclusively owns a new TAP instead of reusing the preceding E2E's default interface. A run-specific `/32` host route isolates residual connected routes on the same subnet. Readiness-failure diagnostics are uploaded with CI metadata. Thirty-round canonical measurements generate stable descriptive performance reports; they are neither a separate workflow mode nor a mandatory PR round count.
 
-## 3. Exact-assets 模式
+<a id="3-exact-assets-模式"></a>
+## 3. Exact-assets mode
 
-aggregate workflow 从受信任的 `main` 加载发布工具,但 prepare checkout 调度器明确选择的
-平台 `main` 或 `release/vMAJOR.MINOR.x` 分支 HEAD 完整 SHA。该 job 上传包含以下内容的
-短期 Actions artifact:
+The aggregate workflow loads release tooling from trusted `main`, but prepare checks out the complete HEAD SHA of platform `main` or `release/vMAJOR.MINOR.x` explicitly selected by the dispatcher. That job uploads a short-lived Actions artifact containing:
 
 ```text
-assets/             platform 包、六个组件 archive、统一 SHA256SUMS
-selection.tsv       workflow 内部版本选择,不上传到 GitHub Release
-release-notes.md    GitHub Release 页面说明
+assets/             platform package, six component archives, unified SHA256SUMS
+selection.tsv       workflow-internal version selection, not uploaded to GitHub Release
+release-notes.md    GitHub Release page description
 ```
 
-BMS 重新验证固定资产集合、SHA-256、platform 包范围、tar 安全路径和跨包覆盖,然后解压到
-`release-install/`。组件 archive 只提供运行制品;组件文档与 E2E 已由 aggregate prepare
-从清单所选 tag 的 GitHub 源码归档收集进 platform 包。执行入口来自 platform archive 本身:
+BMS revalidates the fixed asset set, SHA-256, platform-package scope, safe tar paths and cross-package overwrites, then extracts into `release-install/`. Component archives supply runtime artifacts. Aggregate prepare has already collected component documentation and E2E into the platform package from GitHub source archives at the manifest-selected tags. The execution entry comes from that platform archive:
 
 ```bash
 cd release-install
 BIN=$PWD/bin bash test/e2e/run_all.sh
 ```
 
-该模式不推导或读取组件 `main`:每个 unit 的文档、用例和二进制一样绑定清单所选的独立
-tag,所以平台维护分支可以组合彼此不同的组件维护版本线。它不调用
-Go/Rust/native build,也不会重新编译 vmlinux。通过后 publish job 原样使用此前的 artifact。
+This mode neither infers nor reads component `main`. Each unit's documentation, cases and binaries bind to its independently selected tag, allowing a platform maintenance branch to combine different component maintenance lines. It does not invoke Go/Rust/native builds or recompile vmlinux. After success, publish uses the earlier artifact unchanged.
 
 ## 4. Native cache
 
-`ci/native-cache/native-cache.sh restore-or-build` 处理:
+`ci/native-cache/native-cache.sh restore-or-build` handles:
 
 - guest `vmlinux`;
-- `mkfs.erofs` 与 `fsck.erofs`;
+- `mkfs.erofs` and `fsck.erofs`;
 - guest `envd`;
-- RocksDB headers 与 `librocksdb.a`;
-- patched `cloud-hypervisor`。
+- RocksDB headers and `librocksdb.a`;
+- patched `cloud-hypervisor`.
 
-缓存路径为 `/var/cache/kuasar/native/v1/<arch>/<component>/<input-hash>/`。input hash 覆盖
-构建脚本、patch/config、上游摘要、架构、Go/Cargo/C/C++ 工具链和 pkg-config 解析结果。
-条目通过 staging、校验和及原子 rename 发布;命中恢复前重新校验 descriptor、payload 和
-tar 路径。损坏条目失败,不会在原目录修补。
+Cache entries live at `/var/cache/kuasar/native/v1/<arch>/<component>/<input-hash>/`. The input hash covers build scripts, patches/configuration, upstream digests, architecture, Go/Cargo/C/C++ toolchains and pkg-config resolution. Entries are published through staging, checksums and atomic rename. Descriptor, payload and tar paths are checked again before restoring a hit. Corrupt entries fail rather than being repaired in place.
 
-同 key 构建和恢复持有条目锁。每组件默认保留最近使用的 4 个 key,且只回收超过保护期并能
-非阻塞取得锁的条目。缓存测试入口:
+Build and restore of the same key hold an entry lock. Each component retains its four most recently used keys by default. Reclamation only removes entries beyond the protection period whose locks can be acquired without blocking. Cache tests:
 
 ```bash
 make -C kuasar-sandbox test-ci-tools
 ```
 
-## 5. Runner 与网络
+<a id="5-runner-与网络"></a>
+## 5. Runners and networking
 
-runner 安装资料位于 `ci/runner/`。私有组件仓的 BMS 控制 job 和 release 控制 job 使用
-专用 `kuasar-control` 池;执行候选代码的 E2E job 继续使用 `kuasar-e2e` 池和收窄后的 read
-token。两组 runner 使用不同 rootfs、工作目录、标签和 GitHub runner group;角色变更必须先
-清空并从可信模板重建,不能原地改标签。`kuasar-control` 对组织内全部仓库可见并允许 public,
-同时用 workflow allowlist 只允许中央 `bms-entry.yml` 和各组件 `main` 上的 release workflow。
-公开项目主仓的 BMS 控制 job、每日协调和 aggregate release 控制 job 仍使用 GitHub-hosted runner。runner
-代理属于部署配置,不写入仓库 workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用
-公开中国大陆镜像降低网络抖动。
+Runner installation material lives in `ci/runner/`. Private component BMS control and release-control jobs use the dedicated `kuasar-control` pool. Candidate-executing E2E jobs continue to use the `kuasar-e2e` pool and restricted read tokens. These runner classes have different root filesystems, work directories, labels and GitHub runner groups. Changing roles requires cleaning and rebuilding from a trusted template, not relabeling in place. `kuasar-control` is visible to all organization repositories, including public repositories, but its workflow allowlist permits only central `bms-entry.yml` and release workflows on component `main`. The public project repository's BMS control, Daily coordination and aggregate-release control jobs remain GitHub-hosted. Runner proxies are deployment configuration and are not embedded in repository workflows. Public mainland-China mirrors for Go, Rust, Python, the Linux kernel and common container images reduce network variability.
 
-每次 job 开始会停止遗留 sandbox systemd unit、删除测试 tap 并重载 systemd。reset 还会按
-`RUNNER_NAME` 派生的确定名称(`kuasar-ws-<hash8>`)回收本 runner 的 working-set 网络
-namespace:先对其内进程 TERM、限时后 KILL,确认无存活进程后删除。名称派生保证同宿主多
-runner 互不影响,也使被 SIGKILL 中断的运行能在下一个 job 按精确名称回收,无需猜测接口
-所有权(#43、#53)。常用 zot 与
-versitygw 从 runner 固定工具目录链接到当前 workspace,不进入发布包。`kuasar-e2e` runner
-group 对组织仓库保持 `visibility=all`,不设置 workflow allowlist,只承载候选 E2E。
-各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于
-base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
+At job start, reset stops leftover sandbox systemd units, removes test TAPs and reloads systemd. It also reclaims the runner's working-set network namespace using the deterministic `kuasar-ws-<hash8>` name derived from `RUNNER_NAME`: send TERM to its processes, send KILL after a bounded wait, confirm no process is alive, then delete the namespace. Name derivation prevents runners on the same host from affecting one another and lets the next job reclaim a SIGKILL-interrupted run by exact name without guessing interface ownership (#43, #53). Common zot and versitygw tools are linked from the runner's fixed tool directory into the current workspace; they do not enter release packages. The `kuasar-e2e` runner group retains `visibility=all` for organization repositories, has no workflow allowlist and runs only candidate E2E. Fork-workflow secret forwarding is disabled in every repository. Preparation steps needing App secrets exist only in trusted base-repository workflows, and their tokens are revoked before candidate code executes.
 
 ## 6. Run artifacts
 
-每次 BMS 上传 `ci-metadata-<run>-<attempt>`。source 模式通常包含:
+Every BMS run uploads `ci-metadata-<run>-<attempt>`. Source mode normally includes:
 
-- `run.tsv`:模式、候选仓、PR 与 candidate/base/base-ref/head SHA;
-- `source-set.tsv`:触发 candidate 与所有 companion 的 PR、candidate/base/base-ref/head SHA 和角色;
-- `revisions.tsv`:platform 测试框架与五组件的精确 revision;
-- `release-units.tsv`:六个 Daily 发布单元的配置版本、派生 ref 与解析 SHA;
-- `source-cache.tsv`:源码缓存命中和摘要;
-- `native-cache.tsv`:native key、命中和耗时;
-- `timings.tsv`:构建与测试阶段资源数据;
-- UFFD 与 working-set 报告(仅对应测试运行时)。
+- `run.tsv`: mode, candidate repository, PR and candidate/base/base-ref/head SHA;
+- `source-set.tsv`: triggering candidate and all companion PRs, candidate/base/base-ref/head SHA and roles;
+- `revisions.tsv`: exact revisions of platform test tooling and the five components;
+- `release-units.tsv`: configured versions, derived refs and resolved SHAs of the six Daily release units;
+- `source-cache.tsv`: source-cache hits and digests;
+- `native-cache.tsv`: native keys, hits and durations;
+- `timings.tsv`: build/test stage resource data;
+- UFFD and working-set reports, only when those tests ran.
 
-exact-assets 模式只记录 run 与测试输出,不创建伪造的源码或 native cache 元数据。发布版本
-组合由项目主仓 `main` 选择、组件 tag 和 GitHub Release notes 表达。
+Exact-assets mode records the run and test output without inventing source or native-cache metadata. The release combination is expressed by the manifest at the exact selected platform-branch commit, component tags and GitHub release notes. It need not come from platform `main`: maintenance-branch aggregates retain their own selection.
 
-## 7. See Also
+## 7. See also
 
-- [release.md](release.md):发布资产、aggregate BMS 和权限边界;
-- [deployment.md](deployment.md):BMS 所需系统服务与运行环境;
-- [../ci/runner/README.md](../ci/runner/README.md):runner 安装与维护;
-- [../test/QUICKSTART.md](../test/QUICKSTART.md):E2E 前置条件与排错。
+- [release.md](release.md): release assets, aggregate BMS and permission boundaries;
+- [deployment.md](deployment.md): system services and runtime environment required by BMS;
+- [../ci/runner/README.md](../ci/runner/README.md): runner installation and maintenance;
+- [../test/QUICKSTART.md](../test/QUICKSTART.md): E2E prerequisites and troubleshooting.
