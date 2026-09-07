@@ -384,7 +384,7 @@ ok "command execution works end-to-end (SDK → proxy → envd → guest)"
 pause
 
 # ===========================================================================
-banner "网络：端口转发 (host→沙箱 floatingip) + 沙箱出网 (NAT)"
+banner "Networking: port forwarding (host -> sandbox floatingip) + guest egress (NAT)"
 # ---------------------------------------------------------------------------
 # No server to start: the template's start command (python3 -m http.server 8000,
 # set at build time) is ALREADY running in the sandbox, serving the COPY'd+RUN-built
@@ -394,12 +394,12 @@ DB="$WORK/lib/node-ctl.db"
 [ -s "$DB" ] || DB="$WORK/lib/orchestrator.db"
 FIP="$(sqlite3 "$DB" "select floatingip from sandboxes where id='$SID'" 2>/dev/null || true)"
 [ -n "$FIP" ] || die "could not resolve floatingip for sandbox $SID from $DB"
-say "沙箱 floatingip = ${FIP:-?}  (host 经 $SW_MGMT 直达)"
+say "Sandbox floatingip = ${FIP:-?}  (host reaches it through $SW_MGMT)"
 echo "${c_cmd}  \$ curl http://$FIP:8000/    # served by the template's start command${c_off}"
 out=""; for _ in $(seq 1 8); do out="$(curl -s --max-time 5 --noproxy '*' "http://$FIP:8000/" 2>&1)" || true; case "$out" in *"$BUILT_MARKER"*) break;; esac; sleep 1; done
 case "$out" in
-  *"$BUILT_MARKER"*) ok "host→沙箱 floatingip:8000 直连成功，且页面即构建产物 (start_cmd 经快照→恢复仍在服务)";;
-  *) [ -n "${DEMO_NETDIAG:-}" ] && say "直连失败 (NETDIAG, 继续)" || die "直连 floatingip 失败或页面非构建产物: ${out:-<empty>}";;
+  *"$BUILT_MARKER"*) ok "Direct host -> sandbox floatingip:8000 serves the built page (start_cmd survived snapshot/restore)";;
+  *) [ -n "${DEMO_NETDIAG:-}" ] && say "Direct connection failed (NETDIAG: continuing)" || die "Direct floatingip connection failed or did not serve the built page: ${out:-<empty>}";;
 esac
 TOKEN_RESPONSE="$WORK/connect-token.json"
 code="$(curl -sk --max-time 8 --noproxy '*' -o "$TOKEN_RESPONSE" -w '%{http_code}' \
@@ -411,10 +411,10 @@ TOK="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["forwardA
 hosts_add "8000-$SID.$DOMAIN"
 out="$(curl -sk --max-time 8 --noproxy '*' -H "X-Access-Token: $TOK" "https://8000-$SID.$DOMAIN/" 2>&1)" || true
 case "$out" in
-  *"$BUILT_MARKER"*) ok "e2b 暴露端口 https://8000-<sid>.<domain> (proxy→floatingip) 服务构建产物成功";;
-  *) [ -n "${DEMO_NETDIAG:-}" ] && say "暴露端口失败 (NETDIAG, 继续)" || die "e2b 暴露端口失败: ${out:-<empty>}";;
+  *"$BUILT_MARKER"*) ok "The e2b exposed port https://8000-<sid>.<domain> (proxy -> floatingip) serves the built page";;
+  *) [ -n "${DEMO_NETDIAG:-}" ] && say "Exposed-port request failed (NETDIAG: continuing)" || die "e2b exposed-port request failed: ${out:-<empty>}";;
 esac
-say "沙箱出网 (NAT MASQUERADE): guest curl http://1.1.1.1"
+say "Guest egress (NAT MASQUERADE): guest curl http://1.1.1.1"
 py <<PY 2>&1 | grep -iE 'egress|HTTP' | sed 's/^/    /' || true
 from e2b import Sandbox
 print(Sandbox.connect("$SID").commands.run("curl -s -m10 -o /dev/null -w 'egress HTTP %{http_code}\\n' http://1.1.1.1").stdout)
@@ -450,7 +450,7 @@ PY
 fi
 
 # ===========================================================================
-banner "暂停态转模板 (export-sandbox --to-template) → 从模板扇出新沙箱"
+banner "Paused state -> template (export-sandbox --to-template) -> new sandbox instances"
 # ---------------------------------------------------------------------------
 say "pause, then promote the paused snapshot to a reusable remote template (local→remote)."
 py <<PY || die "pause-before-export failed"
@@ -481,7 +481,7 @@ ok "fork via template: a fresh sandbox booted from the paused state + in-guest e
 pause
 
 # ===========================================================================
-banner "一步迁移 (export move → connect with X-Kuasar-Migration-Token = import+resume)"
+banner "One-call migration (export move -> connect with X-Kuasar-Migration-Token = import+resume)"
 # ---------------------------------------------------------------------------
 say "export (move) mints a one-line token and relinquishes the source row; connect with the token re-imports + resumes in ONE SDK call."
 echo "${c_cmd}  \$ TOKEN=\$(node-ctl export-sandbox $SID)${c_off}"

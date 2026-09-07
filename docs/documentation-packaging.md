@@ -35,6 +35,12 @@ URLs for the corresponding source reference. Fenced code and inline-code
 examples remain unchanged. Ordinary inline links, reference definitions and
 HTML `href`/`src` attributes are handled; complex Markdown still requires review.
 
+Directory links without a fragment use the source page's language when a
+matching README is included, including component `docs/` links that fall back
+to the component README. English is the fallback when no Chinese edition exists.
+Direct file links and directory links with explicit fragments keep their named
+file or default README target, preserving the original anchor contract.
+
 The release packager obtains component references from the existing selected
 release manifest and uses the aggregate version for project source URLs. It
 passes these references only to documentation assembly; it does not alter version
@@ -50,7 +56,11 @@ selected kernel has no Chinese counterpart, assembly does not substitute a
 Chinese document from the runtime unit's different revision.
 
 Recognized cross-repository `main` links to included documents resolve within the
-assembled set. Explicit historical-version URLs remain historical references.
+assembled set. Absolute GitHub `main` links to other files or directories that
+exist in the selected source use that source's selected reference, just like
+relative source links; queries and fragments are preserved. If an absolute
+`main` URL names a file absent from the selected source, it remains unchanged and
+requires separate review. Explicit historical-version URLs remain historical references.
 External links, including private component source URLs, still require the
 separate access checks described by [the review policy](documentation-policy.md).
 

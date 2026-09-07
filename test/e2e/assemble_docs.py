@@ -117,15 +117,21 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
         target = mapping.get(key)
         original = roots[target_owner] / target_path
         if target is None and original.is_dir():
-            target = mapping.get((target_owner, (target_path / 'README.md').as_posix()))
+            # Directory browsing has no explicit language. Preserve the source
+            # page's language when possible; an explicit fragment keeps the
+            # default README so its existing anchor contract does not change.
+            readme = 'README_zh.md' if path.stem.endswith('_zh') and not url.fragment else 'README.md'
+            target = mapping.get((target_owner, (target_path / readme).as_posix()))
+            if target is None:
+                target = mapping.get((target_owner, (target_path / 'README.md').as_posix()))
             if target is None and target_path == Path('docs'):
-                target = mapping.get((target_owner, 'README.md'))
+                target = mapping.get((target_owner, readme)) or mapping.get((target_owner, 'README.md'))
         if target is not None:
             result = urlunsplit(('', '', quote(os.path.relpath(target, dest.parent), safe='/._-'), url.query, url.fragment))
-        elif url.scheme:
-            return raw  # A selected source need not contain a file from a newer main URL.
         else:
             if not original.exists():
+                if url.scheme:
+                    return raw  # A selected source need not contain a file from a newer main URL.
                 raise ValueError(f'missing source link: {owner}/{path}: {value}')
             kind = 'tree' if original.is_dir() else 'blob'
             result = urlunsplit(('https', 'github.com', f'/kuasar-sandbox/{REPOS[target_owner]}/{kind}/{refs[target_owner]}/' + quote(target_path.as_posix(), safe='/._-'), url.query, url.fragment))

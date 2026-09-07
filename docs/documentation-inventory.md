@@ -1,6 +1,6 @@
 # Full-documentation migration inventory
 
-Tracking: [#86](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/86). This is an implementation ledger, not a language-check exemption list or a claim that translation is complete. Re-enumerate each target tree before final acceptance. Each row means the English default and, when preserving Chinese, its `_zh.md` counterpart.
+Tracking: [#86](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/86). The corrected inventory contains 31 original Chinese-primary documents: the initial 28 plus three previously omitted license-scope explanations. This is an implementation ledger, not a language-check exemption list or a claim that final acceptance is complete. Re-enumerate each target tree before final acceptance. Each row means the English default and its preserved `_zh.md` counterpart.
 
 | Repository | Initial Chinese-primary path | Implementation task |
 | --- | --- | --- |
@@ -22,16 +22,19 @@ Tracking: [#86](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/86). Thi
 | sandboxer | `docs/sandbox-init.md` | kuasar-sandbox/sandboxer#192 |
 | sandboxer | `docs/cloud-hypervisor.md` | kuasar-sandbox/sandboxer#192 |
 | sandboxer | `native-deps/README.md` | kuasar-sandbox/sandboxer#192 |
+| sandboxer | `LICENSE_SCOPE.md` | kuasar-sandbox/sandboxer#192 |
 | accelerator | `docs/manifest.md` | kuasar-sandbox/accelerator#104 |
 | accelerator | `docs/cache.md` | kuasar-sandbox/accelerator#104 |
 | accelerator | `docs/store.md` | kuasar-sandbox/accelerator#104 |
 | connector | `docs/vswitch.md` | kuasar-sandbox/connector#40 |
 | connector | `docs/tapfd.md` | kuasar-sandbox/connector#40 |
+| connector | `LICENSE_SCOPE.md` | kuasar-sandbox/connector#40 |
 | guest-runtime | `docs/flatten.md` | kuasar-sandbox/guest-runtime#47 |
 | guest-runtime | `docs/vmlinux.md` | kuasar-sandbox/guest-runtime#47 |
 | guest-runtime | `docs/sandbox-runtime.md` | kuasar-sandbox/guest-runtime#47 |
 | guest-runtime | `native-deps/README.md` | kuasar-sandbox/guest-runtime#47 |
 | guest-runtime | `native-deps/docs/build.md` | kuasar-sandbox/guest-runtime#47 |
+| guest-runtime | `LICENSE_SCOPE.md` | kuasar-sandbox/guest-runtime#47 |
 
 The previous English entry PRs, existing English design/example documents, community files, license-scope explanations and user-facing non-Markdown documentation are also subject to omission and consistency review. Existing complete English material need not be translated into Chinese. Upstream legal texts, third-party source comments and deliberately multilingual test data retain their original form.
 

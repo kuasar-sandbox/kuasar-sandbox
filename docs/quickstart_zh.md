@@ -236,5 +236,5 @@ sudo -n docker rm -f kuasar-quickstart-registry
 - 生产环境必须使用正式 TLS,可靠存储,网络策略和安全凭据.Demo 生成的本地 CA 和服务器证书,
   本地 Registry 和演示凭据只用于体验.
 
-更完整的单节点和集群拓扑见 [Deployment](deployment.md),组件版本与聚合发布关系见
+更完整的单节点和集群拓扑见 [Deployment](deployment_zh.md),组件版本与聚合发布关系见
 [Releases](release_zh.md),安全漏洞报告方式见 [安全策略](../SECURITY_zh.md).
