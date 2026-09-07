@@ -23,41 +23,10 @@ if [ ! -d "$PLATFORM/docs" ] || [ ! -d "$PLATFORM/test" ]; then
 fi
 
 mkdir -p "$OUTPUT"
-cp -a "$PLATFORM/docs" "$PLATFORM/test" "$OUTPUT/"
+cp -a "$PLATFORM/test" "$OUTPUT/"
 rm -rf "$OUTPUT/test/e2e"
 mkdir -p "$OUTPUT/test/e2e"
 install -m 0755 "$PLATFORM/test/e2e/run_all.sh" "$OUTPUT/test/e2e/run_all.sh"
-
-copy_component_docs() {
-    local component="$1" source_root="$2" source_docs="$source_root/docs"
-    if [ ! -f "$source_root/README.md" ] || [ ! -d "$source_docs" ]; then
-        echo "$component source is missing README.md or docs/" >&2
-        exit 1
-    fi
-    if find "$source_docs" -type l -print -quit | grep -q .; then
-        echo "$component docs contain a symbolic link" >&2
-        exit 1
-    fi
-
-    local source_file relative destination
-    while IFS= read -r -d '' source_file; do
-        relative="${source_file#"$source_docs/"}"
-        destination="$OUTPUT/docs/$relative"
-        [ ! -e "$destination" ] || {
-            echo "component docs collide at docs/$relative" >&2
-            exit 1
-        }
-        mkdir -p "$(dirname "$destination")"
-        cp -a "$source_file" "$destination"
-    done < <(find "$source_docs" -type f -print0 | LC_ALL=C sort -z)
-
-    destination="$OUTPUT/docs/$component.md"
-    [ ! -e "$destination" ] || {
-        echo "component README collides at docs/$component.md" >&2
-        exit 1
-    }
-    install -m 0644 "$source_root/README.md" "$destination"
-}
 
 for index in "${!COMPONENTS[@]}"; do
     component="${COMPONENTS[$index]}"
@@ -71,7 +40,10 @@ for index in "${!COMPONENTS[@]}"; do
         echo "$component e2e suite contains a symbolic link" >&2
         exit 1
     fi
-    copy_component_docs "$component" "$source_root"
+    [ -f "$source_root/README.md" ] && [ -d "$source_root/docs" ] || {
+        echo "$component source is missing README.md or docs/" >&2
+        exit 1
+    }
     cp -a "$source_suite" "$OUTPUT/test/e2e/$component"
 done
 
@@ -85,6 +57,11 @@ if find "$platform_suite" -type l -print -quit | grep -q .; then
     exit 1
 fi
 cp -a "$platform_suite" "$OUTPUT/test/e2e/platform"
+
+# Keep the existing flat design-document entry points, include both languages
+# and out-of-docs guides, then rebase only documentation links for this layout.
+python3 "$(dirname "${BASH_SOURCE[0]}")/assemble_docs.py" \
+    "$OUTPUT" "$PLATFORM" "${SOURCES[@]}"
 
 for component in "${COMPONENTS[@]}" platform; do
     [ -x "$OUTPUT/test/e2e/$component/run_all.sh" ] || {

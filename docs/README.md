@@ -33,5 +33,6 @@ Repository access follows the current coordinated source-publication state. Priv
 - [Language and review policy](documentation-policy.md)
 - [Terminology](terminology.md)
 - [Migration inventory](documentation-inventory.md)
+- [Documentation packaging](documentation-packaging.md)
 - [Contribution rules](../CONTRIBUTING.md)
 - [Security reporting](../SECURITY.md)
