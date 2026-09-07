@@ -16,7 +16,7 @@ Preview 继续用于开发和评估.生产就绪描述系统的部署能力,公�
 
 - [快速开始](docs/quickstart_zh.md):从同一聚合 Release 下载资产,校验并用 E2B SDK 运行首个真实 MicroVM;
 - [Architecture](docs/kuasar-sandbox_zh.md):系统能力,组件边界和关键语义;
-- [Deployment](docs/deployment.md):单节点,集群拓扑与进程依赖;
+- [Deployment](docs/deployment_zh.md):单节点,集群拓扑与进程依赖;
 - [Releases](docs/release_zh.md):组件版本,聚合版本和资产契约;
 - [Demo](test/demo/DEMO_zh.md):本地体验环境和 E2B SDK 演示;
 - [Full validation](test/QUICKSTART_zh.md):完整 Aggregate Release E2E 验收;
@@ -213,7 +213,7 @@ gh workflow run aggregate-release.yml \
 ## Documentation
 
 - [Architecture](docs/kuasar-sandbox_zh.md):系统目标,架构和关键语义;
-- [Deployment](docs/deployment.md):部署拓扑,进程,端口与启停依赖;
+- [Deployment](docs/deployment_zh.md):部署拓扑,进程,端口与启停依赖;
 - [Performance](docs/perf_zh.md):带测试上下文的性能基线,回归门禁与调优方法;
 - [CI](docs/ci_zh.md):可复用 BMS,缓存,候选 revision 和 exact-asset 模式;
 - [Releases](docs/release_zh.md):组件版本,聚合选择,资产与发布事务;

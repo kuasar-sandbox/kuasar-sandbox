@@ -6,7 +6,7 @@
 
 - [快速开始](quickstart_zh.md)
 - [系统总览](kuasar-sandbox_zh.md)
-- [部署](deployment.md)
+- [部署](deployment_zh.md)
 - [性能方法](perf_zh.md)
 - [发布契约](release_zh.md)
 - [CI 与 BMS](ci_zh.md)

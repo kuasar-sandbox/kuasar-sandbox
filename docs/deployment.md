@@ -1,125 +1,116 @@
-# deployment — 部署拓扑与组件清单
+[English](deployment.md) | [简体中文](deployment_zh.md)
 
-kuasar-sandbox 平台由若干**独立部署的进程**组成,通过网络协议(gRPC / wire /
-vsock / UDS)协作。本文档定义这些进程在生产部署中的归属、责任边界、配置入口与
-启停依赖,供运维与 SRE 使用。
+<a id="deployment--部署拓扑与组件清单"></a>
 
-各模块的 CLI、配置 schema、内部设计在自己的文档里(`docs/<模块>.md`);本文档
-**不**重复这些细节,只回答"东西在哪、彼此怎么找到对方、谁先起谁后起"。
+# deployment — deployment topology and component inventory
 
-## 1. 角色概览
+The platform consists of independently deployed processes communicating through gRPC, the cache wire protocol, vsock and Unix domain sockets (UDS). This operations/SRE guide defines process ownership, responsibilities, configuration entry points and startup/shutdown dependencies.
 
-部署角色按数据路径和控制面拓扑选择.本地文件,共享文件存储与
-Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署的强制前提.
+Each component's design document owns its CLI, configuration schema and internal behavior. This guide explains where processes run, how they find one another and their ordering dependencies.
 
-**节点与集群角色**
+<a id="1-角色概览"></a>
 
-| 角色 | 职责 | 关键进程 |
+## 1. Role overview
+
+Select roles according to the data path and control-plane topology. Local files, shared files and Manifest/store/cache are separate choices; Manifest and caching are not prerequisites for either standalone or cluster deployment.
+
+**Node and cluster roles**
+
+| Role | Responsibility | Main processes |
 |---|---|---|
-| Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行(§5) | `node-ctl conductor serve`(含可选 `resource_listen`;external proxy 模式另启 master + workers),`sandbox-ctl × N`;Manifest 数据路径按需部署 `cache-ctl`,Manifest 数据路径或产生镜像的构建需要 `store-ctl` |
-| Shared Storage | 为命名 `file://` location 提供跨节点原生文件访问 | 部署方提供的 NAS,NFS 或共享文件系统 |
-| L2 Cache Cluster(可选) | 为 Manifest 路径提供分布式 EC 缓存,未部署时 cache 可以本地命中或直接回源 | `cache-ctl shard` |
-| Cluster Control Plane(可选) | E2B 兼容多节点控制面:registry 维护执行态,router 提供统一入口,placer 导入 group 并放置;生命周期仍由 node 执行 | `cluster-ctl registry`,`cluster-ctl router`,`cluster-ctl placer` |
+| Compute Node | Hosts MicroVMs and node resource control; E2B template builds also run in build sandboxes on this node (§5). | `node-ctl conductor serve`, optionally with `resource_listen`; external proxy adds a master and workers; `sandbox-ctl × N`. Deploy `cache-ctl` when selected for the Manifest path, and `store-ctl` for Manifest storage or image-producing builds. |
+| Shared Storage | Native cross-node file access for named `file://` locations. | Operator-provided NAS, NFS or shared filesystem. |
+| L2 Cache Cluster (optional) | Distributed EC caching for the Manifest path; without it, cache can hit locally or read the origin. | `cache-ctl shard`. |
+| Cluster Control Plane (optional) | E2B-compatible multi-node control: registry maintains execution state, router supplies the common entry point, and placer imports groups and selects placement. Nodes still execute lifecycle operations. | `cluster-ctl registry`, `cluster-ctl router`, `cluster-ctl placer`. |
 
-**外部共享资源**(由部署方运营,平台外)
+**External shared resources**, operated outside the platform:
 
-| 资源 | 用途 |
+| Resource | Purpose |
 |---|---|
-| Local/NAS/NFS | 本地或跨节点原生文件工件,不要求转换为内容分片 |
-| FS 或 S3-compatible store | Manifest 与 chunk 的远程持久化后端 |
-| 平台管理面 | 沙箱实例调度、配置、租户管控、模板构建凭据(registry 拉取令牌 / 客户密钥);通过 **cluster 控制面**向 placer/provider 导入 sandbox-group 配置,或在单机部署中直接调用 `node-ctl` e2b API |
-| 容器镜像仓库 | 租户镜像来源;构建沙箱内 `flatten-ctl` 按需拉取(OCI v1.1,支持 Referrers) |
+| Local/NAS/NFS | Local or shared native-file artifacts, without mandatory conversion to content chunks. |
+| FS or S3-compatible store | Durable backend for Manifests and chunks. |
+| Platform management plane | Instance scheduling, configuration, tenancy and template-build credentials (registry pull tokens/customer keys). Imports sandbox-group configuration through the cluster placer/provider, or calls the standalone `node-ctl` E2B API directly. |
+| Container registry | Tenant image source, pulled as needed by `flatten-ctl` in the build sandbox; supports OCI 1.1 Referrers. |
 
 ## 2. Compute Node
 
-### 2.1 常驻进程
+<a id="21-常驻进程"></a>
 
-| 进程 | 角色 | 数量 | 启停 | 归属 |
+### 2.1 Resident processes
+
+| Process | Role | Count | Lifecycle | Owner |
 |---|---|---|---|---|
-| `node-ctl`(`serve`)| 本机沙箱编排 + e2b 兼容控制面 + 节点级资源仲裁(`resource_listen`)+ node-link 集群接入客户端;经 run-id 模板单元 `sandbox-runner@<run-id>`/`sandbox-builder@<run-id>` 驱动 sandbox-ctl;`proxy.mode=internal` 时还在本进程承载数据面 proxy | 单实例 | systemd | 平台内,`orchestrator/docs/node.md`(资源协议见 node-resource.md)|
-| `node-ctl proxy`(`serve`,external 仅)| proxy master 经 config-socket 订阅路由与 conductor-owned MMDS policy、绑定独立数据/MMDS入口并管理 worker;worker 用 mmap 读取固定路由,经 master 本机 RPC 查询可变 MMDS route/value/service,执行数据面鉴权、反代及 native exec gate | 1 master + `workers` 个 worker | systemd | 平台内,`orchestrator/docs/node-proxy.md` |
-| `cache-ctl`(`mode: local|tiered`,可选)| Manifest 数据入口:节点本地 L1,可选 EC L2 和 store origin | 每节点至多一个实例 | systemd,使用 Manifest 路径时先于 node-ctl | 平台内,`docs/cache.md` |
-| `store-ctl`(可选) | Manifest store 的节点侧 FS/S3-compatible 读写服务 | 每节点至多一个实例 | systemd,使用 Manifest 数据路径或执行产生镜像的构建时启动 | 平台内,`docs/store.md` |
-| `sandbox-ctl`(`run`) | 单个沙箱的控制平面(类 `runc run`);非 daemon | 每沙箱一个 | 由 node-ctl 经 `sandbox-runner@<run-id>` 单元(`run-sandbox`)assignment 后启动 | 平台内,`docs/sandbox.md` |
-| `cloud-hypervisor` | VMM(patched);`sandbox-ctl` 子进程 | 每沙箱一个 | `sandbox-ctl` 派生 | 平台内,`docs/cloud-hypervisor.md` |
+| `node-ctl conductor serve` | Local orchestration, E2B-compatible control plane, optional node resource arbitration and node-link client. Drives sandbox-ctl through `sandbox-runner@<run-id>` and `sandbox-builder@<run-id>`. With `proxy.mode=internal`, also hosts the data-plane proxy. | One conductor per node. | systemd. | [orchestrator/node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md); resource protocol in [node-resource](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md). |
+| `node-ctl proxy serve` (external mode) | Master subscribes to routes and conductor-owned MMDS policy over config-socket, binds data/MMDS listeners and manages workers. Workers read fixed routes through mmap and query mutable MMDS routes/values/services through local master RPC; they authenticate and proxy data traffic, including the native exec gate. | One master plus configured `workers`. | systemd. | [orchestrator/node-proxy](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md). |
+| `cache-ctl` (`mode: local|tiered`, optional) | Manifest read entry: local L1, optional EC L2 and store origin. | Commonly one per selected cache configuration; separate domains can use separate instances. | systemd; start before consumers of this Manifest path. | [accelerator/cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md). |
+| `store-ctl` (optional) | Node-side read/write service for FS/S3-compatible Manifest storage. | Commonly one sidecar per node/storage configuration. | systemd; required for the selected Manifest path or image-producing builds. | [accelerator/store](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md). |
+| `sandbox-ctl run` | Controls one sandbox, similar in lifecycle to `runc run`; not a shared daemon. | One per sandbox. | Assigned by node-ctl through `sandbox-runner@<run-id>` and its `run-sandbox` launcher. | [sandboxer/sandbox](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md). |
+| `cloud-hypervisor` | Patched VMM, child of sandbox-ctl. | One per sandbox. | Spawned by sandbox-ctl. | [sandboxer/cloud-hypervisor](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/cloud-hypervisor.md). |
 
-### 2.2 端口与套接字
+<a id="22-端口与套接字"></a>
 
-所有节点本机进程默认监听 loopback 或 UDS,不向集群外暴露:
+### 2.2 Ports and sockets
 
-| 进程 | 监听 | 协议 | 用途 |
+Bind node-local storage, cache and control services to loopback or UDS. Public API/data listeners and L2 peer listeners are deliberate exceptions. The addresses below are deployment examples/conventions; the selected configuration determines actual listeners.
+
+| Process | Listener | Protocol | Purpose |
 |---|---|---|---|
-| `store-ctl` | `127.0.0.1:7100` | gRPC | `Put` / `Get` / `GetSalt`(本机 cache-ctl + manifest-ctl 调用)|
-| `store-ctl` | `127.0.0.1:7061` | gRPC health | 探针 |
-| `cache-ctl tiered` | `127.0.0.1:7070` | wire(自定义二进制 TCP)| 数据面:`sandbox-ctl` / `manifest-ctl` 拉 chunk |
-| `cache-ctl tiered` | `127.0.0.1:7071` | gRPC | health / `ping` / `info` |
-| `node-ctl conductor serve(resource_listen)` | `/run/sandbox-resource.sock` | UDS,自定义协议 | 沙箱资源协议(`sandbox-ctl` 拨号目标)|
-| `sandbox-ctl` | `/run/sandbox/<sid>/*.sock` | UDS | sandbox 内部:`ch.sock` / `blk{0,1}.sock` / `uffd.sock` / `ctl.sock` / `vsock.sock`(+ `_5000`);另写 `<sid>.pid`(config-socket 鉴别)、`<sid>.env`(`SANDBOX_ARGS`)|
-| `node-ctl`(`serve`) | `api.listen`,如 `:443` | HTTPS/h2 | **对外** e2b 控制面 API;`proxy.mode=internal` 时同一 handler 也承载沙箱数据面,`proxy.data_listen` 可另设数据入口 |
-| `node-ctl proxy`(`serve`,external 仅)| `proxy.yaml.data_listen` | HTTPS/h2 或 h2c | **独立数据入口**;master 绑定 listener 并把 fd 交给 workers,native exec 使用 `service=exec` + `X-Access-Token` CONNECT |
-| `node-ctl`/external proxy | conductor `mmds.listen`,默认 `127.0.0.1:19254` | HTTP/1.1 | vswitch `--mgmt-service` 的目标;internal 由 conductor 绑定,external 由 master 从可信 Hello policy 取得后绑定并把 fd 交给 workers |
-| MMDS local service | `mmds.services.<name>.endpoint` | HTTP/1.1 over UDS | conductor-only registry;V1 为 `unix://` absolute path,internal 直拨,external worker 经 master 取得解析后的 socket path |
-| `node-ctl`(`serve`) | `/run/sandbox/node-ctl.socket` | UDS,HTTP/h2c + framed JSON stream | config-socket(run/task/admin/plugin/api 五平面):启动器取 LaunchSpec/BuildSpec;admin 管 manifest key 与 sandbox MMDS value;external proxy/platform agent 经 plugin 平面注册并同步受控路由(SO_PEERCRED + `<id>.pid`/pidfile 鉴别)|
+| `store-ctl` | `127.0.0.1:7100` | gRPC | `Put` / `Get` / `GetSalt` for local cache-ctl and manifest-ctl. |
+| `store-ctl` | `127.0.0.1:7061` | gRPC health | Probes. |
+| `cache-ctl tiered` | `127.0.0.1:7070` | Custom binary TCP wire | sandbox-ctl/manifest-ctl chunk reads. |
+| `cache-ctl tiered` | `127.0.0.1:7071` | gRPC | Health, `ping`, `info`. |
+| `node-ctl conductor serve` (`resource_listen`) | `/run/sandbox-resource.sock` | Resource protocol over UDS | sandbox-ctl resource-controller dial target. |
+| `sandbox-ctl` | `<run_root>/sandboxes/<sid>/*.sock` for node-managed sandboxes | UDS | `ch.sock`, `blk{0,1}.sock`, `uffd.sock`, `ctl.sock`, `vsock.sock` and `_5000`; `<sid>.pid` authenticates the task on config-socket. Assignment/launch parameters come through config-socket, not an `SANDBOX_ARGS` envfile. |
+| `node-ctl conductor serve` | `api.listen`, e.g. `:443` | HTTPS/h2 | Public E2B control API. In internal proxy mode its handler also serves sandbox data; `proxy.data_listen` can select a separate data entry. |
+| `node-ctl proxy serve` (external) | `proxy.yaml.data_listen` | HTTPS/h2 or h2c | Separate data entry. Master binds the listener and passes FDs to workers. Native exec uses CONNECT with `service=exec` and `X-Access-Token`. |
+| Conductor/external proxy | Conductor `mmds.listen`, default `127.0.0.1:19254` | HTTP/1.1 | Target of vswitch `--mgmt-service`. Internal mode binds in conductor; external master receives trusted Hello policy, binds and passes the FD to workers. |
+| MMDS local service | `mmds.services.<name>.endpoint` | HTTP/1.1 over UDS | Conductor-only registry; V1 requires an absolute `unix://` path. Internal proxy dials directly; external worker obtains the resolved socket path from master. |
+| `node-ctl conductor serve` | `/run/sandbox/node-ctl.socket` | HTTP/h2c and framed JSON streams over UDS | Five config-socket planes: run/task/admin/plugin/api. Launchers obtain task/launch/build specifications; admin manages Manifest keys and sandbox MMDS values; external proxy/platform extensions register and synchronize permitted routes over the plugin plane. Authentication uses SO_PEERCRED and task/runner/admin/plugin pidfiles. |
 
-使用 tiered cache 时,EC 客户端通过节点对外网络拨号 L2 cluster 节点的 `7070`
-端口(详见 §3);local cache 或直接 store 路径不需要 L2.internal 模式下,conductor
-进程内 proxy 与控制面共用 handler;
-external 模式下,`node-ctl proxy serve` 启动 1 个 master 和配置数量的 workers,正常数据面流量进入
-`proxy.yaml.data_listen`,而控制面仍由 conductor 的 `api.listen` 承载。external worker 使用自身
-`proxy.yaml` 中必填的 `paths.run_root` 定位 `<run_root>/<NodeSandboxID>/ctl.sock`;该值是节点本地部署配置,
-不经 routesync `Policy` 或共享内存路由视图传递。`proxy.yaml` 不配置 `mmds_listen` 或
-`services`;conductor 的 trusted `proxy + route_wake + mmds` registration 是这两项的唯一
-投影通道。其余本机进程均使用 loopback/UDS。
-`sandbox-ctl` 由 `node-ctl` 经 systemd **模板单元 `sandbox-runner@<run-id>.service`** 拉起
-(`StartUnit`/预启动 → 单元内 `run-sandbox` WaitAssignment 后 `execve` 为 `sandbox-ctl run`,非自行 fork-exec)。e2b 模板构建
-另走第二个模板单元 **`sandbox-builder@<run-id>.service`**(单元内 `run-builder` WaitAssignment 后
-**驻留驱动构建沙箱内的三阶段流水线** import / steps / template,每阶段一台 microVM 作其直接子进程;镜像拉取与 step 执行
-都在沙箱内,详见 §5 与 `orchestrator/docs/node.md` §12)。两个模板单元由
-`node-ctl conductor serve` 启动时自动生成并安装(`install_units:false` 则交由运维带外管理),完整设计见
-`orchestrator/docs/node.md` §5/§12。
+Tiered cache dials L2 peer port `7070` through the node network (§3). Local cache or direct store access does not require L2. In internal mode conductor shares its API handler with the proxy. In external mode `node-ctl proxy serve` starts one master and the configured workers; data traffic enters `proxy.yaml.data_listen`, while control traffic remains at conductor `api.listen`.
 
-运维侧:`/run/sandbox/<sid>/ctl.sock` 除了承载 snapshot,也是 `sandbox-ctl exec
---sandbox-id <sid> -- CMD` 的本机入口.远程调用不会直接暴露该 UDS:客户端先以
-`X-API-KEY` 显式申请绑定 AuthSandboxID 的 `kat1` ExecAccessToken,再由
-`sandbox-ctl exec --proxy` 和可重复的 `--proxy-header` 透传 SID、`service=exec`、
-token 及 cluster context 并建立 CONNECT;最终 node proxy 验证 token 后拨现有
-`ctl.sock`,由 `pkg/ctl.ProxyExec` 限制首帧只能是 `exec_request`.远程客户端由
-[`sandboxer#28`](https://github.com/kuasar-sandbox/sandboxer/issues/28)交付,也是
-standalone,cluster和external-proxy真实guest E2E的必需客户端;这些测试直接调用该客户端,
-不再使用临时 CONNECT bridge.完整规格见
-`sandboxer/docs/sandbox.md` 和 `orchestrator/docs/node-proxy.md`.
+External workers require node-local `proxy.yaml.paths.run_root`. They derive `<run_root>/sandboxes/<NodeSandboxID>/ctl.sock`; routesync Policy and the shared-memory route view do not carry this root. Proxy YAML does not duplicate `mmds_listen` or `services`: conductor's trusted `proxy + route_wake + mmds` registration is their sole projection channel. Other node-local services use loopback/UDS.
 
-### 2.3 持久化与运行时目录
+Conductor starts sandbox-ctl through the **`sandbox-runner@<run-id>.service` template**, using StartUnit/prestarted units. `run-sandbox` waits for assignment, obtains the exact task and final LaunchSpec, then exec-replaces itself with `sandbox-ctl run`; conductor does not directly fork-exec that runtime. Builds use **`sandbox-builder@<run-id>.service`**: `run-builder` waits for assignment and remains resident while driving the target-selected import/steps/template pipeline, with at most one phase MicroVM at a time as its child. Image parsing/pulling and step execution occur in guests (§5). Conductor generates/installs both templates at startup unless `install_units: false` delegates their management to the operator. See node.md §5/§12.
 
-```
-/var/store/                          store-ctl fs-backend data (local or shared filesystem)
-/var/cache/accel-l1/                 cache-ctl local/tiered L1 RocksDB (working-set-sized)
-/run/node-ctl/                       node-ctl audit + state(tmpfs)
-/run/sandbox/<sid>/                  每沙箱运行时目录:socket + snap-stage/snap-state(CH 元数据中转,tmpfs)
-/var/lib/sandbox/<sid>/              每沙箱磁盘目录:overlay 写层 <sid>.overlay.diff(本地 NVMe)
-```
+The sandbox's `ctl.sock` serves snapshot and local `sandbox-ctl exec --sandbox-id <sid> -- CMD` operations. For a node-managed sandbox, the local client must use the effective sandbox root, e.g. `--run-root /run/sandbox/sandboxes`, to find that socket. Remote access does not expose the UDS: first use `X-API-KEY` to request a `kat1` ExecAccessToken bound to AuthSandboxID. `sandbox-ctl exec --proxy`, with repeatable `--proxy-header`, sends SID, `service=exec`, token and cluster context through CONNECT. Node proxy verifies the token and dials the existing UDS; `pkg/ctl.ProxyExec` restricts the first frame to `exec_request`. The client delivered by [sandboxer #28](https://github.com/kuasar-sandbox/sandboxer/issues/28) is used by standalone, cluster and external-proxy real-guest E2E, replacing temporary CONNECT bridges. The full contract belongs to sandbox.md and node-proxy.md.
 
-run 根(`/run/sandbox`,tmpfs)与 base 根(`/var/lib/sandbox`,磁盘)分离:可写
-overlay 层必须落盘,不能用 tmpfs。两者分别由 `--run-root`/`SANDBOX_RUN_ROOT`、
-`--base-root`/`SANDBOX_BASE_ROOT` 覆盖。快照**产物**另由 `--output` 指定目录(磁盘)。
+<a id="23-持久化与运行时目录"></a>
 
-### 2.4 节点共享资源目录
+### 2.3 Persistent and runtime directories
 
-平台维护节点级共享文件,所有沙箱按名称引用,不复制:
+With node roots `/run/sandbox` and `/var/lib/sandbox`, the current node-managed layout is:
 
-```
-/opt/sandbox/
-  kernel/
-    <ver>/vmlinux                    # 多版本并存,SANDBOX_CONFIG 按名引用
-  runtime/
-    <ver>/sandbox-runtime.bundle      # 多版本并存
-  overlay-templates/
-    overlay-1g.ext4                  # 预格式化空 ext4,大小不同的多份
-    overlay-4g.ext4
-    overlay-16g.ext4
-```
+| Path | Contents |
+|---|---|
+| `/var/store/` | store-ctl FS backend on local/shared storage. |
+| `/var/cache/accel-l1/` | local/tiered L1 RocksDB, sized for the working set. |
+| `/run/sandbox/runners/<run-id>.pid` | Runner/build execution pidfile. |
+| `/run/sandbox/sandboxes/<sid>/` | Sandbox sockets, task pidfile/configuration and temporary CH metadata staging (`snap-stage`/`snap-state`); tmpfs. |
+| `/var/lib/sandbox/sandboxes/<sid>/` | Persistent sandbox state, including `<sid>.overlay.diff` and `checkpoint/`. |
+| `/run/sandbox/builds/<BuildID>/` | Build pidfile and phase runtime directories/sockets; the complete validated BuildID is the directory name. |
+| `/var/lib/sandbox/builds/<BuildID>/checkpoint/` | Build image and snapshot artifacts. |
+| `/var/lib/sandbox/node-ctl.db` | Default conductor SQLite database (`db_path`). |
 
-引用方式(在 `SANDBOX_CONFIG` 里):
+`paths.run_root` is for small volatile state and sockets; `paths.base_root` holds larger disk-backed state. The resource controller rebuilds live accounting from inventory/reports; deprecated `resource_listen.state_path` is ignored and is not a resource `state.json` persistence mechanism. Audit output, when configured, is separate.
+
+Direct sandbox-ctl uses its supplied `--run-root`/`SANDBOX_RUN_ROOT` and `--base-root`/`SANDBOX_BASE_ROOT`, with PathID as the directory leaf. Conductor passes the derived `sandboxes/` roots for ordinary sandboxes. Thus standalone `/run/sandbox/<sid>` examples cannot be copied unchanged into a node-managed deployment. Writable overlays belong on disk, while snapshot outputs are selected by `--output` or the orchestrator's checkpoint path. See [nodepath](https://github.com/kuasar-sandbox/orchestrator/blob/main/internal/nodepath/path.go).
+
+<a id="24-节点共享资源目录"></a>
+
+### 2.4 Shared node resources
+
+Maintain named shared inputs instead of provisioning a private copy for each sandbox:
+
+| Example path | Use |
+|---|---|
+| `/opt/sandbox/kernel/<ver>/vmlinux` | Coexisting kernel versions selected through sandbox configuration. |
+| `/opt/sandbox/runtime/<ver>/sandbox-runtime.bundle` | Coexisting runtime versions. |
+| `/opt/sandbox/overlay-templates/overlay-1g.ext4` | Preformatted 1 GiB ext4 template. |
+| `/opt/sandbox/overlay-templates/overlay-4g.ext4` | Preformatted 4 GiB ext4 template. |
+| `/opt/sandbox/overlay-templates/overlay-16g.ext4` | Preformatted 16 GiB ext4 template. |
+
+Example `SANDBOX_CONFIG`:
 
 ```yaml
 boot:
@@ -127,457 +118,376 @@ boot:
   runtime: file:///opt/sandbox/runtime/v1/sandbox-runtime.bundle
   root:
     overlay:
-      # diff 省略 → 自动落在 /var/lib/sandbox/<sid>/<sid>.overlay.diff(磁盘)
-      diff_template: file:///opt/sandbox/overlay-templates/basic-1G.ext4  # 见下
+      # Omitted diff uses the effective base root and PathID; see §2.3.
+      diff_template: file:///opt/sandbox/overlay-templates/overlay-1g.ext4
 ```
 
-**复制约定**:`sandbox-runtime.bundle` 与 `vmlinux` **不复制**——`sandbox-ctl`
-让 CH 以只读 mmap / 直接打开方式使用(DAX 共享 host page cache,N 个沙箱共一份
-RAM 工作集)。**overlay 写层**是沙箱独占、运行期被修改的可写盘:`diff` 省略时
-`sandbox-ctl` 自动在 base 目录(磁盘)创建,并在 `diff_template` 给定时从模板
-**稀疏复制**一份预格式化 ext4(无需 node-ctl 预先 `cp`)。显式给定 `diff`
-则按该路径打开既有文件、不复制、不删除。
+**Provisioning:** the configured runtime/kernel files are shared inputs, not per-sandbox copies. Runtime virtio-pmem/DAX can share immutable backing pages through host page cache. Loading one shared kernel file does not mean all guests share one resident kernel working set; each guest has its own execution state.
 
-### 2.5 per-sandbox 配置下发
+The overlay is a private writable disk. If `diff` is omitted, sandbox-ctl owns a new diff under its effective disk-backed base directory. A `diff_template` seeds it from the template's logical sparse contents, applying configured active-diff encryption when enabled; node-ctl need not `cp` the template. An existing nonempty explicit diff is opened according to its format/policy and remains caller-owned. An absent explicit path can also be provisioned from the configured template/base; an existing empty diff is rejected. See [PrepareDiff](https://github.com/kuasar-sandbox/sandboxer/blob/main/pkg/sandbox/overlaydiff.go) and [active-diff storage](https://github.com/kuasar-sandbox/sandboxer/blob/main/pkg/vhost/diff_file.go).
 
-每个沙箱由 `node-ctl` 在启动单元前写一份 per-sandbox **`SANDBOX_CONFIG`**
-(`<sid>.yaml`,非密).使用 Manifest 路径时,再搭配共享的 **`MANIFEST_CONFIG`**
-(`manifest.key` 留空)+ per-沙箱 `MANIFEST_KEY` env;本地文件或命名共享文件引用
-不要求先建立 Manifest 配置.配置经 `run-sandbox`(单元)以 flag 传入 sandbox-ctl:
+<a id="25-per-sandbox-配置下发"></a>
 
-| 文件 | 内容 | 传入方式 | 文档 |
+### 2.5 Per-sandbox configuration delivery
+
+Conductor renders per-sandbox YAML at `<run_root>/sandboxes/<sid>/<sid>.yaml`, mode `0600`. Treat it according to its contents, including user-provided launch environment; do not assume all configuration is nonconfidential. The runner receives assignment/task/final LaunchSpec over config-socket and passes the YAML path to sandbox-ctl.
+
+For a Manifest data path, use shared **`MANIFEST_CONFIG`** with `manifest.key` empty and a per-sandbox **`MANIFEST_KEY`** environment value. Local files and named shared-file references do not require a Manifest configuration first.
+
+| Input | Contents | Delivery | Contract |
 |---|---|---|---|
-| `SANDBOX_CONFIG` | 该沙箱的资源 / 启动 / 网络 / launch 配置 | `sandbox-ctl run --config <path>`,等价 `SANDBOX_CONFIG` env | `docs/sandbox.md` §3 |
-| `MANIFEST_CONFIG`(按需) | Manifest 路径使用的本机 store/cache 端点与内容保护参数 | `sandbox-ctl run --manifest-config <path>`,等价 `MANIFEST_CONFIG` env;`manifest-ctl` 使用同一格式 | `docs/manifest.md` §3 |
+| `SANDBOX_CONFIG` | Resources, boot, networking and launch settings. | `sandbox-ctl run --config <path>`; standalone CLI also supports `SANDBOX_CONFIG`. | sandbox.md §3. |
+| `MANIFEST_CONFIG` (as needed) | Local store/cache endpoints and content-protection parameters. | `--manifest-config <path>` or fallback `MANIFEST_CONFIG`; manifest-ctl uses the same format. | manifest.md §3. |
 
-要点:
+- **Per-sandbox key:** each sandbox uses its tenant's customer content key. In E2B, node-ctl decrypts the stored APISecret/ManifestKey credential pair; ManifestKey supplies `MANIFEST_KEY`, while **APISecret signs `api_key`**. See node.md §7. An external plane directly integrating with standalone node-ctl must respect the same per-sandbox key lifecycle.
+- **Shared format:** manifest-ctl and sandbox-ctl use the same Manifest schema and connect to the selected store/cache topology; named file paths do not traverse that data plane.
+- **Explicit path selection:** the Manifest loader checks the flag first, then `MANIFEST_CONFIG`. It does not discover a current-directory/global default. With neither, it returns `ErrConfigNotProvided`; callers decide whether this is fatal or disables unused Manifest features. See [LoadConfig](https://github.com/kuasar-sandbox/accelerator/blob/main/pkg/manifest/load.go).
 
-- **per-sandbox 密钥**:每沙箱用各自租户的客户密钥;node-ctl 经**共享**
-  `MANIFEST_CONFIG`(`manifest.key` 留空)+ per-沙箱 `MANIFEST_KEY` env 注入(e2b 路径下
-  `MANIFEST_KEY` 为该租户内容根密钥——node-ctl 从加密的 APISecret+ManifestKey
-  凭据对中解出;**api_key 由 APISecret 签发**,见 `orchestrator/docs/node.md` §7)。
-  外部管理面若选择直接对接单机
-  `node-ctl`,也必须按同一 per-sandbox 生命周期落地 manifest 配置
-- **共享格式**:选择 Manifest 路径时,`manifest-ctl` 与 `sandbox-ctl` 使用同一
-  配置格式,并按部署拓扑连接本机 store/cache 端点;命名文件路径不经过该数据面
-- **不**走 env、不走全局默认:loader 要求显式 flag 指定路径(详见
-  `docs/manifest.md` §3 loader 契约)
+<a id="26-mmds-route-安全与部署边界"></a>
 
-### 2.6 MMDS Route 安全与部署边界
+### 2.6 MMDS route security and deployment boundaries
 
-MMDS custom route 只在 conductor `mmds.routes.enabled=true` 时受理。租户在 Sandbox
-Create 或 Build Register 通过 `X-Kuasar-Sandbox-MMDS`/metadata 声明 exact
-static/secret/service route;Header 与 metadata 按 `secrets`、`routes` 两个顶层 key 合并。
-admission 后普通 metadata 只保留 canonical routes,initial values 则按 sandbox/build owner
-加密存 sqlite。节点本地 admin UDS 可 PUT/DELETE 已声明 name,没有 cluster Secret API。
+Custom routes require conductor `mmds.routes.enabled=true`. Sandbox Create and Build Register declare exact static/secret/service routes through `X-Kuasar-Sandbox-MMDS` or metadata, merging Header and metadata independently at the top-level `secrets` and `routes` keys. After admission ordinary metadata retains canonical routes; initial values are encrypted in SQLite under the sandbox/build owner. Local admin UDS can PUT/DELETE declared names. There is no cluster Secret API.
 
-```text
-                              trusted plugin stream
-                              routes + values + services
-                                      │
-guest ─► MMDS VIP ─► internal proxy ──┼─► conductor store + service registry
-                    or                │
-                    external worker ──┴─► master bounded heap ─► local UDS service
-                              MMDS RPC        ▲
-                                              └─ conductor-only config
+```mermaid
+flowchart TD
+  G["Guest via MMDS VIP"] --> I["Internal proxy"]
+  G --> W["External worker"]
+  I --> C["Conductor store and service registry"]
+  C -->|"Trusted registration: routes, values, services"| M["Master bounded heap"]
+  W -->|"Local MMDS RPC"| M
+  I --> S["Local UDS service"]
+  M -->|"Resolved endpoint for worker"| W
+  W --> S
 ```
 
-service route 固定构造 `GET <exact-path>` over UDS,Host 为 `mmds-service`,只注入
-`E2b-Sandbox-Id` 与 `E2b-Sandbox-Service`;不透传 guest Header/query/body,不跟随
-redirect。internal 直接使用 conductor registry;external master 从受信 registration 的
-Hello policy 原子接收同一 registry,worker 不读第二份 YAML。routesync 断开时 external
-MMDS heap 立即 fail closed,完整 Bookmark 后才重新开放。
+A service route constructs `GET <exact-path>` over UDS with Host `mmds-service`, adding only `E2b-Sandbox-Id` and `E2b-Sandbox-Service`. It does not forward guest headers/query/body or follow redirects. Internal mode uses conductor's registry directly. External master atomically receives that registry in trusted registration Hello policy; workers do not read a second YAML. A routesync disconnect immediately closes external MMDS access; only a complete Bookmark reopens it.
 
-routes 可随 standalone migration token 的 portable metadata 移动,secret value 不迁移。
-只有目标不存在且确实 import 时,standalone CONNECT 可额外注入 secrets-only MMDS 输入;
-目标已存在则 token 与 secret 输入都不解析。cluster CONNECT/node-link/placement 不扩展
-MMDS contract,也没有 cluster MMDS E2E。
+Routes can move in a standalone migration token's portable metadata; secret values do not migrate. Only when the target is absent and an import actually occurs may standalone CONNECT add secrets-only MMDS input. An existing target skips parsing both migration token and secret input. Cluster CONNECT, node-link and placement do not extend this MMDS contract, and there is no cluster MMDS E2E.
 
-Build Register 的 routes/value 只供本次 builder sandbox。Trigger 不得覆盖;build 终态事务
-同时从 build metadata 删除 routes namespace 并删除 value blob,最终 image/template/snapshot
-不包含该配置。宿主持久化不会主动把 value 写入 snapshot,但 guest GET 后 plaintext 已进入
-guest/application memory,包含内存的 Pause/snapshot 可能捕获该普通 working set;此类制品仍须
-按敏感数据保护。
+Build Register routes/values serve only that build's sandbox. Trigger cannot override them. A terminal build transaction deletes the route namespace from Build metadata and removes the value blob. Publication does not copy this configuration into the final image/template/snapshot. However, a guest GET can put plaintext in ordinary guest/application memory or files, which a later memory snapshot or image export can capture. Protect such artifacts as sensitive data; host-side deletion cannot remove plaintext already consumed by the guest.
 
 ## 3. L2 Cache Cluster
 
-L2 是 Manifest 数据路径的可选加速层.部署可以只使用 local cache + store origin,
-也可以按工作集和故障域部署 shard 集群.它不参与本地文件或命名共享文件读取.
+L2 is optional acceleration for the Manifest path. Use local cache plus origin alone, or deploy shards according to working set and failure domains. It does not participate in native local/named shared-file reads.
 
-### 3.1 集群规格
+<a id="31-集群规格"></a>
 
-- **规模**:由工作集,命中率目标,SSD 容量,网络和故障域实测决定
-- **编码**:配置 RS 4+1(`data_shards: 4, parity_shards: 1`)时,每个 chunk 编码为
-  5 个 shard
-- **放置**:Maglev 一致性哈希.每个 chunk 的 5 个 shard 由 chunk hash 通过
-  `LocateN(key, 5)` 在配置的 peer 池中确定性选出.5 peer 是该 RS 配置的
-  最小集群规模,扩容不改变 placement 算法.详见
-  `docs/cache.md` §4.9
-- **资源**:SSD,RocksDB BlockCache(`mem_ratio`)和网络规格按部署测量选择
-- **隔离**:不同应用域(镜像 chunk / 快照 chunk)可独立部署集群实例,同一套
-  软件配置不同 RocksDB path + 不同集群成员
-- **持久化**:RocksDB on `/mnt/ssd/accel-l2`,daemon 进程崩溃可热重启不丢数据
+### 3.1 Cluster specification
 
-### 3.2 端口
+- **Size:** choose from measured working set, desired hit rate, SSD capacity, networking and failure domains.
+- **Encoding:** `data_shards: 4, parity_shards: 1` encodes each chunk as five shards when enough peers are available.
+- **Placement:** Maglev deterministically selects the ordered peer set from chunk hash, using `LocateN(key, 5)`/the EC router's peer-selection path. A true RS 4+1 deployment needs at least five peers. Initial construction clamps an oversized scheme to available peers, so a smaller pool must not be described as still providing 4+1. Inspect the effective scheme and startup log. Adding peers does not replace the placement algorithm; see cache.md §4.9.
+- **Resources:** size SSD, RocksDB BlockCache (`mem_ratio`) and networking from deployment measurements.
+- **Isolation:** image-chunk and snapshot-chunk domains can use separate cluster instances with different RocksDB paths and membership.
+- **Persistence:** RocksDB under e.g. `/mnt/ssd/accel-l2` can retain cached data across a daemon restart. Cache remains reconstructible; this does not promise survival of every crash, storage failure or unsynced write.
 
-| 进程 | 监听 | 协议 | 用途 |
+<a id="32-端口"></a>
+
+### 3.2 Ports
+
+| Process | Listener | Protocol | Purpose |
 |---|---|---|---|
-| `cache-ctl shard` | `0.0.0.0:7070` | wire | shard PUT/GET(由 compute node 上 tiered cache-ctl 发起)|
-| `cache-ctl shard` | `0.0.0.0:7071` | gRPC | health / `info` |
+| `cache-ctl shard` | `0.0.0.0:7070` | wire | Shard PUT/GET from compute-node tiered cache. |
+| `cache-ctl shard` | `0.0.0.0:7071` | gRPC | Health and `info`. |
 
-`shard` 模式既不访问 L3 也不持有任何 origin 凭据,纯 KV——这是它能水平扩展、
-彼此对等无主的前提。
+Shard mode neither reads L3 nor holds origin credentials. It is a KV service; peers do not require a shard leader.
 
-### 3.3 成员变更
+<a id="33-成员变更"></a>
 
-集群成员的 `endpoint` 列表写在每个 compute node 上 `cache-ctl tiered` 的
-yaml 里(`tiers[].cluster.peers`)。增减节点是 compute node 端的**配置变更
-+ SIGHUP**:Maglev 表重算后约 `1/M` 的 `(key, idx)` 迁移到新节点,其他 peer
-命中正常。**操作规程:一次只动 1 个 peer**——同时换 ≥ 2 peer 单 key miss 数
-可能超过 parity(RS 4+1 parity=1),读路径将 fallthrough origin,正确但慢。
+### 3.3 Membership changes
 
-shard 节点本身无须感知集群成员;它只是个 KV。
+Each compute node's tiered YAML lists `tiers[].cluster.peers`. Adding/removing a peer is a compute-side **configuration change plus SIGHUP**, rebuilding the Maglev table. The affected keys depend on the old/new membership; do not assume a universal exact `1/M` movement ratio. Surviving peers can return existing framed shards by their recorded shard index.
 
-## 4. 外部持久化与管理资源
+**Change one peer at a time.** Changing two or more peers can lose more than the single parity allowance of a 4+1 key, producing an L2 miss and falling through to origin. Confirm convergence/hit behavior before the next change; one-at-a-time operations are a precaution, not an unconditional no-miss guarantee. Shard nodes themselves remain KV servers and do not need the membership list.
 
-### 4.1 存储后端
+<a id="4-外部持久化与管理资源"></a>
 
-本地和命名共享文件工件由文件系统直接承载.Manifest 路径的 `store-ctl` 支持
-FS 和 S3-compatible 后端:FS root 可以位于本地盘或共享文件系统,S3-compatible
-后端可以使用一个或多个 bucket.后端的容量,故障域和共享范围由部署方选择.
-store 内部路径由 `store-ctl` 维护,详见 `docs/store.md`.
+## 4. External persistence and management resources
 
-S3-compatible 后端使用部署配置或 SDK 默认凭据链.凭据只进入可信 host 服务,
-不写入 Guest 或文档示例.每个节点可以运行本地 `store-ctl` sidecar 并连接同一
-持久化后端;FS backend 也可以直接使用节点本地或共享目录.
+<a id="41-存储后端"></a>
 
-### 4.2 外部管理面接口
+### 4.1 Storage backends
 
-region 级、独立运营,平台外。与平台的接口:
+Local/named shared-file artifacts are carried directly by the filesystem. For Manifest data, store-ctl supports FS and S3-compatible backends: FS root can be local or shared, and S3-compatible storage can use one or multiple buckets. Operators choose capacity, failure domains and sharing scope. Store-ctl owns its internal paths; see store.md.
 
-- 多节点部署:平台管理面向 `cluster-ctl placer` 的 provider/importer 侧导入
-  sandbox-group 配置、selector、客户密钥引用和模板构建凭据。
-- 单节点部署:平台管理面可直接调用 `node-ctl` e2b API,并按 §2.2 的配置契约
-  提供 per-sandbox 启动配置;使用 Manifest 路径时再提供对应内容保护配置.
-- 节点侧桥接进程若由外部系统提供,不属于本发布件,也不改变本页列出的进程、
-  配置和启动依赖。
+S3-compatible access uses deployment configuration or the SDK default credential chain. Origin credentials stay in trusted host services, outside guests and documentation examples. Each node may run a store-ctl sidecar against the same durable backend; FS can also use a node-local directory.
 
-构建在 compute 节点的构建沙箱内进行(§5),无独立展平管理面/数据面池。
+<a id="42-外部管理面接口"></a>
 
-## 5. 镜像构建(构建沙箱内三阶段)
+### 4.2 External management interface
 
-e2b 模板构建在 compute 节点上进行,**无独立展平池**:每个构建执行绑定一个
-`sandbox-builder@<run-id>` 单元(`run-builder` 驻留驱动),镜像拉取与 step 执行都在**构建沙箱(microVM)内**——租户网络
-流量与镜像内容不触宿主用户态,宿主侧只做工件接力与收尾上传。完整语义见
-`orchestrator/docs/node.md` §12。
+The region-level management plane is independently operated outside this project:
 
-### 5.1 三阶段流水
+- In multi-node deployments, it imports sandbox-group configuration, selectors, customer-key references and template-build credentials through placer/provider.
+- In standalone deployments, it can call the node-ctl E2B API and supply the configuration contract in §2.5, adding content-protection configuration when using Manifest data.
+- An externally supplied node bridge/agent is not part of these release assets and does not redefine this guide's processes, configuration or dependencies.
 
-`run-builder` 依 BuildSpec 最多跑三阶段,每阶段一台 `sandbox-ctl run` + cloud-hypervisor
-(都计入本单元 cgroup):
+Builds run in compute-node build sandboxes (§5); there is no separate flatten management/data pool.
 
-| 阶段 | 触发 | 做什么 |
+<a id="5-镜像构建构建沙箱内三阶段"></a>
+
+## 5. Image builds: three phases inside build sandboxes
+
+E2B template builds run on compute nodes without a separate flatten pool. Each execution owns `sandbox-builder@<run-id>`, whose resident `run-builder` drives guest MicroVMs. Image parsing/pulling and steps occur inside those guests. The host still carries exec streams, artifacts and final publication bytes; guest execution does not mean tenant bytes never pass through host userspace. See node.md §12.
+
+<a id="51-三阶段流水"></a>
+
+### 5.1 Three-phase pipeline
+
+BuildSpec selects up to three phases, each using `sandbox-ctl run` plus Cloud Hypervisor and accounted within the build unit:
+
+| Phase | Condition | Work |
 |---|---|---|
-| A import | 有 fromImage | 空单盘沙箱 + 单一 `sandbox-runtime.bundle` 内置的 flatten-ctl/mkfs.erofs;guest 内 `flatten-ctl export -` 以租户凭据拉取 + 确定性展平,tarstream 工件经 exec stdio 流回宿主 |
-| B steps | 有 steps | base 镜像 + 单一 runtime + 大可写层;**envd 为 app**,RUN/ENV/ARG/WORKDIR/USER 经 envd `process.Start` 执行(与 e2b 同形);导出新镜像工件 |
-| C template | 有 startCmd | 生产 e2b runtime 冷启最终镜像;startCmd 经 envd 启动、readyCmd 轮询;`sandbox-ctl snapshot` 出本地快照 bundle |
+| A import | `fromImage` supplied. | An empty single-disk sandbox uses flatten-ctl/mkfs.erofs from sandbox-runtime.bundle, pulls with tenant credentials and deterministically flattens in the guest. `flatten-ctl export --output - <image>` streams a tarstream artifact back through exec stdio. |
+| B steps | `steps` supplied. | Base image, runtime and a large writable layer; envd is the application. RUN/ENV/ARG/WORKDIR/USER use envd `process.Start`, matching E2B semantics, then export the resulting image artifact. |
+| C template | `startCmd` supplied. | Cold-boot the final image with the production E2B runtime; start through envd, poll readyCmd, then create a local snapshot bundle with sandbox-ctl snapshot. |
 
-两类 guest 信道刻意分离:e2b 语义(steps/startCmd/readyCmd)走 **envd**,平台机制(flatten 拉取/
-导出、配置注入、工件流回、就绪探针)走 **`sandbox-ctl exec`**。COPY 上下文经对象存储直传
-(`builder.files_storage`,presigned PUT/GET,字节不过控制面),构建期 `flatten-ctl tar extract`
-解包。
+The channels have distinct purposes: E2B steps/startCmd/readyCmd use **envd**; platform operations such as flattening, configuration injection, artifact streaming and readiness probes use **sandbox-ctl exec**. COPY context uses object storage (`builder.files_storage`, presigned PUT/GET), avoiding upload-body relay through the public control API. During the build, host/guest transfer and `flatten-ctl tar extract` deliver/extract that context; do not interpret this as a guarantee that no host process handles its bytes.
 
-### 5.2 收尾上传(平台凭据唯一出现点)
+<a id="52-收尾上传平台凭据唯一出现点"></a>
 
-阶段产物经宿主 workdir 顺序交接;终态:img ⇒ `manifest-ctl store image.img` 后形成
-canonical manifest ref;快照 ⇒ 一条 `sandbox-ctl upload-snapshot <bundle>`.产生镜像的
-构建始终需要可用的 `store-ctl`;`checkpoint.remote.ref_location_parent` 只选择快照
-发布位置.未配置 named location 时快照发布到 Manifest;配置后发布到共享文件 location.
-持久 id 为
-`<profile>-<kind>-<base64url(canonical-portable-ref)>`.Manifest 模式由本机
-`store-ctl`(§2.1 sidecar)承载远端写.
+### 5.2 Final publication: platform storage credentials
 
-### 5.3 凭据与隔离
+Phase artifacts pass sequentially through the host's build directories. Final image publication ingests `image.img` with manifest-ctl and produces a canonical Manifest reference; snapshot publication uses `sandbox-ctl upload-snapshot <bundle>`. Image-producing builds always require store-ctl. `checkpoint.remote.ref_location_parent` selects the snapshot destination only: without a named location, publish to Manifest; with one, publish to the shared-file location.
 
-租户 registry 拉取凭据仅 `FLATTEN_*` 经 exec env 进入 import 阶段 guest;**`MANIFEST_KEY`
-永不入 guest**。凭据来源(任务级 pull token / SDK 明文 / 租户默认 `registry_auth_enc`)由
-node-ctl 解析,见 node.md §12。构建池上限由 `sandbox-builder.slice` 的
-`CPUQuota`/`MemoryMax` 施加,并发由 `builder.max_concurrent` 准入。
+The durable ID is `<profile>-<kind>-<base64url(canonical-portable-ref)>`. In Manifest mode, local store-ctl (§2.1) performs remote writes. Origin storage credentials belong to the host publication/storage path, not guest build commands.
 
-Build Register 的 MMDS initial values 是另一条独立 confidential flow:加密 blob 以 build
-owner 落库,运行期只向 synthetic builder Sandbox route 投影,不进 BuildSpec env、普通
-metadata、最终 image/snapshot/template;Build Trigger 不接受覆盖,ready/error/cleanup 删除 blob。
+<a id="53-凭据与隔离"></a>
+
+### 5.3 Credentials and isolation
+
+Tenant registry credentials enter the import guest through `FLATTEN_*` exec environment. The builder's `MANIFEST_KEY` remains host-side. Node-ctl resolves task pull tokens, SDK-supplied plaintext or tenant default `registry_auth_enc`; see node.md §12. `sandbox-builder.slice` CPUQuota/MemoryMax limit aggregate build resources; `builder.max_concurrent` controls admission.
+
+MMDS initial values from Build Register are a separate confidential flow: encrypted under the Build owner and projected only to the synthetic builder Sandbox route. They are not inserted into BuildSpec env or ordinary metadata, and publication does not copy the MMDS configuration into final artifacts. Trigger cannot overwrite them; ready/error/cleanup removes the encrypted blob. A guest can nevertheless copy fetched plaintext into files or memory captured by export/snapshot (§2.6).
 
 ## 6. Cluster Control Plane (cluster-ctl)
 
-大规模(多 compute 节点)部署时,机群之上由 **cluster-ctl** 三角色控制面聚合:**registry**
-(shardkv 状态集群 + 节点通道枢纽)、**router**(e2b 兼容统一入口:控制面 + 数据面,
-按 sandbox-group + route-key + 稳定 sandbox_id 路由,在 node 边界使用 NodeSandboxID;
-Exec Session 通过 `Reserve(operation=exec-session)` + `CmdExecSession` 由 node 签发,数据面由
-Router 与 node 验证同一 KAT;非 READY route 进入 data Reserve 时,Registry 在触发生命周期
-动作前再次验证)、**placer**(group provider/importer、WATCH_LIST 消费方与
-放置调度器)。详见 `orchestrator/docs/cluster.md`。单 compute 节点独立部署(直供 e2b SDK)
-时**不需要** cluster 层。
+For multiple compute nodes, three roles compose the cluster layer: **registry**, a shardkv state cluster and node-channel hub; **router**, the common E2B control/data entry; and **placer**, the group provider/importer, WATCH_LIST consumer and placement scheduler. Router uses sandbox-group, route-key and stable sandbox_id, translating to NodeSandboxID at the node boundary. Exec Session uses `Reserve(operation=exec-session)` and `CmdExecSession` for node-side signing; Router and node validate the same KAT. Data Reserve for a non-READY route makes Registry validate again before triggering lifecycle work. See [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md). A standalone node directly serving the E2B SDK does not require this layer.
 
-```text
-client / SDK
-    │
-    ▼
-cluster-ctl router
-    │ route_link Reserve/Resolve
-    ▼
-cluster-ctl registry  ◄──── node_link ────► node-ctl conductor serve × N
-    ▲
-    │ placer_link Place / verify-key
-    ▼
-cluster-ctl placer
+```mermaid
+flowchart TD
+  C["Client / SDK"] --> R["cluster-ctl router"]
+  R -->|"route_link Reserve / Resolve"| G["cluster-ctl registry"]
+  G <-->|"node_link"| N["node-ctl conductor on compute nodes"]
+  P["cluster-ctl placer"] <-->|"placer_link Place / verify-key"| G
 ```
 
-### 6.1 进程
+<a id="61-进程"></a>
 
-| 进程 | 角色 | 数量 | 启停 | 归属 |
+### 6.1 Processes
+
+| Process | Role | Count | Lifecycle | Owner |
 |---|---|---|---|---|
-| `cluster-ctl registry` | registry 自聚簇成员;复制 `route_link` / `node_link` / `node_list` / `placer_link` 执行态,承载 node 长连接和 route/node owner RPC | 1 或 N 副本;每个 group/node 由 LocateN 选 owner set | systemd | 平台内,`cluster.md` |
-| `cluster-ctl router` | e2b 兼容统一入口(`api.<domain>` 控制面 + 数据面),持近期 route cache;数据面 miss 时 Resolve 并对已知非 READY route 做 data Reserve,create/connect/exec-session 使用对应 Reserve operation;Exec CONNECT 仅替换 stable SID 为 current NodeSandboxID,保持 service/port/token | N 副本(LB 后,无状态)| systemd | 平台内,`cluster-router.md` |
-| `cluster-ctl placer` | group provider/importer、WATCH_LIST 消费方与放置调度器;向 registry 提供 PlaceSandbox / PlaceBuild / verify-key | N 副本;按 placer memberlist ready 视图和 group 确定性 failover | systemd | 平台内,`cluster-placer.md` |
+| `cluster-ctl registry` | Replicated `route_link`, `node_link`, `node_list`, `placer_link` execution state; node connections and route/node owner RPC. | One or more members; LocateN selects each group/node owner set. | systemd. | cluster.md. |
+| `cluster-ctl router` | E2B control/data entry (`api.<domain>`), recent route cache. Data misses Resolve; known non-READY data routes Reserve. Create/connect/exec-session use their respective Reserve operations. Exec CONNECT replaces stable SID with current NodeSandboxID, preserving service/port/token. | Multiple stateless replicas behind LB. | systemd. | [cluster-router.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-router.md). |
+| `cluster-ctl placer` | Group provider/importer, WATCH_LIST consumer and scheduler; PlaceSandbox/PlaceBuild/verify-key for registry. | Multiple replicas; deterministic group failover uses ready placer memberlist view. | systemd. | [cluster-placer.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-placer.md). |
 
-小规模可三角色同机共置;大规模按 registry 成员表、router 入口副本和 placer 副本分别扩展。
+Small deployments can colocate all three. Larger ones scale registry membership, router entry replicas and placer replicas separately.
 
-### 6.2 端口
+<a id="62-端口"></a>
 
-| 进程 | 监听 | 协议 | 用途 |
+### 6.2 Ports
+
+| Process | Listener | Protocol | Purpose |
 |---|---|---|---|
-| `cluster-ctl router` | `:443` | HTTPS/h2 | **对外** e2b 控制面 + 数据面入口(机群唯一北向面)|
-| `cluster-ctl registry` | `member.listen`,如 `:7700` | JSONRPC over HTTP/h2c 或 HTTPS | 统一控制面;按 path 承载 `/node-link/*`、`/route-link/*`、`/placer-link/*`、`/cluster/membership`、`/internal/registry-member/*`、`/internal/memberlist/*` |
-| `cluster-ctl registry` | `node_link.listen`(可选) | JSONRPC over HTTP/h2c 或 HTTPS | 可选独立 node 长连接监听;为空时复用 `member.listen` |
-| `cluster-ctl placer` | `placer.listen`,如 `:7800` | JSONRPC over HTTP/h2c 或 HTTPS | placer Place / verify-key API;memberlist HTTP transport 复用同一监听 |
+| Router | `:443` | HTTPS/h2 | Public E2B control/data entry for the cluster. |
+| Registry | `member.listen`, e.g. `:7700` | JSONRPC over HTTP/h2c or HTTPS | Unified control plane with `/node-link/*`, `/route-link/*`, `/placer-link/*`, `/cluster/membership`, `/internal/registry-member/*`, `/internal/memberlist/*`. |
+| Registry | Optional `node_link.listen` | JSONRPC over HTTP/h2c or HTTPS | Separate node-connection listener; empty reuses member.listen. |
+| Placer | `placer.listen`, e.g. `:7800` | JSONRPC over HTTP/h2c or HTTPS | Place/verify-key API; memberlist HTTP transport shares the listener. |
 
-### 6.3 与节点 / 平台管理面的关系
+<a id="63-与节点--平台管理面的关系"></a>
 
-- **节点接入**:每 compute 节点 `node-ctl conductor serve` 配 registry node_link endpoint,拨入 node-link。接入成员
-  可以 redirect 到 node owner,或 relay 到首个可用 owner。`node_link` owner 复制完整节点视图;
-  `route_link` owner 下发 create/connect/delete/build/key 命令时,通过 node-owner RPC 转给当前
-  `link_owner`。
-- **平台管理面(平台外)**:向 placer/provider 侧导入 sandbox-group 配置(租户 `manifest_key`、
-  `api_secret`、沙箱初始化配置、镜像仓库、模板、nodeSelectors)。registry 不实现 group provider,
-  只在 Reserve/Place 冷路径把请求转给 ready placer。凭据对分发是 create/build 前置条件;
-  drop 或租约过期不修改已经复制到现有 sandbox/build 记录的凭据对。
-- **MMDS 范围**:cluster registry/router/placer/node-link 不新增 MMDS Secret API、CONNECT
-  config passthrough、placement 或 admission 语义。MMDS route/value/service 是 compute node
-  的 standalone/local proxy contract;通用 metadata 的偶然透传不构成 cluster 支持。
-- **成员关系**:registry 成员表由版本化配置分发,通过信号或 API reload。`memberlist` 复用 HTTP 控制面,
-  只做 failure detection 和 meta 传播,不维护成员清单,不参与 `LocateN` 分片计算。
-- **成员变更**:registry 可同时持有 active / next membership。受影响的 group/node 逻辑 owner set 为
-  old/new 并集,提交要求 old quorum + new quorum;node 上报、node_list 投影、group 请求和 placer import/source
-  驱动数据自然复制到新 owner set。router/node/placer 通过 `/cluster/membership` 刷新 active/next 视图。
+### 6.3 Relationship to nodes and external management
 
-### 6.4 故障域
+- **Node connection:** conductor dials the configured registry node-link endpoint. The contacted member can redirect to the node owner or relay to an available owner. Node-link owners replicate the full node view. Route-link owners forward create/connect/delete/build/key commands through node-owner RPC to the current `link_owner`.
+- **External management:** imports sandbox-group configuration (tenant manifest_key, api_secret, initial sandbox configuration, registry, templates, nodeSelectors) through placer/provider. Registry is not a group provider; Reserve/Place cold paths call a ready placer. Credential-pair distribution precedes create/build. Drop or lease expiry does not modify credentials already copied into existing sandbox/build records.
+- **MMDS scope:** registry/router/placer/node-link add no MMDS Secret API, CONNECT configuration passthrough, placement or admission contract. MMDS route/value/service is a compute-node standalone/local-proxy contract; incidental generic metadata forwarding is not cluster support.
+- **Membership:** distribute versioned registry membership configuration and reload by signal/API. Memberlist uses the HTTP control plane for failure detection and metadata, not membership-list ownership or LocateN shard calculation.
+- **Membership transitions:** registry can retain active/next membership simultaneously. Affected logical group/node owner sets are the old/new union; commits require old quorum plus new quorum. Node reports, node-list projection, group requests and placer import/source operations naturally replicate to new owners. Router/node/placer refresh active/next views through `/cluster/membership`.
 
-| 故障 | 影响 | 自愈 |
+<a id="64-故障域"></a>
+
+### 6.4 Failure domains
+
+| Failure | Impact | Recovery |
 |---|---|---|
-| 单个 `registry` 成员崩溃 | 其参与的逻辑分片降一格;quorum 仍满足时继续服务,不足时该分片停写 | 成员恢复后通过 quorum read / read-repair catch-up;router 本地 cache 使**已建立会话热路径不受影响** |
-| registry 整集群完全下电但 shard 数据保留 | 下电期间 Reserve/Place 不可用 | registry quorum 恢复后读取原 shard 数据,node-link 重连并继续收敛 |
-| registry 执行 shard 不可恢复地丢失 | 不得从备份构造 sandbox/build 节点执行态 | provider 数据按其持久化流程恢复;存活 node 的执行投影恢复和 migration-token 持久 route 分别由 [orchestrator #34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33) 跟踪,完成前须明确报告不可恢复 |
-| `router` 崩溃 | 该副本连接断 | 无状态,LB 改路由其余副本 |
-| `placer` 崩溃 | 该 placer 不再作为 ready 候选;冷放置 failover 到同 group 的其他 placer | 热路径不受影响;Place 超时后 registry 换下一个候选 |
-| 单 compute 节点 node-link 失联 | registry 暂失该节点视图 | 节点重连重报;node_dead_after 后 node_list 失效,placer 不再放置到该节点;孤儿 sandbox 按 group+sandbox_id 清理 |
+| One registry member crashes. | Its logical shards lose one replica; writes continue only with quorum. | Quorum reads/read-repair catch up after recovery. Already routed sessions can continue without a fresh registry lookup, subject to their existing node/transport connections. |
+| Entire registry is powered off, shard data retained. | Reserve/Place unavailable during outage. | Read retained data after quorum returns; node-link reconnects and converges. |
+| Execution shards are irrecoverably lost. | Do not reconstruct live sandbox/build node execution state from a stale backup. | Recover provider data through its durability process. Live-node projection recovery and migration-token durable routes remain tracked by [#34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33); report unavailable recovery explicitly until implemented. |
+| Router crashes. | Connections through that replica break. | LB selects another stateless replica. |
+| Placer crashes. | It leaves the ready set; cold placement fails over to another placer for the same group. | Hot routing is unaffected; Registry tries another candidate after Place timeout. |
+| A compute node loses node-link. | Registry temporarily lacks its current view. | Node reconnects/reports. After node_dead_after, node_list expires it and placer stops selecting it; orphan cleanup uses group+sandbox_id. |
 
-## 7. 全景拓扑
+<a id="7-全景拓扑"></a>
 
-按节点角色分三张子图。每张图自闭合:外部端点用 `(...)` 标注,实体在其他
-子图或 region 级。
+## 7. Overall topology
+
+The following views separate process/data, L2 and build relationships. External endpoints represent another role or the region-level service.
 
 ### 7.1 Compute Node
 
-```
-   ┌─ Compute Node ───────────────────────────────────────────────────────────────────────────────────┐
-   │                                                                                                  │
-   │   ── process tree ──                                                                             │
-   │                                                                                                  │
-   │   (Platform Mgmt Plane, region)                                                                  │
-   │           │  per-sandbox SANDBOX_CONFIG / optional MANIFEST_CONFIG                              │
-   │           ▼                                                                                      │
-   │   node-ctl            ── StartUnit ──►  sandbox-ctl × N    ── spawns ──►  cloud-hypervisor       │
-   │                                                │                                  │              │
-   │                                                │                                  ▼              │
-   │                                                │                              guest VM           │
-   │                                                │                                                 │
-   │                                                └── UDS  /run/sandbox-resource.sock ──► node-ctl  │
-   │                                                                                                  │
-   │   ── data path ──                                                                                │
-   │                                                                                                  │
-   │   sandbox-ctl ──► Local File / NAS / NFS                                                         │
-   │        │                                                                                         │
-   │        └── optional Manifest ObjectGet :7070 ──► cache-ctl local/tiered                          │
-   │                                                  │   L1 RocksDB                                  │
-   │                                                  ├── wire EC fan-out (5 shards) ──► (L2 cluster) │
-   │                                                  └── origin gRPC :7100 ──► store-ctl  (sidecar)  │
-   │                                                                                       │          │
-   │                                                                                       ▼  HTTPS   │
-   │                                                                      (FS / S3-compatible store)  │
-   │                                                                                                  │
-   └──────────────────────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TD
+  M["External management: sandbox configuration"] --> N["node-ctl conductor"]
+  N -->|"StartUnit / assignment"| U["sandbox-runner unit: run-sandbox"]
+  U -->|"exec"| S["sandbox-ctl"]
+  S --> H["Cloud Hypervisor and guest"]
+  S -->|"Resource UDS"| N
+  S --> F["Local file / NAS / NFS"]
+  S -->|"Optional Manifest ObjectGet :7070"| C["cache-ctl local / tiered: L1 RocksDB"]
+  C -->|"EC fan-out"| L["Optional L2 cluster"]
+  C -->|"Origin gRPC :7100"| O["store-ctl sidecar"]
+  O --> B["FS / S3-compatible backend"]
 ```
 
 ### 7.2 L2 Cache Cluster
 
+```mermaid
+flowchart TD
+  C["Compute-node tiered caches"] -->|"Configured EC shard fan-out"| P["Maglev peer placement"]
+  P --> S["cache-ctl shard peers: wire :7070 / gRPC :7071"]
+  S --> D["RocksDB on SSD"]
 ```
-                            wire EC fan-out  (5 shards / chunk)
-                            from every Compute Node's cache-ctl tiered
-                                                │
-                                                ▼
-   ┌─ Optional L2 Cache Cluster ──────────────────────────────────────────────────────────────────────┐
-   │                                                                                                  │
-   │      cache-ctl  shard      wire :7070   /   gRPC :7071                                           │
-   │      RocksDB on SSD                                                                              │
-   │      Maglev placement:   LocateN( chunk_hash, 5 )  over full peer pool   (RS 4+1)                │
-   │                                                                                                  │
-   │      no origin credentials here - origin access stays in each Compute Node's store-ctl           │
-   │                                                                                                  │
-   └──────────────────────────────────────────────────────────────────────────────────────────────────┘
-```
+
+For an effective RS 4+1 scheme, placement selects five peers per chunk. Origin credentials and origin access remain at each compute node's store-ctl; shards do not receive them.
 
 ### 7.3 Image Build (in-sandbox, on Compute Node)
 
+```mermaid
+flowchart TD
+  N["node-ctl"] -->|"Assignment"| R["sandbox-builder unit: resident run-builder"]
+  R --> A["A import guest"]
+  A --> B["B steps guest"]
+  B --> C["C template guest"]
+  A --> I["Host image artifact"]
+  B --> I
+  C --> S["Host snapshot artifact"]
+  I --> M["manifest-ctl / store-ctl"]
+  S --> F["Named shared-file location"]
+  S --> M
+  M --> O["FS / S3-compatible backend"]
 ```
-   ┌─ Compute Node ── e2b template build  (§5) ───────────────────────────────────────────────────────┐
-   │                                                                                                  │
-   │   node-ctl          ── assign ──►  sandbox-builder@<run-id>  ( run-builder, resident )            │
-   │                                              │  drives 3 stage VMs (sandbox-ctl run + CH)         │
-   │                                              ▼                                                    │
-   │     A import ──► B steps ──► C template      ( guest: flatten-ctl / envd; tenant net stays in VM )│
-   │                                              │  image.img / snapshot bundle  (host workdir)       │
-   │                                              ▼                                                    │
-   │   image ──► manifest-ctl store ──► store-ctl ──► FS / S3-compatible store                        │
-   │   snapshot ──► local/named file location                                                         │
-   │            └──► Manifest ──► store-ctl ──► FS / S3-compatible store                              │
-   │                                                                                                  │
-   └──────────────────────────────────────────────────────────────────────────────────────────────────┘
-```
 
-构建复用 compute 节点既有的 vswitch 网络槽(guest 拉取出网).产生镜像的构建始终经
-`manifest-ctl store` 复用 `store-ctl`;本地或命名共享文件 location 只改变快照发布路径.
-两种快照路径都无独立构建池或额外常驻进程(§5).
+Only required phases run. Each phase has sandbox-ctl and CH under the same build unit and uses guest flatten-ctl/envd. Builds reuse existing compute-node vswitch slots for guest egress. Image publication always reuses store-ctl through Manifest ingest; local/named file locations alter snapshot publication only. Neither snapshot path requires a separate build pool or another resident service (§5).
 
-## 8. 启停依赖
+<a id="8-启停依赖"></a>
 
-### 8.1 启动顺序
+## 8. Startup and shutdown dependencies
 
-**外部依赖(按部署选择)**
+<a id="81-启动顺序"></a>
 
-1. 本地/共享文件路径已挂载并可访问;若使用 Manifest 数据路径或执行产生镜像的构建,
-   对应 FS 或 S3-compatible store 后端已就绪
+### 8.1 Startup order
 
-**L2 Cache Cluster(可选,在使用它的 compute 之前)**
+**External dependencies, according to the deployment**
 
-2. 配置的 `cache-ctl shard` 成员启动并健康
-3. 集群成员清单(`tiers[].cluster.peers`)落到 compute node 配置仓
+1. Mount and verify local/shared-file paths. If using Manifest data or producing build images, make the selected FS/S3-compatible backend available.
 
-**Compute Node(每节点独立)**
+**Optional L2, before its compute consumers**
 
-4. 使用 Manifest 数据路径或执行产生镜像的构建时启动 `store-ctl`,确认 active
-   generation 已 init 且 gRPC 健康
-5. 使用 cache 时启动 `cache-ctl local|tiered`;tiered 模式确认 L2 peer 和 store
-   origin 可达
-6. `node-ctl conductor serve`(`resource_listen`)→ state 恢复或冷启;e2b SDK
-   直连或 cluster registry 接入后开始接受新沙箱
+2. Start and health-check the configured shard members.
+3. Distribute their `tiers[].cluster.peers` list to compute configurations.
 
-注:`cache-ctl tiered` 启动**不需要**等 L2 全员在线——tier chain 把瞬时
-故障层视作 miss 下穿(详见 `docs/cache.md` §错误模型)。**写**路径
-(`manifest-ctl store` 直连 `store-ctl`)在所选持久化后端 / store-ctl 不可达时会失败.
+**Compute nodes, independently**
 
-模板构建复用 compute 节点的 `node-ctl`;产生镜像的构建还需要 `store-ctl`,没有产生
-镜像时只按所选快照路径准备数据后端.`node-ctl` 与所需数据后端就绪后即可经 e2b API
-接受构建(§5).
+4. If required, start store-ctl and verify active generation initialization and gRPC health.
+5. If selected, start local/tiered cache. For tiered mode verify configured L2 peers and store origin reachability.
+6. Start conductor, including configured resource_listen, and recover/reconcile node state. Accept new sandboxes through standalone E2B or after registry attachment. In external proxy mode start/verify the proxy master and workers' trusted registration before opening their data entry to clients.
 
-### 8.2 关闭顺序(自顶向下)
+Tiered cache does not need every L2 peer online to start: a failing tier becomes a miss and falls through (§3 and cache.md's error model). The write path, manifest-ctl directly using store-ctl, fails when the selected durable backend/store is unavailable.
 
-1. 平台管理面 / cluster / 客户端停止向该节点 `node-ctl` 调度新沙箱
-2. `node-ctl` 等待存量沙箱自然退出 / 主动 snapshot,然后 SIGTERM,persist 状态(含资源预算)后退出
-3. 若部署 `cache-ctl`,则 SIGTERM,等待 in-flight 请求结束和 RocksDB flush
-4. 若部署 `store-ctl`,则最后停止该服务
+Builds reuse conductor. Image-producing builds also require store-ctl; builds without image publication need the selected snapshot backend. Accept builds after conductor and those required backends are ready (§5).
 
-L2 cluster 的关闭与 compute node 关闭无强序——每个 compute node 的 `cache-ctl
-tiered` 自己处理 L2 不可达。
+<a id="82-关闭顺序自顶向下"></a>
 
-## 9. 故障域
+### 8.2 Shutdown order, from consumers to providers
 
-| 故障 | 直接影响 | 自愈 |
+1. Stop external management/cluster/client admission of new sandbox and build work to the node.
+2. Drain existing work and explicitly wait for exit or complete requested snapshots before stopping conductor. SQLite preserves recorded lifecycle state; resource accounting is reconstructed after restart, not saved as resource state.json. Sending SIGTERM alone is not an instruction to snapshot every guest.
+3. If deployed, stop cache-ctl with SIGTERM and allow its normal in-flight handling and RocksDB shutdown to complete.
+4. Stop store-ctl last.
+
+L2 shutdown has no strict ordering against compute shutdown; each tiered client handles L2 unavailability through its configured fallthrough behavior.
+
+<a id="9-故障域"></a>
+
+## 9. Failure domains
+
+| Failure | Direct impact | Recovery |
 |---|---|---|
-| 单 compute node `store-ctl` 崩溃 | 本机 Manifest origin read/write 停;L1/L2 命中和文件路径不受影响 | systemd 重启后恢复 origin 访问 |
-| 单 compute node `cache-ctl tiered` 崩溃 | 本机沙箱新 fault 卡 wire dial | systemd 重启;RocksDB 持久化 ⇒ L1 命中不丢 |
-| 单 `cache-ctl shard` 节点崩溃 | RS 4+1 容 1 节点故障;L2 仍服务 | systemd 重启;tiered 端 Maglev 表在该 peer 不可达期间把请求路由到其余 4 + 1 parity |
-| 同 RS 组中 ≥ 2 `cache-ctl shard` 同时崩溃 | 部分 `(chunk, idx)` 落到 ≥ 2 故障 peer 上,该 chunk L2 miss | 读路径 fallthrough origin(慢但正确);避免方式:成员变更**一次只动 1 peer** |
-| `node-ctl` 崩溃 | 北向 API 中断,新沙箱无法拉起 / admit 失败;存量沙箱保持上次 grant 继续跑(资源仲裁随进程在本机) | systemd 重启;状态在 sqlite(`db_path`,默认 `<base_root>/node-ctl.db`)持久化 + 资源 `state.json` 在 tmpfs(扫 cgroup 重建),以 `ListUnitsByPatterns("sandbox-runner@*.service")` 的存活单元对账 sqlite `sandboxes` 表重挂(active+running⇒adopt 重武装 TTL;running 无单元⇒标 dead;`paused`/snapshot 记录保留可被 connect/auto-resume 拉起) |
-| S3-compatible 后端不可达 | 使用该 origin 的 Manifest 读写受影响 | 已 L1/L2 命中的沙箱继续跑;依赖新 origin 的写路径 / cold-image fault / 展平上传失败;本地或共享文件路径不受影响 |
-| compute node 整机故障 | 该节点运行中的沙箱中断 | 平台隔离故障节点;已发布到命名共享文件或 Manifest 的暂停工件可由 cluster 在其他节点导入恢复,仅本地工件仍依赖原节点 |
-| L2 cluster > parity 同时故障 | 相关 L2 读取 miss | tiered fallthrough origin(slow path 持续);恢复后自然恢复 |
+| Compute-node store-ctl crashes. | Local Manifest origin reads/writes stop; L1/L2 hits and native-file paths are unaffected. | systemd restart restores origin access. |
+| Compute-node tiered cache crashes. | New sandbox faults requiring wire access wait/fail under client timeout/cancellation behavior. | systemd restarts it; persisted RocksDB data can restore L1 hits. Cache misses still fall through normally. |
+| One shard fails under effective RS 4+1. | L2 can reconstruct from any four **distinct shard indices** among the selected five, if those shards are available. | Restart the shard. A peer outage does not automatically rewrite Maglev membership or create an extra parity peer. |
+| At least two shards for one 4+1 key are unavailable. | Fewer than four distinct valid shards cause an L2 miss. | Read through origin, with added cost. Change membership one peer at a time and verify convergence. |
+| Conductor crashes. | API/admission and new launches stop; existing sandboxes retain their last grants. | Restart and reconcile SQLite (`db_path`, default `<base_root>/node-ctl.db`) with live `sandbox-runner@*.service` units. Adopt active/running sandboxes and rearm TTL; mark running records without units dead; retain paused/snapshot records for connect/auto-resume. Resource inventory and reports reconstruct accounting; deprecated state_path is ignored. |
+| S3-compatible origin unavailable. | Manifest operations needing that origin fail or wait according to their policies. | L1/L2 hits can continue. New origin writes, cold faults and final image upload are affected; independent local/shared-file paths are unaffected. |
+| Entire compute node fails. | Running sandboxes on that node stop. | Isolate the node. Cluster can import portable paused artifacts published to named shared files/Manifest on another node; local-only artifacts still depend on the original node/storage. |
+| L2 loses more than its parity allowance. | Affected keys miss in L2. | Tiered reads continue through origin where available; cache service resumes as peers/data recover. |
 
-## 10. 部署规模示例
+<a id="10-部署规模示例"></a>
 
-### 10.1 开发 / PoC(单机)
+## 10. Deployment examples
 
-```
-单机:  store-ctl       (fs backend, /var/store)
-       cache-ctl       (mode: local,无 L2)
-       sandbox-ctl × N (node-ctl 可省,手工 run)
-```
+<a id="101-开发--poc单机"></a>
 
-无 L2 cluster,无远程对象存储,无独立资源控制器(资源仲裁随 `node-ctl conductor serve` 内置,`resource_listen`
-未配则静态 cgroup);`manifest-ctl` 走本机 `store-ctl` + `cache-ctl`。对应 `docs/cache.md`
-§3.2 (local 模式)。**单机直供 e2b SDK,无需 cluster 层(`node-ctl conductor serve` 即北向面)**。
+### 10.1 Development / PoC (one host)
 
-### 10.2 生产单 AZ
+| Process | Example configuration |
+|---|---|
+| store-ctl | FS backend at `/var/store`. |
+| cache-ctl | `mode: local`, no L2. |
+| sandbox-ctl × N | Manual runs may omit conductor. |
 
-```
-Compute:           scale by peak working set, active ratio, restore cost, and safety margin
-Storage:           Local NVMe / NAS / NFS / FS or S3-compatible store
-Optional cache:    local cache or an L2 shard cluster sized by hit rate and failure domain
-Control plane:     node-ctl standalone or registry + router + placer
-```
+This example uses no L2, remote object store or separate resource-controller daemon. Resource arbitration is integrated into conductor; without resource_listen, use static cgroup limits. Manifest-ctl uses local store/cache; see cache.md §3.2. For an unmodified E2B SDK, run conductor as the standalone API; the cluster layer remains unnecessary.
 
-每个 compute 节点运行 `node-ctl` 和当前沙箱对应的 `sandbox-ctl`;使用 Manifest
-数据路径时再部署 `store-ctl` 与可选 `cache-ctl`.节点数量,单节点并发和 cache
-容量必须用目标版本,硬件,沙箱规格与 workload 实测,不能由架构图中的固定值推导.
-Cluster Control Plane 由 registry 自聚簇,LB 后的 router 和 placer 组成,副本数按
-可用性与负载选择.
+<a id="102-生产单-az"></a>
 
-### 10.3 多 AZ
+### 10.2 Production in one AZ
 
-每个 AZ 可以独立运行 compute 和可选 L2 cache,并按故障域选择共享文件系统或
-S3-compatible store.使用 tiered cache 时,compute 节点通常优先连接本 AZ peer,
-减少跨 AZ 热路径流量.是否跨 AZ 共享内容由内容密钥,安全域和后端配置共同决定,
-不能仅因内容相同自动跨租户或跨故障域共享.
+| Dimension | Selection |
+|---|---|
+| Compute | Peak working set, active ratio, restore cost and safety margin. |
+| Storage | Local NVMe / NAS / NFS / FS or S3-compatible store. |
+| Optional cache | Local cache or L2 shards sized by hit rate and failure domain. |
+| Control plane | Standalone node-ctl or registry + router + placer. |
 
-## 11. 配置入口速查
+Each compute node runs conductor and one sandbox-ctl per active sandbox. Add store and optional cache for Manifest data. Measure node count, per-node concurrency and cache capacity using the target versions, hardware, sandbox specifications and workload; architecture diagrams do not establish fixed capacity. For cluster mode, choose registry membership and LB-backed router/placer replicas according to availability and load.
 
-每个模块的完整 yaml schema 在自身文档里,本节只给入口指针。
+<a id="103-多-az"></a>
 
-| 进程 | 配置位置 | 部署惯例 | Schema 文档 |
+### 10.3 Multiple AZs
+
+Each AZ can run its own compute and optional L2 and select shared storage/S3-compatible failure domains. Tiered compute typically prefers same-AZ peers to reduce cross-AZ hot-path traffic. Cross-AZ content sharing depends on content keys, security domains and backend configuration; equal bytes alone do not authorize cross-tenant or cross-domain sharing.
+
+<a id="11-配置入口速查"></a>
+
+## 11. Configuration entry points
+
+Full schemas belong to the owning component documents; these are entry pointers.
+
+| Process | Configuration | Deployment convention | Schema |
 |---|---|---|---|
-| `store-ctl` | `--config <path>` | `listen: 127.0.0.1:7100`(节点本机)| 源仓 `accelerator/docs/store.md` §3;发布包 `docs/store.md` |
-| `cache-ctl tiered` | `--config <path>` | `listen: 127.0.0.1:7070`(节点本机);`tiers[].cluster.peers` 写所选 L2 成员 | 源仓 `accelerator/docs/cache.md` §3.4;发布包 `docs/cache.md` |
-| `cache-ctl shard` | `--config <path>` | `listen: 0.0.0.0:7070`(对外服务)| 源仓 `accelerator/docs/cache.md` §3.3;发布包 `docs/cache.md` |
-| `node-ctl conductor serve` | `/etc/node-ctl/conductor.yaml` | `mmds.listen/routes/services` 是 MMDS 唯一配置源;service 仅 `unix://` absolute path | 源仓 `orchestrator/docs/node.md` §3/§4.6;`node-proxy.md` §7 |
-| `node-ctl proxy serve` | `/etc/node-ctl/proxy.yaml` | external data listener/worker/shm bootstrap;不重复配置 MMDS listen/services | 源仓 `orchestrator/docs/node-proxy.md` §2 |
-| `node-ctl conductor serve(resource_listen)` | `/etc/node-ctl/conductor.yaml` 的内联 `resource_listen` 块 | `socket: /run/sandbox-resource.sock` | 源仓 `orchestrator/docs/node-resource.md` §3;发布包 `docs/node-resource.md` |
-| `cluster-ctl registry` | `--config /etc/cluster-ctl/registry.yaml` | `member.id/listen`;`membership.active/versions[].members[].advertise/node_advertise/owners`;`node_link`、`route_link`、`node_list`、`placer_link` | 源仓 `orchestrator/docs/cluster.md`;发布包 `docs/cluster.md` |
-| `cluster-ctl router` | `--config /etc/cluster-ctl/router.yaml` | `registry.bootstrap` 指向 registry 控制面;router `:443`(LB 后 N 副本);请求必须带 `X-Kuasar-Sandbox-Group` | 源仓 `orchestrator/docs/cluster-router.md`;发布包 `docs/cluster-router.md` |
-| `cluster-ctl placer` | `--config /etc/cluster-ctl/placer.yaml` | `placer.id/listen/advertise/memberlist_label`;`registry.bootstrap`;`import_groups[]`;`placement` | 源仓 `orchestrator/docs/cluster-placer.md`;发布包 `docs/cluster-placer.md` |
-| `sandbox-ctl run` | `--config <path>`(`SANDBOX_CONFIG`);Manifest 路径另加 `--manifest-config <path>` | **per-sandbox**,由 `node-ctl` 生成,落在 `/run/sandbox/<sid>/` | 源仓 `sandboxer/docs/sandbox.md` §3;发布包 `docs/sandbox.md` |
-| `manifest-ctl` | `--manifest-config <path>`(`MANIFEST_CONFIG`)| 与 `sandbox-ctl` 共享 Manifest 配置和 store/cache 端点 | 源仓 `accelerator/docs/manifest.md` §3;发布包 `docs/manifest.md` |
-| `flatten-ctl` | CLI flag + `--manifest-config`(`MANIFEST_CONFIG`,`--upload` 时)+ `--config`(`FLATTEN_CONFIG`,registry 源时);凭据走 `FLATTEN_REGISTRY_*` env | 经单一 guest runtime 在构建沙箱 guest 内运行(`run-builder` 驱动,§5)| 源仓 `guest-runtime/docs/flatten.md` §2;发布包 `docs/flatten.md` |
+| store-ctl | `--config <path>` | `listen: 127.0.0.1:7100`. | [store.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md) §3; archive `docs/store.md`. |
+| tiered cache-ctl | `--config <path>` | `listen: 127.0.0.1:7070`; selected `tiers[].cluster.peers`. | [cache.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md) §3.4; archive `docs/cache.md`. |
+| shard cache-ctl | `--config <path>` | `listen: 0.0.0.0:7070` for peers. | cache.md §3.3. |
+| conductor | `/etc/node-ctl/conductor.yaml` | `mmds.listen/routes/services` is MMDS's sole source; services use absolute unix:// paths. | [node.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md) §3/§4.6; node-proxy.md §7. |
+| external proxy | `/etc/node-ctl/proxy.yaml` | Data listener/worker/shm bootstrap; no duplicate MMDS listen/services. | [node-proxy.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md) §2. |
+| conductor resource controller | Inline `resource_listen` in conductor.yaml. | `socket: /run/sandbox-resource.sock`. | [node-resource.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md) §3; archive `docs/node-resource.md`. |
+| registry | `--config /etc/cluster-ctl/registry.yaml` | member.id/listen; membership.active/versions[].members[].advertise/node_advertise/owners; node_link/route_link/node_list/placer_link. | [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md); archive `docs/cluster.md`. |
+| router | `--config /etc/cluster-ctl/router.yaml` | registry.bootstrap; public :443 behind LB; requests require X-Kuasar-Sandbox-Group. | [cluster-router.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-router.md); archive `docs/cluster-router.md`. |
+| placer | `--config /etc/cluster-ctl/placer.yaml` | placer.id/listen/advertise/memberlist_label; registry.bootstrap; import_groups[]; placement. | [cluster-placer.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-placer.md); archive `docs/cluster-placer.md`. |
+| sandbox-ctl run | `--config <path>` / SANDBOX_CONFIG; Manifest path adds `--manifest-config`. | Per-sandbox YAML under `<run_root>/sandboxes/<sid>/` when conductor-managed. | [sandbox.md](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md) §3; archive `docs/sandbox.md`. |
+| manifest-ctl | `--manifest-config <path>` / MANIFEST_CONFIG. | Same Manifest schema and store/cache endpoints as sandbox-ctl. | [manifest.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/manifest.md) §3; archive `docs/manifest.md`. |
+| flatten-ctl | CLI flags; `--manifest-config` / MANIFEST_CONFIG for upload; `--config` / FLATTEN_CONFIG for flatten settings; credentials in FLATTEN_REGISTRY_* env. | Runs inside the build guest through the runtime bundle, driven by run-builder (§5). | [flatten.md](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/flatten.md) §2; archive `docs/flatten.md`. |
 
-构建产物路径、跨架构和独立/聚合发布见 `kuasar-sandbox/README.md`
-与 `kuasar-sandbox/docs/release.md`;发布包解压与测试入口见
-`test/QUICKSTART.md`;性能基线、回归 checklist 见 [`perf.md`](perf.md)。
+For build outputs, architecture selection and component/aggregate releases, see [README](../README.md) and [release.md](release.md). For archive extraction and E2E, see [full validation](../test/QUICKSTART.md). Measurement and regression methodology are in [perf.md](perf.md).
 
-## 12. See Also
+## 12. See also
 
-- [`docs/kuasar-sandbox.md`](kuasar-sandbox.md) — 系统设计总览:业务目标、子系统分工、端到端数据流
-- `sandboxer/docs/sandbox.md`(发布包:`docs/sandbox.md`) — compute node 上 `sandbox-ctl` 的完整生命周期
-- `accelerator/docs/cache.md`(发布包:`docs/cache.md`) §3.1 — `local` / `shard` / `tiered` 三形态选择;§4.9 Maglev 一致性哈希
-- `accelerator/docs/store.md`(发布包:`docs/store.md`) - 后端选择(FS / S3-compatible)与内部存储组织
-- `orchestrator/docs/node-resource.md`(发布包:`docs/node-resource.md`) — 节点资源控制协议
-- `orchestrator/docs/node.md` — e2b 兼容控制面与节点主机;`cluster.md` — 集群级注册表 / 路由 / 放置
-- `accelerator/docs/manifest.md`(发布包:`docs/manifest.md`) — `MANIFEST_CONFIG` 格式与 loader 契约
+- [System overview](kuasar-sandbox.md): goals, subsystem ownership and end-to-end data flow.
+- [sandboxer/sandbox.md](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md): full compute-node runtime lifecycle; archive `docs/sandbox.md`.
+- [accelerator/cache.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md): local/shard/tiered selection (§3.1) and Maglev placement (§4.9); archive `docs/cache.md`.
+- [accelerator/store.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md): FS/S3-compatible backends and internal storage layout; archive `docs/store.md`.
+- [orchestrator/node-resource.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md): node resource protocol; archive `docs/node-resource.md`.
+- [orchestrator/node.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md): E2B control and node hosting; [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md): registry/routing/placement.
+- [accelerator/manifest.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/manifest.md): MANIFEST_CONFIG and loader contract; archive `docs/manifest.md`.
