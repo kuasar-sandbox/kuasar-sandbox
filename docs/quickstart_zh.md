@@ -7,8 +7,8 @@
 销毁沙箱.
 
 这是最短使用路径,不是完整发布验收.网络,TLS,Registry 和内部数据路径的详细
-说明见 [Demo](../test/demo/DEMO.md);六个 owner 套件和平台组合门禁见
-[Aggregate Release Validation Guide](../test/QUICKSTART.md).
+说明见 [Demo](../test/demo/DEMO_zh.md);六个 owner 套件和平台组合门禁见
+[Aggregate Release Validation Guide](../test/QUICKSTART_zh.md).
 
 ## 1. 检查环境
 
@@ -53,7 +53,7 @@ sudo -n docker info >/dev/null
 
 Docker 只用于为本 Quick Start 准备本地 OCI Registry 并导入基础镜像,不是所有 Kuasar
 Sandbox 部署的运行时依赖.如果已有从构建 MicroVM 可访问的 OCI Registry,可以按
-[Demo 的 Registry 配置](../test/demo/DEMO.md)复用它.Zot 只在选择由
+[Demo 的 Registry 配置](../test/demo/DEMO_zh.md)复用它.Zot 只在选择由
 `demo_prep.sh` 启动本地 Zot 时需要;versitygw 只在演示 `COPY` 构建步骤时需要.
 
 从源码构建时,Makefile 还支持 `TARGET_ARCH=aarch64`,但这不表示 aarch64 已作为当前
@@ -217,9 +217,9 @@ sudo -n docker rm -f kuasar-quickstart-registry
 - `e2b Python SDK not installed`:确认 `PATH` 中的 `python3` 来自前述 virtual environment,
   并将同一 `PATH` 传给 `sudo env`.
 - Registry 或镜像拉取失败:确认 Docker 能够拉取基础镜像,Registry 端口未被占用;
-  使用外部 Registry 时按 [Demo](../test/demo/DEMO.md) 传入访问凭据.
+  使用外部 Registry 时按 [Demo](../test/demo/DEMO_zh.md) 传入访问凭据.
 - TLS,网络或端口冲突:检查 TCP 443,Registry 端口,iptables 和本机路由;
-  详细数据路径见 [Demo](../test/demo/DEMO.md).
+  详细数据路径见 [Demo](../test/demo/DEMO_zh.md).
 
 ## 8. 支持范围和生产部署
 
