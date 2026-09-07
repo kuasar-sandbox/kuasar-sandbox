@@ -122,10 +122,10 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
                 target = mapping.get((target_owner, 'README.md'))
         if target is not None:
             result = urlunsplit(('', '', quote(os.path.relpath(target, dest.parent), safe='/._-'), url.query, url.fragment))
-        elif url.scheme:
-            return raw  # A selected source need not contain a file from a newer main URL.
         else:
             if not original.exists():
+                if url.scheme:
+                    return raw  # A selected source need not contain a file from a newer main URL.
                 raise ValueError(f'missing source link: {owner}/{path}: {value}')
             kind = 'tree' if original.is_dir() else 'blob'
             result = urlunsplit(('https', 'github.com', f'/kuasar-sandbox/{REPOS[target_owner]}/{kind}/{refs[target_owner]}/' + quote(target_path.as_posix(), safe='/._-'), url.query, url.fragment))

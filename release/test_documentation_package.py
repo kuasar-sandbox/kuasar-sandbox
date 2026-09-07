@@ -90,13 +90,26 @@ class DocumentationPackageTest(unittest.TestCase):
 
     def test_cross_repository_links_and_historical_revisions(self):
         (self.root / 'connector/docs/switch.md').write_text('# Wire\n')
+        (self.root / 'connector/cmd').mkdir()
+        (self.root / 'connector/cmd/main.go').write_text('package main\n')
         (self.root / 'platform/docs/overview.md').write_text(
             '[current](https://github.com/kuasar-sandbox/connector/blob/main/docs/switch.md#wire)\n'
-            '[history](https://github.com/kuasar-sandbox/connector/blob/v0.0.1/docs/switch.md#wire)\n')
+            '[history](https://github.com/kuasar-sandbox/connector/blob/v0.0.1/docs/switch.md#wire)\n'
+            '[code](https://github.com/kuasar-sandbox/connector/blob/main/cmd/main.go?plain=1#L1)\n'
+            '[directory](https://github.com/kuasar-sandbox/connector/tree/main/cmd)\n'
+            '[selected](https://github.com/kuasar-sandbox/connector/blob/connector-revision/cmd/main.go)\n'
+            '[old code](https://github.com/kuasar-sandbox/connector/blob/v0.0.1/cmd/main.go)\n'
+            '[newer](https://github.com/kuasar-sandbox/connector/blob/main/cmd/newer.go)\n')
         output, _ = self.assemble()
         text = (output / 'docs/overview.md').read_text()
         self.assertIn('[current](switch.md#wire)', text)
         self.assertIn('/blob/v0.0.1/docs/switch.md#wire', text)
+        self.assertIn('/blob/connector-revision/cmd/main.go?plain=1#L1', text)
+        self.assertIn('/tree/connector-revision/cmd)', text)
+        self.assertIn('[selected](https://github.com/kuasar-sandbox/connector/blob/connector-revision/cmd/main.go)', text)
+        self.assertIn('/blob/v0.0.1/cmd/main.go', text)
+        self.assertIn('/blob/main/cmd/newer.go', text)
+        self.assertNotIn('/blob/main/cmd/main.go', text)
 
     def test_collisions_are_rejected(self):
         for owner in ('accelerator', 'connector'):

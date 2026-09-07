@@ -37,8 +37,10 @@ runtime 与 vmlinux 单元可以选择 guest-runtime 的不同提交。因此发
 `DOCS_VMLINUX_SOURCE`，从所选 kernel 源码同时取得 `vmlinux.md` 和 `vmlinux_zh.md`。
 若所选旧 kernel 没有中文对应文档，不会用 runtime 单元另一 revision 的中文文档替代。
 
-可以识别且指向已包含文档的跨仓 `main` 链接在组装集合内解析。显式指向历史版本的 URL
-保留为历史引用。外部链接，包括私有组件的源码 URL，仍需按照
+可以识别且指向已包含文档的跨仓 `main` 链接在组装集合内解析。绝对 GitHub `main` 链接
+若指向所选源码中存在的其他文件或目录，则与相对源码链接一样固定到该源码的所选引用，
+并保留 query 与 fragment。若绝对 `main` URL 指向所选源码中不存在的文件，则保留原样，
+需要单独检视。显式指向历史版本的 URL 保留为历史引用。外部链接，包括私有组件的源码 URL，仍需按照
 [检视策略](documentation-policy_zh.md)单独检查访问能力。
 
 ## 验证
