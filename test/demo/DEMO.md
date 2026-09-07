@@ -1,75 +1,74 @@
-# e2b 兼容沙箱主机 — 端到端演示
+[English](DEMO.md) | [简体中文](DEMO_zh.md)
 
-`demo_e2b.sh` 用**未改造的 e2b Python SDK**(`pip install e2b e2b-code-interpreter`)把
-`orchestrator` 的全链路跑一遍:`Template().from_image()` 构建模板(**拉取 + 展平在构建沙箱
-microVM 内进行,客户端不再 docker build/push**)→ 启动真实 microVM → guest 内执行命令 →
-**端口转发 + 出网** → 暂停/恢复 → **暂停态转模板扇出** → **一步迁移**(import+resume)→ 销毁。
-SDK 零修改,仅靠环境变量 + 本机 `/etc/hosts` + 本地 Demo CA 签发的 TLS(`SSL_CERT_FILE`)指向本节点
-(与指向 e2b.dev 的方式一致)。
+# E2B-compatible sandbox host — end-to-end demonstration
 
-**存储层是持久化前置**:内容存储(store-ctl)、本地 L1 缓存(cache-ctl,tiered rocksdb)、镜像仓库
-三者由 `demo_prep.sh` **起一次、常驻复用**(store/cache 监听 **UNIX socket**、不占端口;数据落
-`DEMO_DATA_DIR`、跨多次演示复用并缓存镜像与 chunk)。`demo_e2b.sh` 每次只起编排 + eBPF 交换机。
+`demo_e2b.sh` exercises the full `orchestrator` path using the **unmodified E2B Python SDK** (`pip install e2b e2b-code-interpreter`): build a template with `Template().from_image()` (**image pulling and flattening happen inside a build-sandbox MicroVM, not through client-side docker build/push**), start a real MicroVM, execute guest commands, verify **port forwarding and outbound access**, pause/resume, **fan out new instances from a paused-state template**, perform **one-step migration** (import + resume), and destroy the sandbox.
 
-## 演示了什么
+The SDK is unchanged. Environment variables, local `/etc/hosts` entries and TLS issued by a local Demo CA (`SSL_CERT_FILE`) point it to this node, just as it would point to e2b.dev.
 
-| 步骤 | 命令(真实 e2b Python SDK / node-ctl) | 证明 |
-|---|---|---|
-| 1 | (编排起栈) | orchestrator(TLS) + eBPF vswitch + host NAT;store/cache 经 UDS 复用 |
-| 2 | `e2b-key-ctl` + `manifest-key add` | 凭据模型:ManifestKey 保护内容与拉取令牌,固定 KDF 派生缺省 APISecret,APISecret 签发 api_key,两者成对白名单入库 |
-| 3 | `Template().from_image(ref).build()` | **构建沙箱**(microVM)内拉取该镜像(租户凭据、租户网络)+ 展平为模板;**无客户端 docker** |
-| 4 | `Sandbox.create(template)` | 从模板冷启真实 cloud-hypervisor microVM,guest 内 envd 就绪 |
-| 5 | `sbx.commands.run(…)` | guest 内执行命令(默认用户 `user`,可写 `/home/user`)经 proxy→envd |
-| 6 | `curl http://<floatingip>:port` / `https://<port>-<sid>.<domain>` | **端口转发** + **沙箱出网**(NAT) |
-| 7 | `sbx.pause()` / `Sandbox.connect(id)` | 快照入内容存储 → 恢复(**resume == connect**);暂停前写入恢复后仍在 |
-| 8 | `export-sandbox --to-template` → `Sandbox.create(<tmpl>)` | 暂停态晋升为远程模板、扇出**新**沙箱(带 forked 状态) |
-| 9 | `export-sandbox` → `Sandbox.connect(id, api_headers={migration-token})` | **一步迁移**:connect 自动 import + resume |
-| 10 | `Sandbox.list()` / `sbx.kill()` | 生命周期 |
+**Persistent storage is prepared once for this Demo:** `demo_prep.sh` starts the content store (`store-ctl`), local L1 cache (`cache-ctl`, tiered RocksDB) and image registry for **persistent reuse**. Store/cache listen on **Unix sockets**, not TCP ports. Data lives under `DEMO_DATA_DIR`, caching images and chunks across Demo runs. Each `demo_e2b.sh` invocation starts only orchestration and the eBPF switch. This is the Demo's selected storage setup, not a requirement that every Kuasar deployment use this data path.
 
-## 前置条件
+<a id="演示了什么"></a>
+## What the Demo demonstrates
 
-- 二进制(源码树中执行 `make -C kuasar-sandbox build`;release 包内已自带):`node-ctl`、`store-ctl`、**`cache-ctl`**(CGO/rocksdb)、
-  `flatten-ctl`、`e2b-key-ctl`、`connector-ctl vswitch`、`cloud-hypervisor`、`vmlinux`、`sandbox-runtime.bundle`。
-- 主机:**systemd 为 PID1 + root**(编排经 D-Bus 驱动单元;TLS :443;KVM);可读写 `/dev/kvm`。
-- 资源:Demo 构建沙箱使用 2 vCPU,6 GiB capacity 和 4 GiB allocatable;主机还需为系统服务和运行沙箱留余量.
-- **e2b Python SDK**:`pip install e2b e2b-code-interpreter`。
-- 工具:`python3`、`openssl`、`iproute2(ip)`、`curl`、`sqlite3`、`iptables`;`demo_prep.sh` 另需 `docker`(一次性把
-  base 镜像 seed 进仓库)和(无第三方仓库时)`zot`。
-- **镜像仓库**:`REGISTRY=<host:port>`(+ `REGISTRY_USER`/`REGISTRY_PASS`/`REGISTRY_INSECURE`)指向第三方仓库;
-  或不设 `REGISTRY` 让 `demo_prep.sh` 起一个仅监听 `127.0.0.1` 的**持久本地 zot**。构建沙箱经
-  vswitch `--mgmt-service` 访问它。base 镜像默认 `e2bdev/code-interpreter:latest`(`E2E_IMAGE=` 覆盖)。
+| Step | Command (real E2B Python SDK / node-ctl) | Demonstrated behavior |
+| --- | --- | --- |
+| 1 | Start the orchestration stack | orchestrator with TLS, eBPF vSwitch and host NAT; existing store/cache reused over UDS. |
+| 2 | `e2b-key-ctl` + `manifest-key add` | Credential model: ManifestKey protects content and pull tokens; a fixed KDF derives the default APISecret, which signs api_key; the pair is allowlisted in storage. |
+| 3 | `Template().from_image(ref).build()` | Pull and flatten the image inside a **build-sandbox MicroVM**, using tenant credentials and networking; **no client-side docker build/push**. |
+| 4 | `Sandbox.create(template)` | Cold-start a real Cloud Hypervisor MicroVM from the template, with guest envd ready. |
+| 5 | `sbx.commands.run(…)` | Execute in the guest through proxy → envd, with default account `user` and writable `/home/user`. |
+| 6 | `curl http://<floatingip>:port` / `https://<port>-<sid>.<domain>` | **Port forwarding** and sandbox **outbound NAT**. |
+| 7 | `sbx.pause()` / `Sandbox.connect(id)` | Save a snapshot in the content store and resume it (**resume == connect**); data written before pause survives. |
+| 8 | `export-sandbox --to-template` → `Sandbox.create(<tmpl>)` | Promote paused state to a remote template and fan out **new** sandboxes carrying that forked state. |
+| 9 | `export-sandbox` → `Sandbox.connect(id, api_headers={migration-token})` | **One-step migration:** connect automatically imports and resumes. |
+| 10 | `Sandbox.list()` / `sbx.kill()` | Lifecycle operations. |
 
-## 运行
+<a id="前置条件"></a>
+## Prerequisites
+
+- Binaries (build from source with `make -C kuasar-sandbox build`; release packages include them): `node-ctl`, `store-ctl`, **`cache-ctl`** with CGO/RocksDB, `flatten-ctl`, `e2b-key-ctl`, `connector-ctl vswitch`, `cloud-hypervisor`, `vmlinux` and `sandbox-runtime.bundle`.
+- Host: **systemd as PID 1 and root**, because orchestration uses D-Bus units, TLS port 443 and KVM; `/dev/kvm` must be readable/writable.
+- Resources: the Demo build sandbox uses 2 vCPUs, 6 GiB capacity and 4 GiB allocatable. Leave additional host capacity for system services and running sandboxes.
+- **E2B Python SDK:** `pip install e2b e2b-code-interpreter`.
+- Tools: `python3`, `openssl`, `iproute2` (`ip`), `curl`, `sqlite3` and `iptables`. `demo_prep.sh` also needs `docker` to seed a base image into the registry once, and `zot` when no external registry is supplied.
+- **Image registry:** set `REGISTRY=<host:port>`, with `REGISTRY_USER`/`REGISTRY_PASS`/`REGISTRY_INSECURE` as needed, for an external registry. Alternatively, leave `REGISTRY` unset and `demo_prep.sh` starts a **persistent local zot** listening only on `127.0.0.1`. Build sandboxes reach it through vSwitch `--mgmt-service`. The default base image is `e2bdev/code-interpreter:latest`; override it with `E2E_IMAGE=`.
+
+<a id="运行"></a>
+## Run
 
 ```bash
-# 源码树(从 org root 运行)
-# ① 一次性 / 持久前置:起 store(UDS) + cache(UDS) + 仓库,seed base 镜像(重复运行幂等、跳过已起的)
-REGISTRY=registry.example.com REGISTRY_USER=u REGISTRY_PASS=p  bash kuasar-sandbox/test/demo/demo_prep.sh
-bash kuasar-sandbox/test/demo/demo_prep.sh            # 或不设 REGISTRY → 起持久本地 zot
-#   停服务: demo_prep.sh stop   ·   停并清数据: demo_prep.sh reset
+# Source workspace: run from the organization workspace root.
+# 1. One-time persistent prerequisites: store/cache over UDS, registry and base-image seed.
+#    Repeated invocation is idempotent and skips services already running.
+REGISTRY=registry.example.com REGISTRY_USER=u REGISTRY_PASS=p bash kuasar-sandbox/test/demo/demo_prep.sh
+bash kuasar-sandbox/test/demo/demo_prep.sh  # Or omit REGISTRY to start persistent local zot.
+# Stop services: demo_prep.sh stop; stop and remove data: demo_prep.sh reset.
 
-# ② 每次演示(读取 demo_prep 写出的 ~/.cache/kuasar-demo/prep.env)
-sudo bash kuasar-sandbox/test/demo/demo_e2b.sh        # 普通用户也行:会自动 sudo 重入
-sudo env DEMO_QUICKSTART=1 bash …/demo_e2b.sh         # pause/resume + kill 后结束,跳过扇出与迁移
-DEMO_PAUSE=1   sudo bash …/demo_e2b.sh                # 每步回车暂停(适合逐步讲解 / 另开终端操作)
-DEMO_KEEP=1    sudo bash …/demo_e2b.sh                # 保留每次工作目录排查
-DEMO_NETDIAG=1 sudo bash …/demo_e2b.sh                # 网络步失败不中止
+# 2. Per-run demonstration (reads ~/.cache/kuasar-demo/prep.env written by preparation).
+sudo bash kuasar-sandbox/test/demo/demo_e2b.sh
+sudo env DEMO_QUICKSTART=1 bash kuasar-sandbox/test/demo/demo_e2b.sh  # Stop after pause/resume and kill.
+sudo env DEMO_PAUSE=1 bash kuasar-sandbox/test/demo/demo_e2b.sh       # Press Enter between steps.
+sudo env DEMO_KEEP=1 bash kuasar-sandbox/test/demo/demo_e2b.sh        # Preserve this run's work directory.
+sudo env DEMO_NETDIAG=1 bash kuasar-sandbox/test/demo/demo_e2b.sh     # Do not abort on networking-step failure.
 
-# release 包(从解包目录运行)
+# Release package: run from the extraction directory.
 bash test/demo/demo_prep.sh
 sudo bash test/demo/demo_e2b.sh
 ```
 
-`demo_e2b.sh` 退出即清理本次的编排单元 / vswitch / NAT 规则 / `/etc/hosts` 临时项 / 工作目录;**持久存储层
-(store/cache/仓库)保留**,下次演示直接复用。
+The main script can also be started by an ordinary user and re-enters through sudo automatically. The examples above use `sudo env` to pass Demo controls explicitly rather than relying on sudo preserving caller environment variables. `DEMO_QUICKSTART=1` skips template fan-out and migration after pause/resume and kill.
 
-## 网络配置(端口转发 + 出网)
+On exit, `demo_e2b.sh` cleans up the current orchestration units, vSwitch, NAT rules, temporary `/etc/hosts` entries and work directory. The **persistent store/cache/registry layer remains** for the next run.
 
-e2b profile 的 guest 网卡是一个 link-local **inner IP** `169.254.0.21/30`、默认路由 nexthop `169.254.0.22`
-(/30+网关让 envd 端口转发可用;所有 e2b 沙箱相同——唯一身份是 floatingip);host 与外网都不在该网段。
-四项配置把"host↔沙箱"、"沙箱→host 服务"与"沙箱→外网"打通——脚本已自动完成:
+<a id="网络配置端口转发--出网"></a>
+## Network configuration: port forwarding and outbound access
 
-```
+The E2B-profile guest uses link-local **inner IP** `169.254.0.21/30` and default-route next hop `169.254.0.22`. The /30 and gateway allow envd port forwarding. All E2B sandboxes may use the same inner addresses; their floating IP identifies them on this Demo's host-facing path. The host and external network are not in that inner subnet.
+
+The scripts automatically configure the following paths between host and sandbox, sandbox and host services, and sandbox and the external network:
+
+```text
   host (root netns)                       vswitch (netns sw0)                 guest microVM
   curl <floatingip>:port ─route─► sw0m0 ─► ARP-proxy + DNAT floatingip->inner ─tap─► eth0 169.254.0.21/30
   reply ◄───────────────────────── SNAT inner->floatingip ◄──────── tap ◄──────────  http.server :port
@@ -81,49 +80,32 @@ e2b profile 的 guest 网卡是一个 link-local **inner IP** `169.254.0.21/30`�
   local registry: guest ─► 169.254.169.254:<port> ─mgmt-service─► 127.0.0.1:<port>
 ```
 
-1. **`connector-ctl vswitch start … --mgmt-extract=:sw0m0:169.254.169.254,0.0.0.0/0`** 在 host(root netns) 建管理网卡
-   `sw0m0`、自动加路由 `100.100.96.0/20 dev sw0m0`;其中 CIDR 只用于流量分类,不是接口地址。脚本另给 `sw0m0`
-   配置不承载服务的保留地址 `169.254.1.0/31`。eBPF 在 sw0m0 侧 ARP 代答 + 把 host 发往 floatingip 的包
-   **DNAT** 成沙箱 inner IP、重定向到对应 tap,回包再 **SNAT** 回 floatingip;`mgmt_cidrs` 含 `0.0.0.0/0` ⇒ 出网入口。
-2. **本地服务映射**:`--mgmt-service=169.254.169.254:<port>:127.0.0.1:<port>` 把构建沙箱对管理 VIP 的访问
-   转到仅监听 host loopback 的 zot;脚本在 `sw0m0` 开启 `route_localnet`。可选 MMDS 也使用相同机制映射端口 80。
-3. **host NAT**(脚本幂等加、退出删):`iptables -A FORWARD -{i,o} sw0m0 …` + `-t nat -A POSTROUTING -s 100.100.96.0/20 -j MASQUERADE`。
-4. **guest inner IP + 默认路由 + `/etc/hosts`/`/etc/resolv.conf`** 由 orchestrator 经 SANDBOX_CONFIG `files:` 自动下发
-   (hostname 治 getfqdn 卡顿、见 node.md §11;guest DNS `169.254.169.253` 经 demo 的 iptables DNAT 路由到本机首个 nameserver)。
+1. **`connector-ctl vswitch start … --mgmt-extract=:sw0m0:169.254.169.254,0.0.0.0/0`** creates management interface `sw0m0` in the host/root netns and adds route `100.100.96.0/20 dev sw0m0`. The CIDRs classify traffic; they are not interface addresses. The script separately assigns reserved address `169.254.1.0/31` to `sw0m0`, without hosting a service on it. eBPF answers ARP on the sw0m0 side, **DNATs** packets from host to floating IP into the sandbox inner IP and redirects them to the corresponding TAP. Replies are **SNATed** back to the floating IP. Including `0.0.0.0/0` in `mgmt_cidrs` provides the outbound path.
+2. **Local service mapping:** `--mgmt-service=169.254.169.254:<port>:127.0.0.1:<port>` maps build-sandbox access to the management VIP onto zot bound only to host loopback. The script enables `route_localnet` on `sw0m0`. Optional MMDS uses the same mechanism for port 80.
+3. **Host NAT**, idempotently added by the script and removed at exit: `iptables -A FORWARD -{i,o} sw0m0 …` and `-t nat -A POSTROUTING -s 100.100.96.0/20 -j MASQUERADE`.
+4. **Guest inner IP, default route, `/etc/hosts` and `/etc/resolv.conf`** are supplied by orchestrator through SANDBOX_CONFIG `files:`. The hostname avoids getfqdn stalls; see the node specification, section 11. The Demo's iptables DNAT sends guest DNS `169.254.169.253` to the host's first nameserver.
 
-两条访问沙箱端口的路径(步骤 6 均验证):**直连** host 经 `sw0m0` 直达 `http://<floatingip>:<port>`;**e2b 暴露端口**
-`https://<port>-<sid>.<domain>`,proxy 校验 `X-Access-Token` 后转发到 `floatingip:port`。
+Step 6 verifies two ways of accessing a sandbox port: **directly**, from the host through `sw0m0` to `http://<floatingip>:<port>`; and through the **E2B exposed-port address**, `https://<port>-<sid>.<domain>`, where the proxy validates `X-Access-Token` before forwarding to `floatingip:port`.
 
-> **per-sid `/etc/hosts` 即可(SDK `create` 是惰性的)**:`Sandbox.create()` 只 POST 控制面、构造对象即返回,**不**
-> 急于连数据面(仅 `mcp` 模式才急连);故 demo 在 create 拿到 sid **后**再把 `49983-<sid>.<domain>` 等加进
-> `/etc/hosts`,首条命令时才连 envd——无需通配 DNS。若要在另一窗口对**自己**新建的沙箱即时交互,要么照此先加 host,
-> 要么配通配 DNS(dnsmasq `address=/<domain>/127.0.0.1`,`/etc/hosts` 不支持通配)。
+> **Per-sandbox `/etc/hosts` entries are enough for this SDK flow:** `Sandbox.create()` performs the control-plane POST and returns an object without immediately connecting to the data plane (the `mcp` mode is an exception). After create returns the sid, the Demo adds names such as `49983-<sid>.<domain>` to `/etc/hosts`; the first command then connects to envd. Wildcard DNS is not required. For immediate interaction with a sandbox you create yourself in another terminal, first add its host entry in the same way, or configure wildcard DNS, such as dnsmasq `address=/<domain>/127.0.0.1`. `/etc/hosts` does not support wildcards.
 
-**另开终端手动操作**:演示在"租户接入"步把 SDK 凭据写入 `/tmp/demo-e2b-cli-env.sh`。配合 `DEMO_PAUSE=1`,另开终端
-`source /tmp/demo-e2b-cli-env.sh` 后即可用 SDK 操作本节点(`python3 -c "from e2b import Sandbox; print([s.sandbox_id for s in Sandbox.list()])"`)。
+**Manual use in another terminal:** during tenant onboarding, the Demo writes SDK credentials to `/tmp/demo-e2b-cli-env.sh`. With `DEMO_PAUSE=1`, open another terminal and run `source /tmp/demo-e2b-cli-env.sh`, then use the SDK against this node, for example `python3 -c "from e2b import Sandbox; print([s.sandbox_id for s in Sandbox.list()])"`.
 
-## SDK 如何指向本节点(零改造)
+<a id="sdk-如何指向本节点零改造"></a>
+## Pointing the unmodified SDK at this node
 
-e2b SDK 用 `E2B_DOMAIN` 推出控制面 `https://api.<domain>` 与数据面 `https://<port>-<sid>.<domain>`:
+The E2B SDK derives control-plane address `https://api.<domain>` and data-plane address `https://<port>-<sid>.<domain>` from `E2B_DOMAIN`:
 
-- `E2B_DOMAIN`/`E2B_API_KEY` 指向本节点;**构建直接 `from_image(<registry>/<image>)`**——构建沙箱内拉取并展平
-  (凭据来自租户默认或任务级 token,见 node.md §12),**不再有客户端 docker build/push 或 `E2B_IMAGE_URI_MASK`**。
-  镜像 ref 须**从构建沙箱可达**:本地 zot 的 ref 由脚本自动改写为 vswitch mgmt VIP
-  (`169.254.169.254:<port>`),再由 `--mgmt-service` 转到 `127.0.0.1:<port>`;第三方仓库经 NAT 出网直达。
-- 本地 Demo CA 签发 `CA:FALSE` 的 `*.<domain>` 服务器证书 +
-  **`SSL_CERT_FILE=<ca.crt>`** 让 SDK 验证 TLS.
-- `/etc/hosts` 把 `api.<domain>` 与每个沙箱的 `49983/49999/<port>-<sid>.<domain>` 解析到 `127.0.0.1`(创建后加、退出删)。
+- `E2B_DOMAIN`/`E2B_API_KEY` point to this node. **Build directly with `from_image(<registry>/<image>)`:** pulling and flattening occur inside the build sandbox, using tenant-default or task-specific tokens (node specification, section 12). There is **no client-side docker build/push or `E2B_IMAGE_URI_MASK`**. The image reference must be **reachable from the build sandbox**. For local zot, the script rewrites the reference to the management VIP (`169.254.169.254:<port>`), mapped to `127.0.0.1:<port>` by `--mgmt-service`; external registries are reached through outbound NAT.
+- The local Demo CA issues a `CA:FALSE` server certificate for `*.<domain>`. **`SSL_CERT_FILE=<ca.crt>`** lets the SDK verify TLS.
+- `/etc/hosts` maps `api.<domain>` and each sandbox's `49983/49999/<port>-<sid>.<domain>` to `127.0.0.1`; sandbox entries are added after create and removed on exit.
 
-## 说明与注意
+<a id="说明与注意"></a>
+## Notes and cautions
 
-- **base 镜像须满足 e2b userland 约定**:有 `user` 账户、`/bin/bash`、`util-linux`/`coreutils`(envd 以默认用户、
-  包一层 `ionice … nice …` 执行命令)。`e2bdev/code-interpreter` 本就具备;它由 `demo_prep.sh` seed 进仓库一次,
-  模板 `from_image` 直接命名它、构建沙箱内拉取,无任何 shim/改写。
-- **envd 以 root 运行**:envd 是 e2b 基础设施,须 root 才能 setuid 到镜像默认用户执行负载命令(e2b profile 固定
-  `launch.user=0:0`,不沿用镜像 `Config.User`)。
-- **持久存储复用**:`demo_prep.sh` 的 store/cache/仓库常驻、数据落 `DEMO_DATA_DIR`(默认 `~/.cache/kuasar-demo`),
-  跨多次演示去重缓存 → 复跑快;`demo_prep.sh reset` 清空重来。
-- **本地 Demo CA 签发的 TLS** 仅为本机演示;生产用通配 `*.<domain>` 正式证书(见 `orchestrator/docs/node.md` §13).
+- **The base image must satisfy E2B userland conventions:** account `user`, `/bin/bash`, `util-linux` and `coreutils`. Envd executes commands as the default user through `ionice … nice …`. `e2bdev/code-interpreter` already supplies these. `demo_prep.sh` seeds it into the registry once; template `from_image` names it directly, and the build sandbox pulls it without a shim or rewrite.
+- **Envd runs as root:** it is E2B infrastructure and needs root to setuid to the image's default user for workload commands. The E2B profile fixes `launch.user=0:0` instead of inheriting image `Config.User`.
+- **Persistent storage reuse:** the preparation script keeps store/cache/registry running and stores data under `DEMO_DATA_DIR` (default `~/.cache/kuasar-demo`). Cached/deduplicated data is reused across runs. `demo_prep.sh reset` clears it for a fresh start.
+- **TLS issued by the local Demo CA is for local demonstration only.** Production should use an appropriate trusted wildcard certificate for `*.<domain>`; see `orchestrator/docs/node.md`, section 13.
 
-自动化回归(断言版、非讲解版)见 `kuasar-sandbox/test/e2e/`:`e2e_run_builder.sh`(三阶段构建流水线:
-guest 内拉取展平 → steps → 模板快照 → 从产物模板 create)与 `e2e_execute.sh`(启动+执行+暂停/恢复状态存活)。
+For automated assertion-based regression rather than an interactive walkthrough, see the assembled `test/e2e/orchestrator/` owner suite: `e2e_run_builder.sh` covers the three-stage build pipeline (guest pull/flatten → steps → template snapshot → create from the resulting template), and `e2e_execute.sh` covers startup, execution and state survival across pause/resume. In the source workspace these files are maintained by `orchestrator/test/e2e/`.
