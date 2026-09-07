@@ -10,8 +10,8 @@
 - [性能方法](perf.md)
 - [发布契约](release.md)
 - [CI 与 BMS](ci.md)
-- [完整发布验证](../test/QUICKSTART.md)
-- [演示](../test/demo/DEMO.md)
+- [完整发布验证](../test/QUICKSTART_zh.md)
+- [演示](../test/demo/DEMO_zh.md)
 - [Runner 运维（英文）](../ci/runner/README.md)
 
 详细设计和运维文档的全量英文化由 [#86](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/86) 跟踪。[逐文件清单（英文）](documentation-inventory.md)及关联实现任务区分完成和待翻译内容。导航标题为英文不代表目标已经完成翻译；迁移中逐项调整中文对应路径。

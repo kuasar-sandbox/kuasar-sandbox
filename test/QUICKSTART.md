@@ -1,40 +1,40 @@
-# Platform release 测试指南
+[English](QUICKSTART.md) | [简体中文](QUICKSTART_zh.md)
 
-> 本文是 Aggregate Release Validation Guide,用于完整 E2E 和发布验收,不是首次安装指南.
-> 普通用户请先阅读 [Quick Start](../docs/quickstart.md).
+# Platform release validation guide
 
-本文件位于 `platform-release-vX.Y.Z.tar.gz` 的 `test/QUICKSTART.md`。platform 包集中交付
-系统及组件文档、组件 E2E、platform 组合用例、性能脚本和 demo;六个组件包只交付运行制品。
-把同一个聚合 Release 的七个 archive 解压到同一目录后即可执行完整验证。
+> This is the Aggregate Release Validation Guide for full E2E and release acceptance, not a first-installation guide.
+> Users getting started should read the [Quick Start](../docs/quickstart.md) first.
 
-## 1. 解包布局
+This file is delivered as `test/QUICKSTART.md` in `platform-release-vX.Y.Z.tar.gz`. The platform package contains system and component documentation, component E2E suites, platform combination tests, performance scripts and the Demo. The six component packages contain runtime artifacts. Extract the seven archives from one aggregate Release into the same directory to run full validation.
+
+<a id="1-解包布局"></a>
+## 1. Extracted layout
 
 ```text
 <release-dir>/
-├── bin/                         六个组件包提供的运行制品
-├── deploy/                      组件部署文件
-├── docs/                        platform 与五个组件的聚合文档
+├── bin/                         Runtime artifacts from the six component packages
+├── deploy/                      Component deployment files
+├── docs/                        Aggregated platform and five-component documentation
 └── test/
     ├── QUICKSTART.md
     ├── e2e/
-    │   ├── run_all.sh           完整发布门禁
+    │   ├── run_all.sh           Full release gate
     │   ├── accelerator/
     │   ├── connector/
     │   ├── guest-runtime/
     │   ├── sandboxer/
     │   ├── orchestrator/
-    │   └── platform/            真正跨组件组合本身的用例
+    │   └── platform/            Genuinely cross-component combination tests
     ├── perf/
     └── demo/
 ```
 
-各 owner 目录只有一个稳定入口 `run_all.sh`。组件特性用例始终保存在对应组件目录,即使它
-依赖其他仓的二进制、KVM 或 platform 提供的服务环境。platform 目录只保存无法归属于单一
-组件的组合用例。
+Each owner directory has one stable entry point, `run_all.sh`. Component-feature cases stay in that component's directory even when they depend on another repository's binaries, KVM or the service environment provided by the platform. The platform directory contains only combinations that cannot be assigned to a single component.
 
-## 2. 解压与校验
+<a id="2-解压与校验"></a>
+## 2. Verification and extraction
 
-下载同一聚合 Release 的全部显式资产后先校验:
+Download all explicit assets from the same aggregate Release, then verify them first:
 
 ```bash
 sha256sum --quiet -c SHA256SUMS
@@ -45,24 +45,24 @@ done
 cd kuasar-sandbox-release
 ```
 
-archive 已由发布流程检查路径安全和跨包覆盖。不要混用不同聚合 Release 下载的
-`SHA256SUMS`、platform 包和组件包。
+The release process checks archive path safety and cross-package overwrites. Do not mix `SHA256SUMS`, platform packages or component packages from different aggregate Releases.
 
-## 3. 前置条件
+<a id="3-前置条件"></a>
+## 3. Prerequisites
 
-完整门禁需要:
+The full gate requires:
 
-- Linux x86_64、systemd、cgroup v2 与可读写 `/dev/kvm`;
-- root 或无交互 `sudo`;
-- Docker、iproute2、curl、Python 3、openssl、mkfs.ext4;
-- 可执行的本地 OCI registry `zot`;
-- 可执行的 S3-compatible 测试网关 `versitygw`;
-- 能拉取用例使用的基础镜像,或预先准备对应镜像。
+- Linux x86_64, systemd, cgroup v2 and readable/writable `/dev/kvm`;
+- root or noninteractive `sudo`;
+- Docker, iproute2, curl, Python 3, openssl and mkfs.ext4;
+- an executable local OCI registry, `zot`;
+- an executable S3-compatible test gateway, `versitygw`;
+- access to the base images used by the cases, or those images prepared in advance.
 
-`bin/` 默认从解压根目录自动定位,也可用 `BIN=/path/to/bin` 覆盖。OBS 用例是唯一的凭据型
-可选套件;只有设置 `OBS_E2E=1` 才运行。
+By default, `bin/` is located from the extraction root; override it with `BIN=/path/to/bin`. The OBS cases are the only credential-dependent optional suite and run only when `OBS_E2E=1` is set.
 
-## 4. 运行完整门禁
+<a id="4-运行完整门禁"></a>
+## 4. Run the full gate
 
 ```bash
 ZOT_BIN=/path/to/zot \
@@ -70,16 +70,16 @@ VGW_BIN=/path/to/versitygw \
 bash test/e2e/run_all.sh
 ```
 
-顶层入口依次执行 accelerator、connector、guest-runtime、sandboxer、orchestrator 和
-platform 的 `run_all.sh`。任一 owner 失败即停止,成功结尾为:
+The top-level entry point runs `run_all.sh` for accelerator, connector, guest-runtime, sandboxer, orchestrator and platform in that order. It stops on any owner failure. Successful completion ends with:
 
 ```text
 ==> full release e2e: OK
 ```
 
-## 5. 运行组件或单项用例
+<a id="5-运行组件或单项用例"></a>
+## 5. Run an owner or individual case
 
-只运行一个 owner:
+Run one owner:
 
 ```bash
 BIN=$PWD/bin bash test/e2e/accelerator/run_all.sh
@@ -88,7 +88,7 @@ BIN=$PWD/bin ZOT_BIN=/path/to/zot VGW_BIN=/path/to/versitygw \
     bash test/e2e/orchestrator/run_all.sh
 ```
 
-直接运行单项时,按脚本头部说明设置环境:
+For a directly invoked case, set the environment described at the top of that script:
 
 ```bash
 BIN=$PWD/bin bash test/e2e/sandboxer/e2e_sandbox_cold.sh
@@ -96,19 +96,19 @@ BIN=$PWD/bin ZOT_BIN=/path/to/zot \
     bash test/e2e/orchestrator/e2e_run_builder.sh
 ```
 
-主要归属为:
+The main ownership boundaries are:
 
-- accelerator:manifest、cache、store、OBS;
-- connector:eBPF/TC 网络拓扑与 tap;
-- guest-runtime:OCI 展平与 runtime bundle;
-- sandboxer:冷启动、磁盘、快照、恢复、stdio、tapfd;
-- orchestrator:node/proxy、builder、exec、MMDS、cluster、resource density;
-- platform:warm-pool 跨 sandboxer/accelerator 去重组合。
+- accelerator: Manifest, Cache, Store and OBS;
+- connector: eBPF/TC network topology and TAP;
+- guest-runtime: OCI flattening and runtime bundle;
+- sandboxer: cold start, disks, snapshot, restore, stdio and TAP FD;
+- orchestrator: node/proxy, builder, exec, MMDS, cluster and resource density;
+- platform: cross-component sandboxer/accelerator integration, currently including the legacy-named `e2e_warmpool_dedup.sh` case. The test name is not a general cross-VM snapshot-deduplication guarantee.
 
-## 6. Perf 与 demo
+<a id="6-perf-与-demo"></a>
+## 6. Performance and Demo
 
-性能入口位于 `test/perf/`,e2b SDK 演示位于 `test/demo/`。它们与 E2E 共享同一个 `bin/`
-布局,但不属于组件 PR 的 `run_all.sh` correctness 门禁。常用入口:
+Performance entry points are under `test/perf/`; the E2B SDK Demo is under `test/demo/`. They share the same `bin/` layout with E2E but are not part of the component PR `run_all.sh` correctness gate. Common entry points:
 
 ```bash
 BIN=$PWD/bin bash test/perf/sandbox-perf.sh
@@ -116,11 +116,12 @@ bash test/demo/demo_prep.sh
 sudo bash test/demo/demo_e2b.sh
 ```
 
-## 7. 排错
+<a id="7-排错"></a>
+## 7. Troubleshooting
 
-- `missing executable .../run_all.sh`:platform 包与组件选择不完整或混用了不同版本;
-- `missing ... in BIN`:没有解压全部六个组件 archive;
-- `/dev/kvm` 不可用:检查设备权限与 runner 虚拟化配置;
-- `sudo -n` 失败:为测试 runner 配置所需的无交互权限;
-- 镜像拉取失败:预拉取脚本指定的镜像或配置可用镜像代理;
-- 需要保留现场:按具体脚本支持设置 `E2E_KEEP=1`。
+- `missing executable .../run_all.sh`: the platform package/component selection is incomplete, or packages from different versions were mixed.
+- `missing ... in BIN`: not all six component archives were extracted.
+- `/dev/kvm` unavailable: check device permissions and runner virtualization configuration.
+- `sudo -n` fails: configure the test runner with the required noninteractive permissions.
+- Image pull fails: pre-pull the images specified by the script or configure a reachable image proxy.
+- Preserve a failure environment: set `E2E_KEEP=1` when supported by the specific script.
