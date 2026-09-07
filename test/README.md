@@ -1,22 +1,22 @@
-# 测试组织
+[English](README.md) | [简体中文](README_zh.md)
 
-platform 提供统一测试环境和发布聚合,不保存组件特性 E2E 的副本。
+# Test organization
 
-- 各组件在自己的 `test/e2e/` 维护用例和 `run_all.sh`;
-- `test/e2e/assemble.sh` 从五个组件源码组装 owner 目录;
-- `test/e2e/run_all.sh` 是源码 BMS 与发布包共同使用的完整入口;
-- `test/e2e/platform/` 只维护真正跨组件组合本身的用例;
-- `test/perf/` 与 `test/demo/` 继续由 platform 维护。
+The project repository provides a shared test environment and aggregate release packaging. It does not keep copies of component-specific E2E tests.
 
-源码工作区运行:
+- Each component owns its cases and `run_all.sh` under its own `test/e2e/`.
+- `test/e2e/assemble.sh` assembles owner directories from the five component source trees.
+- `test/e2e/run_all.sh` is the full entry point shared by source BMS and release packages.
+- `test/e2e/platform/` contains only tests of genuinely cross-component combinations.
+- `test/perf/` and `test/demo/` remain owned by the project repository.
+
+From the source workspace:
 
 ```bash
 make build
 make test-e2e
 ```
 
-`make test-e2e` 使用候选组件源码组装 `build/e2e-suite/`,再执行其中的
-`test/e2e/run_all.sh`。聚合发布从所选组件 tag 的 GitHub 源码归档生成相同布局,因此源码
-PR 与 exact-asset BMS 使用同一组 owner 入口。
+`make test-e2e` assembles `build/e2e-suite/` from the candidate component sources, then runs its `test/e2e/run_all.sh`. Aggregate releases produce the same layout from GitHub source archives at the selected component tags. Source PRs and exact-asset BMS therefore use the same owner entry points.
 
-发布包使用方式及环境前置见 [QUICKSTART.md](QUICKSTART.md)。
+For release-package usage and prerequisites, see [QUICKSTART.md](QUICKSTART.md).
