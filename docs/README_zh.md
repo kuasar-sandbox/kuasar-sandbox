@@ -33,5 +33,6 @@
 - [语言与检视规范](documentation-policy_zh.md)
 - [术语](terminology_zh.md)
 - [迁移清单（英文）](documentation-inventory.md)
+- [文档打包](documentation-packaging_zh.md)
 - [贡献规范（英文）](../CONTRIBUTING.md)
 - [安全报告](../SECURITY_zh.md)

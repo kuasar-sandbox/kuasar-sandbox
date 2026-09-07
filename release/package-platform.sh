@@ -69,12 +69,14 @@ package_archive() {
   work="$(mktemp -d)"
   stage="$work/stage"
   mkdir -p "$output/assets"
-  "$ROOT/test/e2e/assemble.sh" "$stage" "$PLATFORM_SOURCE_ROOT" \
-    "$sources/accelerator" "$sources/connector" "$sources/runtime" \
-    "$sources/sandboxer" "$sources/orchestrator"
   [ -f "$sources/vmlinux/docs/vmlinux.md" ] \
     || release_fail "vmlinux source is missing docs/vmlinux.md"
-  install -m 0644 "$sources/vmlinux/docs/vmlinux.md" "$stage/docs/vmlinux.md"
+  resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$work/docs-refs.tsv"
+  printf 'platform\t%s\n' "$version" >> "$work/docs-refs.tsv"
+  DOCS_SOURCE_REFS="$work/docs-refs.tsv" DOCS_VMLINUX_SOURCE="$sources/vmlinux" \
+    "$ROOT/test/e2e/assemble.sh" "$stage" "$PLATFORM_SOURCE_ROOT" \
+    "$sources/accelerator" "$sources/connector" "$sources/runtime" \
+    "$sources/sandboxer" "$sources/orchestrator"
   archive="$(platform_archive "$version")"
   tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
     --pax-option=delete=atime,delete=ctime -czf "$output/assets/$archive" -C "$stage" .

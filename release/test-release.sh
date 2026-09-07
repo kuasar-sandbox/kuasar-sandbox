@@ -73,7 +73,9 @@ EOF
   chmod +x "$source_root/test/e2e/run_all.sh"
 done < "$TMP/selection.tsv"
 printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux.md"
+printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
 printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
+printf 'selected Chinese vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux_zh.md"
 
 SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
@@ -148,6 +150,8 @@ for component in accelerator connector guest-runtime sandboxer orchestrator; do
 done
 grep -Fqx 'selected vmlinux docs' "$TMP/install/docs/vmlinux.md" \
   || release_fail "vmlinux docs did not come from the selected vmlinux source"
+grep -Fqx 'selected Chinese vmlinux docs' "$TMP/install/docs/vmlinux_zh.md" \
+  || release_fail "Chinese vmlinux docs did not come from the selected vmlinux source"
 
 runner_root="$TMP/runner-root"
 mkdir -p "$runner_root/bin" "$runner_root/test/e2e"
