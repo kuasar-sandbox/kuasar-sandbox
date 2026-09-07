@@ -35,6 +35,12 @@ URLs for the corresponding source reference. Fenced code and inline-code
 examples remain unchanged. Ordinary inline links, reference definitions and
 HTML `href`/`src` attributes are handled; complex Markdown still requires review.
 
+Directory links without a fragment use the source page's language when a
+matching README is included, including component `docs/` links that fall back
+to the component README. English is the fallback when no Chinese edition exists.
+Direct file links and directory links with explicit fragments keep their named
+file or default README target, preserving the original anchor contract.
+
 The release packager obtains component references from the existing selected
 release manifest and uses the aggregate version for project source URLs. It
 passes these references only to documentation assembly; it does not alter version

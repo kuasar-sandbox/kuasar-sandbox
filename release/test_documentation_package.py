@@ -90,6 +90,10 @@ class DocumentationPackageTest(unittest.TestCase):
 
     def test_cross_repository_links_and_historical_revisions(self):
         (self.root / 'connector/docs/switch.md').write_text('# Wire\n')
+        (self.root / 'connector/README_zh.md').write_text('# Connector Chinese\n')
+        (self.root / 'connector/native-deps').mkdir()
+        for name in ('README.md', 'README_zh.md'):
+            (self.root / 'connector/native-deps' / name).write_text('# Native\n')
         (self.root / 'connector/cmd').mkdir()
         (self.root / 'connector/cmd/main.go').write_text('package main\n')
         (self.root / 'platform/docs/overview.md').write_text(
@@ -100,6 +104,14 @@ class DocumentationPackageTest(unittest.TestCase):
             '[selected](https://github.com/kuasar-sandbox/connector/blob/connector-revision/cmd/main.go)\n'
             '[old code](https://github.com/kuasar-sandbox/connector/blob/v0.0.1/cmd/main.go)\n'
             '[newer](https://github.com/kuasar-sandbox/connector/blob/main/cmd/newer.go)\n')
+        directory_links = (
+            '[docs](https://github.com/kuasar-sandbox/connector/tree/main/docs)\n'
+            '[native](https://github.com/kuasar-sandbox/connector/tree/main/native-deps)\n'
+            '[anchor](https://github.com/kuasar-sandbox/connector/tree/main/docs#connector)\n'
+            '[explicit English](https://github.com/kuasar-sandbox/connector/blob/main/README.md)\n'
+            '[English-only](https://github.com/kuasar-sandbox/accelerator/tree/main/docs)\n')
+        (self.root / 'platform/docs/directories.md').write_text(directory_links)
+        (self.root / 'platform/docs/directories_zh.md').write_text(directory_links)
         output, _ = self.assemble()
         text = (output / 'docs/overview.md').read_text()
         self.assertIn('[current](switch.md#wire)', text)
@@ -110,6 +122,15 @@ class DocumentationPackageTest(unittest.TestCase):
         self.assertIn('/blob/v0.0.1/cmd/main.go', text)
         self.assertIn('/blob/main/cmd/newer.go', text)
         self.assertNotIn('/blob/main/cmd/main.go', text)
+        en = (output / 'docs/directories.md').read_text()
+        zh = (output / 'docs/directories_zh.md').read_text()
+        self.assertIn('[docs](connector.md)', en)
+        self.assertIn('[docs](connector_zh.md)', zh)
+        self.assertIn('[native](connector/native-deps/README.md)', en)
+        self.assertIn('[native](connector/native-deps/README_zh.md)', zh)
+        self.assertIn('[anchor](connector.md#connector)', zh)
+        self.assertIn('[explicit English](connector.md)', zh)
+        self.assertIn('[English-only](accelerator.md)', zh)
 
     def test_collisions_are_rejected(self):
         for owner in ('accelerator', 'connector'):
