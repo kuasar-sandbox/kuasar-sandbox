@@ -466,10 +466,10 @@ EOF
   cmdline: "console=hvc0 printk.time=1"
   root:
     base: manifest://$ROOT_KEY
-    overlay: { diff: file://$dir/root.ext4, size: 1GiB }
+    overlay: { diff: file://$dir/root.ext4 }
   disks:
-    - { name: scratch, diff: file://$dir/scratch.ext4, diff_size: 512MiB }
-    - { name: dataset, base: manifest://$DATASET_KEY, overlay: { diff: file://$dir/dataset.ext4, size: 512MiB } }
+    - { name: scratch, diff: file://$dir/scratch.ext4 }
+    - { name: dataset, base: manifest://$DATASET_KEY, overlay: { diff: file://$dir/dataset.ext4 } }
 EOF
         cat >>"$path" <<'EOF'
 mounts:
@@ -483,10 +483,10 @@ EOF
     else
         cat >>"$path" <<EOF
   root:
-    overlay: { diff: file://$dir/root.ext4, size: 1GiB }
+    overlay: { diff: file://$dir/root.ext4 }
   disks:
-    - { name: scratch, diff: file://$dir/scratch.ext4, diff_size: 512MiB }
-    - { name: dataset, overlay: { diff: file://$dir/dataset.ext4, size: 512MiB } }
+    - { name: scratch, diff: file://$dir/scratch.ext4 }
+    - { name: dataset, overlay: { diff: file://$dir/dataset.ext4 } }
 EOF
     fi
     cat >>"$path" <<EOF
