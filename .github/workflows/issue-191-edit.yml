@@ -22,12 +22,13 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           python3 - <<'PY'
           from pathlib import Path
-          import re, subprocess
+          import subprocess
           p = Path('test/perf/sandbox-perf-working-set.sh')
-          old = p.read_text()
-          new, count = re.subn(r'(?m)^\s*diff_size:\s*[^\n]*\n', '', old)
-          assert count == 1, count
-          p.write_text(new)
+          text = p.read_text()
+          for key in [', diff_size: 512MiB', ', size: 512MiB', ', size: 1GiB']:
+              assert text.count(key) == 2, (key, text.count(key))
+              text = text.replace(key, '')
+          p.write_text(text)
           subprocess.check_call(['bash', '-n', str(p)])
           subprocess.check_call(['git', 'diff', '--check'])
           subprocess.check_call(['git', 'diff', '--', str(p)])
