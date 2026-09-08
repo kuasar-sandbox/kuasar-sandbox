@@ -20,7 +20,15 @@ Preview 继续用于开发和评估.生产就绪描述系统的部署能力,公�
 - [Releases](docs/release_zh.md):组件版本,聚合版本和资产契约;
 - [Demo](test/demo/DEMO_zh.md):本地体验环境和 E2B SDK 演示;
 - [Full validation](test/QUICKSTART_zh.md):完整 Aggregate Release E2E 验收;
-- [安全策略](SECURITY_zh.md):支持范围和私密漏洞报告入口.
+- [安全策略](SECURITY_zh.md):支持范围和私密漏洞报告入口;
+- [贡献指南](CONTRIBUTING_zh.md):项目仓贡献规则与组织级指南.
+
+## 为什么使用 MicroVM 沙箱
+
+Agent 会运行模型生成的命令、用户程序、第三方仓库、下载的工具和临时依赖,
+因此平台不能假定沙箱内代码可信。Kuasar Sandbox 用 KVM MicroVM 作为计算隔离边界:
+每个沙箱拥有独立 Guest Kernel,宿主只暴露受控的生命周期、存储、网络和执行接口。
+在保留虚拟机安全边界的同时,周边系统面向短生命周期、高并发和有状态 Agent 工作负载组织。
 
 ## 核心能力
 
@@ -30,16 +38,74 @@ Preview 继续用于开发和评估.生产就绪描述系统的部署能力,公�
   模板父层,每个实例只维护自己的增量状态.
 - **有状态暂停恢复**:暂停同一个逻辑沙箱并保留进程,内存和文件系统状态,随后在
   原节点或具备可移植工件的其他节点恢复稳定 Sandbox ID.
+- **按需加载**:内存页和磁盘块在工作负载实际访问时加载,启动与恢复成本取决于工作集,
+  而不是完整逻辑镜像大小.
 - **灵活数据路径**:镜像,快照和稀疏工件可以使用本地文件,NAS/NFS 等共享文件
   存储,也可以使用 Manifest,S3-compatible 对象存储和分层缓存.
 - **高密资源治理**:空闲时回收 CPU 和非活跃内存,长时间等待时暂停实例;节点以
   准入,动态预算,水位和安全余量保护并发活跃工作负载.
 - **隔离网络基础**:快速分配和回收沙箱网络资源,以内核态数据路径转发,默认隔离
   沙箱,并向外部策略网关传递可信沙箱身份.
+- **多租安全**:平台身份、限定作用域的数据面 capability、内容保护密钥、网络身份和节点
+  资源预算保持独立的安全边界.
 - **E2B 兼容入口**:`node-ctl conductor serve` 提供单节点 E2B 兼容服务,集群 router 提供
   多节点统一入口,均可由未修改的 E2B SDK 使用.
 - **单节点与集群部署**:组件既可以组成单机平台,也可以通过 registry,router 和
   placer 组成 group-scoped 多节点控制面.
+
+## 快照生命周期
+
+同一套快照基础设施支持两种用户工作流。
+
+### 从快照模板创建实例(1:N)
+
+模板可包含已初始化的操作系统、语言运行时、依赖、工具与预热服务。多个新沙箱共享
+不可变父状态,同时保有各自独立的身份和可写变化。
+
+### 暂停与恢复一个逻辑实例(1:1)
+
+暂停运行中的沙箱会保留进程、内存和文件系统状态;重新连接同一稳定身份会恢复该逻辑实例。
+这支持长时间运行的 Agent、人工审批、空闲会话、节点维护和迁移。
+
+两者都使用明确的父/子快照关系。存储效率首先来自共享已知父层、只记录实例变化,
+不依赖独立运行的虚拟机偶然生成高度相同的内存快照。
+
+## 数据与存储模型
+
+并非所有工件都必须使用同一种后端:
+
+| 数据路径 | 典型用途 | 特征 |
+|---|---|---|
+| 本地文件 | 单节点、本地 NVMe、节点亲和工作负载 | 路径短、外部依赖少 |
+| 共享文件系统 | NAS、NFS 或在多节点一致挂载的文件系统 | 原生文件语义、直接跨节点访问 |
+| Manifest 与对象存储 | 大规模分发、远程持久化、跨节点恢复和分层缓存 | 内容寻址组织、按需读取 |
+
+`accelerator` 提供这些路径共用的稀疏数据表达、本地工件、完整性与加密、引用、Manifest
+组织、文件系统与 S3-compatible Store、缓存、OCI 获取、EROFS 展平、fetch 与 prefetch。
+内容寻址和去重在适合的数据/安全域内使用,不是唯一存储模型,也不假定每份独立 VM 快照都能有效去重。
+
+## 高密资源治理
+
+Agent 沙箱负载通常非线性:大部分时间等待模型、工具、外部 I/O 或人工输入,随后短时突发。
+密度是安全利用资源的结果:
+
+1. 空闲沙箱释放 CPU 和非活跃内存;
+2. 长时间空闲的沙箱可暂停为持久状态;
+3. 回收容量归还节点共享池;
+4. 节点准入、动态 grant、水位、主动回收和安全余量保护并发突发;
+5. 在声明的资源模型内,平台共享不能把节点压力转化为沙箱 OOM 或丢失有效工作。
+
+`sandboxer` 执行单沙箱 cgroup、balloon 与 VMM 生命周期动作;`node-ctl` reservation
+controller 拥有节点级准入、共享池记账、grant、inventory 对账和恢复。高密是在不把 OOM
+当调度机制的前提下提高有效利用率,不是单纯追求 VM 数量。
+
+## 网络与策略集成
+
+`connector` 为 MicroVM 提供高密 eBPF/TC 数据路径,快速创建/释放沙箱网络资源,
+默认不转发沙箱间流量,验证平台分配的网络身份,已有流量逐包转发无需用户态进程参与。
+
+部署可把可信沙箱身份传给集中式外部策略网关,在那里实施逐沙箱公网、私网、DNS、代理、
+审计与流量治理策略。节点本地轻量 Egress 仍是提议中的扩展,不是基础 vSwitch 的已交付能力。
 
 ## 架构
 
@@ -61,11 +127,11 @@ KVM / Local File / NAS / Object Storage / Network
 
 | 组件仓 | 主要职责 |
 |---|---|
-| [`orchestrator`](https://github.com/kuasar-sandbox/orchestrator) | 单节点和集群控制面,E2B 兼容入口,节点资源准入与恢复 |
-| [`sandboxer`](https://github.com/kuasar-sandbox/sandboxer) | MicroVM 生命周期,快照/恢复,Guest 协同和单沙箱资源执行 |
-| [`accelerator`](https://github.com/kuasar-sandbox/accelerator) | 镜像,快照和稀疏工件的数据访问,存储,缓存与 OCI 展平 |
-| [`connector`](https://github.com/kuasar-sandbox/connector) | eBPF/TC vSwitch,TAP 交接,隔离网络和外部网关接入基础 |
-| [`guest-runtime`](https://github.com/kuasar-sandbox/guest-runtime) | Guest runtime 镜像与 Guest kernel 构建和发布 |
+| [`orchestrator`](https://github.com/kuasar-sandbox/orchestrator) | E2B 兼容节点服务、节点资源准入、Proxy 集成与 Registry/Router/Placer 集群控制面 |
+| [`sandboxer`](https://github.com/kuasar-sandbox/sandboxer) | MicroVM 生命周期、快照/恢复、Guest 控制、块设备和单沙箱资源执行 |
+| [`accelerator`](https://github.com/kuasar-sandbox/accelerator) | 数据访问、存储、加密、内容组织、缓存、OCI 获取与镜像展平 |
+| [`connector`](https://github.com/kuasar-sandbox/connector) | 高密 eBPF 网络、隔离、TAP 交接、可信沙箱网络身份与策略网关接入基础 |
+| [`guest-runtime`](https://github.com/kuasar-sandbox/guest-runtime) | Guest runtime 镜像、Guest kernel、native Guest 依赖和镜像构建工具 |
 
 五个组件可以组合成完整平台,也可以按场景独立采用,部署和发布.`guest-runtime`
 提供 `runtime` 和 `vmlinux` 两个发布单元,但仍然是一个组件仓.
@@ -96,6 +162,27 @@ prerelease 聚合版本,`Proposed` 表示仍在 Issue 或设计阶段且不能�
 
 最新可用资产和 prerelease 状态以
 [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 为准.
+
+## 快速开始
+
+[快速开始](docs/quickstart_zh.md) 从同一聚合版本下载全部显式资产、校验 `SHA256SUMS`,
+准备单节点,并用上游 E2B Python SDK 执行:
+
+```python
+from e2b import Sandbox, Template
+
+template = Template().from_image("<registry>/<image>:<tag>")
+build = Template.build(template, name="quickstart", cpu_count=2, memory_mb=6144)
+sandbox = Sandbox.create(build.template_id, timeout=300)
+sandbox_id = sandbox.sandbox_id
+print(sandbox.commands.run("uname -sm").stdout)
+sandbox.pause()
+sandbox = Sandbox.connect(sandbox_id)  # reconnect and auto-resume
+print(sandbox.commands.run("echo resumed").stdout)
+sandbox.kill()
+```
+
+完整本地环境、模板实例扇出、网络访问和迁移流程见 [Demo](test/demo/DEMO_zh.md)。
 
 ## Development
 
@@ -157,6 +244,9 @@ make -C kuasar-sandbox test-ci-tools
 make -C kuasar-sandbox test-perf-tools
 ```
 
+需要 KVM、root、eBPF、systemd、外部存储或完整兄弟源码集的测试分别声明这些前置条件。
+跳过特权用例不能解释为完成集成验收。
+
 ## Release
 
 组件独立发布以下版本线:
@@ -165,50 +255,16 @@ make -C kuasar-sandbox test-perf-tools
 - Guest runtime: `runtime-vX.Y.Z`;
 - Guest kernel: `vmlinux-vX.Y.Z`.
 
-主仓只发布聚合版本 `release-vX.Y.Z`.聚合版本可以选择不同的组件版本.每个受维护平台
-分支以 `releases/release.yaml` 描述下一 Stable,以 `releases/daily-preview.yaml` 描述
-当前 Daily Preview,并强制 `daily version >= release version`.代码库只维护这两个当前
-清单;历史选择由同一文件的 first-parent Git 提交历史保存,不建立第二套 history 目录或
-版本文件.
-正式版只引用上一正式版;Preview 优先引用同一正式版本线的上一 Preview,该版本线的
-首个 Preview 则引用上一正式版.第一个正式版本不设置基线,也不把 Preview 或全部提交
-历史作为发布说明 diff.
+主仓发布 `release-vX.Y.Z` 聚合版本,各组件可以选择不同版本号。
+`releases/release.yaml` 选择下一 Stable,`releases/daily-preview.yaml` 选择当前 Daily Preview。
+聚合工作流解析精确组件 Tag、校验声明的资产与校验和、组装 platform archive,
+并在发布前运行跨组件验证。
 
-Daily scanner 自动处理平台 `main` 和全部 `release/vMAJOR.MINOR.x`.主线只扫描各组件
-`main`;平台维护分支按每个 unit 在 Daily 清单中的独立版本映射组件
-`release/vMAJOR.MINOR.x`,分支不存在时固定复用该 unit 的完整 Release.Tag 选择按
-first-parent 上最近的带 Tag 提交,仅同一提交上的多个 Tag 比较 SemVer.残缺 Daily-owned
-Preview 会连同资产和 Tag 一起清理后重扫;外来残缺版本只忽略.
+当前 x86_64 聚合版本包含一个 platform archive、六个发布单元 archive 和统一
+`SHA256SUMS`。源码仓保持独立,聚合版本是经过测试的组合契约。
 
-组件 Release 的显式资产只有目标 archive 与 `SHA256SUMS`.当前 x86_64 聚合 Release
-精确包含 platform 包,六个发布单元 archive 和统一 `SHA256SUMS`,不发布项目生成的
-release metadata JSON,也不重复上传 GitHub 已自动提供的源码归档.版本选择 YAML 只在
-代码库维护,既不是 Release 资产,也不进入 platform 包.组件 archive 不携带 `docs/` 或
-`test/e2e/`;aggregate prepare 从所选组件 tag 的 GitHub 源码归档收集它们,统一写入
-platform 包.
-
-人工收敛一个已经配置的聚合版本:
-
-```bash
-RELEASE_VERSION=$(awk '$1 == "version:" {print $2}' \
-  kuasar-sandbox/releases/release.yaml)
-PLATFORM_REF=$(git -C kuasar-sandbox branch --show-current)
-PLATFORM_SHA=$(git -C kuasar-sandbox rev-parse HEAD)
-make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
-  PLATFORM_REF="$PLATFORM_REF" PLATFORM_SHA="$PLATFORM_SHA"
-```
-
-也可以在组件版本已发布后只触发聚合验证与发布:
-
-```bash
-gh workflow run aggregate-release.yml \
-  --repo kuasar-sandbox/kuasar-sandbox --ref main \
-  -f version="$RELEASE_VERSION" \
-  -f source_ref="$PLATFORM_REF" -f source_sha="$PLATFORM_SHA"
-```
-
-详细资产契约,权限边界,失败恢复和每日 Preview 状态机见
-[docs/release.md](docs/release_zh.md).
+完整的两清单/历史和基线规则、维护分支选择、资产排除规则、人工发布命令、权限边界与
+失败恢复均由 [Release 规范](docs/release_zh.md) 维护。
 
 ## Documentation
 
@@ -222,7 +278,16 @@ gh workflow run aggregate-release.yml \
 - [Full validation](test/QUICKSTART_zh.md):发布包解压,环境准备与完整 E2E 入口.
 - [安全策略](SECURITY_zh.md):支持范围和私密漏洞报告方式.
 
+维护中的设计与参考文档提供完整中英文版本。英文使用默认文件名,中文使用 `_zh.md`,
+并带双向语言选择器。遵循 [文档贡献政策](CONTRIBUTING_zh.md#文档贡献)。
+
+## 贡献与安全
+
+修改前阅读组织级 [贡献指南(英文)](https://github.com/kuasar-sandbox/.github/blob/main/CONTRIBUTING.md)。
+选择拥有该行为的仓库、保持 PR 聚焦,跨仓修改须双向关联配套 PR。
+不要在公开 Issue 或讨论中披露安全漏洞;遵循 [安全策略](SECURITY_zh.md),使用 GitHub 私密漏洞报告。
+
 ## License
 
 本仓库的项目原创内容采用 [Apache License 2.0](LICENSE).
-贡献授权说明见 [CONTRIBUTING.md（英文）](CONTRIBUTING.md).
+第三方及其他许可的内容保留自己的声明与义务。贡献授权说明见 [CONTRIBUTING_zh.md](CONTRIBUTING_zh.md).

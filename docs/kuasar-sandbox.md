@@ -49,7 +49,7 @@ Kuasar Sandbox provides MicroVM lifecycle, data access, node networking and stan
 <a id="21-用户入口"></a>
 ### 2.1 User entry points
 
-In a standalone deployment, `node-ctl conductor serve` provides E2B-compatible control-plane and data-plane entry points. In a multi-node deployment, `cluster-ctl router` provides a unified entry point and uses registry and placer to route group-scoped requests to the target node. Both modes support the create, execute, pause, connect/resume and destroy semantics used by the unmodified E2B SDK.
+In a standalone deployment, `node-ctl conductor serve` provides the E2B-compatible control API and the independent `node-ctl proxy serve` supplies sandbox data ingress. In a multi-node deployment, `cluster-ctl router` provides a unified entry point and uses registry and placer to route group-scoped requests to the target node. Both modes support the create, execute, pause, connect/resume and destroy semantics used by the unmodified E2B SDK.
 
 `sandbox-ctl` is the node-internal execution tool for an individual sandbox. It starts MicroVMs and handles execution, snapshotting, restoration and artifact import/publication. Ordinary platform users access the system through E2B or platform APIs and do not need to manipulate internal sockets or component protocols.
 
@@ -61,7 +61,8 @@ The component that owns a behavior also owns its configuration:
 | Scope | Configuration and authoritative documentation |
 | --- | --- |
 | Individual sandbox startup, disks, snapshots and resource execution | `sandboxer/docs/sandbox.md` |
-| Node API, credentials, builds and recovery | `orchestrator/docs/node.md` |
+| Node API, credentials and recovery | [Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md) |
+| Complete Build API, configuration, preparation, execution and publication | [Node Build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md) |
 | Node admission and shared resource pool | `orchestrator/docs/node-resource.md` |
 | Cluster registry/router/placer | `orchestrator/docs/cluster*.md` |
 | Manifest, store and cache | `accelerator/docs/{manifest,store,cache}.md` |
@@ -270,7 +271,7 @@ Credential updates affect only later business records that are created with copi
 <a id="81-单节点和集群"></a>
 ### 8.1 Standalone and cluster operation
 
-On a standalone node, `node-ctl conductor serve` manages local sandboxes, builds, data-plane proxying and the optional Reservation Controller. A cluster consists of three independent `cluster-ctl` roles:
+On a standalone node, `node-ctl conductor serve` manages local sandboxes, builds and the optional Reservation Controller. The independent Proxy owns data-plane forwarding and registers with conductor for trusted route/policy updates. A cluster consists of three independent `cluster-ctl` roles:
 
 - `registry`: maintains reliable execution state for nodes, routes and placers;
 - `router`: provides the E2B-compatible unified entry point and routes by sandbox-group;

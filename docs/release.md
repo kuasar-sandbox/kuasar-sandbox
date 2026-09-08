@@ -35,6 +35,8 @@ The comparison uses numeric aggregate `MAJOR.MINOR.PATCH` values, not string ord
 <a id="21-stable-清单"></a>
 ### 2.1 Stable manifest
 
+`previous_version` is optional for the first Stable release. When present it names an earlier Stable release; release notes never substitute a Preview or the repository's entire history as the first Stable baseline.
+
 ```yaml
 version: release-v0.5.7
 previous_version: release-v0.5.6
@@ -167,6 +169,18 @@ Workflow run names include source SHA and the dependency-version tuple. The cont
 <a id="7-聚合发布-cli"></a>
 ## 7. Aggregate publication CLI
 
+To converge an aggregate version already committed in the selected branch, the local release entry first handles the required component units and then the aggregate transaction:
+
+```bash
+RELEASE_VERSION=$(awk '$1 == "version:" {print $2}' \
+  kuasar-sandbox/releases/release.yaml)
+PLATFORM_REF=$(git -C kuasar-sandbox branch --show-current)
+PLATFORM_SHA=$(git -C kuasar-sandbox rev-parse HEAD)
+make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
+  PLATFORM_REF="$PLATFORM_REF" PLATFORM_SHA="$PLATFORM_SHA"
+```
+
+
 The aggregate workflow also loads trusted tooling from platform `main`, but version selection, system documentation, platform cases and package content come from the exact HEAD of the selected platform branch. Old release scripts on that target branch are not executed as the controller:
 
 ```bash
@@ -193,9 +207,93 @@ make test-ci-tools
 
 Each ordinary component Release contains exactly its component archive and `SHA256SUMS`. Runtime and vmlinux have independent archive names. An aggregate Release contains exactly a platform archive, six unchanged component archives and one unified `SHA256SUMS`: eight explicit assets.
 
+Do not publish generated release-metadata JSON or duplicate GitHub's automatically supplied source archives. Selection YAML remains in the repository, not in Release assets or the platform package. Component archives exclude `docs/` and `test/e2e/`; aggregate preparation collects them from the selected component source tags into the platform archive (§8.1).
+
 Component workflows build and test at the selected source SHA. Aggregate prepare downloads the six complete manifest-selected Releases, validates GitHub size/digest, component SHA-256, internal paths and cross-package collisions, then creates a deterministic platform package. Exact-asset BMS extracts the same short-lived artifact on a real KVM runner and runs the five component-owned suites plus the platform combination suite, six owner entries in total. Only successful BMS permits aggregate publish to create the tag and Release.
 
 Preview, maintenance Stable and mainline Stable use identical asset contracts and BMS gates. They differ only in release state and Latest policy.
+
+<a id="documentation-in-the-platform-package"></a>
+### 8.1 Documentation payload and source mapping
+
+The platform archive assembles documentation from the project repository and the
+selected component sources. Source navigation and archive navigation use
+different layouts. `test/e2e/assemble_docs.py`, called by the existing E2E
+assembler, copies documentation and rewrites its links after owner suites have
+been copied. It does not edit executable examples, scripts, configuration values
+or component binaries.
+
+#### Layout
+
+| Source | Archive destination |
+| --- | --- |
+| Project and component `docs/*` | `docs/*`, preserving existing flat entry points |
+| Component `README.md` / `README_zh.md` | `docs/<component>.md` / `docs/<component>_zh.md` |
+| Component native-build, example, contribution and license documents | `docs/<component>/<original-path>` |
+| Project documents outside `docs/` and `test/` | `docs/project/<original-path>` |
+| Project `test/` documentation | Its existing `test/` path |
+| Component `test/e2e/` documentation | `test/e2e/<component>/<original-relative-path>` |
+
+Both language versions are included when present. Existing complete English-only
+documents remain valid. License and attribution files retain their contents.
+Generated build outputs, dependency/vendor trees and Git metadata are excluded.
+Flat destination collisions and symbolic links in documentation inputs are
+rejected rather than silently overwriting another component's document.
+
+#### Navigation and source versions
+
+Links to included documents, images and license files are rebased to their actual
+archive paths. Reciprocal language selectors follow the renamed component
+READMEs. Links to source files that are not included in the archive use GitHub
+URLs for the corresponding source reference. Fenced code and inline-code
+examples remain unchanged. Ordinary inline links, reference definitions and
+HTML `href`/`src` attributes are handled; complex Markdown still requires review.
+
+Directory links without a fragment use the source page's language when a
+matching README is included, including component `docs/` links that fall back
+to the component README. English is the fallback when no Chinese edition exists.
+Direct file links and directory links with explicit fragments keep their named
+file or default README target, preserving the original anchor contract.
+
+The release packager obtains component references from the existing selected
+release manifest and uses the aggregate version for project source URLs. It
+passes these references only to documentation assembly; it does not alter version
+selection. For direct source assembly, Git HEAD is used when available, otherwise
+source links use `main`. A local acceptance run can provide a tab-separated
+`DOCS_SOURCE_REFS` file containing owner and exact source revision. This is
+assembly metadata, not a runtime configuration option.
+
+The runtime and vmlinux units can select different guest-runtime commits. The
+release packager therefore supplies `DOCS_VMLINUX_SOURCE` independently and takes
+both `vmlinux.md` and `vmlinux_zh.md` from that selected kernel source. If an older
+selected kernel has no Chinese counterpart, assembly does not substitute a
+Chinese document from the runtime unit's different revision.
+
+Recognized cross-repository `main` links to included documents resolve within the
+assembled set. Absolute GitHub `main` links to other files or directories that
+exist in the selected source use that source's selected reference, just like
+relative source links; queries and fragments are preserved. If an absolute
+`main` URL names a file absent from the selected source, it remains unchanged and
+requires separate review. Explicit historical-version URLs remain historical references.
+External links, including private component source URLs, still require the
+separate access checks described by [the review policy](../CONTRIBUTING.md#documentation-contributions).
+
+#### Validation
+
+```sh
+python3 -m unittest release/test_documentation_package.py
+make test-release-tools
+```
+
+The focused tests exercise language selectors, native-build links, source URLs,
+unchanged executable content, cross-repository links, collisions, symbolic links
+and independent kernel-language selection. The release tests also unpack the
+actual platform tarball and check that both kernel documents came from the
+selected vmlinux source. Final acceptance must additionally run assembly on the
+actual reviewed source set, inspect the extracted archive, and validate all
+relative paths and heading fragments. Translation completeness is a separate
+semantic review; a passing package check is not evidence that pending documents
+have been translated.
 
 ## 9. Preview GC
 

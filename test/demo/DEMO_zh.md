@@ -114,7 +114,7 @@ host 与外网都不在该网段。四项配置把"host↔沙箱"、"沙箱→ho
 e2b SDK 用 `E2B_DOMAIN` 推出控制面 `https://api.<domain>` 与数据面 `https://<port>-<sid>.<domain>`:
 
 - `E2B_DOMAIN`/`E2B_API_KEY` 指向本节点;**构建直接 `from_image(<registry>/<image>)`**——构建沙箱内拉取并展平
-  (凭据来自租户默认或任务级 token,见 node.md §12),**不再有客户端 docker build/push 或 `E2B_IMAGE_URI_MASK`**。
+  (凭据来自租户默认或任务级 token,见 [Node Build §5](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md#5-按目标执行与发布)),**不再有客户端 docker build/push 或 `E2B_IMAGE_URI_MASK`**。
   镜像 ref 须**从构建沙箱可达**:本地 zot 的 ref 由脚本自动改写为 vswitch mgmt VIP
   (`169.254.169.254:<port>`),再由 `--mgmt-service` 转到 `127.0.0.1:<port>`;第三方仓库经 NAT 出网直达。
 - 本地 Demo CA 签发 `CA:FALSE` 的 `*.<domain>` 服务器证书 +

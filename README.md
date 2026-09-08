@@ -201,6 +201,8 @@ Runtime files are collected into `bin/<arch>/` according to [`release/bin-inputs
 GOWORK=off make -C sandboxer build
 ```
 
+Component suites live in their owner's `test/e2e/`, with `run_all.sh` as the common entry. `make test-e2e` assembles the selected source set into `test/e2e/<owner>/` and invokes the same top-level entry as the platform package. A case that consumes several components still belongs to the component owning its behavior.
+
 Release-tool tests do not contact GitHub or build the real native dependencies:
 
 ```bash
@@ -237,7 +239,7 @@ See [docs/release.md](docs/release.md) for the full asset contract, trust bounda
 - [Full validation](test/QUICKSTART.md) — aggregate package validation and all E2E owners;
 - [Security](SECURITY.md) — supported versions and private vulnerability reporting.
 
-Detailed design documents are currently maintained primarily in Chinese. The English README and Quick Start provide the complete public entry path; additional translations can be added without making a full-document translation a prerequisite for source publication.
+Maintained design and reference documents have complete English/Chinese editions. English uses the default filename; Chinese counterparts use `_zh.md` and reciprocal language selectors. Follow the [documentation contribution policy](CONTRIBUTING.md#documentation-contributions).
 
 ## Contributing and security
 
