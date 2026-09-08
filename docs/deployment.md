@@ -18,7 +18,7 @@ Select roles according to the data path and control-plane topology. Local files,
 
 | Role | Responsibility | Main processes |
 |---|---|---|
-| Compute Node | Hosts MicroVMs and node resource control; E2B template builds also run in build sandboxes on this node (§5). | `node-ctl conductor serve`, optionally with `resource_listen`; external proxy adds a master and workers; `sandbox-ctl × N`. Deploy `cache-ctl` when selected for the Manifest path, and `store-ctl` for Manifest storage or image-producing builds. |
+| Compute Node | Hosts MicroVMs and node resource control; E2B template builds also run in build sandboxes on this node (§5). | `node-ctl conductor serve`, optionally with `resource_listen`; independent Proxy master and workers; `sandbox-ctl × N`. Deploy `cache-ctl` when selected for the Manifest path, and `store-ctl` when source access, publication or configured write admission requires it. |
 | Shared Storage | Native cross-node file access for named `file://` locations. | Operator-provided NAS, NFS or shared filesystem. |
 | L2 Cache Cluster (optional) | Distributed EC caching for the Manifest path; without it, cache can hit locally or read the origin. | `cache-ctl shard`. |
 | Cluster Control Plane (optional) | E2B-compatible multi-node control: registry maintains execution state, router supplies the common entry point, and placer imports groups and selects placement. Nodes still execute lifecycle operations. | `cluster-ctl registry`, `cluster-ctl router`, `cluster-ctl placer`. |
@@ -43,7 +43,7 @@ Select roles according to the data path and control-plane topology. Local files,
 | `node-ctl conductor serve` | Local orchestration, E2B-compatible control plane, optional node resource arbitration and node-link client. Drives sandbox-ctl through `sandbox-runner@<run-id>` and `sandbox-builder@<run-id>`. The independent Proxy owns sandbox data ingress; conductor does not serve the data plane. | One conductor per node. | systemd. | [orchestrator/node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md); resource protocol in [node-resource](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md). |
 | `node-ctl proxy serve` | Master subscribes to routes and conductor-owned MMDS policy over config-socket, binds data/MMDS listeners and manages workers. Workers read fixed routes through mmap and query mutable MMDS routes/values/services through local master RPC; they authenticate and proxy data traffic, including the native exec gate. | One master plus configured `workers`. | systemd. | [orchestrator/node-proxy](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md). |
 | `cache-ctl` (`mode: local|tiered`, optional) | Manifest read entry: local L1, optional EC L2 and store origin. | Commonly one per selected cache configuration; separate domains can use separate instances. | systemd; start before consumers of this Manifest path. | [accelerator/cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md). |
-| `store-ctl` (optional) | Node-side read/write service for FS/S3-compatible Manifest storage. | Commonly one sidecar per node/storage configuration. | systemd; required for the selected Manifest path or image-producing builds. | [accelerator/store](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md). |
+| `store-ctl` (optional) | Node-side read/write service for FS/S3-compatible Manifest storage. | Commonly one sidecar per node/storage configuration. | systemd; required when selected source access, publication or configured write admission uses Store (§5). | [accelerator/store](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md). |
 | `sandbox-ctl run` | Controls one sandbox, similar in lifecycle to `runc run`; not a shared daemon. | One per sandbox. | Assigned by node-ctl through `sandbox-runner@<run-id>` and its `run-sandbox` launcher. | [sandboxer/sandbox](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md). |
 | `cloud-hypervisor` | Patched VMM, child of sandbox-ctl. | One per sandbox. | Spawned by sandbox-ctl. | [sandboxer/cloud-hypervisor](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/cloud-hypervisor.md). |
 
@@ -71,9 +71,9 @@ Tiered cache dials L2 peer port `7070` through the node network (§3). Local cac
 
 External workers require node-local `proxy.yaml.paths.run_root`. They derive `<run_root>/sandboxes/<NodeSandboxID>/ctl.sock`; routesync Policy and the shared-memory route view do not carry this root. Proxy YAML does not duplicate `mmds_listen` or `services`: conductor's trusted `proxy + route_wake + mmds` registration is their sole projection channel. Other node-local services use loopback/UDS.
 
-Conductor starts sandbox-ctl through the **`sandbox-runner@<run-id>.service` template**, using StartUnit/prestarted units. `run-sandbox` waits for assignment, obtains the exact task and final LaunchSpec, then exec-replaces itself with `sandbox-ctl run`; conductor does not directly fork-exec that runtime. Builds use **`sandbox-builder@<run-id>.service`**: `run-builder` waits for assignment and remains resident while driving the target-selected import/steps/template pipeline, with at most one phase MicroVM at a time as its child. Image parsing/pulling and step execution occur in guests (§5). Conductor generates/installs both templates at startup unless `install_units: false` delegates their management to the operator. See node.md §5/§12.
+Conductor starts sandbox-ctl through the **`sandbox-runner@<run-id>.service` template**. Builds use **`sandbox-builder@<run-id>.service`**, with at most one phase MicroVM active at a time. Conductor generates/installs both templates at startup unless `install_units: false` delegates their management to the operator. Assignment and process lifetime belong to [Node §5](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md#5-process-management-through-systemd-template-units); builder task preparation, execution and publication belong to [Build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md).
 
-The sandbox's `ctl.sock` serves snapshot and local `sandbox-ctl exec --sandbox-id <sid> -- CMD` operations. For a node-managed sandbox, the local client must use the effective sandbox root, e.g. `--run-root /run/sandbox/sandboxes`, to find that socket. Remote access does not expose the UDS: first use `X-API-KEY` to request a `kat1` ExecAccessToken bound to AuthSandboxID. `sandbox-ctl exec --proxy`, with repeatable `--proxy-header`, sends SID, `service=exec`, token and cluster context through CONNECT. Node proxy verifies the token and dials the existing UDS; `pkg/ctl.ProxyExec` restricts the first frame to `exec_request`. The client delivered by [sandboxer #28](https://github.com/kuasar-sandbox/sandboxer/issues/28) is used by standalone, cluster and external-proxy real-guest E2E, replacing temporary CONNECT bridges. The full contract belongs to sandbox.md and node-proxy.md.
+The sandbox's `ctl.sock` serves snapshot and local `sandbox-ctl exec --sandbox-id <sid> -- CMD` operations. For a node-managed sandbox, the local client must use the effective sandbox root, e.g. `--run-root /run/sandbox/sandboxes`, to find that socket. Remote clients use the authenticated Proxy entry with an explicitly acquired ExecAccessToken; the UDS stays local. The [sandbox CLI](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md) and [Proxy contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md) own token binding, CONNECT headers and frame validation.
 
 <a id="23-持久化与运行时目录"></a>
 
@@ -131,6 +131,8 @@ The overlay is a private writable disk. If `diff` is omitted, sandbox-ctl owns a
 
 Conductor owns node records and validated launch policy; runner and builder processes obtain exact task specifications through the node-local config socket. Use the configured RunRoot/BaseRoot and installed unit templates consistently. Host root and the daemon UID are trusted; guests must not reach this socket.
 
+Protect generated sandbox and build-phase YAML, written with mode `0600`, according to its contents: user-provided launch environment can be confidential. Credential updates affect later record inserts; they do not rebind credentials already copied into durable sandbox/build records. The node credential contract owns that lifecycle.
+
 The [node specification](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md#6-local-control-socket-run-task-admin-plugin-and-api-planes) owns authentication, assignment and bootstrap/finalization schemas. The [Build specification](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md) owns builder task preparation and execution. Do not expose this internal socket as a public API.
 
 <a id="26-mmds-route-安全与部署边界"></a>
@@ -138,7 +140,7 @@ The [node specification](https://github.com/kuasar-sandbox/orchestrator/blob/mai
 
 Conductor configuration is the sole authority for `mmds.listen`, allowed routes and local services. Start and register the independent Proxy before admitting requests that need that data/MMDS path. Bind the MMDS listener in the configured network namespace and point vSwitch management traffic to that listener. Local services use explicitly configured absolute Unix-socket URIs; do not expose their host sockets to guests.
 
-The [Proxy MMDS contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md#7-mmds) owns request identity, route matching, secret handling, header filtering and forwarding restrictions. Public API TLS/authentication, local socket permissions, guest-isolated networking and service credentials must be configured together. Avoid a second service registry in proxy YAML.
+The [Proxy MMDS contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md#7-mmds) owns request identity, route matching, secret handling, header filtering and forwarding restrictions; [Build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md) owns build-scoped registration and terminal cleanup. Public API TLS/authentication, local socket permissions, guest-isolated networking and service credentials must be configured together. Avoid a second service registry in proxy YAML.
 
 ## 3. L2 Cache Cluster
 
@@ -212,11 +214,13 @@ Builds are executed on compute nodes by conductor-assigned `sandbox-builder@<run
 
 For deployment, provide the guest Runtime/Kernel and flattening tools, a guest-reachable OCI registry when importing images, and the selected durable output path. Image publication requires its configured Store or named-file carrier; native-file snapshots do not imply a mandatory object-store conversion. COPY contexts require the configured object-storage service and presigned-upload access, not a public upload proxy in conductor.
 
+Manifest Store publication requires Store. Source access requires its selected Cache/Store or file/Bundle dependencies. Named-location Bundle publication can run without `store-ctl` when the source graph is fully file/Bundle-resolvable and offline write admission is valid. A configured Store endpoint must still satisfy write admission; failure does not fall back offline. The [Manifest admission contract](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/manifest.md) and Build publication rules determine the selected dependencies.
+
 Use independently scoped registry-pull and artifact-publication credentials. Keep host content-protection material out of guest workloads. Configure per-build registry trust, node-local paths, builder units and aggregate resource limits according to the Build contract; do not infer a universal three-phase run from the presence of `startCmd`. Delay build admission until conductor, required storage services and the guest-reachable network are ready.
 
 ## 6. Cluster Control Plane (cluster-ctl)
 
-For multiple compute nodes, three roles compose the cluster layer: **registry**, a shardkv state cluster and node-channel hub; **router**, the common E2B control/data entry; and **placer**, the group provider/importer, WATCH_LIST consumer and placement scheduler. Router uses sandbox-group, route-key and stable sandbox_id, translating to NodeSandboxID at the node boundary. Exec Session uses `Reserve(operation=exec-session)` and `CmdExecSession` for node-side signing; Router and node validate the same KAT. Data Reserve for a non-READY route makes Registry validate again before triggering lifecycle work. See [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md). A standalone node directly serving the E2B SDK does not require this layer.
+For multiple compute nodes, three roles compose the cluster layer: **registry**, a state cluster and node-channel hub; **router**, the common E2B control/data entry; and **placer**, the group provider/importer and placement scheduler. Their independent contracts own routing, activation and authentication. See [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md). A standalone node directly serving the E2B SDK does not require this layer.
 
 ```mermaid
 flowchart TD
@@ -326,7 +330,7 @@ This is a deployment relationship, not a fixed phase-count or publication algori
 
 **External dependencies, according to the deployment**
 
-1. Mount and verify local/shared-file paths. If using Manifest data or producing build images, make the selected FS/S3-compatible backend available.
+1. Mount and verify local/shared-file paths. Make the selected source and publication backends available (§5), including FS/S3-compatible Store where configured.
 
 **Optional L2, before its compute consumers**
 
@@ -341,7 +345,7 @@ This is a deployment relationship, not a fixed phase-count or publication algori
 
 Tiered cache does not need every L2 peer online to start: clean misses may fall through, while backend/protocol failures retain the Cache contract's explicit error behavior. The write path, manifest-ctl directly using store-ctl, fails when the selected durable backend/store is unavailable.
 
-Builds reuse conductor. Image-producing builds also require store-ctl; builds without image publication need the selected snapshot backend. Accept builds after conductor and those required backends are ready (§5).
+Builds reuse conductor. Accept builds after conductor, the selected source/publication backends and any configured Store write-admission endpoint are ready (§5).
 
 <a id="82-关闭顺序自顶向下"></a>
 

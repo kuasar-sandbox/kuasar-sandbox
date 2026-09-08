@@ -39,6 +39,9 @@ daily-preview.yaml/version >= release.yaml/version
 
 ### 2.1 Stable 清单
 
+首个 Stable 可省略 `previous_version`;提供时必须指向更早的 Stable。
+首个 Stable 的发布说明不以 Preview 或整个仓库提交历史代替比较基线。
+
 ```yaml
 version: release-v0.5.7
 previous_version: release-v0.5.6
@@ -224,6 +227,18 @@ workflow run name 包含源码 SHA 和依赖版本元组。控制器只重跑相
 
 ## 7. 聚合发布 CLI
 
+要收敛已在所选分支提交配置的聚合版本,本地发布入口先处理所需组件单元,再执行聚合事务:
+
+```bash
+RELEASE_VERSION=$(awk '$1 == "version:" {print $2}' \
+  kuasar-sandbox/releases/release.yaml)
+PLATFORM_REF=$(git -C kuasar-sandbox branch --show-current)
+PLATFORM_SHA=$(git -C kuasar-sandbox rev-parse HEAD)
+make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
+  PLATFORM_REF="$PLATFORM_REF" PLATFORM_SHA="$PLATFORM_SHA"
+```
+
+
 聚合工作流同样从平台 `main` 加载受信任工具,但版本选择、系统文档、平台用例和打包
 内容来自所选平台分支的精确 HEAD。目标分支中的旧发布脚本不会作为控制器执行:
 
@@ -257,6 +272,11 @@ make test-ci-tools
 每个普通组件 Release 精确包含组件 archive 和 `SHA256SUMS`。runtime、vmlinux 使用各自
 独立 archive 名。聚合 Release 精确包含 platform archive、六个原样复制的组件 archive
 和统一 `SHA256SUMS`,共八项显式资产。
+
+不发布项目生成的 release metadata JSON,也不重复上传 GitHub 自动提供的源码归档。
+版本选择 YAML 只在仓库维护,既不是 Release 资产,也不进入 platform 包。
+组件 archive 不携带 `docs/` 或 `test/e2e/`;aggregate prepare 从所选组件源码 Tag 收集,
+统一写入 platform archive(§8.1)。
 
 组件工作流在选定源码 SHA 上运行组件构建和测试。聚合 prepare 下载清单指定的六个完整
 Release,校验 GitHub size/digest、组件 SHA-256、包内路径与跨包覆盖,生成确定性 platform

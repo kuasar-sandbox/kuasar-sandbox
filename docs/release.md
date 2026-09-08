@@ -35,6 +35,8 @@ The comparison uses numeric aggregate `MAJOR.MINOR.PATCH` values, not string ord
 <a id="21-stable-清单"></a>
 ### 2.1 Stable manifest
 
+`previous_version` is optional for the first Stable release. When present it names an earlier Stable release; release notes never substitute a Preview or the repository's entire history as the first Stable baseline.
+
 ```yaml
 version: release-v0.5.7
 previous_version: release-v0.5.6
@@ -167,6 +169,18 @@ Workflow run names include source SHA and the dependency-version tuple. The cont
 <a id="7-聚合发布-cli"></a>
 ## 7. Aggregate publication CLI
 
+To converge an aggregate version already committed in the selected branch, the local release entry first handles the required component units and then the aggregate transaction:
+
+```bash
+RELEASE_VERSION=$(awk '$1 == "version:" {print $2}' \
+  kuasar-sandbox/releases/release.yaml)
+PLATFORM_REF=$(git -C kuasar-sandbox branch --show-current)
+PLATFORM_SHA=$(git -C kuasar-sandbox rev-parse HEAD)
+make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
+  PLATFORM_REF="$PLATFORM_REF" PLATFORM_SHA="$PLATFORM_SHA"
+```
+
+
 The aggregate workflow also loads trusted tooling from platform `main`, but version selection, system documentation, platform cases and package content come from the exact HEAD of the selected platform branch. Old release scripts on that target branch are not executed as the controller:
 
 ```bash
@@ -192,6 +206,8 @@ make test-ci-tools
 ## 8. Assets and BMS
 
 Each ordinary component Release contains exactly its component archive and `SHA256SUMS`. Runtime and vmlinux have independent archive names. An aggregate Release contains exactly a platform archive, six unchanged component archives and one unified `SHA256SUMS`: eight explicit assets.
+
+Do not publish generated release-metadata JSON or duplicate GitHub's automatically supplied source archives. Selection YAML remains in the repository, not in Release assets or the platform package. Component archives exclude `docs/` and `test/e2e/`; aggregate preparation collects them from the selected component source tags into the platform archive (§8.1).
 
 Component workflows build and test at the selected source SHA. Aggregate prepare downloads the six complete manifest-selected Releases, validates GitHub size/digest, component SHA-256, internal paths and cross-package collisions, then creates a deterministic platform package. Exact-asset BMS extracts the same short-lived artifact on a real KVM runner and runs the five component-owned suites plus the platform combination suite, six owner entries in total. Only successful BMS permits aggregate publish to create the tag and Release.
 

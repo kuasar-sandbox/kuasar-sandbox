@@ -70,7 +70,8 @@ Kuasar Sandbox 提供 MicroVM 生命周期,数据访问,节点网络和单节点
 | 范围 | 配置与事实来源 |
 |---|---|
 | 单沙箱启动,磁盘,快照和资源执行 | `sandboxer/docs/sandbox.md` |
-| 单节点 API,凭据,构建和恢复 | `orchestrator/docs/node.md` |
+| 单节点 API,凭据和恢复 | [Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node_zh.md) |
+| 完整 Build API、配置、准备、执行与发布 | [Node Build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md) |
 | 节点准入和共享资源池 | `orchestrator/docs/node-resource.md` |
 | 集群 registry/router/placer | `orchestrator/docs/cluster*.md` |
 | Manifest,store 和 cache | `accelerator/docs/{manifest,store,cache}.md` |

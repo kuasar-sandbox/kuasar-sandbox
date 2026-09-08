@@ -61,7 +61,8 @@ The component that owns a behavior also owns its configuration:
 | Scope | Configuration and authoritative documentation |
 | --- | --- |
 | Individual sandbox startup, disks, snapshots and resource execution | `sandboxer/docs/sandbox.md` |
-| Node API, credentials, builds and recovery | `orchestrator/docs/node.md` |
+| Node API, credentials and recovery | [Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md) |
+| Complete Build API, configuration, preparation, execution and publication | [Node Build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md) |
 | Node admission and shared resource pool | `orchestrator/docs/node-resource.md` |
 | Cluster registry/router/placer | `orchestrator/docs/cluster*.md` |
 | Manifest, store and cache | `accelerator/docs/{manifest,store,cache}.md` |
