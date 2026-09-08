@@ -58,7 +58,7 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 | `cache-ctl tiered` | `127.0.0.1:7071` | gRPC | health / `ping` / `info` |
 | `node-ctl conductor serve(resource_listen)` | `/run/sandbox-resource.sock` | UDS,自定义协议 | 沙箱资源协议(`sandbox-ctl` 拨号目标)|
 | `sandbox-ctl` | `/run/sandbox/sandboxes/<sid>/*.sock` | UDS | sandbox 内部:`ch.sock` / `blk{0,1}.sock` / `uffd.sock` / `ctl.sock` / `vsock.sock`(+ `_5000`);另写 `<sid>.pid`(config-socket task 鉴别);assignment/launch 参数经 config-socket 交接,不使用 SANDBOX_ARGS envfile|
-| `node-ctl conductor serve` | `api.listen`,如 `:443` | HTTPS/h2 | **对外** E2B 控制 API；独立 Proxy 提供单独的数据入口 |
+| `node-ctl conductor serve` | `api.listen`,如 `:443` | 按拓扑使用 HTTPS/h2 或 HTTP/h2c | E2B 控制 API；独立 Proxy 提供单独的数据入口。集群内部 listener 约束见 §6.3 |
 | `node-ctl proxy serve`| `proxy.yaml.data_listen` | HTTPS/h2 或 h2c | **独立数据入口**;master 绑定 listener 并把 fd 交给 workers,native exec 使用 `service=exec` + `X-Access-Token` CONNECT |
 | Proxy master/workers | conductor `mmds.listen`,默认 `127.0.0.1:19254` | HTTP/1.1 | vswitch `--mgmt-service` 的目标;master 从受信 Conductor policy 取得 listener 配置，绑定后将 FD 交给 workers |
 | MMDS local service | `mmds.services.<name>.endpoint` | HTTP/1.1 over UDS | 服务注册表由 Conductor 持有；V1 使用 `unix://` absolute path，worker 经 master 获取允许的已解析 socket path |
@@ -280,6 +280,8 @@ flowchart TD
 ### 6.3 与节点 / 平台管理面的关系
 
 节点与 Registry 建立已认证的 node-link 会话，并显式通告 API 与数据端点。Router 向 Registry 获取按 group 分区的状态，再向选定节点转发控制/数据请求。Placer 从所配置 Provider 导入 group 并提出放置建议，节点准入仍是资源确认方。
+
+当前 Router→node 使用明文 HTTP/CONNECT：`APIEndpoint` 与 `DataEndpoint` 必须登记两个不同、可达的内部明文 listener，不能填入启用 TLS 的节点 listener。应保护该内部网络，并在 Router 或其前置负载均衡器终止公网入口 TLS。Node-link 独立使用其配置的 mTLS。独立部署可以在两个不同的节点 API/data 入口终止 TLS，不能把这种 listener 配置直接照搬到集群注册。
 
 按入口和发现配置部署 Router/Placer，保证 Registry bootstrap 与通告端点可达。[Registry 协议](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md)、[Router 行为](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-router_zh.md) 与 [Placer 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-placer_zh.md) 分别维护 Resolve/Reserve schema、缓存、激活和重试语义；部署指南不复制这些状态机。
 

@@ -61,7 +61,7 @@ Bind node-local storage, cache and control services to loopback or UDS. Public A
 | `cache-ctl tiered` | `127.0.0.1:7071` | gRPC | Health, `ping`, `info`. |
 | `node-ctl conductor serve` (`resource_listen`) | `/run/sandbox-resource.sock` | Resource protocol over UDS | sandbox-ctl resource-controller dial target. |
 | `sandbox-ctl` | `<run_root>/sandboxes/<sid>/*.sock` for node-managed sandboxes | UDS | `ch.sock`, `blk{0,1}.sock`, `uffd.sock`, `ctl.sock`, `vsock.sock` and `_5000`; `<sid>.pid` authenticates the task on config-socket. Assignment/launch parameters come through config-socket, not an `SANDBOX_ARGS` envfile. |
-| `node-ctl conductor serve` | `api.listen`, e.g. `:443` | HTTPS/h2 | Public E2B control API; the independent Proxy supplies the separate data entry. |
+| `node-ctl conductor serve` | `api.listen`, e.g. `:443` | HTTPS/h2 or HTTP/h2c, according to topology | E2B control API; the independent Proxy supplies the separate data entry. Cluster internal listener constraints are in §6.3. |
 | `node-ctl proxy serve` | `proxy.yaml.data_listen` | HTTPS/h2 or h2c | Separate data entry. Master binds the listener and passes FDs to workers. Native exec uses CONNECT with `service=exec` and `X-Access-Token`. |
 | Proxy master/workers | Conductor `mmds.listen`, default `127.0.0.1:19254` | HTTP/1.1 | Target of vswitch `--mgmt-service`. The master receives trusted conductor policy, binds the listener and passes its FD to workers. |
 | MMDS local service | `mmds.services.<name>.endpoint` | HTTP/1.1 over UDS | Conductor-only registry; V1 requires an absolute `unix://` path. Workers obtain a permitted resolved socket path from their master. |
@@ -257,6 +257,8 @@ Small deployments can colocate all three. Larger ones scale registry membership,
 ### 6.3 Relationship to nodes and external management
 
 Nodes establish authenticated node-link sessions with Registry and advertise their API and data endpoints explicitly. Router connects to Registry for group-scoped state and to the chosen node for control/data forwarding. Placer imports groups from its configured Provider and proposes placement; node admission remains authoritative for resources.
+
+Current Router-to-node forwarding uses plaintext HTTP/CONNECT: register two distinct, reachable internal plaintext listeners as `APIEndpoint` and `DataEndpoint`, not TLS-enabled node listeners. Protect this internal network and terminate public ingress TLS at Router or its fronting load balancer. Node-link independently uses its configured mTLS. Standalone deployments can instead terminate TLS on both distinct node API/data entries; do not copy that listener configuration directly into cluster registration.
 
 Deploy Router and Placer behind the appropriate ingress/discovery configuration, and keep their Registry bootstrap and advertised endpoints reachable. The [Registry protocol](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md), [Router behavior](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-router.md), and [Placer contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-placer.md) own Resolve/Reserve schemas, caching, activation and retry semantics. This deployment guide does not duplicate those state machines.
 
