@@ -24,6 +24,105 @@ candidate_pattern='^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-s
 working_set_perf="$SCRIPT_DIR/../../test/perf/sandbox-perf-working-set.sh"
 private_control_runner="    runs-on: \${{ github.event.repository.private && 'kuasar-control' || 'ubuntu-latest' }}"
 
+# These positive fixtures must remain compatible with the runtime's strict
+# disk/restore input contract. Deliberate rejection tests live in sandboxer
+# and are not subject to a blanket repository-wide ban on size fields.
+python3 - "$SCRIPT_DIR/../.." <<'PY'
+import pathlib
+import re
+import subprocess
+import sys
+import tempfile
+
+root = pathlib.Path(sys.argv[1])
+warm = (root / 'test/e2e/platform/e2e_warmpool_dedup.sh').read_text()
+perf = (root / 'test/perf/sandbox-perf-manifest.sh').read_text()
+
+def fields(document):
+    stack = []
+    result = set()
+    for line in document.splitlines():
+        match = re.match(r'^( *)([A-Za-z_][A-Za-z0-9_]*):(?:\s|$)', line)
+        if not match:
+            continue
+        indent, key = len(match[1]), match[2]
+        while stack and stack[-1][0] >= indent:
+            stack.pop()
+        stack.append((indent, key))
+        result.add('.'.join(part for _, part in stack))
+    return result
+
+def heredoc(text, label):
+    matches = re.findall(r'<<EOF\n(.*?)\nEOF', text, re.S)
+    assert len(matches) == 1, f'{label}: expected exactly one YAML fixture'
+    return fields(matches[0])
+
+warm_match = re.search(r'cat > "\$WORK/sb-\$i.yaml" <<EOF\n.*?\nEOF', warm, re.S)
+assert warm_match, 'warm-pool sandbox YAML fixture was not found'
+fixtures = {'warm-pool': heredoc(warm_match[0], 'warm-pool')}
+for name in ('write_sandbox_yaml', 'write_host_yaml'):
+    match = re.search(r'^' + name + r'\(\) \{\n.*?^\}', perf, re.S | re.M)
+    assert match, f'{name}: writer was not found'
+    fixtures[name] = heredoc(match[0], name)
+
+for name, paths in fixtures.items():
+    assert 'boot.root.overlay.diff' in paths, f'{name}: active diff binding missing'
+    retired = {f'{base}.{key}' for base in ('boot.root', 'boot.root.overlay')
+               for key in ('size', 'diff_size')}
+    assert not paths & retired, f'{name}: retired disk input {paths & retired}'
+    if name == 'write_host_yaml':
+        forbidden = {'boot.cmdline', 'boot.root.base', 'launch'}
+        assert not paths & forbidden, f'{name}: cold-only restore input {paths & forbidden}'
+    else:
+        assert {'boot.cmdline', 'boot.root.base', 'launch'} <= paths, f'{name}: cold workload lost'
+
+assert 'truncate -s 1G "$BLK1_BASE"' in warm, 'warm-pool real 1 GiB capacity lost'
+assert perf.count('truncate -s 1G "$diff"') == 3, 'cold/long/restore real 1 GiB capacity lost'
+assert '\nchunker:\n  mode: cdc\n' in perf, 'manifest workload does not explicitly select CDC'
+assert '"${SANDBOX_FILES[@]}"' in warm, 'aggregate excludes uploaded Sandbox E artifacts'
+assert '"$SNAP_SANDBOX_REF" = "manifest://$SANDBOX_MKEY"' in warm, 'S -> E accounting identity unchecked'
+print('test-ci-tools: positive disk/restore fixtures PASS')
+
+# Execute the actual parser bodies without starting any VM or Store process.
+count_fn = re.search(r'^nonzero_chunk_count\(\) \{\n.*?^\}', warm, re.S | re.M)
+assert count_fn, 'nonzero chunk parser missing'
+for sample, expected in (
+    ('chunk count:   7\nzero chunks:   2 (8.0 KiB)\n', '5'),
+    ('chunk count:   0\nzero chunks:   0 (0 B)\n', '0'),
+    ('chunk count:   7\n', None),
+    ('chunk count:   1\nzero chunks:   2 (8.0 KiB)\n', None),
+    ('chunk count:   7\nchunk count:   7\nzero chunks:   2 (8.0 KiB)\n', None),
+):
+    result = subprocess.run(['bash', '-c', count_fn[0] + '\nnonzero_chunk_count'],
+                            input=sample, text=True, capture_output=True)
+    assert (result.returncode == 0) == (expected is not None), (sample, result)
+    if expected is not None:
+        assert result.stdout.strip() == expected, result
+
+upload = re.search(r'    local upload_line snapshot_line\n.*?    local mem_resident="\$\{BASH_REMATCH\[1\]\}"', perf, re.S)
+assert upload, 'upload statistics parser missing'
+parse = ('parse() {\n local snap_log="$1" tag=regression i=1\n' + upload[0] +
+         '\n printf "%s %s %s %s %s\\n" "$sandbox_total" "$sandbox_dedup" "$snap_total" "$snap_dedup" "$mem_resident"\n}\nparse "$1"')
+valid = ('snapshot upload done: memory_size=8192 resident=4096 pause_ms=1 dump_ms=2\n'
+         '  upload OK; Sandbox E stored=2 dedup=3, Snapshot S stored=5 dedup=7\n')
+with tempfile.TemporaryDirectory(prefix='manifest-stats-') as directory:
+    sample_path = pathlib.Path(directory) / 'snapshot.log'
+    for sample, expected in (
+        (valid, '5 3 12 7 4096'),
+        (valid.replace('Sandbox E', 'overlay').replace('Snapshot S', 'snapshot'), None),
+        (valid.replace('dedup=7', 'dedup=bad'), None),
+        (valid.replace(' resident=4096', ''), None),
+        ('', None),
+    ):
+        sample_path.write_text(sample)
+        result = subprocess.run(['bash', '-eu', '-c', parse, 'test-upload-parser', str(sample_path)],
+                                text=True, capture_output=True)
+        assert (result.returncode == 0) == (expected is not None), (sample, result)
+        if expected is not None:
+            assert result.stdout.strip() == expected, result
+print('test-ci-tools: manifest upload and nonzero-entry accounting parsers PASS')
+PY
+
 [ "$(grep -Fxc "$private_control_runner" "$entry_workflow")" -eq 2 ] \
     || fail "BMS admission and finalization do not select the private caller runner pool"
 if grep -Fqx '    runs-on: ubuntu-latest' "$entry_workflow"; then

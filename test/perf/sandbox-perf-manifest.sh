@@ -218,7 +218,7 @@ cache:
   endpoint: 127.0.0.1:$CACHE_PORT
   pool: 4
   timeout: 10s
-chunk:
+chunker:
   mode: cdc
 crypto:
   chunk: aes
@@ -310,7 +310,6 @@ boot:
     base: manifest://$MKEY
     overlay:
       diff: file://$diff
-      size: 1GiB
 launch:
   args: $args_json
   restart: never
@@ -331,15 +330,9 @@ network:
 boot:
   kernel: file://$VMLINUX
   runtime: file://$BIN/sandbox-runtime.bundle
-  cmdline: "console=hvc0 printk.time=1"
   root:
-    base: manifest://$MKEY
     overlay:
       diff: file://$diff
-      size: 1GiB
-launch:
-  args: ["-c", "import time; time.sleep(60)"]
-  restart: never
 EOF
 }
 
@@ -561,21 +554,21 @@ run_upload_iter() {
     local wall_ms
     wall_ms=$(awk "BEGIN{printf \"%.1f\", ($t_end - $t0) / 1000000.0}")
     local upload_line snapshot_line
-    upload_line=$(grep -m1 'upload OK; overlay stored=' "$snap_log") || {
+    upload_line=$(grep -m1 'upload OK; Sandbox E stored=' "$snap_log") || {
         echo "snapshot upload $tag iter $i did not report chunk statistics" >&2
         sed -n '1,120p' "$snap_log" >&2
         return 1
     }
-    if [[ ! "$upload_line" =~ overlay[[:space:]]stored=([0-9]+)[[:space:]]dedup=([0-9]+),[[:space:]]snapshot[[:space:]]stored=([0-9]+)[[:space:]]dedup=([0-9]+) ]]; then
+    if [[ ! "$upload_line" =~ Sandbox[[:space:]]E[[:space:]]stored=([0-9]+)[[:space:]]dedup=([0-9]+),[[:space:]]Snapshot[[:space:]]S[[:space:]]stored=([0-9]+)[[:space:]]dedup=([0-9]+)$ ]]; then
         echo "snapshot upload $tag iter $i returned malformed chunk statistics: $upload_line" >&2
         return 1
     fi
-    local disk_stored="${BASH_REMATCH[1]}"
-    local disk_dedup="${BASH_REMATCH[2]}"
+    local sandbox_stored="${BASH_REMATCH[1]}"
+    local sandbox_dedup="${BASH_REMATCH[2]}"
     local snap_stored="${BASH_REMATCH[3]}"
     local snap_dedup="${BASH_REMATCH[4]}"
-    local disk_total snap_total
-    disk_total=$((disk_stored + disk_dedup))
+    local sandbox_total snap_total
+    sandbox_total=$((sandbox_stored + sandbox_dedup))
     snap_total=$((snap_stored + snap_dedup))
 
     snapshot_line=$(grep -m1 '^snapshot upload done:' "$snap_log") || {
@@ -596,8 +589,8 @@ print(json.dumps({
     "snap_key": "$key",
     "snap_total": int("${snap_total:-0}"),
     "snap_dedup": int("${snap_dedup:-0}"),
-    "disk_total": int("${disk_total:-0}"),
-    "disk_dedup": int("${disk_dedup:-0}"),
+    "sandbox_total": int("${sandbox_total:-0}"),
+    "sandbox_dedup": int("${sandbox_dedup:-0}"),
     "memory_resident_bytes": int("${mem_resident:-0}"),
 }))
 PY
@@ -719,7 +712,7 @@ if "wall_exit_ms" in keys:
 elif "snap_total" in keys:
     print(f"  upload wallclock:     median={fmt(med('wall_ms'),'ms')}  min={min(r.get('wall_ms',0) for r in rows):.0f}ms  max={max(r.get('wall_ms',0) for r in rows):.0f}ms")
     print(f"  snapshot chunks:      total={int(med('snap_total') or 0)} dedup={int(med('snap_dedup') or 0)}")
-    print(f"  disk chunks:          total={int(med('disk_total') or 0)} dedup={int(med('disk_dedup') or 0)}")
+    print(f"  Sandbox E chunks:     total={int(med('sandbox_total') or 0)} dedup={int(med('sandbox_dedup') or 0)}")
     print(f"  memory resident:      median={(med('memory_resident_bytes') or 0)/1024/1024:.1f} MiB")
 PY
 }
