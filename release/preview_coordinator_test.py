@@ -189,6 +189,47 @@ class PreviewCoordinatorTest(unittest.TestCase):
             formal.main()
         branch_sha.assert_not_called()
 
+    def test_date_rollover_advances_only_a_published_update_baseline(self) -> None:
+        base = "release-v1.2.3"
+        current = "preview.20260908"
+        for complete, prior in (
+            (False, None),
+            (False, "preview.20260907"),
+            (True, None),
+            (True, "preview.20260907"),
+        ):
+            with self.subTest(complete=complete, prior=prior):
+                empty = coordinator.ReleaseStatus(None, None, False)
+                published = coordinator.ReleaseStatus({}, "a" * 40, True)
+                with (
+                    mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+                    mock.patch.object(coordinator, "PLATFORM_SHA", "a" * 40),
+                    mock.patch.object(coordinator, "TODAY", "20260909"),
+                    mock.patch.object(coordinator, "validate_environment"),
+                    mock.patch.object(
+                        coordinator, "manifest_values",
+                        return_value=(base, "release-v1.2.2", current, prior, {}),
+                    ),
+                    mock.patch.object(
+                        coordinator, "release_version", return_value="release-v1.2.2"
+                    ),
+                    mock.patch.object(
+                        coordinator, "platform_release",
+                        side_effect=[empty, published if complete else empty],
+                    ),
+                    mock.patch.object(coordinator, "active_aggregate_run", return_value=None),
+                    mock.patch.object(coordinator, "active_delete_run", return_value=None),
+                    mock.patch.object(coordinator, "plan_units", return_value={}),
+                    mock.patch.object(coordinator, "platform_changed_since", return_value=True),
+                    mock.patch.object(coordinator, "render_manifest", return_value="manifest") as render,
+                    mock.patch.object(coordinator, "persist_manifest", return_value="b" * 40),
+                    mock.patch.object(coordinator, "converge", return_value=True),
+                ):
+                    coordinator.main()
+                render.assert_called_once_with(
+                    base, "release-v1.2.2", "20260909", current if complete else prior, {}
+                )
+
     def test_formal_coordinator_polls_after_pending_api_convergence(self) -> None:
         plans: dict[str, coordinator.Plan] = {}
         with (
@@ -315,7 +356,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
         plan_units.assert_called_once_with({}, "20260831")
         self.assertEqual(
             render_manifest.call_args.args[2:4],
-            ("20260831", "preview.20260830"),
+            ("20260831", "preview.20260829"),
         )
 
     def test_stale_partial_aggregate_is_cleaned_before_rollover(self) -> None:
@@ -454,9 +495,10 @@ class PreviewCoordinatorTest(unittest.TestCase):
             mock.patch.object(coordinator, "platform_release", return_value=empty),
             mock.patch.object(coordinator, "aggregate_runs", return_value=failed),
             mock.patch.object(coordinator, "gh") as gh,
-            self.assertRaisesRegex(coordinator.Deferred, "aggregate publication failed"),
+            self.assertRaisesRegex(RuntimeError, "aggregate publication failed") as failure,
         ):
             coordinator.ensure_aggregate(version, sha)
+        self.assertIs(type(failure.exception), RuntimeError)
         gh.assert_not_called()
 
     def test_older_active_aggregate_is_not_hidden_by_newer_cancelled_run(self) -> None:
@@ -846,9 +888,53 @@ components:
             mock.patch.object(coordinator, "active_delete_run", return_value=None),
             mock.patch.object(coordinator, "latest_run", return_value=failed),
             mock.patch.object(coordinator, "gh") as gh,
-            self.assertRaisesRegex(coordinator.Deferred, "three attempts"),
+            self.assertRaisesRegex(RuntimeError, "three attempts") as failure,
         ):
             coordinator.dispatch_cleanup(plan, "incomplete")
+        self.assertIs(type(failure.exception), RuntimeError)
+        gh.assert_not_called()
+
+    def test_component_publication_retry_exhaustion_is_a_failure(self) -> None:
+        tag = "v1.2.3-preview.20260909"
+        plan = coordinator.Plan(
+            coordinator.UNIT_BY_NAME["accelerator"],
+            tag, "main", "a" * 40, tag, tag, "publish",
+        )
+        state = mock.Mock()
+        state.status.return_value = coordinator.ReleaseStatus(None, None, False)
+        failed = {
+            "status": "completed", "conclusion": "failure", "run_attempt": 3,
+            "html_url": "https://example.invalid/run/1",
+        }
+        with (
+            mock.patch.object(coordinator, "RepositoryState", return_value=state),
+            mock.patch.object(coordinator, "active_release_run", return_value=None),
+            mock.patch.object(coordinator, "latest_run", return_value=failed),
+            mock.patch.object(coordinator, "gh") as gh,
+            self.assertRaisesRegex(RuntimeError, "three attempts") as failure,
+        ):
+            coordinator.ensure_unit(
+                plan, {"accelerator": plan}, "release-v1.2.3-preview.20260909", "b" * 40
+            )
+        self.assertIs(type(failure.exception), RuntimeError)
+        gh.assert_not_called()
+
+    def test_platform_cleanup_retry_exhaustion_is_a_failure(self) -> None:
+        failed = {
+            "status": "completed", "conclusion": "failure", "run_attempt": 3,
+            "html_url": "https://example.invalid/run/1",
+        }
+        with (
+            mock.patch.object(coordinator, "active_aggregate_run", return_value=None),
+            mock.patch.object(coordinator, "active_delete_run", return_value=None),
+            mock.patch.object(coordinator, "latest_run", return_value=failed),
+            mock.patch.object(coordinator, "gh") as gh,
+            self.assertRaisesRegex(RuntimeError, "three attempts") as failure,
+        ):
+            coordinator.dispatch_platform_cleanup(
+                "release-v1.2.3-preview.20260909", "b" * 40
+            )
+        self.assertIs(type(failure.exception), RuntimeError)
         gh.assert_not_called()
 
     def test_cancelled_cleanup_is_retried_after_concurrency_coalescing(self) -> None:
