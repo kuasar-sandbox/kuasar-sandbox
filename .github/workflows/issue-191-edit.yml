@@ -1,0 +1,45 @@
+name: Issue 191 isolated platform edit
+on:
+  push:
+    branches: [work/sandboxer-191-cleanup]
+permissions:
+  contents: write
+jobs:
+  edit:
+    if: github.repository == 'kuasar-sandbox/kuasar-sandbox'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/sandboxer-191-disk-config
+          fetch-depth: 0
+      - name: Remove retired disk size keys from performance configurations
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = ce68494e299641613d16d269330df6cc7d2928ef
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          python3 - <<'PY'
+          from pathlib import Path
+          import re, subprocess
+          changed = []
+          for name in ['test/perf/sandbox-perf-cache-order-ab.sh', 'test/perf/sandbox-perf-working-set.sh']:
+              p = Path(name)
+              old = p.read_text()
+              new = re.sub(r'(?m)^\s*diff_size:\s*[^\n]*\n', '', old)
+              new = re.sub(r',\s*diff_size:\s*[A-Za-z0-9.]+', '', new)
+              new = '\n'.join(re.sub(r',\s*size:\s*[A-Za-z0-9.]+', '', line) if 'overlay:' in line else line for line in new.split('\n'))
+              assert old != new, name
+              p.write_text(new)
+              changed.append(name)
+              subprocess.check_call(['bash', '-n', name])
+          subprocess.check_call(['git', 'diff', '--check'])
+          subprocess.check_call(['git', 'diff', '--', *changed])
+          r = subprocess.run(['git', 'grep', '-n', '-E', r'diff_size|overlay:.*\bsize:', '--', 'test/perf'], text=True, capture_output=True)
+          assert r.returncode == 1, r.stdout + r.stderr
+          subprocess.check_call(['make', 'test-perf-tools'])
+          subprocess.check_call(['git', 'add', '--', *changed])
+          subprocess.check_call(['git', 'commit', '-m', 'fix(perf): stop generating ineffective disk-size settings'])
+          subprocess.check_call(['git', 'push', 'origin', 'HEAD:refs/heads/fix/sandboxer-191-disk-config'])
+          PY
