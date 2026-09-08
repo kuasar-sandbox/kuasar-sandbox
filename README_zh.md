@@ -208,7 +208,7 @@ gh workflow run aggregate-release.yml \
 ```
 
 详细资产契约,权限边界,失败恢复和每日 Preview 状态机见
-[docs/release.md](docs/release_zh.md).
+[docs/release_zh.md](docs/release_zh.md).
 
 ## Documentation
 

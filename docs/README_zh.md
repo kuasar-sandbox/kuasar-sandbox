@@ -2,37 +2,30 @@
 
 # 文档
 
-## 用户与系统文档
+## 开始使用与部署运维
 
-- [快速开始](quickstart_zh.md)
-- [系统总览](kuasar-sandbox_zh.md)
-- [部署](deployment_zh.md)
-- [性能方法](perf_zh.md)
-- [发布契约](release_zh.md)
-- [CI 与 BMS](ci_zh.md)
-- [完整发布验证](../test/QUICKSTART_zh.md)
-- [演示](../test/demo/DEMO_zh.md)
-- [Runner 运维（英文）](../ci/runner/README.md)
+- [快速开始](quickstart_zh.md)：使用同一聚合版本运行第一个沙箱。
+- [部署](deployment_zh.md)：选择拓扑、服务、存储与运维依赖。
+- [完整 E2B 演示](../test/demo/DEMO_zh.md)：生命周期、网络、模板扇出与迁移。
+- [聚合发布验证](../test/QUICKSTART_zh.md)：验收交付资产，不是首次体验的源码构建指南。
 
-详细设计和运维文档的全量英文化由 [#86](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/86) 跟踪。[逐文件清单（英文）](documentation-inventory.md)及关联实现任务区分完成和待翻译内容。导航标题为英文不代表目标已经完成翻译；迁移中逐项调整中文对应路径。
+## 系统与组件契约
 
-## 组件规范
+- [系统总览](kuasar-sandbox_zh.md)：用户语义与五个组件的职责边界。
+- [术语](terminology_zh.md)：跨组件词汇速查；精确字段语义由所属组件定义。
+- [orchestrator](https://github.com/kuasar-sandbox/orchestrator/tree/main/docs)：节点生命周期、Build、资源控制、Registry、Router、Placer 与扩展。
+- [sandboxer](https://github.com/kuasar-sandbox/sandboxer/tree/main/docs)：运行生命周期、便携工件、Guest ABI 与 VMM 集成。
+- [accelerator](https://github.com/kuasar-sandbox/accelerator/tree/main/docs)：Manifest、文件工件、Store 与 Cache。
+- [connector](https://github.com/kuasar-sandbox/connector/tree/main/docs)：vSwitch 设计及运维、独立 TAP FD 协议。
+- [guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/tree/main/docs)：镜像展平、Runtime Bundle 与 Kernel。
 
-各个独立演进的组件拥有详细文档：
+## 开发、验证与发布
 
-- [orchestrator](https://github.com/kuasar-sandbox/orchestrator/tree/main/docs)：节点和集群控制面、路由、资源。
-- [sandboxer](https://github.com/kuasar-sandbox/sandboxer/tree/main/docs)：生命周期、工件、Guest ABI、VMM 补丁。
-- [accelerator](https://github.com/kuasar-sandbox/accelerator/tree/main/docs)：数据访问、Manifest、Store、Cache。
-- [connector](https://github.com/kuasar-sandbox/connector/tree/main/docs)：vSwitch 与 TAP FD 协议。
-- [guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/tree/main/docs)：Runtime Bundle、内核和镜像展平。
+- [贡献与文档检视](../CONTRIBUTING_zh.md#文档贡献)。
+- [性能方法](perf_zh.md)：计时边界、证据与回归入口。
+- [CI 与 BMS](ci_zh.md)：精确源码集合、信任边界与验证模式。
+- [发布契约](release_zh.md)：版本选择、资产、发布恢复与文档打包。
+- [Runner 运维（英文）](../ci/runner/README.md)：安装与运维验证 Runner。
+- [安全报告](../SECURITY_zh.md)。
 
-仓库访问取决于协调公开的当前状态；私有链接不能作为匿名验收已完成的证据。
-
-## 维护文档
-
-- [语言与检视规范](documentation-policy_zh.md)
-- [术语](terminology_zh.md)
-- [迁移清单（英文）](documentation-inventory.md)
-- [文档打包](documentation-packaging_zh.md)
-- [贡献规范（英文）](../CONTRIBUTING.md)
-- [安全报告](../SECURITY_zh.md)
+英文为默认入口；维护中的中文版本在各配对文档顶部互链。组件访问取决于仓库可见性；已认证的源码检视不代表匿名访问验收完成。

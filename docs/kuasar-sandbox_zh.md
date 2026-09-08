@@ -54,7 +54,7 @@ Kuasar Sandbox 提供 MicroVM 生命周期,数据访问,节点网络和单节点
 
 ### 2.1 用户入口
 
-单节点部署由 `node-ctl conductor serve` 提供 E2B 兼容控制面和数据面入口.多节点部署由
+单节点部署由 `node-ctl conductor serve` 提供 E2B 兼容控制 API，独立的 `node-ctl proxy serve` 提供沙箱数据入口。多节点部署由
 `cluster-ctl router` 提供统一入口,通过 registry 和 placer 将 group-scoped 请求路由到
 目标 node.两种模式都支持未修改的 E2B SDK 所使用的创建,执行,暂停,连接/恢复和销毁
 语义.
@@ -296,7 +296,7 @@ OOM 和有效工作丢失.应用仍可能因为自身资源声明,内存上限�
 
 ### 8.1 单节点和集群
 
-单节点由 `node-ctl conductor serve` 管理本机沙箱,构建,数据面代理和可选 Reservation Controller.
+单节点由 `node-ctl conductor serve` 管理本机沙箱、构建和可选 Reservation Controller。独立 Proxy 承载数据转发，并向 Conductor 注册以接收受信路由与策略更新。
 集群由三个独立 `cluster-ctl` 角色组成:
 
 - `registry`:维护 node,route 和 placer 的可靠执行态;
@@ -329,7 +329,7 @@ owner E2E 与 platform 组合用例.发布包记录精确版本组合,避免混�
 ## 9. 性能与容量
 
 系统总览不把单次测试数字或容量推演写成普遍能力.性能结果统一记录在
-[perf.md](perf_zh.md),并按组件拥有的 E2E/perf 入口回归.
+[perf_zh.md](perf_zh.md),并按组件拥有的 E2E/perf 入口回归.
 
 可对外比较的结果至少应同时说明:
 
@@ -361,7 +361,7 @@ Preview 继续用于开发和评估.当前 GitHub Release 提供 Linux x86_64 �
 ## 11. See Also
 
 - [deployment_zh.md](deployment_zh.md) - 部署拓扑,进程,端口和启停依赖
-- [perf.md](perf_zh.md) - 带环境口径的组件性能基线与回归方法
+- [perf_zh.md](perf_zh.md) - 带环境口径的组件性能基线与回归方法
 - [release_zh.md](release_zh.md) - 组件/聚合版本,资产和发布事务
 - [Demo](../test/demo/DEMO_zh.md) - 本地体验环境与 E2B SDK 演示
 - [Full validation](../test/QUICKSTART_zh.md) - Aggregate Release 完整验证入口
