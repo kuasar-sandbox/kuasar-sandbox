@@ -573,7 +573,7 @@ def dispatch_cleanup(plan: Plan, mode: str) -> None:
         rerun_workflow(plan.unit.repository, state)
         raise Pending(f"reran cleanup: {state.get('html_url')}")
     if state is not None and state.get("conclusion") != "success":
-        raise Deferred(f"cleanup remains failed after three attempts: {state.get('html_url')}")
+        raise RuntimeError(f"cleanup remains failed after three attempts: {state.get('html_url')}")
     args = [
         "workflow",
         "run",
@@ -931,7 +931,7 @@ def ensure_unit(
         rerun_workflow(plan.unit.repository, state_run)
         print(f"==> reran publication: {state_run.get('html_url')}")
         return False
-    raise Deferred(f"publication remains failed after three attempts: {state_run.get('html_url')}")
+    raise RuntimeError(f"publication remains failed after three attempts: {state_run.get('html_url')}")
 
 
 def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
@@ -953,7 +953,7 @@ def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
         rerun_workflow(PLATFORM_REPOSITORY, state)
         raise Pending(f"reran platform cleanup: {state.get('html_url')}")
     if state is not None and state.get("conclusion") != "success":
-        raise Deferred(
+        raise RuntimeError(
             f"platform cleanup remains failed after three attempts: {state.get('html_url')}"
         )
     gh(
@@ -1013,7 +1013,7 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
         dispatch_aggregate_run(version, source_sha)
         print(f"==> redispatched aggregate {version} with a fresh exact stage")
         return False
-    raise Deferred(f"aggregate publication failed: {state.get('html_url')}")
+    raise RuntimeError(f"aggregate publication failed: {state.get('html_url')}")
 
 
 def converge(plans: dict[str, Plan], aggregate: str, source_sha: str) -> bool:
@@ -1086,7 +1086,8 @@ def main() -> None:
                 )
             dispatch_platform_cleanup(current_aggregate, recovery_sha)
         date = TODAY
-        next_previous_preview = preview
+        # An unpublished selection may contain component tags that never existed.
+        # Keep its previous published baseline rather than comparing against it.
 
     active_aggregate = active_aggregate_run(current_aggregate)
     if active_aggregate is not None:
