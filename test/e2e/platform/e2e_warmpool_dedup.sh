@@ -7,7 +7,7 @@
 # image (python:3.12-slim by default), each running the same TICK
 # counter, snapshot each at steady state, then ingest blk1 overlays
 # into the same store. Pairwise-diff the resulting manifests and
-# report median/min/max chunk-bytes overlap separately for:
+# report median/min/max unique nonzero chunk-hash overlap separately for:
 #
 #   blk0 (image)  — single ingest, trivially shared (sanity check only)
 #   blk1 (overlay diff) — one per sandbox, tests how similar the
@@ -16,9 +16,9 @@
 #   memory snapshot     — one per sandbox, tests how similar the
 #                          guest RAM looks at the same TICK count
 #
-# Why this matters: kuasar-sandbox.md §7.3 targets >85% cross-image
-# dedup. Same-image / same-app dedup should comfortably exceed that;
-# this test exposes the actual number on real workloads.
+# Report the observed overlap for this controlled same-image workload.
+# Results are measurements, not a universal cross-image or VM-memory
+# deduplication guarantee.
 #
 # Defaults:
 #   WARMPOOL_N=5        sandboxes to spin up
@@ -231,6 +231,7 @@ while True:
     time.sleep(0.25)'
 
 declare -a SNAP_MKEYS=()
+declare -a SANDBOX_MKEYS=()
 declare -a BLK1_MKEYS=()
 
 for i in $(seq 1 "$N"); do
@@ -265,16 +266,14 @@ network:
 boot:
   kernel: file://$VMLINUX
   runtime: file://$BIN/sandbox-runtime.bundle
-  # nokaslr + norandmaps disable kernel/user ASLR. Required for the
-  # kuasar-sandbox.md §4.6 ">90% dedup" target — without them the kernel image
-  # base + user mmap layout differ per boot, defeating chunk-level
-  # cross-instance dedup.
+  # This controlled measurement disables kernel/user ASLR to reduce one
+  # source of layout variation. It is not a production security setting
+  # or a guarantee of deterministic cross-instance memory deduplication.
   cmdline: "console=hvc0 printk.time=1 nokaslr norandmaps"
   root:
     base: $BLK0_REF
     overlay:
       diff: file://$DIFF_FILE
-      size: 1GiB
 launch:
   args: ["-c", $(printf '%s' "$SANDBOX_LAUNCH" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')]
   restart: never
@@ -321,6 +320,15 @@ EOF
     [ ${#SNAP_MKEY} -eq 64 ] || { echo "FAIL: bad SNAP_MKEY for sandbox $i: '$SNAP_MKEY'"; cat "$SNAP_LOG"; exit 1; }
     SNAP_MKEYS[i]="$SNAP_MKEY"
     echo "    snapshot manifest: $SNAP_MKEY"
+    # Upload also creates Sandbox E (root disk plus runtime configuration).
+    # Include it in aggregate accounting, and check the S -> E dependency.
+    SANDBOX_MKEY=$(sed -n 's/^  Sandbox E manifest key: \([0-9a-f]\{64\}\)$/\1/p' "$SNAP_LOG")
+    [[ "$SANDBOX_MKEY" =~ ^[0-9a-f]{64}$ ]] || { echo "FAIL: missing or ambiguous Sandbox E key for sandbox $i"; cat "$SNAP_LOG"; exit 1; }
+    SANDBOX_MKEYS[i]="$SANDBOX_MKEY"
+    SNAP_SANDBOX_REF=$("$BIN/sandbox-ctl" info --json \
+        --manifest-config "$WORK/accelerator.yaml" "manifest://$SNAP_MKEY" \
+        | python3 -c 'import json, sys; print(json.load(sys.stdin)["SandboxRef"])')
+    [ "$SNAP_SANDBOX_REF" = "manifest://$SANDBOX_MKEY" ] || { echo "FAIL: Snapshot S references a different Sandbox E"; exit 1; }
 
     # Tear down sandbox; blk1 diff is now flushed (snapshot --resume=false
     # paused vCPUs + flushed vhost workers).
@@ -329,10 +337,9 @@ EOF
 
     # Ingest blk1 diff (the overlay's actual disk content) into the store
     # so we can manifest-diff it against other sandboxes' overlays. store
-    # consumes tarstream artifacts (ff88f5f), so wrap the raw diff first;
-    # the envelope is a deterministic constant prefix (entry "image", zero
-    # mtime/uid/gid, identical size across CoW copies) that dedups away, so
-    # the cross-sandbox content dedup measured below is unaffected.
+    # consumes tarstream artifacts, so wrap the raw diff first. Ingestion
+    # decodes the envelope and chunks only its logical payload; tar headers
+    # do not participate in the cross-sandbox content comparison.
     echo "    ingest blk1 overlay → store"
     "$BIN/flatten-ctl" tar stream -f "$DIFF_FILE.tar" "image:$DIFF_FILE"
     BLK1_MKEY=$("$BIN/manifest-ctl" store \
@@ -359,21 +366,14 @@ for i in $(seq 1 "$N"); do
         --output "$LOCAL/snap-$i.manifest" "${SNAP_MKEYS[i]}"
     "$BIN/manifest-ctl" get-manifest \
         --manifest-config "$WORK/accelerator.yaml" \
+        --output "$LOCAL/sandbox-$i.manifest" "${SANDBOX_MKEYS[i]}"
+    "$BIN/manifest-ctl" get-manifest \
+        --manifest-config "$WORK/accelerator.yaml" \
         --output "$LOCAL/blk1-$i.manifest" "${BLK1_MKEYS[i]}"
 done
 
 # ---- pairwise diff matrices --------------------------------------------
 
-# Run manifest-ctl diff for every (i,j) i<j pair within a category and
-# extract the "shared" / "merged" line from the human-readable output.
-# manifest-ctl diff prints something like:
-#   shared: 12345 chunks (123.4 MiB)
-#   only A: 100 chunks (1.0 MiB)
-#   only B: 200 chunks (2.0 MiB)
-#   merged unique: 12645 chunks (126.4 MiB)
-# We parse "shared" + "merged unique" bytes and compute % = shared / merged.
-
-# Helper: run diff, return "<shared_bytes> <merged_bytes>" on stdout.
 # Parse manifest-ctl diff output. The tool prints (one per line):
 #   shared:      <N> chunks (X.X UNIT)
 #   only in A:   <N> chunks (X.X UNIT)
@@ -384,12 +384,23 @@ done
 diff_pair() {
     local a="$1" b="$2"
     "$BIN/manifest-ctl" diff "$a" "$b" 2>/dev/null | awk '
-        /^shared:[[:space:]]+[0-9]+/    { shared = $2 }
-        /^only in A:[[:space:]]+[0-9]+/ { onlyA  = $4 }
-        /^only in B:[[:space:]]+[0-9]+/ { onlyB  = $4 }
+        /^shared:[[:space:]]+[0-9]+/    { shared = $2; seenS++ }
+        /^only in A:[[:space:]]+[0-9]+/ { onlyA  = $4; seenA++ }
+        /^only in B:[[:space:]]+[0-9]+/ { onlyB  = $4; seenB++ }
         END {
-            shared = shared + 0; onlyA = onlyA + 0; onlyB = onlyB + 0
+            if (seenS != 1 || seenA != 1 || seenB != 1) exit 1
             print shared, shared + onlyA + onlyB
+        }'
+}
+
+# info includes synthetic zero entries, which have no physical Store object.
+nonzero_chunk_count() {
+    awk '
+        /^chunk count:[[:space:]]+[0-9]+$/ { total = $3; seenT++ }
+        /^zero chunks:[[:space:]]+[0-9]+ / { zero = $3; seenZ++ }
+        END {
+            if (seenT != 1 || seenZ != 1 || zero > total) exit 1
+            print total - zero
         }'
 }
 
@@ -492,19 +503,20 @@ compute_matrix "memory snapshot" "${SNAP_FILES[@]}"
 # ---- store-side aggregate stats ----------------------------------------
 
 echo
-echo "==> store-side: total chunks ingested vs pairwise sum"
+echo "==> store-side: selected artifacts nonzero chunk-entry savings"
 total_chunks_in_store=$(count_files "$WORK/store-data" -name '*.chunk')
 total_chunks_in_store_alt=$(count_files "$WORK/store-data/chunk")
 [ "$total_chunks_in_store" -eq 0 ] && total_chunks_in_store="$total_chunks_in_store_alt"
 sum_per_manifest=0
-for f in "$LOCAL/blk0.manifest" "${BLK1_FILES[@]}" "${SNAP_FILES[@]}"; do
-    n=$("$BIN/manifest-ctl" info "$f" 2>/dev/null | awk '/^chunk count:/ { n = $3 } END { if (n != "") print n }')
-    if [ -n "$n" ] && [ "$n" -eq "$n" ] 2>/dev/null; then
-        sum_per_manifest=$((sum_per_manifest + n))
-    fi
+SANDBOX_FILES=()
+for i in $(seq 1 "$N"); do SANDBOX_FILES+=("$LOCAL/sandbox-$i.manifest"); done
+for f in "$LOCAL/blk0.manifest" "${BLK1_FILES[@]}" "${SNAP_FILES[@]}" "${SANDBOX_FILES[@]}"; do
+    n=$("$BIN/manifest-ctl" info "$f" | nonzero_chunk_count) || { echo "FAIL: invalid chunk statistics for $f"; exit 1; }
+    sum_per_manifest=$((sum_per_manifest + n))
 done
 echo "    unique chunks in store:    $total_chunks_in_store"
-echo "    sum chunks across manifests: $sum_per_manifest"
+echo "    nonzero entries in blk0 + each blk1/E/S: $sum_per_manifest"
+[ "$total_chunks_in_store" -le "$sum_per_manifest" ] || { echo "FAIL: Store chunks exceed the selected artifact entries"; exit 1; }
 if [ "$sum_per_manifest" -gt 0 ] && [ "$total_chunks_in_store" -gt 0 ]; then
     overall_dedup=$(awk -v u="$total_chunks_in_store" -v s="$sum_per_manifest" \
         'BEGIN{printf "%.2f", 100.0*(1.0 - u/s)}')
