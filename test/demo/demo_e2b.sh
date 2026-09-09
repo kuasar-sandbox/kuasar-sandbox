@@ -50,7 +50,8 @@ esac
 
 HANDOFF="$DEMO_DATA_DIR/prep.env"
 demo_validate_handoff "$HANDOFF"
-exec {DEMO_LOCK_FD}<>"$DEMO_DATA_DIR/.lock"
+DEMO_LOCK_FD=200
+exec 200<>"$DEMO_DATA_DIR/.lock"
 flock -sn "$DEMO_LOCK_FD" || demo_die "preparation is being stopped, reset, or changed under $DEMO_DATA_DIR"
 # prep.env is root-owned mode 0600. Its values were emitted with Bash %q.
 # shellcheck disable=SC1090
@@ -135,7 +136,7 @@ proc_start_time() {
 start_process() { # name log executable args...
     local name="$1" log="$2" exe pid start; shift 2
     exe="$(readlink -f "$1")"
-    setsid "$@" >"$log" 2>&1 </dev/null & pid=$!
+    setsid "$@" >"$log" 2>&1 </dev/null 200>&- & pid=$!
     sleep 0.1
     kill -0 "$pid" 2>/dev/null || {
         [ "$name" != conductor ] || capture_unit_files

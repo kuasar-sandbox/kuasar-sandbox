@@ -119,7 +119,7 @@ start_owned() { # name command...
     fi
     [ "$state" -eq 1 ] || demo_die "$PID_DIR/$name.pid does not identify an owned process; refusing to replace or kill it"
     rm -f "$PID_DIR/$name.pid"
-    setsid "$@" >"$LOG_DIR/$name.log" 2>&1 </dev/null &
+    setsid "$@" >"$LOG_DIR/$name.log" 2>&1 </dev/null 200>&- &
     pid=$!
     sleep 0.1
     kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null || true; demo_die "$name exited during startup (see $LOG_DIR/$name.log)"; }
@@ -197,7 +197,8 @@ stop_all() {
 
 demo_init_data_dir
 command -v flock >/dev/null 2>&1 || demo_die "flock is required"
-exec {DEMO_LOCK_FD}>"$DEMO_DATA_DIR/.lock"
+DEMO_LOCK_FD=200
+exec 200>"$DEMO_DATA_DIR/.lock"
 chmod 0600 "$DEMO_DATA_DIR/.lock"
 flock -n "$DEMO_LOCK_FD" || demo_die "another Demo preparation or run is using $DEMO_DATA_DIR"
 for directory in "$PID_DIR" "$LOG_DIR" "$RUN_DIR" "$DEMO_DATA_DIR/store" \

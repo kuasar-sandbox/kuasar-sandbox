@@ -10,10 +10,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=demo_common.sh
 . "$SCRIPT_DIR/demo_common.sh"
 
-command -v grep >/dev/null 2>&1 || {
-    echo "grep is required to inspect the Demo scripts" >&2
-    exit 1
-}
+for tool in flock grep; do
+    command -v "$tool" >/dev/null 2>&1 || {
+        echo "$tool is required to inspect the Demo scripts" >&2
+        exit 1
+    }
+done
 
 TEST_ROOT="$(mktemp -d /tmp/kuasar-demo-safety.XXXXXX)"
 cleanup() {
@@ -130,5 +132,39 @@ if grep -Eq 'library/python:3\.12-slim@sha256:[0-9a-f]{64}' \
     echo "Demo source image digest is duplicated outside demo_common.sh" >&2
     exit 1
 fi
+
+for script in demo_prep.sh demo_e2b.sh; do
+    grep -Fq 'DEMO_LOCK_FD=200' "$SCRIPT_DIR/$script" || {
+        echo "$script does not reserve the non-inherited Demo lock descriptor" >&2
+        exit 1
+    }
+done
+# shellcheck disable=SC2016 # Literal start_owned command must close the lock.
+grep -Fq 'setsid "$@" >"$LOG_DIR/$name.log" 2>&1 </dev/null 200>&- &' \
+    "$SCRIPT_DIR/demo_prep.sh" || {
+    echo "persistent preparation services inherit the Demo lock" >&2
+    exit 1
+}
+# shellcheck disable=SC2016 # Literal start_process command must close the lock.
+grep -Fq 'setsid "$@" >"$log" 2>&1 </dev/null 200>&- & pid=$!' \
+    "$SCRIPT_DIR/demo_e2b.sh" || {
+    echo "per-run services inherit the Demo lock" >&2
+    exit 1
+}
+
+lock_fixture="$TEST_ROOT/non-inherited.lock"
+exec 200>"$lock_fixture"
+flock -n 200
+sleep 30 200>&- &
+lock_child=$!
+exec 200>&-
+if ! flock -n "$lock_fixture" true; then
+    kill "$lock_child" 2>/dev/null || true
+    wait "$lock_child" 2>/dev/null || true
+    echo "closed child descriptor retained the Demo lock" >&2
+    exit 1
+fi
+kill "$lock_child" 2>/dev/null || true
+wait "$lock_child" 2>/dev/null || true
 
 echo "PASS: Demo ownership and private-handoff safety"
