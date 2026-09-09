@@ -389,6 +389,12 @@ Apply 先 dispatch 五个组件仓的本地删除 wrapper。每个 wrapper 仅�
 新的清理 run。Stable Release、Stable Tag、Actions artifacts、非 canonical orphan 都
 不属于 GC 删除集合。
 
+一次 Apply 会等待异步删除,每隔 30 秒根据实时 Release、Tag 和受保护引用重新生成计划
+(计划执行时间另计),持续处理所有符合条件的 Stable 版本,仅在各版本候选集均为空后报告
+收敛。控制器整次运行共用一小时收敛预算;到期仍有候选时报告失败,后续运行按仓库实际
+状态继续。Workflow 留出 75 分钟用于准备和收尾。Dry-run 对指定或发现的每个 Stable
+版本只输出一次计划,不派发删除、不等待。
+
 ```bash
 # 只读真实计划
 gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
