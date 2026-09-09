@@ -90,6 +90,16 @@ descriptor together: `KUASAR_UTIL_LINUX_SRPM_URL`,
 `KUASAR_UTIL_LINUX_TARBALL_SHA256`. The archive name is validated as a plain
 file name and is included in the static-library build identity.
 
+The template retains that build's license texts and `SOURCES.tsv` under
+`/usr/share/kuasar-ci/native-libuuid/<build-id>/`. The record binds the actual
+`libuuid.a` digest to the verified source RPM and upstream tarball;
+`MATERIALS.sha256` covers the complete material inventory. Both new and existing
+slots receive the library and its matching catalog. Missing or changed material
+invalidates a template cache hit, and a mismatched slot copy fails preparation.
+Runtime packaging consumes this catalog because the locally built archive has
+no installed RPM owner. These records support release review; they do not
+certify license compliance.
+
 The host install also writes `/etc/modules-load.d/kuasar-ci.conf` for bridge,
 overlay, TUN, and vhost devices. Enabled slots therefore retain their required
 bind devices after a host reboot. Space checks follow the filesystems that hold

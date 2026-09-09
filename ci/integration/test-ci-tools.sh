@@ -130,6 +130,7 @@ if grep -Fqx '    runs-on: ubuntu-latest' "$entry_workflow"; then
 fi
 
 provisioner="$SCRIPT_DIR/../runner/provision.sh"
+bash "$SCRIPT_DIR/test-runner-native-materials.sh" "$provisioner"
 for slot in 1 2 4 6; do
     actual=$(bash -c '. "$1"; printf "%s\t%s\t%s\t%s" "$(slot_role "$2")" "$(runner_name "$2")" "$(runner_group "$2")" "$(runner_labels "$2")"' \
         test-runner-role "$provisioner" "$slot")
