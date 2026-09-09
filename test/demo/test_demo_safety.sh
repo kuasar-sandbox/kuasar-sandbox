@@ -72,6 +72,23 @@ fi
 chmod 0600 "$DEMO_DATA_DIR/prep.env"
 demo_validate_handoff "$DEMO_DATA_DIR/prep.env"
 
+mkdir "$TEST_ROOT/run-target" "$TEST_ROOT/foreign-target"
+printf 'sentinel\n' >"$TEST_ROOT/run-target/owned"
+printf 'foreign\n' >"$TEST_ROOT/foreign-target/sentinel"
+demo_create_run_alias "$TEST_ROOT/run-alias" "$TEST_ROOT/run-target"
+if demo_create_run_alias "$TEST_ROOT/run-alias" "$TEST_ROOT/foreign-target" >/dev/null 2>&1; then
+    echo "existing socket alias was replaced" >&2
+    exit 1
+fi
+if demo_remove_run_alias "$TEST_ROOT/run-alias" "$TEST_ROOT/foreign-target" >/dev/null 2>&1; then
+    echo "socket alias with a different owner was removed" >&2
+    exit 1
+fi
+demo_remove_run_alias "$TEST_ROOT/run-alias" "$TEST_ROOT/run-target"
+[ ! -L "$TEST_ROOT/run-alias" ]
+grep -Fxq sentinel "$TEST_ROOT/run-target/owned"
+grep -Fxq foreign "$TEST_ROOT/foreign-target/sentinel"
+
 cat >"$TEST_ROOT/manifest.json" <<'EOF'
 {"schemaVersion":2,"config":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
 EOF

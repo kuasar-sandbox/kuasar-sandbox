@@ -93,6 +93,10 @@ GUEST_DNS="${GUEST_DNS:-169.254.169.253}"; HOST_DNS=""
 MGMT_VIP="169.254.169.254"; SW_MGMT_ADDR="169.254.1.0/31"
 WORK="$DEMO_DATA_DIR/runs/$RUN_KEY"
 [ ! -e "$WORK" ] || demo_die "run directory already exists; choose another DEMO_RUN_ID: $WORK"
+RUN_ROOT="/run/kd-$RUN_KEY"
+if [ -e "$RUN_ROOT" ] || [ -L "$RUN_ROOT" ]; then
+    demo_die "socket alias already exists; choose another DEMO_RUN_ID: $RUN_ROOT"
+fi
 RESULT_DIR="$DEMO_DATA_DIR/results/$RUN_KEY"
 if [ -n "${DEMO_KEEP:-}" ] && [ -e "$RESULT_DIR" ]; then
     demo_die "result directory already exists; refusing to overwrite it: $RESULT_DIR"
@@ -124,6 +128,7 @@ die()  { echo $'\e[1;31m'"  ✗ $*"$'\e[0m' >&2; exit 1; }
 declare -a PROCESS_NAMES=() PROCESS_PIDS=() PROCESS_STARTS=() PROCESS_EXES=() NAT_ADDED=()
 declare -A UNIT_HASHES=()
 SWITCH_OWNED=0; NETNS_OWNED=0; HOSTS_OWNED=0; AMBIGUOUS_SWITCH=0
+RUN_ALIAS_OWNED=0
 AK=""; API_SECRET=""; MK=""; ENC=""; TOK=""; MIG_TOKEN=""
 
 proc_start_time() {
@@ -263,6 +268,9 @@ cleanup() {
     systemctl daemon-reload >/dev/null 2>&1
     rm -f -- "$CLI_ENV_FILE"
     keep_safe_logs
+    if [ "$cleanup_failed" -eq 0 ] && [ "$RUN_ALIAS_OWNED" -eq 1 ]; then
+        demo_remove_run_alias "$RUN_ROOT" "$WORK/run" || cleanup_failed=1
+    fi
     if [ "$cleanup_failed" -eq 0 ]; then
         case "$WORK/" in "$DEMO_DATA_DIR"/runs/"$RUN_KEY"/) rm -rf -- "$WORK" || cleanup_failed=1 ;; *) echo "  ! unsafe work path preserved: $WORK" >&2; cleanup_failed=1 ;; esac
     else
@@ -346,6 +354,8 @@ fi
 if { iptables -S; iptables -t nat -S; } 2>/dev/null | grep -Fq -- "$HOST_MARKER"; then
     die "iptables already contains the run marker $HOST_MARKER; refusing to adopt or replace those rules"
 fi
+demo_create_run_alias "$RUN_ROOT" "$WORK/run" || die "cannot reserve the Demo socket alias"
+RUN_ALIAS_OWNED=1
 
 # ===========================================================================
 banner "Per-run node stack (orchestrator + eBPF switch; storage tier already up)"
@@ -449,7 +459,7 @@ proxy: { auth: enforce }
 $MMDS_CFG
 encryption_key: "$ENC"
 manifest_config: '$WORK/manifest.yaml'
-paths: { run_root: '$WORK/run', base_root: '$WORK/lib', config_socket: '$WORK/node-ctl.socket' }
+paths: { run_root: '$RUN_ROOT', base_root: '$WORK/lib', config_socket: '$WORK/node-ctl.socket' }
 units: { dir: '$UNIT_DIR', runner: '$RUNNER_TEMPLATE', builder: '$BUILDER_TEMPLATE' }
 sandbox:
   network: { switch: '$SWITCH' }          # e2b defaults: ip 169.254.0.21/30 nexthop .22
@@ -473,7 +483,7 @@ checkpoint: { mode: local }
 EOF
 cat > "$WORK/proxy.yaml" <<EOF
 config_socket: '$WORK/node-ctl.socket'
-paths: { run_root: '$WORK/run' }
+paths: { run_root: '$RUN_ROOT' }
 data_listen: '$DATA_IP:$TLS_PORT'
 stats_socket: '$WORK/proxy-stats.sock'
 shm_path: '$WORK/proxy-routes.shm'

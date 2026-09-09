@@ -103,6 +103,8 @@ Preparation is idempotent only when the live services still match their recorded
 
 `DEMO_DATA_DIR` defaults to `/var/lib/kuasar-demo`. It must be a canonical absolute path using safe path characters. The scripts create a root-owned mode-0700 directory and a strict ownership marker. A nonempty unmarked directory, symbolic-link path, unexpected PID record, changed live configuration, or foreign host resource causes a fail-closed refusal.
 
+Each run reserves the short socket alias `/run/kd-<run-id>` pointing into its private work directory, keeping maximum Sandbox and Build socket paths within Linux's limit. An existing alias is a conflict. Cleanup removes only an alias that still points to that run's directory.
+
 `prep.env`, Docker authentication, service configuration, generated keys, TLS private keys, and the optional `cli.env` are kept in the run-owned tree with private permissions. The preparation handoff uses shell assignments rather than exported secrets, and long-lived Conductor, Proxy, Store, and Cache processes do not inherit Registry or object-storage passwords unnecessarily. Credentials copied into a newly created node business record remain attached to that record; changing a later key-distribution entry does not rebind existing records.
 
 On normal exit and ordinary failures, `demo_e2b.sh` stops only the exact unit instances and process groups it started, deletes only its tagged iptables and `/etc/hosts` entries, and removes a vSwitch or namespace only after proving ownership. It never wildcard-stops all sandbox runners/builders. If ownership becomes ambiguous or cleanup is incomplete, it preserves the private work directory and reports failure instead of force-deleting the object.

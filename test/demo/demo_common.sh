@@ -91,6 +91,27 @@ demo_require_yaml_single_quoted() {
     esac
 }
 
+demo_create_run_alias() {
+    local alias="$1" target="$2"
+    if [ ! -d "$target" ] || [ -L "$target" ]; then
+        echo "Demo run target is not an owned directory: $target" >&2
+        return 1
+    fi
+    ln -sT -- "$target" "$alias" \
+        || { echo "Demo socket alias already exists; refusing to replace it: $alias" >&2; return 1; }
+}
+
+demo_remove_run_alias() {
+    local alias="$1" target="$2"
+    if [ ! -e "$alias" ] && [ ! -L "$alias" ]; then return 0; fi
+    if [ -L "$alias" ] && [ "$(readlink -- "$alias")" = "$target" ]; then
+        rm -- "$alias"
+    else
+        echo "Demo socket alias changed; preserving it: $alias" >&2
+        return 1
+    fi
+}
+
 demo_secure_owned_file() {
     local path="$1" mode="${2:-600}"
     if [ ! -f "$path" ] || [ -L "$path" ]; then

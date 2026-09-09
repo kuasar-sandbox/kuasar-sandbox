@@ -103,6 +103,8 @@ sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
 
 `DEMO_DATA_DIR` 默认是 `/var/lib/kuasar-demo`。它必须是只含安全路径字符的 canonical absolute path。脚本创建 root 所属、mode 0700 的目录和严格 ownership marker。非空且无 marker 的目录、symlink 路径、异常 PID record、存活服务配置变化或陌生 host 资源都会触发 fail-closed 拒绝。
 
+每次运行会保留指向其私有工作目录的短 socket alias `/run/kd-<run-id>`,使最长的 Sandbox 和 Build socket 路径不超过 Linux 限制。已有 alias 会被视为冲突。清理只删除仍指向本次运行目录的 alias。
+
 `prep.env`、Docker 认证、服务配置、生成的 key、TLS private key 和可选 `cli.env` 均位于运行所属目录并使用私有权限。准备交接使用 shell assignment 而不是导出 secret;长期运行的 Conductor、Proxy、Store 与 Cache 不会无必要地继承 Registry 或对象存储密码。复制进新 node business record 的凭据保持与该记录关联;之后修改 key-distribution entry 不会重绑已有记录。
 
 正常退出和普通失败时,`demo_e2b.sh` 只停止它启动的精确 unit instance 与 process group,只删除带本次标记的 iptables 和 `/etc/hosts` 条目,并且仅在能证明归属后删除 vSwitch 或 namespace。脚本不会用通配符停止全部 Sandbox Runner/Builder。如果归属变得不明确或清理不完整,脚本会保留私有工作目录并报告失败,不会强制删除该对象。
