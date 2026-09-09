@@ -421,8 +421,11 @@ BASE_TAG="sha-${IMAGE_DIGEST,,}"
 BASE_TAG_REF="$REGISTRY/$REGISTRY_NS/base:$BASE_TAG"
 
 if ! docker image inspect "$E2E_IMAGE" >/dev/null 2>&1; then
-    docker pull --platform linux/amd64 "$E2E_IMAGE" >"$LOG_DIR/source-pull.log" 2>&1 \
-        || demo_die "docker pull failed for $E2E_IMAGE"
+    if ! docker pull --platform linux/amd64 "$E2E_IMAGE" >"$LOG_DIR/source-pull.log" 2>&1; then
+        echo "docker pull output for public source image $E2E_IMAGE:" >&2
+        sed -n 'p' "$LOG_DIR/source-pull.log" >&2
+        demo_die "docker pull failed for $E2E_IMAGE"
+    fi
 fi
 SOURCE_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$E2E_IMAGE")"
 if docker pull --platform linux/amd64 "$BASE_TAG_REF" >"$LOG_DIR/destination-pull.log" 2>&1; then

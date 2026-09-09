@@ -10,6 +10,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=demo_common.sh
 . "$SCRIPT_DIR/demo_common.sh"
 
+command -v grep >/dev/null 2>&1 || {
+    echo "grep is required to inspect the Demo scripts" >&2
+    exit 1
+}
+
 TEST_ROOT="$(mktemp -d /tmp/kuasar-demo-safety.XXXXXX)"
 cleanup() {
     case "$TEST_ROOT" in /tmp/kuasar-demo-safety.*) rm -rf -- "$TEST_ROOT" ;;
@@ -80,10 +85,16 @@ if (demo_require_yaml_single_quoted TEST_VALUE "unsafe'value") >/dev/null 2>&1; 
     exit 1
 fi
 
-if rg -n "/tmp/demo-e2b-cli-env|systemctl stop 'sandbox-(runner|builder)@\\\*|0\\|4\\).*SWITCH_OWNED=1|printf 'export (REGISTRY|VGW_)" \
+if grep -En "/tmp/demo-e2b-cli-env|systemctl stop 'sandbox-(runner|builder)@\\\*|0\\|4\\).*SWITCH_OWNED=1|printf 'export (REGISTRY|VGW_)" \
     "$SCRIPT_DIR/demo_e2b.sh" "$SCRIPT_DIR/demo_prep.sh"; then
     echo "unsafe Demo cleanup pattern remains" >&2
     exit 1
+else
+    grep_status=$?
+    if [ "$grep_status" -ne 1 ]; then
+        echo "cannot inspect Demo scripts for unsafe cleanup patterns (grep exit $grep_status)" >&2
+        exit 1
+    fi
 fi
 # shellcheck disable=SC2016 # The literal source pattern must not expand here.
 if grep -Fq 'local name="$1" record="$PID_DIR/$name.pid"' \
