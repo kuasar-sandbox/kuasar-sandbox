@@ -71,4 +71,4 @@ The checker covers ordinary Markdown inline/reference destinations, local file e
 
 A PR records Summary, Corrections, Translation coverage, Validation and Out of scope. Inspect the final diff, all review discussions and required checks against the exact head and current base. Use normal repository merge rules; no administrative bypass or invented reviewer approval.
 
-Final acceptance records file-level coverage, semantic review, links, source/archive layouts and merge evidence separately. A successful language scan does not imply a correct translation. An unavailable test is not passed. Anonymous access to private repositories stays explicitly pending the coordinated public window; a documentation task does not authorize changing repository visibility or replacing published release assets.
+Final acceptance records file-level coverage, semantic review, links, source/archive layouts and merge evidence separately. A successful language scan does not imply a correct translation. An unavailable test is not passed. Published Release assets are immutable; ordinary documentation work never replaces them.

@@ -6,7 +6,7 @@
 
 It provides independent guest-kernel isolation, snapshot-template instantiation, stateful pause and resume, on-demand data loading, high-density resource governance, and a deployment path from a single node to a multi-node cluster.
 
-The current stable aggregate release is [`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2). Preview releases remain available for development and evaluation. Production readiness describes the system's deployment and operational capabilities; the Stable/Preview label describes the stability of a public release channel. Production deployments should still validate capacity against their own workloads and configure production TLS, durable storage, network policy, and credentials.
+The [Stable channel](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/latest) resolves to the current non-prerelease aggregate; select that Release once and pin its exact tag, assets, and checksums for an installation. Preview releases remain available for development and evaluation. Production readiness describes the system's deployment and operational capabilities; the Stable/Preview label describes the stability of a public release channel. Production deployments should still validate capacity against their own workloads and configure production TLS, durable storage, network policy, and credentials.
 
 ## Start here
 
@@ -115,7 +115,7 @@ The five components form the complete platform together, but each component can 
 
 ## Release status and support scope
 
-- **Current stable aggregate release:** [`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2).
+- **Stable channel:** the GitHub Latest non-prerelease aggregate; resolve it once and retain its exact tag for every asset and checksum in one installation.
 - **Preview channel:** GitHub prereleases for development and evaluation; Preview does not replace the current Stable release.
 - **Prebuilt architecture:** current GitHub releases provide Linux x86_64 assets.
 - **Source-build architectures:** the Makefiles support `TARGET_ARCH=x86_64` and `TARGET_ARCH=aarch64`; source-build support does not mean that prebuilt release assets are published for both architectures.

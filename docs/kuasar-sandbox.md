@@ -318,7 +318,7 @@ Numbers without this context cannot support promises about node capacity, startu
 
 Kuasar Sandbox provides standalone and cluster topologies, node admission and recovery, independent processes and fault domains, component and aggregate versions, real MicroVM cross-component E2E, release-asset verification and exact version combinations.
 
-The current Stable aggregate version is [`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2). Preview remains available for development and evaluation. Current GitHub releases provide prebuilt Linux x86_64 assets. Source builds support x86_64 and aarch64, but a supported source-build architecture is not automatically a published-asset architecture. [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) and [release.md](release.md) are authoritative for the latest status.
+The [Stable channel](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/latest) resolves to the current non-prerelease aggregate. Resolve it once and use that exact tag for all assets and checksums in an installation. Preview remains available for development and evaluation. Current GitHub releases provide prebuilt Linux x86_64 assets. Source builds support x86_64 and aarch64, but a supported source-build architecture is not automatically a published-asset architecture. [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) and [release.md](release.md) are authoritative for the latest status.
 
 ## 11. See also
 

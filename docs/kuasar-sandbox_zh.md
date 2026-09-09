@@ -352,9 +352,9 @@ owner E2E 与 platform 组合用例.发布包记录精确版本组合,避免混�
 Kuasar Sandbox 具备单节点和集群拓扑,节点资源准入与恢复,独立进程和故障域,组件
 独立版本和聚合版本,跨组件真实 MicroVM E2E,Release 资产校验和精确版本组合.
 
-当前 Stable 聚合版本为
-[`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2);
-Preview 继续用于开发和评估.当前 GitHub Release 提供 Linux x86_64 预构建资产;
+[Stable 通道](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/latest)解析为
+当前非 prerelease 聚合版本.一次安装只解析一次,随后对全部资产和校验和使用同一精确
+Tag.Preview 继续用于开发和评估.当前 GitHub Release 提供 Linux x86_64 预构建资产;
 源码构建支持 x86_64 和 aarch64,但源码可构建架构不能自动视为已发布资产架构.最新状态以
 [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 和
 [release_zh.md](release_zh.md) 为准.
