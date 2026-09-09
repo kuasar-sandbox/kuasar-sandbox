@@ -342,7 +342,12 @@ def verify(args: argparse.Namespace) -> None:
     path = release_dir(args)
     env = runtime_environment(path)
     env["DEMO_QUICKSTART"] = "1"
-    sudo_env = ["sudo", "-n", "env"] + [f"{key}={env[key]}" for key in ("PATH", "DEMO_DATA_DIR", "DEMO_QUICKSTART")]
+    env["DEMO_UNIT_PREFIX"] = args.unit_prefix
+    keys = ["PATH", "DEMO_DATA_DIR", "DEMO_QUICKSTART", "DEMO_UNIT_PREFIX"]
+    if args.keep_logs:
+        env["DEMO_KEEP"] = "1"
+        keys.append("DEMO_KEEP")
+    sudo_env = ["sudo", "-n", "env"] + [f"{key}={env[key]}" for key in keys]
     run(sudo_env + ["bash", "test/demo/demo_e2b.sh"], cwd=path)
     print("Kuasar MicroVM verification passed.")
 
@@ -363,7 +368,11 @@ def stop(args: argparse.Namespace) -> None:
 
 def quick_start(args: argparse.Namespace) -> None:
     install_dir = prepare_release(args)
-    runtime_args = argparse.Namespace(release_dir=install_dir)
+    runtime_args = argparse.Namespace(
+        release_dir=install_dir,
+        unit_prefix=args.unit_prefix,
+        keep_logs=args.keep_logs,
+    )
     deploy(runtime_args)
     verify(runtime_args)
     print("Quick start completed successfully.")
@@ -385,17 +394,46 @@ def build_parser() -> argparse.ArgumentParser:
     quick_start_parser.add_argument("--version", default=DEFAULT_VERSION)
     quick_start_parser.add_argument("--repository", default=DEFAULT_REPOSITORY)
     quick_start_parser.add_argument("--root", type=Path, default=Path.cwd())
+    quick_start_parser.add_argument("--unit-prefix", default="kuasar-demo")
+    quick_start_parser.add_argument("--keep-logs", action="store_true")
 
-    for command in ("deploy", "verify", "stop"):
+    for command in ("deploy", "stop"):
         item = subparsers.add_parser(command)
         item.add_argument("--release-dir", type=Path, required=True)
 
+    verify_parser = subparsers.add_parser("verify")
+    verify_parser.add_argument("--release-dir", type=Path, required=True)
+    verify_parser.add_argument("--unit-prefix", default="kuasar-demo")
+    verify_parser.add_argument("--keep-logs", action="store_true")
+
     return parser
+
+
+def requested_release(args: argparse.Namespace) -> str:
+    if hasattr(args, "version"):
+        return args.version
+    if hasattr(args, "release_dir"):
+        return str(args.release_dir.resolve())
+    return "host environment"
+
+
+def print_result(args: argparse.Namespace, succeeded: bool, reason: str | None = None) -> None:
+    stream = sys.stdout if succeeded else sys.stderr
+    print("\n=== KUASAR DEPLOYMENT RESULT ===", file=stream)
+    print(f"Command: {args.command}", file=stream)
+    print(f"Release: {requested_release(args)}", file=stream)
+    print(f"Result: {'SUCCEEDED' if succeeded else 'FAILED'}", file=stream)
+    if reason:
+        print(f"Reason: {reason}", file=stream)
 
 
 def main() -> int:
     args = build_parser().parse_args()
     try:
+        require(
+            not hasattr(os, "geteuid") or os.geteuid() != 0,
+            "run this tool as a regular user; it uses passwordless sudo internally",
+        )
         if args.command == "check":
             check_environment()
         elif args.command == "prepare":
@@ -408,10 +446,11 @@ def main() -> int:
             verify(args)
         elif args.command == "stop":
             stop(args)
+        print_result(args, True)
         return 0
     except (DeployError, subprocess.CalledProcessError) as exc:
-        if str(exc):
-            print(f"ERROR: {exc}", file=sys.stderr)
+        reason = str(exc) or "one or more required checks failed"
+        print_result(args, False, reason)
         return 1
 
 
