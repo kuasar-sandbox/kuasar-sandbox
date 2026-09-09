@@ -85,5 +85,11 @@ if rg -n "/tmp/demo-e2b-cli-env|systemctl stop 'sandbox-(runner|builder)@\\\*|0\
     echo "unsafe Demo cleanup pattern remains" >&2
     exit 1
 fi
+# shellcheck disable=SC2016 # The literal source pattern must not expand here.
+if grep -Fq 'local name="$1" record="$PID_DIR/$name.pid"' \
+    "$SCRIPT_DIR/demo_prep.sh"; then
+    echo "record_state expands its local name before assignment under set -u" >&2
+    exit 1
+fi
 
 echo "PASS: Demo ownership and private-handoff safety"

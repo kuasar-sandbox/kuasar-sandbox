@@ -88,7 +88,8 @@ proc_start_time() {
 }
 
 record_state() { # name; 0=owned live, 1=absent/dead, 2=invalid or live mismatch
-    local name="$1" record="$PID_DIR/$name.pid" current_start current_exe
+    local name="$1" record current_start current_exe
+    record="$PID_DIR/$name.pid"
     REC_PID="" REC_START="" REC_EXE=""
     [ -e "$record" ] || return 1
     [ -f "$record" ] && [ ! -L "$record" ] || return 2
