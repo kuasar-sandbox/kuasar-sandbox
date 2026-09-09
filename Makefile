@@ -36,6 +36,8 @@ E2E_TOOL_DIR   := build/e2e-tools/$(TARGET_ARCH)
 E2E_ZOT_BIN    := $(abspath $(E2E_TOOL_DIR)/zot)
 E2E_VGW_BIN    := $(abspath $(E2E_TOOL_DIR)/versitygw)
 E2E_SUITE_DIR  := $(abspath build/e2e-suite)
+DEMO_DATA_DIR  ?= /var/lib/kuasar-demo
+PYTHON_BIN     ?=
 BIN_INPUTS_MANIFEST := release/bin-inputs.manifest
 CI_TIMED       := ci/integration/ci-timed.sh
 GO_REPOS       := accelerator sandboxer guest-runtime connector orchestrator
@@ -158,8 +160,9 @@ dedup-report:
 # (build template → boot microVM → exec → pause/resume → kill). DEMO_PAUSE=1 to
 # step through and drive the CLI from another terminal; see test/demo/DEMO.md.
 demo: build e2e-tools
-	BIN=$(SBIN) ZOT_BIN=$(E2E_ZOT_BIN) VGW_BIN=$(E2E_VGW_BIN) bash test/demo/demo_prep.sh   # persistent store/cache/registry (idempotent; honors REGISTRY=…)
-	BIN=$(SBIN) bash test/demo/demo_e2b.sh
+	@test -n "$(PYTHON_BIN)" || { echo "set PYTHON_BIN=/absolute/path/to/pinned-venv/bin/python" >&2; exit 1; }
+	sudo -n env DEMO_DATA_DIR="$(DEMO_DATA_DIR)" BIN="$(SBIN)" ZOT_BIN="$(E2E_ZOT_BIN)" VGW_BIN="$(E2E_VGW_BIN)" bash test/demo/demo_prep.sh
+	sudo -n env DEMO_DATA_DIR="$(DEMO_DATA_DIR)" BIN="$(SBIN)" PYTHON_BIN="$(PYTHON_BIN)" bash test/demo/demo_e2b.sh
 
 # ---------------------------------------------------------------------------
 # Sub-repo vet/test/clean aggregates
@@ -174,6 +177,7 @@ test-ci-tools:
 	bash ci/integration/test-ci-tools.sh
 
 test-release-tools:
+	bash test/demo/test_demo_safety.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_documentation_package.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_selection_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_coordinator_test.py

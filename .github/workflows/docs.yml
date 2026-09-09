@@ -6,6 +6,8 @@ on:
       - '**.md'
       - 'ci/check_docs.py'
       - 'ci/test_check_docs.py'
+      - 'test/demo/*.sh'
+      - 'test/demo/requirements.txt'
       - '.github/workflows/docs.yml'
 
 permissions:
@@ -22,6 +24,8 @@ jobs:
           persist-credentials: false
       - name: Test documentation checker
         run: python3 -m unittest discover -s ci -p 'test_check_docs.py'
+      - name: Test Demo ownership safeguards
+        run: bash test/demo/test_demo_safety.sh
       - name: Check changed documentation
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}

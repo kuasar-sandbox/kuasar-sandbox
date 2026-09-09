@@ -1,138 +1,136 @@
 [English](DEMO.md) | [简体中文](DEMO_zh.md)
 
-# e2b 兼容沙箱主机 — 端到端演示
+# E2B 兼容沙箱主机 Demo
 
-`demo_e2b.sh` 用**未改造的 e2b Python SDK**(`pip install e2b e2b-code-interpreter`)把
-`orchestrator` 的全链路跑一遍:`Template().from_image()` 构建模板(**拉取 + 展平在构建沙箱
-microVM 内进行,客户端不再 docker build/push**)→ 启动真实 microVM → guest 内执行命令 →
-**端口转发 + 出网** → 暂停/恢复 → **暂停态转模板扇出** → **一步迁移**(import+resume)→ 销毁。
-SDK 零修改,仅靠环境变量 + 本机 `/etc/hosts` + 本地 Demo CA 签发的 TLS(`SSL_CERT_FILE`)指向本节点
-(与指向 e2b.dev 的方式一致)。
+本 Demo 通过未修改的 E2B Python SDK 驱动一个 Kuasar Sandbox 单节点。它使用当前独立的 Conductor 和 Proxy 进程,在 Builder MicroVM 内构建 snapshot template,创建真实 MicroVM,执行 Command 与 Files API,验证数据访问,暂停并恢复同一逻辑 Sandbox,最后销毁 Sandbox。完整模式还覆盖 Template 扇出和一步迁移。
 
-**本 Demo 的持久存储前置**:内容存储(store-ctl)、本地 L1 缓存(cache-ctl,tiered rocksdb)、镜像仓库
-三者由 `demo_prep.sh` **起一次、常驻复用**(store/cache 监听 **UNIX socket**、不占端口;数据落
-`DEMO_DATA_DIR`、跨多次演示复用并缓存镜像与 chunk)。`demo_e2b.sh` 每次只起编排 + eBPF 交换机。
-这是 Demo 选择的存储配置,不是要求所有 Kuasar 部署都使用该数据路径。
+Demo 是可执行的产品入口,但不能代替组件与聚合 Integration E2E。没有可读写 KVM 的运行,或通过 `DEMO_NETDIAG` 容忍网络断言失败的运行,都不能作为验收证据。
 
-## 演示了什么
+## 1. 执行模式
 
-| 步骤 | 命令(真实 e2b Python SDK / node-ctl) | 证明 |
-|---|---|---|
-| 1 | (编排起栈) | orchestrator(TLS) + eBPF vswitch + host NAT;store/cache 经 UDS 复用 |
-| 2 | `e2b-key-ctl` + `manifest-key add` | 凭据模型:ManifestKey 保护内容与拉取令牌,固定 KDF 派生缺省 APISecret,APISecret 签发 api_key,两者成对白名单入库 |
-| 3 | `Template().from_image(ref).build()` | **构建沙箱**(microVM)内拉取该镜像(租户凭据、租户网络)+ 展平为模板;**无客户端 docker** |
-| 4 | `Sandbox.create(template)` | 从模板冷启真实 cloud-hypervisor microVM,guest 内 envd 就绪 |
-| 5 | `sbx.commands.run(…)` | guest 内执行命令(默认用户 `user`,可写 `/home/user`)经 proxy→envd |
-| 6 | `curl http://<floatingip>:port` / `https://<port>-<sid>.<domain>` | **端口转发** + **沙箱出网**(NAT) |
-| 7 | `sbx.pause()` / `Sandbox.connect(id)` | 快照入内容存储 → 恢复(**resume == connect**);暂停前写入恢复后仍在 |
-| 8 | `export-sandbox --to-template` → `Sandbox.create(<tmpl>)` | 暂停态晋升为远程模板、扇出**新**沙箱(带 forked 状态) |
-| 9 | `export-sandbox` → `Sandbox.connect(id, api_headers={migration-token})` | **一步迁移**:connect 自动 import + resume |
-| 10 | `Sandbox.list()` / `sbx.kill()` | 生命周期 |
+一次运行只能使用一套内部一致的 source set:
 
-## 前置条件
+- **源码模式:** 用项目 `Makefile` 构建六个兄弟仓,再以同一源码 revision 的脚本运行对应 `bin/<arch>` 目录。
+- **Release 模式:** 解析一个聚合 Release Tag,校验该 Release 的全部资产,完成解包后只使用该解包目录中的脚本和二进制。不得把 `main` 上的脚本与较旧 Stable Release 的二进制混用。
 
-- 二进制(源码树中执行 `make -C kuasar-sandbox build`;release 包内已自带):`node-ctl`、`store-ctl`、**`cache-ctl`**(CGO/rocksdb)、
-  `flatten-ctl`、`e2b-key-ctl`、`connector-ctl vswitch`、`cloud-hypervisor`、`vmlinux`、`sandbox-runtime.bundle`。
-- 主机:**systemd 为 PID1 + root**(编排经 D-Bus 驱动单元;TLS :443;KVM);可读写 `/dev/kvm`。
-- 资源:Demo 构建沙箱使用 2 vCPU,6 GiB capacity 和 4 GiB allocatable;主机还需为系统服务和运行沙箱留余量.
-- **e2b Python SDK**:`pip install e2b e2b-code-interpreter`。
-- 工具:`python3`、`openssl`、`iproute2(ip)`、`curl`、`sqlite3`、`iptables`;`demo_prep.sh` 另需 `docker`(一次性把
-  base 镜像 seed 进仓库)和(无第三方仓库时)`zot`。
-- **镜像仓库**:`REGISTRY=<host:port>`(+ `REGISTRY_USER`/`REGISTRY_PASS`/`REGISTRY_INSECURE`)指向第三方仓库;
-  或不设 `REGISTRY` 让 `demo_prep.sh` 起一个仅监听 `127.0.0.1` 的**持久本地 zot**。构建沙箱经
-  vswitch `--mgmt-service` 访问它。base 镜像默认 `e2bdev/code-interpreter:latest`(`E2E_IMAGE=` 覆盖)。
+`demo_prep.sh` 负责 Demo 持久层:Manifest Store、分层 Cache、Registry 配置、不可变基础镜像 seed,以及 `COPY` 使用的可选 VersityGW。`demo_e2b.sh` 负责一次临时运行:TLS、凭据、Conductor、Proxy、systemd unit、vSwitch、network namespace、NAT 规则、host 映射、Sandbox 和私有工作文件。
 
-## 运行
+## 2. 验证内容
+
+| 阶段 | 操作 | 必须得到的结果 |
+| --- | --- | --- |
+| 准备 | Store/Cache 使用私有 Unix socket;使用本地 Zot 或选定 Registry | 协议健康检查成功,并从目标 Registry 回读 digest 固定的基础镜像 |
+| 配置 | `node-ctl config conductor` 与 `node-ctl config proxy` | 当前 Conductor 与独立 Proxy 配置都通过校验 |
+| 就绪 | Conductor `/health`、Proxy TLS 响应和 stats socket | 控制面与数据面分别就绪;Conductor 不处理数据面形状的请求 |
+| 租户 | `manifest-key add` 与 E2B API key | Registry 凭据在 key 创建时关联,密码不出现在命令行 |
+| 构建 | `Template.build(..., headers={"X-Kuasar-Sandbox-Builder": ...})` | 回读到请求的 sandbox-with-memory 目标,产物 Template kind 为 `snp` |
+| 创建 | `Sandbox.create(template)` | 真实 Cloud Hypervisor MicroVM 可通过数据 Proxy 使用 |
+| 数据 | `commands.run`、`files.write`、`files.read`、暴露端口 | Guest 执行和两类数据访问都返回断言内容 |
+| 状态 | `pause` 后执行 `Sandbox.connect(id)` | Command 与 Files API 写入的数据跨 snapshot/resume 保留 |
+| 扇出 | `export-sandbox --to-template` 后执行 `Sandbox.create` | 新 child 携带导出的状态 |
+| 迁移 | `Sandbox.connect(id, headers={migration-token})` | 一次 SDK 调用完成 import+resume,状态不变 |
+| 销毁 | `Sandbox.kill` 与运行所属清理 | Sandbox 和所有能安全证明归属的临时 host 资源都已消失 |
+
+Quick Start 模式(`DEMO_QUICKSTART=1`)在 build、create、执行/数据访问、pause/resume 和 kill 后结束。完整模式要求 VersityGW,并继续执行扇出与迁移。
+
+## 3. 主机与工具前置
+
+预构建资产支持 Linux x86_64 和 glibc 2.38 或更高版本。真实运行还需要:
+
+- systemd 为 PID 1、cgroup v2、root 和可读写的 `/dev/kvm`;
+- 操作者在运行前启用 `net.ipv4.ip_forward=1`;Demo 会拒绝修改这个 host-global 设置;
+- `127.0.0.1:443` 与 `127.0.0.2:443` 空闲,没有标准 `sandbox-runner@*`/`sandbox-builder@*` 实例,也没有冲突的 Demo vSwitch、namespace、link、unit、host entry 或 iptables marker;
+- `openssl`、`ip`、`curl`、`sqlite3`、`iptables`、`flock`、`setsid`、`timeout`、`mkfs.ext4`,以及用于向 OCI Registry seed 镜像的 Docker;
+- 在独立 virtual environment 中安装 [`requirements.txt`](requirements.txt) 固定的 Python 依赖;
+- 同一 source set 中的 `node-ctl`、`e2b-key-ctl`、`connector-ctl`、`store-ctl`、`cache-ctl`、`cloud-hypervisor`、`vmlinux` 与 `sandbox-runtime.bundle`。
+
+完整模式还需要 `versitygw`。源码模式通过 `make e2e-tools` 取得固定版本的 Zot 与 VersityGW。Release 模式可以使用操作者提供的 Registry 和 VersityGW;较短 Release-first 流程见 [Quick Start](../../docs/quickstart_zh.md)。
+
+Builder Sandbox 请求 2 vCPU 和 6 GiB capacity。还应为 host 和从 Template 创建的 Sandbox 保留 CPU 与内存。
+
+## 4. 源码模式运行
+
+在包含六个兄弟仓的父目录执行:
 
 ```bash
-# 源码树(从 org root 运行)
-# ① 一次性 / 持久前置:起 store(UDS) + cache(UDS) + 仓库,seed base 镜像(重复运行幂等、跳过已起的)
-REGISTRY=registry.example.com REGISTRY_USER=u REGISTRY_PASS=p bash kuasar-sandbox/test/demo/demo_prep.sh
-bash kuasar-sandbox/test/demo/demo_prep.sh  # 或不设 REGISTRY → 起持久本地 zot
-# 停服务: demo_prep.sh stop; 停并清数据: demo_prep.sh reset
+make -C kuasar-sandbox build e2e-tools
+python3 -m venv kuasar-sandbox/.demo-venv
+kuasar-sandbox/.demo-venv/bin/python3 -m pip install \
+    --requirement kuasar-sandbox/test/demo/requirements.txt
 
-# ② 每次演示(读取 demo_prep 写出的 ~/.cache/kuasar-demo/prep.env)
-sudo bash kuasar-sandbox/test/demo/demo_e2b.sh
-sudo env DEMO_QUICKSTART=1 bash kuasar-sandbox/test/demo/demo_e2b.sh  # pause/resume + kill 后结束
-sudo env DEMO_PAUSE=1 bash kuasar-sandbox/test/demo/demo_e2b.sh       # 每步回车暂停
-sudo env DEMO_KEEP=1 bash kuasar-sandbox/test/demo/demo_e2b.sh        # 保留本次工作目录
-sudo env DEMO_NETDIAG=1 bash kuasar-sandbox/test/demo/demo_e2b.sh     # 网络步失败不中止
+DEMO_DATA_DIR=/var/lib/kuasar-demo-source
+BIN="$PWD/kuasar-sandbox/bin/x86_64"
+PYTHON_BIN="$PWD/kuasar-sandbox/.demo-venv/bin/python3"
+ZOT_BIN="$PWD/kuasar-sandbox/build/e2e-tools/x86_64/zot"
+VGW_BIN="$PWD/kuasar-sandbox/build/e2e-tools/x86_64/versitygw"
 
-# release 包(从解包目录运行)
-bash test/demo/demo_prep.sh
-sudo bash test/demo/demo_e2b.sh
+sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
+    ZOT_BIN="$ZOT_BIN" VGW_BIN="$VGW_BIN" \
+    bash "$PWD/kuasar-sandbox/test/demo/demo_prep.sh"
+sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
+    PYTHON_BIN="$PYTHON_BIN" \
+    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
 ```
 
-主脚本也可由普通用户启动,会自动 sudo 重入。上面的示例用 `sudo env` 显式传递 Demo
-控制变量,不依赖 sudo 保留调用方环境。`DEMO_QUICKSTART=1` 在 pause/resume + kill 后结束,
-跳过模板扇出与迁移。
+跨越 `sudo` 的路径全部显式使用绝对路径。脚本不依赖调用者与 root 恰好使用相同 `HOME` 或 Python 安装。
 
-`demo_e2b.sh` 退出即清理本次的编排单元 / vswitch / NAT 规则 / `/etc/hosts` 临时项 / 工作目录;**持久存储层
-(store/cache/仓库)保留**,下次演示直接复用。
+如需使用已有 Registry 而不是 Demo 所属 Zot,传入 `REGISTRY=<host[:port]>`。需要认证时传入 `REGISTRY_USER` 与 `REGISTRY_PASS`;`demo_prep.sh` 通过 stdin 向 `docker login` 传密码,Docker 认证只存放在私有 Demo 数据目录。只有明确使用 HTTP Registry 时才设置 `REGISTRY_INSECURE=1`。覆盖 `E2E_IMAGE` 时必须使用不可变的 `name@sha256:<digest>` 引用。
 
-## 网络配置(端口转发 + 出网)
+## 5. 控制项与重复运行
 
-e2b profile 的 guest 网卡是一个 link-local **inner IP** `169.254.0.21/30`、默认路由 nexthop `169.254.0.22`
-(/30+网关让 envd 端口转发可用;各 e2b 沙箱可使用相同 inner 地址,本 Demo 的 host 访问路径通过 floatingip 区分它们);
-host 与外网都不在该网段。四项配置把"host↔沙箱"、"沙箱→host 服务"与"沙箱→外网"打通——脚本已自动完成:
+```bash
+# 只运行较短生命周期。
+sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
+    PYTHON_BIN="$PYTHON_BIN" DEMO_QUICKSTART=1 \
+    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
 
-```
-  host (root netns)                       vswitch (netns sw0)                 guest microVM
-  curl <floatingip>:port ─route─► sw0m0 ─► ARP-proxy + DNAT floatingip->inner ─tap─► eth0 169.254.0.21/30
-  reply ◄───────────────────────── SNAT inner->floatingip ◄──────── tap ◄──────────  http.server :port
-                                                                                      (default via 169.254.0.22)
+# 在阶段间暂停;脚本会打印供另一个 root 终端使用的私有 cli.env。
+sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
+    PYTHON_BIN="$PYTHON_BIN" DEMO_PAUSE=1 \
+    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
 
-  egress: guest ─(default via 169.254.0.22)─► nx extract 0.0.0.0/0 ─► sw0m0
-          ─► host NAT MASQUERADE (-s 100.100.96.0/20, ip_forward=1) ─► internet
-
-  local registry: guest ─► 169.254.169.254:<port> ─mgmt-service─► 127.0.0.1:<port>
+# 只保留未检测到运行密钥的日志。
+sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
+    PYTHON_BIN="$PYTHON_BIN" DEMO_KEEP=1 \
+    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
 ```
 
-1. **`connector-ctl vswitch start … --mgmt-extract=:sw0m0:169.254.169.254,0.0.0.0/0`** 在 host(root netns) 建管理网卡
-   `sw0m0`、自动加路由 `100.100.96.0/20 dev sw0m0`;其中 CIDR 只用于流量分类,不是接口地址。脚本另给 `sw0m0`
-   配置不承载服务的保留地址 `169.254.1.0/31`。eBPF 在 sw0m0 侧 ARP 代答 + 把 host 发往 floatingip 的包
-   **DNAT** 成沙箱 inner IP、重定向到对应 tap,回包再 **SNAT** 回 floatingip;`mgmt_cidrs` 含 `0.0.0.0/0` ⇒ 出网入口。
-2. **本地服务映射**:`--mgmt-service=169.254.169.254:<port>:127.0.0.1:<port>` 把构建沙箱对管理 VIP 的访问
-   转到仅监听 host loopback 的 zot;脚本在 `sw0m0` 开启 `route_localnet`。可选 MMDS 也使用相同机制映射端口 80。
-3. **host NAT**(脚本幂等加、退出删):`iptables -A FORWARD -{i,o} sw0m0 …` + `-t nat -A POSTROUTING -s 100.100.96.0/20 -j MASQUERADE`。
-4. **guest inner IP + 默认路由 + `/etc/hosts`/`/etc/resolv.conf`** 由 orchestrator 经 SANDBOX_CONFIG `files:` 自动下发
-   (hostname 治 getfqdn 卡顿、见 node.md §11;guest DNS `169.254.169.253` 经 demo 的 iptables DNAT 路由到本机首个 nameserver)。
+只有当存活服务仍匹配记录的 executable、start time 与配置时,准备步骤才幂等。每次运行默认获得新的随机身份。可以设置 `DEMO_RUN_ID` 以便复现,但已有 work/result 目录或 host marker 会被视为冲突,不会被接管。
 
-两条访问沙箱端口的路径(步骤 6 均验证):**直连** host 经 `sw0m0` 直达 `http://<floatingip>:<port>`;**e2b 暴露端口**
-`https://<port>-<sid>.<domain>`,proxy 校验 `X-Access-Token` 后转发到 `floatingip:port`。
+`DEMO_NETDIAG=1` 会在直连端口或 egress 断言失败后继续诊断。此模式不能作为 Demo 或 Release 验证成功的证据。
 
-> **per-sid `/etc/hosts` 即可(SDK `create` 是惰性的)**:`Sandbox.create()` 只 POST 控制面、构造对象即返回,**不**
-> 急于连数据面(仅 `mcp` 模式才急连);故 demo 在 create 拿到 sid **后**再把 `49983-<sid>.<domain>` 等加进
-> `/etc/hosts`,首条命令时才连 envd——无需通配 DNS。若要在另一窗口对**自己**新建的沙箱即时交互,要么照此先加 host,
-> 要么配通配 DNS(dnsmasq `address=/<domain>/127.0.0.1`,`/etc/hosts` 不支持通配)。
+## 6. 归属、凭据与清理
 
-**另开终端手动操作**:演示在"租户接入"步把 SDK 凭据写入 `/tmp/demo-e2b-cli-env.sh`。配合 `DEMO_PAUSE=1`,另开终端
-`source /tmp/demo-e2b-cli-env.sh` 后即可用 SDK 操作本节点(`python3 -c "from e2b import Sandbox; print([s.sandbox_id for s in Sandbox.list()])"`)。
+`DEMO_DATA_DIR` 默认是 `/var/lib/kuasar-demo`。它必须是只含安全路径字符的 canonical absolute path。脚本创建 root 所属、mode 0700 的目录和严格 ownership marker。非空且无 marker 的目录、symlink 路径、异常 PID record、存活服务配置变化或陌生 host 资源都会触发 fail-closed 拒绝。
 
-## SDK 如何指向本节点(零改造)
+`prep.env`、Docker 认证、服务配置、生成的 key、TLS private key 和可选 `cli.env` 均位于运行所属目录并使用私有权限。准备交接使用 shell assignment 而不是导出 secret;长期运行的 Conductor、Proxy、Store 与 Cache 不会无必要地继承 Registry 或对象存储密码。复制进新 node business record 的凭据保持与该记录关联;之后修改 key-distribution entry 不会重绑已有记录。
 
-e2b SDK 用 `E2B_DOMAIN` 推出控制面 `https://api.<domain>` 与数据面 `https://<port>-<sid>.<domain>`:
+正常退出和普通失败时,`demo_e2b.sh` 只停止它启动的精确 unit instance 与 process group,只删除带本次标记的 iptables 和 `/etc/hosts` 条目,并且仅在能证明归属后删除 vSwitch 或 namespace。脚本不会用通配符停止全部 Sandbox Runner/Builder。如果归属变得不明确或清理不完整,脚本会保留私有工作目录并报告失败,不会强制删除该对象。
 
-- `E2B_DOMAIN`/`E2B_API_KEY` 指向本节点;**构建直接 `from_image(<registry>/<image>)`**——构建沙箱内拉取并展平
-  (凭据来自租户默认或任务级 token,见 [Node Build §5](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md#5-按目标执行与发布)),**不再有客户端 docker build/push 或 `E2B_IMAGE_URI_MASK`**。
-  镜像 ref 须**从构建沙箱可达**:本地 zot 的 ref 由脚本自动改写为 vswitch mgmt VIP
-  (`169.254.169.254:<port>`),再由 `--mgmt-service` 转到 `127.0.0.1:<port>`;第三方仓库经 NAT 出网直达。
-- 本地 Demo CA 签发 `CA:FALSE` 的 `*.<domain>` 服务器证书 +
-  **`SSL_CERT_FILE=<ca.crt>`** 让 SDK 验证 TLS.
-- `/etc/hosts` 把 `api.<domain>` 与每个沙箱的 `49983/49999/<port>-<sid>.<domain>` 解析到 `127.0.0.1`(创建后加、退出删)。
+持久准备层可以供下次运行复用:
 
-## 说明与注意
+```bash
+sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" \
+    bash "$PWD/kuasar-sandbox/test/demo/demo_prep.sh" stop
+sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" \
+    bash "$PWD/kuasar-sandbox/test/demo/demo_prep.sh" reset
+```
 
-- **base 镜像须满足 e2b userland 约定**:有 `user` 账户、`/bin/bash`、`util-linux`/`coreutils`(envd 以默认用户、
-  包一层 `ionice … nice …` 执行命令)。`e2bdev/code-interpreter` 本就具备;它由 `demo_prep.sh` seed 进仓库一次,
-  模板 `from_image` 直接命名它、构建沙箱内拉取,无任何 shim/改写。
-- **envd 以 root 运行**:envd 是 e2b 基础设施,须 root 才能 setuid 到镜像默认用户执行负载命令(e2b profile 固定
-  `launch.user=0:0`,不沿用镜像 `Config.User`)。
-- **持久存储复用**:`demo_prep.sh` 的 store/cache/仓库常驻、数据落 `DEMO_DATA_DIR`(默认 `~/.cache/kuasar-demo`),
-  跨多次演示去重缓存 → 复跑快;`demo_prep.sh reset` 清空重来。
-- **本地 Demo CA 签发的 TLS** 仅为本机演示;生产用通配 `*.<domain>` 正式证书(见 `orchestrator/docs/node.md` §13).
+`stop` 只停止由有效运行所属 PID record 标识的服务并保留数据。`reset` 先停止这些服务,再只删除带精确 marker 且明确采用 Demo 名称的数据目录。应先解决报告的归属不明外部资源,再删除其诊断目录。
 
-自动化回归(断言版、非讲解版)见聚合后的 `test/e2e/orchestrator/` owner 套件:
-`e2e_run_builder.sh`(三阶段构建流水线:guest 内拉取展平 → steps → 模板快照 → 从产物模板 create)
-与 `e2e_execute.sh`(启动+执行+暂停/恢复状态存活)。源码工作区中两者由
-`orchestrator/test/e2e/` 维护。
+## 7. 网络与入口布局
+
+Conductor 监听 `127.0.0.1:443`,独立 Proxy 监听 `127.0.0.2:443`。本地 Demo CA 为 `*.<domain>` 签发证书,SDK 调用使用该 CA 文件和 `NO_PROXY=*`。脚本在取得每个 Sandbox ID 后逐项添加 `/etc/hosts` 记录,并按本次 marker 删除;不假定存在 wildcard DNS。
+
+vSwitch 为每个 Sandbox 从 `100.100.96.0/20` 分配 floating IP,E2B guest profile 则复用 inner 地址 `169.254.0.21/30` 和 next hop `169.254.0.22`。本次运行添加带唯一标记的 forwarding 与 masquerade 规则。绑定在 host loopback 的本地 Registry 和 VersityGW 通过 `169.254.169.254` 上的 `--mgmt-service` 暴露给 Builder MicroVM;脚本不会把这些服务暴露到外部网络。
+
+Demo 同时验证直连 `http://<floating-ip>:8000` 和经过认证的 E2B 数据入口 `https://8000-<sid>.<domain>`,并使用真实 `X-Access-Token`。Guest egress 只是对 Demo 现有 NAT 路径的断言,不是新增产品 Egress 实现。
+
+## 8. 故障排查与 See Also
+
+- Python package 缺失或版本不匹配时,应在独立 virtual environment 中修复;脚本要求精确的 `e2b==2.25.1`。
+- Listener、unit、vSwitch、namespace、link、host mapping 或 iptables 冲突不会被自动删除。请使用空闲主机,或在 Demo 之外由实际 owner 处理指明的对象。
+- 首次准备可能需要较长时间拉取并推送 digest 固定的基础镜像。目标拉取失败只有在 Registry 明确返回 manifest 不存在时才会被视为“尚未 seed”。
+- `cleanup was incomplete` 表示运行失败。重试前检查保留的 root-only 目录和指明的 host 对象。
+
+另见 [Quick Start](../../docs/quickstart_zh.md)、[单节点设计](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node_zh.md)、[Builder 设计](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md)和 [Integration E2E 指南](../QUICKSTART_zh.md)。
