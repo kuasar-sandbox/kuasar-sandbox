@@ -70,6 +70,25 @@ fi
 chmod 0600 "$DEMO_DATA_DIR/prep.env"
 demo_validate_handoff "$DEMO_DATA_DIR/prep.env"
 
+cat >"$TEST_ROOT/manifest.json" <<'EOF'
+{"schemaVersion":2,"config":{"digest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}
+EOF
+[ "$(demo_registry_manifest_config_digest "$TEST_ROOT/manifest.json")" = \
+    sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ]
+printf '{"schemaVersion":2,"config":{"digest":"sha256:not-a-digest"}}\n' \
+    >"$TEST_ROOT/invalid-manifest.json"
+if demo_registry_manifest_config_digest "$TEST_ROOT/invalid-manifest.json" >/dev/null 2>&1; then
+    echo "invalid registry config digest was accepted" >&2
+    exit 1
+fi
+printf '{"errors":[{"code":"MANIFEST_UNKNOWN"}]}\n' >"$TEST_ROOT/manifest-unknown.json"
+demo_registry_error_is_absent "$TEST_ROOT/manifest-unknown.json"
+printf '{"errors":[{"code":"DENIED"}]}\n' >"$TEST_ROOT/registry-denied.json"
+if demo_registry_error_is_absent "$TEST_ROOT/registry-denied.json"; then
+    echo "registry denial was accepted as an absent tag" >&2
+    exit 1
+fi
+
 DEMO_DATA_DIR="$TEST_ROOT/path with spaces"
 export DEMO_DATA_DIR
 if (demo_validate_data_path) >/dev/null 2>&1; then

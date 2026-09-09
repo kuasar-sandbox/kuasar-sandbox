@@ -16,6 +16,36 @@ demo_die() {
     exit 1
 }
 
+demo_registry_manifest_config_digest() {
+    [ "$#" -eq 1 ] || return 2
+    python3 - "$1" <<'PY'
+import json
+import re
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    document = json.load(stream)
+value = document.get("config", {}).get("digest", "")
+if not isinstance(value, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+    raise SystemExit(1)
+print(value)
+PY
+}
+
+demo_registry_error_is_absent() {
+    [ "$#" -eq 1 ] || return 2
+    python3 - "$1" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    document = json.load(stream)
+codes = {item.get("code") for item in document.get("errors", []) if isinstance(item, dict)}
+if not codes.intersection({"MANIFEST_UNKNOWN", "NAME_UNKNOWN"}):
+    raise SystemExit(1)
+PY
+}
+
 demo_select_owner() {
     [ "$(id -u)" -eq 0 ] || demo_die "run this Demo entry point as root (use sudo -n env with explicit paths)"
     DEMO_OWNER_UID=0

@@ -229,10 +229,11 @@ esac
 for binary in store-ctl cache-ctl; do
     [ -x "$BIN/$binary" ] || demo_die "missing $BIN/$binary; use the matching source build or release archive"
 done
-for tool in curl docker flock timeout setsid; do command -v "$tool" >/dev/null 2>&1 || demo_die "$tool is required"; done
+for tool in curl docker flock timeout setsid python3; do command -v "$tool" >/dev/null 2>&1 || demo_die "$tool is required"; done
 
 REGISTRY_INSECURE="${REGISTRY_INSECURE:-}"
 REGISTRY_AUTH_FILE=""
+OWNED_ZOT=0
 select_docker_config() {
     local registry_hash
     registry_hash="$(printf '%s' "$REGISTRY" | sha256sum | awk '{print substr($1,1,16)}')"
@@ -264,6 +265,7 @@ else
     [[ "$ZOT_PORT" =~ ^[0-9]+$ ]] || demo_die "ZOT_PORT must be numeric"
     ((10#$ZOT_PORT >= 1 && 10#$ZOT_PORT <= 65535)) || demo_die "ZOT_PORT must be in 1-65535"
     REGISTRY="127.0.0.1:$ZOT_PORT"
+    OWNED_ZOT=1
     select_docker_config
     REGISTRY_INSECURE=1
     if record_state zot; then
@@ -428,7 +430,54 @@ if ! docker image inspect "$E2E_IMAGE" >/dev/null 2>&1; then
     fi
 fi
 SOURCE_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$E2E_IMAGE")"
-if docker pull --platform linux/amd64 "$BASE_TAG_REF" >"$LOG_DIR/destination-pull.log" 2>&1; then
+BASE_REF=""
+
+probe_owned_zot_manifest() {
+    local body="$LOG_DIR/destination-manifest.json"
+    local headers="$LOG_DIR/destination-manifest.headers"
+    local status config_digest manifest_digest
+    status="$(curl -sS --max-time 10 --noproxy '*' \
+        -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+        -D "$headers" -o "$body" -w '%{http_code}' \
+        "http://127.0.0.1:$ZOT_PORT/v2/$REGISTRY_NS/base/manifests/$BASE_TAG")" \
+        || demo_die "could not query the owned Zot manifest for $BASE_TAG_REF"
+    case "$status" in
+        200)
+            config_digest="$(demo_registry_manifest_config_digest "$body")" \
+                || demo_die "owned Zot returned an invalid manifest for $BASE_TAG_REF"
+            [ "$config_digest" = "$SOURCE_IMAGE_ID" ] \
+                || demo_die "$BASE_TAG_REF already names different content; refusing to overwrite it"
+            manifest_digest="$(awk '
+                tolower($1) == "docker-content-digest:" {
+                    value=$2; sub(/\r$/, "", value); print value; exit
+                }
+            ' "$headers")"
+            [[ "$manifest_digest" =~ ^sha256:[0-9a-f]{64}$ ]] \
+                || demo_die "owned Zot omitted the immutable digest for $BASE_TAG_REF"
+            BASE_REF="${BASE_TAG_REF%:*}@$manifest_digest"
+            return 0
+            ;;
+        404)
+            demo_registry_error_is_absent "$body" \
+                || demo_die "owned Zot returned an ambiguous 404 for the unclaimed tag $BASE_TAG_REF"
+            return 1
+            ;;
+        *) demo_die "owned Zot manifest query for $BASE_TAG_REF returned HTTP $status" ;;
+    esac
+}
+
+if [ "$OWNED_ZOT" -eq 1 ]; then
+    if probe_owned_zot_manifest; then
+        say "base image already seeded and content-matched: $BASE_TAG_REF"
+    else
+        say "seeding immutable base image $E2E_IMAGE"
+        docker tag "$E2E_IMAGE" "$BASE_TAG_REF"
+        docker push "$BASE_TAG_REF" >"$LOG_DIR/push.log" 2>&1 \
+            || demo_die "docker push failed for $BASE_TAG_REF"
+        probe_owned_zot_manifest \
+            || demo_die "owned Zot still reports $BASE_TAG_REF absent after push"
+    fi
+elif docker pull --platform linux/amd64 "$BASE_TAG_REF" >"$LOG_DIR/destination-pull.log" 2>&1; then
     [ "$(docker image inspect --format '{{.Id}}' "$BASE_TAG_REF")" = "$SOURCE_IMAGE_ID" ] \
         || demo_die "$BASE_TAG_REF already names different content; refusing to overwrite it"
     say "base image already seeded and content-matched: $BASE_TAG_REF"
@@ -445,12 +494,13 @@ else
     [ "$(docker image inspect --format '{{.Id}}' "$BASE_TAG_REF")" = "$SOURCE_IMAGE_ID" ] \
         || demo_die "$BASE_TAG_REF content does not match $E2E_IMAGE after push"
 fi
-BASE_REF=""
-while IFS= read -r repo_digest; do
-    case "$repo_digest" in
-        "${BASE_TAG_REF%:*}"@sha256:*) BASE_REF="$repo_digest"; break ;;
-    esac
-done < <(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$BASE_TAG_REF")
+if [ -z "$BASE_REF" ]; then
+    while IFS= read -r repo_digest; do
+        case "$repo_digest" in
+            "${BASE_TAG_REF%:*}"@sha256:*) BASE_REF="$repo_digest"; break ;;
+        esac
+    done < <(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$BASE_TAG_REF")
+fi
 [ -n "$BASE_REF" ] || demo_die "could not resolve the immutable destination digest for $BASE_TAG_REF"
 ok "base image fixed to $BASE_REF"
 
