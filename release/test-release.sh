@@ -53,9 +53,14 @@ while IFS=$'\t' read -r unit tag; do
   archive="$(component_archive "$unit" "$tag")"
   stage="$TMP/stage-$unit"
   directory="$TMP/fetched/components/$unit"
-  mkdir -p "$stage/bin" "$directory"
+  mkdir -p "$stage/bin" "$directory" \
+    "$stage/share/licenses/$unit/project" "$stage/share/sources/$unit"
   printf '%s %s\n' "$unit" "$tag" > "$stage/bin/$unit"
   chmod +x "$stage/bin/$unit"
+  printf '%s license fixture\n' "$unit" \
+    > "$stage/share/licenses/$unit/project/LICENSE"
+  printf 'payload\tname\n%s\t%s\n' "$unit" "$unit" \
+    > "$stage/share/sources/$unit/SOURCES.tsv"
   tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@1700000000' \
     -czf "$directory/$archive" -C "$stage" .
   (cd "$directory" && sha256sum "$archive" > SHA256SUMS)
@@ -76,6 +81,30 @@ printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vml
 printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
 printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
 printf 'selected Chinese vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux_zh.md"
+
+cp -a "$TMP/fetched" "$TMP/fetched-foreign-material"
+foreign_unit=connector
+foreign_tag="$(awk -F '\t' -v unit="$foreign_unit" '$1 == unit {print $2}' \
+  "$TMP/selection.tsv")"
+foreign_archive="$(component_archive "$foreign_unit" "$foreign_tag")"
+foreign_dir="$TMP/fetched-foreign-material/components/$foreign_unit"
+mkdir -p "$TMP/foreign-stage"
+tar -xzf "$foreign_dir/$foreign_archive" -C "$TMP/foreign-stage"
+mkdir -p "$TMP/foreign-stage/share/licenses/accelerator/injected"
+printf 'foreign namespace fixture\n' \
+  > "$TMP/foreign-stage/share/licenses/accelerator/injected/LICENSE"
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@1700000000' \
+  -czf "$foreign_dir/$foreign_archive" -C "$TMP/foreign-stage" .
+(cd "$foreign_dir" && sha256sum "$foreign_archive" > SHA256SUMS)
+if SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
+  "$ROOT/release/aggregate-release.sh" assemble "$VERSION" \
+    "$TMP/fetched-foreign-material" "$TMP/foreign-bundle" \
+    >"$TMP/foreign-material.out" 2>&1; then
+  release_fail "aggregate accepted a component's foreign material namespace"
+fi
+grep -Fq "$foreign_unit archive contains another release unit's material namespace" \
+  "$TMP/foreign-material.out" \
+  || release_fail "foreign material fixture failed outside the namespace check"
 
 SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
@@ -173,6 +202,11 @@ grep -Fq '==> full release e2e: OK' "$TMP/runner.out" \
 
 for unit in "${RELEASE_UNITS[@]}"; do
   [ -x "$TMP/install/bin/$unit" ] || release_fail "$unit fixture was not extracted"
+  [ "$(cat "$TMP/install/share/licenses/$unit/project/LICENSE")" \
+      = "$unit license fixture" ] \
+    || release_fail "$unit license material was overwritten during aggregate extraction"
+  [ -s "$TMP/install/share/sources/$unit/SOURCES.tsv" ] \
+    || release_fail "$unit source material was not extracted"
 done
 
 cp -a "$TMP/bundle" "$TMP/tampered"

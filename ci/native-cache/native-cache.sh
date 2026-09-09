@@ -5,7 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="${KUASAR_WORKSPACE_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
 CACHE_ROOT="${KUASAR_NATIVE_CACHE_ROOT:-/var/cache/kuasar/native}"
-CACHE_SCHEMA="v1"
+CACHE_SCHEMA="v2"
 METRICS_FILE="${KUASAR_NATIVE_CACHE_METRICS:-}"
 MAX_ENTRIES="${KUASAR_NATIVE_CACHE_MAX_ENTRIES:-4}"
 MIN_ENTRY_AGE_SECONDS="${KUASAR_NATIVE_CACHE_MIN_AGE_SECONDS:-3600}"
@@ -394,20 +394,36 @@ component_outputs() {
     case "$1" in
         vmlinux)
             printf 'guest-runtime/native-deps/bin/%s/vmlinux\n' "$TARGET_ARCH"
+            printf '%s\n' \
+                guest-runtime/native-deps/build/src/linux/COPYING \
+                guest-runtime/native-deps/build/src/linux/CREDITS \
+                guest-runtime/native-deps/build/src/linux/LICENSES
             ;;
         erofs)
             printf 'guest-runtime/native-deps/bin/%s/mkfs.erofs\n' "$TARGET_ARCH"
             printf 'guest-runtime/native-deps/bin/%s/fsck.erofs\n' "$TARGET_ARCH"
+            printf 'guest-runtime/native-deps/build/%s/src/erofs-utils/AUTHORS\n' "$TARGET_ARCH"
+            printf 'guest-runtime/native-deps/build/%s/src/erofs-utils/COPYING\n' "$TARGET_ARCH"
             ;;
         envd)
             printf 'guest-runtime/native-deps/bin/%s/envd\n' "$TARGET_ARCH"
+            printf '%s\n' guest-runtime/native-deps/build/src/e2b-infra/LICENSE
             ;;
         rocksdb)
             printf 'accelerator/build/%s/rocksdb/include\n' "$TARGET_ARCH"
             printf 'accelerator/build/%s/rocksdb/lib/librocksdb.a\n' "$TARGET_ARCH"
+            printf '%s\n' \
+                accelerator/build/src/rocksdb/AUTHORS \
+                accelerator/build/src/rocksdb/COPYING \
+                accelerator/build/src/rocksdb/LICENSE.Apache \
+                accelerator/build/src/rocksdb/LICENSE.leveldb
             ;;
         cloud-hypervisor)
             printf 'sandboxer/native-deps/bin/%s/cloud-hypervisor\n' "$TARGET_ARCH"
+            printf '%s\n' \
+                sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md \
+                sandboxer/native-deps/build/src/cloud-hypervisor/LICENSES \
+                sandboxer/native-deps/build/src/cloud-hypervisor/Cargo.lock
             ;;
     esac
 }

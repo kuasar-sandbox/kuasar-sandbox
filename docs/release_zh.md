@@ -153,9 +153,11 @@ Daily 清单中指定的 Tag 也参加提交位置比较:
 `vX.Y.(Z+1)-preview.YYYYMMDD`;获胜 Preview 落后于 HEAD 时保持其 core 版本,只换成
 本次日期。下一次扫描会看到这个 Preview,不会反复增加 Patch。
 
-依赖改变也需要重建实际链接依赖的 unit:accelerator 或 connector 改变会重建
-sandboxer、orchestrator 和 runtime;sandboxer 改变会重建 orchestrator 和 runtime。
-vmlinux 不因这些依赖变化而重建。若同一 unit 在同一天已经发布 Preview 后依赖再次改变,
+依赖改变也需要重建实际携带依赖的 unit:accelerator 改变会直接重建 sandboxer、
+orchestrator 和 runtime;connector 改变会直接重建 sandboxer 和 orchestrator;
+sandboxer 改变会直接重建 orchestrator 和 runtime。因此 connector 改变后,新选择的
+sandboxer 还会传递触发 runtime 重建。vmlinux 不因这些依赖变化而重建。若同一 unit
+在同一天已经发布 Preview 后依赖再次改变,
 流程延后到下一个 Preview 日期,不复用带有旧依赖的资产,也不发明同日序号格式。
 
 平台自身在所选分支上的代码变化同样会产生新的聚合 Preview,即使六个组件都复用。
@@ -216,7 +218,9 @@ gh workflow run release.yml \
   -f connector_version=v0.1.9
 ```
 
-orchestrator 和 runtime 还接收 `sandboxer_version`;runtime 与 vmlinux 使用各自工作流。
+orchestrator 接收 `accelerator_version`、`connector_version` 和 `sandboxer_version`;
+runtime 只接收与镜像实际载荷一致的 `accelerator_version` 和 `sandboxer_version`;
+vmlinux 不接收内部组件版本输入。runtime 与 vmlinux 使用各自工作流。
 预检要求 `source_sha` 仍是 `source_ref` 的 HEAD,构建 checkout 该 SHA,最终 Tag 也指向该
 SHA。依赖参数必须对应已经完整发布的精确 Release。
 Preview 还要求 `aggregate_sha` 所指平台提交中的
