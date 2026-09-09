@@ -77,7 +77,7 @@ UNITS = (
         "runtime",
         "kuasar-sandbox/guest-runtime",
         "release-runtime.yml",
-        ("accelerator", "connector", "sandboxer"),
+        ("accelerator", "sandboxer"),
     ),
 )
 UNIT_BY_NAME = {unit.name: unit for unit in UNITS}

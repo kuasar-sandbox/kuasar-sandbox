@@ -773,6 +773,12 @@ components:
         )
         self.assertIn("aggregate_sha=" + "b" * 40, values)
 
+    def test_runtime_dependency_binding_matches_embedded_payloads(self) -> None:
+        self.assertEqual(
+            coordinator.UNIT_BY_NAME["runtime"].dependencies,
+            ("accelerator", "sandboxer"),
+        )
+
     def test_release_run_title_pins_source_and_dependency_tuple(self) -> None:
         accelerator = coordinator.Plan(
             coordinator.UNIT_BY_NAME["accelerator"],
