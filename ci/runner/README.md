@@ -1,13 +1,15 @@
-# BMS runner slots
+[English](README.md) | [简体中文](README_zh.md)
+
+# CI runner slots
 
 This directory provisions four candidate E2E slots and two control slots as
-separate `systemd-nspawn` system containers on the openEuler 24.03 BMS host.
+separate `systemd-nspawn` system containers on an openEuler 24.03 integration host.
 Each container owns its systemd, journald, PID, mount, network, cgroup, Docker
 daemon, runner credentials, and Actions work directory. The containers share
 only:
 
-- `/var/cache/kuasar`, for exact-SHA source archives and immutable native
-  artifacts protected by repository-owned locks;
+- `/var/cache/kuasar`, a writable source/native-artifact cache; exact-SHA names
+  and repository-owned locks coordinate reuse but do not prevent tampering;
 - `/var/lib/kuasar-ci/tools`, read-only test tool binaries;
 - `/usr/local/go` and the host kernel module tree, read-only.
 
@@ -33,10 +35,16 @@ validated `/usr/local/go` toolchain is absent, installation fetches
 `5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`
 before replacing the toolchain. Jobs never download a Go distribution.
 
-The containers are privileged resource-name isolation, not a security boundary
+The containers provide privileged resource-name isolation, not a security boundary
 for untrusted jobs. They deliberately receive KVM, TUN, vhost devices, all
 capabilities, Docker keyring syscalls, and the `bpf` syscall required by the
 connector datapath.
+Candidate code must not receive release permissions, persistent runner
+credentials or another job's writable state. These containers alone do not
+establish that boundary: their root workloads share a privileged host, and
+runner credentials persist in the slot. Maintainer acceptance and read-only
+job tokens do not remove those risks. Untrusted Fork execution needs a verified
+isolation boundary in addition to the admission checks in [CI](../../docs/ci.md).
 
 ## Host layout
 
@@ -48,6 +56,9 @@ connector datapath.
 | 4 | E2E | `bms-tmp-kuasar-e2e-4` | NUMA1: `22-28,66-72` | high 52 GiB, max 56 GiB | `10.203.0.14/24` |
 | 5 | control | `bms-tmp-kuasar-control-5` | NUMA1: `29-35,73-79` | high 52 GiB, max 56 GiB | `10.203.0.15/24` |
 | 6 | E2E | `bms-tmp-kuasar-e2e-6` | NUMA1: `36-42,80-86` | high 52 GiB, max 56 GiB | `10.203.0.16/24` |
+
+The runner names above are existing registration identifiers, not the name of
+a validation method. Renaming documentation does not recreate registrations.
 
 The layout reserves one physical core per NUMA node (`21,65` and `43,87`) and
 about 39 GiB of host memory when every slot reaches `MemoryMax`. It targets
@@ -65,7 +76,7 @@ set first, then loads the required modules and validates all device nodes.
 
 ## Install
 
-Run from this directory on the BMS host as root:
+Run from this directory on the integration host as root:
 
 ```bash
 ./provision.sh check
@@ -135,17 +146,18 @@ package operation. This prevents an `openEuler-release` update from restoring
 international metalinks. Keep `/etc/yum.repos.d/*.repo` on the host pointed at a
 direct China mirror; the same configuration is propagated to all slots.
 
-Generate short-lived organization registration tokens with an authenticated
-`gh` client and stream them over SSH. The provisioner forwards the token over
+Generate short-lived organization registration tokens and stream them over
+the operator's existing authorized SSH connection. The provisioner forwards the token over
 the container's stdin as the runner's `ACTIONS_RUNNER_INPUT_TOKEN`; it never
 places the token in command arguments or files:
 
 ```bash
+CI_HOST=ci-host.example # Replace with the existing integration host's SSH alias.
 gh api --method POST /orgs/kuasar-sandbox/actions/runners/registration-token \
-  --jq .token | ssh bms.tmp '/usr/local/sbin/kuasar-ci-runner-provision register 1'
+  --jq .token | ssh "$CI_HOST" '/usr/local/sbin/kuasar-ci-runner-provision register 1'
 
 gh api --method POST /orgs/kuasar-sandbox/actions/runners/registration-token \
-  --jq .token | ssh bms.tmp '/usr/local/sbin/kuasar-ci-runner-provision register 2'
+  --jq .token | ssh "$CI_HOST" '/usr/local/sbin/kuasar-ci-runner-provision register 2'
 
 # Repeat with a fresh token for slots 3 through 6.
 ```
@@ -161,7 +173,7 @@ update `CONTROL_SLOTS`, then rebuild it from the trusted template before using
 a fresh registration token:
 
 ```bash
-ssh bms.tmp '/usr/local/sbin/kuasar-ci-runner-provision rebuild 3'
+ssh "$CI_HOST" '/usr/local/sbin/kuasar-ci-runner-provision rebuild 3'
 ```
 
 `rebuild` refuses an active or unowned slot. It first moves the old rootfs to a
@@ -196,8 +208,8 @@ done
 
 The runner reads `.env` only at startup, so restart the slots after every proxy
 change. The provisioner deliberately preserves each runner's `.env` while it
-reconciles the runner distribution. These runners execute fork code; the
-runner-level proxy must therefore use network-side access control and must not
+reconciles the runner distribution. Accepted Fork candidates remain subject to
+the isolation requirements above; the runner-level proxy must use network-side access control and must not
 put reusable credentials where a workload can read them.
 
 The `.env` `no_proxy` list must include local control endpoints, sandbox test
@@ -207,31 +219,35 @@ environment when no proxy is configured.
 
 Slots 1, 2, 4, and 6 join the `kuasar-e2e` organization group with labels
 `kuasar-e2e,kvm,cgroup-v2` plus a slot label. That group remains
-organization-wide (`visibility=all`) and has no workflow allowlist because the
-central BMS execution workflow runs candidate source there with read-only
-credentials.
+organization-wide (`visibility=all`) and currently has no workflow allowlist.
+Those allocation settings and read-only job tokens are not an untrusted-code
+security boundary. Do not use group visibility as admission to privileged code
+execution.
 
 Slots 3 and 5 instead join `kuasar-control`, carry only `kuasar-control` and a
 control-slot label, and have separate root filesystems and work directories.
 The control group uses organization-wide visibility and permits public
 organization repositories, so new or public repositories do not require a
 runner-group membership update. An exact workflow allowlist still restricts
-allocation to the trusted central `bms-entry.yml` plus the component release
-workflows on `main`. BMS admission/finalization and release control jobs may
+allocation to the trusted central `ci-entry.yml` plus the component release
+workflows on `main`. CI admission/finalization and release control jobs may
 hold write credentials but never execute candidate source. Candidate E2E jobs
-cannot select the control group, and control jobs cannot select an E2E slot.
+must not select the control group, and control jobs must not select an E2E slot.
+When migrating an entrypoint, add and verify the new exact workflow path before
+retiring the old allowlist entry or required check. Preserve the old gate until
+the new source-bound checks have actually run successfully.
 
 The containers share a physical host and are deliberately privileged resource
 isolation, not a boundary against a malicious host-level escape. Operate the
-BMS host as trusted infrastructure, keep the control runner's exact workflow
+integration host as trusted infrastructure, keep the control runner's exact workflow
 allowlist up to date, and rebuild rather than relabel any slot whose role
 changes.
 
-Start and verify infrastructure isolation:
+Start and verify infrastructure resource separation:
 
 ```bash
-ssh bms.tmp '/usr/local/sbin/kuasar-ci-runner-provision start'
-ssh bms.tmp '/usr/local/sbin/kuasar-ci-runner-provision verify'
+ssh "$CI_HOST" '/usr/local/sbin/kuasar-ci-runner-provision start'
+ssh "$CI_HOST" '/usr/local/sbin/kuasar-ci-runner-provision verify'
 ```
 
 `start` rechecks that the retained legacy host runner is stopped. If any
@@ -243,7 +259,7 @@ For rollback, stop all container slots without deleting their state. A failed
 container stop makes the command fail instead of leaving a slot running:
 
 ```bash
-ssh bms.tmp '/usr/local/sbin/kuasar-ci-runner-provision stop'
+ssh "$CI_HOST" '/usr/local/sbin/kuasar-ci-runner-provision stop'
 ```
 
 `start` and `verify` require the current runner service invocation to report
@@ -256,6 +272,6 @@ through the China-side proxy path, and active runner services. It is not an E2E
 wrapper. Repository workflows still execute `make test-e2e` directly.
 
 Do not stop or unregister the existing host runner until all slots have passed
-the full five-repository E2E concurrently three times and cancellation cleanup
+the complete assembled Integration E2E gate concurrently three times and cancellation cleanup
 has been verified. During migration it may be stopped but retained as a quick
 rollback path.
