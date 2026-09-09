@@ -1,0 +1,732 @@
+name: Reusable PR CI Entry
+
+on:
+  workflow_call:
+    secrets:
+      KUASAR_CI_APP_PRIVATE_KEY:
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+concurrency:
+  group: ci-pr-${{ github.repository }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  admission:
+    # GitHub bills reusable workflow jobs to the caller. Keep the public platform
+    # caller on hosted capacity and route private component callers to the
+    # dedicated control pool. It never executes candidate source.
+    runs-on: ${{ github.event.repository.private && 'kuasar-control' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    outputs:
+      eligible: ${{ steps.admission.outputs.eligible }}
+      pull_request_number: ${{ steps.admission.outputs.pull_request_number }}
+      candidate_sha: ${{ steps.admission.outputs.candidate_sha }}
+      base_sha: ${{ steps.admission.outputs.base_sha }}
+      base_ref: ${{ steps.admission.outputs.base_ref }}
+      head_sha: ${{ steps.admission.outputs.head_sha }}
+      companion_candidates: ${{ steps.admission.outputs.companion_candidates }}
+    steps:
+      - name: Create organization membership token
+        if: >-
+          github.event_name == 'pull_request_target' &&
+          github.event.pull_request.draft == false &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        id: membership-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: ${{ github.event.repository.name }}
+          permission-members: read
+
+      - name: Create companion validation token
+        if: >-
+          github.event_name == 'pull_request_target' &&
+          github.event.pull_request.draft == false &&
+          contains(github.event.pull_request.body || '', '<!-- kuasar-ci-companions')
+        id: companion-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Admit the current exact integration commit
+        id: admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MEMBERSHIP_TOKEN: ${{ steps.membership-token.outputs.token }}
+          COMPANION_TOKEN: ${{ steps.companion-token.outputs.token }}
+          STATUS_CONTEXT: kuasar/ci-exact-head
+        run: |
+          set -euo pipefail
+
+          [ "$GITHUB_EVENT_NAME" = pull_request_target ] \
+            || { echo "PR CI requires pull_request_target" >&2; exit 1; }
+
+          api_get() {
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL$1"
+          }
+
+          api_get_with_token() {
+            local token=$1 path=$2
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $token" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL$path"
+          }
+
+          supported_base_ref() {
+            [ "$1" = main ] \
+              || [[ "$1" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]]
+          }
+
+          check_org_membership() {
+            local username=$1
+            local response_file="$RUNNER_TEMP/org-membership.json"
+            local http_code
+
+            if ! http_code=$(curl --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              --output "$response_file" --write-out '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $MEMBERSHIP_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/orgs/kuasar-sandbox/memberships/$username"); then
+              echo "Organization membership lookup failed" >&2
+              return 2
+            fi
+
+            case "$http_code" in
+              200)
+                jq -e '
+                  .state == "active"
+                  and (.role == "admin" or .role == "member")
+                ' "$response_file" >/dev/null
+                ;;
+              404) return 1 ;;
+              *)
+                echo "Organization membership lookup returned HTTP $http_code" >&2
+                return 2
+                ;;
+            esac
+          }
+
+          post_status() {
+            local sha=$1 state=$2 description=$3
+            jq -cn \
+              --arg state "$state" \
+              --arg context "$STATUS_CONTEXT" \
+              --arg description "$description" \
+              --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              '{state: $state, context: $context, description: $description, target_url: $target_url}' \
+              | curl --fail --show-error --silent \
+                  --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+                  --request POST \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "Authorization: Bearer $GH_TOKEN" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  --data-binary @- \
+                  "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$sha" >/dev/null
+          }
+
+          event_pr=$(jq -er '.pull_request.number' "$GITHUB_EVENT_PATH")
+          event_action=$(jq -er '.action' "$GITHUB_EVENT_PATH")
+          event_author=$(jq -er '.pull_request.user.login' "$GITHUB_EVENT_PATH")
+          pr=$(api_get "/repos/$GITHUB_REPOSITORY/pulls/$event_pr")
+
+          pull_request_number=$(jq -er '.number' <<< "$pr")
+          candidate_sha=$(jq -r '.merge_commit_sha // ""' <<< "$pr")
+          base_sha=$(jq -er '.base.sha' <<< "$pr")
+          head_sha=$(jq -er '.head.sha' <<< "$pr")
+          draft=$(jq -r '.draft' <<< "$pr")
+          state=$(jq -er '.state' <<< "$pr")
+          base_ref=$(jq -er '.base.ref' <<< "$pr")
+          base_repository=$(jq -er '.base.repo.full_name' <<< "$pr")
+          head_repository=$(jq -er '.head.repo.full_name' <<< "$pr")
+          author=$(jq -er '.user.login' <<< "$pr")
+          companion_candidates='[]'
+
+          reason=""
+          deferred=false
+          case "$event_action" in
+            opened|synchronize|reopened|ready_for_review|converted_to_draft) ;;
+            *) reason="unsupported pull request action" ;;
+          esac
+          if [ -z "$reason" ] && [ "$pull_request_number" != "$event_pr" ]; then
+            reason="pull request changed during admission"
+          fi
+          if [ -z "$reason" ] && [ "$state" != open ]; then
+            reason="pull request is not open"
+          fi
+          if [ -z "$reason" ] && ! supported_base_ref "$base_ref"; then
+            reason="base branch is not main or release/vMAJOR.MINOR.x"
+          fi
+          if [ -z "$reason" ] && [ "$base_repository" != "$GITHUB_REPOSITORY" ]; then
+            reason="base repository does not match the workflow repository"
+          fi
+          if [ -z "$reason" ] && [ "$event_author" != "$author" ]; then
+            reason="pull request author changed during admission"
+          fi
+          if [ -z "$reason" ]; then
+            event_base_sha=$(jq -er '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
+            event_base_ref=$(jq -er '.pull_request.base.ref' "$GITHUB_EVENT_PATH")
+            event_head_sha=$(jq -er '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
+            event_base_repository=$(jq -er '.pull_request.base.repo.full_name' "$GITHUB_EVENT_PATH")
+            event_head_repository=$(jq -er '.pull_request.head.repo.full_name' "$GITHUB_EVENT_PATH")
+            event_author=$(jq -er '.pull_request.user.login' "$GITHUB_EVENT_PATH")
+            event_draft=$(jq -r '.pull_request.draft' "$GITHUB_EVENT_PATH")
+            if [ "$event_base_sha" != "$base_sha" ] \
+              || [ "$event_base_ref" != "$base_ref" ] \
+              || [ "$event_head_sha" != "$head_sha" ] \
+              || [ "$event_base_repository" != "$base_repository" ] \
+              || [ "$event_head_repository" != "$head_repository" ] \
+              || [ "$event_author" != "$author" ] \
+              || [ "$event_draft" != "$draft" ]; then
+              reason="pull request changed after this event"
+            fi
+          fi
+
+          if [ -z "$reason" ] && [ "$draft" != false ]; then
+            deferred=true
+          fi
+          if [ -z "$reason" ] && [ "$deferred" = false ] \
+            && [ "$head_repository" != "$GITHUB_REPOSITORY" ]; then
+            if [ -z "$MEMBERSHIP_TOKEN" ]; then
+              reason="organization membership token is unavailable"
+            elif check_org_membership "$author"; then
+              :
+            else
+              membership_result=$?
+              if [ "$membership_result" -eq 1 ]; then
+                reason="fork author is not an active organization member"
+              else
+                reason="organization membership verification failed"
+              fi
+            fi
+          fi
+          if [ -z "$reason" ] && [ "$deferred" = false ] \
+            && ! [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            reason="GitHub did not provide an integration commit"
+          fi
+          if [ -z "$reason" ] && [ "$deferred" = false ]; then
+            for value in "$base_sha" "$head_sha"; do
+              if ! [[ "$value" =~ ^[0-9a-f]{40}$ ]]; then
+                reason="pull request parent SHA is invalid"
+                break
+              fi
+            done
+          fi
+
+          if [ -z "$reason" ] && [ "$deferred" = false ]; then
+            commit=$(api_get "/repos/$GITHUB_REPOSITORY/git/commits/$candidate_sha")
+            if ! jq -e \
+              --arg candidate "$candidate_sha" \
+              --arg base "$base_sha" \
+              --arg head "$head_sha" '
+                .sha == $candidate
+                and (.parents | length) == 2
+                and .parents[0].sha == $base
+                and .parents[1].sha == $head
+              ' <<< "$commit" >/dev/null; then
+              reason="candidate is not the exact two-parent integration commit"
+            fi
+          fi
+
+          if [ -z "$reason" ] && [ "$deferred" = false ]; then
+            body=$(jq -r '.body // ""' <<< "$pr" | tr -d '\r')
+            companion_lines=""
+            companion_parse=0
+            companion_lines=$(awk '
+              # BEGIN kuasar-ci-companion-parser
+              BEGIN { inside=0; starts=0; ends=0 }
+              /kuasar-bms-companions/ { invalid=1; exit 2 }
+              /^<!--[[:space:]]*kuasar-ci-companions[[:space:]]*$/ {
+                starts++
+                if (inside) exit 2
+                inside=1
+                next
+              }
+              inside && /^[[:space:]]*-->[[:space:]]*$/ {
+                ends++
+                inside=0
+                next
+              }
+              inside { print }
+              END {
+                if (invalid) exit 2
+                if (starts == 0) exit 3
+                if (starts != 1 || ends != 1 || inside) exit 2
+              }
+              # END kuasar-ci-companion-parser
+            ' <<< "$body") || companion_parse=$?
+
+            case "$companion_parse" in
+              0)
+                if [ -z "$COMPANION_TOKEN" ]; then
+                  reason="companion validation token is unavailable"
+                else
+                  companion_count=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+                    -e '/^$/d' <<< "$companion_lines" | wc -l)
+                  if [ "$companion_count" -gt 5 ]; then
+                    reason="too many companion repositories"
+                  fi
+                  declare -A seen_companion_repositories=()
+                  while [ -z "$reason" ] && IFS= read -r companion_ref; do
+                    companion_ref=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+                      <<< "$companion_ref")
+                    [ -n "$companion_ref" ] || continue
+                    if ! [[ "$companion_ref" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)#([1-9][0-9]*)$ ]]; then
+                      reason="invalid kuasar-ci-companions entry"
+                      break
+                    fi
+                    companion_repository="kuasar-sandbox/${BASH_REMATCH[1]}"
+                    companion_pr=${BASH_REMATCH[2]}
+                    if [ "$companion_repository" = "$GITHUB_REPOSITORY" ]; then
+                      reason="candidate repository cannot also be a companion"
+                      break
+                    fi
+                    if [ -n "${seen_companion_repositories[$companion_repository]:-}" ]; then
+                      reason="duplicate companion repository"
+                      break
+                    fi
+                    seen_companion_repositories[$companion_repository]=1
+
+                    if ! companion_merge_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/git/ref/pull/$companion_pr/merge"); then
+                      reason="companion does not have an open merge ref"
+                      break
+                    fi
+                    if ! companion_head_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/git/ref/pull/$companion_pr/head"); then
+                      reason="companion head ref is unavailable"
+                      break
+                    fi
+                    companion_candidate=$(jq -r '.object.sha // ""' <<< "$companion_merge_ref")
+                    companion_head=$(jq -r '.object.sha // ""' <<< "$companion_head_ref")
+                    if ! companion_commit=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/git/commits/$companion_candidate"); then
+                      reason="companion integration commit is unavailable"
+                      break
+                    fi
+                    if ! companion_pr_data=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/pulls/$companion_pr"); then
+                      reason="companion pull request is unavailable"
+                      break
+                    fi
+                    companion_base_ref=$(jq -r '.base.ref // ""' <<< "$companion_pr_data")
+                    if ! supported_base_ref "$companion_base_ref"; then
+                      reason="companion base branch is not main or release/vMAJOR.MINOR.x"
+                      break
+                    fi
+                    if ! companion_base_branch_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/git/ref/heads/$companion_base_ref"); then
+                      reason="companion base branch ref is unavailable"
+                      break
+                    fi
+                    if ! companion_head_branches=$(api_get_with_token "$COMPANION_TOKEN" \
+                      "/repos/$companion_repository/commits/$companion_head/branches-where-head"); then
+                      reason="companion head branch lookup failed"
+                      break
+                    fi
+                    companion_base=$(jq -r '.parents[0].sha // ""' <<< "$companion_commit")
+                    if ! jq -e \
+                      --arg merge_ref "refs/pull/$companion_pr/merge" \
+                      --arg head_ref "refs/pull/$companion_pr/head" \
+                      --arg candidate "$companion_candidate" \
+                      --arg base "$companion_base" \
+                      --arg base_ref "$companion_base_ref" \
+                      --arg head "$companion_head" \
+                      --arg repository "$companion_repository" \
+                      --argjson number "$companion_pr" '
+                        .merge.ref == $merge_ref
+                        and .merge.object.sha == $candidate
+                        and .head_ref.ref == $head_ref
+                        and .head_ref.object.sha == $head
+                        and .commit.sha == $candidate
+                        and (.commit.parents | length) == 2
+                        and .commit.parents[0].sha == $base
+                        and .commit.parents[1].sha == $head
+                        and .pr.number == $number
+                        and .pr.state == "open"
+                        and .pr.draft == false
+                        and .pr.base.ref == $base_ref
+                        and .pr.base.repo.full_name == $repository
+                        and .pr.base.sha == $base
+                        and .pr.head.sha == $head
+                        and .base_branch.object.sha == $base
+                        and (.branches | type == "array" and length > 0)
+                      ' <<< "$(jq -cn \
+                        --argjson merge "$companion_merge_ref" \
+                        --argjson head_ref "$companion_head_ref" \
+                        --argjson commit "$companion_commit" \
+                        --argjson pr "$companion_pr_data" \
+                        --argjson base_branch "$companion_base_branch_ref" \
+                        --argjson branches "$companion_head_branches" \
+                        '{merge: $merge, head_ref: $head_ref, commit: $commit,
+                          pr: $pr, base_branch: $base_branch, branches: $branches}')" >/dev/null; then
+                      reason="companion refs do not form the current same-repository branch integration"
+                      break
+                    fi
+                    companion_record=$(jq -cn \
+                      --arg repository "$companion_repository" \
+                      --argjson pull_request_number "$companion_pr" \
+                      --arg candidate_sha "$companion_candidate" \
+                      --arg base_sha "$companion_base" \
+                      --arg base_ref "$companion_base_ref" \
+                      --arg head_sha "$companion_head" \
+                      '{repository: $repository, pull_request_number: $pull_request_number,
+                        candidate_sha: $candidate_sha, base_sha: $base_sha, base_ref: $base_ref,
+                        head_sha: $head_sha}')
+                    companion_candidates=$(jq -c --argjson record "$companion_record" \
+                      '. + [$record]' <<< "$companion_candidates")
+                  done <<< "$companion_lines"
+                  companion_candidates=$(jq -c 'sort_by(.repository)' \
+                    <<< "$companion_candidates")
+                  if [ -z "$reason" ] && [ "$(jq 'length' <<< "$companion_candidates")" -eq 0 ]; then
+                    reason="kuasar-ci-companions block is empty"
+                  fi
+                fi
+                ;;
+              2) reason="malformed kuasar-ci-companions block" ;;
+              3)
+                if grep -Fq '<!-- kuasar-ci-companions' <<< "$body"; then
+                  reason="malformed kuasar-ci-companions block"
+                fi
+                ;;
+              *) reason="failed to parse kuasar-ci-companions block" ;;
+            esac
+          fi
+
+          eligible=false
+          status_state=pending
+          status_description="Integration E2E is deferred while this pull request is draft"
+          if [ "$deferred" = false ] && [ -z "$reason" ]; then
+            eligible=true
+            if [ "$companion_candidates" = '[]' ]; then
+              status_description="Integration E2E is validating this exact integration commit"
+            else
+              status_description="Integration E2E is validating this exact source set"
+            fi
+          elif [ -n "$reason" ]; then
+            status_state=failure
+            status_description="Integration E2E admission rejected: $reason"
+          fi
+
+          {
+            echo "eligible=$eligible"
+            echo "pull_request_number=$pull_request_number"
+            echo "candidate_sha=$candidate_sha"
+            echo "base_sha=$base_sha"
+            echo "base_ref=$base_ref"
+            echo "head_sha=$head_sha"
+            echo "companion_candidates=$companion_candidates"
+          } >> "$GITHUB_OUTPUT"
+
+          if [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            post_status "$candidate_sha" "$status_state" "$status_description"
+          fi
+
+          if [ -n "$reason" ]; then
+            echo "$status_description" >&2
+            exit 1
+          fi
+
+  e2e:
+    needs: admission
+    if: needs.admission.outputs.eligible == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      mode: source
+      candidate_repository: ${{ github.repository }}
+      pull_request_number: ${{ needs.admission.outputs.pull_request_number }}
+      candidate_sha: ${{ needs.admission.outputs.candidate_sha }}
+      base_sha: ${{ needs.admission.outputs.base_sha }}
+      base_ref: ${{ needs.admission.outputs.base_ref }}
+      head_sha: ${{ needs.admission.outputs.head_sha }}
+      companion_candidates: ${{ needs.admission.outputs.companion_candidates }}
+    secrets:
+      KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+
+  finalize:
+    needs: [admission, e2e]
+    if: always()
+    runs-on: ${{ github.event.repository.private && 'kuasar-control' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      STATUS_CONTEXT: kuasar/ci-exact-head
+      ADMISSION_RESULT: ${{ needs.admission.result }}
+      ELIGIBLE: ${{ needs.admission.outputs.eligible }}
+      E2E_RESULT: ${{ needs.e2e.result }}
+      CANDIDATE_PR: ${{ needs.admission.outputs.pull_request_number }}
+      CANDIDATE_SHA: ${{ needs.admission.outputs.candidate_sha }}
+      CANDIDATE_BASE_SHA: ${{ needs.admission.outputs.base_sha }}
+      CANDIDATE_BASE_REF: ${{ needs.admission.outputs.base_ref }}
+      CANDIDATE_HEAD_SHA: ${{ needs.admission.outputs.head_sha }}
+      COMPANION_CANDIDATES: ${{ needs.admission.outputs.companion_candidates }}
+    steps:
+      - name: Create companion finalization token
+        if: >-
+          needs.admission.result == 'success' &&
+          needs.admission.outputs.companion_candidates != '[]'
+        id: companion-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
+          permission-contents: read
+          permission-pull-requests: read
+
+      - name: Finalize the exact integration status
+        env:
+          COMPANION_TOKEN: ${{ steps.companion-token.outputs.token }}
+        run: |
+          set -euo pipefail
+
+          api_get() {
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL$1"
+          }
+
+          api_get_with_token() {
+            local token=$1 path=$2
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $token" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL$path"
+          }
+
+          validate_companion() {
+            local record=$1
+            local repository number candidate base base_ref head merge_ref head_ref commit pr base_branch branches snapshot
+            repository=$(jq -r '.repository' <<< "$record")
+            number=$(jq -r '.pull_request_number' <<< "$record")
+            candidate=$(jq -r '.candidate_sha' <<< "$record")
+            base=$(jq -r '.base_sha' <<< "$record")
+            base_ref=$(jq -r '.base_ref' <<< "$record")
+            head=$(jq -r '.head_sha' <<< "$record")
+            merge_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/git/ref/pull/$number/merge") \
+              || return 1
+            head_ref=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/git/ref/pull/$number/head") \
+              || return 1
+            commit=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/git/commits/$candidate") || return 1
+            pr=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/pulls/$number") || return 1
+            base_branch=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/git/ref/heads/$base_ref") || return 1
+            branches=$(api_get_with_token "$COMPANION_TOKEN" \
+              "/repos/$repository/commits/$head/branches-where-head") || return 1
+            snapshot=$(jq -cn \
+              --argjson merge "$merge_ref" \
+              --argjson head_ref "$head_ref" \
+              --argjson commit "$commit" \
+              --argjson pr "$pr" \
+              --argjson base_branch "$base_branch" \
+              --argjson branches "$branches" \
+              '{merge: $merge, head_ref: $head_ref, commit: $commit,
+                pr: $pr, base_branch: $base_branch, branches: $branches}')
+            jq -e \
+              --arg repository "$repository" \
+              --argjson number "$number" \
+              --arg merge_ref "refs/pull/$number/merge" \
+              --arg head_ref "refs/pull/$number/head" \
+              --arg candidate "$candidate" \
+              --arg base "$base" \
+              --arg base_ref "$base_ref" \
+              --arg head "$head" '
+                .merge.ref == $merge_ref
+                and .merge.object.sha == $candidate
+                and .head_ref.ref == $head_ref
+                and .head_ref.object.sha == $head
+                and .commit.sha == $candidate
+                and (.commit.parents | length) == 2
+                and .commit.parents[0].sha == $base
+                and .commit.parents[1].sha == $head
+                and .pr.number == $number
+                and .pr.state == "open"
+                and .pr.draft == false
+                and .pr.base.ref == $base_ref
+                and .pr.base.repo.full_name == $repository
+                and .pr.base.sha == $base
+                and .pr.head.sha == $head
+                and .base_branch.object.sha == $base
+                and (.branches | type == "array" and length > 0)
+              ' <<< "$snapshot" >/dev/null
+          }
+
+          post_status() {
+            local sha=$1 state=$2 description=$3
+            jq -cn \
+              --arg state "$state" \
+              --arg context "$STATUS_CONTEXT" \
+              --arg description "$description" \
+              --arg target_url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+              '{state: $state, context: $context, description: $description, target_url: $target_url}' \
+              | curl --fail --show-error --silent \
+                  --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+                  --request POST \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "Authorization: Bearer $GH_TOKEN" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  --data-binary @- \
+                  "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$sha" >/dev/null
+          }
+
+          if [ "$ADMISSION_RESULT" != success ]; then
+            echo "Admission already rejected this pull request"
+            exit 0
+          fi
+
+          if [ "$ELIGIBLE" != true ]; then
+            if ! [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Draft pull request has no integration commit to mark pending"
+              exit 0
+            fi
+
+            pr=$(api_get "/repos/$GITHUB_REPOSITORY/pulls/$CANDIDATE_PR")
+            if jq -e \
+              --argjson number "$CANDIDATE_PR" \
+              --arg candidate "$CANDIDATE_SHA" \
+              --arg base "$CANDIDATE_BASE_SHA" \
+              --arg base_ref "$CANDIDATE_BASE_REF" \
+              --arg head "$CANDIDATE_HEAD_SHA" '
+                .number == $number
+                and .state == "open"
+                and .draft == true
+                and .base.ref == $base_ref
+                and .base.repo.full_name == env.GITHUB_REPOSITORY
+                and .base.sha == $base
+                and .head.sha == $head
+                and .merge_commit_sha == $candidate
+              ' <<< "$pr" >/dev/null; then
+              post_status \
+                "$CANDIDATE_SHA" pending \
+                "Integration E2E is deferred while this pull request is draft"
+            else
+              echo "Deferred pull request changed; a newer event owns its status"
+            fi
+            exit 0
+          fi
+
+          if ! [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "No exact integration commit is available for final status" >&2
+            exit 1
+          fi
+
+          pr=$(api_get "/repos/$GITHUB_REPOSITORY/pulls/$CANDIDATE_PR")
+          if jq -e \
+            --argjson number "$CANDIDATE_PR" \
+            --arg candidate "$CANDIDATE_SHA" \
+            --arg base "$CANDIDATE_BASE_SHA" \
+            --arg base_ref "$CANDIDATE_BASE_REF" \
+            --arg head "$CANDIDATE_HEAD_SHA" '
+              .number == $number
+              and .state == "open"
+              and .draft == true
+              and .base.ref == $base_ref
+              and .base.repo.full_name == env.GITHUB_REPOSITORY
+              and .base.sha == $base
+              and .head.sha == $head
+              and .merge_commit_sha == $candidate
+            ' <<< "$pr" >/dev/null; then
+            post_status \
+              "$CANDIDATE_SHA" pending \
+              "Integration E2E is deferred while this pull request is draft"
+            exit 0
+          fi
+
+          final_state=failure
+          description="Integration E2E did not validate this integration commit"
+          if [ "$E2E_RESULT" != success ]; then
+            description="Integration E2E result: $E2E_RESULT"
+          else
+            commit=$(api_get "/repos/$GITHUB_REPOSITORY/git/commits/$CANDIDATE_SHA")
+            source_set_valid=true
+            if [ "$COMPANION_CANDIDATES" != '[]' ]; then
+              if [ -z "$COMPANION_TOKEN" ]; then
+                source_set_valid=false
+              else
+                while IFS= read -r companion; do
+                  if ! validate_companion "$companion"; then
+                    source_set_valid=false
+                    break
+                  fi
+                done < <(jq -c '.[]' <<< "$COMPANION_CANDIDATES")
+              fi
+            fi
+            if jq -e \
+              --argjson number "$CANDIDATE_PR" \
+              --arg candidate "$CANDIDATE_SHA" \
+              --arg base "$CANDIDATE_BASE_SHA" \
+              --arg base_ref "$CANDIDATE_BASE_REF" \
+              --arg head "$CANDIDATE_HEAD_SHA" '
+                .number == $number
+                and .state == "open"
+                and .draft == false
+                and .base.ref == $base_ref
+                and .base.repo.full_name == env.GITHUB_REPOSITORY
+                and .base.sha == $base
+                and .head.sha == $head
+                and .merge_commit_sha == $candidate
+              ' <<< "$pr" >/dev/null \
+              && jq -e \
+                --arg candidate "$CANDIDATE_SHA" \
+                --arg base "$CANDIDATE_BASE_SHA" \
+                --arg head "$CANDIDATE_HEAD_SHA" '
+                  .sha == $candidate
+                  and (.parents | length) == 2
+                  and .parents[0].sha == $base
+                  and .parents[1].sha == $head
+                ' <<< "$commit" >/dev/null \
+              && [ "$source_set_valid" = true ]; then
+              final_state=success
+              if [ "$COMPANION_CANDIDATES" = '[]' ]; then
+                description="Integration E2E passed for this exact integration commit"
+              else
+                description="Integration E2E passed for this exact source set"
+              fi
+            else
+              description="Pull request or companion source set changed while Integration E2E was running"
+            fi
+          fi
+
+          post_status "$CANDIDATE_SHA" "$final_state" "$description"
+
+          [ "$final_state" = success ]

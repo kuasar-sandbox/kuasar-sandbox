@@ -37,7 +37,7 @@ E2E_ZOT_BIN    := $(abspath $(E2E_TOOL_DIR)/zot)
 E2E_VGW_BIN    := $(abspath $(E2E_TOOL_DIR)/versitygw)
 E2E_SUITE_DIR  := $(abspath build/e2e-suite)
 BIN_INPUTS_MANIFEST := release/bin-inputs.manifest
-CI_TIMED       := ci/bms/ci-timed.sh
+CI_TIMED       := ci/integration/ci-timed.sh
 GO_REPOS       := accelerator sandboxer guest-runtime connector orchestrator
 ZOT_VERSION    ?= v2.1.17
 
@@ -66,8 +66,8 @@ build:
 	@$(CI_TIMED) build/collect $(MAKE) collect
 
 e2e-tools:
-	$(CI_TIMED) tools/zot env BINDIR="$(abspath $(E2E_TOOL_DIR))" TARGET_ARCH="$(TARGET_ARCH)" ZOT_VERSION="$(ZOT_VERSION)" bash ci/bms/ensure-zot.sh
-	$(CI_TIMED) tools/versitygw env BINDIR="$(abspath $(E2E_TOOL_DIR))" TARGET_ARCH="$(TARGET_ARCH)" bash ci/bms/ensure-versitygw.sh
+	$(CI_TIMED) tools/zot env BINDIR="$(abspath $(E2E_TOOL_DIR))" TARGET_ARCH="$(TARGET_ARCH)" ZOT_VERSION="$(ZOT_VERSION)" bash ci/integration/ensure-zot.sh
+	$(CI_TIMED) tools/versitygw env BINDIR="$(abspath $(E2E_TOOL_DIR))" TARGET_ARCH="$(TARGET_ARCH)" bash ci/integration/ensure-versitygw.sh
 
 # Assemble bin/$(TARGET_ARCH)/ from each sub-repo's per-arch bin per the
 # binary-input manifest. Native builds drop a bin/<name> symlink to the per-arch
@@ -171,7 +171,7 @@ test:
 	@for r in $(GO_REPOS); do echo "== test $$r =="; $(MAKE) -C $(ORG)/$$r test || exit 1; done
 
 test-ci-tools:
-	bash ci/bms/test-ci-tools.sh
+	bash ci/integration/test-ci-tools.sh
 
 test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_documentation_package.py

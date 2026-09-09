@@ -1,15 +1,15 @@
 [English](ci.md) | [简体中文](ci_zh.md)
 
-# BMS CI
+# 持续集成
 
 ## 1. 概述
 
-项目主仓维护 BMS 的可信控制面与唯一执行 workflow。五个组件仓只保留事件触发和参数
-wrapper,并从项目主仓 `main` 引用 `.github/workflows/bms-entry.yml`;该入口再从同一个
-项目主仓 `main` revision 调用 `.github/workflows/bms-e2e.yml`。公共准入、runner 初始化、
+项目主仓维护 CI 的可信控制面与唯一执行 workflow。五个组件仓只保留事件触发和参数
+wrapper,并从项目主仓 `main` 引用 `.github/workflows/ci-entry.yml`;该入口再从同一个
+项目主仓 `main` revision 调用 `.github/workflows/integration-tests.yml`。公共准入、runner 初始化、
 源码缓存、native cache、完整 E2E 和精确发布资产验证不再复制到各仓。
 
-BMS 有两个明确模式:
+执行 workflow 有两个明确模式:
 
 - `source`:验证触发仓的 PR integration commit、可选 exact companion PR 集合与按照
   目标平台分支解析的其余源码组合;
@@ -19,19 +19,18 @@ BMS 有两个明确模式:
 
 各仓可信 wrapper 使用 `pull_request_target` 接收事件,不执行候选仓提供的 workflow。它只接受
 目标为 `main` 或 `release/vMAJOR.MINOR.x` 的 PR。同仓非 draft PR 自动准入;fork PR 由可信控制 job 使用只读 App token
-查询当前组织成员关系,仅 `active` 的 owner/member 自动准入。私有组件仓的控制 job 使用
-专用 `kuasar-control` 池,公开的项目主仓仍使用 GitHub-hosted runner。控制 job 同时重新查询当前 PR,
+查询当前组织成员关系,仅 `active` 的 owner/member 自动准入。公开仓的准入与结束控制 job 使用 GitHub-hosted runner。控制 job 同时重新查询当前 PR,
 校验 GitHub 生成的 two-parent integration commit,并在该 commit 上把
-`kuasar/bms-exact-head` 置为 `pending`。事件中的 `author_association` 不作为私有组织成员
+`kuasar/ci-exact-head` 置为 `pending`。事件中的 `author_association` 不作为组织成员
 身份来源。draft PR 只运行 admission/finalize 控制步骤,不运行完整 E2E,其 exact-head 保持
-`pending`;转为 ready 后由新的事件自动运行完整 BMS。外部 fork、冲突或已经变化的事件拒绝准入。
+`pending`;转为 ready 后由新的事件自动运行完整 Integration E2E。外部 fork、冲突或已经变化的事件拒绝准入。
 
 其余五仓 revision 通过一次 GitHub GraphQL 查询解析,候选仓 revision 替换为已准入的
 integration commit。普通 PR 不声明 companion,行为与单候选模式相同。不能由任一仓
 `main` 单独编译的原子跨仓变更可在两个 PR body 中互相声明:
 
 ```text
-<!-- kuasar-bms-companions
+<!-- kuasar-ci-companions
 kuasar-sandbox/orchestrator#227
 -->
 ```
@@ -41,7 +40,7 @@ marker 最多出现一次,其中每个非空行必须是允许仓库的 `owner/r
 `refs/pull/N/merge`,其 integration 的第一 parent 必须等于该 PR 当前目标分支,第二 parent 必须等于
 `refs/pull/N/head`,且该 head 必须仍是组织仓某个 branch 的 head。这样 fork 只能作为已通过既有
 成员准入的触发 PR,不能经 companion 间接进入特权 runner。每个 companion 还必须在自身
-Ready 状态下运行 BMS 并取得自己的 exact-head status;一条 primary status 不能替代另一个 PR
+Ready 状态下运行 Integration E2E 并取得自己的 exact-head status;一条 primary status 不能替代另一个 PR
 的门禁。编辑 PR body 不属于组件 wrapper 订阅的事件,因此修改 marker 后需 push 新 head,或执行
 draft → ready 触发新运行。准备合入时必须把 status 所链接 run 的 `source-set.tsv` 与当前 marker
 逐项比较;body 在该 run 之后发生过 marker 变更时,即使 commit status 仍显示 success 也视为失效。
@@ -70,8 +69,8 @@ companion marker,再以该 PR 目标版本线的新 sibling 重跑。该流程�
 7. companion/source App token 只有六仓 `Contents: read`、`Pull requests: read`,其中 runner
    上的 token 在执行候选代码前撤销。
 
-结束控制 job 再次查询 PR。只有 BMS 成功且当前 integration commit
-仍与准入值完全一致时,它才把同一个 `kuasar/bms-exact-head` 状态置为 `success`;测试失败、
+结束控制 job 再次查询 PR。只有 Integration E2E 成功且当前 integration commit
+仍与准入值完全一致时,它才把同一个 `kuasar/ci-exact-head` 状态置为 `success`;测试失败、
 取消、跳过或 PR 已变化都不会生成可用于合入的成功状态。GitHub 自带的
 `pull_request_target` workflow check 绑定 PR head commit,不能代替这个 integration-commit
 状态。
@@ -89,17 +88,17 @@ GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每
 `release/vX.Y.x`;不存在该组件维护分支时固定为清单中的精确 tag。`release-units.tsv`
 保留这六项独立的配置版本、请求 ref 与解析 SHA。源码 workspace 仍只有一个
 `guest-runtime` checkout,它采用 runtime unit 的解析 SHA;vmlinux 的独立 archive、校验和
-运行组合由正式发布前的 exact-assets BMS 按清单精确验证,不会被这个源码 checkout 合并成
+运行组合由正式发布前的 exact-assets 发行资产验证 按清单精确验证,不会被这个源码 checkout 合并成
 一个发布单元。
 
-随后创建五组件 `go.work`,恢复或构建 native cache,并从候选项目主仓源码运行:
+随后创建五组件 `go.work`,恢复或构建 native cache,并验证与构建候选项目主仓源码:
 
 ```bash
-make -C src/platform test-release-tools test-perf-tools
-make -C src/platform test-e2e
+make -C src/platform test-ci-tools test-release-tools test-perf-tools
+make -C src/platform build e2e-tools assemble-e2e test-uffd-performance-gate
 ```
 
-每个组件在自己的 `test/e2e/` 维护用例与唯一入口 `run_all.sh`。Platform BMS 将五个
+每个组件在自己的 `test/e2e/` 维护用例与唯一入口 `run_all.sh`。Platform Integration E2E 将五个
 组件源码与 `kuasar-sandbox/test/e2e/platform/` 中真正跨组件组合本身的用例组装为:
 
 ```text
@@ -112,12 +111,12 @@ test/e2e/orchestrator/run_all.sh
 test/e2e/platform/run_all.sh
 ```
 
-顶层入口按 owner 顺序调用六个入口。某组件是候选仓时,组装目录直接采用该 PR integration
-commit 的 `test/e2e/`,所以特性实现与其 E2E 在同一个 PR 评审,组件 PR 的完整 BMS 结果也以
+项目主仓 PR 运行顶层入口,按 owner 顺序调用全部六个入口。组件 PR 运行该组件组装后的完整 owner 入口。某组件是候选仓时,组装目录直接采用该 PR integration
+commit 的 `test/e2e/`,所以特性实现与其 E2E 在同一个 PR 评审,组件 PR 的完整 Integration E2E 结果也以
 该组件 `run_all.sh` 在统一环境中通过为准。测试需要其他仓二进制不改变所有权:platform 只
 提供完整 `BIN`、zot、versitygw、KVM 与系统服务环境,不复制用例源码。
 
-完整 source BMS 还会固定执行 1 轮 working-set smoke,覆盖 A/B/C/D 以及本地加密
+完整 source Integration E2E 还会固定执行 1 轮 working-set smoke,覆盖 A/B/C/D 以及本地加密
 `off/auto × cold/warm`。该 smoke 每次创建并独占一个新的 TAP,不复用前序 E2E 的
 默认接口,并用本轮 `/32` host route 隔离同网段的残留 connected route;
 readiness 失败诊断随 CI metadata 上传。30 轮 canonical 测量用于生成稳定的
@@ -135,7 +134,7 @@ selection.tsv       workflow 内部版本选择,不上传到 GitHub Release
 release-notes.md    GitHub Release 页面说明
 ```
 
-BMS 重新验证固定资产集合、SHA-256、platform 包范围、tar 安全路径和跨包覆盖,然后解压到
+Integration E2E 重新验证固定资产集合、SHA-256、platform 包范围、tar 安全路径和跨包覆盖,然后解压到
 `release-install/`。组件 archive 只提供运行制品;组件文档与 E2E 已由 aggregate prepare
 从清单所选 tag 的 GitHub 源码归档收集进 platform 包。执行入口来自 platform archive 本身:
 
@@ -158,7 +157,7 @@ Go/Rust/native build,也不会重新编译 vmlinux。通过后 publish job 原�
 - RocksDB headers 与 `librocksdb.a`;
 - patched `cloud-hypervisor`。
 
-缓存路径为 `/var/cache/kuasar/native/v1/<arch>/<component>/<input-hash>/`。input hash 覆盖
+缓存路径为 `/var/cache/kuasar/native/v2/<arch>/<component>/<input-hash>/`。input hash 覆盖
 构建脚本、patch/config、上游摘要、架构、Go/Cargo/C/C++ 工具链和 pkg-config 解析结果。
 条目通过 staging、校验和及原子 rename 发布;命中恢复前重新校验 descriptor、payload 和
 tar 路径。损坏条目失败,不会在原目录修补。
@@ -172,12 +171,12 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runner 与网络
 
-runner 安装资料位于 `ci/runner/`。私有组件仓的 BMS 控制 job 和 release 控制 job 使用
+runner 安装资料位于 `ci/runner/`。Release 控制 job 使用
 专用 `kuasar-control` 池;执行候选代码的 E2E job 继续使用 `kuasar-e2e` 池和收窄后的 read
 token。两组 runner 使用不同 rootfs、工作目录、标签和 GitHub runner group;角色变更必须先
 清空并从可信模板重建,不能原地改标签。`kuasar-control` 对组织内全部仓库可见并允许 public,
-同时用 workflow allowlist 只允许中央 `bms-entry.yml` 和各组件 `main` 上的 release workflow。
-公开项目主仓的 BMS 控制 job、每日协调和 aggregate release 控制 job 仍使用 GitHub-hosted runner。runner
+同时用 workflow allowlist 只允许中央 `ci-entry.yml` 和各组件 `main` 上的 release workflow。
+公开仓 CI 的准入/结束控制 job、每日协调和 aggregate release 控制 job 使用 GitHub-hosted runner。runner
 代理属于部署配置,不写入仓库 workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用
 公开中国大陆镜像降低网络抖动。
 
@@ -191,9 +190,13 @@ group 对组织仓库保持 `visibility=all`,不设置 workflow allowlist,只承
 各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于
 base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
 
+特权 Runner 的部署必须使发布凭据和持久 Runner 凭据不可被候选代码访问,并在任务之间丢弃
+候选可写状态。只撤销源码 token 不会建立这种隔离。未评审的外部 Fork 代码不得进入这些
+特权 slot;维护者应先按贡献流程检视并接纳其精确源码。
+
 ## 6. Run artifacts
 
-每次 BMS 上传 `ci-metadata-<run>-<attempt>`。source 模式通常包含:
+每次 Integration E2E 上传 `ci-metadata-<run>-<attempt>`。source 模式通常包含:
 
 - `run.tsv`:模式、候选仓、PR 与 candidate/base/base-ref/head SHA;
 - `source-set.tsv`:触发 candidate 与所有 companion 的 PR、candidate/base/base-ref/head SHA 和角色;
@@ -210,7 +213,7 @@ exact-assets 模式只记录 run 与测试输出,不创建伪造的源码或 nat
 
 ## 7. See Also
 
-- [release_zh.md](release_zh.md):发布资产、aggregate BMS 和权限边界;
-- [deployment_zh.md](deployment_zh.md):BMS 所需系统服务与运行环境;
+- [release_zh.md](release_zh.md):发布资产、发行资产验证 和权限边界;
+- [deployment_zh.md](deployment_zh.md):Integration E2E 所需系统服务与运行环境;
 - [../ci/runner/README.md（英文）](../ci/runner/README.md):runner 安装与维护;
 - [../test/QUICKSTART_zh.md](../test/QUICKSTART_zh.md):E2E 前置条件与排错。

@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
+
+permissions:
+  contents: read
+  pull-requests: read
+  statuses: write
+
+jobs:
+  ci:
+    uses: kuasar-sandbox/kuasar-sandbox/.github/workflows/ci-entry.yml@main
+    secrets:
+      KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+
+  previous-required-check:
+    # Remove after this repository's required rule uses ci / finalize.
+    # The old check follows the real CI result, including admission and the
+    # final current-candidate verification; it cannot turn a failure into success.
+    name: bms / finalize
+    needs: ci
+    if: always()
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Verify the completed CI result
+        env:
+          CI_RESULT: ${{ needs.ci.result }}
+        run: test "$CI_RESULT" = success

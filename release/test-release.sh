@@ -374,15 +374,15 @@ for workflow in aggregate-release.yml delete-preview.yml; do
     "$ROOT/.github/workflows/$workflow")" -eq 1 ] \
     || release_fail "$workflow does not hold exactly one full-workflow mutation lock"
 done
-grep -Fq 'moved while exact-asset BMS was running' \
+grep -Fq 'moved while release asset validation was running' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate publisher does not recheck source branch HEAD"
 grep -Fq 'platform_source_sha: ${{ needs.prepare.outputs.source_sha }}' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
-  || release_fail "aggregate BMS does not receive the selected platform source"
+  || release_fail "aggregate validation does not receive the selected platform source"
 grep -Fq 'PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/src/platform' \
-  "$ROOT/.github/workflows/bms-e2e.yml" \
-  || release_fail "exact-asset BMS does not validate against selected platform source"
+  "$ROOT/.github/workflows/integration-tests.yml" \
+  || release_fail "exact-asset validation does not validate against selected platform source"
 grep -Fq 'ref: main' "$ROOT/.github/workflows/preview-gc.yml" \
   || release_fail "Preview GC does not pin trusted main tooling"
 grep -Fq 'Preview GC must run from main' "$ROOT/.github/workflows/preview-gc.yml" \
