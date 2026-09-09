@@ -58,6 +58,7 @@ jobs:
           permission-contents: read
 
       - name: Plan or converge Preview garbage collection
+        shell: bash
         env:
           PYTHONUNBUFFERED: "1"
           GH_TOKEN: ${{ steps.gc-token.outputs.token }}
