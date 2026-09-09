@@ -353,9 +353,13 @@ VMLINUX_INPUTS := deps/build-vmlinux.sh deps/common.sh \
 vmlinux: $(VMLINUX_BIN)
 $(VMLINUX_BIN): $(VMLINUX_INPUTS)
 	@mkdir -p "$(dir $@)"
+	@mkdir -p build/src/linux/LICENSES/preferred
 	@printf 'build\n' >>"$(FAKE_BUILD_COUNTER)"
 	@printf 'fake-vmlinux\n' >"$@"
 	@chmod +x "$@"
+	@printf 'linux copying fixture\n' >build/src/linux/COPYING
+	@printf 'linux credits fixture\n' >build/src/linux/CREDITS
+	@printf 'linux license fixture\n' >build/src/linux/LICENSES/preferred/GPL-2.0
 EOF
     printf 'common fixture\n' >"$root/guest-runtime/native-deps/deps/common.sh"
     printf 'build vmlinux fixture\n' >"$root/guest-runtime/native-deps/deps/build-vmlinux.sh"
@@ -387,11 +391,13 @@ cat >"$TMP/bin/make" <<'EOF'
 set -euo pipefail
 workdir=""
 arch=x86_64
+target=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
         -C) workdir=$2; shift 2 ;;
         TARGET_ARCH=*) arch=${1#*=}; shift ;;
-        *) shift ;;
+        CROSS_PREFIX=*) shift ;;
+        *) target=$1; shift ;;
     esac
 done
 [ -n "$workdir" ]
@@ -400,9 +406,44 @@ flock 9
 printf 'build\n' >&9
 flock -u 9
 sleep "${FAKE_BUILD_SLEEP:-0}"
-mkdir -p "$workdir/bin/$arch"
-printf 'fake-envd\n' >"$workdir/bin/$arch/envd"
-chmod +x "$workdir/bin/$arch/envd"
+case "$target" in
+    envd)
+        mkdir -p "$workdir/bin/$arch" "$workdir/build/src/e2b-infra"
+        printf 'fake-envd\n' >"$workdir/bin/$arch/envd"
+        chmod +x "$workdir/bin/$arch/envd"
+        printf 'envd license fixture\n' >"$workdir/build/src/e2b-infra/LICENSE"
+        ;;
+    erofs)
+        mkdir -p "$workdir/bin/$arch" "$workdir/build/$arch/src/erofs-utils"
+        printf 'fake-mkfs.erofs\n' >"$workdir/bin/$arch/mkfs.erofs"
+        printf 'fake-fsck.erofs\n' >"$workdir/bin/$arch/fsck.erofs"
+        chmod +x "$workdir/bin/$arch/mkfs.erofs" "$workdir/bin/$arch/fsck.erofs"
+        printf 'erofs authors fixture\n' >"$workdir/build/$arch/src/erofs-utils/AUTHORS"
+        printf 'erofs copying fixture\n' >"$workdir/build/$arch/src/erofs-utils/COPYING"
+        ;;
+    deps-rocksdb)
+        mkdir -p "$workdir/build/$arch/rocksdb/include/rocksdb" \
+            "$workdir/build/$arch/rocksdb/lib" "$workdir/build/src/rocksdb"
+        printf 'rocksdb header fixture\n' >"$workdir/build/$arch/rocksdb/include/rocksdb/db.h"
+        printf 'rocksdb library fixture\n' >"$workdir/build/$arch/rocksdb/lib/librocksdb.a"
+        for file in AUTHORS COPYING LICENSE.Apache LICENSE.leveldb; do
+            printf 'rocksdb %s fixture\n' "$file" >"$workdir/build/src/rocksdb/$file"
+        done
+        ;;
+    cloud-hypervisor)
+        mkdir -p "$workdir/bin/$arch" \
+            "$workdir/build/src/cloud-hypervisor/LICENSES"
+        printf 'fake-cloud-hypervisor\n' >"$workdir/bin/$arch/cloud-hypervisor"
+        chmod +x "$workdir/bin/$arch/cloud-hypervisor"
+        printf 'cloud credits fixture\n' \
+            >"$workdir/build/src/cloud-hypervisor/CREDITS.md"
+        printf 'cloud license fixture\n' \
+            >"$workdir/build/src/cloud-hypervisor/LICENSES/Apache-2.0.txt"
+        printf 'cloud lock fixture\n' \
+            >"$workdir/build/src/cloud-hypervisor/Cargo.lock"
+        ;;
+    *) exit 2 ;;
+esac
 EOF
 chmod +x "$TMP/bin/make"
 
@@ -549,13 +590,16 @@ env PATH="$SYSTEM_PATH" FAKE_BUILD_COUNTER="$vmlinux_counter" \
     KUASAR_NATIVE_CACHE_METRICS="$vmlinux_metrics" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build vmlinux
 [ "$(wc -l <"$vmlinux_counter")" -eq 1 ] || fail "cold vmlinux cache must build once"
+[ "$(cat "$vmlinux_workspace/guest-runtime/native-deps/build/src/linux/COPYING")" \
+    = 'linux copying fixture' ] || fail "cold vmlinux cache omitted source license material"
 env PATH="$SYSTEM_PATH" FAKE_BUILD_COUNTER="$vmlinux_counter" \
     make -C "$vmlinux_workspace/guest-runtime/native-deps" \
     TARGET_ARCH=x86_64 vmlinux >/dev/null
 [ "$(wc -l <"$vmlinux_counter")" -eq 1 ] \
     || fail "cold vmlinux cache restore left the Make target stale"
 
-rm -f "$vmlinux_workspace/guest-runtime/native-deps/bin/x86_64/vmlinux"
+rm -f "$vmlinux_workspace/guest-runtime/native-deps/bin/x86_64/vmlinux" \
+    "$vmlinux_workspace/guest-runtime/native-deps/build/src/linux/COPYING"
 env PATH="$SYSTEM_PATH" FAKE_BUILD_COUNTER="$vmlinux_counter" \
     KUASAR_WORKSPACE_ROOT="$vmlinux_workspace" KUASAR_NATIVE_CACHE_ROOT="$vmlinux_cache" \
     KUASAR_NATIVE_CACHE_METRICS="$vmlinux_metrics" \
@@ -565,6 +609,8 @@ env PATH="$SYSTEM_PATH" FAKE_BUILD_COUNTER="$vmlinux_counter" \
     TARGET_ARCH=x86_64 vmlinux >/dev/null
 [ "$(wc -l <"$vmlinux_counter")" -eq 1 ] \
     || fail "hot vmlinux cache restore left the Make target stale"
+[ "$(cat "$vmlinux_workspace/guest-runtime/native-deps/build/src/linux/COPYING")" \
+    = 'linux copying fixture' ] || fail "hot vmlinux cache did not restore source license material"
 grep -q $'vmlinux\thit\t' "$vmlinux_metrics" || fail "hot vmlinux cache metric is missing"
 
 cloud_workspace="$TMP/cloud-workspace"
@@ -613,20 +659,75 @@ rocks_key_v2="$(env PATH="$TMP/bin:$PATH" CC=clang CXX=clang++ \
 [ "$rocks_key_v1" != "$rocks_key_v2" ] \
     || fail "selected RocksDB compiler did not invalidate the key"
 
+material_cache="$TMP/material-cache"
+material_counter="$TMP/material-build-counter"
+env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" \
+    KUASAR_WORKSPACE_ROOT="$cross_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build erofs
+env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" \
+    KUASAR_WORKSPACE_ROOT="$rocks_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build rocksdb
+env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" CARGO_HOME="$cargo_home" \
+    KUASAR_WORKSPACE_ROOT="$cloud_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build cloud-hypervisor
+[ "$(wc -l <"$material_counter")" -eq 3 ] \
+    || fail "cold native material fixtures did not build exactly once per component"
+[ "$(cat "$cross_workspace/guest-runtime/native-deps/build/x86_64/src/erofs-utils/COPYING")" \
+    = 'erofs copying fixture' ] || fail "erofs cache omitted source license material"
+[ "$(cat "$rocks_workspace/accelerator/build/src/rocksdb/LICENSE.Apache")" \
+    = 'rocksdb LICENSE.Apache fixture' ] || fail "RocksDB cache omitted source license material"
+[ "$(cat "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md")" \
+    = 'cloud credits fixture' ] || fail "Cloud Hypervisor cache omitted source credit material"
+
+rm -f \
+    "$cross_workspace/guest-runtime/native-deps/bin/x86_64/mkfs.erofs" \
+    "$cross_workspace/guest-runtime/native-deps/build/x86_64/src/erofs-utils/COPYING" \
+    "$rocks_workspace/accelerator/build/x86_64/rocksdb/lib/librocksdb.a" \
+    "$rocks_workspace/accelerator/build/src/rocksdb/LICENSE.Apache" \
+    "$cloud_workspace/sandboxer/native-deps/bin/x86_64/cloud-hypervisor" \
+    "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md"
+env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" \
+    KUASAR_WORKSPACE_ROOT="$cross_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build erofs
+env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" \
+    KUASAR_WORKSPACE_ROOT="$rocks_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build rocksdb
+env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" CARGO_HOME="$cargo_home" \
+    KUASAR_WORKSPACE_ROOT="$cloud_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build cloud-hypervisor
+[ "$(wc -l <"$material_counter")" -eq 3 ] \
+    || fail "hot native material fixtures rebuilt a component"
+[ -s "$cross_workspace/guest-runtime/native-deps/build/x86_64/src/erofs-utils/COPYING" ] \
+    || fail "hot erofs cache did not restore source license material"
+[ -s "$rocks_workspace/accelerator/build/src/rocksdb/LICENSE.Apache" ] \
+    || fail "hot RocksDB cache did not restore source license material"
+[ -s "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md" ] \
+    || fail "hot Cloud Hypervisor cache did not restore source credit material"
+
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
     KUASAR_WORKSPACE_ROOT="$workspace" KUASAR_NATIVE_CACHE_ROOT="$cache" \
     KUASAR_NATIVE_CACHE_METRICS="$metrics" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build envd
 [ "$(wc -l <"$counter")" -eq 1 ] || fail "cold cache must build once"
+[ "$(cat "$workspace/guest-runtime/native-deps/build/src/e2b-infra/LICENSE")" \
+    = 'envd license fixture' ] || fail "cold envd cache omitted source license material"
 
-rm -f "$workspace/guest-runtime/native-deps/bin/x86_64/envd"
+rm -f "$workspace/guest-runtime/native-deps/bin/x86_64/envd" \
+    "$workspace/guest-runtime/native-deps/build/src/e2b-infra/LICENSE"
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
     KUASAR_WORKSPACE_ROOT="$workspace" KUASAR_NATIVE_CACHE_ROOT="$cache" \
     KUASAR_NATIVE_CACHE_METRICS="$metrics" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build envd
 [ "$(wc -l <"$counter")" -eq 1 ] || fail "hot cache rebuilt the component"
+[ "$(cat "$workspace/guest-runtime/native-deps/build/src/e2b-infra/LICENSE")" \
+    = 'envd license fixture' ] || fail "hot envd cache did not restore source license material"
 grep -q $'envd\thit\t' "$metrics" || fail "hot cache metric is missing"
 
+# A different input key is exercised in the same fixture directory. Real
+# source-mode assembly starts from a clean component tree as required by the
+# cache; remove the source tree created by the preceding mocked build to model
+# that boundary exactly.
+rm -rf "$workspace/guest-runtime/native-deps/build/src/e2b-infra"
 printf 'changed input\n' >>"$workspace/guest-runtime/native-deps/deps/build-envd.sh"
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
     KUASAR_WORKSPACE_ROOT="$workspace" KUASAR_NATIVE_CACHE_ROOT="$cache" \
@@ -635,7 +736,7 @@ env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
 
 current_key="$(env PATH="$TMP/bin:$PATH" KUASAR_WORKSPACE_ROOT="$workspace" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key envd | cut -f2)"
-entry="$cache/v1/x86_64/envd/$current_key"
+entry="$cache/v2/x86_64/envd/$current_key"
 chmod u+w "$entry/payload.tar"
 printf 'tampered\n' >>"$entry/payload.tar"
 if env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
@@ -666,8 +767,8 @@ staging_cache="$TMP/staging-cache"
 staging_workspace="$TMP/staging-workspace"
 staging_counter="$TMP/staging-counter"
 setup_workspace "$staging_workspace"
-orphan_stage="$staging_cache/v1/.tmp/envd.orphan.test"
-orphan_lock="$staging_cache/v1/.locks/staging/${orphan_stage##*/}.lock"
+orphan_stage="$staging_cache/v2/.tmp/envd.orphan.test"
+orphan_lock="$staging_cache/v2/.locks/staging/${orphan_stage##*/}.lock"
 mkdir -p "$orphan_stage/payload" "$(dirname "$orphan_lock")"
 exec 8>"$orphan_lock"
 flock 8
@@ -688,13 +789,14 @@ retained_workspace="$TMP/retained-workspace"
 retained_counter="$TMP/retained-counter"
 setup_workspace "$retained_workspace"
 for n in 1 2 3 4; do
+    rm -rf "$retained_workspace/guest-runtime/native-deps/build/src/e2b-infra"
     printf 'input-%s\n' "$n" >"$retained_workspace/guest-runtime/native-deps/deps/build-envd.sh"
     env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$retained_counter" \
         KUASAR_WORKSPACE_ROOT="$retained_workspace" KUASAR_NATIVE_CACHE_ROOT="$retained_cache" \
         KUASAR_NATIVE_CACHE_MAX_ENTRIES=2 KUASAR_NATIVE_CACHE_MIN_AGE_SECONDS=0 \
         "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build envd >/dev/null
 done
-[ "$(find "$retained_cache/v1/x86_64/envd" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ] \
+[ "$(find "$retained_cache/v2/x86_64/envd" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ] \
     || fail "native cache retention limit was not enforced"
 
 source_cache="$TMP/source-cache"

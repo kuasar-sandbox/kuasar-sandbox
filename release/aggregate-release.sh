@@ -147,6 +147,20 @@ validate_component_download() {
     | grep -E '(^|/)docs(/|$)|(^|/)test/e2e(/|$)' >/dev/null; then
     release_fail "$unit archive contains docs/ or test/e2e/ content owned by the platform package"
   fi
+  if tar -tzf "$directory/$archive" | awk -v unit="$unit" '
+    {
+      path=$0
+      sub(/^\.\//, "", path)
+      if (path ~ /^share\/(licenses|sources)\/[^/]+/ &&
+          path !~ ("^share/(licenses|sources)/" unit "(/|$)")) {
+        exit 1
+      }
+    }
+  '; then
+    :
+  else
+    release_fail "$unit archive contains another release unit's material namespace"
+  fi
 }
 
 validate_tar_paths() {
