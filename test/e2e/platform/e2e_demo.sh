@@ -18,6 +18,18 @@ if [ "$(id -u)" -ne 0 ]; then
     exec sudo -nE "$0" "$@"
 fi
 
+# The integration host already uses this mirror for public Docker Hub inputs.
+# Keep the authoritative image and digest in demo_common.sh and change only
+# the transport prefix needed by this runner environment.
+[ -f "$DEMO_DIR/demo_common.sh" ] || {
+    echo "missing Demo release input: $DEMO_DIR/demo_common.sh" >&2
+    exit 1
+}
+# shellcheck source=test/demo/demo_common.sh
+. "$DEMO_DIR/demo_common.sh"
+E2E_IMAGE="${E2E_IMAGE:-m.daocloud.io/docker.io/$DEMO_DEFAULT_E2E_IMAGE}"
+export E2E_IMAGE
+
 for path in "$DEMO_DIR/demo_prep.sh" "$DEMO_DIR/demo_e2b.sh" \
     "$DEMO_DIR/requirements.txt"; do
     [ -f "$path" ] || {

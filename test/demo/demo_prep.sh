@@ -44,7 +44,7 @@ done
 # The acceptance run must exercise it with the pinned SDK pair in
 # requirements.txt. Overrides should likewise use immutable digest references
 # rather than a moving tag.
-E2E_IMAGE="${E2E_IMAGE:-e2bdev/code-interpreter@sha256:5a0c5384a3feeb6865d5e69e99e2ef8498150ba81ccc8b46ee2ec4ceed738017}"
+E2E_IMAGE="${E2E_IMAGE:-$DEMO_DEFAULT_E2E_IMAGE}"
 REGISTRY_NS="${REGISTRY_NS:-e2b}"
 ZOT_BIN="${ZOT_BIN:-$(command -v zot 2>/dev/null || true)}"
 VGW_BIN="${VGW_BIN:-$(command -v versitygw 2>/dev/null || true)}"

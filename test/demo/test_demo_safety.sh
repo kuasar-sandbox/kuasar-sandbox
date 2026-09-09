@@ -102,5 +102,14 @@ if grep -Fq 'local name="$1" record="$PID_DIR/$name.pid"' \
     echo "record_state expands its local name before assignment under set -u" >&2
     exit 1
 fi
+[[ "$DEMO_DEFAULT_E2E_IMAGE" =~ ^e2bdev/code-interpreter@sha256:[0-9a-f]{64}$ ]] || {
+    echo "canonical Demo source image must be an immutable e2bdev digest" >&2
+    exit 1
+}
+if grep -Fq 'e2bdev/code-interpreter@sha256:' \
+    "$SCRIPT_DIR/demo_prep.sh" "$SCRIPT_DIR/../e2e/platform/e2e_demo.sh"; then
+    echo "Demo source image digest is duplicated outside demo_common.sh" >&2
+    exit 1
+fi
 
 echo "PASS: Demo ownership and private-handoff safety"
