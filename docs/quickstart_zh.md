@@ -271,7 +271,7 @@ sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
     bash "$INSTALL_DIR/test/demo/demo_e2b.sh"
 ```
 
-首次准备会拉取 digest 固定的基础镜像,再使用 digest 派生的目标 Tag 推入 Registry,耗时取决于网络和存储。脚本会回读目标内容;如同名内容不同则拒绝覆盖。
+首次准备会拉取按 digest 固定的精简 Docker Official `python:3.12-slim` linux/amd64 manifest,再使用 digest 派生的目标 Tag 推入 Registry。脚本会回读目标内容;如同名内容不同则拒绝覆盖。
 
 只有完成以下全部操作,Quick Start 才成功:构建并回读 `snp` Template target、创建真实 MicroVM、执行 Guest 命令、通过 Files API 写入/读取、验证直连和认证数据访问及 outbound NAT、确认两类数据跨 pause/resume 保留、调用 `kill()`,并完成运行所属清理。
 

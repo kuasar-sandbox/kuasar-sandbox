@@ -74,7 +74,7 @@ sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
 
 All paths crossing `sudo` are explicit and absolute. The scripts do not rely on the caller and root having the same `HOME` or Python installation.
 
-To use an existing Registry instead of the Demo-owned Zot, pass `REGISTRY=<host[:port]>`. If authentication is required, pass `REGISTRY_USER` and `REGISTRY_PASS`; `demo_prep.sh` sends the password to `docker login` on stdin and stores Docker authentication only below the private Demo data directory. Set `REGISTRY_INSECURE=1` only for an intentionally HTTP Registry. Every `E2E_IMAGE` override must be an immutable `name@sha256:<digest>` reference.
+The default base is the compact Docker Official `python:3.12-slim` linux/amd64 manifest pinned by digest; its Python runtime is sufficient for the build, readiness, execution, and data-access checks. To use an existing Registry instead of the Demo-owned Zot, pass `REGISTRY=<host[:port]>`. If authentication is required, pass `REGISTRY_USER` and `REGISTRY_PASS`; `demo_prep.sh` sends the password to `docker login` on stdin and stores Docker authentication only below the private Demo data directory. Set `REGISTRY_INSECURE=1` only for an intentionally HTTP Registry. Every `E2E_IMAGE` override must be an immutable `name@sha256:<digest>` reference.
 
 ## 5. Controls and repeated runs
 

@@ -9,7 +9,7 @@ DEMO_OWNER_MARKER_VERSION=kuasar-demo-owner-v1
 # and Integration E2E. The E2E wrapper may prepend its existing registry
 # mirror, but it must not maintain a second digest list.
 # shellcheck disable=SC2034 # Used by scripts that source this helper.
-DEMO_DEFAULT_E2E_IMAGE=e2bdev/code-interpreter@sha256:5a0c5384a3feeb6865d5e69e99e2ef8498150ba81ccc8b46ee2ec4ceed738017
+DEMO_DEFAULT_E2E_IMAGE=library/python:3.12-slim@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79
 
 demo_die() {
     echo "  x $*" >&2

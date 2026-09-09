@@ -355,8 +355,9 @@ OVL="$WORK/overlay-1G.ext4"; truncate -s 1G "$OVL"; "$MKFS_EXT4" -F -q -b 4096 "
 say "builder diff_template — build-sandbox writable disk (pull cache + steps delta + export scratch; sparse)"
 # Sparse, so the cap is free until written. The FULL build re-flattens the base
 # again in phase B (steps export) on top of phase A's pull+flatten, so headroom
-# beyond the ~3 GB base matters: blobs + unpacked tree + two erofs outputs + mkfs
-# chunk staging can coexist. 24 GiB sparse covers a code-interpreter (~3 GB) build.
+# beyond the compact default base matters: blobs + unpacked tree + two EROFS
+# outputs + mkfs chunk staging can coexist. The 24 GiB sparse cap also leaves
+# room for an explicitly selected, larger digest-pinned base.
 BLD="$WORK/builder-24G.ext4"; truncate -s 24G "$BLD"; "$MKFS_EXT4" -F -q -b 4096 "$BLD" >/dev/null 2>&1 || die "mkfs.ext4 (builder)"
 
 say "local demo CA + *.$DOMAIN server cert (SDK trusts the CA via SSL_CERT_FILE; data plane is https)"
@@ -624,7 +625,7 @@ else
     say "Quick Start has no files_storage — its build omits COPY"
 fi
 say "ONE fluent build drives all three phases — A pull+flatten · B steps (COPY/RUN/ENV/WORKDIR via envd) · C startCmd→snapshot:"
-echo "${c_cmd}  \$ Template().from_image('$GUEST_BASE_REF')${COPY_DISP}.run_cmd(…).set_envs(…).set_workdir(…).set_start_cmd('python3 -m http.server 8000', wait_for_url(…))${c_off}"
+echo "${c_cmd}  \$ Template().from_image('$GUEST_BASE_REF')${COPY_DISP}.run_cmd(…).set_envs(…).set_workdir(…).set_start_cmd('python3 -m http.server 8000', wait_for_timeout(2000))${c_off}"
 say "on_build_logs streams the node's build journal (every phase + step) live as it runs:"
 # on_build_logs prints to STDERR so the live stream shows in the terminal without
 # polluting the template id captured from stdout below. With a start command the
@@ -632,7 +633,7 @@ say "on_build_logs streams the node's build journal (every phase + step) live as
 # command left running under envd, so create is a restore, not a cold boot.
 BUILD_RESULT="$(py "$WORK/ctx" "$GUEST_BASE_REF" "$BUILT_MARKER" "$HAS_COPY" "$RUN_KEY" <<'PY'
 import json, os, sys
-from e2b import Template, wait_for_url
+from e2b import Template, wait_for_timeout
 context, base_ref, marker, has_copy, run_key = sys.argv[1:]
 os.chdir(context)                                       # COPY src paths resolve from here
 def show(e):
@@ -647,7 +648,7 @@ tpl = (tpl
     .set_envs({"DEMO_BUILT": "kuasar"})                # B: ENV (into the image config)
     .set_workdir("/home/user/site")                    # B: WORKDIR
     .set_start_cmd("python3 -m http.server 8000 --directory /home/user/site",   # C: startCmd → snapshot
-                   wait_for_url("http://localhost:8000/")))                     # C: readyCmd (curl; base lacks ss)
+                   wait_for_timeout(2000)))                                  # C: SDK readyCmd without extra image tools
 info = Template.build(
     tpl,
     name="demo-app-" + run_key,
@@ -715,7 +716,10 @@ if $HAS_COPY:
     copied = s.commands.run("cat /home/user/site/COPIED.txt").stdout.strip()
     assert copied == "this file was COPY'd from the build context", copied
 print("ENV DEMO_BUILT =", s.commands.run("printenv DEMO_BUILT || echo '(image env not applied to exec)'").stdout.strip())
-code = s.commands.run("curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/ || echo none").stdout.strip()
+code = s.commands.run(
+    "python3 -c \"import urllib.request; "
+    "print(urllib.request.urlopen('http://localhost:8000/', timeout=5).status)\""
+).stdout.strip()
 print("startCmd http.server in-guest (HTTP", code + ") — frozen in the snapshot, live after restore")
 assert code == "200", f"the template start command (http.server) is not serving after restore (got {code!r})"
 print("--- write a file that must survive pause/resume ---")
@@ -762,12 +766,16 @@ case "$out" in
   *"$BUILT_MARKER"*) ok "The e2b exposed port https://8000-<sid>.<domain> (proxy -> floatingip) serves the built page";;
   *) if [ -n "${DEMO_NETDIAG:-}" ]; then say "Exposed-port request failed (NETDIAG: continuing)"; else die "e2b exposed-port request failed: ${out:-<empty>}"; fi ;;
 esac
-say "Guest egress (NAT MASQUERADE): guest curl http://1.1.1.1"
+say "Guest egress (NAT MASQUERADE): guest Python HTTP request to 1.1.1.1"
 set +e
 EGRESS_OUTPUT="$(py <<PY 2>&1
 import re
 from e2b import Sandbox
-r = Sandbox.connect("$SID").commands.run("curl -sS -m10 -o /dev/null -w 'egress HTTP %{http_code}\\n' http://1.1.1.1")
+r = Sandbox.connect("$SID").commands.run(
+    "python3 -c \"import http.client; "
+    "c=http.client.HTTPConnection('1.1.1.1', 80, timeout=10); "
+    "c.request('GET', '/'); print('egress HTTP', c.getresponse().status)\""
+)
 print(r.stdout.rstrip())
 assert r.exit_code == 0, (r.exit_code, r.stderr)
 assert re.fullmatch(r"egress HTTP [1-5][0-9][0-9]", r.stdout.strip()), r.stdout

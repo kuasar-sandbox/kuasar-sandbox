@@ -272,7 +272,7 @@ sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
     bash "$INSTALL_DIR/test/demo/demo_e2b.sh"
 ```
 
-The first preparation pulls a digest-pinned base image and pushes it under a digest-derived destination tag, so duration depends on network and storage. It reads the destination back and refuses to overwrite different content.
+The first preparation pulls the compact Docker Official `python:3.12-slim` linux/amd64 manifest pinned by digest and pushes it under a digest-derived destination tag. It reads the destination back and refuses to overwrite different content.
 
 Quick Start succeeds only after the script has built and read back an `snp` template target, created a real MicroVM, executed guest commands, written and read through the Files API, verified direct and authenticated data access plus outbound NAT, preserved both data forms across pause/resume, called `kill()`, and completed run-owned cleanup.
 

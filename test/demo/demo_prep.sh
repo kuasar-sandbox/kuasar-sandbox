@@ -466,14 +466,21 @@ probe_owned_zot_manifest() {
     esac
 }
 
+push_base_image() {
+    if ! docker push "$BASE_TAG_REF" >"$LOG_DIR/push.log" 2>&1; then
+        echo "docker push output for $BASE_TAG_REF:" >&2
+        sed -n 'p' "$LOG_DIR/push.log" >&2
+        demo_die "docker push failed for $BASE_TAG_REF"
+    fi
+}
+
 if [ "$OWNED_ZOT" -eq 1 ]; then
     if probe_owned_zot_manifest; then
         say "base image already seeded and content-matched: $BASE_TAG_REF"
     else
         say "seeding immutable base image $E2E_IMAGE"
         docker tag "$E2E_IMAGE" "$BASE_TAG_REF"
-        docker push "$BASE_TAG_REF" >"$LOG_DIR/push.log" 2>&1 \
-            || demo_die "docker push failed for $BASE_TAG_REF"
+        push_base_image
         probe_owned_zot_manifest \
             || demo_die "owned Zot still reports $BASE_TAG_REF absent after push"
     fi
@@ -487,8 +494,7 @@ else
     fi
     say "seeding immutable base image $E2E_IMAGE"
     docker tag "$E2E_IMAGE" "$BASE_TAG_REF"
-    docker push "$BASE_TAG_REF" >"$LOG_DIR/push.log" 2>&1 \
-        || demo_die "docker push failed for $BASE_TAG_REF"
+    push_base_image
     docker pull --platform linux/amd64 "$BASE_TAG_REF" >>"$LOG_DIR/destination-pull.log" 2>&1 \
         || demo_die "could not read back $BASE_TAG_REF after push"
     [ "$(docker image inspect --format '{{.Id}}' "$BASE_TAG_REF")" = "$SOURCE_IMAGE_ID" ] \
