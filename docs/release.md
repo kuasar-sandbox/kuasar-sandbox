@@ -313,6 +313,8 @@ Historical aggregate Previews were published before the contract requiring tags 
 
 Apply first dispatches the five component repositories' local deletion wrappers. Each uses only its own short-lived `GITHUB_TOKEN contents:write`, verifies the exact Preview tag and source SHA again, then deletes the Release, all assets and tag together. Platform deletes aggregate Previews only after all component candidates disappear. Partial failure does not recreate deleted objects. Deterministic component and aggregate deletion failures each receive at most three attempts; the next run recomputes canonical history and continues convergence. If a same-name object remains visible or is recreated after successful cleanup, the next apply dispatches a fresh cleanup run. Stable Releases, Stable tags, Actions artifacts and noncanonical orphans are outside the GC deletion set.
 
+An apply run waits for asynchronous deletion and rebuilds the plan from live Releases, tags and protected references every 30 seconds, with planning time added to that interval. It continues through all eligible Stable versions and reports convergence only after each plan has no remaining candidates. The controller has a shared one-hour convergence budget for the run; pending candidates at the deadline cause failure, and a later run resumes from actual repository state. The workflow allows 75 minutes for setup and finalization. A dry run prints one plan per requested or discovered Stable version without dispatching or waiting.
+
 ```bash
 # Read-only plan against actual release state.
 gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \

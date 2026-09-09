@@ -13,6 +13,7 @@ import pathlib
 import re
 import subprocess
 import sys
+import time
 from dataclasses import dataclass
 from typing import Any, Iterable, NoReturn
 
@@ -23,6 +24,8 @@ import preview_coordinator as coordinator  # noqa: E402
 
 
 GRACE_DAYS = 7
+WAIT_SECONDS = 60 * 60
+POLL_SECONDS = 30
 STABLE_RE = re.compile(r"^release-v[0-9]+\.[0-9]+\.[0-9]+$")
 AGGREGATE_PREVIEW_RE = re.compile(
     r"^release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]{8}$"
@@ -662,6 +665,7 @@ def main() -> None:
     dry_run = os.environ.get("DRY_RUN", "true") == "true"
     if requested and STABLE_RE.fullmatch(requested) is None:
         raise GCError("stable_version must match release-vMAJOR.MINOR.PATCH")
+    deadline = time.monotonic() + WAIT_SECONDS
     for version in stable_versions(requested):
         if not dry_run:
             elapsed, eligible = grace_elapsed(stable_published_at(version))
@@ -672,18 +676,29 @@ def main() -> None:
                     raise GCError(f"grace period has not elapsed for {version}")
                 print(f"==> skip {version}: grace period has not elapsed")
                 continue
-        candidates, metadata = plan(version)
-        print_plan(candidates, metadata)
-        elapsed, eligible = grace_elapsed(str(metadata["published_at"]))
-        print(f"eligible_at\t{eligible.isoformat()}")
-        if dry_run:
-            continue
-        if not elapsed:
-            raise GCError(f"Stable publication timestamp changed for {version}")
-        if apply(candidates):
-            print(f"==> Preview GC converged for {version}")
-        else:
-            print(f"==> Preview GC remains pending for {version}")
+        while True:
+            # Re-plan from live Releases, tags and protected references after
+            # every asynchronous deletion. A successful dispatch is not GC
+            # completion, and a stale plan must never authorize the next stage.
+            candidates, metadata = plan(version)
+            print_plan(candidates, metadata)
+            elapsed, eligible = grace_elapsed(str(metadata["published_at"]))
+            print(f"eligible_at\t{eligible.isoformat()}")
+            if dry_run:
+                break
+            if not elapsed:
+                raise GCError(f"Stable publication timestamp changed for {version}")
+            if not candidates:
+                print(f"==> Preview GC converged for {version}")
+                break
+            if time.monotonic() >= deadline:
+                raise GCError(f"Preview GC timed out with pending candidates for {version}")
+            apply(candidates)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise GCError(f"Preview GC timed out with pending candidates for {version}")
+            print(f"==> Preview GC remains pending for {version}; waiting to re-plan")
+            time.sleep(min(POLL_SECONDS, remaining))
 
 
 if __name__ == "__main__":

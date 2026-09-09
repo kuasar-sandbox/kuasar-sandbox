@@ -28,6 +28,7 @@ concurrency:
 jobs:
   collect:
     runs-on: ubuntu-latest
+    timeout-minutes: 75
     steps:
       - name: Check out canonical platform history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -58,6 +59,7 @@ jobs:
 
       - name: Plan or converge Preview garbage collection
         env:
+          PYTHONUNBUFFERED: "1"
           GH_TOKEN: ${{ steps.gc-token.outputs.token }}
           STABLE_VERSION: ${{ inputs.stable_version }}
           DRY_RUN: ${{ github.event_name == 'schedule' && 'false' || inputs.dry_run }}

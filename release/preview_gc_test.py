@@ -6,9 +6,11 @@ from __future__ import annotations
 
 import datetime as dt
 import importlib.util
+import io
 import pathlib
 import sys
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 
@@ -393,6 +395,161 @@ class PreviewGCTest(unittest.TestCase):
         self.assertEqual(
             gh.call_args.args[:3], ("workflow", "run", "delete-preview.yml")
         )
+
+
+class PreviewGCConvergenceTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.version = "release-v1.2.3"
+        self.published = "2020-01-01T00:00:00Z"
+        self.first = preview_gc.Candidate(
+            preview_gc.coordinator.PLATFORM_REPOSITORY,
+            "platform",
+            f"{self.version}-preview.20260830",
+            "5" * 40, 43, 8, 200,
+        )
+        self.second = preview_gc.Candidate(
+            self.first.repository, "platform",
+            f"{self.version}-preview.20260831",
+            "6" * 40, 44, 8, 200,
+        )
+        self.component = preview_gc.Candidate(
+            "kuasar-sandbox/connector", "connector",
+            "v1.2.3-preview.20260830", "7" * 40, 45, 2, 100,
+        )
+        self.metadata = {
+            "stable_version": self.version,
+            "stable_sha": "8" * 40,
+            "published_at": self.published,
+        }
+        self.clock = 0.0
+        self.output = io.StringIO()
+        self.enterContext(redirect_stdout(self.output))
+        self.enterContext(mock.patch.dict(
+            preview_gc.os.environ, {"STABLE_VERSION": "", "DRY_RUN": "false"}
+        ))
+        self.versions = self.enterContext(mock.patch.object(
+            preview_gc, "stable_versions", return_value=[self.version]
+        ))
+        self.published_at = self.enterContext(mock.patch.object(
+            preview_gc, "stable_published_at", return_value=self.published
+        ))
+        self.enterContext(mock.patch.object(
+            preview_gc.time, "monotonic", side_effect=lambda: self.clock
+        ))
+        self.sleep = self.enterContext(mock.patch.object(
+            preview_gc.time, "sleep", side_effect=self.advance
+        ))
+
+    def advance(self, seconds: float) -> None:
+        self.clock += seconds
+
+    def test_waits_for_component_and_all_aggregates_then_verifies_zero(self) -> None:
+        phases = [
+            [self.component, self.first, self.second],
+            [self.component, self.first, self.second],
+            [self.first, self.second],
+            [self.first, self.second],
+            [self.second],
+            [],
+        ]
+        phase = -1
+        mutations = []
+
+        def plan(version):
+            nonlocal phase
+            self.assertEqual(version, self.version)
+            phase += 1
+            return phases[phase], self.metadata
+
+        def active(repository, tag):
+            if (phase, tag) in ((1, self.component.tag), (3, self.first.tag)):
+                return {"html_url": "https://example.invalid/active"}
+            return None
+
+        def dispatch_aggregate(*args):
+            self.assertEqual(args[:3], ("workflow", "run", "delete-preview.yml"))
+            mutations.append(next(arg for arg in args if arg.startswith("version=")))
+
+        with (
+            mock.patch.object(preview_gc, "plan", side_effect=plan),
+            mock.patch.object(preview_gc, "live_manifest_protection", return_value=set()),
+            mock.patch.object(preview_gc.coordinator, "active_delete_run", side_effect=active),
+            mock.patch.object(preview_gc.coordinator, "latest_run", return_value=None),
+            mock.patch.object(preview_gc, "dispatch_component", side_effect=lambda item: mutations.append(item.tag)),
+            mock.patch.object(preview_gc.coordinator, "gh", side_effect=dispatch_aggregate),
+        ):
+            preview_gc.main()
+        self.assertEqual(mutations, [
+            self.component.tag, f"version={self.first.tag}", f"version={self.second.tag}"
+        ])
+        self.assertEqual(phase, 5)
+        self.assertEqual(self.sleep.call_count, 5)
+        self.assertEqual(self.output.getvalue().count("Preview GC converged"), 1)
+
+    def test_dry_run_plans_each_version_once_without_dispatch_or_wait(self) -> None:
+        self.versions.return_value = [self.version, "release-v1.2.4"]
+        with (
+            mock.patch.dict(preview_gc.os.environ, {"DRY_RUN": "true"}),
+            mock.patch.object(preview_gc, "plan", return_value=([self.first], self.metadata)) as plan,
+            mock.patch.object(preview_gc, "apply") as apply,
+        ):
+            preview_gc.main()
+        self.assertEqual(plan.call_args_list, [mock.call(self.version), mock.call("release-v1.2.4")])
+        self.published_at.assert_not_called()
+        apply.assert_not_called()
+        self.sleep.assert_not_called()
+
+    def test_pending_deletion_times_out_instead_of_reporting_success(self) -> None:
+        with (
+            mock.patch.object(preview_gc, "WAIT_SECONDS", 45),
+            mock.patch.object(preview_gc, "plan", return_value=([self.first], self.metadata)),
+            mock.patch.object(preview_gc, "apply", return_value=False) as apply,
+            self.assertRaisesRegex(preview_gc.GCError, "timed out with pending candidates"),
+        ):
+            preview_gc.main()
+        self.assertEqual(apply.call_count, 2)
+        self.assertEqual(self.clock, 45)
+        self.assertNotIn("Preview GC converged", self.output.getvalue())
+
+    def test_replanning_error_stops_without_another_dispatch(self) -> None:
+        with (
+            mock.patch.object(preview_gc, "plan", side_effect=[
+                ([self.first], self.metadata), preview_gc.GCError("ownership changed")
+            ]),
+            mock.patch.object(preview_gc, "apply", return_value=False) as apply,
+            self.assertRaisesRegex(preview_gc.GCError, "ownership changed"),
+        ):
+            preview_gc.main()
+        apply.assert_called_once_with([self.first])
+        self.assertNotIn("Preview GC converged", self.output.getvalue())
+
+    def test_grace_period_is_rechecked_before_every_apply(self) -> None:
+        changed = dict(self.metadata, published_at=dt.datetime.now(dt.timezone.utc).isoformat())
+        with (
+            mock.patch.object(preview_gc, "plan", side_effect=[
+                ([self.first], self.metadata), ([self.first], changed)
+            ]),
+            mock.patch.object(preview_gc, "apply", return_value=False) as apply,
+            self.assertRaisesRegex(preview_gc.GCError, "publication timestamp changed"),
+        ):
+            preview_gc.main()
+        apply.assert_called_once_with([self.first])
+
+    def test_wait_budget_is_shared_across_stable_versions(self) -> None:
+        second_version = "release-v1.2.4"
+        self.versions.return_value = [self.version, second_version]
+        with (
+            mock.patch.object(preview_gc, "WAIT_SECONDS", 30),
+            mock.patch.object(preview_gc, "plan", side_effect=[
+                ([self.first], self.metadata), ([], self.metadata),
+                ([self.second], dict(self.metadata, stable_version=second_version)),
+            ]),
+            mock.patch.object(preview_gc, "apply", return_value=False) as apply,
+            self.assertRaisesRegex(preview_gc.GCError, f"pending candidates for {second_version}"),
+        ):
+            preview_gc.main()
+        apply.assert_called_once_with([self.first])
+        self.assertEqual(self.output.getvalue().count("Preview GC converged"), 1)
 
 
 if __name__ == "__main__":
