@@ -81,10 +81,12 @@ CONTROL_IP=127.0.0.1
 DATA_IP=127.0.0.2
 RUN_KEY="${DEMO_RUN_ID:-$(tr -d '-' </proc/sys/kernel/random/uuid | cut -c1-10)}"
 [[ "$RUN_KEY" =~ ^[a-z0-9]{6,12}$ ]] || demo_die "DEMO_RUN_ID must contain 6-12 lowercase letters or digits"
-SWITCH="${SWITCH:-kd-$RUN_KEY}"
+SWITCH="${SWITCH:-k${RUN_KEY:0:8}}"
 SW_NETNS="${SW_NETNS:-kdns-$RUN_KEY}"
 SW_MGMT="${SW_MGMT:-kdm$RUN_KEY}"
-[[ "$SWITCH" =~ ^[a-zA-Z0-9_.-]+$ ]] || demo_die "unsafe switch name: $SWITCH"
+# Connector appends "-dummy" (and port suffixes) to this name. Reserve those
+# six bytes within Linux's 15-byte interface-name limit before host setup.
+[[ "$SWITCH" =~ ^[a-zA-Z0-9_.-]{1,9}$ ]] || demo_die "switch name must be 1-9 safe characters: $SWITCH"
 [[ "$SW_NETNS" =~ ^[a-zA-Z0-9_.-]+$ ]] || demo_die "unsafe network namespace name: $SW_NETNS"
 [[ "$SW_MGMT" =~ ^[a-zA-Z0-9_.-]{1,15}$ ]] || demo_die "management interface name must be 1-15 safe characters"
 FIP_CIDR="${FIP_CIDR:-100.100.96.0/20}"

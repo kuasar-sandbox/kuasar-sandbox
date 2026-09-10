@@ -103,6 +103,10 @@ Preparation is idempotent only when the live services still match their recorded
 
 `DEMO_DATA_DIR` defaults to `/var/lib/kuasar-demo`. It must be a canonical absolute path using safe path characters. The scripts create a root-owned mode-0700 directory and a strict ownership marker. A nonempty unmarked directory, symbolic-link path, unexpected PID record, changed live configuration, or foreign host resource causes a fail-closed refusal.
 An unmarked nonempty directory or invalid ownership marker is rejected before changing the directory's contents or permissions.
+The default switch name is `k` plus the first eight run-ID characters. Custom
+`SWITCH` names must be 1–9 safe characters, leaving room for Connector's
+`-dummy` and port suffixes within Linux's 15-byte interface-name limit.
+Name conflicts are refused, never adopted.
 New child processes have up to 30 seconds to finish their setsid/exec transition;
 their observed executable and start time are tracked before service readiness is
 checked. This transition handling never applies to a pre-existing PID record.
