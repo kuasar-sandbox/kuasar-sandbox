@@ -136,12 +136,13 @@ demo_init_data_dir() {
     [ -d "$DEMO_DATA_DIR" ] || demo_die "DEMO_DATA_DIR is not a directory: $DEMO_DATA_DIR"
     [ "$(stat -c %u "$DEMO_DATA_DIR")" = "$DEMO_OWNER_UID" ] \
         || demo_die "DEMO_DATA_DIR is owned by uid $(stat -c %u "$DEMO_DATA_DIR"), expected $DEMO_OWNER_UID"
-    chmod 0700 "$DEMO_DATA_DIR"
-
     if [ ! -e "$marker" ]; then
         if [ "$created" -eq 0 ] && find "$DEMO_DATA_DIR" -mindepth 1 -maxdepth 1 -print -quit | grep -q .; then
             demo_die "$DEMO_DATA_DIR is nonempty but has no Kuasar Demo ownership marker; refusing to adopt it"
         fi
+        # Only a new or explicitly selected empty directory may be adopted.
+        # Protect the marker creation after proving there is no foreign state.
+        chmod 0700 "$DEMO_DATA_DIR"
         local marker_tmp="$DEMO_DATA_DIR/.owner.$$"
         (umask 077; printf '%s\nuid=%s\ngid=%s\n' \
             "$DEMO_OWNER_MARKER_VERSION" "$DEMO_OWNER_UID" "$DEMO_OWNER_GID" >"$marker_tmp")
@@ -171,6 +172,7 @@ demo_init_data_dir() {
         || [ "$marker_extra" -ne 0 ]; then
         demo_die "ownership marker does not match this Demo owner"
     fi
+    chmod 0700 "$DEMO_DATA_DIR"
 }
 
 demo_validate_handoff() {

@@ -102,6 +102,7 @@ sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
 ## 6. 归属、凭据与清理
 
 `DEMO_DATA_DIR` 默认是 `/var/lib/kuasar-demo`。它必须是只含安全路径字符的 canonical absolute path。脚本创建 root 所属、mode 0700 的目录和严格 ownership marker。非空且无 marker 的目录、symlink 路径、异常 PID record、存活服务配置变化或陌生 host 资源都会触发 fail-closed 拒绝。
+非空且无 marker 的目录或无效 ownership marker 会在目录内容或权限改变之前被拒绝。
 
 每次运行会保留指向其私有工作目录的短 socket alias `/run/kd-<run-id>`,使最长的 Sandbox 和 Build socket 路径不超过 Linux 限制。已有 alias 会被视为冲突。清理只删除仍指向本次运行目录的 alias。
 

@@ -36,20 +36,25 @@ demo_init_data_dir
 [ "$(stat -c %a "$DEMO_DATA_DIR/.kuasar-demo-owner")" = 600 ]
 
 printf 'extra\n' >>"$DEMO_DATA_DIR/.kuasar-demo-owner"
+chmod 0750 "$DEMO_DATA_DIR"
 if (demo_init_data_dir) >/dev/null 2>&1; then
     echo "ownership marker with trailing data was accepted" >&2
     exit 1
 fi
+[ "$(stat -c %a "$DEMO_DATA_DIR")" = 750 ]
 
 DEMO_DATA_DIR="$TEST_ROOT/foreign"
 export DEMO_DATA_DIR
 mkdir "$DEMO_DATA_DIR"
+chmod 0755 "$DEMO_DATA_DIR"
 printf 'sentinel\n' >"$DEMO_DATA_DIR/foreign-data"
 if (demo_init_data_dir) >/dev/null 2>&1; then
     echo "nonempty unmarked directory was adopted" >&2
     exit 1
 fi
 grep -Fxq sentinel "$DEMO_DATA_DIR/foreign-data"
+[ "$(stat -c %a "$DEMO_DATA_DIR")" = 755 ]
+[ ! -e "$DEMO_DATA_DIR/.kuasar-demo-owner" ]
 
 mkdir "$TEST_ROOT/real-parent"
 ln -s "$TEST_ROOT/real-parent" "$TEST_ROOT/link-parent"
