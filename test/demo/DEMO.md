@@ -27,8 +27,8 @@ Use one internally consistent source set:
 | Create | `Sandbox.create(template)` | A real Cloud Hypervisor MicroVM becomes usable through the data Proxy |
 | Data | `commands.run`, `files.write`, `files.read`, exposed port | Guest execution and both data paths return asserted content |
 | State | `pause` then `Sandbox.connect(id)` | Command-written and Files-API data survive snapshot and resume |
-| Fan-out | `export-sandbox --to-template`, then `Sandbox.create` | A new child carries the exported state |
-| Migration | `Sandbox.connect(id, headers={migration-token})` | Import and resume complete in one SDK call with state intact |
+| Fan-out | `export-sandbox --to-template`, then `Sandbox.create` | A listed new child returns the asserted command-written and Files-API data |
+| Migration | `Sandbox.connect(id, headers={migration-token})` | Import and resume complete in one SDK call; both data values are asserted again |
 | Destroy | `Sandbox.kill` and run-owned cleanup | Sandboxes and all safely attributable ephemeral host resources are gone |
 
 Quick Start mode (`DEMO_QUICKSTART=1`) stops after build, create, execution/data access, pause/resume, and kill. Complete mode requires VersityGW and continues through fan-out and migration.

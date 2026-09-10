@@ -704,7 +704,7 @@ PY
 [ -n "$SID" ] || die "no sandbox id from create"
 printf '%s\n' "$SID" >>"$SIDS_FILE"; chmod 0600 "$SIDS_FILE"
 hosts_add "$DATA_IP" "49983-$SID.$DOMAIN"; hosts_add "$DATA_IP" "49999-$SID.$DOMAIN"
-ok "sandbox running: $SID  (data plane: https://49983-$SID.$DOMAIN → proxy → guest envd)"
+ok "sandbox accepted: $SID  (the next guest operation verifies readiness through https://49983-$SID.$DOMAIN)"
 pause
 
 # ===========================================================================
@@ -858,9 +858,15 @@ py <<PY || die "forked child exec failed"
 from e2b import Sandbox
 ids = [s.sandbox_id for s in Sandbox.list().next_items()]
 print("forked child", "$CHILD", "running:", "$CHILD" in ids)
-print("  child sees forked state:", Sandbox.connect("$CHILD").commands.run("cat /home/user/state.txt").stdout.rstrip())
-print("  child exec user:", Sandbox.connect("$CHILD").commands.run("id -un").stdout.rstrip())
-Sandbox.connect("$CHILD").kill()
+assert "$CHILD" in ids, "forked child is missing from the running sandbox list"
+child = Sandbox.connect("$CHILD")
+result = child.commands.run("cat /home/user/state.txt")
+assert result.exit_code == 0, (result.exit_code, result.stderr)
+assert result.stdout.strip() == "hello from before the snapshot", result.stdout
+assert child.files.read("/home/user/sdk-data.txt") == "written through the E2B Files API"
+print("  child sees forked state:", result.stdout.rstrip())
+print("  child exec user:", child.commands.run("id -un").stdout.rstrip())
+child.kill()
 PY
 ok "fork via template: a fresh sandbox booted from the paused state + in-guest exec works"
 pause
@@ -875,7 +881,11 @@ say "source row now gone; resume on (logically) another node with the migration 
 py <<PY || die "connect-with-migration-token failed"
 from e2b import Sandbox
 s = Sandbox.connect("$SID", headers={"X-Kuasar-Migration-Token": "$MIG_TOKEN"})
-print("migrated + resumed; state:", s.commands.run("cat /home/user/state.txt").stdout.rstrip())
+result = s.commands.run("cat /home/user/state.txt")
+assert result.exit_code == 0, (result.exit_code, result.stderr)
+assert result.stdout.strip() == "hello from before the snapshot", result.stdout
+assert s.files.read("/home/user/sdk-data.txt") == "written through the E2B Files API"
+print("migrated + resumed; state:", result.stdout.rstrip())
 PY
 ok "one-call migration (auto import + resume) preserved guest state"
 pause

@@ -178,6 +178,7 @@ test-ci-tools:
 
 test-release-tools:
 	bash test/demo/test_demo_safety.sh
+	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_state_assertions.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_documentation_package.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_selection_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_coordinator_test.py

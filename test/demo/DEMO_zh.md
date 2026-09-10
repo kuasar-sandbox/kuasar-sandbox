@@ -27,8 +27,8 @@ Demo 是可执行的产品入口,但不能代替组件与聚合 Integration E2E�
 | 创建 | `Sandbox.create(template)` | 真实 Cloud Hypervisor MicroVM 可通过数据 Proxy 使用 |
 | 数据 | `commands.run`、`files.write`、`files.read`、暴露端口 | Guest 执行和两类数据访问都返回断言内容 |
 | 状态 | `pause` 后执行 `Sandbox.connect(id)` | Command 与 Files API 写入的数据跨 snapshot/resume 保留 |
-| 扇出 | `export-sandbox --to-template` 后执行 `Sandbox.create` | 新 child 携带导出的状态 |
-| 迁移 | `Sandbox.connect(id, headers={migration-token})` | 一次 SDK 调用完成 import+resume,状态不变 |
+| 扇出 | `export-sandbox --to-template` 后执行 `Sandbox.create` | 新 child 出现在列表中,Command 写入的数据与 Files API 数据均通过断言 |
+| 迁移 | `Sandbox.connect(id, headers={migration-token})` | 一次 SDK 调用完成 import+resume,再次断言两类数据的内容 |
 | 销毁 | `Sandbox.kill` 与运行所属清理 | Sandbox 和所有能安全证明归属的临时 host 资源都已消失 |
 
 Quick Start 模式(`DEMO_QUICKSTART=1`)在 build、create、执行/数据访问、pause/resume 和 kill 后结束。完整模式要求 VersityGW,并继续执行扇出与迁移。
