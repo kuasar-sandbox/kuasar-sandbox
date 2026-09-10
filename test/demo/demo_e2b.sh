@@ -139,7 +139,7 @@ proc_start_time() {
     printf '%s\n' "${fields[19]}"
 }
 start_process() { # name log executable args...
-    local name="$1" log="$2" exe pid start; shift 2
+    local name="$1" log="$2" exe pid start current_exe index; shift 2
     exe="$(readlink -f "$1")"
     setsid "$@" >"$log" 2>&1 </dev/null 200>&- & pid=$!
     sleep 0.1
@@ -149,7 +149,20 @@ start_process() { # name log executable args...
         die "$name exited during startup (see $log)"
     }
     start="$(proc_start_time "$pid")" || die "cannot record $name process identity"
-    PROCESS_NAMES+=("$name"); PROCESS_PIDS+=("$pid"); PROCESS_STARTS+=("$start"); PROCESS_EXES+=("$exe")
+    current_exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+    [ -n "$current_exe" ] || die "cannot record $name launch executable"
+    index="${#PROCESS_PIDS[@]}"
+    PROCESS_NAMES+=("$name"); PROCESS_PIDS+=("$pid"); PROCESS_STARTS+=("$start"); PROCESS_EXES+=("$current_exe")
+    for _ in $(seq 1 300); do
+        [ "$(proc_start_time "$pid" 2>/dev/null || true)" = "$start" ] \
+            || die "$name exited or changed process identity before exec"
+        current_exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+        [ -n "$current_exe" ] || die "$name exited before exec"
+        PROCESS_EXES[index]="$current_exe"
+        [ "$current_exe" != "$exe" ] || break
+        sleep 0.1
+    done
+    [ "$current_exe" = "$exe" ] || die "$name did not execute its requested program within 30 seconds"
     STARTED_PID="$pid"
 }
 stop_process_at() {

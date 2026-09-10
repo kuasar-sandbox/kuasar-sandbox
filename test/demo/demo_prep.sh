@@ -106,7 +106,7 @@ record_state() { # name; 0=owned live, 1=absent/dead, 2=invalid or live mismatch
 
 declare -a STARTED_NOW=()
 start_owned() { # name command...
-    local name="$1" requested_exe state pid start_time; shift
+    local name="$1" requested_exe state pid start_time current_exe; shift
     requested_exe="$(readlink -f "$1" 2>/dev/null || true)"
     [ -n "$requested_exe" ] || demo_die "cannot resolve executable for $name: $1"
     if record_state "$name"; then
@@ -124,9 +124,24 @@ start_owned() { # name command...
     sleep 0.1
     kill -0 "$pid" 2>/dev/null || { wait "$pid" 2>/dev/null || true; demo_die "$name exited during startup (see $LOG_DIR/$name.log)"; }
     start_time="$(proc_start_time "$pid")" || demo_die "cannot read $name process identity"
-    printf '%s\t%s\t%s\n' "$pid" "$start_time" "$requested_exe" >"$PID_DIR/$name.pid"
+    current_exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+    [ -n "$current_exe" ] || demo_die "cannot read $name launch executable"
+    printf '%s\t%s\t%s\n' "$pid" "$start_time" "$current_exe" >"$PID_DIR/$name.pid"
     chmod 0600 "$PID_DIR/$name.pid"
     STARTED_NOW+=("$name")
+    # setsid/exec can still be loading the target after the first sleep. Track
+    # this newly spawned child's real executable until the transition completes;
+    # never apply this transition allowance to a pre-existing PID record.
+    for _ in $(seq 1 300); do
+        [ "$(proc_start_time "$pid" 2>/dev/null || true)" = "$start_time" ] \
+            || demo_die "$name exited or changed process identity before exec"
+        current_exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+        [ -n "$current_exe" ] || demo_die "$name exited before exec"
+        printf '%s\t%s\t%s\n' "$pid" "$start_time" "$current_exe" >"$PID_DIR/$name.pid"
+        [ "$current_exe" != "$requested_exe" ] || break
+        sleep 0.1
+    done
+    [ "$current_exe" = "$requested_exe" ] || demo_die "$name did not execute its requested program within 30 seconds"
     ok "$name started (pid $pid)"
 }
 

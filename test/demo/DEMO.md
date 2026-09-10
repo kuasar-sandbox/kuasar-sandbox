@@ -103,6 +103,9 @@ Preparation is idempotent only when the live services still match their recorded
 
 `DEMO_DATA_DIR` defaults to `/var/lib/kuasar-demo`. It must be a canonical absolute path using safe path characters. The scripts create a root-owned mode-0700 directory and a strict ownership marker. A nonempty unmarked directory, symbolic-link path, unexpected PID record, changed live configuration, or foreign host resource causes a fail-closed refusal.
 An unmarked nonempty directory or invalid ownership marker is rejected before changing the directory's contents or permissions.
+New child processes have up to 30 seconds to finish their setsid/exec transition;
+their observed executable and start time are tracked before service readiness is
+checked. This transition handling never applies to a pre-existing PID record.
 
 Each run reserves the short socket alias `/run/kd-<run-id>` pointing into its private work directory, keeping maximum Sandbox and Build socket paths within Linux's limit. An existing alias is a conflict. Cleanup removes only an alias that still points to that run's directory.
 
