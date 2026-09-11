@@ -27,7 +27,7 @@ COPY 存储保持主机可达:Conductor 执行 HEAD/预签名,SDK 直接上传,B
 | 配置 | `node-ctl config conductor` 与 `node-ctl config proxy` | 当前 Conductor 与独立 Proxy 配置都通过校验 |
 | 就绪 | Conductor `/health`、Proxy TLS 响应和 stats socket | 控制面与数据面分别就绪;Conductor 不处理数据面形状的请求 |
 | 租户 | `manifest-key add` 与 E2B API key | Registry 凭据在 key 创建时关联,密码不出现在命令行 |
-| 构建 | `Template.build(..., headers={"X-Kuasar-Sandbox-Builder": ...})` | 回读到请求的 sandbox-with-memory 目标,产物 Template kind 为 `snp` |
+| 构建 | `Template.build(...)` 加非空 start/ready command | 现有 auto target 解析为 memory Sandbox;精确 Build 的 ready 状态返回 kind `snp` 和供 create 使用的已发布 Template ID |
 | 创建 | `Sandbox.create(template)` | 真实 Cloud Hypervisor MicroVM 可通过数据 Proxy 使用 |
 | 数据 | `commands.run`、`files.write`、`files.read`、暴露端口 | Guest 执行和两类数据访问都返回断言内容 |
 | 状态 | `pause` 后执行 `Sandbox.connect(id)` | Command 与 Files API 写入的数据跨 snapshot/resume 保留 |
@@ -36,6 +36,11 @@ COPY 存储保持主机可达:Conductor 执行 HEAD/预签名,SDK 直接上传,B
 | 销毁 | `Sandbox.kill` 与运行所属清理 | Sandbox 和所有能安全证明归属的临时 host 资源都已消失 |
 
 Quick Start 模式(`DEMO_QUICKSTART=1`)在 build、create、执行/数据访问、pause/resume 和 kill 后结束。完整模式要求 VersityGW,并继续执行扇出与迁移。
+
+SDK 会把 `Template.build(headers=...)` 同时传给注册和触发请求,而 Kuasar Builder
+配置只允许在注册时提供。因此 Demo 保持自动目标,通过 start/ready command 选择快照,
+再严格检查最终快照结果。固定版本 SDK 等待结束后仍返回注册 handle;Demo 从该精确
+Build 的状态中读取已发布、可供 create 使用的 Template ID。
 
 ## 3. 主机与工具前置
 

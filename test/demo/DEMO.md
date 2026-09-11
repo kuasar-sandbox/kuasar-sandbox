@@ -28,7 +28,7 @@ and uses the Demo's management-VIP route to local Zot.
 | Configure | `node-ctl config conductor` and `node-ctl config proxy` | Current Conductor and independent Proxy configurations both validate |
 | Ready | Conductor `/health`, Proxy TLS response and stats socket | Control and data listeners are independently ready; a data-shaped request is not served by Conductor |
 | Tenant | `manifest-key add` and an E2B API key | Registry credentials are attached at key creation without placing passwords on the command line |
-| Build | `Template.build(..., headers={"X-Kuasar-Sandbox-Builder": ...})` | The requested sandbox-with-memory target is read back and the resulting template kind is `snp` |
+| Build | `Template.build(...)` with nonempty start/ready commands | The existing auto target resolves to a memory Sandbox; the exact build's ready status returns kind `snp` and the published template ID used for create |
 | Create | `Sandbox.create(template)` | A real Cloud Hypervisor MicroVM becomes usable through the data Proxy |
 | Data | `commands.run`, `files.write`, `files.read`, exposed port | Guest execution and both data paths return asserted content |
 | State | `pause` then `Sandbox.connect(id)` | Command-written and Files-API data survive snapshot and resume |
@@ -37,6 +37,12 @@ and uses the Demo's management-VIP route to local Zot.
 | Destroy | `Sandbox.kill` and run-owned cleanup | Sandboxes and all safely attributable ephemeral host resources are gone |
 
 Quick Start mode (`DEMO_QUICKSTART=1`) stops after build, create, execution/data access, pause/resume, and kill. Complete mode requires VersityGW and continues through fan-out and migration.
+
+The SDK forwards `Template.build(headers=...)` to both registration and trigger,
+but Kuasar Builder configuration is register-only. The Demo therefore leaves the
+target automatic and supplies start/ready commands, then strictly checks the
+snapshot result. The pinned SDK returns its registration handle after waiting;
+the Demo reads the published, creatable template ID from that exact build's status.
 
 ## 3. Host and tool prerequisites
 

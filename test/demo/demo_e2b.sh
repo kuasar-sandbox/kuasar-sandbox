@@ -667,34 +667,42 @@ tpl = (tpl
     .set_workdir("/home/user/site")                    # B: WORKDIR
     .set_start_cmd("python3 -m http.server 8000 --directory /home/user/site",   # C: startCmd → snapshot
                    wait_for_timeout(2000)))                                  # C: SDK readyCmd without extra image tools
+# The SDK forwards build headers to both registration and trigger. Builder
+# configuration is register-only, so use the existing auto target: these
+# nonempty start/ready commands select a memory Sandbox (snapshot) output.
 info = Template.build(
     tpl,
     name="demo-app-" + run_key,
     cpu_count=2,
     memory_mb=6144,
     on_build_logs=show,
-    headers={"X-Kuasar-Sandbox-Builder": json.dumps({"target": {"kind": "sandbox", "memory": True}})},
 )
 print(json.dumps({"template_id": info.template_id, "build_id": info.build_id}))
 PY
 )" || die "template build failed (see $WORK/orch.log)"
-read -r TEMPLATE BUILD_ID < <("$PYTHON_BIN" -c \
+read -r REGISTERED_TEMPLATE BUILD_ID < <("$PYTHON_BIN" -c \
     'import json,sys; x=json.loads(sys.argv[1]); print(x["template_id"], x["build_id"])' "$BUILD_RESULT") \
     || die "invalid SDK build result"
-if [ -z "$TEMPLATE" ] || [ -z "$BUILD_ID" ]; then die "no template/build id from build"; fi
+if [ -z "$REGISTERED_TEMPLATE" ] || [ -z "$BUILD_ID" ]; then die "no template/build id from build"; fi
+# This SDK version returns the registration handle even after waiting for the
+# build. Resolve the creatable published ID from this exact build's status.
 curl -fsS --max-time 10 --noproxy '*' --cacert "$WORK/demo-ca.crt" \
     --resolve "api.$DOMAIN:$TLS_PORT:$CONTROL_IP" -H "X-API-KEY: $AK" \
-    "https://api.$DOMAIN/templates" >"$WORK/templates.json" \
+    "https://api.$DOMAIN/templates/$REGISTERED_TEMPLATE/builds/$BUILD_ID/status" >"$WORK/build-status.json" \
     || die "could not read back the built template"
-"$PYTHON_BIN" - "$WORK/templates.json" "$TEMPLATE" "$BUILD_ID" <<'PY' \
-    || die "build target/readback did not match the requested snapshot target"
+TEMPLATE="$("$PYTHON_BIN" - "$WORK/build-status.json" "$BUILD_ID" <<'PY'
 import json, sys
-items = json.load(open(sys.argv[1], encoding="utf-8"))
-matches = [x for x in items if x.get("templateID") == sys.argv[2] and x.get("buildID") == sys.argv[3]]
-assert len(matches) == 1, matches
-assert matches[0].get("target") == {"kind": "sandbox", "memory": True}, matches[0]
-assert matches[0].get("kind") == "snp", matches[0]
+result = json.load(open(sys.argv[1], encoding="utf-8"))
+assert result.get("buildID") == sys.argv[2], "build identity mismatch"
+assert result.get("status") == "ready", "build is not ready"
+assert result.get("profile") == "e2b", "build profile mismatch"
+assert "target" in result and result["target"] is None, "expected registered auto target"
+assert result.get("kind") == "snp", "build did not publish a memory snapshot"
+template = result.get("templateID", "")
+assert template.startswith("e2b-snp-"), "build did not return a published snapshot ID"
+print(template)
 PY
+)" || die "build readback did not match the command-selected snapshot target"
 ok "snapshot template built → $TEMPLATE  (start command frozen under envd)"
 pause
 
