@@ -599,6 +599,12 @@ run_cold_snapshot_restore() {
     for i in $(seq 1 $N); do
         rmdir "/sys/fs/cgroup/sandboxes/oc-snap-$i" 2>/dev/null || true
     done
+    # The snapshot VMs are stopped; release their taps before restoring. The
+    # restored guests keep their pre-snapshot gateway IPs, so the restore taps
+    # must own those host IPs exclusively.
+    for i in $(seq 1 $N); do
+        ip link delete "tap${i}" 2>/dev/null || true
+    done
 
     local post_snap_avail=$(read_avail_mib)
     RECLAIMED_MIB=$(( post_snap_avail - base_avail ))
@@ -686,6 +692,14 @@ EOF
     SANDBOX_PIDS=()
 
     echo "  ✓ ${RESTORE_READY_COUNT}/8 Sandboxes Reached Restored-Ready State in ${RESTORE_WALL_MS} ms wallclock (exit failures: ${RESTORE_EXIT_FAIL})"
+
+    # Release the restore taps before the next phase: tapr1..8 use the same
+    # host IPs as tap1..8 in the ramp/stress phases, so a leaked tapr* would
+    # black-hole those sandboxes' traffic to the mock LLM proxy.
+    for i in $(seq 1 8); do
+        ip link delete "tapr${i}" 2>/dev/null || true
+        rmdir "/sys/fs/cgroup/sandboxes/oc-rest-${i}" 2>/dev/null || true
+    done
 }
 
 # ============================================================================
