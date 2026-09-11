@@ -181,6 +181,12 @@ async function runAgentSession() {
 
   // Write machine-readable output to /tmp/openclaw-result.json
   writeFileSync('/tmp/openclaw-result.json', JSON.stringify(report, null, 2));
+
+  // The benchmark session is one-shot: exit explicitly so a lingering handle
+  // (e.g. an HTTP keep-alive socket to the mock proxy inside the guest) can
+  // never keep the microVM's app alive after the verdict. The error path
+  // below already exits; the success path must too.
+  process.exit(0);
 }
 
 runAgentSession().catch(err => {

@@ -112,22 +112,28 @@ start_proxy() {
     }
 }
 
-# Prepare openclaw-blk0.img rootfs
+# Prepare openclaw-blk0.img rootfs. The cache is keyed to the exact Docker
+# image ID so a stale blk0 (e.g. from an older session driver) is never
+# silently reused.
 CACHED_BLK0="$OUT_BASE/openclaw-blk0.img"
+CACHED_BLK0_ID="$CACHED_BLK0.id"
 prepare_blk0() {
-    if [ -f "$CACHED_BLK0" ]; then
+    if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+        echo "==> Building agent container image $IMAGE..."
+        docker build -t "$IMAGE" "$REPO_ROOT/test/perf/workloads/openclaw-image"
+    fi
+    local image_id
+    image_id=$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || true)
+    if [ -n "$image_id" ] && [ -f "$CACHED_BLK0" ] && [ "$(cat "$CACHED_BLK0_ID" 2>/dev/null)" = "$image_id" ]; then
         BLK0="$CACHED_BLK0"
-        echo "==> Using cached OpenClaw block device: $BLK0"
+        echo "==> Using cached OpenClaw block device: $BLK0 ($image_id)"
     else
         BLK0="$WORK/openclaw-blk0.img"
-        if [ ! -f "$BLK0" ]; then
-            if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-                echo "==> Building agent container image $IMAGE..."
-                docker build -t "$IMAGE" "$REPO_ROOT/test/perf/workloads/openclaw-image"
-            fi
-            echo "==> Exporting OpenClaw container image to EROFS block device..."
-            docker save "$IMAGE" | "$BIN/flatten-ctl" export --output "$BLK0" --no-progress >/dev/null
+        echo "==> Exporting OpenClaw container image to EROFS block device..."
+        docker save "$IMAGE" | "$BIN/flatten-ctl" export --output "$BLK0" --no-progress >/dev/null
+        if [ -n "$image_id" ]; then
             cp "$BLK0" "$CACHED_BLK0" 2>/dev/null || true
+            printf '%s\n' "$image_id" > "$CACHED_BLK0_ID"
         fi
     fi
 }
@@ -168,6 +174,79 @@ wait_for_ready_file() {
 
 verdict_le() { awk -v v="$1" -v s="$2" 'BEGIN {print (v+0 <= s+0) ? "PASS" : "FAIL"}'; }
 verdict_lt() { awk -v v="$1" -v s="$2" 'BEGIN {print (v+0 <  s+0) ? "PASS" : "FAIL"}'; }
+
+# Poll a sandbox log until the agent session reports a terminal verdict (or a
+# fatal error), or the timeout expires. Returns 1 on timeout.
+wait_for_session_verdict() {
+    local log="$1" timeout_s="${2:-180}"
+    local deadline=$(( SECONDS + timeout_s ))
+    while [ "$SECONDS" -lt "$deadline" ]; do
+        grep -qE "Verdict: (PASS|FAIL)|AgentSession Fatal Error" "$log" 2>/dev/null && return 0
+        sleep 0.25
+    done
+    return 1
+}
+
+# Stop a sandbox-ctl process with a bounded wait: SIGTERM, poll, then SIGKILL.
+# Never blocks indefinitely on a microVM whose guest app failed to exit.
+stop_sandbox_ctl() {
+    local pid="$1" timeout_s="${2:-60}"
+    if ! kill -0 "$pid" 2>/dev/null; then
+        wait "$pid" 2>/dev/null || true
+        return 0
+    fi
+    kill -TERM "$pid" 2>/dev/null || true
+    local deadline=$(( SECONDS + timeout_s ))
+    while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+        sleep 0.2
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "  ! sandbox-ctl pid=$pid did not exit in ${timeout_s}s of SIGTERM; sending SIGKILL" >&2
+        kill -KILL "$pid" 2>/dev/null || true
+    fi
+    wait "$pid" 2>/dev/null || true
+}
+
+# Reap a sandbox-ctl process that is expected to exit on its own (guest app
+# completed). Sets REAP_EXIT_CODE to the process exit status (124 when force-
+# stopped). Returns 0 when the process exited within the timeout.
+REAP_EXIT_CODE=0
+reap_sandbox_ctl() {
+    local pid="$1" sid="$2" timeout_s="${3:-180}"
+    REAP_EXIT_CODE=0
+    local deadline=$(( SECONDS + timeout_s ))
+    while kill -0 "$pid" 2>/dev/null && [ "$SECONDS" -lt "$deadline" ]; do
+        sleep 0.25
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "  ! $sid (pid=$pid) still running after ${timeout_s}s; stopping it" >&2
+        stop_sandbox_ctl "$pid" 30
+        REAP_EXIT_CODE=124
+        return 1
+    fi
+    wait "$pid" 2>/dev/null || REAP_EXIT_CODE=$?
+    return 0
+}
+
+# Wait for a set of sandbox-ctl pids to exit naturally, up to timeout_s, then
+# bounded-stop any survivors so a guest app that fails to exit cannot hang the
+# harness indefinitely.
+wait_or_stop_all() {
+    local timeout_s="$1"; shift
+    local deadline=$(( SECONDS + timeout_s ))
+    while :; do
+        local alive=0 p
+        for p in "$@"; do kill -0 "$p" 2>/dev/null && alive=$((alive + 1)); done
+        [ "$alive" -eq 0 ] && return 0
+        if [ "$SECONDS" -ge "$deadline" ]; then
+            echo "  ! $alive sandbox process(es) still running after ${timeout_s}s; stopping them" >&2
+            break
+        fi
+        sleep 0.5
+    done
+    for p in "$@"; do stop_sandbox_ctl "$p" 30; done
+    return 1
+}
 
 # Start node-ctl conductor
 start_node_ctl() {
@@ -354,11 +433,15 @@ run_calibration() {
     local s_pid=$!
     SANDBOX_PIDS+=("$s_pid")
 
-    wait "$s_pid"
-    local t1=$(date +%s%N)
-    CALIB_WALL_MS=$(( (t1 - t0) / 1000000 ))
-
-    echo "  -> OpenClaw Session Completed in ${CALIB_WALL_MS} ms"
+    if wait_for_session_verdict "$WORK/$sid.log" 180; then
+        local t1=$(date +%s%N)
+        CALIB_WALL_MS=$(( (t1 - t0) / 1000000 ))
+        echo "  -> OpenClaw Session Completed in ${CALIB_WALL_MS} ms"
+    else
+        CALIB_WALL_MS=-1
+        echo "  ! calibration session produced no verdict within 180s" >&2
+    fi
+    stop_sandbox_ctl "$s_pid" 60
     sed 's/^/     /' "$WORK/$sid.log" | tail -n 25
 
     if grep -q "Verdict: PASS" "$WORK/$sid.log"; then
@@ -390,6 +473,7 @@ run_pause_resume() {
     start_node_ctl
 
     local N=30
+    SANDBOX_PIDS=()
     echo "  -> Launching $N OpenClaw sandboxes with 20s thinking delay..."
     for i in $(seq 1 $N); do
         local sid="oc-pause-$i"
@@ -449,9 +533,7 @@ run_pause_resume() {
 
     echo "  ✓ Resumed $resumed_count / $N VMs in ${total_resume_ms} ms (avg ${RESUME_AVG_MS} ms/VM)"
 
-    for spid in "${SANDBOX_PIDS[@]}"; do
-        wait "$spid" 2>/dev/null || true
-    done
+    wait_or_stop_all 240 "${SANDBOX_PIDS[@]}" || true
     SANDBOX_PIDS=()
     for i in $(seq 1 $N); do
         rmdir "/sys/fs/cgroup/sandboxes/oc-pause-$i" 2>/dev/null || true
@@ -512,9 +594,7 @@ run_cold_snapshot_restore() {
     SNAP_COUNT=$snap_ok
     SNAP_AVG_MS=$(awk -v d="$snap_dur" -v n="$N" 'BEGIN {printf "%.2f", d / n}')
 
-    for spid in "${SANDBOX_PIDS[@]}"; do
-        wait "$spid" 2>/dev/null || true
-    done
+    wait_or_stop_all 240 "${SANDBOX_PIDS[@]}" || true
     SANDBOX_PIDS=()
     for i in $(seq 1 $N); do
         rmdir "/sys/fs/cgroup/sandboxes/oc-snap-$i" 2>/dev/null || true
@@ -596,7 +676,9 @@ EOF
 
     local rest_fail=0
     for rpid in "${REST_PIDS[@]}"; do
-        if ! wait "$rpid" 2>/dev/null; then
+        if reap_sandbox_ctl "$rpid" "restore pid=$rpid" 240; then
+            [ "$REAP_EXIT_CODE" -ne 0 ] && rest_fail=$((rest_fail + 1))
+        else
             rest_fail=$((rest_fail + 1))
         fi
     done
@@ -669,8 +751,11 @@ run_concurrency_ramp() {
         local pass_count=0
         local fail_count=0
         local guest_killed=0
-        for spid in "${PIDS[@]}"; do
-            if wait "$spid" 2>/dev/null; then
+        local idx
+        for idx in "${!PIDS[@]}"; do
+            local sid="oc-ramp-${N}-$((idx + 1))"
+            reap_sandbox_ctl "${PIDS[$idx]}" "$sid" 300 || true
+            if [ "$REAP_EXIT_CODE" -eq 0 ]; then
                 pass_count=$((pass_count + 1))
             else
                 fail_count=$((fail_count + 1))
@@ -745,9 +830,7 @@ run_production_stress() {
         sleep 0.02
     done
 
-    for spid in "${PIDS[@]}"; do
-        wait "$spid" 2>/dev/null || true
-    done
+    wait_or_stop_all 300 "${PIDS[@]}" || true
     local t1=$(date +%s%N)
     STRESS_DUR_MS=$(( (t1 - t0) / 1000000 ))
 
