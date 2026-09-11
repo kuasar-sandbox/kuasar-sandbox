@@ -49,6 +49,12 @@
 #     WL_ALPHA       (pareto) Pareto shape (default 1.5)
 #     WL_XMIN        (pareto) Pareto x_min seconds (default 1.0)
 #
+#   Mixed population (overrides per-sandbox shape with profile classes)
+#     MIX            e.g. "light:0.6,tool:0.3,heavy:0.1" — fraction of N per
+#                    profile, assigned as contiguous index blocks in the
+#                    listed order. Empty = uniform (all sandboxes use the
+#                    single-shape knobs above).
+#
 #   Test windows
 #     ADMIT_DEADLINE seconds an admit may sit in the queue before being
 #                    canceled; also the host-side observation window when
@@ -123,6 +129,49 @@ WL_RMAX_MIB="${WL_RMAX_MIB:-192}"
 WL_LAMBDA="${WL_LAMBDA:-0.5}"
 WL_ALPHA="${WL_ALPHA:-1.5}"
 WL_XMIN="${WL_XMIN:-1.0}"
+
+# ---- mixed population profiles (used when MIX is set) ----
+# Profile shapes follow the P1 single-sandbox characterization and the P3
+# capacity calibration (test/results/p1-*-N1.txt, p3c-capacityfix-*.txt):
+# P_MEM is the zone/capacity and includes the ~50 MiB guest-OS baseline.
+# Sizing a zone at the application peak alone makes the guest kernel's direct
+# reclaim race the balloon deflate path under herded cycles, and the guest
+# OOM-kills the application without ever appearing in host cgroup counters.
+declare -A P_MEM=(   [light]=${P_LIGHT_MEM:-192}  [tool]=${P_TOOL_MEM:-320}  [heavy]=${P_HEAVY_MEM:-512} )
+declare -A P_FLOOR=( [light]=64   [tool]=64   [heavy]=128 )
+declare -A P_BURST=( [light]=64   [tool]=64   [heavy]=128 )
+declare -A P_RMIN=(  [light]=16   [tool]=64   [heavy]=128 )
+declare -A P_RMAX=(  [light]=64   [tool]=128  [heavy]=256 )
+MIX="${MIX:-}"
+
+# profile_for <index 1..N> — emits the profile key for sandbox i by walking
+# MIX entries in order and consuming the cumulative fraction. With MIX unset
+# all indexes map to the uniform shape (handled via empty return).
+declare -a MIX_KEYS MIX_FRACS MIX_CUM
+if [ -n "$MIX" ]; then
+    IFS=',' read -ra _mix_entries <<< "$MIX"
+    for e in "${_mix_entries[@]}"; do
+        MIX_KEYS+=("${e%%:*}"); MIX_FRACS+=("${e##*:}")
+    done
+    cum=0
+    for f in "${MIX_FRACS[@]}"; do cum=$(awk -v a="$cum" -v b="$f" 'BEGIN{printf "%.4f", a+b}'); MIX_CUM+=("$cum"); done
+    # fractions must sum to 1 within 0.001 (rounding tolerance)
+    for p in "${MIX_KEYS[@]}"; do
+        [ -n "${P_MEM[$p]:-}" ] || { echo "FATAL: MIX profile '$p' unknown (known: ${!P_MEM[@]})" >&2; exit 1; }
+    done
+    [ "$(awk -v a="$cum" 'BEGIN{print (a+0.001>1.0 && a-0.001<1.0) ? 1 : 0}')" = "1" ] || { echo "FATAL: MIX fractions must sum to 1 (got $cum)" >&2; exit 1; }
+fi
+
+profile_for() {
+    local i="$1" k
+    [ -n "$MIX" ] || return 1
+    for k in "${!MIX_KEYS[@]}"; do
+        if [ "$(awk -v i="$i" -v n="$N" -v c="${MIX_CUM[$k]}" 'BEGIN{print (i <= c*n) ? 1 : 0}')" = "1" ]; then
+            echo "${MIX_KEYS[$k]}"; return 0
+        fi
+    done
+    echo "${MIX_KEYS[-1]}"; return 0
+}
 ADMIT_DEADLINE="${ADMIT_DEADLINE:-$WL_DURATION}"
 # Host-side observation runs for whichever is longer: workload duration or
 # the admit deadline. Default (ADMIT_DEADLINE unset) matches WL_DURATION
@@ -147,7 +196,14 @@ STAGGER_S="${STAGGER_S:-0}"
 TICK_S=5
 
 WORK="${WORK:-$(mktemp -d /tmp/density-perf-XXXXXX)}"
-mkdir -p "$WORK" "$WORK/run" "$WORK/lib"
+mkdir -p "$WORK" "$WORK/lib"
+# node-ctl validates that <run_root>/sandboxes/<max-57-char-sid>/vsock.sock_5000
+# fits the 107-byte unix-socket limit — the run_root itself must be ≤ ~23 bytes,
+# so /tmp paths and long names fail. Use a short dedicated run_root under /run
+# (sandbox-ctl keeps its own /run/sandbox default; live sandboxes register via
+# the controller socket + cgroup path, not via dirs under this run_root).
+NODECTL_RUN_ROOT="${NODECTL_RUN_ROOT:-/run/dp-$$}"
+mkdir -p "$NODECTL_RUN_ROOT" "$NODECTL_RUN_ROOT/sandboxes"
 OUT="${PERF_OUT:-$REPO_ROOT/test/results/density-perf-N${N}.txt}"
 mkdir -p "$(dirname "$OUT")"
 
@@ -230,7 +286,7 @@ cleanup_all() {
         wait "$DAEMON_PID" 2>/dev/null
     fi
     if [ -z "${PERF_KEEP:-}" ]; then
-        rm -rf "$WORK"
+        rm -rf "$WORK" "$NODECTL_RUN_ROOT"
     else
         echo "kept work dir: $WORK" >&2
     fi
@@ -262,16 +318,16 @@ echo "+memory +cpu" > /sys/fs/cgroup/sandboxes/cgroup.subtree_control 2>/dev/nul
 WORKLOAD_PY="$(cat "$REPO_ROOT/test/perf/workload.py")"
 
 emit_yaml() {
-    local sid="$1"
+    local sid="$1" sb_cap="$2" sb_floor="$3" sb_burst="$4" sb_rmin="$5" sb_rmax="$6"
     {
         cat <<EOF
 resources:
   capacity:
     cpu: 1
-    memory: ${CAP_MIB}MiB
+    memory: ${sb_cap}MiB
   allocatable:
     cpu: 1
-    memory: ${FLOOR_MIB}MiB
+    memory: ${sb_floor}MiB
     deflate_on_oom: true
   control:
     cgroup_path: /sys/fs/cgroup/sandboxes/${sid}
@@ -281,7 +337,7 @@ resources:
       psi_some_window_us: ${PSI_WINDOW_US:-1000000}
       min_interval_ms: ${PSI_MIN_INT_MS:-100}
   startup:
-    memory: ${BURST_MIB}MiB
+    memory: ${sb_burst}MiB
 network:
   tap: ${sid}-tap
 boot:
@@ -301,8 +357,8 @@ launch:
     WL_LAMBDA: "${WL_LAMBDA}"
     WL_ALPHA: "${WL_ALPHA}"
     WL_XMIN: "${WL_XMIN}"
-    WL_RMIN_MIB: "${WL_RMIN_MIB}"
-    WL_RMAX_MIB: "${WL_RMAX_MIB}"
+    WL_RMIN_MIB: "${sb_rmin}"
+    WL_RMAX_MIB: "${sb_rmax}"
     PYTHONUNBUFFERED: "1"
   restart: never
   args:
@@ -320,13 +376,13 @@ EOF
 cat > "$WORK/node-ctl.yaml" <<EOF
 api: { domain: density.local, listen: "127.0.0.1:0" }
 encryption_key: "0000000000000000000000000000000000000000000000000000000000000000"
-proxy: { mode: internal, auth: enforce }
+proxy: { auth: enforce }
 sandbox:
   boot:
     kernel: $BIN/vmlinux
     runtime: $BIN/sandbox-runtime.bundle
 paths:
-  run_root: $WORK/run
+  run_root: $NODECTL_RUN_ROOT
   base_root: $WORK/lib
   config_socket: $WORK/node-ctl.socket
   db_path: $WORK/node-ctl.db
@@ -335,7 +391,6 @@ resource_listen:
   enabled: true
   socket: $WORK/sandbox-resource.sock
   state_path: $WORK/state.json
-  audit_path: $WORK/audit.log
   cgroup_scan_paths:
     - /sys/fs/cgroup/sandboxes
   resources:
@@ -358,9 +413,6 @@ resource_listen:
     startup_ttl: 30s
     queue_ttl: ${ADMIT_DEADLINE}s
     queue_max_depth: 256
-  dampening:
-    recover_duration: $RECOVER_DUR
-    cooldown_periods: 5
   log_level: info
 EOF
 
@@ -376,35 +428,29 @@ read_avail() { awk '/MemAvailable:/ {printf "%d", $2/1024}' /proc/meminfo; }
 # exactly one number per invocation; safe under set -e.
 count() { grep -E "$1" "$2" 2>/dev/null | wc -l; }
 
-# queue_depth derives "currently queued admits" from audit events: a sid
-# enters the queue on `admit_queued sid=X` and leaves it on either
-# `admit token=... sid=X` (granted) or `admit_queue_canceled sid=X`
-# (TTL / EOF). Awk maintains a per-sid set; END prints the residual.
-queue_depth() {
-    [ -f "$WORK/audit.log" ] || { echo 0; return; }
-    awk '
-/admit_queued/             { for(i=2;i<=NF;i++) if($i ~ /^sid=/) { q[substr($i,5)]=1; break } }
-/admit token=/             { for(i=2;i<=NF;i++) if($i ~ /^sid=/) { delete q[substr($i,5)];   break } }
-/admit_queue_canceled/     { for(i=2;i<=NF;i++) if($i ~ /^sid=/) { delete q[substr($i,5)];   break } }
-END                        { n=0; for(k in q) n++; print n }' "$WORK/audit.log"
-}
+# queue_depth: the refactored controller logs no explicit "entry into queue"
+# event, so a live queue-depth cannot be derived from daemon.log. The
+# meaningful residual is instead visible as `canceled` (TTL/disconnect) and
+# `rejects` (queue_full / dropped_long) counters. Kept as a 0 placeholder so
+# the RESULT block and verdict shape stay unchanged.
+queue_depth() { echo 0; }
 
 snapshot_counters() {
-    # `admit token=` matches only the canonical success-admit event from
-    # buildAdmitOK (server.go); excludes admit_queued / admit_queue_*
-    # bookkeeping events that share the 'admit' substring.
-    #
-    # `admit_queue_canceled` (audit.log) counts queued admits that were
-    # not admitted because of queue TTL expiry or client disconnect. It
-    # is distinct from `rejected` (controller-side refusal) — we sum
-    # them as "not admitted" in the verdict path.
+    # The refactored node-ctl (post-0.1.3) logs ALL resource-controller events
+    # through slog to daemon.log (there is no separate audit.log):
+    #   success:  msg="admit <tok> sid=<sid> ..." / msg="grant ..." / msg="settled ..."
+    #   queue:    event=admit_queue_canceled | admit_queue_dropped_long |
+    #             admit_queue_full | admit_queued
+    # The old `reclaim` event is no longer emitted (reclaims are implicit in
+    # the allocator's zone bookkeeping), so that counter reads 0 and the RESULT
+    # line is retained only as a diagnostic.
     local admits reclaims grants settled rejects canceled queued
-    admits=$(  count 'admit token='          "$WORK/audit.log" )
-    reclaims=$(count '^[^ ]* reclaim'        "$WORK/audit.log" )
-    grants=$(  count ' grant '               "$WORK/daemon.log")
-    settled=$( count ' settled '             "$WORK/daemon.log")
-    rejects=$( count 'rejected'              "$WORK/daemon.log")
-    canceled=$(count 'admit_queue_canceled ' "$WORK/audit.log" )
+    admits=$(  count 'msg="admit '              "$WORK/daemon.log")
+    reclaims=0
+    grants=$(  count 'msg="grant '              "$WORK/daemon.log")
+    settled=$( count 'msg="settled '            "$WORK/daemon.log")
+    rejects=$( count 'admit_queue_dropped_long' "$WORK/daemon.log")
+    canceled=$(count 'event=admit_queue_canceled' "$WORK/daemon.log")
     queued=$(queue_depth)
     echo "$admits $reclaims $grants $settled $rejects $canceled $queued"
 }
@@ -421,6 +467,33 @@ snapshot_cgroup() {
     echo "$total_high $total_oom"
 }
 
+# Guest app exits with nonzero code ("app exited code=137 signal=9" for a
+# guest-internal OOM kill). Survivors log "code=0 signal=0" at workload end
+# and must not count. The cgroup memory.events counters never see this
+# failure mode — the kill happens inside the guest (balloon/OOM race), so
+# the verdict must check it explicitly.
+guest_app_exits() {
+    local n=0 f
+    for f in "$WORK"/sb-perf-*.log; do
+        [ -f "$f" ] || continue
+        n=$((n + $(grep -E 'app exited code=[1-9]' "$f" 2>/dev/null | wc -l)))
+    done
+    echo "$n"
+}
+
+# Client-side admission rejections. The refactored node-ctl logs zone_critical /
+# exceeds_node_capacity / etc. rejections ONLY to the sandbox-ctl client (the
+# server emits no reject event for the zone-red path), so the server-side
+# "rejects" counter undercounts. Count "admit rejected" in each sb log.
+client_rejects() {
+    local n=0 f
+    for f in "$WORK"/sb-perf-*.log; do
+        [ -f "$f" ] || continue
+        n=$((n + $(grep -cE 'admit rejected' "$f" 2>/dev/null)))
+    done
+    echo "$n"
+}
+
 # ---- helper: print the BANNER/SETUP/BOOT sections (only once, into log+tee) ----
 say()  { printf '%s\n' "$*"      | tee -a "$OUT"; }
 sayf() { printf "$@"             | tee -a "$OUT"; }
@@ -433,6 +506,7 @@ say "============================================================"
 say ""
 say " SETUP"
 say "   per-sandbox:  zone=${MEM_MIB} MiB  floor=${FLOOR_MIB} MiB  burst=${BURST_MIB} MiB  cap=${CAP_MIB} MiB"
+[ -n "$MIX" ] && say "   mix:          $MIX  (light=${P_MEM[light]}/${P_RMIN[light]}-${P_RMAX[light]}MiB tool=${P_MEM[tool]}/${P_RMIN[tool]}-${P_RMAX[tool]}MiB heavy=${P_MEM[heavy]}/${P_RMIN[heavy]}-${P_RMAX[heavy]}MiB)"
 say "   node pool:    ${PHYS_MEM} (host_reserved=${HOST_RES_MEM}, host_cpu=${PHYS_CPU}/${HOST_RES_CPU} reserved)"
 say "   watermarks:   high=${HIGH_FACTOR}  low=${LOW_FACTOR}  emergency=${EMERG_FACTOR}"
 say "   workload:     $WORKLOAD_DESC"
@@ -451,6 +525,7 @@ done
 
 # ---- baseline host memory (taken AFTER daemon up, BEFORE first sandbox) ----
 host_baseline_avail=$(read_avail)
+host_oom_base=$(awk '$1=="oom_kill" {print $2}' /proc/vmstat); host_oom_base=${host_oom_base:-0}
 
 # ---- launch sandboxes ----
 say " BOOT"
@@ -458,12 +533,18 @@ launch_t0=$(date +%s.%N)
 for i in $(seq 1 "$N"); do
     sid="sb-perf-$i"
     SB_SIDS+=("$sid")
+    if [ -n "$MIX" ]; then
+        p="$(profile_for "$i")"
+        sb_cap="${P_MEM[$p]}" sb_floor="${P_FLOOR[$p]}" sb_burst="${P_BURST[$p]}" sb_rmin="${P_RMIN[$p]}" sb_rmax="${P_RMAX[$p]}"
+    else
+        sb_cap="$CAP_MIB" sb_floor="$FLOOR_MIB" sb_burst="$BURST_MIB" sb_rmin="$WL_RMIN_MIB" sb_rmax="$WL_RMAX_MIB"
+    fi
     mkdir -p "/sys/fs/cgroup/sandboxes/$sid"
     ip tuntap add "${sid}-tap" mode tap 2>/dev/null || true
     ip link set "${sid}-tap" up
     truncate -s 1G "$WORK/${sid}.diff"
     mkfs.ext4 -q -F "$WORK/${sid}.diff"
-    emit_yaml "$sid"
+    emit_yaml "$sid" "$sb_cap" "$sb_floor" "$sb_burst" "$sb_rmin" "$sb_rmax"
     "$BIN/sandbox-ctl" run \
         --config "$WORK/$sid.yaml" \
         --sandbox-id "$sid" \
@@ -594,7 +675,11 @@ final_canceled=${final_counters[5]}
 final_queued=${final_counters[6]}
 final_high=${final_cg[0]}
 final_oom=${final_cg[1]}
+final_guest_exits=$(guest_app_exits)
+final_client_rejects=$(client_rejects)
 final_avail=$(read_avail)
+host_oom_end=$(awk '$1=="oom_kill" {print $2}' /proc/vmstat); host_oom_end=${host_oom_end:-0}
+host_oom_delta=$((host_oom_end - host_oom_base))
 peak_drop=$((host_baseline_avail - min_avail))
 post_drop=$((host_baseline_avail - final_avail))
 peak_per_sb=$(awk -v d="$peak_drop" -v n="$N" 'BEGIN{printf "%.1f", d/n}')
@@ -610,18 +695,26 @@ projected=$(awk -v a="$min_avail" -v p="$peak_per_sb" 'BEGIN{
 if [ "$final_oom" -gt 0 ]; then
     verdict="FAIL"
     verdict_reason="$final_oom cgroup OOM kill(s) — controller did not reclaim in time"
+elif [ "$final_guest_exits" -gt 0 ]; then
+    verdict="FAIL"
+    verdict_reason="$final_guest_exits guest app exit(s) with nonzero code (guest-internal OOM or app crash — grep 'app exited' in sb-perf-*.log)"
 elif [ "$hangs" -gt 0 ]; then
     verdict="DEGRADED"
     verdict_reason="$hangs sandbox-ctl(s) did not exit within 60s of SIGTERM (see WARN above)"
 elif [ "$final_rejects" -gt 0 ] || [ "$final_canceled" -gt 0 ]; then
     verdict="DEGRADED"
-    verdict_reason="$final_rejects rejection(s) + $final_canceled queue-cancellation(s); $final_admits of $N admitted"
+    verdict_reason="$final_rejects server + $final_client_rejects client rejection(s) + $final_canceled queue-cancellation(s); $final_admits of $N admitted"
 elif [ "$final_admits" -lt "$N" ]; then
     verdict="DEGRADED"
-    if [ "$final_queued" -gt 0 ]; then
+    if [ "$final_client_rejects" -gt 0 ]; then
+        # zone-red / capacity ceiling: the controller refused further admits at
+        # the reservation ceiling (server logs no event for this path — the
+        # reject is visible only in the sandbox-ctl client logs).
+        verdict_reason="only $final_admits of $N admitted; $final_client_rejects rejected client-side (zone_critical / capacity ceiling — reservation-gated, not memory-gated)"
+    elif [ "$final_queued" -gt 0 ]; then
         verdict_reason="only $final_admits of $N admitted; $final_queued still queued at observe end (raise ADMIT_DEADLINE, lower BURST_MIB, or pool/startup capacity exhausted by settled tenants)"
     else
-        verdict_reason="only $final_admits of $N admitted (no rejections / cancellations / queue residue — check daemon.log + audit.log)"
+        verdict_reason="only $final_admits of $N admitted (no rejections / cancellations / queue residue — check daemon.log)"
     fi
 else
     verdict="PASS"
@@ -642,8 +735,8 @@ sayf "       (end of window: %d MiB drop; workload drained + page reclaim active
 sayf "     projected ceiling (peak basis):  ~%s sandboxes\n" "$projected"
 say ""
 say "   admission"
-sayf "     %d admitted / %d rejected / %d queue-canceled / %d still queued\n" \
-    "$final_admits" "$final_rejects" "$final_canceled" "$final_queued"
+sayf "     %d admitted / %d rejected (server) / %d rejected (client, zone) / %d queue-canceled / %d still queued\n" \
+    "$final_admits" "$final_rejects" "$final_client_rejects" "$final_canceled" "$final_queued"
 sayf "     %d settled at shutdown / %d burst grants total / %d sandbox-ctl hang(s)\n" \
     "$final_settled" "$final_grants" "$hangs"
 say ""
@@ -654,6 +747,8 @@ if [ "$MODE" = "cycles" ] && [ "$final_high" -gt 0 ]; then
     say  "        non-zero ≠ failure — the only true failure signal is OOM)"
 fi
 sayf "     cgroup OOM kills:          %d\n" "$final_oom"
+sayf "     host oom_kill delta:       %d (kernel-wide; cgroup OOMs inside sandbox cgroups surface here first)\n" "$host_oom_delta"
+sayf "     guest app exits (nonzero): %d (OOM/crash inside guest — cgroup counters blind to this)\n" "$final_guest_exits"
 sayf "     controller reclaims:       %d (burst-grant pullbacks)\n" "$final_reclaims"
 say ""
 say "   notes"
@@ -661,7 +756,7 @@ say "     host 'used' is NOT reported — page cache movement makes it noisy and
 say "     not attributable to sandboxes. MemAvailable is the right density metric."
 say ""
 say " ARTIFACTS    $WORK/"
-say "   daemon.log  audit.log  sb-perf-{1..$N}.{log,cgroup-events}"
+say "   daemon.log  sb-perf-{1..$N}.{log,cgroup-events}"
 say ""
 say "============================================================"
 echo "  full report: $OUT" >&2
