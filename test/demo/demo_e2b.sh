@@ -38,6 +38,12 @@ SW_MGMT="${SW_MGMT:-sw0m0}"; FIP_CIDR="${FIP_CIDR:-100.100.96.0/20}"
 GUEST_DNS="${GUEST_DNS:-169.254.169.253}"; HOST_DNS=""
 MGMT_VIP="169.254.169.254"; SW_MGMT_ADDR="169.254.1.0/31"
 DEMO_DATA_DIR="${DEMO_DATA_DIR:-$HOME/.cache/kuasar-demo}"
+UNIT_PREFIX="${DEMO_UNIT_PREFIX:-sandbox}"
+[[ "$UNIT_PREFIX" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "✗ invalid DEMO_UNIT_PREFIX: $UNIT_PREFIX"; exit 1; }
+RUNNER_UNIT="${UNIT_PREFIX}-runner@.service"
+BUILDER_UNIT="${UNIT_PREFIX}-builder@.service"
+RUNNER_UNIT_GLOB="${UNIT_PREFIX}-runner@*.service"
+BUILDER_UNIT_GLOB="${UNIT_PREFIX}-builder@*.service"
 
 # Pull in the persistent-prep handoff (REGISTRY / sockets / BASE_REF).
 [ -f "$DEMO_DATA_DIR/prep.env" ] || { echo "✗ run demo_prep.sh first (no $DEMO_DATA_DIR/prep.env)"; exit 1; }
@@ -74,13 +80,13 @@ echo "${c_hd}"'
 WORK="$(mktemp -d /tmp/demo-e2b-XXXXXX)"
 CLI_ENV_FILE="/tmp/demo-e2b-cli-env.sh"
 UNIT_DIR=/run/systemd/system
-UNITS=(sandbox-runner@.service sandbox-builder@.service sandbox-runner.slice sandbox-builder.slice)
+UNITS=("$RUNNER_UNIT" "$BUILDER_UNIT" sandbox-runner.slice sandbox-builder.slice)
 declare -a OURS=(); for u in "${UNITS[@]}"; do [ -e "$UNIT_DIR/$u" ] && die "$UNIT_DIR/$u exists; refusing to clobber"; OURS+=("$UNIT_DIR/$u"); done
 mkdir -p "$WORK/run" "$WORK/lib" "$WORK/home" "$WORK/saved"
 declare -a PIDS=() NAT_ADDED=()
 cleanup() {
     set +e; echo; echo "${c_dim}── teardown (storage tier from demo_prep.sh is left running) ──${c_off}"
-    systemctl stop 'sandbox-runner@*.service' 'sandbox-builder@*.service' 2>/dev/null
+    systemctl stop "$RUNNER_UNIT_GLOB" "$BUILDER_UNIT_GLOB" 2>/dev/null
     for p in "${PIDS[@]:-}"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
     for r in "${NAT_ADDED[@]:-}"; do case "$r" in
         r1) iptables -D FORWARD -o "$SW_MGMT" -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null;;
@@ -198,7 +204,7 @@ $MMDS_CFG
 encryption_key: "$ENC"
 manifest_config: $WORK/manifest.yaml
 paths: { run_root: $WORK/run, base_root: $WORK/lib, config_socket: $WORK/node-ctl.socket }
-units: { dir: $UNIT_DIR }
+units: { dir: $UNIT_DIR, runner: "$RUNNER_UNIT", builder: "$BUILDER_UNIT" }
 sandbox:
   network: { switch: $SWITCH }            # e2b defaults: ip 169.254.0.21/30 nexthop .22; hostname/dns injected via files:
   resources:
