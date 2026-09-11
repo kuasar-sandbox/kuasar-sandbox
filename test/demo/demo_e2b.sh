@@ -658,7 +658,14 @@ def show(e):
     msg = e.message.rstrip()
     if msg:
         print("    · " + msg, file=sys.stderr, flush=True)
-tpl = Template().from_image(base_ref)
+# The compact Python base has no E2B default account. Prepare it in the image,
+# never on the host, and reject an existing account with incompatible IDs.
+tpl = Template().from_image(base_ref).run_cmd(
+    'if ! id user >/dev/null 2>&1; then '
+    'useradd --create-home --home-dir /home/user --uid 1000 --user-group --shell /bin/bash user; '
+    'fi && test "$(id -u user):$(id -g user)" = 1000:1000',
+    user="root",
+)
 if has_copy == "True":
     tpl = tpl.copy("site", "/home/user/site", user="1000:1000")   # B: COPY into the image, owned by the e2b user
 tpl = (tpl

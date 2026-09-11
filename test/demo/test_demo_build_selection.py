@@ -12,6 +12,19 @@ SCRIPT = Path(__file__).with_name("demo_e2b.sh").read_text()
 
 
 class DemoBuildSelection(unittest.TestCase):
+    def test_image_prepares_sdk_user_before_copy(self):
+        match = re.search(r"(?ms)^BUILD_RESULT=.*?<<'PY'\n(.*?)^PY$", SCRIPT)
+        self.assertIsNotNone(match)
+        calls = [node for node in ast.walk(ast.parse(match.group(1)))
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)]
+        setup = [call for call in calls if call.func.attr == "run_cmd" and call.args
+                 and isinstance(call.args[0], ast.Constant) and "useradd" in call.args[0].value]
+        self.assertEqual(len(setup), 1)
+        self.assertEqual({key.arg: ast.literal_eval(key.value) for key in setup[0].keywords},
+                         {"user": "root"})
+        self.assertIn("1000:1000", setup[0].args[0].value)
+        self.assertTrue(all(call.lineno > setup[0].lineno for call in calls if call.func.attr == "copy"))
+
     def test_sdk_build_uses_command_driven_auto_target(self):
         match = re.search(r"(?ms)^BUILD_RESULT=.*?<<'PY'\n(.*?)^PY$", SCRIPT)
         self.assertIsNotNone(match)
