@@ -15,6 +15,10 @@ Demo 是可执行的产品入口,但不能代替组件与聚合 Integration E2E�
 
 `demo_prep.sh` 负责 Demo 持久层:Manifest Store、分层 Cache、Registry 配置、不可变基础镜像 seed,以及 `COPY` 使用的可选 VersityGW。`demo_e2b.sh` 负责一次临时运行:TLS、凭据、Conductor、Proxy、systemd unit、vSwitch、network namespace、NAT 规则、host 映射、Sandbox 和私有工作文件。
 
+COPY 存储保持主机可达:Conductor 执行 HEAD/预签名,SDK 直接上传,Builder 在主机
+下载上下文后再流式送入构建 VM。Registry 镜像导入不同:它在 guest 中执行,
+通过 Demo 的管理 VIP 路由访问本地 Zot。
+
 ## 2. 验证内容
 
 | 阶段 | 操作 | 必须得到的结果 |
@@ -130,7 +134,7 @@ sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" \
 
 Conductor 监听 `127.0.0.1:443`,独立 Proxy 监听 `127.0.0.2:443`。本地 Demo CA 为 `*.<domain>` 签发证书,SDK 调用使用该 CA 文件和 `NO_PROXY=*`。脚本在取得每个 Sandbox ID 后逐项添加 `/etc/hosts` 记录,并按本次 marker 删除;不假定存在 wildcard DNS。
 
-vSwitch 为每个 Sandbox 从 `100.100.96.0/20` 分配 floating IP,E2B guest profile 则复用 inner 地址 `169.254.0.21/30` 和 next hop `169.254.0.22`。本次运行添加带唯一标记的 forwarding 与 masquerade 规则。绑定在 host loopback 的本地 Registry 和 VersityGW 通过 `169.254.169.254` 上的 `--mgmt-service` 暴露给 Builder MicroVM;脚本不会把这些服务暴露到外部网络。
+vSwitch 为每个 Sandbox 从 `100.100.96.0/20` 分配 floating IP,E2B guest profile 则复用 inner 地址 `169.254.0.21/30` 和 next hop `169.254.0.22`。本次运行添加带唯一标记的 forwarding 与 masquerade 规则。本地 Registry 通过 `169.254.169.254` 上的 `--mgmt-service` 暴露给 Builder MicroVM。VersityGW 保持在 host loopback,供主机侧 COPY 路径使用,不经过这个 guest 路由。脚本不会把这两个服务暴露到外部网络。
 
 Demo 同时验证直连 `http://<floating-ip>:8000` 和经过认证的 E2B 数据入口 `https://8000-<sid>.<domain>`,并使用真实 `X-Access-Token`。Guest egress 只是对 Demo 现有 NAT 路径的断言,不是新增产品 Egress 实现。
 

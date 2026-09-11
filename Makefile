@@ -181,6 +181,7 @@ test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_state_assertions.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_process_startup.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_network_names.py
+	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_files_storage.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_documentation_package.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_selection_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_coordinator_test.py

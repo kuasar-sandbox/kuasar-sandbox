@@ -453,20 +453,12 @@ if [ -n "${DEMO_MMDS:-}" ]; then
     # loopback MMDS — no iptables (the eBPF datapath does it + rewrites replies).
     MGMT_SERVICE_ARGS+=("--mgmt-service=$MGMT_VIP:80:127.0.0.1:19254")
 fi
-# builder.files_storage backs COPY build contexts. A locally bound versitygw is
-# exposed to the build MicroVM through the same management VIP as local Zot.
+# COPY context HEAD/presigning, SDK upload and Builder download are host-side.
+# The Builder streams the downloaded context into the VM. Unlike image import,
+# this endpoint must stay host-reachable and does not need a guest VIP mapping.
 FILES_STORAGE_CFG=""
 if [ -n "${VGW_ENDPOINT:-}" ]; then
-    FILES_STORAGE_ENDPOINT="$VGW_ENDPOINT"
-    case "$VGW_ENDPOINT" in
-        http://127.0.0.1:*|http://localhost:*)
-            LOCAL_VGW_PORT="${VGW_ENDPOINT##*:}"
-            [[ "$LOCAL_VGW_PORT" =~ ^[0-9]+$ ]] || die "invalid local versitygw endpoint: $VGW_ENDPOINT"
-            FILES_STORAGE_ENDPOINT="http://$MGMT_VIP:$LOCAL_VGW_PORT"
-            MGMT_SERVICE_ARGS+=("--mgmt-service=$MGMT_VIP:$LOCAL_VGW_PORT:127.0.0.1:$LOCAL_VGW_PORT")
-            ;;
-    esac
-    FILES_STORAGE_CFG="  files_storage: { endpoint: '$FILES_STORAGE_ENDPOINT', region: '${VGW_REGION:-us-east-1}', bucket: '$VGW_BUCKET', access_key: '$VGW_ACCESS_KEY_VALUE', secret_key: '$VGW_SECRET_KEY_VALUE', force_path_style: true }"
+    FILES_STORAGE_CFG="  files_storage: { endpoint: '$VGW_ENDPOINT', region: '${VGW_REGION:-us-east-1}', bucket: '$VGW_BUCKET', access_key: '$VGW_ACCESS_KEY_VALUE', secret_key: '$VGW_SECRET_KEY_VALUE', force_path_style: true }"
 fi
 cat > "$WORK/conductor.yaml" <<EOF
 api: { domain: '$DOMAIN', listen: '$CONTROL_IP:$TLS_PORT', tls: { cert: '$WORK/tls.crt', key: '$WORK/tls.key' } }
@@ -646,7 +638,7 @@ echo "this file was COPY'd from the build context" > "$WORK/ctx/site/COPIED.txt"
 HAS_COPY=False; [ -n "${VGW_ENDPOINT:-}" ] && HAS_COPY=True
 COPY_DISP=""; [ "$HAS_COPY" = True ] && COPY_DISP=".copy('site','/home/user/site')"
 if [ "$HAS_COPY" = True ]; then
-    say "files_storage (versitygw) up — the build includes COPY (context direct-uploaded via presigned PUT, fetched + extracted in-build)"
+    say "files_storage (versitygw) up — COPY context is direct-uploaded via presigned PUT, fetched on the host, then streamed into the build VM"
 else
     say "Quick Start has no files_storage — its build omits COPY"
 fi
