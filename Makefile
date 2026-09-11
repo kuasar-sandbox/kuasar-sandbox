@@ -44,7 +44,7 @@ ZOT_VERSION    ?= v2.1.17
 PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf-density
 
 .PHONY: all build collect e2e-tools assemble-e2e release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
-	        bench test-e2e test-e2e-prebuilt perf dedup-report \
+	        bench test-e2e test-e2e-prebuilt perf dedup-report perf-agent \
 	        $(PERF_TARGETS)
 
 all: build
@@ -141,6 +141,12 @@ perf-sandbox-working-set: build
 perf-density: build
 	BIN=$(SBIN) bash test/perf/density-perf.sh
 
+# Autonomous coding-agent workload suite. Opt-in and not part of `perf`:
+# long-running, requires /dev/kvm and root. PHASES=all|calibrate|pause_resume|cold|ramp|stress
+PHASES ?= all
+perf-agent: build
+	BIN=$(SBIN) bash test/perf/openclaw-density-bench.sh $(PHASES)
+
 # Aggregate perf: accelerator's perf-cache + this repo's perfs.
 perf: build
 	$(MAKE) -C $(ORG)/accelerator perf-cache
@@ -204,6 +210,7 @@ help:
 	@echo "  test-e2e-prebuilt  run full compatibility E2E from fetched release binaries without rebuilding"
 	@echo "  demo          run the e2b end-to-end demo (test/demo/demo_e2b.sh; DEMO_PAUSE=1 to step through)"
 	@echo "  perf          aggregate: accelerator perf-cache + this repo's perf-sandbox/-manifest/-density"
+	@echo "  perf-agent    autonomous coding-agent workload suite (PHASES=all|calibrate|pause_resume|cold|ramp|stress)"
 	@echo "  bench         Go micro-benchmarks across every Go sub-repo"
 	@echo "  dedup-report  delegate to accelerator"
 	@echo "  vet / test    drive each Go sub-repo's vet/test target"

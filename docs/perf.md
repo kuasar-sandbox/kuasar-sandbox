@@ -18,6 +18,7 @@ make perf-sandbox
 make perf-sandbox-manifest
 make perf-sandbox-working-set
 make perf-density
+make perf-agent
 make test-uffd-performance-gate
 make test-perf-tools
 ```
@@ -27,6 +28,8 @@ make test-perf-tools
 ```bash
 make -C ../accelerator perf-cache
 ```
+
+`make perf-agent` runs the autonomous coding-agent workload suite (deterministic mock LLM; the `openclaw` npm package is not used). It is opt-in, is not part of `make perf`, and runs phases selected with `PHASES=all|calibrate|pause_resume|cold|ramp|stress`.
 
 Real MicroVM paths require read/write access to `/dev/kvm`, root or noninteractive sudo, and the necessary images and runtime artifacts. Manifest and density harnesses additionally check Docker, networking and filesystem tools as specified by their scripts. A skip caused by missing prerequisites is not successful performance validation. Release evidence must record actual exit status and every failed sample.
 
