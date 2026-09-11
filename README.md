@@ -137,14 +137,13 @@ See [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases)
 
 ## Quick Start
 
-The [Quick Start](docs/quickstart.md) downloads every explicit asset from one aggregate release, verifies `SHA256SUMS`, prepares a standalone node, and uses the upstream E2B Python SDK to:
+The [Quick Start](docs/quickstart.md) downloads every explicit asset from one aggregate release, verifies `SHA256SUMS`, prepares a standalone node, and builds a ready snapshot template with the upstream E2B Python SDK. The Demo reads its published template ID from the exact build's ready status; the SDK's registration handle is not that ID. With the node running and the documented SDK connection settings in place, set `TEMPLATE_ID` to that published ID for the lifecycle below:
 
 ```python
-from e2b import Sandbox, Template
+import os
+from e2b import Sandbox
 
-template = Template().from_image("<registry>/<image>:<tag>")
-build = Template.build(template, name="quickstart", cpu_count=2, memory_mb=6144)
-sandbox = Sandbox.create(build.template_id, timeout=300)
+sandbox = Sandbox.create(os.environ["TEMPLATE_ID"], timeout=300)
 sandbox_id = sandbox.sandbox_id
 print(sandbox.commands.run("uname -sm").stdout)
 sandbox.pause()

@@ -166,14 +166,15 @@ prerelease 聚合版本,`Proposed` 表示仍在 Issue 或设计阶段且不能�
 ## 快速开始
 
 [快速开始](docs/quickstart_zh.md) 从同一聚合版本下载全部显式资产、校验 `SHA256SUMS`,
-准备单节点,并用上游 E2B Python SDK 执行:
+准备单节点,并用上游 E2B Python SDK 构建就绪的快照模板。Demo 从精确 Build 的 ready
+状态读取已发布 Template ID;SDK 返回的注册句柄不是这个 ID。保持节点运行并完成文档中的
+SDK 连接配置后,把 `TEMPLATE_ID` 设置为该已发布 ID,再执行以下生命周期:
 
 ```python
-from e2b import Sandbox, Template
+import os
+from e2b import Sandbox
 
-template = Template().from_image("<registry>/<image>:<tag>")
-build = Template.build(template, name="quickstart", cpu_count=2, memory_mb=6144)
-sandbox = Sandbox.create(build.template_id, timeout=300)
+sandbox = Sandbox.create(os.environ["TEMPLATE_ID"], timeout=300)
 sandbox_id = sandbox.sandbox_id
 print(sandbox.commands.run("uname -sm").stdout)
 sandbox.pause()

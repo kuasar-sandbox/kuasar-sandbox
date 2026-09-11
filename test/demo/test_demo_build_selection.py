@@ -12,6 +12,14 @@ SCRIPT = Path(__file__).with_name("demo_e2b.sh").read_text()
 
 
 class DemoBuildSelection(unittest.TestCase):
+    def test_readme_examples_use_published_template_ids(self):
+        root = Path(__file__).resolve().parents[2]
+        for name in ("README.md", "README_zh.md"):
+            with self.subTest(name=name):
+                text = (root / name).read_text()
+                self.assertIn('os.environ["TEMPLATE_ID"]', text)
+                self.assertNotIn("Sandbox.create(build.template_id", text)
+
     def test_image_prepares_sdk_user_before_copy(self):
         match = re.search(r"(?ms)^BUILD_RESULT=.*?<<'PY'\n(.*?)^PY$", SCRIPT)
         self.assertIsNotNone(match)
