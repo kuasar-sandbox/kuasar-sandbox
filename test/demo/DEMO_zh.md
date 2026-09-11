@@ -83,7 +83,7 @@ sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
 
 跨越 `sudo` 的路径全部显式使用绝对路径。脚本不依赖调用者与 root 恰好使用相同 `HOME` 或 Python 安装。
 
-默认基础镜像是按 digest 固定的 Docker Official `python:3.12-slim` linux/amd64 manifest。模板构建在 COPY 和快照启动前创建 E2B 默认 `user` 账号 (UID/GID 1000:1000);已有同名账号必须使用这些 ID。其 Python Runtime 足以完成就绪、执行和数据访问检查。覆盖镜像在该账号不存在时还必须提供 `useradd`。如需使用已有 Registry 而不是 Demo 所属 Zot,传入 `REGISTRY=<host[:port]>`。需要认证时传入 `REGISTRY_USER` 与 `REGISTRY_PASS`;`demo_prep.sh` 通过 stdin 向 `docker login` 传密码,Docker 认证只存放在私有 Demo 数据目录。只有明确使用 HTTP Registry 时才设置 `REGISTRY_INSECURE=1`。覆盖 `E2E_IMAGE` 时必须使用不可变的 `name@sha256:<digest>` 引用。
+默认基础镜像是按 digest 固定的 Docker Official `python:3.12-slim` linux/amd64 manifest。模板构建使用 `set_user("root")` 创建 E2B 默认 `user` 账号 (UID/GID 1000:1000),随后在 COPY 和快照启动前调用 `set_user("user")`;已有同名账号必须使用这些 ID。这些调用生成 Builder USER 步骤,不使用 SDK 可选的 `run_cmd(user=...)` 参数。其 Python Runtime 足以完成就绪、执行和数据访问检查。覆盖镜像在该账号不存在时还必须提供 `useradd`。如需使用已有 Registry 而不是 Demo 所属 Zot,传入 `REGISTRY=<host[:port]>`。需要认证时传入 `REGISTRY_USER` 与 `REGISTRY_PASS`;`demo_prep.sh` 通过 stdin 向 `docker login` 传密码,Docker 认证只存放在私有 Demo 数据目录。只有明确使用 HTTP Registry 时才设置 `REGISTRY_INSECURE=1`。覆盖 `E2E_IMAGE` 时必须使用不可变的 `name@sha256:<digest>` 引用。
 
 ## 5. 控制项与重复运行
 

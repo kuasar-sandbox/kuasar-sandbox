@@ -20,8 +20,13 @@ class DemoBuildSelection(unittest.TestCase):
         setup = [call for call in calls if call.func.attr == "run_cmd" and call.args
                  and isinstance(call.args[0], ast.Constant) and "useradd" in call.args[0].value]
         self.assertEqual(len(setup), 1)
-        self.assertEqual({key.arg: ast.literal_eval(key.value) for key in setup[0].keywords},
-                         {"user": "root"})
+        self.assertEqual(setup[0].keywords, [])
+        self.assertEqual(setup[0].func.value.func.attr, "set_user")
+        self.assertEqual(ast.literal_eval(setup[0].func.value.args[0]), "root")
+        users = [call for call in calls if call.func.attr == "set_user"]
+        self.assertEqual(len(users), 2)
+        self.assertTrue(any(ast.literal_eval(call.args[0]) == "user"
+                            and call.func.value is setup[0] for call in users))
         self.assertIn("1000:1000", setup[0].args[0].value)
         self.assertTrue(all(call.lineno > setup[0].lineno for call in calls if call.func.attr == "copy"))
 
