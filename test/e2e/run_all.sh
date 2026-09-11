@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Full source and release E2E gate. The source BMS assembler and the platform
+# Full source and release E2E gate. The source CI assembler and the platform
 # release packager both create the same test/e2e/<owner>/ directory layout.
 
 set -euo pipefail

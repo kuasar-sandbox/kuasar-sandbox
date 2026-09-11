@@ -99,7 +99,7 @@ Agent / E2B SDK / Platform API
 KVM / Local Files / NAS / Object Storage / Network
 ```
 
-`kuasar-sandbox/kuasar-sandbox` is the canonical project repository. It owns the system-level design, shared BMS infrastructure, cross-component validation, demos, aggregate version selection, and aggregate releases.
+`kuasar-sandbox/kuasar-sandbox` is the canonical project repository. It owns the system-level design, shared CI infrastructure, cross-component validation, demos, aggregate version selection, and aggregate releases.
 
 The implementation is maintained in five loosely coupled component repositories:
 
@@ -175,12 +175,12 @@ The project repository contains:
 docs/              System design, deployment, performance, CI, and release documents
 test/e2e/          Owner suites, run_all.sh, and platform integration cases
 test/perf|demo/    Platform performance and demonstration scripts
-ci/bms/            BMS helpers and source-cache maintenance
+ci/integration/    CI helpers and source-cache maintenance
 ci/native-cache/   VMLinux, EROFS, Envd, RocksDB, and Cloud Hypervisor cache support
-ci/runner/         Self-hosted BMS runner deployment
+ci/runner/         Self-hosted CI runner deployment
 release/           Version resolution, packaging, aggregation, and publishing
 releases/          Stable and daily Preview aggregate selections
-.github/workflows/ Reusable BMS, aggregate-release, and daily-Preview workflows
+.github/workflows/ Reusable CI, aggregate-release, and daily-Preview workflows
 ```
 
 ## Build and test
@@ -232,7 +232,7 @@ See [docs/release.md](docs/release.md) for the full asset contract, trust bounda
 - [Architecture](docs/kuasar-sandbox.md) — system goals, architecture, lifecycle, storage, resource, network, and security semantics;
 - [Deployment](docs/deployment.md) — standalone and cluster topology, processes, ports, persistent paths, and startup dependencies;
 - [Performance](docs/perf.md) — performance baselines with test context, regression gates, and tuning methods;
-- [CI](docs/ci.md) — reusable BMS, source selection, native caches, and exact-asset validation;
+- [CI](docs/ci.md) — Integration E2E, source selection, native caches, and release asset validation;
 - [Releases](docs/release.md) — component versions, aggregate selection, assets, and release transactions;
 - [Quick Start](docs/quickstart.md) — the shortest path from an aggregate release to a real MicroVM;
 - [Demo](test/demo/DEMO.md) — the complete local demonstration and SDK flow;

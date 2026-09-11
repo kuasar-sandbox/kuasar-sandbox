@@ -88,7 +88,7 @@ GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每
 `release/vX.Y.x`;不存在该组件维护分支时固定为清单中的精确 tag。`release-units.tsv`
 保留这六项独立的配置版本、请求 ref 与解析 SHA。源码 workspace 仍只有一个
 `guest-runtime` checkout,它采用 runtime unit 的解析 SHA;vmlinux 的独立 archive、校验和
-运行组合由正式发布前的 exact-assets 发行资产验证 按清单精确验证,不会被这个源码 checkout 合并成
+运行组合由正式发布前的 exact-assets 发行资产验证按清单精确验证,不会被这个源码 checkout 合并成
 一个发布单元。
 
 随后创建五组件 `go.work`,恢复或构建 native cache,并验证与构建候选项目主仓源码:
@@ -213,7 +213,7 @@ exact-assets 模式只记录 run 与测试输出,不创建伪造的源码或 nat
 
 ## 7. See Also
 
-- [release_zh.md](release_zh.md):发布资产、发行资产验证 和权限边界;
+- [release_zh.md](release_zh.md):发布资产、发行资产验证和权限边界;
 - [deployment_zh.md](deployment_zh.md):Integration E2E 所需系统服务与运行环境;
 - [../ci/runner/README_zh.md](../ci/runner/README_zh.md):runner 安装与维护;
 - [../test/QUICKSTART_zh.md](../test/QUICKSTART_zh.md):E2E 前置条件与排错。

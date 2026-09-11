@@ -23,7 +23,7 @@
 
 - [Contribution and documentation review](../CONTRIBUTING.md#documentation-contributions).
 - [Performance methodology](perf.md): timing boundaries, evidence and regression entry points.
-- [CI and BMS](ci.md): exact source sets, trust boundaries and validation modes.
+- [CI](ci.md): exact source sets, trust boundaries and validation modes.
 - [Release contract](release.md): version selection, assets, publication/recovery and documentation packaging.
 - [Runner operations](../ci/runner/README.md): install and operate the validation runner.
 - [Security reporting](../SECURITY.md).

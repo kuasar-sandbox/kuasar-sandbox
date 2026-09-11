@@ -290,28 +290,27 @@ parser_status=$?
 set -e
 [ "$parser_status" -eq 2 ] || fail "retired companion declaration was silently ignored"
 
-python3 - "$SCRIPT_DIR/../../.github/workflows/ci.yml" "$workflow" <<'PY'
+python3 - "$SCRIPT_DIR/../.." "$workflow" <<'PY'
 import pathlib
-import subprocess
 import sys
 
-caller = pathlib.Path(sys.argv[1]).read_text()
+root = pathlib.Path(sys.argv[1])
 execution = pathlib.Path(sys.argv[2]).read_text()
-assert "name: bms / finalize" in caller
-assert "needs: ci" in caller
-assert "CI_RESULT: ${{ needs.ci.result }}" in caller
-command = next(line.split("run: ", 1)[1] for line in caller.splitlines()
-               if 'run: test "$CI_RESULT" = success' in line)
-for result in ("success", "failure", "cancelled", "skipped", ""):
-    completed = subprocess.run(["bash", "-c", command],
-                               env={"CI_RESULT": result}, check=False)
-    assert (completed.returncode == 0) == (result == "success"), result
+# Stage one publishes central support before changing any active caller or rule.
+caller = (root / ".github/workflows/platform-bms.yml").read_text()
+assert "  bms:\n    uses: ./.github/workflows/bms-entry.yml" in caller
+assert not (root / ".github/workflows/ci.yml").exists()
+aggregate = (root / ".github/workflows/aggregate-release.yml").read_text()
+assert "uses: ./.github/workflows/bms-e2e.yml" in aggregate
+assert "needs: [prepare, exact-asset-bms]" in aggregate
+assert (root / ".github/workflows/ci-entry.yml").is_file()
+assert (root / ".github/workflows/bms-entry.yml").is_file()
 revoke = execution.index("- name: Revoke platform tooling token before candidate execution")
 assert revoke < execution.index("- name: Finalize source workspace")
 assert revoke < execution.index("- name: Test exact published assets")
 assert "skip-token-revoke: true" in execution[
     execution.index("- name: Create read-only platform tooling token"):revoke]
-print("test-ci-tools: required-check transition and token lifetime PASS")
+print("test-ci-tools: central-first migration and token lifetime PASS")
 PY
 
 cat >"$TMP/duplicate-companions.md" <<'EOF'

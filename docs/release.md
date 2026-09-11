@@ -205,15 +205,16 @@ make test-ci-tools
 ```
 
 <a id="8-资产与-bms"></a>
-## 8. Assets and BMS
+<a id="8-assets-and-bms"></a>
+## 8. Release asset validation
 
 Each ordinary component Release contains exactly its component archive and `SHA256SUMS`. Runtime and vmlinux have independent archive names. An aggregate Release contains exactly a platform archive, six unchanged component archives and one unified `SHA256SUMS`: eight explicit assets.
 
 Do not publish generated release-metadata JSON or duplicate GitHub's automatically supplied source archives. Selection YAML remains in the repository, not in Release assets or the platform package. Component archives exclude `docs/` and `test/e2e/`; aggregate preparation collects them from the selected component source tags into the platform archive (§8.1).
 
-Component workflows build and test at the selected source SHA. Aggregate prepare downloads the six complete manifest-selected Releases, validates GitHub size/digest, component SHA-256, internal paths and cross-package collisions, then creates a deterministic platform package. Exact-asset BMS extracts the same short-lived artifact on a real KVM runner and runs the five component-owned suites plus the platform combination suite, six owner entries in total. Only successful BMS permits aggregate publish to create the tag and Release.
+Component workflows build and test at the selected source SHA. Aggregate prepare downloads the six complete manifest-selected Releases, validates GitHub size/digest, component SHA-256, internal paths and cross-package collisions, then creates a deterministic platform package. Release asset validation extracts the same short-lived artifact on a real KVM runner and runs the five component-owned suites plus the platform combination suite, six owner entries in total. Only successful validation permits aggregate publish to create the tag and Release.
 
-Preview, maintenance Stable and mainline Stable use identical asset contracts and BMS gates. They differ only in release state and Latest policy.
+Preview, maintenance Stable and mainline Stable use identical asset contracts and release asset validation gates. They differ only in release state and Latest policy.
 
 <a id="documentation-in-the-platform-package"></a>
 ### 8.1 Documentation payload and source mapping
@@ -334,27 +335,35 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 - Candidate-executing runners receive only read-only source tokens, revoked before execution.
 - Publication first creates a draft, uploads assets and verifies digests; it becomes public only after every check agrees.
 - Publishers never overwrite published tags or Releases. Incomplete Preview recovery uses only the protected deletion entry.
-- Branch HEAD, tag commit, manifest blob SHA and exact-asset BMS together pin a publication.
+- Branch HEAD, tag commit, manifest blob SHA and release asset validation together pin a publication.
 - Even when the rendered Daily manifest needs no write, the coordinator rechecks remote branch HEAD and manifest blob rather than dispatching components from a stale checkout.
 - Preview build bindings prevent incorrect reuse of the same tag/source across different dependency closures.
-- The scanner has a separate concurrency key. All platform branch coordinators and GC share the global `preview-manifest-selection-and-gc` group. The scanner waits for each branch in sequence rather than filling multiple pending slots. A component's complete build/publication workflow and deletion share a mutation group for the same exact version; the platform's complete prepare/BMS/publish workflow and deletion also share an exact-version group. GitHub can coalesce pending requests in a group. Daily and GC do not treat cancellation as success. Component publication/deletion rerun the appropriate jobs or full workflow with identical inputs; aggregate publication creates a new workflow run and exact stage. Each path allows at most three attempts; Daily publication or cleanup reports failure when retries are exhausted, so exclusion does not silently lose the desired publication or deletion state. Different versions do not share pending slots. Component Latest reconciliation is an exception: it is idempotent and scans the complete mainline Stable set every time, so it uses repository-wide serialization and allows triggers to coalesce. The last retained run can still converge the full state. Only the Stable aggregate selected by `release.yaml` at current platform `main` HEAD can update Latest, and branch HEAD, manifest selection and existing Release are revalidated before and after publication.
+- The scanner has a separate concurrency key. All platform branch coordinators and GC share the global `preview-manifest-selection-and-gc` group. The scanner waits for each branch in sequence rather than filling multiple pending slots. A component's complete build/publication workflow and deletion share a mutation group for the same exact version; the platform's complete prepare/validation/publish workflow and deletion also share an exact-version group. GitHub can coalesce pending requests in a group. Daily and GC do not treat cancellation as success. Component publication/deletion rerun the appropriate jobs or full workflow with identical inputs; aggregate publication creates a new workflow run and exact stage. Each path allows at most three attempts; Daily publication or cleanup reports failure when retries are exhausted, so exclusion does not silently lose the desired publication or deletion state. Different versions do not share pending slots. Component Latest reconciliation is an exception: it is idempotent and scans the complete mainline Stable set every time, so it uses repository-wide serialization and allows triggers to coalesce. The last retained run can still converge the full state. Only the Stable aggregate selected by `release.yaml` at current platform `main` HEAD can update Latest, and branch HEAD, manifest selection and existing Release are revalidated before and after publication.
 
 <a id="11-受保护分支"></a>
 ## 11. Protected branches
 
+During the CI naming migration, keep `bms / finalize` required until the central
+`ci-entry.yml` is available on trusted `main`, callers have switched, and real
+`ci / finalize` checks have passed for their exact candidates. Then update the
+required rule to `ci / finalize` before removing the old entry and temporary
+result bridge. The bridge must depend on the real CI result and reject a failed,
+cancelled or skipped overall workflow; it is not an independently supplied success.
+Draft checks with skipped E2E do not constitute acceptance.
+
 One repository ruleset governs project-branch protection. The active ruleset matches only `refs/heads/main` and `refs/heads/release/v*`. It requires a PR, resolved discussions, strict `bms / finalize` status checks and linear history, and blocks force pushes and branch deletion. It does not use default administrator bypass, signed-commit requirements, CODEOWNERS or a merge queue.
 
-The current `required_approving_review_count` is 0. GitHub counts approvals only from writers other than the PR author. Without an independent write reviewer, requiring one approval would prevent maintainers' own PRs from merging under the ruleset. Review still requires complete diff inspection, resolved review threads and exact BMS evidence.
+The current `required_approving_review_count` is 0. GitHub counts approvals only from writers other than the PR author. Without an independent write reviewer, requiring one approval would prevent maintainers' own PRs from merging under the ruleset. Review still requires complete diff inspection, resolved review threads and exact Integration E2E evidence.
 
 Before enabling this ruleset, confirm that the `kuasar-sandbox-bms-ci` installation has approved `Contents: write`. It must not be activated without that permission: Daily Preview could not commit its converged manifest and would be blocked by the deliberately exclusive bypass design.
 
-Status checks use `do_not_enforce_on_create: true` for a new branch, allowing a maintenance line to be created from an already-published Stable tag. Every subsequent update immediately returns to the same PR and BMS gates; branch creation cannot bypass later commit checks.
+Status checks use `do_not_enforce_on_create: true` for a new branch, allowing a maintenance line to be created from an already-published Stable tag. Every subsequent update immediately returns to the same PR and Integration E2E gates; branch creation cannot bypass later commit checks.
 
-Daily Preview must commit its converged manifest directly to the protected target branch. The active ruleset therefore grants `always` bypass only to the `kuasar-sandbox-bms-ci` GitHub App, ID `4283831`. That App's only write use is the repository-scoped short-lived token described above. Human maintenance, ordinary `github-actions` and all other Apps are absent from the bypass list. BMS always revalidates the PR's exact integration commit and target branch; this bypass does not replace the `bms / finalize` gate for PRs.
+Daily Preview must commit its converged manifest directly to the protected target branch. The active ruleset therefore grants `always` bypass only to the `kuasar-sandbox-bms-ci` GitHub App, ID `4283831`. That App's only write use is the repository-scoped short-lived token described above. Human maintenance, ordinary `github-actions` and all other Apps are absent from the bypass list. CI always revalidates the PR's exact integration commit and target branch; this bypass does not replace the `bms / finalize` gate for PRs. The App name is an existing registration identifier, not a validation method.
 
 ## 12. See also
 
-- [ci.md](ci.md): BMS revisions, caches and execution modes;
+- [ci.md](ci.md): CI revisions, caches and execution modes;
 - [deployment.md](deployment.md): deployment and runtime prerequisites;
 - [../test/QUICKSTART.md](../test/QUICKSTART.md): complete aggregate-release validation;
 - [../release/](../release/): selection, packaging, coordination, recovery and GC implementation.

@@ -1,4 +1,4 @@
-name: Reusable Integration E2E E2E
+name: Reusable Integration E2E
 
 on:
   workflow_call:

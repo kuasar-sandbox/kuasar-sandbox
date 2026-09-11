@@ -275,7 +275,8 @@ make test-release-tools
 make test-ci-tools
 ```
 
-## 8. 资产与 BMS
+<a id="8-资产与-bms"></a>
+## 8. 发行资产验证
 
 每个普通组件 Release 精确包含组件 archive 和 `SHA256SUMS`。runtime、vmlinux 使用各自
 独立 archive 名。聚合 Release 精确包含 platform archive、六个原样复制的组件 archive
@@ -288,10 +289,10 @@ make test-ci-tools
 
 组件工作流在选定源码 SHA 上运行组件构建和测试。聚合 prepare 下载清单指定的六个完整
 Release,校验 GitHub size/digest、组件 SHA-256、包内路径与跨包覆盖,生成确定性 platform
-包。随后 exact-asset BMS 在真实 KVM runner 解压同一个短期 artifact,执行五个组件 owner
-套件及平台组合套件,共六个 owner 入口。只有该 BMS 成功,聚合 publish job 才能创建 Tag 和 Release。
+包。随后发行资产验证在真实 KVM runner 解压同一个短期 artifact,执行五个组件 owner
+套件及平台组合套件,共六个 owner 入口。只有该验证成功,聚合 publish job 才能创建 Tag 和 Release。
 
-Preview、维护分支 Stable 和主线 Stable 使用相同资产与 BMS 门禁;差别只在发行状态与
+Preview、维护分支 Stable 和主线 Stable 使用相同资产与发行资产验证门禁;差别只在发行状态与
 Latest 策略。
 
 <a id="平台包中的文档"></a>
@@ -421,14 +422,14 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 - 执行候选代码的 runner 只接收源码只读 token,并在执行前撤销;
 - 发布先创建 draft、上传并复核 digest,全部一致后才公开;
 - 已发布 Tag 或 Release 不由发布器覆盖;残缺 Preview 只能经受保护删除入口恢复;
-- 分支 HEAD、Tag commit、清单 blob SHA 和 exact-asset BMS 共同固定一次发布;
+- 分支 HEAD、Tag commit、清单 blob SHA 和发行资产验证共同固定一次发布;
 - 即使渲染后的 Daily 清单无需写入,协调器仍复核远端分支 HEAD 与清单 blob,不会用陈旧
   checkout 派发组件;
 - Preview Release 的构建绑定防止相同 Tag/源码在不同依赖闭包之间被错误复用;
 - scanner 使用独立 concurrency key;所有平台分支协调器与 GC 共用全局
   `preview-manifest-selection-and-gc` concurrency group。scanner 顺序等待每个分支,不同时
   填入多个 pending slot。组件完整构建/发布 workflow 与 delete 对同一精确版本共用
-  mutation group;平台聚合完整 prepare/BMS/publish workflow 与 delete 也使用同一精确
+  mutation group;平台聚合完整 prepare/validation/publish workflow 与 delete 也使用同一精确
   版本组。GitHub 可能合并该组内的 pending 请求;Daily 协调器和 GC 不把 cancelled 当作
   成功。组件发布和删除按同一精确输入重跑相应 job 或完整 workflow;聚合发布创建新的
   workflow run 和 exact stage。各路径最多尝试三次;Daily 的发布或清理耗尽重试后报告失败。因此互斥不会把发布或
@@ -441,6 +442,11 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 
 ## 11. 受保护分支
 
+CI 更名期间保留必需的 `bms / finalize`,直到中央 `ci-entry.yml` 已在受信任的 `main`
+上线、调用者已经切换,且各自精确候选的真实 `ci / finalize` 检查已经通过。随后先把必需
+规则改为 `ci / finalize`,再移除旧入口和临时结果桥接。桥接必须依赖真实 CI 结果,拒绝
+整体失败、取消或跳过的工作流,不能独立提供成功状态。Draft 的 E2E 跳过不构成验收。
+
 项目仓的分支保护以一个 repository ruleset 为准。当前已启用的 ruleset 只匹配
 `refs/heads/main` 与 `refs/heads/release/v*`。它要求 PR、所有讨论已解决、严格匹配
 `bms / finalize`、线性历史,并阻止 force push 与分支删除。不使用管理员默认绕过、签名
@@ -448,25 +454,25 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 
 当前 `required_approving_review_count` 为 0。GitHub 只计入拥有 write 权限且不是 PR 作者的
 approval;仓库没有独立的 write reviewer 时,强制一个 approval 会让维护者自己的所有 PR
-无法按 ruleset 合入。代码检视仍通过完整 diff 自检、resolved review threads 和精确 BMS
+无法按 ruleset 合入。代码检视仍通过完整 diff 自检、resolved review threads 和精确端到端集成测试
 门禁执行。
 
 启用前必须确认 `kuasar-sandbox-bms-ci` 的安装已获批 `Contents: write`。未满足此条件时
 不得激活 ruleset: Daily Preview 无法提交收敛后的清单,会被唯一的 bypass 设计反向阻断。
 
 状态检查规则对新建 branch 使用 `do_not_enforce_on_create: true`,因此可以从已经发布的
-Stable Tag 建立一条新的维护线;创建后的任何更新立即回到同一套 PR 与 BMS 门禁，不能借此
+Stable Tag 建立一条新的维护线;创建后的任何更新立即回到同一套 PR 与端到端集成测试门禁，不能借此
 绕过后续提交检查。
 
 Daily Preview 必须直接把收敛后的清单提交到受保护目标分支,因此当前已启用的 ruleset 只为
 `kuasar-sandbox-bms-ci` GitHub App (ID `4283831`) 配置 `always` bypass。该 App 的唯一写入
 用途是上述本仓短期 token;人工维护、普通 `github-actions` 与所有其他 App 都不在 bypass
-列表。BMS 对 PR 始终重新验证精确 integration commit 与目标 branch,所以 bypass 不替代
-`bms / finalize` 门禁。
+列表。CI 对 PR 始终重新验证精确 integration commit 与目标 branch,所以 bypass 不替代
+`bms / finalize` 门禁。App 名称是已有注册标识,不是一种验证方法。
 
 ## 12. See Also
 
-- [ci_zh.md](ci_zh.md):BMS revision、缓存和执行模式;
+- [ci_zh.md](ci_zh.md):CI revision、缓存和执行模式;
 - [deployment_zh.md](deployment_zh.md):部署与运行前置条件;
 - [../test/QUICKSTART_zh.md](../test/QUICKSTART_zh.md):完整聚合 Release 验证;
 - [../release/](../release/):选择、打包、协调、恢复和 GC 实现。

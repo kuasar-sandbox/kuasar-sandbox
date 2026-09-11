@@ -123,7 +123,7 @@ KVM / Local File / NAS / Object Storage / Network
 ```
 
 `kuasar-sandbox/kuasar-sandbox` 是 canonical project repository,负责系统级设计,
-跨组件验证,公共 BMS 环境和聚合发布.五个组件仓独立维护实现,组件 E2E 和版本线:
+跨组件验证,公共 CI 环境和聚合发布.五个组件仓独立维护实现,组件 E2E 和版本线:
 
 | 组件仓 | 主要职责 |
 |---|---|
@@ -204,12 +204,12 @@ sandbox.kill()
 docs/             System design, deployment, performance, CI, and release docs
 test/e2e/         Owner suites, run_all.sh, and platform integration cases
 test/perf|demo/   Platform performance and demo scripts
-ci/bms/           BMS helpers and source-cache maintenance
+ci/integration/   CI helpers and source-cache maintenance
 ci/native-cache/  vmlinux, erofs, envd, RocksDB, and Cloud Hypervisor cache
-ci/runner/        Self-hosted BMS runner deployment
+ci/runner/        Self-hosted CI runner deployment
 release/          Version resolution, packaging, aggregation, and publishing
 releases/         Stable and daily Preview aggregate selections
-.github/workflows/Reusable BMS, aggregate release, and daily Preview workflows
+.github/workflows/Reusable CI, aggregate release, and daily Preview workflows
 ```
 
 ## Build and Test
@@ -271,7 +271,7 @@ make -C kuasar-sandbox test-perf-tools
 - [Architecture](docs/kuasar-sandbox_zh.md):系统目标,架构和关键语义;
 - [Deployment](docs/deployment_zh.md):部署拓扑,进程,端口与启停依赖;
 - [Performance](docs/perf_zh.md):带测试上下文的性能基线,回归门禁与调优方法;
-- [CI](docs/ci_zh.md):可复用 BMS,缓存,候选 revision 和 exact-asset 模式;
+- [CI](docs/ci_zh.md):端到端集成测试,缓存,候选 revision 和发行资产验证;
 - [Releases](docs/release_zh.md):组件版本,聚合选择,资产与发布事务;
 - [快速开始](docs/quickstart_zh.md):从聚合 Release 到真实 MicroVM 的首次使用路径;
 - [Demo](test/demo/DEMO_zh.md):本地体验环境与 SDK 演示;

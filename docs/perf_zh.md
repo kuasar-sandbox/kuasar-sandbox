@@ -124,7 +124,7 @@ raw/
 保留逐样本事实;`raw/` 保存 snapshot,publisher,restore 和 cache 证据.对外引用必须保留
 完整目录并给出对应 CI Run URL,不能只摘录 `report.md` 的某个分位数.
 
-主线 BMS 的 working-set 项是 smoke,用于发现明显回归.正式性能报告应显式设置样本数,
+主线 CI 的 working-set 项是 smoke,用于发现明显回归.正式性能报告应显式设置样本数,
 保存所有样本,并将 smoke 与统计报告分开命名.
 
 ### 4.3 快照语义
@@ -202,14 +202,14 @@ placer 只做 group 导入和放置建议,最终资源确认在 node admission.�
 
 ## 7. Release 与 CI 证据
 
-源码候选 BMS 会构建精确 revision,运行 owner E2E,UFFD regression gate 和 working-set
+源码候选的端到端集成测试会构建精确 revision,运行 owner E2E,UFFD regression gate 和 working-set
 smoke,并上传 `ci-metadata-<run-id>-<attempt>` artifact.聚合 Release 的 exact-assets 模式
 从同一个聚合包解压所有资产,在真实 KVM 上运行完整 `test/e2e/run_all.sh`.
 
 工作流与证据入口:
 
-- [`.github/workflows/bms-e2e.yml`](../.github/workflows/bms-e2e.yml):源码候选与
-  exact-assets BMS;
+- [`.github/workflows/integration-tests.yml`](../.github/workflows/integration-tests.yml):源码候选的
+  端到端集成测试与发行资产验证;
 - [`test/perf/`](../test/perf/):主仓性能 harness 与报告生成器;
 - [`test/e2e/run_all.sh`](../test/e2e/run_all.sh):聚合预构建 owner + platform E2E.
 

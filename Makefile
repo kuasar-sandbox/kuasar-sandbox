@@ -207,7 +207,7 @@ help:
 	@echo "  bench         Go micro-benchmarks across every Go sub-repo"
 	@echo "  dedup-report  delegate to accelerator"
 	@echo "  vet / test    drive each Go sub-repo's vet/test target"
-	@echo "  test-ci-tools validate BMS cache/timing helpers"
+	@echo "  test-ci-tools validate CI cache/timing helpers"
 	@echo "  test-release-tools validate selections, packages, checksums, and publishers"
 	@echo "  test-perf-tools validate performance report generators"
 	@echo "  test-uffd-performance-gate enforce source UFFD A/B/C performance bounds"

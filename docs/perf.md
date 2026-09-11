@@ -112,7 +112,7 @@ raw/
 
 `environment.json` records revisions, host, image, binaries and workload. `samples.jsonl` retains individual sample facts. `raw/` retains snapshot, publisher, restore and cache evidence. External citations must preserve the complete directory and provide the corresponding CI run URL, rather than extracting one percentile from `report.md`.
 
-The mainline BMS working-set step is a smoke test for obvious regressions. A formal performance report must explicitly set sample counts, retain all samples and label smoke tests separately from statistical reports.
+The mainline CI working-set step is a smoke test for obvious regressions. A formal performance report must explicitly set sample counts, retain all samples and label smoke tests separately from statistical reports.
 
 <a id="43-快照语义"></a>
 ### 4.3 Snapshot semantics
@@ -181,11 +181,11 @@ Placer only imports groups and recommends placement. Node admission performs fin
 <a id="7-release-与-ci-证据"></a>
 ## 7. Release and CI evidence
 
-Source-candidate BMS builds exact revisions, runs owner E2E, the UFFD regression gate and working-set smoke, and uploads a `ci-metadata-<run-id>-<attempt>` artifact. Aggregate-release exact-assets mode extracts all assets from the same aggregate package and runs the complete `test/e2e/run_all.sh` on real KVM.
+Source-candidate Integration E2E builds exact revisions, runs owner E2E, the UFFD regression gate and working-set smoke, and uploads a `ci-metadata-<run-id>-<attempt>` artifact. Aggregate-release exact-assets mode extracts all assets from the same aggregate package and runs the complete `test/e2e/run_all.sh` on real KVM.
 
 Workflow and evidence entry points:
 
-- [`.github/workflows/bms-e2e.yml`](../.github/workflows/bms-e2e.yml): source-candidate and exact-assets BMS;
+- [`.github/workflows/integration-tests.yml`](../.github/workflows/integration-tests.yml): source-candidate Integration E2E and release asset validation;
 - [`test/perf/`](../test/perf/): project performance harnesses and report generators;
 - [`test/e2e/run_all.sh`](../test/e2e/run_all.sh): aggregate prebuilt owner and platform E2E.
 
