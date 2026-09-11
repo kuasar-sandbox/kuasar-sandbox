@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# Assert a real-KVM UFFD scenario and append its metrics to the BMS artifact.
+# Assert a real-KVM UFFD scenario and append its metrics to the CI artifact.
 # Call only after sandbox-ctl exits and atomically writes --stats-json.
 uffd_performance_gate() {
     local scenario="$1"

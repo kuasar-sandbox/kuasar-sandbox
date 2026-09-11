@@ -233,7 +233,7 @@ write_release_notes() {
   local version="$1" previous="$2" selection="$3" updates="$4" output="$5" unit tag
   {
     printf '# Kuasar Sandbox %s\n\n' "$version"
-    printf 'Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains the platform documentation/test package and the exact component archives validated together on real-KVM BMS.\n\n'
+    printf 'Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains the platform documentation/test package and the exact component archives validated together by real-KVM release asset validation.\n\n'
     printf '## Highlights\n\n'
     printf '%s\n' \
       '- Independent Guest Kernel isolation for each MicroVM sandbox.' \

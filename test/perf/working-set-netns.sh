@@ -157,7 +157,7 @@ if [ "${WORKING_SET_NETNS_SOURCED:-}" = 1 ]; then
     return 0 2>/dev/null || true
 fi
 
-# Privilege bootstrap: the BMS workflow invokes this wrapper directly, without
+# Privilege bootstrap: the CI workflow invokes this wrapper directly, without
 # sudo, and the inner smoke's own sudo re-exec would never run because this
 # wrapper needs root for `ip netns` long before the smoke starts. Re-exec
 # ourselves through sudo -nE (non-interactive, environment preserved so

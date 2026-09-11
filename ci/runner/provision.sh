@@ -27,7 +27,7 @@ UTIL_LINUX_SRPM_URL=${KUASAR_UTIL_LINUX_SRPM_URL:-https://mirrors.huaweicloud.co
 UTIL_LINUX_SRPM_SHA256=${KUASAR_UTIL_LINUX_SRPM_SHA256:-40324d3ab54be52ef67544732a71ec14f6aecb2e92f5d8fa0aaaac532c55c0bf}
 UTIL_LINUX_SOURCE_ARCHIVE=${KUASAR_UTIL_LINUX_SOURCE_ARCHIVE:-util-linux-2.39.1.tar.xz}
 UTIL_LINUX_TARBALL_SHA256=${KUASAR_UTIL_LINUX_TARBALL_SHA256:-890ae8ff810247bd19e274df76e8371d202cda01ad277681b0ea88eeaa00286b}
-LIBUUID_BUILD_SCHEMA=util-linux-static-v1
+LIBUUID_BUILD_SCHEMA=util-linux-static-v2-materials
 SLOT_OWNER_MARKER=.kuasar-ci-slot-owner
 SLOT_OWNER_ID=kuasar-ci-bms-runner-v1
 RUNNER_REGISTRATION_MARKER=.kuasar-ci-registration-complete
@@ -362,8 +362,83 @@ assert_install_space() {
     fi
 }
 
+record_static_libuuid_materials() {
+    local source=$1 library=$2 catalog=$3 file relative
+    install -d -m 0755 "$catalog/licenses"
+    if [ ! -s "$source/COPYING" ] || [ ! -s "$source/libuuid/COPYING" ] \
+        || [ ! -d "$source/Documentation/licenses" ]; then
+        die "util-linux source is missing its libuuid licensing entry"
+    fi
+    while IFS= read -r file; do
+        relative="${file#"$source"/}"
+        install -d -m 0755 "$catalog/licenses/$(dirname "$relative")"
+        install -m 0644 "$file" "$catalog/licenses/$relative"
+    done < <(
+        {
+            printf '%s\n' "$source/COPYING" "$source/libuuid/COPYING"
+            find "$source/Documentation/licenses" -type f -print
+        } | LC_ALL=C sort -u
+    )
+    printf 'payload\tname\tversion\tsource\tintegrity\tlicense_directory\n' > "$catalog/SOURCES.tsv"
+    printf 'libuuid.a\tutil-linux\t%s\t%s\tsha256:%s;tarball-sha256:%s;srpm-sha256:%s\tlicenses\n' \
+        "$UTIL_LINUX_SOURCE_ARCHIVE" "$UTIL_LINUX_SRPM_URL" \
+        "$(sha256sum "$library" | awk '{print $1}')" \
+        "$UTIL_LINUX_TARBALL_SHA256" "$UTIL_LINUX_SRPM_SHA256" >> "$catalog/SOURCES.tsv"
+    (
+        cd "$catalog" || exit
+        find licenses SOURCES.tsv -type f -print | LC_ALL=C sort \
+            | while IFS= read -r file; do sha256sum "$file"; done
+    ) > "$catalog/MATERIALS.sha256"
+    chmod 0644 "$catalog/SOURCES.tsv" "$catalog/MATERIALS.sha256"
+}
+
+static_libuuid_materials_valid() {
+    local catalog=$1 library=$2 expected line file
+    if [ ! -s "$library" ] || [ ! -s "$catalog/SOURCES.tsv" ] \
+        || [ ! -s "$catalog/MATERIALS.sha256" ] \
+        || [ ! -s "$catalog/licenses/COPYING" ] \
+        || [ ! -s "$catalog/licenses/libuuid/COPYING" ]; then
+        return 1
+    fi
+    if find "$catalog" -type l -print -quit | grep -q .; then return 1; fi
+    while IFS= read -r line; do
+        [[ "$line" =~ ^[0-9a-f]{64}\ \ [A-Za-z0-9._+/-]+$ ]] || return 1
+        file="${line#*  }"
+        case "$file" in
+            /*|../*|*/../*|*/..|..|.) return 1 ;;
+        esac
+    done < "$catalog/MATERIALS.sha256"
+    (cd "$catalog" && sha256sum --status -c MATERIALS.sha256) || return 1
+    cmp -s <(sed 's/^.*  //' "$catalog/MATERIALS.sha256" | LC_ALL=C sort) \
+        <(cd "$catalog" && find licenses SOURCES.tsv -type f -print | LC_ALL=C sort) || return 1
+    awk -F '\t' '
+        NR == 1 {if ($0 != "payload\tname\tversion\tsource\tintegrity\tlicense_directory") exit 1}
+        NR == 2 {if (NF != 6 || $1 != "libuuid.a" || $2 != "util-linux" || $3 == "" || $4 == "" || $6 != "licenses") exit 1}
+        END {if (NR != 2) exit 1}
+    ' "$catalog/SOURCES.tsv" || return 1
+    expected="$(awk -F '\t' 'NR == 2 {split($5, parts, ";"); sub(/^sha256:/, "", parts[1]); print parts[1]}' "$catalog/SOURCES.tsv")"
+    [ "$expected" = "$(sha256sum "$library" | awk '{print $1}')" ]
+}
+
+copy_static_libuuid() {
+    local root=$1 build_id source destination
+    build_id="$(cat "$TEMPLATE_ROOT/usr/lib64/.kuasar-libuuid-build-id")"
+    [[ "$build_id" =~ ^[0-9a-f]{64}$ ]] || die "invalid template libuuid build identity"
+    source="$TEMPLATE_ROOT/usr/share/kuasar-ci/native-libuuid/$build_id"
+    destination="$root/usr/share/kuasar-ci/native-libuuid/$build_id"
+    static_libuuid_materials_valid "$source" "$TEMPLATE_ROOT/usr/lib64/libuuid.a" \
+        || die "template libuuid material is incomplete"
+    install -d -m 0755 "$root/usr/lib64" "$destination"
+    cp -a "$source/." "$destination/"
+    install -m 0644 "$TEMPLATE_ROOT/usr/lib64/libuuid.a" "$root/usr/lib64/libuuid.a"
+    static_libuuid_materials_valid "$destination" "$root/usr/lib64/libuuid.a" \
+        || die "slot libuuid material is incomplete"
+    install -m 0644 "$TEMPLATE_ROOT/usr/lib64/.kuasar-libuuid-build-id" \
+        "$root/usr/lib64/.kuasar-libuuid-build-id"
+}
+
 install_static_libuuid() {
-    local marker="$TEMPLATE_ROOT/usr/lib64/.kuasar-libuuid-build-id" build_id
+    local marker="$TEMPLATE_ROOT/usr/lib64/.kuasar-libuuid-build-id" build_id catalog
     case "$UTIL_LINUX_SOURCE_ARCHIVE" in
         ""|.|..|*/*) die "util-linux source archive must be a file name" ;;
     esac
@@ -374,8 +449,10 @@ install_static_libuuid() {
         printf 'source_archive=%s\n' "$UTIL_LINUX_SOURCE_ARCHIVE"
         printf 'tarball_sha256=%s\n' "$UTIL_LINUX_TARBALL_SHA256"
     } | sha256sum | awk '{print $1}')"
+    catalog="$TEMPLATE_ROOT/usr/share/kuasar-ci/native-libuuid/$build_id"
     if [ -s "$TEMPLATE_ROOT/usr/lib64/libuuid.a" ] \
-        && [ "$(cat "$marker" 2>/dev/null || true)" = "$build_id" ]; then
+        && [ "$(cat "$marker" 2>/dev/null || true)" = "$build_id" ] \
+        && static_libuuid_materials_valid "$catalog" "$TEMPLATE_ROOT/usr/lib64/libuuid.a"; then
         return
     fi
 
@@ -417,6 +494,9 @@ install_static_libuuid() {
         make -j"$(nproc)" libuuid.la >/dev/null
         install -m 0644 .libs/libuuid.a /usr/lib64/libuuid.a
     '
+    record_static_libuuid_materials "$work/src" "$TEMPLATE_ROOT/usr/lib64/libuuid.a" "$catalog"
+    static_libuuid_materials_valid "$catalog" "$TEMPLATE_ROOT/usr/lib64/libuuid.a" \
+        || die "static libuuid license/source material validation failed"
     printf '%s\n' "$build_id" >"$marker"
     rm -rf "$work"
     [ -s "$TEMPLATE_ROOT/usr/lib64/libuuid.a" ] \
@@ -689,9 +769,7 @@ prepare_slot() {
     install -m 0644 "$TEMPLATE_ROOT/etc/pip.conf" "$root/etc/pip.conf"
     install -m 0644 "$TEMPLATE_ROOT/root/.cargo/config.toml" "$root/root/.cargo/config.toml"
     install -m 0644 "$TEMPLATE_ROOT/etc/resolv.conf" "$root/etc/resolv.conf"
-    install -m 0644 "$TEMPLATE_ROOT/usr/lib64/libuuid.a" "$root/usr/lib64/libuuid.a"
-    install -m 0644 "$TEMPLATE_ROOT/usr/lib64/.kuasar-libuuid-build-id" \
-        "$root/usr/lib64/.kuasar-libuuid-build-id"
+    copy_static_libuuid "$root"
 
     local machine_id template_machine_id
     machine_id="$(cat "$root/etc/machine-id" 2>/dev/null || true)"

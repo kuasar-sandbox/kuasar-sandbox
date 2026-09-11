@@ -23,9 +23,9 @@
 
 - [贡献与文档检视](../CONTRIBUTING_zh.md#文档贡献)。
 - [性能方法](perf_zh.md)：计时边界、证据与回归入口。
-- [CI 与 BMS](ci_zh.md)：精确源码集合、信任边界与验证模式。
+- [持续集成](ci_zh.md)：精确源码集合、信任边界与验证模式。
 - [发布契约](release_zh.md)：版本选择、资产、发布恢复与文档打包。
-- [Runner 运维（英文）](../ci/runner/README.md)：安装与运维验证 Runner。
+- [Runner 运维](../ci/runner/README_zh.md)：安装与运维验证 Runner。
 - [安全报告](../SECURITY_zh.md)。
 
 英文为默认入口；维护中的中文版本在各配对文档顶部互链。组件访问取决于仓库可见性；已认证的源码检视不代表匿名访问验收完成。

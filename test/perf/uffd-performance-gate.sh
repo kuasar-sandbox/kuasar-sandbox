@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Stable, same-process UFFD performance guard for BMS. Real KVM readiness and
+# Stable, same-process UFFD performance guard for CI. Real KVM readiness and
 # tail-path assertions live in e2e_sandbox_restore/upload_restore; this script
 # catches critical-path and read-amplification regressions without KVM noise.
 
