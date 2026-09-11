@@ -879,14 +879,16 @@ printf '%s\n' "$CHILD" >>"$SIDS_FILE"
 hosts_add "$DATA_IP" "49983-$CHILD.$DOMAIN"; hosts_add "$DATA_IP" "49999-$CHILD.$DOMAIN"
 py <<PY || die "forked child exec failed"
 from e2b import Sandbox
-ids = [s.sandbox_id for s in Sandbox.list().next_items()]
-print("forked child", "$CHILD", "running:", "$CHILD" in ids)
-assert "$CHILD" in ids, "forked child is missing from the running sandbox list"
+# Create is durable admission, not guest readiness. Public list intentionally
+# hides starting rows; perform the real guest operation before checking it.
 child = Sandbox.connect("$CHILD")
 result = child.commands.run("cat /home/user/state.txt")
 assert result.exit_code == 0, (result.exit_code, result.stderr)
 assert result.stdout.strip() == "hello from before the snapshot", result.stdout
 assert child.files.read("/home/user/sdk-data.txt") == "written through the E2B Files API"
+ids = [s.sandbox_id for s in Sandbox.list().next_items()]
+print("forked child", "$CHILD", "listed after guest readiness:", "$CHILD" in ids)
+assert "$CHILD" in ids, "ready forked child is missing from the sandbox list"
 print("  child sees forked state:", result.stdout.rstrip())
 print("  child exec user:", child.commands.run("id -un").stdout.rstrip())
 child.kill()

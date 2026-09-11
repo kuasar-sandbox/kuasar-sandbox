@@ -32,7 +32,7 @@ and uses the Demo's management-VIP route to local Zot.
 | Create | `Sandbox.create(template)` | A real Cloud Hypervisor MicroVM becomes usable through the data Proxy |
 | Data | `commands.run`, `files.write`, `files.read`, exposed port | Guest execution and both data paths return asserted content |
 | State | `pause` then `Sandbox.connect(id)` | Command-written and Files-API data survive snapshot and resume |
-| Fan-out | `export-sandbox --to-template`, then `Sandbox.create` | A listed new child returns the asserted command-written and Files-API data |
+| Fan-out | `export-sandbox --to-template`, then `Sandbox.create` | The child passes guest command and Files-API data assertions before it is required to appear in the public list; `starting` rows are intentionally hidden |
 | Migration | `Sandbox.connect(id, headers={migration-token})` | Import and resume complete in one SDK call; both data values are asserted again |
 | Destroy | `Sandbox.kill` and run-owned cleanup | Sandboxes and all safely attributable ephemeral host resources are gone |
 
