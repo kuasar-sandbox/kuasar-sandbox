@@ -126,12 +126,12 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  exact-asset-bms:
+  release-asset-validation:
     needs: prepare
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/bms-e2e.yml
+    uses: ./.github/workflows/integration-tests.yml
     with:
       mode: exact-assets
       release_version: ${{ needs.prepare.outputs.version }}
@@ -141,7 +141,7 @@ jobs:
       KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
 
   publish:
-    needs: [prepare, exact-asset-bms]
+    needs: [prepare, release-asset-validation]
     runs-on: ubuntu-latest
     permissions:
       actions: read
