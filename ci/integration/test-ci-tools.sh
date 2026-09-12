@@ -296,13 +296,18 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 execution = pathlib.Path(sys.argv[2]).read_text()
-# Stage one publishes central support before changing any active caller or rule.
-caller = (root / ".github/workflows/platform-bms.yml").read_text()
-assert "  bms:\n    uses: ./.github/workflows/bms-entry.yml" in caller
-assert not (root / ".github/workflows/ci.yml").exists()
+# Keep the original required workflow active until the new real checks have run
+# and the required rule is migrated. Do not synthesize a successful old check.
+previous = (root / ".github/workflows/platform-bms.yml").read_text()
+assert "  bms:\n    uses: ./.github/workflows/bms-entry.yml" in previous
+caller = (root / ".github/workflows/ci.yml").read_text()
+assert "  ci:\n    uses: kuasar-sandbox/kuasar-sandbox/.github/workflows/ci-entry.yml@main" in caller
+assert "previous-required-check" not in caller
+assert "bms / finalize" not in caller
 aggregate = (root / ".github/workflows/aggregate-release.yml").read_text()
-assert "uses: ./.github/workflows/bms-e2e.yml" in aggregate
-assert "needs: [prepare, exact-asset-bms]" in aggregate
+assert "uses: ./.github/workflows/integration-tests.yml" in aggregate
+assert "needs: [prepare, release-asset-validation]" in aggregate
+assert "bms-e2e.yml" not in aggregate
 assert (root / ".github/workflows/ci-entry.yml").is_file()
 assert (root / ".github/workflows/bms-entry.yml").is_file()
 revoke = execution.index("- name: Revoke platform tooling token before candidate execution")
@@ -310,7 +315,7 @@ assert revoke < execution.index("- name: Finalize source workspace")
 assert revoke < execution.index("- name: Test exact published assets")
 assert "skip-token-revoke: true" in execution[
     execution.index("- name: Create read-only platform tooling token"):revoke]
-print("test-ci-tools: central-first migration and token lifetime PASS")
+print("test-ci-tools: real parallel checks during caller migration and token lifetime PASS")
 PY
 
 cat >"$TMP/duplicate-companions.md" <<'EOF'

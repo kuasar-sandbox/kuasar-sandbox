@@ -25,7 +25,9 @@ wrapper,并从项目主仓 `main` 引用 `.github/workflows/ci-entry.yml`;该入
 身份来源。draft PR 只运行 admission/finalize 控制步骤,不运行完整 E2E,其 exact-head 保持
 `pending`;转为 ready 后由新的事件自动运行完整 Integration E2E。外部 fork、冲突或已经变化的事件拒绝准入。
 
-其余五仓 revision 通过一次 GitHub GraphQL 查询解析,候选仓 revision 替换为已准入的
+其余仓库 revision 通过 GitHub REST API,按照目标平台分支选择的 ref 解析。
+包括 runtime 与 vmlinux 在内的六个发布单元分别解析;源码 workspace 的唯一
+`guest-runtime` checkout 使用 runtime 单元,详见下文。候选仓 revision 替换为已准入的
 integration commit。普通 PR 不声明 companion,行为与单候选模式相同。不能由任一仓
 `main` 单独编译的原子跨仓变更可在两个 PR body 中互相声明:
 
