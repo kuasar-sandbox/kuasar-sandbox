@@ -28,4 +28,4 @@
 - [Runner operations](../ci/runner/README.md): install and operate the validation runner.
 - [Security reporting](../SECURITY.md).
 
-English is the default; maintained Chinese editions are linked at the top of each paired document. Component access depends on repository visibility. Authenticated source review does not constitute anonymous-access acceptance.
+English is the default; maintained Chinese editions are linked at the top of each paired document. Follow the contribution guide for public Fork and pull request workflows. To use a release, select one published version and keep its documentation, scripts, binaries and checksums together.

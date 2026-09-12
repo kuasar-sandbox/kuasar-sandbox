@@ -6,17 +6,17 @@ Kuasar Sandbox receives system-level and cross-component security reports throug
 
 ## Supported versions
 
-The current supported stable aggregate release is [`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2).
-
-Please report vulnerabilities that affect the current Stable release, the latest published aggregate Preview, or the current `main` branch. Include the exact aggregate and component versions that are affected. Reports about older Preview releases are evaluated according to whether the issue still affects the current Stable release, the latest Preview, or `main`.
+Please report vulnerabilities that affect the [current Stable channel](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/latest), the latest published aggregate Preview, or the current `main` branch. Include the exact aggregate and component versions that are affected. Reports about older Preview releases are evaluated according to whether the issue still affects the current Stable release, the latest Preview, or `main`.
 
 | Version range | Status |
 | --- | --- |
-| `release-v0.1.2` | Current supported Stable release |
+| GitHub Latest non-prerelease aggregate | Current supported Stable release |
 | Latest published aggregate Preview | Prerelease reports accepted |
 | Current `main` | Source reports accepted |
 
 Preview is a GitHub prerelease channel. The production readiness of the system and the stability label of a public release channel are separate concerns.
+
+This file defines vulnerability intake, coordination, and disclosure. It does not replace the implementation security model. System trust boundaries are documented in [Tenant security](docs/kuasar-sandbox.md#73-tenant-security); each component's linked design documents remain authoritative for its protocol, storage, runtime, and network mechanisms.
 
 ## Report a vulnerability privately
 

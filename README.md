@@ -6,7 +6,7 @@
 
 It provides independent guest-kernel isolation, snapshot-template instantiation, stateful pause and resume, on-demand data loading, high-density resource governance, and a deployment path from a single node to a multi-node cluster.
 
-The current stable aggregate release is [`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2). Preview releases remain available for development and evaluation. Production readiness describes the system's deployment and operational capabilities; the Stable/Preview label describes the stability of a public release channel. Production deployments should still validate capacity against their own workloads and configure production TLS, durable storage, network policy, and credentials.
+The [Stable channel](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/latest) resolves to the current non-prerelease aggregate; select that Release once and pin its exact tag, assets, and checksums for an installation. Preview releases remain available for development and evaluation. Production readiness describes the system's deployment and operational capabilities; the Stable/Preview label describes the stability of a public release channel. Production deployments should still validate capacity against their own workloads and configure production TLS, durable storage, network policy, and credentials.
 
 ## Start here
 
@@ -115,7 +115,7 @@ The five components form the complete platform together, but each component can 
 
 ## Release status and support scope
 
-- **Current stable aggregate release:** [`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2).
+- **Stable channel:** the GitHub Latest non-prerelease aggregate; resolve it once and retain its exact tag for every asset and checksum in one installation.
 - **Preview channel:** GitHub prereleases for development and evaluation; Preview does not replace the current Stable release.
 - **Prebuilt architecture:** current GitHub releases provide Linux x86_64 assets.
 - **Source-build architectures:** the Makefiles support `TARGET_ARCH=x86_64` and `TARGET_ARCH=aarch64`; source-build support does not mean that prebuilt release assets are published for both architectures.
@@ -137,14 +137,13 @@ See [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases)
 
 ## Quick Start
 
-The [Quick Start](docs/quickstart.md) downloads every explicit asset from one aggregate release, verifies `SHA256SUMS`, prepares a standalone node, and uses the upstream E2B Python SDK to:
+The [Quick Start](docs/quickstart.md) downloads every explicit asset from one aggregate release, verifies `SHA256SUMS`, prepares a standalone node, and builds a ready snapshot template with the upstream E2B Python SDK. The Demo reads its published template ID from the exact build's ready status; the SDK's registration handle is not that ID. With the node running and the documented SDK connection settings in place, set `TEMPLATE_ID` to that published ID for the lifecycle below:
 
 ```python
-from e2b import Sandbox, Template
+import os
+from e2b import Sandbox
 
-template = Template().from_image("<registry>/<image>:<tag>")
-build = Template.build(template, name="quickstart", cpu_count=2, memory_mb=6144)
-sandbox = Sandbox.create(build.template_id, timeout=300)
+sandbox = Sandbox.create(os.environ["TEMPLATE_ID"], timeout=300)
 sandbox_id = sandbox.sandbox_id
 print(sandbox.commands.run("uname -sm").stdout)
 sandbox.pause()

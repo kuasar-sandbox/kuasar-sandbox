@@ -6,9 +6,9 @@ Kuasar Sandbox 是一套支持生产部署的 MicroVM 沙箱平台,面向大规�
 Serverless 与强化学习工作负载,提供独立 Guest Kernel 隔离,快照模板实例化,
 有状态暂停恢复,按需数据加载,高密资源治理,以及从单节点到多节点集群的完整能力.
 
-系统支持生产部署.当前 Stable 聚合版本为
-[`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2);
-Preview 继续用于开发和评估.生产就绪描述系统的部署能力,公开发行通道标记描述资产
+系统支持生产部署.[Stable 通道](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/latest)
+解析为当前非 prerelease 聚合版本;一次安装应只解析一次 Release,并固定其精确 Tag、全部
+资产和校验和.Preview 继续用于开发和评估.生产就绪描述系统的部署能力,公开发行通道标记描述资产
 和接口的稳定性,两者是不同维度.生产部署仍应结合工作负载完成容量验证,
 并配置正式 TLS,可靠存储,网络策略和安全凭据.
 
@@ -138,7 +138,7 @@ KVM / Local File / NAS / Object Storage / Network
 
 ## 发行状态
 
-- **Current stable release**:[`release-v0.1.2`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.2).
+- **Stable 通道**:GitHub Latest 指向的非 prerelease 聚合版本;一次安装先解析一次,再对全部资产和校验和固定同一精确 Tag.
 - **Preview 通道**:作为 GitHub prerelease 保留,用于开发和评估,不替代当前 Stable.
 - **预构建 Release 架构**:当前 GitHub Release 提供 Linux x86_64 资产.
 - **源码构建架构**:当前 Makefile 支持 `TARGET_ARCH=x86_64` 和
@@ -166,14 +166,15 @@ prerelease 聚合版本,`Proposed` 表示仍在 Issue 或设计阶段且不能�
 ## 快速开始
 
 [快速开始](docs/quickstart_zh.md) 从同一聚合版本下载全部显式资产、校验 `SHA256SUMS`,
-准备单节点,并用上游 E2B Python SDK 执行:
+准备单节点,并用上游 E2B Python SDK 构建就绪的快照模板。Demo 从精确 Build 的 ready
+状态读取已发布 Template ID;SDK 返回的注册句柄不是这个 ID。保持节点运行并完成文档中的
+SDK 连接配置后,把 `TEMPLATE_ID` 设置为该已发布 ID,再执行以下生命周期:
 
 ```python
-from e2b import Sandbox, Template
+import os
+from e2b import Sandbox
 
-template = Template().from_image("<registry>/<image>:<tag>")
-build = Template.build(template, name="quickstart", cpu_count=2, memory_mb=6144)
-sandbox = Sandbox.create(build.template_id, timeout=300)
+sandbox = Sandbox.create(os.environ["TEMPLATE_ID"], timeout=300)
 sandbox_id = sandbox.sandbox_id
 print(sandbox.commands.run("uname -sm").stdout)
 sandbox.pause()
