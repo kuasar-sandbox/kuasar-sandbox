@@ -32,6 +32,8 @@ daily-preview.yaml/version >= release.yaml/version
 
 The comparison uses numeric aggregate `MAJOR.MINOR.PATCH` values, not string ordering. A Stable manifest can select only Stable components. A Preview manifest can mix Stable and Preview components. Both manifests must list exactly six release units with their respective correct tag prefixes.
 
+The two manifests below are examples, not a list of current published versions.
+
 <a id="21-stable-清单"></a>
 ### 2.1 Stable manifest
 
@@ -93,7 +95,7 @@ Platform and component maintenance branches need not have matching names. Platfo
 - platform `main`;
 - every platform branch matching `release/vMAJOR.MINOR.x`.
 
-The scanner pins each branch HEAD SHA, then loads the trusted controller from platform `main` to process that SHA. The controller accesses private component repositories with a read-only contents GitHub App token. The token is passed only through a subprocess-scoped Git HTTP authorization header, never through remote URLs, repository configuration or logs. All branch coordinators and Preview GC share one GitHub Actions concurrency key, preventing manifest selection from overlapping GC planning/dispatch. The scanner dispatches and waits for branches in order. Cancelled or timed-out branch tasks receive at most three attempts in that scan; later scans recover work that remains incomplete. If a branch moves during selection or manifest commit, the current run does not overwrite remote state; the next run starts from the new HEAD. A deterministic failure is recorded while other branches continue, and the scanner reports failure at the end. One broken maintenance line therefore cannot indefinitely starve other branches.
+The scanner pins each branch HEAD SHA, then loads the trusted controller from platform `main` to process that SHA. The controller accesses component repositories with a read-only contents GitHub App token. The token is passed only through a subprocess-scoped Git HTTP authorization header, never through remote URLs, repository configuration or logs. All branch coordinators and Preview GC share one GitHub Actions concurrency key, preventing manifest selection from overlapping GC planning/dispatch. The scanner dispatches and waits for branches in order. Cancelled or timed-out branch tasks receive at most three attempts in that scan; later scans recover work that remains incomplete. If a branch moves during selection or manifest commit, the current run does not overwrite remote state; the next run starts from the new HEAD. A deterministic failure is recorded while other branches continue, and the scanner reports failure at the end. One broken maintenance line therefore cannot indefinitely starve other branches.
 
 <a id="41-源分支映射"></a>
 ### 4.1 Source-branch mapping
@@ -278,8 +280,8 @@ exist in the selected source use that source's selected reference, just like
 relative source links; queries and fragments are preserved. If an absolute
 `main` URL names a file absent from the selected source, it remains unchanged and
 requires separate review. Explicit historical-version URLs remain historical references.
-External links, including private component source URLs, still require the
-separate access checks described by [the review policy](../CONTRIBUTING.md#documentation-contributions).
+External links, including component source URLs, still require the
+separate link checks described by [the review policy](../CONTRIBUTING.md#documentation-contributions).
 
 #### Validation
 
@@ -332,7 +334,7 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 - Cross-repository GitHub App access is limited to `Contents: read`, `Pull requests: read` and `Actions: write`. Each short-lived token requests only the subset required for its current step.
 - Daily manifest commits use the same App's separate short-lived `Contents: write` token scoped only to the `kuasar-sandbox` repository. It has no component-repository write access and does not reuse the generic `github-actions` identity.
 - Component publication, component deletion, aggregate publication and platform deletion use only their respective workflow's short-lived repository `GITHUB_TOKEN contents:write`.
-- Candidate-executing runners receive only read-only source tokens, revoked before execution.
+- Source-fetch tokens on candidate-executing runners are read-only and revoked before execution. This does not isolate persistent App/runner credentials or shared writable state; see [CI runner slots](../ci/runner/README.md).
 - Publication first creates a draft, uploads assets and verifies digests; it becomes public only after every check agrees.
 - Publishers never overwrite published tags or Releases. Incomplete Preview recovery uses only the protected deletion entry.
 - Branch HEAD, tag commit, manifest blob SHA and release asset validation together pin a publication.
@@ -343,15 +345,12 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 <a id="11-受保护分支"></a>
 ## 11. Protected branches
 
-During the CI naming migration, keep `bms / finalize` required until the central
-`ci-entry.yml` is available on trusted `main`, callers have switched, and real
-`ci / finalize` checks have passed for their exact candidates. Then update the
-required rule to `ci / finalize` before removing the old entry and temporary
-result bridge. The bridge must depend on the real CI result and reject a failed,
-cancelled or skipped overall workflow; it is not an independently supplied success.
-Draft checks with skipped E2E do not constitute acceptance.
+The required `ci / finalize` check is backed by `kuasar/ci-exact-head` on the
+current two-parent integration commit. Failed, cancelled or skipped E2E cannot
+produce acceptance, including a draft workflow whose control jobs succeed.
+Do not substitute a result bridge or an independently supplied success status.
 
-One repository ruleset governs project-branch protection. The active ruleset matches only `refs/heads/main` and `refs/heads/release/v*`. It requires a PR, resolved discussions, strict `bms / finalize` status checks and linear history, and blocks force pushes and branch deletion. It does not use default administrator bypass, signed-commit requirements, CODEOWNERS or a merge queue.
+One repository ruleset governs project-branch protection. The active ruleset matches only `refs/heads/main` and `refs/heads/release/v*`. It requires a PR, resolved discussions, strict `ci / finalize` status checks and linear history, and blocks force pushes and branch deletion. It does not use default administrator bypass, signed-commit requirements, CODEOWNERS or a merge queue.
 
 The current `required_approving_review_count` is 0. GitHub counts approvals only from writers other than the PR author. Without an independent write reviewer, requiring one approval would prevent maintainers' own PRs from merging under the ruleset. Review still requires complete diff inspection, resolved review threads and exact Integration E2E evidence.
 
@@ -359,7 +358,7 @@ Before enabling this ruleset, confirm that the `kuasar-sandbox-bms-ci` installat
 
 Status checks use `do_not_enforce_on_create: true` for a new branch, allowing a maintenance line to be created from an already-published Stable tag. Every subsequent update immediately returns to the same PR and Integration E2E gates; branch creation cannot bypass later commit checks.
 
-Daily Preview must commit its converged manifest directly to the protected target branch. The active ruleset therefore grants `always` bypass only to the `kuasar-sandbox-bms-ci` GitHub App, ID `4283831`. That App's only write use is the repository-scoped short-lived token described above. Human maintenance, ordinary `github-actions` and all other Apps are absent from the bypass list. CI always revalidates the PR's exact integration commit and target branch; this bypass does not replace the `bms / finalize` gate for PRs. The App name is an existing registration identifier, not a validation method.
+Daily Preview must commit its converged manifest directly to the protected target branch. The active ruleset therefore grants `always` bypass only to the `kuasar-sandbox-bms-ci` GitHub App, ID `4283831`. That App's only write use is the repository-scoped short-lived token described above. Human maintenance, ordinary `github-actions` and all other Apps are absent from the bypass list. CI always revalidates the PR's exact integration commit and target branch; this bypass does not replace the `ci / finalize` gate for PRs. The App name is an existing registration identifier, not a validation method.
 
 ## 12. See also
 

@@ -37,6 +37,8 @@ daily-preview.yaml/version >= release.yaml/version
 组件;Preview 清单可以混合选择 Stable 和 Preview 组件。两个清单都必须精确列出六个发布
 单元,并使用各自正确的 Tag 前缀。
 
+下面两个清单都是示例,不是当前已发布版本的清单。
+
 ### 2.1 Stable 清单
 
 首个 Stable 可省略 `previous_version`;提供时必须指向更早的 Stable。
@@ -116,7 +118,7 @@ vmlinux 固定版本。
 - 所有符合 `release/vMAJOR.MINOR.x` 的平台分支。
 
 scanner 固定每个分支的 HEAD SHA,再从平台 `main` 加载受信任的控制器处理该 SHA。
-控制器使用 GitHub App 的只读 contents Token 访问私有组件仓;Token 只通过子进程级 Git
+控制器使用 GitHub App 的只读 contents Token 访问组件仓;Token 只通过子进程级 Git
 HTTP authorization header 传递,不写入 remote URL、仓库配置或日志。
 所有分支协调器与 Preview GC 共用一个 GitHub Actions concurrency key,因此清单选择和
 GC 计划/派发不会重叠。scanner 按分支顺序派发并等待;被取消或超时的分支任务在本轮最多
@@ -340,8 +342,8 @@ runtime 与 vmlinux 单元可以选择 guest-runtime 的不同提交。因此发
 可以识别且指向已包含文档的跨仓 `main` 链接在组装集合内解析。绝对 GitHub `main` 链接
 若指向所选源码中存在的其他文件或目录，则与相对源码链接一样固定到该源码的所选引用，
 并保留 query 与 fragment。若绝对 `main` URL 指向所选源码中不存在的文件，则保留原样，
-需要单独检视。显式指向历史版本的 URL 保留为历史引用。外部链接，包括私有组件的源码 URL，仍需按照
-[检视策略](../CONTRIBUTING_zh.md#文档贡献)单独检查访问能力。
+需要单独检视。显式指向历史版本的 URL 保留为历史引用。外部链接,包括组件源码 URL,仍需按照
+[检视策略](../CONTRIBUTING_zh.md#文档贡献)单独检查链接。
 
 #### 验证
 
@@ -419,7 +421,8 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
   `github-actions` 身份;
 - 组件发布、组件删除、聚合发布和平台删除只使用各仓本次 workflow 的短期
   `GITHUB_TOKEN contents:write`;
-- 执行候选代码的 runner 只接收源码只读 token,并在执行前撤销;
+- 候选 Runner 的源码获取 token 为只读,并在执行前撤销。这不隔离持久 App/Runner
+  凭据或共享可写状态;具体边界见 [CI Runner slot](../ci/runner/README_zh.md);
 - 发布先创建 draft、上传并复核 digest,全部一致后才公开;
 - 已发布 Tag 或 Release 不由发布器覆盖;残缺 Preview 只能经受保护删除入口恢复;
 - 分支 HEAD、Tag commit、清单 blob SHA 和发行资产验证共同固定一次发布;
@@ -442,14 +445,13 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 
 ## 11. 受保护分支
 
-CI 更名期间保留必需的 `bms / finalize`,直到中央 `ci-entry.yml` 已在受信任的 `main`
-上线、调用者已经切换,且各自精确候选的真实 `ci / finalize` 检查已经通过。随后先把必需
-规则改为 `ci / finalize`,再移除旧入口和临时结果桥接。桥接必须依赖真实 CI 结果,拒绝
-整体失败、取消或跳过的工作流,不能独立提供成功状态。Draft 的 E2E 跳过不构成验收。
+必需的 `ci / finalize` 检查以当前双亲 integration commit 上的
+`kuasar/ci-exact-head` 为依据。E2E 失败、取消或跳过都不能产生验收成功,
+包括控制 job 成功但跳过 E2E 的 Draft 工作流。不能用结果桥接或独立提供的成功状态替代。
 
 项目仓的分支保护以一个 repository ruleset 为准。当前已启用的 ruleset 只匹配
 `refs/heads/main` 与 `refs/heads/release/v*`。它要求 PR、所有讨论已解决、严格匹配
-`bms / finalize`、线性历史,并阻止 force push 与分支删除。不使用管理员默认绕过、签名
+`ci / finalize`、线性历史,并阻止 force push 与分支删除。不使用管理员默认绕过、签名
 提交、CODEOWNERS 或 merge queue。
 
 当前 `required_approving_review_count` 为 0。GitHub 只计入拥有 write 权限且不是 PR 作者的
@@ -468,7 +470,7 @@ Daily Preview 必须直接把收敛后的清单提交到受保护目标分支,�
 `kuasar-sandbox-bms-ci` GitHub App (ID `4283831`) 配置 `always` bypass。该 App 的唯一写入
 用途是上述本仓短期 token;人工维护、普通 `github-actions` 与所有其他 App 都不在 bypass
 列表。CI 对 PR 始终重新验证精确 integration commit 与目标 branch,所以 bypass 不替代
-`bms / finalize` 门禁。App 名称是已有注册标识,不是一种验证方法。
+`ci / finalize` 门禁。App 名称是已有注册标识,不是一种验证方法。
 
 ## 12. See Also
 

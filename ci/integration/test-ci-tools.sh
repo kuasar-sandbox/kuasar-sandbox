@@ -296,10 +296,11 @@ import sys
 
 root = pathlib.Path(sys.argv[1])
 execution = pathlib.Path(sys.argv[2]).read_text()
-# Keep the original required workflow active until the new real checks have run
-# and the required rule is migrated. Do not synthesize a successful old check.
-previous = (root / ".github/workflows/platform-bms.yml").read_text()
-assert "  bms:\n    uses: ./.github/workflows/bms-entry.yml" in previous
+# Remove the old caller only after the canonical check is required. The old
+# execution helpers remain until no base workflow can invoke the old entry.
+assert not (root / ".github/workflows/platform-bms.yml").exists()
+assert (root / "ci/bms/ci-timed.sh").is_file()
+assert (root / "ci/bms/source-cache-prune.sh").is_file()
 caller = (root / ".github/workflows/ci.yml").read_text()
 assert "  ci:\n    uses: kuasar-sandbox/kuasar-sandbox/.github/workflows/ci-entry.yml@main" in caller
 assert "previous-required-check" not in caller
@@ -315,7 +316,7 @@ assert revoke < execution.index("- name: Finalize source workspace")
 assert revoke < execution.index("- name: Test exact published assets")
 assert "skip-token-revoke: true" in execution[
     execution.index("- name: Create read-only platform tooling token"):revoke]
-print("test-ci-tools: real parallel checks during caller migration and token lifetime PASS")
+print("test-ci-tools: canonical caller and retained execution helpers PASS")
 PY
 
 cat >"$TMP/duplicate-companions.md" <<'EOF'
