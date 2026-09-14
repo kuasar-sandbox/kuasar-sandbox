@@ -729,13 +729,31 @@ def plan_units(configured: dict[str, str], date: str) -> dict[str, Plan]:
         temporary = pathlib.Path(directory)
         for unit in UNITS:
             plan = make_plan(unit, configured[unit.name], date, temporary)
+            state = RepositoryState(unit)
+            status = state.status(plan.selected)
             dependency_changed = any(
                 plans[name].selected != configured[name] for name in unit.dependencies
             )
-            if dependency_changed and plan.action != "publish":
-                plan = force_dependency_preview(plan, date, RepositoryState(unit))
+            # Persisting the manifest records a dependency rebuild before its
+            # Release exists. On restart, the dependencies can already match
+            # that manifest while source selection still finds the old winner.
+            configured_tag = preview_selection.parse_tag(unit.name, plan.configured)
+            winner_tag = preview_selection.parse_tag(unit.name, plan.winner)
+            pending_dependency_preview = (
+                bool(unit.dependencies)
+                and "-preview." in plan.configured
+                and configured_tag.same_commit_order > winner_tag.same_commit_order
+                and plan.configured == preview_selection.preview_candidate(
+                    unit.name, plan.winner, plan.configured.rsplit("-preview.", 1)[1]
+                )
+                and not state.status(plan.configured).complete
+            )
+            if (
+                dependency_changed or pending_dependency_preview
+            ) and plan.action != "publish":
+                plan = force_dependency_preview(plan, date, state)
+                status = state.status(plan.selected)
             plans[unit.name] = plan
-            status = RepositoryState(unit).status(plan.selected)
             if status.complete:
                 validate_preview_reuse(plan, plans, status)
     return plans
