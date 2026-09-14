@@ -269,6 +269,8 @@ make -C kuasar-sandbox test-perf-tools
 
 ## Documentation
 
+- [文档索引](docs/README_zh.md):阅读路径与组件契约;
+
 - [Architecture](docs/kuasar-sandbox_zh.md):系统目标,架构和关键语义;
 - [Deployment](docs/deployment_zh.md):部署拓扑,进程,端口与启停依赖;
 - [Performance](docs/perf_zh.md):带测试上下文的性能基线,回归门禁与调优方法;

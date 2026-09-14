@@ -13,11 +13,11 @@
 
 - [System overview](kuasar-sandbox.md): user semantics and the five component boundaries.
 - [Terminology](terminology.md): concise cross-component vocabulary; detailed field semantics remain with their owners.
-- [orchestrator](https://github.com/kuasar-sandbox/orchestrator/tree/main/docs): node lifecycle, Build, resource control, Registry, Router, Placer and extensions.
-- [sandboxer](https://github.com/kuasar-sandbox/sandboxer/tree/main/docs): runtime lifecycle, portable artifacts, Guest ABI and VMM integration.
-- [accelerator](https://github.com/kuasar-sandbox/accelerator/tree/main/docs): Manifest, file artifacts, Store and Cache.
-- [connector](https://github.com/kuasar-sandbox/connector/tree/main/docs): vSwitch design/operations and the independent TAP FD protocol.
-- [guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/tree/main/docs): image flattening, Runtime Bundle and Kernel.
+- [orchestrator](https://github.com/kuasar-sandbox/orchestrator/blob/main/README.md#documentation): node lifecycle, Build, resource control, Registry, Router, Placer and extensions.
+- [sandboxer](https://github.com/kuasar-sandbox/sandboxer/blob/main/README.md#documentation): runtime lifecycle, portable artifacts, Guest ABI and VMM integration.
+- [accelerator](https://github.com/kuasar-sandbox/accelerator/blob/main/README.md#documentation): Manifest, file artifacts, Store and Cache.
+- [connector](https://github.com/kuasar-sandbox/connector/blob/main/README.md#documentation): vSwitch design/operations and the independent TAP FD protocol.
+- [guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README.md#documentation): image flattening, Runtime Bundle and Kernel.
 
 ## Develop, validate and release
 

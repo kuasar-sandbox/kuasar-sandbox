@@ -13,11 +13,11 @@
 
 - [系统总览](kuasar-sandbox_zh.md)：用户语义与五个组件的职责边界。
 - [术语](terminology_zh.md)：跨组件词汇速查；精确字段语义由所属组件定义。
-- [orchestrator](https://github.com/kuasar-sandbox/orchestrator/tree/main/docs)：节点生命周期、Build、资源控制、Registry、Router、Placer 与扩展。
-- [sandboxer](https://github.com/kuasar-sandbox/sandboxer/tree/main/docs)：运行生命周期、便携工件、Guest ABI 与 VMM 集成。
-- [accelerator](https://github.com/kuasar-sandbox/accelerator/tree/main/docs)：Manifest、文件工件、Store 与 Cache。
-- [connector](https://github.com/kuasar-sandbox/connector/tree/main/docs)：vSwitch 设计及运维、独立 TAP FD 协议。
-- [guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/tree/main/docs)：镜像展平、Runtime Bundle 与 Kernel。
+- [orchestrator](https://github.com/kuasar-sandbox/orchestrator/blob/main/README_zh.md#文档)：节点生命周期、Build、资源控制、Registry、Router、Placer 与扩展。
+- [sandboxer](https://github.com/kuasar-sandbox/sandboxer/blob/main/README_zh.md#文档)：运行生命周期、便携工件、Guest ABI 与 VMM 集成。
+- [accelerator](https://github.com/kuasar-sandbox/accelerator/blob/main/README_zh.md#文档)：Manifest、文件工件、Store 与 Cache。
+- [connector](https://github.com/kuasar-sandbox/connector/blob/main/README_zh.md#文档)：vSwitch 设计及运维、独立 TAP FD 协议。
+- [guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README_zh.md#文档)：镜像展平、Runtime Bundle 与 Kernel。
 
 ## 开发、验证与发布
 

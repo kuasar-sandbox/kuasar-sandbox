@@ -2,7 +2,6 @@
 
 # Continuous integration
 
-<a id="1-概述"></a>
 ## 1. Overview
 
 The project repository owns the trusted CI control plane and the shared execution workflows. The five component repositories retain only event triggers and parameter wrappers, referencing `.github/workflows/ci-entry.yml` from project `main`. That entry calls `.github/workflows/integration-tests.yml` from the same resolved project `main` revision. Common admission, runner initialization, source caching, native caching, full E2E and exact released-asset validation are not duplicated across repositories.
@@ -12,7 +11,6 @@ The execution workflow has two explicit modes:
 - `source`: validates the triggering repository's PR integration commit, an optional exact companion-PR set and the other sources resolved for the target platform branch;
 - `exact-assets`: validates release archives already downloaded and verified by the aggregate workflow, without rebuilding them.
 
-<a id="2-source-模式"></a>
 ## 2. Source mode
 
 Each repository's trusted wrapper receives `pull_request_target` events without executing workflows supplied by the candidate repository. It accepts only PRs targeting `main` or `release/vMAJOR.MINOR.x`. Non-draft same-repository PRs are admitted automatically. For fork PRs, a trusted control job queries current organization membership using a read-only App token; only an `active` owner/member is admitted automatically. Public-repository admission and finalization use GitHub-hosted runners. The control job also re-queries the current PR, validates GitHub's generated two-parent integration commit and sets `kuasar/ci-exact-head` to `pending` on that commit. Event `author_association` is not the source of organization membership. Draft PRs run only admission/finalize control steps, not full E2E, and retain a `pending` exact-head status. Marking a draft ready causes a new event to run full Integration E2E. External forks, conflicts and events whose inputs have changed are rejected.
@@ -70,7 +68,6 @@ A project-repository PR runs the top-level entry, which invokes all six owner en
 
 Full source Integration E2E also runs one working-set smoke round covering A/B/C/D and local encryption `off/auto × cold/warm`. Each smoke run creates and exclusively owns a new TAP instead of reusing the preceding E2E's default interface. A run-specific `/32` host route isolates residual connected routes on the same subnet. Readiness-failure diagnostics are uploaded with CI metadata. Thirty-round canonical measurements generate stable descriptive performance reports; they are neither a separate workflow mode nor a mandatory PR round count.
 
-<a id="3-exact-assets-模式"></a>
 ## 3. Exact-assets mode
 
 The aggregate workflow loads release tooling from trusted `main`, but prepare checks out the complete HEAD SHA of platform `main` or `release/vMAJOR.MINOR.x` explicitly selected by the dispatcher. That job uploads a short-lived Actions artifact containing:
@@ -108,7 +105,6 @@ Build and restore of the same key hold an entry lock. Each component retains its
 make -C kuasar-sandbox test-ci-tools
 ```
 
-<a id="5-runner-与网络"></a>
 ## 5. Runners and networking
 
 Runner installation material lives in `ci/runner/`. Release-control jobs use the dedicated `kuasar-control` pool. Candidate-executing E2E jobs continue to use the `kuasar-e2e` pool and restricted read tokens. These runner classes have different root filesystems, work directories, labels and GitHub runner groups. Changing roles requires cleaning and rebuilding from a trusted template, not relabeling in place. `kuasar-control` is visible to all organization repositories, including public repositories, but its workflow allowlist permits only central `ci-entry.yml` and release workflows on component `main`. Public-repository CI admission/finalization, Daily coordination and aggregate-release control jobs use GitHub-hosted runners. Runner proxies are deployment configuration and are not embedded in repository workflows. Public mainland-China mirrors for Go, Rust, Python, the Linux kernel and common container images reduce network variability.

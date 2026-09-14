@@ -1,14 +1,10 @@
 [English](deployment.md) | [简体中文](deployment_zh.md)
 
-<a id="deployment--部署拓扑与组件清单"></a>
-
 # deployment — deployment topology and component inventory
 
 The platform consists of independently deployed processes communicating through gRPC, the cache wire protocol, vsock and Unix domain sockets (UDS). This operations/SRE guide defines process ownership, responsibilities, configuration entry points and startup/shutdown dependencies.
 
 Each component's design document owns its CLI, configuration schema and internal behavior. This guide explains where processes run, how they find one another and their ordering dependencies.
-
-<a id="1-角色概览"></a>
 
 ## 1. Role overview
 
@@ -34,8 +30,6 @@ Select roles according to the data path and control-plane topology. Local files,
 
 ## 2. Compute Node
 
-<a id="21-常驻进程"></a>
-
 ### 2.1 Resident processes
 
 | Process | Role | Count | Lifecycle | Owner |
@@ -46,8 +40,6 @@ Select roles according to the data path and control-plane topology. Local files,
 | `store-ctl` (optional) | Node-side read/write service for FS/S3-compatible Manifest storage. | Commonly one sidecar per node/storage configuration. | systemd; required when selected source access, publication or configured write admission uses Store (§5). | [accelerator/store](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md). |
 | `sandbox-ctl run` | Controls one sandbox, similar in lifecycle to `runc run`; not a shared daemon. | One per sandbox. | Assigned by node-ctl through `sandbox-runner@<run-id>` and its `run-sandbox` launcher. | [sandboxer/sandbox](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md). |
 | `cloud-hypervisor` | Patched VMM, child of sandbox-ctl. | One per sandbox. | Spawned by sandbox-ctl. | [sandboxer/cloud-hypervisor](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/cloud-hypervisor.md). |
-
-<a id="22-端口与套接字"></a>
 
 ### 2.2 Ports and sockets
 
@@ -75,8 +67,6 @@ Conductor starts sandbox-ctl through the **`sandbox-runner@<run-id>.service` tem
 
 The sandbox's `ctl.sock` serves snapshot and local `sandbox-ctl exec --sandbox-id <sid> -- CMD` operations. For a node-managed sandbox, the local client must use the effective sandbox root, e.g. `--run-root /run/sandbox/sandboxes`, to find that socket. Remote clients use the authenticated Proxy entry with an explicitly acquired ExecAccessToken; the UDS stays local. The [sandbox CLI](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md) and [Proxy contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md) own token binding, CONNECT headers and frame validation.
 
-<a id="23-持久化与运行时目录"></a>
-
 ### 2.3 Persistent and runtime directories
 
 With node roots `/run/sandbox` and `/var/lib/sandbox`, the current node-managed layout is:
@@ -95,8 +85,6 @@ With node roots `/run/sandbox` and `/var/lib/sandbox`, the current node-managed 
 `paths.run_root` is for small volatile state and sockets; `paths.base_root` holds larger disk-backed state. The resource controller rebuilds live accounting from inventory/reports; deprecated `resource_listen.state_path` is ignored and is not a resource `state.json` persistence mechanism. Audit output, when configured, is separate.
 
 Direct sandbox-ctl uses its supplied `--run-root`/`SANDBOX_RUN_ROOT` and `--base-root`/`SANDBOX_BASE_ROOT`, with PathID as the directory leaf. Conductor passes the derived `sandboxes/` roots for ordinary sandboxes. Thus standalone `/run/sandbox/<sid>` examples cannot be copied unchanged into a node-managed deployment. Writable overlays belong on disk, while snapshot outputs are selected by `--output` or the orchestrator's checkpoint path. See [nodepath](https://github.com/kuasar-sandbox/orchestrator/blob/main/internal/nodepath/path.go).
-
-<a id="24-节点共享资源目录"></a>
 
 ### 2.4 Shared node resources
 
@@ -126,7 +114,6 @@ boot:
 
 The overlay is a private writable disk. If `diff` is omitted, sandbox-ctl owns a new diff under its effective disk-backed base directory. A `diff_template` seeds it from the template's logical sparse contents, applying configured active-diff encryption when enabled; node-ctl need not `cp` the template. An existing nonempty explicit diff is opened according to its format/policy and remains caller-owned. An absent explicit path can also be provisioned from the configured template/base; an existing empty diff is rejected. See [PrepareDiff](https://github.com/kuasar-sandbox/sandboxer/blob/main/pkg/sandbox/overlaydiff.go) and [active-diff storage](https://github.com/kuasar-sandbox/sandboxer/blob/main/pkg/vhost/diff_file.go).
 
-<a id="25-per-sandbox-配置下发"></a>
 ### 2.5 Per-sandbox configuration delivery
 
 Conductor owns node records and validated launch policy; runner and builder processes obtain exact task specifications through the node-local config socket. Use the configured RunRoot/BaseRoot and installed unit templates consistently. Host root and the daemon UID are trusted; guests must not reach this socket.
@@ -135,7 +122,6 @@ Protect generated sandbox and build-phase YAML, written with mode `0600`, accord
 
 The [node specification](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md#6-local-control-socket-run-task-admin-plugin-and-api-planes) owns authentication, assignment and bootstrap/finalization schemas. The [Build specification](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md) owns builder task preparation and execution. Do not expose this internal socket as a public API.
 
-<a id="26-mmds-route-安全与部署边界"></a>
 ### 2.6 MMDS route security and deployment boundaries
 
 Conductor configuration is the sole authority for `mmds.listen`, allowed routes and local services. Start and register the independent Proxy before admitting requests that need that data/MMDS path. Bind the MMDS listener in the configured network namespace and point vSwitch management traffic to that listener. Local services use explicitly configured absolute Unix-socket URIs; do not expose their host sockets to guests.
@@ -146,8 +132,6 @@ The [Proxy MMDS contract](https://github.com/kuasar-sandbox/orchestrator/blob/ma
 
 L2 is optional acceleration for the Manifest path. Use local cache plus origin alone, or deploy shards according to working set and failure domains. It does not participate in native local/named shared-file reads.
 
-<a id="31-集群规格"></a>
-
 ### 3.1 Cluster specification
 
 - **Size:** choose from measured working set, desired hit rate, SSD capacity, networking and failure domains.
@@ -156,8 +140,6 @@ L2 is optional acceleration for the Manifest path. Use local cache plus origin a
 - **Resources:** size SSD, RocksDB BlockCache (`mem_ratio`) and networking from deployment measurements.
 - **Isolation:** image-chunk and snapshot-chunk domains can use separate cluster instances with different RocksDB paths and membership.
 - **Persistence:** RocksDB under e.g. `/mnt/ssd/accel-l2` can retain cached data across a daemon restart. Cache remains reconstructible; this does not promise survival of every crash, storage failure or unsynced write.
-
-<a id="32-端口"></a>
 
 ### 3.2 Ports
 
@@ -168,27 +150,19 @@ L2 is optional acceleration for the Manifest path. Use local cache plus origin a
 
 Shard mode neither reads L3 nor holds origin credentials. It is a KV service; peers do not require a shard leader.
 
-<a id="33-成员变更"></a>
-
 ### 3.3 Membership changes
 
 Each compute node's tiered YAML lists `tiers[].cluster.peers`. Adding/removing a peer is a compute-side **configuration change plus SIGHUP**, rebuilding the Maglev table. The affected keys depend on the old/new membership; do not assume a universal exact `1/M` movement ratio. Surviving peers can return existing framed shards by their recorded shard index.
 
 **Change one peer at a time.** Changing two or more peers can lose more than the single parity allowance of a 4+1 key, producing an L2 miss and falling through to origin. Confirm convergence/hit behavior before the next change; one-at-a-time operations are a precaution, not an unconditional no-miss guarantee. Shard nodes themselves remain KV servers and do not need the membership list.
 
-<a id="4-外部持久化与管理资源"></a>
-
 ## 4. External persistence and management resources
-
-<a id="41-存储后端"></a>
 
 ### 4.1 Storage backends
 
 Local/named shared-file artifacts are carried directly by the filesystem. For Manifest data, store-ctl supports FS and S3-compatible backends: FS root can be local or shared, and S3-compatible storage can use one or multiple buckets. Operators choose capacity, failure domains and sharing scope. Store-ctl owns its internal paths; see store.md.
 
 S3-compatible access uses deployment configuration or the SDK default credential chain. Origin credentials stay in trusted host services, outside guests and documentation examples. Each node may run a store-ctl sidecar against the same durable backend; FS can also use a node-local directory.
-
-<a id="42-外部管理面接口"></a>
 
 ### 4.2 External management interface
 
@@ -200,14 +174,6 @@ The region-level management plane is independently operated outside this project
 
 Builds run in compute-node build sandboxes (§5); there is no separate flatten management/data pool.
 
-<a id="5-image-builds-three-phases-inside-build-sandboxes"></a>
-<a id="5-镜像构建构建沙箱内三阶段"></a>
-<a id="51-three-phase-pipeline"></a>
-<a id="51-三阶段流水"></a>
-<a id="52-final-publication-platform-storage-credentials"></a>
-<a id="52-收尾上传平台凭据唯一出现点"></a>
-<a id="53-credentials-and-isolation"></a>
-<a id="53-凭据与隔离"></a>
 ## 5. Build deployment
 
 Builds are executed on compute nodes by conductor-assigned `sandbox-builder@<run-id>` units. A builder runs target-selected sandbox phases sequentially, with at most one phase MicroVM active at a time. The public template API, target selection, Build resource admission, exact task messages, steps, publication and recovery are specified together in [node-build.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md).
@@ -230,8 +196,6 @@ flowchart TD
   P["cluster-ctl placer"] <-->|"placer_link Place / verify-key"| G
 ```
 
-<a id="61-进程"></a>
-
 ### 6.1 Processes
 
 | Process | Role | Count | Lifecycle | Owner |
@@ -242,8 +206,6 @@ flowchart TD
 
 Small deployments can colocate all three. Larger ones scale registry membership, router entry replicas and placer replicas separately.
 
-<a id="62-端口"></a>
-
 ### 6.2 Ports
 
 | Process | Listener | Protocol | Purpose |
@@ -253,7 +215,6 @@ Small deployments can colocate all three. Larger ones scale registry membership,
 | Registry | Optional `node_link.listen` | JSONRPC over HTTP/h2c or HTTPS | Separate node-connection listener; empty reuses member.listen. |
 | Placer | `placer.listen`, e.g. `:7800` | JSONRPC over HTTP/h2c or HTTPS | Place/verify-key API; memberlist HTTP transport shares the listener. |
 
-<a id="63-与节点--平台管理面的关系"></a>
 ### 6.3 Relationship to nodes and external management
 
 Nodes establish authenticated node-link sessions with Registry and advertise their API and data endpoints explicitly. Router connects to Registry for group-scoped state and to the chosen node for control/data forwarding. Placer imports groups from its configured Provider and proposes placement; node admission remains authoritative for resources.
@@ -261,8 +222,6 @@ Nodes establish authenticated node-link sessions with Registry and advertise the
 Current Router-to-node forwarding uses plaintext HTTP/CONNECT: register two distinct, reachable internal plaintext listeners as `APIEndpoint` and `DataEndpoint`, not TLS-enabled node listeners. Protect this internal network and terminate public ingress TLS at Router or its fronting load balancer. Node-link independently uses its configured mTLS. Standalone deployments can instead terminate TLS on both distinct node API/data entries; do not copy that listener configuration directly into cluster registration.
 
 Deploy Router and Placer behind the appropriate ingress/discovery configuration, and keep their Registry bootstrap and advertised endpoints reachable. The [Registry protocol](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md), [Router behavior](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-router.md), and [Placer contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-placer.md) own Resolve/Reserve schemas, caching, activation and retry semantics. This deployment guide does not duplicate those state machines.
-
-<a id="64-故障域"></a>
 
 ### 6.4 Failure domains
 
@@ -274,8 +233,6 @@ Deploy Router and Placer behind the appropriate ingress/discovery configuration,
 | Router crashes. | Connections through that replica break. | LB selects another stateless replica. |
 | Placer crashes. | It leaves the ready set; cold placement fails over to another placer for the same group. | Hot routing is unaffected; Registry tries another candidate after Place timeout. |
 | A compute node loses node-link. | Registry temporarily lacks its current view. | Node reconnects/reports. After node_dead_after, node_list expires it and placer stops selecting it; orphan cleanup uses group+sandbox_id. |
-
-<a id="7-全景拓扑"></a>
 
 ## 7. Overall topology
 
@@ -320,13 +277,9 @@ Conductor ──► assigned Builder unit
                      └──► selected artifact publication backend
 ```
 
-This is a deployment relationship, not a fixed phase-count or publication algorithm. See [Build execution and publication](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md).
-
-<a id="8-启停依赖"></a>
+This is a deployment relationship, not a fixed phase-count or publication algorithm. See [Build execution and publication](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md#5-target-aware-execution-and-publication).
 
 ## 8. Startup and shutdown dependencies
-
-<a id="81-启动顺序"></a>
 
 ### 8.1 Startup order
 
@@ -349,8 +302,6 @@ Tiered cache does not need every L2 peer online to start: clean misses may fall 
 
 Builds reuse conductor. Accept builds after conductor, the selected source/publication backends and any configured Store write-admission endpoint are ready (§5).
 
-<a id="82-关闭顺序自顶向下"></a>
-
 ### 8.2 Shutdown order, from consumers to providers
 
 1. Stop external management/cluster/client admission of new sandbox and build work to the node.
@@ -359,8 +310,6 @@ Builds reuse conductor. Accept builds after conductor, the selected source/publi
 4. Stop store-ctl last.
 
 L2 shutdown has no strict ordering against compute shutdown; each tiered client handles L2 unavailability according to the Cache error/fallback contract; an arbitrary failure is not automatically a clean miss.
-
-<a id="9-故障域"></a>
 
 ## 9. Failure domains
 
@@ -375,11 +324,7 @@ L2 shutdown has no strict ordering against compute shutdown; each tiered client 
 | Entire compute node fails. | Running sandboxes on that node stop. | Isolate the node. Cluster can import portable paused artifacts published to named shared files/Manifest on another node; local-only artifacts still depend on the original node/storage. |
 | L2 loses more than its parity allowance. | Affected keys miss in L2. | Tiered reads continue through origin where available; cache service resumes as peers/data recover. |
 
-<a id="10-部署规模示例"></a>
-
 ## 10. Deployment examples
-
-<a id="101-开发--poc单机"></a>
 
 ### 10.1 Development / PoC (one host)
 
@@ -390,8 +335,6 @@ L2 shutdown has no strict ordering against compute shutdown; each tiered client 
 | sandbox-ctl × N | Manual runs may omit conductor. |
 
 This example uses no L2, remote object store or separate resource-controller daemon. Resource arbitration is integrated into conductor; without resource_listen, use static cgroup limits. Manifest-ctl uses local store/cache; see cache.md §3.2. For an unmodified E2B SDK, run conductor as the standalone API; the cluster layer remains unnecessary.
-
-<a id="102-生产单-az"></a>
 
 ### 10.2 Production in one AZ
 
@@ -404,13 +347,9 @@ This example uses no L2, remote object store or separate resource-controller dae
 
 Each compute node runs conductor and one sandbox-ctl per active sandbox. Add store and optional cache for Manifest data. Measure node count, per-node concurrency and cache capacity using the target versions, hardware, sandbox specifications and workload; architecture diagrams do not establish fixed capacity. For cluster mode, choose registry membership and LB-backed router/placer replicas according to availability and load.
 
-<a id="103-多-az"></a>
-
 ### 10.3 Multiple AZs
 
 Each AZ can run its own compute and optional L2 and select shared storage/S3-compatible failure domains. Tiered compute typically prefers same-AZ peers to reduce cross-AZ hot-path traffic. Cross-AZ content sharing depends on content keys, security domains and backend configuration; equal bytes alone do not authorize cross-tenant or cross-domain sharing.
-
-<a id="11-配置入口速查"></a>
 
 ## 11. Configuration entry points
 
@@ -421,7 +360,7 @@ Full schemas belong to the owning component documents; these are entry pointers.
 | store-ctl | `--config <path>` | `listen: 127.0.0.1:7100`. | [store.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md) §3; archive `docs/store.md`. |
 | tiered cache-ctl | `--config <path>` | `listen: 127.0.0.1:7070`; selected `tiers[].cluster.peers`. | [cache.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md) §3.4; archive `docs/cache.md`. |
 | shard cache-ctl | `--config <path>` | `listen: 0.0.0.0:7070` for peers. | cache.md §3.3. |
-| conductor | `/etc/node-ctl/conductor.yaml` | `mmds.listen/routes/services` is MMDS's sole source; services use absolute unix:// paths. | [node.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md) §3/§4.6; node-proxy.md §7. |
+| conductor | `/etc/node-ctl/conductor.yaml` | `mmds.listen/routes/services` is MMDS's sole source; services use absolute unix:// paths. | [node.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md) §3/§4.4; node-proxy.md §7. |
 | external proxy | `/etc/node-ctl/proxy.yaml` | Data listener/worker/shm bootstrap; no duplicate MMDS listen/services. | [node-proxy.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md) §2. |
 | conductor resource controller | Inline `resource_listen` in conductor.yaml. | `socket: /run/sandbox-resource.sock`. | [node-resource.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md) §3; archive `docs/node-resource.md`. |
 | registry | `--config /etc/cluster-ctl/registry.yaml` | member.id/listen; membership.active/versions[].members[].advertise/node_advertise/owners; node_link/route_link/node_list/placer_link. | [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md); archive `docs/cluster.md`. |
