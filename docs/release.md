@@ -116,6 +116,8 @@ Dependency changes also rebuild units that actually carry those dependencies. An
 
 A code change on the selected platform branch also creates a new aggregate Preview even if all six components are reused. Workflow run names for an aggregate version bind its platform source SHA. While any matching run remains active, the controller leaves the current Daily manifest unchanged, even if a newer run was cancelled or finished. A new branch HEAD gets a new run identity; old inputs are not rerun and an in-flight manifest is not rewritten. A branch-coordination task's identity also includes its requested date, so scans on different dates at the same platform SHA cannot incorrectly reuse each other's results.
 
+If a dependency rebuild was committed to the Daily manifest before its component Release existed, a later scan resumes that pending Preview even when the selected dependencies already equal the manifest. This applies to both Stable and Preview winners; advancing the date or revision publishes the rebuild under the newly selected suffix. Complete Releases still require the original source and dependency checks.
+
 ## 5. Recovering incomplete publication
 
 A complete component Release must be non-draft, have a prerelease state consistent with its tag, contain only the contracted archive and `SHA256SUMS`, and have both assets in uploaded state. A complete aggregate Release must meet the eight-asset contract.

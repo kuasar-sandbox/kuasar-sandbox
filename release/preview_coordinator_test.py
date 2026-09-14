@@ -721,6 +721,105 @@ components:
         with self.assertRaisesRegex(coordinator.Deferred, "same Preview date"):
             coordinator.force_dependency_preview(plan, "20260831", state)
 
+    def resumed_preview_plan(
+        self, unit_name: str, winner: str, configured: str, date: str,
+        *, complete: bool = False, matching_dependencies: bool = False,
+    ) -> coordinator.Plan:
+        dependent = coordinator.UNIT_BY_NAME[unit_name]
+        names = {unit_name, *dependent.dependencies}
+        if "sandboxer" in names:
+            names.update(coordinator.UNIT_BY_NAME["sandboxer"].dependencies)
+        units = tuple(unit for unit in coordinator.UNITS if unit.name in names)
+        configured_versions = {
+            unit.name: configured if unit == dependent else "v1.0.0"
+            for unit in units
+        }
+        plans = {}
+        states = {}
+        for unit in units:
+            selected = winner if unit == dependent else configured_versions[unit.name]
+            plan = coordinator.Plan(
+                unit, configured_versions[unit.name], "main", "a" * 40,
+                selected, selected, "reuse",
+            )
+            plans[unit.name] = plan
+            dependencies = ",".join(
+                f"{name}={configured_versions[name] if matching_dependencies or name != 'sandboxer' else 'v0.9.0'}"
+                for name in unit.dependencies
+            )
+            body = self.binding_body(unit.name, plan.source_sha, dependencies)
+            if "-preview." in selected:
+                body = body.replace("20260831", selected.rsplit("-preview.", 1)[1])
+            published = coordinator.ReleaseStatus(
+                {"tag_name": selected, "body": body}, plan.source_sha, True
+            )
+            statuses = {selected: published}
+            if complete:
+                statuses[configured_versions[unit.name]] = published
+            state = mock.Mock()
+            state.status.side_effect = lambda tag, statuses=statuses: statuses.get(
+                tag, coordinator.ReleaseStatus(None, None, False)
+            )
+            states[unit.name] = state
+        with (
+            mock.patch.object(coordinator, "UNITS", units),
+            mock.patch.object(
+                coordinator, "make_plan",
+                side_effect=lambda unit, *_: plans[unit.name],
+            ),
+            mock.patch.object(
+                coordinator, "RepositoryState",
+                side_effect=lambda unit: states[unit.name],
+            ),
+        ):
+            return coordinator.plan_units(configured_versions, date)[unit_name]
+
+    def test_resumes_unpublished_dependency_preview_after_manifest_commit(self) -> None:
+        for unit, prefix in (("orchestrator", "v"), ("runtime", "runtime-v")):
+            for winner in (prefix + "1.0.0", prefix + "1.0.1-preview.20260830"):
+                for date in ("20260831", "20260831.1", "20260901"):
+                    with self.subTest(unit=unit, winner=winner, date=date):
+                        plan = self.resumed_preview_plan(
+                            unit, winner, prefix + "1.0.1-preview.20260831", date
+                        )
+                        self.assertEqual(plan.selected, prefix + "1.0.1-preview." + date)
+                        self.assertEqual(plan.action, "publish")
+                        self.assertEqual(plan.source_sha, "a" * 40)
+
+    def test_resumed_completed_dependency_preview_is_reused_with_matching_binding(self) -> None:
+        tag = "v1.0.1-preview.20260831"
+        plan = self.resumed_preview_plan(
+            "orchestrator", tag, tag, "20260831",
+            complete=True, matching_dependencies=True,
+        )
+        self.assertEqual(plan.selected, tag)
+        self.assertEqual(plan.action, "reuse")
+
+    def test_resumed_complete_preview_with_wrong_dependencies_stays_deferred(self) -> None:
+        tag = "v1.0.1-preview.20260831"
+        with self.assertRaisesRegex(coordinator.Deferred, "dependency binding"):
+            self.resumed_preview_plan(
+                "orchestrator", tag, tag, "20260831", complete=True
+            )
+
+    def test_pending_preview_does_not_revive_an_older_or_unrelated_version(self) -> None:
+        for configured in (
+            "v1.0.1-preview.20260829", "v1.0.2-preview.20260831",
+        ):
+            with self.subTest(configured=configured):
+                with self.assertRaisesRegex(coordinator.Deferred, "dependency binding"):
+                    self.resumed_preview_plan(
+                        "orchestrator", "v1.0.1-preview.20260830", configured, "20260831"
+                    )
+
+    def test_pending_preview_does_not_rebuild_a_unit_without_dependencies(self) -> None:
+        plan = self.resumed_preview_plan(
+            "accelerator", "v1.0.1-preview.20260830",
+            "v1.0.1-preview.20260831", "20260831",
+        )
+        self.assertEqual(plan.selected, "v1.0.1-preview.20260830")
+        self.assertEqual(plan.action, "reuse")
+
     def test_dependency_change_defers_when_dependent_branch_is_missing(self) -> None:
         plan = coordinator.Plan(
             coordinator.UNIT_BY_NAME["sandboxer"],
