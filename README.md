@@ -228,6 +228,8 @@ See [docs/release.md](docs/release.md) for the full asset contract, trust bounda
 
 ## Documentation
 
+- [Documentation index](docs/README.md) — reading paths and component contracts;
+
 - [Architecture](docs/kuasar-sandbox.md) — system goals, architecture, lifecycle, storage, resource, network, and security semantics;
 - [Deployment](docs/deployment.md) — standalone and cluster topology, processes, ports, persistent paths, and startup dependencies;
 - [Performance](docs/perf.md) — performance baselines with test context, regression gates, and tuning methods;

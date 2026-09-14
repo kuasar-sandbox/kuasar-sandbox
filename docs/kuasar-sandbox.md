@@ -1,16 +1,13 @@
 [English](kuasar-sandbox.md) | [简体中文](kuasar-sandbox_zh.md)
 
-<a id="kuasar-sandbox---microvm-沙箱平台系统总览"></a>
 # kuasar-sandbox - MicroVM sandbox platform overview
 
 Kuasar Sandbox serves Agent, Serverless, Code Interpreter and reinforcement-learning workloads that need isolated execution, fast instantiation, long-lived session state and elastic resource management. Each sandbox has an independent guest kernel as its isolation boundary. The system can create new instances from snapshot templates or pause and resume the same logical instance.
 
 This document describes public system semantics and component boundaries. Internal protocols, field layouts and storage encodings belong to the component repositories. Implementation status is determined by the components' current `main`, the aggregate version selection and the corresponding release assets.
 
-<a id="1-概述"></a>
 ## 1. Overview
 
-<a id="11-用户场景"></a>
 ### 1.1 User scenarios
 
 Kuasar Sandbox addresses these shared needs:
@@ -23,7 +20,6 @@ Kuasar Sandbox addresses these shared needs:
 
 The system's capabilities support production deployment. Stable and Preview describe the release stability of public assets and interfaces; they do not replace production configuration of capacity, durable storage, TLS, network policy and credentials by the operator.
 
-<a id="12-设计原则"></a>
 ### 1.2 Design principles
 
 1. **Isolation first:** each sandbox has its own guest kernel. Sharing takes place through explicit read-only layers, trusted host data paths and configured security domains.
@@ -33,7 +29,6 @@ The system's capabilities support production deployment. Stable and Preview desc
 5. **Separate facts from goals:** identify implementation status, test results and design targets separately. Performance numbers require reproducible measurement definitions.
 6. **Independent components:** the five component repositories can evolve, deploy and release independently. The project repository owns system design, cross-component validation and aggregate releases.
 
-<a id="13-系统边界"></a>
 ### 1.3 System boundaries
 
 Kuasar Sandbox provides MicroVM lifecycle, data access, node networking and standalone/cluster orchestration. It does not replace:
@@ -43,17 +38,14 @@ Kuasar Sandbox provides MicroVM lifecycle, data access, node networking and stan
 - application-level memory limits, error handling or data classification;
 - capabilities described in issues or RFCs that have not yet been merged and released.
 
-<a id="2-用户入口与部署配置"></a>
 ## 2. User entry points and deployment configuration
 
-<a id="21-用户入口"></a>
 ### 2.1 User entry points
 
 In a standalone deployment, `node-ctl conductor serve` provides the E2B-compatible control API and the independent `node-ctl proxy serve` supplies sandbox data ingress. In a multi-node deployment, `cluster-ctl router` provides a unified entry point and uses registry and placer to route group-scoped requests to the target node. Both modes support the create, execute, pause, connect/resume and destroy semantics used by the unmodified E2B SDK.
 
 `sandbox-ctl` is the node-internal execution tool for an individual sandbox. It starts MicroVMs and handles execution, snapshotting, restoration and artifact import/publication. Ordinary platform users access the system through E2B or platform APIs and do not need to manipulate internal sockets or component protocols.
 
-<a id="22-配置归属"></a>
 ### 2.2 Configuration ownership
 
 The component that owns a behavior also owns its configuration:
@@ -71,10 +63,8 @@ The component that owns a behavior also owns its configuration:
 
 See [deployment.md](deployment.md) for topology, process dependencies and ports. This overview does not duplicate internal fields or wire contracts: an inference from an old design must not replace the current implementation.
 
-<a id="3-系统架构"></a>
 ## 3. System architecture
 
-<a id="31-总体拓扑"></a>
 ### 3.1 Overall topology
 
 ```text
@@ -90,7 +80,6 @@ Agent / E2B SDK / Platform API
 KVM / Local File / NAS / Object Storage / Network
 ```
 
-<a id="32-组件职责"></a>
 ### 3.2 Component responsibilities
 
 | Component | System responsibility |
@@ -103,7 +92,6 @@ KVM / Local File / NAS / Object Storage / Network
 
 The project repository does not duplicate these implementations. It maintains system-level design, real MicroVM cross-component E2E tests, the shared execution environment and aggregate releases selecting exact version combinations.
 
-<a id="33-依赖边界"></a>
 ### 3.3 Dependency boundaries
 
 Component dependencies remain explicit. At the repository level:
@@ -116,24 +104,20 @@ T2: orchestrator -> sandboxer + accelerator + connector
 
 Implementation stays inside its owning component, with specific packages exported across repositories. The diagram describes repository-level relationships, not an exhaustive package allowlist: orchestrator uses sandboxer resource and artifact/restore APIs, for example, and its MMDS source index uses connector vSwitch constants. The current module files and imports define the actual dependency set. The five components can form the complete platform or be adopted independently for particular scenarios.
 
-<a id="4-快照与实例语义"></a>
 ## 4. Snapshot and instance semantics
 
-<a id="41-从快照模板创建新实例1n"></a>
 ### 4.1 Creating new instances from a snapshot template: 1:N
 
 A template completes environment, dependency and optional application-process initialization before publication. Multiple creation requests can reference the same read-only template parent, but each instance receives its own Sandbox ID, network identity, credential binding and incremental state. Subsequent writes, process progress and pauses belong only to that instance and do not modify the template or other instances.
 
 This serves Agent, Code Interpreter, RL rollout, Serverless and parallel-task workloads: the template bears the common initialization cost, and each instance evolves independently from the same starting point.
 
-<a id="42-暂停并恢复同一个实例11"></a>
 ### 4.2 Pausing and resuming the same instance: 1:1
 
 A pause that captures memory preserves the process, memory and filesystem state of the same logical instance. Explicit pause defaults to this snapshot behavior. With `memory: false`, pause preserves disk artifacts and later starts the application again; it does not restore the previous process memory. `autoPauseMemory` independently selects the capture behavior of automatic pause. Connect/resume retains the stable public Sandbox ID in either case. Artifacts kept on the original node allow in-place recovery; after publication to a named shared-file location or Manifest, the cluster can import and resume them on another node. The node-internal execution ID can change while the public identity remains stable.
 
 This serves waits for model calls, human confirmation or external events, long sessions and node migration. A `warm pool` is an upper-level resource-preparation policy that can keep instances or templates available in advance; it is not an independent snapshot technology.
 
-<a id="43-分层快照"></a>
 ### 4.3 Layered snapshots
 
 Snapshot reuse comes from explicit parent relationships:
@@ -153,10 +137,8 @@ template parent (read-only)
 
 Sharing efficiency does not depend on different running VMs coincidentally producing identical memory bytes. Reusable content comes from explicit template parents, the host page cache for immutable runtime/rootfs content and content organization of stable artifacts within a security domain.
 
-<a id="5-数据路径与-accelerator"></a>
 ## 5. Data paths and accelerator
 
-<a id="51-统一引用语义"></a>
 ### 5.1 Unified reference semantics
 
 The upper-level lifecycle uses common artifact references and integrity information rather than requiring all data to be converted to one backend. The supported paths include:
@@ -167,7 +149,6 @@ The upper-level lifecycle uses common artifact references and integrity informat
 
 Operators can select different paths for different artifacts. For example, temporary node-local state can use NVMe, shared NAS snapshots can use file locations directly, and widely distributed images can use Manifest and tiered caching.
 
-<a id="52-accelerator-定位"></a>
 ### 5.2 accelerator's role
 
 `accelerator` is the foundational data-access and storage component for images, snapshots and sparse artifacts. It covers:
@@ -183,12 +164,10 @@ Operators can select different paths for different artifacts. For example, tempo
 
 Content addressing and deduplication are capabilities within this scope, not accelerator's sole value. Instances from a common template primarily rely on parent-layer sharing. Content-level reuse is more suitable for stable images, runtimes and repetitive artifacts, and is constrained by content-key and security-domain boundaries.
 
-<a id="53-稀疏与按需数据"></a>
 ### 5.3 Sparse and on-demand data
 
 Sparse semantics have three states: Hole comes from authoritative metadata, Zero denotes logical zero data and Data denotes actual content. The system does not scan zero bytes to invent Hole regions. Snapshots and disk layers can be read by reference range. Cache hits and prefetch reduce remote access without changing artifact integrity or parent relationships.
 
-<a id="6-高密资源治理"></a>
 ## 6. Resource management for high density
 
 Agent sandboxes typically alternate long waits with short bursts. The system improves effective node-resource utilization through this loop:
@@ -222,10 +201,8 @@ The platform's protection boundary is to avoid OOM and loss of useful work cause
 
 High density results from better node-resource utilization, not from pursuing instance count in isolation. Capacity must be validated against actual workload peak working sets, active fraction, recovery cost and node safety margin.
 
-<a id="7-网络与多租边界"></a>
 ## 7. Networking and tenant boundaries
 
-<a id="71-网络目的"></a>
 ### 7.1 Networking goals
 
 `connector` provides these foundations for sandbox networking:
@@ -239,7 +216,6 @@ High density results from better node-resource utilization, not from pursuing in
 
 This overview defines those functional goals. Network-locator encoding, encapsulation fields and option layouts belong to connector's detailed documentation and are not the primary user interface.
 
-<a id="72-功能状态"></a>
 ### 7.2 Capability status
 
 | Capability | Status | Meaning |
@@ -252,7 +228,6 @@ This overview defines those functional goals. Network-locator encoding, encapsul
 
 Delivered means merged into component main with component validation. It does not mean an aggregate Stable Release containing that code has already been published. An issue, RFC or PR alone does not turn a Proposed capability into a delivered one.
 
-<a id="73-多租安全"></a>
 ### 7.3 Tenant security
 
 - Platform identity credentials and content-protection keys have separate purposes. APISecret authenticates platform identity and control-plane operations; ManifestKey protects the content-key domain.
@@ -265,10 +240,8 @@ Delivered means merged into component main with component validation. It does no
 
 Credential updates affect only later business records that are created with copied credentials. Credentials already persisted in existing sandbox records retain their original binding; updating a key-distribution table does not automatically rebind those records.
 
-<a id="8-集群与可靠性"></a>
 ## 8. Clustering and reliability
 
-<a id="81-单节点和集群"></a>
 ### 8.1 Standalone and cluster operation
 
 On a standalone node, `node-ctl conductor serve` manages local sandboxes, builds and the optional Reservation Controller. The independent Proxy owns data-plane forwarding and registers with conductor for trusted route/policy updates. A cluster consists of three independent `cluster-ctl` roles:
@@ -279,7 +252,6 @@ On a standalone node, `node-ctl conductor serve` manages local sandboxes, builds
 
 The target node and sandboxer still execute the lifecycle. The public Sandbox ID remains stable through same-node restoration, cross-node migration and replacement placement. The node-internal execution ID can change with the placement generation.
 
-<a id="82-恢复与故障域"></a>
 ### 8.2 Recovery and fault domains
 
 - `sandbox-ctl`, the VMM, node, registry, router and placer are independently observable and recoverable processes/fault domains.
@@ -288,14 +260,12 @@ The target node and sandboxer still execute the lifecycle. The public Sandbox ID
 - Registry stores cluster execution state; the node is authoritative for a running sandbox. Placer only recommends placement, and node admission still performs final resource confirmation.
 - Group is the cluster partition key. Routing, placement, credential verification and operations remain group-scoped.
 
-<a id="83-版本与验证"></a>
 ### 8.3 Versions and validation
 
 Components have independent versions and releases. An aggregate version selects exactly six release units: four component archives, the guest runtime and the guest kernel. Aggregate preparation validates component assets and SHA256, then runs owner E2E and platform combination tests in a real KVM environment. The release package records the exact version combination to avoid mixing assets from different dates or aggregate versions.
 
 These mechanisms support version pinning, fault diagnosis and repeatable validation in production. Operators still need production implementations and configuration for TLS, persistent backends, backups, monitoring, network policy and capacity.
 
-<a id="9-性能与容量"></a>
 ## 9. Performance and capacity
 
 This overview does not present one-off measurements or capacity projections as universal capabilities. Performance results are recorded in [perf.md](perf.md) and regressed through the owning components' E2E/performance entry points.
@@ -313,7 +283,6 @@ An externally comparable result must at least identify:
 
 Numbers without this context cannot support promises about node capacity, startup/restore latency, cache hit rate or storage savings. Design goals must be labeled as targets. Only validation at a specified version and environment establishes a result within that test's scope.
 
-<a id="10-部署与发行状态"></a>
 ## 10. Deployment and release status
 
 Kuasar Sandbox provides standalone and cluster topologies, node admission and recovery, independent processes and fault domains, component and aggregate versions, real MicroVM cross-component E2E, release-asset verification and exact version combinations.
@@ -327,8 +296,8 @@ The [Stable channel](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/l
 - [release.md](release.md) - component/aggregate versions, assets and publication transactions
 - [Demo](../test/demo/DEMO.md) - local environment and E2B SDK demonstration
 - [Full validation](../test/QUICKSTART.md) - complete aggregate-release validation
-- [`orchestrator`](https://github.com/kuasar-sandbox/orchestrator/tree/main/docs) - node, resource and cluster design
-- [`sandboxer`](https://github.com/kuasar-sandbox/sandboxer/tree/main/docs) - MicroVM, snapshot and guest coordination
-- [`accelerator`](https://github.com/kuasar-sandbox/accelerator/tree/main/docs) - Manifest, store and cache
+- [`orchestrator`](https://github.com/kuasar-sandbox/orchestrator/blob/main/README.md#documentation) - node, resource and cluster design
+- [`sandboxer`](https://github.com/kuasar-sandbox/sandboxer/blob/main/README.md#documentation) - MicroVM, snapshot and guest coordination
+- [`accelerator`](https://github.com/kuasar-sandbox/accelerator/blob/main/README.md#documentation) - Manifest, store and cache
 - [`connector`](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch.md) - vSwitch implementation and networking details
-- [`guest-runtime`](https://github.com/kuasar-sandbox/guest-runtime/tree/main/docs) - runtime, vmlinux and flattening
+- [`guest-runtime`](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README.md#documentation) - runtime, vmlinux and flattening

@@ -277,7 +277,6 @@ make test-release-tools
 make test-ci-tools
 ```
 
-<a id="8-资产与-bms"></a>
 ## 8. 发行资产验证
 
 每个普通组件 Release 精确包含组件 archive 和 `SHA256SUMS`。runtime、vmlinux 使用各自

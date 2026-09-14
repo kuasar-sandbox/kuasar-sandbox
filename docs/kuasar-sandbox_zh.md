@@ -366,8 +366,8 @@ Tag.Preview 继续用于开发和评估.当前 GitHub Release 提供 Linux x86_6
 - [release_zh.md](release_zh.md) - 组件/聚合版本,资产和发布事务
 - [Demo](../test/demo/DEMO_zh.md) - 本地体验环境与 E2B SDK 演示
 - [Full validation](../test/QUICKSTART_zh.md) - Aggregate Release 完整验证入口
-- [`orchestrator`](https://github.com/kuasar-sandbox/orchestrator/tree/main/docs) - node,资源和 cluster 设计
-- [`sandboxer`](https://github.com/kuasar-sandbox/sandboxer/tree/main/docs) - MicroVM,snapshot 和 Guest 协同
-- [`accelerator`](https://github.com/kuasar-sandbox/accelerator/tree/main/docs) - Manifest,store 和 cache
+- [`orchestrator`](https://github.com/kuasar-sandbox/orchestrator/blob/main/README_zh.md#文档) - node,资源和 cluster 设计
+- [`sandboxer`](https://github.com/kuasar-sandbox/sandboxer/blob/main/README_zh.md#文档) - MicroVM,snapshot 和 Guest 协同
+- [`accelerator`](https://github.com/kuasar-sandbox/accelerator/blob/main/README_zh.md#文档) - Manifest,store 和 cache
 - [`connector`](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch_zh.md) - vSwitch 实现与网络细节
-- [`guest-runtime`](https://github.com/kuasar-sandbox/guest-runtime/tree/main/docs) - runtime,vmlinux 和 flatten
+- [`guest-runtime`](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README_zh.md#文档) - runtime,vmlinux 和 flatten

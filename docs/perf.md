@@ -1,13 +1,11 @@
 [English](perf.md) | [简体中文](perf_zh.md)
 
-<a id="perf---性能验证与调优"></a>
 # perf - Performance validation and tuning
 
 This document defines measurement boundaries, entry points, evidence requirements and regression methods for Kuasar Sandbox performance testing. Results apply only to the recorded versions, hardware, data path, cache state, sandbox specification and workload. A development-environment measurement cannot be extrapolated to all production deployments.
 
 Historical absolute numbers in earlier documentation did not retain exact aggregate/component versions, complete hardware details, failure rates and locations of raw reports together. They are therefore no longer retained as public baselines. This document does not publish startup or restore latency, cache hit rates, node capacity or storage savings without an evidence chain.
 
-<a id="1-测量入口"></a>
 ## 1. Measurement entry points
 
 Project-level aggregate entry points:
@@ -30,7 +28,6 @@ make -C ../accelerator perf-cache
 
 Real MicroVM paths require read/write access to `/dev/kvm`, root or noninteractive sudo, and the necessary images and runtime artifacts. Manifest and density harnesses additionally check Docker, networking and filesystem tools as specified by their scripts. A skip caused by missing prerequisites is not successful performance validation. Release evidence must record actual exit status and every failed sample.
 
-<a id="2-结果证据合同"></a>
 ## 2. Result evidence contract
 
 Any result intended for documentation, release notes or capacity planning must retain at least:
@@ -50,10 +47,8 @@ The aggregate outputs of the current `sandbox-perf.sh` and `sandbox-perf-manifes
 
 A result missing a necessary dimension can support local diagnosis, but cannot be presented as a project-wide performance fact. Design thresholds must be labeled as a target or regression gate. Passing a gate only establishes that the candidate meets that test contract; it does not automatically establish a production SLO.
 
-<a id="3-cache-与数据路径"></a>
 ## 3. Cache and data paths
 
-<a id="31-测量对象"></a>
 ### 3.1 Measurement subjects
 
 The accelerator cache benchmark observes local cache, tiered cache, shard fan-out and store origin separately. Distinguish at least:
@@ -66,7 +61,6 @@ The accelerator cache benchmark observes local cache, tiered cache, shard fan-ou
 
 `CACHE_CTL_TIMING=1` supplies internal cache-stage diagnostics. Use pprof and tracing to locate CPU, allocation, network and scheduling costs. Internal timings do not replace the client's end-to-end measurement.
 
-<a id="32-路径解释"></a>
 ### 3.2 Interpreting paths
 
 Compare these three artifact paths separately:
@@ -81,10 +75,8 @@ Do not interpret every ordinary `file://` reference as incapable of sharing. A n
 
 Content-reuse results describe observations for the particular dataset, security domain and parent relationships. Instances of a common template primarily share explicit read-only parents. Coincidentally identical memory bytes in different running VMs are not a prerequisite for snapshot efficiency.
 
-<a id="4-sandbox-启动快照与恢复"></a>
 ## 4. Sandbox startup, snapshots and restoration
 
-<a id="41-基础矩阵"></a>
 ### 4.1 Basic matrix
 
 `test/perf/sandbox-perf.sh` compares file and Manifest cold-start paths. `test/perf/sandbox-perf-manifest.sh` expands the matrix to Manifest cold/hot cache, snapshot publication and restoration. Reports should include at least:
@@ -97,7 +89,6 @@ Content-reuse results describe observations for the particular dataset, security
 
 `<run-root>/<sid>/ctl.sock` proves only that the host control socket exists. A performance harness must use an actual guest command, health check or workload-readiness condition as its completion signal.
 
-<a id="42-working-set-矩阵"></a>
 ### 4.2 Working-set matrix
 
 `test/perf/sandbox-perf-working-set.sh` performs paired capture, publication, cold restore and optional prefetch comparisons against the same immutable parent. It produces:
@@ -114,7 +105,6 @@ raw/
 
 The mainline CI working-set step is a smoke test for obvious regressions. A formal performance report must explicitly set sample counts, retain all samples and label smoke tests separately from statistical reports.
 
-<a id="43-快照语义"></a>
 ### 4.3 Snapshot semantics
 
 Measurements should separately cover:
@@ -127,10 +117,8 @@ Measurements should separately cover:
 
 Snapshot layering, data carrier and cache state are three independent variables. A result for one cannot substitute for the other two.
 
-<a id="5-节点资源与密度"></a>
 ## 5. Node resources and density
 
-<a id="51-workload-模型"></a>
 ### 5.1 Workload model
 
 `test/perf/workload.py` provides three workload classes: `idle`, deterministic grow/rest cycles and heavy-tailed active/idle activity. When running `test/perf/density-perf.sh`, explicitly record concurrency, memory zone, resource floor/startup/capacity, workload parameters, observation window and random seed.
@@ -143,7 +131,6 @@ Reports observe all of the following:
 - timelines for startup, activity, reclamation and termination;
 - Reservation-pool watermarks, startup reserve and operational margin.
 
-<a id="52-解释边界"></a>
 ### 5.2 Interpretation boundaries
 
 Density depends on workload peak working set, active fraction, resident VMM/guest overhead, reclamation latency, pause policy and node safety margin. The memory zone is a limit, not a constant that can be directly converted into physical occupancy or instance count.
@@ -159,7 +146,6 @@ Balloon is not the only source of elasticity. Idle-CPU scheduling, inactive-memo
 
 High density is a result of improved resource utilization, not a promise of a predetermined instance count.
 
-<a id="6-cluster-控制面"></a>
 ## 6. Cluster control plane
 
 Cluster performance must distinguish hot and cold paths:
@@ -178,7 +164,6 @@ Hot-path validation checks that a route-cache hit does not enter Resolve/Reserve
 
 Placer only imports groups and recommends placement. Node admission performs final resource confirmation. Placer throughput must not be described as the throughput of completed MicroVM creation.
 
-<a id="7-release-与-ci-证据"></a>
 ## 7. Release and CI evidence
 
 Source-candidate Integration E2E builds exact revisions, runs owner E2E, the UFFD regression gate and working-set smoke, and uploads a `ci-metadata-<run-id>-<attempt>` artifact. Aggregate-release exact-assets mode extracts all assets from the same aggregate package and runs the complete `test/e2e/run_all.sh` on real KVM.
@@ -191,7 +176,6 @@ Workflow and evidence entry points:
 
 A green aggregate status alone is not evidence for a performance claim. Cite the run URL, base/head SHA, mode, relevant job log and downloaded raw artifact. If a workflow ran only smoke tests, identify it as `smoke`; do not relabel it as complete statistical validation.
 
-<a id="8-回归检查"></a>
 ## 8. Regression checks
 
 For cache-path changes:

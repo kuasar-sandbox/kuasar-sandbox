@@ -33,11 +33,15 @@ Every maintained first-party project, design, deployment, build, operations, val
 
 ### Translation contract
 
-Read the whole source document at a recorded commit before translating. Preserve its organization, section numbering, tables, diagrams, examples, limitations and failure behavior. A summary or an English abstract is not a translation of a specification. Long documents may use separate review commits, but the default document must be complete before its translation PR is merged.
+Read the whole source document at a recorded commit before translating. A translation-only change preserves its organization, section numbering, tables, diagrams, examples, limitations and failure behavior. A summary or an English abstract is not a translation of a specification. Long documents may use separate review commits, but the default document must be complete before its translation PR is merged.
 
 Keep API and CLI names, configuration keys and values, state names, format fields, constants, paths, units and executable examples unchanged unless a separately identified source-backed correction is required. Translate explanatory comments and diagram labels without changing program or graph semantics. Detailed design documents retain the protocol and implementation terminology that a concise project overview may omit.
 
 Translate normative requirements without strengthening or weakening them: MUST, MUST NOT, SHOULD, SHOULD NOT and MAY retain their respective meanings. An implementation observation must not become a universal requirement or compatibility promise merely through translation.
+
+### Structural cleanup
+
+An explicitly approved structural cleanup may retire old document paths, remove forwarding-only sections and migration aliases, and reorder section numbers. Preserve the complete maintained contracts in their owning documents, update both language editions, and migrate every maintained inbound reference to the actual topic. Old URLs and section numbers do not require permanent compatibility pages or aliases. This does not alter upstream legal texts, real protocol compatibility boundaries or historical evidence.
 
 ### Correcting existing documentation
 
@@ -47,7 +51,7 @@ Distinguish implemented behavior, proposed design and historical measurements. P
 
 ### Navigation and revisions
 
-English navigation should target English default paths. Chinese navigation should target the Chinese counterpart where it exists, otherwise identify an English-only destination. Update relative links, reference-style links, heading fragments, explicit anchors and numbered cross-references. Preserve existing externally referenced anchors where practical, using explicit aliases when translating headings would break them.
+English navigation should target English default paths. Chinese navigation should target the Chinese counterpart where it exists, otherwise identify an English-only destination. Update relative links, reference-style links, heading fragments, explicit anchors and numbered cross-references. For translation-only changes, preserve externally referenced anchors where practical. For an approved structural cleanup, follow the approved retirement scope and migrate maintained references instead of retaining obsolete paths or numbering.
 
 Check repository source navigation and assembled platform documentation separately: a path valid in a six-repository workspace is not automatically valid in an archive. Use explicit cross-repository source URLs where no repository-local target exists. Do not create links containing private download tokens.
 

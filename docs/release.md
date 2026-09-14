@@ -2,7 +2,6 @@
 
 # Release
 
-<a id="1-概述"></a>
 ## 1. Overview
 
 Kuasar Sandbox separates component publication from platform aggregate publication. A component version describes an independent component delivery; an aggregate version describes a set of already-published components that passed exact-asset validation together. Neither version is derived from the other, and they need not have matching names.
@@ -16,7 +15,6 @@ The release units are:
 
 `guest-runtime` has runtime and vmlinux release units but remains one component repository. Every version line accepts the `-preview.YYYYMMDD` suffix. Preview is a GitHub prerelease; Stable is not a prerelease. Published versions are never overwritten, renamed or rebuilt.
 
-<a id="2-配置规约"></a>
 ## 2. Configuration contract
 
 Each maintained platform branch uses exactly two manifests:
@@ -34,7 +32,6 @@ The comparison uses numeric aggregate `MAJOR.MINOR.PATCH` values, not string ord
 
 The two manifests below are examples, not a list of current published versions.
 
-<a id="21-stable-清单"></a>
 ### 2.1 Stable manifest
 
 `previous_version` is optional for the first Stable release. When present it names an earlier Stable release; release notes never substitute a Preview or the repository's entire history as the first Stable baseline.
@@ -53,7 +50,6 @@ components:
 
 `previous_version` must be strictly earlier than `version`. A formal aggregate can select component versions that differ from one another and from the aggregate version.
 
-<a id="22-daily-preview-清单"></a>
 ### 2.2 Daily Preview manifest
 
 ```yaml
@@ -76,7 +72,6 @@ Advance `previous_preview_version` only after the current aggregate has a comple
 
 After Stable `V1` is published, continued development on the same branch must first advance Daily to `V2` and set `previous_version: V1`. Advance the Stable manifest when preparing `V2`. After `V2`, advance both toward `V3`, and so on. When Daily and Stable name the same version and that Stable aggregate has already been published, the line is closed: no new Preview and no repeated Stable publication. If the same-version Stable Release exists but its assets or tag are incomplete, Daily also defers before any manifest or component changes; it does not publish a Preview alongside an incomplete Stable.
 
-<a id="3-分支与版本线"></a>
 ## 3. Branches and version lines
 
 Platform `main` publishes the latest mainline version. Maintenance patches use platform `release/vMAJOR.MINOR.x`. For example, after publishing `release-v0.1.0`, a `release/v0.1.x` branch can be created from that tag. Maintenance then publishes `release-v0.1.1` and `release-v0.1.2`, while mainline can later publish `release-v0.2.0`.
@@ -87,7 +82,6 @@ Platform GitHub Latest is updated only by a Stable aggregate published from plat
 
 Platform and component maintenance branches need not have matching names. Platform `release/v0.5.x` can aggregate `sandboxer release/v0.3.x`, `orchestrator release/v0.4.x` and a fixed vmlinux version released only from `main`.
 
-<a id="4-daily-分支扫描与组件选择"></a>
 ## 4. Daily branch scanning and component selection
 
 `Daily Preview Scanner` runs daily on an Asia/Shanghai schedule, scanning:
@@ -97,7 +91,6 @@ Platform and component maintenance branches need not have matching names. Platfo
 
 The scanner pins each branch HEAD SHA, then loads the trusted controller from platform `main` to process that SHA. The controller accesses component repositories with a read-only contents GitHub App token. The token is passed only through a subprocess-scoped Git HTTP authorization header, never through remote URLs, repository configuration or logs. All branch coordinators and Preview GC share one GitHub Actions concurrency key, preventing manifest selection from overlapping GC planning/dispatch. The scanner dispatches and waits for branches in order. Cancelled or timed-out branch tasks receive at most three attempts in that scan; later scans recover work that remains incomplete. If a branch moves during selection or manifest commit, the current run does not overwrite remote state; the next run starts from the new HEAD. A deterministic failure is recorded while other branches continue, and the scanner reports failure at the end. One broken maintenance line therefore cannot indefinitely starve other branches.
 
-<a id="41-源分支映射"></a>
 ### 4.1 Source-branch mapping
 
 - Platform `main` always selects every component repository's `main`.
@@ -107,7 +100,6 @@ The scanner pins each branch HEAD SHA, then loads the trusted controller from pl
 
 The six units in one platform maintenance branch can therefore come from six different component version lines.
 
-<a id="42-tag-选择"></a>
 ### 4.2 Tag selection
 
 Tag selection does not choose the largest SemVer across all branch history. It walks backward from the selected branch HEAD along first-parent history. The first commit with a complete usable Release tag wins. SemVer selects the largest valid tag only among tags on that same commit. A maintenance branch also ignores tags outside its `MAJOR.MINOR` line.
@@ -124,7 +116,6 @@ Dependency changes also rebuild units that actually carry those dependencies. An
 
 A code change on the selected platform branch also creates a new aggregate Preview even if all six components are reused. Workflow run names for an aggregate version bind its platform source SHA. While any matching run remains active, the controller leaves the current Daily manifest unchanged, even if a newer run was cancelled or finished. A new branch HEAD gets a new run identity; old inputs are not rerun and an in-flight manifest is not rewritten. A branch-coordination task's identity also includes its requested date, so scans on different dates at the same platform SHA cannot incorrectly reuse each other's results.
 
-<a id="5-残缺发布恢复"></a>
 ## 5. Recovering incomplete publication
 
 A complete component Release must be non-draft, have a prerelease state consistent with its tag, contain only the contracted archive and `SHA256SUMS`, and have both assets in uploaded state. A complete aggregate Release must meet the eight-asset contract.
@@ -141,7 +132,6 @@ When an unfinished aggregate selection crosses into a new Shanghai date, the con
 
 Recovery restores the Daily process; it does not patch or rebuild assets of incomplete Releases. The `incomplete` mode never deletes a complete same-name Release. When a tag is already missing but its draft or prerelease remains, recovery deletion is allowed only if `target_commitish` is a full source SHA matching the expected source. If a same-name incomplete object reappears after successful cleanup, the controller starts a new cleanup run instead of treating historical success as proof of current convergence.
 
-<a id="6-组件发布-cli"></a>
 ## 6. Component publication CLI
 
 Component workflows always load trusted tooling from repository `main`, but require the actual source branch and its exact HEAD SHA as explicit inputs. The following shows parameter shapes only; automatic Daily fills these values:
@@ -170,7 +160,6 @@ Preview additionally requires that `daily-preview.yaml/version + preview_version
 
 Workflow run names include source SHA and the dependency-version tuple. The controller reruns failed runs only for identical input tuples. Changed branch HEADs or dependency selections create a new dispatch rather than consuming the three recovery attempts with obsolete inputs.
 
-<a id="7-聚合发布-cli"></a>
 ## 7. Aggregate publication CLI
 
 To converge an aggregate version already committed in the selected branch, the local release entry first handles the required component units and then the aggregate transaction:
@@ -206,8 +195,6 @@ make test-release-tools
 make test-ci-tools
 ```
 
-<a id="8-资产与-bms"></a>
-<a id="8-assets-and-bms"></a>
 ## 8. Release asset validation
 
 Each ordinary component Release contains exactly its component archive and `SHA256SUMS`. Runtime and vmlinux have independent archive names. An aggregate Release contains exactly a platform archive, six unchanged component archives and one unified `SHA256SUMS`: eight explicit assets.
@@ -328,7 +315,6 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
   -f stable_version=release-v0.5.7 -f dry_run=false
 ```
 
-<a id="10-权限与可靠性"></a>
 ## 10. Permissions and reliability
 
 - Cross-repository GitHub App access is limited to `Contents: read`, `Pull requests: read` and `Actions: write`. Each short-lived token requests only the subset required for its current step.
@@ -342,7 +328,6 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 - Preview build bindings prevent incorrect reuse of the same tag/source across different dependency closures.
 - The scanner has a separate concurrency key. All platform branch coordinators and GC share the global `preview-manifest-selection-and-gc` group. The scanner waits for each branch in sequence rather than filling multiple pending slots. A component's complete build/publication workflow and deletion share a mutation group for the same exact version; the platform's complete prepare/validation/publish workflow and deletion also share an exact-version group. GitHub can coalesce pending requests in a group. Daily and GC do not treat cancellation as success. Component publication/deletion rerun the appropriate jobs or full workflow with identical inputs; aggregate publication creates a new workflow run and exact stage. Each path allows at most three attempts; Daily publication or cleanup reports failure when retries are exhausted, so exclusion does not silently lose the desired publication or deletion state. Different versions do not share pending slots. Component Latest reconciliation is an exception: it is idempotent and scans the complete mainline Stable set every time, so it uses repository-wide serialization and allows triggers to coalesce. The last retained run can still converge the full state. Only the Stable aggregate selected by `release.yaml` at current platform `main` HEAD can update Latest, and branch HEAD, manifest selection and existing Release are revalidated before and after publication.
 
-<a id="11-受保护分支"></a>
 ## 11. Protected branches
 
 The required `ci / finalize` check is backed by `kuasar/ci-exact-head` on the
