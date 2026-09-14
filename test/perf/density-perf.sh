@@ -430,27 +430,30 @@ count() { grep -E "$1" "$2" 2>/dev/null | wc -l; }
 
 # queue_depth: the refactored controller logs no explicit "entry into queue"
 # event, so a live queue-depth cannot be derived from daemon.log. The
-# meaningful residual is instead visible as `canceled` (TTL/disconnect) and
-# `rejects` (queue_full / dropped_long) counters. Kept as a 0 placeholder so
-# the RESULT block and verdict shape stay unchanged.
+# meaningful residual is instead visible as the client-sourced `canceled`
+# (TTL/disconnect) and the server `dropped_long` counters. Kept as a 0
+# placeholder so the RESULT block and verdict shape stay unchanged.
 queue_depth() { echo 0; }
 
 snapshot_counters() {
-    # The refactored node-ctl (post-0.1.3) logs ALL resource-controller events
-    # through slog to daemon.log (there is no separate audit.log):
+    # The refactored node-ctl (post-0.1.3) logs resource-controller events through
+    # slog to daemon.log (there is no separate audit.log):
     #   success:  msg="admit <tok> sid=<sid> ..." / msg="grant ..." / msg="settled ..."
-    #   queue:    event=admit_queue_canceled | admit_queue_dropped_long |
-    #             admit_queue_full | admit_queued
-    # The old `reclaim` event is no longer emitted (reclaims are implicit in
-    # the allocator's zone bookkeeping), so that counter reads 0 and the RESULT
-    # line is retained only as a diagnostic.
+    #   queue:    event=admit_queue_dropped_long (long-term reject from the queue);
+    #             build/write failures use admit_queue_{build,write}_failed
+    # A queued admit canceled by TTL or client disconnect has NO server-side event
+    # on current main — the sandbox-ctl client logs
+    # `admit rejected (queue_canceled): ...`, so that counter is client-sourced.
+    # The old `reclaim` event is no longer emitted (reclaims are implicit in the
+    # allocator's zone bookkeeping), so that counter reads 0 and the RESULT line
+    # is retained only as a diagnostic.
     local admits reclaims grants settled rejects canceled queued
     admits=$(  count 'msg="admit '              "$WORK/daemon.log")
     reclaims=0
     grants=$(  count 'msg="grant '              "$WORK/daemon.log")
     settled=$( count 'msg="settled '            "$WORK/daemon.log")
     rejects=$( count 'admit_queue_dropped_long' "$WORK/daemon.log")
-    canceled=$(count 'event=admit_queue_canceled' "$WORK/daemon.log")
+    canceled=$(client_queue_canceled)
     queued=$(queue_depth)
     echo "$admits $reclaims $grants $settled $rejects $canceled $queued"
 }
@@ -490,6 +493,17 @@ client_rejects() {
     for f in "$WORK"/sb-perf-*.log; do
         [ -f "$f" ] || continue
         n=$((n + $(grep -cE 'admit rejected' "$f" 2>/dev/null)))
+    done
+    echo "$n"
+}
+
+# Client-side queue cancellations, a subset of client_rejects(): node-ctl has no
+# server-side event when a queued admit is canceled by TTL or client disconnect.
+client_queue_canceled() {
+    local n=0 f
+    for f in "$WORK"/sb-perf-*.log; do
+        [ -f "$f" ] || continue
+        n=$((n + $(grep -cE 'queue_canceled' "$f" 2>/dev/null)))
     done
     echo "$n"
 }
