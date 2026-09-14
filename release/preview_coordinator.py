@@ -384,7 +384,7 @@ def validate_preview_reuse(
     binding = preview_binding(status, plan.selected)
     date = plan.selected.rsplit("-preview.", 1)[1]
     if re.fullmatch(
-        rf"release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.{date}",
+        rf"release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.{re.escape(date)}",
         binding["aggregate_version"],
     ) is None or re.fullmatch(r"[0-9a-f]{40}", binding["aggregate_sha"]) is None:
         raise Deferred(f"{plan.unit.name} {plan.selected} has invalid aggregate provenance")
@@ -717,7 +717,7 @@ def force_dependency_preview(plan: Plan, date: str, state: RepositoryState) -> P
         raise Deferred(f"dependency rebuild tag collision: {plan.unit.name} {selected}")
     if status.complete and selected == plan.winner:
         raise Deferred(
-            f"{plan.unit.name} needs another dependency rebuild on the same Preview date"
+            f"{plan.unit.name} needs another dependency rebuild on the same Preview date and revision"
         )
     action = "reuse" if status.complete else "publish"
     return replace(plan, selected=selected, action=action)
@@ -1037,8 +1037,8 @@ def validate_environment() -> None:
         fail("PLATFORM_REF must be main or release/vMAJOR.MINOR.x")
     if re.fullmatch(r"[0-9a-f]{40}", PLATFORM_SHA) is None:
         fail("PLATFORM_SHA must be a full lowercase SHA")
-    if re.fullmatch(r"[0-9]{8}", TODAY) is None:
-        fail("PREVIEW_DATE must match YYYYMMDD")
+    if re.fullmatch(r"[0-9]{8}(?:\.[1-9][0-9]*)?", TODAY) is None:
+        fail("PREVIEW_DATE must match YYYYMMDD[.N]")
     if run(["git", "rev-parse", "HEAD"], cwd=PLATFORM_ROOT).stdout.strip() != PLATFORM_SHA:
         fail("platform checkout does not match PLATFORM_SHA")
     if branch_sha(PLATFORM_REPOSITORY, PLATFORM_REF) != PLATFORM_SHA:
@@ -1069,15 +1069,17 @@ def main() -> None:
         return
 
     current_status = platform_release(current_aggregate)
+    requested_order = selection.preview_order(f"preview.{TODAY}")
+    current_order = selection.preview_order(preview)
     date = current_date
     next_previous_preview = previous_preview
     if current_status.complete:
-        if TODAY <= current_date:
+        if requested_order <= current_order:
             print(f"==> maintained preview is current: {current_aggregate}")
             return
         date = TODAY
         next_previous_preview = preview
-    elif TODAY > current_date:
+    elif requested_order > current_order:
         if current_status.partial:
             recovery_sha = recoverable_source_sha(current_status)
             if recovery_sha is None:

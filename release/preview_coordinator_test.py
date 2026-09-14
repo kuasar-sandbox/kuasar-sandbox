@@ -248,6 +248,66 @@ class PreviewCoordinatorTest(unittest.TestCase):
         self.assertEqual(converge.call_count, 2)
         sleep.assert_called_once_with(1)
 
+    def test_revision_rollover_and_scheduled_resume_preserve_the_baseline(self) -> None:
+        for current, requested, selected in (
+            ("20260914", "20260914.1", "20260914.1"),
+            ("20260914.9", "20260914.10", "20260914.10"),
+            ("20260914.10", "20260915", "20260915"),
+            ("20260914.1", "20260914", "20260914.1"),
+        ):
+            with self.subTest(current=current, requested=requested):
+                empty = coordinator.ReleaseStatus(None, None, False)
+                with (
+                    mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+                    mock.patch.object(coordinator, "TODAY", requested),
+                    mock.patch.object(coordinator, "validate_environment"),
+                    mock.patch.object(coordinator, "manifest_values", return_value=(
+                        "release-v1.2.3", "release-v1.2.2", f"preview.{current}",
+                        "preview.20260909", {},
+                    )),
+                    mock.patch.object(coordinator, "release_version", return_value="release-v1.2.2"),
+                    mock.patch.object(coordinator, "platform_release", return_value=empty),
+                    mock.patch.object(coordinator, "active_aggregate_run", return_value=None),
+                    mock.patch.object(coordinator, "active_delete_run", return_value=None),
+                    mock.patch.object(coordinator, "plan_units", return_value={}) as plan,
+                    mock.patch.object(coordinator, "render_manifest", return_value="manifest") as render,
+                    mock.patch.object(coordinator, "persist_manifest", return_value="b" * 40),
+                    mock.patch.object(coordinator, "converge", return_value=True),
+                ):
+                    coordinator.main()
+                plan.assert_called_once_with({}, selected)
+                self.assertEqual(render.call_args.args[2:4], (selected, "preview.20260909"))
+
+    def test_manifest_revision_order_is_numeric(self) -> None:
+        text = "\n".join([
+            "version: release-v1.2.3",
+            "preview_version: preview.20260914.10",
+            "previous_preview_version: preview.20260914.9",
+            "components:",
+            *[f"  {unit.name}: {coordinator.preview_selection.unit_prefix(unit.name)}1.2.3-preview.20260914.10"
+              for unit in coordinator.UNITS],
+        ])
+        aggregate, previous, _ = coordinator.selection.parse_manifest(text, "fixture", True)
+        self.assertEqual(aggregate, "release-v1.2.3-preview.20260914.10")
+        self.assertEqual(previous, "release-v1.2.3-preview.20260914.9")
+        with self.assertRaisesRegex(coordinator.selection.ManifestError, "must be older"):
+            coordinator.selection.parse_manifest(
+                text.replace("previous_preview_version: preview.20260914.9", "previous_preview_version: preview.20260914.11"),
+                "fixture", True,
+            )
+
+    def test_preview_reuse_requires_the_exact_revision(self) -> None:
+        tag = "v1.2.3-preview.20260914.1"
+        plan = coordinator.Plan(coordinator.UNIT_BY_NAME["accelerator"], tag, "main", "a" * 40, tag, tag, "reuse")
+        body = self.binding_body("accelerator", plan.source_sha).replace("20260831", "20260914.1")
+        for suffix in ("20260914.1", "20260914x1", "20260914.2"):
+            status = coordinator.ReleaseStatus({"body": body.replace("20260914.1", suffix)}, plan.source_sha, True)
+            if suffix == "20260914.1":
+                coordinator.validate_preview_reuse(plan, {"accelerator": plan}, status)
+            else:
+                with self.assertRaisesRegex(coordinator.Deferred, "aggregate provenance"):
+                    coordinator.validate_preview_reuse(plan, {"accelerator": plan}, status)
+
     def test_cancelled_workflow_uses_full_rerun(self) -> None:
         state = {"id": 17, "conclusion": "cancelled"}
         with mock.patch.object(coordinator, "gh") as gh:
@@ -292,6 +352,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
         with (
             mock.patch.object(coordinator, "PLATFORM_REF", "main"),
             mock.patch.object(coordinator, "validate_environment"),
+            mock.patch.object(coordinator, "TODAY", "20260831"),
             mock.patch.object(
                 coordinator,
                 "manifest_values",
@@ -1092,6 +1153,7 @@ components:
         with (
             mock.patch.object(coordinator, "PLATFORM_REF", "main"),
             mock.patch.object(coordinator, "validate_environment"),
+            mock.patch.object(coordinator, "TODAY", "20260831"),
             mock.patch.object(
                 coordinator,
                 "manifest_values",

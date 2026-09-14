@@ -5,7 +5,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: Aggregate version in release-vX.Y.Z or release-vX.Y.Z-preview.YYYYMMDD form
+        description: Aggregate version in release-vX.Y.Z or release-vX.Y.Z-preview.YYYYMMDD[.N] form
         required: true
         type: string
       source_ref:
@@ -75,7 +75,7 @@ jobs:
             || { echo "$SOURCE_REF moved after selection" >&2; exit 1; }
           [ "$(git -C platform rev-parse HEAD)" = "$SOURCE_SHA" ]
           if [[ "$SOURCE_REF" =~ ^release/v([0-9]+)\.([0-9]+)\.x$ ]]; then
-            [[ "$VERSION" =~ ^release-v${BASH_REMATCH[1]}\.${BASH_REMATCH[2]}\.[0-9]+(-preview\.[0-9]{8})?$ ]] \
+            [[ "$VERSION" =~ ^release-v${BASH_REMATCH[1]}\.${BASH_REMATCH[2]}\.[0-9]+(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]] \
               || { echo "$VERSION does not belong to $SOURCE_REF" >&2; exit 1; }
           fi
           bash control/release/validate-preview-line.sh "$VERSION" "$SOURCE_SHA"

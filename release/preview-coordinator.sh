@@ -5,7 +5,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 [ "$#" -le 1 ] || {
-  echo "usage: preview-coordinator.sh [YYYYMMDD]" >&2
+  echo "usage: preview-coordinator.sh [YYYYMMDD[.N]]" >&2
   exit 2
 }
 

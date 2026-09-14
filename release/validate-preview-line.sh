@@ -13,8 +13,8 @@ if [[ "$TAG" != *-preview.* ]]; then
   exit 0
 fi
 
-[[ "$TAG" =~ ^release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]{8}$ ]] || {
-  echo "aggregate Preview must match release-vX.Y.Z-preview.YYYYMMDD" >&2
+[[ "$TAG" =~ ^release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]{8}(\.[1-9][0-9]*)?$ ]] || {
+  echo "aggregate Preview must match release-vX.Y.Z-preview.YYYYMMDD[.N]" >&2
   exit 1
 }
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || {

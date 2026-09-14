@@ -22,7 +22,7 @@ TAG_RE = re.compile(
     r"(?P<major>0|[1-9][0-9]*)\."
     r"(?P<minor>0|[1-9][0-9]*)\."
     r"(?P<patch>0|[1-9][0-9]*)"
-    r"(?:-preview\.(?P<preview>[0-9]{8}))?$"
+    r"(?:-preview\.(?P<preview>[0-9]{8})(?:\.(?P<revision>[1-9][0-9]*))?)?$"
 )
 
 
@@ -38,6 +38,7 @@ class UnitTag:
     minor: int
     patch: int
     preview: int | None
+    revision: int = 0
 
     @property
     def is_preview(self) -> bool:
@@ -48,11 +49,11 @@ class UnitTag:
         return self.major, self.minor
 
     @property
-    def same_commit_order(self) -> tuple[int, int, int, int, int]:
+    def same_commit_order(self) -> tuple[int, int, int, int, int, int]:
         # A stable tag sorts after previews of the same core version.
         stable = 1 if self.preview is None else 0
         preview = self.preview if self.preview is not None else 0
-        return self.major, self.minor, self.patch, stable, preview
+        return self.major, self.minor, self.patch, stable, preview, self.revision
 
 
 @dataclass(frozen=True)
@@ -92,6 +93,7 @@ def parse_tag(unit: str, value: str) -> UnitTag:
         minor=int(match.group("minor")),
         patch=int(match.group("patch")),
         preview=int(preview) if preview is not None else None,
+        revision=int(match.group("revision") or "0"),
     )
 
 
@@ -106,8 +108,8 @@ def component_source_ref(platform_ref: str, unit: str, configured: str) -> str:
 
 def preview_candidate(unit: str, winner: str, date: str) -> str:
     parsed = parse_tag(unit, winner)
-    if re.fullmatch(r"[0-9]{8}", date) is None:
-        raise SelectionError("preview date must match YYYYMMDD")
+    if re.fullmatch(r"[0-9]{8}(?:\.[1-9][0-9]*)?", date) is None:
+        raise SelectionError("preview date must match YYYYMMDD[.N]")
     patch = parsed.patch if parsed.is_preview else parsed.patch + 1
     return f"{parsed.prefix}{parsed.major}.{parsed.minor}.{patch}-preview.{date}"
 

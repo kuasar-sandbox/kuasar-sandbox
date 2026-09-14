@@ -28,7 +28,7 @@ WAIT_SECONDS = 60 * 60
 POLL_SECONDS = 30
 STABLE_RE = re.compile(r"^release-v[0-9]+\.[0-9]+\.[0-9]+$")
 AGGREGATE_PREVIEW_RE = re.compile(
-    r"^release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]{8}$"
+    r"^release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?$"
 )
 
 

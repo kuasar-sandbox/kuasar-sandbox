@@ -166,8 +166,8 @@ jobs:
             exact-assets)
               [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] \
                 || { echo "exact-assets Integration E2E requires workflow_dispatch" >&2; exit 1; }
-              [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]]
-              [[ "$RELEASE_BUNDLE_ARTIFACT" =~ ^aggregate-stage-release-v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8})?-[0-9]+$ ]]
+              [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]]
+              [[ "$RELEASE_BUNDLE_ARTIFACT" =~ ^aggregate-stage-release-v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?-[0-9]+$ ]]
               [[ "$PLATFORM_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
               ;;
             *) echo "mode must be source or exact-assets" >&2; exit 1 ;;
@@ -616,7 +616,7 @@ jobs:
           daily_suffix=$(awk '$1 == "preview_version:" { print $2; exit }' \
             src/platform/releases/daily-preview.yaml)
           [[ "$daily_version" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
-          [[ "$daily_suffix" =~ ^preview\.[0-9]{8}$ ]]
+          [[ "$daily_suffix" =~ ^preview\.[0-9]{8}(\.[1-9][0-9]*)?$ ]]
 
           declare -A configured_versions=()
           while IFS=$'\t' read -r unit configured; do

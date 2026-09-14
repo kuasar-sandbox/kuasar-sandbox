@@ -128,6 +128,41 @@ class PreviewSelectionTest(unittest.TestCase):
 
         self.assertEqual(result.selected, "v0.3.6-preview.20260830")
 
+    def test_same_day_revisions_follow_numeric_semver_order(self) -> None:
+        tags = [
+            "v1.2.3-preview.20260914",
+            "v1.2.3-preview.20260914.1",
+            "v1.2.3-preview.20260914.9",
+            "v1.2.3-preview.20260914.10",
+            "v1.2.3-preview.20260915",
+            "v1.2.3",
+        ]
+        parsed = [preview_selection.parse_tag("sandboxer", tag) for tag in tags]
+        self.assertEqual(
+            [tag.raw for tag in sorted(reversed(parsed), key=lambda tag: tag.same_commit_order)],
+            tags,
+        )
+
+    def test_explicit_revision_rebuilds_changed_source_without_overwriting(self) -> None:
+        tagged = self.repository.commit("published")
+        self.repository.git("tag", "v1.2.3-preview.20260914", tagged)
+        head = self.repository.commit("fixed")
+        result = preview_selection.resolve(
+            self.repository.root, "main", "sandboxer", "v1.2.3-preview.20260914",
+            ["v1.2.3-preview.20260914"], "20260914.1",
+        )
+        self.assertEqual(result.selected, "v1.2.3-preview.20260914.1")
+        self.assertEqual(result.head, head)
+        self.assertEqual(self.repository.git("rev-list", "-n", "1", result.winner), tagged)
+
+    def test_revision_rejects_zero_leading_zero_and_arbitrary_suffixes(self) -> None:
+        for suffix in ("20260914.0", "20260914.01", "20260914.-1", "20260914-1", "20260914.1.2"):
+            with self.subTest(suffix=suffix):
+                with self.assertRaises(preview_selection.SelectionError):
+                    preview_selection.parse_tag("runtime", f"runtime-v1.2.3-preview.{suffix}")
+                with self.assertRaises(preview_selection.SelectionError):
+                    preview_selection.preview_candidate("runtime", "runtime-v1.2.3", suffix)
+
     def test_release_branch_filters_tags_to_its_version_line(self) -> None:
         matching = self.repository.commit("matching")
         self.repository.git("tag", "v1.2.4", matching)
