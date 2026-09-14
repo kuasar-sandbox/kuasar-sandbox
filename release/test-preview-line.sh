@@ -53,4 +53,15 @@ if PATH="$TMP/bin:$PATH" FAKE_MANIFEST="$BAD_MANIFEST" \
   exit 1
 fi
 
+REVISION_MANIFEST="$(printf '%s' "$MANIFEST" | base64 -d \
+  | sed 's/preview.20260831/preview.20260831.1/g' | base64 -w0)"
+PATH="$TMP/bin:$PATH" FAKE_MANIFEST="$REVISION_MANIFEST" \
+  bash "$SCRIPT_DIR/validate-preview-line.sh" "$TAG.1" "$SOURCE_SHA"
+if PATH="$TMP/bin:$PATH" FAKE_MANIFEST="$REVISION_MANIFEST" \
+  bash "$SCRIPT_DIR/validate-preview-line.sh" "$TAG.2" "$SOURCE_SHA" \
+  >/dev/null 2>&1; then
+  echo "test-preview-line: accepted another revision than the manifest" >&2
+  exit 1
+fi
+
 echo "test-preview-line: PASS"

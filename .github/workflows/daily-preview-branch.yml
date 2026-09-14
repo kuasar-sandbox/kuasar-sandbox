@@ -13,7 +13,7 @@ on:
         required: true
         type: string
       date:
-        description: YYYYMMDD selection date
+        description: YYYYMMDD[.N] selection date
         required: true
         type: string
 

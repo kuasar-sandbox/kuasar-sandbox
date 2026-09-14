@@ -88,6 +88,22 @@ class PreviewGCTest(unittest.TestCase):
             "v1.0.2-preview.20260831",
         )
 
+    def test_numbered_previews_remain_distinct_canonical_gc_candidates(self) -> None:
+        tags = [
+            "release-v1.2.3-preview.20260914",
+            "release-v1.2.3-preview.20260914.1",
+            "release-v1.2.3-preview.20260914.10",
+        ]
+        with (
+            mock.patch.object(preview_gc, "git", return_value="third\nsecond\nfirst"),
+            mock.patch.object(preview_gc, "parse_snapshot", side_effect=[(tag, {}) for tag in reversed(tags)]),
+        ):
+            snapshots = preview_gc.canonical_snapshots("f" * 40, "release-v1.2.3")
+        self.assertEqual(set(snapshots), set(tags))
+        for tag in tags:
+            self.assertIsNotNone(preview_gc.AGGREGATE_PREVIEW_RE.fullmatch(tag))
+        self.assertIsNone(preview_gc.AGGREGATE_PREVIEW_RE.fullmatch("release-v1.2.3"))
+
     def test_missing_release_and_tag_is_already_converged(self) -> None:
         unit = preview_gc.coordinator.UNIT_BY_NAME["connector"]
         state = mock.Mock()

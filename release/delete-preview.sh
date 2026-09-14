@@ -22,7 +22,7 @@ fail() {
   exit 1
 }
 
-[[ "$TAG" =~ ^release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]{8}$ ]] \
+[[ "$TAG" =~ ^release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.[0-9]{8}(\.[1-9][0-9]*)?$ ]] \
   || fail "invalid aggregate Preview tag: $TAG"
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "source-sha must be a full lowercase SHA"
 [ "$MODE" = incomplete ] || [ "$MODE" = gc ] || fail "mode must be incomplete or gc"

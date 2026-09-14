@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       date:
-        description: Optional YYYYMMDD selection date
+        description: Optional YYYYMMDD[.N] selection date
         required: false
         type: string
       platform_ref:
@@ -45,8 +45,8 @@ jobs:
         run: |
           set -euo pipefail
           date="${REQUESTED_DATE:-$(TZ=Asia/Shanghai date +%Y%m%d)}"
-          [[ "$date" =~ ^[0-9]{8}$ ]] \
-            || { echo "date must match YYYYMMDD" >&2; exit 1; }
+          [[ "$date" =~ ^[0-9]{8}(\.[1-9][0-9]*)?$ ]] \
+            || { echo "date must match YYYYMMDD[.N]" >&2; exit 1; }
 
           refs=()
           if [ -n "$REQUESTED_REF" ]; then

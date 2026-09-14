@@ -13,13 +13,13 @@ release_fail() {
 }
 
 validate_component_version() {
-  [[ "$1" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]] \
-    || release_fail "component version must match vX.Y.Z or vX.Y.Z-preview.YYYYMMDD"
+  [[ "$1" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]] \
+    || release_fail "component version must match vX.Y.Z or vX.Y.Z-preview.YYYYMMDD[.N]"
 }
 
 validate_aggregate_version() {
-  [[ "$1" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]] \
-    || release_fail "aggregate version must match release-vX.Y.Z or release-vX.Y.Z-preview.YYYYMMDD"
+  [[ "$1" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]] \
+    || release_fail "aggregate version must match release-vX.Y.Z or release-vX.Y.Z-preview.YYYYMMDD[.N]"
 }
 
 validate_unit_version() {
@@ -29,12 +29,12 @@ validate_unit_version() {
       validate_component_version "$version"
       ;;
     runtime)
-      [[ "$version" =~ ^runtime-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]] \
-        || release_fail "runtime version must match runtime-vX.Y.Z or runtime-vX.Y.Z-preview.YYYYMMDD"
+      [[ "$version" =~ ^runtime-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]] \
+        || release_fail "runtime version must match runtime-vX.Y.Z or runtime-vX.Y.Z-preview.YYYYMMDD[.N]"
       ;;
     vmlinux)
-      [[ "$version" =~ ^vmlinux-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]] \
-        || release_fail "vmlinux version must match vmlinux-vX.Y.Z or vmlinux-vX.Y.Z-preview.YYYYMMDD"
+      [[ "$version" =~ ^vmlinux-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]] \
+        || release_fail "vmlinux version must match vmlinux-vX.Y.Z or vmlinux-vX.Y.Z-preview.YYYYMMDD[.N]"
       ;;
     *) release_fail "unknown release unit: $unit" ;;
   esac

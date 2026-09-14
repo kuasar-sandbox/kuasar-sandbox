@@ -16,7 +16,9 @@ Kuasar Sandbox 将组件发布与平台聚合发布分开。组件版本描述�
 - 平台聚合: `release-vX.Y.Z`。
 
 `guest-runtime` 有 runtime 和 vmlinux 两个发布单元,但仍然是一个组件仓。所有版本线都
-接受 `-preview.YYYYMMDD` 后缀。Preview 是 GitHub prerelease,Stable 是非 prerelease;
+接受 `-preview.YYYYMMDD[.N]` 后缀。可选修订号 `N` 是不含前导零的十进制正整数;
+例如 `preview.20260914.1` 表示该日期的第一次显式修订。日期和修订号按数值排序,
+次日排在前一日期的所有修订之后。Preview 是 GitHub prerelease,Stable 是非 prerelease;
 任何已发布版本都不覆盖、不改名、不重建。
 
 ## 2. 配置规约
@@ -153,14 +155,18 @@ Daily 清单中指定的 Tag 也参加提交位置比较:
 
 获胜 Tag 已在 HEAD 时直接复用。获胜 Stable Tag 落后于 HEAD 时,Patch 只自增一次并产生
 `vX.Y.(Z+1)-preview.YYYYMMDD`;获胜 Preview 落后于 HEAD 时保持其 core 版本,只换成
-本次日期。下一次扫描会看到这个 Preview,不会反复增加 Patch。
+本次日期及可选修订号。下一次扫描会看到这个 Preview,不会反复增加 Patch。
 
 依赖改变也需要重建实际携带依赖的 unit:accelerator 改变会直接重建 sandboxer、
 orchestrator 和 runtime;connector 改变会直接重建 sandboxer 和 orchestrator;
 sandboxer 改变会直接重建 orchestrator 和 runtime。因此 connector 改变后,新选择的
 sandboxer 还会传递触发 runtime 重建。vmlinux 不因这些依赖变化而重建。若同一 unit
-在同一天已经发布 Preview 后依赖再次改变,
-流程延后到下一个 Preview 日期,不复用带有旧依赖的资产,也不发明同日序号格式。
+已经发布了请求日期及修订号的 Preview,之后依赖再次改变,流程保持 deferred。操作者可以
+通过 scanner 请求更大的修订号,例如
+`gh workflow run daily-preview.yml --ref main -f date=20260914.1`。控制器重新选择当前
+源码和依赖闭包并发布新 Tag,不会替换完整 Release。重复同一请求会恢复该次发布;定时扫描
+也会恢复清单中尚未完成的修订,直到下一个上海日期。修订号必须显式指定,不会自动递增。
+新发布组件必须与聚合的完整日期及修订号后缀一致;复用版本仍核验原始精确来源和依赖绑定。
 
 平台自身在所选分支上的代码变化同样会产生新的聚合 Preview,即使六个组件都复用。
 同一聚合版本的 workflow run 名同时绑定平台源码 SHA。只要任意匹配 run 仍在运行,即使
@@ -187,10 +193,11 @@ run 身份,不会用旧输入重跑或改写运行中清单。
   让 prepare 重新拉取组件 Release 并生成新的 exact stage;三次预算按这些 run 的
   `run_attempt` 总数累计。
 
-若未完成的聚合选择跨过了新的上海日期,控制器不再用旧日期 Tag 绑定新的组件 HEAD。
+若未完成的聚合选择推进到新的上海日期或显式请求的更大修订号,控制器不再用旧日期 Tag 绑定新的组件 HEAD。
 残缺聚合对象先通过受保护入口删除;随后清单滚到新日期并重新选择。旧选择中已经完整发布
-但未被任何保留聚合引用的组件 Preview 交给 GC 按回退窗口统一删除。若仍在同一天,控制器
-保持 deferred,避免覆盖已经公开的完整 Preview Tag。
+但未被任何保留聚合引用的组件 Preview 交给 GC 按回退窗口统一删除。若未请求更大修订号且未跨日,控制器
+保持 deferred。带修订号的 Preview 使用同样的受保护恢复和 GC 规则:删除仍受 Stable 关闭
+版本线后的七天回退窗口、规范归属和保留引用约束。
 
 恢复的目标是恢复 Daily 流程,不是修补或重建残缺 Release 的资产。同名完整 Release 永远
 不会被 `incomplete` 模式删除。若 Tag 已经缺失但 draft 或 prerelease 仍在,只有

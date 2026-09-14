@@ -18,20 +18,20 @@ STABLE_RE = re.compile(
 )
 AGGREGATE_RE = re.compile(
     r"^release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
-    r"(?:-preview\.[0-9]{8})?$"
+    r"(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?$"
 )
-PREVIEW_RE = re.compile(r"^preview\.[0-9]{8}$")
+PREVIEW_RE = re.compile(r"^preview\.[0-9]{8}(?:\.[1-9][0-9]*)?$")
 COMPONENT_RE = re.compile(
     r"^v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
-    r"(?:-preview\.[0-9]{8})?$"
+    r"(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?$"
 )
 RUNTIME_RE = re.compile(
     r"^runtime-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
-    r"(?:-preview\.[0-9]{8})?$"
+    r"(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?$"
 )
 VMLINUX_RE = re.compile(
     r"^vmlinux-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)"
-    r"(?:-preview\.[0-9]{8})?$"
+    r"(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?$"
 )
 
 
@@ -95,6 +95,13 @@ def aggregate_version(value: str) -> AggregateVersion:
     return AggregateVersion(*(int(part) for part in match.groups()))
 
 
+def preview_order(value: str) -> tuple[int, int]:
+    if PREVIEW_RE.fullmatch(value) is None:
+        raise ManifestError(f"invalid Preview suffix: {value}")
+    parts = value.split(".")
+    return int(parts[1]), int(parts[2]) if len(parts) == 3 else 0
+
+
 def validate_components(
     config: dict[str, object], source: str, preview: bool
 ) -> dict[str, str]:
@@ -146,19 +153,19 @@ def parse_manifest(
     if preview:
         preview_version = config.get("preview_version")
         if not isinstance(preview_version, str) or PREVIEW_RE.fullmatch(preview_version) is None:
-            raise ManifestError(f"preview_version in {source} must match preview.YYYYMMDD")
+            raise ManifestError(f"preview_version in {source} must match preview.YYYYMMDD[.N]")
         aggregate = f"{version}-{preview_version}"
         if "previous_preview_version" in config:
             previous_preview = config["previous_preview_version"]
             if not isinstance(previous_preview, str) or PREVIEW_RE.fullmatch(previous_preview) is None:
                 raise ManifestError(
-                    f"previous_preview_version in {source} must match preview.YYYYMMDD"
+                    f"previous_preview_version in {source} must match preview.YYYYMMDD[.N]"
                 )
             if previous_preview == preview_version:
                 raise ManifestError(
                     f"previous_preview_version in {source} must differ from preview_version"
                 )
-            if previous_preview >= preview_version:
+            if preview_order(previous_preview) >= preview_order(preview_version):
                 raise ManifestError(
                     f"previous_preview_version in {source} must be older than preview_version"
                 )

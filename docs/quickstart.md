@@ -58,7 +58,7 @@ ASSETS_TSV="$(mktemp)"
 trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV"' EXIT
 
 if [ -n "$RELEASE_VERSION" ]; then
-    [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8})?$ ]]
+    [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]]
     RELEASE_API="https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/tags/$RELEASE_VERSION"
 else
     RELEASE_API="https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/latest"
@@ -73,10 +73,10 @@ import json, re, sys
 metadata, requested, output = sys.argv[1:]
 release = json.load(open(metadata, encoding="utf-8"))
 tag = release.get("tag_name", "")
-tag_re = re.compile(r"^release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8})?$")
+tag_re = re.compile(r"^release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?$")
 assert tag_re.fullmatch(tag), tag
 assert not release.get("draft")
-assert bool(re.search(r"-preview\.[0-9]{8}$", tag)) == bool(release.get("prerelease"))
+assert bool(re.search(r"-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?$", tag)) == bool(release.get("prerelease"))
 assert not requested or requested == tag, (requested, tag)
 patterns = {
     "platform": re.compile(rf"^platform-{re.escape(tag)}\.tar\.gz$"),
