@@ -111,6 +111,18 @@ Runtime packaging consumes this catalog because the locally built archive has
 no installed RPM owner. These records support release review; they do not
 certify license compliance.
 
+Runtime release validation also needs trusted host `fsck.erofs` and `dump.erofs`
+with `--extract` and `--path/--cat` support. The configured openEuler mirrors do
+not provide these readers. Every install verifies the upstream erofs-utils
+v1.9.1 archive against SHA-256
+`a9ef5ab67c4b8d2d3e9ed71f39cd008bda653142a720d8a395a36f1110d0c432`, builds the
+readers inside the template, and installs them on `PATH` under `/usr/local/bin`
+in all six slots. The archive is cached in
+`/var/cache/kuasar/sources`; its `COPYING` is retained under
+`/usr/share/licenses/kuasar-ci-erofs-readers`. These host readers are separate
+from the guest binaries being packaged. `verify` checks the required reader
+options as well as runner readiness.
+
 The host install also writes `/etc/modules-load.d/kuasar-ci.conf` for bridge,
 overlay, TUN, and vhost devices. Enabled slots therefore retain their required
 bind devices after a host reboot. Space checks follow the filesystems that hold

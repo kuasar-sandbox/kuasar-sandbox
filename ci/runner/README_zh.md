@@ -91,6 +91,15 @@ Redis server 也从同一镜像安装。GNU `time` 采集分阶段 CPU、内存�
 slot 中的副本不匹配则准备失败。Runtime 打包消费该目录,因为本地构建的静态库
 没有已安装 RPM owner。这些记录支持发行检视,不构成许可证合规认证。
 
+Runtime 发行校验还要求可信宿主工具 `fsck.erofs` 和 `dump.erofs` 支持
+`--extract` 与 `--path/--cat`。当前配置的 openEuler 镜像不提供这些读取工具。
+每次 install 都先核对上游 erofs-utils v1.9.1 归档的 SHA-256
+`a9ef5ab67c4b8d2d3e9ed71f39cd008bda653142a720d8a395a36f1110d0c432`,再在模板内构建
+这些读取工具,并安装到全部六个 slot 的 `/usr/local/bin`,使其位于 `PATH`。归档缓存到
+`/var/cache/kuasar/sources`;其中的 `COPYING` 保留在
+`/usr/share/licenses/kuasar-ci-erofs-readers`。这些宿主读取工具独立于正在打包的
+guest 二进制。`verify` 同时检查所需读取选项与 Runner 就绪状态。
+
 主机安装还为 bridge、overlay、TUN 和 vhost 设备写入
 `/etc/modules-load.d/kuasar-ci.conf`,使已启用 slot 在重启后仍有必需的绑定设备。
 空间检查分别跟随模板与 `/var/lib/machines` 所在文件系统:两者共享文件系统时

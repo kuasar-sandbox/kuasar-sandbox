@@ -28,6 +28,8 @@ UTIL_LINUX_SRPM_SHA256=${KUASAR_UTIL_LINUX_SRPM_SHA256:-40324d3ab54be52ef6754473
 UTIL_LINUX_SOURCE_ARCHIVE=${KUASAR_UTIL_LINUX_SOURCE_ARCHIVE:-util-linux-2.39.1.tar.xz}
 UTIL_LINUX_TARBALL_SHA256=${KUASAR_UTIL_LINUX_TARBALL_SHA256:-890ae8ff810247bd19e274df76e8371d202cda01ad277681b0ea88eeaa00286b}
 LIBUUID_BUILD_SCHEMA=util-linux-static-v2-materials
+EROFS_READERS_URL=https://codeload.github.com/erofs/erofs-utils/tar.gz/refs/tags/v1.9.1
+EROFS_READERS_SHA256=a9ef5ab67c4b8d2d3e9ed71f39cd008bda653142a720d8a395a36f1110d0c432
 SLOT_OWNER_MARKER=.kuasar-ci-slot-owner
 SLOT_OWNER_ID=kuasar-ci-bms-runner-v1
 RUNNER_REGISTRATION_MARKER=.kuasar-ci-registration-complete
@@ -503,6 +505,51 @@ install_static_libuuid() {
         || die "static libuuid build did not produce /usr/lib64/libuuid.a"
 }
 
+install_erofs_readers() {
+    local archive="$SOURCE_CACHE/erofs-utils-v1.9.1.tar.gz"
+    local work="$TEMPLATE_ROOT/tmp/kuasar-erofs-readers-build"
+    install -d -m 0755 "$SOURCE_CACHE"
+    if [ ! -f "$archive" ] || ! verify_sha256 "$archive" "$EROFS_READERS_SHA256"; then
+        log "downloading pinned EROFS host reader sources"
+        curl --fail --location --retry 3 --connect-timeout 10 --max-time 120 \
+            --output "$archive" "$EROFS_READERS_URL"
+    fi
+    verify_sha256 "$archive" "$EROFS_READERS_SHA256" \
+        || die "EROFS host reader source checksum mismatch"
+    rm -rf "$work"
+    install -d -m 0755 "$work"
+    tar -xzf "$archive" --strip-components=1 -C "$work"
+
+    # These are host readers for release validation, separate from guest tools.
+    # Rebuild on every install so existing templates cannot retain missing tools.
+    log "building trusted EROFS host readers inside the runner root"
+    chroot "$TEMPLATE_ROOT" /bin/bash -ceu '
+        cd /tmp/kuasar-erofs-readers-build
+        ./autogen.sh >/dev/null 2>&1
+        ./configure --disable-lz4 --disable-lzma --without-zlib \
+            --without-libzstd --without-libdeflate --without-xxhash \
+            --without-libcurl --without-openssl --without-libxml2 \
+            --without-json-c --without-libnl3 --disable-multithreading >/dev/null
+        make -C lib -j"$(nproc)" >/dev/null
+        make -C fsck -j"$(nproc)" >/dev/null
+        make -C dump -j"$(nproc)" >/dev/null
+        install -d -m 0755 /usr/local/bin /usr/share/licenses/kuasar-ci-erofs-readers
+        install -m 0755 fsck/fsck.erofs dump/dump.erofs /usr/local/bin/
+        install -m 0644 COPYING /usr/share/licenses/kuasar-ci-erofs-readers/COPYING
+    '
+    rm -rf "$work"
+}
+
+copy_erofs_readers() {
+    local root=$1 tool
+    install -d -m 0755 "$root/usr/local/bin" "$root/usr/share/licenses/kuasar-ci-erofs-readers"
+    for tool in fsck.erofs dump.erofs; do
+        install -m 0755 "$TEMPLATE_ROOT/usr/local/bin/$tool" "$root/usr/local/bin/$tool"
+    done
+    install -m 0644 "$TEMPLATE_ROOT/usr/share/licenses/kuasar-ci-erofs-readers/COPYING" \
+        "$root/usr/share/licenses/kuasar-ci-erofs-readers/COPYING"
+}
+
 check_host() {
     require_root
     assert_supported_host
@@ -623,6 +670,7 @@ build_template_root() {
     touch "$TEMPLATE_ROOT/.kuasar-ci-template"
 
     install_static_libuuid
+    install_erofs_readers
 
     copy_runner_distribution "$TEMPLATE_ROOT/opt/actions-runner"
     install -d -m 0755 \
@@ -770,6 +818,7 @@ prepare_slot() {
     install -m 0644 "$TEMPLATE_ROOT/root/.cargo/config.toml" "$root/root/.cargo/config.toml"
     install -m 0644 "$TEMPLATE_ROOT/etc/resolv.conf" "$root/etc/resolv.conf"
     copy_static_libuuid "$root"
+    copy_erofs_readers "$root"
 
     local machine_id template_machine_id
     machine_id="$(cat "$root/etc/machine-id" 2>/dev/null || true)"
@@ -1049,6 +1098,11 @@ verify_slots() {
             systemctl is-active --quiet docker.service
             docker info >/dev/null
             test -s /usr/lib64/libuuid.a
+            fsck_help=$(fsck.erofs --help 2>&1)
+            dump_help=$(dump.erofs --help 2>&1)
+            grep -Fq -- --extract <<< "$fsck_help"
+            grep -Fq -- --path <<< "$dump_help"
+            grep -Fq -- --cat <<< "$dump_help"
             libstdcpp=$(gcc -print-file-name=libstdc++.a)
             test "$libstdcpp" != libstdc++.a
             test -s "$libstdcpp"
