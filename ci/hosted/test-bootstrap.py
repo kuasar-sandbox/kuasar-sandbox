@@ -67,6 +67,12 @@ class BootstrapTests(unittest.TestCase):
         self.assertTrue(chosen <= os.sched_getaffinity(0))
         self.assertGreaterEqual(int(jobs), 1)
 
+    def test_host_erofs_writer_and_readers_are_installed(self):
+        source = BOOTSTRAP.read_text()
+        for tool in ("mkfs", "fsck", "dump"):
+            self.assertIn(f'make -C {tool} -j"$KUASAR_BUILD_JOBS"', source)
+            self.assertIn(f"{tool}/{tool}.erofs", source)
+
     def test_ephemeral_paths(self):
         source = BOOTSTRAP.read_text()
         self.assertNotIn("/var/cache/kuasar", source)

@@ -195,14 +195,14 @@ exact-assets 保留现有 runner 选择与覆盖范围。不增加 runner 规格
 | `control` | PR 准入/结束、发布清理/reconcile;Git、curl、jq、Python/YAML 与归档工具 |
 | `release-control` | 发布 preflight、Kernel publish、Preview 删除;control 工具加 Go |
 | `kernel` | Kernel 构建;Go 与 Ubuntu Kbuild 开发包 |
-| `runtime` | Runtime 构建;Go、native 开发包与可信 EROFS reader |
-| `runtime-publish` | Runtime 发布校验;Go 与独立构建的 EROFS reader |
+| `runtime` | Runtime 构建;Go、native 开发包与可信 EROFS writer/reader |
+| `runtime-publish` | Runtime 发布校验;Go 与独立构建的 EROFS writer/reader |
 | `source` | 完整源码构建/E2E;全部 native 依赖、Rust/Docker 检查与 VM/网络工具 |
 
 Go 使用官方 `go1.26.5.linux-amd64.tar.gz`,SHA256 为
 `5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`。
 bootstrap 校验归档、driver 与 compiler 后才加入 PATH;module 工具链选择保留
-`GOTOOLCHAIN=auto`。EROFS host reader 从固定的 v1.9.1 源码和 SHA256 构建,
+`GOTOOLCHAIN=auto`。EROFS host writer/reader 从固定的 v1.9.1 源码和 SHA256 构建,
 独立于 guest 静态 recipe。Rust/Cargo 与 Docker 是
 [标准镜像](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
 的必需能力,会显式检查。Native source pin、Cargo lockfile、构建参数、link map 和

@@ -105,10 +105,12 @@ install_readers() (
         --without-libcurl --without-openssl --without-libxml2 \
         --without-json-c --without-libnl3 --disable-multithreading
     make -C lib -j"$KUASAR_BUILD_JOBS"
+    make -C mkfs -j"$KUASAR_BUILD_JOBS"
     make -C fsck -j"$KUASAR_BUILD_JOBS"
     make -C dump -j"$KUASAR_BUILD_JOBS"
-    install -m 0755 fsck/fsck.erofs dump/dump.erofs "$KUASAR_HOSTED_ROOT/bin/"
+    install -m 0755 mkfs/mkfs.erofs fsck/fsck.erofs dump/dump.erofs "$KUASAR_HOSTED_ROOT/bin/"
     install -m 0644 COPYING "$KUASAR_HOSTED_ROOT/erofs-readers.COPYING"
+    "$KUASAR_HOSTED_ROOT/bin/mkfs.erofs" --version
     local fsck_help dump_help
     fsck_help=$("$KUASAR_HOSTED_ROOT/bin/fsck.erofs" --help 2>&1)
     dump_help=$("$KUASAR_HOSTED_ROOT/bin/dump.erofs" --help 2>&1)

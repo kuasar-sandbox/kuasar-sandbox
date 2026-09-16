@@ -126,14 +126,14 @@ bootstrap, with explicit profiles:
 | `control` | PR admission/finalization, release cleanup/reconcile; Git, curl, jq, Python/YAML and archive tools |
 | `release-control` | Release preflight, Kernel publish and Preview deletion; control tools plus Go |
 | `kernel` | Kernel build; Go and Ubuntu Kbuild development packages |
-| `runtime` | Runtime build; Go, native development packages and trusted EROFS readers |
-| `runtime-publish` | Runtime publish validation; Go and separately built EROFS readers |
+| `runtime` | Runtime build; Go, native development packages and trusted EROFS writer/readers |
+| `runtime-publish` | Runtime publish validation; Go and separately built EROFS writer/readers |
 | `source` | Complete source build/E2E; all native prerequisites, Rust/Docker checks, VM/network tools |
 
 Go comes from the official `go1.26.5.linux-amd64.tar.gz`, SHA256
 `5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`.
 The bootstrap verifies the archive, driver and compiler before adding it to
-PATH; module toolchain selection retains `GOTOOLCHAIN=auto`. EROFS host readers
+PATH; module toolchain selection retains `GOTOOLCHAIN=auto`. EROFS host writer/readers
 use pinned v1.9.1 source and its SHA256, independently of the static guest
 recipe. Rust/Cargo and Docker are required capabilities of the
 [standard image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
