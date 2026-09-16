@@ -10,8 +10,10 @@ die() { echo "ensure-versitygw: $*" >&2; exit 1; }
 log() { echo "==> $*" >&2; }
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-umbrella_dir="$(cd "$script_dir/.." && pwd)"
-org_dir="$(cd "$umbrella_dir/../.." && pwd)"
+# This helper lives two levels below the repository root. Keep cold-build
+# sources under root build/, not ci/build/, so docs assembly excludes them.
+umbrella_dir="$(cd "$script_dir/../.." && pwd)"
+org_dir="$(cd "$umbrella_dir/.." && pwd)"
 
 : "${TARGET_ARCH:=$(uname -m)}"
 case "$TARGET_ARCH" in
