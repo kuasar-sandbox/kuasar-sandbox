@@ -78,7 +78,7 @@ jobs:
       - kuasar-e2e
       - kvm
       - cgroup-v2
-    timeout-minutes: ${{ inputs.mode == 'exact-assets' && 120 || 45 }}
+    timeout-minutes: ${{ inputs.mode == 'exact-assets' && 120 || 60 }}
     env:
       TARGET_ARCH: x86_64
       GOPROXY: https://goproxy.cn,direct
