@@ -71,24 +71,12 @@ concurrency:
 
 jobs:
   e2e:
-    runs-on:
-      - self-hosted
-      - Linux
-      - X64
-      - kuasar-e2e
-      - kvm
-      - cgroup-v2
-    timeout-minutes: ${{ inputs.mode == 'exact-assets' && 120 || 60 }}
+    # Migrate only guest-runtime source candidates; other callers keep their pool.
+    runs-on: ${{ fromJSON(inputs.mode == 'source' && inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' && '["ubuntu-24.04"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
+    timeout-minutes: ${{ inputs.mode == 'source' && inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' && 180 || (inputs.mode == 'exact-assets' && 120 || 60) }}
     env:
       TARGET_ARCH: x86_64
-      GOPROXY: https://goproxy.cn,direct
-      GOSUMDB: sum.golang.google.cn
-      GOTOOLCHAIN: local
-      RUSTUP_DIST_SERVER: https://rsproxy.cn
-      RUSTUP_UPDATE_ROOT: https://rsproxy.cn/rustup
-      CARGO_REGISTRIES_CRATES_IO_PROTOCOL: sparse
-      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      PIP_INDEX_URL: https://pypi.tuna.tsinghua.edu.cn/simple
+      KUASAR_HOSTED: ${{ inputs.mode == 'source' && inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' }}
       KUASAR_CI_DIR: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}
       KUASAR_CI_TIMINGS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/timings.tsv
       KUASAR_NATIVE_CACHE_METRICS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/native-cache.tsv
@@ -107,6 +95,30 @@ jobs:
       PLATFORM_SOURCE_SHA: ${{ inputs.platform_source_sha }}
 
     steps:
+      - name: Check standard image archive transport
+        if: env.KUASAR_HOSTED == 'true'
+        run: |
+          set -euo pipefail
+          # Needed to materialize the trusted bootstrap from the archive API.
+          for tool in bash curl jq tar awk sort grep mktemp; do
+            command -v "$tool" >/dev/null || { echo "missing archive transport: $tool" >&2; exit 1; }
+          done
+
+      - name: Configure persistent runner environment
+        if: env.KUASAR_HOSTED != 'true'
+        run: |
+          cat >> "$GITHUB_ENV" <<'EOF'
+          GOPROXY=https://goproxy.cn,direct
+          GOSUMDB=sum.golang.google.cn
+          GOTOOLCHAIN=local
+          RUSTUP_DIST_SERVER=https://rsproxy.cn
+          RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
+          CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
+          CARGO_NET_GIT_FETCH_WITH_CLI=true
+          PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+          KUASAR_SOURCE_CACHE_ROOT=/var/cache/kuasar/sources
+          EOF
+
       - name: Validate reusable workflow request
         env:
           TRUSTED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
@@ -197,6 +209,7 @@ jobs:
           fi
 
       - name: Reset interrupted E2E state
+        if: env.KUASAR_HOSTED != 'true'
         run: |
           set -euo pipefail
           privileged=()
@@ -368,6 +381,14 @@ jobs:
             -H "X-GitHub-Api-Version: 2022-11-28" \
             https://api.github.com/installation/token)
           case "$status" in 204|401) ;; *) echo "failed to revoke tooling token: HTTP $status" >&2; exit 1 ;; esac
+
+      - name: Bootstrap standard guest source runner from trusted tooling
+        if: env.KUASAR_HOSTED == 'true'
+        run: bash trusted/platform/ci/hosted/bootstrap.sh --profile source
+
+      - name: Check hosted CI regression contracts
+        if: env.KUASAR_HOSTED == 'true'
+        run: python3 trusted/platform/ci/hosted/test-workflows.py
 
       - name: Reset exact aggregate workspace
         if: inputs.mode == 'exact-assets'
@@ -711,7 +732,7 @@ jobs:
             printf 'kuasar-sandbox/%s\t%s\t%s\t%s\n' \
               "$repo" "$requested_ref" "$resolved_sha" "$role" >> "$KUASAR_REVISION_MANIFEST"
 
-            source_dir="/var/cache/kuasar/sources/$repo"
+            source_dir="$KUASAR_SOURCE_CACHE_ROOT/$repo"
             archive="$source_dir/$resolved_sha.tar.gz"
             checksum="$archive.sha256"
             lock="$source_dir/.cache.lock"
@@ -803,7 +824,7 @@ jobs:
           while IFS=$'\t' read -r repository _ resolved_sha _; do
             repo=${repository#kuasar-sandbox/}
             [ "$repo" = kuasar-sandbox ] && continue
-            source_dir="/var/cache/kuasar/sources/$repo"
+            source_dir="$KUASAR_SOURCE_CACHE_ROOT/$repo"
             src/platform/ci/integration/source-cache-prune.sh \
               "$source_dir" "$source_dir/$resolved_sha.tar.gz"
           done < <(tail -n +2 "$KUASAR_REVISION_MANIFEST")
@@ -812,6 +833,7 @@ jobs:
           go work init ./accelerator ./connector ./guest-runtime ./orchestrator ./sandboxer
 
       - name: Attach runner caches and test tools
+        if: env.KUASAR_HOSTED != 'true'
         run: |
           set -euo pipefail
           if [ "${{ inputs.mode }}" = source ]; then
@@ -844,22 +866,61 @@ jobs:
             fi
           done
 
+      - name: Attach job-local source caches and test tools
+        if: env.KUASAR_HOSTED == 'true'
+        run: |
+          set -euo pipefail
+          for path in \
+            src/accelerator/build/tarball \
+            src/guest-runtime/native-deps/build/tarball \
+            src/sandboxer/native-deps/build/tarball
+          do
+            mkdir -p "$(dirname "$path")"
+            ln -sfn "$KUASAR_TARBALL_CACHE" "$path"
+          done
+          # make e2e-tools builds/downloads the existing pinned tool inputs.
+          # Never link the persistent runner's preinstalled tools on hosted.
+          tool_dir="$GITHUB_WORKSPACE/src/platform/build/e2e-tools/x86_64"
+          mkdir -p "$tool_dir"
+          echo "E2E_ZOT_BIN=$tool_dir/zot" >> "$GITHUB_ENV"
+          echo "E2E_VGW_BIN=$tool_dir/versitygw" >> "$GITHUB_ENV"
+          for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
+            timeout 3m docker pull "$image"
+          done
+
       - name: Restore or build verified native artifacts
         if: inputs.mode == 'source'
         working-directory: src/platform
-        run: ci/native-cache/native-cache.sh restore-or-build
+        shell: bash
+        run: |
+          if [ "${KUASAR_HOSTED:-false}" = true ]; then
+            taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
+          fi
+          ci/native-cache/native-cache.sh restore-or-build
 
       - name: Validate platform tooling
         if: inputs.mode == 'source'
         working-directory: src/platform
-        run: make test-ci-tools test-release-tools test-perf-tools
+        shell: bash
+        run: |
+          if [ "${KUASAR_HOSTED:-false}" = true ]; then
+            taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
+          fi
+          make test-ci-tools test-release-tools test-perf-tools
 
       - name: Build and test source candidate
         if: inputs.mode == 'source'
         working-directory: src/platform
+        shell: bash
         run: |
+          if [ "${KUASAR_HOSTED:-false}" = true ]; then
+            taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
+          fi
           set -euo pipefail
           make build e2e-tools assemble-e2e
+          if [ "$KUASAR_HOSTED" = true ]; then
+            [ -x "$E2E_ZOT_BIN" ] && [ -x "$E2E_VGW_BIN" ]
+          fi
           make test-uffd-performance-gate
 
           owner="${CANDIDATE_REPOSITORY##*/}"

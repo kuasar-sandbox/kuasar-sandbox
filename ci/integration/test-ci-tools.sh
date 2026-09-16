@@ -22,7 +22,6 @@ daily_workflow="$SCRIPT_DIR/../../.github/workflows/daily-preview-branch.yml"
 legacy_repository="kuasar-sandbox/platform"
 candidate_pattern='^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$'
 working_set_perf="$SCRIPT_DIR/../../test/perf/sandbox-perf-working-set.sh"
-private_control_runner="    runs-on: \${{ github.event.repository.private && 'kuasar-control' || 'ubuntu-latest' }}"
 
 # These positive fixtures must remain compatible with the runtime's strict
 # disk/restore input contract. Deliberate rejection tests live in sandboxer
@@ -123,11 +122,9 @@ with tempfile.TemporaryDirectory(prefix='manifest-stats-') as directory:
 print('test-ci-tools: manifest upload and nonzero-entry accounting parsers PASS')
 PY
 
-[ "$(grep -Fxc "$private_control_runner" "$entry_workflow")" -eq 2 ] \
-    || fail "Integration E2E admission and finalization do not select the private caller runner pool"
-if grep -Fqx '    runs-on: ubuntu-latest' "$entry_workflow"; then
-    fail "Integration E2E entry still unconditionally bills control jobs to hosted runners"
-fi
+# Exercise both repository and visibility branches; literal workflow lines no
+# longer describe the staged guest-runtime exception to the existing pools.
+python3 "$SCRIPT_DIR/../hosted/test-workflows.py"
 
 provisioner="$SCRIPT_DIR/../runner/provision.sh"
 bash "$SCRIPT_DIR/test-runner-native-materials.sh" "$provisioner"

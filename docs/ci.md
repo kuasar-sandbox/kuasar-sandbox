@@ -4,7 +4,7 @@
 
 ## 1. Overview
 
-The project repository owns the trusted CI control plane and the shared execution workflows. The five component repositories retain only event triggers and parameter wrappers, referencing `.github/workflows/ci-entry.yml` from project `main`. That entry calls `.github/workflows/integration-tests.yml` from the same resolved project `main` revision. Common admission, runner initialization, source caching, native caching, full E2E and exact released-asset validation are not duplicated across repositories.
+The project repository owns the trusted CI control plane and the shared execution workflows. The five component repositories retain only event triggers and parameter wrappers. All PR wrappers continue to reference `.github/workflows/ci-entry.yml` from project `main`; GitHub resolves that trusted revision once per run. Guest release bootstrap checkouts pin a reviewed platform commit. That entry calls `.github/workflows/integration-tests.yml` from the same resolved platform revision. Common admission, runner initialization, source caching, native caching, full E2E and exact released-asset validation are not duplicated across repositories.
 
 The execution workflow has two explicit modes:
 
@@ -25,13 +25,13 @@ kuasar-sandbox/orchestrator#227
 
 The marker may occur at most once. Each nonempty line must be an allowed `owner/repository#PR`. A repository may appear only once, and a PR cannot reference its triggering repository. Empty, duplicate and unclosed blocks are rejected. A companion must retain `refs/pull/N/merge`; the integration commit's first parent must equal the PR's current target branch and its second parent must equal `refs/pull/N/head`. That head must still be the head of a branch in the organization repository. A fork can therefore enter only as the triggering PR after existing membership admission, not indirectly as a companion on a privileged runner. Every companion must run Integration E2E in its own Ready state and obtain its own exact-head status: the primary PR's status cannot replace another PR's gate. Component wrappers do not subscribe to PR-body edits, so a marker change requires pushing a new head or a draft-to-ready transition. Before merging, compare the linked run's `source-set.tsv` against the current marker item by item. A marker changed after that run invalidates its evidence even if the commit status still displays success.
 
-Admission and finalization use short-lived App tokens restricted to the six repositories with `Contents: read` and `Pull requests: read`. PR refs, target branch refs, commit parents and `branches-where-head` resolve each companion into PR number, candidate/base/base-ref/head SHA. The self-hosted job does not trust raw PR-body text; it receives the resolved admission records, re-queries all refs/commits before executing candidate code, assembles sources by exact integration SHA and revokes the token. Finalization queries every record a third time. A missing merge ref, changed target branch/head/integration SHA or head that no longer belongs to an organization-repository branch makes the triggering PR's exact-head status fail.
+Admission and finalization use short-lived App tokens restricted to the six repositories with `Contents: read` and `Pull requests: read`. PR refs, target branch refs, commit parents and `branches-where-head` resolve each companion into PR number, candidate/base/base-ref/head SHA. The execution job does not trust raw PR-body text; it receives the resolved admission records, re-queries all refs/commits before executing candidate code, assembles sources by exact integration SHA and revokes the token. Finalization queries every record a third time. A missing merge ref, changed target branch/head/integration SHA or head that no longer belongs to an organization-repository branch makes the triggering PR's exact-head status fail.
 
 The status is written only to the triggering PR's integration commit. Cross-repository changes must declare their companions reciprocally and each run Integration E2E, covering each owning component's E2E entry and obtaining separate statuses. After merging the first PR, remove its companion marker from subsequent PRs and rerun against the new sibling revision on the target version line. This freezes the source-validation set without adding product-version negotiation, compatibility aliases or temporary runtime gates. Source mode still has no `main` push or manual-dispatch entry.
 
 Reusable-workflow validation requires:
 
-1. The control plane and execution implementation both resolve from project `main`, with the resolved full SHA recorded during the run.
+1. The control plane and execution implementation both resolve from the trusted platform workflow revision (project `main`, resolved to its full SHA), with the full SHA recorded during the run.
 2. The `pull_request_target` event, current PR and candidate/base/head inputs agree exactly.
 3. The candidate and every companion have their respective base/head as their two integration-commit parents.
 4. The current open PR and all companion refs retain the same base/head/merge commits before execution and after completion.
@@ -41,7 +41,7 @@ Reusable-workflow validation requires:
 
 The final control job re-queries the PR. It sets the same `kuasar/ci-exact-head` status to `success` only when Integration E2E succeeded and the current integration commit still exactly matches admission. Test failure, cancellation, skips and a changed PR cannot produce successful merge evidence. GitHub's ordinary `pull_request_target` workflow check attaches to the PR head commit and cannot replace this integration-commit status.
 
-Platform tooling and source are retrieved through GitHub's official archive API at full SHAs with read-only App tokens, without depending on Git smart HTTP. When their SHAs match, the already-extracted trusted tree is reused. Archives must have exactly one top-level directory and no path traversal, symbolic links or other nonregular entries. The five component source archives are cached at `/var/cache/kuasar/sources/<repo>/<sha>.tar.gz`. Hits validate SHA-256 and tar structure. Misses download GitHub's official tarball, falling back to the official zipball and local conversion on failure. Per-repository `flock` serializes maintenance, retaining the 32 most recently used revisions. Tokens are explicitly revoked before candidate code runs.
+Platform tooling and source are retrieved through GitHub's official archive API at full SHAs with read-only App tokens, without depending on Git smart HTTP. When their SHAs match, the already-extracted trusted tree is reused. Archives must have exactly one top-level directory and no path traversal, symbolic links or other nonregular entries. The five component source archives use `$KUASAR_SOURCE_CACHE_ROOT/<repo>/<sha>.tar.gz`: a job-local directory on hosted, or `/var/cache/kuasar/sources` on persistent runners. Hits validate SHA-256 and tar structure. Misses download GitHub's official tarball, falling back to the official zipball and local conversion on failure. Per-repository `flock` serializes maintenance, retaining the 32 most recently used revisions. Tokens are explicitly revoked before candidate code runs.
 
 For a platform PR targeting `main`, all six units resolve from component `main`. For a target of `release/vMAJOR.MINOR.x`, the execution job first reads `releases/daily-preview.yaml` from the PR integration, then applies the formal Daily rules independently to derive each component's `release/vX.Y.x`. If that maintenance branch is absent, the unit stays pinned to the manifest's exact tag. `release-units.tsv` records the six independent configured versions, requested refs and resolved SHAs. The source workspace still has one `guest-runtime` checkout, using the runtime unit's SHA. The independent vmlinux archive, checksum and runtime combination are verified against the manifest by exact-assets release asset validation before formal publication. A single source checkout does not combine these two release units.
 
@@ -97,7 +97,7 @@ This mode neither infers nor reads component `main`. Each unit's documentation, 
 - RocksDB headers and `librocksdb.a`;
 - patched `cloud-hypervisor`.
 
-Cache entries live at `/var/cache/kuasar/native/v2/<arch>/<component>/<input-hash>/`. The input hash covers build scripts, patches/configuration, upstream digests, architecture, Go/Cargo/C/C++ toolchains and pkg-config resolution. Entries are published through staging, checksums and atomic rename. Descriptor, payload and tar paths are checked again before restoring a hit. Corrupt entries fail rather than being repaired in place.
+Cache entries live at `$KUASAR_NATIVE_CACHE_ROOT/v2/<arch>/<component>/<input-hash>/`. Hosted bootstrap sets this root inside the disposable job directory; persistent runners retain `/var/cache/kuasar/native`. Hosted caches are local reuse only and are not uploaded to Actions cache or artifacts. The input hash covers build scripts, patches/configuration, upstream digests, architecture, Go/Cargo/C/C++ toolchains and pkg-config resolution. Entries are published through staging, checksums and atomic rename. Descriptor, payload and tar paths are checked again before restoring a hit. Corrupt entries fail rather than being repaired in place.
 
 Build and restore of the same key hold an entry lock. Each component retains its four most recently used keys by default. Reclamation only removes entries beyond the protection period whose locks can be acquired without blocking. Cache tests:
 
@@ -107,9 +107,88 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runners and networking
 
-Runner installation material lives in `ci/runner/`. Release-control jobs use the dedicated `kuasar-control` pool. Candidate-executing E2E jobs continue to use the `kuasar-e2e` pool and restricted read tokens. These runner classes have different root filesystems, work directories, labels and GitHub runner groups. Changing roles requires cleaning and rebuilding from a trusted template, not relabeling in place. `kuasar-control` is visible to all organization repositories, including public repositories, but its workflow allowlist permits only central `ci-entry.yml` and release workflows on component `main`. Public-repository CI admission/finalization, Daily coordination and aggregate-release control jobs use GitHub-hosted runners. Runner proxies are deployment configuration and are not embedded in repository workflows. Public mainland-China mirrors for Go, Rust, Python, the Linux kernel and common container images reduce network variability.
+### 5.1 Guest-runtime standard runners
 
-At job start, reset stops leftover sandbox systemd units, removes test TAPs and reloads systemd. It also reclaims the runner's working-set network namespace using the deterministic `kuasar-ws-<hash8>` name derived from `RUNNER_NAME`: send TERM to its processes, send KILL after a bounded wait, confirm no process is alive, then delete the namespace. Name derivation prevents runners on the same host from affecting one another and lets the next job reclaim a SIGKILL-interrupted run by exact name without guessing interface ownership (#43, #53). Common zot and versitygw tools are linked from the runner's fixed tool directory into the current workspace; they do not enter release packages. The `kuasar-e2e` runner group retains `visibility=all` for organization repositories, has no workflow allowlist and runs only candidate E2E. Fork-workflow secret forwarding is disabled in every repository. Preparation steps needing App secrets exist only in trusted base-repository workflows, and their tokens are revoked before candidate code executes.
+Guest-runtime release/maintenance jobs and all three transitive PR jobs
+(admission, source E2E, finalization) select standard `ubuntu-24.04`. Source
+E2E selects hosted only when `mode == source` and
+`candidate_repository == kuasar-sandbox/guest-runtime`. All other candidates
+and exact-assets keep their existing runner selection and coverage. There is
+no runner-size input, paid-runner fallback, replacement success check or reduced
+E2E mode. Standard hosted capacity is free for the public guest repository;
+repository visibility and billing are outside this change.
+
+[ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) is the shared trusted
+bootstrap, with explicit profiles:
+
+| Profile | Jobs / prerequisites |
+| --- | --- |
+| `control` | PR admission/finalization, release cleanup/reconcile; Git, curl, jq, Python/YAML and archive tools |
+| `release-control` | Release preflight, Kernel publish and Preview deletion; control tools plus Go |
+| `kernel` | Kernel build; Go and Ubuntu Kbuild development packages |
+| `runtime` | Runtime build; Go, native development packages and trusted EROFS readers |
+| `runtime-publish` | Runtime publish validation; Go and separately built EROFS readers |
+| `source` | Complete source build/E2E; all native prerequisites, Rust/Docker checks, VM/network tools |
+
+Go comes from the official `go1.26.5.linux-amd64.tar.gz`, SHA256
+`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`.
+The bootstrap verifies the archive, driver and compiler before adding it to
+PATH; module toolchain selection retains `GOTOOLCHAIN=auto`. EROFS host readers
+use pinned v1.9.1 source and its SHA256, independently of the static guest
+recipe. Rust/Cargo and Docker are required capabilities of the
+[standard image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+and are checked explicitly. Native source pins, Cargo lockfiles, build flags,
+link maps and materials remain owned by their existing recipes. Missing tools,
+checksum mismatches or unavailable VM capabilities fail the job.
+
+The source profile loads `tun` and `vhost_vsock`, enables
+`vm.unprivileged_userfaultfd=1`, grants only the job uid access to `/dev/kvm`,
+`/dev/vhost-vsock` and `/dev/net/tun`, and checks userfaultfd, systemd and cgroup
+v2. It installs no runner service, template, nspawn slot or persistent network.
+The old owned-state recovery runs only on persistent runners. Builds use CPU
+affinity bounded by available CPUs and memory (2 GiB OS reserve, 2 GiB per
+compiler job), including recipes using `nproc`; Go/Cargo parallelism uses the
+same budget. Top-level Make goals retain their sequential order. Source E2E has
+180 minutes for a cold build and the complete owner/UFFD/A/B/C/D smoke sequence.
+
+Source archives, native entries, tarballs, Go/Cargo caches and tools live under
+`$RUNNER_TEMP/kuasar-hosted.*`. They are never uploaded. Sources themselves stay
+in the job workspace; only the existing revision/timing/performance metadata
+and validated release bundles are uploaded. Release bundles retain their
+required license/source inventories, without a full workspace handoff. Hosted
+uses official Go/Rust/Python/kernel/image endpoints, and builds the existing
+zot/versitygw targets locally. Persistent callers keep their mirror settings.
+
+PR bootstrap runs from `trusted/platform` at `job.workflow_sha`, after platform
+tooling-token revocation and before source-token creation. Guest release jobs
+check out that same immutable platform pin before requested sources; Runtime
+ABI checks come from the trusted guest workflow checkout. Kernel needs no
+cross-repository App token. Runtime still fetches its private dependency closure
+with the existing read-only source token and revokes it before executing source
+or packaging code. Publishing remains in a separate job with write permission.
+
+Rollout is ordered: qualify and normally merge the shared platform change,
+then set every guest release bootstrap checkout to that reviewed full SHA.
+A squash/rebase requires refreshing these release pins. PR wrappers retain
+`@main`; a new guest PR event after the platform merge resolves the new trusted
+workflow and selects standard runners. `pull_request_target` executes the
+base-branch wrapper, so editing a candidate wrapper alone is not qualification.
+Other callers retain their runner choices until their own migration. Manual
+rehearsals do not replace the required exact-candidate Integration E2E check.
+
+Offline checks are `python3 ci/hosted/test-workflows.py` (also included in
+`make test-ci-tools`) and guest `python3 scripts/ci-test-workflows.py
+../kuasar-sandbox`. They cover runner selection, profiles, pins, token ordering,
+private cache paths, ABI and required coverage. Syntax/offline success is not
+hosted qualification: the supervisor must exercise the actual candidate run,
+including the full working-set matrix and truthful revision metadata, after
+activating the trusted rollout.
+
+### 5.2 Remaining persistent callers
+
+Runner installation material lives in `ci/runner/`. Unmigrated component release-control jobs use the dedicated `kuasar-control` pool. Their candidate-executing E2E jobs continue to use the `kuasar-e2e` pool and restricted read tokens. These runner classes have different root filesystems, work directories, labels and GitHub runner groups. Changing roles requires cleaning and rebuilding from a trusted template, not relabeling in place. `kuasar-control` is visible to all organization repositories, including public repositories, but its workflow allowlist permits only central `ci-entry.yml` and release workflows on component `main`. Public-repository CI admission/finalization, Daily coordination and aggregate-release control jobs use GitHub-hosted runners. Runner proxies are deployment configuration and are not embedded in repository workflows. Public mainland-China mirrors for Go, Rust, Python, the Linux kernel and common container images reduce network variability.
+
+At persistent-runner job start, reset stops leftover sandbox systemd units, removes test TAPs and reloads systemd. It also reclaims the runner's working-set network namespace using the deterministic `kuasar-ws-<hash8>` name derived from `RUNNER_NAME`: send TERM to its processes, send KILL after a bounded wait, confirm no process is alive, then delete the namespace. Name derivation prevents runners on the same host from affecting one another and lets the next job reclaim a SIGKILL-interrupted run by exact name without guessing interface ownership (#43, #53). Common zot and versitygw tools are linked from the runner's fixed tool directory into the current workspace; they do not enter release packages. The `kuasar-e2e` runner group retains `visibility=all` for organization repositories, has no workflow allowlist and runs only candidate E2E. Fork-workflow secret forwarding is disabled in every repository. Preparation steps needing App secrets exist only in trusted base-repository workflows, and their tokens are revoked before candidate code executes.
 
 Privileged Runner provisioning must keep publishing credentials and persistent Runner credentials outside candidate access, and discard candidate-writable state between jobs. Revoking source tokens alone does not establish that isolation. Unreviewed outside-fork code must not enter these privileged slots; maintainers first review and accept its exact source through the documented contribution flow.
 

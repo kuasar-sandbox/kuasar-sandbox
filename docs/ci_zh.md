@@ -5,8 +5,10 @@
 ## 1. 概述
 
 项目主仓维护 CI 的可信控制面与唯一执行 workflow。五个组件仓只保留事件触发和参数
-wrapper,并从项目主仓 `main` 引用 `.github/workflows/ci-entry.yml`;该入口再从同一个
-项目主仓 `main` revision 调用 `.github/workflows/integration-tests.yml`。公共准入、runner 初始化、
+wrapper。所有 PR wrapper 继续引用项目主仓 `main` 的 `.github/workflows/ci-entry.yml`,
+每次运行解析到精确的可信提交。guest 的发布 bootstrap checkout 固定到评审后的平台提交。
+该入口再从同一个解析后的平台 revision 调用
+`.github/workflows/integration-tests.yml`。公共准入、runner 初始化、
 源码缓存、native cache、完整 E2E 和精确发布资产验证不再复制到各仓。
 
 执行 workflow 有两个明确模式:
@@ -50,7 +52,7 @@ draft → ready 触发新运行。准备合入时必须把 status 所链接 run 
 admission 和 finalization 使用仅限六仓 `Contents: read`、`Pull requests: read` 的短期 App
 token,通过 PR refs、目标 branch ref、
 commit parents 与 `branches-where-head` 把每个 companion 解析成 PR number、candidate/base/base-ref/head
-SHA。自托管 job 不信任 PR body 原文,只接收 admission 输出的已解析记录,在执行候选代码前
+SHA。执行 job 不信任 PR body 原文,只接收 admission 输出的已解析记录,在执行候选代码前
 重新查询全部 refs/commit,按 exact integration SHA 组装源码并撤销 token。结束控制 job第三次
 查询全部记录;任一 merge ref 消失、目标 branch/head/integration SHA 变化或 head 不再属于组织仓 branch,
 触发 PR 的 exact-head status 均失败。
@@ -62,7 +64,7 @@ companion marker,再以该 PR 目标版本线的新 sibling 重跑。该流程�
 
 可复用 workflow 验证:
 
-1. 控制面与执行实现都解析自 `kuasar-sandbox/kuasar-sandbox` 的 `main`,运行中记录解析后的完整 SHA;
+1. 控制面与执行实现都解析自可信平台 workflow revision(项目主仓 `main` 解析后的完整 SHA),运行中记录完整 SHA;
 2. `pull_request_target` event、当前 PR 与 candidate/base/head 输入完全一致;
 3. candidate 和所有 companion 均是以各自 base/head 为两个父提交的 integration commit;
 4. 当前开放 PR 与全部 companion refs 的 base/head/merge commit 在执行前与结束后均未变化;
@@ -80,7 +82,8 @@ companion marker,再以该 PR 目标版本线的新 sibling 重跑。该流程�
 platform tooling 与 source 使用只读 App token 从 GitHub 官方 archive API 按完整 SHA 获取,
 不依赖 Git smart HTTP;二者 SHA 相同时直接复用已解包的 trusted tree。归档必须只有一个顶层
 目录、不得包含路径穿越或符号链接等非普通条目。五个组件的源码归档缓存在
-`/var/cache/kuasar/sources/<repo>/<sha>.tar.gz`。命中时校验 SHA-256 和 tar 结构;miss 从
+`$KUASAR_SOURCE_CACHE_ROOT/<repo>/<sha>.tar.gz`:hosted 使用 job 临时目录,持久 runner
+使用 `/var/cache/kuasar/sources`。命中时校验 SHA-256 和 tar 结构;miss 从
 GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每仓以 `flock`
 串行维护,保留最近使用的 32 个 revision。token 在执行候选代码前显式撤销。
 
@@ -159,7 +162,9 @@ Go/Rust/native build,也不会重新编译 vmlinux。通过后 publish job 原�
 - RocksDB headers 与 `librocksdb.a`;
 - patched `cloud-hypervisor`。
 
-缓存路径为 `/var/cache/kuasar/native/v2/<arch>/<component>/<input-hash>/`。input hash 覆盖
+缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v2/<arch>/<component>/<input-hash>/`。hosted
+bootstrap 将根目录设在本次 job 临时目录内;持久 runner 保持 `/var/cache/kuasar/native`。
+hosted 只做本地复用,不向 Actions cache 或 artifact 上传缓存。input hash 覆盖
 构建脚本、patch/config、上游摘要、架构、Go/Cargo/C/C++ 工具链和 pkg-config 解析结果。
 条目通过 staging、校验和及原子 rename 发布;命中恢复前重新校验 descriptor、payload 和
 tar 路径。损坏条目失败,不会在原目录修补。
@@ -173,8 +178,73 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runner 与网络
 
-runner 安装资料位于 `ci/runner/`。Release 控制 job 使用
-专用 `kuasar-control` 池;执行候选代码的 E2E job 继续使用 `kuasar-e2e` 池和收窄后的 read
+### 5.1 Guest-runtime 标准 runner
+
+Guest-runtime 的发布/维护 job 和 PR 的三个传递 job(admission、source E2E、finalization)
+均选择标准 `ubuntu-24.04`。Source E2E 仅在 `mode == source` 且
+`candidate_repository == kuasar-sandbox/guest-runtime` 时选择 hosted。其他候选仓和
+exact-assets 保留现有 runner 选择与覆盖范围。不增加 runner 规格输入、付费 fallback、
+替代成功 check 或缩减 E2E 的模式。公开 guest 仓使用免费的标准 hosted 容量;
+仓库可见性和计费不属于本次变更。
+
+[ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) 是唯一共享的可信 bootstrap,
+各 job 明确指定 profile:
+
+| Profile | Job / 前置能力 |
+| --- | --- |
+| `control` | PR 准入/结束、发布清理/reconcile;Git、curl、jq、Python/YAML 与归档工具 |
+| `release-control` | 发布 preflight、Kernel publish、Preview 删除;control 工具加 Go |
+| `kernel` | Kernel 构建;Go 与 Ubuntu Kbuild 开发包 |
+| `runtime` | Runtime 构建;Go、native 开发包与可信 EROFS reader |
+| `runtime-publish` | Runtime 发布校验;Go 与独立构建的 EROFS reader |
+| `source` | 完整源码构建/E2E;全部 native 依赖、Rust/Docker 检查与 VM/网络工具 |
+
+Go 使用官方 `go1.26.5.linux-amd64.tar.gz`,SHA256 为
+`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`。
+bootstrap 校验归档、driver 与 compiler 后才加入 PATH;module 工具链选择保留
+`GOTOOLCHAIN=auto`。EROFS host reader 从固定的 v1.9.1 源码和 SHA256 构建,
+独立于 guest 静态 recipe。Rust/Cargo 与 Docker 是
+[标准镜像](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+的必需能力,会显式检查。Native source pin、Cargo lockfile、构建参数、link map 和
+materials 仍由既有 recipe 维护。工具缺失、摘要不符或 VM 能力不可用均使 job 失败。
+
+Source profile 加载 `tun`、`vhost_vsock`,启用 `vm.unprivileged_userfaultfd=1`,
+仅向本次 job 的 uid 授予 `/dev/kvm`、`/dev/vhost-vsock`、`/dev/net/tun` 访问权,
+并检查 userfaultfd、systemd 和 cgroup v2。不安装 runner service、模板、nspawn slot
+或持久网络。旧的 owned-state 恢复仅在持久 runner 运行。构建 CPU affinity 按可用
+CPU 与内存限制(预留 2 GiB 给系统,每个 compiler job 预算 2 GiB),也约束使用
+`nproc` 的 recipe;Go/Cargo 并发使用同一预算。顶层 Make goal 仍顺序执行。
+Source E2E 的 180 分钟限时包含冷构建与完整 owner/UFFD/A/B/C/D smoke。
+
+源码归档、native 条目、tarball、Go/Cargo cache 和工具位于
+`$RUNNER_TEMP/kuasar-hosted.*`,不上传这些目录。源码本身保留在 job workspace;
+仅上传既有 revision/timing/performance metadata 与验证后的发布 bundle。Bundle 继续
+包含必需的许可/来源清单,不传递完整 workspace。Hosted 使用官方 Go/Rust/Python/
+kernel/image 地址并本地构建既有 zot/versitygw target;持久 caller 保持其镜像设置。
+
+PR bootstrap 从 `job.workflow_sha` 对应的 `trusted/platform` 执行,位于平台工具
+token 撤销之后、source token 创建之前。Guest release job 在请求源码之前 checkout
+同一 immutable 平台 pin;Runtime ABI 检查来自可信 guest workflow checkout。Kernel
+不再需要跨仓 App token。Runtime 仍通过既有只读 source token 获取私有依赖闭包,
+在执行源码或打包代码前撤销。Publish 仍是单独拥有写权限的 job。
+
+迁移顺序为:先验证并正常合入共享平台改动,再将 guest 的所有发布 bootstrap checkout
+固定到该评审提交的完整 SHA。Squash/rebase 后需要更新这些发布 pin。PR wrapper 保留
+`@main`;平台合入后的新 guest PR 事件会解析新可信 workflow 并选择标准 runner。
+`pull_request_target` 使用 base 分支 wrapper,因此仅修改候选 wrapper 不能作为资格验证。
+其他 caller 的执行环境在各自迁移前保持不变。手工演练不代替精确候选的必需 Integration
+E2E 检查。
+
+离线检查为 `python3 ci/hosted/test-workflows.py`(也由 `make test-ci-tools` 执行)及 guest
+`python3 scripts/ci-test-workflows.py ../kuasar-sandbox`,覆盖 runner 选择、profile、pin、
+token 顺序、私有缓存路径、ABI 与必需覆盖。语法/离线通过不代表 hosted qualification:
+启用可信迁移后,supervisor 仍需运行真实候选 CI,包含完整 working-set matrix 和真实
+revision metadata。
+
+### 5.2 其余持久 runner caller
+
+runner 安装资料位于 `ci/runner/`。尚未迁移的组件 Release 控制 job 使用
+专用 `kuasar-control` 池;其执行候选代码的 E2E job 继续使用 `kuasar-e2e` 池和收窄后的 read
 token。两组 runner 使用不同 rootfs、工作目录、标签和 GitHub runner group;角色变更必须先
 清空并从可信模板重建,不能原地改标签。`kuasar-control` 对组织内全部仓库可见并允许 public,
 同时用 workflow allowlist 只允许中央 `ci-entry.yml` 和各组件 `main` 上的 release workflow。
@@ -182,7 +252,7 @@ token。两组 runner 使用不同 rootfs、工作目录、标签和 GitHub runn
 代理属于部署配置,不写入仓库 workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用
 公开中国大陆镜像降低网络抖动。
 
-每次 job 开始会停止遗留 sandbox systemd unit、删除测试 tap 并重载 systemd。reset 还会按
+每次持久 runner job 开始会停止遗留 sandbox systemd unit、删除测试 tap 并重载 systemd。reset 还会按
 `RUNNER_NAME` 派生的确定名称(`kuasar-ws-<hash8>`)回收本 runner 的 working-set 网络
 namespace:先对其内进程 TERM、限时后 KILL,确认无存活进程后删除。名称派生保证同宿主多
 runner 互不影响,也使被 SIGKILL 中断的运行能在下一个 job 按精确名称回收,无需猜测接口

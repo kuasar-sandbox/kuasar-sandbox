@@ -17,10 +17,9 @@ concurrency:
 
 jobs:
   admission:
-    # GitHub bills reusable workflow jobs to the caller. Keep the public platform
-    # caller on hosted capacity and route private component callers to the
-    # dedicated control pool. It never executes candidate source.
-    runs-on: ${{ github.event.repository.private && 'kuasar-control' || 'ubuntu-latest' }}
+    # Guest-runtime is the first standard-runner caller. Other callers keep
+    # their existing control selection. This job never executes candidate source.
+    runs-on: ${{ github.repository == 'kuasar-sandbox/guest-runtime' && 'ubuntu-24.04' || (github.event.repository.private && 'kuasar-control' || 'ubuntu-latest') }}
     permissions:
       contents: read
       pull-requests: read
@@ -34,6 +33,20 @@ jobs:
       head_sha: ${{ steps.admission.outputs.head_sha }}
       companion_candidates: ${{ steps.admission.outputs.companion_candidates }}
     steps:
+      - name: Check out trusted hosted bootstrap
+        if: github.repository == 'kuasar-sandbox/guest-runtime'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: trusted/platform
+          sparse-checkout: ci/hosted
+          persist-credentials: false
+
+      - name: Bootstrap standard control runner
+        if: github.repository == 'kuasar-sandbox/guest-runtime'
+        run: bash trusted/platform/ci/hosted/bootstrap.sh --profile control
+
       - name: Create organization membership token
         if: >-
           github.event_name == 'pull_request_target' &&
@@ -473,7 +486,7 @@ jobs:
   finalize:
     needs: [admission, e2e]
     if: always()
-    runs-on: ${{ github.event.repository.private && 'kuasar-control' || 'ubuntu-latest' }}
+    runs-on: ${{ github.repository == 'kuasar-sandbox/guest-runtime' && 'ubuntu-24.04' || (github.event.repository.private && 'kuasar-control' || 'ubuntu-latest') }}
     permissions:
       contents: read
       pull-requests: read
@@ -491,6 +504,20 @@ jobs:
       CANDIDATE_HEAD_SHA: ${{ needs.admission.outputs.head_sha }}
       COMPANION_CANDIDATES: ${{ needs.admission.outputs.companion_candidates }}
     steps:
+      - name: Check out trusted hosted bootstrap
+        if: github.repository == 'kuasar-sandbox/guest-runtime'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: trusted/platform
+          sparse-checkout: ci/hosted
+          persist-credentials: false
+
+      - name: Bootstrap standard control runner
+        if: github.repository == 'kuasar-sandbox/guest-runtime'
+        run: bash trusted/platform/ci/hosted/bootstrap.sh --profile control
+
       - name: Create companion finalization token
         if: >-
           needs.admission.result == 'success' &&
