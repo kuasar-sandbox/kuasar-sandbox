@@ -46,3 +46,35 @@ for mutation in payload license unlisted symlink missing traversal identity; do
     fi
 done
 printf 'test-ci-tools: native libuuid source catalog and repeated slot copy PASS\n'
+
+# Exercise the actual wrapper from a standalone-installed provision.sh layout.
+(
+    installed="$test_root/installed/usr/local"
+    mkdir -p "$installed/sbin" "$installed/libexec/kuasar-static-crypto"
+    cp "$1" "$installed/sbin/kuasar-ci-runner-provision"
+    cat > "$installed/libexec/kuasar-static-crypto/static-crypto.py" <<'PYTHON'
+import json, os, sys
+with open(os.environ["CRYPTO_HOOK_LOG"], "a") as output:
+    output.write(json.dumps(sys.argv[1:]) + "\n")
+PYTHON
+    : > "$installed/libexec/kuasar-static-crypto/static-crypto-catalog.py"
+    export CRYPTO_HOOK_LOG="$test_root/crypto-hooks.jsonl"
+    source "$installed/sbin/kuasar-ci-runner-provision"
+    TEMPLATE_ROOT="$test_root/crypto-template" SOURCE_CACHE="$test_root/sources"
+    install_static_crypto
+    copy_static_crypto "$test_root/crypto-slot"
+    python3 - "$CRYPTO_HOOK_LOG" "$1" "$test_root" <<'PYTHON'
+import json, pathlib, sys
+rows=[json.loads(line) for line in pathlib.Path(sys.argv[1]).read_text().splitlines()]
+root=sys.argv[3]
+assert rows == [
+    ["install", "--root", root + "/crypto-template", "--sources", root + "/sources", "--download", "--jobs", "2"],
+    ["copy", "--template", root + "/crypto-template", "--root", root + "/crypto-slot"],
+]
+source=pathlib.Path(sys.argv[2]).read_text()
+assert "    install_static_libuuid\n    install_static_crypto\n    check_erofs_static_libraries" in source
+assert '    copy_static_libuuid "$root"\n    copy_static_crypto "$root"' in source
+assert '"$SCRIPT_DIR/static-crypto.py" "$SCRIPT_DIR/static-crypto-catalog.py"' in source
+print("test-ci-tools: crypto template/slot hooks and standalone helper lookup PASS")
+PYTHON
+)

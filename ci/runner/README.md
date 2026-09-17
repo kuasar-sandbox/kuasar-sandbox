@@ -95,6 +95,75 @@ E2E are installed from the same mirror. GNU `time` provides per-stage CPU,
 memory, and I/O metrics. Every install reconciles the package manifest so
 existing slots receive newly added build dependencies.
 
+The Libgcrypt guest SHA backend also needs `libgcrypt.a` and `libgpg-error.a`.
+The pinned openEuler 24.03-LTS-SP4 devel packages omit these archives. The
+[static crypto provider](static-crypto.py) builds them inside the template and
+copies a validated generation to each new or existing slot. It requires the
+matching `libgcrypt-devel` `1.10.2-4.oe2403sp4` and `libgpg-error-devel`
+`1.47-1.oe2403sp4` packages. It installs only the two static archives and their
+catalog; distro headers, pkg-config metadata, shared libraries and services stay
+under package management. OpenSSL remains a separate host kernel prerequisite.
+
+The provider pins both SRPMs and every contained source, spec, patch and auxiliary
+file. Source RPMs are cached in `/var/cache/kuasar/sources` and fetched from the
+same Huawei Cloud mirror only when absent. A checksum mismatch fails the build.
+
+| Input | SHA-256 |
+| --- | --- |
+| `libgcrypt-1.10.2-4.oe2403sp4.src.rpm` | `074decf4fb34ddadbc1e7498140bfb6dbf7d24f0ed9b85fe9ec7f5c9540ac984` |
+| `libgcrypt-1.10.2.tar.bz2` | `3b9c02a004b68c256add99701de00b383accccf37177e0d6c58289664cce0c03` |
+| `libgpg-error-1.47-1.oe2403sp4.src.rpm` | `cb75e6c3ae8d4d5d13eb621106c4ad9e3a1f0670959d3a277870790e6083f499` |
+| `libgpg-error-1.47.tar.gz` | `685d4bd9d05576c4fc7f0870903dfdfbe41f2dd6a12e76fd8bd1717278f6b365` |
+
+Preparation rejects traversal, duplicate archive members and links before
+extraction. It applies the spec's patches in order with zero fuzz, including
+Libgcrypt Patch2 (the CVE backport), and preserves the explicit spec substitutions.
+`autoconf -f` and `autoheader -f` regenerate the affected configure inputs using
+the bundled m4 files; this avoids replacing gettext/libtool support files through
+`autoreconf`. Builds use at most two jobs, `-O2 -g0 -fPIC`, static libraries only,
+and no documentation build. Libgpg-error disables NLS and installs its headers
+and config scripts only into a temporary dependency prefix. The static Libgcrypt
+build disables shared-object HMAC generation, which requires a `.so`; the distro
+shared library is untouched. Other relevant configure options are retained in
+`BUILD.json`, along with ordered patches and the actual tool identities. A real
+static-link SHA-256 probe must pass before installation.
+
+Each generation lives at `/usr/share/kuasar-ci/native-crypto/<build-id>/`.
+`SOURCES.tsv` binds actual archive bytes to the pinned SRPMs/tarballs;
+`MATERIALS.sha256` inventories every file and its digest is the build ID.
+The catalog retains the original SRPMs and all their files, upstream license
+texts/notices, the exact provider/validator recipe, compiler/tool hashes and
+versions, configure/build logs, generated headers and configuration, plus both
+archives for relinking. Large source and archive files appear in the source
+catalog, not in every license directory. The recipe is specific to these pins;
+updating it requires updating the provider digest and the matching validator in
+`guest-runtime/scripts/static-crypto-catalog.py`.
+
+Installation stages and validates the full catalog before replacing archives and
+writes `/usr/lib64/.kuasar-crypto-build-id` last. Ordinary failures restore the
+previous archives and marker; an interruption before the marker is published
+cannot authorize reuse or collection. Warm reuse requires the complete matching
+catalog, both installed archive bytes, the current recipe and tool identities.
+Template-to-slot copies validate both ends. The installed standalone provisioner
+finds its helpers under `/usr/local/libexec/kuasar-static-crypto`.
+
+For local verification with the host compiler, use a disposable prefix and the
+already downloaded, exact source RPMs (no package or service changes):
+
+```bash
+crypto_root=$(mktemp -d)
+python3 ci/runner/static-crypto.py install --host-build --root "$crypto_root" \
+  --sources /path/to/pinned-srpms --jobs 2
+python3 ci/runner/static-crypto-catalog.py installed --root "$crypto_root"
+python3 ci/runner/static-crypto.py copy --template "$crypto_root" --root "$crypto_root-slot"
+```
+
+Run these commands from the repository root. Omit `--host-build` to test inside
+an existing disposable openEuler root with the matching devel packages and build
+tools. The host-compiler mode verifies the helper; it does not establish target
+openEuler or BMS acceptance. No full provisioner invocation is needed for this
+check. The helper does not register runners or install packages.
+
 Changing the pinned util-linux source requires overriding the complete source
 descriptor together: `KUASAR_UTIL_LINUX_SRPM_URL`,
 `KUASAR_UTIL_LINUX_SRPM_SHA256`, `KUASAR_UTIL_LINUX_SOURCE_ARCHIVE`, and

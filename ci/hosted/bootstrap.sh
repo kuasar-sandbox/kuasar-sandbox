@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Trusted ubuntu-24.04 prerequisites. Never source this from a requested candidate.
+# Trusted standard Ubuntu prerequisites. Never source this from a requested candidate.
 set -euo pipefail
 
 GO_VERSION=1.26.5
@@ -46,7 +46,8 @@ select_profile() {
         packages+=(autoconf automake libtool uuid-dev)
     fi
     if $with_native; then
-        packages+=(liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)
+        # Retain the native crypto prerequisites already merged in #126.
+        packages+=(patch libgcrypt20-dev libgpg-error-dev libssl-dev liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)
     fi
     if [ "$profile" = source ]; then
         packages+=(cmake clang llvm libclang-dev libsnappy-dev libssl-dev)
@@ -129,9 +130,8 @@ install_readers() (
 render_kvm_rule() {
     [ "$#" -eq 2 ] || die "KVM rule requires job uid and primary gid"
     if [ "${GITHUB_ACTIONS:-}" != true ] || [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ] \
-        || [ "${RUNNER_OS:-}" != Linux ] || [ "${RUNNER_ARCH:-}" != X64 ] \
-        || [ "${ImageOS:-}" != ubuntu24 ]; then
-        die "KVM rule requires a disposable GitHub-hosted ubuntu-24.04 x64 job"
+        || [ "${RUNNER_OS:-}" != Linux ] || [ "${RUNNER_ARCH:-}" != X64 ]; then
+        die "KVM rule requires a disposable GitHub-hosted Linux x64 job"
     fi
     local value
     for value in "$@"; do
@@ -214,7 +214,7 @@ main() {
     [ "$(uname -m)" = x86_64 ] || die "x86_64 is required"
     # shellcheck disable=SC1091
     . /etc/os-release
-    if [ "$ID" != ubuntu ] || [ "$VERSION_ID" != 24.04 ]; then die "ubuntu-24.04 is required"; fi
+    if [ "$ID" != ubuntu ] || [ "$(uname -s)" != Linux ]; then die "Ubuntu Linux is required"; fi
     if $with_vm; then render_kvm_rule "$(id -u)" "$(id -g)" >/dev/null; fi
     : "${RUNNER_TEMP:?}" "${GITHUB_ENV:?}" "${GITHUB_PATH:?}"
     need sudo curl sha256sum tar python3

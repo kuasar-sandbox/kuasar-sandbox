@@ -85,7 +85,7 @@ cd release-install
 BIN=$PWD/bin bash test/e2e/run_all.sh
 ```
 
-This mode neither infers nor reads component `main`. Each unit's documentation, cases and binaries bind to its independently selected tag, allowing a platform maintenance branch to combine different component maintenance lines. It does not rebuild product Go/Rust/native binaries, vmlinux, RocksDB or Cloud Hypervisor. On the public main caller, the trusted `exact-assets` bootstrap supplies host prerequisites; after bundle validation/extraction, [exact-assets-tools.sh](../ci/hosted/exact-assets-tools.sh) downloads zot v2.1.17 and builds the local versitygw v1.5.0 test service. Only host test tools and EROFS writer/readers are built. Product binaries in `release-install/bin` remain untouched. All ten existing `REQUIRE_*` flags stay enabled, and the packaged top-level suite still runs every owner. After success, publish uses the earlier artifact unchanged.
+This mode neither infers nor reads component `main`. Each unit's documentation, cases and binaries bind to its independently selected tag, allowing a platform maintenance branch to combine different component maintenance lines. It does not rebuild product Go/Rust/native binaries, vmlinux, RocksDB or Cloud Hypervisor. On a Public caller, the trusted `exact-assets` bootstrap supplies host prerequisites; after bundle validation/extraction, [exact-assets-tools.sh](../ci/hosted/exact-assets-tools.sh) downloads zot v2.1.17 and builds the local versitygw v1.5.0 test service. Only host test tools and EROFS writer/readers are built. Product binaries in `release-install/bin` remain untouched. All ten existing `REQUIRE_*` flags stay enabled, and the packaged top-level suite still runs every owner. After success, publish uses the earlier artifact unchanged.
 
 ## 4. Native cache
 
@@ -99,6 +99,12 @@ This mode neither infers nor reads component `main`. Each unit's documentation, 
 
 Cache entries live at `$KUASAR_NATIVE_CACHE_ROOT/v2/<arch>/<component>/<input-hash>/`. Hosted bootstrap sets this root inside the disposable job directory; persistent runners retain `/var/cache/kuasar/native`. Hosted caches are local reuse only and are not uploaded to Actions cache or artifacts. The input hash covers build scripts, patches/configuration, upstream digests, architecture, Go/Cargo/C/C++ toolchains and pkg-config resolution. Entries are published through staging, checksums and atomic rename. Descriptor, payload and tar paths are checked again before restoring a hit. Corrupt entries fail rather than being repaired in place.
 
+EROFS keys include Libgcrypt/Libgpg-error/uuid pkg-config metadata, target compiler/tool bytes, actual local source archive bytes (or the expected digest for a pinned URL), and a bounded compiler/static-link probe. The probe tracks consumed headers, including forced includes, and the archives/startup objects actually selected through flags, sysroots and library search paths. A source URL or filename is a locator, not content identity. Logical workspace file labels are relocatable; meaningful compiler and sysroot flag values remain significant. An unpinned URL cannot authorize a shared cache; use a pinned URL or a local archive.
+
+Optional `guest-runtime/native-deps/deps/erofs-patches` material, ordered `series` and `deps/erofs-recipe.sh` enter the key. Older source sets without those files are supported, including the previous OpenSSL recipe's actual target link probe. Adding, changing or removing inputs invalidates the key. Hosted native profiles install `libgcrypt20-dev libgpg-error-dev uuid-dev` and retain `libssl-dev` for already-admitted older source sets. openEuler 24.03-LTS-SP4's `libgcrypt-1.10.2-4` and `libgpg-error-1.47-1` source RPMs explicitly disable static libraries; their devel packages alone are insufficient. The [runner provider](../ci/runner/README.md#install) builds those pinned distro-patched sources with at most two jobs, installs only the static archives and validated source/build/relink/license catalogs, and verifies warm reuse and template-to-slot copies. Runtime packaging validates the same pinned catalogs; Ubuntu keeps the installed-package material path.
+
+EROFS retains one optional `bin/<arch>/.erofs-recipe` v2 stamp with both output hashes and actual external compiler/link dependencies, both link maps and their EROFS object/archive inputs, and source `LICENSES`, `AUTHORS` and `COPYING`. Restoring an identical recipe can reuse the outputs without an extracted source tree. Older caches without the stamp remain readable and rebuild on the next recipe check. Repository patch files remain from the admitted source set; cache restore does not replace them. Runtime patch-material validation uses the selected commit's local Git objects; those objects must be available to standalone validators. Actual target copyright/notices and source/relink inputs remain required for real release packaging.
+
 Build and restore of the same key hold an entry lock. Each component retains its four most recently used keys by default. Reclamation only removes entries beyond the protection period whose locks can be acquired without blocking. Cache tests:
 
 ```bash
@@ -107,25 +113,26 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runners and networking
 
-### 5.1 Public main and guest-runtime standard runners
+### 5.1 Visibility-only standard runner routing
 
 The main migration is tracked in [#127](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/127).
+The shared control and E2E jobs select `ubuntu-latest` exactly when the actual
+calling repository is Public. Every other visibility retains the existing
+`kuasar-control` or `kuasar-e2e` pool. Repository names, candidate identity and
+mode do not choose the runner; invalid inputs fail the independent request
+validator on the selected runner. The reusable workflow repository and fork
+visibility are not the calling repository's visibility.
 
-The main repository's own source candidates and exact-assets calls select
-standard `ubuntu-24.04` only when the actual caller is public
-`kuasar-sandbox/kuasar-sandbox`. The completed public guest-runtime source route
-is retained. A source candidate must also equal `github.repository`;
-`candidate_repository` alone cannot move a different or private caller onto
-hosted. Public admission/finalization and existing main documentation, release
-and maintenance jobs use the same explicit image. Hosted control bootstrap is
-limited to the public main/guest callers. Private callers retain `kuasar-control`
-and the existing `kuasar-e2e` labels, caches and tools, including private main or
-guest callers. Guest exact-assets and other component E2E routes remain unchanged.
-There is no runner-size input, paid fallback, replacement success check or
-reduced E2E mode. Repository visibility and billing are outside this change.
+Control bootstrap uses the same Public condition. Mode still chooses the
+`source` or `exact-assets` profile, credentials, workload and timeout: exact
+assets keep 120 minutes; other hosted work keeps 180 and private source keeps
+60. No migration allowlist, extra runner decision job or paid fallback exists.
+Host selection follows `ubuntu-latest`, but toolchain, dependency and auxiliary
+service versions and hashes remain pinned. Capability checks require Ubuntu
+Linux, x86_64 and the expected hosted environment, not a numbered image.
+Removing that version gate does not qualify an untested future Ubuntu image.
 
-[ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) is the shared trusted
-bootstrap, with explicit profiles:
+Each job chooses the profile needed for its actual work:
 
 | Profile | Jobs / prerequisites |
 | --- | --- |
@@ -143,7 +150,7 @@ The bootstrap verifies the archive, driver and compiler before adding it to
 PATH; source-module toolchain selection retains `GOTOOLCHAIN=auto`. EROFS host writer/readers
 use pinned v1.9.1 source and its SHA256, independently of the static guest
 recipe. Docker, and Rust/Cargo for source builds, are required capabilities of the
-[standard image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+[standard image](https://github.com/actions/runner-images#available-images)
 and are checked explicitly. Native source pins, Cargo lockfiles, build flags,
 link maps and materials remain owned by their existing recipes. Missing tools,
 checksum mismatches or unavailable VM capabilities fail the job.
@@ -152,7 +159,7 @@ The source and exact-assets profiles load `tun` and `vhost_vsock`, enable
 `vm.unprivileged_userfaultfd=1`, and check userfaultfd, systemd and cgroup v2.
 A headless runner's udev `uaccess` processing can remove the named runner ACL
 from `/dev/kvm` without replacing the device. Before host changes, VM bootstrap
-requires the expected GitHub-hosted Ubuntu 24.04 x64 environment and validates
+requires the expected GitHub-hosted Ubuntu Linux x64 environment and validates
 non-root numeric job uid/primary gid. It installs only
 `/etc/udev/rules.d/99-kuasar-job-kvm.rules`, matching `SUBSYSTEM=="misc"` and
 `KERNEL=="kvm"`, with final `GROUP:="<id -g>"` and `MODE:="0660"` assignments.
@@ -207,8 +214,11 @@ or packaging code. Publishing remains in a separate job with write permission.
 Rollout follows the corrected main-first, public-before-hosted order: finish
 main's own source/aggregate qualification first, then prepare and review each
 remaining private repository, publish that repository, and verify its own
-standard-runner CI. Accelerator #129/#135 remains deferred; this change adds no
-accelerator routing/profile work or public relay for a private component.
+standard-runner CI. Accelerator #129/#135 remains deferred as component-specific work. Sequential
+preparation/publication/validation is a work order, not a shared routing allowlist.
+A later Public transition selects hosted automatically; component-owned release
+workflows still require their own preparation and real acceptance. No public relay
+for a private component is introduced.
 Main's genuine aggregate/source-set tests may use the existing authorized
 companion dependencies, but do not qualify component publication. The completed
 guest route and immutable release bootstrap pins are retained; future pin changes
@@ -232,7 +242,7 @@ activating the trusted rollout.
 
 ### 5.2 Remaining persistent callers
 
-Runner installation material lives in `ci/runner/`. Unmigrated component release-control jobs use the dedicated `kuasar-control` pool. Their candidate-executing E2E jobs continue to use the `kuasar-e2e` pool and restricted read tokens. These runner classes have different root filesystems, work directories, labels and GitHub runner groups. Changing roles requires cleaning and rebuilding from a trusted template, not relabeling in place. `kuasar-control` is visible to all organization repositories, including public repositories, but its workflow allowlist permits only central `ci-entry.yml` and release workflows on component `main`. Public-repository CI admission/finalization, Daily coordination and aggregate-release control jobs use GitHub-hosted runners. Runner proxies are deployment configuration and are not embedded in repository workflows. Public mainland-China mirrors for Go, Rust, Python, the Linux kernel and common container images reduce network variability.
+Runner installation material lives in `ci/runner/`. Unmigrated component release-control jobs use the dedicated `kuasar-control` pool. For non-public callers, shared candidate-executing E2E jobs use the `kuasar-e2e` pool and restricted read tokens. These runner classes have different root filesystems, work directories, labels and GitHub runner groups. Changing roles requires cleaning and rebuilding from a trusted template, not relabeling in place. `kuasar-control` is visible to all organization repositories, including public repositories, but its workflow allowlist permits only central `ci-entry.yml` and release workflows on component `main`. Public-repository CI admission/finalization, Daily coordination and aggregate-release control jobs use GitHub-hosted runners. Runner proxies are deployment configuration and are not embedded in repository workflows. Public mainland-China mirrors for Go, Rust, Python, the Linux kernel and common container images reduce network variability.
 
 At persistent-runner job start, reset stops leftover sandbox systemd units, removes test TAPs and reloads systemd. It also reclaims the runner's working-set network namespace using the deterministic `kuasar-ws-<hash8>` name derived from `RUNNER_NAME`: send TERM to its processes, send KILL after a bounded wait, confirm no process is alive, then delete the namespace. Name derivation prevents runners on the same host from affecting one another and lets the next job reclaim a SIGKILL-interrupted run by exact name without guessing interface ownership (#43, #53). Common zot and versitygw tools are linked from the runner's fixed tool directory into the current workspace; they do not enter release packages. The `kuasar-e2e` runner group retains `visibility=all` for organization repositories, has no workflow allowlist and runs only candidate E2E. Fork-workflow secret forwarding is disabled in every repository. Preparation steps needing App secrets exist only in trusted base-repository workflows, and their tokens are revoked before candidate code executes.
 

@@ -71,12 +71,12 @@ concurrency:
 
 jobs:
   e2e:
-    # Only the actual public main/guest caller can select its qualified hosted route.
-    runs-on: ${{ fromJSON((github.event.repository.visibility == 'public' && ((inputs.mode == 'source' && inputs.candidate_repository == github.repository && (github.repository == 'kuasar-sandbox/kuasar-sandbox' || github.repository == 'kuasar-sandbox/guest-runtime')) || (inputs.mode == 'exact-assets' && github.repository == 'kuasar-sandbox/kuasar-sandbox'))) && '["ubuntu-24.04"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
-    timeout-minutes: ${{ (github.event.repository.visibility == 'public' && inputs.mode == 'source' && inputs.candidate_repository == github.repository && (github.repository == 'kuasar-sandbox/kuasar-sandbox' || github.repository == 'kuasar-sandbox/guest-runtime')) && 180 || (inputs.mode == 'exact-assets' && 120 || 60) }}
+    # Visibility selects the runner; request validation independently authorizes inputs.
+    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
+    timeout-minutes: ${{ inputs.mode == 'exact-assets' && 120 || (github.event.repository.visibility == 'public' && 180 || 60) }}
     env:
       TARGET_ARCH: x86_64
-      KUASAR_HOSTED: ${{ github.event.repository.visibility == 'public' && ((inputs.mode == 'source' && inputs.candidate_repository == github.repository && (github.repository == 'kuasar-sandbox/kuasar-sandbox' || github.repository == 'kuasar-sandbox/guest-runtime')) || (inputs.mode == 'exact-assets' && github.repository == 'kuasar-sandbox/kuasar-sandbox')) }}
+      KUASAR_HOSTED: ${{ github.event.repository.visibility == 'public' }}
       KUASAR_CI_DIR: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}
       KUASAR_CI_TIMINGS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/timings.tsv
       KUASAR_NATIVE_CACHE_METRICS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/native-cache.tsv

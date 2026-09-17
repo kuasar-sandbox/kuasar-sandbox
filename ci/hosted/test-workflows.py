@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Offline regression contracts for the public main/guest runner migration."""
+"""Offline regression contracts for the visibility-only standard runner selection."""
 import ast
 import json
+import os
+import tempfile
 from pathlib import Path
 import subprocess
 import sys
@@ -9,8 +11,6 @@ import sys
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-GUEST = "kuasar-sandbox/guest-runtime"
-MAIN = "kuasar-sandbox/kuasar-sandbox"
 
 
 def expression(value, context):
@@ -50,6 +50,35 @@ def load(name):
     return yaml.safe_load((ROOT / ".github/workflows" / name).read_text())
 
 
+def check_request_rejection(e2e):
+    """Run the real, credential-free request validator; routing is not authorization."""
+    script = next(step["run"] for step in e2e["steps"] if step["name"] == "Validate reusable workflow request")
+    script = script.replace("${{ inputs.mode }}", "$TEST_MODE")
+    sha = "1" * 40
+    repository = "kuasar-sandbox/kuasar-sandbox"
+    with tempfile.TemporaryDirectory() as directory:
+        event = Path(directory) / "event.json"
+        event.write_text(json.dumps({"repository": {"full_name": repository}, "pull_request": {
+            "number": 1, "state": "open", "draft": False,
+            "base": {"ref": "main", "sha": sha, "repo": {"full_name": repository}}, "head": {"sha": sha}}}))
+        env = dict(os.environ, TRUSTED_WORKFLOW_REPOSITORY=repository, TRUSTED_WORKFLOW_SHA=sha,
+                   GITHUB_EVENT_NAME="pull_request_target", GITHUB_EVENT_PATH=str(event),
+                   CANDIDATE_REPOSITORY=repository, CANDIDATE_SHA=sha, CANDIDATE_BASE_SHA=sha,
+                   CANDIDATE_HEAD_SHA=sha, CANDIDATE_BASE_REF="main", CANDIDATE_PR="1",
+                   COMPANION_CANDIDATES="[]", TEST_MODE="source")
+        cases = (({}, None), ({"TEST_MODE": "invalid"}, "mode must be source or exact-assets"),
+                 ({"CANDIDATE_REPOSITORY": "kuasar-sandbox/connector"}, "inputs do not match"),
+                 ({"CANDIDATE_HEAD_SHA": "2" * 40}, "inputs do not match"),
+                 ({"TEST_MODE": "exact-assets"}, "requires workflow_dispatch"),
+                 ({"TRUSTED_WORKFLOW_REPOSITORY": "outside/project"}, "implementation must come from"))
+        for overrides, message in cases:
+            result = subprocess.run(["bash", "-c", script], env={**env, **overrides},
+                                    capture_output=True, text=True, timeout=5)
+            assert (result.returncode == 0) == (message is None), (overrides, result.stderr)
+            if message:
+                assert message in result.stderr, (overrides, result.stderr)
+
+
 def check():
     entry = load("ci-entry.yml")["jobs"]
     e2e = load("integration-tests.yml")["jobs"]["e2e"]
@@ -58,23 +87,21 @@ def check():
     callers = tuple(f"kuasar-sandbox/{name}" for name in repos) + ("outside/kuasar-sandbox",)
     cases = 0
     for repository in callers:
-        for visibility in ("public", "private", "internal", ""):
+        for visibility in ("private", "public", "private", "internal", ""):
             context = {"github": {"repository": repository, "event": {"repository": {
                 "private": visibility != "public", "visibility": visibility}}}}
             for job in (entry["admission"], entry["finalize"]):
-                expected = "ubuntu-24.04" if visibility == "public" else "kuasar-control"
+                expected = "ubuntu-latest" if visibility == "public" else "kuasar-control"
                 assert expression(job["runs-on"], context) == expected
                 for step in job["steps"][:2]:
-                    assert expression(step["if"], context) == (visibility == "public" and repository in (MAIN, GUEST))
+                    assert expression(step["if"], context) == (visibility == "public")
             for mode in ("source", "exact-assets", "invalid"):
                 for candidate in (*callers, ""):
                     context["inputs"] = {"mode": mode, "candidate_repository": candidate}
-                    hosted = visibility == "public" and (
-                        (mode == "source" and repository == candidate and repository in (MAIN, GUEST))
-                        or (mode == "exact-assets" and repository == MAIN))
-                    assert expression(e2e["runs-on"], context) == (["ubuntu-24.04"] if hosted else legacy), context
+                    hosted = visibility == "public"
+                    assert expression(e2e["runs-on"], context) == (["ubuntu-latest"] if hosted else legacy), context
                     assert expression(e2e["env"]["KUASAR_HOSTED"], context) == hosted, context
-                    assert expression(e2e["timeout-minutes"], context) == (180 if hosted and mode == "source" else 120 if mode == "exact-assets" else 60), context
+                    assert expression(e2e["timeout-minutes"], context) == (120 if mode == "exact-assets" else 180 if hosted else 60), context
                     context["env"] = {"KUASAR_HOSTED": str(hosted).lower()}
                     steps = {step["name"]: step for step in e2e["steps"]}
                     for name, enabled in (
@@ -86,6 +113,8 @@ def check():
                     ):
                         assert expression(steps[name]["if"], context) == enabled, (name, context)
                     cases += 1
+
+    check_request_rejection(e2e)
 
     assert entry["e2e"]["uses"] == "./.github/workflows/integration-tests.yml"
     assert entry["e2e"]["with"]["candidate_repository"] == "${{ github.repository }}"
@@ -164,7 +193,7 @@ def check():
     for name in ("docs", "aggregate-release", "daily-preview", "daily-preview-branch", "delete-preview", "preview-gc"):
         for job in load(name + ".yml")["jobs"].values():
             if "runs-on" in job:
-                assert job["runs-on"] == "ubuntu-24.04", name
+                assert job["runs-on"] == "ubuntu-latest", name
     print(f"hosted-workflows: {cases} caller/visibility/mode/candidate combinations, trusted bootstrap, exact assets and required coverage PASS")
 
 

@@ -63,7 +63,10 @@ PACKAGES=(
     git git-lfs rsync util-linux util-linux-devel iproute iptables nftables
     procps-ng which time file hostname kmod iputils jq socat openssl sqlite
     gcc gcc-c++ libstdc++-static make cmake autoconf automake libtool pkgconf
+    # OpenSSL remains a host kernel prerequisite. Crypto devel packages alone
+    # do not supply guest static archives on openEuler 24.03-LTS-SP4.
     glibc-devel openssl-devel elfutils-libelf-devel ncurses-devel flex bison dwarves perl bc
+    libgcrypt-devel libgpg-error-devel
     lz4-devel zstd-devel zlib-devel snappy-devel
     rust cargo rust-std-static clang llvm bpftool
     python3 python3-pip python3-devel python3-pyyaml
@@ -71,7 +74,7 @@ PACKAGES=(
 )
 BOOTSTRAP_PACKAGES=(filesystem glibc bash coreutils)
 HOST_PACKAGES=(
-    bash coreutils findutils grep gawk tar xz curl rsync util-linux procps-ng
+    bash coreutils findutils grep gawk tar xz curl rsync util-linux procps-ng python3
     systemd systemd-container systemd-nspawn dnf rpm cpio
     iproute iptables kmod
 )
@@ -505,6 +508,35 @@ install_static_libuuid() {
         || die "static libuuid build did not produce /usr/lib64/libuuid.a"
 }
 
+static_crypto_helper() {
+    local helper="$SCRIPT_DIR/static-crypto.py"
+    # provision.sh is also installed as a standalone /usr/local/sbin command.
+    if [ ! -f "$helper" ]; then helper="$SCRIPT_DIR/../libexec/kuasar-static-crypto/static-crypto.py"; fi
+    [ -f "$helper" ] && [ -f "${helper%/*}/static-crypto-catalog.py" ] \
+        || die "static crypto provider is missing; install the paired runner helpers"
+    python3 "$helper" "$@"
+}
+
+install_static_crypto() {
+    static_crypto_helper install --root "$TEMPLATE_ROOT" --sources "$SOURCE_CACHE" --download --jobs 2
+}
+
+copy_static_crypto() {
+    static_crypto_helper copy --template "$TEMPLATE_ROOT" --root "$1"
+}
+
+check_erofs_static_libraries() {
+    # The supported SP4 libgcrypt 1.10.2-4 and libgpg-error 1.47-1 SRPMs
+    # explicitly use --disable-static. Do not assume -devel provides .a files.
+    chroot "$TEMPLATE_ROOT" /bin/bash -ceu '
+        pkg-config --exists libgcrypt gpg-error uuid
+        for name in gcrypt gpg-error uuid; do
+            library=$(gcc -print-file-name="lib$name.a")
+            test "$library" != "lib$name.a" && test -s "$library" || exit 1
+        done
+    ' || die "guest EROFS static-library preflight failed after provisioning libgcrypt.a, libgpg-error.a and libuuid.a"
+}
+
 install_erofs_readers() {
     local archive="$SOURCE_CACHE/erofs-utils-v1.9.1.tar.gz"
     local work="$TEMPLATE_ROOT/tmp/kuasar-erofs-readers-build"
@@ -588,6 +620,9 @@ install_host_support() {
     install -m 0755 "$SCRIPT_DIR/kuasar-ci-bpf" /usr/local/libexec/kuasar-ci-bpf
     install -m 0644 "$SCRIPT_DIR/kuasar-ci-bpf.service" /etc/systemd/system/kuasar-ci-bpf.service
     install -m 0755 "$SCRIPT_DIR/provision.sh" /usr/local/sbin/kuasar-ci-runner-provision
+    install -d -m 0755 /usr/local/libexec/kuasar-static-crypto
+    install -m 0644 "$SCRIPT_DIR/static-crypto.py" "$SCRIPT_DIR/static-crypto-catalog.py" \
+        /usr/local/libexec/kuasar-static-crypto/
 
     local uplink
     uplink="$(ip route show default | awk 'NR == 1 { print $5 }')"
@@ -670,6 +705,8 @@ build_template_root() {
     touch "$TEMPLATE_ROOT/.kuasar-ci-template"
 
     install_static_libuuid
+    install_static_crypto
+    check_erofs_static_libraries
     install_erofs_readers
 
     copy_runner_distribution "$TEMPLATE_ROOT/opt/actions-runner"
@@ -818,6 +855,7 @@ prepare_slot() {
     install -m 0644 "$TEMPLATE_ROOT/root/.cargo/config.toml" "$root/root/.cargo/config.toml"
     install -m 0644 "$TEMPLATE_ROOT/etc/resolv.conf" "$root/etc/resolv.conf"
     copy_static_libuuid "$root"
+    copy_static_crypto "$root"
     copy_erofs_readers "$root"
 
     local machine_id template_machine_id
@@ -1098,6 +1136,10 @@ verify_slots() {
             systemctl is-active --quiet docker.service
             docker info >/dev/null
             test -s /usr/lib64/libuuid.a
+            for name in gcrypt gpg-error; do
+                library=$(gcc -print-file-name="lib$name.a")
+                test "$library" != "lib$name.a" && test -s "$library"
+            done
             fsck_help=$(fsck.erofs --help 2>&1)
             dump_help=$(dump.erofs --help 2>&1)
             grep -Fq -- --extract <<< "$fsck_help"

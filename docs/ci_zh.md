@@ -150,7 +150,7 @@ BIN=$PWD/bin bash test/e2e/run_all.sh
 
 该模式不推导或读取组件 `main`:每个 unit 的文档、用例和二进制一样绑定清单所选的独立
 tag,所以平台维护分支可以组合彼此不同的组件维护版本线。它不重建产品 Go/Rust/native
-二进制、vmlinux、RocksDB 或 Cloud Hypervisor。公开主仓 caller 使用可信 `exact-assets`
+二进制、vmlinux、RocksDB 或 Cloud Hypervisor。公开 caller 使用可信 `exact-assets`
 bootstrap 准备宿主依赖;bundle 验证并解压后,[exact-assets-tools.sh](../ci/hosted/exact-assets-tools.sh)
 下载 zot v2.1.17 并构建本地 versitygw v1.5.0 测试服务。仅构建宿主测试工具和 EROFS
 writer/reader,不修改 `release-install/bin` 内的产品二进制。既有十个 `REQUIRE_*` 均保持
@@ -173,6 +173,12 @@ hosted 只做本地复用,不向 Actions cache 或 artifact 上传缓存。input
 条目通过 staging、校验和及原子 rename 发布;命中恢复前重新校验 descriptor、payload 和
 tar 路径。损坏条目失败,不会在原目录修补。
 
+EROFS key 包含 Libgcrypt/Libgpg-error/uuid 的 pkg-config 元数据、目标编译器/工具字节、实际本地源码归档字节（固定 URL 则使用预期摘要）及有界的编译/静态链接探针。探针跟踪实际包含的头文件（含强制 include）以及通过选项、sysroot 和库搜索路径真正选中的静态库/启动对象。源码 URL 或文件名是定位信息，不是内容身份。工作区文件使用可迁移的逻辑标签；具有语义的编译器和 sysroot 选项值仍然有效。未固定摘要的 URL 不能授权共享缓存；须使用固定 URL 或本地归档。
+
+可选的 `guest-runtime/native-deps/deps/erofs-patches` 材料、有序 `series` 和 `deps/erofs-recipe.sh` 都进入 key。仍支持不含这些文件的旧源码集合，包括旧 OpenSSL 配方的实际目标链接探针。新增、修改或移除输入都会使 key 失效。hosted native profile 安装 `libgcrypt20-dev libgpg-error-dev uuid-dev`，并保留 `libssl-dev` 以支持已经准入的旧源码集合。openEuler 24.03-LTS-SP4 的 `libgcrypt-1.10.2-4` 和 `libgpg-error-1.47-1` 源码 RPM 明确禁用静态库，仅安装 devel 软件包不够。[Runner provider](../ci/runner/README_zh.md#安装) 以最多两个 job 构建这些 pin 且包含发行版补丁的源码,仅安装静态 archive 及经过验证的源码/构建/重新链接/许可目录,并验证热复用和模板到 slot 的复制。Runtime 打包验证相同的 pin 目录;Ubuntu 保留已安装软件包材料路径。
+
+EROFS 保留唯一可选的 `bin/<arch>/.erofs-recipe` v2 stamp（含两个输出摘要和实际外部编译/链接依赖）、两个链接映射及其 EROFS 对象/静态库输入，以及源码 `LICENSES`、`AUTHORS` 和 `COPYING`。恢复相同配方时无需完整解压源码树即可复用。没有 stamp 的旧缓存仍可读取，并在下一次配方检查时重建。仓库补丁文件仍来自准入的 source set，cache restore 不覆盖它们。Runtime 补丁材料验证使用所选提交的本地 Git 对象；独立验证器必须能访问这些对象。真实发布打包仍须配齐实际目标的版权/声明及源码/重新链接输入。
+
 同 key 构建和恢复持有条目锁。每组件默认保留最近使用的 4 个 key,且只回收超过保护期并能
 非阻塞取得锁的条目。缓存测试入口:
 
@@ -182,22 +188,22 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runner 与网络
 
-### 5.1 公开主仓与 guest-runtime 标准 runner
+### 5.1 仅按公开性选择标准 runner
 
-主仓迁移统一由 [#127](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/127) 跟踪。
+主仓迁移由 [#127](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/127) 跟踪。
+共享 control 和 E2E job 仅在实际调用仓为 Public 时选择 `ubuntu-latest`；其他公开性
+保留原有 `kuasar-control` 或 `kuasar-e2e` 池。仓名、候选身份和 mode 不决定 runner，
+非法输入由独立请求校验在选定 runner 上拒绝。可复用 workflow 所在仓和 fork 的公开性
+不是实际调用仓的公开性。
 
-只有实际 caller 是公开的 `kuasar-sandbox/kuasar-sandbox` 时,主仓自身的 source 候选和
-exact-assets 调用才选择标准 `ubuntu-24.04`。已完成的公开 guest-runtime source 路径继续
-保留。Source 的 candidate 还必须等于 `github.repository`;仅靠 `candidate_repository`
-输入不能把其他 caller 或私有 caller 转到 hosted。公开仓的 admission/finalization 与
-主仓既有文档、发布和维护 job 均使用同一显式镜像。Hosted control bootstrap 仅用于公开
-main/guest caller。私有 caller 保留 `kuasar-control` 及既有 `kuasar-e2e` 标签、缓存和工具,
-包括私有 main/guest caller。Guest exact-assets 和其他组件 E2E 路径保持不变。不增加
-runner 规格输入、付费 fallback、替代成功 check 或缩减 E2E 的模式。仓库可见性和计费
-不属于本次变更。
+Control bootstrap 使用同一 Public 条件。Mode 继续决定 `source` / `exact-assets`
+profile、凭据、执行内容及超时：exact-assets 保持 120 分钟，其他 hosted 工作保持
+180 分钟，私有 source 保持 60 分钟。不增加迁移名单、runner 决策 job 或付费回退。
+宿主选择跟随 `ubuntu-latest`，但工具链、依赖和测试辅助服务的版本与摘要继续固定。
+能力检查要求 Ubuntu Linux、x86_64 和预期 hosted 环境，不检查具体发行版号。
+删除人为版本门禁，不代表未实测的新 Ubuntu 版本已经通过完整 E2E。
 
-[ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) 是唯一共享的可信 bootstrap,
-各 job 明确指定 profile:
+各 job 按实际工作选择 profile：
 
 | Profile | Job / 前置能力 |
 | --- | --- |
@@ -214,14 +220,14 @@ Go 使用官方 `go1.26.5.linux-amd64.tar.gz`,SHA256 为
 bootstrap 校验归档、driver 与 compiler 后才加入 PATH;source module 工具链选择保留
 `GOTOOLCHAIN=auto`。EROFS host writer/reader 从固定的 v1.9.1 源码和 SHA256 构建,
 独立于 guest 静态 recipe。Docker 以及源码构建所需的 Rust/Cargo 是
-[标准镜像](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+[标准镜像](https://github.com/actions/runner-images#available-images)
 的必需能力,会显式检查。Native source pin、Cargo lockfile、构建参数、link map 和
 materials 仍由既有 recipe 维护。工具缺失、摘要不符或 VM 能力不可用均使 job 失败。
 
 Source 和 exact-assets profile 加载 `tun`、`vhost_vsock`,启用
 `vm.unprivileged_userfaultfd=1`,并检查 userfaultfd、systemd 和 cgroup v2。
 无桌面会话的 runner 上,udev `uaccess` 处理可能在设备 inode 不变时删除 `/dev/kvm`
-上的 runner 命名 ACL。修改宿主之前,VM bootstrap 要求预期的 GitHub-hosted Ubuntu 24.04
+上的 runner 命名 ACL。修改宿主之前,VM bootstrap 要求预期的 GitHub-hosted Ubuntu Linux
 x64 环境,并校验非 root 的数字 job uid/主组 gid。它仅安装
 `/etc/udev/rules.d/99-kuasar-job-kvm.rules`,匹配 `SUBSYSTEM=="misc"` 和
 `KERNEL=="kvm"`,使用最终赋值 `GROUP:="<id -g>"`、`MODE:="0660"`。
@@ -263,8 +269,9 @@ Guest release job 在请求源码之前 checkout
 
 迁移遵循纠正后的主仓优先、先公开再 hosted 顺序:先完成主仓自身的 source/aggregate
 资格验证,再逐个准备和评审剩余私有仓、公开该仓、验证其自身标准 runner CI。
-Accelerator #129/#135 继续延期;本次不加入 accelerator routing/profile 工作,也不建立私有
-组件的公开验证 relay。主仓真实 aggregate/source-set 测试可使用既有已授权 companion
+Accelerator #129/#135 的组件专属工作继续延期。逐仓准备、公开、验证是工作顺序，
+不是共享路由白名单；后续仓库公开后会自动选择 hosted，但组件自有发布 workflow
+仍需逐仓适配并实测。不建立私有组件的公开验证 relay。主仓真实 aggregate/source-set 测试可使用既有已授权 companion
 依赖,但不能算作组件公开验收。已完成的 guest 路径和 immutable release bootstrap pin
 保持不变;以后更新 pin 必须使用经过评审的真实上游 SHA。PR wrapper 保留 `@main`,
 `pull_request_target` 使用 base 分支 wrapper。仅修改候选源码或手工演练不能代替精确候选
