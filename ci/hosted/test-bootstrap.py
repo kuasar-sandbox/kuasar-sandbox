@@ -107,7 +107,7 @@ class BootstrapTests(unittest.TestCase):
                     self.assertIn("Ubuntu Linux is required", result.stderr)
 
     def test_missing_docker_capability_fails_before_device_changes(self):
-        result = shell('need() { :; }; docker() { return 23; }; '
+        result = shell('need() { :; }; id() { echo 1001; }; docker() { return 23; }; '
                        'sudo() { echo UNEXPECTED_DEVICE_CHANGE; }; configure_vm', **HOSTED_VM)
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertNotIn("UNEXPECTED_DEVICE_CHANGE", result.stdout)
