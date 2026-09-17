@@ -85,7 +85,7 @@ cd release-install
 BIN=$PWD/bin bash test/e2e/run_all.sh
 ```
 
-This mode neither infers nor reads component `main`. Each unit's documentation, cases and binaries bind to its independently selected tag, allowing a platform maintenance branch to combine different component maintenance lines. It does not invoke Go/Rust/native builds or recompile vmlinux. After success, publish uses the earlier artifact unchanged.
+This mode neither infers nor reads component `main`. Each unit's documentation, cases and binaries bind to its independently selected tag, allowing a platform maintenance branch to combine different component maintenance lines. It does not rebuild product Go/Rust/native binaries, vmlinux, RocksDB or Cloud Hypervisor. On the public main caller, the trusted `exact-assets` bootstrap supplies host prerequisites; after bundle validation/extraction, [exact-assets-tools.sh](../ci/hosted/exact-assets-tools.sh) downloads zot v2.1.17 and builds the local versitygw v1.5.0 test service. Only host test tools and EROFS writer/readers are built. Product binaries in `release-install/bin` remain untouched. All ten existing `REQUIRE_*` flags stay enabled, and the packaged top-level suite still runs every owner. After success, publish uses the earlier artifact unchanged.
 
 ## 4. Native cache
 
@@ -107,16 +107,22 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runners and networking
 
-### 5.1 Guest-runtime standard runners
+### 5.1 Public main and guest-runtime standard runners
 
-Guest-runtime release/maintenance jobs and all three transitive PR jobs
-(admission, source E2E, finalization) select standard `ubuntu-24.04`. Source
-E2E selects hosted only when `mode == source` and
-`candidate_repository == kuasar-sandbox/guest-runtime`. All other candidates
-and exact-assets keep their existing runner selection and coverage. There is
-no runner-size input, paid-runner fallback, replacement success check or reduced
-E2E mode. Standard hosted capacity is free for the public guest repository;
-repository visibility and billing are outside this change.
+The main migration is tracked in [#127](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/127).
+
+The main repository's own source candidates and exact-assets calls select
+standard `ubuntu-24.04` only when the actual caller is public
+`kuasar-sandbox/kuasar-sandbox`. The completed public guest-runtime source route
+is retained. A source candidate must also equal `github.repository`;
+`candidate_repository` alone cannot move a different or private caller onto
+hosted. Public admission/finalization and existing main documentation, release
+and maintenance jobs use the same explicit image. Hosted control bootstrap is
+limited to the public main/guest callers. Private callers retain `kuasar-control`
+and the existing `kuasar-e2e` labels, caches and tools, including private main or
+guest callers. Guest exact-assets and other component E2E routes remain unchanged.
+There is no runner-size input, paid fallback, replacement success check or
+reduced E2E mode. Repository visibility and billing are outside this change.
 
 [ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) is the shared trusted
 bootstrap, with explicit profiles:
@@ -129,52 +135,92 @@ bootstrap, with explicit profiles:
 | `runtime` | Runtime build; Go, native development packages and trusted EROFS writer/readers |
 | `runtime-publish` | Runtime publish validation; Go and separately built EROFS writer/readers |
 | `source` | Complete source build/E2E; all native prerequisites, Rust/Docker checks, VM/network tools |
+| `exact-assets` | Packaged binaries/tests; Docker, systemd/cgroup v2, KVM/UFFD/netns/BPF, runtime utilities, EROFS host tools; pinned Go only for versitygw |
 
 Go comes from the official `go1.26.5.linux-amd64.tar.gz`, SHA256
 `5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`.
 The bootstrap verifies the archive, driver and compiler before adding it to
-PATH; module toolchain selection retains `GOTOOLCHAIN=auto`. EROFS host writer/readers
+PATH; source-module toolchain selection retains `GOTOOLCHAIN=auto`. EROFS host writer/readers
 use pinned v1.9.1 source and its SHA256, independently of the static guest
-recipe. Rust/Cargo and Docker are required capabilities of the
+recipe. Docker, and Rust/Cargo for source builds, are required capabilities of the
 [standard image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
 and are checked explicitly. Native source pins, Cargo lockfiles, build flags,
 link maps and materials remain owned by their existing recipes. Missing tools,
 checksum mismatches or unavailable VM capabilities fail the job.
 
-The source profile loads `tun` and `vhost_vsock`, enables
-`vm.unprivileged_userfaultfd=1`, grants only the job uid access to `/dev/kvm`,
-`/dev/vhost-vsock` and `/dev/net/tun`, and checks userfaultfd, systemd and cgroup
-v2. It installs no runner service, template, nspawn slot or persistent network.
+The source and exact-assets profiles load `tun` and `vhost_vsock`, enable
+`vm.unprivileged_userfaultfd=1`, and check userfaultfd, systemd and cgroup v2.
+A headless runner's udev `uaccess` processing can remove the named runner ACL
+from `/dev/kvm` without replacing the device. Before host changes, VM bootstrap
+requires the expected GitHub-hosted Ubuntu 24.04 x64 environment and validates
+non-root numeric job uid/primary gid. It installs only
+`/etc/udev/rules.d/99-kuasar-job-kvm.rules`, matching `SUBSYSTEM=="misc"` and
+`KERNEL=="kvm"`, with final `GROUP:="<id -g>"` and `MODE:="0660"` assignments.
+It reloads rules, triggers only KVM, waits for udev to settle, and applies the
+same group/mode only to `/dev/kvm`. It then removes the named runner KVM ACL to
+replay the observed loss and verifies `O_RDWR` as the current job user.
+Group membership is unchanged; no world access is granted. Vhost-vsock and
+TUN retain their original per-job ACLs. The suite and its pre-sudo access checks
+remain unchanged; full hosted qualification is still required.
+
+The required packaged connector E2E verifies actual namespaces and BPF data
+paths; bootstrap does not require an additional kernel-version-specific probe. Both profiles explicitly install full-suite utilities such as ping,
+netcat, OpenSSL, SQLite and `strace` for the sandboxer usage fault/source
+fixtures. Neither installs a runner service, template, nspawn slot or persistent
+network.
 The old owned-state recovery runs only on persistent runners. Builds use CPU
 affinity bounded by available CPUs and memory (2 GiB OS reserve, 2 GiB per
 compiler job), including recipes using `nproc`; Go/Cargo parallelism uses the
 same budget. Top-level Make goals retain their sequential order. Source E2E has
-180 minutes for a cold build and the complete owner/UFFD/A/B/C/D smoke sequence.
+the existing 180-minute hosted budget for a cold build and the complete
+owner/UFFD/A/B/C/D smoke sequence; exact-assets retains 120 minutes and private
+source retains 60. Test assertions and the full working-set matrix are unchanged.
 
 Source archives, native entries, tarballs, Go/Cargo caches and tools live under
-`$RUNNER_TEMP/kuasar-hosted.*`. They are never uploaded. Sources themselves stay
+`$RUNNER_TEMP/kuasar-hosted.*`; exact-assets test tools use a separate
+`$RUNNER_TEMP/kuasar-exact-tools.*` tree. They are never uploaded. Sources themselves stay
 in the job workspace; only the existing revision/timing/performance metadata
 and validated release bundles are uploaded. Release bundles retain their
 required license/source inventories, without a full workspace handoff. Hosted
-uses official Go/Rust/Python/kernel/image endpoints, and builds the existing
-zot/versitygw targets locally. Persistent callers keep their mirror settings.
+uses official Go/Rust/Python/kernel/image endpoints. Source mode retains its
+existing zot/versitygw targets. Exact-assets reuses trusted platform
+`ensure-zot.sh` and only the public guest-runtime `build-versitygw.sh`/`common.sh`
+from [commit 494dbceae683d6b20cdbec00fe6b1f554ea2f508](https://github.com/kuasar-sandbox/guest-runtime/tree/494dbceae683d6b20cdbec00fe6b1f554ea2f508/native-deps/deps).
+Fixed recipe paths, commit and SHA256 pins are checked; versitygw source also
+passes archive path/type validation. Go is pinned for this host tool build, with
+bounded affinity/parallelism and local caches. `host-tools.tsv` records recipe,
+source and binary identities. No private sibling checkout or candidate-selected
+host build script is used in exact-assets. Persistent callers keep their mirror
+settings.
 
-PR bootstrap runs from `trusted/platform` at `job.workflow_sha`, after platform
-tooling-token revocation and before source-token creation. Guest release jobs
+Integration bootstrap runs from `trusted/platform` at `job.workflow_sha`, after
+request validation and platform tooling-token revocation. The validated mode
+selects `source` or `exact-assets`; only source mode creates a source token and
+attaches source caches. Exact-assets attaches its tools only after downloading,
+validating and extracting the bundle. Guest release jobs
 check out that same immutable platform pin before requested sources; Runtime
 ABI checks come from the trusted guest workflow checkout. Kernel needs no
 cross-repository App token. Runtime still fetches its private dependency closure
 with the existing read-only source token and revokes it before executing source
 or packaging code. Publishing remains in a separate job with write permission.
 
-Rollout is ordered: qualify and normally merge the shared platform change,
-then set every guest release bootstrap checkout to that reviewed full SHA.
-A squash/rebase requires refreshing these release pins. PR wrappers retain
-`@main`; a new guest PR event after the platform merge resolves the new trusted
-workflow and selects standard runners. `pull_request_target` executes the
-base-branch wrapper, so editing a candidate wrapper alone is not qualification.
-Other callers retain their runner choices until their own migration. Manual
-rehearsals do not replace the required exact-candidate Integration E2E check.
+Rollout follows the corrected main-first, public-before-hosted order: finish
+main's own source/aggregate qualification first, then prepare and review each
+remaining private repository, publish that repository, and verify its own
+standard-runner CI. Accelerator #129/#135 remains deferred; this change adds no
+accelerator routing/profile work or public relay for a private component.
+Main's genuine aggregate/source-set tests may use the existing authorized
+companion dependencies, but do not qualify component publication. The completed
+guest route and immutable release bootstrap pins are retained; future pin changes
+must use the reviewed upstream SHA. PR wrappers keep `@main`, and
+`pull_request_target` executes the base-branch wrapper. Candidate-only edits or
+manual rehearsals cannot replace the required exact-candidate Integration E2E
+check. The local authoring Git baseline is not upstream release provenance.
+
+Standard-runner functional results do not prove the previous fixed-hardware VM
+capacity. Optional real-cloud OBS/NFS tests still need their own environment and
+evidence; local zot/versitygw fixtures do not establish real-cloud acceptance.
+Required capability or resource failures must fail, not become successful skips.
 
 Offline checks are `python3 ci/hosted/test-workflows.py` (also included in
 `make test-ci-tools`) and guest `python3 scripts/ci-test-workflows.py
@@ -205,7 +251,7 @@ Every Integration E2E run uploads `ci-metadata-<run>-<attempt>`. Source mode nor
 - `timings.tsv`: build/test stage resource data;
 - UFFD and working-set reports, only when those tests ran.
 
-Exact-assets mode records the run and test output without inventing source or native-cache metadata. The release combination is expressed by the manifest at the exact selected platform-branch commit, component tags and GitHub release notes. It need not come from platform `main`: maintenance-branch aggregates retain their own selection.
+Exact-assets mode records the run, test output and hosted `host-tools.tsv` identities without inventing component-source or native-cache metadata. The release combination is expressed by the manifest at the exact selected platform-branch commit, component tags and GitHub release notes. It need not come from platform `main`: maintenance-branch aggregates retain their own selection.
 
 ## 7. See also
 

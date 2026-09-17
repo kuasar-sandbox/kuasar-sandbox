@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline regression contracts for the staged guest-runtime runner migration."""
+"""Offline regression contracts for the public main/guest runner migration."""
 import ast
 import json
 from pathlib import Path
@@ -10,6 +10,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 GUEST = "kuasar-sandbox/guest-runtime"
+MAIN = "kuasar-sandbox/kuasar-sandbox"
 
 
 def expression(value, context):
@@ -54,19 +55,37 @@ def check():
     e2e = load("integration-tests.yml")["jobs"]["e2e"]
     legacy = ["self-hosted", "Linux", "X64", "kuasar-e2e", "kvm", "cgroup-v2"]
     repos = ("guest-runtime", "accelerator", "connector", "kuasar-sandbox", "orchestrator", "sandboxer")
-    for name in repos:
-        repository = f"kuasar-sandbox/{name}"
-        for private in (False, True):
-            context = {"github": {"repository": repository, "event": {"repository": {"private": private}}}}
+    callers = tuple(f"kuasar-sandbox/{name}" for name in repos) + ("outside/kuasar-sandbox",)
+    cases = 0
+    for repository in callers:
+        for visibility in ("public", "private", "internal", ""):
+            context = {"github": {"repository": repository, "event": {"repository": {
+                "private": visibility != "public", "visibility": visibility}}}}
             for job in (entry["admission"], entry["finalize"]):
-                expected = "ubuntu-24.04" if repository == GUEST else "kuasar-control" if private else "ubuntu-latest"
+                expected = "ubuntu-24.04" if visibility == "public" else "kuasar-control"
                 assert expression(job["runs-on"], context) == expected
-            for mode in ("source", "exact-assets"):
-                context["inputs"] = {"mode": mode, "candidate_repository": repository}
-                hosted = mode == "source" and repository == GUEST
-                assert expression(e2e["runs-on"], context) == (["ubuntu-24.04"] if hosted else legacy)
-                assert expression(e2e["env"]["KUASAR_HOSTED"], context) == hosted
-                assert expression(e2e["timeout-minutes"], context) == (180 if hosted else 120 if mode == "exact-assets" else 60)
+                for step in job["steps"][:2]:
+                    assert expression(step["if"], context) == (visibility == "public" and repository in (MAIN, GUEST))
+            for mode in ("source", "exact-assets", "invalid"):
+                for candidate in (*callers, ""):
+                    context["inputs"] = {"mode": mode, "candidate_repository": candidate}
+                    hosted = visibility == "public" and (
+                        (mode == "source" and repository == candidate and repository in (MAIN, GUEST))
+                        or (mode == "exact-assets" and repository == MAIN))
+                    assert expression(e2e["runs-on"], context) == (["ubuntu-24.04"] if hosted else legacy), context
+                    assert expression(e2e["env"]["KUASAR_HOSTED"], context) == hosted, context
+                    assert expression(e2e["timeout-minutes"], context) == (180 if hosted and mode == "source" else 120 if mode == "exact-assets" else 60), context
+                    context["env"] = {"KUASAR_HOSTED": str(hosted).lower()}
+                    steps = {step["name"]: step for step in e2e["steps"]}
+                    for name, enabled in (
+                        ("Attach job-local source caches and test tools", hosted and mode == "source"),
+                        ("Attach job-local exact-assets test tools", hosted and mode == "exact-assets"),
+                        ("Attach runner caches and test tools", not hosted),
+                        ("Bootstrap standard runner from trusted tooling", hosted),
+                        ("Pull standard runner test images", hosted),
+                    ):
+                        assert expression(steps[name]["if"], context) == enabled, (name, context)
+                    cases += 1
 
     assert entry["e2e"]["uses"] == "./.github/workflows/integration-tests.yml"
     assert entry["e2e"]["with"]["candidate_repository"] == "${{ github.repository }}"
@@ -77,12 +96,14 @@ def check():
         assert checkout["with"]["repository"] == "${{ job.workflow_repository }}"
         assert checkout["with"]["persist-credentials"] is False
         assert bootstrap["run"] == "bash trusted/platform/ci/hosted/bootstrap.sh --profile control"
-        assert bootstrap["if"] == checkout["if"] == f"github.repository == '{GUEST}'"
+        assert bootstrap["if"] == checkout["if"]
 
     steps = {step["name"]: step for step in e2e["steps"]}
     names = list(steps)
-    bootstrap_name = "Bootstrap standard guest source runner from trusted tooling"
-    assert steps[bootstrap_name]["run"] == "bash trusted/platform/ci/hosted/bootstrap.sh --profile source"
+    bootstrap_name = "Bootstrap standard runner from trusted tooling"
+    assert steps[bootstrap_name]["run"] == 'bash trusted/platform/ci/hosted/bootstrap.sh --profile "$BOOTSTRAP_PROFILE"'
+    assert steps[bootstrap_name]["env"] == {"BOOTSTRAP_PROFILE": "${{ inputs.mode }}"}
+    assert names.index("Validate reusable workflow request") < names.index(bootstrap_name)
     assert names.index("Revoke platform tooling token before candidate execution") < names.index(bootstrap_name)
     assert names.index(bootstrap_name) < names.index("Create read-only source token")
     assert names.index("Revoke source token before executing candidate code") < names.index("Finalize source workspace")
@@ -115,9 +136,39 @@ def check():
     assert {key.removeprefix("REQUIRE_") for key, value in exact["env"].items() if key.startswith("REQUIRE_") and value == "1"} == required
     assert exact["run"] == "bash test/e2e/run_all.sh"
     assert exact["if"] == "inputs.mode == 'exact-assets'"
-    print("hosted-workflows: runner matrix, trusted bootstrap, ephemeral paths and required coverage PASS")
+    tools_name = "Attach job-local exact-assets test tools"
+    assert steps[tools_name]["run"] == "bash trusted/platform/ci/hosted/exact-assets-tools.sh"
+    assert names.index("Download exact aggregate bundle") < names.index("Validate and extract exact aggregate bundle") < names.index(tools_name) < names.index(exact["name"])
+    images = steps["Pull standard runner test images"]["run"]
+    for image in ("python:3.12-slim", "python:3.12-alpine", "alpine:3.19", "alpine:3.20", "busybox:latest"):
+        assert image in images
+    assert names.index(tools_name) < names.index("Pull standard runner test images") < names.index(exact["name"])
+    validate = steps["Validate and extract exact aggregate bundle"]
+    assert 'trusted/platform/release/aggregate-release.sh validate "$RELEASE_VERSION" release-bundle' in validate["run"]
+    assert '"$RELEASE_VERSION" release-bundle release-install' in validate["run"]
+    assert exact["working-directory"] == "release-install"
+    assert exact["env"]["BIN"] == "${{ github.workspace }}/release-install/bin"
+    # No private source token, sibling assembly, native/product build or source cache attach in exact mode.
+    context = {"inputs": {"mode": "exact-assets", "pull_request_number": "0"}, "env": {"KUASAR_HOSTED": "true"}}
+    for name in ("Create read-only source token", "Validate pull request integration set",
+                 "Assemble the five component source repositories", "Finalize source workspace",
+                 "Attach job-local source caches and test tools", "Restore or build verified native artifacts",
+                 "Validate platform tooling", "Build and test source candidate", "Run working-set performance smoke"):
+        assert not expression(steps[name]["if"], context), name
+    materialize = steps["Materialize exact platform sources"]
+    assert materialize["env"]["TRUSTED_SHA"] == "${{ job.workflow_sha }}"
+    assert materialize["env"]["TRUSTED_REPOSITORY"] == "${{ job.workflow_repository }}"
+    assert 'materialize "$TRUSTED_REPOSITORY" "$TRUSTED_SHA" trusted/platform' in materialize["run"]
+    for name in (bootstrap_name, tools_name):
+        assert "src/platform" not in steps[name]["run"]
+    for name in ("docs", "aggregate-release", "daily-preview", "daily-preview-branch", "delete-preview", "preview-gc"):
+        for job in load(name + ".yml")["jobs"].values():
+            if "runs-on" in job:
+                assert job["runs-on"] == "ubuntu-24.04", name
+    print(f"hosted-workflows: {cases} caller/visibility/mode/candidate combinations, trusted bootstrap, exact assets and required coverage PASS")
 
 
 if __name__ == "__main__":
     check()
-    subprocess.run([sys.executable, str(Path(__file__).with_name("test-bootstrap.py"))], check=True)
+    for name in ("test-bootstrap.py", "test-exact-assets-tools.py"):
+        subprocess.run([sys.executable, str(Path(__file__).with_name(name))], check=True)

@@ -149,8 +149,12 @@ BIN=$PWD/bin bash test/e2e/run_all.sh
 ```
 
 该模式不推导或读取组件 `main`:每个 unit 的文档、用例和二进制一样绑定清单所选的独立
-tag,所以平台维护分支可以组合彼此不同的组件维护版本线。它不调用
-Go/Rust/native build,也不会重新编译 vmlinux。通过后 publish job 原样使用此前的 artifact。
+tag,所以平台维护分支可以组合彼此不同的组件维护版本线。它不重建产品 Go/Rust/native
+二进制、vmlinux、RocksDB 或 Cloud Hypervisor。公开主仓 caller 使用可信 `exact-assets`
+bootstrap 准备宿主依赖;bundle 验证并解压后,[exact-assets-tools.sh](../ci/hosted/exact-assets-tools.sh)
+下载 zot v2.1.17 并构建本地 versitygw v1.5.0 测试服务。仅构建宿主测试工具和 EROFS
+writer/reader,不修改 `release-install/bin` 内的产品二进制。既有十个 `REQUIRE_*` 均保持
+启用,包内顶层 suite 仍运行所有 owner。通过后 publish job 原样使用此前的 artifact。
 
 ## 4. Native cache
 
@@ -178,14 +182,19 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runner 与网络
 
-### 5.1 Guest-runtime 标准 runner
+### 5.1 公开主仓与 guest-runtime 标准 runner
 
-Guest-runtime 的发布/维护 job 和 PR 的三个传递 job(admission、source E2E、finalization)
-均选择标准 `ubuntu-24.04`。Source E2E 仅在 `mode == source` 且
-`candidate_repository == kuasar-sandbox/guest-runtime` 时选择 hosted。其他候选仓和
-exact-assets 保留现有 runner 选择与覆盖范围。不增加 runner 规格输入、付费 fallback、
-替代成功 check 或缩减 E2E 的模式。公开 guest 仓使用免费的标准 hosted 容量;
-仓库可见性和计费不属于本次变更。
+主仓迁移统一由 [#127](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/127) 跟踪。
+
+只有实际 caller 是公开的 `kuasar-sandbox/kuasar-sandbox` 时,主仓自身的 source 候选和
+exact-assets 调用才选择标准 `ubuntu-24.04`。已完成的公开 guest-runtime source 路径继续
+保留。Source 的 candidate 还必须等于 `github.repository`;仅靠 `candidate_repository`
+输入不能把其他 caller 或私有 caller 转到 hosted。公开仓的 admission/finalization 与
+主仓既有文档、发布和维护 job 均使用同一显式镜像。Hosted control bootstrap 仅用于公开
+main/guest caller。私有 caller 保留 `kuasar-control` 及既有 `kuasar-e2e` 标签、缓存和工具,
+包括私有 main/guest caller。Guest exact-assets 和其他组件 E2E 路径保持不变。不增加
+runner 规格输入、付费 fallback、替代成功 check 或缩减 E2E 的模式。仓库可见性和计费
+不属于本次变更。
 
 [ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) 是唯一共享的可信 bootstrap,
 各 job 明确指定 profile:
@@ -198,42 +207,72 @@ exact-assets 保留现有 runner 选择与覆盖范围。不增加 runner 规格
 | `runtime` | Runtime 构建;Go、native 开发包与可信 EROFS writer/reader |
 | `runtime-publish` | Runtime 发布校验;Go 与独立构建的 EROFS writer/reader |
 | `source` | 完整源码构建/E2E;全部 native 依赖、Rust/Docker 检查与 VM/网络工具 |
+| `exact-assets` | 包内二进制/测试;Docker、systemd/cgroup v2、KVM/UFFD/netns/BPF、运行工具及 EROFS 宿主工具;固定 Go 仅用于 versitygw |
 
 Go 使用官方 `go1.26.5.linux-amd64.tar.gz`,SHA256 为
 `5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`。
-bootstrap 校验归档、driver 与 compiler 后才加入 PATH;module 工具链选择保留
+bootstrap 校验归档、driver 与 compiler 后才加入 PATH;source module 工具链选择保留
 `GOTOOLCHAIN=auto`。EROFS host writer/reader 从固定的 v1.9.1 源码和 SHA256 构建,
-独立于 guest 静态 recipe。Rust/Cargo 与 Docker 是
+独立于 guest 静态 recipe。Docker 以及源码构建所需的 Rust/Cargo 是
 [标准镜像](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
 的必需能力,会显式检查。Native source pin、Cargo lockfile、构建参数、link map 和
 materials 仍由既有 recipe 维护。工具缺失、摘要不符或 VM 能力不可用均使 job 失败。
 
-Source profile 加载 `tun`、`vhost_vsock`,启用 `vm.unprivileged_userfaultfd=1`,
-仅向本次 job 的 uid 授予 `/dev/kvm`、`/dev/vhost-vsock`、`/dev/net/tun` 访问权,
-并检查 userfaultfd、systemd 和 cgroup v2。不安装 runner service、模板、nspawn slot
-或持久网络。旧的 owned-state 恢复仅在持久 runner 运行。构建 CPU affinity 按可用
+Source 和 exact-assets profile 加载 `tun`、`vhost_vsock`,启用
+`vm.unprivileged_userfaultfd=1`,并检查 userfaultfd、systemd 和 cgroup v2。
+无桌面会话的 runner 上,udev `uaccess` 处理可能在设备 inode 不变时删除 `/dev/kvm`
+上的 runner 命名 ACL。修改宿主之前,VM bootstrap 要求预期的 GitHub-hosted Ubuntu 24.04
+x64 环境,并校验非 root 的数字 job uid/主组 gid。它仅安装
+`/etc/udev/rules.d/99-kuasar-job-kvm.rules`,匹配 `SUBSYSTEM=="misc"` 和
+`KERNEL=="kvm"`,使用最终赋值 `GROUP:="<id -g>"`、`MODE:="0660"`。
+重载规则后仅触发 KVM,等待 udev settle,并仅对 `/dev/kvm` 应用相同 group/mode。
+随后删除 runner 的 KVM 命名 ACL,重放已观测到的丢失情况,以当前 job 用户验证 `O_RDWR`。
+不修改组成员,不授予所有用户访问权限。Vhost-vsock 与 TUN 保留原有 job 专属 ACL。
+Suite 和 sudo 前的访问检查保持不变;仍需完整 hosted 资格验证。
+
+必需的包内 connector E2E 验证真实 namespace 和 BPF 数据路径,bootstrap 不额外要求依赖内核版本的探测工具。两个 profile 均显式安装
+完整 suite 所需的 ping、netcat、OpenSSL、SQLite,以及 sandboxer usage fault/source
+fixture 所需的 `strace`。不安装 runner service、模板、nspawn slot 或持久网络。
+旧的 owned-state 恢复仅在持久 runner 运行。构建 CPU affinity 按可用
 CPU 与内存限制(预留 2 GiB 给系统,每个 compiler job 预算 2 GiB),也约束使用
 `nproc` 的 recipe;Go/Cargo 并发使用同一预算。顶层 Make goal 仍顺序执行。
-Source E2E 的 180 分钟限时包含冷构建与完整 owner/UFFD/A/B/C/D smoke。
+Source E2E 使用既有 hosted 180 分钟限时,包含冷构建与完整 owner/UFFD/A/B/C/D smoke;
+exact-assets 保持 120 分钟,私有 source 保持 60 分钟。测试断言和完整 working-set matrix
+均不缩减。
 
 源码归档、native 条目、tarball、Go/Cargo cache 和工具位于
-`$RUNNER_TEMP/kuasar-hosted.*`,不上传这些目录。源码本身保留在 job workspace;
+`$RUNNER_TEMP/kuasar-hosted.*`;exact-assets 测试工具另用
+`$RUNNER_TEMP/kuasar-exact-tools.*` 目录,不上传这些目录。源码本身保留在 job workspace;
 仅上传既有 revision/timing/performance metadata 与验证后的发布 bundle。Bundle 继续
 包含必需的许可/来源清单,不传递完整 workspace。Hosted 使用官方 Go/Rust/Python/
-kernel/image 地址并本地构建既有 zot/versitygw target;持久 caller 保持其镜像设置。
+kernel/image 地址。Source 模式继续使用既有 zot/versitygw target。Exact-assets 复用可信
+平台的 `ensure-zot.sh`,只下载公开 guest-runtime
+[提交 494dbceae683d6b20cdbec00fe6b1f554ea2f508](https://github.com/kuasar-sandbox/guest-runtime/tree/494dbceae683d6b20cdbec00fe6b1f554ea2f508/native-deps/deps)
+的 `build-versitygw.sh`/`common.sh`。固定 recipe 路径、commit 和 SHA256 均校验;
+versitygw 源码还检查归档路径和类型。该宿主工具构建固定 Go,限制 affinity/并发并使用本地
+缓存。`host-tools.tsv` 记录 recipe、源码和二进制身份。Exact-assets 不 checkout 私有 sibling,
+不由候选源码选择宿主构建脚本。持久 caller 保持其镜像设置。
 
-PR bootstrap 从 `job.workflow_sha` 对应的 `trusted/platform` 执行,位于平台工具
-token 撤销之后、source token 创建之前。Guest release job 在请求源码之前 checkout
+Integration bootstrap 从 `job.workflow_sha` 对应的 `trusted/platform` 执行,位于请求
+验证和平台工具 token 撤销之后。已验证的 mode 选择 `source` 或 `exact-assets`;只有 source
+创建源码 token、挂接源码缓存。Exact-assets 仅在下载、验证并解压 bundle 后挂接测试工具。
+Guest release job 在请求源码之前 checkout
 同一 immutable 平台 pin;Runtime ABI 检查来自可信 guest workflow checkout。Kernel
 不再需要跨仓 App token。Runtime 仍通过既有只读 source token 获取私有依赖闭包,
 在执行源码或打包代码前撤销。Publish 仍是单独拥有写权限的 job。
 
-迁移顺序为:先验证并正常合入共享平台改动,再将 guest 的所有发布 bootstrap checkout
-固定到该评审提交的完整 SHA。Squash/rebase 后需要更新这些发布 pin。PR wrapper 保留
-`@main`;平台合入后的新 guest PR 事件会解析新可信 workflow 并选择标准 runner。
-`pull_request_target` 使用 base 分支 wrapper,因此仅修改候选 wrapper 不能作为资格验证。
-其他 caller 的执行环境在各自迁移前保持不变。手工演练不代替精确候选的必需 Integration
-E2E 检查。
+迁移遵循纠正后的主仓优先、先公开再 hosted 顺序:先完成主仓自身的 source/aggregate
+资格验证,再逐个准备和评审剩余私有仓、公开该仓、验证其自身标准 runner CI。
+Accelerator #129/#135 继续延期;本次不加入 accelerator routing/profile 工作,也不建立私有
+组件的公开验证 relay。主仓真实 aggregate/source-set 测试可使用既有已授权 companion
+依赖,但不能算作组件公开验收。已完成的 guest 路径和 immutable release bootstrap pin
+保持不变;以后更新 pin 必须使用经过评审的真实上游 SHA。PR wrapper 保留 `@main`,
+`pull_request_target` 使用 base 分支 wrapper。仅修改候选源码或手工演练不能代替精确候选
+必需的 Integration E2E 检查。本地创作用 Git 基线不代表上游发布来源。
+
+标准 runner 的功能结果不能证明此前固定硬件上的 VM 容量。可选的真实云 OBS/NFS 测试仍
+需各自环境和证据;本地 zot/versitygw fixture 不代表真实云验收。必需能力缺失或资源不足
+必须失败,不能转为成功 Skip。
 
 离线检查为 `python3 ci/hosted/test-workflows.py`(也由 `make test-ci-tools` 执行)及 guest
 `python3 scripts/ci-test-workflows.py ../kuasar-sandbox`,覆盖 runner 选择、profile、pin、
@@ -279,7 +318,7 @@ base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
 - `timings.tsv`:构建与测试阶段资源数据;
 - UFFD 与 working-set 报告(仅对应测试运行时)。
 
-exact-assets 模式只记录 run 与测试输出,不创建伪造的源码或 native cache 元数据。发布版本
+exact-assets 模式记录 run、测试输出和 hosted `host-tools.tsv` 身份,不创建伪造的组件源码或 native cache 元数据。发布版本
 组合由精确选定的平台分支提交中的清单、组件 tag 和 GitHub Release notes 表达。该提交不一定
 来自平台 `main`:维护分支聚合保留自身的版本选择。
 

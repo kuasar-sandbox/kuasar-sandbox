@@ -71,12 +71,12 @@ concurrency:
 
 jobs:
   e2e:
-    # Migrate only guest-runtime source candidates; other callers keep their pool.
-    runs-on: ${{ fromJSON(inputs.mode == 'source' && inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' && '["ubuntu-24.04"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
-    timeout-minutes: ${{ inputs.mode == 'source' && inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' && 180 || (inputs.mode == 'exact-assets' && 120 || 60) }}
+    # Only the actual public main/guest caller can select its qualified hosted route.
+    runs-on: ${{ fromJSON((github.event.repository.visibility == 'public' && ((inputs.mode == 'source' && inputs.candidate_repository == github.repository && (github.repository == 'kuasar-sandbox/kuasar-sandbox' || github.repository == 'kuasar-sandbox/guest-runtime')) || (inputs.mode == 'exact-assets' && github.repository == 'kuasar-sandbox/kuasar-sandbox'))) && '["ubuntu-24.04"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
+    timeout-minutes: ${{ (github.event.repository.visibility == 'public' && inputs.mode == 'source' && inputs.candidate_repository == github.repository && (github.repository == 'kuasar-sandbox/kuasar-sandbox' || github.repository == 'kuasar-sandbox/guest-runtime')) && 180 || (inputs.mode == 'exact-assets' && 120 || 60) }}
     env:
       TARGET_ARCH: x86_64
-      KUASAR_HOSTED: ${{ inputs.mode == 'source' && inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' }}
+      KUASAR_HOSTED: ${{ github.event.repository.visibility == 'public' && ((inputs.mode == 'source' && inputs.candidate_repository == github.repository && (github.repository == 'kuasar-sandbox/kuasar-sandbox' || github.repository == 'kuasar-sandbox/guest-runtime')) || (inputs.mode == 'exact-assets' && github.repository == 'kuasar-sandbox/kuasar-sandbox')) }}
       KUASAR_CI_DIR: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}
       KUASAR_CI_TIMINGS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/timings.tsv
       KUASAR_NATIVE_CACHE_METRICS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/native-cache.tsv
@@ -382,9 +382,11 @@ jobs:
             https://api.github.com/installation/token)
           case "$status" in 204|401) ;; *) echo "failed to revoke tooling token: HTTP $status" >&2; exit 1 ;; esac
 
-      - name: Bootstrap standard guest source runner from trusted tooling
+      - name: Bootstrap standard runner from trusted tooling
         if: env.KUASAR_HOSTED == 'true'
-        run: bash trusted/platform/ci/hosted/bootstrap.sh --profile source
+        env:
+          BOOTSTRAP_PROFILE: ${{ inputs.mode }}
+        run: bash trusted/platform/ci/hosted/bootstrap.sh --profile "$BOOTSTRAP_PROFILE"
 
       - name: Check hosted CI regression contracts
         if: env.KUASAR_HOSTED == 'true'
@@ -411,6 +413,10 @@ jobs:
           rm -rf release-install
           trusted/platform/release/aggregate-release.sh extract \
             "$RELEASE_VERSION" release-bundle release-install
+
+      - name: Attach job-local exact-assets test tools
+        if: env.KUASAR_HOSTED == 'true' && inputs.mode == 'exact-assets'
+        run: bash trusted/platform/ci/hosted/exact-assets-tools.sh
 
       - name: Create read-only source token
         if: inputs.mode == 'source'
@@ -867,7 +873,7 @@ jobs:
           done
 
       - name: Attach job-local source caches and test tools
-        if: env.KUASAR_HOSTED == 'true'
+        if: env.KUASAR_HOSTED == 'true' && inputs.mode == 'source'
         run: |
           set -euo pipefail
           for path in \
@@ -884,6 +890,11 @@ jobs:
           mkdir -p "$tool_dir"
           echo "E2E_ZOT_BIN=$tool_dir/zot" >> "$GITHUB_ENV"
           echo "E2E_VGW_BIN=$tool_dir/versitygw" >> "$GITHUB_ENV"
+
+      - name: Pull standard runner test images
+        if: env.KUASAR_HOSTED == 'true'
+        run: |
+          set -euo pipefail
           for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
             timeout 3m docker pull "$image"
           done
