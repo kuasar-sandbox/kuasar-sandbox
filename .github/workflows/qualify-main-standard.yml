@@ -1,8 +1,4 @@
 name: Main standard runner qualification
-on:
-  push:
-    branches: [ci/qualify-main-standard]
-    paths: [.github/workflows/qualify-main-standard.yml]
 permissions:
   contents: read
 concurrency:
@@ -13,120 +9,82 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
-      - name: Read exact trusted main tooling
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: 04a947f1a7ab3f143b9e2c61888e6a3700e6cd3d
-          path: control
-          persist-credentials: false
-      - name: Read exact released platform sources
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: 9741fa2fd86e3a5cf8e6ff7e63b8c35e8b1117b7
-          path: release-source
-          persist-credentials: false
-      - name: Read public host test-tool recipe only
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          repository: kuasar-sandbox/guest-runtime
-          ref: 494dbceae683d6b20cdbec00fe6b1f554ea2f508
-          path: host-tools-source
-          sparse-checkout: native-deps
-          persist-credentials: false
-      - name: Prepare standard VM test host
-        run: |
-          set -euo pipefail
-          bash control/ci/hosted/bootstrap.sh --profile source
-          nproc; free -m; df -h .; uname -a
-      - name: Keep KVM access bound to the disposable job group
-        run: |
-          set -euo pipefail
-          sudo apt-get install -y --no-install-recommends strace iputils-ping
-          udevadm info -q property -n /dev/kvm
-          grep -n 'KERNEL=="kvm"' /usr/lib/udev/rules.d/*.rules || true
-          gid=$(id -g)
-          [[ "$gid" =~ ^[0-9]+$ ]]
-          printf 'SUBSYSTEM=="misc", KERNEL=="kvm", GROUP:="%s", MODE:="0660"\n' "$gid" | sudo tee /etc/udev/rules.d/99-kuasar-job-kvm.rules >/dev/null
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --action=change --sysname-match=kvm
-          sudo udevadm settle --timeout=10
-          sudo chgrp "$gid" /dev/kvm
-          sudo chmod 0660 /dev/kvm
-          # Replay the observed removal of the named ACL; group access must survive.
-          sudo setfacl -x "u:$(id -u)" /dev/kvm
-          test -r /dev/kvm && test -w /dev/kvm
-          python3 -c 'import os; f=os.open("/dev/kvm", os.O_RDWR); os.close(f)'
-      - name: Download and verify the existing public aggregate
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p bundle/assets
-          base=https://github.com/kuasar-sandbox/kuasar-sandbox/releases/download/release-v0.1.4
-          for asset in SHA256SUMS platform-release-v0.1.4.tar.gz accelerator-v0.1.4-linux-x86_64.tar.gz connector-v0.1.3-linux-x86_64.tar.gz orchestrator-v0.1.4-linux-x86_64.tar.gz sandbox-runtime-x86_64-v0.1.4.tar.gz sandboxer-v0.1.4-linux-x86_64.tar.gz vmlinux-x86_64-v0.1.2.tar.gz; do
-            curl -fL --retry 3 --max-time 180 "$base/$asset" -o "bundle/assets/$asset"
-          done
-          (cd bundle/assets && sha256sum -c SHA256SUMS)
-          curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/tags/release-v0.1.4 | jq -er .body > bundle/release-notes.md
-          source control/release/lib.sh
-          resolve_selection "$PWD/release-source" release-v0.1.4 "$PWD/bundle/selection.tsv"
-          PLATFORM_SOURCE_ROOT="$PWD/release-source" bash control/release/aggregate-release.sh validate release-v0.1.4 "$PWD/bundle"
-          PLATFORM_SOURCE_ROOT="$PWD/release-source" bash control/release/aggregate-release.sh extract release-v0.1.4 "$PWD/bundle" "$PWD/release-install"
-          (cd release-install && find bin -type f -print0 | sort -z | xargs -0 sha256sum) > "$RUNNER_TEMP/product-binaries.sha256"
-      - name: Prepare pinned local service tools without rebuilding products
-        run: |
-          set -euo pipefail
-          export BINDIR="$RUNNER_TEMP/main-e2e-tools"
-          export BUILD_DIR="$RUNNER_TEMP/main-e2e-tools-build"
-          export TARBALL_CACHE="$KUASAR_TARBALL_CACHE"
-          export VERSITYGW_SRC="$RUNNER_TEMP/main-versitygw-source"
-          export TARGET_ARCH=x86_64 GO_ARCH=amd64
-          bash control/ci/integration/ensure-zot.sh
-          bash host-tools-source/native-deps/deps/build-versitygw.sh
-          test -x "$BINDIR/zot"; test -x "$BINDIR/versitygw"
-          echo "E2E_ZOT_BIN=$BINDIR/zot" >> "$GITHUB_ENV"
-          echo "E2E_VGW_BIN=$BINDIR/versitygw" >> "$GITHUB_ENV"
-          for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
-            timeout 3m docker pull "$image"
-          done
-      - name: Observe device permissions before the untouched packaged suite
-        run: |
-          id
-          for device in /dev/kvm /dev/vhost-vsock /dev/net/tun; do
-            stat -c '%n %a %u:%g %i' "$device"
-            getfacl -cp "$device"
-            if test -r "$device" && test -w "$device"; then echo "$device accessible"; else echo "$device INACCESSIBLE"; fi
-          done
-          cat /proc/self/cgroup
-      - name: Run every required packaged aggregate E2E case
-        working-directory: release-install
-        env:
-          BIN: ${{ github.workspace }}/release-install/bin
-          ZOT_BIN: ${{ env.E2E_ZOT_BIN }}
-          VGW_BIN: ${{ env.E2E_VGW_BIN }}
-          REQUIRE_KVM: "1"
-          REQUIRE_EXEC: "1"
-          REQUIRE_CLUSTER_STUB: "1"
-          REQUIRE_CLUSTER_REAL: "1"
-          REQUIRE_ORCH: "1"
-          REQUIRE_PROXY: "1"
-          REQUIRE_BUILDER: "1"
-          REQUIRE_RUNTASK: "1"
-          REQUIRE_CONNECTOR_E2E: "1"
-          REQUIRE_GUEST_RUNTIME: "1"
-        run: bash test/e2e/run_all.sh
-      - name: Confirm products were not replaced and record host resources
-        if: always()
-        run: |
-          if test -f "$RUNNER_TEMP/product-binaries.sha256"; then
-            (cd release-install && sha256sum -c "$RUNNER_TEMP/product-binaries.sha256")
-          fi
-          id
-          for device in /dev/kvm /dev/vhost-vsock /dev/net/tun; do
-            stat -c '%n %a %u:%g %i' "$device"
-            getfacl -cp "$device"
-            if test -r "$device" && test -w "$device"; then echo "$device accessible"; else echo "$device INACCESSIBLE"; fi
-          done
-          cat /proc/self/cgroup
-          free -m; df -h .
-          echo 'This is full public-release package qualification, not candidate-source acceptance; no release or tag was created.'
+    - name: Read exact trusted main tooling
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: 2d203dcbc6bd2f597da244737cd04d2e47256cf9
+        path: control
+        persist-credentials: false
+    - name: Read exact released platform sources
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: 9741fa2fd86e3a5cf8e6ff7e63b8c35e8b1117b7
+        path: release-source
+        persist-credentials: false
+    - name: Prepare standard VM test host
+      run: 'set -euo pipefail
+
+        bash control/ci/hosted/bootstrap.sh --profile exact-assets
+
+        nproc; free -m; df -h .; uname -a
+
+        '
+    - name: Download and verify the existing public aggregate
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: "set -euo pipefail\nmkdir -p bundle/assets\nbase=https://github.com/kuasar-sandbox/kuasar-sandbox/releases/download/release-v0.1.4\n\
+        for asset in SHA256SUMS platform-release-v0.1.4.tar.gz accelerator-v0.1.4-linux-x86_64.tar.gz connector-v0.1.3-linux-x86_64.tar.gz\
+        \ orchestrator-v0.1.4-linux-x86_64.tar.gz sandbox-runtime-x86_64-v0.1.4.tar.gz sandboxer-v0.1.4-linux-x86_64.tar.gz\
+        \ vmlinux-x86_64-v0.1.2.tar.gz; do\n  curl -fL --retry 3 --max-time 180 \"$base/$asset\" -o \"bundle/assets/$asset\"\
+        \ndone\n(cd bundle/assets && sha256sum -c SHA256SUMS)\ncurl -fsSL --retry 3 -H \"Authorization: Bearer $GH_TOKEN\"\
+        \ https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/tags/release-v0.1.4 | jq -er .body\
+        \ > bundle/release-notes.md\nsource control/release/lib.sh\nresolve_selection \"$PWD/release-source\" release-v0.1.4\
+        \ \"$PWD/bundle/selection.tsv\"\nPLATFORM_SOURCE_ROOT=\"$PWD/release-source\" bash control/release/aggregate-release.sh\
+        \ validate release-v0.1.4 \"$PWD/bundle\"\nPLATFORM_SOURCE_ROOT=\"$PWD/release-source\" bash control/release/aggregate-release.sh\
+        \ extract release-v0.1.4 \"$PWD/bundle\" \"$PWD/release-install\"\n(cd release-install && find bin -type\
+        \ f -print0 | sort -z | xargs -0 sha256sum) > \"$RUNNER_TEMP/product-binaries.sha256\"\n"
+    - name: Prepare pinned local service tools without rebuilding products
+      run: 'set -euo pipefail
+
+        bash control/ci/hosted/exact-assets-tools.sh
+
+        (cd release-install && sha256sum -c "$RUNNER_TEMP/product-binaries.sha256")
+
+        '
+      env:
+        KUASAR_CI_DIR: ${{ runner.temp }}/main-qualification-evidence
+    - name: Observe device permissions before the untouched packaged suite
+      run: "id\nfor device in /dev/kvm /dev/vhost-vsock /dev/net/tun; do\n  stat -c '%n %a %u:%g %i' \"$device\"\
+        \n  getfacl -cp \"$device\"\n  if test -r \"$device\" && test -w \"$device\"; then echo \"$device accessible\"\
+        ; else echo \"$device INACCESSIBLE\"; fi\ndone\ncat /proc/self/cgroup\n"
+    - name: Run every required packaged aggregate E2E case
+      working-directory: release-install
+      env:
+        BIN: ${{ github.workspace }}/release-install/bin
+        ZOT_BIN: ${{ env.E2E_ZOT_BIN }}
+        VGW_BIN: ${{ env.E2E_VGW_BIN }}
+        REQUIRE_KVM: '1'
+        REQUIRE_EXEC: '1'
+        REQUIRE_CLUSTER_STUB: '1'
+        REQUIRE_CLUSTER_REAL: '1'
+        REQUIRE_ORCH: '1'
+        REQUIRE_PROXY: '1'
+        REQUIRE_BUILDER: '1'
+        REQUIRE_RUNTASK: '1'
+        REQUIRE_CONNECTOR_E2E: '1'
+        REQUIRE_GUEST_RUNTIME: '1'
+      run: bash test/e2e/run_all.sh
+    - name: Confirm products were not replaced and record host resources
+      if: always()
+      run: "if test -f \"$RUNNER_TEMP/product-binaries.sha256\"; then\n  (cd release-install && sha256sum -c \"\
+        $RUNNER_TEMP/product-binaries.sha256\")\nfi\nid\nfor device in /dev/kvm /dev/vhost-vsock /dev/net/tun; do\n\
+        \  stat -c '%n %a %u:%g %i' \"$device\"\n  getfacl -cp \"$device\"\n  if test -r \"$device\" && test -w\
+        \ \"$device\"; then echo \"$device accessible\"; else echo \"$device INACCESSIBLE\"; fi\ndone\ncat /proc/self/cgroup\n\
+        free -m; df -h .\necho 'This is full public-release package qualification, not candidate-source acceptance;\
+        \ no release or tag was created.'\n"
+'on':
+  push:
+    branches:
+    - ci/qualify-main-standard
+    paths:
+    - .github/workflows/qualify-main-standard.yml
