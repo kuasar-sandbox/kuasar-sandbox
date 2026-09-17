@@ -38,6 +38,24 @@ jobs:
           set -euo pipefail
           bash control/ci/hosted/bootstrap.sh --profile source
           nproc; free -m; df -h .; uname -a
+      - name: Keep KVM access bound to the disposable job group
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y --no-install-recommends strace iputils-ping
+          udevadm info -q property -n /dev/kvm
+          grep -n 'KERNEL=="kvm"' /usr/lib/udev/rules.d/*.rules || true
+          gid=$(id -g)
+          [[ "$gid" =~ ^[0-9]+$ ]]
+          printf 'SUBSYSTEM=="misc", KERNEL=="kvm", GROUP:="%s", MODE:="0660"\n' "$gid" | sudo tee /etc/udev/rules.d/99-kuasar-job-kvm.rules >/dev/null
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --action=change --sysname-match=kvm
+          sudo udevadm settle --timeout=10
+          sudo chgrp "$gid" /dev/kvm
+          sudo chmod 0660 /dev/kvm
+          # Replay the observed removal of the named ACL; group access must survive.
+          sudo setfacl -x "u:$(id -u)" /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          python3 -c 'import os; f=os.open("/dev/kvm", os.O_RDWR); os.close(f)'
       - name: Download and verify the existing public aggregate
         run: |
           set -euo pipefail
