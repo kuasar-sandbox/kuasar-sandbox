@@ -10,7 +10,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   full-published-e2e:
-    if: github.event.repository.private == false && github.repository == 'kuasar-sandbox/kuasar-sandbox'
+    if: toJSON(github.event.repository.private) == 'false' && github.repository == 'kuasar-sandbox/kuasar-sandbox'
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     steps:
@@ -79,7 +79,12 @@ jobs:
           REQUIRE_RUNTASK: '1'
           REQUIRE_CONNECTOR_E2E: '1'
           REQUIRE_GUEST_RUNTIME: '1'
-        run: bash test/e2e/run_all.sh
+        run: |
+          set -euo pipefail
+          id; ls -l /dev/kvm; getfacl /dev/kvm
+          # Full native suites historically run privileged. Several packaged
+          # cases check access before their own sudo, unlike guest-only E2E.
+          sudo -n -E env PATH="$PATH" bash test/e2e/run_all.sh
       - name: Confirm product binaries were not replaced
         if: always()
         run: |
