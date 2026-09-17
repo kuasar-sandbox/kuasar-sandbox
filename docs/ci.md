@@ -231,3 +231,5 @@ Exact-assets mode records the run and test output without inventing source or na
 - [deployment.md](deployment.md): system services and runtime environment required by Integration E2E;
 - [../ci/runner/README.md](../ci/runner/README.md): runner installation and maintenance;
 - [../test/QUICKSTART.md](../test/QUICKSTART.md): E2E prerequisites and troubleshooting.
+
+Normal Go RocksDB tests retain the upstream binding’s compression-library link flags; the accelerator profile explicitly supplies Snappy, LZ4, Zstandard and zlib development libraries. This does not enable compression in the existing native RocksDB recipe.

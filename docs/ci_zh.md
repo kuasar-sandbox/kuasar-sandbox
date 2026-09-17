@@ -303,3 +303,5 @@ exact-assets 模式只记录 run 与测试输出,不创建伪造的源码或 nat
 - [deployment_zh.md](deployment_zh.md):Integration E2E 所需系统服务与运行环境;
 - [../ci/runner/README_zh.md](../ci/runner/README_zh.md):runner 安装与维护;
 - [../test/QUICKSTART_zh.md](../test/QUICKSTART_zh.md):E2E 前置条件与排错。
+
+普通 Go RocksDB 测试保留上游绑定的压缩库链接参数;accelerator profile 显式提供 Snappy、LZ4、Zstandard 与 zlib 开发库,并不启用原有 native RocksDB recipe 的压缩功能。

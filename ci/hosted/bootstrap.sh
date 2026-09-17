@@ -33,7 +33,8 @@ select_profile() {
         accelerator)
             with_go=true
             # RocksDB's existing static recipe and release/link-map checks only.
-            packages+=(build-essential cmake pkg-config binutils)
+            packages+=(build-essential cmake pkg-config binutils
+                libsnappy-dev liblz4-dev libzstd-dev zlib1g-dev)
             ;;
         kernel) with_go=true; with_kernel=true ;;
         runtime|runtime-publish) with_go=true; with_native=true; with_readers=true ;;

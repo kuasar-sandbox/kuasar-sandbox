@@ -19,7 +19,7 @@ class BootstrapTests(unittest.TestCase):
         required = {
             "control": {"curl", "git", "jq", "python3", "python3-yaml", "util-linux"},
             "release-control": {"curl", "git", "jq"},
-            "accelerator": {"build-essential", "cmake", "pkg-config", "binutils", "python3", "python3-yaml", "util-linux"},
+            "accelerator": {"build-essential", "cmake", "pkg-config", "binutils", "python3", "python3-yaml", "util-linux", "libsnappy-dev", "liblz4-dev", "libzstd-dev", "zlib1g-dev"},
             "kernel": {"build-essential", "bc", "bison", "flex", "libelf-dev", "libssl-dev", "libncurses-dev", "pkg-config", "time"},
             "runtime": {"autoconf", "automake", "libtool", "uuid-dev", "liblz4-dev", "libzstd-dev", "zlib1g-dev", "libfuse3-dev"},
             "runtime-publish": {"autoconf", "automake", "libtool", "uuid-dev"},
@@ -48,7 +48,7 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(flags, "true false false false false")
         self.assertFalse(set(packages) & {"bc", "bison", "flex", "libelf-dev", "libfuse3-dev",
                                          "autoconf", "automake", "kmod", "acl", "docker.io",
-                                         "redis-server", "libsnappy-dev"})
+                                         "redis-server"})
 
     def test_required_tools_fail_closed(self):
         self.assertNotEqual(shell("need kuasar_nonexistent_required_tool").returncode, 0)
