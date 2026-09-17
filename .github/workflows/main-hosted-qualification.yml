@@ -1,0 +1,91 @@
+name: Main standard runner qualification
+on:
+  push:
+    branches: [ci/main-hosted-qualification]
+    paths: [.github/workflows/main-hosted-qualification.yml]
+permissions:
+  contents: read
+concurrency:
+  group: main-hosted-qualification
+  cancel-in-progress: true
+jobs:
+  full-published-e2e:
+    if: github.event.repository.private == false && github.repository == 'kuasar-sandbox/kuasar-sandbox'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 04a947f1a7ab3f143b9e2c61888e6a3700e6cd3d
+          path: tooling/platform
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: kuasar-sandbox/guest-runtime
+          ref: 494dbceae683d6b20cdbec00fe6b1f554ea2f508
+          path: tooling/guest-runtime
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 9741fa2fd86e3a5cf8e6ff7e63b8c35e8b1117b7
+          path: published-platform
+          persist-credentials: false
+      - name: Prepare standard runner capabilities
+        run: bash tooling/platform/ci/hosted/bootstrap.sh --profile source
+      - name: Build only auxiliary test services and prepare images
+        run: |
+          set -euo pipefail
+          taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
+          make -C tooling/platform e2e-tools
+          test -x tooling/platform/build/e2e-tools/x86_64/zot
+          test -x tooling/platform/build/e2e-tools/x86_64/versitygw
+          mkdir -p "$RUNNER_TEMP/qualification-docker"
+          printf '{"auths":{}}\n' > "$RUNNER_TEMP/qualification-docker/config.json"
+          echo "DOCKER_CONFIG=$RUNNER_TEMP/qualification-docker" >> "$GITHUB_ENV"
+          export DOCKER_CONFIG="$RUNNER_TEMP/qualification-docker"
+          for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
+            timeout 3m docker pull "$image"
+          done
+      - name: Download and extract the exact public release without rebuilding products
+        env:
+          PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/published-platform
+        run: |
+          set -euo pipefail
+          mkdir -p bundle/assets
+          base=https://github.com/kuasar-sandbox/kuasar-sandbox/releases/download/release-v0.1.4
+          for asset in SHA256SUMS platform-release-v0.1.4.tar.gz accelerator-v0.1.4-linux-x86_64.tar.gz connector-v0.1.3-linux-x86_64.tar.gz orchestrator-v0.1.4-linux-x86_64.tar.gz sandbox-runtime-x86_64-v0.1.4.tar.gz sandboxer-v0.1.4-linux-x86_64.tar.gz vmlinux-x86_64-v0.1.2.tar.gz; do
+            curl -fLsS --retry 3 --max-time 240 "$base/$asset" -o "bundle/assets/$asset"
+          done
+          (cd bundle/assets && sha256sum -c SHA256SUMS)
+          curl -fsSL --retry 3 https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/tags/release-v0.1.4 | jq -er .body > bundle/release-notes.md
+          source tooling/platform/release/lib.sh
+          resolve_selection "$PLATFORM_SOURCE_ROOT" release-v0.1.4 "$PWD/bundle/selection.tsv"
+          bash tooling/platform/release/aggregate-release.sh validate release-v0.1.4 "$PWD/bundle"
+          bash tooling/platform/release/aggregate-release.sh extract release-v0.1.4 "$PWD/bundle" "$PWD/install"
+          find install/bin -type f -exec sha256sum {} + | sort > "$RUNNER_TEMP/product-before.sha256"
+      - name: Execute every packaged E2E owner with required capabilities
+        working-directory: install
+        env:
+          BIN: ${{ github.workspace }}/install/bin
+          ZOT_BIN: ${{ github.workspace }}/tooling/platform/build/e2e-tools/x86_64/zot
+          VGW_BIN: ${{ github.workspace }}/tooling/platform/build/e2e-tools/x86_64/versitygw
+          REQUIRE_KVM: '1'
+          REQUIRE_EXEC: '1'
+          REQUIRE_CLUSTER_STUB: '1'
+          REQUIRE_CLUSTER_REAL: '1'
+          REQUIRE_ORCH: '1'
+          REQUIRE_PROXY: '1'
+          REQUIRE_BUILDER: '1'
+          REQUIRE_RUNTASK: '1'
+          REQUIRE_CONNECTOR_E2E: '1'
+          REQUIRE_GUEST_RUNTIME: '1'
+        run: bash test/e2e/run_all.sh
+      - name: Confirm product binaries were not replaced
+        if: always()
+        run: |
+          set -euo pipefail
+          if [ -f "$RUNNER_TEMP/product-before.sha256" ]; then
+            sha256sum -c "$RUNNER_TEMP/product-before.sha256"
+          fi
+          free -m; df -h .
+          echo 'Published baseline full-suite qualification; not candidate-source or new-release publication.'
