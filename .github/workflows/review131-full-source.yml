@@ -26,7 +26,7 @@ jobs:
     - name: Read exact reviewed public main candidate
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
-        ref: a08eba837090d9ceb5b41f05049055edca632c05
+        ref: 7ebfa19fb3b72e94f1e921c1b3a7cf8cd74a2ea9
         path: src/platform
         persist-credentials: false
     - name: Prepare standard source host from the reviewed candidate
@@ -69,7 +69,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/orchestrator
-        ref: f5b72089ae0c9f2cb32ccf306381c6a1906ba5ff
+        ref: b7df3d26a45687d4de7b652a9563dbcdfd7afcda
         path: src/orchestrator
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -77,7 +77,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/sandboxer
-        ref: 02f2d32a6db4caeaa9e19a737d655766cc267e84
+        ref: 4a1e9eb79d0ec37a60a45b914897efac6edf577b
         path: src/sandboxer
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -97,9 +97,9 @@ jobs:
 
         printf ''repository\trequested_ref\tresolved_sha\trole\n'' > "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/platform rev-parse HEAD)" = a08eba837090d9ceb5b41f05049055edca632c05
+        test "$(git -C src/platform rev-parse HEAD)" = 7ebfa19fb3b72e94f1e921c1b3a7cf8cd74a2ea9
 
-        printf ''%s\t%s\t%s\t%s\n'' kuasar-sandbox a08eba837090d9ceb5b41f05049055edca632c05 a08eba837090d9ceb5b41f05049055edca632c05
+        printf ''%s\t%s\t%s\t%s\n'' kuasar-sandbox 7ebfa19fb3b72e94f1e921c1b3a7cf8cd74a2ea9 7ebfa19fb3b72e94f1e921c1b3a7cf8cd74a2ea9
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         test "$(git -C src/accelerator rev-parse HEAD)" = 7a704d7697c1c46bbcf2927276a304d809ea6a76
@@ -117,14 +117,14 @@ jobs:
         printf ''%s\t%s\t%s\t%s\n'' guest-runtime 509ec2dcc58c0414be95fe144ffcc4f10ac0727b 509ec2dcc58c0414be95fe144ffcc4f10ac0727b
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/orchestrator rev-parse HEAD)" = f5b72089ae0c9f2cb32ccf306381c6a1906ba5ff
+        test "$(git -C src/orchestrator rev-parse HEAD)" = b7df3d26a45687d4de7b652a9563dbcdfd7afcda
 
-        printf ''%s\t%s\t%s\t%s\n'' orchestrator f5b72089ae0c9f2cb32ccf306381c6a1906ba5ff f5b72089ae0c9f2cb32ccf306381c6a1906ba5ff
+        printf ''%s\t%s\t%s\t%s\n'' orchestrator b7df3d26a45687d4de7b652a9563dbcdfd7afcda b7df3d26a45687d4de7b652a9563dbcdfd7afcda
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/sandboxer rev-parse HEAD)" = 02f2d32a6db4caeaa9e19a737d655766cc267e84
+        test "$(git -C src/sandboxer rev-parse HEAD)" = 4a1e9eb79d0ec37a60a45b914897efac6edf577b
 
-        printf ''%s\t%s\t%s\t%s\n'' sandboxer 02f2d32a6db4caeaa9e19a737d655766cc267e84 02f2d32a6db4caeaa9e19a737d655766cc267e84
+        printf ''%s\t%s\t%s\t%s\n'' sandboxer 4a1e9eb79d0ec37a60a45b914897efac6edf577b 4a1e9eb79d0ec37a60a45b914897efac6edf577b
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         cd src
@@ -175,18 +175,18 @@ jobs:
       run: "set -euo pipefail\n# Build no replacements here: package the exact products already built/tested.\n\
         workspace=\"$GITHUB_WORKSPACE\"\nstage=\"$RUNNER_TEMP/main-staged-products\"\n# Official package entry points\
         \ require the same selected component versions\n# as this unpublished staging manifest; their source SHAs\
-        \ remain real commits.\nexport RELEASE_ACCELERATOR_VERSION=v0.1.5-preview.20260917.9999\nexport RELEASE_CONNECTOR_VERSION=v0.1.5-preview.20260917.9999\n\
-        export RELEASE_SANDBOXER_VERSION=v0.1.5-preview.20260917.9999\nmkdir -p \"$stage/fetched/components\" \"\
+        \ remain real commits.\nexport RELEASE_ACCELERATOR_VERSION=v0.1.5-preview.20260918.9999\nexport RELEASE_CONNECTOR_VERSION=v0.1.5-preview.20260918.9999\n\
+        export RELEASE_SANDBOXER_VERSION=v0.1.5-preview.20260918.9999\nmkdir -p \"$stage/fetched/components\" \"\
         $stage/fetched/sources\" \"$stage/fetched/updates\"\nfor repo in accelerator connector sandboxer orchestrator;\
-        \ do\n  version=v0.1.5-preview.20260917.9999\n  dir=\"$workspace/src/$repo\"\n  test -z \"$(git -C \"$dir\"\
+        \ do\n  version=v0.1.5-preview.20260918.9999\n  dir=\"$workspace/src/$repo\"\n  test -z \"$(git -C \"$dir\"\
         \ status --porcelain --untracked-files=no)\"\n  (cd \"$dir\" && SOURCE_DATE_EPOCH=\"$(git show -s --format=%ct\
         \ HEAD)\" \\\n    bash scripts/release.sh package \"$version\" x86_64 \"$stage/packages/$repo\")\n  (cd\
         \ \"$dir\" && bash scripts/release.sh validate \"$version\" x86_64 \"$stage/packages/$repo\")\n  mkdir -p\
         \ \"$stage/fetched/components/$repo\"\n  cp \"$stage/packages/$repo/assets/\"* \"$stage/fetched/components/$repo/\"\
         \n  ln -s \"$dir\" \"$stage/fetched/sources/$repo\"\n  printf 'Unpublished qualification only. Exact source:\
         \ `%s`.\\n' \"$(git -C \"$dir\" rev-parse HEAD)\" > \"$stage/fetched/updates/$repo.md\"\ndone\nfor unit\
-        \ in runtime vmlinux; do\n  version=runtime-v0.1.5-preview.20260917.9999\n  test \"$unit\" != vmlinux ||\
-        \ version=vmlinux-v0.1.3-preview.20260917.9999\n  dir=\"$workspace/src/guest-runtime\"\n  (cd \"$dir\" &&\
+        \ in runtime vmlinux; do\n  version=runtime-v0.1.5-preview.20260918.9999\n  test \"$unit\" != vmlinux ||\
+        \ version=vmlinux-v0.1.3-preview.20260918.9999\n  dir=\"$workspace/src/guest-runtime\"\n  (cd \"$dir\" &&\
         \ SOURCE_SHA=\"$(git rev-parse HEAD)\" SOURCE_DATE_EPOCH=\"$(git show -s --format=%ct HEAD)\" \\\n    bash\
         \ scripts/release.sh package \"$unit\" \"$version\" x86_64 \"$stage/packages/$unit\")\n  (cd \"$dir\" &&\
         \ SOURCE_SHA=\"$(git rev-parse HEAD)\" bash scripts/release.sh validate \"$unit\" \"$version\" x86_64 \"\
@@ -196,10 +196,10 @@ jobs:
         \ndone\n# This isolated manifest is a staged candidate, not a tag or a published release.\nmkdir -p \"$stage/platform-input\"\
         \ngit -C \"$workspace/src/platform\" archive HEAD | tar -x -C \"$stage/platform-input\"\npython3 - \"$stage/platform-input/releases/daily-preview.yaml\"\
         \ <<'PY'\nimport pathlib, sys\npathlib.Path(sys.argv[1]).write_text('''version: release-v0.1.5\npreview_version:\
-        \ preview.20260917.9999\ncomponents:\n  accelerator: v0.1.5-preview.20260917.9999\n  connector: v0.1.5-preview.20260917.9999\n\
-        \  sandboxer: v0.1.5-preview.20260917.9999\n  orchestrator: v0.1.5-preview.20260917.9999\n  runtime: runtime-v0.1.5-preview.20260917.9999\n\
-        \  vmlinux: vmlinux-v0.1.3-preview.20260917.9999\n''')\nPY\nexport PLATFORM_SOURCE_ROOT=\"$stage/platform-input\"\
-        \nversion=release-v0.1.5-preview.20260917.9999\nsource \"$workspace/src/platform/release/lib.sh\"\nresolve_selection\
+        \ preview.20260918.9999\ncomponents:\n  accelerator: v0.1.5-preview.20260918.9999\n  connector: v0.1.5-preview.20260918.9999\n\
+        \  sandboxer: v0.1.5-preview.20260918.9999\n  orchestrator: v0.1.5-preview.20260918.9999\n  runtime: runtime-v0.1.5-preview.20260918.9999\n\
+        \  vmlinux: vmlinux-v0.1.3-preview.20260918.9999\n''')\nPY\nexport PLATFORM_SOURCE_ROOT=\"$stage/platform-input\"\
+        \nversion=release-v0.1.5-preview.20260918.9999\nsource \"$workspace/src/platform/release/lib.sh\"\nresolve_selection\
         \ \"$PLATFORM_SOURCE_ROOT\" \"$version\" \"$stage/fetched/selection.tsv\"\n: > \"$stage/fetched/previous-selection.tsv\"\
         \nbash \"$workspace/src/platform/release/aggregate-release.sh\" assemble \"$version\" \"$stage/fetched\"\
         \ \"$stage/bundle\"\nbash \"$workspace/src/platform/release/aggregate-release.sh\" validate \"$version\"\
@@ -226,7 +226,7 @@ jobs:
     - name: Read reviewed public validation tooling
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
-        ref: a08eba837090d9ceb5b41f05049055edca632c05
+        ref: 7ebfa19fb3b72e94f1e921c1b3a7cf8cd74a2ea9
         path: trusted/platform
         persist-credentials: false
     - name: Prepare a fresh exact-assets host
@@ -241,9 +241,9 @@ jobs:
 
         export PLATFORM_SOURCE_ROOT="$PWD/staged-bundle/platform-config"
 
-        bash trusted/platform/release/aggregate-release.sh validate release-v0.1.5-preview.20260917.9999 staged-bundle
+        bash trusted/platform/release/aggregate-release.sh validate release-v0.1.5-preview.20260918.9999 staged-bundle
 
-        bash trusted/platform/release/aggregate-release.sh extract release-v0.1.5-preview.20260917.9999 staged-bundle
+        bash trusted/platform/release/aggregate-release.sh extract release-v0.1.5-preview.20260918.9999 staged-bundle
         release-install
 
         sha256sum release-install/bin/* > "$RUNNER_TEMP/products-before.sha256"'
