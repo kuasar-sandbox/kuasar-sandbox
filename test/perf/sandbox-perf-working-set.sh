@@ -66,7 +66,8 @@ if [ "$(id -u)" -ne 0 ]; then
     exec sudo -nE "$0" "$@"
 fi
 
-WORK="$(mktemp -d /tmp/perf-working-set-XXXXXX)"
+# Active COW bodies need disk-backed storage; /tmp may be tmpfs.
+WORK="$(mktemp -d "${TMPDIR:-/var/tmp}/perf-working-set-XXXXXX")"
 [ -n "$TAP_NAME" ] || TAP_NAME="$(working_set_tap_name "$WORK")"
 mkdir -p "$OUT_DIR/raw"
 SAMPLES="$OUT_DIR/samples.jsonl"
