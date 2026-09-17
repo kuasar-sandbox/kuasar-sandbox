@@ -53,7 +53,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/connector
-        ref: f0bb380bc6cc3bac9050e8844b42353124a5d2e7
+        ref: 465e4b159d99ae296596752c334017047aae05ba
         path: src/connector
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -61,7 +61,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/guest-runtime
-        ref: 7593bdf841132e2b72db232afa41839b06cb21f0
+        ref: 4ecd6e77f2d1972785036585d99bd169adbdda01
         path: src/guest-runtime
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -77,7 +77,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/sandboxer
-        ref: e3e5cf1fc638c37c032672c083e97ef6b3b18114
+        ref: f66d8e7ba74540158501b7b171fd722b78a4e6f2
         path: src/sandboxer
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -107,14 +107,14 @@ jobs:
         printf ''%s\t%s\t%s\t%s\n'' accelerator 7a704d7697c1c46bbcf2927276a304d809ea6a76 7a704d7697c1c46bbcf2927276a304d809ea6a76
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/connector rev-parse HEAD)" = f0bb380bc6cc3bac9050e8844b42353124a5d2e7
+        test "$(git -C src/connector rev-parse HEAD)" = 465e4b159d99ae296596752c334017047aae05ba
 
-        printf ''%s\t%s\t%s\t%s\n'' connector f0bb380bc6cc3bac9050e8844b42353124a5d2e7 f0bb380bc6cc3bac9050e8844b42353124a5d2e7
+        printf ''%s\t%s\t%s\t%s\n'' connector 465e4b159d99ae296596752c334017047aae05ba 465e4b159d99ae296596752c334017047aae05ba
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/guest-runtime rev-parse HEAD)" = 7593bdf841132e2b72db232afa41839b06cb21f0
+        test "$(git -C src/guest-runtime rev-parse HEAD)" = 4ecd6e77f2d1972785036585d99bd169adbdda01
 
-        printf ''%s\t%s\t%s\t%s\n'' guest-runtime 7593bdf841132e2b72db232afa41839b06cb21f0 7593bdf841132e2b72db232afa41839b06cb21f0
+        printf ''%s\t%s\t%s\t%s\n'' guest-runtime 4ecd6e77f2d1972785036585d99bd169adbdda01 4ecd6e77f2d1972785036585d99bd169adbdda01
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         test "$(git -C src/orchestrator rev-parse HEAD)" = fac2b6a8712f480f248851da028b4c77a7b59f60
@@ -122,9 +122,9 @@ jobs:
         printf ''%s\t%s\t%s\t%s\n'' orchestrator fac2b6a8712f480f248851da028b4c77a7b59f60 fac2b6a8712f480f248851da028b4c77a7b59f60
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/sandboxer rev-parse HEAD)" = e3e5cf1fc638c37c032672c083e97ef6b3b18114
+        test "$(git -C src/sandboxer rev-parse HEAD)" = f66d8e7ba74540158501b7b171fd722b78a4e6f2
 
-        printf ''%s\t%s\t%s\t%s\n'' sandboxer e3e5cf1fc638c37c032672c083e97ef6b3b18114 e3e5cf1fc638c37c032672c083e97ef6b3b18114
+        printf ''%s\t%s\t%s\t%s\n'' sandboxer f66d8e7ba74540158501b7b171fd722b78a4e6f2 f66d8e7ba74540158501b7b171fd722b78a4e6f2
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         cd src
@@ -171,3 +171,101 @@ jobs:
       if: always()
       run: free -m; df -h .; test ! -f "$KUASAR_CI_TIMINGS" || cat "$KUASAR_CI_TIMINGS"; test ! -f "$KUASAR_REVISION_MANIFEST"
         || cat "$KUASAR_REVISION_MANIFEST"
+    - name: Package and validate the exact tested unpublished products
+      run: "set -euo pipefail\n# Build no replacements here: package the exact products already built/tested.\n\
+        workspace=\"$GITHUB_WORKSPACE\"\nstage=\"$RUNNER_TEMP/main-staged-products\"\nmkdir -p \"$stage/fetched/components\"\
+        \ \"$stage/fetched/sources\" \"$stage/fetched/updates\"\nfor repo in accelerator connector sandboxer orchestrator;\
+        \ do\n  version=v0.1.5-preview.20260917.9999\n  dir=\"$workspace/src/$repo\"\n  test -z \"$(git -C \"$dir\"\
+        \ status --porcelain --untracked-files=no)\"\n  (cd \"$dir\" && SOURCE_DATE_EPOCH=\"$(git show -s --format=%ct\
+        \ HEAD)\" \\\n    bash scripts/release.sh package \"$version\" x86_64 \"$stage/packages/$repo\")\n  (cd\
+        \ \"$dir\" && bash scripts/release.sh validate \"$version\" x86_64 \"$stage/packages/$repo\")\n  mkdir -p\
+        \ \"$stage/fetched/components/$repo\"\n  cp \"$stage/packages/$repo/assets/\"* \"$stage/fetched/components/$repo/\"\
+        \n  ln -s \"$dir\" \"$stage/fetched/sources/$repo\"\n  printf 'Unpublished qualification only. Exact source:\
+        \ `%s`.\\n' \"$(git -C \"$dir\" rev-parse HEAD)\" > \"$stage/fetched/updates/$repo.md\"\ndone\nfor unit\
+        \ in runtime vmlinux; do\n  version=runtime-v0.1.5-preview.20260917.9999\n  test \"$unit\" != vmlinux ||\
+        \ version=vmlinux-v0.1.3-preview.20260917.9999\n  dir=\"$workspace/src/guest-runtime\"\n  (cd \"$dir\" &&\
+        \ SOURCE_SHA=\"$(git rev-parse HEAD)\" SOURCE_DATE_EPOCH=\"$(git show -s --format=%ct HEAD)\" \\\n    bash\
+        \ scripts/release.sh package \"$unit\" \"$version\" x86_64 \"$stage/packages/$unit\")\n  (cd \"$dir\" &&\
+        \ SOURCE_SHA=\"$(git rev-parse HEAD)\" bash scripts/release.sh validate \"$unit\" \"$version\" x86_64 \"\
+        $stage/packages/$unit\")\n  mkdir -p \"$stage/fetched/components/$unit\"\n  cp \"$stage/packages/$unit/assets/\"\
+        * \"$stage/fetched/components/$unit/\"\n  ln -s \"$dir\" \"$stage/fetched/sources/$unit\"\n  printf 'Unpublished\
+        \ qualification only. Exact source: `%s`.\\n' \"$(git -C \"$dir\" rev-parse HEAD)\" > \"$stage/fetched/updates/$unit.md\"\
+        \ndone\n# This isolated manifest is a staged candidate, not a tag or a published release.\nmkdir -p \"$stage/platform-input\"\
+        \ngit -C \"$workspace/src/platform\" archive HEAD | tar -x -C \"$stage/platform-input\"\npython3 - \"$stage/platform-input/releases/daily-preview.yaml\"\
+        \ <<'PY'\nimport pathlib, sys\npathlib.Path(sys.argv[1]).write_text('''version: release-v0.1.5\npreview_version:\
+        \ preview.20260917.9999\ncomponents:\n  accelerator: v0.1.5-preview.20260917.9999\n  connector: v0.1.5-preview.20260917.9999\n\
+        \  sandboxer: v0.1.5-preview.20260917.9999\n  orchestrator: v0.1.5-preview.20260917.9999\n  runtime: runtime-v0.1.5-preview.20260917.9999\n\
+        \  vmlinux: vmlinux-v0.1.3-preview.20260917.9999\n''')\nPY\nexport PLATFORM_SOURCE_ROOT=\"$stage/platform-input\"\
+        \nversion=release-v0.1.5-preview.20260917.9999\nsource \"$workspace/src/platform/release/lib.sh\"\nresolve_selection\
+        \ \"$PLATFORM_SOURCE_ROOT\" \"$version\" \"$stage/fetched/selection.tsv\"\n: > \"$stage/fetched/previous-selection.tsv\"\
+        \nbash \"$workspace/src/platform/release/aggregate-release.sh\" assemble \"$version\" \"$stage/fetched\"\
+        \ \"$stage/bundle\"\nbash \"$workspace/src/platform/release/aggregate-release.sh\" validate \"$version\"\
+        \ \"$stage/bundle\"\nmkdir -p \"$stage/bundle/platform-config/releases\"\ncp \"$PLATFORM_SOURCE_ROOT/releases/release.yaml\"\
+        \ \"$PLATFORM_SOURCE_ROOT/releases/daily-preview.yaml\" \"$stage/bundle/platform-config/releases/\"\ncp\
+        \ \"$KUASAR_REVISION_MANIFEST\" \"$stage/bundle/source-revisions.tsv\"\nprintf 'Unpublished exact-source\
+        \ qualification; no remote tags/releases created.\\n' > \"$stage/bundle/QUALIFICATION.txt\"\nprintf 'STAGED_BUNDLE=%s\\\
+        n' \"$stage/bundle\" >> \"$GITHUB_ENV\"\n"
+    - name: Transfer only validated candidate release bundles
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      with:
+        name: review131-staged-products
+        path: ${{ env.STAGED_BUNDLE }}
+        retention-days: 1
+        if-no-files-found: error
+  staged-exact-assets:
+    needs: full-source-e2e
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      KUASAR_CI_DIR: ${{ github.workspace }}/exact-evidence
+      KUASAR_REVISION_MANIFEST: ${{ github.workspace }}/staged-bundle/source-revisions.tsv
+    steps:
+    - name: Read reviewed public validation tooling
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1
+        path: trusted/platform
+        persist-credentials: false
+    - name: Prepare a fresh exact-assets host
+      run: bash trusted/platform/ci/hosted/bootstrap.sh --profile exact-assets
+    - name: Receive the successful source job candidate bundles
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      with:
+        name: review131-staged-products
+        path: staged-bundle
+    - name: Validate and extract the unpublished exact bundle
+      run: 'set -euo pipefail
+
+        export PLATFORM_SOURCE_ROOT="$PWD/staged-bundle/platform-config"
+
+        bash trusted/platform/release/aggregate-release.sh validate release-v0.1.5-preview.20260917.9999 staged-bundle
+
+        bash trusted/platform/release/aggregate-release.sh extract release-v0.1.5-preview.20260917.9999 staged-bundle
+        release-install
+
+        sha256sum release-install/bin/* > "$RUNNER_TEMP/products-before.sha256"'
+    - name: Prepare pinned auxiliary tools only
+      run: bash trusted/platform/ci/hosted/exact-assets-tools.sh
+    - name: Pull standard runner test images
+      run: "set -euo pipefail\nfor image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest;\
+        \ do\n  timeout 3m docker pull \"$image\"\ndone\n"
+    - name: Run every required test from the validated staged package
+      working-directory: release-install
+      env:
+        BIN: ${{ github.workspace }}/release-install/bin
+        ZOT_BIN: ${{ env.E2E_ZOT_BIN }}
+        VGW_BIN: ${{ env.E2E_VGW_BIN }}
+        REQUIRE_KVM: '1'
+        REQUIRE_EXEC: '1'
+        REQUIRE_CLUSTER_STUB: '1'
+        REQUIRE_CLUSTER_REAL: '1'
+        REQUIRE_ORCH: '1'
+        REQUIRE_PROXY: '1'
+        REQUIRE_BUILDER: '1'
+        REQUIRE_RUNTASK: '1'
+        REQUIRE_CONNECTOR_E2E: '1'
+        REQUIRE_GUEST_RUNTIME: '1'
+      run: bash test/e2e/run_all.sh
+    - name: Verify product bytes remained unchanged
+      if: always()
+      run: test ! -f "$RUNNER_TEMP/products-before.sha256" || sha256sum -c "$RUNNER_TEMP/products-before.sha256"
