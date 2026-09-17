@@ -53,7 +53,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/connector
-        ref: 465e4b159d99ae296596752c334017047aae05ba
+        ref: 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8
         path: src/connector
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -61,7 +61,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/guest-runtime
-        ref: 4ecd6e77f2d1972785036585d99bd169adbdda01
+        ref: 509ec2dcc58c0414be95fe144ffcc4f10ac0727b
         path: src/guest-runtime
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -77,7 +77,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/sandboxer
-        ref: f66d8e7ba74540158501b7b171fd722b78a4e6f2
+        ref: 02f2d32a6db4caeaa9e19a737d655766cc267e84
         path: src/sandboxer
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -107,14 +107,14 @@ jobs:
         printf ''%s\t%s\t%s\t%s\n'' accelerator 7a704d7697c1c46bbcf2927276a304d809ea6a76 7a704d7697c1c46bbcf2927276a304d809ea6a76
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/connector rev-parse HEAD)" = 465e4b159d99ae296596752c334017047aae05ba
+        test "$(git -C src/connector rev-parse HEAD)" = 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8
 
-        printf ''%s\t%s\t%s\t%s\n'' connector 465e4b159d99ae296596752c334017047aae05ba 465e4b159d99ae296596752c334017047aae05ba
+        printf ''%s\t%s\t%s\t%s\n'' connector 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/guest-runtime rev-parse HEAD)" = 4ecd6e77f2d1972785036585d99bd169adbdda01
+        test "$(git -C src/guest-runtime rev-parse HEAD)" = 509ec2dcc58c0414be95fe144ffcc4f10ac0727b
 
-        printf ''%s\t%s\t%s\t%s\n'' guest-runtime 4ecd6e77f2d1972785036585d99bd169adbdda01 4ecd6e77f2d1972785036585d99bd169adbdda01
+        printf ''%s\t%s\t%s\t%s\n'' guest-runtime 509ec2dcc58c0414be95fe144ffcc4f10ac0727b 509ec2dcc58c0414be95fe144ffcc4f10ac0727b
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         test "$(git -C src/orchestrator rev-parse HEAD)" = fac2b6a8712f480f248851da028b4c77a7b59f60
@@ -122,9 +122,9 @@ jobs:
         printf ''%s\t%s\t%s\t%s\n'' orchestrator fac2b6a8712f480f248851da028b4c77a7b59f60 fac2b6a8712f480f248851da028b4c77a7b59f60
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/sandboxer rev-parse HEAD)" = f66d8e7ba74540158501b7b171fd722b78a4e6f2
+        test "$(git -C src/sandboxer rev-parse HEAD)" = 02f2d32a6db4caeaa9e19a737d655766cc267e84
 
-        printf ''%s\t%s\t%s\t%s\n'' sandboxer f66d8e7ba74540158501b7b171fd722b78a4e6f2 f66d8e7ba74540158501b7b171fd722b78a4e6f2
+        printf ''%s\t%s\t%s\t%s\n'' sandboxer 02f2d32a6db4caeaa9e19a737d655766cc267e84 02f2d32a6db4caeaa9e19a737d655766cc267e84
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         cd src
@@ -173,8 +173,11 @@ jobs:
         || cat "$KUASAR_REVISION_MANIFEST"
     - name: Package and validate the exact tested unpublished products
       run: "set -euo pipefail\n# Build no replacements here: package the exact products already built/tested.\n\
-        workspace=\"$GITHUB_WORKSPACE\"\nstage=\"$RUNNER_TEMP/main-staged-products\"\nmkdir -p \"$stage/fetched/components\"\
-        \ \"$stage/fetched/sources\" \"$stage/fetched/updates\"\nfor repo in accelerator connector sandboxer orchestrator;\
+        workspace=\"$GITHUB_WORKSPACE\"\nstage=\"$RUNNER_TEMP/main-staged-products\"\n# Official package entry points\
+        \ require the same selected component versions\n# as this unpublished staging manifest; their source SHAs\
+        \ remain real commits.\nexport RELEASE_ACCELERATOR_VERSION=v0.1.5-preview.20260917.9999\nexport RELEASE_CONNECTOR_VERSION=v0.1.5-preview.20260917.9999\n\
+        export RELEASE_SANDBOXER_VERSION=v0.1.5-preview.20260917.9999\nmkdir -p \"$stage/fetched/components\" \"\
+        $stage/fetched/sources\" \"$stage/fetched/updates\"\nfor repo in accelerator connector sandboxer orchestrator;\
         \ do\n  version=v0.1.5-preview.20260917.9999\n  dir=\"$workspace/src/$repo\"\n  test -z \"$(git -C \"$dir\"\
         \ status --porcelain --untracked-files=no)\"\n  (cd \"$dir\" && SOURCE_DATE_EPOCH=\"$(git show -s --format=%ct\
         \ HEAD)\" \\\n    bash scripts/release.sh package \"$version\" x86_64 \"$stage/packages/$repo\")\n  (cd\
