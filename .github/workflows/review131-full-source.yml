@@ -1,0 +1,173 @@
+name: Reviewed main complete source qualification
+'on':
+  push:
+    branches:
+    - ci/review131-latest
+    paths:
+    - .github/workflows/review131-full-source.yml
+permissions:
+  contents: read
+concurrency:
+  group: reviewed-main-full-source-qualification
+  cancel-in-progress: true
+jobs:
+  full-source-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      KUASAR_HOSTED: 'true'
+      TARGET_ARCH: x86_64
+      CANDIDATE_REPOSITORY: kuasar-sandbox/kuasar-sandbox
+      KUASAR_CI_DIR: ${{ github.workspace }}/ci-metrics
+      KUASAR_CI_TIMINGS: ${{ github.workspace }}/ci-metrics/timings.tsv
+      KUASAR_NATIVE_CACHE_METRICS: ${{ github.workspace }}/ci-metrics/native-cache.tsv
+      KUASAR_REVISION_MANIFEST: ${{ github.workspace }}/ci-metrics/revisions.tsv
+    steps:
+    - name: Read exact reviewed public main candidate
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1
+        path: src/platform
+        persist-credentials: false
+    - name: Prepare standard source host from the reviewed candidate
+      run: bash src/platform/ci/hosted/bootstrap.sh --profile source
+    - name: Read-only token for the main aggregate source set
+      id: source-token
+      uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+      with:
+        client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+        private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+        owner: kuasar-sandbox
+        repositories: accelerator,connector,guest-runtime,orchestrator,sandboxer
+        permission-contents: read
+        skip-token-revoke: true
+    - name: Read exact aggregate dependency accelerator
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: kuasar-sandbox/accelerator
+        ref: 7a704d7697c1c46bbcf2927276a304d809ea6a76
+        path: src/accelerator
+        token: ${{ steps.source-token.outputs.token }}
+        persist-credentials: false
+    - name: Read exact aggregate dependency connector
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: kuasar-sandbox/connector
+        ref: f0bb380bc6cc3bac9050e8844b42353124a5d2e7
+        path: src/connector
+        token: ${{ steps.source-token.outputs.token }}
+        persist-credentials: false
+    - name: Read exact aggregate dependency guest-runtime
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: kuasar-sandbox/guest-runtime
+        ref: 7593bdf841132e2b72db232afa41839b06cb21f0
+        path: src/guest-runtime
+        token: ${{ steps.source-token.outputs.token }}
+        persist-credentials: false
+    - name: Read exact aggregate dependency orchestrator
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: kuasar-sandbox/orchestrator
+        ref: fac2b6a8712f480f248851da028b4c77a7b59f60
+        path: src/orchestrator
+        token: ${{ steps.source-token.outputs.token }}
+        persist-credentials: false
+    - name: Read exact aggregate dependency sandboxer
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        repository: kuasar-sandbox/sandboxer
+        ref: e3e5cf1fc638c37c032672c083e97ef6b3b18114
+        path: src/sandboxer
+        token: ${{ steps.source-token.outputs.token }}
+        persist-credentials: false
+    - name: Revoke source token before executing candidate code
+      if: ${{ always() && steps.source-token.outputs.token != '' }}
+      env:
+        GH_TOKEN: ${{ steps.source-token.outputs.token }}
+      run: "set -euo pipefail\nstatus=$(curl --show-error --silent \\\n  --retry 4 --retry-all-errors --connect-timeout\
+        \ 10 --max-time 60 \\\n  --request DELETE --output /dev/null --write-out '%{http_code}' \\\n  -H \"Accept:\
+        \ application/vnd.github+json\" \\\n  -H \"Authorization: Bearer $GH_TOKEN\" \\\n  -H \"X-GitHub-Api-Version:\
+        \ 2022-11-28\" \\\n  https://api.github.com/installation/token)\ncase \"$status\" in 204|401) ;; *) echo\
+        \ \"failed to revoke source token: HTTP $status\" >&2; exit 1 ;; esac\n"
+    - name: Validate the exact source set and initialize workspace
+      run: 'set -euo pipefail
+
+        mkdir -p "$KUASAR_CI_DIR"
+
+        printf ''repository\trequested_ref\tresolved_sha\trole\n'' > "$KUASAR_REVISION_MANIFEST"
+
+        test "$(git -C src/platform rev-parse HEAD)" = 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1
+
+        printf ''%s\t%s\t%s\t%s\n'' kuasar-sandbox 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1
+        reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
+
+        test "$(git -C src/accelerator rev-parse HEAD)" = 7a704d7697c1c46bbcf2927276a304d809ea6a76
+
+        printf ''%s\t%s\t%s\t%s\n'' accelerator 7a704d7697c1c46bbcf2927276a304d809ea6a76 7a704d7697c1c46bbcf2927276a304d809ea6a76
+        reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
+
+        test "$(git -C src/connector rev-parse HEAD)" = f0bb380bc6cc3bac9050e8844b42353124a5d2e7
+
+        printf ''%s\t%s\t%s\t%s\n'' connector f0bb380bc6cc3bac9050e8844b42353124a5d2e7 f0bb380bc6cc3bac9050e8844b42353124a5d2e7
+        reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
+
+        test "$(git -C src/guest-runtime rev-parse HEAD)" = 7593bdf841132e2b72db232afa41839b06cb21f0
+
+        printf ''%s\t%s\t%s\t%s\n'' guest-runtime 7593bdf841132e2b72db232afa41839b06cb21f0 7593bdf841132e2b72db232afa41839b06cb21f0
+        reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
+
+        test "$(git -C src/orchestrator rev-parse HEAD)" = fac2b6a8712f480f248851da028b4c77a7b59f60
+
+        printf ''%s\t%s\t%s\t%s\n'' orchestrator fac2b6a8712f480f248851da028b4c77a7b59f60 fac2b6a8712f480f248851da028b4c77a7b59f60
+        reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
+
+        test "$(git -C src/sandboxer rev-parse HEAD)" = e3e5cf1fc638c37c032672c083e97ef6b3b18114
+
+        printf ''%s\t%s\t%s\t%s\n'' sandboxer e3e5cf1fc638c37c032672c083e97ef6b3b18114 e3e5cf1fc638c37c032672c083e97ef6b3b18114
+        reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
+
+        cd src
+
+        go work init ./accelerator ./connector ./guest-runtime ./orchestrator ./sandboxer'
+    - name: Pull standard runner test images
+      run: "set -euo pipefail\nfor image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest;\
+        \ do\n  timeout 3m docker pull \"$image\"\ndone\n"
+    - name: Attach job-local source caches and test tools
+      run: "set -euo pipefail\nfor path in \\\n  src/accelerator/build/tarball \\\n  src/guest-runtime/native-deps/build/tarball\
+        \ \\\n  src/sandboxer/native-deps/build/tarball\ndo\n  mkdir -p \"$(dirname \"$path\")\"\n  ln -sfn \"$KUASAR_TARBALL_CACHE\"\
+        \ \"$path\"\ndone\n# make e2e-tools builds/downloads the existing pinned tool inputs.\n# Never link the\
+        \ persistent runner's preinstalled tools on hosted.\ntool_dir=\"$GITHUB_WORKSPACE/src/platform/build/e2e-tools/x86_64\"\
+        \nmkdir -p \"$tool_dir\"\necho \"E2E_ZOT_BIN=$tool_dir/zot\" >> \"$GITHUB_ENV\"\necho \"E2E_VGW_BIN=$tool_dir/versitygw\"\
+        \ >> \"$GITHUB_ENV\"\n"
+    - name: Restore or build verified native artifacts
+      working-directory: src/platform
+      shell: bash
+      run: "if [ \"${KUASAR_HOSTED:-false}\" = true ]; then\n  taskset -pc \"$KUASAR_BUILD_CPUS\" \"$$\" >/dev/null\n\
+        fi\nci/native-cache/native-cache.sh restore-or-build\n"
+    - name: Validate platform tooling
+      working-directory: src/platform
+      shell: bash
+      run: "if [ \"${KUASAR_HOSTED:-false}\" = true ]; then\n  taskset -pc \"$KUASAR_BUILD_CPUS\" \"$$\" >/dev/null\n\
+        fi\nmake test-ci-tools test-release-tools test-perf-tools\n"
+    - name: Build and test source candidate
+      working-directory: src/platform
+      shell: bash
+      run: "if [ \"${KUASAR_HOSTED:-false}\" = true ]; then\n  taskset -pc \"$KUASAR_BUILD_CPUS\" \"$$\" >/dev/null\n\
+        fi\nset -euo pipefail\nmake build e2e-tools assemble-e2e\nif [ \"$KUASAR_HOSTED\" = true ]; then\n  [ -x\
+        \ \"$E2E_ZOT_BIN\" ] && [ -x \"$E2E_VGW_BIN\" ]\nfi\nmake test-uffd-performance-gate\n\nowner=\"${CANDIDATE_REPOSITORY##*/}\"\
+        \nrunner=\"build/e2e-suite/test/e2e/$owner/run_all.sh\"\nif [ \"$owner\" = kuasar-sandbox ]; then\n  runner=build/e2e-suite/test/e2e/run_all.sh\n\
+        fi\n[ -x \"$runner\" ] \\\n  || { echo \"missing E2E runner for candidate owner $owner: $runner\" >&2; exit\
+        \ 1; }\n\nci/integration/ci-timed.sh \"e2e/$owner\" env \\\n  BIN=\"$PWD/bin/x86_64\" \\\n  ZOT_BIN=\"$E2E_ZOT_BIN\"\
+        \ \\\n  VGW_BIN=\"$E2E_VGW_BIN\" \\\n  bash \"$runner\"\n"
+    - name: Run working-set performance smoke
+      working-directory: src/platform
+      env:
+        PERF_ITERS: '1'
+        PERF_OUT_DIR: ${{ env.KUASAR_CI_DIR }}/working-set-perf
+      run: "ci/integration/ci-timed.sh perf/working-set-smoke env \\\n  BIN=\"$PWD/bin/x86_64\" \\\n  PERF_ITERS=\"\
+        $PERF_ITERS\" \\\n  PERF_OUT_DIR=\"$PERF_OUT_DIR\" \\\n  bash test/perf/working-set-netns.sh test/perf/sandbox-perf-working-set.sh\n"
+    - name: Record actual source-set timing and resource evidence
+      if: always()
+      run: free -m; df -h .; test ! -f "$KUASAR_CI_TIMINGS" || cat "$KUASAR_CI_TIMINGS"; test ! -f "$KUASAR_REVISION_MANIFEST"
+        || cat "$KUASAR_REVISION_MANIFEST"
