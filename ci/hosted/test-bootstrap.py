@@ -19,10 +19,11 @@ class BootstrapTests(unittest.TestCase):
         required = {
             "control": {"curl", "git", "jq", "python3", "python3-yaml", "util-linux"},
             "release-control": {"curl", "git", "jq"},
+            "accelerator": {"build-essential", "cmake", "pkg-config", "binutils", "python3", "python3-yaml", "util-linux", "libsnappy-dev", "liblz4-dev", "libzstd-dev", "zlib1g-dev"},
             "kernel": {"build-essential", "bc", "bison", "flex", "libelf-dev", "libssl-dev", "libncurses-dev", "pkg-config", "time"},
             "runtime": {"autoconf", "automake", "libtool", "uuid-dev", "liblz4-dev", "libzstd-dev", "zlib1g-dev", "libfuse3-dev"},
             "runtime-publish": {"autoconf", "automake", "libtool", "uuid-dev"},
-            "source": {"cmake", "clang", "libclang-dev", "libsnappy-dev", "iproute2", "kmod", "acl", "e2fsprogs", "redis-server"},
+            "source": {"cmake", "binutils", "clang", "libclang-dev", "libsnappy-dev", "iproute2", "kmod", "acl", "e2fsprogs", "redis-server", "unzip", "openssl"},
         }
         for profile, expected in required.items():
             result = shell('select_profile "$PROFILE"; printf "%s\\n" "${packages[@]}"', PROFILE=profile)
@@ -37,6 +38,17 @@ class BootstrapTests(unittest.TestCase):
             if profile not in ("control",):
                 self.assertEqual(flags.stdout.split()[0], "true")
         self.assertNotEqual(shell("select_profile typo").returncode, 0)
+
+    def test_accelerator_has_no_guest_or_vm_setup(self):
+        result = shell('select_profile accelerator; '
+                       'echo "$with_go $with_native $with_kernel $with_readers $with_vm"; '
+                       'printf "%s\\n" "${packages[@]}"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        flags, *packages = result.stdout.splitlines()
+        self.assertEqual(flags, "true false false false false")
+        self.assertFalse(set(packages) & {"bc", "bison", "flex", "libelf-dev", "libfuse3-dev",
+                                         "autoconf", "automake", "kmod", "acl", "docker.io",
+                                         "redis-server"})
 
     def test_required_tools_fail_closed(self):
         self.assertNotEqual(shell("need kuasar_nonexistent_required_tool").returncode, 0)

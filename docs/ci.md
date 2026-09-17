@@ -107,16 +107,16 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runners and networking
 
-### 5.1 Guest-runtime standard runners
+### 5.1 Public runner preparation
 
-Guest-runtime release/maintenance jobs and all three transitive PR jobs
-(admission, source E2E, finalization) select standard `ubuntu-24.04`. Source
-E2E selects hosted only when `mode == source` and
-`candidate_repository == kuasar-sandbox/guest-runtime`. All other candidates
-and exact-assets keep their existing runner selection and coverage. There is
-no runner-size input, paid-runner fallback, replacement success check or reduced
-E2E mode. Standard hosted capacity is free for the public guest repository;
-repository visibility and billing are outside this change.
+Guest-runtime retains its completed standard-runner route unchanged. Accelerator#134 /
+platform#128 prepares accelerator while it remains Private. After authorized
+publication and rollout, accelerator selects `ubuntu-24.04` for admission,
+source E2E and finalization; source E2E also requires `mode == source`.
+Private accelerator and other unmigrated callers retain their existing pools.
+Other caller and exact-assets selection/coverage remain unchanged. This does not
+change visibility, billing or quota, create a public relay for private CI, or
+introduce a reduced E2E mode or replacement success check.
 
 [ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) is the shared trusted
 bootstrap, with explicit profiles:
@@ -124,7 +124,8 @@ bootstrap, with explicit profiles:
 | Profile | Jobs / prerequisites |
 | --- | --- |
 | `control` | PR admission/finalization, release cleanup/reconcile; Git, curl, jq, Python/YAML and archive tools |
-| `release-control` | Release preflight, Kernel publish and Preview deletion; control tools plus Go |
+| `release-control` | Release preflight, Kernel/accelerator publish and Preview deletion; control tools plus Go |
+| `accelerator` | Real RocksDB build and release tests; pinned Go, CMake, build-essential, pkg-config, binutils and control tools; no Kernel, EROFS, KVM or Docker setup |
 | `kernel` | Kernel build; Go and Ubuntu Kbuild development packages |
 | `runtime` | Runtime build; Go, native development packages and trusted EROFS writer/readers |
 | `runtime-publish` | Runtime publish validation; Go and separately built EROFS writer/readers |
@@ -138,7 +139,9 @@ use pinned v1.9.1 source and its SHA256, independently of the static guest
 recipe. Rust/Cargo and Docker are required capabilities of the
 [standard image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
 and are checked explicitly. Native source pins, Cargo lockfiles, build flags,
-link maps and materials remain owned by their existing recipes. Missing tools,
+link maps and materials remain owned by their existing recipes. Accelerator
+source E2E uses the full `source` profile, including Redis, unzip and OpenSSL,
+so five-component assembly and the working-set gate remain intact. Missing tools,
 checksum mismatches or unavailable VM capabilities fail the job.
 
 The source profile loads `tun` and `vhost_vsock`, enables
@@ -159,30 +162,45 @@ required license/source inventories, without a full workspace handoff. Hosted
 uses official Go/Rust/Python/kernel/image endpoints, and builds the existing
 zot/versitygw targets locally. Persistent callers keep their mirror settings.
 
-PR bootstrap runs from `trusted/platform` at `job.workflow_sha`, after platform
-tooling-token revocation and before source-token creation. Guest release jobs
+PR bootstrap runs from `trusted/platform` at `job.workflow_sha`, before
+source-token creation. Source jobs retain the existing read-only tooling App
+token and revoke it before bootstrap/candidate execution. Guest release jobs
 check out that same immutable platform pin before requested sources; Runtime
 ABI checks come from the trusted guest workflow checkout. Kernel needs no
 cross-repository App token. Runtime still fetches its private dependency closure
 with the existing read-only source token and revokes it before executing source
 or packaging code. Publishing remains in a separate job with write permission.
 
-Rollout is ordered: qualify and normally merge the shared platform change,
-then set every guest release bootstrap checkout to that reviewed full SHA.
-A squash/rebase requires refreshing these release pins. PR wrappers retain
-`@main`; a new guest PR event after the platform merge resolves the new trusted
-workflow and selects standard runners. `pull_request_target` executes the
-base-branch wrapper, so editing a candidate wrapper alone is not qualification.
-Other callers retain their runner choices until their own migration. Manual
-rehearsals do not replace the required exact-candidate Integration E2E check.
+Accelerator release and maintenance routing also checks
+`github.event.repository.private == false`. Its private jobs retain the exact
+control/build pools, mirrors and tarball cache; bootstrap never mutates a private
+runner. Public release builds bootstrap from `trusted/platform` before checking
+out the exact requested source into `src/accelerator`. Trusted checks stay in a
+sibling checkout, outside source cleanliness/provenance checks. Build, tests,
+packaging and upload paths follow that source subtree. The CI-only ABI guard
+requires static manifest/store binaries and the normal RocksDB/static-libstdc++
+cache binary with no GLIBC requirement above the declared 2.38 baseline; failures
+block packaging. It does not change the native recipe or release materials.
+
+Merge and qualify the shared implementation before activating a caller. Release
+workflows pin its reviewed immutable upstream SHA; refresh pins after a squash
+or rebase. PR wrappers retain `@main`, so new events resolve the trusted base
+implementation. Editing a candidate wrapper alone is not qualification. Other
+callers retain their routes until their migration; private preparation is not
+proof of public hosted execution.
 
 Offline checks are `python3 ci/hosted/test-workflows.py` (also included in
-`make test-ci-tools`) and guest `python3 scripts/ci-test-workflows.py
-../kuasar-sandbox`. They cover runner selection, profiles, pins, token ordering,
+`make test-ci-tools`), accelerator `python3 scripts/ci-test-workflows.py
+../kuasar-sandbox` (or the platform checkout path), and guest's corresponding check.
+They cover runner selection, profiles, pins, token ordering,
 private cache paths, ABI and required coverage. Syntax/offline success is not
-hosted qualification: the supervisor must exercise the actual candidate run,
+hosted qualification: maintainers must exercise the actual candidate run,
 including the full working-set matrix and truthful revision metadata, after
-activating the trusted rollout.
+authorizing the trusted public rollout. Release packaging tests use synthetic
+payload/link-map fixtures; they do not qualify a real RocksDB build. Local
+filesystem/cache and S3-compatible fixtures establish local behavior, not real
+cloud coverage. Credentialed OBS coverage remains a separate explicit
+`OBS_E2E=1` run; excluded cloud cases must not be reported as passing.
 
 ### 5.2 Remaining persistent callers
 
@@ -213,3 +231,5 @@ Exact-assets mode records the run and test output without inventing source or na
 - [deployment.md](deployment.md): system services and runtime environment required by Integration E2E;
 - [../ci/runner/README.md](../ci/runner/README.md): runner installation and maintenance;
 - [../test/QUICKSTART.md](../test/QUICKSTART.md): E2E prerequisites and troubleshooting.
+
+Normal Go RocksDB tests retain the upstream binding’s compression-library link flags; the accelerator profile explicitly supplies Snappy, LZ4, Zstandard and zlib development libraries. This does not enable compression in the existing native RocksDB recipe.

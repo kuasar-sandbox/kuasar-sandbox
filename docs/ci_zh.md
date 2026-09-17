@@ -178,14 +178,14 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runner 与网络
 
-### 5.1 Guest-runtime 标准 runner
+### 5.1 Public runner 准备
 
-Guest-runtime 的发布/维护 job 和 PR 的三个传递 job(admission、source E2E、finalization)
-均选择标准 `ubuntu-24.04`。Source E2E 仅在 `mode == source` 且
-`candidate_repository == kuasar-sandbox/guest-runtime` 时选择 hosted。其他候选仓和
-exact-assets 保留现有 runner 选择与覆盖范围。不增加 runner 规格输入、付费 fallback、
-替代成功 check 或缩减 E2E 的模式。公开 guest 仓使用免费的标准 hosted 容量;
-仓库可见性和计费不属于本次变更。
+Guest-runtime 保持已经完成的标准 runner 路由不变。Accelerator#134 / platform#128
+在 accelerator 仍为 Private 时进行准备;经授权公开并完成 rollout 后,accelerator 的
+admission、source E2E 和 finalization 才选择 `ubuntu-24.04`;source E2E 还要求
+`mode == source`。Private accelerator 与其他未迁移 caller 保留原有执行池。
+其他 caller 及 exact-assets 的选择和覆盖保持不变。本变更不调整可见性、计费或 quota,
+不建立 private CI 的 public relay,也不引入缩减 E2E 模式或替代成功 check。
 
 [ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) 是唯一共享的可信 bootstrap,
 各 job 明确指定 profile:
@@ -193,7 +193,8 @@ exact-assets 保留现有 runner 选择与覆盖范围。不增加 runner 规格
 | Profile | Job / 前置能力 |
 | --- | --- |
 | `control` | PR 准入/结束、发布清理/reconcile;Git、curl、jq、Python/YAML 与归档工具 |
-| `release-control` | 发布 preflight、Kernel publish、Preview 删除;control 工具加 Go |
+| `release-control` | 发布 preflight、Kernel/accelerator publish、Preview 删除;control 工具加 Go |
+| `accelerator` | 真实 RocksDB 构建与发布测试;固定 Go、CMake、build-essential、pkg-config、binutils 和 control 工具;不设置 Kernel、EROFS、KVM 或 Docker |
 | `kernel` | Kernel 构建;Go 与 Ubuntu Kbuild 开发包 |
 | `runtime` | Runtime 构建;Go、native 开发包与可信 EROFS writer/reader |
 | `runtime-publish` | Runtime 发布校验;Go 与独立构建的 EROFS writer/reader |
@@ -206,7 +207,9 @@ bootstrap 校验归档、driver 与 compiler 后才加入 PATH;module 工具链�
 独立于 guest 静态 recipe。Rust/Cargo 与 Docker 是
 [标准镜像](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
 的必需能力,会显式检查。Native source pin、Cargo lockfile、构建参数、link map 和
-materials 仍由既有 recipe 维护。工具缺失、摘要不符或 VM 能力不可用均使 job 失败。
+materials 仍由既有 recipe 维护。Accelerator source E2E 复用完整 `source` profile,
+包含 Redis、unzip 和 OpenSSL,保留五组件组装及 working-set gate。
+工具缺失、摘要不符或 VM 能力不可用均使 job 失败。
 
 Source profile 加载 `tun`、`vhost_vsock`,启用 `vm.unprivileged_userfaultfd=1`,
 仅向本次 job 的 uid 授予 `/dev/kvm`、`/dev/vhost-vsock`、`/dev/net/tun` 访问权,
@@ -222,24 +225,35 @@ Source E2E 的 180 分钟限时包含冷构建与完整 owner/UFFD/A/B/C/D smoke
 包含必需的许可/来源清单,不传递完整 workspace。Hosted 使用官方 Go/Rust/Python/
 kernel/image 地址并本地构建既有 zot/versitygw target;持久 caller 保持其镜像设置。
 
-PR bootstrap 从 `job.workflow_sha` 对应的 `trusted/platform` 执行,位于平台工具
-token 撤销之后、source token 创建之前。Guest release job 在请求源码之前 checkout
+PR bootstrap 从 `job.workflow_sha` 对应的 `trusted/platform` 执行,位于 source token
+创建之前。Source job 保留既有只读平台 App token,并在 bootstrap/候选执行前撤销。
+Guest release job 在请求源码之前 checkout
 同一 immutable 平台 pin;Runtime ABI 检查来自可信 guest workflow checkout。Kernel
 不再需要跨仓 App token。Runtime 仍通过既有只读 source token 获取私有依赖闭包,
 在执行源码或打包代码前撤销。Publish 仍是单独拥有写权限的 job。
 
-迁移顺序为:先验证并正常合入共享平台改动,再将 guest 的所有发布 bootstrap checkout
-固定到该评审提交的完整 SHA。Squash/rebase 后需要更新这些发布 pin。PR wrapper 保留
-`@main`;平台合入后的新 guest PR 事件会解析新可信 workflow 并选择标准 runner。
-`pull_request_target` 使用 base 分支 wrapper,因此仅修改候选 wrapper 不能作为资格验证。
-其他 caller 的执行环境在各自迁移前保持不变。手工演练不代替精确候选的必需 Integration
-E2E 检查。
+Accelerator 发布与维护也检查 `github.event.repository.private == false`。其 private
+job 保留原有 control/build 池、镜像和 tarball cache,不执行会改变系统的 bootstrap。
+Public release 先从 `trusted/platform` bootstrap,再将请求的精确源码 checkout 到
+`src/accelerator`;可信检查位于旁边的独立 checkout,不污染源码清洁度与来源检查。
+构建、测试、打包和上传路径均跟随源码子目录。CI-only ABI guard 要求 manifest/store
+保持静态,cache 保留正常 RocksDB/static-libstdc++ 模式,且 GLIBC 需求不得高于既有
+2.38 基线。失败阻止打包,不改变 native recipe 或发布材料。
 
-离线检查为 `python3 ci/hosted/test-workflows.py`(也由 `make test-ci-tools` 执行)及 guest
-`python3 scripts/ci-test-workflows.py ../kuasar-sandbox`,覆盖 runner 选择、profile、pin、
+先合入并验证共享实现,再激活对应 caller。发布 workflow 固定到评审后的完整不可变
+upstream SHA;Squash/rebase 后需要更新 pin。PR wrapper 保留 `@main`,新事件使用
+base 分支的可信实现。仅修改候选 wrapper 不能证明资格验证通过。其他 caller 在各自
+迁移前保持原路由,private 准备不代表已经在 public hosted 执行。
+
+离线检查为 `python3 ci/hosted/test-workflows.py`(也由 `make test-ci-tools` 执行)、accelerator
+`python3 scripts/ci-test-workflows.py ../kuasar-sandbox`(或实际平台 checkout 路径)及 guest 对应检查,
+覆盖 runner 选择、profile、pin、
 token 顺序、私有缓存路径、ABI 与必需覆盖。语法/离线通过不代表 hosted qualification:
-启用可信迁移后,supervisor 仍需运行真实候选 CI,包含完整 working-set matrix 和真实
-revision metadata。
+经授权进入 public rollout 后,维护者仍需运行真实候选 CI,包含完整 working-set matrix
+和真实 revision metadata。发布测试使用合成 payload/link-map fixture,不能证明真实
+RocksDB 构建通过。本地 filesystem/cache 和 S3-compatible fixture 仅证明本地行为,
+不代表真实云覆盖。凭据化 OBS 覆盖仍需独立显式 `OBS_E2E=1` 运行,被排除的云测试不得
+报告为通过。
 
 ### 5.2 其余持久 runner caller
 
@@ -289,3 +303,5 @@ exact-assets 模式只记录 run 与测试输出,不创建伪造的源码或 nat
 - [deployment_zh.md](deployment_zh.md):Integration E2E 所需系统服务与运行环境;
 - [../ci/runner/README_zh.md](../ci/runner/README_zh.md):runner 安装与维护;
 - [../test/QUICKSTART_zh.md](../test/QUICKSTART_zh.md):E2E 前置条件与排错。
+
+普通 Go RocksDB 测试保留上游绑定的压缩库链接参数;accelerator profile 显式提供 Snappy、LZ4、Zstandard 与 zlib 开发库,并不启用原有 native RocksDB recipe 的压缩功能。
