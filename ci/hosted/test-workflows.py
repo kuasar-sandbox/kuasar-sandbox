@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline regression contracts for the staged guest-runtime runner migration."""
+"""Offline regression contracts for public guest-runtime/accelerator routing."""
 import ast
 import json
 from pathlib import Path
@@ -10,6 +10,7 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 GUEST = "kuasar-sandbox/guest-runtime"
+ACCELERATOR = "kuasar-sandbox/accelerator"
 
 
 def expression(value, context):
@@ -23,6 +24,8 @@ def expression(value, context):
         if isinstance(node, ast.Constant):
             return node.value
         if isinstance(node, ast.Name):
+            if node.id in ("true", "false"):
+                return node.id == "true"
             return context[node.id]
         if isinstance(node, ast.Attribute):
             return visit(node.value)[node.attr]
@@ -53,17 +56,20 @@ def check():
     entry = load("ci-entry.yml")["jobs"]
     e2e = load("integration-tests.yml")["jobs"]["e2e"]
     legacy = ["self-hosted", "Linux", "X64", "kuasar-e2e", "kvm", "cgroup-v2"]
-    repos = ("guest-runtime", "accelerator", "connector", "kuasar-sandbox", "orchestrator", "sandboxer")
+    repos = ("guest-runtime", "accelerator", "connector", "kuasar-sandbox", "orchestrator", "sandboxer", "other")
     for name in repos:
         repository = f"kuasar-sandbox/{name}"
         for private in (False, True):
             context = {"github": {"repository": repository, "event": {"repository": {"private": private}}}}
+            standard = not private and repository in (GUEST, ACCELERATOR)
             for job in (entry["admission"], entry["finalize"]):
-                expected = "ubuntu-24.04" if repository == GUEST else "kuasar-control" if private else "ubuntu-latest"
+                expected = "ubuntu-24.04" if standard else "kuasar-control" if private else "ubuntu-latest"
                 assert expression(job["runs-on"], context) == expected
+                for step in job["steps"][:2]:
+                    assert expression(step["if"], context) == standard
             for mode in ("source", "exact-assets"):
                 context["inputs"] = {"mode": mode, "candidate_repository": repository}
-                hosted = mode == "source" and repository == GUEST
+                hosted = mode == "source" and standard
                 assert expression(e2e["runs-on"], context) == (["ubuntu-24.04"] if hosted else legacy)
                 assert expression(e2e["env"]["KUASAR_HOSTED"], context) == hosted
                 assert expression(e2e["timeout-minutes"], context) == (180 if hosted else 120 if mode == "exact-assets" else 60)
@@ -77,14 +83,17 @@ def check():
         assert checkout["with"]["repository"] == "${{ job.workflow_repository }}"
         assert checkout["with"]["persist-credentials"] is False
         assert bootstrap["run"] == "bash trusted/platform/ci/hosted/bootstrap.sh --profile control"
-        assert bootstrap["if"] == checkout["if"] == f"github.repository == '{GUEST}'"
+        assert bootstrap["if"] == checkout["if"]
 
     steps = {step["name"]: step for step in e2e["steps"]}
     names = list(steps)
-    bootstrap_name = "Bootstrap standard guest source runner from trusted tooling"
+    bootstrap_name = "Bootstrap standard source runner from trusted tooling"
     assert steps[bootstrap_name]["run"] == "bash trusted/platform/ci/hosted/bootstrap.sh --profile source"
     assert names.index("Revoke platform tooling token before candidate execution") < names.index(bootstrap_name)
     assert names.index(bootstrap_name) < names.index("Create read-only source token")
+    assert steps[bootstrap_name]["if"] == "env.KUASAR_HOSTED == 'true'"
+    assert "if" not in steps["Create read-only platform tooling token"]
+    assert steps["Materialize exact platform sources"]["env"]["GH_TOKEN"] == "${{ steps.platform-tooling-token.outputs.token }}"
     assert names.index("Revoke source token before executing candidate code") < names.index("Finalize source workspace")
     for name in ("Reset interrupted E2E state", "Attach runner caches and test tools", "Configure persistent runner environment"):
         assert steps[name]["if"] == "env.KUASAR_HOSTED != 'true'"
@@ -115,7 +124,7 @@ def check():
     assert {key.removeprefix("REQUIRE_") for key, value in exact["env"].items() if key.startswith("REQUIRE_") and value == "1"} == required
     assert exact["run"] == "bash test/e2e/run_all.sh"
     assert exact["if"] == "inputs.mode == 'exact-assets'"
-    print("hosted-workflows: runner matrix, trusted bootstrap, ephemeral paths and required coverage PASS")
+    print("hosted-workflows: public/private runner matrix, trusted bootstrap, ephemeral paths and required coverage PASS")
 
 
 if __name__ == "__main__":

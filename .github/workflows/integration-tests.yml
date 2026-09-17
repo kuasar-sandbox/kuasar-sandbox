@@ -71,12 +71,12 @@ concurrency:
 
 jobs:
   e2e:
-    # Migrate only guest-runtime source candidates; other callers keep their pool.
-    runs-on: ${{ fromJSON(inputs.mode == 'source' && inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' && '["ubuntu-24.04"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
-    timeout-minutes: ${{ inputs.mode == 'source' && inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' && 180 || (inputs.mode == 'exact-assets' && 120 || 60) }}
+    # Only public guest-runtime/accelerator source CI; private and other callers keep their pool.
+    runs-on: ${{ fromJSON(github.event.repository.private == false && inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || inputs.candidate_repository == 'kuasar-sandbox/accelerator') && '["ubuntu-24.04"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
+    timeout-minutes: ${{ github.event.repository.private == false && inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || inputs.candidate_repository == 'kuasar-sandbox/accelerator') && 180 || (inputs.mode == 'exact-assets' && 120 || 60) }}
     env:
       TARGET_ARCH: x86_64
-      KUASAR_HOSTED: ${{ inputs.mode == 'source' && inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' }}
+      KUASAR_HOSTED: ${{ github.event.repository.private == false && inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || inputs.candidate_repository == 'kuasar-sandbox/accelerator') }}
       KUASAR_CI_DIR: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}
       KUASAR_CI_TIMINGS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/timings.tsv
       KUASAR_NATIVE_CACHE_METRICS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/native-cache.tsv
@@ -382,7 +382,7 @@ jobs:
             https://api.github.com/installation/token)
           case "$status" in 204|401) ;; *) echo "failed to revoke tooling token: HTTP $status" >&2; exit 1 ;; esac
 
-      - name: Bootstrap standard guest source runner from trusted tooling
+      - name: Bootstrap standard source runner from trusted tooling
         if: env.KUASAR_HOSTED == 'true'
         run: bash trusted/platform/ci/hosted/bootstrap.sh --profile source
 

@@ -30,6 +30,11 @@ select_profile() {
     case "$profile" in
         control) ;;
         release-control) with_go=true ;;
+        accelerator)
+            with_go=true
+            # RocksDB's existing static recipe and release/link-map checks only.
+            packages+=(build-essential cmake pkg-config binutils)
+            ;;
         kernel) with_go=true; with_kernel=true ;;
         runtime|runtime-publish) with_go=true; with_native=true; with_readers=true ;;
         source) with_go=true; with_native=true; with_kernel=true; with_readers=true; with_vm=true ;;
@@ -45,7 +50,7 @@ select_profile() {
         packages+=(autoconf automake libtool uuid-dev liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)
     fi
     if $with_vm; then
-        packages+=(cmake clang llvm libclang-dev libsnappy-dev libssl-dev
+        packages+=(cmake binutils clang llvm libclang-dev libsnappy-dev libssl-dev openssl
             python3-venv python3-pip iproute2 iptables nftables kmod acl
             e2fsprogs procps psmisc socat redis-server rsync cpio zstd lz4)
     fi
@@ -159,7 +164,7 @@ PY
 
 main() {
     if [ "$#" -ne 2 ] || [ "$1" != --profile ]; then
-        die "usage: bootstrap.sh --profile control|release-control|kernel|runtime|runtime-publish|source"
+        die "usage: bootstrap.sh --profile control|release-control|accelerator|kernel|runtime|runtime-publish|source"
     fi
     select_profile "$2"
     [ "$(uname -m)" = x86_64 ] || die "x86_64 is required"
