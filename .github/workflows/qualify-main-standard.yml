@@ -57,6 +57,8 @@ jobs:
           test -r /dev/kvm && test -w /dev/kvm
           python3 -c 'import os; f=os.open("/dev/kvm", os.O_RDWR); os.close(f)'
       - name: Download and verify the existing public aggregate
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p bundle/assets
@@ -65,7 +67,7 @@ jobs:
             curl -fL --retry 3 --max-time 180 "$base/$asset" -o "bundle/assets/$asset"
           done
           (cd bundle/assets && sha256sum -c SHA256SUMS)
-          curl -fsSL --retry 3 https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/tags/release-v0.1.4 | jq -er .body > bundle/release-notes.md
+          curl -fsSL --retry 3 -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/tags/release-v0.1.4 | jq -er .body > bundle/release-notes.md
           source control/release/lib.sh
           resolve_selection "$PWD/release-source" release-v0.1.4 "$PWD/bundle/selection.tsv"
           PLATFORM_SOURCE_ROOT="$PWD/release-source" bash control/release/aggregate-release.sh validate release-v0.1.4 "$PWD/bundle"
