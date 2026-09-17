@@ -180,13 +180,12 @@ make -C kuasar-sandbox test-ci-tools
 
 ### 5.1 Public runner 准备
 
-仓库仍为 private 时,accelerator#134 / platform#128 仅为**已准备,未激活**。
-经授权公开并完成 rollout 后,public guest-runtime 和 accelerator 的 PR 三个传递 job
-(admission、source E2E、finalization)选择标准 `ubuntu-24.04`。Source E2E 还要求
-`mode == source` 且候选仓为这两个仓之一。Private caller 保留 `kuasar-control` 和原有
-`[self-hosted, Linux, X64, kuasar-e2e, kvm, cgroup-v2]` 池。其他 caller 与 exact-assets
-保持原有选择和覆盖。本变更不调整可见性、计费或 quota,也不建立 private CI 的 public
-relay;不增加缩减 E2E 模式或替代成功 check。
+Guest-runtime 保持已经完成的标准 runner 路由不变。Accelerator#134 / platform#128
+在 accelerator 仍为 Private 时进行准备;经授权公开并完成 rollout 后,accelerator 的
+admission、source E2E 和 finalization 才选择 `ubuntu-24.04`;source E2E 还要求
+`mode == source`。Private accelerator 与其他未迁移 caller 保留原有执行池。
+其他 caller 及 exact-assets 的选择和覆盖保持不变。本变更不调整可见性、计费或 quota,
+不建立 private CI 的 public relay,也不引入缩减 E2E 模式或替代成功 check。
 
 [ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) 是唯一共享的可信 bootstrap,
 各 job 明确指定 profile:

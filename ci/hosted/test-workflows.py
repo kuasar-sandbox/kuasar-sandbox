@@ -61,7 +61,7 @@ def check():
         repository = f"kuasar-sandbox/{name}"
         for private in (False, True):
             context = {"github": {"repository": repository, "event": {"repository": {"private": private}}}}
-            standard = not private and repository in (GUEST, ACCELERATOR)
+            standard = repository == GUEST or (not private and repository == ACCELERATOR)
             for job in (entry["admission"], entry["finalize"]):
                 expected = "ubuntu-24.04" if standard else "kuasar-control" if private else "ubuntu-latest"
                 assert expression(job["runs-on"], context) == expected

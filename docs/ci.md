@@ -109,15 +109,14 @@ make -C kuasar-sandbox test-ci-tools
 
 ### 5.1 Public runner preparation
 
-Accelerator#134 / platform#128 is **prepared, not activated** while the repositories
-are private. After authorized publication and rollout, public guest-runtime and
-accelerator PR callers select standard `ubuntu-24.04` for admission, source E2E
-and finalization. Source E2E additionally requires `mode == source` and one of
-those two candidate repositories. Private callers retain `kuasar-control` and
-the exact existing `[self-hosted, Linux, X64, kuasar-e2e, kvm, cgroup-v2]` pool.
-Other callers and exact-assets retain their selection and coverage. This does
-not change visibility, billing or quota, or create a public relay for private CI.
-There is no reduced E2E mode or replacement success check.
+Guest-runtime retains its completed standard-runner route unchanged. Accelerator#134 /
+platform#128 prepares accelerator while it remains Private. After authorized
+publication and rollout, accelerator selects `ubuntu-24.04` for admission,
+source E2E and finalization; source E2E also requires `mode == source`.
+Private accelerator and other unmigrated callers retain their existing pools.
+Other caller and exact-assets selection/coverage remain unchanged. This does not
+change visibility, billing or quota, create a public relay for private CI, or
+introduce a reduced E2E mode or replacement success check.
 
 [ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) is the shared trusted
 bootstrap, with explicit profiles:

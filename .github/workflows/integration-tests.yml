@@ -71,12 +71,12 @@ concurrency:
 
 jobs:
   e2e:
-    # Only public guest-runtime/accelerator source CI; private and other callers keep their pool.
-    runs-on: ${{ fromJSON(github.event.repository.private == false && inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || inputs.candidate_repository == 'kuasar-sandbox/accelerator') && '["ubuntu-24.04"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
-    timeout-minutes: ${{ github.event.repository.private == false && inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || inputs.candidate_repository == 'kuasar-sandbox/accelerator') && 180 || (inputs.mode == 'exact-assets' && 120 || 60) }}
+    # Guest-runtime keeps its completed route; only Public accelerator source CI opts in.
+    runs-on: ${{ fromJSON(inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || (github.event.repository.private == false && inputs.candidate_repository == 'kuasar-sandbox/accelerator')) && '["ubuntu-24.04"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
+    timeout-minutes: ${{ inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || (github.event.repository.private == false && inputs.candidate_repository == 'kuasar-sandbox/accelerator')) && 180 || (inputs.mode == 'exact-assets' && 120 || 60) }}
     env:
       TARGET_ARCH: x86_64
-      KUASAR_HOSTED: ${{ github.event.repository.private == false && inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || inputs.candidate_repository == 'kuasar-sandbox/accelerator') }}
+      KUASAR_HOSTED: ${{ inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || (github.event.repository.private == false && inputs.candidate_repository == 'kuasar-sandbox/accelerator')) }}
       KUASAR_CI_DIR: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}
       KUASAR_CI_TIMINGS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/timings.tsv
       KUASAR_NATIVE_CACHE_METRICS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/native-cache.tsv
