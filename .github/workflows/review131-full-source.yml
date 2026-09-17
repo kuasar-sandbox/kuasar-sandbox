@@ -26,7 +26,7 @@ jobs:
     - name: Read exact reviewed public main candidate
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
-        ref: 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1
+        ref: a08eba837090d9ceb5b41f05049055edca632c05
         path: src/platform
         persist-credentials: false
     - name: Prepare standard source host from the reviewed candidate
@@ -69,7 +69,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/orchestrator
-        ref: fac2b6a8712f480f248851da028b4c77a7b59f60
+        ref: f5b72089ae0c9f2cb32ccf306381c6a1906ba5ff
         path: src/orchestrator
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -97,9 +97,9 @@ jobs:
 
         printf ''repository\trequested_ref\tresolved_sha\trole\n'' > "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/platform rev-parse HEAD)" = 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1
+        test "$(git -C src/platform rev-parse HEAD)" = a08eba837090d9ceb5b41f05049055edca632c05
 
-        printf ''%s\t%s\t%s\t%s\n'' kuasar-sandbox 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1
+        printf ''%s\t%s\t%s\t%s\n'' kuasar-sandbox a08eba837090d9ceb5b41f05049055edca632c05 a08eba837090d9ceb5b41f05049055edca632c05
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         test "$(git -C src/accelerator rev-parse HEAD)" = 7a704d7697c1c46bbcf2927276a304d809ea6a76
@@ -117,9 +117,9 @@ jobs:
         printf ''%s\t%s\t%s\t%s\n'' guest-runtime 509ec2dcc58c0414be95fe144ffcc4f10ac0727b 509ec2dcc58c0414be95fe144ffcc4f10ac0727b
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/orchestrator rev-parse HEAD)" = fac2b6a8712f480f248851da028b4c77a7b59f60
+        test "$(git -C src/orchestrator rev-parse HEAD)" = f5b72089ae0c9f2cb32ccf306381c6a1906ba5ff
 
-        printf ''%s\t%s\t%s\t%s\n'' orchestrator fac2b6a8712f480f248851da028b4c77a7b59f60 fac2b6a8712f480f248851da028b4c77a7b59f60
+        printf ''%s\t%s\t%s\t%s\n'' orchestrator f5b72089ae0c9f2cb32ccf306381c6a1906ba5ff f5b72089ae0c9f2cb32ccf306381c6a1906ba5ff
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         test "$(git -C src/sandboxer rev-parse HEAD)" = 02f2d32a6db4caeaa9e19a737d655766cc267e84
@@ -226,7 +226,7 @@ jobs:
     - name: Read reviewed public validation tooling
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
-        ref: 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1
+        ref: a08eba837090d9ceb5b41f05049055edca632c05
         path: trusted/platform
         persist-credentials: false
     - name: Prepare a fresh exact-assets host
