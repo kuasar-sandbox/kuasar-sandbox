@@ -69,6 +69,15 @@ jobs:
           for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
             timeout 3m docker pull "$image"
           done
+      - name: Observe device permissions before the untouched packaged suite
+        run: |
+          id
+          for device in /dev/kvm /dev/vhost-vsock /dev/net/tun; do
+            stat -c '%n %a %u:%g %i' "$device"
+            getfacl -cp "$device"
+            if test -r "$device" && test -w "$device"; then echo "$device accessible"; else echo "$device INACCESSIBLE"; fi
+          done
+          cat /proc/self/cgroup
       - name: Run every required packaged aggregate E2E case
         working-directory: release-install
         env:
@@ -92,5 +101,12 @@ jobs:
           if test -f "$RUNNER_TEMP/product-binaries.sha256"; then
             (cd release-install && sha256sum -c "$RUNNER_TEMP/product-binaries.sha256")
           fi
+          id
+          for device in /dev/kvm /dev/vhost-vsock /dev/net/tun; do
+            stat -c '%n %a %u:%g %i' "$device"
+            getfacl -cp "$device"
+            if test -r "$device" && test -w "$device"; then echo "$device accessible"; else echo "$device INACCESSIBLE"; fi
+          done
+          cat /proc/self/cgroup
           free -m; df -h .
           echo 'This is full public-release package qualification, not candidate-source acceptance; no release or tag was created.'
