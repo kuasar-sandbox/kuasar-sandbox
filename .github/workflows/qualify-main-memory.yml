@@ -97,10 +97,16 @@ jobs:
       run: "id\nfor device in /dev/kvm /dev/vhost-vsock /dev/net/tun; do\n  stat -c '%n %a %u:%g %i' \"$device\"\
         \n  getfacl -cp \"$device\"\n  if test -r \"$device\" && test -w \"$device\"; then echo \"$device accessible\"\
         ; else echo \"$device INACCESSIBLE\"; fi\ndone\ncat /proc/self/cgroup\n"
+    - name: Enable VMM diagnostic verbosity without replacing product files
+      run: "set -euo pipefail\nmkdir -p \"$RUNNER_TEMP/vmm-trace-bin\"\nfor binary in \"$GITHUB_WORKSPACE\"/release-install/bin/*;\
+        \ do\n  ln -s \"$binary\" \"$RUNNER_TEMP/vmm-trace-bin/$(basename \"$binary\")\"\ndone\nrm \"$RUNNER_TEMP/vmm-trace-bin/cloud-hypervisor\"\
+        \nprintf '#!/usr/bin/env bash\\nexec %q -v -v \"$@\"\\n' \"$GITHUB_WORKSPACE/release-install/bin/cloud-hypervisor\"\
+        \ > \"$RUNNER_TEMP/vmm-trace-bin/cloud-hypervisor\"\nchmod 0755 \"$RUNNER_TEMP/vmm-trace-bin/cloud-hypervisor\"\
+        \n\"$GITHUB_WORKSPACE/release-install/bin/cloud-hypervisor\" --version\n"
     - name: Diagnose unchanged packaged memory-budget regression
       working-directory: release-install
       env:
-        BIN: ${{ github.workspace }}/release-install/bin
+        BIN: ${{ runner.temp }}/vmm-trace-bin
         ZOT_BIN: ${{ env.E2E_ZOT_BIN }}
         VGW_BIN: ${{ env.E2E_VGW_BIN }}
         REQUIRE_KVM: '1'
@@ -133,7 +139,7 @@ jobs:
       if: always()
       run: "set -euo pipefail\nfree -m\ngrep -E 'CommitLimit|Committed_AS|MemAvailable' /proc/meminfo\nsudo dmesg\
         \ -T | tail -80\nfor dir in /tmp/e2e-memory-budget-ws-*; do\n  [ -d \"$dir\" ] || continue\n  sudo find\
-        \ \"$dir\" -maxdepth 4 -type f -name '*log*' -print -exec tail -100 {} \\;\ndone\n"
+        \ \"$dir\" -maxdepth 4 -type f -name '*log*' -print -exec tail -300 {} \\;\ndone\n"
 'on':
   push:
     branches:
