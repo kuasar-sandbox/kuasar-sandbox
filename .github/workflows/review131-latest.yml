@@ -1,0 +1,48 @@
+name: Reviewed standard runner profiles
+on:
+  push:
+    branches: [ci/review131-latest]
+    paths: [.github/workflows/review131-latest.yml]
+permissions:
+  contents: read
+jobs:
+  profiles:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [control, source, exact-assets]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1
+          persist-credentials: false
+      - name: Record actual standard runner image
+        run: |
+          set -euo pipefail
+          printf 'Runner: %s\nImageOS: %s\nImageVersion: %s\n' "$RUNNER_ENVIRONMENT" "$ImageOS" "$ImageVersion"
+          uname -a
+          cat /etc/os-release
+          nproc
+          free -m
+          df -h .
+      - name: Prepare the exact reviewed profile
+        env:
+          PROFILE: ${{ matrix.profile }}
+        run: bash ci/hosted/bootstrap.sh --profile "$PROFILE"
+      - name: Validate routing, prerequisites, and product isolation contracts
+        run: python3 -B ci/hosted/test-workflows.py
+      - name: Qualify actual pinned auxiliary tools for asset testing
+        if: matrix.profile == 'exact-assets'
+        env:
+          KUASAR_CI_DIR: ${{ runner.temp }}/profile-evidence
+        run: |
+          set -euo pipefail
+          bash ci/hosted/exact-assets-tools.sh
+          cat "$KUASAR_CI_DIR/host-tools.tsv"
+      - name: Record verification scope
+        if: always()
+        run: |
+          printf 'This run qualifies current ubuntu-latest profile initialization and offline contracts only.\n'
+          printf 'It does not replace full candidate-source or staged-product E2E acceptance.\n'
