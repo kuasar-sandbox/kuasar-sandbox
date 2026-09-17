@@ -1,0 +1,72 @@
+name: Main usage Go environment diagnosis
+'on':
+  push:
+    branches:
+    - ci/review131-latest
+    paths:
+    - .github/workflows/review131-go-diagnostic.yml
+permissions:
+  contents: read
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      with:
+        ref: 67f2f02ad843c5e8fb1d85829947e84eb2d2c4e1
+        path: src/platform
+        persist-credentials: false
+    - name: Compare exact bootstrap Go and reset-PATH driver
+      run: 'set -euo pipefail
+
+        source src/platform/ci/hosted/bootstrap.sh
+
+        export KUASAR_HOSTED_ROOT="$(mktemp -d "$RUNNER_TEMP/usage-go.XXXXXX")"
+
+        install_go
+
+        printf ''package main\nimport "fmt"\nfunc main() { fmt.Println("probe-ok")
+        }\n'' > "$RUNNER_TEMP/usage-probe.go"
+
+        cd "$RUNNER_TEMP"
+
+        export GOWORK=off CGO_ENABLED=0
+
+        printf ''\nMATCHED TOOLCHAIN\n''
+
+        command -v go
+
+        go version
+
+        go tool compile -V=full
+
+        go build -trimpath -o usage-probe-good usage-probe.go
+
+        printf ''\nSIMULATED SECURE PATH (NO PRIVILEGE)\n''
+
+        export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+        command -v go
+
+        go version
+
+        go tool compile -V=full
+
+        set +e
+
+        go build -trimpath -o usage-probe-mixed usage-probe.go
+
+        status=$?
+
+        set -e
+
+        printf ''MIXED_BUILD_EXIT=%s\n'' "$status"
+
+        printf ''\nEXPLICIT PINNED DRIVER\n''
+
+        "$GOROOT/bin/go" build -trimpath -o usage-probe-explicit usage-probe.go
+
+        ./usage-probe-explicit
+
+        '
