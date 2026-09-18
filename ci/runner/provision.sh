@@ -19,9 +19,9 @@ TOOL_ROOT=/var/lib/kuasar-ci/tools
 ZOT_TOOL_SHA256=523e5bf29a013db09115f780c3152af98fc5b65fc408a0d3e6c293643dc9bde7
 VERSITYGW_TOOL_SHA256=e839f0ce24a51dbf0a7a925e08a28a0bfa190d05290c13f2c4536852bc5f3a7d
 GO_ROOT=/usr/local/go
-GO_VERSION=go1.26.5
-GO_TARBALL_URL=https://mirrors.aliyun.com/golang/go1.26.5.linux-amd64.tar.gz
-GO_TARBALL_SHA256=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
+GO_VERSION=go1.26.8
+GO_TARBALL_URL=https://mirrors.aliyun.com/golang/go1.26.8.linux-amd64.tar.gz
+GO_TARBALL_SHA256=d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b
 GO_BINARY_SHA256=8da5fd321795754b994c64e3eb8a5a14ff47bd285559a7e876f3c79abafc67f9
 UTIL_LINUX_SRPM_URL=${KUASAR_UTIL_LINUX_SRPM_URL:-https://mirrors.huaweicloud.com/openeuler/openEuler-24.03-LTS-SP4/source/Packages/util-linux-2.39.1-38.oe2403sp4.src.rpm}
 UTIL_LINUX_SRPM_SHA256=${KUASAR_UTIL_LINUX_SRPM_SHA256:-40324d3ab54be52ef67544732a71ec14f6aecb2e92f5d8fa0aaaac532c55c0bf}
@@ -1153,8 +1153,8 @@ verify_slots() {
             test -x /usr/bin/time
             [ "$(systemctl show actions-runner.service --property=RefuseManualStop --value)" = yes ]
             [ "$(systemctl show actions-runner.service --property=StartLimitIntervalUSec --value)" = 0 ]
-            [ "$(/usr/local/go/bin/go version)" = "go version go1.26.5 linux/amd64" ]
-            [ "$(/usr/local/go/bin/go tool compile -V=full)" = "compile version go1.26.5" ]
+            [ "$(/usr/local/go/bin/go version)" = "go version go1.26.8 linux/amd64" ]
+            [ "$(/usr/local/go/bin/go tool compile -V=full)" = "compile version go1.26.8" ]
             redis-server --version >/dev/null
             ip route get 223.5.5.5 >/dev/null
             curl --fail --silent --show-error --connect-timeout 5 --max-time 20 https://goproxy.cn >/dev/null

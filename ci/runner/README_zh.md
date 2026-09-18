@@ -24,10 +24,10 @@ PID、mount、network、cgroup、Docker daemon、Runner 凭据和 Actions 工作
 执行 `check` 前,从运维端传入已验证文件。provisioner 拒绝缺失或摘要不匹配的
 工具,并把该目录只读挂载到全部 slot。
 
-共享 Go 工具链固定为 `linux/amd64` 的 `go1.26.5`。若不存在已验证的
+共享 Go 工具链固定为 `linux/amd64` 的 `go1.26.8`。若不存在已验证的
 `/usr/local/go`,安装过程只从阿里云中国直连镜像 `https://mirrors.aliyun.com/golang/`
-取得 `go1.26.5.linux-amd64.tar.gz`,核对 Go 发行 SHA-256
-`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`
+取得 `go1.26.8.linux-amd64.tar.gz`,核对 Go 发行 SHA-256
+`d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b`
 后再替换工具链。任务本身不下载 Go distribution。
 
 这些容器提供特权资源名称隔离,不是不可信任务的安全边界。它们有意获得 KVM、
