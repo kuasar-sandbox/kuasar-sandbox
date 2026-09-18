@@ -28,11 +28,11 @@ Transfer these verified files from the operator host before running `check`.
 The provisioner rejects missing or mismatched tools and mounts the directory
 read-only into all slots.
 
-The shared Go toolchain is pinned to `go1.26.5` for `linux/amd64`. If the
+The shared Go toolchain is pinned to `go1.26.8` for `linux/amd64`. If the
 validated `/usr/local/go` toolchain is absent, installation fetches
-`go1.26.5.linux-amd64.tar.gz` only from the direct Aliyun China mirror
+`go1.26.8.linux-amd64.tar.gz` only from the direct Aliyun China mirror
 `https://mirrors.aliyun.com/golang/` and verifies the Go release SHA-256
-`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`
+`d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b`
 before replacing the toolchain. Jobs never download a Go distribution.
 
 The containers provide privileged resource-name isolation, not a security boundary

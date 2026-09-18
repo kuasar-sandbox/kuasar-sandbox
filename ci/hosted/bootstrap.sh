@@ -2,8 +2,8 @@
 # Trusted standard Ubuntu prerequisites. Never source this from a requested candidate.
 set -euo pipefail
 
-GO_VERSION=1.26.5
-GO_SHA256=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
+GO_VERSION=1.26.8
+GO_SHA256=d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b
 EROFS_VERSION=1.9.1
 EROFS_SHA256=a9ef5ab67c4b8d2d3e9ed71f39cd008bda653142a720d8a395a36f1110d0c432
 

@@ -150,7 +150,7 @@ class BootstrapTests(unittest.TestCase):
 
     def test_go_pin_and_corruption_before_extraction(self):
         pins = shell('printf "%s %s\\n" "$GO_VERSION" "$GO_SHA256"')
-        self.assertEqual(pins.stdout.strip(), "1.26.5 5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053")
+        self.assertEqual(pins.stdout.strip(), "1.26.8 d0f743b33e8d8945e6b1f432edd15785c70507121d6e2a723b21285eddf8b57b")
         with tempfile.TemporaryDirectory() as directory:
             env = dict(KUASAR_HOSTED_ROOT=directory)
             result = shell('curl() { printf corrupt > "${@: -1}"; }; '
