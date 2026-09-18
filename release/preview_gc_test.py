@@ -38,16 +38,12 @@ class PreviewGCTest(unittest.TestCase):
                 item, sha, item.get("target_commitish") == tag_sha
             )
 
-        def git(*args, **_kwargs):
-            if args[0] == "rev-parse":
-                return "same-tree"
-            if args[0] == "rev-list":
-                return tag_sha
-            self.fail(f"unexpected git arguments: {args}")
-
         with (
             mock.patch.object(preview_gc, "platform_release_status", side_effect=status),
-            mock.patch.object(preview_gc, "git", side_effect=git),
+            mock.patch.object(
+                preview_gc, "commit_tree", side_effect=["same-tree", "same-tree"]
+            ),
+            mock.patch.object(preview_gc, "git", return_value=tag_sha),
         ):
             self.assertIs(
                 preview_gc.stable_release(version, {version: release}, {version: tag_sha}),
@@ -66,7 +62,7 @@ class PreviewGCTest(unittest.TestCase):
         with (
             mock.patch.object(preview_gc, "platform_release_status", return_value=incomplete),
             mock.patch.object(
-                preview_gc, "git", side_effect=["target-tree", "tag-tree"]
+                preview_gc, "commit_tree", side_effect=["target-tree", "tag-tree"]
             ),
             self.assertRaisesRegex(preview_gc.GCError, "violates the release contract"),
         ):
