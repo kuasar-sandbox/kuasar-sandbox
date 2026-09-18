@@ -69,7 +69,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/orchestrator
-        ref: fb54bffe189d178d7036cef7ef4f14a2cba64e1b
+        ref: 90490466c8b85b76069b95055d0dd3f6d219ef0a
         path: src/orchestrator
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -117,9 +117,9 @@ jobs:
         printf ''%s\t%s\t%s\t%s\n'' guest-runtime 509ec2dcc58c0414be95fe144ffcc4f10ac0727b 509ec2dcc58c0414be95fe144ffcc4f10ac0727b
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/orchestrator rev-parse HEAD)" = fb54bffe189d178d7036cef7ef4f14a2cba64e1b
+        test "$(git -C src/orchestrator rev-parse HEAD)" = 90490466c8b85b76069b95055d0dd3f6d219ef0a
 
-        printf ''%s\t%s\t%s\t%s\n'' orchestrator fb54bffe189d178d7036cef7ef4f14a2cba64e1b fb54bffe189d178d7036cef7ef4f14a2cba64e1b
+        printf ''%s\t%s\t%s\t%s\n'' orchestrator 90490466c8b85b76069b95055d0dd3f6d219ef0a 90490466c8b85b76069b95055d0dd3f6d219ef0a
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         test "$(git -C src/sandboxer rev-parse HEAD)" = 2b9704f5aedc9f524ff56207a25a940dc0f9ec6f
