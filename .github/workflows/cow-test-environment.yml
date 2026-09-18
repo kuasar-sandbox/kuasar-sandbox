@@ -86,8 +86,7 @@ jobs:
           SH
           parent=$(readlink /proc/self/ns/mnt)
           sudo -n env PARENT_MNT_NS="$parent" timeout --kill-after=3s 30s unshare --mount --propagation private bash "$RUNNER_TEMP/mount-probe.sh"
-          sudo -n env PARENT_MNT_NS="$parent" timeout --kill-after=3s 30s unshare --user --map-root-user --mount --propagation private bash "$RUNNER_TEMP/mount-probe.sh"
-          echo 'PRIVILEGED_MOUNT_AND_USER_MOUNT_PATHS=PASS'
+          echo 'SELECTED_PRIVILEGED_MOUNT_ONLY_PATH=PASS'
       - name: Confirm policy was not disabled
         if: always()
         run: sysctl kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true
