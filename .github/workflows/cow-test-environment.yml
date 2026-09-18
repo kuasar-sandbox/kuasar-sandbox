@@ -1,0 +1,93 @@
+name: COW test environment qualification
+on:
+  push:
+    branches: [ci/qualify-cow-test-environment]
+permissions: {}
+jobs:
+  kernel-capabilities:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Record kernel and namespace security policy without changing it
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          id
+          cat /proc/self/attr/current
+          for setting in kernel.apparmor_restrict_unprivileged_userns kernel.unprivileged_userns_clone; do
+            sysctl "$setting" 2>/dev/null || true
+          done
+          set +e
+          timeout 10s unshare --user --map-root-user --mount --propagation private true > "$RUNNER_TEMP/unprivileged-ns.log" 2>&1
+          rc=$?
+          set -e
+          echo "UNPRIVILEGED_NAMESPACE_RESULT=$rc"
+          cat "$RUNNER_TEMP/unprivileged-ns.log"
+      - name: Observe actual file O_DIRECT alignment behavior
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/direct-probe.c" <<'C'
+          #define _GNU_SOURCE
+          #include <errno.h>
+          #include <fcntl.h>
+          #include <stdio.h>
+          #include <stdlib.h>
+          #include <string.h>
+          #include <sys/vfs.h>
+          #include <unistd.h>
+          int main(int argc, char **argv) {
+            if (argc != 2) return 2;
+            int fd = open(argv[1], O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC, 0600);
+            if (fd < 0) { perror("open"); return 1; }
+            if (unlink(argv[1]) || ftruncate(fd, 8192)) { perror("prepare"); return 1; }
+            struct statfs fs; if (fstatfs(fd, &fs)) return 1;
+            printf("filesystem_type=%lx\n", (unsigned long)fs.f_type);
+            int flags = fcntl(fd, F_GETFL); errno = 0;
+            int enabled = fcntl(fd, F_SETFL, flags|O_DIRECT);
+            printf("O_DIRECT_enable=%d errno=%d\n", enabled, errno);
+            if (enabled < 0) { close(fd); return 0; }
+            void *buf = NULL; if (posix_memalign(&buf, 4096, 4096)) return 1;
+            memset(buf, 0x42, 4096); errno = 0;
+            ssize_t written = pwrite(fd, buf, 4096, 1);
+            printf("unaligned_pwrite=%zd errno=%d flags=%x\n", written, errno, fcntl(fd, F_GETFL));
+            free(buf); return close(fd) != 0;
+          }
+          C
+          gcc -Wall -Wextra -Werror "$RUNNER_TEMP/direct-probe.c" -o "$RUNNER_TEMP/direct-probe"
+          "$RUNNER_TEMP/direct-probe" "$RUNNER_TEMP/dio-file"
+      - name: Verify real bounded tmpfs with explicit privileged isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/mount-probe.sh" <<'SH'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          test "$(readlink /proc/self/ns/mnt)" != "$PARENT_MNT_NS"
+          directory=$(mktemp -d /var/tmp/kuasar-ns-probe.XXXXXX)
+          cleanup() { umount "$directory" 2>/dev/null || true; rmdir "$directory"; }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          mount -t tmpfs -o size=32k,nr_inodes=16,mode=0700,nosuid,nodev,noexec tmpfs "$directory"
+          python3 - "$directory" <<'PY'
+          import errno, os, sys
+          fd=os.open(os.path.join(sys.argv[1],'data'),os.O_CREAT|os.O_EXCL|os.O_WRONLY,0o600)
+          try:
+              for n in range(16): os.write(fd,b'x'*4096)
+          except OSError as error:
+              if error.errno != errno.ENOSPC: raise
+              print('REAL_TMPFS_ENOSPC=PASS',flush=True)
+          else: raise SystemExit('Expected real ENOSPC was not reached')
+          finally: os.close(fd)
+          os.unlink(os.path.join(sys.argv[1],'data'))
+          PY
+          SH
+          parent=$(readlink /proc/self/ns/mnt)
+          sudo -n env PARENT_MNT_NS="$parent" timeout --kill-after=3s 30s unshare --mount --propagation private bash "$RUNNER_TEMP/mount-probe.sh"
+          sudo -n env PARENT_MNT_NS="$parent" timeout --kill-after=3s 30s unshare --user --map-root-user --mount --propagation private bash "$RUNNER_TEMP/mount-probe.sh"
+          echo 'PRIVILEGED_MOUNT_AND_USER_MOUNT_PATHS=PASS'
+      - name: Confirm policy was not disabled
+        if: always()
+        run: sysctl kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || true
