@@ -130,6 +130,19 @@ jobs:
         cd src
 
         go work init ./accelerator ./connector ./guest-runtime ./orchestrator ./sandboxer'
+    - name: Initialize source qualification metadata
+      run: |
+        set -euo pipefail
+        mkdir -p "$KUASAR_CI_DIR"
+        # Match the production run.tsv schema; this rehearsal tests the reviewed
+        # head itself, not an invented PR integration commit.
+        candidate_sha="$(git -C src/platform rev-parse HEAD)"
+        printf 'mode\tcandidate_repository\tpull_request\tcandidate_sha\tbase_sha\tbase_ref\thead_sha\trelease_version\n' > "$KUASAR_CI_DIR/run.tsv"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          source "$CANDIDATE_REPOSITORY" 131 "$candidate_sha" \
+          289e08dae6bdd71b87996234375a19c380741dda main "$candidate_sha" '' \
+          >> "$KUASAR_CI_DIR/run.tsv"
+        cat "$KUASAR_CI_DIR/run.tsv"
     - name: Pull standard runner test images
       run: "set -euo pipefail\nfor image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest;\
         \ do\n  timeout 3m docker pull \"$image\"\ndone\n"
@@ -229,6 +242,16 @@ jobs:
         ref: 6aaf107b5f3671a275fb73b4731ca5834784995c
         path: trusted/platform
         persist-credentials: false
+    - name: Initialize exact-assets qualification metadata
+      run: |
+        set -euo pipefail
+        mkdir -p "$KUASAR_CI_DIR"
+        # Explicit binary-only mode, even alongside public validation tooling.
+        printf 'mode\tcandidate_repository\tpull_request\tcandidate_sha\tbase_sha\tbase_ref\thead_sha\trelease_version\n' > "$KUASAR_CI_DIR/run.tsv"
+        printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+          exact-assets '' 0 '' '' '' '' release-v0.1.5-preview.20260918.9999 \
+          >> "$KUASAR_CI_DIR/run.tsv"
+        cat "$KUASAR_CI_DIR/run.tsv"
     - name: Prepare a fresh exact-assets host
       run: bash trusted/platform/ci/hosted/bootstrap.sh --profile exact-assets
     - name: Receive the successful source job candidate bundles
