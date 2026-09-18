@@ -23,6 +23,55 @@ SPEC.loader.exec_module(preview_gc)
 
 
 class PreviewGCTest(unittest.TestCase):
+    def test_stable_release_accepts_same_tree_legacy_target(self) -> None:
+        version = "release-v1.2.3"
+        tag_sha = "2" * 40
+        target_sha = "1" * 40
+        release = {
+            "target_commitish": target_sha,
+            "prerelease": False,
+            "assets": [{"digest": "sha256:" + "3" * 64, "size": 1}],
+        }
+
+        def status(_version, item, sha):
+            return preview_gc.coordinator.ReleaseStatus(
+                item, sha, item.get("target_commitish") == tag_sha
+            )
+
+        def git(*args, **_kwargs):
+            if args[0] == "rev-parse":
+                return "same-tree"
+            if args[0] == "rev-list":
+                return tag_sha
+            self.fail(f"unexpected git arguments: {args}")
+
+        with (
+            mock.patch.object(preview_gc, "platform_release_status", side_effect=status),
+            mock.patch.object(preview_gc, "git", side_effect=git),
+        ):
+            self.assertIs(
+                preview_gc.stable_release(version, {version: release}, {version: tag_sha}),
+                release,
+            )
+
+    def test_stable_release_rejects_different_tree_legacy_target(self) -> None:
+        version = "release-v1.2.3"
+        tag_sha = "2" * 40
+        release = {
+            "target_commitish": "1" * 40,
+            "prerelease": False,
+            "assets": [{"digest": "sha256:" + "3" * 64, "size": 1}],
+        }
+        incomplete = preview_gc.coordinator.ReleaseStatus(release, tag_sha, False)
+        with (
+            mock.patch.object(preview_gc, "platform_release_status", return_value=incomplete),
+            mock.patch.object(
+                preview_gc, "git", side_effect=["target-tree", "tag-tree"]
+            ),
+            self.assertRaisesRegex(preview_gc.GCError, "violates the release contract"),
+        ):
+            preview_gc.stable_release(version, {version: release}, {version: tag_sha})
+
     def test_plan_digest_is_stable_and_includes_tag_commit(self) -> None:
         first = preview_gc.Candidate(
             "kuasar-sandbox/accelerator",

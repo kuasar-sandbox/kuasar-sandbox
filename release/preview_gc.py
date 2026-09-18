@@ -127,7 +127,27 @@ def stable_release(
     release = releases.get(version)
     if release is None:
         raise GCError(f"Stable aggregate does not exist: {version}")
-    status = platform_release_status(version, release, tags.get(version))
+    tag_sha = tags.get(version)
+    status = platform_release_status(version, release, tag_sha)
+    target = release.get("target_commitish")
+    # Older Stable releases were published from a pre-tag commit and later
+    # tagged with a metadata-only commit. Treat that immutable, identical tree
+    # as equivalent without changing the Stable release or weakening Preview
+    # ownership checks.
+    if (
+        not status.complete
+        and release.get("prerelease") is False
+        and tag_sha is not None
+        and isinstance(target, str)
+        and re.fullmatch(r"[0-9a-f]{40}", target)
+        and target != tag_sha
+    ):
+        target_tree = git("rev-parse", f"{target}^{{tree}}", check=False)
+        tag_tree = git("rev-parse", f"{tag_sha}^{{tree}}", check=False)
+        if target_tree and target_tree == tag_tree:
+            normalized = dict(release)
+            normalized["target_commitish"] = tag_sha
+            status = platform_release_status(version, normalized, tag_sha)
     if not status.complete or release.get("prerelease") is not False:
         raise GCError(f"Stable aggregate violates the release contract: {version}")
     if status.tag_sha != git("rev-list", "-n", "1", version):
