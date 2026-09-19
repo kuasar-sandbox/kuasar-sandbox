@@ -39,6 +39,11 @@ WS_LOCK="/tmp/wsnt-$WS_OWNER_HASH.lock"
 exec 9>"$WS_LOCK"
 flock -w 60 9 || fail "another working_set_netns_test run for owner $WS_OWNER holds $WS_LOCK"
 
+# Test the same TERM -> KILL state machine with bounded fixture waits; the
+# production defaults remain 10s/5s and are not changed by this test process.
+export WORKING_SET_NETNS_TERM_WAIT=1
+export WORKING_SET_NETNS_KILL_WAIT=1
+
 # shellcheck source=test/perf/working-set-netns.sh
 WORKING_SET_NETNS_SOURCED=1
 . "$REPO_ROOT/test/perf/working-set-netns.sh"
