@@ -980,11 +980,28 @@ jobs:
           REQUIRE_GUEST_RUNTIME: "1"
         run: bash test/e2e/run_all.sh
 
+      - name: Stage revision and timing metadata
+        id: ci-metadata
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          upload_dir="$RUNNER_TEMP/ci-metadata-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo rm -rf -- "$upload_dir"
+          mkdir -p "$upload_dir"
+          if sudo test -d "$KUASAR_CI_DIR"; then
+            unexpected=$(sudo find -P "$KUASAR_CI_DIR" -xdev ! -type d ! -type f -print -quit)
+            [ -z "$unexpected" ] || { echo "unsupported CI metadata entry: $unexpected" >&2; exit 1; }
+            sudo tar --one-file-system -C "$KUASAR_CI_DIR" -cf - . | tar --no-same-owner -C "$upload_dir" -xf -
+            chmod -R u+rwX "$upload_dir"
+          fi
+          echo "path=$upload_dir" >> "$GITHUB_OUTPUT"
+
       - name: Upload revision and timing metadata
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ci-metadata-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.KUASAR_CI_DIR }}
+          path: ${{ steps.ci-metadata.outputs.path }}
           if-no-files-found: warn
           retention-days: 30
