@@ -17,9 +17,9 @@ concurrency:
 
 jobs:
   admission:
-    # Guest-runtime is the first standard-runner caller. Other callers keep
-    # their existing control selection. This job never executes candidate source.
-    runs-on: ${{ github.repository == 'kuasar-sandbox/guest-runtime' && 'ubuntu-24.04' || (github.event.repository.private && 'kuasar-control' || 'ubuntu-latest') }}
+    # Public control jobs use the standard image; private callers keep their pool.
+    # This job never executes candidate source.
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || 'kuasar-control' }}
     permissions:
       contents: read
       pull-requests: read
@@ -34,7 +34,7 @@ jobs:
       companion_candidates: ${{ steps.admission.outputs.companion_candidates }}
     steps:
       - name: Check out trusted hosted bootstrap
-        if: github.repository == 'kuasar-sandbox/guest-runtime'
+        if: github.event.repository.visibility == 'public'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ job.workflow_repository }}
@@ -44,7 +44,7 @@ jobs:
           persist-credentials: false
 
       - name: Bootstrap standard control runner
-        if: github.repository == 'kuasar-sandbox/guest-runtime'
+        if: github.event.repository.visibility == 'public'
         run: bash trusted/platform/ci/hosted/bootstrap.sh --profile control
 
       - name: Create organization membership token
@@ -486,7 +486,7 @@ jobs:
   finalize:
     needs: [admission, e2e]
     if: always()
-    runs-on: ${{ github.repository == 'kuasar-sandbox/guest-runtime' && 'ubuntu-24.04' || (github.event.repository.private && 'kuasar-control' || 'ubuntu-latest') }}
+    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || 'kuasar-control' }}
     permissions:
       contents: read
       pull-requests: read
@@ -505,7 +505,7 @@ jobs:
       COMPANION_CANDIDATES: ${{ needs.admission.outputs.companion_candidates }}
     steps:
       - name: Check out trusted hosted bootstrap
-        if: github.repository == 'kuasar-sandbox/guest-runtime'
+        if: github.event.repository.visibility == 'public'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ job.workflow_repository }}
@@ -515,7 +515,7 @@ jobs:
           persist-credentials: false
 
       - name: Bootstrap standard control runner
-        if: github.repository == 'kuasar-sandbox/guest-runtime'
+        if: github.event.repository.visibility == 'public'
         run: bash trusted/platform/ci/hosted/bootstrap.sh --profile control
 
       - name: Create companion finalization token

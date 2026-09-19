@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Trusted ubuntu-24.04 prerequisites. Never source this from a requested candidate.
+# Trusted standard Ubuntu prerequisites. Never source this from a requested candidate.
 set -euo pipefail
 
 GO_VERSION=1.26.5
@@ -33,22 +33,29 @@ select_profile() {
         kernel) with_go=true; with_kernel=true ;;
         runtime|runtime-publish) with_go=true; with_native=true; with_readers=true ;;
         source) with_go=true; with_native=true; with_kernel=true; with_readers=true; with_vm=true ;;
+        exact-assets) with_go=true; with_readers=true; with_vm=true ;;
         *) die "unknown profile: $profile" ;;
     esac
-    if $with_native || $with_kernel; then
+    if $with_native || $with_kernel || $with_readers; then
         packages+=(build-essential pkg-config)
     fi
     if $with_kernel; then
         packages+=(bc bison flex libelf-dev libssl-dev libncurses-dev)
     fi
+    if $with_native || $with_readers; then
+        packages+=(autoconf automake libtool uuid-dev)
+    fi
     if $with_native; then
-        # Keep libssl-dev for already-admitted older EROFS source sets.
-        packages+=(autoconf automake libtool patch uuid-dev libgcrypt20-dev libgpg-error-dev libssl-dev liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)
+        # Retain the native crypto prerequisites already merged in #126.
+        packages+=(patch libgcrypt20-dev libgpg-error-dev libssl-dev liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)
+    fi
+    if [ "$profile" = source ]; then
+        packages+=(cmake clang llvm libclang-dev libsnappy-dev libssl-dev)
     fi
     if $with_vm; then
-        packages+=(cmake clang llvm libclang-dev libsnappy-dev libssl-dev
-            python3-venv python3-pip iproute2 iptables nftables kmod acl
-            e2fsprogs procps psmisc socat redis-server rsync cpio zstd lz4)
+        packages+=(python3-venv python3-pip iproute2 iptables nftables kmod acl
+            e2fsprogs procps psmisc socat redis-server rsync cpio zstd lz4
+            systemd udev dbus iputils-ping netcat-openbsd openssl sqlite3 zip strace)
     fi
 }
 
@@ -120,14 +127,36 @@ install_readers() (
     grep -Fq -- --cat <<< "$dump_help" || die "dump.erofs lacks --cat"
 )
 
+render_kvm_rule() {
+    [ "$#" -eq 2 ] || die "KVM rule requires job uid and primary gid"
+    if [ "${GITHUB_ACTIONS:-}" != true ] || [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ] \
+        || [ "${RUNNER_OS:-}" != Linux ] || [ "${RUNNER_ARCH:-}" != X64 ]; then
+        die "KVM rule requires a disposable GitHub-hosted Linux x64 job"
+    fi
+    local value
+    for value in "$@"; do
+        if ! [[ "$value" =~ ^[1-9][0-9]{0,9}$ ]] || [ "$value" -gt 4294967294 ]; then
+            die "KVM rule requires non-root numeric job uid/gid"
+        fi
+    done
+    printf 'SUBSYSTEM=="misc", KERNEL=="kvm", GROUP:="%s", MODE:="0660"\n' "$2"
+}
+
 configure_vm() {
+    local job_uid job_gid kvm_rule
+    job_uid=$(id -u)
+    job_gid=$(id -g)
+    kvm_rule=$(render_kvm_rule "$job_uid" "$job_gid")
     # Docker and rustup are standard runner-image capabilities; fail closed if
     # they disappear. Do not replace the Docker daemon or the native Rust pins.
-    need docker rustup cargo rustc systemctl ip modprobe setfacl mkfs.ext4
+    need docker systemctl ip modprobe setfacl mkfs.ext4 udevadm
     docker info >/dev/null
-    rustup show active-toolchain
-    cargo --version
-    rustc --version
+    if [ "$profile" = source ]; then
+        need rustup cargo rustc
+        rustup show active-toolchain
+        cargo --version
+        rustc --version
+    fi
     [ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ] || die "cgroup v2 is required"
     [ -d /run/systemd/system ] || die "systemd is required"
     sudo -n modprobe tun vhost_vsock
@@ -135,10 +164,28 @@ configure_vm() {
     local device
     for device in /dev/kvm /dev/vhost-vsock /dev/net/tun; do
         [ -c "$device" ] || die "required VM device missing: $device"
-        # ACLs apply to this disposable job's uid; no global chmod 666/group edits.
-        sudo -n setfacl -m "u:$(id -u):rw" "$device"
+        # Keep the existing per-job ACLs on vhost-vsock and TUN.
+        sudo -n setfacl -m "u:$job_uid:rw" "$device"
         if [ ! -r "$device" ] || [ ! -w "$device" ]; then die "VM device inaccessible: $device"; fi
     done
+    # Headless uaccess events can remove KVM's named ACL on the same inode.
+    # The current primary group survives that loss; no membership/world changes.
+    printf '%s\n' "$kvm_rule" > "$KUASAR_HOSTED_ROOT/99-kuasar-job-kvm.rules"
+    sudo -n install -o root -g root -m 0644 "$KUASAR_HOSTED_ROOT/99-kuasar-job-kvm.rules" \
+        /etc/udev/rules.d/99-kuasar-job-kvm.rules
+    sudo -n udevadm control --reload-rules
+    sudo -n udevadm trigger --action=change --subsystem-match=misc --sysname-match=kvm
+    sudo -n udevadm settle --timeout=30
+    sudo -n chgrp "$job_gid" /dev/kvm
+    sudo -n chmod 0660 /dev/kvm
+    sudo -n setfacl -x "u:$job_uid" /dev/kvm
+    # Replay the observed ACL loss and verify open as the job user, before sudo.
+    python3 - <<'PY'
+import os
+
+fd = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC)
+os.close(fd)
+PY
     # Check the unprivileged syscall, not just the configured sysctl value.
     python3 - <<'PY'
 import ctypes
@@ -158,15 +205,17 @@ PY
     emit PIP_INDEX_URL https://pypi.org/simple
 }
 
+
 main() {
     if [ "$#" -ne 2 ] || [ "$1" != --profile ]; then
-        die "usage: bootstrap.sh --profile control|release-control|kernel|runtime|runtime-publish|source"
+        die "usage: bootstrap.sh --profile control|release-control|kernel|runtime|runtime-publish|source|exact-assets"
     fi
     select_profile "$2"
     [ "$(uname -m)" = x86_64 ] || die "x86_64 is required"
     # shellcheck disable=SC1091
     . /etc/os-release
-    if [ "$ID" != ubuntu ] || [ "$VERSION_ID" != 24.04 ]; then die "ubuntu-24.04 is required"; fi
+    if [ "$ID" != ubuntu ] || [ "$(uname -s)" != Linux ]; then die "Ubuntu Linux is required"; fi
+    if $with_vm; then render_kvm_rule "$(id -u)" "$(id -g)" >/dev/null; fi
     : "${RUNNER_TEMP:?}" "${GITHUB_ENV:?}" "${GITHUB_PATH:?}"
     need sudo curl sha256sum tar python3
     sudo -n apt-get update
