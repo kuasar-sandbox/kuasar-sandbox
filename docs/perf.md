@@ -166,7 +166,7 @@ Placer only imports groups and recommends placement. Node admission performs fin
 
 ## 7. Release and CI evidence
 
-Source-candidate Integration E2E builds exact revisions, runs owner E2E, the UFFD regression gate and working-set smoke, and uploads a `ci-metadata-<run-id>-<attempt>` artifact. Aggregate-release exact-assets mode extracts all assets from the same aggregate package and runs the complete `test/e2e/run_all.sh` on real KVM.
+Source-candidate Integration E2E builds exact revisions, runs owner E2E, the UFFD regression gate and working-set smoke, and uploads a `ci-metadata-<run-id>-<attempt>` artifact. Aggregate-release exact-assets mode extracts the same validated aggregate package in five isolated jobs and partitions the complete `test/e2e/run_all.sh` coverage across core, sandboxer main/default-cadence, and two balanced orchestrator shards on real KVM. Source metadata keeps the `ci-metadata-<run-id>-<attempt>` name; exact-assets shard metadata appends the shard name.
 
 Workflow and evidence entry points:
 

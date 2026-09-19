@@ -203,7 +203,7 @@ placer 只做 group 导入和放置建议,最终资源确认在 node admission.�
 ## 7. Release 与 CI 证据
 
 源码候选的端到端集成测试会构建精确 revision,运行 owner E2E,UFFD regression gate 和 working-set
-smoke,并上传 `ci-metadata-<run-id>-<attempt>` artifact.聚合 Release 的 exact-assets 模式
+smoke,并上传 `ci-metadata-<run-id>-<attempt>` artifact。聚合 Release 的 exact-assets 模式把同一个已验证 aggregate package 分成 5 个隔离 job，分别运行 core、sandboxer main/default-cadence 和两个均衡的 orchestrator shard；exact-assets metadata artifact 在名称末尾追加 shard。聚合 Release 的 exact-assets 模式
 从同一个聚合包解压所有资产,在真实 KVM 上运行完整 `test/e2e/run_all.sh`.
 
 工作流与证据入口:
