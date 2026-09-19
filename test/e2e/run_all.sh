@@ -16,7 +16,15 @@ export ZOT_BIN VGW_BIN
 echo "==> full release e2e"
 echo "==> BIN=$BIN"
 
-owners=(accelerator connector guest-runtime sandboxer orchestrator platform)
+case "${KUASAR_E2E_SHARD:-all}" in
+    all|source) owners=(accelerator connector guest-runtime sandboxer orchestrator platform) ;;
+    core) owners=(accelerator connector guest-runtime platform) ;;
+    sandboxer-main) owners=(sandboxer); export SANDBOXER_E2E_GROUP=main ;;
+    sandboxer-defaults) owners=(sandboxer); export SANDBOXER_E2E_GROUP=defaults ;;
+    orchestrator-a) owners=(orchestrator); export ORCHESTRATOR_E2E_GROUP=a ;;
+    orchestrator-b) owners=(orchestrator); export ORCHESTRATOR_E2E_GROUP=b ;;
+    *) echo "unknown KUASAR_E2E_SHARD=${KUASAR_E2E_SHARD}" >&2; exit 2 ;;
+esac
 for owner in "${owners[@]}"; do
     runner="$SCRIPT_DIR/$owner/run_all.sh"
     [ -x "$runner" ] || {
