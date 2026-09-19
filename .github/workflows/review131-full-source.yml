@@ -77,7 +77,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/sandboxer
-        ref: 97601c97b7195d52c7f4b5ef0b2dd8199ca02dad
+        ref: 216441479a740b846685d6e82bcb6b241b2e7b8d
         path: src/sandboxer
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -122,9 +122,9 @@ jobs:
         printf ''%s\t%s\t%s\t%s\n'' orchestrator 53b5875d7296cccc1d692362b424ac07d8d1ba21 53b5875d7296cccc1d692362b424ac07d8d1ba21
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/sandboxer rev-parse HEAD)" = 97601c97b7195d52c7f4b5ef0b2dd8199ca02dad
+        test "$(git -C src/sandboxer rev-parse HEAD)" = 216441479a740b846685d6e82bcb6b241b2e7b8d
 
-        printf ''%s\t%s\t%s\t%s\n'' sandboxer 97601c97b7195d52c7f4b5ef0b2dd8199ca02dad 97601c97b7195d52c7f4b5ef0b2dd8199ca02dad
+        printf ''%s\t%s\t%s\t%s\n'' sandboxer 216441479a740b846685d6e82bcb6b241b2e7b8d 216441479a740b846685d6e82bcb6b241b2e7b8d
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         cd src
