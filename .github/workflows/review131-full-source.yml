@@ -45,7 +45,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/accelerator
-        ref: 7a704d7697c1c46bbcf2927276a304d809ea6a76
+        ref: 53d65bd609f98193d024e2d2136ce7cc7fe46425
         path: src/accelerator
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -61,7 +61,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/guest-runtime
-        ref: 509ec2dcc58c0414be95fe144ffcc4f10ac0727b
+        ref: c09e628fe4d69c7e33281a182a7287eb54a8271c
         path: src/guest-runtime
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -102,9 +102,9 @@ jobs:
         printf ''%s\t%s\t%s\t%s\n'' kuasar-sandbox c41143930f5e21bbf79a05055ad64fd4848aff13 c41143930f5e21bbf79a05055ad64fd4848aff13
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/accelerator rev-parse HEAD)" = 7a704d7697c1c46bbcf2927276a304d809ea6a76
+        test "$(git -C src/accelerator rev-parse HEAD)" = 53d65bd609f98193d024e2d2136ce7cc7fe46425
 
-        printf ''%s\t%s\t%s\t%s\n'' accelerator 7a704d7697c1c46bbcf2927276a304d809ea6a76 7a704d7697c1c46bbcf2927276a304d809ea6a76
+        printf ''%s\t%s\t%s\t%s\n'' accelerator 53d65bd609f98193d024e2d2136ce7cc7fe46425 53d65bd609f98193d024e2d2136ce7cc7fe46425
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         test "$(git -C src/connector rev-parse HEAD)" = 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8
@@ -112,9 +112,9 @@ jobs:
         printf ''%s\t%s\t%s\t%s\n'' connector 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/guest-runtime rev-parse HEAD)" = 509ec2dcc58c0414be95fe144ffcc4f10ac0727b
+        test "$(git -C src/guest-runtime rev-parse HEAD)" = c09e628fe4d69c7e33281a182a7287eb54a8271c
 
-        printf ''%s\t%s\t%s\t%s\n'' guest-runtime 509ec2dcc58c0414be95fe144ffcc4f10ac0727b 509ec2dcc58c0414be95fe144ffcc4f10ac0727b
+        printf ''%s\t%s\t%s\t%s\n'' guest-runtime c09e628fe4d69c7e33281a182a7287eb54a8271c c09e628fe4d69c7e33281a182a7287eb54a8271c
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         test "$(git -C src/orchestrator rev-parse HEAD)" = 53b5875d7296cccc1d692362b424ac07d8d1ba21
