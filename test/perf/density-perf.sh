@@ -462,7 +462,7 @@ for i in $(seq 1 "$N"); do
     ip tuntap add "${sid}-tap" mode tap 2>/dev/null || true
     ip link set "${sid}-tap" up
     truncate -s 1G "$WORK/${sid}.diff"
-    mkfs.ext4 -q -F "$WORK/${sid}.diff"
+    mkfs.ext4 -q -F -O ^has_journal "$WORK/${sid}.diff"
     emit_yaml "$sid"
     "$BIN/sandbox-ctl" run \
         --config "$WORK/$sid.yaml" \

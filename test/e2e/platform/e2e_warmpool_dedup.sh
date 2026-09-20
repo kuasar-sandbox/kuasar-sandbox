@@ -188,13 +188,13 @@ mkdir -p "$WORK/runtime"
 
 # ---- prepare blk1 base (deterministic mkfs, copied per sandbox) ----------
 #
-# Naive per-sandbox mkfs.ext4 produces a fresh UUID + timestamp + lazy-init
-# tail every run, so the resulting superblock + journal chunks are unique
-# per sandbox and cross-sandbox dedup of blk1 collapses to ~0%.
+# Per-sandbox formatting varies UUIDs, timestamps and inode initialization.
+# Reusing one journal-free template keeps the initial filesystem bytes shared.
 #
 # Production warm-pool model: blk1 is a CoW copy of a pre-built base diff
 # (one mkfs upstream, N copies downstream). Mirror that here:
 #   1. mkfs.ext4 once into base.diff with deterministic flags:
+#        -O ^has_journal            — no filesystem journal in the work disk
 #        -U <fixed UUID>             — same FS UUID across sandboxes
 #        -E nodiscard                — skip TRIM (which is also non-deterministic)
 #        -E hash_seed=<fixed>        — htree hashing seed (else random per-FS)
@@ -210,9 +210,9 @@ mkdir -p "$WORK/runtime"
 echo "==> prepare base blk1 diff (deterministic mkfs)"
 BLK1_BASE="$WORK/runtime/blk1-base.diff"
 truncate -s 1G "$BLK1_BASE"
-SOURCE_DATE_EPOCH=1577836800 mkfs.ext4 -q -F \
+SOURCE_DATE_EPOCH=1577836800 mkfs.ext4 -q -F -O ^has_journal \
     -U 11111111-2222-3333-4444-555555555555 \
-    -E nodiscard,lazy_itable_init=0,lazy_journal_init=0,hash_seed=00000000-0000-0000-0000-000000000000 \
+    -E nodiscard,lazy_itable_init=0,hash_seed=00000000-0000-0000-0000-000000000000 \
     -M / \
     "$BLK1_BASE"
 echo "    base diff sha256: $(sha256sum "$BLK1_BASE" | cut -d' ' -f1)"

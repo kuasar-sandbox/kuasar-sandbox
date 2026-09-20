@@ -413,7 +413,7 @@ run_cold_iter() {
     mkdir -p "$d/runtime"
     local diff="$d/runtime/blk1.diff"
     truncate -s 1G "$diff"
-    mkfs.ext4 -q -F "$diff"
+    mkfs.ext4 -q -F -O ^has_journal "$diff"
     write_sandbox_yaml "$d/sandbox.yaml" "$diff" \
         '["-c", "import sys; print('"'"'PYBOOT-OK'"'"', sys.version_info.major*100+sys.version_info.minor)"]'
 
@@ -475,7 +475,7 @@ start_long_sandbox() {
     mkdir -p "$d/runtime"
     local diff="$d/runtime/blk1.diff"
     truncate -s 1G "$diff"
-    mkfs.ext4 -q -F "$diff"
+    mkfs.ext4 -q -F -O ^has_journal "$diff"
     # Tight counter (no time.sleep) so the FIRST TICK after restore
     # appears immediately — measurement of restore latency would
     # otherwise be polluted by mid-sleep snapshot capture.
