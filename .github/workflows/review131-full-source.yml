@@ -301,5 +301,3 @@ jobs:
     - name: Verify product bytes remained unchanged
       if: always()
       run: test ! -f "$RUNNER_TEMP/products-before.sha256" || sha256sum -c "$RUNNER_TEMP/products-before.sha256"
-
-[executed on device: VM-16-4-ubuntu (ece80c39-2a6a-48a6-8bca-2dd73fc629dd)]
