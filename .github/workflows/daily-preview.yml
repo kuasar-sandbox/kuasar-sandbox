@@ -23,7 +23,7 @@ jobs:
           mkdir aggregate-stage
           gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir aggregate-stage
           test -s aggregate-stage/SHA256SUMS
-          sha256sum -c aggregate-stage/SHA256SUMS
+          (cd aggregate-stage && sha256sum -c SHA256SUMS)
           echo "artifact=aggregate-stage-${VERSION}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
       - name: Upload exact aggregate stage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
