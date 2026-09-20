@@ -45,7 +45,7 @@ ZOT_VERSION    ?= v2.1.17
 
 PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf-density
 
-.PHONY: all build collect e2e-tools assemble-e2e release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
+.PHONY: all build collect e2e-zot e2e-versitygw e2e-tools assemble-e2e release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
 	        bench test-e2e test-e2e-prebuilt perf dedup-report \
 	        $(PERF_TARGETS)
 
@@ -67,9 +67,13 @@ build:
 	$(CI_TIMED) build/orchestrator $(MAKE) -C $(ORG)/orchestrator build
 	@$(CI_TIMED) build/collect $(MAKE) collect
 
-e2e-tools:
+e2e-zot:
 	$(CI_TIMED) tools/zot env BINDIR="$(abspath $(E2E_TOOL_DIR))" TARGET_ARCH="$(TARGET_ARCH)" ZOT_VERSION="$(ZOT_VERSION)" bash ci/integration/ensure-zot.sh
+
+e2e-versitygw:
 	$(CI_TIMED) tools/versitygw env BINDIR="$(abspath $(E2E_TOOL_DIR))" TARGET_ARCH="$(TARGET_ARCH)" bash ci/integration/ensure-versitygw.sh
+
+e2e-tools: e2e-zot e2e-versitygw
 
 # Assemble bin/$(TARGET_ARCH)/ from each sub-repo's per-arch bin per the
 # binary-input manifest. Native builds drop a bin/<name> symlink to the per-arch
@@ -175,6 +179,7 @@ test:
 
 test-ci-tools:
 	bash ci/integration/test-ci-tools.sh
+	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-source-owner.py
 
 test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test-environment-tools.py
