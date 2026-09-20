@@ -28,7 +28,7 @@ class ExactToolsTests(unittest.TestCase):
         for path in (self.runner, self.fixtures, self.mockbin, self.product):
             path.mkdir(parents=True)
         for name in ("bash", "dirname", "basename", "python3", "cp", "chmod", "mkdir", "sha256sum", "awk",
-                     "mv", "tar", "gzip", "sort", "install", "mktemp", "rm", "rmdir", "cut", "taskset", "touch"):
+                     "mv", "tar", "gzip", "sort", "install", "mktemp", "rm", "rmdir", "cut", "taskset", "touch", "readlink"):
             (self.mockbin / name).symlink_to(shutil.which(name))
         for name in ("vmlinux", "cloud-hypervisor", "sandbox-ctl", "mkfs.erofs", "zot", "versitygw"):
             (self.product / name).write_bytes(b"packaged product: " + name.encode())
@@ -43,7 +43,7 @@ from pathlib import Path
 keys = ('BINDIR', 'BUILD_DIR', 'TARBALL_CACHE', 'TMPDIR', 'VERSITYGW_SRC',
         'VERSITYGW_TARBALL', 'VERSITYGW_TARBALL_SHA256', 'VERSITYGW_GOFLAGS',
         'GOTOOLCHAIN', 'GOMAXPROCS', 'GO_ARCH')
-Path(os.environ['PROBE']).write_text(json.dumps({key: os.environ[key] for key in keys}))
+Path(os.environ['PROBE']).write_text(json.dumps({key: os.environ.get(key) for key in keys}))
 target = Path(os.environ['BINDIR']) / 'versitygw'
 target.write_text('#!/bin/sh\\necho fixture-versitygw\\n')
 target.chmod(0o755)
@@ -77,6 +77,9 @@ Path(args[args.index('-o') + 1]).write_bytes(data)
                         PROBE=str(self.root / "probe"), FIXTURES=str(self.fixtures),
                         DOWNLOADS=str(self.root / "downloads"), CURL_LOG=str(self.root / "curl"))
 
+        for key in ("E2E_ZOT_BIN", "E2E_VGW_BIN", "ZOT_BIN", "VGW_BIN"):
+            self.env.pop(key, None)
+
     def archive(self, name="versitygw-1.5.0/cmd/versitygw/main.go", symlink=False):
         with tarfile.open(self.fixtures / "versitygw-1.5.0.tar.gz", "w:gz") as archive:
             item = tarfile.TarInfo(name)
@@ -98,7 +101,7 @@ Path(args[args.index('-o') + 1]).write_bytes(data)
             body = '''download() {
 printf '%s\\t%s\\t%s\\n' "$1" "$2" "$3" >> "$DOWNLOADS"
 cp "$FIXTURES/${2##*/}" "$2"
-}; ZOT_BINARY_SHA256=''' + hashlib.sha256(ZOT).hexdigest() + '; main "$@"'
+}; main "$@"'''
         return subprocess.run(["bash", "-c", 'source "$1"; shift; ' + body,
                                "test-exact-tools", str(HELPER), *args],
                               cwd=self.root, env={**self.env, **env}, text=True,
@@ -120,7 +123,7 @@ cp "$FIXTURES/${2##*/}" "$2"
         for name in ("BINDIR", "BUILD_DIR", "TARBALL_CACHE", "TMPDIR", "VERSITYGW_SRC", "VERSITYGW_TARBALL"):
             self.assertTrue(Path(probe[name]).is_relative_to(self.runner), name)
         self.assertEqual(probe["VERSITYGW_GOFLAGS"], "-mod=mod -p=1")
-        self.assertEqual(probe["GOTOOLCHAIN"], "local")
+        self.assertEqual(probe["GOTOOLCHAIN"], self.env.get("GOTOOLCHAIN"))
         self.assertEqual(probe["GOMAXPROCS"], "1")
         self.assertEqual(probe["GO_ARCH"], "amd64")
         downloads = [line.split("\t") for line in (self.root / "downloads").read_text().splitlines()]
@@ -134,6 +137,40 @@ cp "$FIXTURES/${2##*/}" "$2"
         identity = (self.root / "metrics/host-tools.tsv").read_text()
         self.assertIn(COMMIT, identity)
         self.assertIn(hashlib.sha256(ZOT).hexdigest(), identity)
+
+    def test_environment_tools_bypass_no_existing_capabilities(self):
+        supplied = self.root / "custom tools"
+        supplied.mkdir()
+        for name in ("zot", "versitygw"):
+            tool = supplied / name
+            tool.write_text("#!/bin/sh\necho independently-built-tool\n")
+            tool.chmod(0o755)
+        for explicit in (False, True):
+            settings = ({"E2E_ZOT_BIN": str(supplied / "zot"),
+                         "E2E_VGW_BIN": str(supplied / "versitygw")} if explicit else
+                        {"PATH": str(supplied) + os.pathsep + str(self.mockbin)})
+            result = self.run_helper(**settings)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertFalse((self.root / "downloads").exists())
+            self.assertFalse((self.root / "curl").exists())
+            self.assertFalse((self.root / "probe").exists())
+            outputs = dict(line.split("=", 1) for line in self.envfile.read_text().splitlines())
+            self.assertEqual(outputs, {"E2E_ZOT_BIN": str(supplied / "zot"),
+                                       "E2E_VGW_BIN": str(supplied / "versitygw")})
+            self.assertEqual(self.product_snapshot(), self.before)
+
+    def test_invalid_explicit_tool_does_not_download_a_replacement(self):
+        result = self.run_helper(E2E_ZOT_BIN=str(self.root / "absent"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("environment zot is not executable", result.stderr)
+        self.assertFalse((self.root / "downloads").exists())
+        self.assertFalse((self.root / "curl").exists())
+
+    def test_fallback_build_preserves_explicit_toolchain_policy(self):
+        result = self.run_helper(GOTOOLCHAIN="go1.99.1+path")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads((self.root / "probe").read_text())["GOTOOLCHAIN"],
+                         "go1.99.1+path")
 
     def test_bad_arguments_paths_and_budget_reject_before_fetch(self):
         for args, overrides in ((("--bindir", str(self.product)), {}),

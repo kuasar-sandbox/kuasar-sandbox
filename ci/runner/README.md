@@ -11,29 +11,28 @@ only:
 - `/var/cache/kuasar`, a writable source/native-artifact cache; exact-SHA names
   and repository-owned locks coordinate reuse but do not prevent tampering;
 - `/var/lib/kuasar-ci/tools`, read-only test tool binaries;
-- `/usr/local/go` and the host kernel module tree, read-only.
+- the environment-selected Go root and executable, and the host kernel module tree, read-only.
 
 Each slot receives a different bpffs subtree at `/sys/fs/bpf`; pinned BPF paths
 cannot collide across concurrent jobs.
 
-The host must preload the pinned x86_64 E2E tools instead of downloading their
-large release artifacts during a job:
+The environment must provide executable `zot` and `versitygw` in
+`/var/lib/kuasar-ci/tools` before `check`. Their bytes and exact versions are
+not allowlisted; the required service behavior is exercised by the E2E suites.
+The directory is mounted read-only into all slots. Release jobs also require
+`gh` on the runner's PATH; jobs do not install a replacement CLI.
 
-| Path | SHA-256 |
-| --- | --- |
-| `/var/lib/kuasar-ci/tools/zot` | `523e5bf29a013db09115f780c3152af98fc5b65fc408a0d3e6c293643dc9bde7` |
-| `/var/lib/kuasar-ci/tools/versitygw` | `e839f0ce24a51dbf0a7a925e08a28a0bfa190d05290c13f2c4536852bc5f3a7d` |
-
-Transfer these verified files from the operator host before running `check`.
-The provisioner rejects missing or mismatched tools and mounts the directory
-read-only into all slots.
-
-The shared Go toolchain is pinned to `go1.26.5` for `linux/amd64`. If the
-validated `/usr/local/go` toolchain is absent, installation fetches
-`go1.26.5.linux-amd64.tar.gz` only from the direct Aliyun China mirror
-`https://mirrors.aliyun.com/golang/` and verifies the Go release SHA-256
-`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`
-before replacing the toolchain. Jobs never download a Go distribution.
+The provisioner resolves `go` from its environment PATH and asks that executable
+for its GOROOT. It maps the root and, where separate, only that executable into
+the slot at their actual paths. It records the selected executable directory
+for registration, without assuming `/usr/local/go` or mounting host `/usr/bin`.
+Paths must be absolute and representable in nspawn bind settings (no colon or
+line break). The environment is responsible for the complete usable toolchain
+and any wrapper dependencies. No Go distribution is downloaded, replaced, or
+checked against a fixed executable digest or patch version. Set the runner's
+normal Go environment as needed; product jobs do not override GOTOOLCHAIN.
+Missing tools or an unusable toolchain fail explicitly. EROFS reader source
+builds, their dependency checks, and source integrity verification are unchanged.
 
 The containers provide privileged resource-name isolation, not a security boundary
 for untrusted jobs. They deliberately receive KVM, TUN, vhost devices, all

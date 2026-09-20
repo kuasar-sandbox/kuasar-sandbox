@@ -184,6 +184,8 @@ releases/          Stable and daily Preview aggregate selections
 
 ## Build and test
 
+Builds use environment-provided Go and inherit its `GOROOT` and `GOTOOLCHAIN` selection. Release automation requires a working `gh` on `PATH`; the project does not install, replace, or authenticate these environment tools against fixed binary digests. EROFS tools remain built from the project-selected sources, patches, and recipes.
+
 A complete source build is driven from this project repository and consumes the five sibling component repositories:
 
 ```bash
