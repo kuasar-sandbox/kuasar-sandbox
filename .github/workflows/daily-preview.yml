@@ -13,17 +13,25 @@ jobs:
     outputs:
       artifact: ${{ steps.meta.outputs.artifact }}
     steps:
-      - name: Download existing exact release assets
+      - name: Check out exact platform test source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: 6bd036aba028ff0539bd285a0c1db48624e20cd8
+          path: platform
+          persist-credentials: false
+      - name: Reconstruct existing exact aggregate bundle
         id: meta
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: release-v0.1.5-preview.20260920.1
         run: |
           set -euo pipefail
-          mkdir aggregate-stage
-          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir aggregate-stage
-          test -s aggregate-stage/SHA256SUMS
-          (cd aggregate-stage && sha256sum -c SHA256SUMS)
+          mkdir -p aggregate-stage/assets
+          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir aggregate-stage/assets
+          gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" --json body --jq .body > aggregate-stage/release-notes.md
+          platform/release/selection.py "$GITHUB_WORKSPACE/platform" "$VERSION" > aggregate-stage/selection.tsv
+          test -s aggregate-stage/assets/SHA256SUMS
+          (cd aggregate-stage/assets && sha256sum -c SHA256SUMS)
           echo "artifact=aggregate-stage-${VERSION}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
       - name: Upload exact aggregate stage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
