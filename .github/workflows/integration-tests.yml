@@ -864,7 +864,7 @@ jobs:
           ln -sfn /var/lib/kuasar-ci/tools/versitygw "$tool_dir/versitygw"
           echo "E2E_ZOT_BIN=$GITHUB_WORKSPACE/$tool_dir/zot" >> "$GITHUB_ENV"
           echo "E2E_VGW_BIN=$GITHUB_WORKSPACE/$tool_dir/versitygw" >> "$GITHUB_ENV"
-          for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
+          for image in python:3.12-slim python:3.12-alpine busybox:latest; do
             if ! docker image inspect "$image" >/dev/null 2>&1; then
               mirror="m.daocloud.io/docker.io/library/$image"
               timeout 3m docker pull "$mirror"
@@ -895,7 +895,7 @@ jobs:
         if: env.KUASAR_HOSTED == 'true'
         run: |
           set -euo pipefail
-          for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
+          for image in python:3.12-slim python:3.12-alpine busybox:latest; do
             timeout 3m docker pull "$image"
           done
 
@@ -917,7 +917,7 @@ jobs:
           if [ "${KUASAR_HOSTED:-false}" = true ]; then
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
-          make test-ci-tools test-release-tools test-perf-tools
+          make -j3 test-ci-tools test-release-tools test-perf-tools
 
       - name: Build and test source candidate
         if: inputs.mode == 'source'

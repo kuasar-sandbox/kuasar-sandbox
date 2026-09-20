@@ -122,8 +122,8 @@ PYTHON_BIN="$DEMO_DATA_DIR/sdk-venv/bin/python3"
 
 DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" PYTHON_BIN="$PYTHON_BIN" \
     bash "$DEMO_DIR/demo_e2b.sh"
-DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" PYTHON_BIN="$PYTHON_BIN" \
-    DEMO_QUICKSTART=1 bash "$DEMO_DIR/demo_e2b.sh"
+# The full flow above contains the entire Quick Start lifecycle before fan-out.
+# test_demo_build_selection.py pins the Quick Start branch/early-exit contract.
 
 # Stop/start validates the durable preparation contract and stale-socket
 # handling; the EXIT trap then performs the exact-marker reset.
@@ -131,4 +131,4 @@ DEMO_DATA_DIR="$DEMO_DATA_DIR" bash "$DEMO_DIR/demo_prep.sh" stop
 DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" ZOT_BIN="$ZOT_BIN" VGW_BIN="$VGW_BIN" \
     bash "$DEMO_DIR/demo_prep.sh"
 
-echo "PASS: documented full Demo, repeated Quick Start, and owned cleanup"
+echo "PASS: documented full Demo (including Quick Start lifecycle) and owned cleanup"

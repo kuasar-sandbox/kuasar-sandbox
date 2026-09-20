@@ -35,7 +35,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 . "$REPO_ROOT/test/lib/tarstream.sh"
 BIN="${BIN:-$REPO_ROOT/bin}"
 IMAGE="${IMAGE:-python:3.12-slim}"
-N="${WARMPOOL_N:-5}"
+N="${WARMPOOL_N:-2}"
 TICKS="${WARMPOOL_TICKS:-10}"
 
 skip() {

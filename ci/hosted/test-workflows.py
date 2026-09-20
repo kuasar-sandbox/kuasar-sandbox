@@ -169,7 +169,7 @@ def check():
     assert steps[tools_name]["run"] == "bash trusted/platform/ci/hosted/exact-assets-tools.sh"
     assert names.index("Download exact aggregate bundle") < names.index("Validate and extract exact aggregate bundle") < names.index(tools_name) < names.index(exact["name"])
     images = steps["Pull standard runner test images"]["run"]
-    for image in ("python:3.12-slim", "python:3.12-alpine", "alpine:3.19", "alpine:3.20", "busybox:latest"):
+    for image in ("python:3.12-slim", "python:3.12-alpine", "busybox:latest"):
         assert image in images
     assert names.index(tools_name) < names.index("Pull standard runner test images") < names.index(exact["name"])
     validate = steps["Validate and extract exact aggregate bundle"]
