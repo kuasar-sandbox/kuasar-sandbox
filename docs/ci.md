@@ -250,7 +250,7 @@ Privileged Runner provisioning must keep publishing credentials and persistent R
 
 ## 6. Run artifacts
 
-Every Integration E2E run uploads `ci-metadata-<run>-<attempt>`. Source mode normally includes:
+Source Integration E2E uploads `ci-metadata-<run>-<attempt>`. Exact-assets runs one artifact per shard as `ci-metadata-<run>-<attempt>-<shard>`. Source mode normally includes:
 
 - `run.tsv`: mode, candidate repository, PR and candidate/base/base-ref/head SHA;
 - `source-set.tsv`: triggering candidate and all companion PRs, candidate/base/base-ref/head SHA and roles;

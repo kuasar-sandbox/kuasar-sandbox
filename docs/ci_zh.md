@@ -314,7 +314,7 @@ base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
 
 ## 6. Run artifacts
 
-每次 Integration E2E 上传 `ci-metadata-<run>-<attempt>`。source 模式通常包含:
+Source Integration E2E 上传 `ci-metadata-<run>-<attempt>`；exact-assets 为每个 shard 上传 `ci-metadata-<run>-<attempt>-<shard>`。source 模式通常包含:
 
 - `run.tsv`:模式、候选仓、PR 与 candidate/base/base-ref/head SHA;
 - `source-set.tsv`:触发 candidate 与所有 companion 的 PR、candidate/base/base-ref/head SHA 和角色;
@@ -325,7 +325,7 @@ base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
 - `timings.tsv`:构建与测试阶段资源数据;
 - UFFD 与 working-set 报告(仅对应测试运行时)。
 
-exact-assets 模式记录 run、测试输出和 hosted `host-tools.tsv` 身份,不创建伪造的组件源码或 native cache 元数据。发布版本
+exact-assets 模式把同一个已验证 package 分成 `core`、`sandboxer-main`、`sandboxer-defaults`、`orchestrator-a`、`orchestrator-b` 五个隔离 shard；它们合起来覆盖全部 owner 和必需用例。各 shard 记录 run、测试输出和 hosted `host-tools.tsv` 身份,不创建伪造的组件源码或 native cache 元数据。发布版本
 组合由精确选定的平台分支提交中的清单、组件 tag 和 GitHub Release notes 表达。该提交不一定
 来自平台 `main`:维护分支聚合保留自身的版本选择。
 
