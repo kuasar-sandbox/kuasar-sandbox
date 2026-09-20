@@ -446,7 +446,10 @@ DATASET_KEY=$("$BIN/manifest-ctl" store --manifest-config "$WORK/manifest.yaml" 
 
 format_diff() { # $1=path, $2=size
     truncate -s "$2" "$1"
-    mkfs.ext4 -q -F -O ^has_journal "$1"
+    # Intentional exception: this benchmark restores captured B filesystem
+    # state through a fresh active diff and is the snapshot/restore oracle.
+    # Keep its fixture journaled; no-journal work disks are covered by owning E2E.
+    mkfs.ext4 -q -F "$1"
 }
 
 write_config() { # $1=path, $2=diff dir, $3=prefetch, $4=cold|restore
