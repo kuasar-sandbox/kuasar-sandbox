@@ -869,7 +869,8 @@ jobs:
           ln -sfn /var/lib/kuasar-ci/tools/versitygw "$tool_dir/versitygw"
           echo "E2E_ZOT_BIN=${E2E_ZOT_BIN:-${ZOT_BIN:-$GITHUB_WORKSPACE/$tool_dir/zot}}" >> "$GITHUB_ENV"
           echo "E2E_VGW_BIN=${E2E_VGW_BIN:-${VGW_BIN:-$GITHUB_WORKSPACE/$tool_dir/versitygw}}" >> "$GITHUB_ENV"
-          for image in python:3.12-slim python:3.12-alpine busybox:latest; do
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          for image in $(bash ci/integration/source-owner.sh images "$owner"); do
             if ! docker image inspect "$image" >/dev/null 2>&1; then
               mirror="m.daocloud.io/docker.io/library/$image"
               timeout 3m docker pull "$mirror"
@@ -900,7 +901,8 @@ jobs:
         if: env.KUASAR_HOSTED == 'true'
         run: |
           set -euo pipefail
-          for image in python:3.12-slim python:3.12-alpine busybox:latest; do
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          for image in $(bash ci/integration/source-owner.sh images "$owner"); do
             timeout 3m docker pull "$image"
           done
 
@@ -913,11 +915,13 @@ jobs:
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
           owner="${CANDIDATE_REPOSITORY##*/}"
-          if [ "$owner" = connector ]; then
-            echo "==> connector source suite has no native-artifact dependency"
+          components="$(bash ci/integration/source-owner.sh native-components "$owner")"
+          if [ -z "$components" ]; then
+            echo "==> $owner source suite has no native-artifact dependency"
             exit 0
           fi
-          ci/native-cache/native-cache.sh restore-or-build
+          # shellcheck disable=SC2086 # helper emits fixed component words.
+          ci/native-cache/native-cache.sh restore-or-build $components
 
       - name: Validate platform tooling
         if: inputs.mode == 'source'
@@ -939,23 +943,12 @@ jobs:
           fi
           set -euo pipefail
           owner="${CANDIDATE_REPOSITORY##*/}"
-          if [ "$owner" = connector ]; then
-            make -C ../connector build
-            rm -rf bin/x86_64
-            mkdir -p bin/x86_64
-            cp ../connector/bin/x86_64/connector-ctl bin/x86_64/connector-ctl
-            ln -sfn x86_64/connector-ctl bin/connector-ctl
-            make assemble-e2e
+          bash ci/integration/source-owner.sh build "$owner"
+          if bash ci/integration/source-owner.sh needs-uffd "$owner"; then
+            make test-uffd-performance-gate
           else
-            make build e2e-tools assemble-e2e
-            if [ "$KUASAR_HOSTED" = true ]; then
-              [ -x "$E2E_ZOT_BIN" ] && [ -x "$E2E_VGW_BIN" ]
-            fi
+            echo "==> UFFD gate not in $owner dependency closure"
           fi
-          case "$owner" in
-            kuasar-sandbox|accelerator|sandboxer) make test-uffd-performance-gate ;;
-            *) echo "==> UFFD gate not in $owner dependency closure" ;;
-          esac
 
           runner="build/e2e-suite/test/e2e/$owner/run_all.sh"
           if [ "$owner" = kuasar-sandbox ]; then
@@ -978,10 +971,10 @@ jobs:
           PERF_OUT_DIR: ${{ env.KUASAR_CI_DIR }}/working-set-perf
         run: |
           owner="${CANDIDATE_REPOSITORY##*/}"
-          case "$owner" in
-            kuasar-sandbox|accelerator|sandboxer|guest-runtime) ;;
-            *) echo "==> working-set smoke not in $owner dependency closure"; exit 0 ;;
-          esac
+          if ! bash ci/integration/source-owner.sh needs-working-set "$owner"; then
+            echo "==> working-set smoke not in $owner dependency closure"
+            exit 0
+          fi
           ci/integration/ci-timed.sh perf/working-set-smoke env \
             BIN="$PWD/bin/x86_64" \
             PERF_ITERS="$PERF_ITERS" \
