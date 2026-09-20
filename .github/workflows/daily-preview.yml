@@ -1,170 +1,48 @@
-name: Daily Preview Scanner
-run-name: Scan Daily Preview branches
+name: Test Runtime Exact-Assets Qualification
 
 on:
-  schedule:
-    - cron: "13 2-6 * * *"
-      timezone: Asia/Shanghai
   workflow_dispatch:
-    inputs:
-      date:
-        description: Optional YYYYMMDD[.N] selection date
-        required: false
-        type: string
-      platform_ref:
-        description: Optional single main or release/vMAJOR.MINOR.x branch
-        required: false
-        type: string
 
 permissions:
-  actions: write
   contents: read
-
-concurrency:
-  group: daily-preview-scanner
-  cancel-in-progress: false
+  pull-requests: read
 
 jobs:
-  scan:
+  prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 360
+    outputs:
+      artifact: ${{ steps.meta.outputs.artifact }}
     steps:
-      - name: Check out trusted scanner
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Check environment GitHub CLI
-        run: |
-          gh --version
-          gh_help="$(gh api --help)"
-          [[ "$gh_help" == *--slurp* ]] || { echo "environment gh must support api --slurp" >&2; exit 1; }
-
-      - name: Dispatch one converger per maintained branch
+      - name: Download existing exact release assets
+        id: meta
         env:
           GH_TOKEN: ${{ github.token }}
-          REQUESTED_DATE: ${{ inputs.date }}
-          REQUESTED_REF: ${{ inputs.platform_ref }}
+          VERSION: release-v0.1.5-preview.20260920.1
         run: |
           set -euo pipefail
-          date="${REQUESTED_DATE:-$(TZ=Asia/Shanghai date +%Y%m%d)}"
-          [[ "$date" =~ ^[0-9]{8}(\.[1-9][0-9]*)?$ ]] \
-            || { echo "date must match YYYYMMDD[.N]" >&2; exit 1; }
+          mkdir aggregate-stage
+          gh release download "$VERSION" --repo "$GITHUB_REPOSITORY" --dir aggregate-stage
+          test -s aggregate-stage/SHA256SUMS
+          sha256sum -c aggregate-stage/SHA256SUMS
+          echo "artifact=aggregate-stage-${VERSION}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+      - name: Upload exact aggregate stage
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.meta.outputs.artifact }}
+          path: aggregate-stage
+          if-no-files-found: error
+          retention-days: 1
 
-          refs=()
-          if [ -n "$REQUESTED_REF" ]; then
-            [[ "$REQUESTED_REF" = main \
-              || "$REQUESTED_REF" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]] \
-              || { echo "platform_ref must be main or release/vMAJOR.MINOR.x" >&2; exit 1; }
-            refs+=("$REQUESTED_REF")
-          else
-            refs+=(main)
-            mapfile -t maintenance_refs < <(
-              gh api --paginate "repos/$GITHUB_REPOSITORY/branches?per_page=100" \
-                --jq '.[].name' \
-                | grep -E '^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$' \
-                | LC_ALL=C sort -u || true
-            )
-            refs+=("${maintenance_refs[@]}")
-          fi
-
-          runs_endpoint="repos/$GITHUB_REPOSITORY/actions/workflows/daily-preview-branch.yml/runs?event=workflow_dispatch&per_page=100"
-          failures=()
-
-          matching_run() {
-            local title=$1 state=$2
-            gh api --paginate --slurp "$runs_endpoint" \
-              | jq -r --arg title "$title" --arg state "$state" '
-                  [.[] | .workflow_runs[]?
-                   | select(.display_title == $title)
-                   | select($state == "any"
-                            or ($state == "active" and .status != "completed")
-                            or .status == $state)]
-                  | max_by(.id) // empty | .id // empty
-                '
-          }
-
-          wait_for_gc() {
-            local run_id status
-            while true; do
-              run_id=$(gh api --paginate --slurp \
-                "repos/$GITHUB_REPOSITORY/actions/workflows/preview-gc.yml/runs?per_page=100" \
-                | jq -r '[.[] | .workflow_runs[]? | select(.status != "completed")]
-                         | max_by(.id) // empty | .id // empty')
-              [ -n "$run_id" ] || return 0
-              status=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id" \
-                --jq .status)
-              [ "$status" != completed ] || continue
-              echo "==> wait for Preview GC run $run_id"
-              sleep 30
-            done
-          }
-
-          for ref in "${refs[@]}"; do
-            sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$ref" \
-              --jq 'select(.object.type == "commit") | .object.sha')
-            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-            title="Daily preview $ref@$sha for $date"
-            converged=false
-            failed=false
-            for attempt in 1 2 3; do
-              wait_for_gc
-              run_id=$(matching_run "$title" active)
-              if [ -n "$run_id" ]; then
-                echo "==> reuse active $title ($run_id)"
-              else
-                previous_id=$(matching_run "$title" any)
-                gh workflow run daily-preview-branch.yml --ref main \
-                  -f "platform_ref=$ref" \
-                  -f "platform_sha=$sha" \
-                  -f "date=$date"
-                run_id=""
-                for _ in {1..30}; do
-                  candidate_id=$(matching_run "$title" any)
-                  if [ -n "$candidate_id" ] && [ "$candidate_id" != "$previous_id" ]; then
-                    run_id=$candidate_id
-                    break
-                  fi
-                  sleep 2
-                done
-                [ -n "$run_id" ] \
-                  || { echo "cannot locate dispatched $title" >&2; exit 1; }
-                echo "==> dispatched $title ($run_id)"
-              fi
-
-              while true; do
-                state=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id")
-                status=$(jq -r .status <<< "$state")
-                [ "$status" = completed ] || { sleep 30; continue; }
-                conclusion=$(jq -r .conclusion <<< "$state")
-                case "$conclusion" in
-                  success)
-                    converged=true
-                    break
-                    ;;
-                  cancelled|timed_out|stale)
-                    echo "==> $title was $conclusion; retry $attempt/3"
-                    break
-                    ;;
-                  *)
-                    failures+=("$title: $conclusion")
-                    failed=true
-                    break
-                    ;;
-                esac
-              done
-              [ "$failed" = false ] || break
-              [ "$converged" = false ] || break
-            done
-            if [ "$failed" = true ]; then
-              echo "==> record branch failure and continue: $title"
-              continue
-            fi
-            if [ "$converged" = false ]; then
-              echo "==> defer $title after three interrupted attempts; next scan resumes"
-            fi
-          done
-          if [ "${#failures[@]}" -ne 0 ]; then
-            printf 'Daily Preview branch failure: %s\n' "${failures[@]}" >&2
-            exit 1
-          fi
+  validate:
+    needs: prepare
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      mode: exact-assets
+      release_version: release-v0.1.5-preview.20260920.1
+      release_bundle_artifact: ${{ needs.prepare.outputs.artifact }}
+      platform_source_sha: 6bd036aba028ff0539bd285a0c1db48624e20cd8
+    secrets:
+      KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
