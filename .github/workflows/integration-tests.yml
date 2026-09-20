@@ -71,6 +71,11 @@ concurrency:
 
 jobs:
   e2e:
+    name: ${{ inputs.mode == 'source' && 'e2e' || format('e2e [{0}]', matrix.shard) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.mode == 'exact-assets' && '["core","sandboxer","orchestrator"]' || '["source"]') }}
     # Visibility selects the runner; request validation independently authorizes inputs.
     runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
     timeout-minutes: ${{ inputs.mode == 'exact-assets' && 120 || (github.event.repository.visibility == 'public' && 180 || 60) }}
@@ -93,6 +98,7 @@ jobs:
       RELEASE_VERSION: ${{ inputs.release_version }}
       RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
       PLATFORM_SOURCE_SHA: ${{ inputs.platform_source_sha }}
+      KUASAR_E2E_SHARD: ${{ matrix.shard }}
 
     steps:
       - name: Check standard image archive transport
@@ -1006,7 +1012,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ci-metadata-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.mode == 'source' && format('ci-metadata-{0}-{1}', github.run_id, github.run_attempt) || format('ci-metadata-{0}-{1}-{2}', github.run_id, github.run_attempt, matrix.shard) }}
           path: ${{ env.KUASAR_CI_DIR }}
           if-no-files-found: warn
           retention-days: 30
