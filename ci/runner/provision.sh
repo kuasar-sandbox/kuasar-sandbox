@@ -278,11 +278,18 @@ verify_sha256() {
     printf '%s  %s\n' "$expected" "$path" | sha256sum --check --status
 }
 
-assert_e2e_tools() {
+assert_environment_tools() {
     [ -x "$TOOL_ROOT/zot" ] \
         || die "provide an executable zot at $TOOL_ROOT/zot before installation"
     [ -x "$TOOL_ROOT/versitygw" ] \
         || die "provide an executable versitygw at $TOOL_ROOT/versitygw before installation"
+    [ -x "$TOOL_ROOT/gh" ] \
+        || die "provide an executable gh at $TOOL_ROOT/gh before installation"
+    local gh_help
+    gh_help=$("$TOOL_ROOT/gh" api --help) \
+        || die "cannot inspect the environment GitHub CLI"
+    [[ "$gh_help" == *--slurp* ]] \
+        || die "environment gh must support api --slurp"
 }
 
 resolve_environment_go() {
@@ -573,7 +580,7 @@ check_host() {
     require_root
     assert_supported_host
     assert_china_repositories
-    assert_e2e_tools
+    assert_environment_tools
     resolve_environment_go
     local package missing=()
     for package in "${HOST_PACKAGES[@]}" "${PACKAGES[@]}"; do
@@ -856,6 +863,8 @@ prepare_slot() {
     copy_static_libuuid "$root"
     copy_static_crypto "$root"
     copy_erofs_readers "$root"
+    install -d -m 0755 "$root/usr/local/bin"
+    ln -sfn "$TOOL_ROOT/gh" "$root/usr/local/bin/gh"
 
     local machine_id template_machine_id
     machine_id="$(cat "$root/etc/machine-id" 2>/dev/null || true)"
@@ -903,7 +912,7 @@ install_slots() {
     assert_china_repositories
     assert_host_runner_idle
     assert_slots_stopped
-    assert_e2e_tools
+    assert_environment_tools
     cleanup_stale_slot_staging
     assert_install_space
     install_host_support
@@ -1158,6 +1167,9 @@ verify_slots() {
             export PATH="$(cat /opt/actions-runner/.path)"
             go version
             go tool compile -V=full
+            gh --version
+            gh_help=$(gh api --help)
+            [[ "$gh_help" == *--slurp* ]]
             redis-server --version >/dev/null
             ip route get 223.5.5.5 >/dev/null
             curl --fail --silent --show-error --connect-timeout 5 --max-time 20 https://goproxy.cn >/dev/null
