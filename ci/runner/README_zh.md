@@ -10,25 +10,22 @@ PID、mount、network、cgroup、Docker daemon、Runner 凭据和 Actions 工作
 - `/var/cache/kuasar`:可写的源码/原生产物缓存。精确 SHA 名称和仓库锁用于协调
   复用,不能防止篡改;
 - `/var/lib/kuasar-ci/tools`:只读测试工具;
-- `/usr/local/go` 和主机内核模块树:只读。
+- 环境选定的 Go 根目录和可执行文件，以及主机内核模块树：只读。
 
 每个 slot 在 `/sys/fs/bpf` 下绑定不同的 bpffs 子树,避免并行任务的 BPF pin 路径冲突。
 
-主机必须预装 pin 的 x86_64 E2E 工具,不能在任务中下载这些大型发行资产:
+执行 `check` 前，环境应在 `/var/lib/kuasar-ci/tools` 提供可执行的 `zot` 和
+`versitygw`。不以固定摘要或精确版本限制其来源，必需的服务行为由 E2E 验证；
+工具目录只读挂载到各 slot。发布任务还要求 runner 的 PATH 提供 `gh`，不会自行安装替代版本。
 
-| 路径 | SHA-256 |
-| --- | --- |
-| `/var/lib/kuasar-ci/tools/zot` | `523e5bf29a013db09115f780c3152af98fc5b65fc408a0d3e6c293643dc9bde7` |
-| `/var/lib/kuasar-ci/tools/versitygw` | `e839f0ce24a51dbf0a7a925e08a28a0bfa190d05290c13f2c4536852bc5f3a7d` |
-
-执行 `check` 前,从运维端传入已验证文件。provisioner 拒绝缺失或摘要不匹配的
-工具,并把该目录只读挂载到全部 slot。
-
-共享 Go 工具链固定为 `linux/amd64` 的 `go1.26.5`。若不存在已验证的
-`/usr/local/go`,安装过程只从阿里云中国直连镜像 `https://mirrors.aliyun.com/golang/`
-取得 `go1.26.5.linux-amd64.tar.gz`,核对 Go 发行 SHA-256
-`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`
-后再替换工具链。任务本身不下载 Go distribution。
+provisioner 从调用环境 PATH 解析 `go`，向该可执行文件查询 GOROOT，将根目录及
+位于根目录之外的单个 Go 可执行文件按实际路径只读映射到 slot，并记录其目录供
+后续注册使用。不假定 `/usr/local/go`，也不为一个工具挂载整个宿主 `/usr/bin`。
+路径应为绝对路径且可写入 nspawn bind 配置，不得包含冒号或换行。
+完整工具链及自定义 wrapper 的依赖由环境提供；不下载、替换 Go，不按固定二进制
+摘要或补丁版本认证环境。按需配置 runner 的普通 Go 环境，产品 job 不覆盖
+`GOTOOLCHAIN`。工具缺失或无法使用时明确失败。EROFS reader 的源码构建、依赖检查
+和源码完整性校验保持不变。
 
 这些容器提供特权资源名称隔离,不是不可信任务的安全边界。它们有意获得 KVM、
 TUN、vhost 设备、全部 capability、Docker keyring syscall 及 Connector 数据路径
