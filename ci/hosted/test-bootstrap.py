@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline bootstrap tests: no apt, downloads, VM changes or native builds."""
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -148,21 +149,75 @@ class BootstrapTests(unittest.TestCase):
         self.assertNotEqual(shell("need kuasar_nonexistent_required_tool").returncode, 0)
         self.assertNotEqual(shell("main").returncode, 0)
 
-    def test_go_pin_and_corruption_before_extraction(self):
-        pins = shell('printf "%s %s\\n" "$GO_VERSION" "$GO_SHA256"')
-        self.assertEqual(pins.stdout.strip(), "1.26.5 5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053")
+    def test_environment_go_preserves_selection_without_download(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tools = root / "environment tools"
+            tools.mkdir()
+            go = tools / "go"
+            go.write_text("#!/bin/sh\nprintf 'environment Go %s\\n' \"$GOTOOLCHAIN\"\n")
+            go.chmod(0o755)
+            for policy in (None, "local", "auto", "go1.99.1+path"):
+                env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
+                           GITHUB_ENV=str(root / "github-env"), KUASAR_HOSTED_ROOT=str(root),
+                           GOROOT=str(root / "selected root"))
+                if policy is None:
+                    env.pop("GOTOOLCHAIN", None)
+                else:
+                    env["GOTOOLCHAIN"] = policy
+                before = go.read_bytes()
+                command = ('. "$1"; download() { exit 91; }; tar() { exit 92; }; '
+                           'before_root=$GOROOT; before_policy=${GOTOOLCHAIN-unset}; '
+                           'configure_go; [ "$GOROOT" = "$before_root" ]; '
+                           '[ "${GOTOOLCHAIN-unset}" = "$before_policy" ]')
+                result = subprocess.run(["bash", "-c", command, "test", str(BOOTSTRAP)],
+                                        env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("environment Go", result.stdout)
+                self.assertEqual(go.read_bytes(), before)
+                entries = (root / "github-env").read_text()
+                self.assertNotIn("GOROOT=", entries)
+                self.assertNotIn("GOTOOLCHAIN=", entries)
+
+    def test_missing_environment_go_fails_without_installing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "dirname").symlink_to(shutil.which("dirname"))
+            result = subprocess.run([shutil.which("bash"), "-c", '. "$1"; configure_go',
+                                     "test", str(BOOTSTRAP)],
+                                    env=dict(os.environ, PATH=directory),
+                                    capture_output=True, text=True, timeout=10)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("missing required tool: go", result.stderr)
+
+    def test_download_integrity_is_still_enforced(self):
         with tempfile.TemporaryDirectory() as directory:
             env = dict(KUASAR_HOSTED_ROOT=directory)
-            result = shell('curl() { printf corrupt > "${@: -1}"; }; '
-                           'tar() { touch "$KUASAR_HOSTED_ROOT/extracted"; }; install_go', **env)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("checksum mismatch", result.stderr)
-            self.assertFalse((Path(directory) / "extracted").exists())
             result = shell('download https://example.invalid/archive unused invalid', **env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("SHA256 pin", result.stderr)
             result = shell('verify_sha256 /dev/null e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
             self.assertEqual(result.returncode, 0, result.stderr)
+            result = shell('curl() { printf corrupt > "${@: -1}"; }; '
+                           'download https://example.invalid/archive "$KUASAR_HOSTED_ROOT/archive" '
+                           'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', **env)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("checksum mismatch", result.stderr)
+
+    def test_rust_tools_do_not_require_a_matching_rustup(self):
+        # Stop at the existing cgroup check, before any privileged operations.
+        result = shell('profile=source; id() { echo 1001; }; '
+                       'docker() { :; }; systemctl() { :; }; ip() { :; }; '
+                       'modprobe() { :; }; setfacl() { :; }; mkfs.ext4() { :; }; '
+                       'udevadm() { :; }; cargo() { echo environment-cargo; }; '
+                       'rustc() { echo environment-rustc; }; '
+                       'rustup() { echo UNRELATED_RUSTUP; return 89; }; '
+                       'stat() { echo stop-before-device-changes; }; configure_vm', **HOSTED_VM)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("environment-cargo", result.stdout)
+        self.assertIn("environment-rustc", result.stdout)
+        self.assertNotIn("UNRELATED_RUSTUP", result.stdout)
+        self.assertIn("cgroup v2 is required", result.stderr)
 
     def test_resource_budget(self):
         result = shell("resource_budget")
@@ -190,7 +245,7 @@ class BootstrapTests(unittest.TestCase):
         source = BOOTSTRAP.read_text()
         self.assertNotIn("/var/cache/kuasar", source)
         self.assertNotIn("/var/lib/kuasar", source)
-        for name in ("KUASAR_SOURCE_CACHE_ROOT", "KUASAR_NATIVE_CACHE_ROOT", "KUASAR_TARBALL_CACHE", "KUASAR_GH_CLI_CACHE", "GOCACHE", "GOMODCACHE", "CARGO_HOME"):
+        for name in ("KUASAR_SOURCE_CACHE_ROOT", "KUASAR_NATIVE_CACHE_ROOT", "KUASAR_TARBALL_CACHE", "GOCACHE", "GOMODCACHE", "CARGO_HOME"):
             self.assertIn(f'emit {name} "$KUASAR_HOSTED_ROOT/', source)
         self.assertIn('mktemp -d "$RUNNER_TEMP/kuasar-hosted.XXXXXX"', source)
         self.assertIn("sudo -n modprobe tun vhost_vsock", source)

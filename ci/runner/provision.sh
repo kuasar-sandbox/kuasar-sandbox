@@ -16,13 +16,6 @@ MEMORY_MAX=${KUASAR_SLOT_MEMORY_MAX:-56G}
 MEMORY_HIGH=${KUASAR_SLOT_MEMORY_HIGH:-52G}
 SOURCE_CACHE=${KUASAR_SOURCE_CACHE:-/var/cache/kuasar/sources}
 TOOL_ROOT=/var/lib/kuasar-ci/tools
-ZOT_TOOL_SHA256=523e5bf29a013db09115f780c3152af98fc5b65fc408a0d3e6c293643dc9bde7
-VERSITYGW_TOOL_SHA256=e839f0ce24a51dbf0a7a925e08a28a0bfa190d05290c13f2c4536852bc5f3a7d
-GO_ROOT=/usr/local/go
-GO_VERSION=go1.26.5
-GO_TARBALL_URL=https://mirrors.aliyun.com/golang/go1.26.5.linux-amd64.tar.gz
-GO_TARBALL_SHA256=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
-GO_BINARY_SHA256=8da5fd321795754b994c64e3eb8a5a14ff47bd285559a7e876f3c79abafc67f9
 UTIL_LINUX_SRPM_URL=${KUASAR_UTIL_LINUX_SRPM_URL:-https://mirrors.huaweicloud.com/openeuler/openEuler-24.03-LTS-SP4/source/Packages/util-linux-2.39.1-38.oe2403sp4.src.rpm}
 UTIL_LINUX_SRPM_SHA256=${KUASAR_UTIL_LINUX_SRPM_SHA256:-40324d3ab54be52ef67544732a71ec14f6aecb2e92f5d8fa0aaaac532c55c0bf}
 UTIL_LINUX_SOURCE_ARCHIVE=${KUASAR_UTIL_LINUX_SOURCE_ARCHIVE:-util-linux-2.39.1.tar.xz}
@@ -287,54 +280,48 @@ verify_sha256() {
 
 assert_e2e_tools() {
     [ -x "$TOOL_ROOT/zot" ] \
-        || die "preload the pinned zot binary at $TOOL_ROOT/zot before installation"
+        || die "provide an executable zot at $TOOL_ROOT/zot before installation"
     [ -x "$TOOL_ROOT/versitygw" ] \
-        || die "preload the pinned versitygw binary at $TOOL_ROOT/versitygw before installation"
-    verify_sha256 "$TOOL_ROOT/zot" "$ZOT_TOOL_SHA256" \
-        || die "zot checksum mismatch at $TOOL_ROOT/zot"
-    verify_sha256 "$TOOL_ROOT/versitygw" "$VERSITYGW_TOOL_SHA256" \
-        || die "versitygw checksum mismatch at $TOOL_ROOT/versitygw"
+        || die "provide an executable versitygw at $TOOL_ROOT/versitygw before installation"
 }
 
-go_toolchain_valid() {
-    local root=$1
-    [ -x "$root/bin/go" ] \
-        && verify_sha256 "$root/bin/go" "$GO_BINARY_SHA256" \
-        && [ "$(env GOROOT="$root" "$root/bin/go" version 2>/dev/null)" = "go version $GO_VERSION linux/amd64" ] \
-        && [ "$(env GOROOT="$root" "$root/bin/go" env GOROOT 2>/dev/null)" = "$root" ] \
-        && [ "$(env GOROOT="$root" "$root/bin/go" tool compile -V=full 2>/dev/null)" = "compile version $GO_VERSION" ]
+resolve_environment_go() {
+    # Resolve the environment's executable and standard-library root. Neither
+    # its bytes nor its precise version identify an acceptable installation.
+    local executable
+    executable=$(command -v go) || die "Go must be supplied on PATH"
+    [ -f "$executable" ] && [ -x "$executable" ] \
+        || die "Go on PATH must be an executable file"
+    GO_ENTRY="$(cd "$(dirname "$executable")" && pwd -P)/${executable##*/}"
+    GO_COMMAND=$(readlink -f "$executable")
+    GO_ROOT=$("$GO_ENTRY" env GOROOT) || die "cannot query the environment Go root"
+    [ -d "$GO_ROOT" ] || die "the environment Go root is not a directory"
+    # These paths become individual read-only nspawn mounts, never host /usr/bin.
+    local path
+    for path in "$GO_ENTRY" "$GO_COMMAND" "$GO_ROOT"; do
+        [[ "$path" = /* && "$path" != / && "$path" != *:* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] \
+            || die "Go path cannot be represented as an isolated nspawn mount: $path"
+    done
 }
 
-ensure_go_toolchain() {
-    go_toolchain_valid "$GO_ROOT" && return
-    case "$GO_TARBALL_URL" in
-        https://mirrors.aliyun.com/*) ;;
-        *) die "Go toolchain must use the configured China mirror" ;;
+quote_nspawn_path() {
+    local path=$1
+    path=${path//\\/\\\\}
+    path=${path//\"/\\\"}
+    path=${path//%/%%}
+    printf '"%s"' "$path"
+}
+
+write_go_mounts() {
+    printf 'BindReadOnly=%s\n' "$(quote_nspawn_path "$GO_ROOT")"
+    # Preserve the command name on PATH even when it is a symlink to a
+    # differently named executable outside the reported standard-library root.
+    case "$GO_ENTRY" in
+        "$GO_ROOT"/*) ;;
+        *) printf 'BindReadOnly=%s\n' "$(quote_nspawn_path "$GO_COMMAND:$GO_ENTRY")" ;;
     esac
-
-    local archive="$SOURCE_CACHE/${GO_TARBALL_URL##*/}" work
-    install -d -m 0755 "$SOURCE_CACHE"
-    if [ ! -f "$archive" ] || ! verify_sha256 "$archive" "$GO_TARBALL_SHA256"; then
-        rm -f "$archive"
-        log "downloading pinned $GO_VERSION toolchain from the Aliyun mirror"
-        curl --fail --location --retry 3 --output "$archive" "$GO_TARBALL_URL"
-    fi
-    verify_sha256 "$archive" "$GO_TARBALL_SHA256" \
-        || die "Go toolchain checksum mismatch: $archive"
-
-    work="$(mktemp -d /usr/local/kuasar-go.XXXXXX)"
-    if ! tar -xzf "$archive" -C "$work"; then
-        rm -rf "$work"
-        die "failed to extract the Go toolchain"
-    fi
-    if ! go_toolchain_valid "$work/go"; then
-        rm -rf "$work"
-        die "extracted Go toolchain failed validation"
-    fi
-    rm -rf "$GO_ROOT"
-    mv "$work/go" "$GO_ROOT"
-    rmdir "$work"
 }
+
 
 existing_ancestor() {
     local path=$1 parent
@@ -587,6 +574,7 @@ check_host() {
     assert_supported_host
     assert_china_repositories
     assert_e2e_tools
+    resolve_environment_go
     local package missing=()
     for package in "${HOST_PACKAGES[@]}" "${PACKAGES[@]}"; do
         if ! dnf -q repoquery --available --qf '%{name}' "$package" | grep -qx "$package"; then
@@ -601,13 +589,13 @@ check_host() {
     else
         log "kmod is not installed; install will bootstrap it before validating devices"
     fi
-    log "host platform, cgroup v2, China mirrors, pinned E2E tools, and package set are ready"
+    log "host platform, cgroup v2, China mirrors, environment E2E tools, and package set are ready"
 }
 
 install_host_support() {
     dnf -y --setopt=install_weak_deps=False install "${HOST_PACKAGES[@]}"
     command -v systemd-nspawn >/dev/null || die "systemd-nspawn was not installed"
-    ensure_go_toolchain
+    resolve_environment_go
     if systemctl is-active --quiet kuasar-ci-network.service; then
         log "stopping the active CI network before replacing its configuration"
         systemctl stop kuasar-ci-network.service
@@ -719,7 +707,6 @@ build_template_root() {
         "$TEMPLATE_ROOT/var/log/journal" \
         "$TEMPLATE_ROOT/var/cache/kuasar" \
         "$TEMPLATE_ROOT/var/lib/kuasar-ci/tools" \
-        "$TEMPLATE_ROOT/usr/local/go" \
         "$TEMPLATE_ROOT/usr/lib/modules"
 
     cat >"$TEMPLATE_ROOT/root/.cargo/config.toml" <<'EOF'
@@ -764,6 +751,18 @@ write_nspawn_config() {
     root="$(slot_root "$slot")"
     cpus="$(slot_value "$slot" CPUS)"
     numa="$(slot_value "$slot" NUMA)"
+    resolve_environment_go
+    install -d -m 0755 "$root$GO_ROOT"
+    case "$GO_ENTRY" in
+        "$GO_ROOT"/*) ;;
+        *)
+            install -d -m 0755 "$root$(dirname "$GO_ENTRY")"
+            [ -e "$root$GO_ENTRY" ] || [ -L "$root$GO_ENTRY" ] || touch "$root$GO_ENTRY"
+            ;;
+    esac
+    # Retain the selected entry point for a later register command, which may
+    # run with a different administrative PATH.
+    printf '%s\n' "${GO_ENTRY%/*}" > "$root/.kuasar-ci-go-bin"
 
     cat >"/etc/systemd/nspawn/$machine.nspawn" <<EOF
 [Exec]
@@ -779,7 +778,7 @@ LinkJournal=no
 [Files]
 Bind=/var/cache/kuasar
 BindReadOnly=/var/lib/kuasar-ci/tools
-BindReadOnly=/usr/local/go
+$(write_go_mounts)
 BindReadOnly=/usr/lib/modules
 Bind=/sys/fs/bpf/$machine:/sys/fs/bpf
 Bind=/dev/kvm
@@ -997,7 +996,10 @@ register_slot() {
                     --labels "$4" --work _work
             ' register-runner "https://github.com/$ORG" "$name" "$group" "$labels"
     [ -s "$runner/.runner" ] || die "$machine registration did not produce runner metadata"
-    printf '/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin\n' \
+    local go_bin
+    IFS= read -r go_bin < "$root/.kuasar-ci-go-bin" \
+        || die "slot $slot has no recorded environment Go path; reinstall the slot"
+    printf '%s:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin\n' "$go_bin" \
         >"$runner/.path"
     systemctl --root="$root" enable actions-runner.service >/dev/null
     touch "$runner/$RUNNER_REGISTRATION_MARKER"
@@ -1153,8 +1155,9 @@ verify_slots() {
             test -x /usr/bin/time
             [ "$(systemctl show actions-runner.service --property=RefuseManualStop --value)" = yes ]
             [ "$(systemctl show actions-runner.service --property=StartLimitIntervalUSec --value)" = 0 ]
-            [ "$(/usr/local/go/bin/go version)" = "go version go1.26.5 linux/amd64" ]
-            [ "$(/usr/local/go/bin/go tool compile -V=full)" = "compile version go1.26.5" ]
+            export PATH="$(cat /opt/actions-runner/.path)"
+            go version
+            go tool compile -V=full
             redis-server --version >/dev/null
             ip route get 223.5.5.5 >/dev/null
             curl --fail --silent --show-error --connect-timeout 5 --max-time 20 https://goproxy.cn >/dev/null

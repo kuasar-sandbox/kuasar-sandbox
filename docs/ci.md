@@ -85,7 +85,7 @@ cd release-install
 BIN=$PWD/bin bash test/e2e/run_all.sh
 ```
 
-This mode neither infers nor reads component `main`. Each unit's documentation, cases and binaries bind to its independently selected tag, allowing a platform maintenance branch to combine different component maintenance lines. It does not rebuild product Go/Rust/native binaries, vmlinux, RocksDB or Cloud Hypervisor. On a Public caller, the trusted `exact-assets` bootstrap supplies host prerequisites; after bundle validation/extraction, [exact-assets-tools.sh](../ci/hosted/exact-assets-tools.sh) downloads zot v2.1.17 and builds the local versitygw v1.5.0 test service. Only host test tools and EROFS writer/readers are built. Product binaries in `release-install/bin` remain untouched. All ten existing `REQUIRE_*` flags stay enabled, and the packaged top-level suite still runs every owner. After success, publish uses the earlier artifact unchanged.
+This mode neither infers nor reads component `main`. Each unit's documentation, cases and binaries bind to its independently selected tag, allowing a platform maintenance branch to combine different component maintenance lines. It does not rebuild product Go/Rust/native binaries, vmlinux, RocksDB or Cloud Hypervisor. On a Public caller, the trusted `exact-assets` bootstrap supplies host prerequisites; after bundle validation/extraction, [exact-assets-tools.sh](../ci/hosted/exact-assets-tools.sh) reuses environment-provided zot/versitygw first; when absent, it downloads zot v2.1.17 or builds the local versitygw v1.5.0 test service with verified inputs. Only host test tools and EROFS writer/readers are built. Product binaries in `release-install/bin` remain untouched. All ten existing `REQUIRE_*` flags stay enabled, and the packaged top-level suite still runs every owner. After success, publish uses the earlier artifact unchanged.
 
 ## 4. Native cache
 
@@ -142,12 +142,12 @@ Each job chooses the profile needed for its actual work:
 | `runtime` | Runtime build; Go, native development packages and trusted EROFS writer/readers |
 | `runtime-publish` | Runtime publish validation; Go and separately built EROFS writer/readers |
 | `source` | Complete source build/E2E; all native prerequisites, Rust/Docker checks, VM/network tools |
-| `exact-assets` | Packaged binaries/tests; Docker, systemd/cgroup v2, KVM/UFFD/netns/BPF, runtime utilities, EROFS host tools; pinned Go only for versitygw |
+| `exact-assets` | Packaged binaries/tests; Docker, systemd/cgroup v2, KVM/UFFD/netns/BPF, runtime utilities, EROFS host tools; environment Go for the versitygw fallback build |
 
-Go comes from the official `go1.26.5.linux-amd64.tar.gz`, SHA256
-`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`.
-The bootstrap verifies the archive, driver and compiler before adding it to
-PATH; source-module toolchain selection retains `GOTOOLCHAIN=auto`. EROFS host writer/readers
+Go is supplied by the runner environment. Bootstrap checks availability without
+installing another distribution, changing GOROOT/GOTOOLCHAIN, or comparing a
+binary digest or exact patch version. Source/module requirements still apply.
+Release automation uses the environment GitHub CLI. EROFS host writer/readers
 use pinned v1.9.1 source and its SHA256, independently of the static guest
 recipe. Docker, and Rust/Cargo for source builds, are required capabilities of the
 [standard image](https://github.com/actions/runner-images#available-images)
@@ -189,12 +189,12 @@ Source archives, native entries, tarballs, Go/Cargo caches and tools live under
 in the job workspace; only the existing revision/timing/performance metadata
 and validated release bundles are uploaded. Release bundles retain their
 required license/source inventories, without a full workspace handoff. Hosted
-uses official Go/Rust/Python/kernel/image endpoints. Source mode retains its
+uses the environment Go/Rust tools and official Python/kernel/image endpoints. Source mode retains its
 existing zot/versitygw targets. Exact-assets reuses trusted platform
 `ensure-zot.sh` and only the public guest-runtime `build-versitygw.sh`/`common.sh`
 from [commit 494dbceae683d6b20cdbec00fe6b1f554ea2f508](https://github.com/kuasar-sandbox/guest-runtime/tree/494dbceae683d6b20cdbec00fe6b1f554ea2f508/native-deps/deps).
 Fixed recipe paths, commit and SHA256 pins are checked; versitygw source also
-passes archive path/type validation. Go is pinned for this host tool build, with
+passes archive path/type validation. The environment Go is used for this host tool build, with
 bounded affinity/parallelism and local caches. `host-tools.tsv` records recipe,
 source and binary identities. No private sibling checkout or candidate-selected
 host build script is used in exact-assets. Persistent callers keep their mirror

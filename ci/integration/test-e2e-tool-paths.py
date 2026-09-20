@@ -103,6 +103,29 @@ PY
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(Path(self.env['PROBE']).exists())
 
+    def test_explicit_environment_tool_precedes_cached_output(self):
+        supplied = self.workspace / 'selected tool'
+        supplied.write_text('#!/bin/sh\necho independently-built\n')
+        supplied.chmod(0o751)
+        old = self.workspace / 'previous environment tool'
+        old.write_text('#!/bin/sh\necho do-not-overwrite\n')
+        old.chmod(0o751)
+        target = self.platform / 'build/e2e-tools/x86_64/versitygw'
+        target.parent.mkdir(parents=True)
+        target.symlink_to(old)
+        result = self.run_helper(E2E_VGW_BIN=str(supplied))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(target.read_bytes(), supplied.read_bytes())
+        self.assertIn('do-not-overwrite', old.read_text())
+        self.assertEqual(supplied.stat().st_mode & 0o777, 0o751)
+        self.assertFalse(Path(self.env['PROBE']).exists())
+
+    def test_invalid_explicit_environment_tool_has_no_fallback(self):
+        result = self.run_helper(VGW_BIN=str(self.workspace / 'missing'))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('environment versitygw is not executable', result.stderr)
+        self.assertFalse(Path(self.env['PROBE']).exists())
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
