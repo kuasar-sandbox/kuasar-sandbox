@@ -311,21 +311,25 @@ resolve_environment_go() {
     done
 }
 
-quote_nspawn_path() {
+escape_nspawn_path() {
     local path=$1
+    # BindReadOnly= parses quotes as literal path bytes on current systemd.
+    # Backslash-escape whitespace instead, retaining percent escaping for
+    # systemd specifier expansion.
     path=${path//\\/\\\\}
-    path=${path//\"/\\\"}
+    path=${path// /\\ }
+    path=${path//$'\t'/\\$'\t'}
     path=${path//%/%%}
-    printf '"%s"' "$path"
+    printf '%s' "$path"
 }
 
 write_go_mounts() {
-    printf 'BindReadOnly=%s\n' "$(quote_nspawn_path "$GO_ROOT")"
+    printf 'BindReadOnly=%s\n' "$(escape_nspawn_path "$GO_ROOT")"
     # Preserve the command name on PATH even when it is a symlink to a
     # differently named executable outside the reported standard-library root.
     case "$GO_ENTRY" in
         "$GO_ROOT"/*) ;;
-        *) printf 'BindReadOnly=%s\n' "$(quote_nspawn_path "$GO_COMMAND:$GO_ENTRY")" ;;
+        *) printf 'BindReadOnly=%s\n' "$(escape_nspawn_path "$GO_COMMAND:$GO_ENTRY")" ;;
     esac
 }
 
