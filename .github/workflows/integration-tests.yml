@@ -907,6 +907,11 @@ jobs:
           if [ "${KUASAR_HOSTED:-false}" = true ]; then
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          if [ "$owner" = connector ]; then
+            echo "==> connector source suite has no native-artifact dependency"
+            exit 0
+          fi
           ci/native-cache/native-cache.sh restore-or-build
 
       - name: Validate platform tooling
@@ -928,13 +933,25 @@ jobs:
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
           set -euo pipefail
-          make build e2e-tools assemble-e2e
-          if [ "$KUASAR_HOSTED" = true ]; then
-            [ -x "$E2E_ZOT_BIN" ] && [ -x "$E2E_VGW_BIN" ]
-          fi
-          make test-uffd-performance-gate
-
           owner="${CANDIDATE_REPOSITORY##*/}"
+          if [ "$owner" = connector ]; then
+            make -C ../connector build
+            rm -rf bin/x86_64
+            mkdir -p bin/x86_64
+            cp ../connector/bin/x86_64/connector-ctl bin/x86_64/connector-ctl
+            ln -sfn x86_64/connector-ctl bin/connector-ctl
+            make assemble-e2e
+          else
+            make build e2e-tools assemble-e2e
+            if [ "$KUASAR_HOSTED" = true ]; then
+              [ -x "$E2E_ZOT_BIN" ] && [ -x "$E2E_VGW_BIN" ]
+            fi
+          fi
+          case "$owner" in
+            kuasar-sandbox|accelerator|sandboxer) make test-uffd-performance-gate ;;
+            *) echo "==> UFFD gate not in $owner dependency closure" ;;
+          esac
+
           runner="build/e2e-suite/test/e2e/$owner/run_all.sh"
           if [ "$owner" = kuasar-sandbox ]; then
             runner=build/e2e-suite/test/e2e/run_all.sh
@@ -955,6 +972,11 @@ jobs:
           PERF_ITERS: "1"
           PERF_OUT_DIR: ${{ env.KUASAR_CI_DIR }}/working-set-perf
         run: |
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          case "$owner" in
+            kuasar-sandbox|accelerator|sandboxer|guest-runtime) ;;
+            *) echo "==> working-set smoke not in $owner dependency closure"; exit 0 ;;
+          esac
           ci/integration/ci-timed.sh perf/working-set-smoke env \
             BIN="$PWD/bin/x86_64" \
             PERF_ITERS="$PERF_ITERS" \

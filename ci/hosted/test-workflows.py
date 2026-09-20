@@ -151,8 +151,12 @@ def check():
         assert steps[name]["shell"] == "bash"
         assert 'taskset -pc "$KUASAR_BUILD_CPUS" "$$"' in steps[name]["run"]
         assert steps[name]["if"] == "inputs.mode == 'source'"
+    native = steps["Restore or build verified native artifacts"]["run"]
+    assert 'if [ "$owner" = connector ]; then' in native
+    assert 'connector source suite has no native-artifact dependency' in native
     build = steps["Build and test source candidate"]["run"]
-    for required in ('make build e2e-tools assemble-e2e', 'make test-uffd-performance-gate',
+    for required in ('make build e2e-tools assemble-e2e', 'make -C ../connector build',
+                     'make test-uffd-performance-gate', 'kuasar-sandbox|accelerator|sandboxer)',
                      'owner="${CANDIDATE_REPOSITORY##*/}"', 'bash "$runner"'):
         assert required in build
     smoke = steps["Run working-set performance smoke"]
@@ -160,6 +164,7 @@ def check():
     assert smoke["env"]["PERF_ITERS"] == "1"
     assert "PERF_GROUPS" not in smoke["env"]
     assert "bash test/perf/working-set-netns.sh test/perf/sandbox-perf-working-set.sh" in smoke["run"]
+    assert "kuasar-sandbox|accelerator|sandboxer|guest-runtime)" in smoke["run"]
     exact = steps["Test exact published assets from the platform package"]
     required = {"KVM", "EXEC", "CLUSTER_STUB", "CLUSTER_REAL", "ORCH", "PROXY", "BUILDER", "RUNTASK", "CONNECTOR_E2E", "GUEST_RUNTIME"}
     assert {key.removeprefix("REQUIRE_") for key, value in exact["env"].items() if key.startswith("REQUIRE_") and value == "1"} == required
@@ -171,6 +176,8 @@ def check():
     images = steps["Pull standard runner test images"]["run"]
     for image in ("python:3.12-slim", "python:3.12-alpine", "busybox:latest"):
         assert image in images
+    for image in ("alpine:3.19", "alpine:3.20"):
+        assert image not in images
     assert names.index(tools_name) < names.index("Pull standard runner test images") < names.index(exact["name"])
     validate = steps["Validate and extract exact aggregate bundle"]
     assert 'trusted/platform/release/aggregate-release.sh validate "$RELEASE_VERSION" release-bundle' in validate["run"]
