@@ -225,5 +225,3 @@ if __name__ == "__main__":
     check()
     for name in ("test-bootstrap.py", "test-exact-assets-tools.py"):
         subprocess.run([sys.executable, str(Path(__file__).with_name(name))], check=True)
-
-[executed on device: VM-16-4-ubuntu (ece80c39-2a6a-48a6-8bca-2dd73fc629dd)]

@@ -34,5 +34,3 @@ done
 
 echo
 echo "==> full release e2e: OK"
-
-[executed on device: VM-16-4-ubuntu (ece80c39-2a6a-48a6-8bca-2dd73fc629dd)]
