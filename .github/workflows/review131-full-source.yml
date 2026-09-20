@@ -26,7 +26,7 @@ jobs:
     - name: Read exact reviewed public main candidate
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
-        ref: c41143930f5e21bbf79a05055ad64fd4848aff13
+        ref: ad655ac2603b9c8bcf83d064d673519fb6591ce4
         path: src/platform
         persist-credentials: false
     - name: Prepare standard source host from the reviewed candidate
@@ -45,7 +45,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/accelerator
-        ref: 53d65bd609f98193d024e2d2136ce7cc7fe46425
+        ref: f6c84716969d453242c7555fe6c1298ef0249592
         path: src/accelerator
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -53,7 +53,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/connector
-        ref: 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8
+        ref: 6ae635f0ccd709853288d8176c0e5f35c23e56d3
         path: src/connector
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -61,7 +61,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/guest-runtime
-        ref: c09e628fe4d69c7e33281a182a7287eb54a8271c
+        ref: cec7832127e5c3f83784f72e6138bfcbdb21ad1a
         path: src/guest-runtime
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -69,7 +69,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/orchestrator
-        ref: 53b5875d7296cccc1d692362b424ac07d8d1ba21
+        ref: 5bf9e8b1cd93181b30b4cdac3d36097c2898a2d1
         path: src/orchestrator
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -77,7 +77,7 @@ jobs:
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
         repository: kuasar-sandbox/sandboxer
-        ref: 216441479a740b846685d6e82bcb6b241b2e7b8d
+        ref: 2ac1c41c9815388140a53dde1220c361fce6e717
         path: src/sandboxer
         token: ${{ steps.source-token.outputs.token }}
         persist-credentials: false
@@ -97,34 +97,34 @@ jobs:
 
         printf ''repository\trequested_ref\tresolved_sha\trole\n'' > "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/platform rev-parse HEAD)" = c41143930f5e21bbf79a05055ad64fd4848aff13
+        test "$(git -C src/platform rev-parse HEAD)" = ad655ac2603b9c8bcf83d064d673519fb6591ce4
 
-        printf ''%s\t%s\t%s\t%s\n'' kuasar-sandbox c41143930f5e21bbf79a05055ad64fd4848aff13 c41143930f5e21bbf79a05055ad64fd4848aff13
+        printf ''%s\t%s\t%s\t%s\n'' kuasar-sandbox ad655ac2603b9c8bcf83d064d673519fb6591ce4 ad655ac2603b9c8bcf83d064d673519fb6591ce4
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/accelerator rev-parse HEAD)" = 53d65bd609f98193d024e2d2136ce7cc7fe46425
+        test "$(git -C src/accelerator rev-parse HEAD)" = f6c84716969d453242c7555fe6c1298ef0249592
 
-        printf ''%s\t%s\t%s\t%s\n'' accelerator 53d65bd609f98193d024e2d2136ce7cc7fe46425 53d65bd609f98193d024e2d2136ce7cc7fe46425
+        printf ''%s\t%s\t%s\t%s\n'' accelerator f6c84716969d453242c7555fe6c1298ef0249592 f6c84716969d453242c7555fe6c1298ef0249592
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/connector rev-parse HEAD)" = 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8
+        test "$(git -C src/connector rev-parse HEAD)" = 6ae635f0ccd709853288d8176c0e5f35c23e56d3
 
-        printf ''%s\t%s\t%s\t%s\n'' connector 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8 1b83f59b30ef950a3ba0bdbc3d97052eedda6ae8
+        printf ''%s\t%s\t%s\t%s\n'' connector 6ae635f0ccd709853288d8176c0e5f35c23e56d3 6ae635f0ccd709853288d8176c0e5f35c23e56d3
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/guest-runtime rev-parse HEAD)" = c09e628fe4d69c7e33281a182a7287eb54a8271c
+        test "$(git -C src/guest-runtime rev-parse HEAD)" = cec7832127e5c3f83784f72e6138bfcbdb21ad1a
 
-        printf ''%s\t%s\t%s\t%s\n'' guest-runtime c09e628fe4d69c7e33281a182a7287eb54a8271c c09e628fe4d69c7e33281a182a7287eb54a8271c
+        printf ''%s\t%s\t%s\t%s\n'' guest-runtime cec7832127e5c3f83784f72e6138bfcbdb21ad1a cec7832127e5c3f83784f72e6138bfcbdb21ad1a
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/orchestrator rev-parse HEAD)" = 53b5875d7296cccc1d692362b424ac07d8d1ba21
+        test "$(git -C src/orchestrator rev-parse HEAD)" = 5bf9e8b1cd93181b30b4cdac3d36097c2898a2d1
 
-        printf ''%s\t%s\t%s\t%s\n'' orchestrator 53b5875d7296cccc1d692362b424ac07d8d1ba21 53b5875d7296cccc1d692362b424ac07d8d1ba21
+        printf ''%s\t%s\t%s\t%s\n'' orchestrator 5bf9e8b1cd93181b30b4cdac3d36097c2898a2d1 5bf9e8b1cd93181b30b4cdac3d36097c2898a2d1
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
-        test "$(git -C src/sandboxer rev-parse HEAD)" = 216441479a740b846685d6e82bcb6b241b2e7b8d
+        test "$(git -C src/sandboxer rev-parse HEAD)" = 2ac1c41c9815388140a53dde1220c361fce6e717
 
-        printf ''%s\t%s\t%s\t%s\n'' sandboxer 216441479a740b846685d6e82bcb6b241b2e7b8d 216441479a740b846685d6e82bcb6b241b2e7b8d
+        printf ''%s\t%s\t%s\t%s\n'' sandboxer 2ac1c41c9815388140a53dde1220c361fce6e717 2ac1c41c9815388140a53dde1220c361fce6e717
         reviewed-source-rehearsal >> "$KUASAR_REVISION_MANIFEST"
 
         cd src
@@ -139,12 +139,12 @@ jobs:
         candidate_sha="$(git -C src/platform rev-parse HEAD)"
         printf 'mode\tcandidate_repository\tpull_request\tcandidate_sha\tbase_sha\tbase_ref\thead_sha\trelease_version\n' > "$KUASAR_CI_DIR/run.tsv"
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
-          source "$CANDIDATE_REPOSITORY" 131 "$candidate_sha" \
-          8cdccb430c689113f569c66f788b7620f71ded6a main "$candidate_sha" '' \
+          source "$CANDIDATE_REPOSITORY" 140 "$candidate_sha" \
+          b52103b71e88274a636dc615823d0dfeb04f5aa1 main "$candidate_sha" '' \
           >> "$KUASAR_CI_DIR/run.tsv"
         cat "$KUASAR_CI_DIR/run.tsv"
     - name: Pull standard runner test images
-      run: "set -euo pipefail\nfor image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest;\
+      run: "set -euo pipefail\nfor image in python:3.12-slim python:3.12-alpine busybox:latest;\
         \ do\n  timeout 3m docker pull \"$image\"\ndone\n"
     - name: Attach job-local source caches and test tools
       run: "set -euo pipefail\nfor path in \\\n  src/accelerator/build/tarball \\\n  src/guest-runtime/native-deps/build/tarball\
@@ -162,7 +162,7 @@ jobs:
       working-directory: src/platform
       shell: bash
       run: "if [ \"${KUASAR_HOSTED:-false}\" = true ]; then\n  taskset -pc \"$KUASAR_BUILD_CPUS\" \"$$\" >/dev/null\n\
-        fi\nmake test-ci-tools test-release-tools test-perf-tools\n"
+        fi\nmake -j3 test-ci-tools test-release-tools test-perf-tools\n"
     - name: Build and test source candidate
       working-directory: src/platform
       shell: bash
@@ -229,17 +229,23 @@ jobs:
         retention-days: 1
         if-no-files-found: error
   staged-exact-assets:
+    name: staged-exact-assets [${{ matrix.shard }}]
     needs: full-source-e2e
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [core, sandboxer, orchestrator]
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
       KUASAR_CI_DIR: ${{ github.workspace }}/exact-evidence
       KUASAR_REVISION_MANIFEST: ${{ github.workspace }}/staged-bundle/source-revisions.tsv
+      KUASAR_E2E_SHARD: ${{ matrix.shard }}
     steps:
     - name: Read reviewed public validation tooling
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       with:
-        ref: c41143930f5e21bbf79a05055ad64fd4848aff13
+        ref: ad655ac2603b9c8bcf83d064d673519fb6591ce4
         path: trusted/platform
         persist-credentials: false
     - name: Initialize exact-assets qualification metadata
@@ -273,7 +279,7 @@ jobs:
     - name: Prepare pinned auxiliary tools only
       run: bash trusted/platform/ci/hosted/exact-assets-tools.sh
     - name: Pull standard runner test images
-      run: "set -euo pipefail\nfor image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest;\
+      run: "set -euo pipefail\nfor image in python:3.12-slim python:3.12-alpine busybox:latest;\
         \ do\n  timeout 3m docker pull \"$image\"\ndone\n"
     - name: Run every required test from the validated staged package
       working-directory: release-install
@@ -295,3 +301,5 @@ jobs:
     - name: Verify product bytes remained unchanged
       if: always()
       run: test ! -f "$RUNNER_TEMP/products-before.sha256" || sha256sum -c "$RUNNER_TEMP/products-before.sha256"
+
+[executed on device: VM-16-4-ubuntu (ece80c39-2a6a-48a6-8bca-2dd73fc629dd)]
