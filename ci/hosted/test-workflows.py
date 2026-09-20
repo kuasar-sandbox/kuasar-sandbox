@@ -83,6 +83,15 @@ def check():
     entry = load("ci-entry.yml")["jobs"]
     e2e = load("integration-tests.yml")["jobs"]["e2e"]
     legacy = ["self-hosted", "Linux", "X64", "kuasar-e2e", "kvm", "cgroup-v2"]
+    shard_expr = e2e["strategy"]["matrix"]["shard"]
+    for shard in ("core", "sandboxer", "orchestrator"):
+        assert shard in shard_expr
+    assert '["source"]' in shard_expr
+    assert e2e["env"]["KUASAR_E2E_SHARD"] == "${{ matrix.shard }}"
+    assert "inputs.mode == 'source' && 'e2e'" in e2e["name"]
+    aggregate_runner = (ROOT / "test/e2e/run_all.sh").read_text()
+    for shard in ("core", "sandboxer", "orchestrator"):
+        assert shard in aggregate_runner
     repos = ("guest-runtime", "accelerator", "connector", "kuasar-sandbox", "orchestrator", "sandboxer")
     callers = tuple(f"kuasar-sandbox/{name}" for name in repos) + ("outside/kuasar-sandbox",)
     cases = 0
