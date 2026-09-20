@@ -9,14 +9,15 @@ PID、mount、network、cgroup、Docker daemon、Runner 凭据和 Actions 工作
 
 - `/var/cache/kuasar`:可写的源码/原生产物缓存。精确 SHA 名称和仓库锁用于协调
   复用,不能防止篡改;
-- `/var/lib/kuasar-ci/tools`:只读测试工具;
+- `/var/lib/kuasar-ci/tools`:只读环境工具;
 - 环境选定的 Go 根目录和可执行文件，以及主机内核模块树：只读。
 
 每个 slot 在 `/sys/fs/bpf` 下绑定不同的 bpffs 子树,避免并行任务的 BPF pin 路径冲突。
 
-执行 `check` 前，环境应在 `/var/lib/kuasar-ci/tools` 提供可执行的 `zot` 和
-`versitygw`。不以固定摘要或精确版本限制其来源，必需的服务行为由 E2E 验证；
-工具目录只读挂载到各 slot。发布任务还要求 runner 的 PATH 提供 `gh`，不会自行安装替代版本。
+执行 `check` 前，环境应在 `/var/lib/kuasar-ci/tools` 提供可执行的 `zot`、
+`versitygw` 和 `gh`。不以固定摘要或精确版本限制其来源，必需的服务行为由
+E2E 验证；provisioner 还要求 `gh api --help` 提供 `--slurp`。工具目录只读
+挂载到各 slot，并把环境提供的 CLI 链接到 runner 的 PATH。发布任务不会自行安装替代版本。
 
 provisioner 从调用环境 PATH 解析 `go`，向该可执行文件查询 GOROOT，将根目录及
 位于根目录之外的单个 Go 可执行文件按实际路径只读映射到 slot，并记录其目录供

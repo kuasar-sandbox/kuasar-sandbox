@@ -10,17 +10,18 @@ only:
 
 - `/var/cache/kuasar`, a writable source/native-artifact cache; exact-SHA names
   and repository-owned locks coordinate reuse but do not prevent tampering;
-- `/var/lib/kuasar-ci/tools`, read-only test tool binaries;
+- `/var/lib/kuasar-ci/tools`, read-only environment tool binaries;
 - the environment-selected Go root and executable, and the host kernel module tree, read-only.
 
 Each slot receives a different bpffs subtree at `/sys/fs/bpf`; pinned BPF paths
 cannot collide across concurrent jobs.
 
-The environment must provide executable `zot` and `versitygw` in
+The environment must provide executable `zot`, `versitygw`, and `gh` in
 `/var/lib/kuasar-ci/tools` before `check`. Their bytes and exact versions are
-not allowlisted; the required service behavior is exercised by the E2E suites.
-The directory is mounted read-only into all slots. Release jobs also require
-`gh` on the runner's PATH; jobs do not install a replacement CLI.
+not allowlisted. The E2E suites exercise the required service behavior, while
+the provisioner requires `gh api --help` to advertise `--slurp`. The directory
+is mounted read-only into all slots, and each slot links the supplied CLI onto
+the runner's PATH. Release jobs do not install a replacement CLI.
 
 The provisioner resolves `go` from its environment PATH and asks that executable
 for its GOROOT. It maps the root and, where separate, only that executable into
