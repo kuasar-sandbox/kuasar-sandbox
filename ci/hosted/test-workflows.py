@@ -143,7 +143,7 @@ def check():
             assert not expression(step["if"], {"env": {"KUASAR_HOSTED": "true"}}), step["name"]
         assert "actions/cache@" not in step.get("uses", "")
         if "actions/upload-artifact@" in step.get("uses", ""):
-            assert step["with"]["path"] == "${{ env.KUASAR_CI_DIR }}"
+            assert step["with"]["path"] == "${{ steps.ci-metadata.outputs.path }}"
     for name in ("Assemble the five component source repositories", "Finalize source workspace"):
         assert 'source_dir="$KUASAR_SOURCE_CACHE_ROOT/$repo"' in steps[name]["run"]
     assert "repos=(accelerator connector guest-runtime orchestrator sandboxer)" in steps["Assemble the five component source repositories"]["run"]
@@ -165,6 +165,14 @@ def check():
     assert {key.removeprefix("REQUIRE_") for key, value in exact["env"].items() if key.startswith("REQUIRE_") and value == "1"} == required
     assert exact["run"] == "bash test/e2e/run_all.sh"
     assert exact["if"] == "inputs.mode == 'exact-assets'"
+    metadata = steps["Stage revision and timing metadata"]
+    assert metadata["if"] == "always()"
+    assert metadata["id"] == "ci-metadata"
+    assert 'sudo find -P "$KUASAR_CI_DIR" -xdev' in metadata["run"]
+    assert 'sudo tar --one-file-system -C "$KUASAR_CI_DIR" -cf - .' in metadata["run"]
+    assert 'tar --no-same-owner -C "$upload_dir" -xf -' in metadata["run"]
+    assert 'chmod -R u+rwX "$upload_dir"' in metadata["run"]
+    assert names.index(exact["name"]) < names.index(metadata["name"]) < names.index("Upload revision and timing metadata")
     tools_name = "Attach job-local exact-assets test tools"
     assert steps[tools_name]["run"] == "bash trusted/platform/ci/hosted/exact-assets-tools.sh"
     assert names.index("Download exact aggregate bundle") < names.index("Validate and extract exact aggregate bundle") < names.index(tools_name) < names.index(exact["name"])
