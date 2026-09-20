@@ -446,7 +446,7 @@ DATASET_KEY=$("$BIN/manifest-ctl" store --manifest-config "$WORK/manifest.yaml" 
 
 format_diff() { # $1=path, $2=size
     truncate -s "$2" "$1"
-    mkfs.ext4 -q -F "$1"
+    mkfs.ext4 -q -F -O ^has_journal "$1"
 }
 
 write_config() { # $1=path, $2=diff dir, $3=prefetch, $4=cold|restore
