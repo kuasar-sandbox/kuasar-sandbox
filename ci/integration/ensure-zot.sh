@@ -37,6 +37,17 @@ asset="zot-linux-${GO_ARCH}-minimal"
 : "${ZOT_SHA256_URL:=https://github.com/project-zot/zot/releases/download/${ZOT_VERSION}/checksums.sha256.txt}"
 
 out_bin="$BINDIR/zot"
+supplied="${E2E_ZOT_BIN:-${ZOT_BIN:-}}"
+if [ -n "$supplied" ] && [ "$supplied" != "$out_bin" ]; then
+    [ -f "$supplied" ] && [ -x "$supplied" ] \
+        || die "environment zot is not executable: $supplied"
+    mkdir -p "$BINDIR"
+    if ! [ "$supplied" -ef "$out_bin" ]; then
+        cp --remove-destination "$supplied" "$out_bin"
+        chmod 0755 "$out_bin"
+    fi
+    exit 0
+fi
 if [ -x "$out_bin" ]; then
     log "already available: $out_bin"
     exit 0

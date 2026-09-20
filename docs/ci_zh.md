@@ -152,7 +152,7 @@ BIN=$PWD/bin bash test/e2e/run_all.sh
 tag,所以平台维护分支可以组合彼此不同的组件维护版本线。它不重建产品 Go/Rust/native
 二进制、vmlinux、RocksDB 或 Cloud Hypervisor。公开 caller 使用可信 `exact-assets`
 bootstrap 准备宿主依赖;bundle 验证并解压后,[exact-assets-tools.sh](../ci/hosted/exact-assets-tools.sh)
-下载 zot v2.1.17 并构建本地 versitygw v1.5.0 测试服务。仅构建宿主测试工具和 EROFS
+优先复用环境提供的 zot/versitygw；缺失时才从经过校验的输入下载 zot v2.1.17 或构建本地 versitygw v1.5.0 测试服务。仅构建宿主测试工具和 EROFS
 writer/reader,不修改 `release-install/bin` 内的产品二进制。既有十个 `REQUIRE_*` 均保持
 启用,包内顶层 suite 仍运行所有 owner。通过后 publish job 原样使用此前的 artifact。
 
@@ -213,12 +213,11 @@ profile、凭据、执行内容及超时：exact-assets 保持 120 分钟，其�
 | `runtime` | Runtime 构建;Go、native 开发包与可信 EROFS writer/reader |
 | `runtime-publish` | Runtime 发布校验;Go 与独立构建的 EROFS writer/reader |
 | `source` | 完整源码构建/E2E;全部 native 依赖、Rust/Docker 检查与 VM/网络工具 |
-| `exact-assets` | 包内二进制/测试;Docker、systemd/cgroup v2、KVM/UFFD/netns/BPF、运行工具及 EROFS 宿主工具;固定 Go 仅用于 versitygw |
+| `exact-assets` | 包内二进制/测试;Docker、systemd/cgroup v2、KVM/UFFD/netns/BPF、运行工具及 EROFS 宿主工具;环境 Go 用于 versitygw 的缺失回退构建 |
 
-Go 使用官方 `go1.26.5.linux-amd64.tar.gz`,SHA256 为
-`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`。
-bootstrap 校验归档、driver 与 compiler 后才加入 PATH;source module 工具链选择保留
-`GOTOOLCHAIN=auto`。EROFS host writer/reader 从固定的 v1.9.1 源码和 SHA256 构建,
+Go 由 runner 环境提供；bootstrap 只检查可用性，不安装另一套 distribution，不覆盖
+`GOROOT`/`GOTOOLCHAIN`，不比较二进制摘要或精确补丁版本。源码及模块的最低要求
+仍生效。发布自动化使用环境中的 GitHub CLI。EROFS host writer/reader 从固定的 v1.9.1 源码和 SHA256 构建,
 独立于 guest 静态 recipe。Docker 以及源码构建所需的 Rust/Cargo 是
 [标准镜像](https://github.com/actions/runner-images#available-images)
 的必需能力,会显式检查。Native source pin、Cargo lockfile、构建参数、link map 和
@@ -250,12 +249,11 @@ exact-assets 保持 120 分钟,私有 source 保持 60 分钟。测试断言和�
 `$RUNNER_TEMP/kuasar-hosted.*`;exact-assets 测试工具另用
 `$RUNNER_TEMP/kuasar-exact-tools.*` 目录,不上传这些目录。源码本身保留在 job workspace;
 仅上传既有 revision/timing/performance metadata 与验证后的发布 bundle。Bundle 继续
-包含必需的许可/来源清单,不传递完整 workspace。Hosted 使用官方 Go/Rust/Python/
-kernel/image 地址。Source 模式继续使用既有 zot/versitygw target。Exact-assets 复用可信
+包含必需的许可/来源清单,不传递完整 workspace。Hosted 使用环境中的 Go/Rust 工具和官方 Python/kernel/image 地址。Source 模式继续使用既有 zot/versitygw target。Exact-assets 复用可信
 平台的 `ensure-zot.sh`,只下载公开 guest-runtime
 [提交 494dbceae683d6b20cdbec00fe6b1f554ea2f508](https://github.com/kuasar-sandbox/guest-runtime/tree/494dbceae683d6b20cdbec00fe6b1f554ea2f508/native-deps/deps)
 的 `build-versitygw.sh`/`common.sh`。固定 recipe 路径、commit 和 SHA256 均校验;
-versitygw 源码还检查归档路径和类型。该宿主工具构建固定 Go,限制 affinity/并发并使用本地
+versitygw 源码还检查归档路径和类型。该宿主工具构建使用环境 Go，限制 affinity/并发并使用本地
 缓存。`host-tools.tsv` 记录 recipe、源码和二进制身份。Exact-assets 不 checkout 私有 sibling,
 不由候选源码选择宿主构建脚本。持久 caller 保持其镜像设置。
 

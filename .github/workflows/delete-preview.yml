@@ -45,8 +45,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Install pinned GitHub CLI
-        run: bash release/install-gh-cli.sh
+      - name: Check environment GitHub CLI
+        run: |
+          gh --version
+          gh_help="$(gh api --help)"
+          [[ "$gh_help" == *--slurp* ]] || { echo "environment gh must support api --slurp" >&2; exit 1; }
 
       - name: Delete Preview release, assets, and tag
         env:

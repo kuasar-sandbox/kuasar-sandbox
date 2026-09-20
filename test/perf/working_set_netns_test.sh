@@ -525,3 +525,5 @@ fi
 [ ! -e "$DELS_E" ] || fail "teardown deleted the namespace name despite a survivor"
 
 echo "working_set_netns_test: PASS"
+
+[executed on device: VM-16-4-ubuntu (ece80c39-2a6a-48a6-8bca-2dd73fc629dd)]

@@ -32,6 +32,17 @@ esac
 : "${VERSITYGW_SRC:=$umbrella_dir/build/src/versitygw}"
 
 out_bin="$BINDIR/versitygw"
+supplied="${E2E_VGW_BIN:-${VGW_BIN:-}}"
+if [ -n "$supplied" ] && [ "$supplied" != "$out_bin" ]; then
+    [ -f "$supplied" ] && [ -x "$supplied" ] \
+        || die "environment versitygw is not executable: $supplied"
+    mkdir -p "$BINDIR"
+    if ! [ "$supplied" -ef "$out_bin" ]; then
+        cp --remove-destination "$supplied" "$out_bin"
+        chmod 0755 "$out_bin"
+    fi
+    exit 0
+fi
 if [ -x "$out_bin" ]; then
     log "already available: $out_bin"
     exit 0

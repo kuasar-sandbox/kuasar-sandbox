@@ -116,7 +116,6 @@ jobs:
           cat >> "$GITHUB_ENV" <<'EOF'
           GOPROXY=https://goproxy.cn,direct
           GOSUMDB=sum.golang.google.cn
-          GOTOOLCHAIN=local
           RUSTUP_DIST_SERVER=https://rsproxy.cn
           RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
           CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
@@ -868,8 +867,8 @@ jobs:
           mkdir -p "$tool_dir"
           ln -sfn /var/lib/kuasar-ci/tools/zot "$tool_dir/zot"
           ln -sfn /var/lib/kuasar-ci/tools/versitygw "$tool_dir/versitygw"
-          echo "E2E_ZOT_BIN=$GITHUB_WORKSPACE/$tool_dir/zot" >> "$GITHUB_ENV"
-          echo "E2E_VGW_BIN=$GITHUB_WORKSPACE/$tool_dir/versitygw" >> "$GITHUB_ENV"
+          echo "E2E_ZOT_BIN=${E2E_ZOT_BIN:-${ZOT_BIN:-$GITHUB_WORKSPACE/$tool_dir/zot}}" >> "$GITHUB_ENV"
+          echo "E2E_VGW_BIN=${E2E_VGW_BIN:-${VGW_BIN:-$GITHUB_WORKSPACE/$tool_dir/versitygw}}" >> "$GITHUB_ENV"
           for image in python:3.12-slim python:3.12-alpine busybox:latest; do
             if ! docker image inspect "$image" >/dev/null 2>&1; then
               mirror="m.daocloud.io/docker.io/library/$image"
@@ -890,12 +889,12 @@ jobs:
             mkdir -p "$(dirname "$path")"
             ln -sfn "$KUASAR_TARBALL_CACHE" "$path"
           done
-          # make e2e-tools builds/downloads the existing pinned tool inputs.
+          # make e2e-tools reuses environment tools or supplies missing test inputs.
           # Never link the persistent runner's preinstalled tools on hosted.
           tool_dir="$GITHUB_WORKSPACE/src/platform/build/e2e-tools/x86_64"
           mkdir -p "$tool_dir"
-          echo "E2E_ZOT_BIN=$tool_dir/zot" >> "$GITHUB_ENV"
-          echo "E2E_VGW_BIN=$tool_dir/versitygw" >> "$GITHUB_ENV"
+          echo "E2E_ZOT_BIN=${E2E_ZOT_BIN:-${ZOT_BIN:-$tool_dir/zot}}" >> "$GITHUB_ENV"
+          echo "E2E_VGW_BIN=${E2E_VGW_BIN:-${VGW_BIN:-$tool_dir/versitygw}}" >> "$GITHUB_ENV"
 
       - name: Pull standard runner test images
         if: env.KUASAR_HOSTED == 'true'
@@ -1008,11 +1007,30 @@ jobs:
           REQUIRE_GUEST_RUNTIME: "1"
         run: bash test/e2e/run_all.sh
 
+      - name: Stage revision and timing metadata
+        id: ci-metadata
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          upload_dir="$RUNNER_TEMP/ci-metadata-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo rm -rf -- "$upload_dir"
+          mkdir -p "$upload_dir"
+          if sudo test -d "$KUASAR_CI_DIR"; then
+            unexpected=$(sudo find -P "$KUASAR_CI_DIR" -xdev ! -type d ! -type f -print -quit)
+            [ -z "$unexpected" ] || { echo "unsupported CI metadata entry: $unexpected" >&2; exit 1; }
+            sudo tar --one-file-system -C "$KUASAR_CI_DIR" -cf - . | tar --no-same-owner -C "$upload_dir" -xf -
+            chmod -R u+rwX "$upload_dir"
+          fi
+          echo "path=$upload_dir" >> "$GITHUB_OUTPUT"
+
       - name: Upload revision and timing metadata
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ inputs.mode == 'source' && format('ci-metadata-{0}-{1}', github.run_id, github.run_attempt) || format('ci-metadata-{0}-{1}-{2}', github.run_id, github.run_attempt, matrix.shard) }}
-          path: ${{ env.KUASAR_CI_DIR }}
+          path: ${{ steps.ci-metadata.outputs.path }}
           if-no-files-found: warn
           retention-days: 30
+
+[executed on device: VM-16-4-ubuntu (ece80c39-2a6a-48a6-8bca-2dd73fc629dd)]

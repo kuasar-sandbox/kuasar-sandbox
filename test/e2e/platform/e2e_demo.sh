@@ -132,3 +132,5 @@ DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" ZOT_BIN="$ZOT_BIN" VGW_BIN="$VGW_BIN" 
     bash "$DEMO_DIR/demo_prep.sh"
 
 echo "PASS: documented full Demo (including Quick Start lifecycle) and owned cleanup"
+
+[executed on device: VM-16-4-ubuntu (ece80c39-2a6a-48a6-8bca-2dd73fc629dd)]

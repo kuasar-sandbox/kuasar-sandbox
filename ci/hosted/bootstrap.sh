@@ -2,8 +2,6 @@
 # Trusted standard Ubuntu prerequisites. Never source this from a requested candidate.
 set -euo pipefail
 
-GO_VERSION=1.26.5
-GO_SHA256=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
 EROFS_VERSION=1.9.1
 EROFS_SHA256=a9ef5ab67c4b8d2d3e9ed71f39cd008bda653142a720d8a395a36f1110d0c432
 
@@ -81,16 +79,10 @@ print(jobs, ','.join(map(str, cpus[:jobs])))
 PY
 }
 
-install_go() {
-    local archive="$KUASAR_HOSTED_ROOT/go.tar.gz"
-    download "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" "$archive" "$GO_SHA256"
-    tar -xzf "$archive" -C "$KUASAR_HOSTED_ROOT"
-    emit GOROOT "$KUASAR_HOSTED_ROOT/go"
-    add_path "$GOROOT/bin"
-    # Authenticate the distribution first, then validate both driver and compiler.
-    [ "$(GOTOOLCHAIN=local go version)" = "go version go${GO_VERSION} linux/amd64" ] || die "wrong Go driver"
-    [ "$(GOTOOLCHAIN=local go tool compile -V=full)" = "compile version go${GO_VERSION}" ] || die "wrong Go compiler"
-    emit GOTOOLCHAIN auto
+configure_go() {
+    need go
+    # The environment owns compiler selection, including GOROOT/GOTOOLCHAIN.
+    go version
     emit GOPROXY https://proxy.golang.org,direct
     emit GOSUMDB sum.golang.org
     emit GOPATH "$KUASAR_HOSTED_ROOT/gopath"
@@ -147,13 +139,12 @@ configure_vm() {
     job_uid=$(id -u)
     job_gid=$(id -g)
     kvm_rule=$(render_kvm_rule "$job_uid" "$job_gid")
-    # Docker and rustup are standard runner-image capabilities; fail closed if
-    # they disappear. Do not replace the Docker daemon or the native Rust pins.
+    # Use the environment's Docker and Rust tools. Missing capabilities fail
+    # without selecting another installation or requiring a toolchain manager.
     need docker systemctl ip modprobe setfacl mkfs.ext4 udevadm
     docker info >/dev/null
     if [ "$profile" = source ]; then
-        need rustup cargo rustc
-        rustup show active-toolchain
+        need cargo rustc
         cargo --version
         rustc --version
     fi
@@ -227,7 +218,6 @@ main() {
     emit KUASAR_NATIVE_CACHE_ROOT "$KUASAR_HOSTED_ROOT/native"
     emit KUASAR_TARBALL_CACHE "$KUASAR_HOSTED_ROOT/tarballs"
     emit TARBALL_CACHE "$KUASAR_HOSTED_ROOT/tarballs"
-    emit KUASAR_GH_CLI_CACHE "$KUASAR_HOSTED_ROOT/gh-cli"
     local jobs cpus
     read -r jobs cpus < <(resource_budget)
     [[ "$jobs" =~ ^[1-9][0-9]*$ && "$cpus" =~ ^[0-9]+(,[0-9]+)*$ ]] || die "cannot bound build parallelism"
@@ -236,7 +226,7 @@ main() {
     emit GOMAXPROCS "$jobs"
     emit CARGO_BUILD_JOBS "$jobs"
     add_path "$KUASAR_HOSTED_ROOT/bin"
-    if $with_go; then install_go; fi
+    if $with_go; then configure_go; fi
     if $with_readers; then install_readers; fi
     if $with_vm; then configure_vm; fi
     echo "hosted-bootstrap: profile=$profile jobs=$jobs cpus=$cpus"

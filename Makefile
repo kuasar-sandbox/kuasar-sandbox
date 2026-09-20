@@ -33,8 +33,8 @@ export TARGET_ARCH
 BINDIR         := bin/$(TARGET_ARCH)
 SBIN           := $(abspath $(BINDIR))
 E2E_TOOL_DIR   := build/e2e-tools/$(TARGET_ARCH)
-E2E_ZOT_BIN    := $(abspath $(E2E_TOOL_DIR)/zot)
-E2E_VGW_BIN    := $(abspath $(E2E_TOOL_DIR)/versitygw)
+E2E_ZOT_BIN    ?= $(abspath $(E2E_TOOL_DIR)/zot)
+E2E_VGW_BIN    ?= $(abspath $(E2E_TOOL_DIR)/versitygw)
 E2E_SUITE_DIR  := $(abspath build/e2e-suite)
 DEMO_DATA_DIR  ?= /var/lib/kuasar-demo
 PYTHON_BIN     ?=
@@ -177,6 +177,7 @@ test-ci-tools:
 	bash ci/integration/test-ci-tools.sh
 
 test-release-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 release/test-environment-tools.py
 	bash test/demo/test_demo_safety.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_state_assertions.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_process_startup.py
