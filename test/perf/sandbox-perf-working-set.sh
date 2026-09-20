@@ -444,20 +444,24 @@ MKFS_EROFS_PATH="$BIN/mkfs.erofs" "$BIN/flatten-ctl" export --tmpdir "$WORK/flat
 DATASET_KEY=$("$BIN/manifest-ctl" store --manifest-config "$WORK/manifest.yaml" --no-progress "$DATASET_IMAGE")
 [[ "$DATASET_KEY" =~ ^[0-9a-f]{64}$ ]] || fatal "invalid dataset manifest key: $DATASET_KEY"
 
-format_diff() { # $1=path, $2=size
+prepare_diff() { # $1=path, $2=size, $3=cold|restore
+    # Restore must inherit the captured filesystem. Fresh mkfs metadata would
+    # occupy upper COW pages and mask the snapshot's superblock/inodes/data.
+    # Keep an existing sparse plaintext file so crypto.local=auto does not
+    # introduce active-DIFF encryption into the local-artifact comparison.
+    truncate -s 0 "$1"
     truncate -s "$2" "$1"
-    # Intentional exception: this benchmark restores captured B filesystem
-    # state through a fresh active diff and is the snapshot/restore oracle.
-    # Keep its fixture journaled; no-journal work disks are covered by owning E2E.
-    mkfs.ext4 -q -F "$1"
+    if [ "$3" = cold ]; then
+        mkfs.ext4 -q -F -O ^has_journal "$1"
+    fi
 }
 
 write_config() { # $1=path, $2=diff dir, $3=prefetch, $4=cold|restore
     local path="$1" dir="$2" prefetch="$3" mode="${4:-restore}"
     mkdir -p "$dir"
-    format_diff "$dir/root.ext4" 1G
-    format_diff "$dir/scratch.ext4" 512M
-    format_diff "$dir/dataset.ext4" 512M
+    prepare_diff "$dir/root.ext4" 1G "$mode"
+    prepare_diff "$dir/scratch.ext4" 512M "$mode"
+    prepare_diff "$dir/dataset.ext4" 512M "$mode"
     cat >"$path" <<EOF
 resources: { capacity: { cpu: 1, memory: 512MiB }, allocatable: { cpu: 1, memory: 512MiB } }
 network: { tap: $TAP_NAME, interface: eth0, ip: $GUEST_HTTP_IP/31, hostname: perf-working-set }
@@ -702,9 +706,10 @@ cp "$B_DIR/info.json" "$B_DIR/run.log" "$B_DIR/seed.log" "$B_DIR/snapshot.log" \
 echo "==> immutable B: $B_ARTIFACT" >&2
 
 # Build a logically equivalent encrypted B once for the dedicated local
-# tarstream comparison. The active diff targets are deliberately preformatted
-# plaintext files; crypto.local=auto therefore changes only captured local
-# artifacts and does not mix DIFF/XTS cost into the measurement.
+# tarstream comparison. Active diffs stay plaintext: cold fixtures are
+# journal-free filesystems, while restore targets have no allocated pages and
+# inherit the captured filesystem. crypto.local=auto changes only captured
+# local artifacts and does not mix DIFF/XTS cost into the measurement.
 AUTO_B_DIR="$WORK/base-auto"
 AUTO_B_OUT="$AUTO_B_DIR/snapshot"
 mkdir -p "$AUTO_B_OUT"
