@@ -82,7 +82,7 @@ def check_request_rejection():
 
 def check_source_transition(script):
     """Execute the rollout step: extracted checks precede E2E and fail closed."""
-    cases = (("kuasar-sandbox", True, False), ("sandboxer", True, False),
+    cases = (("kuasar-sandbox", True, False), ("connector", True, False), ("sandboxer", True, False),
              ("orchestrator", True, False), ("kuasar-sandbox", False, False),
              ("orchestrator", True, True))
     for owner, extracted, fail_check in cases:
@@ -100,7 +100,7 @@ echo build >> "$EVENT_LOG"
 ''')
             write("platform/ci/integration/ci-timed.sh", 'shift; exec "$@"\n')
             if extracted:
-                for component in ("sandboxer", "orchestrator"):
+                for component in ("connector", "sandboxer", "orchestrator"):
                     write(f"{component}/scripts/ci-source-checks.sh", f'''
 [ "$TMPDIR" = /var/tmp ]
 echo {component}-checks >> "$EVENT_LOG"
@@ -125,11 +125,13 @@ echo e2e >> "$EVENT_LOG"
                        CANDIDATE_REPOSITORY=f"kuasar-sandbox/{owner}",
                        E2E_ZOT_BIN="fixture-zot", E2E_VGW_BIN="fixture-vgw",
                        FAIL_CHECK=str(fail_check).lower(),
-                       EXPECT_HELPERS=str(extracted and owner != "sandboxer").lower())
+                       EXPECT_HELPERS=str(extracted and owner in ("orchestrator", "kuasar-sandbox")).lower())
             result = subprocess.run(["bash", "-c", script], cwd=platform, env=env,
                                     capture_output=True, text=True, timeout=5)
             expected = ["build"]
             if extracted:
+                if owner in ("connector", "kuasar-sandbox"):
+                    expected.append("connector-checks")
                 if owner in ("sandboxer", "kuasar-sandbox"):
                     expected.append("sandboxer-checks")
                 if owner in ("orchestrator", "kuasar-sandbox"):

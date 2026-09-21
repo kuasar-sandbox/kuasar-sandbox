@@ -672,9 +672,10 @@ jobs:
           # validated. New owner revisions move these checks out of their E2E scripts;
           # old revisions still execute them in the unchanged owner runner.
           case "$owner" in
+            connector) source_checks=(connector) ;;
             sandboxer) source_checks=(sandboxer) ;;
             orchestrator) source_checks=(orchestrator) ;;
-            kuasar-sandbox) source_checks=(sandboxer orchestrator) ;;
+            kuasar-sandbox) source_checks=(connector sandboxer orchestrator) ;;
             *) source_checks=() ;;
           esac
           for source_owner in "${source_checks[@]}"; do
