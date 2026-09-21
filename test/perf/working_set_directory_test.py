@@ -95,3 +95,82 @@ class WorkingSetDiffTest(unittest.TestCase):
         for size, blocks, prefix in files.values():
             self.assertEqual(blocks, 0)
             self.assertEqual(prefix, bytes(4096))
+
+
+class WorkingSetCheckpointTest(unittest.TestCase):
+    source_path = Path(__file__).with_name("sandbox-perf-working-set.sh")
+
+    def check_sample(self, group=None, policy="off"):
+        source = self.source_path.read_text()
+        stage = re.search(r"^stage_checkpoint\(\).*?^}\n", source, re.M | re.S)
+        if group:
+            start = source.index('        SAMPLE_DIR="$WORK/sample-$group-$iteration"')
+            finish = source.index('        SOURCE_PID=', start)
+            preparation = source[start:finish]
+        else:
+            start = source.index('capture_local_crypto_w()')
+            finish = source.index('    local source_pid=', start)
+            preparation = source[start:finish] + '\n}\ncapture_local_crypto_w "$POLICY" 1\n'
+        with tempfile.TemporaryDirectory(prefix="owned-checkpoint-") as tmp:
+            root = Path(tmp)
+            baseline = root / "immutable base"
+            baseline.mkdir()
+            names = ["a" * 64 + ".snapshot", "b" * 64 + ".sandbox",
+                     "c" * 64 + ".overlay", "d" * 64 + ".overlay"]
+            for name in names:
+                (baseline / name).write_text(name)
+            (baseline / "ws-base.snapshot").symlink_to(names[0])
+            calls = root / "calls"
+            script = 'set -euo pipefail\n' + (stage[0] if stage else '')
+            script += '''write_config() { :; }
+reset_sample_storage() { :; }
+drop_host_caches() {
+    local owned="${w_out:-${W_OUT:-}}"
+    [ -n "$owned" ] && [ -f "$owned/$B_BASENAME" ]
+}
+start_sandbox() {
+    printf '%s\\n' "$1" "$4" "$7" "${w_out:-${W_OUT:-}}" > "$CALLS"
+}
+'''
+            script += preparation
+            env = dict(os.environ, WORK=str(root), POLICY=policy,
+                       group=group or "D", iteration="1", CALLS=str(calls),
+                       B=str(baseline / "ws-base.snapshot"), B_OUT=str(baseline),
+                       B_DIR=str(baseline.parent), B_ARTIFACT=str(baseline / names[0]),
+                       B_BASENAME=names[0], AUTO_B=str(baseline / "ws-base.snapshot"),
+                       AUTO_B_OUT=str(baseline), AUTO_B_INFO=str(root / "auto.json"),
+                       AUTO_B_ARTIFACT=str(baseline / names[0]), AUTO_B_BASENAME=names[0])
+            result = subprocess.run(["bash", "-c", script], env=env,
+                                    text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            sid, base, restored, output = calls.read_text().splitlines()
+            checkpoint = Path(base) / sid / "checkpoint"
+            self.assertEqual(Path(output), checkpoint)
+            self.assertEqual(Path(restored), checkpoint / names[0])
+            for name in names:
+                self.assertEqual((checkpoint / name).read_text(), name)
+                self.assertEqual((baseline / name).read_text(), name)
+            self.assertEqual((checkpoint / "ws-base.snapshot").resolve(), checkpoint / names[0])
+            # Hiding a sample-owned disk name must not rename the shared B input.
+            disk = checkpoint / names[2]
+            disk.rename(checkpoint / (names[2] + ".hidden"))
+            self.assertTrue((baseline / names[2]).is_file())
+            self.assertEqual((baseline / names[2]).read_text(), names[2])
+
+    def test_matrix_sources_and_outputs_use_owned_checkpoint(self):
+        for group in "ABCD":
+            with self.subTest(group=group):
+                self.check_sample(group=group)
+
+    def test_crypto_sources_and_outputs_use_owned_checkpoint(self):
+        for policy in ("off", "auto"):
+            with self.subTest(policy=policy):
+                self.check_sample(policy=policy)
+
+    def test_publication_hides_only_sample_disk_names(self):
+        source = self.source_path.read_text()
+        start = source.index("        # The W disk tops")
+        source = source[start:source.index("        PUBLISH_START=", start)]
+        self.assertIn('snapshot_disk_tops "$B_DIR/info.json" "$W_OUT"', source)
+        self.assertIn('for path in "${SAMPLE_B_DISK_TOPS[@]}"', source)
+        self.assertNotIn('for path in "${B_DISK_TOPS[@]}"', source)
