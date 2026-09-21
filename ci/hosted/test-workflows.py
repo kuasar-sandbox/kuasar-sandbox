@@ -87,9 +87,13 @@ def check():
     # Evaluate real allocation guards: candidate inputs, provider publicity and
     # failure/finalization cannot authorize a private or mismatched actual caller.
     count = 0
-    for name in ("ci-entry", "integration-tests", "integration-architecture", "aggregate-release",
-                 "daily-preview", "daily-preview-branch", "delete-preview", "preview-gc"):
-        for job in load(name + ".yml")["jobs"].values():
+    for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
+        name = path.name
+        for job in load(name)["jobs"].values():
+            # A thin reusable caller allocates no runner itself. Every actual
+            # allocation, and guarded nested invocation, is evaluated below.
+            if "runs-on" not in job and "if" not in job:
+                continue
             assert "if" in job, (name, "missing pre-allocation guard")
             for caller in ("kuasar-sandbox/accelerator", "kuasar-sandbox/kuasar-sandbox", "outside/repo"):
                 for visibility in ("private", "internal", ""):

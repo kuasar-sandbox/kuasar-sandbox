@@ -96,7 +96,7 @@ Local contract checks: `make test-ci-tools test-release-tools test-perf-tools` w
 
 ## 7. Initial coverage and rollout evidence
 
-This is the single initial coverage ledger for #152. Update the evidence column with exact public run URLs and SHAs during rollout; an unexecuted selected case remains pending, not passed. Chinese readers: 本表同时记录首轮覆盖、原因、真实证据和后续事项。
+This is the single initial coverage ledger for #152. Update the evidence column with exact public run URLs and SHAs during rollout; an unexecuted selected case remains pending, not passed. The Chinese guide links to this same ledger for scope, reasons, evidence and follow-up.
 
 | Architecture / owner | Predeclared scope | Evidence at implementation | Gap / next step |
 | --- | --- | --- | --- |
