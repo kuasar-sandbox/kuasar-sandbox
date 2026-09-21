@@ -85,7 +85,7 @@ cd release-install
 BIN=$PWD/bin bash test/e2e/run_all.sh
 ```
 
-This mode neither infers nor reads component `main`. Each unit's documentation, cases and binaries bind to its independently selected tag, allowing a platform maintenance branch to combine different component maintenance lines. It does not invoke Go/Rust/native builds or recompile vmlinux. After success, publish uses the earlier artifact unchanged.
+This mode neither infers nor reads component `main`. Each unit's documentation, cases and binaries bind to its independently selected tag, allowing a platform maintenance branch to combine different component maintenance lines. It does not rebuild product Go/Rust/native binaries, vmlinux, RocksDB or Cloud Hypervisor. On a Public caller, the trusted `exact-assets` bootstrap supplies host prerequisites; after bundle validation/extraction, [exact-assets-tools.sh](../ci/hosted/exact-assets-tools.sh) reuses environment-provided zot/versitygw first; when absent, it downloads zot v2.1.17 or builds the local versitygw v1.5.0 test service with verified inputs. Only host test tools and EROFS writer/readers are built. Product binaries in `release-install/bin` remain untouched. All ten existing `REQUIRE_*` flags stay enabled, and the packaged top-level suite still runs every owner. After success, publish uses the earlier artifact unchanged.
 
 ## 4. Native cache
 
@@ -99,6 +99,12 @@ This mode neither infers nor reads component `main`. Each unit's documentation, 
 
 Cache entries live at `$KUASAR_NATIVE_CACHE_ROOT/v2/<arch>/<component>/<input-hash>/`. Hosted bootstrap sets this root inside the disposable job directory; persistent runners retain `/var/cache/kuasar/native`. Hosted caches are local reuse only and are not uploaded to Actions cache or artifacts. The input hash covers build scripts, patches/configuration, upstream digests, architecture, Go/Cargo/C/C++ toolchains and pkg-config resolution. Entries are published through staging, checksums and atomic rename. Descriptor, payload and tar paths are checked again before restoring a hit. Corrupt entries fail rather than being repaired in place.
 
+EROFS keys include Libgcrypt/Libgpg-error/uuid pkg-config metadata, target compiler/tool bytes, actual local source archive bytes (or the expected digest for a pinned URL), and a bounded compiler/static-link probe. The probe tracks consumed headers, including forced includes, and the archives/startup objects actually selected through flags, sysroots and library search paths. A source URL or filename is a locator, not content identity. Logical workspace file labels are relocatable; meaningful compiler and sysroot flag values remain significant. An unpinned URL cannot authorize a shared cache; use a pinned URL or a local archive.
+
+Optional `guest-runtime/native-deps/deps/erofs-patches` material, ordered `series` and `deps/erofs-recipe.sh` enter the key. Older source sets without those files are supported, including the previous OpenSSL recipe's actual target link probe. Adding, changing or removing inputs invalidates the key. Hosted native profiles install `libgcrypt20-dev libgpg-error-dev uuid-dev` and retain `libssl-dev` for already-admitted older source sets. openEuler 24.03-LTS-SP4's `libgcrypt-1.10.2-4` and `libgpg-error-1.47-1` source RPMs explicitly disable static libraries; their devel packages alone are insufficient. The [runner provider](../ci/runner/README.md#install) builds those pinned distro-patched sources with at most two jobs, installs only the static archives and validated source/build/relink/license catalogs, and verifies warm reuse and template-to-slot copies. Runtime packaging validates the same pinned catalogs; Ubuntu keeps the installed-package material path.
+
+EROFS retains one optional `bin/<arch>/.erofs-recipe` v2 stamp with both output hashes and actual external compiler/link dependencies, both link maps and their EROFS object/archive inputs, and source `LICENSES`, `AUTHORS` and `COPYING`. Restoring an identical recipe can reuse the outputs without an extracted source tree. Older caches without the stamp remain readable and rebuild on the next recipe check. Repository patch files remain from the admitted source set; cache restore does not replace them. Runtime patch-material validation uses the selected commit's local Git objects; those objects must be available to standalone validators. Actual target copyright/notices and source/relink inputs remain required for real release packaging.
+
 Build and restore of the same key hold an entry lock. Each component retains its four most recently used keys by default. Reclamation only removes entries beyond the protection period whose locks can be acquired without blocking. Cache tests:
 
 ```bash
@@ -107,104 +113,136 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 5. Runners and networking
 
-### 5.1 Public runner preparation
+### 5.1 Visibility-only standard runner routing
 
-Guest-runtime retains its completed standard-runner route unchanged. Accelerator#134 /
-platform#128 prepares accelerator while it remains Private. After authorized
-publication and rollout, accelerator selects `ubuntu-24.04` for admission,
-source E2E and finalization; source E2E also requires `mode == source`.
-Private accelerator and other unmigrated callers retain their existing pools.
-Other caller and exact-assets selection/coverage remain unchanged. This does not
-change visibility, billing or quota, create a public relay for private CI, or
-introduce a reduced E2E mode or replacement success check.
+The main migration is tracked in [#127](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/127).
+The shared control and E2E jobs select `ubuntu-latest` exactly when the actual
+calling repository is Public. Every other visibility retains the existing
+`kuasar-control` or `kuasar-e2e` pool. Repository names, candidate identity and
+mode do not choose the runner; invalid inputs fail the independent request
+validator on the selected runner. The reusable workflow repository and fork
+visibility are not the calling repository's visibility.
 
-[ci/hosted/bootstrap.sh](../ci/hosted/bootstrap.sh) is the shared trusted
-bootstrap, with explicit profiles:
+Control bootstrap uses the same Public condition. Mode still chooses the
+`source` or `exact-assets` profile, credentials, workload and timeout: exact
+assets keep 120 minutes; other hosted work keeps 180 and private source keeps
+60. No migration allowlist, extra runner decision job or paid fallback exists.
+Host selection follows `ubuntu-latest`, but toolchain, dependency and auxiliary
+service versions and hashes remain pinned. Capability checks require Ubuntu
+Linux, x86_64 and the expected hosted environment, not a numbered image.
+Removing that version gate does not qualify an untested future Ubuntu image.
+
+Each job chooses the profile needed for its actual work:
 
 | Profile | Jobs / prerequisites |
 | --- | --- |
 | `control` | PR admission/finalization, release cleanup/reconcile; Git, curl, jq, Python/YAML and archive tools |
-| `release-control` | Release preflight, Kernel/accelerator publish and Preview deletion; control tools plus Go |
-| `accelerator` | Real RocksDB build and release tests; pinned Go, CMake, build-essential, pkg-config, binutils and control tools; no Kernel, EROFS, KVM or Docker setup |
+| `release-control` | Release preflight, Kernel publish and Preview deletion; control tools plus Go |
 | `kernel` | Kernel build; Go and Ubuntu Kbuild development packages |
 | `runtime` | Runtime build; Go, native development packages and trusted EROFS writer/readers |
 | `runtime-publish` | Runtime publish validation; Go and separately built EROFS writer/readers |
 | `source` | Complete source build/E2E; all native prerequisites, Rust/Docker checks, VM/network tools |
+| `exact-assets` | Packaged binaries/tests; Docker, systemd/cgroup v2, KVM/UFFD/netns/BPF, runtime utilities, EROFS host tools; environment Go for the versitygw fallback build |
 
-Go comes from the official `go1.26.5.linux-amd64.tar.gz`, SHA256
-`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`.
-The bootstrap verifies the archive, driver and compiler before adding it to
-PATH; module toolchain selection retains `GOTOOLCHAIN=auto`. EROFS host writer/readers
+Go is supplied by the runner environment. Bootstrap checks availability without
+installing another distribution, changing GOROOT/GOTOOLCHAIN, or comparing a
+binary digest or exact patch version. Source/module requirements still apply.
+Release automation uses the environment GitHub CLI. EROFS host writer/readers
 use pinned v1.9.1 source and its SHA256, independently of the static guest
-recipe. Rust/Cargo and Docker are required capabilities of the
-[standard image](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+recipe. Docker, and Rust/Cargo for source builds, are required capabilities of the
+[standard image](https://github.com/actions/runner-images#available-images)
 and are checked explicitly. Native source pins, Cargo lockfiles, build flags,
-link maps and materials remain owned by their existing recipes. Accelerator
-source E2E uses the full `source` profile, including Redis, unzip and OpenSSL,
-so five-component assembly and the working-set gate remain intact. Missing tools,
+link maps and materials remain owned by their existing recipes. Missing tools,
 checksum mismatches or unavailable VM capabilities fail the job.
 
-The source profile loads `tun` and `vhost_vsock`, enables
-`vm.unprivileged_userfaultfd=1`, grants only the job uid access to `/dev/kvm`,
-`/dev/vhost-vsock` and `/dev/net/tun`, and checks userfaultfd, systemd and cgroup
-v2. It installs no runner service, template, nspawn slot or persistent network.
+The source and exact-assets profiles load `tun` and `vhost_vsock`, enable
+`vm.unprivileged_userfaultfd=1`, and check userfaultfd, systemd and cgroup v2.
+A headless runner's udev `uaccess` processing can remove the named runner ACL
+from `/dev/kvm` without replacing the device. Before host changes, VM bootstrap
+requires the expected GitHub-hosted Ubuntu Linux x64 environment and validates
+non-root numeric job uid/primary gid. It installs only
+`/etc/udev/rules.d/99-kuasar-job-kvm.rules`, matching `SUBSYSTEM=="misc"` and
+`KERNEL=="kvm"`, with final `GROUP:="<id -g>"` and `MODE:="0660"` assignments.
+It reloads rules, triggers only KVM, waits for udev to settle, and applies the
+same group/mode only to `/dev/kvm`. It then removes the named runner KVM ACL to
+replay the observed loss and verifies `O_RDWR` as the current job user.
+Group membership is unchanged; no world access is granted. Vhost-vsock and
+TUN retain their original per-job ACLs. The suite and its pre-sudo access checks
+remain unchanged; full hosted qualification is still required.
+
+The required packaged connector E2E verifies actual namespaces and BPF data
+paths; bootstrap does not require an additional kernel-version-specific probe. Both profiles explicitly install full-suite utilities such as ping,
+netcat, OpenSSL, SQLite and `strace` for the sandboxer usage fault/source
+fixtures. Neither installs a runner service, template, nspawn slot or persistent
+network.
 The old owned-state recovery runs only on persistent runners. Builds use CPU
 affinity bounded by available CPUs and memory (2 GiB OS reserve, 2 GiB per
 compiler job), including recipes using `nproc`; Go/Cargo parallelism uses the
 same budget. Top-level Make goals retain their sequential order. Source E2E has
-180 minutes for a cold build and the complete owner/UFFD/A/B/C/D smoke sequence.
+the existing 180-minute hosted budget for a cold build and the complete
+owner/UFFD/A/B/C/D smoke sequence; exact-assets retains 120 minutes and private
+source retains 60. Test assertions and the full working-set matrix are unchanged.
 
 Source archives, native entries, tarballs, Go/Cargo caches and tools live under
-`$RUNNER_TEMP/kuasar-hosted.*`. They are never uploaded. Sources themselves stay
+`$RUNNER_TEMP/kuasar-hosted.*`; exact-assets test tools use a separate
+`$RUNNER_TEMP/kuasar-exact-tools.*` tree. They are never uploaded. Sources themselves stay
 in the job workspace; only the existing revision/timing/performance metadata
 and validated release bundles are uploaded. Release bundles retain their
 required license/source inventories, without a full workspace handoff. Hosted
-uses official Go/Rust/Python/kernel/image endpoints, and builds the existing
-zot/versitygw targets locally. Persistent callers keep their mirror settings.
+uses the environment Go/Rust tools and official Python/kernel/image endpoints. Source mode retains its
+existing zot/versitygw targets. Exact-assets reuses trusted platform
+`ensure-zot.sh` and only the public guest-runtime `build-versitygw.sh`/`common.sh`
+from [commit 494dbceae683d6b20cdbec00fe6b1f554ea2f508](https://github.com/kuasar-sandbox/guest-runtime/tree/494dbceae683d6b20cdbec00fe6b1f554ea2f508/native-deps/deps).
+Fixed recipe paths, commit and SHA256 pins are checked; versitygw source also
+passes archive path/type validation. The environment Go is used for this host tool build, with
+bounded affinity/parallelism and local caches. `host-tools.tsv` records recipe,
+source and binary identities. No private sibling checkout or candidate-selected
+host build script is used in exact-assets. Persistent callers keep their mirror
+settings.
 
-PR bootstrap runs from `trusted/platform` at `job.workflow_sha`, before
-source-token creation. Source jobs retain the existing read-only tooling App
-token and revoke it before bootstrap/candidate execution. Guest release jobs
+Integration bootstrap runs from `trusted/platform` at `job.workflow_sha`, after
+request validation and platform tooling-token revocation. The validated mode
+selects `source` or `exact-assets`; only source mode creates a source token and
+attaches source caches. Exact-assets attaches its tools only after downloading,
+validating and extracting the bundle. Guest release jobs
 check out that same immutable platform pin before requested sources; Runtime
 ABI checks come from the trusted guest workflow checkout. Kernel needs no
 cross-repository App token. Runtime still fetches its private dependency closure
 with the existing read-only source token and revokes it before executing source
 or packaging code. Publishing remains in a separate job with write permission.
 
-Accelerator release and maintenance routing also checks
-`github.event.repository.private == false`. Its private jobs retain the exact
-control/build pools, mirrors and tarball cache; bootstrap never mutates a private
-runner. Public release builds bootstrap from `trusted/platform` before checking
-out the exact requested source into `src/accelerator`. Trusted checks stay in a
-sibling checkout, outside source cleanliness/provenance checks. Build, tests,
-packaging and upload paths follow that source subtree. The CI-only ABI guard
-requires static manifest/store binaries and the normal RocksDB/static-libstdc++
-cache binary with no GLIBC requirement above the declared 2.38 baseline; failures
-block packaging. It does not change the native recipe or release materials.
+Rollout follows the corrected main-first, public-before-hosted order: finish
+main's own source/aggregate qualification first, then prepare and review each
+remaining private repository, publish that repository, and verify its own
+standard-runner CI. Accelerator #129/#135 remains deferred as component-specific work. Sequential
+preparation/publication/validation is a work order, not a shared routing allowlist.
+A later Public transition selects hosted automatically; component-owned release
+workflows still require their own preparation and real acceptance. No public relay
+for a private component is introduced.
+Main's genuine aggregate/source-set tests may use the existing authorized
+companion dependencies, but do not qualify component publication. The completed
+guest route and immutable release bootstrap pins are retained; future pin changes
+must use the reviewed upstream SHA. PR wrappers keep `@main`, and
+`pull_request_target` executes the base-branch wrapper. Candidate-only edits or
+manual rehearsals cannot replace the required exact-candidate Integration E2E
+check. The local authoring Git baseline is not upstream release provenance.
 
-Merge and qualify the shared implementation before activating a caller. Release
-workflows pin its reviewed immutable upstream SHA; refresh pins after a squash
-or rebase. PR wrappers retain `@main`, so new events resolve the trusted base
-implementation. Editing a candidate wrapper alone is not qualification. Other
-callers retain their routes until their migration; private preparation is not
-proof of public hosted execution.
+Standard-runner functional results do not prove the previous fixed-hardware VM
+capacity. Optional real-cloud OBS/NFS tests still need their own environment and
+evidence; local zot/versitygw fixtures do not establish real-cloud acceptance.
+Required capability or resource failures must fail, not become successful skips.
 
 Offline checks are `python3 ci/hosted/test-workflows.py` (also included in
-`make test-ci-tools`), accelerator `python3 scripts/ci-test-workflows.py
-../kuasar-sandbox` (or the platform checkout path), and guest's corresponding check.
-They cover runner selection, profiles, pins, token ordering,
+`make test-ci-tools`) and guest `python3 scripts/ci-test-workflows.py
+../kuasar-sandbox`. They cover runner selection, profiles, pins, token ordering,
 private cache paths, ABI and required coverage. Syntax/offline success is not
-hosted qualification: maintainers must exercise the actual candidate run,
+hosted qualification: the supervisor must exercise the actual candidate run,
 including the full working-set matrix and truthful revision metadata, after
-authorizing the trusted public rollout. Release packaging tests use synthetic
-payload/link-map fixtures; they do not qualify a real RocksDB build. Local
-filesystem/cache and S3-compatible fixtures establish local behavior, not real
-cloud coverage. Credentialed OBS coverage remains a separate explicit
-`OBS_E2E=1` run; excluded cloud cases must not be reported as passing.
+activating the trusted rollout.
 
 ### 5.2 Remaining persistent callers
 
-Runner installation material lives in `ci/runner/`. Unmigrated component release-control jobs use the dedicated `kuasar-control` pool. Their candidate-executing E2E jobs continue to use the `kuasar-e2e` pool and restricted read tokens. These runner classes have different root filesystems, work directories, labels and GitHub runner groups. Changing roles requires cleaning and rebuilding from a trusted template, not relabeling in place. `kuasar-control` is visible to all organization repositories, including public repositories, but its workflow allowlist permits only central `ci-entry.yml` and release workflows on component `main`. Public-repository CI admission/finalization, Daily coordination and aggregate-release control jobs use GitHub-hosted runners. Runner proxies are deployment configuration and are not embedded in repository workflows. Public mainland-China mirrors for Go, Rust, Python, the Linux kernel and common container images reduce network variability.
+Runner installation material lives in `ci/runner/`. Unmigrated component release-control jobs use the dedicated `kuasar-control` pool. For non-public callers, shared candidate-executing E2E jobs use the `kuasar-e2e` pool and restricted read tokens. These runner classes have different root filesystems, work directories, labels and GitHub runner groups. Changing roles requires cleaning and rebuilding from a trusted template, not relabeling in place. `kuasar-control` is visible to all organization repositories, including public repositories, but its workflow allowlist permits only central `ci-entry.yml` and release workflows on component `main`. Public-repository CI admission/finalization, Daily coordination and aggregate-release control jobs use GitHub-hosted runners. Runner proxies are deployment configuration and are not embedded in repository workflows. Public mainland-China mirrors for Go, Rust, Python, the Linux kernel and common container images reduce network variability.
 
 At persistent-runner job start, reset stops leftover sandbox systemd units, removes test TAPs and reloads systemd. It also reclaims the runner's working-set network namespace using the deterministic `kuasar-ws-<hash8>` name derived from `RUNNER_NAME`: send TERM to its processes, send KILL after a bounded wait, confirm no process is alive, then delete the namespace. Name derivation prevents runners on the same host from affecting one another and lets the next job reclaim a SIGKILL-interrupted run by exact name without guessing interface ownership (#43, #53). Common zot and versitygw tools are linked from the runner's fixed tool directory into the current workspace; they do not enter release packages. The `kuasar-e2e` runner group retains `visibility=all` for organization repositories, has no workflow allowlist and runs only candidate E2E. Fork-workflow secret forwarding is disabled in every repository. Preparation steps needing App secrets exist only in trusted base-repository workflows, and their tokens are revoked before candidate code executes.
 
@@ -223,7 +261,7 @@ Every Integration E2E run uploads `ci-metadata-<run>-<attempt>`. Source mode nor
 - `timings.tsv`: build/test stage resource data;
 - UFFD and working-set reports, only when those tests ran.
 
-Exact-assets mode records the run and test output without inventing source or native-cache metadata. The release combination is expressed by the manifest at the exact selected platform-branch commit, component tags and GitHub release notes. It need not come from platform `main`: maintenance-branch aggregates retain their own selection.
+Exact-assets mode records the run, test output and hosted `host-tools.tsv` identities without inventing component-source or native-cache metadata. The release combination is expressed by the manifest at the exact selected platform-branch commit, component tags and GitHub release notes. It need not come from platform `main`: maintenance-branch aggregates retain their own selection.
 
 ## 7. See also
 
@@ -231,5 +269,3 @@ Exact-assets mode records the run and test output without inventing source or na
 - [deployment.md](deployment.md): system services and runtime environment required by Integration E2E;
 - [../ci/runner/README.md](../ci/runner/README.md): runner installation and maintenance;
 - [../test/QUICKSTART.md](../test/QUICKSTART.md): E2E prerequisites and troubleshooting.
-
-Normal Go RocksDB tests retain the upstream binding’s compression-library link flags; the accelerator profile explicitly supplies Snappy, LZ4, Zstandard and zlib development libraries. This does not enable compression in the existing native RocksDB recipe.

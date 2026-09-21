@@ -377,14 +377,14 @@ banner "Per-run node stack (orchestrator + eBPF switch; storage tier already up)
 # ---------------------------------------------------------------------------
 say "overlay diff_template — pre-formatted empty ext4 seeding each cold boot's writable upper"
 MKFS_EXT4="$(command -v mkfs.ext4 || echo /sbin/mkfs.ext4)"; [ -x "$MKFS_EXT4" ] || die "mkfs.ext4 not found"
-OVL="$WORK/overlay-1G.ext4"; truncate -s 1G "$OVL"; "$MKFS_EXT4" -F -q -b 4096 "$OVL" >/dev/null 2>&1 || die "mkfs.ext4"
+OVL="$WORK/overlay-1G.ext4"; truncate -s 1G "$OVL"; "$MKFS_EXT4" -F -q -b 4096 -O ^has_journal "$OVL" >/dev/null 2>&1 || die "mkfs.ext4"
 say "builder diff_template — build-sandbox writable disk (pull cache + steps delta + export scratch; sparse)"
 # Sparse, so the cap is free until written. The FULL build re-flattens the base
 # again in phase B (steps export) on top of phase A's pull+flatten, so headroom
 # beyond the compact default base matters: blobs + unpacked tree + two EROFS
 # outputs + mkfs chunk staging can coexist. The 24 GiB sparse cap also leaves
 # room for an explicitly selected, larger digest-pinned base.
-BLD="$WORK/builder-24G.ext4"; truncate -s 24G "$BLD"; "$MKFS_EXT4" -F -q -b 4096 "$BLD" >/dev/null 2>&1 || die "mkfs.ext4 (builder)"
+BLD="$WORK/builder-24G.ext4"; truncate -s 24G "$BLD"; "$MKFS_EXT4" -F -q -b 4096 -O ^has_journal "$BLD" >/dev/null 2>&1 || die "mkfs.ext4 (builder)"
 
 say "local demo CA + *.$DOMAIN server cert (SDK trusts the CA via SSL_CERT_FILE; data plane is https)"
 cat > "$WORK/ca.cnf" <<EOF

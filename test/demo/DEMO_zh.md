@@ -19,6 +19,11 @@ COPY 存储保持主机可达:Conductor 执行 HEAD/预签名,SDK 直接上传,B
 下载上下文后再流式送入构建 VM。Registry 镜像导入不同:它在 guest 中执行,
 通过 Demo 的管理 VIP 路由访问本地 Zot。
 
+每次运行新建的 overlay 和 builder 工作盘均为稀疏 ext4 文件，格式化时使用
+`mkfs.ext4 -O ^has_journal`，避免文件系统 journal 占用及元数据日志写入；这不影响
+journald 或应用日志。这是可丢弃工作盘的创建约定，不提供崩溃恢复保证，也不限制
+已有用户镜像。Guest sync 和快照/恢复语义保持不变。
+
 ## 2. 验证内容
 
 | 阶段 | 操作 | 必须得到的结果 |

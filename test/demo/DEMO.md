@@ -20,6 +20,13 @@ the SDK uploads directly, and the Builder downloads the context before streaming
 it into the build VM. Registry image import is different: it runs in the guest
 and uses the Demo's management-VIP route to local Zot.
 
+The per-run overlay and builder work disks are new sparse ext4 files formatted
+with `mkfs.ext4 -O ^has_journal`. They omit the filesystem journal, not journald
+or application logs, to avoid journal capacity and metadata writes. This is a
+creation-time default for disposable work disks, not a crash-recovery guarantee
+or a restriction on existing user images. Guest sync and snapshot/resume
+semantics remain unchanged.
+
 ## 2. What is verified
 
 | Phase | Operation | Required result |

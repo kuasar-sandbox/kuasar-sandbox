@@ -14,6 +14,22 @@ from typing import Iterable, NoReturn
 
 COMPONENT_UNITS = {"accelerator", "connector", "sandboxer", "orchestrator"}
 ALL_UNITS = COMPONENT_UNITS | {"runtime", "vmlinux"}
+
+# vmlinux is an independent release unit in guest-runtime. Its version follows
+# the guest kernel artifact, not every commit in the containing repository.
+# Keep this closure aligned with guest-runtime/native-deps' VMLINUX_INPUTS and
+# the kernel and shared Makefile logic consumed by that target.
+VMLINUX_TREE_INPUTS = (
+    "native-deps/deps/build-vmlinux.sh",
+    "native-deps/deps/common.sh",
+    "native-deps/deps/vmlinux",
+    "native-deps/deps/linux-patches",
+)
+# These targets are not prerequisites of vmlinux in guest-runtime/native-deps.
+VMLINUX_UNRELATED_MAKE_TARGETS = {
+    "all", "build", "erofs", "envd", "$(ENVD_BIN)", "versitygw",
+    "$(VERSITYGW_BIN)", "test", "test-scripts", "test-erofs", "clean", "help",
+}
 PLATFORM_RELEASE_BRANCH_RE = re.compile(
     r"^release/v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.x$"
 )
@@ -128,6 +144,67 @@ def run_git(root: pathlib.Path, *args: str, allow_failure: bool = False) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def git_file(root: pathlib.Path, commit: str, path: str) -> str:
+    return run_git(root, "show", f"{commit}:{path}")
+
+
+def vmlinux_make_inputs(text: str) -> list[str]:
+    # Read source text without evaluating Makefile code. Retain shared/unknown
+    # statements, including conditionals, variable overrides and kernel recipes;
+    # ignoring everything except the Linux pins can reuse an obsolete kernel.
+    statements: list[tuple[str | None, str]] = []
+    skip_recipe = False
+    for line in re.sub(r"\\\n[ \t]*", " ", text).splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if line.startswith("\t"):
+            if not skip_recipe:
+                statements.append((None, line))
+            continue
+        skip_recipe = False
+        target = re.match(r"^([^\s:]+)\s*:(?!=)", line)
+        if target and target.group(1) in VMLINUX_UNRELATED_MAKE_TARGETS:
+            skip_recipe = True
+            continue
+        if target and target.group(1) == ".PHONY":
+            continue
+        assignment = re.match(
+            r"^\s*(?:(?:export|override)\s+)*"
+            r"(GO|GO_ARCH|GO_BUILD_FLAGS|(?:EROFS|ENVD|VERSITYGW)_[A-Z0-9_]+)"
+            r"\s*[:?+!]*=",
+            line,
+        )
+        statements.append((assignment.group(1) if assignment else None, line))
+
+    # Other artifacts' private variables can be ignored only while kernel or
+    # shared statements do not reference them, directly or through another one.
+    retained: set[str | None] = {None}
+    while True:
+        references = {
+            name
+            for variable, line in statements if variable in retained
+            for name in re.findall(r"\$[({]([A-Za-z_][A-Za-z0-9_]*)[)}]", line)
+        }
+        if references <= retained:
+            break
+        retained.update(references)
+    return [line for variable, line in statements if variable in retained]
+
+
+def vmlinux_inputs_changed(root: pathlib.Path, base: str, head: str) -> bool:
+    if base == head:
+        return False
+    changed = run_git(
+        root, "diff", "--name-only", f"{base}..{head}", "--", *VMLINUX_TREE_INPUTS
+    )
+    if changed:
+        return True
+    makefile = "native-deps/Makefile"
+    return vmlinux_make_inputs(git_file(root, base, makefile)) != vmlinux_make_inputs(
+        git_file(root, head, makefile)
+    )
+
+
 def first_parent_commits(root: pathlib.Path, source_ref: str) -> list[str]:
     output = run_git(root, "rev-list", "--first-parent", source_ref)
     commits = output.splitlines()
@@ -217,7 +294,10 @@ def resolve(
                     key=lambda item: item.same_commit_order,
                 )
 
-    if winner_commit == head:
+    if winner_commit == head or (
+        unit == "vmlinux"
+        and not vmlinux_inputs_changed(root, winner_commit, head)
+    ):
         return Resolution(source_ref, head, winner.raw, winner_commit, "reuse", winner.raw)
     selected = preview_candidate(unit, winner.raw, date)
     return Resolution(source_ref, head, winner.raw, winner_commit, "publish", selected)

@@ -10,30 +10,30 @@ only:
 
 - `/var/cache/kuasar`, a writable source/native-artifact cache; exact-SHA names
   and repository-owned locks coordinate reuse but do not prevent tampering;
-- `/var/lib/kuasar-ci/tools`, read-only test tool binaries;
-- `/usr/local/go` and the host kernel module tree, read-only.
+- `/var/lib/kuasar-ci/tools`, read-only environment tool binaries;
+- the environment-selected Go root and executable, and the host kernel module tree, read-only.
 
 Each slot receives a different bpffs subtree at `/sys/fs/bpf`; pinned BPF paths
 cannot collide across concurrent jobs.
 
-The host must preload the pinned x86_64 E2E tools instead of downloading their
-large release artifacts during a job:
+The environment must provide executable `zot`, `versitygw`, and `gh` in
+`/var/lib/kuasar-ci/tools` before `check`. Their bytes and exact versions are
+not allowlisted. The E2E suites exercise the required service behavior, while
+the provisioner requires `gh api --help` to advertise `--slurp`. The directory
+is mounted read-only into all slots, and each slot links the supplied CLI onto
+the runner's PATH. Release jobs do not install a replacement CLI.
 
-| Path | SHA-256 |
-| --- | --- |
-| `/var/lib/kuasar-ci/tools/zot` | `523e5bf29a013db09115f780c3152af98fc5b65fc408a0d3e6c293643dc9bde7` |
-| `/var/lib/kuasar-ci/tools/versitygw` | `e839f0ce24a51dbf0a7a925e08a28a0bfa190d05290c13f2c4536852bc5f3a7d` |
-
-Transfer these verified files from the operator host before running `check`.
-The provisioner rejects missing or mismatched tools and mounts the directory
-read-only into all slots.
-
-The shared Go toolchain is pinned to `go1.26.5` for `linux/amd64`. If the
-validated `/usr/local/go` toolchain is absent, installation fetches
-`go1.26.5.linux-amd64.tar.gz` only from the direct Aliyun China mirror
-`https://mirrors.aliyun.com/golang/` and verifies the Go release SHA-256
-`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`
-before replacing the toolchain. Jobs never download a Go distribution.
+The provisioner resolves `go` from its environment PATH and asks that executable
+for its GOROOT. It maps the root and, where separate, only that executable into
+the slot at their actual paths. It records the selected executable directory
+for registration, without assuming `/usr/local/go` or mounting host `/usr/bin`.
+Paths must be absolute and representable in nspawn bind settings (no colon or
+line break). The environment is responsible for the complete usable toolchain
+and any wrapper dependencies. No Go distribution is downloaded, replaced, or
+checked against a fixed executable digest or patch version. Set the runner's
+normal Go environment as needed; product jobs do not override GOTOOLCHAIN.
+Missing tools or an unusable toolchain fail explicitly. EROFS reader source
+builds, their dependency checks, and source integrity verification are unchanged.
 
 The containers provide privileged resource-name isolation, not a security boundary
 for untrusted jobs. They deliberately receive KVM, TUN, vhost devices, all
@@ -94,6 +94,75 @@ used by the RocksDB-linked `cache-ctl` and the Redis server used by Accelerator
 E2E are installed from the same mirror. GNU `time` provides per-stage CPU,
 memory, and I/O metrics. Every install reconciles the package manifest so
 existing slots receive newly added build dependencies.
+
+The Libgcrypt guest SHA backend also needs `libgcrypt.a` and `libgpg-error.a`.
+The pinned openEuler 24.03-LTS-SP4 devel packages omit these archives. The
+[static crypto provider](static-crypto.py) builds them inside the template and
+copies a validated generation to each new or existing slot. It requires the
+matching `libgcrypt-devel` `1.10.2-4.oe2403sp4` and `libgpg-error-devel`
+`1.47-1.oe2403sp4` packages. It installs only the two static archives and their
+catalog; distro headers, pkg-config metadata, shared libraries and services stay
+under package management. OpenSSL remains a separate host kernel prerequisite.
+
+The provider pins both SRPMs and every contained source, spec, patch and auxiliary
+file. Source RPMs are cached in `/var/cache/kuasar/sources` and fetched from the
+same Huawei Cloud mirror only when absent. A checksum mismatch fails the build.
+
+| Input | SHA-256 |
+| --- | --- |
+| `libgcrypt-1.10.2-4.oe2403sp4.src.rpm` | `074decf4fb34ddadbc1e7498140bfb6dbf7d24f0ed9b85fe9ec7f5c9540ac984` |
+| `libgcrypt-1.10.2.tar.bz2` | `3b9c02a004b68c256add99701de00b383accccf37177e0d6c58289664cce0c03` |
+| `libgpg-error-1.47-1.oe2403sp4.src.rpm` | `cb75e6c3ae8d4d5d13eb621106c4ad9e3a1f0670959d3a277870790e6083f499` |
+| `libgpg-error-1.47.tar.gz` | `685d4bd9d05576c4fc7f0870903dfdfbe41f2dd6a12e76fd8bd1717278f6b365` |
+
+Preparation rejects traversal, duplicate archive members and links before
+extraction. It applies the spec's patches in order with zero fuzz, including
+Libgcrypt Patch2 (the CVE backport), and preserves the explicit spec substitutions.
+`autoconf -f` and `autoheader -f` regenerate the affected configure inputs using
+the bundled m4 files; this avoids replacing gettext/libtool support files through
+`autoreconf`. Builds use at most two jobs, `-O2 -g0 -fPIC`, static libraries only,
+and no documentation build. Libgpg-error disables NLS and installs its headers
+and config scripts only into a temporary dependency prefix. The static Libgcrypt
+build disables shared-object HMAC generation, which requires a `.so`; the distro
+shared library is untouched. Other relevant configure options are retained in
+`BUILD.json`, along with ordered patches and the actual tool identities. A real
+static-link SHA-256 probe must pass before installation.
+
+Each generation lives at `/usr/share/kuasar-ci/native-crypto/<build-id>/`.
+`SOURCES.tsv` binds actual archive bytes to the pinned SRPMs/tarballs;
+`MATERIALS.sha256` inventories every file and its digest is the build ID.
+The catalog retains the original SRPMs and all their files, upstream license
+texts/notices, the exact provider/validator recipe, compiler/tool hashes and
+versions, configure/build logs, generated headers and configuration, plus both
+archives for relinking. Large source and archive files appear in the source
+catalog, not in every license directory. The recipe is specific to these pins;
+updating it requires updating the provider digest and the matching validator in
+`guest-runtime/scripts/static-crypto-catalog.py`.
+
+Installation stages and validates the full catalog before replacing archives and
+writes `/usr/lib64/.kuasar-crypto-build-id` last. Ordinary failures restore the
+previous archives and marker; an interruption before the marker is published
+cannot authorize reuse or collection. Warm reuse requires the complete matching
+catalog, both installed archive bytes, the current recipe and tool identities.
+Template-to-slot copies validate both ends. The installed standalone provisioner
+finds its helpers under `/usr/local/libexec/kuasar-static-crypto`.
+
+For local verification with the host compiler, use a disposable prefix and the
+already downloaded, exact source RPMs (no package or service changes):
+
+```bash
+crypto_root=$(mktemp -d)
+python3 ci/runner/static-crypto.py install --host-build --root "$crypto_root" \
+  --sources /path/to/pinned-srpms --jobs 2
+python3 ci/runner/static-crypto-catalog.py installed --root "$crypto_root"
+python3 ci/runner/static-crypto.py copy --template "$crypto_root" --root "$crypto_root-slot"
+```
+
+Run these commands from the repository root. Omit `--host-build` to test inside
+an existing disposable openEuler root with the matching devel packages and build
+tools. The host-compiler mode verifies the helper; it does not establish target
+openEuler or BMS acceptance. No full provisioner invocation is needed for this
+check. The helper does not register runners or install packages.
 
 Changing the pinned util-linux source requires overriding the complete source
 descriptor together: `KUASAR_UTIL_LINUX_SRPM_URL`,

@@ -43,8 +43,11 @@ jobs:
           [ "$GITHUB_REF" = refs/heads/main ] \
             || { echo "Preview GC must run from main" >&2; exit 1; }
 
-      - name: Install pinned GitHub CLI
-        run: bash release/install-gh-cli.sh
+      - name: Check environment GitHub CLI
+        run: |
+          gh --version
+          gh_help="$(gh api --help)"
+          [[ "$gh_help" == *--slurp* ]] || { echo "environment gh must support api --slurp" >&2; exit 1; }
 
       - name: Create read-only planning and dispatch token
         id: gc-token

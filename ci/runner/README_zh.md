@@ -9,26 +9,24 @@ PID、mount、network、cgroup、Docker daemon、Runner 凭据和 Actions 工作
 
 - `/var/cache/kuasar`:可写的源码/原生产物缓存。精确 SHA 名称和仓库锁用于协调
   复用,不能防止篡改;
-- `/var/lib/kuasar-ci/tools`:只读测试工具;
-- `/usr/local/go` 和主机内核模块树:只读。
+- `/var/lib/kuasar-ci/tools`:只读环境工具;
+- 环境选定的 Go 根目录和可执行文件，以及主机内核模块树：只读。
 
 每个 slot 在 `/sys/fs/bpf` 下绑定不同的 bpffs 子树,避免并行任务的 BPF pin 路径冲突。
 
-主机必须预装 pin 的 x86_64 E2E 工具,不能在任务中下载这些大型发行资产:
+执行 `check` 前，环境应在 `/var/lib/kuasar-ci/tools` 提供可执行的 `zot`、
+`versitygw` 和 `gh`。不以固定摘要或精确版本限制其来源，必需的服务行为由
+E2E 验证；provisioner 还要求 `gh api --help` 提供 `--slurp`。工具目录只读
+挂载到各 slot，并把环境提供的 CLI 链接到 runner 的 PATH。发布任务不会自行安装替代版本。
 
-| 路径 | SHA-256 |
-| --- | --- |
-| `/var/lib/kuasar-ci/tools/zot` | `523e5bf29a013db09115f780c3152af98fc5b65fc408a0d3e6c293643dc9bde7` |
-| `/var/lib/kuasar-ci/tools/versitygw` | `e839f0ce24a51dbf0a7a925e08a28a0bfa190d05290c13f2c4536852bc5f3a7d` |
-
-执行 `check` 前,从运维端传入已验证文件。provisioner 拒绝缺失或摘要不匹配的
-工具,并把该目录只读挂载到全部 slot。
-
-共享 Go 工具链固定为 `linux/amd64` 的 `go1.26.5`。若不存在已验证的
-`/usr/local/go`,安装过程只从阿里云中国直连镜像 `https://mirrors.aliyun.com/golang/`
-取得 `go1.26.5.linux-amd64.tar.gz`,核对 Go 发行 SHA-256
-`5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053`
-后再替换工具链。任务本身不下载 Go distribution。
+provisioner 从调用环境 PATH 解析 `go`，向该可执行文件查询 GOROOT，将根目录及
+位于根目录之外的单个 Go 可执行文件按实际路径只读映射到 slot，并记录其目录供
+后续注册使用。不假定 `/usr/local/go`，也不为一个工具挂载整个宿主 `/usr/bin`。
+路径应为绝对路径且可写入 nspawn bind 配置，不得包含冒号或换行。
+完整工具链及自定义 wrapper 的依赖由环境提供；不下载、替换 Go，不按固定二进制
+摘要或补丁版本认证环境。按需配置 runner 的普通 Go 环境，产品 job 不覆盖
+`GOTOOLCHAIN`。工具缺失或无法使用时明确失败。EROFS reader 的源码构建、依赖检查
+和源码完整性校验保持不变。
 
 这些容器提供特权资源名称隔离,不是不可信任务的安全边界。它们有意获得 KVM、
 TUN、vhost 设备、全部 capability、Docker keyring syscall 及 Connector 数据路径
@@ -78,6 +76,65 @@ source RPM 构建它。Source RPM 和其中的上游 tarball 都核对 SHA-256;
 RocksDB 链接的 `cache-ctl` 所需 `libstdc++-static`,以及 Accelerator E2E 使用的
 Redis server 也从同一镜像安装。GNU `time` 采集分阶段 CPU、内存和 I/O 指标。
 每次安装都会对齐包清单,让已有 slot 取得新加入的构建依赖。
+
+Libgcrypt guest SHA 后端还需要 `libgcrypt.a` 和 `libgpg-error.a`。
+pin 的 openEuler 24.03-LTS-SP4 devel 软件包不提供这些 archive。
+[静态 crypto provider](static-crypto.py) 在模板内构建它们,并将通过验证的一代材料
+复制到新建或已有 slot。它要求匹配的 `libgcrypt-devel` `1.10.2-4.oe2403sp4`
+和 `libgpg-error-devel` `1.47-1.oe2403sp4` 软件包。仅安装两个静态 archive
+及对应目录;发行版头文件、pkg-config 元数据、共享库和服务仍由软件包管理。
+OpenSSL 仍是独立的 host 内核构建依赖。
+
+Provider 固定两个 SRPM 及其中每个源码、spec、补丁和辅助文件的摘要。
+Source RPM 缓存于 `/var/cache/kuasar/sources`,仅在缺失时从同一华为云镜像获取。
+校验和不匹配时构建失败。
+
+| 输入 | SHA-256 |
+| --- | --- |
+| `libgcrypt-1.10.2-4.oe2403sp4.src.rpm` | `074decf4fb34ddadbc1e7498140bfb6dbf7d24f0ed9b85fe9ec7f5c9540ac984` |
+| `libgcrypt-1.10.2.tar.bz2` | `3b9c02a004b68c256add99701de00b383accccf37177e0d6c58289664cce0c03` |
+| `libgpg-error-1.47-1.oe2403sp4.src.rpm` | `cb75e6c3ae8d4d5d13eb621106c4ad9e3a1f0670959d3a277870790e6083f499` |
+| `libgpg-error-1.47.tar.gz` | `685d4bd9d05576c4fc7f0870903dfdfbe41f2dd6a12e76fd8bd1717278f6b365` |
+
+准备阶段在解包前拒绝目录穿越、重复归档成员和链接。按 spec 顺序以零 fuzz
+应用补丁,包括 Libgcrypt Patch2（CVE 回补）,并保留 spec 的明确文本替换。
+`autoconf -f` 和 `autoheader -f` 使用随附 m4 文件重新生成受影响的 configure
+输入,避免 `autoreconf` 替换 gettext/libtool 支持文件。构建最多使用两个 job,
+采用 `-O2 -g0 -fPIC`,仅构建静态库,不构建文档。Libgpg-error 禁用 NLS,
+其头文件和 config 脚本只安装到临时依赖前缀。静态 Libgcrypt 构建禁用必须有
+`.so` 的共享对象 HMAC 生成;发行版共享库不变。其他相关 configure 选项、有序补丁
+和实际工具身份记录在 `BUILD.json` 中。安装前必须通过真实静态链接 SHA-256 探针。
+
+每一代材料位于 `/usr/share/kuasar-ci/native-crypto/<build-id>/`。
+`SOURCES.tsv` 将实际 archive 字节绑定到 pin 的 SRPM/tarball;
+`MATERIALS.sha256` 列出所有文件,其摘要就是 build ID。
+目录保留原始 SRPM 及其中全部文件、上游许可正文/声明、精确 provider/validator
+配方、编译器/工具摘要及版本、configure/构建日志、生成的头文件与配置,以及用于
+重新链接的两个 archive。大型源码和 archive 位于源码目录,不重复放入每个许可目录。
+配方仅适用于这些 pin;更新时须同时更新 provider 摘要和
+`guest-runtime/scripts/static-crypto-catalog.py` 中的对应验证器。
+
+安装先暂存并验证完整目录,再替换 archive,最后写入
+`/usr/lib64/.kuasar-crypto-build-id`。普通失败会恢复原有 archive 和 marker;
+在 marker 发布前中断不能授权复用或收集。热复用要求完整匹配的目录、两个已安装
+archive 字节、当前配方及工具身份。模板复制到 slot 时验证两端。
+独立安装的 provisioner 从 `/usr/local/libexec/kuasar-static-crypto` 查找辅助程序。
+
+使用宿主编译器做本地验证时,选择一次性前缀和已下载的精确 source RPM
+（不改变软件包或服务）:
+
+```bash
+crypto_root=$(mktemp -d)
+python3 ci/runner/static-crypto.py install --host-build --root "$crypto_root" \
+  --sources /path/to/pinned-srpms --jobs 2
+python3 ci/runner/static-crypto-catalog.py installed --root "$crypto_root"
+python3 ci/runner/static-crypto.py copy --template "$crypto_root" --root "$crypto_root-slot"
+```
+
+从仓库根目录执行。省略 `--host-build` 可在已有的一次性 openEuler root 内测试,
+其中须有匹配的 devel 软件包和构建工具。宿主编译器模式验证辅助程序,不代表
+目标 openEuler 或 BMS 验收。此检查不需要调用完整 provisioner;辅助程序不会
+注册 Runner 或安装软件包。
 
 修改 util-linux pin 必须同时覆盖完整来源描述:
 `KUASAR_UTIL_LINUX_SRPM_URL`、`KUASAR_UTIL_LINUX_SRPM_SHA256`、

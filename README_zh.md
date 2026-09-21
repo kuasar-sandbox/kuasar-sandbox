@@ -215,6 +215,8 @@ releases/         Stable and daily Preview aggregate selections
 
 ## Build and Test
 
+构建使用环境提供的 Go，并继承 `GOROOT`、`GOTOOLCHAIN` 等工具链选择；发布自动化需要环境在 `PATH` 中提供可用的 `gh`。项目不下载、替换或按固定二进制摘要认证这些环境工具。 EROFS 工具继续按项目源码、补丁及配方构建。
+
 完整源码构建从主仓驱动五个组件仓,并按
 [`release/bin-inputs.manifest`](release/bin-inputs.manifest) 把运行文件收集到
 `bin/<arch>/`:

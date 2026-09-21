@@ -71,12 +71,17 @@ concurrency:
 
 jobs:
   e2e:
-    # Guest-runtime keeps its completed route; only Public accelerator source CI opts in.
-    runs-on: ${{ fromJSON(inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || (github.event.repository.private == false && inputs.candidate_repository == 'kuasar-sandbox/accelerator')) && '["ubuntu-24.04"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
-    timeout-minutes: ${{ inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || (github.event.repository.private == false && inputs.candidate_repository == 'kuasar-sandbox/accelerator')) && 180 || (inputs.mode == 'exact-assets' && 120 || 60) }}
+    name: ${{ inputs.mode == 'source' && 'e2e' || format('e2e [{0}]', matrix.shard) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.mode == 'exact-assets' && '["core","sandboxer","orchestrator"]' || '["source"]') }}
+    # Visibility selects the runner; request validation independently authorizes inputs.
+    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
+    timeout-minutes: ${{ inputs.mode == 'exact-assets' && 120 || (github.event.repository.visibility == 'public' && 180 || 60) }}
     env:
       TARGET_ARCH: x86_64
-      KUASAR_HOSTED: ${{ inputs.mode == 'source' && (inputs.candidate_repository == 'kuasar-sandbox/guest-runtime' || (github.event.repository.private == false && inputs.candidate_repository == 'kuasar-sandbox/accelerator')) }}
+      KUASAR_HOSTED: ${{ github.event.repository.visibility == 'public' }}
       KUASAR_CI_DIR: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}
       KUASAR_CI_TIMINGS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/timings.tsv
       KUASAR_NATIVE_CACHE_METRICS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/native-cache.tsv
@@ -93,6 +98,7 @@ jobs:
       RELEASE_VERSION: ${{ inputs.release_version }}
       RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
       PLATFORM_SOURCE_SHA: ${{ inputs.platform_source_sha }}
+      KUASAR_E2E_SHARD: ${{ matrix.shard }}
 
     steps:
       - name: Check standard image archive transport
@@ -110,7 +116,6 @@ jobs:
           cat >> "$GITHUB_ENV" <<'EOF'
           GOPROXY=https://goproxy.cn,direct
           GOSUMDB=sum.golang.google.cn
-          GOTOOLCHAIN=local
           RUSTUP_DIST_SERVER=https://rsproxy.cn
           RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
           CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
@@ -382,9 +387,11 @@ jobs:
             https://api.github.com/installation/token)
           case "$status" in 204|401) ;; *) echo "failed to revoke tooling token: HTTP $status" >&2; exit 1 ;; esac
 
-      - name: Bootstrap standard source runner from trusted tooling
+      - name: Bootstrap standard runner from trusted tooling
         if: env.KUASAR_HOSTED == 'true'
-        run: bash trusted/platform/ci/hosted/bootstrap.sh --profile source
+        env:
+          BOOTSTRAP_PROFILE: ${{ inputs.mode }}
+        run: bash trusted/platform/ci/hosted/bootstrap.sh --profile "$BOOTSTRAP_PROFILE"
 
       - name: Check hosted CI regression contracts
         if: env.KUASAR_HOSTED == 'true'
@@ -411,6 +418,10 @@ jobs:
           rm -rf release-install
           trusted/platform/release/aggregate-release.sh extract \
             "$RELEASE_VERSION" release-bundle release-install
+
+      - name: Attach job-local exact-assets test tools
+        if: env.KUASAR_HOSTED == 'true' && inputs.mode == 'exact-assets'
+        run: bash trusted/platform/ci/hosted/exact-assets-tools.sh
 
       - name: Create read-only source token
         if: inputs.mode == 'source'
@@ -856,9 +867,10 @@ jobs:
           mkdir -p "$tool_dir"
           ln -sfn /var/lib/kuasar-ci/tools/zot "$tool_dir/zot"
           ln -sfn /var/lib/kuasar-ci/tools/versitygw "$tool_dir/versitygw"
-          echo "E2E_ZOT_BIN=$GITHUB_WORKSPACE/$tool_dir/zot" >> "$GITHUB_ENV"
-          echo "E2E_VGW_BIN=$GITHUB_WORKSPACE/$tool_dir/versitygw" >> "$GITHUB_ENV"
-          for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
+          echo "E2E_ZOT_BIN=${E2E_ZOT_BIN:-${ZOT_BIN:-$GITHUB_WORKSPACE/$tool_dir/zot}}" >> "$GITHUB_ENV"
+          echo "E2E_VGW_BIN=${E2E_VGW_BIN:-${VGW_BIN:-$GITHUB_WORKSPACE/$tool_dir/versitygw}}" >> "$GITHUB_ENV"
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          for image in $(bash ci/integration/source-owner.sh images "$owner"); do
             if ! docker image inspect "$image" >/dev/null 2>&1; then
               mirror="m.daocloud.io/docker.io/library/$image"
               timeout 3m docker pull "$mirror"
@@ -867,7 +879,7 @@ jobs:
           done
 
       - name: Attach job-local source caches and test tools
-        if: env.KUASAR_HOSTED == 'true'
+        if: env.KUASAR_HOSTED == 'true' && inputs.mode == 'source'
         run: |
           set -euo pipefail
           for path in \
@@ -878,13 +890,19 @@ jobs:
             mkdir -p "$(dirname "$path")"
             ln -sfn "$KUASAR_TARBALL_CACHE" "$path"
           done
-          # make e2e-tools builds/downloads the existing pinned tool inputs.
+          # make e2e-tools reuses environment tools or supplies missing test inputs.
           # Never link the persistent runner's preinstalled tools on hosted.
           tool_dir="$GITHUB_WORKSPACE/src/platform/build/e2e-tools/x86_64"
           mkdir -p "$tool_dir"
-          echo "E2E_ZOT_BIN=$tool_dir/zot" >> "$GITHUB_ENV"
-          echo "E2E_VGW_BIN=$tool_dir/versitygw" >> "$GITHUB_ENV"
-          for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
+          echo "E2E_ZOT_BIN=${E2E_ZOT_BIN:-${ZOT_BIN:-$tool_dir/zot}}" >> "$GITHUB_ENV"
+          echo "E2E_VGW_BIN=${E2E_VGW_BIN:-${VGW_BIN:-$tool_dir/versitygw}}" >> "$GITHUB_ENV"
+
+      - name: Pull standard runner test images
+        if: env.KUASAR_HOSTED == 'true'
+        run: |
+          set -euo pipefail
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          for image in $(bash ci/integration/source-owner.sh images "$owner"); do
             timeout 3m docker pull "$image"
           done
 
@@ -896,7 +914,14 @@ jobs:
           if [ "${KUASAR_HOSTED:-false}" = true ]; then
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
-          ci/native-cache/native-cache.sh restore-or-build
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          components="$(bash ci/integration/source-owner.sh native-components "$owner")"
+          if [ -z "$components" ]; then
+            echo "==> $owner source suite has no native-artifact dependency"
+            exit 0
+          fi
+          # shellcheck disable=SC2086 # helper emits fixed component words.
+          ci/native-cache/native-cache.sh restore-or-build $components
 
       - name: Validate platform tooling
         if: inputs.mode == 'source'
@@ -906,7 +931,7 @@ jobs:
           if [ "${KUASAR_HOSTED:-false}" = true ]; then
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
-          make test-ci-tools test-release-tools test-perf-tools
+          make -j3 test-ci-tools test-release-tools test-perf-tools
 
       - name: Build and test source candidate
         if: inputs.mode == 'source'
@@ -917,13 +942,14 @@ jobs:
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
           set -euo pipefail
-          make build e2e-tools assemble-e2e
-          if [ "$KUASAR_HOSTED" = true ]; then
-            [ -x "$E2E_ZOT_BIN" ] && [ -x "$E2E_VGW_BIN" ]
-          fi
-          make test-uffd-performance-gate
-
           owner="${CANDIDATE_REPOSITORY##*/}"
+          bash ci/integration/source-owner.sh build "$owner"
+          if bash ci/integration/source-owner.sh needs-uffd "$owner"; then
+            make test-uffd-performance-gate
+          else
+            echo "==> UFFD gate not in $owner dependency closure"
+          fi
+
           runner="build/e2e-suite/test/e2e/$owner/run_all.sh"
           if [ "$owner" = kuasar-sandbox ]; then
             runner=build/e2e-suite/test/e2e/run_all.sh
@@ -944,6 +970,11 @@ jobs:
           PERF_ITERS: "1"
           PERF_OUT_DIR: ${{ env.KUASAR_CI_DIR }}/working-set-perf
         run: |
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          if ! bash ci/integration/source-owner.sh needs-working-set "$owner"; then
+            echo "==> working-set smoke not in $owner dependency closure"
+            exit 0
+          fi
           ci/integration/ci-timed.sh perf/working-set-smoke env \
             BIN="$PWD/bin/x86_64" \
             PERF_ITERS="$PERF_ITERS" \
@@ -969,11 +1000,28 @@ jobs:
           REQUIRE_GUEST_RUNTIME: "1"
         run: bash test/e2e/run_all.sh
 
+      - name: Stage revision and timing metadata
+        id: ci-metadata
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          upload_dir="$RUNNER_TEMP/ci-metadata-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo rm -rf -- "$upload_dir"
+          mkdir -p "$upload_dir"
+          if sudo test -d "$KUASAR_CI_DIR"; then
+            unexpected=$(sudo find -P "$KUASAR_CI_DIR" -xdev ! -type d ! -type f -print -quit)
+            [ -z "$unexpected" ] || { echo "unsupported CI metadata entry: $unexpected" >&2; exit 1; }
+            sudo tar --one-file-system -C "$KUASAR_CI_DIR" -cf - . | tar --no-same-owner -C "$upload_dir" -xf -
+            chmod -R u+rwX "$upload_dir"
+          fi
+          echo "path=$upload_dir" >> "$GITHUB_OUTPUT"
+
       - name: Upload revision and timing metadata
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ci-metadata-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ env.KUASAR_CI_DIR }}
+          name: ${{ inputs.mode == 'source' && format('ci-metadata-{0}-{1}', github.run_id, github.run_attempt) || format('ci-metadata-{0}-{1}-{2}', github.run_id, github.run_attempt, matrix.shard) }}
+          path: ${{ steps.ci-metadata.outputs.path }}
           if-no-files-found: warn
           retention-days: 30

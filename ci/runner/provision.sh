@@ -16,13 +16,6 @@ MEMORY_MAX=${KUASAR_SLOT_MEMORY_MAX:-56G}
 MEMORY_HIGH=${KUASAR_SLOT_MEMORY_HIGH:-52G}
 SOURCE_CACHE=${KUASAR_SOURCE_CACHE:-/var/cache/kuasar/sources}
 TOOL_ROOT=/var/lib/kuasar-ci/tools
-ZOT_TOOL_SHA256=523e5bf29a013db09115f780c3152af98fc5b65fc408a0d3e6c293643dc9bde7
-VERSITYGW_TOOL_SHA256=e839f0ce24a51dbf0a7a925e08a28a0bfa190d05290c13f2c4536852bc5f3a7d
-GO_ROOT=/usr/local/go
-GO_VERSION=go1.26.5
-GO_TARBALL_URL=https://mirrors.aliyun.com/golang/go1.26.5.linux-amd64.tar.gz
-GO_TARBALL_SHA256=5c2c3b16caefa1d968a94c1daca04a7ca301a496d9b086e17ad77bb81393f053
-GO_BINARY_SHA256=8da5fd321795754b994c64e3eb8a5a14ff47bd285559a7e876f3c79abafc67f9
 UTIL_LINUX_SRPM_URL=${KUASAR_UTIL_LINUX_SRPM_URL:-https://mirrors.huaweicloud.com/openeuler/openEuler-24.03-LTS-SP4/source/Packages/util-linux-2.39.1-38.oe2403sp4.src.rpm}
 UTIL_LINUX_SRPM_SHA256=${KUASAR_UTIL_LINUX_SRPM_SHA256:-40324d3ab54be52ef67544732a71ec14f6aecb2e92f5d8fa0aaaac532c55c0bf}
 UTIL_LINUX_SOURCE_ARCHIVE=${KUASAR_UTIL_LINUX_SOURCE_ARCHIVE:-util-linux-2.39.1.tar.xz}
@@ -63,7 +56,10 @@ PACKAGES=(
     git git-lfs rsync util-linux util-linux-devel iproute iptables nftables
     procps-ng which time file hostname kmod iputils jq socat openssl sqlite
     gcc gcc-c++ libstdc++-static make cmake autoconf automake libtool pkgconf
+    # OpenSSL remains a host kernel prerequisite. Crypto devel packages alone
+    # do not supply guest static archives on openEuler 24.03-LTS-SP4.
     glibc-devel openssl-devel elfutils-libelf-devel ncurses-devel flex bison dwarves perl bc
+    libgcrypt-devel libgpg-error-devel
     lz4-devel zstd-devel zlib-devel snappy-devel
     rust cargo rust-std-static clang llvm bpftool
     python3 python3-pip python3-devel python3-pyyaml
@@ -71,7 +67,7 @@ PACKAGES=(
 )
 BOOTSTRAP_PACKAGES=(filesystem glibc bash coreutils)
 HOST_PACKAGES=(
-    bash coreutils findutils grep gawk tar xz curl rsync util-linux procps-ng
+    bash coreutils findutils grep gawk tar xz curl rsync util-linux procps-ng python3
     systemd systemd-container systemd-nspawn dnf rpm cpio
     iproute iptables kmod
 )
@@ -282,56 +278,61 @@ verify_sha256() {
     printf '%s  %s\n' "$expected" "$path" | sha256sum --check --status
 }
 
-assert_e2e_tools() {
+assert_environment_tools() {
     [ -x "$TOOL_ROOT/zot" ] \
-        || die "preload the pinned zot binary at $TOOL_ROOT/zot before installation"
+        || die "provide an executable zot at $TOOL_ROOT/zot before installation"
     [ -x "$TOOL_ROOT/versitygw" ] \
-        || die "preload the pinned versitygw binary at $TOOL_ROOT/versitygw before installation"
-    verify_sha256 "$TOOL_ROOT/zot" "$ZOT_TOOL_SHA256" \
-        || die "zot checksum mismatch at $TOOL_ROOT/zot"
-    verify_sha256 "$TOOL_ROOT/versitygw" "$VERSITYGW_TOOL_SHA256" \
-        || die "versitygw checksum mismatch at $TOOL_ROOT/versitygw"
+        || die "provide an executable versitygw at $TOOL_ROOT/versitygw before installation"
+    [ -x "$TOOL_ROOT/gh" ] \
+        || die "provide an executable gh at $TOOL_ROOT/gh before installation"
+    local gh_help
+    gh_help=$("$TOOL_ROOT/gh" api --help) \
+        || die "cannot inspect the environment GitHub CLI"
+    [[ "$gh_help" == *--slurp* ]] \
+        || die "environment gh must support api --slurp"
 }
 
-go_toolchain_valid() {
-    local root=$1
-    [ -x "$root/bin/go" ] \
-        && verify_sha256 "$root/bin/go" "$GO_BINARY_SHA256" \
-        && [ "$(env GOROOT="$root" "$root/bin/go" version 2>/dev/null)" = "go version $GO_VERSION linux/amd64" ] \
-        && [ "$(env GOROOT="$root" "$root/bin/go" env GOROOT 2>/dev/null)" = "$root" ] \
-        && [ "$(env GOROOT="$root" "$root/bin/go" tool compile -V=full 2>/dev/null)" = "compile version $GO_VERSION" ]
+resolve_environment_go() {
+    # Resolve the environment's executable and standard-library root. Neither
+    # its bytes nor its precise version identify an acceptable installation.
+    local executable
+    executable=$(command -v go) || die "Go must be supplied on PATH"
+    [ -f "$executable" ] && [ -x "$executable" ] \
+        || die "Go on PATH must be an executable file"
+    GO_ENTRY="$(cd "$(dirname "$executable")" && pwd -P)/${executable##*/}"
+    GO_COMMAND=$(readlink -f "$executable")
+    GO_ROOT=$("$GO_ENTRY" env GOROOT) || die "cannot query the environment Go root"
+    [ -d "$GO_ROOT" ] || die "the environment Go root is not a directory"
+    # These paths become individual read-only nspawn mounts, never host /usr/bin.
+    local path
+    for path in "$GO_ENTRY" "$GO_COMMAND" "$GO_ROOT"; do
+        [[ "$path" = /* && "$path" != / && "$path" != *:* && "$path" != *$'\n'* && "$path" != *$'\r'* ]] \
+            || die "Go path cannot be represented as an isolated nspawn mount: $path"
+    done
 }
 
-ensure_go_toolchain() {
-    go_toolchain_valid "$GO_ROOT" && return
-    case "$GO_TARBALL_URL" in
-        https://mirrors.aliyun.com/*) ;;
-        *) die "Go toolchain must use the configured China mirror" ;;
+escape_nspawn_path() {
+    local path=$1
+    # BindReadOnly= parses quotes as literal path bytes on current systemd.
+    # Backslash-escape whitespace instead, retaining percent escaping for
+    # systemd specifier expansion.
+    path=${path//\\/\\\\}
+    path=${path// /\\ }
+    path=${path//$'\t'/\\$'\t'}
+    path=${path//%/%%}
+    printf '%s' "$path"
+}
+
+write_go_mounts() {
+    printf 'BindReadOnly=%s\n' "$(escape_nspawn_path "$GO_ROOT")"
+    # Preserve the command name on PATH even when it is a symlink to a
+    # differently named executable outside the reported standard-library root.
+    case "$GO_ENTRY" in
+        "$GO_ROOT"/*) ;;
+        *) printf 'BindReadOnly=%s\n' "$(escape_nspawn_path "$GO_COMMAND:$GO_ENTRY")" ;;
     esac
-
-    local archive="$SOURCE_CACHE/${GO_TARBALL_URL##*/}" work
-    install -d -m 0755 "$SOURCE_CACHE"
-    if [ ! -f "$archive" ] || ! verify_sha256 "$archive" "$GO_TARBALL_SHA256"; then
-        rm -f "$archive"
-        log "downloading pinned $GO_VERSION toolchain from the Aliyun mirror"
-        curl --fail --location --retry 3 --output "$archive" "$GO_TARBALL_URL"
-    fi
-    verify_sha256 "$archive" "$GO_TARBALL_SHA256" \
-        || die "Go toolchain checksum mismatch: $archive"
-
-    work="$(mktemp -d /usr/local/kuasar-go.XXXXXX)"
-    if ! tar -xzf "$archive" -C "$work"; then
-        rm -rf "$work"
-        die "failed to extract the Go toolchain"
-    fi
-    if ! go_toolchain_valid "$work/go"; then
-        rm -rf "$work"
-        die "extracted Go toolchain failed validation"
-    fi
-    rm -rf "$GO_ROOT"
-    mv "$work/go" "$GO_ROOT"
-    rmdir "$work"
 }
+
 
 existing_ancestor() {
     local path=$1 parent
@@ -505,6 +506,35 @@ install_static_libuuid() {
         || die "static libuuid build did not produce /usr/lib64/libuuid.a"
 }
 
+static_crypto_helper() {
+    local helper="$SCRIPT_DIR/static-crypto.py"
+    # provision.sh is also installed as a standalone /usr/local/sbin command.
+    if [ ! -f "$helper" ]; then helper="$SCRIPT_DIR/../libexec/kuasar-static-crypto/static-crypto.py"; fi
+    [ -f "$helper" ] && [ -f "${helper%/*}/static-crypto-catalog.py" ] \
+        || die "static crypto provider is missing; install the paired runner helpers"
+    python3 "$helper" "$@"
+}
+
+install_static_crypto() {
+    static_crypto_helper install --root "$TEMPLATE_ROOT" --sources "$SOURCE_CACHE" --download --jobs 2
+}
+
+copy_static_crypto() {
+    static_crypto_helper copy --template "$TEMPLATE_ROOT" --root "$1"
+}
+
+check_erofs_static_libraries() {
+    # The supported SP4 libgcrypt 1.10.2-4 and libgpg-error 1.47-1 SRPMs
+    # explicitly use --disable-static. Do not assume -devel provides .a files.
+    chroot "$TEMPLATE_ROOT" /bin/bash -ceu '
+        pkg-config --exists libgcrypt gpg-error uuid
+        for name in gcrypt gpg-error uuid; do
+            library=$(gcc -print-file-name="lib$name.a")
+            test "$library" != "lib$name.a" && test -s "$library" || exit 1
+        done
+    ' || die "guest EROFS static-library preflight failed after provisioning libgcrypt.a, libgpg-error.a and libuuid.a"
+}
+
 install_erofs_readers() {
     local archive="$SOURCE_CACHE/erofs-utils-v1.9.1.tar.gz"
     local work="$TEMPLATE_ROOT/tmp/kuasar-erofs-readers-build"
@@ -554,7 +584,8 @@ check_host() {
     require_root
     assert_supported_host
     assert_china_repositories
-    assert_e2e_tools
+    assert_environment_tools
+    resolve_environment_go
     local package missing=()
     for package in "${HOST_PACKAGES[@]}" "${PACKAGES[@]}"; do
         if ! dnf -q repoquery --available --qf '%{name}' "$package" | grep -qx "$package"; then
@@ -569,13 +600,13 @@ check_host() {
     else
         log "kmod is not installed; install will bootstrap it before validating devices"
     fi
-    log "host platform, cgroup v2, China mirrors, pinned E2E tools, and package set are ready"
+    log "host platform, cgroup v2, China mirrors, environment E2E tools, and package set are ready"
 }
 
 install_host_support() {
     dnf -y --setopt=install_weak_deps=False install "${HOST_PACKAGES[@]}"
     command -v systemd-nspawn >/dev/null || die "systemd-nspawn was not installed"
-    ensure_go_toolchain
+    resolve_environment_go
     if systemctl is-active --quiet kuasar-ci-network.service; then
         log "stopping the active CI network before replacing its configuration"
         systemctl stop kuasar-ci-network.service
@@ -588,6 +619,9 @@ install_host_support() {
     install -m 0755 "$SCRIPT_DIR/kuasar-ci-bpf" /usr/local/libexec/kuasar-ci-bpf
     install -m 0644 "$SCRIPT_DIR/kuasar-ci-bpf.service" /etc/systemd/system/kuasar-ci-bpf.service
     install -m 0755 "$SCRIPT_DIR/provision.sh" /usr/local/sbin/kuasar-ci-runner-provision
+    install -d -m 0755 /usr/local/libexec/kuasar-static-crypto
+    install -m 0644 "$SCRIPT_DIR/static-crypto.py" "$SCRIPT_DIR/static-crypto-catalog.py" \
+        /usr/local/libexec/kuasar-static-crypto/
 
     local uplink
     uplink="$(ip route show default | awk 'NR == 1 { print $5 }')"
@@ -670,6 +704,8 @@ build_template_root() {
     touch "$TEMPLATE_ROOT/.kuasar-ci-template"
 
     install_static_libuuid
+    install_static_crypto
+    check_erofs_static_libraries
     install_erofs_readers
 
     copy_runner_distribution "$TEMPLATE_ROOT/opt/actions-runner"
@@ -682,7 +718,6 @@ build_template_root() {
         "$TEMPLATE_ROOT/var/log/journal" \
         "$TEMPLATE_ROOT/var/cache/kuasar" \
         "$TEMPLATE_ROOT/var/lib/kuasar-ci/tools" \
-        "$TEMPLATE_ROOT/usr/local/go" \
         "$TEMPLATE_ROOT/usr/lib/modules"
 
     cat >"$TEMPLATE_ROOT/root/.cargo/config.toml" <<'EOF'
@@ -727,6 +762,18 @@ write_nspawn_config() {
     root="$(slot_root "$slot")"
     cpus="$(slot_value "$slot" CPUS)"
     numa="$(slot_value "$slot" NUMA)"
+    resolve_environment_go
+    install -d -m 0755 "$root$GO_ROOT"
+    case "$GO_ENTRY" in
+        "$GO_ROOT"/*) ;;
+        *)
+            install -d -m 0755 "$root$(dirname "$GO_ENTRY")"
+            [ -e "$root$GO_ENTRY" ] || [ -L "$root$GO_ENTRY" ] || touch "$root$GO_ENTRY"
+            ;;
+    esac
+    # Retain the selected entry point for a later register command, which may
+    # run with a different administrative PATH.
+    printf '%s\n' "${GO_ENTRY%/*}" > "$root/.kuasar-ci-go-bin"
 
     cat >"/etc/systemd/nspawn/$machine.nspawn" <<EOF
 [Exec]
@@ -742,7 +789,7 @@ LinkJournal=no
 [Files]
 Bind=/var/cache/kuasar
 BindReadOnly=/var/lib/kuasar-ci/tools
-BindReadOnly=/usr/local/go
+$(write_go_mounts)
 BindReadOnly=/usr/lib/modules
 Bind=/sys/fs/bpf/$machine:/sys/fs/bpf
 Bind=/dev/kvm
@@ -818,7 +865,10 @@ prepare_slot() {
     install -m 0644 "$TEMPLATE_ROOT/root/.cargo/config.toml" "$root/root/.cargo/config.toml"
     install -m 0644 "$TEMPLATE_ROOT/etc/resolv.conf" "$root/etc/resolv.conf"
     copy_static_libuuid "$root"
+    copy_static_crypto "$root"
     copy_erofs_readers "$root"
+    install -d -m 0755 "$root/usr/local/bin"
+    ln -sfn "$TOOL_ROOT/gh" "$root/usr/local/bin/gh"
 
     local machine_id template_machine_id
     machine_id="$(cat "$root/etc/machine-id" 2>/dev/null || true)"
@@ -866,7 +916,7 @@ install_slots() {
     assert_china_repositories
     assert_host_runner_idle
     assert_slots_stopped
-    assert_e2e_tools
+    assert_environment_tools
     cleanup_stale_slot_staging
     assert_install_space
     install_host_support
@@ -959,7 +1009,10 @@ register_slot() {
                     --labels "$4" --work _work
             ' register-runner "https://github.com/$ORG" "$name" "$group" "$labels"
     [ -s "$runner/.runner" ] || die "$machine registration did not produce runner metadata"
-    printf '/usr/local/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin\n' \
+    local go_bin
+    IFS= read -r go_bin < "$root/.kuasar-ci-go-bin" \
+        || die "slot $slot has no recorded environment Go path; reinstall the slot"
+    printf '%s:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin\n' "$go_bin" \
         >"$runner/.path"
     systemctl --root="$root" enable actions-runner.service >/dev/null
     touch "$runner/$RUNNER_REGISTRATION_MARKER"
@@ -1098,6 +1151,10 @@ verify_slots() {
             systemctl is-active --quiet docker.service
             docker info >/dev/null
             test -s /usr/lib64/libuuid.a
+            for name in gcrypt gpg-error; do
+                library=$(gcc -print-file-name="lib$name.a")
+                test "$library" != "lib$name.a" && test -s "$library"
+            done
             fsck_help=$(fsck.erofs --help 2>&1)
             dump_help=$(dump.erofs --help 2>&1)
             grep -Fq -- --extract <<< "$fsck_help"
@@ -1111,8 +1168,12 @@ verify_slots() {
             test -x /usr/bin/time
             [ "$(systemctl show actions-runner.service --property=RefuseManualStop --value)" = yes ]
             [ "$(systemctl show actions-runner.service --property=StartLimitIntervalUSec --value)" = 0 ]
-            [ "$(/usr/local/go/bin/go version)" = "go version go1.26.5 linux/amd64" ]
-            [ "$(/usr/local/go/bin/go tool compile -V=full)" = "compile version go1.26.5" ]
+            export PATH="$(cat /opt/actions-runner/.path)"
+            go version
+            go tool compile -V=full
+            gh --version
+            gh_help=$(gh api --help)
+            [[ "$gh_help" == *--slurp* ]]
             redis-server --version >/dev/null
             ip route get 223.5.5.5 >/dev/null
             curl --fail --silent --show-error --connect-timeout 5 --max-time 20 https://goproxy.cn >/dev/null

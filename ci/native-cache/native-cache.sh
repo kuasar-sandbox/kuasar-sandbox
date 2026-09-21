@@ -95,6 +95,18 @@ component_input_paths() {
             required_file guest-runtime/native-deps/Makefile
             required_file guest-runtime/native-deps/deps/common.sh
             required_file guest-runtime/native-deps/deps/build-erofs.sh
+            if [ -f "$WORKSPACE_ROOT/guest-runtime/Makefile" ]; then
+                required_file guest-runtime/Makefile
+            fi
+            if [ -f "$WORKSPACE_ROOT/guest-runtime/native-deps/deps/erofs-recipe.sh" ]; then
+                required_file guest-runtime/native-deps/deps/erofs-recipe.sh
+            fi
+            # Separate EROFS patch PRs may add this directory; older source
+            # sets have none. Never restore repository inputs from a cache.
+            if [ -d "$WORKSPACE_ROOT/guest-runtime/native-deps/deps/erofs-patches" ]; then
+                find "$WORKSPACE_ROOT/guest-runtime/native-deps/deps/erofs-patches" \
+                    -maxdepth 1 -type f -print0
+            fi
             ;;
         envd)
             required_file guest-runtime/native-deps/Makefile
@@ -255,7 +267,7 @@ component_environment() {
             ;;
         erofs)
             names+=(
-                EROFS_TARBALL EROFS_TARBALL_SHA256 CROSS_PREFIX CFLAGS CXXFLAGS LDFLAGS
+                EROFS_TARBALL_SHA256 CROSS_PREFIX CFLAGS CPPFLAGS CXXFLAGS LDFLAGS LIBS
                 PKG_CONFIG PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
             )
             ;;
@@ -337,9 +349,28 @@ component_toolchain() {
             tool_identity libtoolize libtoolize --version
             tool_identity pkg-config "$pkg_config" --version
             package_identities \
-                'gcc gcc-c++ make autoconf automake libtool libuuid-devel glibc-static' \
-                'gcc g++ make autoconf automake libtool uuid-dev libc6-dev'
+                'gcc gcc-c++ make autoconf automake libtool libuuid-devel glibc-static libgcrypt-devel libgpg-error-devel' \
+                'gcc g++ make autoconf automake libtool uuid-dev libc6-dev libgcrypt20-dev libgpg-error-dev'
+            # Match build-erofs.sh's target-only default pkg-config search.
+            # Keep caller-supplied sysroot/libdir overrides in the descriptor.
+            if [ -n "$cross_prefix" ]; then
+                local multiarch sysroot
+                multiarch="$("$cc" -print-multiarch 2>/dev/null || true)"
+                sysroot="$("$cc" -print-sysroot 2>/dev/null || true)"
+                export PKG_CONFIG_LIBDIR="${PKG_CONFIG_LIBDIR-${sysroot%/}/usr/lib/$multiarch/pkgconfig:${sysroot%/}/lib/$multiarch/pkgconfig:${sysroot%/}/usr/share/pkgconfig}"
+                export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
+                export PKG_CONFIG_SYSROOT_DIR="${PKG_CONFIG_SYSROOT_DIR:-$sysroot}"
+            fi
             pkg_config_module_identity uuid
+            # Optional modules keep legacy source sets supported. The probe
+            # below resolves only the backend actually selected by the recipe.
+            pkg_config_module_identity libgcrypt
+            pkg_config_module_identity gpg-error
+            if grep -q -- '--with-openssl' "$WORKSPACE_ROOT/guest-runtime/native-deps/deps/build-erofs.sh"; then
+                pkg_config_module_identity openssl
+            fi
+            printf 'erofs-tracker\t%s\n' "$(sha256sum "$SCRIPT_DIR/erofs-inputs.py" | cut -d ' ' -f1)"
+            python3 "$SCRIPT_DIR/erofs-inputs.py" "$WORKSPACE_ROOT" "$cross_prefix" || return
             ;;
         envd)
             tool_identity go go version
@@ -380,7 +411,7 @@ compute_key() {
         printf 'component\t%s\n' "$component"
         printf 'target_arch\t%s\n' "$TARGET_ARCH"
         component_environment "$component"
-        component_toolchain "$component"
+        component_toolchain "$component" || { rm -f "$paths_file"; return 1; }
         while IFS= read -r -d '' path; do
             relative="${path#"$WORKSPACE_ROOT/"}"
             printf 'file\t%s\t%s\n' "$relative" "$(sha256sum "$path" | awk '{print $1}')"
@@ -404,6 +435,19 @@ component_outputs() {
             printf 'guest-runtime/native-deps/bin/%s/fsck.erofs\n' "$TARGET_ARCH"
             printf 'guest-runtime/native-deps/build/%s/src/erofs-utils/AUTHORS\n' "$TARGET_ARCH"
             printf 'guest-runtime/native-deps/build/%s/src/erofs-utils/COPYING\n' "$TARGET_ARCH"
+            # New recipes carry their reuse stamp and matching link map; old
+            # admitted source sets remain buildable without these additions.
+            local extra
+            for extra in \
+                "guest-runtime/native-deps/bin/$TARGET_ARCH/.erofs-recipe" \
+                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs.erofs.map" \
+                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs_erofs-main.o" \
+                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/fsck/fsck.erofs.map" \
+                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/fsck/fsck_erofs-main.o" \
+                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/lib/.libs/liberofs.a" \
+                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/LICENSES"; do
+                [ ! -e "$WORKSPACE_ROOT/$extra" ] || printf '%s\n' "$extra"
+            done
             ;;
         envd)
             printf 'guest-runtime/native-deps/bin/%s/envd\n' "$TARGET_ARCH"
@@ -642,7 +686,7 @@ restore_or_build() {
     local component=$1 descriptor key component_root entry lock start status existed_before_lock=0
     start="$(now_ns)"
     descriptor="$(mktemp)"
-    key="$(compute_key "$component" "$descriptor")"
+    key="$(compute_key "$component" "$descriptor")" || { rm -f "$descriptor"; return 1; }
     component_root="$CACHE_ROOT/$CACHE_SCHEMA/$TARGET_ARCH/$component"
     entry="$component_root/$key"
     lock="$CACHE_ROOT/$CACHE_SCHEMA/.locks/$TARGET_ARCH.$component.$key.lock"
@@ -680,7 +724,7 @@ restore_or_build() {
 print_key() {
     local component=$1 descriptor key
     descriptor="$(mktemp)"
-    key="$(compute_key "$component" "$descriptor")"
+    key="$(compute_key "$component" "$descriptor")" || { rm -f "$descriptor"; return 1; }
     rm -f "$descriptor"
     printf '%s\t%s\n' "$component" "$key"
 }
