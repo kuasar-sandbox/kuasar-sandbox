@@ -71,6 +71,11 @@ concurrency:
 
 jobs:
   e2e:
+    name: ${{ inputs.mode == 'source' && 'e2e' || format('e2e [{0}]', matrix.shard) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(inputs.mode == 'exact-assets' && '["core","sandboxer","orchestrator"]' || '["source"]') }}
     # Visibility selects the runner; request validation independently authorizes inputs.
     runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
     timeout-minutes: ${{ inputs.mode == 'exact-assets' && 120 || (github.event.repository.visibility == 'public' && 180 || 60) }}
@@ -93,6 +98,7 @@ jobs:
       RELEASE_VERSION: ${{ inputs.release_version }}
       RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
       PLATFORM_SOURCE_SHA: ${{ inputs.platform_source_sha }}
+      KUASAR_E2E_SHARD: ${{ matrix.shard }}
 
     steps:
       - name: Check standard image archive transport
@@ -863,7 +869,8 @@ jobs:
           ln -sfn /var/lib/kuasar-ci/tools/versitygw "$tool_dir/versitygw"
           echo "E2E_ZOT_BIN=${E2E_ZOT_BIN:-${ZOT_BIN:-$GITHUB_WORKSPACE/$tool_dir/zot}}" >> "$GITHUB_ENV"
           echo "E2E_VGW_BIN=${E2E_VGW_BIN:-${VGW_BIN:-$GITHUB_WORKSPACE/$tool_dir/versitygw}}" >> "$GITHUB_ENV"
-          for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          for image in $(bash ci/integration/source-owner.sh images "$owner"); do
             if ! docker image inspect "$image" >/dev/null 2>&1; then
               mirror="m.daocloud.io/docker.io/library/$image"
               timeout 3m docker pull "$mirror"
@@ -894,7 +901,8 @@ jobs:
         if: env.KUASAR_HOSTED == 'true'
         run: |
           set -euo pipefail
-          for image in python:3.12-slim python:3.12-alpine alpine:3.19 alpine:3.20 busybox:latest; do
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          for image in $(bash ci/integration/source-owner.sh images "$owner"); do
             timeout 3m docker pull "$image"
           done
 
@@ -906,7 +914,14 @@ jobs:
           if [ "${KUASAR_HOSTED:-false}" = true ]; then
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
-          ci/native-cache/native-cache.sh restore-or-build
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          components="$(bash ci/integration/source-owner.sh native-components "$owner")"
+          if [ -z "$components" ]; then
+            echo "==> $owner source suite has no native-artifact dependency"
+            exit 0
+          fi
+          # shellcheck disable=SC2086 # helper emits fixed component words.
+          ci/native-cache/native-cache.sh restore-or-build $components
 
       - name: Validate platform tooling
         if: inputs.mode == 'source'
@@ -916,7 +931,7 @@ jobs:
           if [ "${KUASAR_HOSTED:-false}" = true ]; then
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
-          make test-ci-tools test-release-tools test-perf-tools
+          make -j3 test-ci-tools test-release-tools test-perf-tools
 
       - name: Build and test source candidate
         if: inputs.mode == 'source'
@@ -927,13 +942,14 @@ jobs:
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
           set -euo pipefail
-          make build e2e-tools assemble-e2e
-          if [ "$KUASAR_HOSTED" = true ]; then
-            [ -x "$E2E_ZOT_BIN" ] && [ -x "$E2E_VGW_BIN" ]
-          fi
-          make test-uffd-performance-gate
-
           owner="${CANDIDATE_REPOSITORY##*/}"
+          bash ci/integration/source-owner.sh build "$owner"
+          if bash ci/integration/source-owner.sh needs-uffd "$owner"; then
+            make test-uffd-performance-gate
+          else
+            echo "==> UFFD gate not in $owner dependency closure"
+          fi
+
           runner="build/e2e-suite/test/e2e/$owner/run_all.sh"
           if [ "$owner" = kuasar-sandbox ]; then
             runner=build/e2e-suite/test/e2e/run_all.sh
@@ -954,6 +970,11 @@ jobs:
           PERF_ITERS: "1"
           PERF_OUT_DIR: ${{ env.KUASAR_CI_DIR }}/working-set-perf
         run: |
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          if ! bash ci/integration/source-owner.sh needs-working-set "$owner"; then
+            echo "==> working-set smoke not in $owner dependency closure"
+            exit 0
+          fi
           ci/integration/ci-timed.sh perf/working-set-smoke env \
             BIN="$PWD/bin/x86_64" \
             PERF_ITERS="$PERF_ITERS" \
@@ -1000,7 +1021,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ci-metadata-${{ github.run_id }}-${{ github.run_attempt }}
+          name: ${{ inputs.mode == 'source' && format('ci-metadata-{0}-{1}', github.run_id, github.run_attempt) || format('ci-metadata-{0}-{1}-{2}', github.run_id, github.run_attempt, matrix.shard) }}
           path: ${{ steps.ci-metadata.outputs.path }}
           if-no-files-found: warn
           retention-days: 30

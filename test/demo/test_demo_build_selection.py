@@ -38,6 +38,15 @@ class DemoBuildSelection(unittest.TestCase):
         self.assertIn("1000:1000", setup[0].args[0].value)
         self.assertTrue(all(call.lineno > setup[0].lineno for call in calls if call.func.attr == "copy"))
 
+    def test_quick_start_is_a_prefix_not_a_second_integration_flow(self):
+        branch = SCRIPT.index('if [ -n "${DEMO_QUICKSTART:-}" ]; then')
+        fanout = SCRIPT.index('banner "Paused state -> template')
+        self.assertLess(branch, fanout)
+        body = SCRIPT[branch:fanout]
+        self.assertIn('Sandbox.connect("$SID").kill()', body)
+        self.assertIn('quick start complete', body)
+        self.assertIn('exit 0', body)
+
     def test_sdk_build_uses_command_driven_auto_target(self):
         match = re.search(r"(?ms)^BUILD_RESULT=.*?<<'PY'\n(.*?)^PY$", SCRIPT)
         self.assertIsNotNone(match)
