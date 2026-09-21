@@ -91,7 +91,7 @@ prepare 提供 manifest Docker archive、guest flatten fixture、固定 image ID
 E2E 只 checkout 可信执行器并下载目标 prepared workspace，执行前后核验全部文件摘要和权限。
 它不 checkout 组件源码，不隐式进行产品 Go/Cargo/kernel 编译。
 每个 shard 使用短路径、磁盘支持的私有可变目录，socket、direct I/O、Docker 配置、性能状态均在不可变输入之外。
-源码依赖的 sandboxer/orchestrator unit/race/vet、真实 ENOSPC、Collector 回归和 UFFD benchmark 保留为独立必需源码 job。
+源码依赖的 connector/sandboxer/orchestrator unit/race/vet、真实 pinned-BPF 统计、ENOSPC、Collector 回归和 UFFD benchmark 保留为独立必需源码 job。
 source 模式 x86 sandboxer/platform 还用同一组制品保留 A/B/C/D `off/auto × cold/warm` working-set smoke。
 
 ## 4. Daily 与 Stable

@@ -37,7 +37,7 @@ def execute(plan, sources, output):
     result = {"plan_id": artifacts.identity(plan), "conclusion": "failure", "checks": []}
     output.parent.mkdir(parents=True, exist_ok=True)
     checks = [("platform-contracts", ["make", "test-ci-tools", "test-release-tools", "test-perf-tools"], sources / "platform")]
-    for owner in ("sandboxer", "orchestrator"):
+    for owner in ("connector", "sandboxer", "orchestrator"):
         if owner in selected:
             checks.append((owner + "-unit-race-vet", ["bash", "scripts/ci-source-checks.sh"], sources / owner))
     if "accelerator" in selected:

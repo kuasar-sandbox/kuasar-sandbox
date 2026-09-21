@@ -126,6 +126,7 @@ assemble-e2e:
 # Candidate source and exact release assets both pass this owner-aggregated
 # runner. OBS remains opt-in through OBS_E2E=1 in accelerator/test/e2e/run_all.sh.
 test-e2e: build e2e-tools e2e-fixtures assemble-e2e
+	bash $(ORG)/connector/scripts/ci-source-checks.sh
 	bash $(ORG)/sandboxer/scripts/ci-source-checks.sh
 	bash $(ORG)/orchestrator/scripts/ci-source-checks.sh
 	$(MAKE) test-uffd-performance-gate
