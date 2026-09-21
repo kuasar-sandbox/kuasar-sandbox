@@ -96,18 +96,20 @@ Local contract checks: `make test-ci-tools test-release-tools test-perf-tools` w
 
 ## 7. Initial coverage and rollout evidence
 
-This is the single initial coverage ledger for #152. Update the evidence column with exact public run URLs and SHAs during rollout; an unexecuted selected case remains pending, not passed. The Chinese guide links to this same ledger for scope, reasons, evidence and follow-up.
+This is the single initial coverage ledger for #152. The Chinese guide links here for scope, reasons, evidence and follow-up. Selected cases require actual successful results.
 
 | Architecture / owner | Predeclared scope | Evidence at implementation | Gap / next step |
 | --- | --- | --- | --- |
 | x86_64 / all six owners | Existing complete owner entries, split core/sandboxer/orchestrator; OBS excluded | Artifact/workflow/release contracts pass locally; actual public E2E pending | Run every actual public caller; record run/SHA and failures |
-| x86_64 / source checks | Required unit/race/vet, pinned-BPF stats, ENOSPC, Collector source regressions, UFFD | Sandboxer and orchestrator source checks passed on isolated native precheck; public source/UFFD job pending | Actual standard-runner check remains required |
+| x86_64 / source checks | Required unit/race/vet, pinned-BPF stats, ENOSPC, Collector source regressions, UFFD | [Public platform source checks and UFFD passed](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35660952525); artifact-flow source result pending | Actual standard-runner check remains required |
 | aarch64 / accelerator | Existing cache/store/rolling/manifest and port-lease non-KVM suite | Architecture/composition fixtures pass; native ARM pending | Run existing suite on public standard ARM |
 | aarch64 / guest-runtime | Existing non-KVM flatten/OCI suite | Architecture/embedded identity fixtures pass; native ARM pending | Run existing suite on public standard ARM |
 | aarch64 / connector, sandboxer, orchestrator, platform | Product identity/composition only; no selected owner E2E | Exclusions fixed in plan before execution | No independently selected ARM non-KVM owner entry; VM/KVM/restore/Builder/cluster parity is follow-up |
 | both / credentialed OBS or real cloud | Not selected | No cloud claim | Separate environment and evidence required |
 
-The four component Public cutovers follow the existing #82 readiness records and #128 migration work, with scoped review of new content and real credential/distribution blockers. Public-only CI runs after actual visibility read-back. A guard-skipped private run cannot qualify a component. Preserve ordinary review/protections; no public proxy or protection bypass. Historical test-capability disposition still needs confirmed evidence before the authorized cutover; implementation tests alone do not resolve it.
+Completed Public source acceptance: [platform #159](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35660952525), [accelerator #144](https://github.com/kuasar-sandbox/accelerator/actions/runs/35662919390), [connector #64](https://github.com/kuasar-sandbox/connector/actions/runs/35662687375), [sandboxer #267](https://github.com/kuasar-sandbox/sandboxer/actions/runs/35640791998), [orchestrator #408](https://github.com/kuasar-sandbox/orchestrator/actions/runs/35654577585), and [guest-runtime #74](https://github.com/kuasar-sandbox/guest-runtime/actions/runs/35640824293). These runs exercised the source path during initialization; the table tracks the separate artifact rollout.
+
+Accelerator, connector, sandboxer and orchestrator are Public; visibility and anonymous source/asset access were read back after the authorized cutover. Their actual Public source CI passed before normal merges, alongside platform and guest-runtime. The historical capability disposition is closed in [#82](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/82#issuecomment-5765674410): those fixtures used per-invocation loopback/local-only authority, the original instance was destroyed, and copied fixtures create independent local instances. Ordinary review and required checks remain in force.
 
 ## 8. See also
 

@@ -164,9 +164,11 @@ ARM 当前只选择 accelerator 和 guest-runtime 已有独立非 KVM 套件；�
 ARM VM/KVM/restore/Builder/cluster 同等覆盖、新硬件和全面用例扩充属于后续工作。
 已选测试失败不能事后改为 unsupported，整个 ARM job 不使用 continue-on-error。
 
-四组件 Public 切换复用 #82 准备记录与 #128 迁移工作，只复核新增差异和真实凭据/分发阻塞。
-读回 actual visibility 后执行实际 caller CI。私有 guard 导致的未运行不算成功；保护与评审按正常规则执行。
-历史测试访问能力的销毁/未复用事实仍需确认，代码预检不能代替该证据。
+accelerator、connector、sandboxer、orchestrator 已切为 Public，并读回可见性与匿名源码/资产访问结果。
+四组件以及平台、guest-runtime 均已通过各自真实 Public 源码 CI 后正常合入；精确运行链接见上方覆盖表所在章节。
+历史测试访问能力的边界已在 [#82](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/82#issuecomment-5765674410) 结案：
+对应 fixture 使用每次调用独立的 loopback/本地访问能力，原实例已销毁，复制的 fixture 只会创建独立本地实例。
+普通评审和必需检查继续生效。
 
 ## 8. 参阅
 
