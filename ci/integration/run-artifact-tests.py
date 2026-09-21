@@ -52,7 +52,8 @@ def execute(plan, arch, shard, workspace, result_path):
                                   "loaded image differs from prepared platform/digest")
             images = provenance.get("images", {})
             for label, variable in (("prometheus", "TELEMETRY_PROMETHEUS_IMAGE"), ("clickhouse", "TELEMETRY_CLICKHOUSE_IMAGE"),
-                                    ("orchestrator-base", "ORCHESTRATOR_BASE_IMAGE"), ("orchestrator-execute", "ORCHESTRATOR_EXECUTE_IMAGE")):
+                                    ("orchestrator-base", "ORCHESTRATOR_BASE_IMAGE"), ("orchestrator-execute", "ORCHESTRATOR_EXECUTE_IMAGE"),
+                                    ("busybox", "KUASAR_BUSYBOX_IMAGE")):
                 if label in images:
                     environment[variable] = images[label]["image_id"]
             for case in groups[shard]:
