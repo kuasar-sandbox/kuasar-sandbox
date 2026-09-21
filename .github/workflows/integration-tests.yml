@@ -623,10 +623,12 @@ jobs:
           echo "E2E_ZOT_BIN=${E2E_ZOT_BIN:-${ZOT_BIN:-$tool_dir/zot}}" >> "$GITHUB_ENV"
           echo "E2E_VGW_BIN=${E2E_VGW_BIN:-${VGW_BIN:-$tool_dir/versitygw}}" >> "$GITHUB_ENV"
       - name: Pull standard runner test images
+        working-directory: src/platform
         run: |
           set -euo pipefail
           owner="${CANDIDATE_REPOSITORY##*/}"
-          for image in $(bash ci/integration/source-owner.sh images "$owner"); do
+          images="$(bash ci/integration/source-owner.sh images "$owner")"
+          for image in $images; do
             timeout 3m docker pull "$image"
           done
       - name: Restore or build verified native artifacts

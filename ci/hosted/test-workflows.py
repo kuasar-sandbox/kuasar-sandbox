@@ -80,6 +80,37 @@ def check_request_rejection():
                 assert message in result.stderr, (overrides, result.stderr)
 
 
+def check_source_images(step):
+    """Run the actual image step from its declared workspace and preserve failures."""
+    cases = (("accelerator", False, 0, 0, ["pull python:3.12-slim", "pull python:3.12-alpine"]),
+             ("connector", False, 0, 0, []),
+             ("unknown", False, 0, 2, []),
+             ("accelerator", True, 0, 127, []),
+             ("accelerator", False, 73, 73, ["pull python:3.12-slim"]))
+    for owner, missing_helper, pull_exit, expected_exit, expected_pulls in cases:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            helper = workspace / "src/platform/ci/integration/source-owner.sh"
+            helper.parent.mkdir(parents=True)
+            if not missing_helper:
+                helper.write_text((ROOT / "ci/integration/source-owner.sh").read_text())
+            tools = workspace / "tools"
+            tools.mkdir()
+            docker = tools / "docker"
+            docker.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$PULL_LOG"\nexit "$PULL_EXIT"\n')
+            docker.chmod(0o755)
+            log = workspace / "pulls"
+            env = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}",
+                       CANDIDATE_REPOSITORY=f"kuasar-sandbox/{owner}",
+                       PULL_LOG=str(log), PULL_EXIT=str(pull_exit))
+            result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
+                                    cwd=workspace / step.get("working-directory", "."), env=env,
+                                    capture_output=True, text=True, timeout=5)
+            assert result.returncode == expected_exit, (owner, missing_helper, result.stderr)
+            pulls = log.read_text().splitlines() if log.exists() else []
+            assert pulls == expected_pulls, (owner, pulls, result.stderr)
+
+
 def check_source_transition(script):
     """Execute the rollout step: extracted checks precede E2E and fail closed."""
     cases = (("kuasar-sandbox", True, False), ("connector", True, False), ("sandboxer", True, False),
@@ -188,6 +219,7 @@ def check():
     assert "KUASAR_CI_APP_PRIVATE_KEY" not in json.dumps(transition)
     assert "create-github-app-token" not in json.dumps(transition)
     transition_steps = {step.get("name"): step for step in transition["steps"]}
+    check_source_images(transition_steps["Pull standard runner test images"])
     assert '.visibility == "public"' in transition_steps["Assemble the five component source repositories"]["run"]
     source_stage = transition_steps["Build and test source candidate"]["run"]
     assert 'TMPDIR=/var/tmp bash "$checker"' in source_stage
