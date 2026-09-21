@@ -157,15 +157,30 @@ configure_cross_apt() {
     # Standard Ubuntu uses separate amd64 and arm64 archive endpoints. Restrict
     # the existing deb822 sources before adding the target-only ports source.
     [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || die "cross packages require a disposable hosted job"
-    sudo -n python3 - <<'PY'
+    sudo -n env KUASAR_APT_SOURCE=/etc/apt/sources.list.d/ubuntu.sources python3 - <<'PY'
+import os
 from pathlib import Path
-source = Path('/etc/apt/sources.list.d/ubuntu.sources')
+source = Path(os.environ['KUASAR_APT_SOURCE'])
 text = source.read_text()
-stanzas = []
-for stanza in text.strip().split('\n\n'):
-    lines = [line for line in stanza.splitlines() if not line.startswith('Architectures:')]
-    stanzas.append('\n'.join(lines + ['Architectures: amd64']))
-source.write_text('\n\n'.join(stanzas) + '\n')
+lines = []
+skip_continuation = False
+types = 0
+for line in text.splitlines():
+    if line.startswith((' ', '\t')):
+        if not skip_continuation:
+            lines.append(line)
+        continue
+    skip_continuation = False
+    if line.lower().startswith('architectures:'):
+        skip_continuation = True
+        continue
+    lines.append(line)
+    if line.lower().startswith('types:'):
+        lines.append('Architectures: amd64')
+        types += 1
+if not types:
+    raise SystemExit('ubuntu.sources contains no deb822 Types field')
+source.write_text('\n'.join(lines) + '\n')
 PY
     sudo -n dpkg --add-architecture arm64
     printf 'Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports\nSuites: %s %s-updates %s-security\nComponents: main universe restricted multiverse\nArchitectures: arm64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' \

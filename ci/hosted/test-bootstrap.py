@@ -107,6 +107,29 @@ class BootstrapTests(unittest.TestCase):
                     self.assertNotIn("INSTALL_BOUNDARY", result.stdout)
                     self.assertIn("Ubuntu Linux is required", result.stderr)
 
+    def test_cross_apt_restricts_real_stanzas_not_leading_comments(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "ubuntu.sources"
+            source.write_text(
+                "# Managed by the runner image\n# Documentation follows\n\n"
+                "Types: deb\nURIs: http://archive.ubuntu.com/ubuntu\n"
+                "Architectures: amd64 arm64\nSuites: noble\n\n"
+                "Types: deb\nURIs: http://security.ubuntu.com/ubuntu\nSuites: noble-security\n")
+            command = (
+                '. "$1"; sudo() { [ "$1" = -n ] && shift; '
+                'if [ "$1" = env ]; then shift; shift; env KUASAR_APT_SOURCE="$SOURCE" "$@"; '
+                'else return 0; fi; }; dpkg() { :; }; '
+                'configure_cross_apt')
+            result = subprocess.run(
+                ["bash", "-c", command, "test", str(BOOTSTRAP)],
+                env={**os.environ, **HOSTED_VM, "SOURCE": str(source), "VERSION_CODENAME": "noble"},
+                capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = source.read_text()
+            self.assertTrue(text.startswith("# Managed by the runner image\n# Documentation follows\n\nTypes: deb"))
+            self.assertEqual(text.count("Types: deb\nArchitectures: amd64"), 2)
+            self.assertNotIn("Architectures: amd64 arm64", text)
+
     def test_missing_docker_capability_fails_before_device_changes(self):
         result = shell('need() { :; }; id() { echo 1001; }; docker() { return 23; }; '
                        'sudo() { echo UNEXPECTED_DEVICE_CHANGE; }; configure_vm', **HOSTED_VM)
