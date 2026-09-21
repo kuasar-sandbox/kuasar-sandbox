@@ -43,8 +43,10 @@ def source_owners(plan, arch):
     compiled = {repository.split("/")[1] for records in plan["product_sources"].values() for repository in records}
     if lane.get("embedded_products"):
         compiled.add("guest-runtime")
-    for owner in artifacts.planned_helpers(lane["profile"]).values():
-        if owner != "framework":
+    for name, owner in artifacts.planned_helpers(lane["profile"]).items():
+        if name == "usage-probe":
+            owners.add(owner)  # stdlib-only helper; no sibling library checkout
+        elif owner != "framework":
             compiled.add(owner)
     pending = list(compiled)
     while pending:
@@ -167,6 +169,9 @@ def build(plan, arch, assets, sources, output):
             run(["bash", ROOT / "ci/integration/ensure-zot.sh"], environment={**environment, "BINDIR": str(helper_root)})
         if "custom-proxy" in helpers:
             run(["bash", sources / "orchestrator/scripts/ci-e2e-build.sh", "fixtures", arch, helper_root], environment=environment)
+        if "usage-probe" in helpers:
+            run(["make", "-C", sources / "sandboxer", f"TARGET_ARCH={arch}",
+                 f"E2E_FIXTURE_DIR={helper_root}", "e2e-usage-probe"], environment=environment)
     # Match the existing release packagers' executable/data modes independently
     # of the caller's umask. Tar transport preserves these through Actions.
     for name in artifacts.tree_files(output):

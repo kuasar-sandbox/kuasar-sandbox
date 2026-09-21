@@ -78,6 +78,7 @@ e2e-tools: e2e-zot e2e-versitygw
 # Developer source preparation. The hosted artifact executor receives these
 # helpers in its prepared workspace and never invokes this source target.
 e2e-fixtures:
+	$(MAKE) -C $(ORG)/sandboxer TARGET_ARCH="$(TARGET_ARCH)" E2E_FIXTURE_DIR="$(abspath $(E2E_TOOL_DIR))" e2e-usage-probe
 	bash $(ORG)/orchestrator/scripts/ci-e2e-build.sh fixtures "$(TARGET_ARCH)" "$(abspath $(E2E_TOOL_DIR))"
 
 # Assemble bin/$(TARGET_ARCH)/ from each sub-repo's per-arch bin per the
@@ -131,6 +132,7 @@ test-e2e: build e2e-tools e2e-fixtures assemble-e2e
 	bash $(ORG)/orchestrator/scripts/ci-source-checks.sh
 	$(MAKE) test-uffd-performance-gate
 	$(CI_TIMED) e2e/run-all env BIN=$(SBIN) ZOT_BIN=$(E2E_ZOT_BIN) \
+		USAGE_PROBE_BIN=$(abspath $(E2E_TOOL_DIR))/usage-probe \
 		VGW_BIN=$(E2E_VGW_BIN) CUSTOM_PROXY_BIN=$(abspath $(E2E_TOOL_DIR))/custom-proxy \
 		TELEMETRY_GRPC_PROBE_BIN=$(abspath $(E2E_TOOL_DIR))/telemetry-grpc-probe bash $(E2E_SUITE_DIR)/test/e2e/run_all.sh
 
@@ -144,6 +146,7 @@ verify-prebuilt:
 
 test-e2e-prebuilt: verify-prebuilt e2e-tools e2e-fixtures assemble-e2e
 	$(CI_TIMED) e2e/run-all env BIN=$(SBIN) ZOT_BIN=$(E2E_ZOT_BIN) \
+		USAGE_PROBE_BIN=$(abspath $(E2E_TOOL_DIR))/usage-probe \
 		VGW_BIN=$(E2E_VGW_BIN) CUSTOM_PROXY_BIN=$(abspath $(E2E_TOOL_DIR))/custom-proxy \
 		TELEMETRY_GRPC_PROBE_BIN=$(abspath $(E2E_TOOL_DIR))/telemetry-grpc-probe bash $(E2E_SUITE_DIR)/test/e2e/run_all.sh
 
