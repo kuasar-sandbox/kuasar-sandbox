@@ -891,6 +891,44 @@ components:
             with self.assertRaisesRegex(coordinator.Deferred, "linked inputs differ"):
                 coordinator.verify_dependency_reuse(plan, plans, status, root)
 
+    def test_dependency_inputs_handle_an_unpublished_configured_preview(self) -> None:
+        repository = selection_fixtures.Repository()
+        self.addCleanup(repository.close)
+        old = repository.commit_files("published library", {"pkg/flatten/input.go": "old"})
+        winner = "v1.0.0"
+        repository.git("tag", winner, old)
+        pending = "v1.0.1-preview.20260831"
+        plan = coordinator.Plan(coordinator.UNIT_BY_NAME["accelerator"], pending, "main", old,
+                                winner, pending + ".1", "publish")
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "accelerator").symlink_to(repository.root, target_is_directory=True)
+            for files, changed in (({"cmd/cache-ctl/main.go": "CLI"}, False),
+                                   ({"pkg/flatten/input_test.go": "test"}, False),
+                                   ({"pkg/flatten/input.go": "new library"}, True)):
+                head = repository.commit_files("candidate inputs", files)
+                plan = coordinator.replace(plan, source_sha=head)
+                for consumer in ("sandboxer", "orchestrator", "runtime"):
+                    with self.subTest(files=files, consumer=consumer):
+                        self.assertEqual(coordinator.dependency_inputs_changed(
+                            "accelerator", consumer, {"accelerator": plan},
+                            {"accelerator": pending}, root), changed)
+
+            # Once published, the configured tag is the comparison base even
+            # when the resolver's older winner would report a library change.
+            repository.git("tag", pending, head)
+            head = repository.commit_files("later CLI", {"cmd/cache-ctl/main.go": "later"})
+            plan = coordinator.replace(plan, source_sha=head)
+            self.assertFalse(coordinator.dependency_inputs_changed(
+                "accelerator", "runtime", {"accelerator": plan}, {"accelerator": pending}, root))
+            with self.assertRaises(coordinator.preview_selection.SelectionError):
+                coordinator.dependency_inputs_changed(
+                    "accelerator", "runtime", {"accelerator": plan}, {"accelerator": "v9.9.9"}, root)
+            repository.git("tag", "-d", pending, winner)
+            with self.assertRaises(coordinator.preview_selection.SelectionError):
+                coordinator.dependency_inputs_changed(
+                    "accelerator", "runtime", {"accelerator": plan}, {"accelerator": pending}, root)
+
     def test_resumes_unpublished_dependency_preview_after_manifest_commit(self) -> None:
         for unit, prefix in (("orchestrator", "v"), ("runtime", "runtime-v")):
             for winner in (prefix + "1.0.0", prefix + "1.0.1-preview.20260830"):
