@@ -2,7 +2,8 @@
 #
 # Reproducible A/B/C/D working-set snapshot matrix for sandboxer #54/#41.
 #
-# Every sample restores the same immutable local B, performs the same HTTP
+# Each sample stages the same immutable B in its own canonical checkpoint
+# before cache reset and measurement, then performs the same HTTP
 # warm-up, captures a local W, publishes W independently, then restores the
 # portable W from a cold manifest cache. The main matrix fixes prefetch=off so
 # only drop-caches/merge-ref vary; D also gets a paired prefetch=memory restore.
@@ -501,6 +502,13 @@ EOF
 restore:
   prefetch: $prefetch
 EOF
+}
+
+stage_checkpoint() { # $1=immutable artifact set, $2=base root, $3=sandbox ID
+    local checkpoint="$2/$3/checkpoint"
+    mkdir -p "$checkpoint"
+    cp -al -- "$1/." "$checkpoint/"
+    printf '%s\n' "$checkpoint"
 }
 
 start_sandbox() { # $1=sid, $2=config, $3=run root, $4=base root, $5=log, $6=stats, $7=optional restore ref, $8=optional manifest config
@@ -1469,12 +1477,14 @@ capture_local_crypto_w() { # $1=off|auto, $2=iteration
     local sample_root="$WORK/local-crypto-$policy-$iteration"
     mkdir -p "$sample_root"
     write_config "$sample_root/restore-b.yaml" "$sample_root/b-diffs" off
-    reset_sample_storage
-    drop_host_caches "$b_out"
-
     local sid="ws-crypto-${policy}-${iteration}-source"
+    local w_out
+    w_out=$(stage_checkpoint "$b_out" "$sample_root/b-base" "$sid")
+    reset_sample_storage
+    drop_host_caches "$b_out" "$w_out"
+
     start_sandbox "$sid" "$sample_root/restore-b.yaml" "$sample_root/b-run" "$sample_root/b-base" \
-        "$sample_root/b-run.log" "$sample_root/b-stats.json" "$b" "$manifest_config"
+        "$sample_root/b-run.log" "$sample_root/b-stats.json" "$w_out/$b_basename" "$manifest_config"
     local source_pid="$ACTIVE_SANDBOX_PID"
     wait_http_ready "$source_pid" "$sample_root/b-run.log" /persist \
         "$RESTORE_READY_TIMEOUT_SECONDS" "local-$policy-$iteration-source" \
@@ -1488,9 +1498,6 @@ capture_local_crypto_w() { # $1=off|auto, $2=iteration
         >"$sample_root/writes.log" 2>&1 \
         || { cat "$sample_root/writes.log" >&2; fatal "local crypto $policy/$iteration W disk writes"; }
 
-    local w_out="$sample_root/w"
-    mkdir -p "$w_out"
-    ln "$b_artifact" "$w_out/$b_basename"
     local snapshot_start snapshot_end snapshot_wall_ms
     snapshot_start=$(date +%s%N)
     "$BIN/sandbox-ctl" snapshot --sandbox-id "$sid" --output "$w_out" --run-root "$sample_root/b-run" \
@@ -1538,11 +1545,12 @@ for group in "${MATRIX_GROUPS[@]}"; do
         SAMPLE_DIR="$WORK/sample-$group-$iteration"
         mkdir -p "$SAMPLE_DIR"
         write_config "$SAMPLE_DIR/restore-b.yaml" "$SAMPLE_DIR/b-diffs" off
+        SID="ws-${group,,}-${iteration}-source"
+        W_OUT=$(stage_checkpoint "$B_OUT" "$SAMPLE_DIR/b-base" "$SID")
         reset_sample_storage
         drop_host_caches
-        SID="ws-${group,,}-${iteration}-source"
         start_sandbox "$SID" "$SAMPLE_DIR/restore-b.yaml" "$SAMPLE_DIR/b-run" "$SAMPLE_DIR/b-base" \
-            "$SAMPLE_DIR/b-run.log" "$SAMPLE_DIR/b-stats.json" "$B"
+            "$SAMPLE_DIR/b-run.log" "$SAMPLE_DIR/b-stats.json" "$W_OUT/$B_BASENAME"
         SOURCE_PID="$ACTIVE_SANDBOX_PID"
         wait_http_ready "$SOURCE_PID" "$SAMPLE_DIR/b-run.log" /persist \
             "$RESTORE_READY_TIMEOUT_SECONDS" "$group-$iteration-source" \
@@ -1554,11 +1562,6 @@ for group in "${MATRIX_GROUPS[@]}"; do
             'echo ROOT-W-OK > /root-w; echo SCRATCH-W-OK > /scratch/working-set; echo DATA-W-OK > /data/working-set; sync' \
             >"$SAMPLE_DIR/writes.log" 2>&1 || { cat "$SAMPLE_DIR/writes.log" >&2; fatal "$group/$iteration W disk writes"; }
 
-        W_OUT="$SAMPLE_DIR/w"
-        mkdir -p "$W_OUT"
-        if [ "$merge_ref" = false ]; then
-            ln "$B_ARTIFACT" "$W_OUT/$B_BASENAME"
-        fi
         SNAPSHOT_START=$(date +%s%N)
         "$BIN/sandbox-ctl" snapshot --sandbox-id "$SID" --output "$W_OUT" --run-root "$SAMPLE_DIR/b-run" \
             --drop-caches="$drop_caches" --merge-ref="$merge_ref" >"$SAMPLE_DIR/snapshot.log" 2>&1
@@ -1586,8 +1589,10 @@ for group in "${MATRIX_GROUPS[@]}"; do
         # The W disk tops already absorbed all three local B disk tops. Hide
         # those obsolete files while publishing so an opaque B memory lower
         # cannot accidentally be traversed as a root snapshot graph.
+        # Hide only this sample's links; immutable B stays untouched.
+        mapfile -t SAMPLE_B_DISK_TOPS < <(snapshot_disk_tops "$B_DIR/info.json" "$W_OUT")
         HIDDEN_B_DISK_TOPS=()
-        for path in "${B_DISK_TOPS[@]}"; do
+        for path in "${SAMPLE_B_DISK_TOPS[@]}"; do
             hidden="$path.perf-hidden-$group-$iteration"
             mv -- "$path" "$hidden"
             HIDDEN_B_DISK_TOPS+=("$hidden")
@@ -1597,8 +1602,8 @@ for group in "${MATRIX_GROUPS[@]}"; do
             2>"$SAMPLE_DIR/publish.log")
         PUBLISH_END=$(date +%s%N)
         PUBLISH_MS=$(milliseconds_between "$PUBLISH_START" "$PUBLISH_END")
-        for index in "${!B_DISK_TOPS[@]}"; do
-            mv -- "${HIDDEN_B_DISK_TOPS[$index]}" "${B_DISK_TOPS[$index]}"
+        for index in "${!SAMPLE_B_DISK_TOPS[@]}"; do
+            mv -- "${HIDDEN_B_DISK_TOPS[$index]}" "${SAMPLE_B_DISK_TOPS[$index]}"
         done
         [[ "$PORTABLE_REF" =~ ^manifest://[0-9a-f]{64}$ ]] || { cat "$SAMPLE_DIR/publish.log" >&2; fatal "$group/$iteration invalid portable ref: $PORTABLE_REF"; }
         snapshot_graph_info "$PORTABLE_REF" "" "$SAMPLE_DIR/portable-info.json" "$WORK/manifest.yaml"
