@@ -106,6 +106,8 @@ def check():
                 assert expression(job["if"], context) is False, name
             if "runs-on" in job:
                 assert "self-hosted" not in str(job["runs-on"]), name
+                if not str(job["runs-on"]).startswith("${{"):
+                    assert job["runs-on"] == "ubuntu-latest", (name, job["runs-on"])
     check_request_rejection()
     assert entry["e2e"]["uses"] == "./.github/workflows/integration-tests.yml"
     assert entry["e2e"]["with"]["candidate_repository"] == "${{ github.repository }}"
@@ -124,7 +126,7 @@ def check():
     assert lanes["e2e"]["needs"] == ["build", "prepare"]
     assert "matrix.shard" in lanes["e2e"]["concurrency"]["group"]
     assert "inputs.arch" in lanes["e2e"]["concurrency"]["group"]
-    for arch, runner in (("x86_64", "ubuntu-24.04"), ("aarch64", "ubuntu-24.04-arm")):
+    for arch, runner in (("x86_64", "ubuntu-latest"), ("aarch64", "ubuntu-24.04-arm")):
         assert expression(lanes["e2e"]["runs-on"], {"inputs": {"arch": arch}}) == runner
     assert integration["results"]["needs"] == ["resolve", "x86_64", "aarch64", "source-checks"]
     for job in lanes.values():

@@ -44,7 +44,7 @@ resolve plan ── x86 build ── x86 prepare ── native x86 shards ──
              └─ source unit/race/vet and UFFD checks ─────────────────────┘
 ```
 
-Both builds run in separate `ubuntu-24.04` x86 jobs/workspaces using existing Makefiles and native-cache recipes. Each architecture builds its selected products once and prepares its immutable inputs once. One lane's E2E starts after its own preparation; it does not wait for the other build. Execution uses `ubuntu-24.04` or standard `ubuntu-24.04-arm`, with architecture/shard/run identifiers in concurrency, artifacts and results. Every shard and both architecture results are explicitly collected; no matrix output can overwrite the other result.
+Both builds run in separate `ubuntu-latest` x86 jobs/workspaces using existing Makefiles and native-cache recipes. Each architecture builds its selected products once and prepares its immutable inputs once. One lane's E2E starts after its own preparation; it does not wait for the other build. Execution uses `ubuntu-latest` or standard `ubuntu-24.04-arm`, with architecture/shard/run identifiers in concurrency, artifacts and results. Every shard and both architecture results are explicitly collected; no matrix output can overwrite the other result.
 
 RocksDB and cache-ctl share explicit `CROSS_PREFIX` and target CGO CC/CXX. Rust keeps the provided toolchain and uses its target std/linker. ARM vmlinux uses the kernel `Image` header; Go/native payloads require Linux ELF64 for the selected architecture. EROFS uses target static dependencies and target pkg-config resolution. Host `BUILD_MKFS_EROFS`, Runtime writer/readers and Go packaging helpers remain host-native. No `NO_ROCKSDB` or environment compiler byte allowlist is used.
 
