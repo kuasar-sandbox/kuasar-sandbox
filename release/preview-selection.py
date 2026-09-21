@@ -147,7 +147,7 @@ def git_file(root: pathlib.Path, commit: str, path: str) -> str:
 def make_variables(text: str, names: tuple[str, ...]) -> dict[str, str]:
     result: dict[str, str] = {}
     for line in text.splitlines():
-        match = re.match(r"^([A-Z][A-Z0-9_]*)\\s*\\?=\\s*(.*?)\\s*$", line)
+        match = re.match(r"^([A-Z][A-Z0-9_]*)\s*\?=\s*(.*?)\s*$", line)
         if match is not None and match.group(1) in names:
             result[match.group(1)] = match.group(2)
     missing = set(names) - set(result)
