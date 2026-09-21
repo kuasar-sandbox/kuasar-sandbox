@@ -21,6 +21,13 @@ coordinator = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = coordinator
 SPEC.loader.exec_module(coordinator)
 
+SELECTION_TEST_SPEC = importlib.util.spec_from_file_location(
+    "preview_selection_fixtures", MODULE_PATH.with_name("preview_selection_test.py")
+)
+assert SELECTION_TEST_SPEC is not None and SELECTION_TEST_SPEC.loader is not None
+selection_fixtures = importlib.util.module_from_spec(SELECTION_TEST_SPEC)
+SELECTION_TEST_SPEC.loader.exec_module(selection_fixtures)
+
 FORMAL_PATH = pathlib.Path(__file__).with_name("formal_coordinator.py")
 FORMAL_SPEC = importlib.util.spec_from_file_location(
     "formal_coordinator_test_subject", FORMAL_PATH
@@ -703,34 +710,72 @@ components:
         self.assertEqual(plan.selected, "v0.3.5")
         self.assertEqual(plan.action, "fixed")
 
-    def test_reused_vmlinux_plan_keeps_release_source_commit(self) -> None:
+    def test_vmlinux_selection_and_release_binding_use_actual_source_commit(self) -> None:
         unit = coordinator.UNIT_BY_NAME["vmlinux"]
-        configured = "vmlinux-v1.2.3-preview.20260920"
-        tagged_sha = "3" * 40
-        head_sha = "4" * 40
-        state = mock.Mock()
-        state.status.return_value = coordinator.ReleaseStatus(
-            {"tag_name": configured}, tagged_sha, True
-        )
-        resolution = coordinator.preview_selection.Resolution(
-            "main", head_sha, configured, tagged_sha, "reuse", configured
-        )
-        with (
-            mock.patch.object(coordinator, "PLATFORM_REF", "main"),
-            mock.patch.object(coordinator, "RepositoryState", return_value=state),
-            mock.patch.object(coordinator, "ensure_configured_state"),
-            mock.patch.object(coordinator, "branch_sha", return_value=head_sha),
-            mock.patch.object(coordinator, "clone_repository"),
-            mock.patch.object(
-                coordinator.preview_selection, "resolve", return_value=resolution
-            ),
-        ):
-            plan = coordinator.make_plan(
-                unit, configured, "20260921.2", pathlib.Path("/unused")
-            )
-        self.assertEqual(plan.action, "reuse")
-        self.assertEqual(plan.selected, configured)
-        self.assertEqual(plan.source_sha, tagged_sha)
+        configured = "vmlinux-v1.2.3-preview.20260831"
+        for kernel_changed in (False, True):
+            with self.subTest(kernel_changed=kernel_changed):
+                repository = selection_fixtures.Repository()
+                try:
+                    makefile = (
+                        "LINUX_TARBALL ?= https://kernel.invalid/linux.tar.gz\n"
+                        "LINUX_TARBALL_SHA256 ?= " + "a" * 64 + "\n"
+                    )
+                    tagged_sha = repository.commit_files(
+                        "released kernel", {"native-deps/Makefile": makefile}
+                    )
+                    repository.git("tag", configured, tagged_sha)
+                    files = {"scripts/prepare-sandbox-init.py": "runtime change\n"}
+                    if kernel_changed:
+                        files["native-deps/Makefile"] = makefile.replace("a" * 64, "b" * 64)
+                    head_sha = repository.commit_files("guest-runtime change", files)
+                    released = coordinator.ReleaseStatus(
+                        {
+                            "tag_name": configured,
+                            "body": self.binding_body("vmlinux", tagged_sha),
+                        },
+                        tagged_sha,
+                        True,
+                    )
+                    state = mock.Mock()
+                    state.status.side_effect = lambda tag: (
+                        released if tag == configured
+                        else coordinator.ReleaseStatus(None, None, False)
+                    )
+                    state.usable_tags.return_value = [configured]
+                    with (
+                        tempfile.TemporaryDirectory() as directory,
+                        mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+                        mock.patch.object(coordinator, "RepositoryState", return_value=state),
+                        mock.patch.object(coordinator, "branch_sha", return_value=head_sha),
+                        mock.patch.object(
+                            coordinator, "clone_repository",
+                            side_effect=lambda unit, ref, destination: repository.git(
+                                "clone", "-q", "--no-local", str(repository.root), str(destination)
+                            ),
+                        ),
+                        mock.patch.object(coordinator, "gh") as github,
+                    ):
+                        plan = coordinator.make_plan(
+                            unit, configured, "20260921.2", pathlib.Path(directory)
+                        )
+                        if kernel_changed:
+                            self.assertEqual(plan.action, "publish")
+                            self.assertEqual(plan.source_sha, head_sha)
+                            self.assertEqual(plan.selected, "vmlinux-v1.2.3-preview.20260921.2")
+                        else:
+                            self.assertEqual(plan.action, "reuse")
+                            self.assertEqual(plan.selected, configured)
+                            self.assertEqual(plan.source_sha, tagged_sha)
+                            self.assertTrue(coordinator.ensure_unit(
+                                plan, {"vmlinux": plan}, "unused", "f" * 40
+                            ))
+                            released.release["body"] = self.binding_body("vmlinux", head_sha)
+                            with self.assertRaisesRegex(coordinator.Deferred, "another source binding"):
+                                coordinator.ensure_unit(plan, {"vmlinux": plan}, "unused", "f" * 40)
+                        github.assert_not_called()
+                finally:
+                    repository.close()
 
     def test_dependency_rebuild_cannot_reuse_same_day_preview(self) -> None:
         unit = coordinator.UNIT_BY_NAME["sandboxer"]
