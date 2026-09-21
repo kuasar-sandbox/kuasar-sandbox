@@ -2,36 +2,31 @@
 
 # 持续集成
 
-## 1. 概述
+## 1. 公开调用方与受信任控制
 
-项目主仓维护 CI 的可信控制面与唯一执行 workflow。五个组件仓只保留事件触发和参数
-wrapper。所有 PR wrapper 继续引用项目主仓 `main` 的 `.github/workflows/ci-entry.yml`,
-每次运行解析到精确的可信提交。guest 的发布 bootstrap checkout 固定到评审后的平台提交。
-该入口再从同一个解析后的平台 revision 调用
-`.github/workflows/integration-tests.yml`。公共准入、runner 初始化、
-源码缓存、native cache、完整 E2E 和精确发布资产验证不再复制到各仓。
+平台仓维护 `ci-entry.yml`、`integration-tests.yml` 和 `integration-architecture.yml`。
+组件 PR 保留 `ci-entry.yml@main` 薄入口，由 GitHub 在每轮固定框架版本。
+所有 hosted job，包括 admission、协调、发布、finalize 和 cleanup，都在分配 runner 前检查可信事件中的实际调用仓库：
 
-执行 workflow 有两个明确模式:
+```yaml
+if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+```
 
-- `source`:验证触发仓的 PR integration commit、可选 exact companion PR 集合与按照
-  目标平台分支解析的其余源码组合;
-- `exact-assets`:验证 aggregate workflow 已下载并校验的发布 archive,不重新构建。
+公开的 reusable workflow 提供方、候选输入或 companion 不能授权 private/internal/未知调用方。
+非公开调用不分配 hosted job，也不构成成功验收。没有私有 ARM 队列、新私有适配、larger/付费 fallback。
+既有 runner 运维资料仍在 [ci/runner](../ci/runner/README.md)，新流程不修改其服务。
 
-## 2. Source 模式
+`pull_request_target` 仍只接受 `main` 和 `release/vMAJOR.MINOR.x`。非 draft 同仓 PR 自动准入；
+fork 准入仍查询当前 active 组织成员身份，不能以 `author_association` 代替。
+admission 复核当前 PR/base/head 和 integration commit 的两个父提交，并向该 integration commit
+写入 `kuasar/ci-exact-head=pending`。draft、外部 fork 和冲突都不能得到 E2E 成功结论。
 
-各仓可信 wrapper 使用 `pull_request_target` 接收事件,不执行候选仓提供的 workflow。它只接受
-目标为 `main` 或 `release/vMAJOR.MINOR.x` 的 PR。同仓非 draft PR 自动准入;fork PR 由可信控制 job 使用只读 App token
-查询当前组织成员关系,仅 `active` 的 owner/member 自动准入。公开仓的准入与结束控制 job 使用 GitHub-hosted runner。控制 job 同时重新查询当前 PR,
-校验 GitHub 生成的 two-parent integration commit,并在该 commit 上把
-`kuasar/ci-exact-head` 置为 `pending`。事件中的 `author_association` 不作为组织成员
-身份来源。draft PR 只运行 admission/finalize 控制步骤,不运行完整 E2E,其 exact-head 保持
-`pending`;转为 ready 后由新的事件自动运行完整 Integration E2E。外部 fork、冲突或已经变化的事件拒绝准入。
+App key 和短期控制 token 只进入受信任的 admission/finalize 与发布控制 job。
+产品/helper 构建、源码检查、prepare、E2E 都不接收 App key，候选代码在新的标准 job 执行。
+公开源码以匿名精确 SHA 获取，checkout 不保留凭据；Actions token 只用于可信 API/下载步骤。
+publish 使用独立 job 和写权限。
 
-其余仓库 revision 通过 GitHub REST API,按照目标平台分支选择的 ref 解析。
-包括 runtime 与 vmlinux 在内的六个发布单元分别解析;源码 workspace 的唯一
-`guest-runtime` checkout 使用 runtime 单元,详见下文。候选仓 revision 替换为已准入的
-integration commit。普通 PR 不声明 companion,行为与单候选模式相同。不能由任一仓
-`main` 单独编译的原子跨仓变更可在两个 PR body 中互相声明:
+跨仓原子变更沿用双向 companion 标记：
 
 ```text
 <!-- kuasar-ci-companions
@@ -39,124 +34,78 @@ kuasar-sandbox/orchestrator#227
 -->
 ```
 
-marker 最多出现一次,其中每个非空行必须是允许仓库的 `owner/repository#PR`。同一仓只能
-出现一次,不能引用触发仓自身,空块、重复块和未闭合块均拒绝准入。companion 必须保有
-`refs/pull/N/merge`,其 integration 的第一 parent 必须等于该 PR 当前目标分支,第二 parent 必须等于
-`refs/pull/N/head`,且该 head 必须仍是组织仓某个 branch 的 head。这样 fork 只能作为已通过既有
-成员准入的触发 PR,不能经 companion 间接进入特权 runner。每个 companion 还必须在自身
-Ready 状态下运行 Integration E2E 并取得自己的 exact-head status;一条 primary status 不能替代另一个 PR
-的门禁。编辑 PR body 不属于组件 wrapper 订阅的事件,因此修改 marker 后需 push 新 head,或执行
-draft → ready 触发新运行。准备合入时必须把 status 所链接 run 的 `source-set.tsv` 与当前 marker
-逐项比较;body 在该 run 之后发生过 marker 变更时,即使 commit status 仍显示 success 也视为失效。
+一个 PR 最多一个标记，每个允许仓库只能出现一次。companion 必须公开、open、Ready，
+具有当前两父 merge ref、精确 base/head，且 head 仍属于组织仓分支。
+admission、执行前解析、finalize 均复核。主 PR 的状态不能代替 companion 自己的实际调用方验收。
+标记文本编辑需新 head 或 draft-to-ready 事件；合并前核对本轮 plan 与当前标记。
+已合并 companion 从后续 PR 标记移除并重跑。只有全部所选阶段成功且精确源码集合仍未变化，
+finalize 才能成功；skip/cancel/failure 不能成为合并依据。
 
-admission 和 finalization 使用仅限六仓 `Contents: read`、`Pull requests: read` 的短期 App
-token,通过 PR refs、目标 branch ref、
-commit parents 与 `branches-where-head` 把每个 companion 解析成 PR number、candidate/base/base-ref/head
-SHA。执行 job 不信任 PR body 原文,只接收 admission 输出的已解析记录,在执行候选代码前
-重新查询全部 refs/commit,按 exact integration SHA 组装源码并撤销 token。结束控制 job第三次
-查询全部记录;任一 merge ref 消失、目标 branch/head/integration SHA 变化或 head 不再属于组织仓 branch,
-触发 PR 的 exact-head status 均失败。
+## 2. 精确基线与受影响产品
 
-status 仍只写触发 PR 的 integration commit。跨仓变更需要各 PR 互相声明并各运行一次,从而
-分别覆盖各组件拥有的 E2E 入口并取得各自 status。合入第一个 PR 后,后续 PR 删除已合入的
-companion marker,再以该 PR 目标版本线的新 sibling 重跑。该流程只冻结源码验证集合,不增加产品版本
-协商、兼容 alias 或临时 runtime gate。source 模式仍没有 `main` push 或手工 dispatch 入口。
+`source` 模式从主线维护的 `releases/daily-preview.yaml`、或维护线的 `releases/release.yaml`
+选择一个已发布且通过声明验证范围的 aggregate。仅允许当前选择或显式前驱恢复中断发布。
+plan 固定 aggregate tag commit、六个独立 unit 的版本/SHA、Release/asset ID、大小、摘要和成功的聚合 run。
+新双架构 aggregate 的发布说明还绑定验证 profile 与真实制品摘要。
 
-可复用 workflow 验证:
+基线或 ARM 资产缺失时明确失败并要求初始化。不会拼接组件 Latest，也不会回退全源码构建。
+历史 AMD64-only 发布仍是合法历史发布，只是不满足双架构基线。
+见 [首次 ARM 初始化](release_zh.md#first-arm-initialization)。
 
-1. 控制面与执行实现都解析自可信平台 workflow revision(项目主仓 `main` 解析后的完整 SHA),运行中记录完整 SHA;
-2. `pull_request_target` event、当前 PR 与 candidate/base/head 输入完全一致;
-3. candidate 和所有 companion 均是以各自 base/head 为两个父提交的 integration commit;
-4. 当前开放 PR 与全部 companion refs 的 base/head/merge commit 在执行前与结束后均未变化;
-5. fork 准入 token 只请求组织 `Members: read`,仅存在于 admission 控制 job;
-6. 执行候选代码的 E2E job 的 `GITHUB_TOKEN` 只有 `Contents: read` 和 `Pull requests: read`;
-7. companion/source App token 只有六仓 `Contents: read`、`Pull requests: read`,其中 runner
-   上的 token 在执行候选代码前撤销。
+按候选/companion 与基线源码的实际产品输入差异，通过小型显式映射选择 Go/native 产品及必要链接/内嵌产品。
+accelerator flatten 改动进入 `flatten-ctl` 和实际内嵌它的 runtime；`sandbox-init` 改动进入被测 runtime。
+runtime 与 vmlinux 保持独立源码身份，kernel 继续复用已有 Makefile 输入投影。
+orchestrator 的 `app/`、`config/` 是产品输入；文档或测试专属变化不选择组件产品。
 
-结束控制 job 再次查询 PR。只有 Integration E2E 成功且当前 integration commit
-仍与准入值完全一致时,它才把同一个 `kuasar/ci-exact-head` 状态置为 `success`;测试失败、
-取消、跳过或 PR 已变化都不会生成可用于合入的成功状态。GitHub 自带的
-`pull_request_target` workflow check 绑定 PR head commit,不能代替这个 integration-commit
-状态。
+build 可获取 local Go replacement 所需的精确库源码，但不会因此重建所有 sibling 独立 CLI。
+未修改产品的 hash 必须等于下载基线；候选产品 hash 必须等于本轮真实 build 输出。
+不要求任意旧编排源码重建与基线天然字节相同。
 
-platform tooling 与 source 使用只读 App token 从 GitHub 官方 archive API 按完整 SHA 获取,
-不依赖 Git smart HTTP;二者 SHA 相同时直接复用已解包的 trusted tree。归档必须只有一个顶层
-目录、不得包含路径穿越或符号链接等非普通条目。五个组件的源码归档缓存在
-`$KUASAR_SOURCE_CACHE_ROOT/<repo>/<sha>.tar.gz`:hosted 使用 job 临时目录,持久 runner
-使用 `/var/cache/kuasar/sources`。命中时校验 SHA-256 和 tar 结构;miss 从
-GitHub 官方 tarball 下载,失败时改用官方 zipball 并本地转换。每仓以 `flock`
-串行维护,保留最近使用的 32 个 revision。token 在执行候选代码前显式撤销。
-
-当 platform PR 的目标是 `main`,六个 unit 都从各组件 `main` 解析。当目标是平台
-`release/vMAJOR.MINOR.x`,执行 job 先读取该 PR integration 中的
-`releases/daily-preview.yaml`,再对六个 unit 分别用正式 Daily 规则派生组件
-`release/vX.Y.x`;不存在该组件维护分支时固定为清单中的精确 tag。`release-units.tsv`
-保留这六项独立的配置版本、请求 ref 与解析 SHA。源码 workspace 仍只有一个
-`guest-runtime` checkout,它采用 runtime unit 的解析 SHA;vmlinux 的独立 archive、校验和
-运行组合由正式发布前的 exact-assets 发行资产验证按清单精确验证,不会被这个源码 checkout 合并成
-一个发布单元。
-
-随后创建五组件 `go.work`,恢复或构建 native cache,并验证与构建候选项目主仓源码:
-
-```bash
-make -C src/platform test-ci-tools test-release-tools test-perf-tools
-make -C src/platform build e2e-tools assemble-e2e test-uffd-performance-gate
-```
-
-每个组件在自己的 `test/e2e/` 维护用例与唯一入口 `run_all.sh`。Platform Integration E2E 将五个
-组件源码与 `kuasar-sandbox/test/e2e/platform/` 中真正跨组件组合本身的用例组装为:
+## 3. 两条独立架构生命周期
 
 ```text
-test/e2e/run_all.sh
-test/e2e/accelerator/run_all.sh
-test/e2e/connector/run_all.sh
-test/e2e/guest-runtime/run_all.sh
-test/e2e/sandboxer/run_all.sh
-test/e2e/orchestrator/run_all.sh
-test/e2e/platform/run_all.sh
+resolve → x86 build → x86 prepare → 原生 x86 shards → x86 result
+        → ARM cross build → ARM prepare → 原生 ARM shards → ARM result
+        → 独立源码 unit/race/vet 与 UFFD 检查
+                                  全部所选结果显式汇总
 ```
 
-项目主仓 PR 运行顶层入口,按 owner 顺序调用全部六个入口。组件 PR 运行该组件组装后的完整 owner 入口。某组件是候选仓时,组装目录直接采用该 PR integration
-commit 的 `test/e2e/`,所以特性实现与其 E2E 在同一个 PR 评审,组件 PR 的完整 Integration E2E 结果也以
-该组件 `run_all.sh` 在统一环境中通过为准。测试需要其他仓二进制不改变所有权:platform 只
-提供完整 `BIN`、zot、versitygw、KVM 与系统服务环境,不复制用例源码。
+两种产品都在独立 `ubuntu-24.04` x86 job/workspace 使用已有 Makefile/native-cache 构建。
+每架构产品构建一次、不变输入 prepare 一次。一条 lane 自己准备完成即可开始 E2E，不等待另一架构构建。
+执行使用 `ubuntu-24.04` 或标准 `ubuntu-24.04-arm`；concurrency、artifact、结果均包含架构/shard/run。
+逐个汇总所有 shard 和两种架构，避免 matrix output 覆盖一边。
 
-完整 source Integration E2E 还会固定执行 1 轮 working-set smoke,覆盖 A/B/C/D 以及本地加密
-`off/auto × cold/warm`。该 smoke 每次创建并独占一个新的 TAP,不复用前序 E2E 的
-默认接口,并用本轮 `/32` host route 隔离同网段的残留 connected route;
-readiness 失败诊断随 CI metadata 上传。30 轮 canonical 测量用于生成稳定的
-描述性性能报告,不作为 workflow 的独立模式或 PR 必跑轮数。
+RocksDB 与 cache-ctl 共用显式 `CROSS_PREFIX`、目标 CGO CC/CXX；Rust 使用环境编译器及其匹配 target std/linker。
+ARM kernel 校验 `Image` 头；Go/native ELF 必须为目标 Linux ELF64。
+EROFS 使用目标静态依赖与目标 pkg-config；host `BUILD_MKFS_EROFS`、Runtime writer/readers、Go 打包 helper 保持 host-native。
+不使用 `NO_ROCKSDB`，也不建立环境 Go/Rust 二进制字节白名单。
 
-## 3. Exact-assets 模式
+prepare 在组装前校验包路径/类型/权限/归属、摘要、必要产品和 runtime 内嵌身份。
+两个架构独立解压；候选测试 owner 整棵目录替换，包括 helper 和删除文件残留检查。
+其余测试来自所选 platform 包，按 owner 记录 test revision，与可信 framework SHA 分开。
 
-aggregate workflow 从受信任的 `main` 加载发布工具,但 prepare checkout 调度器明确选择的
-平台 `main` 或 `release/vMAJOR.MINOR.x` 分支 HEAD 完整 SHA。该 job 上传包含以下内容的
-短期 Actions artifact:
+prepare 提供 manifest Docker archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像以及目标 helper
+（zot、versitygw、custom Proxy、telemetry probe）。工作区包含 `bin/`、`test/`、`fixtures/`、`images/`、材料及 `provenance.json`。
+这些是测试输入；被测业务 Build、flatten、snapshot、publish、restore 仍在原有 E2E 用例执行。
 
-```text
-assets/             platform 包、六个组件 archive、统一 SHA256SUMS
-selection.tsv       workflow 内部版本选择,不上传到 GitHub Release
-release-notes.md    GitHub Release 页面说明
-```
+E2E 只 checkout 可信执行器并下载目标 prepared workspace，执行前后核验全部文件摘要和权限。
+它不 checkout 组件源码，不隐式进行产品 Go/Cargo/kernel 编译。
+每个 shard 使用短路径、磁盘支持的私有可变目录，socket、direct I/O、Docker 配置、性能状态均在不可变输入之外。
+源码依赖的 sandboxer/orchestrator unit/race/vet、真实 ENOSPC、Collector 回归和 UFFD benchmark 保留为独立必需源码 job。
+source 模式 x86 sandboxer/platform 还用同一组制品保留 A/B/C/D `off/auto × cold/warm` working-set smoke。
 
-Integration E2E 重新验证固定资产集合、SHA-256、platform 包范围、tar 安全路径和跨包覆盖,然后解压到
-`release-install/`。组件 archive 只提供运行制品;组件文档与 E2E 已由 aggregate prepare
-从清单所选 tag 的 GitHub 源码归档收集进 platform 包。执行入口来自 platform archive 本身:
+## 4. Daily 与 Stable
 
-```bash
-cd release-install
-BIN=$PWD/bin bash test/e2e/run_all.sh
-```
+`exact-assets` 仅接受实际公开的平台 aggregate workflow。
+plan 固定提交清单与暂存的十四项资产（platform + 十二个组件架构包 + SHA256SUMS），不选择产品重建。
+各 target 与 PR 共用 download/compose/prepare/profile/result 原语；测试 helper 可从所选精确测试源码预先构建，
+必需源码检查始终与 artifact E2E 分离。
 
-该模式不推导或读取组件 `main`:每个 unit 的文档、用例和二进制一样绑定清单所选的独立
-tag,所以平台维护分支可以组合彼此不同的组件维护版本线。它不重建产品 Go/Rust/native
-二进制、vmlinux、RocksDB 或 Cloud Hypervisor。公开 caller 使用可信 `exact-assets`
-bootstrap 准备宿主依赖;bundle 验证并解压后,[exact-assets-tools.sh](../ci/hosted/exact-assets-tools.sh)
-优先复用环境提供的 zot/versitygw；缺失时才从经过校验的输入下载 zot v2.1.17 或构建本地 versitygw v1.5.0 测试服务。仅构建宿主测试工具和 EROFS
-writer/reader,不修改 `release-install/bin` 内的产品二进制。既有十个 `REQUIRE_*` 均保持
-启用,包内顶层 suite 仍运行所有 owner。通过后 publish job 原样使用此前的 artifact。
+publish 再次核对双架构成功结果与暂存摘要，原样发布归档，不重新编译。
+许可证/材料、源码身份、受信任 publisher 标记及版本不可变约束继续适用。
+ARM 非 KVM 范围在执行前和 aggregate 验证绑定中声明，不等同完整 VM 验收。
 
-## 4. Native cache
+## 5. Native cache
 
 `ci/native-cache/native-cache.sh restore-or-build` 处理:
 
@@ -167,7 +116,7 @@ writer/reader,不修改 `release-install/bin` 内的产品二进制。既有十�
 - patched `cloud-hypervisor`。
 
 缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v2/<arch>/<component>/<input-hash>/`。hosted
-bootstrap 将根目录设在本次 job 临时目录内;持久 runner 保持 `/var/cache/kuasar/native`。
+新版公开 workflow 将根目录设在每个一次性 build job 的临时目录内。
 hosted 只做本地复用,不向 Actions cache 或 artifact 上传缓存。input hash 覆盖
 构建脚本、patch/config、上游摘要、架构、Go/Cargo/C/C++ 工具链和 pkg-config 解析结果。
 条目通过 staging、校验和及原子 rename 发布;命中恢复前重新校验 descriptor、payload 和
@@ -186,150 +135,42 @@ EROFS 保留唯一可选的 `bin/<arch>/.erofs-recipe` v2 stamp（含两个输�
 make -C kuasar-sandbox test-ci-tools
 ```
 
-## 5. Runner 与网络
+## 6. Hosted 前置条件与证据
 
-### 5.1 仅按公开性选择标准 runner
+bootstrap 保留环境 Go/Rust 版本，仅在一次性 x86 job 添加目标包和匹配 Rust target，不升级编译器或安装 runner 服务。
+host EROFS readers 与 Runtime reader 复用已有固定 recipe。
+源码、native 和编译器缓存留在各 job，不上传。
 
-主仓迁移由 [#127](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/127) 跟踪。
-共享 control 和 E2E job 仅在实际调用仓为 Public 时选择 `ubuntu-latest`；其他公开性
-保留原有 `kuasar-control` 或 `kuasar-e2e` 池。仓名、候选身份和 mode 不决定 runner，
-非法输入由独立请求校验在选定 runner 上拒绝。可复用 workflow 所在仓和 fork 的公开性
-不是实际调用仓的公开性。
+`artifact-build`/`artifact-cross` 提供原生/交叉构建条件；`artifact-prepare` 提供 host readers 与 fixture 工具；
+`artifact-x86` 提供 Docker/systemd/cgroup v2/KVM/UFFD/netns/BPF；`artifact-arm` 仅提供所选非 KVM 条件。
+`source` 保留源码 benchmark 条件。x86 VM bootstrap 保留既有窄范围每 job KVM udev/group 修复，
+检查真实非特权 KVM/UFFD 访问，TUN/vhost-vsock ACL 保持原有方式。缺少所选能力必须失败。
+CPU affinity 和 Go/Cargo 并发由可用 CPU/内存限制。
 
-Control bootstrap 使用同一 Public 条件。Mode 继续决定 `source` / `exact-assets`
-profile、凭据、执行内容及超时：exact-assets 保持 120 分钟，其他 hosted 工作保持
-180 分钟，私有 source 保持 60 分钟。不增加迁移名单、runner 决策 job 或付费回退。
-宿主选择跟随 `ubuntu-latest`，但工具链、依赖和测试辅助服务的版本与摘要继续固定。
-能力检查要求 Ubuntu Linux、x86_64 和预期 hosted 环境，不检查具体发行版号。
-删除人为版本门禁，不代表未实测的新 Ubuntu 版本已经通过完整 E2E。
+证据 artifact 包括 `integration-plan`、每架构 `integration-provenance`、每 shard `integration-shard`、
+`integration-source-result`、两个 `integration-architecture-result` 和最终 `integration-validation`，均带 run ID/attempt。
+provenance 记录基线资产、产品来源/hash、精确源码/测试/框架、内嵌载荷、实际工具/native key、helper/fixture hash、权限及既定 profile。
+结果记录所选用例、退出码、耗时和 prepared provenance 摘要。
+聚合 cleanup 仅移除大型 build/prepared/stage 传输物，验证元数据保留七天；不上传含测试凭据的原始运行状态。
 
-各 job 按实际工作选择 profile：
+轻量合同检查沿用 `make test-ci-tools test-release-tools test-perf-tools`，需可信 EROFS readers 与 `KUASAR_RUNTIME_READER`。
+组件 release/workflow/fixture 检查保留原入口。开发者 `make test-e2e` 仍先准备源码产品/helper，再运行 owner 套件，
+与 hosted artifact executor 分开。合同 fixture 和原生预检不能代替实际公开标准 runner 验收。
 
-| Profile | Job / 前置能力 |
-| --- | --- |
-| `control` | PR 准入/结束、发布清理/reconcile;Git、curl、jq、Python/YAML 与归档工具 |
-| `release-control` | 发布 preflight、Kernel publish、Preview 删除;control 工具加 Go |
-| `kernel` | Kernel 构建;Go 与 Ubuntu Kbuild 开发包 |
-| `runtime` | Runtime 构建;Go、native 开发包与可信 EROFS writer/reader |
-| `runtime-publish` | Runtime 发布校验;Go 与独立构建的 EROFS writer/reader |
-| `source` | 完整源码构建/E2E;全部 native 依赖、Rust/Docker 检查与 VM/网络工具 |
-| `exact-assets` | 包内二进制/测试;Docker、systemd/cgroup v2、KVM/UFFD/netns/BPF、运行工具及 EROFS 宿主工具;环境 Go 用于 versitygw 的缺失回退构建 |
+## 7. 首轮覆盖与切换
 
-Go 由 runner 环境提供；bootstrap 只检查可用性，不安装另一套 distribution，不覆盖
-`GOROOT`/`GOTOOLCHAIN`，不比较二进制摘要或精确补丁版本。源码及模块的最低要求
-仍生效。发布自动化使用环境中的 GitHub CLI。EROFS host writer/reader 从固定的 v1.9.1 源码和 SHA256 构建,
-独立于 guest 静态 recipe。Docker 以及源码构建所需的 Rust/Cargo 是
-[标准镜像](https://github.com/actions/runner-images#available-images)
-的必需能力,会显式检查。Native source pin、Cargo lockfile、构建参数、link map 和
-materials 仍由既有 recipe 维护。工具缺失、摘要不符或 VM 能力不可用均使 job 失败。
+架构/owner/用例、缺失原因、已执行证据和后续事项集中在唯一的 [首轮覆盖表](ci.md#7-initial-coverage-and-rollout-evidence)。
+ARM 当前只选择 accelerator 和 guest-runtime 已有独立非 KVM 套件；其余 owner 明确未选 E2E。
+ARM VM/KVM/restore/Builder/cluster 同等覆盖、新硬件和全面用例扩充属于后续工作。
+已选测试失败不能事后改为 unsupported，整个 ARM job 不使用 continue-on-error。
 
-Source 和 exact-assets profile 加载 `tun`、`vhost_vsock`,启用
-`vm.unprivileged_userfaultfd=1`,并检查 userfaultfd、systemd 和 cgroup v2。
-无桌面会话的 runner 上,udev `uaccess` 处理可能在设备 inode 不变时删除 `/dev/kvm`
-上的 runner 命名 ACL。修改宿主之前,VM bootstrap 要求预期的 GitHub-hosted Ubuntu Linux
-x64 环境,并校验非 root 的数字 job uid/主组 gid。它仅安装
-`/etc/udev/rules.d/99-kuasar-job-kvm.rules`,匹配 `SUBSYSTEM=="misc"` 和
-`KERNEL=="kvm"`,使用最终赋值 `GROUP:="<id -g>"`、`MODE:="0660"`。
-重载规则后仅触发 KVM,等待 udev settle,并仅对 `/dev/kvm` 应用相同 group/mode。
-随后删除 runner 的 KVM 命名 ACL,重放已观测到的丢失情况,以当前 job 用户验证 `O_RDWR`。
-不修改组成员,不授予所有用户访问权限。Vhost-vsock 与 TUN 保留原有 job 专属 ACL。
-Suite 和 sudo 前的访问检查保持不变;仍需完整 hosted 资格验证。
+四组件 Public 切换复用 #82 准备记录与 #128 迁移工作，只复核新增差异和真实凭据/分发阻塞。
+读回 actual visibility 后执行实际 caller CI。私有 guard 导致的未运行不算成功；保护与评审按正常规则执行。
+历史测试访问能力的销毁/未复用事实仍需确认，代码预检不能代替该证据。
 
-必需的包内 connector E2E 验证真实 namespace 和 BPF 数据路径,bootstrap 不额外要求依赖内核版本的探测工具。两个 profile 均显式安装
-完整 suite 所需的 ping、netcat、OpenSSL、SQLite,以及 sandboxer usage fault/source
-fixture 所需的 `strace`。不安装 runner service、模板、nspawn slot 或持久网络。
-旧的 owned-state 恢复仅在持久 runner 运行。构建 CPU affinity 按可用
-CPU 与内存限制(预留 2 GiB 给系统,每个 compiler job 预算 2 GiB),也约束使用
-`nproc` 的 recipe;Go/Cargo 并发使用同一预算。顶层 Make goal 仍顺序执行。
-Source E2E 使用既有 hosted 180 分钟限时,包含冷构建与完整 owner/UFFD/A/B/C/D smoke;
-exact-assets 保持 120 分钟,私有 source 保持 60 分钟。测试断言和完整 working-set matrix
-均不缩减。
+## 8. 参阅
 
-源码归档、native 条目、tarball、Go/Cargo cache 和工具位于
-`$RUNNER_TEMP/kuasar-hosted.*`;exact-assets 测试工具另用
-`$RUNNER_TEMP/kuasar-exact-tools.*` 目录,不上传这些目录。源码本身保留在 job workspace;
-仅上传既有 revision/timing/performance metadata 与验证后的发布 bundle。Bundle 继续
-包含必需的许可/来源清单,不传递完整 workspace。Hosted 使用环境中的 Go/Rust 工具和官方 Python/kernel/image 地址。Source 模式继续使用既有 zot/versitygw target。Exact-assets 复用可信
-平台的 `ensure-zot.sh`,只下载公开 guest-runtime
-[提交 494dbceae683d6b20cdbec00fe6b1f554ea2f508](https://github.com/kuasar-sandbox/guest-runtime/tree/494dbceae683d6b20cdbec00fe6b1f554ea2f508/native-deps/deps)
-的 `build-versitygw.sh`/`common.sh`。固定 recipe 路径、commit 和 SHA256 均校验;
-versitygw 源码还检查归档路径和类型。该宿主工具构建使用环境 Go，限制 affinity/并发并使用本地
-缓存。`host-tools.tsv` 记录 recipe、源码和二进制身份。Exact-assets 不 checkout 私有 sibling,
-不由候选源码选择宿主构建脚本。持久 caller 保持其镜像设置。
-
-Integration bootstrap 从 `job.workflow_sha` 对应的 `trusted/platform` 执行,位于请求
-验证和平台工具 token 撤销之后。已验证的 mode 选择 `source` 或 `exact-assets`;只有 source
-创建源码 token、挂接源码缓存。Exact-assets 仅在下载、验证并解压 bundle 后挂接测试工具。
-Guest release job 在请求源码之前 checkout
-同一 immutable 平台 pin;Runtime ABI 检查来自可信 guest workflow checkout。Kernel
-不再需要跨仓 App token。Runtime 仍通过既有只读 source token 获取私有依赖闭包,
-在执行源码或打包代码前撤销。Publish 仍是单独拥有写权限的 job。
-
-迁移遵循纠正后的主仓优先、先公开再 hosted 顺序:先完成主仓自身的 source/aggregate
-资格验证,再逐个准备和评审剩余私有仓、公开该仓、验证其自身标准 runner CI。
-Accelerator #129/#135 的组件专属工作继续延期。逐仓准备、公开、验证是工作顺序，
-不是共享路由白名单；后续仓库公开后会自动选择 hosted，但组件自有发布 workflow
-仍需逐仓适配并实测。不建立私有组件的公开验证 relay。主仓真实 aggregate/source-set 测试可使用既有已授权 companion
-依赖,但不能算作组件公开验收。已完成的 guest 路径和 immutable release bootstrap pin
-保持不变;以后更新 pin 必须使用经过评审的真实上游 SHA。PR wrapper 保留 `@main`,
-`pull_request_target` 使用 base 分支 wrapper。仅修改候选源码或手工演练不能代替精确候选
-必需的 Integration E2E 检查。本地创作用 Git 基线不代表上游发布来源。
-
-标准 runner 的功能结果不能证明此前固定硬件上的 VM 容量。可选的真实云 OBS/NFS 测试仍
-需各自环境和证据;本地 zot/versitygw fixture 不代表真实云验收。必需能力缺失或资源不足
-必须失败,不能转为成功 Skip。
-
-离线检查为 `python3 ci/hosted/test-workflows.py`(也由 `make test-ci-tools` 执行)及 guest
-`python3 scripts/ci-test-workflows.py ../kuasar-sandbox`,覆盖 runner 选择、profile、pin、
-token 顺序、私有缓存路径、ABI 与必需覆盖。语法/离线通过不代表 hosted qualification:
-启用可信迁移后,supervisor 仍需运行真实候选 CI,包含完整 working-set matrix 和真实
-revision metadata。
-
-### 5.2 其余持久 runner caller
-
-runner 安装资料位于 `ci/runner/`。尚未迁移的组件 Release 控制 job 使用
-专用 `kuasar-control` 池;其执行候选代码的 E2E job 继续使用 `kuasar-e2e` 池和收窄后的 read
-token。两组 runner 使用不同 rootfs、工作目录、标签和 GitHub runner group;角色变更必须先
-清空并从可信模板重建,不能原地改标签。`kuasar-control` 对组织内全部仓库可见并允许 public,
-同时用 workflow allowlist 只允许中央 `ci-entry.yml` 和各组件 `main` 上的 release workflow。
-公开仓 CI 的准入/结束控制 job、每日协调和 aggregate release 控制 job 使用 GitHub-hosted runner。runner
-代理属于部署配置,不写入仓库 workflow;Go、Rust、Python、Linux kernel 与常用容器镜像使用
-公开中国大陆镜像降低网络抖动。
-
-每次持久 runner job 开始会停止遗留 sandbox systemd unit、删除测试 tap 并重载 systemd。reset 还会按
-`RUNNER_NAME` 派生的确定名称(`kuasar-ws-<hash8>`)回收本 runner 的 working-set 网络
-namespace:先对其内进程 TERM、限时后 KILL,确认无存活进程后删除。名称派生保证同宿主多
-runner 互不影响,也使被 SIGKILL 中断的运行能在下一个 job 按精确名称回收,无需猜测接口
-所有权(#43、#53)。常用 zot 与
-versitygw 从 runner 固定工具目录链接到当前 workspace,不进入发布包。`kuasar-e2e` runner
-group 对组织仓库保持 `visibility=all`,不设置 workflow allowlist,只承载候选 E2E。
-各仓 fork workflow 的 secrets 转发关闭;需要 App secret 的准备步骤只存在于
-base 仓可信 workflow,且候选代码执行前相关 token 已撤销。
-
-特权 Runner 的部署必须使发布凭据和持久 Runner 凭据不可被候选代码访问,并在任务之间丢弃
-候选可写状态。只撤销源码 token 不会建立这种隔离。未评审的外部 Fork 代码不得进入这些
-特权 slot;维护者应先按贡献流程检视并接纳其精确源码。
-
-## 6. Run artifacts
-
-每次 Integration E2E 上传 `ci-metadata-<run>-<attempt>`。source 模式通常包含:
-
-- `run.tsv`:模式、候选仓、PR 与 candidate/base/base-ref/head SHA;
-- `source-set.tsv`:触发 candidate 与所有 companion 的 PR、candidate/base/base-ref/head SHA 和角色;
-- `revisions.tsv`:platform 测试框架与五组件的精确 revision;
-- `release-units.tsv`:六个 Daily 发布单元的配置版本、派生 ref 与解析 SHA;
-- `source-cache.tsv`:源码缓存命中和摘要;
-- `native-cache.tsv`:native key、命中和耗时;
-- `timings.tsv`:构建与测试阶段资源数据;
-- UFFD 与 working-set 报告(仅对应测试运行时)。
-
-exact-assets 模式记录 run、测试输出和 hosted `host-tools.tsv` 身份,不创建伪造的组件源码或 native cache 元数据。发布版本
-组合由精确选定的平台分支提交中的清单、组件 tag 和 GitHub Release notes 表达。该提交不一定
-来自平台 `main`:维护分支聚合保留自身的版本选择。
-
-## 7. See Also
-
-- [release_zh.md](release_zh.md):发布资产、发行资产验证和权限边界;
-- [deployment_zh.md](deployment_zh.md):Integration E2E 所需系统服务与运行环境;
-- [../ci/runner/README_zh.md](../ci/runner/README_zh.md):runner 安装与维护;
-- [../test/QUICKSTART_zh.md](../test/QUICKSTART_zh.md):E2E 前置条件与排错。
+- [发布规约](release_zh.md)：版本选择、ARM 初始化与资产发布。
+- [部署](deployment_zh.md)：运行能力与服务。
+- [Runner 运维](../ci/runner/README.md)：既有持久基础设施。
+- [测试快速开始](../test/QUICKSTART.md)：开发者 E2E 条件。

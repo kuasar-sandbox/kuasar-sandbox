@@ -17,9 +17,10 @@ concurrency:
 
 jobs:
   admission:
-    # Public control jobs use the standard image; private callers keep their pool.
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    # Reject non-public actual callers before any hosted runner is allocated.
     # This job never executes candidate source.
-    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || 'kuasar-control' }}
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
@@ -466,7 +467,7 @@ jobs:
 
   e2e:
     needs: admission
-    if: needs.admission.outputs.eligible == 'true'
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && (needs.admission.outputs.eligible == 'true')
     permissions:
       contents: read
       pull-requests: read
@@ -480,13 +481,11 @@ jobs:
       base_ref: ${{ needs.admission.outputs.base_ref }}
       head_sha: ${{ needs.admission.outputs.head_sha }}
       companion_candidates: ${{ needs.admission.outputs.companion_candidates }}
-    secrets:
-      KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
 
   finalize:
     needs: [admission, e2e]
-    if: always()
-    runs-on: ${{ github.event.repository.visibility == 'public' && 'ubuntu-latest' || 'kuasar-control' }}
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && (always())
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read

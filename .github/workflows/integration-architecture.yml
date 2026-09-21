@@ -1,0 +1,242 @@
+name: Reusable Artifact Architecture
+
+on:
+  workflow_call:
+    inputs:
+      arch:
+        required: true
+        type: string
+      framework_sha:
+        required: true
+        type: string
+      plan_artifact:
+        required: true
+        type: string
+      stage_artifact:
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+# Each invocation has its own build -> prepare -> native E2E lifecycle.
+concurrency:
+  group: artifact-${{ github.repository }}-${{ github.run_id }}-${{ inputs.arch }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    outputs:
+      shards: ${{ steps.plan.outputs.shards }}
+    env:
+      TARGET_ARCH: ${{ inputs.arch }}
+      KUASAR_CI_DIR: ${{ github.workspace }}/build-metrics
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kuasar-sandbox/kuasar-sandbox
+          ref: ${{ inputs.framework_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.plan_artifact }}
+          path: plan
+      - name: Validate trusted architecture and shard selection
+        id: plan
+        env:
+          TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          FRAMEWORK_SHA: ${{ inputs.framework_sha }}
+        run: |
+          set -euo pipefail
+          [ "$FRAMEWORK_SHA" = "$TRUSTED_WORKFLOW_SHA" ]
+          case "$TARGET_ARCH" in x86_64|aarch64) ;; *) exit 1 ;; esac
+          PYTHONPATH=framework/ci/integration python3 -B - <<'PYTHON'
+          import artifacts, json, os
+          plan = json.load(open('plan/plan.json'))
+          artifacts.check_plan(plan)
+          artifacts.require(plan['framework_sha'] == os.environ['FRAMEWORK_SHA'], 'framework revision mismatch')
+          groups = artifacts.shards(plan['lanes'][os.environ['TARGET_ARCH']]['profile'])
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('shards=' + json.dumps(list(groups)) + '\n')
+          PYTHON
+      - name: Bootstrap existing native or cross recipes
+        run: |
+          profile=artifact-build
+          if [ "$TARGET_ARCH" = aarch64 ]; then profile=artifact-cross; fi
+          bash framework/ci/hosted/bootstrap.sh --profile "$profile"
+      - name: Download exact aggregate stage
+        if: inputs.stage_artifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.stage_artifact }}
+          path: aggregate-stage
+      - name: Obtain only this target's exact assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGE_ARTIFACT: ${{ inputs.stage_artifact }}
+        run: |
+          options=()
+          if [ -n "$STAGE_ARTIFACT" ]; then options+=(aggregate-stage/assets); fi
+          bash framework/ci/integration/download-baseline.sh plan/plan.json "$TARGET_ARCH" assets "${options[@]}"
+      - name: Build the affected delta and test helpers once
+        run: |
+          taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
+          /usr/bin/time -o build-time.txt -f 'build wall_seconds=%e' \
+            python3 -B framework/ci/integration/build-artifacts.py --plan plan/plan.json \
+            --arch "$TARGET_ARCH" --assets assets --sources sources --output delta
+          tar -czf build-inputs.tar.gz assets delta build-time.txt
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-build-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: build-inputs.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  prepare:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      TARGET_ARCH: ${{ inputs.arch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kuasar-sandbox/kuasar-sandbox
+          ref: ${{ inputs.framework_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.plan_artifact }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: integration-build-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Bootstrap native archive readers
+        run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
+      - name: Compose and prepare this architecture once
+        run: |
+          python3 -B framework/ci/integration/transport.py extract transport/build-inputs.tar.gz inputs
+          /usr/bin/time -o prepare-time.txt -f 'prepare wall_seconds=%e' \
+            python3 -B framework/ci/integration/prepare-artifacts.py --plan plan/plan.json \
+            --arch "$TARGET_ARCH" --assets inputs/assets --delta inputs/delta --workspace "prepared/$TARGET_ARCH"
+          cp inputs/build-time.txt build-time.txt
+          tar -czf prepared.tar.gz -C prepared "$TARGET_ARCH"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: prepared.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-provenance-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            prepared/${{ inputs.arch }}/provenance.json
+            build-time.txt
+            prepare-time.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  e2e:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    needs: [build, prepare]
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.build.outputs.shards) }}
+    concurrency:
+      group: artifact-e2e-${{ github.repository }}-${{ github.run_id }}-${{ inputs.arch }}-${{ matrix.shard }}
+      cancel-in-progress: true
+    env:
+      TARGET_ARCH: ${{ inputs.arch }}
+      TEST_SHARD: ${{ matrix.shard }}
+    steps:
+      - name: Check out only the trusted executor
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kuasar-sandbox/kuasar-sandbox
+          ref: ${{ inputs.framework_sha }}
+          path: framework
+          persist-credentials: false
+          sparse-checkout: |
+            ci/hosted
+            ci/integration
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.plan_artifact }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: transport
+      - name: Bootstrap declared native execution profile
+        run: |
+          profile=artifact-x86
+          if [ "$TARGET_ARCH" = aarch64 ]; then profile=artifact-arm; fi
+          bash framework/ci/hosted/bootstrap.sh --profile "$profile"
+      - name: Run selected cases from immutable prepared inputs
+        run: |
+          python3 -B framework/ci/integration/transport.py extract transport/prepared.tar.gz prepared
+          python3 -B framework/ci/integration/run-artifact-tests.py --plan plan/plan.json \
+            --arch "$TARGET_ARCH" --shard "$TEST_SHARD" --workspace "prepared/$TARGET_ARCH" \
+            --result "results/$TEST_SHARD.json"
+      - name: Upload exact shard result
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-shard-${{ inputs.arch }}-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results/${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  result:
+    if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    needs: [build, prepare, e2e]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      TARGET_ARCH: ${{ inputs.arch }}
+    steps:
+      - name: Require successful build, preparation and every selected shard
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          PREPARE_RESULT: ${{ needs.prepare.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+        run: test "$BUILD_RESULT/$PREPARE_RESULT/$E2E_RESULT" = success/success/success
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kuasar-sandbox/kuasar-sandbox
+          ref: ${{ inputs.framework_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.plan_artifact }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: integration-shard-${{ inputs.arch }}-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: shards
+          merge-multiple: true
+      - name: Explicitly collect this architecture's shards
+        run: |
+          mkdir results
+          python3 -B framework/ci/integration/artifacts.py shard-results \
+            --plan plan/plan.json --arch "$TARGET_ARCH" --results shards > "results/$TARGET_ARCH.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-architecture-result-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: results/${{ inputs.arch }}.json
+          if-no-files-found: error
+          retention-days: 7
