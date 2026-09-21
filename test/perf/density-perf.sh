@@ -390,7 +390,6 @@ units: { dir: $WORK/units, install: false }
 resource_listen:
   enabled: true
   socket: $WORK/sandbox-resource.sock
-  state_path: $WORK/state.json
   cgroup_scan_paths:
     - /sys/fs/cgroup/sandboxes
   resources:
