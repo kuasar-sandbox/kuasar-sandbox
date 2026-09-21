@@ -9,6 +9,7 @@ import pathlib
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 
 
@@ -50,7 +51,7 @@ class Repository:
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(value, encoding="utf-8")
-        self.git("add", "-A")
+        self.git("add", "--", *files)
         self.git("commit", "-qm", message)
         return self.git("rev-parse", "HEAD")
 
@@ -193,9 +194,28 @@ class PreviewSelectionTest(unittest.TestCase):
         tagged = self.repository.commit_files(
             "kernel inputs",
             {
-                "native-deps/Makefile":
-                    "LINUX_TARBALL ?= https://kernel.invalid/linux.tar.gz\n"
-                    "LINUX_TARBALL_SHA256 ?= " + "a" * 64 + "\n",
+                "native-deps/Makefile": textwrap.dedent("""\
+                    LINUX_TARBALL ?= https://kernel.invalid/linux.tar.gz
+                    LINUX_TARBALL_SHA256 ?= aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+                    LINUX_PATCHES_DIR := $(abspath deps/linux-patches)
+                    DEPS_ENV = KERNEL_ARCH=x86_64
+                    LINUX_INVOKE = $(DEPS_ENV) \\
+                        LINUX_TARBALL="$(LINUX_TARBALL)" \\
+                        LINUX_TARBALL_SHA256="$(LINUX_TARBALL_SHA256)" \\
+                        LINUX_PATCHES_DIR="$(LINUX_PATCHES_DIR)"
+                    ENVD_TARBALL ?= https://runtime.invalid/envd.tar.gz
+                    ENVD_SRC ?= build/src/envd
+                    ENVD_BIN := bin/envd
+                    VMLINUX_BIN := bin/vmlinux
+                    .PHONY: vmlinux envd
+                    vmlinux: $(VMLINUX_BIN)
+                    $(VMLINUX_BIN): deps/build-vmlinux.sh
+                    \tSTAGE=build $(LINUX_INVOKE) bash deps/build-vmlinux.sh
+                    envd: $(ENVD_BIN)
+                    $(ENVD_BIN):
+                    \tENVD_TARBALL="$(ENVD_TARBALL)" \\
+                    \tENVD_SRC="$(ENVD_SRC)" bash deps/build-envd.sh
+                    """),
                 "native-deps/deps/build-vmlinux.sh": "build kernel\n",
                 "native-deps/deps/common.sh": "fetch source\n",
                 "native-deps/deps/vmlinux/sandbox-common.config": "CONFIG_A=y\n",
@@ -229,7 +249,10 @@ class PreviewSelectionTest(unittest.TestCase):
             "native-deps/deps/build-vmlinux.sh",
             "native-deps/deps/common.sh",
             "native-deps/deps/vmlinux/sandbox-common.config",
+            "native-deps/deps/vmlinux/sandbox-x86_64.config",
+            "native-deps/deps/vmlinux/sandbox-arm64.config",
             "native-deps/deps/linux-patches/0001.patch",
+            "native-deps/deps/linux-patches/0002.patch",
         ):
             with self.subTest(path=path):
                 self.repository.close()
@@ -243,17 +266,84 @@ class PreviewSelectionTest(unittest.TestCase):
                 )
 
     def test_vmlinux_publishes_when_linux_source_pin_changes(self) -> None:
-        self.seed_vmlinux()
-        self.repository.commit_files(
-            "linux pin",
-            {
-                "native-deps/Makefile":
-                    "LINUX_TARBALL ?= https://kernel.invalid/linux-new.tar.gz\n"
-                    "LINUX_TARBALL_SHA256 ?= " + "b" * 64 + "\n",
-            },
-        )
+        for old, new in (
+            ("https://kernel.invalid/linux.tar.gz", "https://kernel.invalid/linux-new.tar.gz"),
+            ("a" * 64, "b" * 64),
+        ):
+            with self.subTest(input=old):
+                self.repository.close()
+                self.repository = Repository()
+                self.seed_vmlinux()
+                makefile = self.repository.root / "native-deps/Makefile"
+                self.repository.commit_files(
+                    "linux pin", {"native-deps/Makefile": makefile.read_text().replace(old, new)}
+                )
+                self.assertEqual(self.resolve_vmlinux().action, "publish")
+
+    def test_vmlinux_publishes_when_makefile_kernel_recipe_changes(self) -> None:
+        for old, new in (
+            ("STAGE=build $(LINUX_INVOKE)", 'STAGE=build KCFLAGS="-fno-inline" $(LINUX_INVOKE)'),
+            ("deps/linux-patches)", "deps/linux-patches-new)"),
+            ("KERNEL_ARCH=x86_64", "KERNEL_ARCH=arm64"),
+            ('LINUX_INVOKE = $(DEPS_ENV)', 'LINUX_INVOKE = $(DEPS_ENV) LOCALVERSION=-new'),
+        ):
+            with self.subTest(input=old):
+                self.repository.close()
+                self.repository = Repository()
+                self.seed_vmlinux()
+                makefile = self.repository.root / "native-deps/Makefile"
+                self.repository.commit_files(
+                    "kernel recipe", {"native-deps/Makefile": makefile.read_text().replace(old, new)}
+                )
+                self.assertEqual(self.resolve_vmlinux().action, "publish")
+
+    def test_vmlinux_reuses_release_after_unrelated_makefile_changes(self) -> None:
+        tagged = self.seed_vmlinux()
+        makefile = self.repository.root / "native-deps/Makefile"
+        changed = makefile.read_text().replace("envd.tar.gz", "envd-new.tar.gz")
+        changed = changed.replace("ENVD_SRC ?= build/src/envd", "ENVD_SRC ?= build/src/envd-new")
+        changed = changed.replace("bash deps/build-envd.sh", "bash deps/build-envd.sh --new-option")
+        changed += "\n# Runtime build documentation.\n"
+        self.repository.commit_files("runtime Makefile", {"native-deps/Makefile": changed})
         result = self.resolve_vmlinux()
-        self.assertEqual(result.action, "publish")
+        self.assertEqual(result.action, "reuse")
+        self.assertEqual(result.winner_commit, tagged)
+
+    def test_vmlinux_keeps_make_variables_shared_with_kernel_recipe(self) -> None:
+        makefile = (
+            "ENVD_BUILD_FLAGS = -g\n"
+            "ENVD_COMMON_FLAGS = $(ENVD_BUILD_FLAGS)\n"
+            "LINUX_INVOKE = KCFLAGS=\"$(ENVD_COMMON_FLAGS)\"\n"
+            "vmlinux:\n\t$(LINUX_INVOKE) bash deps/build-vmlinux.sh\n"
+        )
+        tagged = self.repository.commit_files(
+            "shared flags", {"native-deps/Makefile": makefile}
+        )
+        self.repository.git("tag", "vmlinux-v1.2.3", tagged)
+        self.repository.commit_files(
+            "shared flags changed",
+            {"native-deps/Makefile": makefile.replace("-g", "-fno-inline")},
+        )
+        self.assertEqual(self.resolve_vmlinux().action, "publish")
+
+    def test_vmlinux_reuses_only_newest_usable_preview(self) -> None:
+        self.seed_vmlinux()
+        preview = "vmlinux-v1.2.4-preview.20260920"
+        tagged = self.repository.commit_files(
+            "kernel patch", {"native-deps/deps/linux-patches/0001.patch": "new patch\n"}
+        )
+        self.repository.git("tag", preview, tagged)
+        head = self.repository.commit_files(
+            "runtime packaging", {"scripts/prepare-sandbox-init.py": "changed\n"}
+        )
+        self.repository.git("tag", "vmlinux-v1.2.4-preview.20260921", head)
+        result = preview_selection.resolve(
+            self.repository.root, "main", "vmlinux", "vmlinux-v1.2.3",
+            ["vmlinux-v1.2.3", preview], "20260921.2",
+        )
+        self.assertEqual(result.action, "reuse")
+        self.assertEqual(result.selected, preview)
+        self.assertEqual(result.winner_commit, tagged)
 
     def test_runtime_still_tracks_guest_runtime_head(self) -> None:
         tagged = self.repository.commit("runtime")
