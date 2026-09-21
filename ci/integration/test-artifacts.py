@@ -175,6 +175,31 @@ class ArtifactContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "embedded init differs"):
             self.compose()
 
+    def test_usage_probe_is_a_required_target_helper(self):
+        self.plan["owners"] = ["sandboxer"]
+        for arch in subject.ARCHES:
+            self.plan["lanes"][arch]["profile"] = subject.profiles(["sandboxer"], arch)
+        delta = self.delta()
+        with self.assertRaisesRegex(ValueError, "helper selection differs"):
+            self.compose(delta=delta)
+        helpers = subject.planned_helpers(self.plan["lanes"]["x86_64"]["profile"])
+        self.assertEqual(helpers["usage-probe"], "sandboxer")
+        (delta / "helpers").mkdir()
+        self.metadata["helpers"] = {}
+        for name, owner in helpers.items():
+            path = delta / "helpers" / name
+            path.write_bytes(elf("x86_64", name))
+            path.chmod(0o755)
+            self.metadata["helpers"][name] = {"sha256": subject.digest(path), "source_sha":
+                self.plan["framework_sha"] if owner == "framework" else self.plan["test_revisions"][owner]["sha"]}
+        (delta / "outputs.json").write_text(json.dumps(self.metadata))
+        provenance = self.compose(delta=delta)
+        probe = self.root / "workspaces/x86_64/fixtures/bin/usage-probe"
+        self.assertEqual(subject.digest(probe), provenance["helpers"]["usage-probe"]["sha256"])
+        probe.unlink()
+        with self.assertRaisesRegex(ValueError, "prepared workspace changed"):
+            subject.verify_workspace(self.root / "workspaces/x86_64", self.plan, "x86_64")
+
     def test_missing_selected_inputs_cannot_fall_back_to_source(self):
         self.plan["baseline"]["assets"] = [record for record in self.plan["baseline"]["assets"]
                                                   if "aarch64" not in record["name"]]
