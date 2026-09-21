@@ -47,7 +47,9 @@ class EnvironmentGo(unittest.TestCase):
                                  'resolve_environment_go; write_go_mounts; '
                                  'printf "policy=%s\\n" "${GOTOOLCHAIN-unset}"', policy)
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn('BindReadOnly="' + str(self.goroot) + '"', result.stdout)
+            escaped_root = str(self.goroot).replace(" ", r"\ ")
+            self.assertIn("BindReadOnly=" + escaped_root, result.stdout)
+            self.assertNotIn('"', result.stdout)
             self.assertEqual(result.stdout.count("BindReadOnly="), 2)
             self.assertIn("policy=" + (policy if policy is not None else "unset"), result.stdout)
             self.assertIn("independent-vendor-build", driver.read_text())
@@ -58,9 +60,11 @@ class EnvironmentGo(unittest.TestCase):
         self.fake_go(self.tools / "go")
         result = self.invoke('resolve_environment_go; write_go_mounts')
         self.assertEqual(result.returncode, 0, result.stderr)
+        escaped_root = str(self.goroot).replace(" ", r"\ ")
+        escaped_driver = str(self.tools / "go").replace(" ", r"\ ")
         self.assertEqual(result.stdout.splitlines(),
-                         ['BindReadOnly="' + str(self.goroot) + '"',
-                          'BindReadOnly="' + str(self.tools / "go") + ':' + str(self.tools / "go") + '"'])
+                         ["BindReadOnly=" + escaped_root,
+                          "BindReadOnly=" + escaped_driver + ":" + escaped_driver])
 
     def test_command_symlink_keeps_its_name_in_the_runner_path(self):
         driver = self.goroot / "bin/vendor-driver"
@@ -68,7 +72,9 @@ class EnvironmentGo(unittest.TestCase):
         (self.tools / "go").symlink_to(driver)
         result = self.invoke('resolve_environment_go; write_go_mounts; printf "%s\\n" "$GO_ENTRY"')
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertIn(str(driver) + ':' + str(self.tools / "go"), result.stdout)
+        escaped_driver = str(driver).replace(" ", r"\ ")
+        escaped_entry = str(self.tools / "go").replace(" ", r"\ ")
+        self.assertIn(escaped_driver + ":" + escaped_entry, result.stdout)
         self.assertEqual(result.stdout.splitlines()[-1], str(self.tools / "go"))
 
     def test_missing_go_fails_without_downloading(self):
