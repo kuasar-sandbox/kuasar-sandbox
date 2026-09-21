@@ -82,18 +82,33 @@ class EnvironmentGo(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("not a directory", result.stderr)
 
-    def test_preloaded_test_tools_have_no_content_allowlist(self):
+    def test_preloaded_environment_tools_are_capability_checked(self):
         for name in ("zot", "versitygw"):
             path = self.root / name
             path.write_text("#!/bin/sh\necho vendor-tool\n")
             path.chmod(0o755)
-        # Only the required executable capability is relevant to these tools.
-        body = 'TOOL_ROOT="' + str(self.root) + '"; assert_e2e_tools'
+        gh = self.root / "gh"
+        gh.write_text("#!/bin/sh\n"
+                      'test "$1:${2-}" = api:--help || exit 71\n'
+                      'echo "  --slurp  compatible environment CLI"\n')
+        gh.chmod(0o755)
+        # Only the required executable capabilities are relevant to these tools.
+        body = 'TOOL_ROOT="' + str(self.root) + '"; assert_environment_tools'
         self.assertEqual(self.invoke(body).returncode, 0)
         (self.root / "zot").unlink()
         result = self.invoke(body)
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("provide an executable zot", result.stderr)
+
+    def test_incompatible_environment_cli_is_rejected(self):
+        for name in ("zot", "versitygw", "gh"):
+            path = self.root / name
+            path.write_text("#!/bin/sh\necho environment-tool\n")
+            path.chmod(0o755)
+        body = 'TOOL_ROOT="' + str(self.root) + '"; assert_environment_tools'
+        result = self.invoke(body)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("environment gh must support api --slurp", result.stderr)
 
     def test_toolchain_replacement_is_not_a_provisioning_action(self):
         source = PROVISION.read_text()
@@ -102,6 +117,7 @@ class EnvironmentGo(unittest.TestCase):
                       "BindReadOnly=/usr/local/go", "go version go1."):
             self.assertNotIn(token, source)
         self.assertIn('export PATH="$(cat /opt/actions-runner/.path)"', source)
+        self.assertIn('ln -sfn "$TOOL_ROOT/gh" "$root/usr/local/bin/gh"', source)
 
 
 if __name__ == "__main__":
