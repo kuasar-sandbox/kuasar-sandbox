@@ -11,7 +11,7 @@ required_bins() { case "$1" in
 connector) echo "connector-ctl" ;;
 guest-runtime) echo "mkfs.erofs store-ctl flatten-ctl" ;;
 accelerator) echo "mkfs.erofs manifest-ctl store-ctl cache-ctl flatten-ctl" ;;
-sandboxer) echo "mkfs.erofs vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ctl sandbox-init cloud-hypervisor sandbox-runtime.bundle" ;;
+sandboxer) echo "mkfs.erofs vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ctl sandbox-init cloud-hypervisor sandbox-runtime.bundle connector-ctl" ;;
 orchestrator|kuasar-sandbox) awk '!/^($|#)/ {print $2}' "$ROOT/release/bin-inputs.manifest" | xargs ;;
 *) die "unknown owner $1" ;;
 esac; }
@@ -36,7 +36,7 @@ build_owner() { local owner=$1; case "$owner" in
 connector) make -C "$ORG/connector" build ;;
 guest-runtime) make -C "$ORG/accelerator" store-ctl; make -C "$ORG/guest-runtime" flatten-ctl; make -C "$ROOT" e2e-zot ;;
 accelerator) make -C "$ORG/accelerator" build; make -C "$ORG/guest-runtime" flatten-ctl ;;
-sandboxer) make -C "$ORG/accelerator" build; make -C "$ORG/sandboxer" build; make -C "$ORG/guest-runtime" build ;;
+sandboxer) make -C "$ORG/accelerator" build; make -C "$ORG/sandboxer" build; make -C "$ORG/guest-runtime" build; make -C "$ORG/connector" build ;;
 orchestrator|kuasar-sandbox) make -C "$ROOT" build; make -C "$ROOT" e2e-tools ;;
 *) die "unknown owner $owner" ;;
 esac; copy_required_bins "$owner"; make -C "$ROOT" assemble-e2e; }

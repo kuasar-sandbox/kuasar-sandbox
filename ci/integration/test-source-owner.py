@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import pathlib, subprocess, unittest
+import os, pathlib, shutil, subprocess, tempfile, unittest
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 HELPER=ROOT/"ci/integration/source-owner.sh"
 def run(cmd,owner): return subprocess.run(["bash",str(HELPER),cmd,owner],text=True,capture_output=True)
@@ -10,8 +10,33 @@ class SourceOwnerClosureTest(unittest.TestCase):
         self.assertEqual(self.words("required-bins","connector"),["connector-ctl"])
         self.assertEqual(set(self.words("required-bins","guest-runtime")),{"mkfs.erofs","store-ctl","flatten-ctl"})
         self.assertEqual(set(self.words("required-bins","accelerator")),{"mkfs.erofs","manifest-ctl","store-ctl","cache-ctl","flatten-ctl"})
-        self.assertTrue({"vmlinux","sandbox-ctl","cloud-hypervisor","sandbox-runtime.bundle","cache-ctl"} <= set(self.words("required-bins","sandboxer")))
+        self.assertTrue({"vmlinux","sandbox-ctl","cloud-hypervisor","sandbox-runtime.bundle","cache-ctl","connector-ctl"} <= set(self.words("required-bins","sandboxer")))
         full=self.words("required-bins","orchestrator"); self.assertEqual(full,self.words("required-bins","kuasar-sandbox")); self.assertIn("connector-ctl",full); self.assertIn("node-ctl",full)
+    def test_sandboxer_builds_and_assembles_connector(self):
+        with tempfile.TemporaryDirectory(prefix="source-owner-") as tmp:
+            org=pathlib.Path(tmp); platform=org/"platform"
+            (platform/"ci/integration").mkdir(parents=True)
+            (platform/"release").mkdir()
+            shutil.copy2(HELPER,platform/"ci/integration/source-owner.sh")
+            manifest=ROOT/"release/bin-inputs.manifest"
+            shutil.copy2(manifest,platform/"release/bin-inputs.manifest")
+            required=set(self.words("required-bins","sandboxer"))
+            for line in manifest.read_text().splitlines():
+                if not line.strip() or line.lstrip().startswith("#"): continue
+                repo,name,*_=line.split()
+                if name in required and name!="connector-ctl":
+                    path=org/repo/"bin/x86_64"/name
+                    path.parent.mkdir(parents=True,exist_ok=True); path.write_text(name)
+            tools=org/"tools";tools.mkdir();log=org/"make.log"
+            make=tools/"make"
+            make.write_text("#!/usr/bin/env python3\nimport os,pathlib,sys\na=sys.argv[1:]\nrepo=pathlib.Path(a[a.index('-C')+1])\nwith open(os.environ['MAKE_LOG'],'a') as f:f.write(repo.name+' '+a[-1]+'\\n')\nif repo.name=='connector' and a[-1]=='build':\n p=repo/'bin/x86_64/connector-ctl'\n p.parent.mkdir(parents=True,exist_ok=True)\n p.write_text('built connector')\n")
+            make.chmod(0o755)
+            env=dict(os.environ,PATH=str(tools)+os.pathsep+os.environ["PATH"],MAKE_LOG=str(log),TARGET_ARCH="x86_64")
+            result=subprocess.run(["bash",str(platform/"ci/integration/source-owner.sh"),"build","sandboxer"],env=env,text=True,capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn("connector build",log.read_text().splitlines())
+            self.assertEqual((platform/"bin/x86_64/connector-ctl").read_text(),"built connector")
+            self.assertNotIn("orchestrator build",log.read_text().splitlines())
     def test_native(self):
         self.assertEqual(self.words("native-components","connector"),[])
         self.assertEqual(self.words("native-components","guest-runtime"),["erofs"])
