@@ -200,6 +200,31 @@ class ArtifactContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "prepared workspace changed"):
             subject.verify_workspace(self.root / "workspaces/x86_64", self.plan, "x86_64")
 
+    def test_guest_execution_binds_init_to_the_validated_runtime_bytes(self):
+        # A legal unchanged runtime may embed a different init revision than the
+        # separately published sandboxer unit. Candidate-init equality is checked
+        # separately; execution must retain this baseline's embedded identity.
+        files = dict(self.files["x86_64"])
+        files["sandbox-init"] = elf("x86_64", "separately published init")
+        name = subject.archive_name("sandboxer", "v1.2.3", "x86_64")
+        record = archive(self.assets / name, {"bin/" + name: data for name, data in files.items()
+                                            if subject.PRODUCTS[name] == "sandboxer"})
+        self.plan["baseline"]["assets"] = [record if entry["name"] == name else entry
+                                           for entry in self.plan["baseline"]["assets"]]
+        provenance = self.compose()
+        self.assertNotEqual(provenance["embedded"]["init"], provenance["products"]["sandbox-init"]["sha256"])
+        spec = importlib.util.spec_from_file_location("executor", Path(__file__).with_name("run-artifact-tests.py"))
+        executor = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(executor)
+        def execute(command, *, cwd, env):
+            self.assertEqual(env["KUASAR_EXPECTED_RUNTIME_INIT_SHA256"], provenance["embedded"]["init"])
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(executor.platform, "machine", return_value="x86_64"), \
+             patch.object(executor.subprocess, "run", side_effect=execute) as case:
+            result = executor.execute(self.plan, "x86_64", "core", self.root / "workspaces/x86_64", self.root / "result.json")
+            self.assertEqual(result["conclusion"], "success")
+            self.assertEqual(case.call_count, 1)
+
     def test_missing_selected_inputs_cannot_fall_back_to_source(self):
         self.plan["baseline"]["assets"] = [record for record in self.plan["baseline"]["assets"]
                                                   if "aarch64" not in record["name"]]
