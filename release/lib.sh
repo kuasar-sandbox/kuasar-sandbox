@@ -54,7 +54,7 @@ component_repository() {
 
 component_archive() {
   local unit="$1" version="$2" target="${3:-$RELEASE_TARGET}"
-  [ "$target" = x86_64 ] || release_fail "unsupported release target: $target"
+  case "$target" in x86_64|aarch64) ;; *) release_fail "unsupported release target: $target" ;; esac
   validate_unit_version "$unit" "$version"
   case "$unit" in
     accelerator|connector|sandboxer|orchestrator)

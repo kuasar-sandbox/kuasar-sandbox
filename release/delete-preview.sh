@@ -79,6 +79,12 @@ fi
     component_archive "$unit" "$selected"
   done < "$TMP/selection.tsv"
 } | LC_ALL=C sort > "$TMP/expected-assets"
+{
+  cat "$TMP/expected-assets"
+  while IFS=$'\t' read -r unit selected; do
+    component_archive "$unit" "$selected" aarch64
+  done < "$TMP/selection.tsv"
+} | LC_ALL=C sort > "$TMP/expected-dual-assets"
 
 gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" \
   | jq --arg tag "$TAG" '[.[][] | select(.tag_name == $tag)]' > "$TMP/releases"
@@ -92,12 +98,13 @@ if [ "$(jq 'length' "$TMP/releases")" -eq 1 ]; then
   if jq -e '
       .draft == false
       and .prerelease == true
-      and (.assets | length == 8)
+      and ((.assets | length == 8) or (.assets | length == 14))
       and all(.assets[]; .state == "uploaded")
-    ' "$TMP/release" >/dev/null \
-    && jq -r '.assets[].name' "$TMP/release" | LC_ALL=C sort \
-      | cmp -s "$TMP/expected-assets" -; then
-    complete=true
+    ' "$TMP/release" >/dev/null; then
+    jq -r '.assets[].name' "$TMP/release" | LC_ALL=C sort > "$TMP/actual-assets"
+    if cmp -s "$TMP/expected-assets" "$TMP/actual-assets" || cmp -s "$TMP/expected-dual-assets" "$TMP/actual-assets"; then
+      complete=true
+    fi
   fi
   if [ "$MODE" = incomplete ] && [ "$complete" = true ]; then
     fail "refusing incomplete recovery for a complete aggregate Preview"

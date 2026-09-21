@@ -41,8 +41,9 @@ class Repository:
         ).stdout.strip()
 
     def commit(self, value: str) -> str:
-        (self.root / "state").write_text(value, encoding="utf-8")
-        self.git("add", "state")
+        (self.root / "cmd").mkdir(exist_ok=True)
+        (self.root / "cmd/state.go").write_text(value, encoding="utf-8")
+        self.git("add", "cmd/state.go")
         self.git("commit", "-qm", value)
         return self.git("rev-parse", "HEAD")
 

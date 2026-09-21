@@ -797,7 +797,7 @@ components:
 
     def resumed_preview_plan(
         self, unit_name: str, winner: str, configured: str, date: str,
-        *, complete: bool = False, matching_dependencies: bool = False,
+        *, complete: bool = False, matching_dependencies: bool = False, arm: bool = True,
     ) -> coordinator.Plan:
         dependent = coordinator.UNIT_BY_NAME[unit_name]
         names = {unit_name, *dependent.dependencies}
@@ -825,11 +825,17 @@ components:
             if "-preview." in selected:
                 body = body.replace("20260831", selected.rsplit("-preview.", 1)[1])
             published = coordinator.ReleaseStatus(
-                {"tag_name": selected, "body": body}, plan.source_sha, True
+                {"tag_name": selected, "body": body, "assets": [
+                    {"name": coordinator.archive_name(unit.name, selected, arch)}
+                    for arch in (("x86_64", "aarch64") if arm else ("x86_64",))]}, plan.source_sha, True
             )
             statuses = {selected: published}
             if complete:
-                statuses[configured_versions[unit.name]] = published
+                configured_tag = configured_versions[unit.name]
+                statuses[configured_tag] = coordinator.ReleaseStatus(
+                    {**published.release, "tag_name": configured_tag, "assets": [
+                        {"name": coordinator.archive_name(unit.name, configured_tag, arch)}
+                        for arch in (("x86_64", "aarch64") if arm else ("x86_64",))]}, plan.source_sha, True)
             state = mock.Mock()
             state.status.side_effect = lambda tag, statuses=statuses: statuses.get(
                 tag, coordinator.ReleaseStatus(None, None, False)
@@ -847,6 +853,43 @@ components:
             ),
         ):
             return coordinator.plan_units(configured_versions, date)[unit_name]
+
+    def test_first_arm_requires_explicit_initialization_and_a_new_version(self) -> None:
+        with mock.patch.object(coordinator, "INITIALIZE_ARM", False):
+            with self.assertRaisesRegex(coordinator.Deferred, "valid historical AMD64"):
+                self.resumed_preview_plan("accelerator", "v1.0.0", "v1.0.0", "20260921", arm=False)
+        with mock.patch.object(coordinator, "INITIALIZE_ARM", True):
+            plan = self.resumed_preview_plan("accelerator", "v1.0.0", "v1.0.0", "20260921", arm=False)
+            self.assertEqual(plan.action, "publish")
+            self.assertEqual(plan.selected, "v1.0.1-preview.20260921")
+            self.assertEqual(plan.winner, "v1.0.0")
+
+    def test_dependency_cli_changes_reuse_linked_product_but_library_changes_do_not(self) -> None:
+        repository = selection_fixtures.Repository()
+        self.addCleanup(repository.close)
+        old = repository.commit_files("library", {"pkg/flatten/input.go": "old"})
+        current = repository.commit_files("independent CLI", {"cmd/cache-ctl/main.go": "new"})
+        tag = "runtime-v1.0.1-preview.20260831"
+        plan = coordinator.Plan(coordinator.UNIT_BY_NAME["runtime"], tag, "main", "a" * 40, tag, tag, "reuse")
+        plans = {
+            name: coordinator.Plan(coordinator.UNIT_BY_NAME[name], "v1.0.0", "main", current,
+                                   "v1.0.0", "v1.0.1", "reuse")
+            for name in ("accelerator", "sandboxer")
+        }
+        binding = "accelerator=v1.0.0,sandboxer=v1.0.1"
+        status = coordinator.ReleaseStatus({"body": self.binding_body("runtime", plan.source_sha, binding)}, plan.source_sha, True)
+        state = mock.Mock()
+        state.status.return_value = coordinator.ReleaseStatus({}, old, True)
+        with tempfile.TemporaryDirectory() as directory, mock.patch.object(coordinator, "RepositoryState", return_value=state):
+            root = pathlib.Path(directory)
+            (root / "accelerator").symlink_to(repository.root, target_is_directory=True)
+            verified = coordinator.verify_dependency_reuse(plan, plans, status, root)
+            coordinator.validate_preview_reuse(verified, plans, status)
+            self.assertEqual(verified.verified_dependency_binding, binding)
+            changed = repository.commit_files("linked implementation", {"pkg/flatten/input.go": "changed"})
+            plans["accelerator"] = coordinator.replace(plans["accelerator"], source_sha=changed)
+            with self.assertRaisesRegex(coordinator.Deferred, "linked inputs differ"):
+                coordinator.verify_dependency_reuse(plan, plans, status, root)
 
     def test_resumes_unpublished_dependency_preview_after_manifest_commit(self) -> None:
         for unit, prefix in (("orchestrator", "v"), ("runtime", "runtime-v")):

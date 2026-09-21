@@ -27,6 +27,7 @@ PLATFORM_REF = os.environ.get("PLATFORM_REF", "main")
 PLATFORM_SHA = os.environ.get("PLATFORM_SHA", "")
 TODAY = os.environ.get("PREVIEW_DATE", "")
 WAIT_SECONDS = int(os.environ.get("PREVIEW_WAIT_SECONDS", "3000"))
+INITIALIZE_ARM = os.environ.get("INITIALIZE_ARM", "false") == "true"
 POLL_SECONDS = int(os.environ.get("PREVIEW_POLL_SECONDS", "120"))
 PREVIEW_BINDING_RE = re.compile(
     r"<!-- kuasar-preview-binding (?P<value>\{[^\r\n]*\}) -->"
@@ -103,6 +104,8 @@ class Plan:
     winner: str
     selected: str
     action: str
+    source_head: str | None = None
+    verified_dependency_binding: str | None = None
 
 
 class Pending(RuntimeError):
@@ -215,23 +218,25 @@ def paginated(endpoint: str, key: str | None = None) -> list[dict[str, Any]]:
     return values
 
 
-def archive_name(unit: str, tag: str) -> str:
+def archive_name(unit: str, tag: str, arch: str = "x86_64") -> str:
+    if arch not in ("x86_64", "aarch64"):
+        raise ValueError("unsupported release architecture")
     if unit == "runtime":
-        return f"sandbox-runtime-x86_64-{tag.removeprefix('runtime-')}.tar.gz"
+        return f"sandbox-runtime-{arch}-{tag.removeprefix('runtime-')}.tar.gz"
     if unit == "vmlinux":
-        return f"vmlinux-x86_64-{tag.removeprefix('vmlinux-')}.tar.gz"
+        return f"vmlinux-{arch}-{tag.removeprefix('vmlinux-')}.tar.gz"
     if unit == "platform":
         return f"platform-{tag}.tar.gz"
-    return f"{unit}-{tag}-linux-x86_64.tar.gz"
+    return f"{unit}-{tag}-linux-{arch}.tar.gz"
 
 
 def platform_asset_names_for_components(
-    tag: str, components: dict[str, str]
+    tag: str, components: dict[str, str], architectures: tuple[str, ...] = ("x86_64",)
 ) -> set[str]:
     return {
         "SHA256SUMS",
         archive_name("platform", tag),
-        *(archive_name(unit, components[unit]) for unit in selection.UNITS),
+        *(archive_name(unit, components[unit], arch) for unit in selection.UNITS for arch in architectures),
     }
 
 
@@ -317,7 +322,7 @@ class RepositoryState:
                 and release.get("prerelease") is prerelease
                 and isinstance(assets, list)
                 and sorted(asset.get("name") for asset in assets)
-                == sorted(("SHA256SUMS", archive))
+                in (sorted(("SHA256SUMS", archive)), sorted(("SHA256SUMS", archive, archive_name(self.unit.name, tag, "aarch64"))))
                 and all(asset.get("state") == "uploaded" for asset in assets)
                 and sha is not None
                 and release.get("target_commitish") == sha
@@ -392,7 +397,7 @@ def validate_preview_reuse(
         raise Deferred(f"{plan.unit.name} {plan.selected} has another unit binding")
     if binding["source_sha"] != plan.source_sha:
         raise Deferred(f"{plan.unit.name} {plan.selected} has another source binding")
-    if binding["dependencies"] != dependency_binding(plan, plans):
+    if binding["dependencies"] not in {dependency_binding(plan, plans), plan.verified_dependency_binding}:
         raise Deferred(f"{plan.unit.name} {plan.selected} has another dependency binding")
 
 
@@ -691,6 +696,7 @@ def make_plan(
         resolution.winner,
         resolution.selected,
         resolution.action,
+        source_sha,
     )
 
 
@@ -700,6 +706,9 @@ def force_dependency_preview(plan: Plan, date: str, state: RepositoryState) -> P
             f"{plan.unit.name} has no derived source branch for a required "
             "dependency rebuild"
         )
+    # A reused unit can predate documentation-only HEAD commits. A new version
+    # forced by dependencies/architecture uses the already resolved branch HEAD.
+    plan = replace(plan, source_sha=plan.source_head or plan.source_sha)
     selected = preview_selection.preview_candidate(plan.unit.name, plan.winner, date)
     status = state.status(selected)
     if status.partial and not status.complete:
@@ -734,9 +743,8 @@ def plan_units(configured: dict[str, str], date: str) -> dict[str, Plan]:
             plan = make_plan(unit, configured[unit.name], date, temporary)
             state = RepositoryState(unit)
             status = state.status(plan.selected)
-            dependency_changed = any(
-                plans[name].selected != configured[name] for name in unit.dependencies
-            )
+            dependency_changed = any(dependency_inputs_changed(name, unit.name, plans, configured, temporary)
+                                     for name in unit.dependencies)
             # Persisting the manifest records a dependency rebuild before its
             # Release exists. On restart, the dependencies can already match
             # that manifest while source selection still finds the old winner.
@@ -756,10 +764,77 @@ def plan_units(configured: dict[str, str], date: str) -> dict[str, Plan]:
             ) and plan.action != "publish":
                 plan = force_dependency_preview(plan, date, state)
                 status = state.status(plan.selected)
+            if status.complete and not has_arm_archive(unit.name, plan.selected, status):
+                if not INITIALIZE_ARM:
+                    raise Deferred(f"{unit.name} {plan.selected} is a valid historical AMD64 release; "
+                                   "explicit INITIALIZE_ARM with a new Preview date/version is required")
+                plan = force_dependency_preview(plan, date, state)
+                status = state.status(plan.selected)
+                if status.complete and not has_arm_archive(unit.name, plan.selected, status):
+                    raise Deferred("ARM initialization must choose a new unit version; historical assets cannot be amended")
+            if status.complete:
+                plan = verify_dependency_reuse(plan, plans, status, temporary)
             plans[unit.name] = plan
             if status.complete:
                 validate_preview_reuse(plan, plans, status)
     return plans
+
+
+def has_arm_archive(unit: str, tag: str, status: ReleaseStatus) -> bool:
+    return bool(status.release and archive_name(unit, tag, "aarch64") in
+                {asset["name"] for asset in status.release.get("assets", [])})
+
+
+def dependency_paths(dependency, consumer):
+    paths = ["go.mod", "go.sum", "pkg", "internal"]
+    if consumer == "runtime" and dependency == "sandboxer":
+        paths = ["go.mod", "go.sum", "Makefile", "cmd/sandbox-init", "pkg", "internal"]
+    elif consumer == "runtime" and dependency == "accelerator":
+        paths = ["go.mod", "go.sum", "pkg/flatten", "pkg/image", "pkg/manifest", "pkg/remote", "pkg/sparse", "pkg/tailzip", "pkg/tarstream",
+                 "pkg/tar", "pkg/cache", "pkg/store", "pkg/readerr", "internal/util"]
+    return paths
+
+
+def dependency_inputs_changed(dependency, consumer, plans, configured, temporary):
+    plan = plans[dependency]
+    if plan.selected == configured[dependency]:
+        return False
+    changed = preview_selection.run_git(temporary / dependency, "diff", "--name-only",
+                                        f"{configured[dependency]}..{plan.source_sha}", "--", *dependency_paths(dependency, consumer))
+    return any(not path.endswith("_test.go") for path in changed.splitlines())
+
+
+def verify_dependency_reuse(plan, plans, status, temporary):
+    """A CLI-only dependency release must not rebuild unchanged linked products.
+
+    Keep the original published binding. Verify any different dependency tuple
+    against its complete release's exact source, then retain that tuple in this
+    immutable plan for the later publication recheck.
+    """
+    if "-preview." not in plan.selected:
+        return plan
+    original = preview_binding(status, plan.selected)["dependencies"]
+    if original == dependency_binding(plan, plans):
+        return plan
+    try:
+        pairs = [item.split("=", 1) for item in original.split(",") if item]
+        versions = dict(pairs)
+        if len(versions) != len(pairs) or set(versions) != set(plan.unit.dependencies):
+            raise ValueError("unexpected dependency set")
+        for name, version in versions.items():
+            if version == plans[name].selected:
+                continue
+            preview_selection.parse_tag(name, version)
+            previous = RepositoryState(UNIT_BY_NAME[name]).status(version)
+            if not previous.complete or previous.tag_sha is None:
+                raise ValueError("original dependency is unavailable")
+            changed = preview_selection.run_git(temporary / name, "diff", "--name-only",
+                f"{previous.tag_sha}..{plans[name].source_sha}", "--", *dependency_paths(name, plan.unit.name))
+            if any(not path.endswith("_test.go") for path in changed.splitlines()):
+                raise ValueError("linked inputs differ")
+    except (ValueError, RuntimeError) as error:
+        raise Deferred(f"{plan.unit.name} {plan.selected} has another dependency binding: {error}") from error
+    return replace(plan, verified_dependency_binding=original)
 
 
 def manifest_values() -> tuple[str, str | None, str, str | None, dict[str, str]]:
@@ -794,11 +869,13 @@ def platform_release(tag: str) -> ReleaseStatus:
         return ReleaseStatus(None, sha, False)
     assets = release.get("assets")
     expected = platform_asset_names(tag, sha) if sha is not None else set()
+    dual = expected | {name.replace("x86_64", "aarch64") for name in expected if "x86_64" in name}
     complete = (
         release.get("draft") is False
         and release.get("prerelease") is ("-preview." in tag)
         and isinstance(assets, list)
-        and {str(asset.get("name")) for asset in assets} == expected
+        and {str(asset.get("name")) for asset in assets} in (expected, dual)
+        and len(assets) == len({str(asset.get("name")) for asset in assets})
         and all(asset.get("state") == "uploaded" for asset in assets)
         and sha is not None
         and release.get("target_commitish") == sha

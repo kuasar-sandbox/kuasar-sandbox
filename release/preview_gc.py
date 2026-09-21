@@ -111,7 +111,9 @@ def platform_release_status(
         and release.get("prerelease") is ("-preview." in tag)
         and isinstance(assets, list)
         and expected is not None
-        and {str(asset.get("name")) for asset in assets} == expected
+        and {str(asset.get("name")) for asset in assets} in (
+            expected, expected | {name.replace("x86_64", "aarch64") for name in expected})
+        and len(assets) == len({str(asset.get("name")) for asset in assets})
         and all(asset.get("state") == "uploaded" for asset in assets)
         and sha is not None
         and release.get("target_commitish") == sha

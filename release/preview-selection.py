@@ -205,6 +205,24 @@ def vmlinux_inputs_changed(root: pathlib.Path, base: str, head: str) -> bool:
     )
 
 
+def unit_inputs_changed(root: pathlib.Path, base: str, head: str, unit: str) -> bool:
+    if unit == "vmlinux":
+        return vmlinux_inputs_changed(root, base, head)
+    # Product recipes, embedded data and shipped material inputs. A repository
+    # HEAD move affecting only docs/E2E/workflow metadata is not a product change.
+    paths = ["go.mod", "go.sum", "Makefile", "cmd", "pkg", "internal", "api", "proto",
+             "LICENSE", "LICENSES", "NOTICE", "THIRD_PARTY_NOTICES", "scripts/release.sh",
+             "scripts/release-materials.sh", "scripts/release-materials.py", "scripts/release-archive-validator.go"]
+    paths += {"accelerator": ["deps", "test/scripts"], "connector": ["deploy", "test/load"],
+              "sandboxer": ["native-deps"], "orchestrator": ["app", "config", "deploy", "test/load", "test/scale"],
+              "runtime": ["runtime", "scripts/prepare-sandbox-init.py", "scripts/release-runtime-payloads.py",
+                          "native-deps/deps/build-envd.sh", "native-deps/deps/build-erofs.sh",
+                          "native-deps/deps/erofs-recipe.sh", "native-deps/deps/erofs-patches", "native-deps/deps/common.sh",
+                          "native-deps/Makefile"]}[unit]
+    changed = run_git(root, "diff", "--name-only", f"{base}..{head}", "--", *paths)
+    return any(not path.endswith("_test.go") for path in changed.splitlines())
+
+
 def first_parent_commits(root: pathlib.Path, source_ref: str) -> list[str]:
     output = run_git(root, "rev-list", "--first-parent", source_ref)
     commits = output.splitlines()
@@ -294,10 +312,7 @@ def resolve(
                     key=lambda item: item.same_commit_order,
                 )
 
-    if winner_commit == head or (
-        unit == "vmlinux"
-        and not vmlinux_inputs_changed(root, winner_commit, head)
-    ):
+    if winner_commit == head or not unit_inputs_changed(root, winner_commit, head, unit):
         return Resolution(source_ref, head, winner.raw, winner_commit, "reuse", winner.raw)
     selected = preview_candidate(unit, winner.raw, date)
     return Resolution(source_ref, head, winner.raw, winner_commit, "publish", selected)
