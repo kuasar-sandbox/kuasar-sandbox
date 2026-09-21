@@ -45,6 +45,15 @@ class Repository:
         self.git("commit", "-qm", value)
         return self.git("rev-parse", "HEAD")
 
+    def commit_files(self, message: str, files: dict[str, str]) -> str:
+        for name, value in files.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(value, encoding="utf-8")
+        self.git("add", "-A")
+        self.git("commit", "-qm", message)
+        return self.git("rev-parse", "HEAD")
+
 
 class PreviewSelectionTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -179,6 +188,84 @@ class PreviewSelectionTest(unittest.TestCase):
 
         self.assertEqual(result.winner, "v1.2.4")
         self.assertEqual(result.selected, "v1.2.5-preview.20260830")
+
+    def seed_vmlinux(self) -> str:
+        tagged = self.repository.commit_files(
+            "kernel inputs",
+            {
+                "native-deps/Makefile":
+                    "LINUX_TARBALL ?= https://kernel.invalid/linux.tar.gz\n"
+                    "LINUX_TARBALL_SHA256 ?= " + "a" * 64 + "\n",
+                "native-deps/deps/build-vmlinux.sh": "build kernel\n",
+                "native-deps/deps/common.sh": "fetch source\n",
+                "native-deps/deps/vmlinux/sandbox-common.config": "CONFIG_A=y\n",
+                "native-deps/deps/vmlinux/sandbox-x86_64.config": "CONFIG_B=y\n",
+                "native-deps/deps/linux-patches/0001.patch": "patch\n",
+            },
+        )
+        self.repository.git("tag", "vmlinux-v1.2.3", tagged)
+        return tagged
+
+    def resolve_vmlinux(self) -> object:
+        return preview_selection.resolve(
+            self.repository.root, "main", "vmlinux", "vmlinux-v1.2.3",
+            ["vmlinux-v1.2.3"], "20260921.2",
+        )
+
+    def test_vmlinux_reuses_release_across_unrelated_guest_runtime_changes(self) -> None:
+        tagged = self.seed_vmlinux()
+        head = self.repository.commit_files(
+            "runtime-only release change",
+            {"scripts/prepare-sandbox-init.py": "runtime packaging only\n"},
+        )
+        result = self.resolve_vmlinux()
+        self.assertEqual(result.head, head)
+        self.assertEqual(result.winner_commit, tagged)
+        self.assertEqual(result.selected, "vmlinux-v1.2.3")
+        self.assertEqual(result.action, "reuse")
+
+    def test_vmlinux_publishes_for_kernel_tree_input_changes(self) -> None:
+        for path in (
+            "native-deps/deps/build-vmlinux.sh",
+            "native-deps/deps/common.sh",
+            "native-deps/deps/vmlinux/sandbox-common.config",
+            "native-deps/deps/linux-patches/0001.patch",
+        ):
+            with self.subTest(path=path):
+                self.repository.close()
+                self.repository = Repository()
+                self.seed_vmlinux()
+                self.repository.commit_files("kernel change", {path: "changed\n"})
+                result = self.resolve_vmlinux()
+                self.assertEqual(result.action, "publish")
+                self.assertEqual(
+                    result.selected, "vmlinux-v1.2.4-preview.20260921.2"
+                )
+
+    def test_vmlinux_publishes_when_linux_source_pin_changes(self) -> None:
+        self.seed_vmlinux()
+        self.repository.commit_files(
+            "linux pin",
+            {
+                "native-deps/Makefile":
+                    "LINUX_TARBALL ?= https://kernel.invalid/linux-new.tar.gz\n"
+                    "LINUX_TARBALL_SHA256 ?= " + "b" * 64 + "\n",
+            },
+        )
+        result = self.resolve_vmlinux()
+        self.assertEqual(result.action, "publish")
+
+    def test_runtime_still_tracks_guest_runtime_head(self) -> None:
+        tagged = self.repository.commit("runtime")
+        self.repository.git("tag", "runtime-v1.2.3", tagged)
+        self.repository.commit_files(
+            "runtime packaging", {"scripts/prepare-sandbox-init.py": "changed\n"}
+        )
+        result = preview_selection.resolve(
+            self.repository.root, "main", "runtime", "runtime-v1.2.3",
+            ["runtime-v1.2.3"], "20260921.2",
+        )
+        self.assertEqual(result.action, "publish")
 
     def test_configured_tag_must_be_on_first_parent_line(self) -> None:
         base = self.repository.commit("base")

@@ -14,6 +14,18 @@ from typing import Iterable, NoReturn
 
 COMPONENT_UNITS = {"accelerator", "connector", "sandboxer", "orchestrator"}
 ALL_UNITS = COMPONENT_UNITS | {"runtime", "vmlinux"}
+
+# vmlinux is an independent release unit in guest-runtime. Its version follows
+# the guest kernel artifact, not every commit in the containing repository.
+# Keep this closure aligned with guest-runtime/native-deps' VMLINUX_INPUTS and
+# the Linux source pin consumed by that target.
+VMLINUX_TREE_INPUTS = (
+    "native-deps/deps/build-vmlinux.sh",
+    "native-deps/deps/common.sh",
+    "native-deps/deps/vmlinux",
+    "native-deps/deps/linux-patches",
+)
+VMLINUX_MAKE_VARIABLES = ("LINUX_TARBALL", "LINUX_TARBALL_SHA256")
 PLATFORM_RELEASE_BRANCH_RE = re.compile(
     r"^release/v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.x$"
 )
@@ -128,6 +140,40 @@ def run_git(root: pathlib.Path, *args: str, allow_failure: bool = False) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def git_file(root: pathlib.Path, commit: str, path: str) -> str:
+    return run_git(root, "show", f"{commit}:{path}")
+
+
+def make_variables(text: str, names: tuple[str, ...]) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for line in text.splitlines():
+        match = re.match(r"^([A-Z][A-Z0-9_]*)\\s*\\?=\\s*(.*?)\\s*$", line)
+        if match is not None and match.group(1) in names:
+            result[match.group(1)] = match.group(2)
+    missing = set(names) - set(result)
+    if missing:
+        raise SelectionError(
+            "vmlinux input variables are missing: " + ", ".join(sorted(missing))
+        )
+    return result
+
+
+def vmlinux_inputs_changed(root: pathlib.Path, base: str, head: str) -> bool:
+    if base == head:
+        return False
+    changed = run_git(
+        root, "diff", "--name-only", f"{base}..{head}", "--", *VMLINUX_TREE_INPUTS
+    )
+    if changed:
+        return True
+    makefile = "native-deps/Makefile"
+    return make_variables(
+        git_file(root, base, makefile), VMLINUX_MAKE_VARIABLES
+    ) != make_variables(
+        git_file(root, head, makefile), VMLINUX_MAKE_VARIABLES
+    )
+
+
 def first_parent_commits(root: pathlib.Path, source_ref: str) -> list[str]:
     output = run_git(root, "rev-list", "--first-parent", source_ref)
     commits = output.splitlines()
@@ -217,7 +263,10 @@ def resolve(
                     key=lambda item: item.same_commit_order,
                 )
 
-    if winner_commit == head:
+    if winner_commit == head or (
+        unit == "vmlinux"
+        and not vmlinux_inputs_changed(root, winner_commit, head)
+    ):
         return Resolution(source_ref, head, winner.raw, winner_commit, "reuse", winner.raw)
     selected = preview_candidate(unit, winner.raw, date)
     return Resolution(source_ref, head, winner.raw, winner_commit, "publish", selected)

@@ -654,6 +654,9 @@ def make_plan(
     if resolution.head != source_sha:
         raise Deferred(f"{unit.repository}:{source_ref} moved while selecting")
     selected_state = state.status(resolution.selected)
+    selected_source_sha = (
+        resolution.winner_commit if resolution.action == "reuse" else source_sha
+    )
     if selected_state.partial and not selected_state.complete:
         if resolution.selected == configured and "-preview." in configured:
             recovery_sha = recoverable_source_sha(selected_state)
@@ -676,7 +679,7 @@ def make_plan(
         raise Deferred(
             f"ignore foreign incomplete publication: {unit.name} {resolution.selected}"
         )
-    if selected_state.complete and selected_state.tag_sha != source_sha:
+    if selected_state.complete and selected_state.tag_sha != selected_source_sha:
         raise Deferred(
             f"{unit.name} {resolution.selected} exists on another source commit"
         )
@@ -684,7 +687,7 @@ def make_plan(
         unit,
         configured,
         source_ref,
-        source_sha,
+        selected_source_sha,
         resolution.winner,
         resolution.selected,
         resolution.action,

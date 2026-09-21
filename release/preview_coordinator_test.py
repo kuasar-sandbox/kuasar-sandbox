@@ -703,6 +703,35 @@ components:
         self.assertEqual(plan.selected, "v0.3.5")
         self.assertEqual(plan.action, "fixed")
 
+    def test_reused_vmlinux_plan_keeps_release_source_commit(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["vmlinux"]
+        configured = "vmlinux-v1.2.3-preview.20260920"
+        tagged_sha = "3" * 40
+        head_sha = "4" * 40
+        state = mock.Mock()
+        state.status.return_value = coordinator.ReleaseStatus(
+            {"tag_name": configured}, tagged_sha, True
+        )
+        resolution = coordinator.preview_selection.Resolution(
+            "main", head_sha, configured, tagged_sha, "reuse", configured
+        )
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+            mock.patch.object(coordinator, "RepositoryState", return_value=state),
+            mock.patch.object(coordinator, "ensure_configured_state"),
+            mock.patch.object(coordinator, "branch_sha", return_value=head_sha),
+            mock.patch.object(coordinator, "clone_repository"),
+            mock.patch.object(
+                coordinator.preview_selection, "resolve", return_value=resolution
+            ),
+        ):
+            plan = coordinator.make_plan(
+                unit, configured, "20260921.2", pathlib.Path("/unused")
+            )
+        self.assertEqual(plan.action, "reuse")
+        self.assertEqual(plan.selected, configured)
+        self.assertEqual(plan.source_sha, tagged_sha)
+
     def test_dependency_rebuild_cannot_reuse_same_day_preview(self) -> None:
         unit = coordinator.UNIT_BY_NAME["sandboxer"]
         plan = coordinator.Plan(
