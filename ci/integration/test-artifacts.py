@@ -237,30 +237,6 @@ class ArtifactContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing candidate owner entry"):
             self.compose(delta=delta)
 
-    def test_failure_diagnostics_survive_mutable_workspace_cleanup(self):
-        self.compose()
-        spec = importlib.util.spec_from_file_location("executor", Path(__file__).with_name("run-artifact-tests.py"))
-        executor = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(executor)
-        result_path = self.root / "results/core.json"
-        temporary_roots = []
-        def execute(command, *, cwd, env):
-            temporary_roots.append(cwd)
-            self.assertTrue(Path(env["BASH_ENV"]).is_file())
-            diagnostics = Path(env["KUASAR_E2E_DIAGNOSTICS_DIR"])
-            self.assertTrue(diagnostics.is_dir())
-            (diagnostics / "case.json").write_text('{"exit_code":23}')
-            return subprocess.CompletedProcess(command, 23)
-        with patch.object(executor.platform, "machine", return_value="x86_64"), \
-             patch.object(executor.subprocess, "run", side_effect=execute):
-            with self.assertRaisesRegex(ValueError, "selected case failed"):
-                executor.execute(self.plan, "x86_64", "core", self.root / "workspaces/x86_64", result_path)
-        self.assertTrue(all(not path.exists() for path in temporary_roots))
-        result = json.loads(result_path.read_text())
-        self.assertEqual(result["conclusion"], "failure")
-        self.assertEqual(result["timings"][0]["exit_code"], 23)
-        self.assertEqual(json.loads((result_path.parent / "core-diagnostics/case.json").read_text()), {"exit_code": 23})
-
     def test_orchestrator_config_and_app_are_product_inputs(self):
         expected = sorted(name for name, unit in subject.PRODUCTS.items() if unit == "orchestrator")
         for path in ("config/config.go", "app/proxy/proxy.go"):

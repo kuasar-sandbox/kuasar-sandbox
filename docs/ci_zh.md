@@ -153,10 +153,6 @@ provenance 记录基线资产、产品来源/hash、精确源码/测试/框架�
 结果记录所选用例、退出码、耗时和 prepared provenance 摘要。
 聚合 cleanup 仅移除大型 build/prepared/stage 传输物，验证元数据保留七天；不上传含测试凭据的原始运行状态。
 
-既有 read-recovery 和 registry-n3 用例失败时，在 cleanup 前记录阶段、Shell 源文件行号与原始退出码。
-源码 CI 元数据和 artifact shard 结果保留日志中经过白名单筛选、大小受限的错误摘要。
-不保留原始消息、命令、凭据或运行载荷；诊断或清理错误不能把测试失败改为成功。
-
 轻量合同检查沿用 `make test-ci-tools test-release-tools test-perf-tools`，需可信 EROFS readers 与 `KUASAR_RUNTIME_READER`。
 组件 release/workflow/fixture 检查保留原入口。开发者 `make test-e2e` 仍先准备源码产品/helper，再运行 owner 套件，
 与 hosted artifact executor 分开。合同 fixture 和原生预检不能代替实际公开标准 runner 验收。

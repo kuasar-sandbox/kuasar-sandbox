@@ -92,8 +92,6 @@ Bootstrap keeps the environment Go/Rust versions. Cross setup adds target packag
 
 Run evidence uses `integration-plan`, per-architecture `integration-provenance`, per-shard `integration-shard`, `integration-source-result`, both `integration-architecture-result` and final `integration-validation` artifacts, each suffixed with run ID/attempt. Provenance includes baseline asset identities, product origin/hashes, exact source/test/framework revisions, embedded payloads, actual tools/native keys, helper and fixture hashes, modes and predeclared profile. Result records include selected cases, exit codes, timings and the prepared provenance digest. Aggregate cleanup removes large build/prepared/stage transfers, retaining validation metadata for seven days. Raw credential-bearing runtime state is not uploaded.
 
-Failures in the existing read-recovery and registry-n3 cases record the phase, shell source line and original exit code before cleanup. Source CI metadata and artifact shard results retain bounded, allowlisted error excerpts from the case logs. Raw messages, commands, credentials and runtime payloads are omitted; diagnostic or cleanup errors cannot turn a failed test into a pass.
-
 Local contract checks: `make test-ci-tools test-release-tools test-perf-tools` with trusted EROFS readers and `KUASAR_RUNTIME_READER`; component release/workflow and fixture checks retain their existing entries. Developer `make test-e2e` still prepares source products/helpers and invokes the owner suites; it is separate from the hosted artifact executor. Offline/fixture checks and native prechecks do not establish actual public-runner acceptance.
 
 ## 7. Initial coverage and rollout evidence

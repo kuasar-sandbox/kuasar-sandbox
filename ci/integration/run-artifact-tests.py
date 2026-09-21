@@ -37,10 +37,6 @@ def execute(plan, arch, shard, workspace, result_path):
                                TMPDIR=str(state / "tmp"), DOCKER_CONFIG=str(state / "docker"),
                                KUASAR_CI_DIR=str(state / "metrics"), PERF_OUT_DIR=str(state / "perf"),
                                PYTHONDONTWRITEBYTECODE="1", CLUSTER_STUB_BUILD="0")
-            environment.update(
-                BASH_ENV=str(artifacts.ROOT / "test/e2e/platform/lib/failure-diagnostics.sh"),
-                KUASAR_E2E_DIAGNOSTICS_DIR=str(result_path.parent / (shard + "-diagnostics")))
-            Path(environment["KUASAR_E2E_DIAGNOSTICS_DIR"]).mkdir(mode=0o755, exist_ok=True)
             for flag in ("KVM", "EXEC", "CLUSTER_STUB", "CLUSTER_REAL", "ORCH", "PROXY", "BUILDER", "RUNTASK", "CONNECTOR_E2E", "GUEST_RUNTIME"):
                 environment["REQUIRE_" + flag] = "1"
             for name, variable in {"zot": "ZOT_BIN", "versitygw": "VGW_BIN", "custom-proxy": "CUSTOM_PROXY_BIN",

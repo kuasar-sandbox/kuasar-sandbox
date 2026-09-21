@@ -141,25 +141,41 @@ exec {fd}>&-
         self.assertEqual(report["exit_code"], 17)
         self.assertTrue(report["logs_unavailable"])
 
-    def test_full_owner_entry_loads_packaged_hook(self):
-        suite = self.root / "test/e2e"
-        (suite / "sandboxer").mkdir(parents=True)
-        (suite / "platform/lib").mkdir(parents=True)
-        shutil.copyfile(ROOT.parents[1] / "run_all.sh", suite / "run_all.sh")
-        for name in ("failure-diagnostics.sh", "failure_diagnostics.py"):
-            shutil.copyfile(ROOT / name, suite / "platform/lib" / name)
-        runner = suite / "sandboxer/run_all.sh"
-        runner.write_text('#!/bin/bash\nbash "$(dirname "$0")/e2e_sandbox_read_recovery.sh"\n')
-        runner.chmod(0o755)
-        case = suite / "sandboxer/e2e_sandbox_read_recovery.sh"
-        case.write_text('set -eu\ncleanup() { rm -rf "$WORK"; }\ntrap cleanup EXIT\nSNAP=$(exit 17)\n')
-        environment = {**os.environ, "KUASAR_E2E_SHARD": "sandboxer", "KUASAR_CI_DIR": str(self.metrics),
-                       "WORK": str(self.work), "ZOT_BIN": "/unused/zot", "VGW_BIN": "/unused/gateway"}
-        environment.pop("BASH_ENV", None)
-        result = subprocess.run(["bash", str(suite / "run_all.sh")], env=environment, text=True, capture_output=True, timeout=10)
-        self.assertEqual(result.returncode, 17, result.stderr)
-        report = json.loads(next(self.metrics.glob("e2e-failures/*.json")).read_text())
-        self.assertEqual((report["line"], report["exit_code"]), (4, 17))
+    def test_trusted_source_entry_enables_hook_only_in_source_ci_layout(self):
+        # The current trusted workflow lacks BASH_ENV. Its assembled source
+        # entry must enable the hook without extending release/artifact E2E.
+        for layout, ci, active in (("build/e2e-suite", True, True),
+                                   ("release", True, False),
+                                   ("prepared/x86_64", True, False),
+                                   ("developer/build/e2e-suite", False, False)):
+            with self.subTest(layout=layout, ci=ci):
+                suite = self.root / layout / "test/e2e"
+                metrics = self.root / layout / "metrics"
+                (suite / "sandboxer").mkdir(parents=True)
+                (suite / "platform/lib").mkdir(parents=True)
+                shutil.copyfile(ROOT.parents[1] / "run_all.sh", suite / "run_all.sh")
+                for name in ("failure-diagnostics.sh", "failure_diagnostics.py"):
+                    shutil.copyfile(ROOT / name, suite / "platform/lib" / name)
+                runner = suite / "sandboxer/run_all.sh"
+                runner.write_text('#!/bin/bash\nbash "$(dirname "$0")/e2e_sandbox_read_recovery.sh"\n')
+                runner.chmod(0o755)
+                case = suite / "sandboxer/e2e_sandbox_read_recovery.sh"
+                case.write_text('set -eu\ncleanup() { rm -rf "$WORK"; }\ntrap cleanup EXIT\nSNAP=$(exit 17)\n')
+                environment = {**os.environ, "KUASAR_E2E_SHARD": "sandboxer",
+                               "WORK": str(self.work), "ZOT_BIN": "/unused/zot", "VGW_BIN": "/unused/gateway"}
+                environment.pop("BASH_ENV", None)
+                environment.pop("KUASAR_CI_DIR", None)
+                if ci:
+                    environment["KUASAR_CI_DIR"] = str(metrics)
+                result = subprocess.run(["bash", str(suite / "run_all.sh")], env=environment,
+                                        text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 17, result.stderr)
+                reports = [json.loads(p.read_text()) for p in metrics.glob("e2e-failures/*.json")]
+                self.assertEqual(len(reports), int(active))
+                if active:
+                    self.assertEqual((reports[0]["line"], reports[0]["exit_code"]), (4, 17))
+                else:
+                    self.assertNotIn("E2E failure:", result.stderr)
 
     def test_collector_is_bounded_and_never_copies_raw_text_or_symlinks(self):
         secret = "unknown-credential-format-should-also-be-withheld"
@@ -174,7 +190,7 @@ exec {fd}>&-
         self.assertNotIn("proxy.log", report["logs"])
         self.assertTrue(report["logs"]["cache.log"]["tail_truncated"])
         self.assertLess(path.stat().st_size, 4096)
-        self.assertEqual(path.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
         self.assertEqual(diagnostics.excerpts("Kernel command line: panic=1"), [])
         self.assertEqual(diagnostics.excerpts("panic: private-value")[0]["error_terms"], ["panic:"])
 
