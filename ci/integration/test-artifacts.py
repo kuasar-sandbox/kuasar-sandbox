@@ -13,6 +13,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 import artifacts as subject
@@ -275,6 +276,31 @@ class ArtifactContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "publisher bytes differ"):
             binding.bind(self.root, self.plan, validation)
         self.assertEqual(notes.read_text(), "Original release notes\n")
+
+    def test_connector_source_failures_block_connector_and_platform(self):
+        spec = importlib.util.spec_from_file_location("source_checks", Path(__file__).with_name("run-source-checks.py"))
+        source_checks = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(source_checks)
+        self.plan["sources"] = {owner: {"repository": "kuasar-sandbox/" + owner, "sha": "c" * 40}
+                                for owner in subject.OWNERS}
+        def checkout(repository, sha, destination):
+            destination.mkdir()
+        def execute(command, *, cwd, env):
+            code = 33 if cwd.name == "connector" and command == ["bash", "scripts/ci-source-checks.sh"] else 0
+            return subprocess.CompletedProcess(command, code)
+        for owner in ("connector", "platform"):
+            self.plan["owners"] = [owner]
+            for arch in subject.ARCHES:
+                self.plan["lanes"][arch]["profile"] = subject.profiles([owner], arch)
+            result = self.root / (owner + "-source-result.json")
+            with patch.object(source_checks.build, "checkout", side_effect=checkout), \
+                 patch.object(source_checks.subprocess, "run", side_effect=execute):
+                with self.assertRaisesRegex(ValueError, "required source check failed: connector-unit-race-vet"):
+                    source_checks.execute(self.plan, self.root / (owner + "-sources"), result)
+            record = json.loads(result.read_text())
+            self.assertEqual(record["conclusion"], "failure")
+            self.assertEqual(record["checks"][-1]["name"], "connector-unit-race-vet")
+            self.assertEqual(record["checks"][-1]["exit_code"], 33)
 
 
 if __name__ == "__main__":
