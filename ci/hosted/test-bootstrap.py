@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Offline bootstrap tests: no apt, downloads, VM changes or native builds."""
+"""Offline bootstrap tests: no installs, downloads, VM changes or native builds."""
 import os
 import shutil
 from pathlib import Path
@@ -112,6 +112,61 @@ class BootstrapTests(unittest.TestCase):
                        'sudo() { echo UNEXPECTED_DEVICE_CHANGE; }; configure_vm', **HOSTED_VM)
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertNotIn("UNEXPECTED_DEVICE_CHANGE", result.stdout)
+
+    def test_cross_apt_preserves_comment_and_empty_paragraphs(self):
+        archive = ("Types: deb\nURIs: http://archive.example.invalid/ubuntu\n"
+                   "Suites: noble noble-updates\nComponents: main universe\n"
+                   "Architectures: amd64 arm64\n")
+        security = ("Types: deb\nURIs: http://security.example.invalid/ubuntu\n"
+                    "Suites: noble-security\nComponents: main universe\n")
+        for comments in (False, True):
+            with self.subTest(comments=comments), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                sources = root / "sources"
+                sources.mkdir()
+                native = sources / "ubuntu.sources"
+                arm = sources / "kuasar-arm64.sources"
+                native.write_text(
+                    "# Ubuntu archive configuration\n# Comments are not sources.\n\n"
+                    + archive + "\n\n\n# Security archive\n\n" + security
+                    + "\n# End of configuration\n" if comments else archive + "\n" + security)
+                script = root / "bootstrap.sh"
+                script.write_text(BOOTSTRAP.read_text()
+                    .replace("/etc/apt/sources.list.d/ubuntu.sources", str(native))
+                    .replace("/etc/apt/sources.list.d/kuasar-arm64.sources", str(arm)))
+                # Execute the real setup with every privileged write redirected
+                # to this fixture. Registering a foreign architecture is mocked.
+                body = '''. "$1"
+sudo() {
+    [ "$1" = -n ] || return 91
+    shift
+    case "$1" in
+        python3|tee) "$@" ;;
+        dpkg) [ "$*" = 'dpkg --add-architecture arm64' ] ;;
+        *) return 92 ;;
+    esac
+}
+configure_cross_apt
+'''
+                result = subprocess.run(["bash", "-c", body, "test-cross", str(script)],
+                    env={**os.environ, **HOSTED_VM, "VERSION_CODENAME": "noble"},
+                    text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                # indextargets parses configured sources without downloading or
+                # installing anything; state/cache/source paths are isolated.
+                parsed = subprocess.run(["apt-get", "indextargets",
+                    "-o", "Dir::Etc::sourcelist=/dev/null",
+                    "-o", f"Dir::Etc::sourceparts={sources}",
+                    "-o", f"Dir::State={root / 'state'}",
+                    "-o", f"Dir::Cache={root / 'cache'}"],
+                    text=True, capture_output=True, timeout=10)
+                self.assertEqual(parsed.returncode, 0, parsed.stderr)
+                self.assertEqual(native.read_text().count("Architectures: amd64"), 2)
+                self.assertNotIn("Architectures: amd64 arm64", native.read_text())
+                self.assertIn("Architectures: arm64\n", arm.read_text())
+                self.assertIn("URIs: http://ports.ubuntu.com/ubuntu-ports\n", arm.read_text())
+                if comments:
+                    self.assertIn("# Comments are not sources.\n\nTypes: deb", native.read_text())
 
     def test_kvm_configuration_is_scoped_and_replays_acl_loss(self):
         source = BOOTSTRAP.read_text()

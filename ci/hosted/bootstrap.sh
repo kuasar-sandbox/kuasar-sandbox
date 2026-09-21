@@ -163,6 +163,10 @@ source = Path('/etc/apt/sources.list.d/ubuntu.sources')
 text = source.read_text()
 stanzas = []
 for stanza in text.strip().split('\n\n'):
+    # Comments and empty paragraphs are not APT source entries.
+    if all(not line.strip() or line.lstrip().startswith('#') for line in stanza.splitlines()):
+        stanzas.append(stanza)
+        continue
     lines = [line for line in stanza.splitlines() if not line.startswith('Architectures:')]
     stanzas.append('\n'.join(lines + ['Architectures: amd64']))
 source.write_text('\n\n'.join(stanzas) + '\n')
