@@ -78,9 +78,6 @@ def collect(case, phase, source, line, status, work, output, http_status):
     with os.fdopen(fd, "w") as stream:
         json.dump(record, stream, sort_keys=True)
         stream.write("\n")
-        # Only this sanitized report is read by the unprivileged artifact
-        # uploader after a case's existing sudo re-exec. Raw logs stay private.
-        os.fchmod(stream.fileno(), 0o644)
     return Path(path)
 
 

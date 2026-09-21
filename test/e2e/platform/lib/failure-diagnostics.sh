@@ -51,7 +51,7 @@ _kd_exit() {
         printf 'E2E failure: case=%s phase=%s source=%s line=%s exit=%s\n' \
             "$_kd_case" "$_kd_phase" "$_kd_source" "$_kd_line" "$result" >&2
         python3 "$_kd_reader" "$_kd_case" "$_kd_phase" "$_kd_source" "$_kd_line" "$result" \
-            "${WORK:-}" "${KUASAR_E2E_DIAGNOSTICS_DIR:-$KUASAR_CI_DIR/e2e-failures}" "${code:-}" \
+            "${WORK:-}" "$KUASAR_CI_DIR/e2e-failures" "${code:-}" \
             || printf 'E2E failure diagnostics unavailable (original failure retained)\n' >&2
     fi
     # Give the original cleanup its original $?; a cleanup/collector failure
