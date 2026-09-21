@@ -20,12 +20,13 @@ fetch_components() {
     resolve_selection "$PLATFORM_SOURCE_ROOT" "$previous" "$output/previous-selection.tsv"
   fi
 
-  local unit tag previous_tag repository archive release_state expected_prerelease unit_dir
+  local unit tag previous_tag repository archive arm_archive release_state expected_prerelease unit_dir
   while IFS=$'\t' read -r unit tag; do
     previous_tag="$(awk -F '\t' -v unit="$unit" '$1 == unit {print $2}' \
       "$output/previous-selection.tsv")"
     repository="$(component_repository "$unit")"
     archive="$(component_archive "$unit" "$tag")"
+    arm_archive="$(component_archive "$unit" "$tag" aarch64)"
     unit_dir="$output/components/$unit"
     mkdir -p "$unit_dir"
     release_state="$(github_api "repos/$repository/releases/tags/$tag")"
@@ -33,23 +34,24 @@ fetch_components() {
     is_preview "$tag" && expected_prerelease=true
     jq -e \
       --arg tag "$tag" \
-      --arg archive "$archive" \
+      --arg archive "$archive" --arg arm "$arm_archive" \
       --argjson prerelease "$expected_prerelease" '
         .tag_name == $tag
         and .draft == false
         and .prerelease == $prerelease
-        and (.assets | length == 2)
-        and ([.assets[].name] | sort == (["SHA256SUMS", $archive] | sort))
+        and (([.assets[].name] | sort) as $names |
+          $names == (["SHA256SUMS", $archive] | sort) or
+          $names == (["SHA256SUMS", $archive, $arm] | sort))
         and ([.assets[].digest] | all(type == "string" and test("^sha256:[0-9a-f]{64}$")))
       ' <<< "$release_state" >/dev/null \
-      || release_fail "$repository $tag does not satisfy the two-asset release contract"
+      || release_fail "$repository $tag does not satisfy its single/dual architecture release contract"
 
     local name asset
-    for name in "$archive" SHA256SUMS; do
+    while IFS= read -r name; do
       asset="$(jq -ce --arg name "$name" '.assets[] | select(.name == $name)' <<< "$release_state")"
       github_download_asset "$repository" "$(jq -er '.id' <<< "$asset")" "$unit_dir/$name"
       verify_github_asset "$unit_dir/$name" "$asset"
-    done
+    done < <(jq -r '.assets[].name' <<< "$release_state")
     validate_component_download "$unit" "$tag" "$unit_dir"
     fetch_component_source "$repository" "$tag" "$output/sources/$unit"
     write_component_updates "$unit" "$repository" "$previous_tag" "$tag" \
@@ -130,16 +132,20 @@ write_component_updates() {
 
 validate_component_download() {
   local unit="$1" tag="$2" directory="$3"
-  local archive checksum_line checksum_name checksum_value
-  archive="$(component_archive "$unit" "$tag")"
-  [ -f "$directory/$archive" ] || release_fail "$unit archive is missing"
+  local archive arch checksum_line checksum_name checksum_value
+  local arches=(x86_64)
+  if [ -f "$directory/$(component_archive "$unit" "$tag" aarch64)" ]; then arches+=(aarch64); fi
   [ -f "$directory/SHA256SUMS" ] || release_fail "$unit SHA256SUMS is missing"
-  [ "$(grep -cve '^[[:space:]]*$' "$directory/SHA256SUMS")" -eq 1 ] \
-    || release_fail "$unit SHA256SUMS must contain exactly one entry"
-  checksum_line="$(grep -ve '^[[:space:]]*$' "$directory/SHA256SUMS")"
-  read -r checksum_value checksum_name _ <<< "$checksum_line"
+  [ "$(grep -cve '^[[:space:]]*$' "$directory/SHA256SUMS")" -eq "${#arches[@]}" ] \
+    || release_fail "$unit SHA256SUMS must contain exactly its architecture entries"
+  for arch in "${arches[@]}"; do
+  archive="$(component_archive "$unit" "$tag" "$arch")"
+  [ -f "$directory/$archive" ] || release_fail "$unit archive is missing"
+  checksum_line=$(awk -v name="$archive" '$2 == name || $2 == "*" name {print}' "$directory/SHA256SUMS")
+  [ "$(wc -l <<< "$checksum_line")" = 1 ] || release_fail "$unit checksum entry is missing or duplicated"
+  read -r checksum_value checksum_name extra <<< "$checksum_line"
   checksum_name="${checksum_name#\*}"
-  [ "$checksum_name" = "$archive" ] || release_fail "$unit SHA256SUMS names an unexpected asset"
+  [ "$checksum_name" = "$archive" ] && [ -z "${extra:-}" ] || release_fail "$unit SHA256SUMS names an unexpected asset"
   [[ "$checksum_value" =~ ^[0-9a-f]{64}$ ]] || release_fail "$unit SHA256SUMS contains an invalid digest"
   [ "$(sha256sum "$directory/$archive" | awk '{print $1}')" = "$checksum_value" ] \
     || release_fail "$unit archive checksum mismatch"
@@ -161,6 +167,7 @@ validate_component_download() {
   else
     release_fail "$unit archive contains another release unit's material namespace"
   fi
+  done
 }
 
 validate_tar_paths() {
@@ -213,11 +220,15 @@ assemble_release() {
   install -m 0644 "$platform_bundle/assets/$platform_name" "$output/assets/$platform_name"
   install -m 0644 "$expected_selection" "$output/selection.tsv"
 
-  local unit tag archive
+  local unit tag archive arch
   while IFS=$'\t' read -r unit tag; do
     validate_component_download "$unit" "$tag" "$fetched/components/$unit"
-    archive="$(component_archive "$unit" "$tag")"
-    install -m 0644 "$fetched/components/$unit/$archive" "$output/assets/$archive"
+    for arch in x86_64 aarch64; do
+      archive="$(component_archive "$unit" "$tag" "$arch")"
+      if [ -f "$fetched/components/$unit/$archive" ]; then
+        install -m 0644 "$fetched/components/$unit/$archive" "$output/assets/$archive"
+      fi
+    done
   done < "$expected_selection"
 
   find "$output/assets" -maxdepth 1 -type f -printf '%f\n' \
@@ -233,7 +244,7 @@ write_release_notes() {
   local version="$1" previous="$2" selection="$3" updates="$4" output="$5" unit tag
   {
     printf '# Kuasar Sandbox %s\n\n' "$version"
-    printf 'Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains the platform documentation/test package and the exact component archives validated together by real-KVM release asset validation.\n\n'
+    printf 'Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains the platform documentation/test package and the exact component archives validated by the declared profiles: established AMD64 suites and the available native ARM non-KVM subset. Historical AMD64-only releases retain their original coverage.\n\n'
     printf '## Highlights\n\n'
     printf '%s\n' \
       '- Independent Guest Kernel isolation for each MicroVM sandbox.' \
@@ -283,12 +294,24 @@ write_release_notes() {
   } > "$output"
 }
 
+# Existing x86-only releases retain their original contract. A dual aggregate
+# contains every ARM unit; a partially populated target is never accepted.
+bundle_arches() {
+  local bundle=$1
+  printf 'x86_64\n'
+  if find "$bundle/assets" -maxdepth 1 -name '*aarch64*.tar.gz' | grep -q .; then printf 'aarch64\n'; fi
+}
+
 expected_asset_names() {
-  local version="$1" selection="$2"
+  local version="$1" selection="$2" arch
+  shift 2
+  local arches=("${@:-x86_64}")
   platform_archive "$version"
-  while IFS=$'\t' read -r unit tag; do
-    component_archive "$unit" "$tag"
-  done < "$selection"
+  for arch in "${arches[@]}"; do
+    while IFS=$'\t' read -r unit tag; do
+      component_archive "$unit" "$tag" "$arch"
+    done < "$selection"
+  done
   printf 'SHA256SUMS\n'
 }
 
@@ -328,7 +351,9 @@ validate_bundle() {
     grep -Fqx "### $unit" "$bundle/release-notes.md" \
       || release_fail "aggregate release notes are missing $unit updates"
   done < "$expected_selection"
-  expected_asset_names "$version" "$expected_selection" | LC_ALL=C sort > "$expected_names"
+  local arches=() arch
+  mapfile -t arches < <(bundle_arches "$bundle")
+  expected_asset_names "$version" "$expected_selection" "${arches[@]}" | LC_ALL=C sort > "$expected_names"
   find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$actual_names"
   cmp -s "$expected_names" "$actual_names" \
     || { diff -u "$expected_names" "$actual_names" >&2 || true; release_fail "aggregate contains an unexpected asset set"; }
@@ -339,19 +364,22 @@ validate_bundle() {
 
   local seen tag archive
   seen="$(mktemp)"
-  : > "$seen"
-  validate_tar_paths "$bundle/assets/$(platform_archive "$version")" "$seen"
-  while IFS=$'\t' read -r unit tag; do
-    archive="$(component_archive "$unit" "$tag")"
-    validate_tar_paths "$bundle/assets/$archive" "$seen"
-  done < "$expected_selection"
+  for arch in "${arches[@]}"; do
+    : > "$seen"
+    validate_tar_paths "$bundle/assets/$(platform_archive "$version")" "$seen"
+    while IFS=$'\t' read -r unit tag; do
+      archive="$(component_archive "$unit" "$tag" "$arch")"
+      validate_tar_paths "$bundle/assets/$archive" "$seen"
+    done < "$expected_selection"
+  done
   rm -f "$seen"
   rm -f "$expected_selection" "$expected_names" "$actual_names"
 }
 
 extract_bundle() {
-  [ "$#" -eq 3 ] || release_fail "usage: aggregate-release.sh extract <release-version> <bundle-dir> <install-dir>"
-  local version="$1" bundle="$2" install="$3"
+  [ "$#" -eq 3 ] || [ "$#" -eq 4 ] || release_fail "usage: aggregate-release.sh extract <release-version> <bundle-dir> <install-dir> [arch]"
+  local version="$1" bundle="$2" install="$3" arch="${4:-x86_64}"
+  case "$arch" in x86_64|aarch64) ;; *) release_fail 'unsupported extraction architecture' ;; esac
   validate_bundle "$version" "$bundle"
   assert_safe_output "$install"
   mkdir -p "$install"
@@ -359,7 +387,7 @@ extract_bundle() {
   while IFS= read -r name; do
     [ "$name" = SHA256SUMS ] && continue
     tar -xzf "$bundle/assets/$name" -C "$install"
-  done < <(expected_asset_names "$version" "$bundle/selection.tsv")
+  done < <(expected_asset_names "$version" "$bundle/selection.tsv" "$arch")
 }
 
 case "${1:-}" in

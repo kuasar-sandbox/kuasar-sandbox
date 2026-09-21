@@ -29,6 +29,7 @@ concurrency:
 
 jobs:
   delete:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
       contents: write

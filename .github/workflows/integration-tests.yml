@@ -1,93 +1,30 @@
-name: Reusable Integration E2E
-
-on:
-  workflow_call:
-    inputs:
-      mode:
-        description: source or exact-assets
-        required: true
-        type: string
-      candidate_repository:
-        description: Repository whose source candidate is under test
-        required: false
-        default: ""
-        type: string
-      pull_request_number:
-        description: Pull request whose integration commit is under test
-        required: false
-        default: "0"
-        type: string
-      candidate_sha:
-        description: Exact source integration commit
-        required: false
-        default: ""
-        type: string
-      base_sha:
-        description: Integration commit first parent
-        required: false
-        default: ""
-        type: string
-      base_ref:
-        description: Exact target branch of the pull request under test
-        required: false
-        default: ""
-        type: string
-      head_sha:
-        description: Integration commit second parent
-        required: false
-        default: ""
-        type: string
-      companion_candidates:
-        description: Resolved exact companion PR integration records for source mode
-        required: false
-        default: "[]"
-        type: string
-      release_version:
-        description: Aggregate release-v* version for exact-assets mode
-        required: false
-        default: ""
-        type: string
-      release_bundle_artifact:
-        description: Current-run artifact containing the exact aggregate bundle
-        required: false
-        default: ""
-        type: string
-      platform_source_sha:
-        description: Exact platform selection source for exact-assets mode
-        required: false
-        default: ""
-        type: string
-    secrets:
-      KUASAR_CI_APP_PRIVATE_KEY:
-        required: false
-
+# Retired by #129 after the first exact dual-architecture baseline is published.
+# This is the existing source flow during rollout, with Public admission and no App key.
+name: Reusable Source Integration During Artifact Rollout
 permissions:
   contents: read
   pull-requests: read
-
 concurrency:
   group: integration-${{ inputs.mode }}-${{ inputs.candidate_repository || inputs.release_version }}-${{ inputs.candidate_sha || github.run_id }}
   cancel-in-progress: true
-
 jobs:
   e2e:
     name: ${{ inputs.mode == 'source' && 'e2e' || format('e2e [{0}]', matrix.shard) }}
     strategy:
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(inputs.mode == 'exact-assets' && '["core","sandboxer","orchestrator"]' || '["source"]') }}
-    # Visibility selects the runner; request validation independently authorizes inputs.
-    runs-on: ${{ fromJSON(github.event.repository.visibility == 'public' && '["ubuntu-latest"]' || '["self-hosted","Linux","X64","kuasar-e2e","kvm","cgroup-v2"]') }}
-    timeout-minutes: ${{ inputs.mode == 'exact-assets' && 120 || (github.event.repository.visibility == 'public' && 180 || 60) }}
+        shard: [source]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
     env:
       TARGET_ARCH: x86_64
-      KUASAR_HOSTED: ${{ github.event.repository.visibility == 'public' }}
+      KUASAR_HOSTED: 'true'
       KUASAR_CI_DIR: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}
       KUASAR_CI_TIMINGS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/timings.tsv
       KUASAR_NATIVE_CACHE_METRICS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/native-cache.tsv
       KUASAR_REVISION_MANIFEST: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/revisions.tsv
-      KUASAR_SOURCE_CACHE_MAX_ENTRIES: "32"
-      KUASAR_NATIVE_CACHE_MAX_ENTRIES: "4"
+      KUASAR_SOURCE_CACHE_MAX_ENTRIES: '32'
+      KUASAR_NATIVE_CACHE_MAX_ENTRIES: '4'
       CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
       CANDIDATE_PR: ${{ inputs.pull_request_number }}
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
@@ -99,36 +36,20 @@ jobs:
       RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
       PLATFORM_SOURCE_SHA: ${{ inputs.platform_source_sha }}
       KUASAR_E2E_SHARD: ${{ matrix.shard }}
-
     steps:
       - name: Check standard image archive transport
-        if: env.KUASAR_HOSTED == 'true'
         run: |
           set -euo pipefail
           # Needed to materialize the trusted bootstrap from the archive API.
           for tool in bash curl jq tar awk sort grep mktemp; do
             command -v "$tool" >/dev/null || { echo "missing archive transport: $tool" >&2; exit 1; }
           done
-
-      - name: Configure persistent runner environment
-        if: env.KUASAR_HOSTED != 'true'
-        run: |
-          cat >> "$GITHUB_ENV" <<'EOF'
-          GOPROXY=https://goproxy.cn,direct
-          GOSUMDB=sum.golang.google.cn
-          RUSTUP_DIST_SERVER=https://rsproxy.cn
-          RUSTUP_UPDATE_ROOT=https://rsproxy.cn/rustup
-          CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
-          CARGO_NET_GIT_FETCH_WITH_CLI=true
-          PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-          KUASAR_SOURCE_CACHE_ROOT=/var/cache/kuasar/sources
-          EOF
-
       - name: Validate reusable workflow request
         env:
           TRUSTED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
         run: |
+          [ "${{ inputs.mode }}" = source ] || { echo "Aggregate initialization uses integration-artifacts.yml" >&2; exit 1; }
           set -euo pipefail
           [ "$TRUSTED_WORKFLOW_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ] \
             || { echo "Integration E2E implementation must come from kuasar-sandbox/kuasar-sandbox" >&2; exit 1; }
@@ -189,7 +110,6 @@ jobs:
               ;;
             *) echo "mode must be source or exact-assets" >&2; exit 1 ;;
           esac
-
       - name: Initialize CI metadata
         run: |
           set -euo pipefail
@@ -212,91 +132,9 @@ jobs:
               .base_sha, .base_ref, .head_sha, "companion"] | @tsv' \
               <<< "$COMPANION_CANDIDATES" >> "$KUASAR_CI_DIR/source-set.tsv"
           fi
-
-      - name: Reset interrupted E2E state
-        if: env.KUASAR_HOSTED != 'true'
-        run: |
-          set -euo pipefail
-          privileged=()
-          if [ "$(id -u)" -ne 0 ]; then privileged=(sudo -n); fi
-          "${privileged[@]}" systemctl stop 'sandbox-runner@*.service' 'sandbox-builder@*.service'
-          if ip link show sb-tap0 >/dev/null 2>&1; then
-            "${privileged[@]}" ip link del sb-tap0
-          fi
-          # Recover this runner's working-set network namespace left behind
-          # by an interrupted run (#43, #53). The name is derived from
-          # RUNNER_NAME, so recovery is exact-ownership: no other runner's
-          # namespace, and no other host interface, is ever touched. This
-          # stays self-contained because no checkout has happened yet.
-          #
-          # Fail-closed: kill (TERM -> bounded wait -> KILL -> bounded wait),
-          # verify the namespace holds no process, and only then delete its
-          # name. Deleting while a process still holds the namespace would
-          # orphan it beyond exact-name recovery. An "empty" verdict is only
-          # ever drawn from a SUCCESSFUL `ip netns pids` returning nothing —
-          # a failed query means "unknown", never "empty"; a survivor, an
-          # enumeration failure, or a failed deletion fails the job before
-          # any measurement runs.
-          # Same derivation as the wrapper (including its "local" fallback), so
-          # the reset always reclaims exactly the namespace the wrapper creates.
-          ws_netns="kuasar-ws-$(printf '%s' "${RUNNER_NAME:-local}" | sha256sum | cut -c1-8)"
-          ws_pids() {
-            local output
-            if ! output="$("${privileged[@]}" ip netns pids "$ws_netns" 2>&1)"; then
-              echo "cannot enumerate processes in $ws_netns: $output" >&2
-              return 1
-            fi
-            printf '%s\n' "$output"
-          }
-          if "${privileged[@]}" ip netns list | awk '{print $1}' | grep -Fxq "$ws_netns"; then
-            echo "recovering interrupted working-set namespace: $ws_netns"
-            if ! ws_out="$(ws_pids)"; then exit 1; fi
-            while read -r pid; do
-              [ -n "$pid" ] && "${privileged[@]}" kill -TERM "$pid" 2>/dev/null || true
-            done <<<"$ws_out"
-            for _ in $(seq 1 20); do
-              if ! ws_out="$(ws_pids)"; then exit 1; fi
-              [ -z "$ws_out" ] && break
-              sleep 0.5
-            done
-            if ! ws_out="$(ws_pids)"; then exit 1; fi
-            while read -r pid; do
-              [ -n "$pid" ] && "${privileged[@]}" kill -KILL "$pid" 2>/dev/null || true
-            done <<<"$ws_out"
-            for _ in $(seq 1 10); do
-              if ! ws_out="$(ws_pids)"; then exit 1; fi
-              [ -z "$ws_out" ] && break
-              sleep 0.5
-            done
-            if ! ws_out="$(ws_pids)"; then exit 1; fi
-            if [ -n "$ws_out" ]; then
-              echo "processes in $ws_netns survived TERM and KILL; refusing to continue" >&2
-              exit 1
-            fi
-            "${privileged[@]}" ip netns del "$ws_netns"
-          fi
-          "${privileged[@]}" rm -f \
-            /run/systemd/system/sandbox-runner@.service \
-            /run/systemd/system/sandbox-builder@.service \
-            /run/systemd/system/sandbox-runner.slice \
-            /run/systemd/system/sandbox-builder.slice
-          "${privileged[@]}" systemctl reset-failed 'sandbox-runner@*.service' 'sandbox-builder@*.service'
-          "${privileged[@]}" systemctl daemon-reload
-
-      - name: Create read-only platform tooling token
-        id: platform-tooling-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
-          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
-          owner: kuasar-sandbox
-          repositories: kuasar-sandbox
-          permission-contents: read
-          skip-token-revoke: true
-
       - name: Materialize exact platform sources
         env:
-          GH_TOKEN: ${{ steps.platform-tooling-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           TRUSTED_REPOSITORY: ${{ job.workflow_repository }}
           TRUSTED_SHA: ${{ job.workflow_sha }}
         run: |
@@ -371,75 +209,16 @@ jobs:
             materialize kuasar-sandbox/kuasar-sandbox \
               "$PLATFORM_SOURCE_SHA" src/platform
           fi
-
-      - name: Revoke platform tooling token before candidate execution
-        if: ${{ always() && steps.platform-tooling-token.outputs.token != '' }}
-        env:
-          GH_TOKEN: ${{ steps.platform-tooling-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          status=$(curl --show-error --silent \
-            --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
-            --request DELETE --output /dev/null --write-out '%{http_code}' \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/installation/token)
-          case "$status" in 204|401) ;; *) echo "failed to revoke tooling token: HTTP $status" >&2; exit 1 ;; esac
-
       - name: Bootstrap standard runner from trusted tooling
-        if: env.KUASAR_HOSTED == 'true'
         env:
           BOOTSTRAP_PROFILE: ${{ inputs.mode }}
         run: bash trusted/platform/ci/hosted/bootstrap.sh --profile "$BOOTSTRAP_PROFILE"
-
       - name: Check hosted CI regression contracts
-        if: env.KUASAR_HOSTED == 'true'
         run: python3 trusted/platform/ci/hosted/test-workflows.py
-
-      - name: Reset exact aggregate workspace
-        if: inputs.mode == 'exact-assets'
-        run: rm -rf release-bundle release-install
-
-      - name: Download exact aggregate bundle
-        if: inputs.mode == 'exact-assets'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ inputs.release_bundle_artifact }}
-          path: release-bundle
-
-      - name: Validate and extract exact aggregate bundle
-        if: inputs.mode == 'exact-assets'
-        env:
-          PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/src/platform
-        run: |
-          set -euo pipefail
-          trusted/platform/release/aggregate-release.sh validate "$RELEASE_VERSION" release-bundle
-          rm -rf release-install
-          trusted/platform/release/aggregate-release.sh extract \
-            "$RELEASE_VERSION" release-bundle release-install
-
-      - name: Attach job-local exact-assets test tools
-        if: env.KUASAR_HOSTED == 'true' && inputs.mode == 'exact-assets'
-        run: bash trusted/platform/ci/hosted/exact-assets-tools.sh
-
-      - name: Create read-only source token
-        if: inputs.mode == 'source'
-        id: source-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
-          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
-          owner: kuasar-sandbox
-          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
-          permission-contents: read
-          permission-pull-requests: read
-          skip-token-revoke: true
-
       - name: Validate pull request integration set
         if: inputs.mode == 'source' && inputs.pull_request_number != '0'
         env:
-          GH_TOKEN: ${{ steps.source-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
           CALLER_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -557,11 +336,9 @@ jobs:
             validate_companion "$companion" \
               || { echo "companion no longer matches the exact open pull request" >&2; exit 1; }
           done < <(jq -c '.[]' <<< "$COMPANION_CANDIDATES")
-
       - name: Assemble the five component source repositories
-        if: inputs.mode == 'source'
         env:
-          GH_TOKEN: ${{ steps.source-token.outputs.token }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           repos=(accelerator connector guest-runtime orchestrator sandboxer)
@@ -706,6 +483,9 @@ jobs:
           done
 
           for repo in "${repos[@]}"; do
+            source_api_get "/repos/kuasar-sandbox/$repo" | jq -e --arg name "kuasar-sandbox/$repo" \
+              '.full_name == $name and .visibility == "public" and .private == false' >/dev/null \
+              || { echo "The rollout source lane only accepts Public dependencies" >&2; exit 1; }
             case "$repo" in
               accelerator|connector|sandboxer|orchestrator) unit=$repo ;;
               guest-runtime) unit=runtime ;;
@@ -812,24 +592,7 @@ jobs:
             > "$KUASAR_CI_TIMINGS"
           printf 'workflow/assemble\t%s\t%s\tunavailable\tunavailable\tunavailable\tunavailable\tunavailable\tunavailable\t0\n' \
             "$started_at" "$elapsed" >> "$KUASAR_CI_TIMINGS"
-
-      - name: Revoke source token before executing candidate code
-        if: ${{ always() && inputs.mode == 'source' && steps.source-token.outputs.token != '' }}
-        env:
-          GH_TOKEN: ${{ steps.source-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          status=$(curl --show-error --silent \
-            --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
-            --request DELETE --output /dev/null --write-out '%{http_code}' \
-            -H "Accept: application/vnd.github+json" \
-            -H "Authorization: Bearer $GH_TOKEN" \
-            -H "X-GitHub-Api-Version: 2022-11-28" \
-            https://api.github.com/installation/token)
-          case "$status" in 204|401) ;; *) echo "failed to revoke source token: HTTP $status" >&2; exit 1 ;; esac
-
       - name: Finalize source workspace
-        if: inputs.mode == 'source'
         run: |
           set -euo pipefail
           while IFS=$'\t' read -r repository _ resolved_sha _; do
@@ -842,44 +605,7 @@ jobs:
           rm -f go.work go.work.sum src/go.work src/go.work.sum
           cd src
           go work init ./accelerator ./connector ./guest-runtime ./orchestrator ./sandboxer
-
-      - name: Attach runner caches and test tools
-        if: env.KUASAR_HOSTED != 'true'
-        run: |
-          set -euo pipefail
-          if [ "${{ inputs.mode }}" = source ]; then
-            install -d -m 0755 /var/cache/kuasar/tarballs
-            for path in \
-              src/accelerator/build/tarball \
-              src/guest-runtime/native-deps/build/tarball \
-              src/sandboxer/native-deps/build/tarball
-            do
-              mkdir -p "$(dirname "$path")"
-              ln -sfn /var/cache/kuasar/tarballs "$path"
-            done
-            linux_file=$(awk '/^LINUX_TARBALL[[:space:]]*\?=/ { url=$3; sub(/\\#.*/, "", url); n=split(url, part, "/"); print part[n]; exit }' src/guest-runtime/native-deps/Makefile)
-            [[ "$linux_file" =~ ^linux-([0-9]+)\..*\.tar\.gz$ ]]
-            echo "LINUX_TARBALL=https://mirrors.tuna.tsinghua.edu.cn/kernel/v${BASH_REMATCH[1]}.x/$linux_file" >> "$GITHUB_ENV"
-            tool_dir=src/platform/build/e2e-tools/x86_64
-          else
-            tool_dir=release-tools
-          fi
-          mkdir -p "$tool_dir"
-          ln -sfn /var/lib/kuasar-ci/tools/zot "$tool_dir/zot"
-          ln -sfn /var/lib/kuasar-ci/tools/versitygw "$tool_dir/versitygw"
-          echo "E2E_ZOT_BIN=${E2E_ZOT_BIN:-${ZOT_BIN:-$GITHUB_WORKSPACE/$tool_dir/zot}}" >> "$GITHUB_ENV"
-          echo "E2E_VGW_BIN=${E2E_VGW_BIN:-${VGW_BIN:-$GITHUB_WORKSPACE/$tool_dir/versitygw}}" >> "$GITHUB_ENV"
-          owner="${CANDIDATE_REPOSITORY##*/}"
-          for image in $(bash ci/integration/source-owner.sh images "$owner"); do
-            if ! docker image inspect "$image" >/dev/null 2>&1; then
-              mirror="m.daocloud.io/docker.io/library/$image"
-              timeout 3m docker pull "$mirror"
-              docker tag "$mirror" "$image"
-            fi
-          done
-
       - name: Attach job-local source caches and test tools
-        if: env.KUASAR_HOSTED == 'true' && inputs.mode == 'source'
         run: |
           set -euo pipefail
           for path in \
@@ -896,18 +622,14 @@ jobs:
           mkdir -p "$tool_dir"
           echo "E2E_ZOT_BIN=${E2E_ZOT_BIN:-${ZOT_BIN:-$tool_dir/zot}}" >> "$GITHUB_ENV"
           echo "E2E_VGW_BIN=${E2E_VGW_BIN:-${VGW_BIN:-$tool_dir/versitygw}}" >> "$GITHUB_ENV"
-
       - name: Pull standard runner test images
-        if: env.KUASAR_HOSTED == 'true'
         run: |
           set -euo pipefail
           owner="${CANDIDATE_REPOSITORY##*/}"
           for image in $(bash ci/integration/source-owner.sh images "$owner"); do
             timeout 3m docker pull "$image"
           done
-
       - name: Restore or build verified native artifacts
-        if: inputs.mode == 'source'
         working-directory: src/platform
         shell: bash
         run: |
@@ -922,9 +644,7 @@ jobs:
           fi
           # shellcheck disable=SC2086 # helper emits fixed component words.
           ci/native-cache/native-cache.sh restore-or-build $components
-
       - name: Validate platform tooling
-        if: inputs.mode == 'source'
         working-directory: src/platform
         shell: bash
         run: |
@@ -932,9 +652,7 @@ jobs:
             taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           fi
           make -j3 test-ci-tools test-release-tools test-perf-tools
-
       - name: Build and test source candidate
-        if: inputs.mode == 'source'
         working-directory: src/platform
         shell: bash
         run: |
@@ -950,6 +668,35 @@ jobs:
             echo "==> UFFD gate not in $owner dependency closure"
           fi
 
+          # Preserve the existing source entry until the first dual aggregate is
+          # validated. New owner revisions move these checks out of their E2E scripts;
+          # old revisions still execute them in the unchanged owner runner.
+          case "$owner" in
+            connector) source_checks=(connector) ;;
+            sandboxer) source_checks=(sandboxer) ;;
+            orchestrator) source_checks=(orchestrator) ;;
+            kuasar-sandbox) source_checks=(connector sandboxer orchestrator) ;;
+            *) source_checks=() ;;
+          esac
+          for source_owner in "${source_checks[@]}"; do
+            checker="../$source_owner/scripts/ci-source-checks.sh"
+            if [ -f "$checker" ]; then
+              TMPDIR=/var/tmp bash "$checker"
+            fi
+          done
+          fixture_env=()
+          fixture_dir="$PWD/build/e2e-tools/x86_64"
+          if [[ "$owner" = sandboxer || "$owner" = kuasar-sandbox ]] \
+            && [ -f ../sandboxer/scripts/ci-source-checks.sh ]; then
+            make -C ../sandboxer TARGET_ARCH=x86_64 E2E_FIXTURE_DIR="$fixture_dir" e2e-usage-probe
+            fixture_env+=(USAGE_PROBE_BIN="$fixture_dir/usage-probe")
+          fi
+          if [[ "$owner" = orchestrator || "$owner" = kuasar-sandbox ]] \
+            && [ -f ../orchestrator/scripts/ci-e2e-build.sh ]; then
+            bash ../orchestrator/scripts/ci-e2e-build.sh fixtures x86_64 "$fixture_dir"
+            fixture_env+=(CUSTOM_PROXY_BIN="$fixture_dir/custom-proxy" TELEMETRY_GRPC_PROBE_BIN="$fixture_dir/telemetry-grpc-probe")
+          fi
+
           runner="build/e2e-suite/test/e2e/$owner/run_all.sh"
           if [ "$owner" = kuasar-sandbox ]; then
             runner=build/e2e-suite/test/e2e/run_all.sh
@@ -959,15 +706,14 @@ jobs:
 
           ci/integration/ci-timed.sh "e2e/$owner" env \
             BIN="$PWD/bin/x86_64" \
+            BASH_ENV="$PWD/build/e2e-suite/test/e2e/platform/lib/failure-diagnostics.sh" \
             ZOT_BIN="$E2E_ZOT_BIN" \
             VGW_BIN="$E2E_VGW_BIN" \
-            bash "$runner"
-
+            "${fixture_env[@]}" bash "$runner"
       - name: Run working-set performance smoke
-        if: inputs.mode == 'source'
         working-directory: src/platform
         env:
-          PERF_ITERS: "1"
+          PERF_ITERS: '1'
           PERF_OUT_DIR: ${{ env.KUASAR_CI_DIR }}/working-set-perf
         run: |
           owner="${CANDIDATE_REPOSITORY##*/}"
@@ -980,26 +726,6 @@ jobs:
             PERF_ITERS="$PERF_ITERS" \
             PERF_OUT_DIR="$PERF_OUT_DIR" \
             bash test/perf/working-set-netns.sh test/perf/sandbox-perf-working-set.sh
-
-      - name: Test exact published assets from the platform package
-        if: inputs.mode == 'exact-assets'
-        working-directory: release-install
-        env:
-          BIN: ${{ github.workspace }}/release-install/bin
-          ZOT_BIN: ${{ env.E2E_ZOT_BIN }}
-          VGW_BIN: ${{ env.E2E_VGW_BIN }}
-          REQUIRE_KVM: "1"
-          REQUIRE_EXEC: "1"
-          REQUIRE_CLUSTER_STUB: "1"
-          REQUIRE_CLUSTER_REAL: "1"
-          REQUIRE_ORCH: "1"
-          REQUIRE_PROXY: "1"
-          REQUIRE_BUILDER: "1"
-          REQUIRE_RUNTASK: "1"
-          REQUIRE_CONNECTOR_E2E: "1"
-          REQUIRE_GUEST_RUNTIME: "1"
-        run: bash test/e2e/run_all.sh
-
       - name: Stage revision and timing metadata
         id: ci-metadata
         if: always()
@@ -1016,12 +742,69 @@ jobs:
             chmod -R u+rwX "$upload_dir"
           fi
           echo "path=$upload_dir" >> "$GITHUB_OUTPUT"
-
       - name: Upload revision and timing metadata
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: ${{ inputs.mode == 'source' && format('ci-metadata-{0}-{1}', github.run_id, github.run_attempt) || format('ci-metadata-{0}-{1}-{2}', github.run_id, github.run_attempt, matrix.shard) }}
           path: ${{ steps.ci-metadata.outputs.path }}
           if-no-files-found: warn
           retention-days: 30
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+'on':
+  workflow_call:
+    inputs:
+      mode:
+        description: source or exact-assets
+        required: true
+        type: string
+      candidate_repository:
+        description: Repository whose source candidate is under test
+        required: false
+        default: ''
+        type: string
+      pull_request_number:
+        description: Pull request whose integration commit is under test
+        required: false
+        default: '0'
+        type: string
+      candidate_sha:
+        description: Exact source integration commit
+        required: false
+        default: ''
+        type: string
+      base_sha:
+        description: Integration commit first parent
+        required: false
+        default: ''
+        type: string
+      base_ref:
+        description: Exact target branch of the pull request under test
+        required: false
+        default: ''
+        type: string
+      head_sha:
+        description: Integration commit second parent
+        required: false
+        default: ''
+        type: string
+      companion_candidates:
+        description: Resolved exact companion PR integration records for source mode
+        required: false
+        default: '[]'
+        type: string
+      release_version:
+        description: Aggregate release-v* version for exact-assets mode
+        required: false
+        default: ''
+        type: string
+      release_bundle_artifact:
+        description: Current-run artifact containing the exact aggregate bundle
+        required: false
+        default: ''
+        type: string
+      platform_source_sha:
+        description: Exact platform selection source for exact-assets mode
+        required: false
+        default: ''
+        type: string

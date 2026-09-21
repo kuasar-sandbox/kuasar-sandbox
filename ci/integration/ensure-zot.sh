@@ -54,7 +54,7 @@ if [ -x "$out_bin" ]; then
 fi
 
 mkdir -p "$BINDIR"
-if host_zot="$(command -v zot 2>/dev/null)" && [ -x "$host_zot" ]; then
+if [ "$TARGET_ARCH" = "$(uname -m)" ] && host_zot="$(command -v zot 2>/dev/null)" && [ -x "$host_zot" ]; then
     log "copying host zot: $host_zot -> $out_bin"
     cp -f "$host_zot" "$out_bin"
     chmod 0755 "$out_bin"

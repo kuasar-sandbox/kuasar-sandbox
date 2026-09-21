@@ -209,6 +209,34 @@ for unit in "${RELEASE_UNITS[@]}"; do
     || release_fail "$unit source material was not extracted"
 done
 
+# A new dual aggregate contains both namespaces, but extraction chooses one.
+# These packaging fixtures are not executable product/architecture acceptance.
+cp -a "$TMP/fetched" "$TMP/fetched-dual"
+while IFS=$'\t' read -r unit tag; do
+  directory="$TMP/fetched-dual/components/$unit"
+  archive="$(component_archive "$unit" "$tag" aarch64)"
+  printf '%s ARM fixture\n' "$unit" > "$TMP/stage-$unit/bin/$unit"
+  tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@1700000000' \
+    -czf "$directory/$archive" -C "$TMP/stage-$unit" .
+  (cd "$directory" && sha256sum ./*.tar.gz | sed 's@  ./@  @' > SHA256SUMS)
+done < "$TMP/selection.tsv"
+SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
+  "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched-dual" "$TMP/dual-bundle"
+[ "$(find "$TMP/dual-bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 14 ] \
+  || release_fail 'dual aggregate does not contain both exact architecture sets'
+for arch in x86_64 aarch64; do
+  "$FORMAL_ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/dual-bundle" "$TMP/install-$arch" "$arch"
+  for unit in "${RELEASE_UNITS[@]}"; do
+    if [ "$arch" = x86_64 ]; then
+      cmp "$TMP/install/bin/$unit" "$TMP/install-$arch/bin/$unit" \
+        || release_fail 'AMD64 baseline bytes changed during dual assembly'
+    else
+      grep -Fxq "$unit ARM fixture" "$TMP/install-$arch/bin/$unit" \
+        || release_fail 'ARM extraction contains the other architecture'
+    fi
+  done
+done
+
 cp -a "$TMP/bundle" "$TMP/tampered"
 printf 'tampered\n' >> "$TMP/tampered/assets/$(platform_archive "$VERSION")"
 if "$ROOT/release/aggregate-release.sh" validate "$VERSION" "$TMP/tampered" >/dev/null 2>&1; then
@@ -377,8 +405,8 @@ grep -Fq 'moved while release asset validation was running' \
 grep -Fq 'platform_source_sha: ${{ needs.prepare.outputs.source_sha }}' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate validation does not receive the selected platform source"
-grep -Fq 'PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/src/platform' \
-  "$ROOT/.github/workflows/integration-tests.yml" \
+grep -Fq 'source_text(PLATFORM, sha, relative)' \
+  "$ROOT/ci/integration/resolve-artifacts.py" \
   || release_fail "exact-asset validation does not validate against selected platform source"
 grep -Fq 'ref: main' "$ROOT/.github/workflows/preview-gc.yml" \
   || release_fail "Preview GC does not pin trusted main tooling"

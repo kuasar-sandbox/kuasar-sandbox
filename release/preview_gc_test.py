@@ -23,6 +23,20 @@ SPEC.loader.exec_module(preview_gc)
 
 
 class PreviewGCTest(unittest.TestCase):
+    def test_complete_dual_release_is_not_incomplete_recovery_material(self) -> None:
+        version, sha = "release-v1.2.3-preview.20260831", "a" * 40
+        components = {unit: (unit + "-" if unit in ("runtime", "vmlinux") else "") + "v1.0.0"
+                      for unit in preview_gc.coordinator.selection.UNITS}
+        old = preview_gc.coordinator.platform_asset_names_for_components(version, components)
+        dual = preview_gc.coordinator.platform_asset_names_for_components(version, components, ("x86_64", "aarch64"))
+        with mock.patch.object(preview_gc.coordinator, "platform_asset_names", return_value=old):
+            for names in (old, dual):
+                release = {"draft": False, "prerelease": True, "target_commitish": sha,
+                           "assets": [{"name": name, "state": "uploaded"} for name in names]}
+                self.assertTrue(preview_gc.platform_release_status(version, release, sha).complete)
+            release["assets"].pop()
+            self.assertFalse(preview_gc.platform_release_status(version, release, sha).complete)
+
     def test_stable_release_accepts_same_tree_legacy_target(self) -> None:
         version = "release-v1.2.3"
         tag_sha = "2" * 40

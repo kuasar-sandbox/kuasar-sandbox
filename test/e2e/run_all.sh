@@ -12,6 +12,11 @@ export BIN
 : "${ZOT_BIN:?ZOT_BIN must point to the platform-provided registry}"
 : "${VGW_BIN:?VGW_BIN must point to the platform-provided object gateway}"
 export ZOT_BIN VGW_BIN
+# The trusted source workflow may predate its BASH_ENV handoff. Enable the
+# hook only in its assembled source suite, never in release/prepared layouts.
+if [[ -n "${KUASAR_CI_DIR:-}" && "$SCRIPT_DIR" == */build/e2e-suite/test/e2e ]]; then
+    export BASH_ENV="$SCRIPT_DIR/platform/lib/failure-diagnostics.sh"
+fi
 
 echo "==> full release e2e"
 echo "==> BIN=$BIN"

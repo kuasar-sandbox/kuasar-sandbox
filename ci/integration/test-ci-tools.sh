@@ -18,6 +18,9 @@ fail() {
 
 workflow="$SCRIPT_DIR/../../.github/workflows/integration-tests.yml"
 entry_workflow="$SCRIPT_DIR/../../.github/workflows/ci-entry.yml"
+request="$SCRIPT_DIR/validate-request.sh"
+source_validation="$SCRIPT_DIR/validate-source-set.sh"
+resolver="$SCRIPT_DIR/resolve-artifacts.py"
 daily_workflow="$SCRIPT_DIR/../../.github/workflows/daily-preview-branch.yml"
 legacy_repository="kuasar-sandbox/platform"
 candidate_pattern='^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$'
@@ -151,20 +154,18 @@ done
 grep -Fq 'rebuild) shift; rebuild_slot "${1:-}" ;;' "$provisioner" \
     || fail "provisioner does not expose the explicit slot rebuild operation"
 
-grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = kuasar-sandbox/kuasar-sandbox ]" "$workflow" \
+grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = kuasar-sandbox/kuasar-sandbox ]" "$request" \
     || fail "trusted workflow repository does not use the project repository identity"
-grep -Fq "$candidate_pattern" "$workflow" \
+grep -Fq "$candidate_pattern" "$request" \
     || fail "candidate repository allowlist does not contain the project repository slug"
 [[ kuasar-sandbox/kuasar-sandbox =~ $candidate_pattern ]] \
     || fail "project repository is rejected by the candidate allowlist"
 if [[ $legacy_repository =~ $candidate_pattern ]]; then
     fail "legacy repository slug is still accepted by the candidate allowlist"
 fi
-grep -Fq 'repositories: kuasar-sandbox' "$workflow" \
-    || fail "platform tooling token does not select the project repository slug"
-grep -Fq 'repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer' \
-    "$workflow" \
-    || fail "source token repository list does not contain the project repository slug"
+if grep -Fq 'create-github-app-token' "$workflow"; then
+    fail "artifact execution must not receive App credentials"
+fi
 grep -Fq 'repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer' \
     "$daily_workflow" \
     || fail "release token repository list does not contain the project repository slug"
@@ -173,7 +174,7 @@ grep -Fq '"kuasar-sandbox": "platform"' "$working_set_perf" \
 if grep -Fq '"platform": "platform"' "$working_set_perf"; then
     fail "working-set revision reports still accept the legacy repository slug"
 fi
-if grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = $legacy_repository ]" "$workflow"; then
+if grep -Fq "[ \"\$TRUSTED_WORKFLOW_REPOSITORY\" = $legacy_repository ]" "$request"; then
     fail "legacy repository identity is still accepted as the trusted Integration E2E implementation"
 fi
 
@@ -185,8 +186,8 @@ grep -Fq 'companion_candidates: ${{ needs.admission.outputs.companion_candidates
     || fail "Integration E2E entry does not pass the admitted companion set to execution"
 [ "$(grep -Fc 'permission-pull-requests: read' "$entry_workflow")" -eq 2 ] \
     || fail "companion admission and finalization tokens cannot read companion pull requests"
-[ "$(grep -Fc 'permission-pull-requests: read' "$workflow")" -eq 1 ] \
-    || fail "Integration E2E source token cannot revalidate companion pull requests"
+grep -Fq 'pull-requests: read' "$workflow" \
+    || fail "resolver cannot revalidate public companion pull requests"
 if grep -Fq 'permission-pull-requests: write' "$workflow" "$entry_workflow"; then
     fail "companion validation requests pull request write access"
 fi
@@ -201,17 +202,17 @@ grep -Fq 'base_ref: ${{ needs.admission.outputs.base_ref }}' "$entry_workflow" \
     || fail "Integration E2E entry does not pass the admitted target branch to execution"
 grep -Fq 'CANDIDATE_BASE_REF' "$workflow" \
     || fail "Integration E2E execution does not retain the exact primary target branch"
-grep -Fq 'release-units.tsv' "$workflow" \
+grep -Fq 'unit_records' "$resolver" \
     || fail "Integration E2E execution does not record independent Daily release-unit selection"
-grep -Fq 'preview-selection.py source-ref' "$workflow" \
+grep -Fq 'component_source_ref' "$resolver" \
     || fail "Integration E2E execution does not derive maintenance component source branches"
 grep -Fq 'branches-where-head' "$entry_workflow" \
     || fail "companion admission does not require an organization repository branch head"
-grep -Fq 'branches-where-head' "$workflow" \
+grep -Fq 'branches-where-head' "$source_validation" \
     || fail "runner validation does not recheck the companion branch provenance"
 runner_companion_validation=$(sed -n \
     '/^[[:space:]]*validate_companion() {$/,/^[[:space:]]*validate_primary \\/p' \
-    "$workflow")
+    "$source_validation")
 [ -n "$runner_companion_validation" ] \
     || fail "cannot extract the runner companion validation function"
 [ "$(grep -Fc -- '--arg repository "$repository"' <<< "$runner_companion_validation")" -eq 1 ] \
@@ -227,12 +228,10 @@ finalizer_companion_validation=$(sed -n \
     || fail "finalizer companion validation does not bind the repository identity"
 [ "$(grep -Fc -- '--argjson number "$number"' <<< "$finalizer_companion_validation")" -eq 1 ] \
     || fail "finalizer companion validation does not bind the pull request number"
-grep -Fq 'source-set.tsv' "$workflow" \
-    || fail "exact source-set metadata is not recorded"
-grep -Fq 'platform_role=companion' "$workflow" \
-    || fail "platform companion revision is not distinguished in the revision manifest"
-grep -Fq 'role=companion' "$workflow" \
-    || fail "component companion revisions are not distinguished in the revision manifest"
+grep -Fq '"candidate_records": records' "$resolver" \
+    || fail "exact primary and companion source set is not recorded"
+grep -Fq '"role": "candidate" if record is primary else "companion"' "$resolver" \
+    || fail "candidate/companion revision ownership is not recorded"
 grep -Fq 'Pull request or companion source set changed while Integration E2E was running' "$entry_workflow" \
     || fail "finalization does not fail closed when a companion changes"
 grep -Fq 'companion_count=' "$entry_workflow" \
@@ -307,16 +306,15 @@ assert "  ci:\n    uses: kuasar-sandbox/kuasar-sandbox/.github/workflows/ci-entr
 assert "previous-required-check" not in caller
 assert "bms / finalize" not in caller
 aggregate = (root / ".github/workflows/aggregate-release.yml").read_text()
-assert "uses: ./.github/workflows/integration-tests.yml" in aggregate
+assert "uses: ./.github/workflows/integration-artifacts.yml" in aggregate
 assert "needs: [prepare, release-asset-validation]" in aggregate
 assert "bms-e2e.yml" not in aggregate
 assert (root / ".github/workflows/ci-entry.yml").is_file()
-revoke = execution.index("- name: Revoke platform tooling token before candidate execution")
-assert revoke < execution.index("- name: Finalize source workspace")
-assert revoke < execution.index("- name: Test exact published assets")
-assert "skip-token-revoke: true" in execution[
-    execution.index("- name: Create read-only platform tooling token"):revoke]
-print("test-ci-tools: canonical-only callers and read-token revocation PASS")
+assert 'create-github-app-token' not in execution
+lane = (root / '.github/workflows/integration-architecture.yml').read_text()
+assert 'KUASAR_CI_APP_PRIVATE_KEY' not in lane
+assert 'persist-credentials: false' in lane
+print("test-ci-tools: canonical-only callers and separate credential-free execution PASS")
 PY
 
 cat >"$TMP/duplicate-companions.md" <<'EOF'

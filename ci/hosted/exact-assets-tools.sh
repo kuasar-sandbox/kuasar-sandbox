@@ -28,8 +28,10 @@ environment_tool() {
     local name=$1 supplied=$2 selected
     if [ -n "$supplied" ]; then
         selected=$supplied
-    else
+    elif [ "$target_arch" = "$(uname -m)" ]; then
         selected=$(command -v "$name" || true)
+    else
+        selected=""
     fi
     [ -n "$selected" ] || return 0
     [ -f "$selected" ] && [ -x "$selected" ] || die "environment $name is not executable: $selected"
@@ -44,7 +46,13 @@ main() {
         || die "RUNNER_TEMP must be an absolute existing directory"
     [[ "$KUASAR_BUILD_JOBS" =~ ^[1-9][0-9]*$ && "$KUASAR_BUILD_CPUS" =~ ^[0-9]+(,[0-9]+)*$ ]] \
         || die "invalid host tool build budget"
-    local tools_root identity
+    local tools_root identity target_arch go_arch
+    target_arch=${TARGET_ARCH:-$(uname -m)}
+    case "$target_arch" in
+        x86_64) go_arch=amd64 ;;
+        aarch64) go_arch=arm64 ;;
+        *) die "invalid target architecture: $target_arch" ;;
+    esac
     tools_root=$(mktemp -d "$RUNNER_TEMP/kuasar-exact-tools.XXXXXX")
     identity="$KUASAR_CI_DIR/host-tools.tsv"
     mkdir -p "$tools_root"/{bin,recipes,tarballs,tmp} "$KUASAR_CI_DIR"
@@ -68,14 +76,14 @@ main() {
             VERSITYGW_SRC="$tools_root/versitygw" VERSITYGW_TARBALL="$archive" \
             VERSITYGW_TARBALL_SHA256="$VERSITYGW_SOURCE_SHA256" \
             VERSITYGW_GOFLAGS="-mod=mod -p=$KUASAR_BUILD_JOBS" \
-            GOMAXPROCS="$KUASAR_BUILD_JOBS" GO_ARCH=amd64 \
+            GOMAXPROCS="$KUASAR_BUILD_JOBS" GO_ARCH="$go_arch" \
             taskset -c "$KUASAR_BUILD_CPUS" bash "$tools_root/recipes/build-versitygw.sh"
         vgw_bin="$tools_root/bin/versitygw"
     fi
     if [ -z "$zot_bin" ]; then
-        BINDIR="$tools_root/bin" TARGET_ARCH=x86_64 TARBALL_CACHE="$tools_root/tarballs" \
+        BINDIR="$tools_root/bin" TARGET_ARCH="$target_arch" TARBALL_CACHE="$tools_root/tarballs" \
             ZOT_VERSION=v2.1.17 \
-            ZOT_URL=https://github.com/project-zot/zot/releases/download/v2.1.17/zot-linux-amd64-minimal \
+            ZOT_URL="https://github.com/project-zot/zot/releases/download/v2.1.17/zot-linux-$go_arch-minimal" \
             ZOT_SHA256_URL=https://github.com/project-zot/zot/releases/download/v2.1.17/checksums.sha256.txt \
             bash "$tooling_dir/../integration/ensure-zot.sh"
         zot_bin="$tools_root/bin/zot"
@@ -84,9 +92,18 @@ main() {
     for tool in zot versitygw; do
         if [ "$tool" = zot ]; then path=$zot_bin; else path=$vgw_bin; fi
         [ -x "$path" ] || die "missing host test tool: $tool"
+        PYTHONPATH="$tooling_dir/../integration" python3 - "$path" "$target_arch" <<'PY'
+import sys
+from artifacts import check_architecture
+check_architecture(sys.argv[1], sys.argv[2])
+PY
         # Observed fingerprints identify the executed tools; they are not allowlists.
         printf '%s\t%s\t%s\n' "$tool" "$path" \
             "$(sha256sum "$path" | cut -d ' ' -f 1)" >> "$identity"
+        if [ -n "${KUASAR_E2E_TOOL_OUTPUT:-}" ]; then
+            mkdir -p "$KUASAR_E2E_TOOL_OUTPUT"
+            install -m 0755 "$path" "$KUASAR_E2E_TOOL_OUTPUT/$tool"
+        fi
     done
     emit E2E_ZOT_BIN "$zot_bin"
     emit E2E_VGW_BIN "$vgw_bin"

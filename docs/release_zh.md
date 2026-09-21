@@ -153,20 +153,17 @@ Daily 清单中指定的 Tag 也参加提交位置比较:
 - 位于同一提交时取最大 SemVer;
 - 不在所选分支 first-parent 上时停止,不把旁支或历史大版本误选进来。
 
-获胜 Tag 已在 HEAD 时直接复用。获胜 Stable Tag 落后于 HEAD 时,Patch 只自增一次并产生
-`vX.Y.(Z+1)-preview.YYYYMMDD`;获胜 Preview 落后于 HEAD 时保持其 core 版本,只换成
-本次日期及可选修订号。下一次扫描会看到这个 Preview,不会反复增加 Patch。
+当 unit 实际产品/打包/材料输入未变化时，复用获胜 Tag，即使文档、测试或 workflow 已推进 HEAD。
+kernel 继续使用已有 Makefile 相关输入投影。相关输入变化后，Stable winner 的 Patch 自增一次形成
+`vX.Y.(Z+1)-preview.YYYYMMDD`；Preview winner 保持 core，仅改变日期/显式修订号。
 
-依赖改变也需要重建实际携带依赖的 unit:accelerator 改变会直接重建 sandboxer、
-orchestrator 和 runtime;connector 改变会直接重建 sandboxer 和 orchestrator;
-sandboxer 改变会直接重建 orchestrator 和 runtime。因此 connector 改变后,新选择的
-sandboxer 还会传递触发 runtime 重建。vmlinux 不因这些依赖变化而重建。若同一 unit
-已经发布了请求日期及修订号的 Preview,之后依赖再次改变,流程保持 deferred。操作者可以
-通过 scanner 请求更大的修订号,例如
-`gh workflow run daily-preview.yml --ref main -f date=20260914.1`。控制器重新选择当前
-源码和依赖闭包并发布新 Tag,不会替换完整 Release。重复同一请求会恢复该次发布;定时扫描
-也会恢复清单中尚未完成的修订,直到下一个上海日期。修订号必须显式指定,不会自动递增。
-新发布组件必须与聚合的完整日期及修订号后缀一致;复用版本仍核验原始精确来源和依赖绑定。
+依赖选择比较 consumer 实际链接/内嵌的源码输入。独立 CLI 或文档变化不会无条件重建全部反向依赖。
+runtime 跟踪 accelerator flatten 库及 sandbox-init 输入；其他 Go consumer 跟踪链接库。
+复用的 Preview 保留原依赖版本绑定；若依赖版本元组不同，必须证明相关源码输入一致，不能跳过来源校验。
+vmlinux 不因这些依赖变化重建。同日同修订号已发布后再次需要重建时保持 deferred；可显式选择更大的修订号，
+例如 `gh workflow run daily-preview.yml --ref main -f date=20260914.1`。
+重复请求恢复相同发布，不覆盖完整 Release，不自动递增修订号。
+新发布组件与聚合使用相同日期/修订后缀，复用版本保留原精确来源。
 
 平台自身在所选分支上的代码变化同样会产生新的聚合 Preview,即使六个组件都复用。
 同一聚合版本的 workflow run 名同时绑定平台源码 SHA。只要任意匹配 run 仍在运行,即使
@@ -180,10 +177,23 @@ run 身份,不会用旧输入重跑或改写运行中清单。
 日期或修订号推进后,使用新选择的后缀发布重建结果。完整 Release 仍须通过原有的源码和
 依赖绑定校验。
 
+<a id="first-arm-initialization"></a>
+### 首次 ARM 初始化
+
+公开目标实现与四组件授权切换完成后，显式派发 `daily-preview-branch.yml`，使用已有的精确
+`platform_ref`、`platform_sha`、`date` 输入，并设 `initialize_arm=true`。`INITIALIZE_ARM` 默认 false。
+选择合法的新 Preview 日期/修订号；历史 AMD64-only unit 使用新版本，从同一精确源码/依赖元组构建两个 target。
+缺少维护源码分支时延后，不虚构替代版本。
+
+聚合只要求当前声明的 x86 与 ARM 原生非 KVM profile，不等待 ARM KVM 同等覆盖。
+发布后普通 PR/Daily 使用该精确基线；不会修改历史 tag/资产/SHA256SUMS，不隐式初始化或回退全源码构建。
+新 Stable 同样需要选择双架构 unit 的新版本，历史 Stable 保持原样。
+
 ## 5. 残缺发布恢复
 
-完整组件 Release 必须是非 draft、prerelease 状态与 Tag 一致,只包含约定 archive 和
-`SHA256SUMS`,且两个资产都处于 uploaded 状态。完整聚合 Release 必须满足八资产契约。
+完整组件 Release 必须非 draft、prerelease 状态与 Tag 一致，且精确约定的归档与 `SHA256SUMS` 都已 uploaded。
+历史 AMD64-only 组件/聚合保留两项/八项契约，新双架构发布使用三项/十四项契约。ARM 集合残缺仍是残缺；
+旧 AMD64-only 发布不因初始化被重判为损坏或删除。
 
 选择器仅把完整 Release 的 Tag 当作候选。残缺状态不让整条 Daily schedule 失败:
 
@@ -291,19 +301,21 @@ make test-ci-tools
 
 ## 8. 发行资产验证
 
-每个普通组件 Release 精确包含组件 archive 和 `SHA256SUMS`。runtime、vmlinux 使用各自
-独立 archive 名。聚合 Release 精确包含 platform archive、六个原样复制的组件 archive
-和统一 `SHA256SUMS`,共八项显式资产。
+每个新组件 Release 包含 x86_64、aarch64 两个 archive 与 `SHA256SUMS`。
+runtime、vmlinux 保留独立包名。新 aggregate 包含架构无关的 platform 包、十二个原样组件包及统一
+`SHA256SUMS`，共十四项资产。历史 AMD64-only 组件/聚合仍按两项/八项资产识别，绝不追加 ARM 文件或改写校验和。
 
 不发布项目生成的 release metadata JSON,也不重复上传 GitHub 自动提供的源码归档。
 版本选择 YAML 只在仓库维护,既不是 Release 资产,也不进入 platform 包。
 组件 archive 不携带 `docs/` 或 `test/e2e/`;aggregate prepare 从所选组件源码 Tag 收集,
 统一写入 platform archive(§8.1)。
 
-组件工作流在选定源码 SHA 上运行组件构建和测试。聚合 prepare 下载清单指定的六个完整
-Release,校验 GitHub size/digest、组件 SHA-256、包内路径与跨包覆盖,生成确定性 platform
-包。随后发行资产验证在真实 KVM runner 解压同一个短期 artifact,执行五个组件 owner
-套件及平台组合套件,共六个 owner 入口。只有该验证成功,聚合 publish job 才能创建 Tag 和 Release。
+组件原生/ARM 交叉构建在两个独立 x86 job 执行，复用相同精确源码与依赖版本，校验后原样组装双架构包。
+依赖 Release 必须公开、完整并解析为轻量 tag 的精确 commit，build checkout 不保留凭据。
+聚合 prepare 下载六个所选 Release，校验 API size/digest、SHA-256、路径、归属与跨包覆盖，并生成 platform 包。
+暂存字节通过共享的每架构 helper build → prepare → E2E 原语：x86 在真实 KVM runner 跑六个 owner；
+ARM 原生运行预先声明的 accelerator/guest-runtime 非 KVM 子集。源码检查是独立必需 job。
+publish 必须收齐两个成功结果，在 `kuasar-integration-validation` 绑定 profile、源码身份和资产摘要，原样上传归档。
 
 Preview、维护分支 Stable 和主线 Stable 使用相同资产与发行资产验证门禁;差别只在发行状态与
 Latest 策略。

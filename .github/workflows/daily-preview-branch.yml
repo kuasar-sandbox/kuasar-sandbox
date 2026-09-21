@@ -4,6 +4,11 @@ run-name: Daily preview ${{ inputs.platform_ref }}@${{ inputs.platform_sha }} fo
 on:
   workflow_dispatch:
     inputs:
+      initialize_arm:
+        description: Explicit first ARM initialization using new unit versions; never changes historical assets
+        required: false
+        default: false
+        type: boolean
       platform_ref:
         description: Exact maintained platform branch
         required: true
@@ -26,6 +31,7 @@ concurrency:
 
 jobs:
   converge:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     runs-on: ubuntu-latest
     timeout-minutes: 55
     steps:
@@ -80,6 +86,7 @@ jobs:
           PLATFORM_REF: ${{ inputs.platform_ref }}
           PLATFORM_SHA: ${{ inputs.platform_sha }}
           PREVIEW_DATE: ${{ inputs.date }}
+          INITIALIZE_ARM: ${{ inputs.initialize_arm }}
           PREVIEW_POLL_SECONDS: "120"
           PREVIEW_WAIT_SECONDS: "3000"
         run: python3 control/release/preview_coordinator.py

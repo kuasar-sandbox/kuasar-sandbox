@@ -51,12 +51,18 @@ def main() -> None:
     if aggregate != version:
         coordinator.fail(f"release.yaml selects {aggregate}, not {version}")
 
+    historical_aggregate = coordinator.platform_release(version).complete
     plans: dict[str, coordinator.Plan] = {}
     for unit in coordinator.UNITS:
         tag = configured[unit.name]
         state = coordinator.RepositoryState(unit)
         status = state.status(tag)
         if status.complete and status.tag_sha is not None:
+            if not historical_aggregate and not coordinator.has_arm_archive(unit.name, tag, status):
+                raise coordinator.Deferred(
+                    f"{unit.name} {tag} is a valid historical AMD64 release; "
+                    "select a new dual-architecture unit version before publishing a new Stable aggregate"
+                )
             plans[unit.name] = coordinator.Plan(
                 unit, tag, None, status.tag_sha, tag, tag, "fixed"
             )
