@@ -1,81 +1,30 @@
-name: Reusable Integration E2E
-
-on:
-  workflow_call:
-    inputs:
-      mode:
-        description: source or exact-assets
-        required: true
-        type: string
-      candidate_repository:
-        description: Repository whose source candidate is under test
-        required: false
-        default: ""
-        type: string
-      pull_request_number:
-        description: Pull request whose integration commit is under test
-        required: false
-        default: "0"
-        type: string
-      candidate_sha:
-        description: Exact source integration commit
-        required: false
-        default: ""
-        type: string
-      base_sha:
-        description: Integration commit first parent
-        required: false
-        default: ""
-        type: string
-      base_ref:
-        description: Exact target branch of the pull request under test
-        required: false
-        default: ""
-        type: string
-      head_sha:
-        description: Integration commit second parent
-        required: false
-        default: ""
-        type: string
-      companion_candidates:
-        description: Resolved exact companion PR integration records for source mode
-        required: false
-        default: "[]"
-        type: string
-      release_version:
-        description: Aggregate release-v* version for exact-assets mode
-        required: false
-        default: ""
-        type: string
-      release_bundle_artifact:
-        description: Current-run artifact containing the exact aggregate bundle
-        required: false
-        default: ""
-        type: string
-      platform_source_sha:
-        description: Exact platform selection source for exact-assets mode
-        required: false
-        default: ""
-        type: string
-
+# Retired by #129 after the first exact dual-architecture baseline is published.
+# This is the existing source flow during rollout, with Public admission and no App key.
+name: Reusable Source Integration During Artifact Rollout
 permissions:
   contents: read
   pull-requests: read
-
 concurrency:
   group: integration-${{ inputs.mode }}-${{ inputs.candidate_repository || inputs.release_version }}-${{ inputs.candidate_sha || github.run_id }}
   cancel-in-progress: true
-
 jobs:
-  resolve:
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+  e2e:
+    name: ${{ inputs.mode == 'source' && 'e2e' || format('e2e [{0}]', matrix.shard) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [source]
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    outputs:
-      framework_sha: ${{ steps.plan.outputs.framework_sha }}
-      artifact: ${{ steps.plan.outputs.artifact }}
+    timeout-minutes: 180
     env:
-      INTEGRATION_MODE: ${{ inputs.mode }}
+      TARGET_ARCH: x86_64
+      KUASAR_HOSTED: 'true'
+      KUASAR_CI_DIR: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}
+      KUASAR_CI_TIMINGS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/timings.tsv
+      KUASAR_NATIVE_CACHE_METRICS: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/native-cache.tsv
+      KUASAR_REVISION_MANIFEST: ${{ github.workspace }}/ci-metrics/${{ github.run_id }}-${{ github.run_attempt }}/revisions.tsv
+      KUASAR_SOURCE_CACHE_MAX_ENTRIES: '32'
+      KUASAR_NATIVE_CACHE_MAX_ENTRIES: '4'
       CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
       CANDIDATE_PR: ${{ inputs.pull_request_number }}
       CANDIDATE_SHA: ${{ inputs.candidate_sha }}
@@ -86,145 +35,769 @@ jobs:
       RELEASE_VERSION: ${{ inputs.release_version }}
       RELEASE_BUNDLE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
       PLATFORM_SOURCE_SHA: ${{ inputs.platform_source_sha }}
+      KUASAR_E2E_SHARD: ${{ matrix.shard }}
     steps:
-      - name: Check out exact trusted framework
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kuasar-sandbox/kuasar-sandbox
-          ref: ${{ job.workflow_sha }}
-          path: framework
-          persist-credentials: false
+      - name: Check standard image archive transport
+        run: |
+          set -euo pipefail
+          # Needed to materialize the trusted bootstrap from the archive API.
+          for tool in bash curl jq tar awk sort grep mktemp; do
+            command -v "$tool" >/dev/null || { echo "missing archive transport: $tool" >&2; exit 1; }
+          done
       - name: Validate reusable workflow request
         env:
           TRUSTED_WORKFLOW_REPOSITORY: ${{ job.workflow_repository }}
           TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
-        run: bash framework/ci/integration/validate-request.sh
-      - name: Validate exact source admission
-        if: inputs.mode == 'source'
+        run: |
+          [ "${{ inputs.mode }}" = source ] || { echo "Aggregate initialization uses integration-artifacts.yml" >&2; exit 1; }
+          set -euo pipefail
+          [ "$TRUSTED_WORKFLOW_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ] \
+            || { echo "Integration E2E implementation must come from kuasar-sandbox/kuasar-sandbox" >&2; exit 1; }
+          [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          case "${{ inputs.mode }}" in
+            source)
+              [ "$GITHUB_EVENT_NAME" = pull_request_target ] \
+                || { echo "source Integration E2E requires pull_request_target" >&2; exit 1; }
+              [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$ ]]
+              for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do
+                value=${!variable}
+                [[ "$value" =~ ^[0-9a-f]{40}$ ]] \
+                  || { echo "$variable must be a full lowercase commit SHA" >&2; exit 1; }
+              done
+              [[ "$CANDIDATE_BASE_REF" = main \
+                || "$CANDIDATE_BASE_REF" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]] \
+                || { echo "CANDIDATE_BASE_REF must be main or release/vMAJOR.MINOR.x" >&2; exit 1; }
+              [[ "$CANDIDATE_PR" =~ ^[1-9][0-9]*$ ]]
+              jq -e --arg primary "$CANDIDATE_REPOSITORY" '
+                type == "array"
+                and length <= 5
+                and ([.[].repository] | length == (unique | length))
+                and all(.[];
+                  (keys == ["base_ref", "base_sha", "candidate_sha", "head_sha", "pull_request_number", "repository"])
+                  and (.repository | test("^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$"))
+                  and .repository != $primary
+                  and (.pull_request_number | type == "number" and . >= 1 and . == floor)
+                  and (.candidate_sha | type == "string" and test("^[0-9a-f]{40}$"))
+                  and (.base_sha | type == "string" and test("^[0-9a-f]{40}$"))
+                  and (.base_ref == "main" or (.base_ref | test("^release/v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.x$")))
+                  and (.head_sha | type == "string" and test("^[0-9a-f]{40}$"))
+                )
+              ' <<< "$COMPANION_CANDIDATES" >/dev/null \
+                || { echo "companion_candidates is not a valid exact source set" >&2; exit 1; }
+              jq -e \
+                --arg repository "$CANDIDATE_REPOSITORY" \
+                --argjson number "$CANDIDATE_PR" \
+                --arg base "$CANDIDATE_BASE_SHA" \
+                --arg base_ref "$CANDIDATE_BASE_REF" \
+                --arg head "$CANDIDATE_HEAD_SHA" '
+                  .repository.full_name == $repository
+                  and .pull_request.number == $number
+                  and .pull_request.state == "open"
+                  and .pull_request.draft == false
+                  and .pull_request.base.ref == $base_ref
+                  and .pull_request.base.repo.full_name == $repository
+                  and .pull_request.base.sha == $base
+                  and .pull_request.head.sha == $head
+                ' "$GITHUB_EVENT_PATH" >/dev/null \
+                || { echo "pull_request_target inputs do not match the admitted event" >&2; exit 1; }
+              ;;
+            exact-assets)
+              [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] \
+                || { echo "exact-assets Integration E2E requires workflow_dispatch" >&2; exit 1; }
+              [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]]
+              [[ "$RELEASE_BUNDLE_ARTIFACT" =~ ^aggregate-stage-release-v[0-9]+\.[0-9]+\.[0-9]+(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?-[0-9]+$ ]]
+              [[ "$PLATFORM_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+              ;;
+            *) echo "mode must be source or exact-assets" >&2; exit 1 ;;
+          esac
+      - name: Initialize CI metadata
+        run: |
+          set -euo pipefail
+          rm -rf "${KUASAR_CI_DIR%/*}"
+          mkdir -p "$KUASAR_CI_DIR"
+          printf 'mode\tcandidate_repository\tpull_request\tcandidate_sha\tbase_sha\tbase_ref\thead_sha\trelease_version\n' \
+            > "$KUASAR_CI_DIR/run.tsv"
+          printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+            "${{ inputs.mode }}" "$CANDIDATE_REPOSITORY" "$CANDIDATE_PR" "$CANDIDATE_SHA" \
+            "$CANDIDATE_BASE_SHA" "$CANDIDATE_BASE_REF" "$CANDIDATE_HEAD_SHA" "$RELEASE_VERSION" \
+            >> "$KUASAR_CI_DIR/run.tsv"
+          if [ "${{ inputs.mode }}" = source ]; then
+            printf 'repository\tpull_request\tcandidate_sha\tbase_sha\tbase_ref\thead_sha\trole\n' \
+              > "$KUASAR_CI_DIR/source-set.tsv"
+            printf '%s\t%s\t%s\t%s\t%s\t%s\tcandidate\n' \
+              "$CANDIDATE_REPOSITORY" "$CANDIDATE_PR" "$CANDIDATE_SHA" \
+              "$CANDIDATE_BASE_SHA" "$CANDIDATE_BASE_REF" "$CANDIDATE_HEAD_SHA" \
+              >> "$KUASAR_CI_DIR/source-set.tsv"
+            jq -r '.[] | [.repository, .pull_request_number, .candidate_sha,
+              .base_sha, .base_ref, .head_sha, "companion"] | @tsv' \
+              <<< "$COMPANION_CANDIDATES" >> "$KUASAR_CI_DIR/source-set.tsv"
+          fi
+      - name: Materialize exact platform sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_REPOSITORY: ${{ job.workflow_repository }}
+          TRUSTED_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          archive_tmp=""
+          trap 'rm -f "${archive_tmp:-}"' EXIT
+
+          materialize() {
+            local repository=$1 sha=$2 destination=$3
+            local entry_type
+            local -a archive_roots=()
+            [[ "$repository" =~ ^kuasar-sandbox/[a-z0-9-]+$ ]]
+            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+            archive_tmp=$(mktemp "$RUNNER_TEMP/kuasar-platform.XXXXXX.tar.gz")
+            curl --fail --show-error --silent --location \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 120 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$GITHUB_API_URL/repos/$repository/tarball/$sha" \
+              -o "$archive_tmp"
+
+            mapfile -t archive_roots < <(tar -tzf "$archive_tmp" \
+              | awk -F/ 'NF { print $1 }' | sort -u)
+            [ "${#archive_roots[@]}" -eq 1 ] && [ -n "${archive_roots[0]}" ] \
+              || { echo "platform archive must contain one top-level directory" >&2; exit 1; }
+            if tar -tzf "$archive_tmp" \
+              | grep -Eq '(^/|(^|/)\.\.(/|$)|(^|/)\.(/|$))'; then
+              echo "platform archive contains an unsafe path" >&2
+              exit 1
+            fi
+            entry_type=$(tar -tvzf "$archive_tmp" | awk '
+              substr($1, 1, 1) !~ /^[-d]$/ && bad == "" { bad = substr($1, 1, 1) }
+              END { print bad }
+            ')
+            [ -z "$entry_type" ] \
+              || { echo "platform archive contains unsupported entry type $entry_type" >&2; exit 1; }
+
+            rm -rf "$destination"
+            install -d -m 0755 "$destination"
+            tar -xzf "$archive_tmp" --strip-components=1 \
+              --no-same-owner --no-same-permissions -C "$destination"
+            rm -f "$archive_tmp"
+            archive_tmp=""
+          }
+
+          materialize "$TRUSTED_REPOSITORY" "$TRUSTED_SHA" trusted/platform
+          if [ "${{ inputs.mode }}" = source ]; then
+            platform_source_sha=${{ job.workflow_sha }}
+            if [ "$CANDIDATE_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ]; then
+              platform_source_sha=$CANDIDATE_SHA
+            else
+              companion_platform_sha=$(jq -r '
+                first(.[] | select(.repository == "kuasar-sandbox/kuasar-sandbox") | .candidate_sha) // ""
+              ' <<< "$COMPANION_CANDIDATES")
+              if [ -n "$companion_platform_sha" ]; then
+                platform_source_sha=$companion_platform_sha
+              fi
+            fi
+            if [ "$platform_source_sha" = "$TRUSTED_SHA" ]; then
+              rm -rf src/platform
+              install -d -m 0755 src/platform
+              cp -a trusted/platform/. src/platform/
+            else
+              materialize kuasar-sandbox/kuasar-sandbox "$platform_source_sha" src/platform
+            fi
+          elif [ "$PLATFORM_SOURCE_SHA" = "$TRUSTED_SHA" ]; then
+            rm -rf src/platform
+            install -d -m 0755 src/platform
+            cp -a trusted/platform/. src/platform/
+          else
+            materialize kuasar-sandbox/kuasar-sandbox \
+              "$PLATFORM_SOURCE_SHA" src/platform
+          fi
+      - name: Bootstrap standard runner from trusted tooling
+        env:
+          BOOTSTRAP_PROFILE: ${{ inputs.mode }}
+        run: bash trusted/platform/ci/hosted/bootstrap.sh --profile "$BOOTSTRAP_PROFILE"
+      - name: Check hosted CI regression contracts
+        run: python3 trusted/platform/ci/hosted/test-workflows.py
+      - name: Validate pull request integration set
+        if: inputs.mode == 'source' && inputs.pull_request_number != '0'
         env:
           GH_TOKEN: ${{ github.token }}
           CALLER_TOKEN: ${{ github.token }}
-        run: bash framework/ci/integration/validate-source-set.sh
-      - name: Download staged aggregate
-        if: inputs.mode == 'exact-assets'
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ inputs.release_bundle_artifact }}
-          path: aggregate-stage
-      - name: Resolve exact immutable plan
-        id: plan
-        env:
-          GH_TOKEN: ${{ github.token }}
-          FRAMEWORK_SHA: ${{ job.workflow_sha }}
         run: |
           set -euo pipefail
-          options=()
-          if [ "$INTEGRATION_MODE" = exact-assets ]; then options+=(--stage aggregate-stage); fi
-          python3 -B framework/ci/integration/resolve-artifacts.py \
-            --framework-sha "$FRAMEWORK_SHA" --output plan.json "${options[@]}"
-          {
-            echo "framework_sha=$FRAMEWORK_SHA"
-            echo "artifact=integration-plan-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          } >> "$GITHUB_OUTPUT"
-      - name: Upload resolved plan
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: ${{ steps.plan.outputs.artifact }}
-          path: plan.json
-          if-no-files-found: error
-          retention-days: 7
+          source_api_get() {
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com$1"
+          }
 
-  x86_64:
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: resolve
-    uses: ./.github/workflows/integration-architecture.yml
-    with:
-      arch: x86_64
-      framework_sha: ${{ needs.resolve.outputs.framework_sha }}
-      plan_artifact: ${{ needs.resolve.outputs.artifact }}
-      stage_artifact: ${{ inputs.release_bundle_artifact }}
+          caller_api_get() {
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $CALLER_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com$1"
+          }
 
-  aarch64:
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: resolve
-    uses: ./.github/workflows/integration-architecture.yml
-    with:
-      arch: aarch64
-      framework_sha: ${{ needs.resolve.outputs.framework_sha }}
-      plan_artifact: ${{ needs.resolve.outputs.artifact }}
-      stage_artifact: ${{ inputs.release_bundle_artifact }}
+          validate_primary() {
+            local response pr
+            response=$(source_api_get "/repos/$CANDIDATE_REPOSITORY/git/commits/$CANDIDATE_SHA")
+            pr=$(caller_api_get "/repos/$CANDIDATE_REPOSITORY/pulls/$CANDIDATE_PR")
+            jq -e \
+              --arg candidate "$CANDIDATE_SHA" \
+              --arg base "$CANDIDATE_BASE_SHA" \
+              --arg head "$CANDIDATE_HEAD_SHA" '
+                .sha == $candidate
+                and (.parents | length) == 2
+                and .parents[0].sha == $base
+                and .parents[1].sha == $head
+              ' <<< "$response" >/dev/null \
+              && jq -e \
+                --arg repository "$CANDIDATE_REPOSITORY" \
+                --argjson number "$CANDIDATE_PR" \
+                --arg candidate "$CANDIDATE_SHA" \
+                --arg base "$CANDIDATE_BASE_SHA" \
+                --arg base_ref "$CANDIDATE_BASE_REF" \
+                --arg head "$CANDIDATE_HEAD_SHA" '
+                  .number == $number
+                  and .state == "open"
+                  and .draft == false
+                  and .base.ref == $base_ref
+                  and .base.repo.full_name == $repository
+                  and .base.sha == $base
+                  and .head.sha == $head
+                  and .merge_commit_sha == $candidate
+                ' <<< "$pr" >/dev/null
+          }
 
-  source-checks:
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: resolve
-    runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kuasar-sandbox/kuasar-sandbox
-          ref: ${{ needs.resolve.outputs.framework_sha }}
-          path: framework
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ needs.resolve.outputs.artifact }}
-          path: plan
-      - name: Bootstrap required source checks
-        run: bash framework/ci/hosted/bootstrap.sh --profile source
-      - name: Run required source and UFFD checks
-        run: |
-          taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
-          python3 -B framework/ci/integration/run-source-checks.py \
-            --plan plan/plan.json --sources source-checks --output source-result.json
-      - name: Upload source check result
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: integration-source-result-${{ github.run_id }}-${{ github.run_attempt }}
-          path: source-result.json
-          if-no-files-found: error
-          retention-days: 7
+          validate_companion() {
+            local record=$1 repository number candidate base base_ref head
+            local merge_ref head_ref commit pr base_branch branches snapshot
+            repository=$(jq -r '.repository' <<< "$record")
+            number=$(jq -r '.pull_request_number' <<< "$record")
+            candidate=$(jq -r '.candidate_sha' <<< "$record")
+            base=$(jq -r '.base_sha' <<< "$record")
+            base_ref=$(jq -r '.base_ref' <<< "$record")
+            head=$(jq -r '.head_sha' <<< "$record")
+            merge_ref=$(source_api_get "/repos/$repository/git/ref/pull/$number/merge") \
+              || return 1
+            head_ref=$(source_api_get "/repos/$repository/git/ref/pull/$number/head") \
+              || return 1
+            commit=$(source_api_get "/repos/$repository/git/commits/$candidate") \
+              || return 1
+            pr=$(source_api_get "/repos/$repository/pulls/$number") \
+              || return 1
+            base_branch=$(source_api_get "/repos/$repository/git/ref/heads/$base_ref") \
+              || return 1
+            branches=$(source_api_get "/repos/$repository/commits/$head/branches-where-head") \
+              || return 1
+            snapshot=$(jq -cn \
+              --argjson merge "$merge_ref" \
+              --argjson head_ref "$head_ref" \
+              --argjson commit "$commit" \
+              --argjson pr "$pr" \
+              --argjson base_branch "$base_branch" \
+              --argjson branches "$branches" \
+              '{merge: $merge, head_ref: $head_ref, commit: $commit,
+                pr: $pr, base_branch: $base_branch, branches: $branches}')
+            jq -e \
+              --arg repository "$repository" \
+              --argjson number "$number" \
+              --arg merge_ref "refs/pull/$number/merge" \
+              --arg head_ref "refs/pull/$number/head" \
+              --arg candidate "$candidate" \
+              --arg base "$base" \
+              --arg base_ref "$base_ref" \
+              --arg head "$head" '
+                .merge.ref == $merge_ref
+                and .merge.object.sha == $candidate
+                and .head_ref.ref == $head_ref
+                and .head_ref.object.sha == $head
+                and .commit.sha == $candidate
+                and (.commit.parents | length) == 2
+                and .commit.parents[0].sha == $base
+                and .commit.parents[1].sha == $head
+                and .pr.number == $number
+                and .pr.state == "open"
+                and .pr.draft == false
+                and .pr.base.ref == $base_ref
+                and .pr.base.repo.full_name == $repository
+                and .pr.base.sha == $base
+                and .pr.head.sha == $head
+                and .base_branch.object.sha == $base
+                and (.branches | type == "array" and length > 0)
+              ' <<< "$snapshot" >/dev/null
+          }
 
-  results:
-    if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: [resolve, x86_64, aarch64, source-checks]
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    steps:
-      - name: Require every selected stage
+          validate_primary \
+            || { echo "candidate no longer matches the exact open pull request" >&2; exit 1; }
+          while IFS= read -r companion; do
+            validate_companion "$companion" \
+              || { echo "companion no longer matches the exact open pull request" >&2; exit 1; }
+          done < <(jq -c '.[]' <<< "$COMPANION_CANDIDATES")
+      - name: Assemble the five component source repositories
         env:
-          RESOLVE_RESULT: ${{ needs.resolve.result }}
-          X86_RESULT: ${{ needs.x86_64.result }}
-          ARM_RESULT: ${{ needs.aarch64.result }}
-          SOURCE_RESULT: ${{ needs.source-checks.result }}
+          GH_TOKEN: ${{ github.token }}
         run: |
-          [ "$RESOLVE_RESULT" = success ] && [ "$X86_RESULT" = success ] \
-            && [ "$ARM_RESULT" = success ] && [ "$SOURCE_RESULT" = success ]
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: kuasar-sandbox/kuasar-sandbox
-          ref: ${{ needs.resolve.outputs.framework_sha }}
-          path: framework
-          persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: ${{ needs.resolve.outputs.artifact }}
-          path: plan
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: integration-architecture-result-*-${{ github.run_id }}-${{ github.run_attempt }}
-          path: results
-          merge-multiple: true
-      - name: Bind both architecture results to the exact plan
+          set -euo pipefail
+          repos=(accelerator connector guest-runtime orchestrator sandboxer)
+          archive_tmp=""
+          checksum_tmp=""
+          zip_tmp=""
+          zip_stage=""
+          trap 'rm -f "${archive_tmp:-}" "${checksum_tmp:-}" "${zip_tmp:-}"; rm -rf "${zip_stage:-}"' EXIT
+          started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          started_ns=$(date +%s%N)
+          printf 'repository\trequested_ref\tresolved_sha\trole\n' > "$KUASAR_REVISION_MANIFEST"
+          printf 'repository\tresolved_sha\tstatus\tsha256\n' > "$KUASAR_CI_DIR/source-cache.tsv"
+
+          platform_base_ref=main
+          if [ "$CANDIDATE_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ]; then
+            platform_base_ref=$CANDIDATE_BASE_REF
+          else
+            companion_platform=$(jq -c '
+              first(.[] | select(.repository == "kuasar-sandbox/kuasar-sandbox")) // empty
+            ' <<< "$COMPANION_CANDIDATES")
+            if [ -n "$companion_platform" ]; then
+              platform_base_ref=$(jq -r '.base_ref' <<< "$companion_platform")
+            fi
+          fi
+          [[ "$platform_base_ref" = main \
+            || "$platform_base_ref" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]]
+
+          platform_requested_ref=$platform_base_ref
+          platform_resolved_sha=${{ job.workflow_sha }}
+          platform_role=sibling
+          if [ "$CANDIDATE_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ]; then
+            platform_requested_ref="$CANDIDATE_SHA"
+            platform_resolved_sha="$CANDIDATE_SHA"
+            platform_role=candidate
+          else
+            companion_platform=$(jq -c '
+              first(.[] | select(.repository == "kuasar-sandbox/kuasar-sandbox")) // empty
+            ' <<< "$COMPANION_CANDIDATES")
+            if [ -n "$companion_platform" ]; then
+              platform_requested_ref=$(jq -r '.candidate_sha' <<< "$companion_platform")
+              platform_resolved_sha=$platform_requested_ref
+              platform_role=companion
+            fi
+          fi
+          [[ "$platform_resolved_sha" =~ ^[0-9a-f]{40}$ ]]
+          printf 'kuasar-sandbox/kuasar-sandbox\t%s\t%s\t%s\n' \
+            "$platform_requested_ref" "$platform_resolved_sha" "$platform_role" \
+            >> "$KUASAR_REVISION_MANIFEST"
+
+          source_api_get() {
+            curl --fail --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com$1"
+          }
+
+          source_api_get_optional() {
+            local path=$1 response status
+            response=$(mktemp "$RUNNER_TEMP/kuasar-ref.XXXXXX")
+            status=$(curl --show-error --silent \
+              --retry 4 --retry-all-errors --connect-timeout 10 --max-time 60 \
+              --output "$response" --write-out '%{http_code}' \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "https://api.github.com$path") \
+              || { rm -f "$response"; return 1; }
+            case "$status" in
+              200) cat "$response"; rm -f "$response"; return 0 ;;
+              404) rm -f "$response"; return 2 ;;
+              *)
+                cat "$response" >&2
+                rm -f "$response"
+                echo "GitHub API returned HTTP $status for $path" >&2
+                return 1
+                ;;
+            esac
+          }
+
+          daily_version=$(awk '$1 == "version:" { print $2; exit }' \
+            src/platform/releases/daily-preview.yaml)
+          daily_suffix=$(awk '$1 == "preview_version:" { print $2; exit }' \
+            src/platform/releases/daily-preview.yaml)
+          [[ "$daily_version" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$daily_suffix" =~ ^preview\.[0-9]{8}(\.[1-9][0-9]*)?$ ]]
+
+          declare -A configured_versions=()
+          while IFS=$'\t' read -r unit configured; do
+            case "$unit" in
+              accelerator|connector|sandboxer|orchestrator|runtime|vmlinux) ;;
+              *) echo "unexpected release unit in Daily manifest: $unit" >&2; exit 1 ;;
+            esac
+            [ -n "$configured" ] || { echo "Daily manifest has an empty $unit selection" >&2; exit 1; }
+            configured_versions["$unit"]=$configured
+          done < <(trusted/platform/release/selection.py src/platform \
+            "$daily_version-$daily_suffix")
+          [ "${#configured_versions[@]}" -eq 6 ] \
+            || { echo "Daily manifest did not resolve exactly six release units" >&2; exit 1; }
+
+          resolve_unit() {
+            local unit=$1 repository=$2 configured=$3 source_ref=$4 branch commit status
+            if branch=$(source_api_get_optional \
+              "/repos/kuasar-sandbox/$repository/git/ref/heads/$source_ref"); then
+              commit=$(jq -r '.object.sha // ""' <<< "$branch")
+            else
+              status=$?
+              [ "$status" -eq 2 ] \
+                || { echo "cannot resolve $repository $source_ref" >&2; return 1; }
+              [ "$source_ref" != main ] \
+                || { echo "component main branch is unavailable: $repository" >&2; return 1; }
+              commit=$(source_api_get \
+                "/repos/kuasar-sandbox/$repository/commits/$configured" \
+                | jq -r '.sha // ""')
+              source_ref=$configured
+            fi
+            [[ "$commit" =~ ^[0-9a-f]{40}$ ]] \
+              || { echo "invalid source commit for $unit" >&2; return 1; }
+            printf '%s\t%s\n' "$source_ref" "$commit"
+          }
+
+          declare -A unit_repositories=(
+            [accelerator]=accelerator [connector]=connector [sandboxer]=sandboxer
+            [orchestrator]=orchestrator [runtime]=guest-runtime [vmlinux]=guest-runtime
+          )
+          declare -A unit_requested_refs=()
+          declare -A unit_resolved_shas=()
+          printf 'unit\trepository\tconfigured_version\trequested_ref\tresolved_sha\n' \
+            > "$KUASAR_CI_DIR/release-units.tsv"
+          for unit in accelerator connector sandboxer orchestrator runtime vmlinux; do
+            configured=${configured_versions[$unit]}
+            source_ref=$(trusted/platform/release/preview-selection.py source-ref \
+              "$platform_base_ref" "$unit" "$configured")
+            IFS=$'\t' read -r requested_ref resolved_sha < <(resolve_unit "$unit" \
+              "${unit_repositories[$unit]}" "$configured" "$source_ref")
+            unit_requested_refs["$unit"]=$requested_ref
+            unit_resolved_shas["$unit"]=$resolved_sha
+            printf '%s\tkuasar-sandbox/%s\t%s\t%s\t%s\n' \
+              "$unit" "${unit_repositories[$unit]}" "$configured" \
+              "$requested_ref" "$resolved_sha" >> "$KUASAR_CI_DIR/release-units.tsv"
+          done
+
+          for repo in "${repos[@]}"; do
+            source_api_get "/repos/kuasar-sandbox/$repo" | jq -e --arg name "kuasar-sandbox/$repo" \
+              '.full_name == $name and .visibility == "public" and .private == false' >/dev/null \
+              || { echo "The rollout source lane only accepts Public dependencies" >&2; exit 1; }
+            case "$repo" in
+              accelerator|connector|sandboxer|orchestrator) unit=$repo ;;
+              guest-runtime) unit=runtime ;;
+              *) echo "unexpected component repository: $repo" >&2; exit 1 ;;
+            esac
+            requested_ref=${unit_requested_refs[$unit]}
+            resolved_sha=${unit_resolved_shas[$unit]}
+            role=sibling
+            if [ "kuasar-sandbox/$repo" = "$CANDIDATE_REPOSITORY" ]; then
+              if [ "$platform_base_ref" != main ] \
+                && [ "$CANDIDATE_BASE_REF" != "$requested_ref" ]; then
+                echo "candidate $CANDIDATE_REPOSITORY targets $CANDIDATE_BASE_REF, not selected $requested_ref" >&2
+                exit 1
+              fi
+              requested_ref="$CANDIDATE_SHA"
+              resolved_sha="$CANDIDATE_SHA"
+              role=candidate
+            else
+              companion_record=$(jq -c --arg repository "kuasar-sandbox/$repo" '
+                first(.[] | select(.repository == $repository)) // empty
+              ' <<< "$COMPANION_CANDIDATES")
+              if [ -n "$companion_record" ]; then
+                companion_base_ref=$(jq -r '.base_ref' <<< "$companion_record")
+                if [ "$platform_base_ref" != main ] \
+                  && [ "$companion_base_ref" != "$requested_ref" ]; then
+                  echo "companion kuasar-sandbox/$repo targets $companion_base_ref, not selected $requested_ref" >&2
+                  exit 1
+                fi
+                requested_ref=$(jq -r '.candidate_sha' <<< "$companion_record")
+                resolved_sha=$requested_ref
+                role=companion
+              fi
+            fi
+            [[ "$resolved_sha" =~ ^[0-9a-f]{40}$ ]]
+            printf 'kuasar-sandbox/%s\t%s\t%s\t%s\n' \
+              "$repo" "$requested_ref" "$resolved_sha" "$role" >> "$KUASAR_REVISION_MANIFEST"
+
+            source_dir="$KUASAR_SOURCE_CACHE_ROOT/$repo"
+            archive="$source_dir/$resolved_sha.tar.gz"
+            checksum="$archive.sha256"
+            lock="$source_dir/.cache.lock"
+            install -d -m 0755 "$source_dir"
+            exec {source_lock_fd}>"$lock"
+            flock "$source_lock_fd"
+            cache_status=hit
+            if ! [ -s "$archive" ] || ! [ -s "$checksum" ] \
+              || ! (cd "$source_dir" && sha256sum --quiet -c "$(basename "$checksum")") \
+              || ! tar -tzf "$archive" >/dev/null; then
+              cache_status=miss
+              archive_tmp="$archive.$$.tmp"
+              checksum_tmp="$checksum.$$.tmp"
+              zip_tmp="$archive.$$.zip.tmp"
+              zip_stage="$source_dir/.zip-stage.$$"
+              rm -f "$archive_tmp" "$checksum_tmp" "$zip_tmp"
+              rm -rf "$zip_stage"
+              if ! curl --fail --show-error --silent --location \
+                --retry 4 --retry-all-errors --connect-timeout 10 --max-time 120 \
+                -H "Accept: application/vnd.github+json" \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "X-GitHub-Api-Version: 2022-11-28" \
+                "https://api.github.com/repos/kuasar-sandbox/$repo/tarball/$resolved_sha" \
+                -o "$archive_tmp"; then
+                cache_status=miss-zip-fallback
+                rm -f "$archive_tmp"
+                curl --fail --show-error --silent --location \
+                  --retry 4 --retry-all-errors --connect-timeout 10 --max-time 120 \
+                  -H "Accept: application/vnd.github+json" \
+                  -H "Authorization: Bearer $GH_TOKEN" \
+                  -H "X-GitHub-Api-Version: 2022-11-28" \
+                  "https://api.github.com/repos/kuasar-sandbox/$repo/zipball/$resolved_sha" \
+                  -o "$zip_tmp"
+                install -d -m 0755 "$zip_stage"
+                unzip -q "$zip_tmp" -d "$zip_stage"
+                mapfile -d '' zip_roots < <(find "$zip_stage" -mindepth 1 -maxdepth 1 -print0)
+                [ "${#zip_roots[@]}" -eq 1 ] && [ -d "${zip_roots[0]}" ]
+                tar -czf "$archive_tmp" -C "$zip_stage" "$(basename "${zip_roots[0]}")"
+                rm -f "$zip_tmp"
+                rm -rf "$zip_stage"
+                zip_tmp=""
+                zip_stage=""
+              fi
+              tar -tzf "$archive_tmp" >/dev/null
+              archive_sha=$(sha256sum "$archive_tmp" | awk '{print $1}')
+              printf '%s  %s\n' "$archive_sha" "$(basename "$archive")" > "$checksum_tmp"
+              chmod a-w "$archive_tmp" "$checksum_tmp"
+              rm -f "$archive" "$checksum"
+              mv "$archive_tmp" "$archive"
+              mv "$checksum_tmp" "$checksum"
+              archive_tmp=""
+              checksum_tmp=""
+            fi
+            archive_sha=$(sha256sum "$archive" | awk '{print $1}')
+            touch "$archive" "$checksum"
+            trusted/platform/ci/integration/materialize-source.sh "$archive" "src/$repo"
+            flock -u "$source_lock_fd"
+            exec {source_lock_fd}>&-
+            printf '%s\t%s\t%s\t%s\n' "$repo" "$resolved_sha" "$cache_status" "$archive_sha" \
+              >> "$KUASAR_CI_DIR/source-cache.tsv"
+          done
+
+          elapsed=$(awk -v start="$started_ns" -v end="$(date +%s%N)" \
+            'BEGIN { printf "%.3f", (end - start) / 1000000000 }')
+          printf 'stage\tstarted_at\telapsed_seconds\tuser_seconds\tsystem_seconds\tcpu_percent\tmax_rss_kb\tfs_input\tfs_output\texit_code\n' \
+            > "$KUASAR_CI_TIMINGS"
+          printf 'workflow/assemble\t%s\t%s\tunavailable\tunavailable\tunavailable\tunavailable\tunavailable\tunavailable\t0\n' \
+            "$started_at" "$elapsed" >> "$KUASAR_CI_TIMINGS"
+      - name: Finalize source workspace
         run: |
-          python3 -B framework/ci/integration/artifacts.py results \
-            --plan plan/plan.json --results results > validation.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          set -euo pipefail
+          while IFS=$'\t' read -r repository _ resolved_sha _; do
+            repo=${repository#kuasar-sandbox/}
+            [ "$repo" = kuasar-sandbox ] && continue
+            source_dir="$KUASAR_SOURCE_CACHE_ROOT/$repo"
+            src/platform/ci/integration/source-cache-prune.sh \
+              "$source_dir" "$source_dir/$resolved_sha.tar.gz"
+          done < <(tail -n +2 "$KUASAR_REVISION_MANIFEST")
+          rm -f go.work go.work.sum src/go.work src/go.work.sum
+          cd src
+          go work init ./accelerator ./connector ./guest-runtime ./orchestrator ./sandboxer
+      - name: Attach job-local source caches and test tools
+        run: |
+          set -euo pipefail
+          for path in \
+            src/accelerator/build/tarball \
+            src/guest-runtime/native-deps/build/tarball \
+            src/sandboxer/native-deps/build/tarball
+          do
+            mkdir -p "$(dirname "$path")"
+            ln -sfn "$KUASAR_TARBALL_CACHE" "$path"
+          done
+          # make e2e-tools reuses environment tools or supplies missing test inputs.
+          # Never link the persistent runner's preinstalled tools on hosted.
+          tool_dir="$GITHUB_WORKSPACE/src/platform/build/e2e-tools/x86_64"
+          mkdir -p "$tool_dir"
+          echo "E2E_ZOT_BIN=${E2E_ZOT_BIN:-${ZOT_BIN:-$tool_dir/zot}}" >> "$GITHUB_ENV"
+          echo "E2E_VGW_BIN=${E2E_VGW_BIN:-${VGW_BIN:-$tool_dir/versitygw}}" >> "$GITHUB_ENV"
+      - name: Pull standard runner test images
+        run: |
+          set -euo pipefail
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          for image in $(bash ci/integration/source-owner.sh images "$owner"); do
+            timeout 3m docker pull "$image"
+          done
+      - name: Restore or build verified native artifacts
+        working-directory: src/platform
+        shell: bash
+        run: |
+          if [ "${KUASAR_HOSTED:-false}" = true ]; then
+            taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
+          fi
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          components="$(bash ci/integration/source-owner.sh native-components "$owner")"
+          if [ -z "$components" ]; then
+            echo "==> $owner source suite has no native-artifact dependency"
+            exit 0
+          fi
+          # shellcheck disable=SC2086 # helper emits fixed component words.
+          ci/native-cache/native-cache.sh restore-or-build $components
+      - name: Validate platform tooling
+        working-directory: src/platform
+        shell: bash
+        run: |
+          if [ "${KUASAR_HOSTED:-false}" = true ]; then
+            taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
+          fi
+          make -j3 test-ci-tools test-release-tools test-perf-tools
+      - name: Build and test source candidate
+        working-directory: src/platform
+        shell: bash
+        run: |
+          if [ "${KUASAR_HOSTED:-false}" = true ]; then
+            taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
+          fi
+          set -euo pipefail
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          bash ci/integration/source-owner.sh build "$owner"
+          if bash ci/integration/source-owner.sh needs-uffd "$owner"; then
+            make test-uffd-performance-gate
+          else
+            echo "==> UFFD gate not in $owner dependency closure"
+          fi
+
+          # Preserve the existing source entry until the first dual aggregate is
+          # validated. New owner revisions move these checks out of their E2E scripts;
+          # old revisions still execute them in the unchanged owner runner.
+          case "$owner" in
+            sandboxer) source_checks=(sandboxer) ;;
+            orchestrator) source_checks=(orchestrator) ;;
+            kuasar-sandbox) source_checks=(sandboxer orchestrator) ;;
+            *) source_checks=() ;;
+          esac
+          for source_owner in "${source_checks[@]}"; do
+            checker="../$source_owner/scripts/ci-source-checks.sh"
+            if [ -f "$checker" ]; then
+              TMPDIR=/var/tmp bash "$checker"
+            fi
+          done
+          fixture_env=()
+          if [[ "$owner" = orchestrator || "$owner" = kuasar-sandbox ]] \
+            && [ -f ../orchestrator/scripts/ci-e2e-build.sh ]; then
+            fixture_dir="$PWD/build/e2e-tools/x86_64"
+            bash ../orchestrator/scripts/ci-e2e-build.sh fixtures x86_64 "$fixture_dir"
+            fixture_env=(CUSTOM_PROXY_BIN="$fixture_dir/custom-proxy" TELEMETRY_GRPC_PROBE_BIN="$fixture_dir/telemetry-grpc-probe")
+          fi
+
+          runner="build/e2e-suite/test/e2e/$owner/run_all.sh"
+          if [ "$owner" = kuasar-sandbox ]; then
+            runner=build/e2e-suite/test/e2e/run_all.sh
+          fi
+          [ -x "$runner" ] \
+            || { echo "missing E2E runner for candidate owner $owner: $runner" >&2; exit 1; }
+
+          ci/integration/ci-timed.sh "e2e/$owner" env \
+            BIN="$PWD/bin/x86_64" \
+            ZOT_BIN="$E2E_ZOT_BIN" \
+            VGW_BIN="$E2E_VGW_BIN" \
+            "${fixture_env[@]}" bash "$runner"
+      - name: Run working-set performance smoke
+        working-directory: src/platform
+        env:
+          PERF_ITERS: '1'
+          PERF_OUT_DIR: ${{ env.KUASAR_CI_DIR }}/working-set-perf
+        run: |
+          owner="${CANDIDATE_REPOSITORY##*/}"
+          if ! bash ci/integration/source-owner.sh needs-working-set "$owner"; then
+            echo "==> working-set smoke not in $owner dependency closure"
+            exit 0
+          fi
+          ci/integration/ci-timed.sh perf/working-set-smoke env \
+            BIN="$PWD/bin/x86_64" \
+            PERF_ITERS="$PERF_ITERS" \
+            PERF_OUT_DIR="$PERF_OUT_DIR" \
+            bash test/perf/working-set-netns.sh test/perf/sandbox-perf-working-set.sh
+      - name: Stage revision and timing metadata
+        id: ci-metadata
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          upload_dir="$RUNNER_TEMP/ci-metadata-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          sudo rm -rf -- "$upload_dir"
+          mkdir -p "$upload_dir"
+          if sudo test -d "$KUASAR_CI_DIR"; then
+            unexpected=$(sudo find -P "$KUASAR_CI_DIR" -xdev ! -type d ! -type f -print -quit)
+            [ -z "$unexpected" ] || { echo "unsupported CI metadata entry: $unexpected" >&2; exit 1; }
+            sudo tar --one-file-system -C "$KUASAR_CI_DIR" -cf - . | tar --no-same-owner -C "$upload_dir" -xf -
+            chmod -R u+rwX "$upload_dir"
+          fi
+          echo "path=$upload_dir" >> "$GITHUB_OUTPUT"
+      - name: Upload revision and timing metadata
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: integration-validation-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            validation.json
-            plan/plan.json
-          if-no-files-found: error
-          retention-days: 7
+          name: ${{ inputs.mode == 'source' && format('ci-metadata-{0}-{1}', github.run_id, github.run_attempt) || format('ci-metadata-{0}-{1}-{2}', github.run_id, github.run_attempt, matrix.shard) }}
+          path: ${{ steps.ci-metadata.outputs.path }}
+          if-no-files-found: warn
+          retention-days: 30
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+'on':
+  workflow_call:
+    inputs:
+      mode:
+        description: source or exact-assets
+        required: true
+        type: string
+      candidate_repository:
+        description: Repository whose source candidate is under test
+        required: false
+        default: ''
+        type: string
+      pull_request_number:
+        description: Pull request whose integration commit is under test
+        required: false
+        default: '0'
+        type: string
+      candidate_sha:
+        description: Exact source integration commit
+        required: false
+        default: ''
+        type: string
+      base_sha:
+        description: Integration commit first parent
+        required: false
+        default: ''
+        type: string
+      base_ref:
+        description: Exact target branch of the pull request under test
+        required: false
+        default: ''
+        type: string
+      head_sha:
+        description: Integration commit second parent
+        required: false
+        default: ''
+        type: string
+      companion_candidates:
+        description: Resolved exact companion PR integration records for source mode
+        required: false
+        default: '[]'
+        type: string
+      release_version:
+        description: Aggregate release-v* version for exact-assets mode
+        required: false
+        default: ''
+        type: string
+      release_bundle_artifact:
+        description: Current-run artifact containing the exact aggregate bundle
+        required: false
+        default: ''
+        type: string
+      platform_source_sha:
+        description: Exact platform selection source for exact-assets mode
+        required: false
+        default: ''
+        type: string

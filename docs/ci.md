@@ -2,6 +2,8 @@
 
 # Continuous integration
 
+The rollout has two protected steps. The foundation installs the shared build/release primitives and validates new aggregates through `integration-artifacts.yml`. During first-baseline initialization, PRs retain the existing source flow on public standard runners, with required source checks and fixture compilation before E2E and no App key in candidate jobs. After all coordinated component changes and the first declared-profile dual aggregate pass, PR #129 replaces that source entry with the artifact flow and removes the temporary workflow alias. This is an explicit rollout stage, never an automatic fallback when an artifact baseline is missing.
+
 ## 1. Public caller and trusted control
 
 The platform owns `ci-entry.yml`, `integration-tests.yml` and `integration-architecture.yml`. Component PR wrappers keep `ci-entry.yml@main`; GitHub resolves that trusted framework once per run. Every hosted job, including admission, coordination, publication, finalization and cleanup, checks **the actual event repository before runner allocation**:

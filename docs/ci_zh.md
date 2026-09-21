@@ -2,6 +2,8 @@
 
 # 持续集成
 
+上线分为两个受保护步骤：先合入共享构建/发布原语，新聚合制品通过 `integration-artifacts.yml` 验证。初始化首个基线期间，PR 沿用公开标准 runner 上的既有源码流程，必需源码检查和 fixture 编译位于 E2E 之前，候选执行 job 不接收 App 私钥。配套组件变更和首个双架构聚合通过既定 profile 后，由 PR #129 切换默认 PR 入口并删除临时 workflow 别名。这是显式上线阶段；制品基线缺失时不会自动回退源码构建。
+
 ## 1. 公开调用方与受信任控制
 
 平台仓维护 `ci-entry.yml`、`integration-tests.yml` 和 `integration-architecture.yml`。
