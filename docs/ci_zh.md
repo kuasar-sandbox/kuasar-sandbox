@@ -72,9 +72,9 @@ resolve → x86 build → x86 prepare → 原生 x86 shards → x86 result
                                   全部所选结果显式汇总
 ```
 
-两种产品都在独立 `ubuntu-24.04` x86 job/workspace 使用已有 Makefile/native-cache 构建。
+两种产品都在独立 `ubuntu-latest` x86 job/workspace 使用已有 Makefile/native-cache 构建。
 每架构产品构建一次、不变输入 prepare 一次。一条 lane 自己准备完成即可开始 E2E，不等待另一架构构建。
-执行使用 `ubuntu-24.04` 或标准 `ubuntu-24.04-arm`；concurrency、artifact、结果均包含架构/shard/run。
+执行使用 `ubuntu-latest` 或标准 `ubuntu-24.04-arm`；concurrency、artifact、结果均包含架构/shard/run。
 逐个汇总所有 shard 和两种架构，避免 matrix output 覆盖一边。
 
 RocksDB 与 cache-ctl 共用显式 `CROSS_PREFIX`、目标 CGO CC/CXX；Rust 使用环境编译器及其匹配 target std/linker。

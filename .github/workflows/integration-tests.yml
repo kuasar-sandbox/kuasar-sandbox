@@ -14,7 +14,7 @@ jobs:
       fail-fast: false
       matrix:
         shard: [source]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 180
     env:
       TARGET_ARCH: x86_64

@@ -27,7 +27,7 @@ concurrency:
 jobs:
   build:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 180
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
@@ -100,7 +100,7 @@ jobs:
   prepare:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     needs: build
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       TARGET_ARCH: ${{ inputs.arch }}
@@ -149,7 +149,7 @@ jobs:
   e2e:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     needs: [build, prepare]
-    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -203,7 +203,7 @@ jobs:
   result:
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     needs: [build, prepare, e2e]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       TARGET_ARCH: ${{ inputs.arch }}
