@@ -706,6 +706,7 @@ jobs:
 
           ci/integration/ci-timed.sh "e2e/$owner" env \
             BIN="$PWD/bin/x86_64" \
+            BASH_ENV="$PWD/build/e2e-suite/test/e2e/platform/lib/failure-diagnostics.sh" \
             ZOT_BIN="$E2E_ZOT_BIN" \
             VGW_BIN="$E2E_VGW_BIN" \
             "${fixture_env[@]}" bash "$runner"

@@ -116,8 +116,11 @@ mkdir -p "$3"
 touch "$3/custom-proxy" "$3/telemetry-grpc-probe"
 ''')
             runner = "platform/build/e2e-suite/test/e2e/"
+            write(runner + "platform/lib/failure-diagnostics.sh",
+                  (ROOT / "test/e2e/platform/lib/failure-diagnostics.sh").read_text())
             runner += "run_all.sh" if owner == "kuasar-sandbox" else f"{owner}/run_all.sh"
             write(runner, '''
+[ -f "$BASH_ENV" ]
 if [ "$EXPECT_HELPERS" = true ]; then
   [ -f "$CUSTOM_PROXY_BIN" ] && [ -f "$TELEMETRY_GRPC_PROBE_BIN" ]
 fi

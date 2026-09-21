@@ -185,6 +185,8 @@ grep -Fqx 'selected Chinese vmlinux docs' "$TMP/install/docs/vmlinux_zh.md" \
 runner_root="$TMP/runner-root"
 mkdir -p "$runner_root/bin" "$runner_root/test/e2e"
 install -m 0755 "$TMP/install/test/e2e/run_all.sh" "$runner_root/test/e2e/run_all.sh"
+mkdir -p "$runner_root/test/e2e/platform"
+cp -a "$TMP/install/test/e2e/platform/lib" "$runner_root/test/e2e/platform/"
 for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
   mkdir -p "$runner_root/test/e2e/$owner"
   cat > "$runner_root/test/e2e/$owner/run_all.sh" <<EOF

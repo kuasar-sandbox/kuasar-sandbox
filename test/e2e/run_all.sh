@@ -12,6 +12,9 @@ export BIN
 : "${ZOT_BIN:?ZOT_BIN must point to the platform-provided registry}"
 : "${VGW_BIN:?VGW_BIN must point to the platform-provided object gateway}"
 export ZOT_BIN VGW_BIN
+if [ -n "${KUASAR_CI_DIR:-}" ]; then
+    export BASH_ENV="$SCRIPT_DIR/platform/lib/failure-diagnostics.sh"
+fi
 
 echo "==> full release e2e"
 echo "==> BIN=$BIN"
