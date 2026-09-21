@@ -78,6 +78,14 @@ class PreviewSelectionTest(unittest.TestCase):
             "20260830",
         )
 
+    def test_direct_cli_entry(self) -> None:
+        result = subprocess.run(
+            [str(MODULE_PATH), "source-ref", "main", "sandboxer", "v9.8.7"],
+            capture_output=True, text=True, check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "main")
+
     def test_source_branch_is_derived_per_component_version(self) -> None:
         self.assertEqual(
             preview_selection.component_source_ref(
