@@ -13,7 +13,7 @@ import unittest
 
 HELPER = Path(__file__).with_name("exact-assets-tools.sh")
 COMMIT = "494dbceae683d6b20cdbec00fe6b1f554ea2f508"
-ZOT = b"#!/bin/sh\necho fixture-zot\n"
+ZOT = b"\x7fELF\x02\x01\x01" + bytes(11) + b"\x3e\x00" + bytes(44)
 
 
 class ExactToolsTests(unittest.TestCase):
@@ -28,7 +28,7 @@ class ExactToolsTests(unittest.TestCase):
         for path in (self.runner, self.fixtures, self.mockbin, self.product):
             path.mkdir(parents=True)
         for name in ("bash", "dirname", "basename", "python3", "cp", "chmod", "mkdir", "sha256sum", "awk",
-                     "mv", "tar", "gzip", "sort", "install", "mktemp", "rm", "rmdir", "cut", "taskset", "touch", "readlink"):
+                     "mv", "tar", "gzip", "sort", "install", "mktemp", "rm", "rmdir", "cut", "taskset", "touch", "readlink", "uname"):
             (self.mockbin / name).symlink_to(shutil.which(name))
         for name in ("vmlinux", "cloud-hypervisor", "sandbox-ctl", "mkfs.erofs", "zot", "versitygw"):
             (self.product / name).write_bytes(b"packaged product: " + name.encode())
@@ -45,7 +45,7 @@ keys = ('BINDIR', 'BUILD_DIR', 'TARBALL_CACHE', 'TMPDIR', 'VERSITYGW_SRC',
         'GOTOOLCHAIN', 'GOMAXPROCS', 'GO_ARCH')
 Path(os.environ['PROBE']).write_text(json.dumps({key: os.environ.get(key) for key in keys}))
 target = Path(os.environ['BINDIR']) / 'versitygw'
-target.write_text('#!/bin/sh\\necho fixture-versitygw\\n')
+target.write_bytes(bytes.fromhex('7f454c46020101') + bytes(11) + bytes.fromhex('3e00' if os.environ['GO_ARCH'] == 'amd64' else 'b700') + bytes(44))
 target.chmod(0o755)
 PY
 ''')
@@ -58,7 +58,7 @@ from pathlib import Path
 args = sys.argv[1:]
 url = next(arg for arg in args if arg.startswith('https://'))
 Path(os.environ['CURL_LOG']).open('a').write(url + '\\n')
-zot = b'#!/bin/sh\\necho fixture-zot\\n'
+zot = bytes.fromhex('7f454c46020101') + bytes(11) + bytes.fromhex('3e00') + bytes(44)
 if url.endswith('/checksums.sha256.txt'):
     data = (hashlib.sha256(zot).hexdigest() + ' *zot-linux-amd64-minimal\\n').encode()
 elif url.endswith('/zot-linux-amd64-minimal'):
@@ -143,7 +143,7 @@ cp "$FIXTURES/${2##*/}" "$2"
         supplied.mkdir()
         for name in ("zot", "versitygw"):
             tool = supplied / name
-            tool.write_text("#!/bin/sh\necho independently-built-tool\n")
+            tool.write_bytes(ZOT)
             tool.chmod(0o755)
         for explicit in (False, True):
             settings = ({"E2E_ZOT_BIN": str(supplied / "zot"),

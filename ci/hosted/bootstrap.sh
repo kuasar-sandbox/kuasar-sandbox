@@ -21,10 +21,10 @@ download() {
 
 select_profile() {
     profile=$1
-    with_go=false with_native=false with_kernel=false with_readers=false with_vm=false
+    with_go=false with_native=false with_kernel=false with_readers=false with_vm=false with_cross=false
     # Include packages even when the standard image currently preinstalls them.
     packages=(ca-certificates curl git jq python3 python3-yaml tar gzip xz-utils unzip
-        coreutils findutils gawk sed grep diffutils util-linux file time)
+        coreutils findutils gawk sed grep diffutils util-linux file time binutils)
     case "$profile" in
         control) ;;
         release-control) with_go=true ;;
@@ -32,6 +32,11 @@ select_profile() {
         runtime|runtime-publish) with_go=true; with_native=true; with_readers=true ;;
         source) with_go=true; with_native=true; with_kernel=true; with_readers=true; with_vm=true ;;
         exact-assets) with_go=true; with_readers=true; with_vm=true ;;
+        artifact-build) with_go=true; with_native=true; with_kernel=true; with_readers=true ;;
+        artifact-cross) with_go=true; with_native=true; with_kernel=true; with_readers=true; with_cross=true ;;
+        artifact-arm) with_readers=true ;;
+        artifact-prepare) with_readers=true ;;
+        artifact-x86) with_readers=true; with_vm=true ;;
         *) die "unknown profile: $profile" ;;
     esac
     if $with_native || $with_kernel || $with_readers; then
@@ -47,10 +52,14 @@ select_profile() {
         # Retain the native crypto prerequisites already merged in #126.
         packages+=(patch libgcrypt20-dev libgpg-error-dev libssl-dev liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)
     fi
-    if [ "$profile" = source ]; then
+    if [[ "$profile" = source || "$profile" = artifact-build || "$profile" = artifact-cross ]]; then
         packages+=(cmake clang llvm libclang-dev libsnappy-dev libssl-dev)
     fi
-    if $with_vm; then
+    if $with_cross; then
+        packages+=(gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
+            libc6-dev-arm64-cross uuid-dev:arm64 libgcrypt20-dev:arm64 libgpg-error-dev:arm64)
+    fi
+    if $with_vm || [ "$profile" = artifact-arm ]; then
         packages+=(python3-venv python3-pip iproute2 iptables nftables kmod acl
             e2fsprogs procps psmisc socat redis-server rsync cpio zstd lz4
             systemd udev dbus iputils-ping netcat-openbsd openssl sqlite3 zip strace)
@@ -118,6 +127,51 @@ install_readers() (
     grep -Fq -- --path <<< "$dump_help" || die "dump.erofs lacks --path"
     grep -Fq -- --cat <<< "$dump_help" || die "dump.erofs lacks --cat"
 )
+
+install_runtime_reader() {
+    # Reuse the existing release verifier at a reviewed immutable source, not a
+    # candidate script or an executable from the runtime image.
+    local revision=4c3999beb54f67cf0990b98c1709cf1a199ff08b
+    local verifier="$KUASAR_HOSTED_ROOT/bin/runtime-payloads.py"
+    download "https://raw.githubusercontent.com/kuasar-sandbox/guest-runtime/$revision/scripts/release-runtime-payloads.py" \
+        "$verifier" 01d97e1cc7aed550305e13b4dfd1daa95a3740be84512d195aed46a277e661fd
+    emit KUASAR_RUNTIME_READER "$verifier"
+}
+
+configure_cross() {
+    need aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ cargo rustc
+    local target=aarch64-unknown-linux-gnu libdir
+    libdir=$(rustc --print target-libdir --target "$target")
+    if ! compgen -G "$libdir/libstd-*.rlib" >/dev/null; then
+        # Install only the matching standard library into the provided toolchain.
+        # Do not select or upgrade the compiler.
+        need rustup
+        rustup target add "$target"
+    fi
+    compgen -G "$libdir/libstd-*.rlib" >/dev/null || die "provided Rust toolchain lacks $target std"
+    # Recipe-scoped CC/pkg-config selection is owned by the existing Makefiles.
+    # In particular never export target GOARCH or PKG_CONFIG_LIBDIR here.
+}
+
+configure_cross_apt() {
+    # Standard Ubuntu uses separate amd64 and arm64 archive endpoints. Restrict
+    # the existing deb822 sources before adding the target-only ports source.
+    [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || die "cross packages require a disposable hosted job"
+    sudo -n python3 - <<'PY'
+from pathlib import Path
+source = Path('/etc/apt/sources.list.d/ubuntu.sources')
+text = source.read_text()
+stanzas = []
+for stanza in text.strip().split('\n\n'):
+    lines = [line for line in stanza.splitlines() if not line.startswith('Architectures:')]
+    stanzas.append('\n'.join(lines + ['Architectures: amd64']))
+source.write_text('\n\n'.join(stanzas) + '\n')
+PY
+    sudo -n dpkg --add-architecture arm64
+    printf 'Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports\nSuites: %s %s-updates %s-security\nComponents: main universe restricted multiverse\nArchitectures: arm64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' \
+        "$VERSION_CODENAME" "$VERSION_CODENAME" "$VERSION_CODENAME" \
+        | sudo -n tee /etc/apt/sources.list.d/kuasar-arm64.sources >/dev/null
+}
 
 render_kvm_rule() {
     [ "$#" -eq 2 ] || die "KVM rule requires job uid and primary gid"
@@ -199,16 +253,22 @@ PY
 
 main() {
     if [ "$#" -ne 2 ] || [ "$1" != --profile ]; then
-        die "usage: bootstrap.sh --profile control|release-control|kernel|runtime|runtime-publish|source|exact-assets"
+        die "usage: bootstrap.sh --profile control|release-control|kernel|runtime|runtime-publish|source|exact-assets|artifact-build|artifact-cross|artifact-prepare|artifact-x86|artifact-arm"
     fi
     select_profile "$2"
-    [ "$(uname -m)" = x86_64 ] || die "x86_64 is required"
+    case "$profile:$(uname -m)" in
+        artifact-arm:aarch64) ;;
+        artifact-arm:*) die "artifact-arm requires a native ARM64 job" ;;
+        *:x86_64) ;;
+        *) die "this build/control profile requires x86_64" ;;
+    esac
     # shellcheck disable=SC1091
     . /etc/os-release
     if [ "$ID" != ubuntu ] || [ "$(uname -s)" != Linux ]; then die "Ubuntu Linux is required"; fi
     if $with_vm; then render_kvm_rule "$(id -u)" "$(id -g)" >/dev/null; fi
     : "${RUNNER_TEMP:?}" "${GITHUB_ENV:?}" "${GITHUB_PATH:?}"
     need sudo curl sha256sum tar python3
+    if $with_cross; then configure_cross_apt; fi
     sudo -n apt-get update
     sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
     need git jq python3 flock file /usr/bin/time
@@ -227,7 +287,9 @@ main() {
     emit CARGO_BUILD_JOBS "$jobs"
     add_path "$KUASAR_HOSTED_ROOT/bin"
     if $with_go; then configure_go; fi
-    if $with_readers; then install_readers; fi
+    if $with_readers; then install_readers; install_runtime_reader; fi
+    if $with_cross; then configure_cross; fi
+    if [ "$profile" = artifact-arm ]; then need docker; docker info >/dev/null; fi
     if $with_vm; then configure_vm; fi
     echo "hosted-bootstrap: profile=$profile jobs=$jobs cpus=$cpus"
 }

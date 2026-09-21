@@ -142,8 +142,8 @@ class BootstrapTests(unittest.TestCase):
         source = BOOTSTRAP.read_text()
         self.assertNotIn("configure_exact_network", source)
         self.assertNotIn("linux-tools-common", source)
-        workflow = (BOOTSTRAP.resolve().parents[2] / ".github/workflows/integration-tests.yml").read_text()
-        self.assertIn('REQUIRE_CONNECTOR_E2E: "1"', workflow)
+        executor = (BOOTSTRAP.resolve().parents[2] / "ci/integration/run-artifact-tests.py").read_text()
+        self.assertIn('"CONNECTOR_E2E"', executor)
 
     def test_required_tools_fail_closed(self):
         self.assertNotEqual(shell("need kuasar_nonexistent_required_tool").returncode, 0)

@@ -46,7 +46,7 @@ ZOT_VERSION    ?= v2.1.17
 PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf-density
 
 .PHONY: all build collect e2e-zot e2e-versitygw e2e-tools assemble-e2e release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
-	        bench test-e2e test-e2e-prebuilt perf dedup-report \
+	        bench e2e-fixtures test-e2e test-e2e-prebuilt perf dedup-report \
 	        $(PERF_TARGETS)
 
 all: build
@@ -74,6 +74,11 @@ e2e-versitygw:
 	$(CI_TIMED) tools/versitygw env BINDIR="$(abspath $(E2E_TOOL_DIR))" TARGET_ARCH="$(TARGET_ARCH)" bash ci/integration/ensure-versitygw.sh
 
 e2e-tools: e2e-zot e2e-versitygw
+
+# Developer source preparation. The hosted artifact executor receives these
+# helpers in its prepared workspace and never invokes this source target.
+e2e-fixtures:
+	bash $(ORG)/orchestrator/scripts/ci-e2e-build.sh fixtures "$(TARGET_ARCH)" "$(abspath $(E2E_TOOL_DIR))"
 
 # Assemble bin/$(TARGET_ARCH)/ from each sub-repo's per-arch bin per the
 # binary-input manifest. Native builds drop a bin/<name> symlink to the per-arch
@@ -120,10 +125,13 @@ assemble-e2e:
 
 # Candidate source and exact release assets both pass this owner-aggregated
 # runner. OBS remains opt-in through OBS_E2E=1 in accelerator/test/e2e/run_all.sh.
-test-e2e: build e2e-tools assemble-e2e
+test-e2e: build e2e-tools e2e-fixtures assemble-e2e
+	bash $(ORG)/sandboxer/scripts/ci-source-checks.sh
+	bash $(ORG)/orchestrator/scripts/ci-source-checks.sh
 	$(MAKE) test-uffd-performance-gate
 	$(CI_TIMED) e2e/run-all env BIN=$(SBIN) ZOT_BIN=$(E2E_ZOT_BIN) \
-		VGW_BIN=$(E2E_VGW_BIN) bash $(E2E_SUITE_DIR)/test/e2e/run_all.sh
+		VGW_BIN=$(E2E_VGW_BIN) CUSTOM_PROXY_BIN=$(abspath $(E2E_TOOL_DIR))/custom-proxy \
+		TELEMETRY_GRPC_PROBE_BIN=$(abspath $(E2E_TOOL_DIR))/telemetry-grpc-probe bash $(E2E_SUITE_DIR)/test/e2e/run_all.sh
 
 # Aggregate releases validate the already-published archives. This target never
 # invokes a component build; bin/<arch>/ must be populated by the release fetcher.
@@ -133,9 +141,10 @@ verify-prebuilt:
 		[ -f "$(SBIN)/$$name" ] || { echo "missing prebuilt release input: $$name" >&2; exit 1; }; \
 	done < $(BIN_INPUTS_MANIFEST)
 
-test-e2e-prebuilt: verify-prebuilt e2e-tools assemble-e2e
+test-e2e-prebuilt: verify-prebuilt e2e-tools e2e-fixtures assemble-e2e
 	$(CI_TIMED) e2e/run-all env BIN=$(SBIN) ZOT_BIN=$(E2E_ZOT_BIN) \
-		VGW_BIN=$(E2E_VGW_BIN) bash $(E2E_SUITE_DIR)/test/e2e/run_all.sh
+		VGW_BIN=$(E2E_VGW_BIN) CUSTOM_PROXY_BIN=$(abspath $(E2E_TOOL_DIR))/custom-proxy \
+		TELEMETRY_GRPC_PROBE_BIN=$(abspath $(E2E_TOOL_DIR))/telemetry-grpc-probe bash $(E2E_SUITE_DIR)/test/e2e/run_all.sh
 
 # perf harnesses living in this repo (cross-repo binary use).
 perf-sandbox: build assemble-e2e
@@ -180,6 +189,8 @@ test:
 test-ci-tools:
 	bash ci/integration/test-ci-tools.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-source-owner.py
+	KUASAR_RUNTIME_READER="$${KUASAR_RUNTIME_READER:-$(ORG)/guest-runtime/scripts/release-runtime-payloads.py}" \
+		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
 
 test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test-environment-tools.py
