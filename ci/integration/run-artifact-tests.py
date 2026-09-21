@@ -33,6 +33,7 @@ def execute(plan, arch, shard, workspace, result_path):
             for name in ("tmp", "docker", "metrics", "perf"):
                 (state / name).mkdir(mode=0o700)
             environment.update(BIN=str(workspace / "bin"), KUASAR_ARTIFACT_E2E="1", TARGET_ARCH=arch,
+                               KUASAR_EXPECTED_RUNTIME_INIT_SHA256=provenance["embedded"]["init"],
                                TMPDIR=str(state / "tmp"), DOCKER_CONFIG=str(state / "docker"),
                                KUASAR_CI_DIR=str(state / "metrics"), PERF_OUT_DIR=str(state / "perf"),
                                PYTHONDONTWRITEBYTECODE="1", CLUSTER_STUB_BUILD="0")
