@@ -685,11 +685,16 @@ jobs:
             fi
           done
           fixture_env=()
+          fixture_dir="$PWD/build/e2e-tools/x86_64"
+          if [[ "$owner" = sandboxer || "$owner" = kuasar-sandbox ]] \
+            && [ -f ../sandboxer/scripts/ci-source-checks.sh ]; then
+            make -C ../sandboxer TARGET_ARCH=x86_64 E2E_FIXTURE_DIR="$fixture_dir" e2e-usage-probe
+            fixture_env+=(USAGE_PROBE_BIN="$fixture_dir/usage-probe")
+          fi
           if [[ "$owner" = orchestrator || "$owner" = kuasar-sandbox ]] \
             && [ -f ../orchestrator/scripts/ci-e2e-build.sh ]; then
-            fixture_dir="$PWD/build/e2e-tools/x86_64"
             bash ../orchestrator/scripts/ci-e2e-build.sh fixtures x86_64 "$fixture_dir"
-            fixture_env=(CUSTOM_PROXY_BIN="$fixture_dir/custom-proxy" TELEMETRY_GRPC_PROBE_BIN="$fixture_dir/telemetry-grpc-probe")
+            fixture_env+=(CUSTOM_PROXY_BIN="$fixture_dir/custom-proxy" TELEMETRY_GRPC_PROBE_BIN="$fixture_dir/telemetry-grpc-probe")
           fi
 
           runner="build/e2e-suite/test/e2e/$owner/run_all.sh"

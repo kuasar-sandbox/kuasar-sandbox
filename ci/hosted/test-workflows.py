@@ -106,6 +106,9 @@ echo build >> "$EVENT_LOG"
 echo {component}-checks >> "$EVENT_LOG"
 [ "$FAIL_CHECK" = false ]
 ''')
+                (root / "sandboxer/Makefile").write_text(
+                    'e2e-usage-probe:\n\t@echo usage-fixtures >> "$$EVENT_LOG"\n'
+                    '\t@mkdir -p "$(E2E_FIXTURE_DIR)"\n\t@touch "$(E2E_FIXTURE_DIR)/usage-probe"\n')
                 write("orchestrator/scripts/ci-e2e-build.sh", '''
 [ "$1" = fixtures ] && [ "$2" = x86_64 ]
 echo fixtures >> "$EVENT_LOG"
@@ -118,6 +121,7 @@ touch "$3/custom-proxy" "$3/telemetry-grpc-probe"
 if [ "$EXPECT_HELPERS" = true ]; then
   [ -f "$CUSTOM_PROXY_BIN" ] && [ -f "$TELEMETRY_GRPC_PROBE_BIN" ]
 fi
+if [ "$EXPECT_USAGE_PROBE" = true ]; then [ -f "$USAGE_PROBE_BIN" ]; fi
 echo e2e >> "$EVENT_LOG"
 ''')
             log = root / "events"
@@ -125,6 +129,7 @@ echo e2e >> "$EVENT_LOG"
                        CANDIDATE_REPOSITORY=f"kuasar-sandbox/{owner}",
                        E2E_ZOT_BIN="fixture-zot", E2E_VGW_BIN="fixture-vgw",
                        FAIL_CHECK=str(fail_check).lower(),
+                       EXPECT_USAGE_PROBE=str(extracted and owner in ("sandboxer", "kuasar-sandbox")).lower(),
                        EXPECT_HELPERS=str(extracted and owner in ("orchestrator", "kuasar-sandbox")).lower())
             result = subprocess.run(["bash", "-c", script], cwd=platform, env=env,
                                     capture_output=True, text=True, timeout=5)
@@ -136,6 +141,9 @@ echo e2e >> "$EVENT_LOG"
                     expected.append("sandboxer-checks")
                 if owner in ("orchestrator", "kuasar-sandbox"):
                     expected.append("orchestrator-checks")
+                if owner in ("sandboxer", "kuasar-sandbox") and not fail_check:
+                    expected.append("usage-fixtures")
+                if owner in ("orchestrator", "kuasar-sandbox"):
                     if not fail_check:
                         expected.append("fixtures")
             if not fail_check:
