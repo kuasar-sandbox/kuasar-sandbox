@@ -11,8 +11,10 @@ fetch_components() {
   [ "$#" -eq 2 ] || release_fail "usage: aggregate-release.sh fetch <release-version> <output-dir>"
   local version="$1" output="$2"
   assert_safe_output "$output"
-  mkdir -p "$output/components" "$output/sources" "$output/updates"
+  mkdir -p "$output/components" "$output/sources" "$output/test-sources" "$output/updates"
   resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$output/selection.tsv"
+  python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --test-revisions \
+    > "$output/test-revisions.json"
   local previous
   previous="$(previous_release "$PLATFORM_SOURCE_ROOT" "$version")"
   : > "$output/previous-selection.tsv"
@@ -53,7 +55,22 @@ fetch_components() {
       verify_github_asset "$unit_dir/$name" "$asset"
     done < <(jq -r '.assets[].name' <<< "$release_state")
     validate_component_download "$unit" "$tag" "$unit_dir"
-    fetch_component_source "$repository" "$tag" "$output/sources/$unit"
+    local source_sha
+    source_sha="$(github_api "repos/$repository/git/ref/tags/$tag" \
+      | jq -er '.object | select(.type == "commit") | .sha | select(test("^[0-9a-f]{40}$"))')"
+    fetch_component_source "$repository" "$source_sha" "$output/sources/$unit"
+    if [ "$unit" != vmlinux ]; then
+      local owner="$unit" test_sha test_source
+      [ "$owner" != runtime ] || owner=guest-runtime
+      test_sha="$(jq -er --arg owner "$owner" '.[$owner]' "$output/test-revisions.json")"
+      test_source="$output/test-sources/$owner"
+      if [ "$test_sha" = "$source_sha" ]; then
+        mkdir -p "$test_source/test"
+        cp -a "$output/sources/$unit/test/e2e" "$test_source/test/e2e"
+      else
+        fetch_component_source "$repository" "$test_sha" "$test_source"
+      fi
+    fi
     write_component_updates "$unit" "$repository" "$previous_tag" "$tag" \
       "$output/updates/$unit.md"
   done < "$output/selection.tsv"
@@ -212,13 +229,18 @@ assemble_release() {
     || release_fail "fetched component selection does not match the selected platform source"
   cmp -s "$expected_previous_selection" "$fetched/previous-selection.tsv" \
     || release_fail "fetched previous selection does not match the selected platform source"
+  python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --test-revisions \
+    > "$work/test-revisions.json"
+  cmp -s "$work/test-revisions.json" "$fetched/test-revisions.json" \
+    || release_fail "fetched test pins do not match the selected platform source"
 
   platform_bundle="$work/platform-bundle"
-  "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$platform_bundle"
+  "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$fetched/test-sources" "$platform_bundle"
   platform_name="$(platform_archive "$version")"
   mkdir -p "$output/assets"
   install -m 0644 "$platform_bundle/assets/$platform_name" "$output/assets/$platform_name"
   install -m 0644 "$expected_selection" "$output/selection.tsv"
+  install -m 0644 "$work/test-revisions.json" "$output/test-revisions.json"
 
   local unit tag archive arch
   while IFS=$'\t' read -r unit tag; do

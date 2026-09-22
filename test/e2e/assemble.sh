@@ -32,6 +32,9 @@ for index in "${!COMPONENTS[@]}"; do
     component="${COMPONENTS[$index]}"
     source_root="${SOURCES[$index]}"
     source_suite="$source_root/test/e2e"
+    if [ -n "${E2E_SOURCE_ROOT:-}" ]; then
+        source_suite="$E2E_SOURCE_ROOT/$component/test/e2e"
+    fi
     [ -x "$source_suite/run_all.sh" ] || {
         echo "$component source is missing executable test/e2e/run_all.sh" >&2
         exit 1

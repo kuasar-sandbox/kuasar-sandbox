@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import re
 import subprocess
@@ -13,6 +14,7 @@ from typing import NoReturn
 
 
 UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vmlinux")
+TEST_OWNERS = ("accelerator", "connector", "guest-runtime", "sandboxer", "orchestrator")
 STABLE_RE = re.compile(
     r"^release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
 )
@@ -54,23 +56,26 @@ def fail(message: str) -> NoReturn:
 
 def read_simple_yaml(text: str, source: str) -> dict[str, object]:
     result: dict[str, object] = {}
-    components: dict[str, str] = {}
     section = ""
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.split("#", 1)[0].rstrip()
         if not line:
             continue
-        if line == "components:":
-            section = "components"
+        if line in ("components:", "test_revisions:"):
+            section = line[:-1]
+            if section in result:
+                raise ManifestError(f"duplicate section {section} in {source}")
+            result[section] = {}
             continue
         match = re.fullmatch(r"([A-Za-z][A-Za-z0-9_-]*):[ ]+([^ ]+)", line.lstrip())
         if match is None:
             raise ManifestError(f"unsupported syntax in {source}:{number}")
         key, value = match.groups()
-        if raw.startswith("  ") and section == "components":
-            if key in components:
-                raise ManifestError(f"duplicate component {key} in {source}")
-            components[key] = value
+        if raw.startswith("  ") and section:
+            entries = result[section]
+            if key in entries:
+                raise ManifestError(f"duplicate {section} entry {key} in {source}")
+            entries[key] = value
         elif not raw.startswith((" ", "\t")):
             if key in result:
                 raise ManifestError(f"duplicate key {key} in {source}")
@@ -78,8 +83,18 @@ def read_simple_yaml(text: str, source: str) -> dict[str, object]:
             section = ""
         else:
             raise ManifestError(f"unexpected indentation in {source}:{number}")
-    result["components"] = components
+    result.setdefault("components", {})
     return result
+
+
+def test_revisions(config: dict[str, object], source: str) -> dict[str, str]:
+    pins = config.get("test_revisions")
+    if not isinstance(pins, dict) or set(pins) != set(TEST_OWNERS):
+        raise ManifestError(f"test_revisions in {source} must pin every component test owner")
+    for owner, sha in pins.items():
+        if not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+            raise ManifestError(f"test revision for {owner} in {source} must be an exact SHA")
+    return dict(pins)
 
 
 def require_stable(value: object, field: str, source: str) -> str:
@@ -132,7 +147,7 @@ def parse_manifest(
 ) -> tuple[str, str | None, dict[str, str]]:
     config = read_simple_yaml(text, source)
     required = {"version", "components"}
-    optional = {"previous_version"}
+    optional = {"previous_version", "test_revisions"}
     if preview:
         required.add("preview_version")
         optional.add("previous_preview_version")
@@ -140,6 +155,10 @@ def parse_manifest(
     if not required <= keys or not keys <= required | optional:
         expected = ", ".join(sorted(required | optional))
         raise ManifestError(f"top-level keys in {source} must be: {expected}")
+    # Historical selections remain readable under their original contract.
+    # New aggregate packaging requires all pins through --test-revisions.
+    if "test_revisions" in config:
+        test_revisions(config, source)
 
     version = require_stable(config.get("version"), "version", source)
     previous_version: str | None = None
@@ -285,6 +304,16 @@ def resolve(root: pathlib.Path, version: str) -> tuple[str | None, dict[str, str
     return previous, components
 
 
+def resolve_test_revisions(root: pathlib.Path, version: str) -> dict[str, str]:
+    commit, _, _ = resolve_record(root, version)
+    preview = "-preview." in version
+    relative = "releases/daily-preview.yaml" if preview else "releases/release.yaml"
+    text = (root / relative).read_text(encoding="utf-8")
+    if parse_manifest(text, relative, preview)[0] != version:
+        text = subprocess.check_output(["git", "-C", str(root), "show", f"{commit}:{relative}"], text=True)
+    return test_revisions(read_simple_yaml(text, relative), relative)
+
+
 def main() -> None:
     if len(sys.argv) == 3 and sys.argv[2] == "--validate-current":
         try:
@@ -295,13 +324,19 @@ def main() -> None:
     if len(sys.argv) not in (3, 4):
         fail(
             "usage: selection.py <platform-root> "
-            "<release-version> [--previous|--commit] | --validate-current"
+            "<release-version> [--previous|--commit|--test-revisions] | --validate-current"
         )
-    if len(sys.argv) == 4 and sys.argv[3] not in ("--previous", "--commit"):
+    if len(sys.argv) == 4 and sys.argv[3] not in ("--previous", "--commit", "--test-revisions"):
         fail(
             "usage: selection.py <platform-root> "
-            "<release-version> [--previous|--commit]"
+            "<release-version> [--previous|--commit|--test-revisions]"
         )
+    if len(sys.argv) == 4 and sys.argv[3] == "--test-revisions":
+        try:
+            print(json.dumps(resolve_test_revisions(pathlib.Path(sys.argv[1]), sys.argv[2]), sort_keys=True))
+        except ManifestError as error:
+            fail(str(error))
+        return
     commit, previous, selected = resolve_record(
         pathlib.Path(sys.argv[1]), sys.argv[2]
     )

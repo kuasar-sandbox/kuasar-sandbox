@@ -37,6 +37,7 @@ def execute(plan, arch, shard, workspace, result_path):
     for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY"):
         artifacts.require(not environment.get(key), f"artifact E2E must not receive {key}")
     result = {"arch": arch, "shard": shard, "plan_id": artifacts.identity(plan), "conclusion": "failure",
+              "test_revisions": provenance["test_revisions"],
               "provenance_sha256": artifacts.digest(workspace / "provenance.json"), "cases": groups[shard], "timings": [],
               "extra_checks": plan["lanes"][arch].get("extra_checks", {}).get(shard, [])}
     started = time.monotonic()

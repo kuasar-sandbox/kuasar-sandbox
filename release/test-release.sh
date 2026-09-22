@@ -23,6 +23,10 @@ write_preview_base_fixture() {
     while IFS=$'\t' read -r unit tag; do
       printf '  %s: %s\n' "$unit" "${tag%%-preview.*}"
     done < "$TMP/current-preview-selection.tsv"
+    printf 'test_revisions:\n'
+    for owner in accelerator connector guest-runtime sandboxer orchestrator; do
+      printf '  %s: %040d\n' "$owner" 1
+    done
   } > "$output"
 }
 
@@ -46,6 +50,9 @@ resolve_selection "$FORMAL_ROOT" "$VERSION" "$TMP/selection.tsv"
 [ -z "$(previous_release "$FORMAL_ROOT" "$VERSION")" ] \
   || release_fail "first formal release unexpectedly has a comparison baseline"
 mkdir -p "$TMP/fetched/components" "$TMP/fetched/sources" "$TMP/fetched/updates"
+mkdir -p "$TMP/fetched/test-sources"
+python3 "$ROOT/release/selection.py" "$FORMAL_ROOT" "$VERSION" --test-revisions \
+  > "$TMP/fetched/test-revisions.json"
 install -m 0644 "$TMP/selection.tsv" "$TMP/fetched/selection.tsv"
 : > "$TMP/fetched/previous-selection.tsv"
 
@@ -76,7 +83,14 @@ set -euo pipefail
 echo "$unit fixture E2E"
 EOF
   chmod +x "$source_root/test/e2e/run_all.sh"
+  if [ "$unit" != vmlinux ]; then
+    owner="$unit"
+    [ "$owner" != runtime ] || owner=guest-runtime
+    cp -a "$source_root" "$TMP/fetched/test-sources/$owner"
+  fi
 done < "$TMP/selection.tsv"
+printf '#!/usr/bin/env bash\necho "pinned orchestrator E2E"\n' \
+  > "$TMP/fetched/test-sources/orchestrator/test/e2e/run_all.sh"
 printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux.md"
 printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
 printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
@@ -108,6 +122,31 @@ grep -Fq "$foreign_unit archive contains another release unit's material namespa
 
 SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
+tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" ./test/e2e/orchestrator/run_all.sh \
+  > "$TMP/packaged-orchestrator-test"
+cmp "$TMP/packaged-orchestrator-test" "$TMP/fetched/test-sources/orchestrator/test/e2e/run_all.sh"
+if cmp -s "$TMP/packaged-orchestrator-test" "$TMP/fetched/sources/orchestrator/test/e2e/run_all.sh"; then
+  release_fail "platform package used the product tag's test instead of the independent pin"
+fi
+while IFS=$'\t' read -r unit tag; do
+  archive="$(component_archive "$unit" "$tag")"
+  cmp "$TMP/fetched/components/$unit/$archive" "$TMP/bundle/assets/$archive"
+done < "$TMP/selection.tsv"
+cp "$TMP/fetched/test-revisions.json" "$TMP/test-pins-saved.json"
+printf '{}\n' > "$TMP/fetched/test-revisions.json"
+if SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
+  "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/rejected-pins" \
+  > "$TMP/rejected-pins.log" 2>&1; then
+  release_fail "aggregate accepted mismatched test pins"
+fi
+grep -Fq 'fetched test pins do not match' "$TMP/rejected-pins.log"
+mv "$TMP/test-pins-saved.json" "$TMP/fetched/test-revisions.json"
+if PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" "$ROOT/release/package-platform.sh" \
+  package "$VERSION" "$TMP/fetched/sources" "" "$TMP/rejected-test-source" \
+  > "$TMP/rejected-test-source.log" 2>&1; then
+  release_fail "platform package silently fell back to product test sources"
+fi
+grep -Fq 'independently pinned test source directory is missing' "$TMP/rejected-test-source.log"
 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" validate "$VERSION" "$TMP/bundle"
 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \

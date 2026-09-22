@@ -68,6 +68,19 @@ components:
 
 The complete aggregate tag is `version + "-" + preview_version`. Later Previews on the same aggregate line use `previous_preview_version` as their update baseline. The first Preview on that line uses `previous_version`.
 
+For a new aggregate, the same Stable or Daily manifest must also include these five independent test pins (replace the placeholders with full lowercase commit SHAs):
+
+```yaml
+test_revisions:
+  accelerator: <accelerator-test-sha>
+  connector: <connector-test-sha>
+  guest-runtime: <guest-runtime-test-sha>
+  sandboxer: <sandboxer-test-sha>
+  orchestrator: <orchestrator-test-sha>
+```
+
+Daily records the exact component source heads already resolved by its trusted plan, even when product units are reused. Commit explicit pins when preparing a new Stable selection. Platform tests use the aggregate source SHA. The platform package takes each complete owner E2E tree from its test pin; component documentation and products keep their selected unit sources. Helper builds, prepared inputs, results and the existing publication validation binding carry the same pins, which later baselines verify against the committed manifest. The staged `test-revisions.json` receipt is internal to validation; published asset names and product bytes do not change. New packaging rejects missing or mismatched pins. Historical manifests/releases remain readable under their original contract and are never amended.
+
 Advance `previous_preview_version` only after the current aggregate has a complete published Release. When an unpublished selection rolls over to a new date, retain its existing baseline (or keep the field absent for the first Preview). An abandoned selection may contain component tags that were never published and cannot serve as an update baseline.
 
 After Stable `V1` is published, continued development on the same branch must first advance Daily to `V2` and set `previous_version: V1`. Advance the Stable manifest when preparing `V2`. After `V2`, advance both toward `V3`, and so on. When Daily and Stable name the same version and that Stable aggregate has already been published, the line is closed: no new Preview and no repeated Stable publication. If the same-version Stable Release exists but its assets or tag are incomplete, Daily also defers before any manifest or component changes; it does not publish a Preview alongside an incomplete Stable.
