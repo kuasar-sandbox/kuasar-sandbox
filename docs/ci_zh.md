@@ -169,6 +169,21 @@ ARM 当前只选择 accelerator 和 guest-runtime 已有独立非 KVM 套件；�
 ARM VM/KVM/restore/Builder/cluster 同等覆盖、新硬件和全面用例扩充属于后续工作。
 已选测试失败不能事后改为 unsupported，整个 ARM job 不使用 continue-on-error。
 
+[聚合 run 35751885794，attempt 1](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794)
+已通过两个既定 profile，并从源码/框架 `69c26d2e9d7a494b3463e42c3b8c20ac1119de4f`
+发布 [release-v0.1.5-preview.20260922.4](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.5-preview.20260922.4)。
+发布验证绑定记录 plan `00969ac8d0bd389b78101ece51675c9315ce2d985beaf6c18b36a8169dcc700b`、
+各 owner 独立测试 pin、两架构 provenance 摘要和成功 shard 结果。
+十四项发布资产与测试时暂存摘要完全一致，匿名读取 SHA256SUMS 验证通过；
+六个组件 unit 全部复用，十八组历史 Release/tag/asset 身份保持不变。
+x86 的全部六个 owner、独立源码检查和 UFFD benchmark 均成功；原生 ARM 的 accelerator/guest-runtime 非 KVM 套件成功。
+标准 x86 使用 `ubuntu-latest`，原生 ARM 使用 `ubuntu-24.04-arm`。逐项 job 链接见同一覆盖表。
+
+PR #129 将共用工作流切换到 `integration-tests.yml`，删除临时 artifact 别名与旧源码编排。
+其合并前受信任源码 CI 不构成切换后的 artifact PR 验收。
+#152 结案前仍须由真实 PR caller 记录新解析的 framework SHA、baseline/delta plan、
+prepared-workspace 执行、两架构结果及适用的 working-set smoke。
+
 accelerator、connector、sandboxer、orchestrator 已切为 Public，并读回可见性与匿名源码/资产访问结果。
 四组件以及平台、guest-runtime 均已通过各自真实 Public 源码 CI 后正常合入；精确运行链接见上方覆盖表所在章节。
 历史测试访问能力的边界已在 [#82](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/82#issuecomment-5765674410) 结案：
