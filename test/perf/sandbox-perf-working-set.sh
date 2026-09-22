@@ -791,6 +791,7 @@ manifest_repository_names = {
 }
 revision_manifest = os.environ.get("KUASAR_REVISION_MANIFEST")
 repositories = {}
+prepared_inputs = None
 
 def git_revision(name, path):
     try:
@@ -811,7 +812,20 @@ def git_revision(name, path):
         raise SystemExit(f"cannot resolve exact revision for {name}: {error}") from error
     return {"sha": sha, "dirty": dirty, "source": "git"}
 
-if revision_manifest:
+if os.environ.get("KUASAR_ARTIFACT_E2E") == "1":
+    # The executor verifies this workspace before and after E2E. It deliberately
+    # contains no source checkouts; product sources can differ from test pins.
+    data = (platform_root / "provenance.json").read_bytes()
+    provenance = json.loads(data)
+    prepared_inputs = {key: provenance[key] for key in
+                       ("plan_id", "arch", "framework_sha", "products", "test_revisions")}
+    prepared_inputs["provenance_sha256"] = hashlib.sha256(data).hexdigest()
+    repositories = {
+        name: {"sha": pin["sha"], "dirty": False, "role": pin["role"],
+               "source": "prepared-test-revision"}
+        for name, pin in provenance["test_revisions"].items()
+    }
+elif revision_manifest:
     manifest_path = pathlib.Path(revision_manifest)
     if not manifest_path.is_file():
         raise SystemExit(f"revision manifest is missing: {manifest_path}")
@@ -929,6 +943,8 @@ environment = {
         "binaries_sha256": {name: digest(os.path.join(bindir, name)) for name in binary_names},
     },
 }
+if prepared_inputs is not None:
+    environment["prepared_inputs"] = prepared_inputs
 pathlib.Path(output).write_text(json.dumps(environment, indent=2, sort_keys=True) + "\n")
 PY
 

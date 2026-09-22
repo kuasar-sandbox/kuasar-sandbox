@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Contract regressions using real archives and EROFS, without running payloads."""
 import copy
+import csv
 import hashlib
 import importlib.util
 import io
@@ -182,11 +183,54 @@ class ArtifactExecutionContracts(unittest.TestCase):
             self.assertTrue(state.name.startswith("ki-"))
             subprocess.run(["sudo", "-n", "rm", "-rf", "--", str(state)], check=True)
 
-    def execute(self):
+    def execute(self, shard="core"):
         credentials = {key: "" for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}
         with patch.object(self.executor.artifacts, "verify_workspace", return_value=self.provenance), \
              patch.object(self.executor.platform, "machine", return_value="x86_64"), patch.dict(os.environ, credentials):
-            return self.executor.execute(self.plan, "x86_64", "core", self.root, self.result)
+            return self.executor.execute(self.plan, "x86_64", shard, self.root, self.result)
+
+    def test_working_set_receives_exact_source_manifest_and_preserves_exit(self):
+        case = "test/e2e/sandboxer/run_all.sh"
+        script = self.root / case
+        script.parent.mkdir(parents=True)
+        script.write_text("exit 0\n")
+        self.provenance["profile"]["cases"] = [case]
+        self.plan["sources"] = test_revisions("c" * 40)
+        self.plan["lanes"]["x86_64"]["extra_checks"] = {"sandboxer": ["working-set-smoke"]}
+        perf = self.root / "test/perf"
+        perf.mkdir()
+        (perf / "working-set-netns.sh").write_text('exec bash "$@"\n')
+        (perf / "sandbox-perf-working-set.sh").write_text(
+            'set -eu\ncp "$KUASAR_REVISION_MANIFEST" "$BIN/recorded-revisions.tsv"\n'
+            'exit "$TEST_WORKING_SET_EXIT"\n')
+        archive = self.root / "image.tar"
+        archive.write_bytes(b"prepared image")
+        identity = "sha256:" + "b" * 64
+        self.provenance["images"] = {"python": {"archive": archive.name, "sha256": subject.digest(archive),
+                                               "image_id": identity, "platform": "linux/amd64"}}
+        original_run = subprocess.run
+        def run(command, **kwargs):
+            if command[:3] == ["docker", "image", "load"]:
+                return subprocess.CompletedProcess(command, 0)
+            return original_run(command, **kwargs)
+        image = [{"Id": identity, "Os": "linux", "Architecture": "amd64"}]
+        for exit_code in (0, 41):
+            with self.subTest(exit_code=exit_code), patch.dict(os.environ, TEST_WORKING_SET_EXIT=str(exit_code)), \
+                 patch.object(self.executor.subprocess, "run", side_effect=run), \
+                 patch.object(self.executor.subprocess, "check_output", return_value=json.dumps(image).encode()):
+                if exit_code:
+                    with self.assertRaisesRegex(ValueError, "selected working-set smoke failed"):
+                        self.execute("sandboxer")
+                else:
+                    self.execute("sandboxer")
+                result = json.loads(self.result.read_text())
+                self.assertEqual(result["conclusion"], "failure" if exit_code else "success")
+                self.assertEqual([item["exit_code"] for item in result["timings"]], [0, exit_code])
+                with (self.root / "bin/recorded-revisions.tsv").open() as manifest:
+                    rows = list(csv.DictReader(manifest, delimiter="\t"))
+                self.assertEqual(rows, [{"repository": record["repository"], "requested_ref": record["sha"],
+                                         "resolved_sha": record["sha"], "role": record["role"]}
+                                        for record in self.plan["sources"].values()])
 
     def test_privileged_case_state_is_removed_before_success(self):
         result = self.execute()

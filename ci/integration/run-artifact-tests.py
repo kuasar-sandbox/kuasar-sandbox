@@ -2,6 +2,7 @@
 """Execute only the predeclared cases from a prepared target workspace."""
 import argparse
 from contextlib import contextmanager
+import csv
 import json
 import os
 from pathlib import Path
@@ -88,7 +89,17 @@ def execute(plan, arch, shard, workspace, result_path):
             if result["extra_checks"] == ["working-set-smoke"]:
                 # Keep the existing source CI smoke with the same product bytes.
                 # Business flatten/manifest/snapshot operations remain in it.
-                selected = {**environment, "PERF_ITERS": "1", "IMAGE": images["python"]["image_id"]}
+                # Baseline-pinned platform tests still use the existing source
+                # revision manifest. Newer tests read the prepared provenance.
+                revisions = state / "working-set-revisions.tsv"
+                with revisions.open("w", newline="") as output:
+                    writer = csv.writer(output, delimiter="\t")
+                    writer.writerow(("repository", "requested_ref", "resolved_sha", "role"))
+                    for owner in artifacts.OWNERS:
+                        record = plan["sources"][owner]
+                        writer.writerow((record["repository"], record["sha"], record["sha"], record["role"]))
+                selected = {**environment, "PERF_ITERS": "1", "IMAGE": images["python"]["image_id"],
+                            "KUASAR_REVISION_MANIFEST": str(revisions)}
                 case_started = time.monotonic()
                 command = ["bash", str(workspace / "test/perf/working-set-netns.sh"), str(workspace / "test/perf/sandbox-perf-working-set.sh")]
                 completed = subprocess.run(command, cwd=state, env=selected)
