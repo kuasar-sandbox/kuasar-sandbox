@@ -1,10 +1,138 @@
 """Exercise the benchmark's actual workspace assignment without KVM setup."""
+import copy
+import csv
+import hashlib
+import json
 import os
 import re
 import tempfile
 from pathlib import Path
 import subprocess
+import sys
 import unittest
+
+
+class WorkingSetEnvironmentTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name) / "prepared/x86_64"
+        self.bindir = self.root / "bin"
+        self.bindir.mkdir(parents=True)
+        for name in ("cache-ctl", "cloud-hypervisor", "flatten-ctl", "manifest-ctl", "mkfs.erofs",
+                     "sandbox-ctl", "sandbox-init", "sandbox-runtime.bundle", "store-ctl", "vmlinux"):
+            (self.bindir / name).write_bytes(name.encode())
+        hypervisor = self.bindir / "cloud-hypervisor"
+        hypervisor.write_text('#!/bin/sh\nprintf "test hypervisor\\n"\n')
+        hypervisor.chmod(0o755)
+        commands = self.root.parent / "commands"
+        commands.mkdir()
+        self.git_calls = commands / "git-calls"
+        self.image = "sha256:" + "e" * 64
+        for name, body in {
+            "git": 'printf "%s\\n" "$*" >> "$GIT_CALLS"\nexit 128\n',
+            "docker": 'printf "%s\\n" "$TEST_IMAGE_ID"\n',
+        }.items():
+            path = commands / name
+            path.write_text("#!/bin/sh\n" + body)
+            path.chmod(0o755)
+        self.environment = dict(os.environ, PATH=str(commands) + os.pathsep + os.environ["PATH"],
+                                GIT_CALLS=str(self.git_calls), TEST_IMAGE_ID=self.image)
+        self.environment.pop("KUASAR_ARTIFACT_E2E", None)
+        self.environment.pop("KUASAR_REVISION_MANIFEST", None)
+        self.provenance = {
+            "plan_id": "a" * 64, "framework_sha": "b" * 40, "arch": "x86_64",
+            "test_revisions": {
+                owner: {"repository": "kuasar-sandbox/" + ("kuasar-sandbox" if owner == "platform" else owner),
+                        "sha": hashlib.sha1(owner.encode()).hexdigest(), "role": "candidate"}
+                for owner in ("accelerator", "connector", "guest-runtime", "orchestrator", "platform", "sandboxer")
+            },
+            "products": {
+                "cache-ctl": {"origin": "baseline", "unit": "accelerator", "sha256": "c" * 64,
+                              "sources": {"repository": "kuasar-sandbox/accelerator", "sha": "d" * 40,
+                                          "version": "v1.2.3"}},
+                "flatten-ctl": {"origin": "candidate", "unit": "runtime", "sha256": "f" * 64,
+                                "sources": {"kuasar-sandbox/accelerator": "1" * 40,
+                                            "kuasar-sandbox/guest-runtime": "2" * 40}},
+            },
+        }
+        self.manifest = self.root / "provenance.json"
+        self.output = self.root.parent / "environment.json"
+        source = Path(__file__).with_name("sandbox-perf-working-set.sh").read_text()
+        block = re.search(r'^python3 - "\$ENVIRONMENT"[^\n]*<<\'PY\'\n(.*?)^PY$', source, re.M | re.S)
+        self.assertIsNotNone(block)
+        self.code = block[1]
+
+    def run_environment(self, artifact=False):
+        environment = dict(self.environment)
+        if artifact:
+            environment["KUASAR_ARTIFACT_E2E"] = "1"
+        # Execute the actual metadata block; only external host probes are stubs.
+        return subprocess.run([sys.executable, "-c", self.code, str(self.output), str(self.root),
+                               str(self.bindir), str(self.bindir / "vmlinux"), self.image, "1", "A B C D",
+                               "16777216", "targeted-posix-fadvise-dontneed"],
+                              env=environment, text=True, capture_output=True)
+
+    def test_artifact_workspace_records_product_and_test_identities_without_git(self):
+        self.manifest.write_text(json.dumps(self.provenance))
+        self.environment["KUASAR_REVISION_MANIFEST"] = str(self.root / "absent-source-manifest.tsv")
+        result = self.run_environment(artifact=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(self.output.read_text())
+        for key, value in self.provenance.items():
+            self.assertEqual(report["prepared_inputs"][key], value)
+        self.assertEqual(report["prepared_inputs"]["provenance_sha256"],
+                         hashlib.sha256(self.manifest.read_bytes()).hexdigest())
+        for owner, pin in self.provenance["test_revisions"].items():
+            self.assertEqual(report["repositories"][owner],
+                             {"sha": pin["sha"], "dirty": False, "role": pin["role"],
+                              "source": "prepared-test-revision"})
+        self.assertEqual(report["inputs"]["image_id"], self.image)
+        self.assertEqual(report["artifacts"]["kernel_sha256"], hashlib.sha256(b"vmlinux").hexdigest())
+        for name, digest in report["artifacts"]["binaries_sha256"].items():
+            self.assertEqual(digest, hashlib.sha256((self.bindir / name).read_bytes()).hexdigest())
+        self.assertFalse(self.git_calls.exists())
+
+    def test_artifact_metadata_failure_never_falls_back_to_git(self):
+        for defect in ("missing-provenance", "missing-owner", "invalid-sha"):
+            with self.subTest(defect=defect):
+                provenance = copy.deepcopy(self.provenance)
+                if defect == "missing-owner":
+                    del provenance["test_revisions"]["accelerator"]
+                elif defect == "invalid-sha":
+                    provenance["test_revisions"]["accelerator"]["sha"] = "not-an-exact-sha"
+                if defect != "missing-provenance":
+                    self.manifest.write_text(json.dumps(provenance))
+                result = self.run_environment(artifact=True)
+                self.assertEqual(result.returncode, 1, result.stderr)
+                self.assertFalse(self.output.exists())
+                self.assertFalse(self.git_calls.exists(), result.stderr)
+
+    def test_source_manifest_still_supplies_exact_revisions(self):
+        source_manifest = self.root / "source-set.tsv"
+        with source_manifest.open("w", newline="") as output:
+            writer = csv.writer(output, delimiter="\t")
+            writer.writerow(("repository", "requested_ref", "resolved_sha", "role"))
+            for pin in self.provenance["test_revisions"].values():
+                writer.writerow((pin["repository"], "main", pin["sha"], "candidate"))
+        self.environment["KUASAR_REVISION_MANIFEST"] = str(source_manifest)
+        result = self.run_environment()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        report = json.loads(self.output.read_text())
+        self.assertNotIn("prepared_inputs", report)
+        for owner, pin in self.provenance["test_revisions"].items():
+            self.assertEqual(report["repositories"][owner],
+                             {"sha": pin["sha"], "dirty": False, "requested_ref": "main",
+                              "role": "candidate", "source": "revision-manifest"})
+        self.assertFalse(self.git_calls.exists())
+
+    def test_missing_source_checkout_still_fails(self):
+        result = self.run_environment()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("cannot resolve exact revision for accelerator", result.stderr)
+        self.assertIn("exit status 128", result.stderr)
+        self.assertFalse(self.output.exists())
+        self.assertIn("rev-parse --show-toplevel", self.git_calls.read_text())
 
 
 class WorkingSetDirectoryTest(unittest.TestCase):
