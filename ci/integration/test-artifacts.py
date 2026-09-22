@@ -96,6 +96,99 @@ class ArtifactBuildContracts(unittest.TestCase):
             self.assertFalse((output / "outputs.json").exists())
 
 
+class ArtifactExecutionContracts(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("executor", Path(__file__).with_name("run-artifact-tests.py"))
+        self.executor = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.executor)
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root / "bin").mkdir()
+        (self.root / "provenance.json").write_text("{}")
+        self.case = "test/e2e/accelerator/run_all.sh"
+        script = self.root / self.case
+        script.parent.mkdir(parents=True)
+        script.write_text('set -eu\nprintf "%s" "$TMPDIR" > "$BIN/scratch"\n'
+                          'sudo -n install -d -o root -g root -m 700 "$TMPDIR/owned"\n'
+                          'sudo -n touch "$TMPDIR/owned/source-set.json"\n')
+        self.plan = {"lanes": {"x86_64": {}}}
+        self.provenance = {"profile": {"cases": [self.case]}, "helpers": {}, "embedded": {"init": "a" * 64}}
+        self.result = self.root / "result.json"
+        self.addCleanup(self.remove_scratch)
+
+    def remove_scratch(self):
+        marker = self.root / "bin/scratch"
+        if marker.exists():
+            state = Path(marker.read_text()).parent
+            self.assertEqual(state.parent, Path("/var/tmp"))
+            self.assertTrue(state.name.startswith("ki-"))
+            subprocess.run(["sudo", "-n", "rm", "-rf", "--", str(state)], check=True)
+
+    def execute(self):
+        credentials = {key: "" for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}
+        with patch.object(self.executor.artifacts, "verify_workspace", return_value=self.provenance), \
+             patch.object(self.executor.platform, "machine", return_value="x86_64"), patch.dict(os.environ, credentials):
+            return self.executor.execute(self.plan, "x86_64", "core", self.root, self.result)
+
+    def test_privileged_case_state_is_removed_before_success(self):
+        result = self.execute()
+        self.assertEqual(result["conclusion"], "success")
+        self.assertEqual(result["timings"][0]["exit_code"], 0)
+        self.assertFalse(Path((self.root / "bin/scratch").read_text()).parent.exists())
+
+    def test_cleanup_failure_keeps_result_failed(self):
+        original_run = subprocess.run
+        def run(command, **kwargs):
+            if command[:5] == ["sudo", "-n", "rm", "-rf", "--"]:
+                raise subprocess.CalledProcessError(23, command)
+            return original_run(command, **kwargs)
+        with patch.object(self.executor.shutil, "rmtree", side_effect=PermissionError("root-owned state")), \
+             patch.object(self.executor.subprocess, "run", side_effect=run):
+            with self.assertRaises(subprocess.CalledProcessError) as failure:
+                self.execute()
+        self.assertEqual(failure.exception.returncode, 23)
+        result = json.loads(self.result.read_text())
+        self.assertEqual(result["timings"][0]["exit_code"], 0)
+        self.assertEqual(result["conclusion"], "failure")
+
+    def test_loaded_image_identity_and_platform_are_required_before_case_execution(self):
+        archive = self.root / "image.tar"
+        archive.write_bytes(b"prepared image bytes")
+        identity = "sha256:" + "b" * 64
+        self.provenance["images"] = {"python": {"archive": archive.name, "sha256": subject.digest(archive),
+                                               "image_id": identity, "platform": "linux/amd64"}}
+        original_run = subprocess.run
+        def run(command, **kwargs):
+            if command[:3] == ["docker", "image", "load"]:
+                return subprocess.CompletedProcess(command, 0)
+            if command[0] == "bash":
+                self.assertEqual(kwargs["env"]["E2E_IMAGE"], identity)
+            return original_run(command, **kwargs)
+        for record in ({"Id": identity, "Os": "linux", "Architecture": "arm64"},
+                       {"Id": "sha256:" + "c" * 64, "Os": "linux", "Architecture": "amd64"}):
+            with self.subTest(record=record), patch.object(self.executor.subprocess, "run", side_effect=run), \
+                 patch.object(self.executor.subprocess, "check_output", return_value=json.dumps([record]).encode()):
+                with self.assertRaisesRegex(ValueError, "loaded image differs"):
+                    self.execute()
+            self.assertEqual(json.loads(self.result.read_text())["timings"], [])
+            self.assertEqual(json.loads(self.result.read_text())["conclusion"], "failure")
+        record = {"Id": identity, "Os": "linux", "Architecture": "amd64"}
+        with patch.object(self.executor.subprocess, "run", side_effect=run), \
+             patch.object(self.executor.subprocess, "check_output", return_value=json.dumps([record]).encode()):
+            self.assertEqual(self.execute()["conclusion"], "success")
+
+    def test_changed_image_archive_is_rejected_before_docker_load(self):
+        archive = self.root / "image.tar"
+        archive.write_bytes(b"changed bytes")
+        self.provenance["images"] = {"python": {"archive": archive.name, "sha256": "0" * 64}}
+        with patch.object(self.executor.subprocess, "run") as command:
+            with self.assertRaisesRegex(ValueError, "prepared image bytes changed"):
+                self.execute()
+        command.assert_not_called()
+        self.assertEqual(json.loads(self.result.read_text())["conclusion"], "failure")
+
+
 class ArtifactContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
