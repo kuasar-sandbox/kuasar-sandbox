@@ -164,7 +164,7 @@ def build(plan, arch, assets, sources, output):
         helper_root = output / "helpers"
         helper_root.mkdir()
         if "versitygw" in helpers:
-            run([ROOT / "ci/hosted/exact-assets-tools.sh"], environment={**environment, "KUASAR_E2E_TOOL_OUTPUT": str(helper_root)})
+            run(["bash", ROOT / "ci/hosted/exact-assets-tools.sh"], environment={**environment, "KUASAR_E2E_TOOL_OUTPUT": str(helper_root)})
         elif "zot" in helpers:
             run(["bash", ROOT / "ci/integration/ensure-zot.sh"], environment={**environment, "BINDIR": str(helper_root)})
         if "custom-proxy" in helpers:

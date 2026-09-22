@@ -68,6 +68,34 @@ def runtime(root, arch, files):
     return prefix + footer(hashlib.sha256(prefix).hexdigest())
 
 
+class ArtifactBuildContracts(unittest.TestCase):
+    def test_build_launches_nonexecutable_framework_helper_and_preserves_failure(self):
+        spec = importlib.util.spec_from_file_location("builder", Path(__file__).with_name("build-artifacts.py"))
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        plan = {"schema": 1, "framework_sha": "a" * 40, "owners": ["platform"],
+                "test_overlays": [], "product_sources": {}, "test_revisions": {},
+                "lanes": {arch: {"products": [], "profile": subject.profiles(["platform"], arch)}
+                          for arch in subject.ARCHES}}
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root / "ci/hosted/exact-assets-tools.sh"
+            helper.parent.mkdir(parents=True)
+            helper.write_text('#!/usr/bin/env bash\n'
+                              'printf "%s\\n" "$TARGET_ARCH" > "$KUASAR_E2E_TOOL_OUTPUT/invoked"\n'
+                              'exit 23\n')
+            helper.chmod(0o644)  # Match the framework script's Git mode.
+            output = root / "build-output"
+            credentials = {key: "" for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}
+            with patch.object(builder, "ROOT", root), patch.object(builder, "materialize"), \
+                 patch.object(builder.platform, "machine", return_value="x86_64"), patch.dict(os.environ, credentials):
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    builder.build(plan, "x86_64", root / "assets", root / "sources", output)
+            self.assertEqual(failure.exception.returncode, 23)
+            self.assertEqual((output / "helpers/invoked").read_text(), "x86_64\n")
+            self.assertFalse((output / "outputs.json").exists())
+
+
 class ArtifactContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
