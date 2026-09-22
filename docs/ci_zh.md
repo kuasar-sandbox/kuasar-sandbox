@@ -179,10 +179,14 @@ ARM VM/KVM/restore/Builder/cluster 同等覆盖、新硬件和全面用例扩充
 x86 的全部六个 owner、独立源码检查和 UFFD benchmark 均成功；原生 ARM 的 accelerator/guest-runtime 非 KVM 套件成功。
 标准 x86 使用 `ubuntu-latest`，原生 ARM 使用 `ubuntu-24.04-arm`。逐项 job 链接见同一覆盖表。
 
-PR #129 将共用工作流切换到 `integration-tests.yml`，删除临时 artifact 别名与旧源码编排。
-其合并前受信任源码 CI 不构成切换后的 artifact PR 验收。
-#152 结案前仍须由真实 PR caller 记录新解析的 framework SHA、baseline/delta plan、
-prepared-workspace 执行、两架构结果及适用的 working-set smoke。
+[PR #129](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/129)
+已在提交 `dea0bc66ae766caf47f3c6684a7f426b79b730ba` 将共用工作流切换到 `integration-tests.yml`，
+删除临时 artifact 别名与旧源码编排；组件薄入口仍使用 `ci-entry.yml@main`。
+其[合并前必需运行](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35756663913)
+使用旧受信任框架，通过源码 E2E、UFFD 和 working-set smoke。
+该源码验证与 artifact PR 验收分别记录：每个真实 caller 均保留实际解析的 framework SHA、
+baseline/delta plan、prepared-workspace 执行、两架构结果及适用的 working-set smoke。
+最终 caller 证据在 [#152](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/152) 中记录后再完成上线结案。
 
 accelerator、connector、sandboxer、orchestrator 已切为 Public，并读回可见性与匿名源码/资产访问结果。
 四组件以及平台、guest-runtime 均已通过各自真实 Public 源码 CI 后正常合入；精确运行链接见上方覆盖表所在章节。

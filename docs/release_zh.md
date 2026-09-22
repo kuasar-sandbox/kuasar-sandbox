@@ -198,6 +198,15 @@ run 身份,不会用旧输入重跑或改写运行中清单。
 <a id="first-arm-initialization"></a>
 ### 首次 ARM 初始化
 
+主线初始化已完成。[release-v0.1.5-preview.20260922.4](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.5-preview.20260922.4)
+是首个通过 x86 与既定原生 ARM 非 KVM profile 的已发布基线；
+[聚合 run 35751885794](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794)
+将结果绑定到源码/框架 `69c26d2e9d7a494b3463e42c3b8c20ac1119de4f`，十四项资产保持实际测试的字节。
+随后 [PR #129](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/129)
+在 `dea0bc66ae766caf47f3c6684a7f426b79b730ba` 启用普通 artifact PR 基线解析。
+普通 PR/Daily 使用无需再次初始化或重跑该发布；`initialize_arm` 默认仍为 false。
+声明的 profile 与保留证据见 [CI 覆盖表](ci.md#7-initial-coverage-and-rollout-evidence)。
+
 公开目标实现与四组件授权切换完成后，显式派发 `daily-preview-branch.yml`，使用已有的精确
 `platform_ref`、`platform_sha`、`date` 输入，并设 `initialize_arm=true`。`INITIALIZE_ARM` 默认 false。
 选择合法的新 Preview 日期/修订号；历史 AMD64-only unit 使用新版本，从同一精确源码/依赖元组构建两个 target。
