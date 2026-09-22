@@ -199,6 +199,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
     def test_date_rollover_advances_only_a_published_update_baseline(self) -> None:
         base = "release-v1.2.3"
         current = "preview.20260908"
+        pins = {owner: "c" * 40 for owner in coordinator.selection.TEST_OWNERS}
         for complete, prior in (
             (False, None),
             (False, "preview.20260907"),
@@ -228,13 +229,14 @@ class PreviewCoordinatorTest(unittest.TestCase):
                     mock.patch.object(coordinator, "active_delete_run", return_value=None),
                     mock.patch.object(coordinator, "plan_units", return_value={}),
                     mock.patch.object(coordinator, "platform_changed_since", return_value=True),
+                    mock.patch.object(coordinator.selection, "read_simple_yaml", return_value={"test_revisions": pins}),
                     mock.patch.object(coordinator, "render_manifest", return_value="manifest") as render,
                     mock.patch.object(coordinator, "persist_manifest", return_value="b" * 40),
                     mock.patch.object(coordinator, "converge", return_value=True),
                 ):
                     coordinator.main()
                 render.assert_called_once_with(
-                    base, "release-v1.2.2", "20260909", current if complete else prior, {}
+                    base, "release-v1.2.2", "20260909", current if complete else prior, {}, pins
                 )
 
     def test_formal_coordinator_polls_after_pending_api_convergence(self) -> None:
@@ -1090,6 +1092,14 @@ components:
         config = coordinator.selection.read_simple_yaml(manifest, "fixture")
         self.assertEqual(coordinator.selection.test_revisions(config, "fixture")["orchestrator"], test_head)
         self.assertEqual(config["components"]["orchestrator"], "v1.2.3")
+        plans["orchestrator"] = coordinator.replace(plans["orchestrator"], source_ref=None, source_head=None)
+        with self.assertRaises(coordinator.selection.ManifestError):
+            coordinator.render_manifest("release-v1.2.3", None, "20260922.4", None, plans)
+        fixed = coordinator.render_manifest("release-v1.2.3", None, "20260922.4", None, plans,
+                                            config["test_revisions"])
+        fixed_config = coordinator.selection.read_simple_yaml(fixed, "fixed selection fixture")
+        self.assertEqual(fixed_config["test_revisions"]["orchestrator"], test_head)
+        self.assertEqual(fixed_config["components"], config["components"])
         for broken in ({}, {"orchestrator": test_head}, {**config["test_revisions"], "orchestrator": "main"}):
             with self.subTest(broken=broken), self.assertRaises(coordinator.selection.ManifestError):
                 coordinator.selection.test_revisions({"test_revisions": broken}, "fixture")

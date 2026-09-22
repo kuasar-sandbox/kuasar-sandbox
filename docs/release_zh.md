@@ -92,7 +92,8 @@ test_revisions:
   orchestrator: <orchestrator-test-sha>
 ```
 
-Daily 写入可信计划已经解析的组件源码精确 HEAD，即使产品 unit 被复用。准备新 Stable 选择时应提交明确的 pin；
+Daily 写入可信计划已经解析的组件源码精确 HEAD，即使产品 unit 被复用。维护选择缺少组件源码分支时，必须已有明确提交的测试 pin。
+准备新 Stable 选择时应提交明确的 pin；
 平台测试使用聚合源码 SHA。platform 包从测试 pin 取得各 owner 的完整 E2E 树，组件文档和产品仍使用所选 unit 源码。
 helper 编译、prepared 输入、结果和现有发布验证 binding 保留相同 pin，后续 baseline 对照提交清单核验。
 暂存的 `test-revisions.json` 仅供内部验证，公开资产名称和产品字节不变。新打包缺失或错配 pin 时失败；
