@@ -1,15 +1,31 @@
 #!/usr/bin/env python3
 """Execute only the predeclared cases from a prepared target workspace."""
 import argparse
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import tempfile
 import time
 
 import artifacts
+
+
+@contextmanager
+def scratch_directory():
+    # Owner cases use sudo and can leave root-owned metrics or VM state here.
+    # Only this freshly allocated private directory may need privileged removal.
+    state = Path(tempfile.mkdtemp(prefix="ki-", dir="/var/tmp"))
+    try:
+        yield state
+    finally:
+        try:
+            shutil.rmtree(state)
+        except PermissionError:
+            subprocess.run(["sudo", "-n", "rm", "-rf", "--", str(state)], check=True)
 
 
 def execute(plan, arch, shard, workspace, result_path):
@@ -21,6 +37,7 @@ def execute(plan, arch, shard, workspace, result_path):
     for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY"):
         artifacts.require(not environment.get(key), f"artifact E2E must not receive {key}")
     result = {"arch": arch, "shard": shard, "plan_id": artifacts.identity(plan), "conclusion": "failure",
+              "test_revisions": provenance["test_revisions"],
               "provenance_sha256": artifacts.digest(workspace / "provenance.json"), "cases": groups[shard], "timings": [],
               "extra_checks": plan["lanes"][arch].get("extra_checks", {}).get(shard, [])}
     started = time.monotonic()
@@ -28,8 +45,7 @@ def execute(plan, arch, shard, workspace, result_path):
     try:
         # Short private disk-backed paths preserve the existing Unix socket and
         # direct-I/O test contracts; long Actions workspace paths exceed sun_path.
-        with tempfile.TemporaryDirectory(prefix="ki-", dir="/var/tmp") as temporary:
-            state = Path(temporary)
+        with scratch_directory() as state:
             for name in ("tmp", "docker", "metrics", "perf"):
                 (state / name).mkdir(mode=0o700)
             environment.update(BIN=str(workspace / "bin"), KUASAR_ARTIFACT_E2E="1", TARGET_ARCH=arch,
@@ -79,7 +95,7 @@ def execute(plan, arch, shard, workspace, result_path):
                 result["timings"].append({"case": "working-set-smoke", "wall_seconds": time.monotonic() - case_started, "exit_code": completed.returncode})
                 artifacts.require(completed.returncode == 0, "selected working-set smoke failed")
             artifacts.verify_workspace(workspace, plan, arch)
-            result["conclusion"] = "success"
+        result["conclusion"] = "success"
     finally:
         result["wall_seconds"] = time.monotonic() - started
         result_path.write_bytes(artifacts.canonical(result) + b"\n")

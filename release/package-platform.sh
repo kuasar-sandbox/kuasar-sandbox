@@ -53,10 +53,12 @@ validate_archive() {
 }
 
 package_archive() {
-  [ "$#" -eq 3 ] \
-    || release_fail "usage: package-platform.sh package <release-version> <component-source-dir> <output-dir>"
-  local version="$1" sources="$2" output="$3"
+  [ "$#" -eq 4 ] \
+    || release_fail "usage: package-platform.sh package <release-version> <component-source-dir> <test-source-dir> <output-dir>"
+  local version="$1" sources="$2" test_sources="$3" output="$4"
   validate_aggregate_version "$version"
+  [ -n "$test_sources" ] && [ -d "$test_sources" ] \
+    || release_fail "independently pinned test source directory is missing"
   local unit
   for unit in accelerator connector runtime vmlinux sandboxer orchestrator; do
     [ -d "$sources/$unit" ] || release_fail "component source is missing: $sources/$unit"
@@ -73,7 +75,7 @@ package_archive() {
     || release_fail "vmlinux source is missing docs/vmlinux.md"
   resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$work/docs-refs.tsv"
   printf 'platform\t%s\n' "$version" >> "$work/docs-refs.tsv"
-  DOCS_SOURCE_REFS="$work/docs-refs.tsv" DOCS_VMLINUX_SOURCE="$sources/vmlinux" \
+  E2E_SOURCE_ROOT="$test_sources" DOCS_SOURCE_REFS="$work/docs-refs.tsv" DOCS_VMLINUX_SOURCE="$sources/vmlinux" \
     "$ROOT/test/e2e/assemble.sh" "$stage" "$PLATFORM_SOURCE_ROOT" \
     "$sources/accelerator" "$sources/connector" "$sources/runtime" \
     "$sources/sandboxer" "$sources/orchestrator"
@@ -101,6 +103,6 @@ case "${1:-}" in
     validate_archive "$1" "$2"
     ;;
   *)
-    release_fail "usage: package-platform.sh <package <release-version> <component-source-dir> <output-dir>|validate <release-version> <archive>>"
+    release_fail "usage: package-platform.sh <package <release-version> <component-source-dir> <test-source-dir> <output-dir>|validate <release-version> <archive>>"
     ;;
 esac

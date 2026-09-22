@@ -63,7 +63,8 @@ def aggregate(version, *, require_dual=True):
     artifacts.require(state.get("tag_name") == version and state.get("target_commitish") == sha
                       and state.get("prerelease") == ("-preview." in version), "aggregate release identity mismatch")
     relative = "releases/daily-preview.yaml" if "-preview." in version else "releases/release.yaml"
-    selected, _, units = release.selection.parse_manifest(source_text(PLATFORM, sha, relative), f"{sha}:{relative}", "-preview." in version)
+    manifest = source_text(PLATFORM, sha, relative)
+    selected, _, units = release.selection.parse_manifest(manifest, f"{sha}:{relative}", "-preview." in version)
     artifacts.require(selected == version, "aggregate tag does not select its published version")
     base_names = {"SHA256SUMS", f"platform-{version}.tar.gz"}
     x86 = {artifacts.archive_name(unit, tag, "x86_64") for unit, tag in units.items()}
@@ -83,6 +84,7 @@ def aggregate(version, *, require_dual=True):
         return None  # An interrupted current publication may use its declared predecessor.
     bindings = PROFILE_BINDING.findall(state.get("body") or "")
     validation = {"x86_64": {"name": "historical-real-kvm"}}
+    tests = None
     if arm <= set(names):
         artifacts.require(len(bindings) == 1, "dual aggregate lacks its declared validation profiles")
         binding = json.loads(bindings[0])
@@ -90,9 +92,13 @@ def aggregate(version, *, require_dual=True):
                           "aggregate validation binding has the wrong source or architecture set")
         expected = {asset["name"]: asset["digest"] for asset in state["assets"] if asset["name"] != "SHA256SUMS"}
         artifacts.require(binding["assets"] == expected, "aggregate bytes differ from validated bytes")
+        pins = release.selection.test_revisions(release.selection.read_simple_yaml(manifest, relative), relative)
+        tests = artifacts.release_test_revisions(pins, sha)
+        artifacts.require(binding.get("test_revisions") == tests, "published test pins differ from committed selection")
         for arch, result in binding["architectures"].items():
             artifacts.require(result["arch"] == arch and result["conclusion"] == "success"
-                              and result["profile"] == artifacts.profiles(["platform"], arch),
+                              and result["profile"] == artifacts.profiles(["platform"], arch)
+                              and result.get("test_revisions") == tests,
                               "aggregate did not pass its predeclared architecture profile")
         validation = binding["architectures"]
     elif require_dual:
@@ -102,7 +108,7 @@ def aggregate(version, *, require_dual=True):
         repository = REPOSITORIES[unit_owner(unit)]
         unit_records[unit] = {"version": tag, "repository": repository, "sha": exact_sha(release.tag_sha(repository, tag))}
     return {"repository": PLATFORM, "version": version, "sha": sha, "release_id": state["id"],
-            "units": unit_records, "validation": validation,
+            "units": unit_records, "validation": validation, "test_revisions": tests,
             "validation_run": max(runs, key=lambda run: run["id"])["html_url"],
             "assets": [{key: asset[key] for key in ("id", "name", "size", "digest")} for asset in state["assets"]]}
 
@@ -172,7 +178,8 @@ def source_plan(framework_sha):
     sources = {owner: {"repository": repository, "sha": selected["sha"] if owner == "platform" else
                       selected["units"]["runtime" if owner == "guest-runtime" else owner]["sha"], "role": "baseline"}
                for owner, repository in REPOSITORIES.items()}
-    tests = {owner: dict(record) for owner, record in sources.items()}
+    tests = {owner: dict(record) for owner, record in
+             artifacts.validate_test_revisions(selected.get("test_revisions")).items()}
     changes, owners, overlays = {}, [], []
     kernel_sha = selected["units"]["vmlinux"]["sha"]
     for record in records:
@@ -227,7 +234,12 @@ def exact_assets_plan(framework_sha, stage):
     version, sha = os.environ["RELEASE_VERSION"], exact_sha(os.environ["PLATFORM_SOURCE_SHA"])
     public(PLATFORM)
     relative = "releases/daily-preview.yaml" if "-preview." in version else "releases/release.yaml"
-    selected, _, units = release.selection.parse_manifest(source_text(PLATFORM, sha, relative), relative, "-preview." in version)
+    manifest = source_text(PLATFORM, sha, relative)
+    selected, _, units = release.selection.parse_manifest(manifest, relative, "-preview." in version)
+    pins = release.selection.test_revisions(release.selection.read_simple_yaml(manifest, relative), relative)
+    tests = artifacts.release_test_revisions(pins, sha)
+    artifacts.require(json.loads((stage / "test-revisions.json").read_text()) == pins,
+                      "staged test pins differ from committed selection")
     artifacts.require(selected == version, "staged aggregate is not selected by its exact platform source")
     artifacts.require((stage / "selection.tsv").read_text() == "".join(f"{unit}\t{units[unit]}\n" for unit in release.selection.UNITS),
                       "staged selection differs from exact source")
@@ -248,7 +260,7 @@ def exact_assets_plan(framework_sha, stage):
                for owner, repository in REPOSITORIES.items()}
     plan = {"schema": 1, "mode": "exact-assets", "framework_sha": exact_sha(framework_sha), "baseline": baseline,
             "candidate_records": [], "owners": ["platform"], "sources": sources, "kernel_sha": unit_records["vmlinux"]["sha"],
-            "test_revisions": sources, "test_overlays": [], "product_sources": {}, "embedded_sources": {},
+            "test_revisions": tests, "test_overlays": [], "product_sources": {}, "embedded_sources": {},
             "lanes": {arch: {"products": [], "embedded_products": [], "profile": artifacts.profiles(["platform"], arch)}
                       for arch in artifacts.ARCHES}}
     artifacts.check_plan(plan)

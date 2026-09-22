@@ -58,14 +58,50 @@ def source_owners(plan, arch):
     return owners | compiled
 
 
-def materialize(plan, arch, root):
+def build_records(plan, arch):
+    records = dict(plan["sources"])
+    products = {repository.split("/")[1] for inputs in plan["product_sources"].values() for repository in inputs}
+    helpers = set(artifacts.planned_helpers(plan["lanes"][arch]["profile"]).values()) - {"framework"}
+    for owner in helpers - products:
+        records[owner] = plan["test_revisions"][owner]
+    for owner in plan["test_overlays"]:
+        artifacts.require(records[owner]["sha"] == plan["test_revisions"][owner]["sha"],
+                          "candidate test checkout differs from its pin")
+    return records
+
+
+def checkout_records(records, root):
     root.mkdir(parents=True, exist_ok=False)
-    for owner in sorted(source_owners(plan, arch)):
-        record = plan["sources"][owner]
+    for owner, record in sorted(records.items()):
         checkout(record["repository"], record["sha"], root / owner)
-    modules = ["./" + owner for owner in sorted(source_owners(plan, arch)) if (root / owner / "go.mod").is_file()]
+    modules = ["./" + owner for owner in sorted(records) if (root / owner / "go.mod").is_file()]
     if modules:
         run(["go", "work", "init", *modules], cwd=root)
+
+
+def materialize(plan, arch, root):
+    records = build_records(plan, arch)
+    checkout_records({owner: records[owner] for owner in source_owners(plan, arch)}, root)
+
+
+def helper_sources(plan, arch, sources):
+    owners = set(artifacts.planned_helpers(plan["lanes"][arch]["profile"]).values()) - {"framework"}
+    records = build_records(plan, arch)
+    if all(records[owner]["sha"] == plan["test_revisions"][owner]["sha"] for owner in owners):
+        return sources
+    # A linked product can still require the baseline source while its test
+    # helper has an independently newer pin. Keep those compiler inputs apart.
+    required = set(owners)
+    pending = list(owners)
+    while pending:
+        for dependency in LIBRARIES.get(pending.pop(), ()):
+            if dependency not in required:
+                required.add(dependency)
+                pending.append(dependency)
+    records.update({owner: plan["test_revisions"][owner] for owner in owners})
+    root = sources / "test-helpers"
+    checkout_records({owner: records[owner] for owner in required}, root)
+    return root
 
 
 def baseline_tree(plan, arch, assets, output):
@@ -163,15 +199,17 @@ def build(plan, arch, assets, sources, output):
     if helpers:
         helper_root = output / "helpers"
         helper_root.mkdir()
+        helper_source = helper_sources(plan, arch, sources)
+        helper_environment = {**environment, "KUASAR_WORKSPACE_ROOT": str(helper_source)}
         if "versitygw" in helpers:
-            run([ROOT / "ci/hosted/exact-assets-tools.sh"], environment={**environment, "KUASAR_E2E_TOOL_OUTPUT": str(helper_root)})
+            run(["bash", ROOT / "ci/hosted/exact-assets-tools.sh"], environment={**environment, "KUASAR_E2E_TOOL_OUTPUT": str(helper_root)})
         elif "zot" in helpers:
             run(["bash", ROOT / "ci/integration/ensure-zot.sh"], environment={**environment, "BINDIR": str(helper_root)})
         if "custom-proxy" in helpers:
-            run(["bash", sources / "orchestrator/scripts/ci-e2e-build.sh", "fixtures", arch, helper_root], environment=environment)
+            run(["bash", helper_source / "orchestrator/scripts/ci-e2e-build.sh", "fixtures", arch, helper_root], environment=helper_environment)
         if "usage-probe" in helpers:
-            run(["make", "-C", sources / "sandboxer", f"TARGET_ARCH={arch}",
-                 f"E2E_FIXTURE_DIR={helper_root}", "e2e-usage-probe"], environment=environment)
+            run(["make", "-C", helper_source / "sandboxer", f"TARGET_ARCH={arch}",
+                 f"E2E_FIXTURE_DIR={helper_root}", "e2e-usage-probe"], environment=helper_environment)
     # Match the existing release packagers' executable/data modes independently
     # of the caller's umask. Tar transport preserves these through Actions.
     for name in artifacts.tree_files(output):
@@ -179,6 +217,7 @@ def build(plan, arch, assets, sources, output):
         executable = file.stat().st_mode & 0o111
         file.chmod(0o755 if executable else 0o644)
     metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "products": {}, "embedded": {}, "tests": {}, "helpers": {},
+                "test_revisions": plan["test_revisions"],
                 "build_context": {"host": platform.machine(), "target": arch, "tools": {}, "native_inputs": {}}}
     for name in lane["products"]:
         metadata["products"][name] = {"sha256": artifacts.digest(output / "bin" / name), "sources": plan["product_sources"][name]}

@@ -49,8 +49,10 @@ select_profile() {
         packages+=(autoconf automake libtool uuid-dev)
     fi
     if $with_native; then
-        # Retain the native crypto prerequisites already merged in #126.
-        packages+=(patch libgcrypt20-dev libgpg-error-dev libssl-dev liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)
+        packages+=(patch libssl-dev liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)
+        # Cross recipes use target crypto headers; their development packages
+        # cannot coexist with the host versions. Host readers disable crypto.
+        if ! $with_cross; then packages+=(libgcrypt20-dev libgpg-error-dev); fi
     fi
     if [[ "$profile" = source || "$profile" = artifact-build || "$profile" = artifact-cross ]]; then
         packages+=(cmake clang llvm libclang-dev libsnappy-dev libssl-dev)

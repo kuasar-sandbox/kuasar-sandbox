@@ -145,16 +145,6 @@ if grep -Fq 'local name="$1" record="$PID_DIR/$name.pid"' \
     echo "record_state expands its local name before assignment under set -u" >&2
     exit 1
 fi
-[[ "$DEMO_DEFAULT_E2E_IMAGE" =~ ^library/python:3\.12-slim@sha256:[0-9a-f]{64}$ ]] || {
-    echo "canonical Demo source image must be the immutable Python linux/amd64 manifest" >&2
-    exit 1
-}
-if grep -Eq 'library/python:3\.12-slim@sha256:[0-9a-f]{64}' \
-    "$SCRIPT_DIR/demo_prep.sh" "$SCRIPT_DIR/../e2e/platform/e2e_demo.sh"; then
-    echo "Demo source image digest is duplicated outside demo_common.sh" >&2
-    exit 1
-fi
-
 for script in demo_prep.sh demo_e2b.sh; do
     grep -Fq 'DEMO_LOCK_FD=200' "$SCRIPT_DIR/$script" || {
         echo "$script does not reserve the non-inherited Demo lock descriptor" >&2

@@ -903,12 +903,25 @@ def platform_changed_since(tag: str) -> bool:
     return status.tag_sha != PLATFORM_SHA
 
 
+def plan_test_revisions(
+    plans: dict[str, Plan], fixed_pins: dict[str, str] | None = None
+) -> dict[str, str]:
+    pins = {}
+    for owner in selection.TEST_OWNERS:
+        plan = plans["runtime" if owner == "guest-runtime" else owner]
+        # Without a component source branch, retain an explicitly committed test
+        # pin; a reused product tag cannot supply a missing test selection.
+        pins[owner] = (fixed_pins or {}).get(owner) if plan.source_ref is None else plan.source_head
+    return selection.test_revisions({"test_revisions": pins}, "trusted Preview plan")
+
+
 def render_manifest(
     base: str,
     previous: str | None,
     date: str,
     previous_preview: str | None,
     plans: dict[str, Plan],
+    fixed_pins: dict[str, str] | None = None,
 ) -> str:
     lines = [f"version: {base}"]
     if previous is not None:
@@ -919,6 +932,9 @@ def render_manifest(
     lines.append("components:")
     for name in selection.UNITS:
         lines.append(f"  {name}: {plans[name].selected}")
+    lines.append("test_revisions:")
+    for owner, sha in plan_test_revisions(plans, fixed_pins).items():
+        lines.append(f"  {owner}: {sha}")
     return "\n".join(lines) + "\n"
 
 
@@ -1243,15 +1259,19 @@ def main() -> None:
                 f"component cleanup is active; keep its manifest immutable: "
                 f"{active_cleanup.get('html_url')}"
             )
+    recorded = selection.read_simple_yaml(
+        (PLATFORM_ROOT / "releases/daily-preview.yaml").read_text(), "daily-preview.yaml"
+    ).get("test_revisions")
     changed = any(plans[name].selected != configured[name] for name in configured)
     if current_status.complete:
         changed = changed or platform_changed_since(current_aggregate)
+        changed = changed or plan_test_revisions(plans, recorded) != recorded
         if not changed:
             print(f"==> no source changes since {current_aggregate}; keep maintained preview")
             return
 
     aggregate = f"{base}-preview.{date}"
-    content = render_manifest(base, previous, date, next_previous_preview, plans)
+    content = render_manifest(base, previous, date, next_previous_preview, plans, recorded)
     PLATFORM_SHA = persist_manifest(content, aggregate)
     deadline = time.monotonic() + WAIT_SECONDS
     while True:

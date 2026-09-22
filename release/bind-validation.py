@@ -12,6 +12,9 @@ import artifacts
 def bind(bundle, plan, validation):
     artifacts.require(plan["mode"] == "exact-assets" and plan["baseline"].get("staged"), "release needs a staged exact-assets plan")
     artifacts.require(validation == artifacts.collect_results(plan, validation["architectures"]), "validation identity differs from staged plan")
+    pins = {owner: record["sha"] for owner, record in plan["test_revisions"].items() if owner != "platform"}
+    artifacts.require(json.loads((bundle / "test-revisions.json").read_text()) == pins,
+                      "publisher test pins differ from validated stage")
     expected = {record["name"]: record["digest"] for record in plan["baseline"]["assets"]}
     actual = {name: "sha256:" + value for name, value in artifacts.tree_files(bundle / "assets").items()}
     artifacts.require(actual == expected, "publisher bytes differ from validated stage")

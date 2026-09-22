@@ -281,6 +281,25 @@ def unpack(archive, destination, unit, seen):
             target.chmod(member.mode & 0o777)
 
 
+def validate_test_revisions(records):
+    require(isinstance(records, dict) and set(records) == set(OWNERS), "missing or unexpected owner test pins")
+    for owner, record in records.items():
+        repository = "kuasar-sandbox/" + ("kuasar-sandbox" if owner == "platform" else owner)
+        require(isinstance(record, dict) and set(record) == {"repository", "sha", "role"}
+                and record["repository"] == repository
+                and isinstance(record["sha"], str) and re.fullmatch(r"[0-9a-f]{40}", record["sha"])
+                and record["role"] in ("release", "baseline", "candidate", "companion"), "invalid owner test pin")
+    return records
+
+
+def release_test_revisions(pins, platform_sha):
+    require(isinstance(pins, dict) and set(pins) == set(OWNERS) - {"platform"}, "missing release owner test pins")
+    records = {owner: {"repository": "kuasar-sandbox/" + ("kuasar-sandbox" if owner == "platform" else owner),
+                       "sha": platform_sha if owner == "platform" else pins[owner], "role": "release"}
+               for owner in OWNERS}
+    return validate_test_revisions(records)
+
+
 def check_plan(plan):
     require(plan["schema"] == 1, "unsupported integration plan")
     require(re.fullmatch(r"[0-9a-f]{40}", plan["framework_sha"]), "missing exact framework revision")
@@ -292,8 +311,7 @@ def check_plan(plan):
         require(lane["profile"] == profiles(plan["owners"], arch), "profile differs from trusted owner selection")
         expected_extra = {"sandboxer": ["working-set-smoke"]} if plan.get("mode") == "source" and arch == "x86_64" and set(plan["owners"]) & {"platform", "sandboxer"} else {}
         require(lane.get("extra_checks", {}) == expected_extra, "extra checks differ from trusted mode/owner selection")
-    for owner, record in plan["test_revisions"].items():
-        require(owner in OWNERS and re.fullmatch(r"[0-9a-f]{40}", record["sha"]), "invalid test revision")
+    validate_test_revisions(plan.get("test_revisions"))
     return identity(plan)
 
 
@@ -318,6 +336,7 @@ def compose(plan, arch, assets, delta, output):
                 and "sha256:" + digest(path) == records[name]["digest"], f"baseline asset digest mismatch: {name}")
     metadata = json.loads((delta / "outputs.json").read_text())
     require(metadata["plan_id"] == plan_id and metadata["arch"] == arch, "candidate input identity mismatch")
+    require(metadata.get("test_revisions") == plan["test_revisions"], "build test pins differ from plan")
     require(set(metadata["products"]) == set(lane["products"]), "candidate product ownership differs from plan")
     require(set(metadata["tests"]) == set(plan["test_overlays"]), "candidate test ownership differs from plan")
     require(set(metadata.get("embedded", {})) == set(lane.get("embedded_products", [])),
@@ -432,6 +451,7 @@ def verify_workspace(workspace, plan, arch):
     del modes["provenance.json"]
     require(modes == provenance["modes"], "prepared workspace permissions changed")
     require(provenance["profile"] == plan["lanes"][arch]["profile"], "selected profile changed after preparation")
+    require(provenance.get("test_revisions") == plan["test_revisions"], "prepared test pins differ from plan")
     return provenance
 
 
@@ -443,7 +463,8 @@ def collect_results(plan, results):
                 "result belongs to a different plan or architecture")
         require(record["conclusion"] == "success" and record["profile"] == plan["lanes"][arch]["profile"],
                 f"selected {arch} validation did not pass")
-    return {"plan_id": identity(plan), "architectures": results}
+        require(record.get("test_revisions") == plan["test_revisions"], "result test pins differ from plan")
+    return {"plan_id": identity(plan), "test_revisions": plan["test_revisions"], "architectures": results}
 
 
 def collect_shard_results(plan, arch, results):
@@ -458,11 +479,13 @@ def collect_shard_results(plan, arch, results):
                 "selected shard validation did not pass")
         require(result.get("extra_checks", []) == plan["lanes"][arch].get("extra_checks", {}).get(shard, []),
                 "required extra checks are missing")
+        require(result.get("test_revisions") == plan["test_revisions"], "shard test pins differ from plan")
         require(re.fullmatch(r"[0-9a-f]{64}", result["provenance_sha256"]), "missing prepared input identity")
         prepared.add(result["provenance_sha256"])
     require(len(prepared) == 1, "shards executed different prepared workspaces")
     return {"arch": arch, "plan_id": identity(plan), "conclusion": "success",
-            "profile": plan["lanes"][arch]["profile"], "shards": results, "provenance_sha256": prepared.pop()}
+            "profile": plan["lanes"][arch]["profile"], "shards": results, "provenance_sha256": prepared.pop(),
+            "test_revisions": plan["test_revisions"]}
 
 
 def main():
