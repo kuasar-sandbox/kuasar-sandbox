@@ -3,8 +3,11 @@ import ast
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 import re
+import subprocess
+import tempfile
 import unittest
 from unittest.mock import mock_open, patch
 
@@ -83,6 +86,104 @@ class DemoBuildSelection(unittest.TestCase):
                        {"templateID": ""}):
             with self.subTest(change=change), self.assertRaises(AssertionError):
                 self.readback(**change)
+
+
+class DemoImagePreparation(unittest.TestCase):
+    def prepare(self, reference, **changes):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            docker = root / "docker"
+            docker.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+a = sys.argv[1:]
+r = Path(os.environ["LOG_DIR"])
+with (r / "calls").open("a") as f: f.write(json.dumps(a) + "\\n")
+identity = "sha256:" + "a" * 64
+destination = "registry.test/test/base:sha-" + "a" * 64
+if a[:2] == ["image", "inspect"]:
+    if a[3] == "{{.Id}} {{.Os}}/{{.Architecture}}":
+        if os.environ.get("MISSING") and not (r / "pulled").exists(): sys.exit(1)
+        print(identity, os.environ.get("PLATFORM", "linux/amd64"))
+    elif a[3] == "{{.Id}}": print(os.environ.get("DEST_ID", identity))
+    else: print("registry.test/test/base@sha256:" + "b" * 64)
+elif a[0] == "pull":
+    if a[-1] == destination:
+        if not os.environ.get("EXISTS") and not (r / "pushed").exists():
+            print("manifest unknown", file=sys.stderr); sys.exit(1)
+    else: (r / "pulled").touch()
+elif a[0] == "tag":
+    assert a[1] == identity, "mutable input was resolved again instead of using its image ID"
+elif a[0] == "push": (r / "pushed").touch()
+else: raise AssertionError(a)
+''')
+            docker.chmod(0o755)
+            curl = root / "curl"
+            curl.write_text('''#!/usr/bin/env python3
+import json, os, sys
+from pathlib import Path
+a = sys.argv[1:]
+r = Path(os.environ["LOG_DIR"])
+exists = os.environ.get("EXISTS") or (r / "pushed").exists()
+body = {"config":{"digest":os.environ.get("DEST_ID", "sha256:" + "a" * 64)}} if exists else {"errors":[{"code":"MANIFEST_UNKNOWN"}]}
+Path(a[a.index("-o") + 1]).write_text(json.dumps(body))
+Path(a[a.index("-D") + 1]).write_text("Docker-Content-Digest: sha256:" + "b" * 64 + "\\r\\n")
+print("200" if exists else "404")
+''')
+            curl.chmod(0o755)
+            prep = Path(__file__).with_name("demo_prep.sh").read_text()
+            # Run the actual input resolution and publish/readback path, with
+            # only Docker and the owned Registry transport replaced by fixtures.
+            block = prep[prep.index('SOURCE_IMAGE_INFO=""'):prep.index('ENV_TMP=')]
+            script = 'set -euo pipefail\n. "$1"\nsay() { :; }\nok() { :; }\n' + block
+            script += '\nprintf "%s\\n" "$SOURCE_IMAGE_ID" "$BASE_TAG" "$BASE_REF"\n'
+            env = {"PATH": str(root) + os.pathsep + os.environ["PATH"], "LOG_DIR": str(root),
+                   "E2E_IMAGE": reference, "REGISTRY": "registry.test", "REGISTRY_NS": "test", "ZOT_PORT": "5000",
+                   "OWNED_ZOT": "1", "KUASAR_ARTIFACT_E2E": "1", **changes}
+            result = subprocess.run(["bash", "-c", script, "_", str(Path(__file__).with_name("demo_common.sh"))],
+                                    env=env, text=True, capture_output=True, timeout=5)
+            calls = [json.loads(line) for line in (root / "calls").read_text().splitlines()]
+            return result, calls
+
+    def test_names_tags_ids_and_digests_resolve_once_without_source_pull(self):
+        identity = "sha256:" + "a" * 64
+        for reference in ("python", "python:3.12-slim", identity, "a" * 12, "python@sha256:" + "c" * 64):
+            with self.subTest(reference=reference):
+                result, calls = self.prepare(reference)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), [identity, "sha-" + "a" * 64,
+                                 "registry.test/test/base@sha256:" + "b" * 64])
+                self.assertEqual([c for c in calls if c[0] == "pull"], [])
+                self.assertEqual([c for c in calls if c[:2] == ["image", "inspect"]],
+                                 [["image", "inspect", "--format", "{{.Id}} {{.Os}}/{{.Architecture}}", reference]])
+                self.assertEqual([c[1] for c in calls if c[0] == "tag"], [identity])
+                self.assertEqual(len([c for c in calls if c[0] == "push"]), 1)
+
+    def test_missing_prepared_image_and_wrong_platform_fail_without_pull_or_publish(self):
+        for change in ({"MISSING": "1"}, {"PLATFORM": "linux/arm64"}, {"PLATFORM": "windows/amd64"}):
+            with self.subTest(change=change):
+                result, calls = self.prepare("python:local", **change)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(c[0] in ("pull", "tag", "push") for c in calls))
+
+    def test_standalone_preparation_can_pull_a_missing_reference(self):
+        result, calls = self.prepare("python:local", MISSING="1", KUASAR_ARTIFACT_E2E="0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([c for c in calls if c[0] == "pull"], [["pull", "--platform", "linux/amd64", "python:local"]])
+
+    def test_destination_content_mismatch_is_never_overwritten(self):
+        for owned in ("0", "1"):
+            with self.subTest(owned=owned):
+                result, calls = self.prepare("python:local", EXISTS="1", DEST_ID="sha256:" + "d" * 64, OWNED_ZOT=owned)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("refusing to overwrite", result.stderr)
+                self.assertFalse(any(c[0] in ("tag", "push") for c in calls))
+
+    def test_new_destination_content_is_read_back_after_publish(self):
+        result, calls = self.prepare("python:local", DEST_ID="sha256:" + "d" * 64)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("refusing to overwrite", result.stderr)
+        self.assertEqual(len([c for c in calls if c[0] == "push"]), 1)
 
 
 if __name__ == "__main__":

@@ -40,10 +40,8 @@ for socket_path in "$STORE_SOCK" "$CACHE_SOCK" "$CACHE_HEALTH_SOCK"; do
     case "$socket_path" in "$RUN_DIR"/*) ;; *) demo_die "Demo socket must stay below $RUN_DIR: $socket_path" ;; esac
 done
 
-# This linux/amd64 manifest digest was resolved when this script was updated.
-# The acceptance run must exercise it with the pinned SDK pair in
-# requirements.txt. Overrides should likewise use immutable digest references
-# rather than a moving tag.
+# Resolve any Docker image reference once, then use that exact local object.
+# The default image selection remains shared with Integration E2E.
 E2E_IMAGE="${E2E_IMAGE:-$DEMO_DEFAULT_E2E_IMAGE}"
 REGISTRY_NS="${REGISTRY_NS:-e2b}"
 ZOT_BIN="${ZOT_BIN:-$(command -v zot 2>/dev/null || true)}"
@@ -430,22 +428,24 @@ else
     say "versitygw is absent; Quick Start may omit COPY, while the complete Demo will refuse to skip it"
 fi
 
-case "$E2E_IMAGE" in *@sha256:????????????????????????????????????????????????????????????????) ;; *)
-    demo_die "E2E_IMAGE must be an immutable sha256 digest reference: $E2E_IMAGE"
-esac
-IMAGE_DIGEST="${E2E_IMAGE##*@sha256:}"
-[[ "$IMAGE_DIGEST" =~ ^[0-9a-fA-F]{64}$ ]] || demo_die "invalid E2E_IMAGE digest"
-BASE_TAG="sha-${IMAGE_DIGEST,,}"
-BASE_TAG_REF="$REGISTRY/$REGISTRY_NS/base:$BASE_TAG"
-
-if ! docker image inspect "$E2E_IMAGE" >/dev/null 2>&1; then
+SOURCE_IMAGE_INFO=""
+if ! SOURCE_IMAGE_INFO="$(docker image inspect --format '{{.Id}} {{.Os}}/{{.Architecture}}' "$E2E_IMAGE" 2>/dev/null)"; then
+    [ "${KUASAR_ARTIFACT_E2E:-0}" != 1 ] \
+        || demo_die "prepared E2E image is missing locally: $E2E_IMAGE"
     if ! docker pull --platform linux/amd64 "$E2E_IMAGE" >"$LOG_DIR/source-pull.log" 2>&1; then
         echo "docker pull output for public source image $E2E_IMAGE:" >&2
         sed -n 'p' "$LOG_DIR/source-pull.log" >&2
         demo_die "docker pull failed for $E2E_IMAGE"
     fi
+    SOURCE_IMAGE_INFO="$(docker image inspect --format '{{.Id}} {{.Os}}/{{.Architecture}}' "$E2E_IMAGE")"
 fi
-SOURCE_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$E2E_IMAGE")"
+read -r SOURCE_IMAGE_ID SOURCE_IMAGE_PLATFORM <<<"$SOURCE_IMAGE_INFO"
+[[ "$SOURCE_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] \
+    || demo_die "Docker returned an invalid source image identity"
+[ "$SOURCE_IMAGE_PLATFORM" = linux/amd64 ] \
+    || demo_die "Demo source image must be linux/amd64, got $SOURCE_IMAGE_PLATFORM"
+BASE_TAG="sha-${SOURCE_IMAGE_ID#sha256:}"
+BASE_TAG_REF="$REGISTRY/$REGISTRY_NS/base:$BASE_TAG"
 BASE_REF=""
 
 probe_owned_zot_manifest() {
@@ -495,7 +495,7 @@ if [ "$OWNED_ZOT" -eq 1 ]; then
         say "base image already seeded and content-matched: $BASE_TAG_REF"
     else
         say "seeding immutable base image $E2E_IMAGE"
-        docker tag "$E2E_IMAGE" "$BASE_TAG_REF"
+        docker tag "$SOURCE_IMAGE_ID" "$BASE_TAG_REF"
         push_base_image
         probe_owned_zot_manifest \
             || demo_die "owned Zot still reports $BASE_TAG_REF absent after push"
@@ -509,7 +509,7 @@ else
         demo_die "could not determine whether $BASE_TAG_REF is absent; refusing to overwrite it"
     fi
     say "seeding immutable base image $E2E_IMAGE"
-    docker tag "$E2E_IMAGE" "$BASE_TAG_REF"
+    docker tag "$SOURCE_IMAGE_ID" "$BASE_TAG_REF"
     push_base_image
     docker pull --platform linux/amd64 "$BASE_TAG_REF" >>"$LOG_DIR/destination-pull.log" 2>&1 \
         || demo_die "could not read back $BASE_TAG_REF after push"
@@ -536,7 +536,7 @@ ENV_TMP="$DEMO_DATA_DIR/.prep.env.$$"
     printf 'CACHE_SOCK=%q\n' "$CACHE_SOCK"
     printf 'CACHE_HEALTH_SOCK=%q\n' "$CACHE_HEALTH_SOCK"
     printf 'BASE_REF=%q\n' "$BASE_REF"
-    printf 'E2E_IMAGE=%q\n' "$E2E_IMAGE"
+    printf 'E2E_IMAGE=%q\n' "$SOURCE_IMAGE_ID"
     printf 'VGW_ENDPOINT=%q\n' "$VGW_ENDPOINT"
     printf 'VGW_BUCKET=%q\n' "$VGW_BUCKET"
     printf 'VGW_REGION=%q\n' us-east-1
