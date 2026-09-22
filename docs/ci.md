@@ -2,8 +2,6 @@
 
 # Continuous integration
 
-The rollout has two protected steps. The foundation installs the shared build/release primitives and validates new aggregates through `integration-artifacts.yml`. During first-baseline initialization, PRs retain the existing source flow on public standard runners, with required source checks and fixture compilation before E2E and no App key in candidate jobs. After all coordinated component changes and the first declared-profile dual aggregate pass, PR #129 replaces that source entry with the artifact flow and removes the temporary workflow alias. This is an explicit rollout stage, never an automatic fallback when an artifact baseline is missing.
-
 ## 1. Public caller and trusted control
 
 The platform owns `ci-entry.yml`, `integration-tests.yml` and `integration-architecture.yml`. Component PR wrappers keep `ci-entry.yml@main`; GitHub resolves that trusted framework once per run. Every hosted job, including admission, coordination, publication, finalization and cleanup, checks **the actual event repository before runner allocation**:
@@ -100,18 +98,24 @@ Local contract checks: `make test-ci-tools test-release-tools test-perf-tools` w
 
 ## 7. Initial coverage and rollout evidence
 
-This is the single initial coverage ledger for #152. Update the evidence column with exact public run URLs and SHAs during rollout; an unexecuted selected case remains pending, not passed. The Chinese guide links to this same ledger for scope, reasons, evidence and follow-up.
+This is the single initial coverage ledger for #152. The Chinese guide links here for scope, reasons, evidence and follow-up. Selected cases require actual successful results.
 
-| Architecture / owner | Predeclared scope | Evidence at implementation | Gap / next step |
+| Architecture / owner | Predeclared scope | Public execution evidence | Gap / next step |
 | --- | --- | --- | --- |
-| x86_64 / all six owners | Existing complete owner entries, split core/sandboxer/orchestrator; OBS excluded | Artifact/workflow/release contracts pass locally; actual public E2E pending | Run every actual public caller; record run/SHA and failures |
-| x86_64 / source checks | Required unit/race/vet, pinned-BPF stats, ENOSPC, Collector source regressions, UFFD | Sandboxer and orchestrator source checks passed on isolated native precheck; public source/UFFD job pending | Actual standard-runner check remains required |
-| aarch64 / accelerator | Existing cache/store/rolling/manifest and port-lease non-KVM suite | Architecture/composition fixtures pass; native ARM pending | Run existing suite on public standard ARM |
-| aarch64 / guest-runtime | Existing non-KVM flatten/OCI suite | Architecture/embedded identity fixtures pass; native ARM pending | Run existing suite on public standard ARM |
-| aarch64 / connector, sandboxer, orchestrator, platform | Product identity/composition only; no selected owner E2E | Exclusions fixed in plan before execution | No independently selected ARM non-KVM owner entry; VM/KVM/restore/Builder/cluster parity is follow-up |
+| x86_64 / all six owners | Existing complete owner entries, split core/sandboxer/orchestrator; OBS excluded | [Core](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794/job/106831237865), [sandboxer](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794/job/106831237847) and [orchestrator](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794/job/106831239335) passed with prepared assets | Post-activation PR caller evidence remains required |
+| x86_64 / source checks | Required unit/race/vet, pinned-BPF stats, ENOSPC, Collector source regressions, UFFD | [Separate required source job passed all six checks](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794/job/106828635736), including the UFFD source benchmark | Retained for applicable PR owners; PR working-set smoke remains required |
+| aarch64 / accelerator | Existing cache/store/rolling/manifest and port-lease non-KVM suite | [Native ARM execution passed](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794/job/106829880307) | Keep the declared non-KVM scope |
+| aarch64 / guest-runtime | Existing non-KVM flatten/OCI suite | [Native ARM execution passed](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794/job/106829880307) | Keep the declared non-KVM scope |
+| aarch64 / connector, sandboxer, orchestrator, platform | Product identity/composition only; no selected owner E2E | [Composition and provenance passed](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794/job/106829377176); exclusions fixed before execution | No independently selected ARM non-KVM owner entry; VM/KVM/restore/Builder/cluster parity is follow-up |
 | both / credentialed OBS or real cloud | Not selected | No cloud claim | Separate environment and evidence required |
 
-The four component Public cutovers follow the existing #82 readiness records and #128 migration work, with scoped review of new content and real credential/distribution blockers. Public-only CI runs after actual visibility read-back. A guard-skipped private run cannot qualify a component. Preserve ordinary review/protections; no public proxy or protection bypass. Historical test-capability disposition still needs confirmed evidence before the authorized cutover; implementation tests alone do not resolve it.
+[Aggregate run 35751885794, attempt 1](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794) passed both declared profiles and published [release-v0.1.5-preview.20260922.4](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.5-preview.20260922.4) from source/framework `69c26d2e9d7a494b3463e42c3b8c20ac1119de4f`. Its release validation binding records plan `00969ac8d0bd389b78101ece51675c9315ce2d985beaf6c18b36a8169dcc700b`, independent owner test pins, both provenance digests and successful shard results. All fourteen published assets match the tested staged digests; anonymous SHA256SUMS readback passed. All six component units were reused, and eighteen historical release/tag/asset identities remained unchanged. Standard x86 jobs used `ubuntu-latest`; native ARM used `ubuntu-24.04-arm`.
+
+PR #129 activates this shared workflow at `integration-tests.yml` and removes the temporary artifact alias and source orchestration. Its pre-merge trusted source CI does not establish post-activation artifact PR acceptance. A real PR caller must still record the newly resolved framework SHA, baseline/delta plan, prepared-workspace execution, both architecture results and applicable working-set smoke before #152 is closed.
+
+Completed Public source acceptance: [platform #159](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35660952525), [accelerator #144](https://github.com/kuasar-sandbox/accelerator/actions/runs/35662919390), [connector #64](https://github.com/kuasar-sandbox/connector/actions/runs/35662687375), [sandboxer #267](https://github.com/kuasar-sandbox/sandboxer/actions/runs/35640791998), [orchestrator #408](https://github.com/kuasar-sandbox/orchestrator/actions/runs/35654577585), and [guest-runtime #74](https://github.com/kuasar-sandbox/guest-runtime/actions/runs/35640824293). These runs exercised the source path during initialization; the table tracks the separate artifact rollout.
+
+Accelerator, connector, sandboxer and orchestrator are Public; visibility and anonymous source/asset access were read back after the authorized cutover. Their actual Public source CI passed before normal merges, alongside platform and guest-runtime. The historical capability disposition is closed in [#82](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/82#issuecomment-5765674410): those fixtures used per-invocation loopback/local-only authority, the original instance was destroyed, and copied fixtures create independent local instances. Ordinary review and required checks remain in force.
 
 ## 8. See also
 

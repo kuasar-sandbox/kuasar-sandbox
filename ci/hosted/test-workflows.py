@@ -80,115 +80,9 @@ def check_request_rejection():
                 assert message in result.stderr, (overrides, result.stderr)
 
 
-def check_source_images(step):
-    """Run the actual image step from its declared workspace and preserve failures."""
-    cases = (("accelerator", False, 0, 0, ["pull python:3.12-slim", "pull python:3.12-alpine"]),
-             ("connector", False, 0, 0, []),
-             ("unknown", False, 0, 2, []),
-             ("accelerator", True, 0, 127, []),
-             ("accelerator", False, 73, 73, ["pull python:3.12-slim"]))
-    for owner, missing_helper, pull_exit, expected_exit, expected_pulls in cases:
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            helper = workspace / "src/platform/ci/integration/source-owner.sh"
-            helper.parent.mkdir(parents=True)
-            if not missing_helper:
-                helper.write_text((ROOT / "ci/integration/source-owner.sh").read_text())
-            tools = workspace / "tools"
-            tools.mkdir()
-            docker = tools / "docker"
-            docker.write_text('#!/usr/bin/env bash\nprintf "%s\\n" "$*" >> "$PULL_LOG"\nexit "$PULL_EXIT"\n')
-            docker.chmod(0o755)
-            log = workspace / "pulls"
-            env = dict(os.environ, PATH=f"{tools}:{os.environ['PATH']}",
-                       CANDIDATE_REPOSITORY=f"kuasar-sandbox/{owner}",
-                       PULL_LOG=str(log), PULL_EXIT=str(pull_exit))
-            result = subprocess.run(["bash", "-e", "-o", "pipefail", "-c", step["run"]],
-                                    cwd=workspace / step.get("working-directory", "."), env=env,
-                                    capture_output=True, text=True, timeout=5)
-            assert result.returncode == expected_exit, (owner, missing_helper, result.stderr)
-            pulls = log.read_text().splitlines() if log.exists() else []
-            assert pulls == expected_pulls, (owner, pulls, result.stderr)
-
-
-def check_source_transition(script):
-    """Execute the rollout step: extracted checks precede E2E and fail closed."""
-    cases = (("kuasar-sandbox", True, False), ("connector", True, False), ("sandboxer", True, False),
-             ("orchestrator", True, False), ("kuasar-sandbox", False, False),
-             ("orchestrator", True, True))
-    for owner, extracted, fail_check in cases:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            platform = root / "platform"
-            def write(relative, body):
-                path = root / relative
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("#!/usr/bin/env bash\nset -euo pipefail\n" + body)
-                path.chmod(0o755)
-            write("platform/ci/integration/source-owner.sh", '''
-if [ "$1" != build ]; then exit 1; fi
-echo build >> "$EVENT_LOG"
-''')
-            write("platform/ci/integration/ci-timed.sh", 'shift; exec "$@"\n')
-            if extracted:
-                for component in ("connector", "sandboxer", "orchestrator"):
-                    write(f"{component}/scripts/ci-source-checks.sh", f'''
-[ "$TMPDIR" = /var/tmp ]
-echo {component}-checks >> "$EVENT_LOG"
-[ "$FAIL_CHECK" = false ]
-''')
-                (root / "sandboxer/Makefile").write_text(
-                    'e2e-usage-probe:\n\t@echo usage-fixtures >> "$$EVENT_LOG"\n'
-                    '\t@mkdir -p "$(E2E_FIXTURE_DIR)"\n\t@touch "$(E2E_FIXTURE_DIR)/usage-probe"\n')
-                write("orchestrator/scripts/ci-e2e-build.sh", '''
-[ "$1" = fixtures ] && [ "$2" = x86_64 ]
-echo fixtures >> "$EVENT_LOG"
-mkdir -p "$3"
-touch "$3/custom-proxy" "$3/telemetry-grpc-probe"
-''')
-            runner = "platform/build/e2e-suite/test/e2e/"
-            write(runner + "platform/lib/failure-diagnostics.sh",
-                  (ROOT / "test/e2e/platform/lib/failure-diagnostics.sh").read_text())
-            runner += "run_all.sh" if owner == "kuasar-sandbox" else f"{owner}/run_all.sh"
-            write(runner, '''
-[ -f "$BASH_ENV" ]
-if [ "$EXPECT_HELPERS" = true ]; then
-  [ -f "$CUSTOM_PROXY_BIN" ] && [ -f "$TELEMETRY_GRPC_PROBE_BIN" ]
-fi
-if [ "$EXPECT_USAGE_PROBE" = true ]; then [ -f "$USAGE_PROBE_BIN" ]; fi
-echo e2e >> "$EVENT_LOG"
-''')
-            log = root / "events"
-            env = dict(os.environ, KUASAR_HOSTED="false", EVENT_LOG=str(log),
-                       CANDIDATE_REPOSITORY=f"kuasar-sandbox/{owner}",
-                       E2E_ZOT_BIN="fixture-zot", E2E_VGW_BIN="fixture-vgw",
-                       FAIL_CHECK=str(fail_check).lower(),
-                       EXPECT_USAGE_PROBE=str(extracted and owner in ("sandboxer", "kuasar-sandbox")).lower(),
-                       EXPECT_HELPERS=str(extracted and owner in ("orchestrator", "kuasar-sandbox")).lower())
-            result = subprocess.run(["bash", "-c", script], cwd=platform, env=env,
-                                    capture_output=True, text=True, timeout=5)
-            expected = ["build"]
-            if extracted:
-                if owner in ("connector", "kuasar-sandbox"):
-                    expected.append("connector-checks")
-                if owner in ("sandboxer", "kuasar-sandbox"):
-                    expected.append("sandboxer-checks")
-                if owner in ("orchestrator", "kuasar-sandbox"):
-                    expected.append("orchestrator-checks")
-                if owner in ("sandboxer", "kuasar-sandbox") and not fail_check:
-                    expected.append("usage-fixtures")
-                if owner in ("orchestrator", "kuasar-sandbox"):
-                    if not fail_check:
-                        expected.append("fixtures")
-            if not fail_check:
-                expected.append("e2e")
-            assert (result.returncode == 0) != fail_check, (owner, result.stderr)
-            assert log.read_text().splitlines() == expected, (owner, result.stderr)
-
-
 def check():
     entry = load("ci-entry.yml")["jobs"]
-    integration = load("integration-artifacts.yml")["jobs"]
+    integration = load("integration-tests.yml")["jobs"]
     lanes = load("integration-architecture.yml")["jobs"]
     # Evaluate real allocation guards: candidate inputs, provider publicity and
     # failure/finalization cannot authorize a private or mismatched actual caller.
@@ -214,19 +108,6 @@ def check():
                 assert "self-hosted" not in str(job["runs-on"]), name
                 if not str(job["runs-on"]).startswith("${{"):
                     assert job["runs-on"] == "ubuntu-latest", (name, job["runs-on"])
-    transition = load("integration-tests.yml")["jobs"]["e2e"]
-    assert transition["runs-on"] == "ubuntu-latest"
-    assert "KUASAR_CI_APP_PRIVATE_KEY" not in json.dumps(transition)
-    assert "create-github-app-token" not in json.dumps(transition)
-    transition_steps = {step.get("name"): step for step in transition["steps"]}
-    check_source_images(transition_steps["Pull standard runner test images"])
-    assert '.visibility == "public"' in transition_steps["Assemble the five component source repositories"]["run"]
-    source_stage = transition_steps["Build and test source candidate"]["run"]
-    assert 'TMPDIR=/var/tmp bash "$checker"' in source_stage
-    assert '"${fixture_env[@]}" bash "$runner"' in source_stage
-    assert 'ci-e2e-build.sh fixtures x86_64' in source_stage
-    check_source_transition(source_stage)
-    assert any(job.get("uses") == "./.github/workflows/integration-artifacts.yml" for job in load("aggregate-release.yml")["jobs"].values())
     check_request_rejection()
     assert entry["e2e"]["uses"] == "./.github/workflows/integration-tests.yml"
     assert entry["e2e"]["with"]["candidate_repository"] == "${{ github.repository }}"

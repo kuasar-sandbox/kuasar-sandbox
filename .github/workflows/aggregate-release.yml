@@ -136,7 +136,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
-    uses: ./.github/workflows/integration-artifacts.yml
+    uses: ./.github/workflows/integration-tests.yml
     with:
       mode: exact-assets
       release_version: ${{ needs.prepare.outputs.version }}

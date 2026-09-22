@@ -306,7 +306,7 @@ assert "  ci:\n    uses: kuasar-sandbox/kuasar-sandbox/.github/workflows/ci-entr
 assert "previous-required-check" not in caller
 assert "bms / finalize" not in caller
 aggregate = (root / ".github/workflows/aggregate-release.yml").read_text()
-assert "uses: ./.github/workflows/integration-artifacts.yml" in aggregate
+assert "uses: ./.github/workflows/integration-tests.yml" in aggregate
 assert "needs: [prepare, release-asset-validation]" in aggregate
 assert "bms-e2e.yml" not in aggregate
 assert (root / ".github/workflows/ci-entry.yml").is_file()
