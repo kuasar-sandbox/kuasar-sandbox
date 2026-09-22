@@ -25,7 +25,7 @@ unrelated generated files.
 <a id="documentation-language-and-review-policy"></a>
 ## Documentation contributions
 
-Organize documentation around one complete user task or component contract. Merge fix-specific notes into their owning specification; remove obsolete one-off reports instead of relocating them to a new archive hierarchy. Split a document only when its sections form independently useful contracts. Record moved sections and removed duplication in the PR, preserve both language editions, and validate source and packaged navigation.
+Organize documentation around one complete user task or component contract. Merge fix-specific notes into their owning specification; remove obsolete one-off reports instead of relocating them to a new archive hierarchy. Add or split a document only when it has a genuinely independent responsibility; a feature, fix, package or flag alone does not justify a separate file. Historical evidence does not require retaining one-off report files; original Git/PR/Issue history can preserve it. Record moved sections and removed duplication in the PR, preserve both language editions, and validate source and packaged navigation.
 
 ### Scope
 

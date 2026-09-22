@@ -1,4 +1,5 @@
 """Exercise the delivered documentation layout and independent kernel selection."""
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -7,6 +8,9 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = ('platform', 'accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator')
+SPEC = importlib.util.spec_from_file_location('check_docs', ROOT / 'ci/check_docs.py')
+DOCS = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(DOCS)
 
 
 class DocumentationPackageTest(unittest.TestCase):
@@ -131,6 +135,46 @@ class DocumentationPackageTest(unittest.TestCase):
         self.assertIn('[anchor](connector.md#connector)', zh)
         self.assertIn('[explicit English](connector.md)', zh)
         self.assertIn('[English-only](accelerator.md)', zh)
+
+    def test_owner_section_navigation_in_source_and_package(self):
+        source = self.root / 'sandboxer'
+        owners = {'sandbox': ('artifact-model', 'journal-output-targets',
+                              'usage-query', 'usage-metrics', 'usage-persistence',
+                              'read-recovery'),
+                  'sandbox-init': ('usage-observations',),
+                  'cloud-hypervisor': ('integration',)}
+        for suffix in ('', '_zh'):
+            navigation = ''.join(f'[{owner}](docs/{owner}{suffix}.md#{anchors[0]})\n'
+                                 for owner, anchors in owners.items())
+            for entry in ('README', 'CONTRIBUTING'):
+                selector = f'[English]({entry}.md) | [简体中文]({entry}_zh.md)\n'
+                (source / f'{entry}{suffix}.md').write_text(selector + navigation)
+            for owner, anchors in owners.items():
+                selector = f'[English]({owner}.md) | [简体中文]({owner}_zh.md)\n'
+                sections = ''.join(f'<a id="{anchor}"></a>\n## {anchor}\n'
+                                   for anchor in anchors)
+                (source / f'docs/{owner}{suffix}.md').write_text(selector + sections)
+            consumer = self.root / 'orchestrator/docs' / f'consumer{suffix}.md'
+            consumer.write_text(
+                '[English](consumer.md) | [简体中文](consumer_zh.md)\n'
+                + ''.join(f'[{anchor}](https://github.com/kuasar-sandbox/sandboxer/'
+                          f'blob/main/docs/{owner}{suffix}.md#{anchor})\n'
+                          for owner, anchors in owners.items() for anchor in anchors))
+        for root in (source, self.root / 'orchestrator'):
+            for path in root.rglob('*.md'):
+                self.assertEqual(DOCS.check_file(root, path), [], str(path))
+        output, _ = self.assemble()
+        for path in output.rglob('*.md'):
+            self.assertEqual(DOCS.check_file(output, path), [], str(path))
+        for suffix in ('', '_zh'):
+            readme = (output / f'docs/sandboxer{suffix}.md').read_text()
+            contributing = (output / f'docs/sandboxer/CONTRIBUTING{suffix}.md').read_text()
+            consumer = (output / f'docs/consumer{suffix}.md').read_text()
+            for owner, anchors in owners.items():
+                self.assertIn(f'({owner}{suffix}.md#{anchors[0]})', readme)
+                self.assertIn(f'(../{owner}{suffix}.md#{anchors[0]})', contributing)
+                for anchor in anchors:
+                    self.assertIn(f'({owner}{suffix}.md#{anchor})', consumer)
 
     def test_collisions_are_rejected(self):
         for owner in ('accelerator', 'connector'):
