@@ -52,6 +52,10 @@ def main() -> None:
         coordinator.fail(f"release.yaml selects {aggregate}, not {version}")
 
     historical_aggregate = coordinator.platform_release(version).complete
+    if not historical_aggregate:
+        coordinator.selection.test_revisions(
+            coordinator.selection.read_simple_yaml(path.read_text(encoding="utf-8"), str(path)), str(path)
+        )
     plans: dict[str, coordinator.Plan] = {}
     for unit in coordinator.UNITS:
         tag = configured[unit.name]

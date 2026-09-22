@@ -20,6 +20,10 @@ import artifacts as subject
 import transport
 
 
+def test_revisions(sha="d" * 40):
+    return subject.release_test_revisions({owner: sha for owner in subject.OWNERS if owner != "platform"}, sha)
+
+
 def elf(arch, marker):
     header = bytearray(64)
     header[:7] = b"\x7fELF\x02\x01\x01"
@@ -69,12 +73,64 @@ def runtime(root, arch, files):
 
 
 class ArtifactBuildContracts(unittest.TestCase):
+    def test_helper_checkout_uses_test_pin_and_preserves_product_source(self):
+        spec = importlib.util.spec_from_file_location("builder", Path(__file__).with_name("build-artifacts.py"))
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            repository = root / "repository"
+            repository.mkdir()
+            def git(*args):
+                return subprocess.check_output(["git", "-C", str(repository), *args])
+            git("init", "-q")
+            git("config", "user.name", "test-pin-fixture")
+            git("config", "user.email", "test-pin@example.invalid")
+            (repository / "cmd").mkdir()
+            (repository / "cmd/product").write_bytes(b"unchanged product input")
+            script = repository / "scripts/ci-e2e-build.sh"
+            script.parent.mkdir()
+            script.write_text('printf "old helper" > "$3/custom-proxy"\n')
+            git("add", ".")
+            git("commit", "-qm", "product and old helper")
+            product = git("rev-parse", "HEAD").decode().strip()
+            script.write_text('printf "pinned helper" > "$3/custom-proxy"\n')
+            git("add", ".")
+            git("commit", "-qm", "helper-only change")
+            pin = git("rev-parse", "HEAD").decode().strip()
+            def checkout(name, sha, destination):
+                destination.mkdir()
+                if name == "kuasar-sandbox/orchestrator":
+                    with tarfile.open(fileobj=io.BytesIO(git("archive", sha))) as tree:
+                        tree.extractall(destination, filter="data")
+            for rebuild in (False, True):
+                plan = {"sources": test_revisions(product), "test_revisions": test_revisions(product),
+                        "test_overlays": [], "product_sources":
+                        {"node-ctl": {"kuasar-sandbox/orchestrator": product}} if rebuild else {},
+                        "lanes": {"x86_64": {"profile": subject.profiles(["orchestrator"], "x86_64")}}}
+                plan["test_revisions"]["orchestrator"]["sha"] = pin
+                sources = root / str(rebuild)
+                with patch.object(builder, "checkout", side_effect=checkout):
+                    builder.materialize(plan, "x86_64", sources)
+                    helper = builder.helper_sources(plan, "x86_64", sources)
+                self.assertEqual(plan["sources"]["orchestrator"]["sha"], product)
+                self.assertEqual((sources / "orchestrator/cmd/product").read_bytes(), b"unchanged product input")
+                self.assertEqual(helper == sources, not rebuild)
+                output = root / ("helper-" + str(rebuild))
+                output.mkdir()
+                subprocess.run(["bash", str(helper / "orchestrator/scripts/ci-e2e-build.sh"),
+                                "fixtures", "x86_64", str(output)], check=True)
+                self.assertEqual((output / "custom-proxy").read_bytes(), b"pinned helper")
+                if rebuild:
+                    self.assertIn("old helper", (sources / "orchestrator/scripts/ci-e2e-build.sh").read_text())
+
     def test_build_launches_nonexecutable_framework_helper_and_preserves_failure(self):
         spec = importlib.util.spec_from_file_location("builder", Path(__file__).with_name("build-artifacts.py"))
         builder = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(builder)
         plan = {"schema": 1, "framework_sha": "a" * 40, "owners": ["platform"],
-                "test_overlays": [], "product_sources": {}, "test_revisions": {},
+                "test_overlays": [], "product_sources": {}, "test_revisions": test_revisions(),
+                "sources": test_revisions(),
                 "lanes": {arch: {"products": [], "profile": subject.profiles(["platform"], arch)}
                           for arch in subject.ARCHES}}
         with tempfile.TemporaryDirectory() as directory:
@@ -112,8 +168,9 @@ class ArtifactExecutionContracts(unittest.TestCase):
         script.write_text('set -eu\nprintf "%s" "$TMPDIR" > "$BIN/scratch"\n'
                           'sudo -n install -d -o root -g root -m 700 "$TMPDIR/owned"\n'
                           'sudo -n touch "$TMPDIR/owned/source-set.json"\n')
-        self.plan = {"lanes": {"x86_64": {}}}
-        self.provenance = {"profile": {"cases": [self.case]}, "helpers": {}, "embedded": {"init": "a" * 64}}
+        self.plan = {"lanes": {"x86_64": {}}, "test_revisions": test_revisions()}
+        self.provenance = {"profile": {"cases": [self.case]}, "helpers": {}, "embedded": {"init": "a" * 64},
+                           "test_revisions": test_revisions()}
         self.result = self.root / "result.json"
         self.addCleanup(self.remove_scratch)
 
@@ -212,7 +269,7 @@ class ArtifactContracts(unittest.TestCase):
             "lanes": {arch: {"products": ["manifest-ctl"], "profile": subject.profiles(["accelerator"], arch)}
                       for arch in subject.ARCHES},
             "test_overlays": ["accelerator"],
-            "test_revisions": {owner: {"sha": "d" * 40} for owner in subject.OWNERS},
+            "test_revisions": test_revisions(),
             "product_sources": {"manifest-ctl": {"accelerator": "e" * 40}},
         }
         self.files = {}
@@ -245,6 +302,7 @@ class ArtifactContracts(unittest.TestCase):
         (tests / "run_all.sh").chmod(0o755)
         (tests / "lib/new-helper.py").write_text("new helper")
         self.metadata = {"plan_id": subject.identity(self.plan), "arch": arch, "products": records,
+                         "test_revisions": self.plan["test_revisions"],
                          "tests": {"accelerator": subject.tree_files(tests)}, "build_context": {"host": "x86_64"}}
         (root / "outputs.json").write_text(json.dumps(self.metadata))
         return root
@@ -264,6 +322,98 @@ class ArtifactContracts(unittest.TestCase):
             subject.verify_workspace(workspace, self.plan, arch)
         self.assertNotEqual(subject.digest(self.root / "workspaces/x86_64/bin/manifest-ctl"),
                             subject.digest(self.root / "workspaces/aarch64/bin/manifest-ctl"))
+
+    def test_test_only_pin_changes_keep_every_product_byte_and_reject_mismatches(self):
+        self.plan["product_sources"] = {}
+        for lane in self.plan["lanes"].values():
+            lane["products"] = []
+        self.plan["test_revisions"]["accelerator"]["sha"] = "f" * 40
+        for arch in subject.ARCHES:
+            delta = self.delta(arch)
+            wrong = copy.deepcopy(self.metadata)
+            wrong["test_revisions"]["accelerator"]["sha"] = "c" * 40
+            (delta / "outputs.json").write_text(json.dumps(wrong))
+            with self.assertRaisesRegex(ValueError, "build test pins"):
+                self.compose(arch, delta)
+            (delta / "outputs.json").write_text(json.dumps(self.metadata))
+            provenance = self.compose(arch, delta)
+            for name, product in provenance["products"].items():
+                self.assertEqual(product["origin"], "baseline")
+                self.assertEqual(product["sha256"], hashlib.sha256(self.files[arch][name]).hexdigest())
+            workspace = self.root / "workspaces" / arch
+            self.assertEqual((workspace / "test/e2e/accelerator/lib/new-helper.py").read_text(), "new helper")
+            self.assertEqual(provenance["test_revisions"], self.plan["test_revisions"])
+            broken = json.loads((workspace / "provenance.json").read_text())
+            broken["test_revisions"]["accelerator"]["sha"] = "c" * 40
+            (workspace / "provenance.json").write_text(json.dumps(broken))
+            with self.assertRaisesRegex(ValueError, "prepared test pins"):
+                subject.verify_workspace(workspace, self.plan, arch)
+        for wrong in ({}, {**test_revisions(), "orchestrator": {"repository": "other/repo", "sha": "c" * 40, "role": "release"}}):
+            with self.assertRaisesRegex(ValueError, "test pin"):
+                subject.validate_test_revisions(wrong)
+
+    def test_release_and_later_baseline_preserve_independent_test_pins(self):
+        spec = importlib.util.spec_from_file_location("resolver", Path(__file__).with_name("resolve-artifacts.py"))
+        resolver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(resolver)
+        binding_spec = importlib.util.spec_from_file_location("binding", Path(__file__).resolve().parents[2] / "release/bind-validation.py")
+        binding = importlib.util.module_from_spec(binding_spec)
+        binding_spec.loader.exec_module(binding)
+        version, sha = self.plan["baseline"]["version"], self.plan["baseline"]["sha"]
+        units = self.plan["baseline"]["units"]
+        pins = {owner: "f" * 40 for owner in subject.OWNERS if owner != "platform"}
+        manifest = "version: " + version + "\ncomponents:\n" + "".join(
+            f"  {unit}: {record['version']}\n" for unit, record in units.items())
+        manifest += "test_revisions:\n" + "".join(f"  {owner}: {pin}\n" for owner, pin in pins.items())
+        (self.root / "selection.tsv").write_text("".join(f"{unit}\t{units[unit]['version']}\n" for unit in subject.UNITS))
+        pin_file = self.root / "test-revisions.json"
+        pin_file.write_text(json.dumps(pins))
+        (self.assets / "SHA256SUMS").write_text("".join(f"{value}  {name}\n" for name, value in subject.tree_files(self.assets).items()))
+        with patch.object(resolver, "source_text", return_value=manifest), patch.object(resolver, "public"), \
+             patch.object(resolver.release, "tag_sha", side_effect=lambda repo, tag: sha if repo == resolver.PLATFORM else "c" * 40), \
+             patch.dict(os.environ, {"RELEASE_VERSION": version, "PLATFORM_SOURCE_SHA": sha}):
+            plan = resolver.exact_assets_plan("a" * 40, self.root)
+            self.assertEqual(plan["test_revisions"]["orchestrator"]["sha"], "f" * 40)
+            self.assertEqual(plan["baseline"]["units"]["orchestrator"]["sha"], "c" * 40)
+            pin_file.write_text(json.dumps({**pins, "orchestrator": "c" * 40}))
+            with self.assertRaisesRegex(ValueError, "staged test pins"):
+                resolver.exact_assets_plan("a" * 40, self.root)
+            pin_file.unlink()
+            with self.assertRaises(FileNotFoundError):
+                resolver.exact_assets_plan("a" * 40, self.root)
+            pin_file.write_text(json.dumps(pins))
+            results = {arch: {"arch": arch, "plan_id": subject.identity(plan), "conclusion": "success",
+                "test_revisions": plan["test_revisions"], "profile": plan["lanes"][arch]["profile"]} for arch in subject.ARCHES}
+            wrong = copy.deepcopy(results)
+            wrong["aarch64"]["test_revisions"]["orchestrator"]["sha"] = "c" * 40
+            with self.assertRaisesRegex(ValueError, "result test pins"):
+                subject.collect_results(plan, wrong)
+            notes = self.root / "release-notes.md"
+            notes.write_text("Exact stage\n")
+            binding.bind(self.root, plan, subject.collect_results(plan, results))
+            state = {"tag_name": version, "target_commitish": sha, "draft": False, "prerelease": False,
+                "id": 1, "body": notes.read_text(), "assets": [dict(record, id=index, state="uploaded")
+                    for index, record in enumerate(plan["baseline"]["assets"], 1)]}
+            run = {"id": 1, "status": "completed", "conclusion": "success", "html_url": "https://example.invalid/run/1",
+                   "display_title": resolver.release.aggregate_run_title(version, sha)}
+            with patch.object(resolver.release, "api_optional", return_value=state), \
+                 patch.object(resolver.release, "aggregate_runs", return_value=[run]):
+                baseline = resolver.aggregate(version)
+                self.assertEqual(baseline["test_revisions"], plan["test_revisions"])
+                with patch.object(resolver, "baseline", return_value=baseline), \
+                     patch.object(resolver, "changed_files", return_value=["docs/ci.md"]), \
+                     patch.dict(os.environ, {"CANDIDATE_REPOSITORY": resolver.PLATFORM, "CANDIDATE_PR": "1",
+                        "CANDIDATE_SHA": "e" * 40, "CANDIDATE_BASE_SHA": sha, "CANDIDATE_HEAD_SHA": "d" * 40,
+                        "CANDIDATE_BASE_REF": "main", "COMPANION_CANDIDATES": "[]"}):
+                    candidate = resolver.source_plan("a" * 40)
+                self.assertEqual(candidate["test_revisions"]["orchestrator"], plan["test_revisions"]["orchestrator"])
+                self.assertEqual(candidate["sources"]["orchestrator"]["sha"], "c" * 40)
+                self.assertEqual(candidate["lanes"]["x86_64"]["products"], [])
+                recorded = json.loads(resolver.PROFILE_BINDING.search(state["body"])[1])
+                recorded["test_revisions"]["orchestrator"]["sha"] = "c" * 40
+                state["body"] = "<!-- kuasar-integration-validation " + json.dumps(recorded) + " -->"
+                with self.assertRaisesRegex(ValueError, "published test pins"):
+                    resolver.aggregate(version)
 
     def test_baseline_and_candidate_tampering_fail(self):
         delta = self.delta()
@@ -378,6 +528,7 @@ class ArtifactContracts(unittest.TestCase):
 
     def test_results_require_both_exact_architectures_and_predeclared_profiles(self):
         results = {arch: {"arch": arch, "plan_id": subject.identity(self.plan), "conclusion": "success",
+                          "test_revisions": self.plan["test_revisions"],
                           "profile": self.plan["lanes"][arch]["profile"]} for arch in subject.ARCHES}
         subject.collect_results(self.plan, results)
         with self.assertRaisesRegex(ValueError, "both architecture"):
@@ -393,6 +544,7 @@ class ArtifactContracts(unittest.TestCase):
             self.plan["lanes"][arch]["profile"] = subject.profiles(["platform"], arch)
         arch = "x86_64"
         results = {shard: {"arch": arch, "shard": shard, "plan_id": subject.identity(self.plan),
+                          "test_revisions": self.plan["test_revisions"],
                           "cases": cases, "conclusion": "success", "provenance_sha256": "a" * 64}
                    for shard, cases in subject.shards(self.plan["lanes"][arch]["profile"]).items()}
         subject.collect_shard_results(self.plan, arch, results)
@@ -432,9 +584,12 @@ class ArtifactContracts(unittest.TestCase):
         self.plan["mode"] = "exact-assets"
         self.plan["baseline"]["staged"] = True
         results = {arch: {"arch": arch, "plan_id": subject.identity(self.plan), "conclusion": "success",
+                          "test_revisions": self.plan["test_revisions"],
                           "profile": self.plan["lanes"][arch]["profile"]} for arch in subject.ARCHES}
         validation = subject.collect_results(self.plan, results)
         notes = self.root / "release-notes.md"
+        (self.root / "test-revisions.json").write_text(json.dumps(
+            {owner: record["sha"] for owner, record in self.plan["test_revisions"].items() if owner != "platform"}))
         notes.write_text("Original release notes\n")
         hashes = subject.tree_files(self.assets)
         binding.bind(self.root, self.plan, validation)

@@ -81,6 +81,24 @@ components:
 `previous_preview_version` 为更新基线;该版本线的首个 Preview 以 `previous_version`
 为基线。
 
+新聚合的同一份 Stable 或 Daily 清单还必须固定五个独立测试 revision（将占位符替换为完整小写提交 SHA）：
+
+```yaml
+test_revisions:
+  accelerator: <accelerator-test-sha>
+  connector: <connector-test-sha>
+  guest-runtime: <guest-runtime-test-sha>
+  sandboxer: <sandboxer-test-sha>
+  orchestrator: <orchestrator-test-sha>
+```
+
+Daily 写入可信计划已经解析的组件源码精确 HEAD，即使产品 unit 被复用。维护选择缺少组件源码分支时，必须已有明确提交的测试 pin。
+准备新 Stable 选择时应提交明确的 pin；
+平台测试使用聚合源码 SHA。platform 包从测试 pin 取得各 owner 的完整 E2E 树，组件文档和产品仍使用所选 unit 源码。
+helper 编译、prepared 输入、结果和现有发布验证 binding 保留相同 pin，后续 baseline 对照提交清单核验。
+暂存的 `test-revisions.json` 仅供内部验证，公开资产名称和产品字节不变。新打包缺失或错配 pin 时失败；
+历史清单和 Release 继续按原契约读取，不补写或修改。
+
 只有当前聚合已完整发布后,才推进 `previous_preview_version`。未发布的选择跨日滚动时,
 保留其已有基线;若是该版本线的首个 Preview,则继续省略此字段。被放弃的选择可能包含
 从未发布的组件 Tag,不能作为更新比较基线。

@@ -86,6 +86,11 @@ prepare 在组装前校验包路径/类型/权限/归属、摘要、必要产品
 两个架构独立解压；候选测试 owner 整棵目录替换，包括 helper 和删除文件残留检查。
 其余测试来自所选 platform 包，按 owner 记录 test revision，与可信 framework SHA 分开。
 
+owner 测试 revision 与产品 tag 独立。新聚合在维护清单的 `test_revisions` 中提交五个组件的完整测试 SHA，
+平台测试使用聚合源码提交。打包和依赖源码的 helper 编译都使用这些精确 pin；helper 与所选产品需要不同 revision 时，
+使用独立源码工作区。prepared provenance、shard/架构结果及现有发布验证 binding 均保留 pin，后续 baseline 核验并复用它们。
+缺失或不匹配会失败，不回退到产品 tag 或执行时的分支 HEAD；仅测试变更不会重建复用的产品。
+
 prepare 提供 manifest Docker archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像以及目标 helper
 （zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe）。工作区包含 `bin/`、`test/`、`fixtures/`、`images/`、材料及 `provenance.json`。
 这些是测试输入；被测业务 Build、flatten、snapshot、publish、restore 仍在原有 E2E 用例执行。
