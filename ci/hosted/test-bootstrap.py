@@ -42,6 +42,26 @@ class BootstrapTests(unittest.TestCase):
                 self.assertEqual(flags.stdout.split()[0], "true")
         self.assertNotEqual(shell("select_profile typo").returncode, 0)
 
+    def test_cross_crypto_keeps_target_devel_and_host_reader_prerequisites(self):
+        def packages(profile):
+            result = shell('select_profile "$PROFILE"; printf "%s\\n" "${packages[@]}"', PROFILE=profile)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return set(result.stdout.splitlines())
+
+        crypto = {"libgcrypt20-dev", "libgpg-error-dev"}
+        target = {name + ":arm64" for name in crypto}
+        cross = packages("artifact-cross")
+        self.assertLessEqual(target | {"uuid-dev:arm64"}, cross)
+        # Ubuntu's crypto development packages cannot coexist across these
+        # architectures. Host archive readers use the non-crypto recipe.
+        self.assertFalse(crypto & cross)
+        self.assertLessEqual(packages("artifact-prepare"), cross)
+        for profile in ("runtime", "runtime-publish", "source", "artifact-build"):
+            with self.subTest(profile=profile):
+                native = packages(profile)
+                self.assertLessEqual(crypto, native)
+                self.assertFalse(target & native)
+
     def test_full_suite_utilities_and_exact_assets_build_scope(self):
         for profile in ("source", "exact-assets"):
             result = shell('select_profile "$PROFILE"; printf "%s\\n" "${packages[@]}"', PROFILE=profile)
