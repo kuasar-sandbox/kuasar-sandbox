@@ -799,8 +799,14 @@ def dependency_inputs_changed(dependency, consumer, plans, configured, temporary
     plan = plans[dependency]
     if plan.selected == configured[dependency]:
         return False
-    changed = preview_selection.run_git(temporary / dependency, "diff", "--name-only",
-                                        f"{configured[dependency]}..{plan.source_sha}", "--", *dependency_paths(dependency, consumer))
+    repository = temporary / dependency
+    previous = configured[dependency]
+    # A persisted Preview selection can precede publication of its tag.
+    # The source resolver has already validated the published winner.
+    if "-preview." in previous and not preview_selection.run_git(repository, "tag", "--list", previous):
+        previous = plan.winner
+    changed = preview_selection.run_git(repository, "diff", "--name-only",
+                                        f"{previous}..{plan.source_sha}", "--", *dependency_paths(dependency, consumer))
     return any(not path.endswith("_test.go") for path in changed.splitlines())
 
 
