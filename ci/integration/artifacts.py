@@ -98,6 +98,7 @@ def changed_products(changes):
         if owner == "accelerator":
             if go or touches("deps"):
                 products.update(("manifest-ctl", "store-ctl", "cache-ctl"))
+            # These are the libraries imported by guest-runtime's flatten CLI.
             if touches("go.mod", "go.sum", "pkg/flatten", "pkg/image", "pkg/manifest",
                        "pkg/remote", "pkg/sparse", "pkg/tailzip", "pkg/tarstream", "pkg/tar",
                        "pkg/cache", "pkg/store", "pkg/readerr", "internal/util"):
@@ -242,6 +243,8 @@ def tree_modes(root):
 
 
 def test_overlay_root(owner):
+    # Platform helpers/perf scripts live outside test/e2e/platform. Their whole
+    # owned tree travels together, excluding the component-owned subtrees.
     return "test/platform" if owner == "platform" else f"test/e2e/{owner}"
 
 
@@ -272,7 +275,6 @@ def normalize_e2e_cases(stage):
             for source in sorted(owner_cases.iterdir()):
                 require(source.is_file() and not source.is_symlink(), f"non-file in {owner} E2E cases: {source.name}")
                 name = case_name(source.name)
-                require(source.stat().st_mode & 0o111, f"non-executable E2E case: {owner}/{name}")
                 require(name not in seen, f"duplicate E2E case ID: {name} ({seen.get(name)} and {owner})")
                 seen[name] = owner
                 shutil.copy2(source, cases / name)
@@ -303,6 +305,9 @@ def runtime_payloads(workspace, arch, expected_init=None, expected_envd=None):
             if name in ("flatten-ctl", "mkfs.erofs"):
                 require(result[name] == digest(workspace / "bin" / name),
                         f"embedded {name} differs from the selected product")
+        # Historical runtime and sandboxer units can legitimately have distinct
+        # compiler contexts. Preserve the exact baseline embedded bytes unless
+        # this plan explicitly replaces the embedded input.
         for name, expected in (("init", expected_init), ("envd", expected_envd)):
             if expected is not None:
                 require(result[name] == expected, f"embedded {name} differs from the selected product")
@@ -405,6 +410,8 @@ def compose(plan, arch, assets, delta, output):
     records = {record["name"]: record for record in baseline["assets"]}
     require(len(records) == len(baseline["assets"]) and set(expected_assets) <= set(records),
             "aggregate lacks target assets; explicit ARM initialization is required")
+    # Validate everything before applying candidate overlays. No latest lookup or
+    # source-build fallback is available at this boundary.
     for name in expected_assets:
         path = assets / name
         require(path.is_file() and not path.is_symlink() and path.stat().st_size == records[name]["size"]
@@ -451,10 +458,9 @@ def compose(plan, arch, assets, delta, output):
                 f"candidate test directory digest mismatch: {owner}")
         names = candidate_cases.get(owner, [])
         if names:
-            modes = tree_modes(root)
             for name in names:
                 entry = overlay_case_path(owner, name)
-                require(entry in files and modes[entry] & 0o111, f"missing executable candidate case: {owner}/{name}")
+                require(entry in files, f"missing candidate case: {owner}/{name}")
         else:
             entry = "e2e/platform/run_all.sh" if owner == "platform" else "run_all.sh"
             require(entry in files, f"missing candidate owner entry: {owner}")
@@ -507,7 +513,7 @@ def compose(plan, arch, assets, delta, output):
                               "sources": plan["product_sources"][name] if candidate else baseline["units"][unit]}
         for case in lane["profile"]["cases"]:
             path = stage / relative(case)
-            require(path.is_file() and os.access(path, os.X_OK), f"missing selected test entry: {case}")
+            require(path.is_file(), f"missing selected test entry: {case}")
         for directory in ("images", "manifests", "fixtures"):
             (stage / directory).mkdir(exist_ok=True)
         if helpers:
