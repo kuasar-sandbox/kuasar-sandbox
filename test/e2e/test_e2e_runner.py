@@ -1,12 +1,14 @@
+import importlib.machinery
 import importlib.util
 import tempfile
 import unittest
 from pathlib import Path
 
 MODULE = Path(__file__).with_name("e2e")
-spec = importlib.util.spec_from_file_location("e2e_runner", MODULE)
+loader = importlib.machinery.SourceFileLoader("e2e_runner", str(MODULE))
+spec = importlib.util.spec_from_loader(loader.name, loader)
 runner = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(runner)
+loader.exec_module(runner)
 
 
 class SelectionTests(unittest.TestCase):
