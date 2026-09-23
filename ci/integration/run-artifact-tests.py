@@ -76,7 +76,20 @@ def execute(plan, arch, shard, workspace, result_path):
                     environment[variable] = images[label]["image_id"]
             for case in groups[shard]:
                 selected = dict(environment)
-                owner = Path(case).parts[2]
+                parts = Path(case).parts
+                owner = parts[2]
+                rewritten = len(parts) == 5 and parts[:2] == ("test", "e2e") and parts[3] == "cases"
+                if rewritten:
+                    artifacts.case_name(parts[4])
+                    # Match the public prepared runner's contract without writing
+                    # run/out state back into the immutable prepared workspace.
+                    case_state = state / "cases" / parts[4]
+                    case_output = state / "out" / parts[4]
+                    case_state.mkdir(parents=True)
+                    case_output.mkdir(parents=True)
+                    selected.update(E2E_WORKSPACE=str(workspace), E2E_ARCH=arch,
+                                    E2E_LIB=str(workspace / "test/e2e/lib"),
+                                    WORK=str(case_state), OUT=str(case_output))
                 if owner == "accelerator":
                     selected["MANIFEST_FIXTURE_DIR"] = str(workspace / "fixtures/manifest")
                 if owner == "guest-runtime":
