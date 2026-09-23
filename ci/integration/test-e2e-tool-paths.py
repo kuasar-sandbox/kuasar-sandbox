@@ -72,53 +72,60 @@ class CaseBridgeContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'duplicate E2E case ID'):
                 ARTIFACTS.normalize_e2e_cases(Path(directory))
 
-    def test_resolver_reads_flat_cases_from_exact_candidate(self):
+    def test_resolver_switches_only_after_run_all_is_removed(self):
         resolver = load_module('case_bridge_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
         listing = [
             {'type': 'file', 'name': 'network.tap.sh'},
             {'type': 'file', 'name': 'network.geneve-ip.sh'},
         ]
-        with patch.object(resolver.release, 'api_optional', return_value=listing) as api:
+        legacy = {'type': 'file', 'name': 'run_all.sh'}
+        with patch.object(resolver.release, 'api_optional', return_value=legacy) as api:
+            self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'), [])
+        self.assertEqual(api.call_count, 1)
+        self.assertIn('test/e2e/run_all.sh', api.call_args.args[0])
+        with patch.object(resolver.release, 'api_optional', side_effect=[None, listing]) as api:
             self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'),
                              ['network.geneve-ip.sh', 'network.tap.sh'])
+        self.assertEqual(api.call_count, 2)
         self.assertIn('ref=' + 'a' * 40, api.call_args.args[0])
-        with patch.object(resolver.release, 'api_optional', return_value=[{'type': 'dir', 'name': 'nested'}]):
+        with patch.object(resolver.release, 'api_optional', side_effect=[None, [{'type': 'dir', 'name': 'nested'}]]):
             with self.assertRaisesRegex(ValueError, 'flat files'):
                 resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
-        with patch.object(resolver.release, 'api_optional',
-                          return_value=[{'type': 'file', 'name': 'working-set.smoke.sh'}]):
+        with patch.object(resolver.release, 'api_optional', side_effect=[None,
+                          [{'type': 'file', 'name': 'working-set.smoke.sh'}]]):
             with self.assertRaisesRegex(ValueError, 'unsupported E2E suite'):
                 resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
 
-    def test_executor_sets_prepared_contract_for_rewritten_case(self):
+    def test_executor_uses_public_runner_for_rewritten_case(self):
         executor = load_module('case_bridge_executor', ROOT / 'ci/integration/run-artifact-tests.py')
         with tempfile.TemporaryDirectory(prefix='kuasar-case-exec-') as directory:
             workspace = Path(directory) / 'prepared'
-            case_name = 'test/e2e/connector/cases/network.tap.sh'
-            case = workspace / case_name
+            internal_case = 'test/e2e/connector/cases/network.tap.sh'
+            case = workspace / 'test/e2e/cases/network.tap.sh'
             case.parent.mkdir(parents=True)
             (workspace / 'bin').mkdir()
             (workspace / 'test/e2e/lib').mkdir(parents=True)
+            shutil.copy2(ROOT / 'test/e2e/e2e', workspace / 'test/e2e/e2e')
             case.write_text(
                 '#!/bin/sh\nset -eu\n'
                 f'[ "$E2E_WORKSPACE" = "{workspace}" ]\n'
                 f'[ "$E2E_LIB" = "{workspace}/test/e2e/lib" ]\n'
                 '[ "$E2E_ARCH" = x86_64 ]\n'
                 'case "$WORK" in /var/tmp/ki-*/cases/network.tap.sh) ;; *) exit 41 ;; esac\n'
-                'case "$OUT" in /var/tmp/ki-*/out/network.tap.sh) ;; *) exit 42 ;; esac\n')
+                'case "$OUT" in /var/tmp/ki-*/out/network.tap.sh) ;; *) exit 42 ;; esac\n'
+                'printf ok > "$OUT/result"\n')
             case.chmod(0o755)
             (workspace / 'provenance.json').write_text('{}')
             revisions = ARTIFACTS.release_test_revisions(
                 {owner: 'd' * 40 for owner in ARTIFACTS.OWNERS if owner != 'platform'}, 'd' * 40)
-            profile = {'cases': [case_name], 'required_products': [], 'exclusions': [], 'name': 'x86-owner-kvm'}
+            profile = {'cases': [internal_case], 'required_products': [], 'exclusions': [], 'name': 'x86-owner-kvm'}
             provenance = {'profile': profile, 'helpers': {}, 'embedded': {'init': 'a' * 64},
                           'test_revisions': revisions}
             plan = {'schema': 1, 'framework_sha': 'a' * 40, 'test_revisions': revisions,
                     'lanes': {'x86_64': {'extra_checks': {}}, 'aarch64': {}}, 'owners': ['connector']}
             result = Path(directory) / 'result.json'
             credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
-            with patch.object(executor.ARTIFACTS if hasattr(executor, 'ARTIFACTS') else executor.artifacts,
-                              'verify_workspace', return_value=provenance), \
+            with patch.object(executor.artifacts, 'verify_workspace', return_value=provenance), \
                  patch.object(executor.platform, 'machine', return_value='x86_64'), \
                  patch.dict(os.environ, credentials):
                 record = executor.execute(plan, 'x86_64', 'core', workspace, result)
