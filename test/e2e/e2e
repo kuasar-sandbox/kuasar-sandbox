@@ -124,6 +124,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         "BIN": str(bin_dir),
         "E2E_WORKSPACE": str(work),
         "E2E_ARCH": arch,
+        "E2E_LIB": str(work / "test" / "e2e" / "lib"),
     })
 
     failed = []
