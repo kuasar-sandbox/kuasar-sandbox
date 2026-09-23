@@ -27,6 +27,8 @@ cp -a "$PLATFORM/test" "$OUTPUT/"
 rm -rf "$OUTPUT/test/e2e"
 mkdir -p "$OUTPUT/test/e2e"
 install -m 0755 "$PLATFORM/test/e2e/run_all.sh" "$OUTPUT/test/e2e/run_all.sh"
+install -m 0755 "$PLATFORM/test/e2e/e2e" "$OUTPUT/test/e2e/e2e"
+cp -a "$PLATFORM/test/e2e/lib" "$OUTPUT/test/e2e/lib"
 
 for index in "${!COMPONENTS[@]}"; do
     component="${COMPONENTS[$index]}"
@@ -72,6 +74,8 @@ for component in "${COMPONENTS[@]}" platform; do
         exit 1
     }
 done
+[ -x "$OUTPUT/test/e2e/e2e" ] || { echo "assembled suite is missing unified E2E runner" >&2; exit 1; }
+[ -f "$OUTPUT/test/e2e/lib/common.sh" ] || { echo "assembled suite is missing common E2E helpers" >&2; exit 1; }
 [ ! -e "$OUTPUT/test/e2e/assemble.sh" ] || {
     echo "source-only E2E assembler leaked into deliverable content" >&2
     exit 1
