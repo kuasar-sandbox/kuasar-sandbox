@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise cold host-tool setup without downloads or preinstalled binaries."""
+"""Exercise cold host-tool setup and the artifact E2E case bridge."""
 import importlib.util
 import json
 import os
@@ -8,11 +8,122 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
+
+import artifacts as ARTIFACTS
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('assemble_docs', ROOT / 'test/e2e/assemble_docs.py')
 ASSEMBLER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(ASSEMBLER)
+
+
+def load_module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class CaseBridgeContracts(unittest.TestCase):
+    def test_case_filename_is_the_only_suite_contract(self):
+        for name in ('basic.cli.sh', 'storage.cache-membership.sh', 'image.flatten.sh',
+                     'network.tap.sh', 'sandbox.lifecycle.sh', 'snapshot.restore.sh',
+                     'orchestrator.exec.sh', 'builder.copy.sh', 'telemetry.metrics.sh'):
+            self.assertEqual(ARTIFACTS.case_name(name), name)
+        for name in ('working-set.smoke.sh', 'density.scale.sh', 'storage.sh',
+                     'storage..sh', 'network/case.sh', '../network.case.sh'):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                ARTIFACTS.case_name(name)
+
+    def test_candidate_profile_uses_exact_cases_without_run_all(self):
+        cases = {'accelerator': ['image.manifest.sh', 'storage.cache.sh', 'storage.obs.sh']}
+        profile = ARTIFACTS.profiles(['accelerator'], 'x86_64', cases)
+        self.assertEqual(profile['cases'], [
+            'test/e2e/accelerator/cases/image.manifest.sh',
+            'test/e2e/accelerator/cases/storage.cache.sh',
+        ])
+        self.assertNotIn('test/e2e/accelerator/run_all.sh', profile['cases'])
+        self.assertEqual(profile['exclusions'][0]['case'], 'storage.obs.sh')
+        with self.assertRaisesRegex(ValueError, 'candidate case list'):
+            ARTIFACTS.profiles(['connector'], 'x86_64',
+                               {'connector': ['network.tap.sh', 'network.geneve-ip.sh']})
+
+    def test_normalization_is_flat_and_rejects_duplicate_case_ids(self):
+        with tempfile.TemporaryDirectory(prefix='kuasar-case-bridge-') as directory:
+            root = Path(directory) / 'test/e2e'
+            (root / 'lib').mkdir(parents=True)
+            for owner, name in (('connector', 'network.tap.sh'), ('guest-runtime', 'image.flatten.sh')):
+                case = root / owner / 'cases' / name
+                case.parent.mkdir(parents=True)
+                case.write_text('#!/bin/sh\nexit 0\n')
+                case.chmod(0o755)
+                helper = root / owner / 'lib' / 'helper.py'
+                helper.parent.mkdir(parents=True)
+                helper.write_text(owner)
+            seen = ARTIFACTS.normalize_e2e_cases(Path(directory))
+            self.assertEqual(seen, {'image.flatten.sh': 'guest-runtime', 'network.tap.sh': 'connector'})
+            self.assertEqual((root / 'cases/network.tap.sh').read_text(), '#!/bin/sh\nexit 0\n')
+            self.assertEqual((root / 'lib/connector/helper.py').read_text(), 'connector')
+            duplicate = root / 'accelerator/cases/network.tap.sh'
+            duplicate.parent.mkdir(parents=True)
+            duplicate.write_text('#!/bin/sh\nexit 0\n')
+            duplicate.chmod(0o755)
+            with self.assertRaisesRegex(ValueError, 'duplicate E2E case ID'):
+                ARTIFACTS.normalize_e2e_cases(Path(directory))
+
+    def test_resolver_reads_flat_cases_from_exact_candidate(self):
+        resolver = load_module('case_bridge_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
+        listing = [
+            {'type': 'file', 'name': 'network.tap.sh'},
+            {'type': 'file', 'name': 'network.geneve-ip.sh'},
+        ]
+        with patch.object(resolver.release, 'api_optional', return_value=listing) as api:
+            self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'),
+                             ['network.geneve-ip.sh', 'network.tap.sh'])
+        self.assertIn('ref=' + 'a' * 40, api.call_args.args[0])
+        with patch.object(resolver.release, 'api_optional', return_value=[{'type': 'dir', 'name': 'nested'}]):
+            with self.assertRaisesRegex(ValueError, 'flat files'):
+                resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
+        with patch.object(resolver.release, 'api_optional',
+                          return_value=[{'type': 'file', 'name': 'working-set.smoke.sh'}]):
+            with self.assertRaisesRegex(ValueError, 'unsupported E2E suite'):
+                resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
+
+    def test_executor_sets_prepared_contract_for_rewritten_case(self):
+        executor = load_module('case_bridge_executor', ROOT / 'ci/integration/run-artifact-tests.py')
+        with tempfile.TemporaryDirectory(prefix='kuasar-case-exec-') as directory:
+            workspace = Path(directory) / 'prepared'
+            case_name = 'test/e2e/connector/cases/network.tap.sh'
+            case = workspace / case_name
+            case.parent.mkdir(parents=True)
+            (workspace / 'bin').mkdir()
+            (workspace / 'test/e2e/lib').mkdir(parents=True)
+            case.write_text(
+                '#!/bin/sh\nset -eu\n'
+                f'[ "$E2E_WORKSPACE" = "{workspace}" ]\n'
+                f'[ "$E2E_LIB" = "{workspace}/test/e2e/lib" ]\n'
+                '[ "$E2E_ARCH" = x86_64 ]\n'
+                'case "$WORK" in /var/tmp/ki-*/cases/network.tap.sh) ;; *) exit 41 ;; esac\n'
+                'case "$OUT" in /var/tmp/ki-*/out/network.tap.sh) ;; *) exit 42 ;; esac\n')
+            case.chmod(0o755)
+            (workspace / 'provenance.json').write_text('{}')
+            revisions = ARTIFACTS.release_test_revisions(
+                {owner: 'd' * 40 for owner in ARTIFACTS.OWNERS if owner != 'platform'}, 'd' * 40)
+            profile = {'cases': [case_name], 'required_products': [], 'exclusions': [], 'name': 'x86-owner-kvm'}
+            provenance = {'profile': profile, 'helpers': {}, 'embedded': {'init': 'a' * 64},
+                          'test_revisions': revisions}
+            plan = {'schema': 1, 'framework_sha': 'a' * 40, 'test_revisions': revisions,
+                    'lanes': {'x86_64': {'extra_checks': {}}, 'aarch64': {}}, 'owners': ['connector']}
+            result = Path(directory) / 'result.json'
+            credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
+            with patch.object(executor.ARTIFACTS if hasattr(executor, 'ARTIFACTS') else executor.artifacts,
+                              'verify_workspace', return_value=provenance), \
+                 patch.object(executor.platform, 'machine', return_value='x86_64'), \
+                 patch.dict(os.environ, credentials):
+                record = executor.execute(plan, 'x86_64', 'core', workspace, result)
+            self.assertEqual(record['conclusion'], 'success')
+            self.assertEqual(record['timings'][0]['exit_code'], 0)
 
 
 class ToolPaths(unittest.TestCase):
