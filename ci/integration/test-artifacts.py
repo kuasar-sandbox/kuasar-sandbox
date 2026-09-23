@@ -155,7 +155,7 @@ class ArtifactBuildContracts(unittest.TestCase):
             helper.write_text('#!/usr/bin/env bash\n'
                               'printf "%s\\n" "$TARGET_ARCH" > "$KUASAR_E2E_TOOL_OUTPUT/invoked"\n'
                               'exit 23\n')
-            helper.chmod(0o644)  # Match the framework script's Git mode.
+            helper.chmod(0o644)
             output = root / "build-output"
             credentials = {key: "" for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}
             with patch.object(builder, "ROOT", root), patch.object(builder, "materialize"), \
@@ -477,6 +477,7 @@ class ArtifactContracts(unittest.TestCase):
                 self.assertEqual(baseline["test_revisions"], plan["test_revisions"])
                 with patch.object(resolver, "baseline", return_value=baseline), \
                      patch.object(resolver, "changed_files", return_value=["docs/ci.md"]), \
+                     patch.object(resolver, "candidate_case_names", return_value=[]), \
                      patch.dict(os.environ, {"CANDIDATE_REPOSITORY": resolver.PLATFORM, "CANDIDATE_PR": "1",
                         "CANDIDATE_SHA": "e" * 40, "CANDIDATE_BASE_SHA": sha, "CANDIDATE_HEAD_SHA": "d" * 40,
                         "CANDIDATE_BASE_REF": "main", "COMPANION_CANDIDATES": "[]"}):
@@ -580,9 +581,6 @@ class ArtifactContracts(unittest.TestCase):
             subject.verify_workspace(self.root / "workspaces/x86_64", self.plan, "x86_64")
 
     def test_guest_execution_binds_init_to_the_validated_runtime_bytes(self):
-        # A legal unchanged runtime may embed a different init revision than the
-        # separately published sandboxer unit. Candidate-init equality is checked
-        # separately; execution must retain this baseline's embedded identity.
         files = dict(self.files["x86_64"])
         files["sandbox-init"] = elf("x86_64", "separately published init")
         name = subject.archive_name("sandboxer", "v1.2.3", "x86_64")
@@ -687,7 +685,7 @@ class ArtifactContracts(unittest.TestCase):
 
     def test_publication_binds_both_results_to_unchanged_stage_bytes(self):
         spec = importlib.util.spec_from_file_location("binding", Path(__file__).resolve().parents[2] / "release/bind-validation.py")
-        binding = importlib.util.module_from_spec(spec)
+        binding = importlib.util.module_from_spec(binding_spec)
         spec.loader.exec_module(binding)
         self.plan["mode"] = "exact-assets"
         self.plan["baseline"]["staged"] = True
