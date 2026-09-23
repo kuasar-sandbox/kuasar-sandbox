@@ -1,72 +1,109 @@
-# Task-scoped operator entry. Not merged into main or used as product source.
-# All publication logic comes from the normally merged, exact main commit below.
-name: Publish authorized Stable release-v0.1.5
-run-name: Stable release-v0.1.5 from bd773ff2
-
+# Read-only closeout of the task-scoped release operation; never merged into main.
+name: Verify authorized Stable release-v0.1.5
+run-name: Verify published Stable release-v0.1.5
 'on':
   push:
     branches: [ops/stable-v0.1.5-20260923]
     paths: [.github/workflows/stable-publish.yml]
-
 permissions:
   contents: read
-
-concurrency:
-  group: preview-manifest-selection-and-gc
-  cancel-in-progress: false
-
 jobs:
-  converge:
+  verify:
     if: >-
       github.event.repository.visibility == 'public' &&
       github.event.repository.full_name == github.repository &&
       github.ref == 'refs/heads/ops/stable-v0.1.5-20260923'
     runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      RELEASE_VERSION: release-v0.1.5
-      PLATFORM_REF: main
-      PLATFORM_SHA: bd773ff2f7d69266cad6840ad1ab69f78f00f7e0
-      RELEASE_WAIT_SECONDS: '3000'
-      RELEASE_POLL_SECONDS: '120'
-      PYTHONUNBUFFERED: '1'
+    timeout-minutes: 10
     steps:
-      - name: Check out only the exact normally merged platform source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
-        with:
-          ref: bd773ff2f7d69266cad6840ad1ab69f78f00f7e0
-          path: platform
-          fetch-depth: 0
-          persist-credentials: false
-
-      - name: Validate controller tools and exact main before dispatch
+      - name: Download and verify the complete published Stable asset set
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
-          gh --version
-          gh_help="$(gh api --help)"
-          [[ "$gh_help" == *--slurp* ]]
-          [ "$(git -C platform rev-parse HEAD)" = "$PLATFORM_SHA" ]
-          [ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$PLATFORM_SHA" ]
-          echo "Authorized Stable selection: $RELEASE_VERSION from $PLATFORM_SHA"
+          python3 - <<'PYVERIFY'
+          """One-off, read-only receipt for the authorized Stable release. No mutations."""
+          import hashlib
+          import json
+          import pathlib
+          import re
+          import subprocess
+          from datetime import datetime, timezone
 
-      - name: Create the existing scoped release-dispatch token
-        id: release-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+          REPO = 'kuasar-sandbox/kuasar-sandbox'
+          VERSION = 'release-v0.1.5'
+          SOURCE = 'bd773ff2f7d69266cad6840ad1ab69f78f00f7e0'
+
+          def api(path):
+              r = subprocess.run(['gh', 'api', path], check=True, capture_output=True, text=True, timeout=60)
+              return json.loads(r.stdout)
+
+          release = api(f'repos/{REPO}/releases/tags/{VERSION}')
+          latest = api(f'repos/{REPO}/releases/latest')
+          tag = api(f'repos/{REPO}/git/ref/tags/{VERSION}')
+          assert release['tag_name'] == VERSION and not release['draft'] and not release['prerelease']
+          assert release['target_commitish'] == SOURCE
+          assert latest['id'] == release['id'] and latest['tag_name'] == VERSION
+          assert tag['object']['sha'] == SOURCE and tag['object']['type'] == 'commit'
+          units = {'accelerator': 'v0.1.5', 'connector': 'v0.1.4', 'sandboxer': 'v0.1.5', 'orchestrator': 'v0.1.5'}
+          names = {'SHA256SUMS', f'platform-{VERSION}.tar.gz'}
+          for arch in ('x86_64', 'aarch64'):
+              names.update(f'{unit}-{version}-linux-{arch}.tar.gz' for unit, version in units.items())
+              names.update((f'sandbox-runtime-{arch}-v0.1.5.tar.gz', f'vmlinux-{arch}-v0.1.3.tar.gz'))
+          assets = release['assets']
+          assert len(assets) == 14 and {a['name'] for a in assets} == names
+          assert all(a['state'] == 'uploaded' and a['size'] > 0 and re.fullmatch(r'sha256:[0-9a-f]{64}', a['digest']) for a in assets)
+          matches = re.findall(r'<!-- kuasar-integration-validation (\{[^\r\n]*\}) -->', release['body'])
+          assert len(matches) == 1
+          binding = json.loads(matches[0])
+          assert binding['plan_id'] == '40ba169d3876ba4342cada27647c3caeaa0ae1faf4c5cf7de81e05a3fd90ec82'
+          assert binding['aggregate_sha'] == SOURCE and binding['framework_sha'] == SOURCE
+          assert set(binding['architectures']) == {'x86_64', 'aarch64'}
+          for arch, result in binding['architectures'].items():
+              assert result['conclusion'] == 'success' and result['plan_id'] == binding['plan_id']
+              assert re.fullmatch(r'[0-9a-f]{64}', result['provenance_sha256'])
+          expected_pins = {
+              'accelerator': '1069c605f2f3d116c1873eb3f2179810e1e8a341',
+              'connector': 'f7f11917096f7a40e6ad1601179ff53429052c92',
+              'guest-runtime': '745ba89c776eed7b9d404a8e3fc19cb60022518b',
+              'sandboxer': 'a48c688ece56a4e9d02620f320f8ee98bc60885c',
+              'orchestrator': '9f7e54f6169f0070ecc864486764023127f55e72',
+              'platform': SOURCE,
+          }
+          assert {owner: record['sha'] for owner, record in binding['test_revisions'].items()} == expected_pins
+          out = pathlib.Path('stable-assets')
+          out.mkdir()
+          subprocess.run(['gh', 'release', 'download', VERSION, '--repo', REPO, '--dir', str(out)], check=True, timeout=300)
+          assert {p.name for p in out.iterdir()} == names
+          checked = {}
+          for a in assets:
+              path = out / a['name']
+              assert path.is_file() and path.stat().st_size == a['size']
+              with path.open('rb') as f:
+                  digest = 'sha256:' + hashlib.file_digest(f, 'sha256').hexdigest()
+              assert digest == a['digest'], a['name']
+              checked[a['name']] = {'id': a['id'], 'size': a['size'], 'digest': digest}
+          assert binding['assets'] == {name: record['digest'] for name, record in checked.items() if name != 'SHA256SUMS'}
+          checksums = {}
+          for line in (out / 'SHA256SUMS').read_text().splitlines():
+              digest, name = line.split(None, 1)
+              name = name.lstrip('*')
+              assert name not in checksums and re.fullmatch(r'[0-9a-f]{64}', digest)
+              checksums[name] = 'sha256:' + digest
+          assert checksums == binding['assets']
+          receipt = {'at': datetime.now(timezone.utc).isoformat(), 'release_id': release['id'], 'version': VERSION,
+                     'source_sha': SOURCE, 'published_at': release['published_at'], 'draft': release['draft'],
+                     'prerelease': release['prerelease'], 'latest': True, 'all_14_assets_downloaded_and_hashed': True,
+                     'checksum_entries': len(checksums), 'plan_id': binding['plan_id'], 'assets': checked,
+                     'test_revisions': binding['test_revisions'],
+                     'architectures': {k: {'conclusion': v['conclusion'], 'profile': v['profile'],
+                                           'provenance_sha256': v['provenance_sha256']} for k, v in binding['architectures'].items()}}
+          pathlib.Path('stable-verification.json').write_text(json.dumps(receipt, indent=2)+'\n')
+          print(json.dumps(receipt, indent=2))
+          PYVERIFY
+      - name: Preserve the compact verified publication receipt
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
-          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
-          owner: kuasar-sandbox
-          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
-          permission-actions: write
-          permission-contents: read
-
-      - name: Run the existing formal release entry without rebuilding locally
-        env:
-          GH_TOKEN: ${{ steps.release-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          make -C platform release \
-            RELEASE_VERSION="$RELEASE_VERSION" \
-            PLATFORM_REF="$PLATFORM_REF" PLATFORM_SHA="$PLATFORM_SHA"
+          name: stable-v0.1.5-verification
+          path: stable-verification.json
+          if-no-files-found: error
+          retention-days: 14
