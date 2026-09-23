@@ -57,7 +57,7 @@ class CaseBridgeContracts(unittest.TestCase):
                 case = root / owner / 'cases' / name
                 case.parent.mkdir(parents=True)
                 case.write_text('#!/bin/sh\nexit 0\n')
-                case.chmod(0o755)
+                case.chmod(0o644)
                 helper = root / owner / 'lib' / 'helper.py'
                 helper.parent.mkdir(parents=True)
                 helper.write_text(owner)
@@ -68,7 +68,7 @@ class CaseBridgeContracts(unittest.TestCase):
             duplicate = root / 'accelerator/cases/network.tap.sh'
             duplicate.parent.mkdir(parents=True)
             duplicate.write_text('#!/bin/sh\nexit 0\n')
-            duplicate.chmod(0o755)
+            duplicate.chmod(0o644)
             with self.assertRaisesRegex(ValueError, 'duplicate E2E case ID'):
                 ARTIFACTS.normalize_e2e_cases(Path(directory))
 
@@ -114,7 +114,7 @@ class CaseBridgeContracts(unittest.TestCase):
                 'case "$WORK" in /var/tmp/ki-*/cases/network.tap.sh) ;; *) exit 41 ;; esac\n'
                 'case "$OUT" in /var/tmp/ki-*/out/network.tap.sh) ;; *) exit 42 ;; esac\n'
                 'printf ok > "$OUT/result"\n')
-            case.chmod(0o755)
+            case.chmod(0o644)
             (workspace / 'provenance.json').write_text('{}')
             revisions = ARTIFACTS.release_test_revisions(
                 {owner: 'd' * 40 for owner in ARTIFACTS.OWNERS if owner != 'platform'}, 'd' * 40)
