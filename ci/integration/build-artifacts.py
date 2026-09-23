@@ -136,6 +136,12 @@ def build(plan, arch, assets, sources, output):
         artifacts.require(not environment.get(key), f"candidate build must not receive {key}")
     materialize(plan, arch, sources)
     (output / "bin").mkdir(parents=True)
+    actual_framework = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
+    artifacts.require(actual_framework == plan["framework_sha"], "framework checkout differs from admitted revision")
+    framework_tests = output / "framework-tests"
+    framework_tests.mkdir()
+    shutil.copy2(ROOT / "test/e2e/e2e", framework_tests / "e2e")
+    shutil.copytree(ROOT / "test/e2e/lib", framework_tests / "lib")
     environment.update(TARGET_ARCH=arch, KUASAR_WORKSPACE_ROOT=str(sources))
     lane = plan["lanes"][arch]
     kernel_root = sources
@@ -230,6 +236,7 @@ def build(plan, arch, assets, sources, output):
         executable = file.stat().st_mode & 0o111
         file.chmod(0o755 if executable else 0o644)
     metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "products": {}, "embedded": {}, "tests": {}, "helpers": {},
+                "framework_tests": artifacts.tree_files(output / "framework-tests"),
                 "test_revisions": plan["test_revisions"],
                 "build_context": {"host": platform.machine(), "target": arch, "tools": {}, "native_inputs": {}}}
     for name in lane["products"]:
