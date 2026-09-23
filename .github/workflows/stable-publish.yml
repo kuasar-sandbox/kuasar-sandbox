@@ -1,0 +1,72 @@
+# Task-scoped operator entry. Not merged into main or used as product source.
+# All publication logic comes from the normally merged, exact main commit below.
+name: Publish authorized Stable release-v0.1.5
+run-name: Stable release-v0.1.5 from bd773ff2
+
+'on':
+  push:
+    branches: [ops/stable-v0.1.5-20260923]
+    paths: [.github/workflows/stable-publish.yml]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-manifest-selection-and-gc
+  cancel-in-progress: false
+
+jobs:
+  converge:
+    if: >-
+      github.event.repository.visibility == 'public' &&
+      github.event.repository.full_name == github.repository &&
+      github.ref == 'refs/heads/ops/stable-v0.1.5-20260923'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      RELEASE_VERSION: release-v0.1.5
+      PLATFORM_REF: main
+      PLATFORM_SHA: bd773ff2f7d69266cad6840ad1ab69f78f00f7e0
+      RELEASE_WAIT_SECONDS: '3000'
+      RELEASE_POLL_SECONDS: '120'
+      PYTHONUNBUFFERED: '1'
+    steps:
+      - name: Check out only the exact normally merged platform source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: bd773ff2f7d69266cad6840ad1ab69f78f00f7e0
+          path: platform
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate controller tools and exact main before dispatch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh --version
+          gh_help="$(gh api --help)"
+          [[ "$gh_help" == *--slurp* ]]
+          [ "$(git -C platform rev-parse HEAD)" = "$PLATFORM_SHA" ]
+          [ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$PLATFORM_SHA" ]
+          echo "Authorized Stable selection: $RELEASE_VERSION from $PLATFORM_SHA"
+
+      - name: Create the existing scoped release-dispatch token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
+          permission-actions: write
+          permission-contents: read
+
+      - name: Run the existing formal release entry without rebuilding locally
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+        run: |
+          set -euo pipefail
+          make -C platform release \
+            RELEASE_VERSION="$RELEASE_VERSION" \
+            PLATFORM_REF="$PLATFORM_REF" PLATFORM_SHA="$PLATFORM_SHA"
