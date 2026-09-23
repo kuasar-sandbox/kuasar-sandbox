@@ -14,6 +14,17 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 CASES = Path(os.environ.get("E2E_CASES_DIR", ROOT / "cases")).resolve()
+SUITES = frozenset({
+    "basic",
+    "storage",
+    "image",
+    "network",
+    "sandbox",
+    "snapshot",
+    "orchestrator",
+    "builder",
+    "telemetry",
+})
 
 
 def discover() -> list[Path]:
@@ -27,6 +38,8 @@ def discover() -> list[Path]:
         suite, rest = name.split(".", 1)
         if not suite or rest == "sh":
             continue
+        if suite not in SUITES:
+            raise SystemExit(f"unsupported suite in case file: {name}")
         cases.append(path)
     return cases
 
@@ -37,8 +50,7 @@ def selected(args: argparse.Namespace) -> list[Path]:
     if not explicit:
         raise SystemExit("select cases with --suite/--include/--exclude/--all")
 
-    suites = {p.name.split(".", 1)[0] for p in cases}
-    unknown = sorted(set(args.suite) - suites)
+    unknown = sorted(set(args.suite) - SUITES)
     if unknown:
         raise SystemExit("unknown suite(s): " + ", ".join(unknown))
 
