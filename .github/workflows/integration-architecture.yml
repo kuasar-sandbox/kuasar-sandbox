@@ -91,11 +91,12 @@ jobs:
           tar -czf build-inputs.tar.gz assets delta build-time.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: integration-build-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-build-${{ inputs.arch }}-${{ github.run_id }}
           path: build-inputs.tar.gz
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
+          overwrite: true
 
   prepare:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
@@ -117,7 +118,7 @@ jobs:
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: integration-build-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-build-${{ inputs.arch }}-${{ github.run_id }}
           path: transport
       - name: Bootstrap native archive readers
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
@@ -131,20 +132,22 @@ jobs:
           tar -czf prepared.tar.gz -C prepared "$TARGET_ARCH"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}
           path: prepared.tar.gz
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
+          overwrite: true
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: integration-provenance-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-provenance-${{ inputs.arch }}-${{ github.run_id }}
           path: |
             prepared/${{ inputs.arch }}/provenance.json
             build-time.txt
             prepare-time.txt
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   e2e:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
@@ -178,7 +181,7 @@ jobs:
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}
           path: transport
       - name: Bootstrap declared native execution profile
         run: |
@@ -195,10 +198,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: integration-shard-${{ inputs.arch }}-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-shard-${{ inputs.arch }}-${{ matrix.shard }}-${{ github.run_id }}
           path: results/${{ matrix.shard }}.json
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   result:
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
@@ -226,7 +230,7 @@ jobs:
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: integration-shard-${{ inputs.arch }}-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: integration-shard-${{ inputs.arch }}-*-${{ github.run_id }}
           path: shards
           merge-multiple: true
       - name: Explicitly collect this architecture's shards
@@ -236,7 +240,8 @@ jobs:
             --plan plan/plan.json --arch "$TARGET_ARCH" --results shards > "results/$TARGET_ARCH.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: integration-architecture-result-${{ inputs.arch }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-architecture-result-${{ inputs.arch }}-${{ github.run_id }}
           path: results/${{ inputs.arch }}.json
           if-no-files-found: error
           retention-days: 7
+          overwrite: true

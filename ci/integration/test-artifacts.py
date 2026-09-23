@@ -148,6 +148,10 @@ class ArtifactBuildContracts(unittest.TestCase):
             root = Path(directory)
             helper = root / "ci/hosted/exact-assets-tools.sh"
             helper.parent.mkdir(parents=True)
+            (root / "test/e2e/lib").mkdir(parents=True)
+            (root / "test/e2e/e2e").write_text("#!/usr/bin/env python3\n")
+            (root / "test/e2e/e2e").chmod(0o755)
+            (root / "test/e2e/lib/common.sh").write_text("#!/usr/bin/env bash\n")
             helper.write_text('#!/usr/bin/env bash\n'
                               'printf "%s\\n" "$TARGET_ARCH" > "$KUASAR_E2E_TOOL_OUTPUT/invoked"\n'
                               'exit 23\n')
@@ -155,7 +159,9 @@ class ArtifactBuildContracts(unittest.TestCase):
             output = root / "build-output"
             credentials = {key: "" for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}
             with patch.object(builder, "ROOT", root), patch.object(builder, "materialize"), \
-                 patch.object(builder.platform, "machine", return_value="x86_64"), patch.dict(os.environ, credentials):
+                 patch.object(builder.platform, "machine", return_value="x86_64"), \
+                 patch.object(builder.subprocess, "check_output", return_value=("a" * 40 + "\n")), \
+                 patch.dict(os.environ, credentials):
                 with self.assertRaises(subprocess.CalledProcessError) as failure:
                     builder.build(plan, "x86_64", root / "assets", root / "sources", output)
             self.assertEqual(failure.exception.returncode, 23)
@@ -364,8 +370,14 @@ class ArtifactContracts(unittest.TestCase):
         (tests / "run_all.sh").write_text("#!/bin/sh\nexit 0\n")
         (tests / "run_all.sh").chmod(0o755)
         (tests / "lib/new-helper.py").write_text("new helper")
+        framework = root / "framework-tests"
+        (framework / "lib").mkdir(parents=True)
+        (framework / "e2e").write_text("#!/usr/bin/env python3\n")
+        (framework / "e2e").chmod(0o755)
+        (framework / "lib/common.sh").write_text("#!/usr/bin/env bash\n")
         self.metadata = {"plan_id": subject.identity(self.plan), "arch": arch, "products": records,
                          "test_revisions": self.plan["test_revisions"],
+                         "framework_tests": subject.tree_files(framework),
                          "tests": {"accelerator": subject.tree_files(tests)}, "build_context": {"host": "x86_64"}}
         (root / "outputs.json").write_text(json.dumps(self.metadata))
         return root
