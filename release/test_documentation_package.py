@@ -27,6 +27,11 @@ class DocumentationPackageTest(unittest.TestCase):
             script.write_text('#!/bin/sh\nprintf "owner suite\\n"\n')
             script.chmod(0o755)
         platform = self.root / 'platform'
+        (platform / 'test/e2e/lib').mkdir(parents=True)
+        runner = platform / 'test/e2e/e2e'
+        runner.write_text('#!/bin/sh\nprintf "unified suite runner\\n"\n')
+        runner.chmod(0o755)
+        (platform / 'test/e2e/lib/common.sh').write_text('# common E2E helpers\\n')
         (platform / 'test/e2e/platform').mkdir()
         (platform / 'test/e2e/platform/run_all.sh').write_bytes((platform / 'test/e2e/run_all.sh').read_bytes())
         (platform / 'test/e2e/platform/run_all.sh').chmod(0o755)
