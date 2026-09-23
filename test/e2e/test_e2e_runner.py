@@ -40,6 +40,15 @@ class SelectionTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             runner.selected(self.args(suite=["missing"]))
 
+    def test_known_but_empty_suite_fails_as_empty_selection(self):
+        with self.assertRaisesRegex(SystemExit, "selection contains no cases"):
+            runner.selected(self.args(suite=["image"]))
+
+    def test_case_with_unapproved_suite_fails_discovery(self):
+        (runner.CASES / "working-set.memory.sh").write_text("#!/bin/sh\n")
+        with self.assertRaisesRegex(SystemExit, "unsupported suite in case file"):
+            runner.discover()
+
     def test_empty_selection_fails(self):
         with self.assertRaises(SystemExit):
             runner.selected(self.args(suite=["basic"], exclude=["basic.*"]))
