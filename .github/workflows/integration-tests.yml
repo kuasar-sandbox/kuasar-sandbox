@@ -124,7 +124,7 @@ jobs:
             --framework-sha "$FRAMEWORK_SHA" --output plan.json "${options[@]}"
           {
             echo "framework_sha=$FRAMEWORK_SHA"
-            echo "artifact=integration-plan-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+            echo "artifact=integration-plan-${GITHUB_RUN_ID}"
           } >> "$GITHUB_OUTPUT"
       - name: Upload resolved plan
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -133,6 +133,7 @@ jobs:
           path: plan.json
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   x86_64:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
@@ -181,10 +182,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: integration-source-result-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-source-result-${{ github.run_id }}
           path: source-result.json
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
 
   results:
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
@@ -213,7 +215,7 @@ jobs:
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: integration-architecture-result-*-${{ github.run_id }}-${{ github.run_attempt }}
+          pattern: integration-architecture-result-*-${{ github.run_id }}
           path: results
           merge-multiple: true
       - name: Bind both architecture results to the exact plan
@@ -222,9 +224,10 @@ jobs:
             --plan plan/plan.json --results results > validation.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: integration-validation-${{ github.run_id }}-${{ github.run_attempt }}
+          name: integration-validation-${{ github.run_id }}
           path: |
             validation.json
             plan/plan.json
           if-no-files-found: error
           retention-days: 7
+          overwrite: true
