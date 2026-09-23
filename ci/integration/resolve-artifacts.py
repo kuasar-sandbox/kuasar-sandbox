@@ -53,7 +53,13 @@ def public(repository):
 
 
 def candidate_case_names(repository, sha, owner):
-    """Read the flat rewritten case set from the exact admitted candidate."""
+    """Read the flat rewritten case set only after the owner runner is retired."""
+    legacy_path = "test/e2e/platform/run_all.sh" if owner == "platform" else "test/e2e/run_all.sh"
+    legacy = release.api_optional(f"repos/{repository}/contents/{legacy_path}?ref={quote(sha, safe='')}")
+    if legacy is not None:
+        artifacts.require(isinstance(legacy, dict) and legacy.get("type") == "file",
+                          f"candidate owner entry is not a file: {owner}")
+        return []
     path = "test/e2e/platform/cases" if owner == "platform" else "test/e2e/cases"
     listing = release.api_optional(f"repos/{repository}/contents/{path}?ref={quote(sha, safe='')}")
     if listing is None:
