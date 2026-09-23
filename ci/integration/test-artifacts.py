@@ -89,6 +89,11 @@ class ArtifactBuildContracts(unittest.TestCase):
             git("config", "user.email", "test-pin@example.invalid")
             (repository / "cmd").mkdir()
             (repository / "cmd/product").write_bytes(b"unchanged product input")
+            (repository / "go.mod").write_text("module cli-helper-fixture\n\ngo 1.26.1\n")
+            test = repository / "internal/orch/capture_test.go"
+            test.parent.mkdir(parents=True)
+            test.write_text('package orch\nimport "testing"\n'
+                            'func TestCapturePairCLIToPausedDatabase(t *testing.T) { t.Log("old CLI test") }\n')
             script = repository / "scripts/ci-e2e-build.sh"
             script.parent.mkdir()
             script.write_text('printf "old helper" > "$3/custom-proxy"\n')
@@ -96,6 +101,7 @@ class ArtifactBuildContracts(unittest.TestCase):
             git("commit", "-qm", "product and old helper")
             product = git("rev-parse", "HEAD").decode().strip()
             script.write_text('printf "pinned helper" > "$3/custom-proxy"\n')
+            test.write_text(test.read_text().replace("old CLI test", "pinned CLI test"))
             git("add", ".")
             git("commit", "-qm", "helper-only change")
             pin = git("rev-parse", "HEAD").decode().strip()
@@ -122,6 +128,10 @@ class ArtifactBuildContracts(unittest.TestCase):
                 subprocess.run(["bash", str(helper / "orchestrator/scripts/ci-e2e-build.sh"),
                                 "fixtures", "x86_64", str(output)], check=True)
                 self.assertEqual((output / "custom-proxy").read_bytes(), b"pinned helper")
+                builder.build_orchestrator_cli_tests(helper, "x86_64", output, os.environ.copy())
+                result = subprocess.check_output([str(output / "orch-cli.test"), "-test.v"], text=True)
+                self.assertIn("pinned CLI test", result)
+                self.assertNotIn("old CLI test", result)
                 if rebuild:
                     self.assertIn("old helper", (sources / "orchestrator/scripts/ci-e2e-build.sh").read_text())
 
@@ -188,6 +198,15 @@ class ArtifactExecutionContracts(unittest.TestCase):
         with patch.object(self.executor.artifacts, "verify_workspace", return_value=self.provenance), \
              patch.object(self.executor.platform, "machine", return_value="x86_64"), patch.dict(os.environ, credentials):
             return self.executor.execute(self.plan, "x86_64", shard, self.root, self.result)
+
+    def test_orchestrator_receives_prepared_cli_helper_and_selected_products(self):
+        case = "test/e2e/orchestrator/run_all.sh"
+        script = self.root / case
+        script.parent.mkdir(parents=True)
+        script.write_text('set -eu\n[ "$ORCH_CLI_TEST_BIN" = "$(dirname "$BIN")/fixtures/bin/orch-cli.test" ]\n')
+        self.provenance["profile"]["cases"] = [case]
+        self.provenance["helpers"] = {"orch-cli.test": {}}
+        self.assertEqual(self.execute("orchestrator")["conclusion"], "success")
 
     def test_working_set_receives_exact_source_manifest_and_preserves_exit(self):
         case = "test/e2e/sandboxer/run_all.sh"
@@ -512,6 +531,39 @@ class ArtifactContracts(unittest.TestCase):
         probe = self.root / "workspaces/x86_64/fixtures/bin/usage-probe"
         self.assertEqual(subject.digest(probe), provenance["helpers"]["usage-probe"]["sha256"])
         probe.unlink()
+        with self.assertRaisesRegex(ValueError, "prepared workspace changed"):
+            subject.verify_workspace(self.root / "workspaces/x86_64", self.plan, "x86_64")
+
+    def test_cli_helper_requires_exact_test_pin_and_survives_preparation(self):
+        self.plan["owners"] = ["orchestrator"]
+        for arch in subject.ARCHES:
+            self.plan["lanes"][arch]["profile"] = subject.profiles(["orchestrator"], arch)
+        self.plan["test_revisions"]["orchestrator"]["sha"] = "f" * 40
+        delta = self.delta()
+        helpers = subject.planned_helpers(self.plan["lanes"]["x86_64"]["profile"])
+        self.assertEqual(helpers["orch-cli.test"], "orchestrator")
+        self.assertNotIn("orch-cli.test", subject.planned_helpers(self.plan["lanes"]["aarch64"]["profile"]))
+        with self.assertRaisesRegex(ValueError, "helper selection differs"):
+            self.compose(delta=delta)
+        (delta / "helpers").mkdir()
+        self.metadata["helpers"] = {}
+        for name, owner in helpers.items():
+            path = delta / "helpers" / name
+            path.write_bytes(elf("x86_64", name))
+            path.chmod(0o755)
+            self.metadata["helpers"][name] = {"sha256": subject.digest(path), "source_sha":
+                self.plan["framework_sha"] if owner == "framework" else self.plan["test_revisions"][owner]["sha"]}
+        helper = self.metadata["helpers"]["orch-cli.test"]
+        helper["source_sha"] = "c" * 40
+        (delta / "outputs.json").write_text(json.dumps(self.metadata))
+        with self.assertRaisesRegex(ValueError, "test helper identity mismatch: orch-cli.test"):
+            self.compose(delta=delta)
+        helper["source_sha"] = "f" * 40
+        (delta / "outputs.json").write_text(json.dumps(self.metadata))
+        provenance = self.compose(delta=delta)
+        prepared = self.root / "workspaces/x86_64/fixtures/bin/orch-cli.test"
+        self.assertEqual(subject.digest(prepared), provenance["helpers"]["orch-cli.test"]["sha256"])
+        prepared.unlink()
         with self.assertRaisesRegex(ValueError, "prepared workspace changed"):
             subject.verify_workspace(self.root / "workspaces/x86_64", self.plan, "x86_64")
 

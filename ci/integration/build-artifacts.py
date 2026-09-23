@@ -76,7 +76,9 @@ def checkout_records(records, root):
         checkout(record["repository"], record["sha"], root / owner)
     modules = ["./" + owner for owner in sorted(records) if (root / owner / "go.mod").is_file()]
     if modules:
-        run(["go", "work", "init", *modules], cwd=root)
+        # A separate test-helper checkout can sit below the product workspace.
+        # Initialize its own file instead of rediscovering the parent's go.work.
+        run(["go", "work", "init", *modules], cwd=root, environment={**os.environ, "GOWORK": "off"})
 
 
 def materialize(plan, arch, root):
@@ -112,6 +114,15 @@ def baseline_tree(plan, arch, assets, output):
         expected = next(item for item in plan["baseline"]["assets"] if item["name"] == name)
         artifacts.require("sha256:" + artifacts.digest(assets / name) == expected["digest"], "build baseline bytes differ from plan")
         artifacts.unpack(assets / name, output, unit, seen)
+
+
+def build_orchestrator_cli_tests(sources, arch, output, environment):
+    # Compile the owner tests from helper_sources' exact test pin. They consume
+    # the independently selected product bytes only in the prepared E2E job.
+    selected = {**environment, "GOWORK": "off", "GOOS": "linux", "CGO_ENABLED": "0",
+                "GOARCH": {"x86_64": "amd64", "aarch64": "arm64"}[arch]}
+    run(["go", "test", "-c", "-trimpath", "-o", output / "orch-cli.test", "./internal/orch"],
+        cwd=sources / "orchestrator", environment=selected)
 
 
 def build(plan, arch, assets, sources, output):
@@ -207,6 +218,8 @@ def build(plan, arch, assets, sources, output):
             run(["bash", ROOT / "ci/integration/ensure-zot.sh"], environment={**environment, "BINDIR": str(helper_root)})
         if "custom-proxy" in helpers:
             run(["bash", helper_source / "orchestrator/scripts/ci-e2e-build.sh", "fixtures", arch, helper_root], environment=helper_environment)
+        if "orch-cli.test" in helpers:
+            build_orchestrator_cli_tests(helper_source, arch, helper_root, helper_environment)
         if "usage-probe" in helpers:
             run(["make", "-C", helper_source / "sandboxer", f"TARGET_ARCH={arch}",
                  f"E2E_FIXTURE_DIR={helper_root}", "e2e-usage-probe"], environment=helper_environment)

@@ -153,7 +153,8 @@ def planned_helpers(profile):
     if owners & {"orchestrator", "platform"}:
         helpers["versitygw"] = "framework"
     if "orchestrator" in owners:
-        helpers.update({"custom-proxy": "orchestrator", "telemetry-grpc-probe": "orchestrator"})
+        helpers.update({"custom-proxy": "orchestrator", "telemetry-grpc-probe": "orchestrator",
+                        "orch-cli.test": "orchestrator"})
     if "sandboxer" in owners:
         helpers["usage-probe"] = "sandboxer"
     return helpers
