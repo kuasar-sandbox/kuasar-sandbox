@@ -80,16 +80,14 @@ def execute(plan, arch, shard, workspace, result_path):
                 owner = parts[2]
                 rewritten = len(parts) == 5 and parts[:2] == ("test", "e2e") and parts[3] == "cases"
                 if rewritten:
-                    artifacts.case_name(parts[4])
-                    # Match the public prepared runner's contract without writing
-                    # run/out state back into the immutable prepared workspace.
-                    case_state = state / "cases" / parts[4]
-                    case_output = state / "out" / parts[4]
-                    case_state.mkdir(parents=True)
-                    case_output.mkdir(parents=True)
-                    selected.update(E2E_WORKSPACE=str(workspace), E2E_ARCH=arch,
-                                    E2E_LIB=str(workspace / "test/e2e/lib"),
-                                    WORK=str(case_state), OUT=str(case_output))
+                    case_id = artifacts.case_name(parts[4])
+                    selected["E2E_CASES_DIR"] = str(workspace / "test/e2e/cases")
+                    command = ["python3", str(workspace / "test/e2e/e2e"), "run",
+                               "--workdir", str(workspace), "--arch", arch,
+                               "--run-root", str(state / "cases"), "--out-root", str(state / "out"),
+                               "--include", case_id]
+                else:
+                    command = ["bash", str(workspace / case)]
                 if owner == "accelerator":
                     selected["MANIFEST_FIXTURE_DIR"] = str(workspace / "fixtures/manifest")
                 if owner == "guest-runtime":
@@ -97,7 +95,7 @@ def execute(plan, arch, shard, workspace, result_path):
                 elif "python" in images:
                     selected.update(E2E_IMAGE=images["python"]["image_id"], IMAGE=images["python"]["image_id"])
                 case_started = time.monotonic()
-                completed = subprocess.run(["bash", str(workspace / case)], cwd=state, env=selected)
+                completed = subprocess.run(command, cwd=state, env=selected)
                 result["timings"].append({"case": case, "wall_seconds": time.monotonic() - case_started, "exit_code": completed.returncode})
                 artifacts.require(completed.returncode == 0, f"selected case failed: {case}")
             if result["extra_checks"] == ["working-set-smoke"]:
