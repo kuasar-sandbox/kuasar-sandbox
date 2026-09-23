@@ -80,6 +80,8 @@ class DocumentationPackageTest(unittest.TestCase):
             target = output / 'test/e2e' / owner / 'run_all.sh'
             self.assertEqual(source.read_bytes(), target.read_bytes())
             self.assertTrue(os.access(target, os.X_OK))
+        self.assertTrue(os.access(output / 'test/e2e/e2e', os.X_OK))
+        self.assertTrue((output / 'test/e2e/lib/common.sh').is_file())
         self.assertFalse((output / 'test/e2e/assemble.sh').exists())
         self.assertFalse((output / 'test/e2e/assemble_docs.py').exists())
 
