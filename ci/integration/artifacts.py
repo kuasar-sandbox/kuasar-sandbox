@@ -344,7 +344,11 @@ def compose(plan, arch, assets, delta, output):
             "candidate embedded ownership differs from plan")
     helpers = planned_helpers(lane["profile"])
     require(set(metadata.get("helpers", {})) == set(helpers), "test helper selection differs from plan")
-    expected_delta = {"outputs.json"}
+    framework_tests = metadata.get("framework_tests", {})
+    require(isinstance(framework_tests, dict) and "e2e" in framework_tests and "lib/common.sh" in framework_tests,
+            "candidate is missing trusted framework E2E files")
+    require(tree_files(delta / "framework-tests") == framework_tests, "framework E2E file digest mismatch")
+    expected_delta = {"outputs.json"} | {f"framework-tests/{name}" for name in framework_tests}
     for name, record in metadata["products"].items():
         file = delta / "bin" / name
         require(file.is_file() and not file.is_symlink() and digest(file) == record["sha256"],
@@ -399,6 +403,7 @@ def compose(plan, arch, assets, delta, output):
                 destination = stage / "test/e2e" / owner
                 shutil.rmtree(destination)
                 shutil.copytree(source, destination)
+        shutil.copytree(delta / "framework-tests", stage / "test/e2e", dirs_exist_ok=True)
         products = {}
         for name, unit in PRODUCTS.items():
             path = stage / "bin" / name
