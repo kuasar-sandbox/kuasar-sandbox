@@ -1,0 +1,172 @@
+#!/usr/bin/env python3
+"""Small public runner for aggregated Kuasar product E2E cases."""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import os
+import platform
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+CASES = ROOT / "cases"
+
+
+def discover() -> list[Path]:
+    if not CASES.is_dir():
+        return []
+    cases = []
+    for path in sorted(CASES.glob("*.sh")):
+        name = path.name
+        if name.count(".") < 2 or not name.endswith(".sh"):
+            continue
+        suite, rest = name.split(".", 1)
+        if not suite or rest == "sh":
+            continue
+        cases.append(path)
+    return cases
+
+
+def selected(args: argparse.Namespace) -> list[Path]:
+    cases = discover()
+    explicit = bool(args.suite or args.include or args.exclude or args.all)
+    if not explicit:
+        raise SystemExit("select cases with --suite/--include/--exclude/--all")
+
+    suites = {p.name.split(".", 1)[0] for p in cases}
+    unknown = sorted(set(args.suite) - suites)
+    if unknown:
+        raise SystemExit("unknown suite(s): " + ", ".join(unknown))
+
+    if args.all:
+        chosen = set(cases)
+    else:
+        chosen = {p for p in cases if p.name.split(".", 1)[0] in args.suite}
+        for pattern in args.include:
+            matches = {p for p in cases if fnmatch.fnmatchcase(p.name, pattern)}
+            if not matches:
+                raise SystemExit(f"--include matched no case: {pattern}")
+            chosen |= matches
+
+    for pattern in args.exclude:
+        matches = {p for p in cases if fnmatch.fnmatchcase(p.name, pattern)}
+        if not matches:
+            raise SystemExit(f"--exclude matched no case: {pattern}")
+        chosen -= matches
+
+    result = sorted(chosen)
+    if not result:
+        raise SystemExit("selection contains no cases")
+    return result
+
+
+def add_selection(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--suite", action="append", default=[])
+    parser.add_argument("--include", action="append", default=[])
+    parser.add_argument("--exclude", action="append", default=[])
+    parser.add_argument("--all", action="store_true")
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    for case in selected(args):
+        print(case.name)
+    return 0
+
+
+def normalize_arch(value: str) -> str:
+    aliases = {"amd64": "x86_64", "arm64": "aarch64"}
+    value = aliases.get(value, value)
+    if value not in {"x86_64", "aarch64"}:
+        raise SystemExit(f"unsupported architecture: {value}")
+    return value
+
+
+def cmd_prepare(args: argparse.Namespace) -> int:
+    release = Path(args.release_dir).resolve()
+    work = Path(args.workdir).resolve()
+    arch = normalize_arch(args.arch)
+    if work.exists():
+        raise SystemExit(f"workdir already exists: {work}")
+
+    candidates = [release / "bin" / arch, release / "bin"]
+    source_bin = next((p for p in candidates if p.is_dir()), None)
+    if source_bin is None:
+        raise SystemExit(f"release has no bin directory for {arch}: {release}")
+
+    work.mkdir(parents=True)
+    shutil.copytree(source_bin, work / "bin", symlinks=True)
+    shutil.copytree(ROOT, work / "test" / "e2e", symlinks=True)
+    (work / "out").mkdir()
+    (work / "fixtures").mkdir()
+    (work / "ARCH").write_text(arch + "\n", encoding="utf-8")
+    print(work)
+    return 0
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    work = Path(args.workdir).resolve()
+    bin_dir = work / "bin"
+    out_root = work / "out"
+    if not bin_dir.is_dir():
+        raise SystemExit(f"prepared workspace is missing bin/: {work}")
+    out_root.mkdir(parents=True, exist_ok=True)
+    arch_file = work / "ARCH"
+    arch = normalize_arch(args.arch or (arch_file.read_text().strip() if arch_file.exists() else platform.machine()))
+
+    env_base = os.environ.copy()
+    env_base.update({
+        "BIN": str(bin_dir),
+        "E2E_WORKSPACE": str(work),
+        "E2E_ARCH": arch,
+    })
+
+    failed = []
+    for case in selected(args):
+        case_id = case.name
+        case_work = work / "run" / case_id
+        case_out = out_root / case_id
+        case_work.mkdir(parents=True, exist_ok=True)
+        case_out.mkdir(parents=True, exist_ok=True)
+        env = env_base | {"WORK": str(case_work), "OUT": str(case_out)}
+        print(f"==> {case_id}", flush=True)
+        result = subprocess.run(["bash", str(case)], env=env, check=False)
+        if result.returncode:
+            failed.append((case_id, result.returncode))
+            print(f"FAIL {case_id} exit={result.returncode}", file=sys.stderr)
+        else:
+            print(f"PASS {case_id}")
+    if failed:
+        print("failed: " + ", ".join(f"{name}({code})" for name, code in failed), file=sys.stderr)
+        return 1
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="e2e")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("list")
+    add_selection(p)
+    p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("prepare")
+    p.add_argument("--release-dir", required=True)
+    p.add_argument("--workdir", required=True)
+    p.add_argument("--arch", default=platform.machine())
+    p.set_defaults(func=cmd_prepare)
+
+    p = sub.add_parser("run")
+    add_selection(p)
+    p.add_argument("--workdir", required=True)
+    p.add_argument("--arch")
+    p.set_defaults(func=cmd_run)
+
+    return args.func(args) if (args := parser.parse_args()) else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
