@@ -29,6 +29,20 @@ mkdir -p "$OUTPUT/test/e2e"
 install -m 0755 "$PLATFORM/test/e2e/run_all.sh" "$OUTPUT/test/e2e/run_all.sh"
 install -m 0755 "$PLATFORM/test/e2e/e2e" "$OUTPUT/test/e2e/e2e"
 cp -a "$PLATFORM/test/e2e/lib" "$OUTPUT/test/e2e/lib"
+mkdir -p "$OUTPUT/test/e2e/cases"
+
+copy_cases() {
+    local owner=$1 source_suite=$2 case target
+    [ -d "$source_suite/cases" ] || return 0
+    while IFS= read -r -d '' case; do
+        target="$OUTPUT/test/e2e/cases/${case##*/}"
+        [ ! -e "$target" ] || {
+            echo "duplicate E2E case id from $owner: ${case##*/}" >&2
+            exit 1
+        }
+        install -m 0755 "$case" "$target"
+    done < <(find "$source_suite/cases" -maxdepth 1 -type f -name '*.*.sh' -print0 | sort -z)
+}
 
 for index in "${!COMPONENTS[@]}"; do
     component="${COMPONENTS[$index]}"
@@ -50,6 +64,11 @@ for index in "${!COMPONENTS[@]}"; do
         exit 1
     }
     cp -a "$source_suite" "$OUTPUT/test/e2e/$component"
+    copy_cases "$component" "$source_suite"
+    if [ -d "$source_suite/lib" ]; then
+        mkdir -p "$OUTPUT/test/e2e/lib/$component"
+        cp -a "$source_suite/lib/." "$OUTPUT/test/e2e/lib/$component/"
+    fi
 done
 
 platform_suite="$PLATFORM/test/e2e/platform"
@@ -62,6 +81,7 @@ if find "$platform_suite" -type l -print -quit | grep -q .; then
     exit 1
 fi
 cp -a "$platform_suite" "$OUTPUT/test/e2e/platform"
+copy_cases platform "$platform_suite"
 
 # Keep the existing flat design-document entry points, include both languages
 # and out-of-docs guides, then rebase only documentation links for this layout.
