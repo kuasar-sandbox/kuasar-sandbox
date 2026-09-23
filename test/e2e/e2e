@@ -72,6 +72,8 @@ def add_selection(parser: argparse.ArgumentParser) -> None:
 
 
 def cmd_list(args: argparse.Namespace) -> int:
+    if not (args.suite or args.include or args.exclude or args.all):
+        args.all = True
     for case in selected(args):
         print(case.name)
     return 0
