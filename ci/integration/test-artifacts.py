@@ -155,7 +155,7 @@ class ArtifactBuildContracts(unittest.TestCase):
             helper.write_text('#!/usr/bin/env bash\n'
                               'printf "%s\\n" "$TARGET_ARCH" > "$KUASAR_E2E_TOOL_OUTPUT/invoked"\n'
                               'exit 23\n')
-            helper.chmod(0o644)
+            helper.chmod(0o644)  # Match the framework script's Git mode.
             output = root / "build-output"
             credentials = {key: "" for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}
             with patch.object(builder, "ROOT", root), patch.object(builder, "materialize"), \
@@ -581,6 +581,9 @@ class ArtifactContracts(unittest.TestCase):
             subject.verify_workspace(self.root / "workspaces/x86_64", self.plan, "x86_64")
 
     def test_guest_execution_binds_init_to_the_validated_runtime_bytes(self):
+        # A legal unchanged runtime may embed a different init revision than the
+        # separately published sandboxer unit. Candidate-init equality is checked
+        # separately; execution must retain this baseline's embedded identity.
         files = dict(self.files["x86_64"])
         files["sandbox-init"] = elf("x86_64", "separately published init")
         name = subject.archive_name("sandboxer", "v1.2.3", "x86_64")
@@ -685,7 +688,7 @@ class ArtifactContracts(unittest.TestCase):
 
     def test_publication_binds_both_results_to_unchanged_stage_bytes(self):
         spec = importlib.util.spec_from_file_location("binding", Path(__file__).resolve().parents[2] / "release/bind-validation.py")
-        binding = importlib.util.module_from_spec(binding_spec)
+        binding = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(binding)
         self.plan["mode"] = "exact-assets"
         self.plan["baseline"]["staged"] = True
