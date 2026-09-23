@@ -193,6 +193,7 @@ test:
 test-ci-tools:
 	bash ci/integration/test-ci-tools.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-source-owner.py
+	PYTHONDONTWRITEBYTECODE=1 python3 test/e2e/test_e2e_runner.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/e2e/platform/lib/test_failure_diagnostics.py
 	KUASAR_RUNTIME_READER="$${KUASAR_RUNTIME_READER:-$(ORG)/guest-runtime/scripts/release-runtime-payloads.py}" \
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
