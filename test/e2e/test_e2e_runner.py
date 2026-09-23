@@ -53,6 +53,29 @@ class SelectionTests(unittest.TestCase):
         with self.assertRaises(SystemExit):
             runner.selected(self.args(suite=["basic"], exclude=["basic.*"]))
 
+    def test_run_can_keep_state_outside_prepared_workspace(self):
+        with tempfile.TemporaryDirectory(prefix="e2e-prepared-") as directory:
+            work = Path(directory) / "prepared"
+            run_root = Path(directory) / "state"
+            out_root = Path(directory) / "output"
+            (work / "bin").mkdir(parents=True)
+            (work / "test/e2e/lib").mkdir(parents=True)
+            (work / "ARCH").write_text("x86_64\n")
+            (runner.CASES / "basic.one.sh").write_text(
+                '#!/bin/sh\nset -eu\n'
+                f'[ "$E2E_WORKSPACE" = "{work}" ]\n'
+                f'[ "$E2E_LIB" = "{work}/test/e2e/lib" ]\n'
+                '[ "$E2E_ARCH" = x86_64 ]\n'
+                f'[ "$WORK" = "{run_root}/basic.one.sh" ]\n'
+                f'[ "$OUT" = "{out_root}/basic.one.sh" ]\n'
+                'printf ok > "$OUT/result"\n')
+            args = self.args(include=["basic.one.sh"], workdir=str(work), arch="x86_64",
+                             run_root=str(run_root), out_root=str(out_root))
+            self.assertEqual(runner.cmd_run(args), 0)
+            self.assertEqual((out_root / "basic.one.sh/result").read_text(), "ok")
+            self.assertFalse((work / "run").exists())
+            self.assertFalse((work / "out").exists())
+
 
 if __name__ == "__main__":
     unittest.main()
