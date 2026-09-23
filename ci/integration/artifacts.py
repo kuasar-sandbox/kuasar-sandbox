@@ -98,7 +98,6 @@ def changed_products(changes):
         if owner == "accelerator":
             if go or touches("deps"):
                 products.update(("manifest-ctl", "store-ctl", "cache-ctl"))
-            # These are the libraries imported by guest-runtime's flatten CLI.
             if touches("go.mod", "go.sum", "pkg/flatten", "pkg/image", "pkg/manifest",
                        "pkg/remote", "pkg/sparse", "pkg/tailzip", "pkg/tarstream", "pkg/tar",
                        "pkg/cache", "pkg/store", "pkg/readerr", "internal/util"):
@@ -203,7 +202,7 @@ def planned_helpers(profile):
 def archive_name(unit, version, arch):
     require(unit in UNITS and arch in ARCHES, "invalid archive unit/architecture")
     prefix = unit + "-" if unit in ("runtime", "vmlinux") else ""
-    require(re.fullmatch(re.escape(prefix) + r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?", version),
+    require(re.fullmatch(re.escape(prefix) + r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?", version),
             "invalid unit version")
     if unit == "runtime":
         return f"sandbox-runtime-{arch}-{version.removeprefix('runtime-')}.tar.gz"
@@ -243,8 +242,6 @@ def tree_modes(root):
 
 
 def test_overlay_root(owner):
-    # Platform helpers/perf scripts live outside test/e2e/platform. Their whole
-    # owned tree travels together, excluding the component-owned subtrees.
     return "test/platform" if owner == "platform" else f"test/e2e/{owner}"
 
 
@@ -306,9 +303,6 @@ def runtime_payloads(workspace, arch, expected_init=None, expected_envd=None):
             if name in ("flatten-ctl", "mkfs.erofs"):
                 require(result[name] == digest(workspace / "bin" / name),
                         f"embedded {name} differs from the selected product")
-        # Historical runtime and sandboxer units can legitimately have distinct
-        # compiler contexts. Preserve the exact baseline embedded bytes unless
-        # this plan explicitly replaces the embedded input.
         for name, expected in (("init", expected_init), ("envd", expected_envd)):
             if expected is not None:
                 require(result[name] == expected, f"embedded {name} differs from the selected product")
@@ -411,8 +405,6 @@ def compose(plan, arch, assets, delta, output):
     records = {record["name"]: record for record in baseline["assets"]}
     require(len(records) == len(baseline["assets"]) and set(expected_assets) <= set(records),
             "aggregate lacks target assets; explicit ARM initialization is required")
-    # Validate everything before applying candidate overlays. No latest lookup or
-    # source-build fallback is available at this boundary.
     for name in expected_assets:
         path = assets / name
         require(path.is_file() and not path.is_symlink() and path.stat().st_size == records[name]["size"]
