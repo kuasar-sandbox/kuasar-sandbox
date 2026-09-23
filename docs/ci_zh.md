@@ -90,7 +90,7 @@ owner 测试 revision 与产品 tag 独立。新聚合在维护清单的 `test_r
 缺失或不匹配会失败，不回退到产品 tag 或执行时的分支 HEAD；仅测试变更不会重建复用的产品。
 
 prepare 提供 manifest Docker archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像以及目标 helper
-（zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe）。工作区包含 `bin/`、`test/`、`fixtures/`、`images/`、材料及 `provenance.json`。
+(zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe、orchestrator CLI tests). orchestrator profile 在既有 helper build 中按精确 test pin 编译 `orch-cli.test`,并通过 `ORCH_CLI_TEST_BIN` 提供给 owner runner;其摘要、目标架构和测试 revision 与其他 helper 一样接受 preparation/provenance 校验. 它消费独立选择的 `BIN` 产品. 工作区包含 `bin/`、`test/`、`fixtures/`、`images/`、材料及 `provenance.json`.
 这些是测试输入；被测业务 Build、flatten、snapshot、publish、restore 仍在原有 E2E 用例执行。
 
 E2E 只 checkout 可信执行器并下载目标 prepared workspace，执行前后核验全部文件摘要和权限。
