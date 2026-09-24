@@ -109,5 +109,36 @@ class SelectedEntryModeTests(unittest.TestCase):
                 workspace, {"cases": ["test/e2e/sandboxer/run_all.sh"]})
 
 
+class GuestFixturePathTests(unittest.TestCase):
+    def test_migrated_guest_uses_normalized_component_library(self):
+        with tempfile.TemporaryDirectory(prefix="kuasar-guest-fixture-") as directory:
+            workspace = Path(directory)
+            migrated = workspace / "test/e2e/lib/guest-runtime/fixture.py"
+            migrated.parent.mkdir(parents=True)
+            migrated.write_text("# prepared fixture\n")
+            plan = {"candidate_cases": {"guest-runtime": ["image.flatten.sh"]}}
+            self.assertEqual(prepare.guest_fixture_script(plan, workspace), migrated)
+
+    def test_unmigrated_guest_keeps_legacy_overlay_path(self):
+        with tempfile.TemporaryDirectory(prefix="kuasar-guest-fixture-") as directory:
+            workspace = Path(directory)
+            legacy = workspace / "test/e2e/guest-runtime/fixture.py"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("# legacy fixture\n")
+            self.assertEqual(prepare.guest_fixture_script({}, workspace), legacy)
+
+    def test_selected_guest_fixture_must_be_a_real_file(self):
+        with tempfile.TemporaryDirectory(prefix="kuasar-guest-fixture-") as directory:
+            workspace = Path(directory)
+            target = workspace / "fixture.py"
+            target.write_text("# target\n")
+            migrated = workspace / "test/e2e/lib/guest-runtime/fixture.py"
+            migrated.parent.mkdir(parents=True)
+            migrated.symlink_to(target)
+            plan = {"candidate_cases": {"guest-runtime": ["image.flatten.sh"]}}
+            with self.assertRaisesRegex(ValueError, "missing prepared guest-runtime fixture helper"):
+                prepare.guest_fixture_script(plan, workspace)
+
+
 if __name__ == "__main__":
     unittest.main()
