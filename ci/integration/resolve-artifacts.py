@@ -61,9 +61,13 @@ def candidate_case_names(repository, sha, owner):
                           f"candidate owner entry is not a file: {owner}")
         return []
     path = "test/e2e/platform/cases" if owner == "platform" else "test/e2e/cases"
-    listing = release.api_optional(f"repos/{repository}/contents/{path}?ref={quote(sha, safe='')}")
-    if listing is None:
-        return []
+    endpoint = f"repos/{repository}/contents/{path}?ref={quote(sha, safe='')}"
+    result = release.gh("api", endpoint, check=False)
+    if result.returncode != 0:
+        if "(HTTP 404)" in result.stderr:
+            return []
+        raise RuntimeError(result.stderr.strip() or f"cannot query {endpoint}")
+    listing = json.loads(result.stdout)
     artifacts.require(isinstance(listing, list), f"candidate E2E cases are not a directory: {owner}")
     names = []
     for entry in listing:
