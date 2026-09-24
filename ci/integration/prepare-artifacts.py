@@ -41,6 +41,14 @@ def validate_selected_entry_modes(workspace, profile):
             artifacts.require(os.access(path, os.X_OK), f"selected legacy test entry is not executable: {case}")
 
 
+def prepared_helper(workspace, owner, name):
+    """Return a component helper from the normalized prepared-workspace namespace."""
+    path = workspace / "test/e2e/lib" / owner / name
+    artifacts.require(path.is_file() and not path.is_symlink(),
+                      f"missing prepared {owner} helper: {name}")
+    return path
+
+
 def prepare(plan, arch, assets, delta, workspace):
     provenance = artifacts.compose(plan, arch, assets, delta, workspace)
     validate_selected_entry_modes(workspace, provenance["profile"])
@@ -52,7 +60,7 @@ def prepare(plan, arch, assets, delta, workspace):
     fixtures, images = {}, {}
     if "accelerator" in owners:
         directory = workspace / "fixtures/manifest"
-        subprocess.run(["python3", str(workspace / "test/e2e/accelerator/lib/manifest_fixture.py"),
+        subprocess.run(["python3", str(prepared_helper(workspace, "accelerator", "manifest_fixture.py")),
                         str(directory), "--architecture", go_arch], check=True)
         for variant in ("a", "b"):
             path = directory / f"image-{variant}.tar"
@@ -61,7 +69,7 @@ def prepare(plan, arch, assets, delta, workspace):
     if "guest-runtime" in owners:
         path = workspace / "images/guest-runtime.tar"
         tag = "kuasar-ci-guest-runtime:" + arch
-        subprocess.run(["python3", str(workspace / "test/e2e/guest-runtime/fixture.py"), str(path),
+        subprocess.run(["python3", str(prepared_helper(workspace, "guest-runtime", "fixture.py")), str(path),
                         "--tag", tag, "--architecture", go_arch], check=True)
         images["guest-runtime"] = {"reference": tag, "platform": fixture_platform, "image_id": image_archive(path, go_arch),
                                    "archive": str(path.relative_to(workspace)), "sha256": artifacts.digest(path), "owner": "guest-runtime"}
