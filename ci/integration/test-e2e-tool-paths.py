@@ -79,20 +79,42 @@ class CaseBridgeContracts(unittest.TestCase):
             {'type': 'file', 'name': 'network.geneve-ip.sh'},
         ]
         legacy = {'type': 'file', 'name': 'run_all.sh'}
-        with patch.object(resolver.release, 'api_optional', return_value=legacy) as api:
+        with patch.object(resolver.release, 'api_optional', return_value=legacy) as api, \
+             patch.object(resolver.release, 'gh') as gh:
             self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'), [])
         self.assertEqual(api.call_count, 1)
+        self.assertEqual(gh.call_count, 0)
         self.assertIn('test/e2e/run_all.sh', api.call_args.args[0])
-        with patch.object(resolver.release, 'api_optional', side_effect=[None, listing]) as api:
+
+        directory = subprocess.CompletedProcess(['gh'], 0, json.dumps(listing), '')
+        with patch.object(resolver.release, 'api_optional', return_value=None), \
+             patch.object(resolver.release, 'gh', return_value=directory) as gh:
             self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'),
                              ['network.geneve-ip.sh', 'network.tap.sh'])
-        self.assertEqual(api.call_count, 2)
-        self.assertIn('ref=' + 'a' * 40, api.call_args.args[0])
-        with patch.object(resolver.release, 'api_optional', side_effect=[None, [{'type': 'dir', 'name': 'nested'}]]):
+        self.assertEqual(gh.call_count, 1)
+        self.assertIn('contents/test/e2e/cases?ref=' + 'a' * 40, gh.call_args.args[1])
+
+        missing = subprocess.CompletedProcess(['gh'], 1, '', 'gh: Not Found (HTTP 404)')
+        with patch.object(resolver.release, 'api_optional', return_value=None), \
+             patch.object(resolver.release, 'gh', return_value=missing):
+            self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'), [])
+
+        not_directory = subprocess.CompletedProcess(['gh'], 0, json.dumps({'type': 'file'}), '')
+        with patch.object(resolver.release, 'api_optional', return_value=None), \
+             patch.object(resolver.release, 'gh', return_value=not_directory):
+            with self.assertRaisesRegex(ValueError, 'not a directory'):
+                resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
+
+        nested = subprocess.CompletedProcess(['gh'], 0, json.dumps([{'type': 'dir', 'name': 'nested'}]), '')
+        with patch.object(resolver.release, 'api_optional', return_value=None), \
+             patch.object(resolver.release, 'gh', return_value=nested):
             with self.assertRaisesRegex(ValueError, 'flat files'):
                 resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
-        with patch.object(resolver.release, 'api_optional', side_effect=[None,
-                          [{'type': 'file', 'name': 'working-set.smoke.sh'}]]):
+
+        invalid = subprocess.CompletedProcess(
+            ['gh'], 0, json.dumps([{'type': 'file', 'name': 'working-set.smoke.sh'}]), '')
+        with patch.object(resolver.release, 'api_optional', return_value=None), \
+             patch.object(resolver.release, 'gh', return_value=invalid):
             with self.assertRaisesRegex(ValueError, 'unsupported E2E suite'):
                 resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
 
