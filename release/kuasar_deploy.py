@@ -4,6 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
 import os
 import platform
 import shutil
@@ -12,10 +17,10 @@ import sys
 from pathlib import Path
 
 
-DEFAULT_VERSION = "release-v0.1.2"
+DEFAULT_VERSION = "release-v0.1.5"
 DEFAULT_REPOSITORY = "kuasar-sandbox/kuasar-sandbox"
+LOCAL_NO_PROXY = "localhost,127.0.0.1,.localhost,.sandboxes.demo.local,api.sandboxes.demo.local,169.254.169.254"
 REQUIRED_COMMANDS = (
-    "gh",
     "tar",
     "sha256sum",
     "python3",
@@ -33,7 +38,6 @@ APT_PACKAGES = (
     "curl",
     "docker.io",
     "e2fsprogs",
-    "gh",
     "iproute2",
     "iptables",
     "libgcc-s1",
@@ -106,11 +110,16 @@ def command_succeeds_quietly(command: list[str]) -> bool:
 def missing_apt_packages() -> list[str]:
     if shutil.which("dpkg-query") is None:
         return list(APT_PACKAGES)
-    return [
-        package
-        for package in APT_PACKAGES
-        if not command_succeeds_quietly(["dpkg-query", "-W", "-f=${Status}", package])
-    ]
+    missing = []
+    for package in APT_PACKAGES:
+        result = subprocess.run(
+            ["dpkg-query", "-W", "-f=${Status}", package],
+            text=True, capture_output=True, check=False,
+        )
+        if result.returncode != 0 or result.stdout.strip() != "install ok installed":
+            missing.append(package)
+    return missing
+
 
 
 def check_environment() -> None:
@@ -190,9 +199,6 @@ def check_environment() -> None:
     )
     record("Docker daemon", docker_ok, "available" if docker_ok else "not available")
 
-    gh_ok = shutil.which("gh") is not None and command_succeeds_quietly(["gh", "auth", "status"])
-    record("GitHub CLI authentication", gh_ok, "authenticated" if gh_ok else "not authenticated")
-
     failures = [(name, detail) for name, passed, detail in results if not passed]
     print("\n=== CHECK SUMMARY ===")
     if failures:
@@ -203,7 +209,7 @@ def check_environment() -> None:
         for name, detail in failures:
             print(f"  - {name}: {detail}")
         print(f"Overall: FAILED - {len(failures)} check(s) failed.")
-        raise DeployError("")
+        raise DeployError(f"{len(failures)} host requirement(s) failed; see the check summary above")
 
     print("Result: PASSED")
     print(f"Passed: {len(results)}")
@@ -228,10 +234,71 @@ def install_missing_dependencies() -> None:
     print("Dependency installation completed.")
 
 
+def release_download_base(repository: str, version: str) -> str:
+    require(re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is not None,
+            "repository must be owner/name")
+    require(re.fullmatch(r"release-v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8})?", version) is not None,
+            "version must be release-vX.Y.Z or release-vX.Y.Z-preview.YYYYMMDD")
+    return f"https://github.com/{repository}/releases/download/{version}"
+
+
+def download_file(url: str, destination: Path) -> None:
+    partial = destination.with_name(destination.name + ".part")
+    try:
+        request = urllib.request.Request(url, headers={"User-Agent": "kuasar-release-deployer"})
+        with urllib.request.urlopen(request, timeout=60) as response, partial.open("wb") as target:
+            require(response.url.startswith("https://"), "download redirected away from HTTPS")
+            shutil.copyfileobj(response, target)
+        partial.replace(destination)
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise DeployError(f"download failed: {url}: {exc}. Check network/proxy CA trust and retry; GitHub login is not required.") from exc
+    finally:
+        partial.unlink(missing_ok=True)
+
+
+def checksum_entries(manifest: str) -> list[tuple[str, str]]:
+    entries = []
+    names = set()
+    for line in manifest.splitlines():
+        if not line.strip():
+            continue
+        match = re.fullmatch(r"([0-9a-fA-F]{64}) [ *]([A-Za-z0-9][A-Za-z0-9_.-]*\.tar\.gz)", line)
+        require(match is not None, "invalid SHA256SUMS entry; expected a flat .tar.gz asset name")
+        digest, name = match.groups()
+        require(name not in names, f"duplicate SHA256SUMS entry: {name}")
+        names.add(name)
+        entries.append((digest.lower(), name))
+    require(bool(entries), "SHA256SUMS contains no release archives")
+    return entries
+
+
+def file_sha256(path: Path) -> str:
+    with path.open("rb") as source:
+        digest = hashlib.sha256()
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+        return digest.hexdigest()
+
+
+def download_release(repository: str, version: str, download_dir: Path) -> None:
+    base = release_download_base(repository, version)
+    print(f"Downloading public Release {version} without GitHub authentication...")
+    manifest = download_dir / "SHA256SUMS"
+    download_file(f"{base}/SHA256SUMS", manifest)
+    entries = checksum_entries(manifest.read_text())
+    for digest, name in entries:
+        destination = download_dir / name
+        if destination.is_file() and file_sha256(destination) == digest:
+            print(f"Reusing verified asset: {name}")
+            continue
+        download_file(f"{base}/{urllib.parse.quote(name)}", destination)
+        require(file_sha256(destination) == digest, f"SHA256 mismatch: {name}; retry to download again")
+
+
 def validate_release(download_dir: Path, install_dir: Path) -> None:
-    archives = sorted(download_dir.glob("*.tar.gz"))
-    require(len(archives) == 7, f"expected 7 archives, found {len(archives)}")
     require((download_dir / "SHA256SUMS").is_file(), "SHA256SUMS is missing")
+    entries = checksum_entries((download_dir / "SHA256SUMS").read_text())
+    archives = [download_dir / name for _, name in entries]
     run(["sha256sum", "--quiet", "-c", "SHA256SUMS"], cwd=download_dir)
 
     for archive in archives:
@@ -248,37 +315,28 @@ def validate_release(download_dir: Path, install_dir: Path) -> None:
 
 
 def prepare_python_environment(install_dir: Path) -> None:
+    requirements = install_dir / "test" / "demo" / "requirements.txt"
+    require(requirements.is_file(), f"release SDK requirements are missing: {requirements}")
     venv = install_dir / ".venv"
     if venv.exists():
         print(f"Python verification environment already exists: {venv}")
         return
     run(["python3", "-m", "venv", str(venv)])
-    run([str(venv / "bin" / "python"), "-m", "pip", "install", "e2b", "e2b-code-interpreter"])
+    run([str(venv / "bin" / "python"), "-m", "pip", "install", "-r", str(requirements)])
 
 
 def prepare_release(args: argparse.Namespace) -> Path:
+    release_download_base(args.repository, args.version)
     install_missing_dependencies()
     check_environment()
     root = args.root.resolve()
     download_dir = root / f"kuasar-download-{args.version}"
     install_dir = root / f"kuasar-{args.version}"
-    require(not download_dir.exists(), f"download directory already exists: {download_dir}")
     require(not install_dir.exists(), f"install directory already exists: {install_dir}")
-    download_dir.mkdir(parents=True)
-    install_dir.mkdir(parents=True)
+    download_dir.mkdir(parents=True, exist_ok=True)
 
-    run(
-        [
-            "gh",
-            "release",
-            "download",
-            args.version,
-            "--repo",
-            args.repository,
-            "--dir",
-            str(download_dir),
-        ]
-    )
+    download_release(args.repository, args.version, download_dir)
+    install_dir.mkdir(parents=True)
     validate_release(download_dir, install_dir)
     prepare_python_environment(install_dir)
     print(f"Release prepared at {install_dir}")
@@ -292,6 +350,27 @@ def release_dir(args: argparse.Namespace) -> Path:
     return path
 
 
+def unit_isolation_mode(path: Path, unit_prefix: str) -> str:
+    demo = path / "test" / "demo" / "demo_e2b.sh"
+    require(demo.is_file(), f"release demo script is missing: {demo}")
+    try:
+        script = demo.read_text()
+    except OSError as exc:
+        raise DeployError(f"cannot read release demo script: {demo}: {exc}") from exc
+
+    if "DEMO_UNIT_PREFIX" in script:
+        return "configurable"
+    if 'RUN_KEY="${DEMO_RUN_ID:-' in script and "RUNNER_TEMPLATE=" in script:
+        require(
+            unit_prefix == "kuasar-demo",
+            "this Release uses automatically isolated per-run unit names and does not support --unit-prefix; use the default prefix",
+        )
+        return "per-run"
+    raise DeployError(
+        "this Release demo does not support isolated unit names; use release-v0.1.5 or later"
+    )
+
+
 def runtime_environment(path: Path) -> dict[str, str]:
     data_dir = path / ".kuasar-quickstart"
     venv = path / ".venv"
@@ -302,6 +381,8 @@ def runtime_environment(path: Path) -> dict[str, str]:
             "DEMO_DATA_DIR": str(data_dir),
             "REGISTRY": "127.0.0.1:5000",
             "REGISTRY_INSECURE": "1",
+            "NO_PROXY": LOCAL_NO_PROXY,
+            "no_proxy": LOCAL_NO_PROXY,
         }
     )
     return env
@@ -340,10 +421,14 @@ def deploy(args: argparse.Namespace) -> None:
 
 def verify(args: argparse.Namespace) -> None:
     path = release_dir(args)
+    isolation = unit_isolation_mode(path, args.unit_prefix)
+    print(f"Unit isolation: {isolation}")
     env = runtime_environment(path)
     env["DEMO_QUICKSTART"] = "1"
-    env["DEMO_UNIT_PREFIX"] = args.unit_prefix
-    keys = ["PATH", "DEMO_DATA_DIR", "DEMO_QUICKSTART", "DEMO_UNIT_PREFIX"]
+    keys = ["PATH", "DEMO_DATA_DIR", "DEMO_QUICKSTART", "NO_PROXY", "no_proxy"]
+    if isolation == "configurable":
+        env["DEMO_UNIT_PREFIX"] = args.unit_prefix
+        keys.append("DEMO_UNIT_PREFIX")
     if args.keep_logs:
         env["DEMO_KEEP"] = "1"
         keys.append("DEMO_KEEP")
@@ -448,7 +533,7 @@ def main() -> int:
             stop(args)
         print_result(args, True)
         return 0
-    except (DeployError, subprocess.CalledProcessError) as exc:
+    except (DeployError, subprocess.CalledProcessError, OSError) as exc:
         reason = str(exc) or "one or more required checks failed"
         print_result(args, False, reason)
         return 1

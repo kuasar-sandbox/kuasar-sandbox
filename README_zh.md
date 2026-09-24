@@ -17,6 +17,7 @@ Serverless 与强化学习工作负载,提供独立 Guest Kernel 隔离,快照�
 - [快速开始](docs/quickstart_zh.md):从同一聚合 Release 下载资产,校验并用 E2B SDK 运行首个真实 MicroVM;
 - [Architecture](docs/kuasar-sandbox_zh.md):系统能力,组件边界和关键语义;
 - [Deployment](docs/deployment_zh.md):单节点,集群拓扑与进程依赖;
+- [Release 快速部署](release/README-deployment_zh.md):检查受支持主机,下载公开 Release 并运行其 E2E demo;
 - [Releases](docs/release_zh.md):组件版本,聚合版本和资产契约;
 - [Demo](test/demo/DEMO_zh.md):本地体验环境和 E2B SDK 演示;
 - [Full validation](test/QUICKSTART_zh.md):完整 Aggregate Release E2E 验收;
