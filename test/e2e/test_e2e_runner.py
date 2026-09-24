@@ -109,5 +109,31 @@ class SelectedEntryModeTests(unittest.TestCase):
                 workspace, {"cases": ["test/e2e/sandboxer/run_all.sh"]})
 
 
+class PreparedHelperTests(unittest.TestCase):
+    def test_helper_comes_from_normalized_prepared_namespace(self):
+        with tempfile.TemporaryDirectory(prefix="kuasar-prepared-helper-") as directory:
+            workspace = Path(directory)
+            helper = workspace / "test/e2e/lib/guest-runtime/fixture.py"
+            helper.parent.mkdir(parents=True)
+            helper.write_text("# prepared helper\n")
+            self.assertEqual(
+                prepare.prepared_helper(workspace, "guest-runtime", "fixture.py"), helper)
+            self.assertFalse((workspace / "test/e2e/guest-runtime/fixture.py").exists())
+
+    def test_missing_or_symlink_helper_fails_closed(self):
+        with tempfile.TemporaryDirectory(prefix="kuasar-prepared-helper-") as directory:
+            workspace = Path(directory)
+            with self.assertRaisesRegex(ValueError, "missing prepared accelerator helper"):
+                prepare.prepared_helper(workspace, "accelerator", "manifest_fixture.py")
+
+            target = workspace / "target.py"
+            target.write_text("# target\n")
+            helper = workspace / "test/e2e/lib/accelerator/manifest_fixture.py"
+            helper.parent.mkdir(parents=True)
+            helper.symlink_to(target)
+            with self.assertRaisesRegex(ValueError, "missing prepared accelerator helper"):
+                prepare.prepared_helper(workspace, "accelerator", "manifest_fixture.py")
+
+
 if __name__ == "__main__":
     unittest.main()
