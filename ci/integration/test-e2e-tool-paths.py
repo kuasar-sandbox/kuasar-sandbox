@@ -79,20 +79,35 @@ class CaseBridgeContracts(unittest.TestCase):
             {'type': 'file', 'name': 'network.geneve-ip.sh'},
         ]
         legacy = {'type': 'file', 'name': 'run_all.sh'}
-        with patch.object(resolver.release, 'api_optional', return_value=legacy) as api:
+        with patch.object(resolver.release, 'api_optional', return_value=legacy) as api, \
+             patch.object(resolver.release, 'gh') as gh:
             self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'), [])
         self.assertEqual(api.call_count, 1)
         self.assertIn('test/e2e/run_all.sh', api.call_args.args[0])
-        with patch.object(resolver.release, 'api_optional', side_effect=[None, listing]) as api:
+        gh.assert_not_called()
+
+        ok = subprocess.CompletedProcess(['gh', 'api'], 0, stdout=json.dumps(listing), stderr='')
+        with patch.object(resolver.release, 'api_optional', return_value=None) as api, \
+             patch.object(resolver.release, 'gh', return_value=ok) as gh:
             self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'),
                              ['network.geneve-ip.sh', 'network.tap.sh'])
-        self.assertEqual(api.call_count, 2)
-        self.assertIn('ref=' + 'a' * 40, api.call_args.args[0])
-        with patch.object(resolver.release, 'api_optional', side_effect=[None, [{'type': 'dir', 'name': 'nested'}]]):
+        self.assertEqual(api.call_count, 1)
+        self.assertIn('test/e2e/run_all.sh', api.call_args.args[0])
+        self.assertEqual(gh.call_count, 1)
+        self.assertIn('test/e2e/cases?ref=' + 'a' * 40, gh.call_args.args[1])
+
+        nested = subprocess.CompletedProcess(
+            ['gh', 'api'], 0, stdout=json.dumps([{'type': 'dir', 'name': 'nested'}]), stderr='')
+        with patch.object(resolver.release, 'api_optional', return_value=None), \
+             patch.object(resolver.release, 'gh', return_value=nested):
             with self.assertRaisesRegex(ValueError, 'flat files'):
                 resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
-        with patch.object(resolver.release, 'api_optional', side_effect=[None,
-                          [{'type': 'file', 'name': 'working-set.smoke.sh'}]]):
+
+        invalid = subprocess.CompletedProcess(
+            ['gh', 'api'], 0,
+            stdout=json.dumps([{'type': 'file', 'name': 'working-set.smoke.sh'}]), stderr='')
+        with patch.object(resolver.release, 'api_optional', return_value=None), \
+             patch.object(resolver.release, 'gh', return_value=invalid):
             with self.assertRaisesRegex(ValueError, 'unsupported E2E suite'):
                 resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
 
@@ -133,7 +148,6 @@ class CaseBridgeContracts(unittest.TestCase):
                 record = executor.execute(plan, 'x86_64', 'core', workspace, result)
             self.assertEqual(record['conclusion'], 'success')
             self.assertEqual(record['timings'][0]['exit_code'], 0)
-
 
     def test_privilege_boundary_forwards_only_prepared_input_names(self):
         executor = load_module('case_privilege_executor', ROOT / 'ci/integration/run-artifact-tests.py')
