@@ -52,6 +52,18 @@ def public(repository):
                       and state.get("private") is False, f"public artifact lane cannot qualify a non-public caller/companion: {repository}")
 
 
+def optional_contents_listing(endpoint, owner):
+    """Read an optional GitHub Contents directory without treating its JSON array as an object."""
+    result = release.gh("api", endpoint, check=False)
+    if result.returncode != 0:
+        if "(HTTP 404)" in result.stderr:
+            return None
+        raise RuntimeError(result.stderr.strip() or f"cannot query {endpoint}")
+    value = json.loads(result.stdout)
+    artifacts.require(isinstance(value, list), f"candidate E2E cases are not a directory: {owner}")
+    return value
+
+
 def candidate_case_names(repository, sha, owner):
     """Read the flat rewritten case set only after the owner runner is retired."""
     legacy_path = "test/e2e/platform/run_all.sh" if owner == "platform" else "test/e2e/run_all.sh"
@@ -61,10 +73,9 @@ def candidate_case_names(repository, sha, owner):
                           f"candidate owner entry is not a file: {owner}")
         return []
     path = "test/e2e/platform/cases" if owner == "platform" else "test/e2e/cases"
-    listing = release.api_optional(f"repos/{repository}/contents/{path}?ref={quote(sha, safe='')}")
+    listing = optional_contents_listing(f"repos/{repository}/contents/{path}?ref={quote(sha, safe='')}", owner)
     if listing is None:
         return []
-    artifacts.require(isinstance(listing, list), f"candidate E2E cases are not a directory: {owner}")
     names = []
     for entry in listing:
         artifacts.require(entry.get("type") == "file" and isinstance(entry.get("name"), str),
