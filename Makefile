@@ -213,6 +213,7 @@ test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test_helper_discovery.py
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test-environment-tools.py
 	bash test/demo/test_demo_safety.sh
+	bash test/demo/test_demo_egress_result.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_state_assertions.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_process_startup.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_network_names.py
