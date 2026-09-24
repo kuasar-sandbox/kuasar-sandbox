@@ -30,8 +30,20 @@ def image_archive(path, go_arch):
         return "sha256:" + hashlib.sha256(data).hexdigest()
 
 
+def validate_selected_entry_modes(workspace, profile):
+    """Keep legacy owner runners executable while rewritten case files stay bash-run."""
+    for case in profile["cases"]:
+        parts = Path(case).parts
+        rewritten = len(parts) == 5 and parts[:2] == ("test", "e2e") and parts[3] == "cases"
+        path = workspace / artifacts.relative(case)
+        artifacts.require(path.is_file(), f"missing selected test entry: {case}")
+        if not rewritten:
+            artifacts.require(os.access(path, os.X_OK), f"selected legacy test entry is not executable: {case}")
+
+
 def prepare(plan, arch, assets, delta, workspace):
     provenance = artifacts.compose(plan, arch, assets, delta, workspace)
+    validate_selected_entry_modes(workspace, provenance["profile"])
     before = dict(provenance["files"])
     modes = dict(provenance["modes"])
     owners = {Path(case).parts[2] for case in provenance["profile"]["cases"]}
