@@ -41,7 +41,7 @@ def execute(plan, sources, output):
         if owner in selected:
             checks.append((owner + "-unit-race-vet", ["bash", "scripts/ci-source-checks.sh"], sources / owner))
     if "accelerator" in selected:
-        checks.append(("accelerator-fixtures", ["python3", "-B", "test/scripts/test_e2e_manifest.py", "-v"], sources / "accelerator"))
+        checks.append(("accelerator-fixtures", ["make", "test-e2e-scripts"], sources / "accelerator"))
     if selected & {"sandboxer", "platform"}:
         checks.append(("uffd-source-benchmark", ["bash", "test/perf/uffd-performance-gate.sh"], sources / "platform"))
     try:

@@ -52,6 +52,29 @@ def public(repository):
                       and state.get("private") is False, f"public artifact lane cannot qualify a non-public caller/companion: {repository}")
 
 
+def candidate_case_names(repository, sha, owner):
+    """Read the flat rewritten case set only after the owner runner is retired."""
+    legacy_path = "test/e2e/platform/run_all.sh" if owner == "platform" else "test/e2e/run_all.sh"
+    legacy = release.api_optional(f"repos/{repository}/contents/{legacy_path}?ref={quote(sha, safe='')}")
+    if legacy is not None:
+        artifacts.require(isinstance(legacy, dict) and legacy.get("type") == "file",
+                          f"candidate owner entry is not a file: {owner}")
+        return []
+    path = "test/e2e/platform/cases" if owner == "platform" else "test/e2e/cases"
+    listing = release.api_optional(f"repos/{repository}/contents/{path}?ref={quote(sha, safe='')}")
+    if listing is None:
+        return []
+    artifacts.require(isinstance(listing, list), f"candidate E2E cases are not a directory: {owner}")
+    names = []
+    for entry in listing:
+        artifacts.require(entry.get("type") == "file" and isinstance(entry.get("name"), str),
+                          f"candidate E2E cases must be flat files: {owner}")
+        names.append(artifacts.case_name(entry["name"]))
+    names.sort()
+    artifacts.require(names == sorted(set(names)), f"duplicate candidate E2E case ID: {owner}")
+    return names
+
+
 def aggregate(version, *, require_dual=True):
     """Historical x86-only releases remain valid; normal dual lanes need ARM."""
     state = release.api_optional(f"repos/{PLATFORM}/releases/tags/{version}")
@@ -180,7 +203,7 @@ def source_plan(framework_sha):
                for owner, repository in REPOSITORIES.items()}
     tests = {owner: dict(record) for owner, record in
              artifacts.validate_test_revisions(selected.get("test_revisions")).items()}
-    changes, owners, overlays = {}, [], []
+    changes, owners, overlays, candidate_cases = {}, [], [], {}
     kernel_sha = selected["units"]["vmlinux"]["sha"]
     for record in records:
         owner = "platform" if record["repository"] == PLATFORM else record["repository"].split("/")[1]
@@ -192,6 +215,9 @@ def source_plan(framework_sha):
         sources[owner] = {"repository": record["repository"], "sha": exact_sha(record["candidate_sha"]),
                           "role": "candidate" if record is primary else "companion"}
         tests[owner] = dict(sources[owner])
+        names = candidate_case_names(record["repository"], record["candidate_sha"], owner)
+        if names:
+            candidate_cases[owner] = names
         owners.append(owner)
         overlays.append(owner)
         if owner == "guest-runtime":
@@ -219,12 +245,12 @@ def source_plan(framework_sha):
     plan = {"schema": 1, "mode": "source", "framework_sha": exact_sha(framework_sha), "baseline": selected,
             "candidate_records": records, "owners": sorted(owners), "changes": changes,
             "sources": sources, "kernel_sha": kernel_sha,
-            "test_revisions": tests, "test_overlays": sorted(overlays),
+            "test_revisions": tests, "test_overlays": sorted(overlays), "candidate_cases": candidate_cases,
             "product_sources": product_source_map(products, sources, kernel_sha),
             "embedded_sources": {"envd": {REPOSITORIES["guest-runtime"]: sources["guest-runtime"]["sha"]}},
             "lanes": {arch: {"products": products, "embedded_products": embedded,
                              "extra_checks": {"sandboxer": ["working-set-smoke"]} if arch == "x86_64" and set(owners) & {"platform", "sandboxer"} else {},
-                             "profile": artifacts.profiles(owners, arch)} for arch in artifacts.ARCHES}}
+                             "profile": artifacts.profiles(owners, arch, candidate_cases)} for arch in artifacts.ARCHES}}
     artifacts.check_plan(plan)
     return plan
 
@@ -260,7 +286,7 @@ def exact_assets_plan(framework_sha, stage):
                for owner, repository in REPOSITORIES.items()}
     plan = {"schema": 1, "mode": "exact-assets", "framework_sha": exact_sha(framework_sha), "baseline": baseline,
             "candidate_records": [], "owners": ["platform"], "sources": sources, "kernel_sha": unit_records["vmlinux"]["sha"],
-            "test_revisions": tests, "test_overlays": [], "product_sources": {}, "embedded_sources": {},
+            "test_revisions": tests, "test_overlays": [], "candidate_cases": {}, "product_sources": {}, "embedded_sources": {},
             "lanes": {arch: {"products": [], "embedded_products": [], "profile": artifacts.profiles(["platform"], arch)}
                       for arch in artifacts.ARCHES}}
     artifacts.check_plan(plan)

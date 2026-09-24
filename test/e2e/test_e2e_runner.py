@@ -1,5 +1,6 @@
 import importlib.machinery
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,13 @@ loader = importlib.machinery.SourceFileLoader("e2e_runner", str(MODULE))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 runner = importlib.util.module_from_spec(spec)
 loader.exec_module(runner)
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "ci/integration"))
+prepare_spec = importlib.util.spec_from_file_location(
+    "prepare_artifacts", ROOT / "ci/integration/prepare-artifacts.py")
+prepare = importlib.util.module_from_spec(prepare_spec)
+prepare_spec.loader.exec_module(prepare)
 
 
 class SelectionTests(unittest.TestCase):
@@ -52,6 +60,53 @@ class SelectionTests(unittest.TestCase):
     def test_empty_selection_fails(self):
         with self.assertRaises(SystemExit):
             runner.selected(self.args(suite=["basic"], exclude=["basic.*"]))
+
+    def test_run_can_keep_state_outside_prepared_workspace(self):
+        with tempfile.TemporaryDirectory(prefix="e2e-prepared-") as directory:
+            work = Path(directory) / "prepared"
+            run_root = Path(directory) / "state"
+            out_root = Path(directory) / "output"
+            (work / "bin").mkdir(parents=True)
+            (work / "test/e2e/lib").mkdir(parents=True)
+            (work / "ARCH").write_text("x86_64\n")
+            (runner.CASES / "basic.one.sh").write_text(
+                '#!/bin/sh\nset -eu\n'
+                f'[ "$E2E_WORKSPACE" = "{work}" ]\n'
+                f'[ "$E2E_LIB" = "{work}/test/e2e/lib" ]\n'
+                '[ "$E2E_ARCH" = x86_64 ]\n'
+                f'[ "$WORK" = "{run_root}/basic.one.sh" ]\n'
+                f'[ "$OUT" = "{out_root}/basic.one.sh" ]\n'
+                'printf ok > "$OUT/result"\n')
+            args = self.args(include=["basic.one.sh"], workdir=str(work), arch="x86_64",
+                             run_root=str(run_root), out_root=str(out_root))
+            self.assertEqual(runner.cmd_run(args), 0)
+            self.assertEqual((out_root / "basic.one.sh/result").read_text(), "ok")
+            self.assertFalse((work / "run").exists())
+            self.assertFalse((work / "out").exists())
+
+
+class SelectedEntryModeTests(unittest.TestCase):
+    def test_rewritten_case_may_be_0644_but_legacy_runner_must_be_executable(self):
+        with tempfile.TemporaryDirectory(prefix="kuasar-entry-modes-") as directory:
+            workspace = Path(directory)
+            rewritten = workspace / "test/e2e/connector/cases/network.tap.sh"
+            rewritten.parent.mkdir(parents=True)
+            rewritten.write_text("#!/bin/sh\nexit 0\n")
+            rewritten.chmod(0o644)
+            prepare.validate_selected_entry_modes(
+                workspace, {"cases": ["test/e2e/connector/cases/network.tap.sh"]})
+
+            legacy = workspace / "test/e2e/sandboxer/run_all.sh"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("#!/bin/sh\nexit 0\n")
+            legacy.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, "legacy test entry is not executable"):
+                prepare.validate_selected_entry_modes(
+                    workspace, {"cases": ["test/e2e/sandboxer/run_all.sh"]})
+
+            legacy.chmod(0o755)
+            prepare.validate_selected_entry_modes(
+                workspace, {"cases": ["test/e2e/sandboxer/run_all.sh"]})
 
 
 if __name__ == "__main__":

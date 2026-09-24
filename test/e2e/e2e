@@ -124,9 +124,11 @@ def cmd_prepare(args: argparse.Namespace) -> int:
 def cmd_run(args: argparse.Namespace) -> int:
     work = Path(args.workdir).resolve()
     bin_dir = work / "bin"
-    out_root = work / "out"
+    run_root = Path(args.run_root).resolve() if args.run_root else work / "run"
+    out_root = Path(args.out_root).resolve() if args.out_root else work / "out"
     if not bin_dir.is_dir():
         raise SystemExit(f"prepared workspace is missing bin/: {work}")
+    run_root.mkdir(parents=True, exist_ok=True)
     out_root.mkdir(parents=True, exist_ok=True)
     arch_file = work / "ARCH"
     arch = normalize_arch(args.arch or (arch_file.read_text().strip() if arch_file.exists() else platform.machine()))
@@ -142,7 +144,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     failed = []
     for case in selected(args):
         case_id = case.name
-        case_work = work / "run" / case_id
+        case_work = run_root / case_id
         case_out = out_root / case_id
         case_work.mkdir(parents=True, exist_ok=True)
         case_out.mkdir(parents=True, exist_ok=True)
@@ -178,6 +180,8 @@ def main() -> int:
     add_selection(p)
     p.add_argument("--workdir", required=True)
     p.add_argument("--arch")
+    p.add_argument("--run-root", help="case state root; defaults to <workdir>/run")
+    p.add_argument("--out-root", help="case output root; defaults to <workdir>/out")
     p.set_defaults(func=cmd_run)
 
     return args.func(args) if (args := parser.parse_args()) else 2

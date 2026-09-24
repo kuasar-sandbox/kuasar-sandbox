@@ -477,6 +477,7 @@ class ArtifactContracts(unittest.TestCase):
                 self.assertEqual(baseline["test_revisions"], plan["test_revisions"])
                 with patch.object(resolver, "baseline", return_value=baseline), \
                      patch.object(resolver, "changed_files", return_value=["docs/ci.md"]), \
+                     patch.object(resolver, "candidate_case_names", return_value=[]), \
                      patch.dict(os.environ, {"CANDIDATE_REPOSITORY": resolver.PLATFORM, "CANDIDATE_PR": "1",
                         "CANDIDATE_SHA": "e" * 40, "CANDIDATE_BASE_SHA": sha, "CANDIDATE_HEAD_SHA": "d" * 40,
                         "CANDIDATE_BASE_REF": "main", "COMPANION_CANDIDATES": "[]"}):
