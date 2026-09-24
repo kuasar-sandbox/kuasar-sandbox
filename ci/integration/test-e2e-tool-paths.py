@@ -108,6 +108,7 @@ class CaseBridgeContracts(unittest.TestCase):
             shutil.copy2(ROOT / 'test/e2e/e2e', workspace / 'test/e2e/e2e')
             case.write_text(
                 '#!/bin/sh\nset -eu\n'
+                '[ "$(id -u)" -eq 0 ]\n'
                 f'[ "$E2E_WORKSPACE" = "{workspace}" ]\n'
                 f'[ "$E2E_LIB" = "{workspace}/test/e2e/lib" ]\n'
                 '[ "$E2E_ARCH" = x86_64 ]\n'
@@ -125,12 +126,25 @@ class CaseBridgeContracts(unittest.TestCase):
                     'lanes': {'x86_64': {'extra_checks': {}}, 'aarch64': {}}, 'owners': ['connector']}
             result = Path(directory) / 'result.json'
             credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
+            credentials['E2E_LIB'] = '/not-the-prepared-library'
             with patch.object(executor.artifacts, 'verify_workspace', return_value=provenance), \
                  patch.object(executor.platform, 'machine', return_value='x86_64'), \
                  patch.dict(os.environ, credentials):
                 record = executor.execute(plan, 'x86_64', 'core', workspace, result)
             self.assertEqual(record['conclusion'], 'success')
             self.assertEqual(record['timings'][0]['exit_code'], 0)
+
+
+    def test_privilege_boundary_forwards_only_prepared_input_names(self):
+        executor = load_module('case_privilege_executor', ROOT / 'ci/integration/run-artifact-tests.py')
+        command = ['python3', '/prepared/test/e2e/e2e', 'run', '--include', 'network.tap.sh']
+        prepared = {'BIN': '/prepared/bin', 'E2E_LIB': '/prepared/test/e2e/lib', 'PATH': '/host/tools'}
+        with patch.object(executor.os, 'geteuid', return_value=1000), \
+             patch.dict(os.environ, {'UNRELATED_SECRET': 'must-not-forward'}):
+            self.assertEqual(executor.privileged_command(command, prepared),
+                             ['sudo', '-n', '--preserve-env=BIN,E2E_LIB,PATH', '--', *command])
+        with patch.object(executor.os, 'geteuid', return_value=0):
+            self.assertEqual(executor.privileged_command(command, prepared), command)
 
 
 class ToolPaths(unittest.TestCase):
