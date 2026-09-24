@@ -41,6 +41,16 @@ def validate_selected_entry_modes(workspace, profile):
             artifacts.require(os.access(path, os.X_OK), f"selected legacy test entry is not executable: {case}")
 
 
+def guest_fixture_script(plan, workspace):
+    """Resolve the guest image fixture at the layout declared by the migration state."""
+    migrated = bool(plan.get("candidate_cases", {}).get("guest-runtime"))
+    path = workspace / ("test/e2e/lib/guest-runtime/fixture.py" if migrated
+                        else "test/e2e/guest-runtime/fixture.py")
+    artifacts.require(path.is_file() and not path.is_symlink(),
+                      "missing prepared guest-runtime fixture helper")
+    return path
+
+
 def prepare(plan, arch, assets, delta, workspace):
     provenance = artifacts.compose(plan, arch, assets, delta, workspace)
     validate_selected_entry_modes(workspace, provenance["profile"])
@@ -61,7 +71,7 @@ def prepare(plan, arch, assets, delta, workspace):
     if "guest-runtime" in owners:
         path = workspace / "images/guest-runtime.tar"
         tag = "kuasar-ci-guest-runtime:" + arch
-        subprocess.run(["python3", str(workspace / "test/e2e/guest-runtime/fixture.py"), str(path),
+        subprocess.run(["python3", str(guest_fixture_script(plan, workspace)), str(path),
                         "--tag", tag, "--architecture", go_arch], check=True)
         images["guest-runtime"] = {"reference": tag, "platform": fixture_platform, "image_id": image_archive(path, go_arch),
                                    "archive": str(path.relative_to(workspace)), "sha256": artifacts.digest(path), "owner": "guest-runtime"}
