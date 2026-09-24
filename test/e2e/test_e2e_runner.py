@@ -1,5 +1,6 @@
 import importlib.machinery
 import importlib.util
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,13 @@ loader = importlib.machinery.SourceFileLoader("e2e_runner", str(MODULE))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 runner = importlib.util.module_from_spec(spec)
 loader.exec_module(runner)
+
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "ci/integration"))
+prepare_spec = importlib.util.spec_from_file_location(
+    "prepare_artifacts", ROOT / "ci/integration/prepare-artifacts.py")
+prepare = importlib.util.module_from_spec(prepare_spec)
+prepare_spec.loader.exec_module(prepare)
 
 
 class SelectionTests(unittest.TestCase):
@@ -75,6 +83,30 @@ class SelectionTests(unittest.TestCase):
             self.assertEqual((out_root / "basic.one.sh/result").read_text(), "ok")
             self.assertFalse((work / "run").exists())
             self.assertFalse((work / "out").exists())
+
+
+class SelectedEntryModeTests(unittest.TestCase):
+    def test_rewritten_case_may_be_0644_but_legacy_runner_must_be_executable(self):
+        with tempfile.TemporaryDirectory(prefix="kuasar-entry-modes-") as directory:
+            workspace = Path(directory)
+            rewritten = workspace / "test/e2e/connector/cases/network.tap.sh"
+            rewritten.parent.mkdir(parents=True)
+            rewritten.write_text("#!/bin/sh\nexit 0\n")
+            rewritten.chmod(0o644)
+            prepare.validate_selected_entry_modes(
+                workspace, {"cases": ["test/e2e/connector/cases/network.tap.sh"]})
+
+            legacy = workspace / "test/e2e/sandboxer/run_all.sh"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text("#!/bin/sh\nexit 0\n")
+            legacy.chmod(0o644)
+            with self.assertRaisesRegex(ValueError, "legacy test entry is not executable"):
+                prepare.validate_selected_entry_modes(
+                    workspace, {"cases": ["test/e2e/sandboxer/run_all.sh"]})
+
+            legacy.chmod(0o755)
+            prepare.validate_selected_entry_modes(
+                workspace, {"cases": ["test/e2e/sandboxer/run_all.sh"]})
 
 
 if __name__ == "__main__":
