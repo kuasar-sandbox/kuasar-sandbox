@@ -66,7 +66,7 @@ def execute(plan, arch, shard, workspace, result_path):
                 prepared_env["REQUIRE_" + flag] = "1"
             for name, variable in {"zot": "ZOT_BIN", "versitygw": "VGW_BIN", "custom-proxy": "CUSTOM_PROXY_BIN",
                                    "telemetry-grpc-probe": "TELEMETRY_GRPC_PROBE_BIN", "usage-probe": "USAGE_PROBE_BIN",
-                                   "orch-cli.test": "ORCH_CLI_TEST_BIN"}.items():
+                                   "cgroup-fork-probe": "CGROUP_FORK_PROBE_BIN", "orch-cli.test": "ORCH_CLI_TEST_BIN"}.items():
                 if name in provenance["helpers"]:
                     prepared_env[variable] = str(workspace / "fixtures/bin" / name)
             environment.update(prepared_env)

@@ -44,8 +44,8 @@ def source_owners(plan, arch):
     if lane.get("embedded_products"):
         compiled.add("guest-runtime")
     for name, owner in artifacts.planned_helpers(lane["profile"]).items():
-        if name == "usage-probe":
-            owners.add(owner)  # stdlib-only helper; no sibling library checkout
+        if name in ("usage-probe", "cgroup-fork-probe"):
+            owners.add(owner)  # standalone test helper; no sibling library checkout
         elif owner != "framework":
             compiled.add(owner)
     pending = list(compiled)
@@ -229,6 +229,9 @@ def build(plan, arch, assets, sources, output):
         if "usage-probe" in helpers:
             run(["make", "-C", helper_source / "sandboxer", f"TARGET_ARCH={arch}",
                  f"E2E_FIXTURE_DIR={helper_root}", "e2e-usage-probe"], environment=helper_environment)
+        if "cgroup-fork-probe" in helpers:
+            run(["make", "-C", helper_source / "sandboxer", f"TARGET_ARCH={arch}",
+                 f"E2E_FIXTURE_DIR={helper_root}", "e2e-cgroup-fork-probe"], environment=helper_environment)
     # Match the existing release packagers' executable/data modes independently
     # of the caller's umask. Tar transport preserves these through Actions.
     for name in artifacts.tree_files(output):

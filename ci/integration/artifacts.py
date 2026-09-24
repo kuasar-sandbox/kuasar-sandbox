@@ -186,7 +186,8 @@ def shards(profile):
 
 
 def planned_helpers(profile):
-    owners = {PurePosixPath(case).parts[2] for case in profile["cases"]}
+    cases = set(profile["cases"])
+    owners = {PurePosixPath(case).parts[2] for case in cases}
     helpers = {}
     if owners & {"guest-runtime", "sandboxer", "orchestrator", "platform"}:
         helpers["zot"] = "framework"
@@ -197,6 +198,8 @@ def planned_helpers(profile):
                         "orch-cli.test": "orchestrator"})
     if "sandboxer" in owners:
         helpers["usage-probe"] = "sandboxer"
+        if "test/e2e/sandboxer/cases/sandbox.cgroup.sh" in cases:
+            helpers["cgroup-fork-probe"] = "sandboxer"
     return helpers
 
 
