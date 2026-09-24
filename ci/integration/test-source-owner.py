@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-import os, pathlib, shutil, subprocess, tempfile, unittest
+import importlib.util, os, pathlib, shutil, subprocess, tempfile, unittest
 ROOT=pathlib.Path(__file__).resolve().parents[2]
-HELPER=ROOT/"ci/integration/source-owner.sh"
+INTEGRATION=ROOT/"ci/integration"
+HELPER=INTEGRATION/"source-owner.sh"
+import artifacts
+
 def run(cmd,owner): return subprocess.run(["bash",str(HELPER),cmd,owner],text=True,capture_output=True)
+
 class SourceOwnerClosureTest(unittest.TestCase):
     def words(self,c,o):
         r=run(c,o); self.assertEqual(r.returncode,0,r.stderr); return r.stdout.split()
@@ -51,4 +55,29 @@ class SourceOwnerClosureTest(unittest.TestCase):
         for o in ("sandboxer","kuasar-sandbox"): self.assertEqual(run("needs-uffd",o).returncode,0); self.assertEqual(run("needs-working-set",o).returncode,0)
         for o in ("accelerator","connector","guest-runtime","orchestrator"): self.assertNotEqual(run("needs-uffd",o).returncode,0); self.assertNotEqual(run("needs-working-set",o).returncode,0)
     def test_unknown(self): self.assertNotEqual(run("required-bins","unknown").returncode,0)
+
+class PreparedHelperSelectionTest(unittest.TestCase):
+    @staticmethod
+    def load_build_artifacts():
+        spec=importlib.util.spec_from_file_location("build_artifacts",INTEGRATION/"build-artifacts.py")
+        module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
+    def test_cgroup_probe_is_selected_only_for_exact_x86_case(self):
+        cgroup=artifacts.profiles(["sandboxer"],"x86_64",{"sandboxer":["sandbox.cgroup.sh"]})
+        self.assertEqual(artifacts.planned_helpers(cgroup)["cgroup-fork-probe"],"sandboxer")
+        lifecycle=artifacts.profiles(["sandboxer"],"x86_64",{"sandboxer":["sandbox.lifecycle.sh"]})
+        self.assertNotIn("cgroup-fork-probe",artifacts.planned_helpers(lifecycle))
+        arm=artifacts.profiles(["sandboxer"],"aarch64",{"sandboxer":["sandbox.cgroup.sh"]})
+        self.assertNotIn("cgroup-fork-probe",artifacts.planned_helpers(arm))
+    def test_cgroup_probe_uses_only_exact_sandboxer_test_source(self):
+        profile=artifacts.profiles(["sandboxer"],"x86_64",{"sandboxer":["sandbox.cgroup.sh"]})
+        plan={"lanes":{"x86_64":{"profile":profile,"embedded_products":[]}},"test_overlays":[],"product_sources":{}}
+        self.assertEqual(self.load_build_artifacts().source_owners(plan,"x86_64"),{"sandboxer"})
+    def test_builder_and_runner_keep_probe_in_prepared_helper_pipeline(self):
+        builder=(INTEGRATION/"build-artifacts.py").read_text()
+        runner=(INTEGRATION/"run-artifact-tests.py").read_text()
+        self.assertIn('if "cgroup-fork-probe" in helpers:',builder)
+        self.assertIn('"e2e-cgroup-fork-probe"',builder)
+        self.assertIn('"cgroup-fork-probe": "CGROUP_FORK_PROBE_BIN"',runner)
+        self.assertNotIn('e2e-cgroup-fork-probe',runner)
+
 if __name__=="__main__": unittest.main()
