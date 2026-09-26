@@ -45,7 +45,7 @@ ZOT_VERSION    ?= v2.1.17
 PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf-density perf-warmpool-dedup
 
 .PHONY: all build collect e2e-zot e2e-versitygw e2e-tools assemble-e2e release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
-	        bench e2e-fixtures test-e2e perf dedup-report perf-agent \
+	        bench e2e-fixtures test-e2e perf dedup-report perf-agent perf-agent-selfcheck \
 	        $(PERF_TARGETS)
 
 all: build
@@ -155,10 +155,15 @@ perf-warmpool-dedup: build
 	BIN=$(SBIN) bash test/perf/warmpool-dedup.sh
 
 # Autonomous coding-agent workload suite. Opt-in and not part of `perf`:
-# long-running, requires /dev/kvm and root. PHASES=all|calibrate|pause_resume|cold|ramp|stress
+# long-running, requires /dev/kvm and root. PHASES=all|calibrate|pause_resume|cold|ramp|stress|self_check
 PHASES ?= all
 perf-agent: build
 	BIN=$(SBIN) bash test/perf/openclaw-density-bench.sh $(PHASES)
+
+# Gate/verdict regression for the agent harness. Offline: no /dev/kvm, root,
+# Docker or release binaries. Wired into test-perf-tools.
+perf-agent-selfcheck:
+	PYTHONDONTWRITEBYTECODE=1 bash test/perf/openclaw-density-bench.sh self_check
 
 # Aggregate perf: accelerator's perf-cache + this repo's perfs.
 perf: build
@@ -218,6 +223,7 @@ test-perf-tools:
 	bash test/perf/uffd_performance_gate_test.sh
 	bash test/perf/working_set_tap_test.sh
 	bash test/perf/working_set_netns_test.sh
+	bash test/perf/openclaw-density-bench.sh self_check
 
 test-uffd-performance-gate:
 	$(CI_TIMED) perf/uffd-gate env ORG="$(ORG)" bash test/perf/uffd-performance-gate.sh
@@ -236,7 +242,8 @@ help:
 	@echo "  test-e2e      prepare and run RELEASE_DIR inputs in a fresh E2E_WORKDIR"
 	@echo "  demo          run the e2b end-to-end demo (test/demo/demo_e2b.sh; DEMO_PAUSE=1 to step through)"
 	@echo "  perf          aggregate: accelerator perf-cache + this repo's perf-sandbox/-manifest/-density"
-	@echo "  perf-agent    autonomous coding-agent workload suite (PHASES=all|calibrate|pause_resume|cold|ramp|stress)"
+	@echo "  perf-agent    autonomous coding-agent workload suite (PHASES=all|calibrate|pause_resume|cold|ramp|stress|self_check)"
+	@echo "  perf-agent-selfcheck  offline gate/verdict regression for the agent harness (no KVM/root)"
 	@echo "  bench         Go micro-benchmarks across every Go sub-repo"
 	@echo "  dedup-report  delegate to accelerator"
 	@echo "  vet / test    drive each Go sub-repo's vet/test target"

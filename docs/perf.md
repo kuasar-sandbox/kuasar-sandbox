@@ -17,6 +17,7 @@ make perf-sandbox-manifest
 make perf-sandbox-working-set
 make perf-density
 make perf-agent
+make perf-agent-selfcheck
 make test-uffd-performance-gate
 make test-perf-tools
 ```
@@ -27,7 +28,9 @@ make test-perf-tools
 make -C ../accelerator perf-cache
 ```
 
-`make perf-agent` runs the autonomous coding-agent workload suite (deterministic mock LLM; the `openclaw` npm package is not used). It is opt-in, is not part of `make perf`, and runs phases selected with `PHASES=all|calibrate|pause_resume|cold|ramp|stress`.
+`make perf-agent` runs the autonomous coding-agent workload suite (deterministic mock LLM; the `openclaw` npm package is not used). It is opt-in, is not part of `make perf`, and runs phases selected with `PHASES=all|calibrate|pause_resume|cold|ramp|stress|self_check`.
+
+Every declared target in the generated report evaluates to a computed PASS/FAIL against the run's own measurements; execution completing is never treated as performance success, and no threshold is raised, removed or reinterpreted when generating the report. Targets are labeled gate or informational target as defined in the Results Evidence Contract below. Gate misses make the harness exit non-zero (a failed validation is never recorded as a green run); informational targets report their miss but do not fail the run. `PHASES=self_check` (`make perf-agent-selfcheck`) replays a fixed report fixture, including a deliberately over-target restore sample, and fails if the report machinery could render that sample as successful evidence. This regression also runs under `make test-perf-tools`.
 
 Real MicroVM paths require read/write access to `/dev/kvm`, root or noninteractive sudo, and the necessary images and runtime artifacts. Manifest and density harnesses additionally check Docker, networking and filesystem tools as specified by their scripts. A skip caused by missing prerequisites is not successful performance validation. Release evidence must record actual exit status and every failed sample.
 
