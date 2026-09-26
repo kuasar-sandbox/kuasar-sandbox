@@ -37,6 +37,30 @@ def privileged_command(command, prepared):
     return ["sudo", "-n", "--preserve-env=" + ",".join(sorted(prepared)), "--", *command]
 
 
+def generated_compatibility_runners(workspace, required=False):
+    """Read trusted assembly output identifying synthesized legacy-shaped runners."""
+    registry = workspace / "test/e2e/generated-compatibility-runners"
+    if not registry.exists() and not registry.is_symlink() and not required:
+        return set()
+    artifacts.require(registry.is_file() and not registry.is_symlink(),
+                      "missing generated compatibility runner registry")
+    entries = registry.read_text().splitlines()
+    artifacts.require(entries == sorted(set(entries)),
+                      "invalid generated compatibility runner registry")
+    allowed = {f"test/e2e/{owner}/run_all.sh" for owner in artifacts.OWNERS if owner != "platform"}
+    artifacts.require(set(entries) <= allowed,
+                      "invalid generated compatibility runner path")
+    for entry in entries:
+        path = workspace / artifacts.relative(entry)
+        artifacts.require(path.is_file() and not path.is_symlink(),
+                          "missing generated compatibility runner")
+    return set(entries)
+
+
+def requires_privilege(case, rewritten, generated_runners):
+    return rewritten or case in generated_runners
+
+
 def execute(plan, arch, shard, workspace, result_path):
     provenance = artifacts.verify_workspace(workspace, plan, arch)
     artifacts.require(platform.machine() == arch, "E2E requires the selected native target runner")
@@ -51,6 +75,8 @@ def execute(plan, arch, shard, workspace, result_path):
               "extra_checks": plan["lanes"][arch].get("extra_checks", {}).get(shard, [])}
     started = time.monotonic()
     result_path.parent.mkdir(parents=True, exist_ok=True)
+    generated_runners = generated_compatibility_runners(
+        workspace, required=plan.get("mode") == "exact-assets")
     try:
         # Short private disk-backed paths preserve the existing Unix socket and
         # direct-I/O test contracts; long Actions workspace paths exceed sun_path.
@@ -105,7 +131,7 @@ def execute(plan, arch, shard, workspace, result_path):
                     selected["E2E_IMAGE"] = images["guest-runtime"]["image_id"]
                 elif "python" in images:
                     selected.update(E2E_IMAGE=images["python"]["image_id"], IMAGE=images["python"]["image_id"])
-                if rewritten:
+                if requires_privilege(case, rewritten, generated_runners):
                     command = privileged_command(command, selected)
                 case_started = time.monotonic()
                 completed = subprocess.run(command, cwd=state, env={**environment, **selected})

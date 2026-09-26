@@ -152,6 +152,12 @@ grep -Fq -- '--include storage.fixture.sh' "$generated_accelerator_runner" \
 if grep -Fq -- '--include storage.connector-fixture.sh' "$generated_accelerator_runner"; then
   release_fail "case-only owner runner can select another owner's case"
 fi
+tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
+  ./test/e2e/generated-compatibility-runners > "$TMP/generated-runners"
+printf '%s\n' \
+  'test/e2e/accelerator/run_all.sh' > "$TMP/expected-generated-runners"
+cmp "$TMP/expected-generated-runners" "$TMP/generated-runners" \
+  || release_fail "generated compatibility runner registry differs from case-only owners"
 tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" ./test/e2e/orchestrator/run_all.sh \
   > "$TMP/packaged-orchestrator-test"
 cmp "$TMP/packaged-orchestrator-test" "$TMP/fetched/test-sources/orchestrator/test/e2e/run_all.sh"

@@ -30,6 +30,9 @@ install -m 0755 "$PLATFORM/test/e2e/run_all.sh" "$OUTPUT/test/e2e/run_all.sh"
 install -m 0755 "$PLATFORM/test/e2e/e2e" "$OUTPUT/test/e2e/e2e"
 cp -a "$PLATFORM/test/e2e/lib" "$OUTPUT/test/e2e/lib"
 mkdir -p "$OUTPUT/test/e2e/cases"
+generated_runners="$OUTPUT/test/e2e/generated-compatibility-runners"
+: > "$generated_runners"
+chmod 0644 "$generated_runners"
 
 copy_cases() {
     local owner=$1 source_suite=$2 case target
@@ -132,6 +135,7 @@ for index in "${!COMPONENTS[@]}"; do
         }
     else
         generate_case_runner "$component" "$source_suite"
+        printf 'test/e2e/%s/run_all.sh\n' "$component" >> "$generated_runners"
     fi
     if [ -d "$source_suite/lib" ]; then
         mkdir -p "$OUTPUT/test/e2e/lib/$component"
