@@ -44,8 +44,12 @@ def validate_selected_entry_modes(workspace, profile):
 def guest_fixture_script(plan, workspace):
     """Resolve the guest image fixture at the layout declared by the migration state."""
     migrated = bool(plan.get("candidate_cases", {}).get("guest-runtime"))
-    path = workspace / ("test/e2e/lib/guest-runtime/fixture.py" if migrated
-                        else "test/e2e/guest-runtime/fixture.py")
+    normalized = workspace / "test/e2e/lib/guest-runtime/fixture.py"
+    # Exact-assets plans have no test overlays. Their validated package may
+    # already carry the migrated library even though candidate_cases is empty.
+    if plan.get("mode") == "exact-assets":
+        migrated = normalized.exists() or normalized.is_symlink()
+    path = normalized if migrated else workspace / "test/e2e/guest-runtime/fixture.py"
     artifacts.require(path.is_file() and not path.is_symlink(),
                       "missing prepared guest-runtime fixture helper")
     return path

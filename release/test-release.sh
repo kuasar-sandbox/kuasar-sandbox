@@ -102,11 +102,14 @@ set -euo pipefail
 echo 'accelerator case-only fixture'
 EOF
 chmod 0644 "$accelerator_suite/cases/storage.fixture.sh"
+# The ordinary profile excludes this opt-in credentialed case.
+printf '#!/usr/bin/env bash\necho "unexpected credentialed OBS selection" >&2\nexit 91\n' \
+  > "$accelerator_suite/cases/storage.obs.sh"
 connector_suite="$TMP/fetched/test-sources/connector/test/e2e"
 mkdir -p "$connector_suite/cases"
 printf '#!/usr/bin/env bash\necho connector-case\n' \
-  > "$connector_suite/cases/connector.fixture.sh"
-chmod 0644 "$connector_suite/cases/connector.fixture.sh"
+  > "$connector_suite/cases/storage.connector-fixture.sh"
+chmod 0644 "$connector_suite/cases/storage.connector-fixture.sh"
 printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux.md"
 printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
 printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
@@ -146,7 +149,7 @@ generated_accelerator_runner="$TMP/generated-runner/test/e2e/accelerator/run_all
   || release_fail "case-only owner compatibility runner is not executable"
 grep -Fq -- '--include storage.fixture.sh' "$generated_accelerator_runner" \
   || release_fail "case-only owner runner omits its exact case"
-if grep -Fq -- '--include connector.fixture.sh' "$generated_accelerator_runner"; then
+if grep -Fq -- '--include storage.connector-fixture.sh' "$generated_accelerator_runner"; then
   release_fail "case-only owner runner can select another owner's case"
 fi
 tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" ./test/e2e/orchestrator/run_all.sh \
@@ -189,6 +192,12 @@ add_duplicate_case() {
 }
 assert_assembly_rejected duplicate-case \
   'duplicate E2E case id from connector: storage.fixture.sh' add_duplicate_case
+
+leave_only_excluded_case() {
+  rm "$1/accelerator/test/e2e/cases/storage.fixture.sh"
+}
+assert_assembly_rejected excluded-only \
+  'accelerator source has no default E2E cases' leave_only_excluded_case
 
 add_suite_symlink() {
   ln -s run_all.sh "$1/sandboxer/test/e2e/linked-runner"
@@ -275,6 +284,19 @@ fi
 "$FORMAL_ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/bundle" "$TMP/install"
 [ -f "$TMP/install/docs/kuasar-sandbox.md" ] || release_fail "platform docs were not extracted"
 [ -x "$TMP/install/test/e2e/run_all.sh" ] || release_fail "platform E2E runner was not extracted"
+bash -n "$TMP/install/test/e2e/accelerator/run_all.sh"
+if ! BIN="$TMP/install/bin" bash "$TMP/install/test/e2e/accelerator/run_all.sh" \
+    > "$TMP/generated-runner.out" 2>&1; then
+  cat "$TMP/generated-runner.out" >&2
+  release_fail "generated owner runner failed its ordinary profile"
+fi
+grep -Fq 'PASS storage.fixture.sh' "$TMP/generated-runner.out" \
+  || release_fail "generated owner runner did not execute its ordinary case"
+if grep -Eq 'connector-case|storage.obs.sh' "$TMP/generated-runner.out"; then
+  release_fail "generated owner runner selected a foreign or excluded case"
+fi
+[ -f "$TMP/install/test/e2e/cases/storage.obs.sh" ] \
+  || release_fail "opt-in credentialed case was removed from the package"
 for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
   [ -x "$TMP/install/test/e2e/$owner/run_all.sh" ] \
     || release_fail "$owner E2E runner was not aggregated"
