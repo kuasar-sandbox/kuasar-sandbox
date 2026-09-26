@@ -15,21 +15,53 @@
 #
 # Usage:
 #   sudo bash openclaw-density-bench.sh [all|calibrate|pause_resume|cold|ramp|stress]
+#   bash openclaw-density-bench.sh self_check
+#
+# Evidence semantics (see docs/perf.md §2): every declared target in the report
+# is evaluated with an explicit PASS/FAIL verdict. `perf-agent` is a validation
+# gate: the harness exits non-zero when any required gate fails. Thresholds
+# marked (informational) report their miss in the report and in GATE misses but
+# do not fail the run. Execution completing is never treated as performance
+# success, and a miss is retained rather than hidden by moving its threshold.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BIN="${BIN:-$REPO_ROOT/bin}"
+
+# Mode parsed up front so self_check can run fully offline: no /dev/kvm, root,
+# Docker or release binaries, and no writes under /run or /var/tmp.
+MODE="${1:-all}"
+case "$MODE" in
+    all|calibrate|pause_resume|cold|ramp|stress) ;;
+    self_check)
+        SELF_CHECK=1
+        # Everything self_check touches lives in a disposable mktemp dir.
+        SELF_TMP="$(mktemp -d /tmp/openclaw-selfcheck.XXXXXX)"
+        OUT_BASE="$SELF_TMP/results"
+        PERF_OUT="$OUT_BASE/OPENCLAW_BENCHMARK_REPORT.md"
+        RAW_DIR="${SELF_TMP}/raw"
+        WORK="$SELF_TMP/work"
+        RUN_ROOT="$SELF_TMP/run-root"
+        ;;
+    *)
+        echo "Usage: $0 [all|calibrate|pause_resume|cold|ramp|stress|self_check]" >&2
+        exit 1
+        ;;
+esac
+
 # All durable outputs (report, log archive, cached rootfs) live under
 # test/results/ — the same git-ignored output area used by the other perf
 # suites — so the harness leaves no untracked files in the repository.
-OUT_BASE="${OUT_BASE:-$REPO_ROOT/test/results/openclaw-bench}"
-PERF_OUT="${PERF_OUT:-$OUT_BASE/OPENCLAW_BENCHMARK_REPORT.md}"
-RAW_DIR="$OUT_BASE/raw_logs"
-# Scratch (VM run-roots, sockets, snapshots) lives on disk-backed /var/tmp:
-# (a) unix socket paths must stay under the 108-byte sockaddr_un limit, and
-WORK="${WORK:-/var/tmp/openclaw-bench/run-$(date +%Y%m%d-%H%M%S)-$$}"
-RUN_ROOT="${RUN_ROOT:-/run/oc-$$}"
+if [ -z "${SELF_CHECK:-}" ]; then
+    OUT_BASE="${OUT_BASE:-$REPO_ROOT/test/results/openclaw-bench}"
+    PERF_OUT="${PERF_OUT:-$OUT_BASE/OPENCLAW_BENCHMARK_REPORT.md}"
+    RAW_DIR="$OUT_BASE/raw_logs"
+    # Scratch (VM run-roots, sockets, snapshots) lives on disk-backed /var/tmp:
+    # (a) unix socket paths must stay under the 108-byte sockaddr_un limit, and
+    WORK="${WORK:-/var/tmp/openclaw-bench/run-$(date +%Y%m%d-%H%M%S)-$$}"
+    RUN_ROOT="${RUN_ROOT:-/run/oc-$$}"
+fi
 PROXY_PORT=8088
 IMAGE="openclaw-agent:latest"
 
@@ -39,12 +71,14 @@ VMLINUX="$BIN/vmlinux"
 BUNDLE="$BIN/sandbox-runtime.bundle"
 CH_BIN="$BIN/cloud-hypervisor"
 
-for b in "$BIN/sandbox-ctl" "$BIN/node-ctl" "$BIN/flatten-ctl" "$VMLINUX" "$BUNDLE" "$CH_BIN"; do
-    if [ ! -f "$b" ]; then
-        echo "Error: missing required binary $b" >&2
-        exit 1
-    fi
-done
+if [ -z "${SELF_CHECK:-}" ]; then
+    for b in "$BIN/sandbox-ctl" "$BIN/node-ctl" "$BIN/flatten-ctl" "$VMLINUX" "$BUNDLE" "$CH_BIN"; do
+        if [ ! -f "$b" ]; then
+            echo "Error: missing required binary $b" >&2
+            exit 1
+        fi
+    done
+fi
 
 # Cleanup trap
 PROXY_PID=""
@@ -92,7 +126,9 @@ cleanup() {
     [ "${KEEP_WORK:-0}" = "1" ] || rm -rf "$WORK" "$RUN_ROOT" 2>/dev/null || true
     set -e
 }
-trap cleanup EXIT INT TERM
+if [ -z "${SELF_CHECK:-}" ]; then
+    trap cleanup EXIT INT TERM
+fi
 
 # Start Local High-Throughput Agent Mock Proxy
 start_proxy() {
@@ -172,8 +208,138 @@ wait_for_ready_file() {
     return 0
 }
 
-verdict_le() { awk -v v="$1" -v s="$2" 'BEGIN {print (v+0 <= s+0) ? "PASS" : "FAIL"}'; }
-verdict_lt() { awk -v v="$1" -v s="$2" 'BEGIN {print (v+0 <  s+0) ? "PASS" : "FAIL"}'; }
+verdict_le() { awk -v v="$1" -v s="$2" 'BEGIN {print (v ~ /^[0-9]+(\.[0-9]+)?$/ && v+0 <= s+0) ? "PASS" : "FAIL"}'; }
+verdict_lt() { awk -v v="$1" -v s="$2" 'BEGIN {print (v ~ /^[0-9]+(\.[0-9]+)?$/ && v+0 <  s+0) ? "PASS" : "FAIL"}'; }
+verdict_ge() { awk -v v="$1" -v s="$2" 'BEGIN {print (v ~ /^[0-9]+(\.[0-9]+)?$/ && v+0 >= s+0) ? "PASS" : "FAIL"}'; }
+verdict_gt() { awk -v v="$1" -v s="$2" 'BEGIN {print (v ~ /^[0-9]+(\.[0-9]+)?$/ && v+0 >  s+0) ? "PASS" : "FAIL"}'; }
+verdict_eq() { awk -v v="$1" -v s="$2" 'BEGIN {print (v ~ /^[0-9]+(\.[0-9]+)?$/ && v+0 == s+0) ? "PASS" : "FAIL"}'; }
+
+# Gate accounting. Every declared target is evaluated exactly once (per-phase
+# markers keep phase banners and finalize() from double-counting). Misses are
+# counted and labeled: required-gate misses decide the exit status, while
+# informational misses are reported without failing the run. n/a measurements
+# count as misses — a gap is never silently passing.
+GATE_TOTAL=0
+GATE_MISSES=0
+GATE_REQUIRED_MISSES=0
+GATE_INFO_MISSES=0
+declare -a GATE_REQUIRED_DETAIL=()
+declare -a GATE_INFO_DETAIL=()
+# _gv <verdict> <required:0|1> <label>
+_gv() {
+    local v="$1" req="$2" label="$3"
+    GATE_TOTAL=$((GATE_TOTAL + 1))
+    if [ "$v" != "PASS" ]; then
+        GATE_MISSES=$((GATE_MISSES + 1))
+        if [ "$req" = "1" ]; then
+            GATE_REQUIRED_MISSES=$((GATE_REQUIRED_MISSES + 1))
+            GATE_REQUIRED_DETAIL+=("$label")
+            echo "  ✗ GATE MISS: $label" >&2
+        else
+            GATE_INFO_MISSES=$((GATE_INFO_MISSES + 1))
+            GATE_INFO_DETAIL+=("$label")
+            echo "  - target miss (informational, non-gating): $label" >&2
+        fi
+        return 1
+    fi
+    return 0
+}
+# Per-phase idempotence so phase banners and finalize() never double-count a target.
+declare -A _EV_DONE=()
+declare -A _RUN_PHASE=()
+_PHASE_M0=0
+_phase_enter() { _PHASE_M0=$GATE_MISSES; }
+_phase_banner() {  # _phase_banner <num> <name>
+    local misses=$(( GATE_MISSES - _PHASE_M0 ))
+    if [ "$misses" -eq 0 ]; then
+        echo "  ✓ Phase ${1}: ${2} — all declared targets PASS"
+    else
+        echo "  ✗ Phase ${1}: ${2} — ${misses} declared target miss(es) (retained as evidence; the final gate decides the exit status)"
+    fi
+}
+var_ref() { eval "printf '%s' \"\${$1:-}\""; }
+
+# --- Declared-target evaluation, per phase. Thresholds are the contracts this
+# PR declares (and docs/perf.md §2 repeats): a miss is retained, never hidden
+# by raising or removing the threshold; "(informational)" targets are reported
+# but do not fail the run.
+_evaluate_p1() {
+    case "${_EV_DONE[p1]:-}" in done) return 0;; esac
+    _EV_DONE[p1]=done
+    [ -n "${_RUN_PHASE[p1]:-}" ] || return 0
+    v_wall=$(verdict_lt "${CALIB_WALL_MS:-}" 3000)
+    v_rss=$(verdict_le "${CALIB_RSS_MIB:-}" 128)
+    v_heap=$(verdict_le "${CALIB_HEAP_MIB:-}" 32)
+    v_cow=$(verdict_le "${CALIB_COW_KIB:-}" 1024)
+    _gv "$v_wall" 1 "phase1: task duration ${CALIB_WALL_MS:-n/a} ms (target < 3000 ms)" || true
+    _gv "$v_rss" 1 "phase1: peak guest RSS ${CALIB_RSS_MIB:-n/a} MiB (target < 128 MiB)" || true
+    _gv "$v_heap" 1 "phase1: final V8 heap ${CALIB_HEAP_MIB:-n/a} MiB (target < 32 MiB)" || true
+    _gv "$v_cow" 1 "phase1: COW diff footprint ${CALIB_COW_KIB:-n/a} KiB (target < 1024 KiB)" || true
+    return 0
+}
+_evaluate_p2() {
+    case "${_EV_DONE[p2]:-}" in done) return 0;; esac
+    _EV_DONE[p2]=done
+    [ -n "${_RUN_PHASE[p2]:-}" ] || return 0
+    v_paused=$(verdict_ge "${PAUSE_COUNT:-}" 30)
+    v_pause=$(verdict_le "${PAUSE_AVG_MS:-}" 15)
+    v_paused_cpu=$(verdict_lt "${PAUSE_CPU_PCT:-}" 5.0)
+    v_resume=$(verdict_le "${RESUME_AVG_MS:-}" 15)
+    _gv "$v_paused" 1 "phase2: instances paused ${PAUSE_COUNT:-n/a}/30 (target 100%)" || true
+    _gv "$v_pause" 1 "phase2: average pause ${PAUSE_AVG_MS:-n/a} ms/VM (target < 15 ms)" || true
+    _gv "$v_paused_cpu" 0 "phase2: host user CPU during pause ${PAUSE_CPU_PCT:-n/a}% (informational target < 5.0%)" || true
+    _gv "$v_resume" 1 "phase2: average resume ${RESUME_AVG_MS:-n/a} ms/VM (target < 15 ms)" || true
+    return 0
+}
+_evaluate_p3() {
+    case "${_EV_DONE[p3]:-}" in done) return 0;; esac
+    _EV_DONE[p3]=done
+    [ -n "${_RUN_PHASE[p3]:-}" ] || return 0
+    v_snapok=$(verdict_ge "${SNAP_COUNT:-}" 16)
+    v_snap=$(verdict_le "${SNAP_AVG_MS:-}" 1000)
+    v_snapsize=$(verdict_le "${SNAP_SIZE_MIB:-}" 1024)
+    v_reclaim=$(verdict_gt "${RECLAIMED_MIB:-}" 0)
+    v_restore="PASS"
+    [ "$(verdict_lt "${RESTORE_WALL_MS:-}" 100)" = FAIL ] && v_restore="FAIL"
+    [ "$(verdict_eq "${RESTORE_READY_COUNT:-}" 8)" = FAIL ] && v_restore="FAIL"
+    v_restfail=$(verdict_le "${RESTORE_EXIT_FAIL:-}" 0)
+    _gv "$v_snapok" 1 "phase3: snapshots succeeded ${SNAP_COUNT:-n/a}/16 (target 100%)" || true
+    _gv "$v_snap" 1 "phase3: snapshot throughput ${SNAP_AVG_MS:-n/a} ms (target < 1000 ms/snapshot)" || true
+    _gv "$v_snapsize" 1 "phase3: snapshot footprint ${SNAP_SIZE_MIB:-n/a} MiB (target < 1024 MiB/snapshot)" || true
+    _gv "$v_reclaim" 0 "phase3: MemAvailable delta after scale-to-zero ${RECLAIMED_MIB:-n/a} MiB (informational target > 0)" || true
+    _gv "$v_restore" 1 "phase3: 8-way restore ready wallclock ${RESTORE_WALL_MS:-n/a} ms, ${RESTORE_READY_COUNT:-n/a}/8 ready (target < 100 ms, 8/8 ready)" || true
+    _gv "$v_restfail" 1 "phase3: restore exit failures ${RESTORE_EXIT_FAIL:-n/a} (target 0)" || true
+    return 0
+}
+_evaluate_p4() {
+    case "${_EV_DONE[p4]:-}" in done) return 0;; esac
+    _EV_DONE[p4]=done
+    [ -n "${_RUN_PHASE[p4]:-}" ] || return 0
+    local n pass
+    v_ooms=$(verdict_le "${HOST_OOMS:-}" 0)
+    for n in 25 50 100 150 200 250; do
+        pass="${RAMP_PASS[$n]:-}"
+        v_ramp=$(verdict_eq "$pass" "$n")
+        printf -v "v_ramp${n}" '%s' "$v_ramp"
+        _gv "$v_ramp" 1 "phase4: verified sessions passed ${pass:-n/a}/${n} at N=${n} (target 100%)" || true
+    done
+    _gv "$v_ooms" 1 "phase4: host oom_kill delta ${HOST_OOMS:-n/a} across ramp (target 0)" || true
+    return 0
+}
+_evaluate_p5() {
+    case "${_EV_DONE[p5]:-}" in done) return 0;; esac
+    _EV_DONE[p5]=done
+    [ -n "${_RUN_PHASE[p5]:-}" ] || return 0
+    v_stress=$(verdict_eq "${STRESS_PASS:-}" 20)
+    _gv "$v_stress" 1 "phase5: fork-exec storm verified session verdicts ${STRESS_PASS:-n/a}/20 (target 100%)" || true
+    return 0
+}
+# Evaluate every declared target (idempotent; called at the end of each phase
+# and again by finalize() before rendering the report).
+evaluate_gates_all() {
+    _evaluate_p1; _evaluate_p2; _evaluate_p3; _evaluate_p4; _evaluate_p5
+    return 0
+}
 
 # Poll a sandbox log until the agent session reports a terminal verdict (or a
 # fatal error), or the timeout expires. Returns 1 on timeout.
@@ -409,10 +575,17 @@ declare -A RAMP_FAIL=()
 declare -A RAMP_WALL=()
 declare -A RAMP_MEM=()
 
+# Gate mode: GATE_MODE=gate (default) fails the run (non-zero exit) when a
+# required gate misses its target; GATE_MODE=report labels the miss but still
+# exits 0.
+GATE_MODE="${GATE_MODE:-gate}"
+
 # ============================================================================
 # Phase 1: Single Sandbox Calibration (P1-OpenClaw)
 # ============================================================================
 run_calibration() {
+    _RUN_PHASE[p1]=1
+    _phase_enter
     echo "============================================================"
     echo " PHASE 1: Autonomous Agent Single-Sandbox Calibration (P1-OpenClaw)"
     echo "============================================================"
@@ -455,6 +628,12 @@ run_calibration() {
         cat "$WORK/$sid.log" >&2
         exit 1
     fi
+    _evaluate_p1
+    if [ "$(( GATE_MISSES - _PHASE_M0 ))" -gt 0 ]; then
+        echo "  ✗ calibration gate FAILED — required targets missed; exit non-zero" >&2
+        exit 1
+    fi
+    echo "  ✓ calibration gate PASS: task ${CALIB_WALL_MS} ms < 3000 ms, RSS ${CALIB_RSS_MIB} MiB < 128, heap ${CALIB_HEAP_MIB} MiB < 32, COW ${CALIB_COW_KIB} KiB < 1024"
     rmdir "/sys/fs/cgroup/sandboxes/$sid" 2>/dev/null || true
 }
 
@@ -462,6 +641,8 @@ run_calibration() {
 # Phase 2: In-Memory VM Pause & Resume Benchmark (N=30)
 # ============================================================================
 run_pause_resume() {
+    _RUN_PHASE[p2]=1
+    _phase_enter
     echo "============================================================"
     echo " PHASE 2: In-Memory VM Pause / Resume Benchmark (N=30)"
     echo "============================================================"
@@ -537,13 +718,16 @@ run_pause_resume() {
     for i in $(seq 1 $N); do
         rmdir "/sys/fs/cgroup/sandboxes/oc-pause-$i" 2>/dev/null || true
     done
-    echo "  ✓ In-Memory Pause / Resume Benchmark Completed Successfully"
+    _evaluate_p2
+    _phase_banner 2 "In-Memory Pause / Resume"
 }
 
 # ============================================================================
 # Phase 3: Cold Snapshot & Concurrent Restore (N=16)
 # ============================================================================
 run_cold_snapshot_restore() {
+    _RUN_PHASE[p3]=1
+    _phase_enter
     echo "============================================================"
     echo " PHASE 3: Cold Snapshot & Scale-to-Zero Restore Benchmark (N=16)"
     echo "============================================================"
@@ -691,7 +875,8 @@ EOF
     SANDBOX_PIDS=()
 
     echo "  ✓ ${RESTORE_READY_COUNT}/8 Sandboxes Reached Restored-Ready State in ${RESTORE_WALL_MS} ms wallclock (exit failures: ${RESTORE_EXIT_FAIL})"
-
+    _evaluate_p3
+    _phase_banner 3 "Cold Snapshot & Restore"
     # Release the restore taps before the next phase: tapr1..8 use the same
     # host IPs as tap1..8 in the ramp/stress phases, so a leaked tapr* would
     # black-hole those sandboxes' traffic to the mock LLM proxy.
@@ -705,6 +890,8 @@ EOF
 # Phase 4: Maximum Concurrency Saturation Ramp
 # ============================================================================
 run_concurrency_ramp() {
+    _RUN_PHASE[p4]=1
+    _phase_enter
     echo "============================================================"
     echo " PHASE 4: Concurrency Saturation Ramp (Real Mixed Agent Fleet)"
     echo "============================================================"
@@ -815,6 +1002,8 @@ run_concurrency_ramp() {
         done
     done
     HOST_OOMS=$(( $(read_oom_kills) - oom_base ))
+    _evaluate_p4
+    _phase_banner 4 "Concurrency Ramp"
 }
 
 # ============================================================================
@@ -823,6 +1012,8 @@ run_concurrency_ramp() {
 STRESS_DUR_MS=0
 STRESS_PASS=0
 run_production_stress() {
+    _RUN_PHASE[p5]=1
+    _phase_enter
     echo "============================================================"
     echo " PHASE 5: Production Stress (Fork-Exec Storms & COW Churn)"
     echo "============================================================"
@@ -857,6 +1048,8 @@ run_production_stress() {
         rmdir "/sys/fs/cgroup/sandboxes/oc-stress-$i" 2>/dev/null || true
     done
     echo "  ✓ Executed tool operations across $N sandboxes in ${STRESS_DUR_MS} ms (verified session verdicts: ${STRESS_PASS}/${N})"
+    _evaluate_p5
+    _phase_banner 5 "Production Stress"
 }
 
 # ============================================================================
@@ -881,6 +1074,20 @@ generate_report() {
     local v_snap=$(verdict_le "$SNAP_AVG_MS" 1000)
     local v_snapsize=$(verdict_le "${SNAP_SIZE_MIB:-999999}" 1024)
 
+    # Pre-render the Gate Summary strings (heredocs don't expand arrays well).
+    local GATE_OTHER_MISSES=$(( GATE_MISSES - GATE_REQUIRED_MISSES ))
+    local GATE_STATUS="PASS"
+    [ "$GATE_REQUIRED_MISSES" -gt 0 ] && GATE_STATUS="FAIL"
+    local GATE_MISSES_MD="- none"
+    if [ "${#GATE_REQUIRED_DETAIL[@]}" -gt 0 ]; then
+        GATE_MISSES_MD=""
+        local _m
+        for _m in "${GATE_REQUIRED_DETAIL[@]}"; do
+            GATE_MISSES_MD+="- ${_m}"$'\n'
+        done
+        GATE_MISSES_MD="${GATE_MISSES_MD%$'\n'}"
+    fi
+
     cat > "$PERF_OUT" <<EOF
 # OpenClaw Autonomous Agent Benchmark Report
 **Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
@@ -889,9 +1096,13 @@ generate_report() {
 **Host Specs**: 32 vCPUs (AMD Zen 5), 61.2 GiB RAM, Linux x86_64, NVMe Storage  
 
 > Every value in this report is measured live by \`openclaw-density-bench.sh\` during
-> this run. Verdicts are computed against the stated SLA, not asserted. Raw per-sandbox,
-> conductor, and proxy logs are archived under \`test/results/openclaw-bench/raw_logs/run-*\`.
-> \`n/a\` indicates a metric whose phase did not complete.
+> this run. Verdicts are computed against the stated target, not asserted; execution
+> success never stands in for performance success. Raw per-sandbox, conductor, and
+> proxy logs are archived under \`test/results/openclaw-bench/raw_logs/run-*\`.
+> \`n/a\` indicates a metric whose phase did not complete; an \`n/a\` verdict also
+> counts as a gate miss. Thresholds are fixed contracts: a miss is retained and
+> reported, not removed to make the run pass. Gates marked "(informational)" are
+> reported targets that do not fail the run.
 
 ---
 
@@ -913,36 +1124,36 @@ Single microVM executing a 4-turn autonomous software engineering task (git insp
 
 | Metric | Measured Value | Target SLA | Verdict |
 | :--- | :--- | :--- | :--- |
-| **End-to-End Task Duration** | **${CALIB_WALL_MS} ms** | $< 3,000\text{ ms}$ | **${v_wall}** |
-| **Peak Guest RSS** | **${CALIB_RSS_MIB:-n/a} MiB** | $< 128\text{ MiB}$ | **${v_rss}** |
-| **Final V8 Heap Used** | **${CALIB_HEAP_MIB:-n/a} MiB** | $< 32\text{ MiB}$ | **${v_heap}** |
-| **COW Diff Write Footprint** | **${CALIB_COW_KIB:-n/a} KiB** (allocated blocks) | $< 1,024\text{ KiB}$ | **${v_cow}** |
+| **End-to-End Task Duration** | **${CALIB_WALL_MS} ms** | $< 3,000\text{ ms}$ | **${v_wall:-n/a}** |
+| **Peak Guest RSS** | **${CALIB_RSS_MIB:-n/a} MiB** | $< 128\text{ MiB}$ | **${v_rss:-n/a}** |
+| **Final V8 Heap Used** | **${CALIB_HEAP_MIB:-n/a} MiB** | $< 32\text{ MiB}$ | **${v_heap:-n/a}** |
+| **COW Diff Write Footprint** | **${CALIB_COW_KIB:-n/a} KiB** (allocated blocks) | $< 1,024\text{ KiB}$ | **${v_cow:-n/a}** |
 
 ---
 
 ### Phase 2: In-Memory VM Pause & Resume Benchmark (\$N=30\$)
 Evaluating the warm-freeze lifecycle during the simulated 20 s LLM generation window:
 
-| Metric | Result | Target SLA |
-| :--- | :--- | :--- |
-| **Instances Paused** | **${PAUSE_COUNT} / 30 VMs** | \$100\%\$ |
-| **Average Pause Duration** | **${PAUSE_AVG_MS} ms/VM** | $< 15\text{ ms}$ |
-| **Host User CPU during Pause** | **${PAUSE_CPU_PCT:-n/a}%** (host-wide sample) | $< 5.0\%$ |
-| **Average Resume Duration** | **${RESUME_AVG_MS} ms/VM** | $< 15\text{ ms}$ |
+| Metric | Result | Target SLA | Verdict |
+| :--- | :--- | :--- | :--- |
+| **Instances Paused** | **${PAUSE_COUNT} / 30 VMs** | $\text{100\%}$ | **${v_paused:-n/a}** |
+| **Average Pause Duration** | **${PAUSE_AVG_MS} ms/VM** | $< 15\text{ ms}$ | **${v_pause:-n/a}** |
+| **Host User CPU during Pause** | **${PAUSE_CPU_PCT:-n/a}%** (host-wide sample) | $< 5.0\%$ (informational) | **${v_paused_cpu:-n/a}** |
+| **Average Resume Duration** | **${RESUME_AVG_MS} ms/VM** | $< 15\text{ ms}$ | **${v_resume:-n/a}** |
 
 ---
 
 ### Phase 3: Cold Snapshot & Scale-to-Zero Restore (\$N=16\$)
 Evaluating cold-tier storage and scale-to-zero reclamation:
 
-| Metric | Result | Target SLA |
-| :--- | :--- | :--- |
-| **Snapshots Succeeded** | **${SNAP_COUNT} / 16** | \$100\%\$ |
-| **Snapshot Throughput** | **${SNAP_AVG_MS} ms / snapshot** | $< 1,000\text{ ms}$ |
-| **Snapshot Disk Footprint** | **${SNAP_SIZE_MIB:-n/a} MiB / snapshot** | $< 1,024\text{ MiB}$ |
-| **MemAvailable Delta After Scale-to-Zero** | **${RECLAIMED_MIB} MiB** (positive = reclaimed; page-cache noise inclusive) | $> 0$ |
-| **8-Way Concurrent Restore (ready wallclock)** | **${RESTORE_WALL_MS} ms** for **${RESTORE_READY_COUNT}/8** ready | $< 100\text{ ms}$, 100% ready |
-| **Restore Process Exit Failures** | **${RESTORE_EXIT_FAIL}** | 0 |
+| Metric | Result | Target SLA | Verdict |
+| :--- | :--- | :--- | :--- |
+| **Snapshots Succeeded** | **${SNAP_COUNT} / 16** | $\text{100\%}$ | **${v_snapok:-n/a}** |
+| **Snapshot Throughput** | **${SNAP_AVG_MS} ms / snapshot** | $< 1,000\text{ ms}$ | **${v_snap:-n/a}** |
+| **Snapshot Disk Footprint** | **${SNAP_SIZE_MIB:-n/a} MiB / snapshot** | $< 1,024\text{ MiB}$ | **${v_snapsize:-n/a}** |
+| **MemAvailable Delta After Scale-to-Zero** | **${RECLAIMED_MIB} MiB** (positive = reclaimed; page-cache noise inclusive) | $> 0$ (informational) | **${v_reclaim:-n/a}** |
+| **8-Way Concurrent Restore (ready wallclock)** | **${RESTORE_WALL_MS} ms** for **${RESTORE_READY_COUNT}/8** ready | $< 100\text{ ms}$, 100% ready | **${v_restore:-n/a}** |
+| **Restore Process Exit Failures** | **${RESTORE_EXIT_FAIL}** | $\text{0}$ | **${v_restfail:-n/a}** |
 
 ---
 
@@ -952,26 +1163,45 @@ Pass counts are **verified** in-guest session verdicts (\`Verdict: PASS\`), not 
 sandbox-ctl exit codes. Avg RAM/Sandbox is the peak MemAvailable drop sampled at 100 ms
 during the live stage, divided by N.
 
-| Concurrency (\$N\$) | Fleet Mix Profile | Verified Pass / Total | Wallclock | Peak MemAvailable Drop / Sandbox |
-| :--- | :--- | :--- | :--- | :--- |
-| **\$N = 25\$** | 70% Paused, 20% Tool, 10% Heavy | **${p25} / 25** | **${w25}s** | **${m25} MiB** |
-| **\$N = 50\$** | 70% Paused, 20% Tool, 10% Heavy | **${p50} / 50** | **${w50}s** | **${m50} MiB** |
-| **\$N = 100\$** | 70% Paused, 20% Tool, 10% Heavy | **${p100} / 100** | **${w100}s** | **${m100} MiB** |
-| **\$N = 150\$** | 70% Paused, 20% Tool, 10% Heavy | **${p150} / 150** | **${w150}s** | **${m150} MiB** |
-| **\$N = 200\$** | 70% Paused, 20% Tool, 10% Heavy | **${p200} / 200** | **${w200}s** | **${m200} MiB** |
-| **\$N = 250\$** | 70% Paused, 20% Tool, 10% Heavy | **${p250} / 250** | **${w250}s** | **${m250} MiB** |
+| Concurrency (\$N\$) | Fleet Mix Profile | Verified Pass / Total | Pass Verdict | Wallclock | Peak MemAvailable Drop / Sandbox |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **\$N = 25\$** | 70% Paused, 20% Tool, 10% Heavy | **${p25} / 25** | **${v_ramp25:-n/a}** | **${w25}s** | **${m25} MiB** |
+| **\$N = 50\$** | 70% Paused, 20% Tool, 10% Heavy | **${p50} / 50** | **${v_ramp50:-n/a}** | **${w50}s** | **${m50} MiB** |
+| **\$N = 100\$** | 70% Paused, 20% Tool, 10% Heavy | **${p100} / 100** | **${v_ramp100:-n/a}** | **${w100}s** | **${m100} MiB** |
+| **\$N = 150\$** | 70% Paused, 20% Tool, 10% Heavy | **${p150} / 150** | **${v_ramp150:-n/a}** | **${w150}s** | **${m150} MiB** |
+| **\$N = 200\$** | 70% Paused, 20% Tool, 10% Heavy | **${p200} / 200** | **${v_ramp200:-n/a}** | **${w200}s** | **${m200} MiB** |
+| **\$N = 250\$** | 70% Paused, 20% Tool, 10% Heavy | **${p250} / 250** | **${v_ramp250:-n/a}** | **${w250}s** | **${m250} MiB** |
 
-Host \`oom_kill\` counter delta across the full ramp: **${HOST_OOMS}**.
+Verified pass target: **N/N sessions PASS at every stage**. Host \`oom_kill\` counter delta
+across the full ramp: **${HOST_OOMS}** (target 0; verdict **${v_ooms:-n/a}**).
 
 ---
 
 ### Phase 5: Production Stress Tests
-- **Fork-Exec Storms**: 20 concurrent sandboxes executing subprocesses $\to$ completed in **${STRESS_DUR_MS} ms**; verified session verdicts: **${STRESS_PASS}/20**.
+- **Fork-Exec Storms**: 20 concurrent sandboxes executing subprocesses $\to$ completed in **${STRESS_DUR_MS} ms**; verified session verdicts: **${STRESS_PASS}/20** (target 20/20; verdict **${v_stress:-n/a}**).
 - **COW Disk Churn**: per-sandbox ext4 diff overlays on \`vhost-user-blk\`; cross-tenant isolation asserted by design, not instrumented in this harness (tracked as future work).
 
 ---
 
-## 3. Production Architecture Recommendations
+## 3. Gate Summary
+Every declared target above is either a **gate** (required; a miss fails the run) or
+an **informational target** (reported, does not fail the run). Per the evidence
+contract in \`docs/perf.md\` §2, thresholds are fixed when the run is launched:
+a miss is retained as evidence, never hidden by raising or removing the threshold.
+
+Target evaluations: **${GATE_TOTAL}** total,
+**${GATE_REQUIRED_MISSES} required gate miss(es)**,
+**${GATE_OTHER_MISSES} informational/other miss(es)**.
+
+**GATE: ${GATE_STATUS}**
+${GATE_MISSES_MD}
+
+The 8-way concurrent restore contract (Phase 3) bundles its three measurements
+into one gate: **${RESTORE_READY_COUNT}/8 ready in ${RESTORE_WALL_MS} ms with
+${RESTORE_EXIT_FAIL} exit failures** against the $< 100\text{ ms}$, 8/8-ready, 0-failure
+target — verdict **${v_restore}**.
+
+## 4. Production Architecture Recommendations
 
 1. **Two-Tier Agent State Management**:
    - **Active Reasoning (0–15s)**: Leave microVMs resident; the guest kernel naturally
@@ -989,11 +1219,159 @@ EOF
     echo "  ✓ Generated report at $PERF_OUT"
 }
 
+# Final gate decision: required-gate misses fail the run (exit non-zero) so a
+# threshold violation can never masquerade as a successful validation. The
+# report is still generated first, so failed runs keep complete evidence.
+gates_fail() {
+    [ "$GATE_MODE" = "report" ] && return 1
+    [ "$GATE_REQUIRED_MISSES" -eq 0 ] && return 1
+    return 0
+}
+
+# Build the report and evaluate every declared target. Returns non-zero when a
+# required gate missed. Used by all modes including self_check.
+finalize() {
+    evaluate_gates_all
+    generate_report
+    if gates_fail; then
+        FAIL_REASON="required target gate failed: ${GATE_REQUIRED_MISSES} miss(es): ${GATE_REQUIRED_DETAIL[*]}"
+        return 1
+    fi
+    return 0
+}
+
 # ============================================================================
-# Main Dispatcher
+# Self-check regression: verify the report/gate machinery can no longer render
+# a known over-target sample as successful evidence. No KVM, root, or binaries
+# required — runs offline by stubbing generate_report's live inputs.
 # ============================================================================
-MODE="${1:-all}"
+run_self_check() {
+    echo "============================================================"
+    echo " SELF-CHECK: report/verdict gate regression (offline; no KVM/root/Docker)"
+    echo "============================================================"
+    echo "  Fixture A: maintainer counterexample — 8/8 restores ready in 139 ms"
+    echo "  vs the declared < 100 ms target must render FAIL, record the required"
+    echo "  gate miss by name, and make the gate return non-zero. An informational"
+    echo "  miss (host user CPU) is reported but must not gate the run."
+    echo "  Fixture B: everything within target must compute GATE PASS."
+    PERF_OUT="$OUT_BASE/OPENCLAW_BENCHMARK_REPORT.md"
+    mkdir -p "$OUT_BASE"
+    # Mark every phase as run so the evaluators count their declared targets.
+    _RUN_PHASE[p1]=1; _RUN_PHASE[p2]=1; _RUN_PHASE[p3]=1; _RUN_PHASE[p4]=1; _RUN_PHASE[p5]=1
+
+    # ------------------------------------------------------------------
+    # Case A: known over-target sample (RESTORE_WALL_MS=139) — the full
+    # runs previously "completed successfully" despite this restore miss.
+    # ------------------------------------------------------------------
+    RESTORE_WALL_MS=139
+    RESTORE_READY_COUNT=8
+    RESTORE_EXIT_FAIL=0
+    PAUSE_AVG_MS=12.30
+    RESUME_AVG_MS=13.10
+    PAUSE_COUNT=30
+    PAUSE_CPU_PCT=8.5
+    SNAP_COUNT=16
+    SNAP_AVG_MS=858.56
+    SNAP_SIZE_MIB=258.3
+    RECLAIMED_MIB=321
+    HOST_OOMS=0
+    STRESS_PASS=20
+    CALIB_WALL_MS=766
+    CALIB_RSS_MIB=54.93
+    CALIB_HEAP_MIB=7.85
+    CALIB_COW_KIB=152
+    RAMP_PASS[25]="25"; RAMP_FAIL[25]="0"; RAMP_WALL[25]="7.71"; RAMP_MEM[25]="28.3"
+    RAMP_PASS[50]="50"; RAMP_FAIL[50]="0"; RAMP_WALL[50]="15.02"; RAMP_MEM[50]="29.1"
+    RAMP_PASS[100]="100"; RAMP_FAIL[100]="0"; RAMP_WALL[100]="29.42"; RAMP_MEM[100]="30.2"
+    RAMP_PASS[150]="150"; RAMP_FAIL[150]="0"; RAMP_WALL[150]="44.80"; RAMP_MEM[150]="30.5"
+    RAMP_PASS[200]="200"; RAMP_FAIL[200]="0"; RAMP_WALL[200]="60.12"; RAMP_MEM[200]="29.9"
+    RAMP_PASS[250]="250"; RAMP_FAIL[250]="0"; RAMP_WALL[250]="75.63"; RAMP_MEM[250]="29.6"
+
+    set +e
+    finalize
+    local rc=$?
+    set -e
+
+    local ok=1
+    if ! grep -qE '^\| \*\*8-Way Concurrent Restore \(ready wallclock\)\*\* \| \*\*139 ms\*\*.*\| \*\*FAIL\*\* \|$' "$PERF_OUT"; then
+        echo "  ✗ restore row did not render FAIL for 139 ms vs < 100 ms target" >&2
+        ok=0
+    fi
+    if ! grep -qF "GATE: FAIL" "$PERF_OUT"; then
+        echo "  ✗ report GATE summary did not say FAIL" >&2
+        ok=0
+    fi
+    if [ "$rc" -eq 0 ]; then
+        echo "  ✗ gate accepted a known over-target sample (exit 0)" >&2
+        ok=0
+    fi
+    case "${GATE_REQUIRED_DETAIL[*]:-}" in
+        *"phase3: 8-way restore ready wallclock 139 ms"*) : ;;
+        *) echo "  ✗ gate did not record the restore contract miss by name" >&2; ok=0 ;;
+    esac
+    if ! grep -qE '\| \*\*PASS\*\* \|$' "$PERF_OUT" || ! grep -qE '\*\*25 / 25\*\*' "$PERF_OUT"; then
+        echo "  ✗ other targets did not render PASS verdicts" >&2
+        ok=0
+    fi
+    if grep -q "Completed Successfully" "$PERF_OUT"; then
+        echo "  ✗ report claims success despite gate failure" >&2
+        ok=0
+    fi
+    # Informational miss (host user CPU 8.5% vs < 5.0%) is reported but must
+    # not gate the run: it may not appear in required-miss accounting.
+    if [ "$GATE_INFO_MISSES" -ne 1 ]; then
+        echo "  ✗ expected the informational CPU miss to be reported (got GATE_INFO_MISSES=${GATE_INFO_MISSES})" >&2
+        ok=0
+    fi
+    case "${GATE_REQUIRED_DETAIL[*]:-}" in
+        *phase2*) echo "  ✗ an informational miss leaked into required-gate accounting" >&2; ok=0 ;;
+    esac
+    if [ "$ok" -eq 1 ]; then
+        echo "  ✓ Case A: over-target sample rendered as FAIL, gate returned rc=$rc (non-zero)"
+    else
+        rm -rf "$SELF_TMP" 2>/dev/null || true
+        echo "  ✗ self-check Case A failed; inspect $PERF_OUT" >&2
+        return 1
+    fi
+
+    # ------------------------------------------------------------------
+    # Case B: same machinery must still compute GATE PASS when every
+    # measurement is within its declared target (guards a gate that can
+    # only fail, never pass).
+    # ------------------------------------------------------------------
+    RESTORE_WALL_MS=77
+    PAUSE_CPU_PCT=2.9
+    GATE_TOTAL=0; GATE_MISSES=0; GATE_REQUIRED_MISSES=0; GATE_INFO_MISSES=0
+    GATE_REQUIRED_DETAIL=(); GATE_INFO_DETAIL=()
+    declare -A _EV_DONE=()
+    set +e
+    finalize
+    rc=$?
+    set -e
+
+    local ok_b=1
+    if [ "$rc" -ne 0 ] || [ "$GATE_REQUIRED_MISSES" -ne 0 ]; then
+        echo "  ✗ Case B: within-target sample still failed the gate (rc=$rc, misses=$GATE_REQUIRED_MISSES)" >&2
+        ok_b=0
+    fi
+    if ! grep -qF "GATE: PASS" "$PERF_OUT"; then
+        echo "  ✗ Case B: report GATE summary did not say PASS" >&2
+        ok_b=0
+    fi
+    if [ "$ok_b" -eq 1 ]; then
+        echo "  ✓ Case B: within-target sample computed GATE PASS"
+        rm -rf "$SELF_TMP" 2>/dev/null || true
+        return 0
+    fi
+    echo "  ✗ self-check Case B failed; inspect $PERF_OUT" >&2
+    return 1
+}
+
+# ============================================================================
+# Main Dispatcher (mode parsed at script top)
+# ============================================================================
 case "$MODE" in
+    self_check)   run_self_check; exit $?;;
     calibrate)    run_calibration;;
     pause_resume) run_pause_resume;;
     cold)         run_cold_snapshot_restore;;
@@ -1010,15 +1388,42 @@ case "$MODE" in
         echo
         run_production_stress
         echo
-        generate_report
         ;;
     *)
-        echo "Usage: $0 [all|calibrate|pause_resume|cold|ramp|stress]"
+        echo "Usage: $0 [all|calibrate|pause_resume|cold|ramp|stress|self_check]"
         exit 1
         ;;
 esac
 
+# Every mode (incl. single-phase) ends in finalize(): evaluate all declared
+# targets once, render the report + a final GATE decision. Single-phase runs
+# never render fabricated PASSes for phases they did not run.
+set +e
+finalize
+FINAL_RC=$?
+set -e
+
+if [ "$GATE_MODE" = "gate" ] && [ "$FINAL_RC" -ne 0 ]; then
+    echo
+    echo "============================================================" >&2
+    echo " OpenClaw Benchmark Suite: GATE FAILED" >&2
+    echo " Required target misses (${GATE_REQUIRED_MISSES}):" >&2
+    for miss in "${GATE_REQUIRED_DETAIL[@]}"; do
+        echo "   ✗ $miss" >&2
+    done
+    if [ "${#GATE_INFO_DETAIL[@]}" -gt 0 ]; then
+        echo " Informational misses (reported, non-gating):" >&2
+        for miss in "${GATE_INFO_DETAIL[@]}"; do
+            echo "   - $miss" >&2
+        done
+    fi
+    echo " Full report: $PERF_OUT" >&2
+    echo " Thresholds unchanged; evidence retained." >&2
+    echo "============================================================" >&2
+    exit "$FINAL_RC"
+fi
+
 echo
 echo "============================================================"
-echo " OpenClaw Benchmark Suite Completed Successfully!"
+echo " OpenClaw Benchmark Suite Completed: GATE PASS (${GATE_TOTAL} declared targets evaluated)"
 echo "============================================================"
