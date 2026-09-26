@@ -20,6 +20,8 @@ make perf-sandbox
 make perf-sandbox-manifest
 make perf-sandbox-working-set
 make perf-density
+make perf-agent
+make perf-agent-selfcheck
 make test-uffd-performance-gate
 make test-perf-tools
 ```
@@ -30,6 +32,18 @@ Manifest,working-set 与 density harness.单独运行 cache benchmark:
 ```bash
 make -C ../accelerator perf-cache
 ```
+
+`make perf-agent` 运行自主编码 agent workload 套件(确定性 mock LLM,不使用
+`openclaw` npm 包).它不纳入 `make perf`,通过
+`PHASES=all|calibrate|pause_resume|cold|ramp|stress|self_check` 选择阶段.
+
+生成报告中的每个声明 target 都以本次运行自身的测量值为比较对象,计算并渲染明确的
+PASS/FAIL;执行成功从不替代性能成功,生成报告时也不会为通过而调高/删除/重释阈值.
+每个 target 按"结果证据合同"(下文 §2)标注为 gate 或 informational target:gate
+未达标时 harness 以非零退出,失败验证不会记成绿色运行;informational target 如实
+报告未达标但不决定退出状态.`PHASES=self_check`(`make perf-agent-selfcheck`)回放
+固定报告 fixtures,包含一个刻意超标的 restore 样本;若报告机制可能把超标样本渲染成
+成功证据则该回归直接失败.该回归同时接入 `make test-perf-tools`.
 
 真实 MicroVM 路径需要可读写的 `/dev/kvm`,root 或无交互 sudo,所需镜像与运行制品.
 Manifest 和 density harness 还会按脚本检查 Docker,网络与文件系统工具.缺少这些条件时
