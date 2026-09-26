@@ -61,9 +61,11 @@ class PreparedHelperSelectionTest(unittest.TestCase):
     def load_build_artifacts():
         spec=importlib.util.spec_from_file_location("build_artifacts",INTEGRATION/"build-artifacts.py")
         module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
-    def test_cgroup_probe_is_selected_only_for_exact_x86_case(self):
+    def test_cgroup_probe_is_selected_for_exact_case_or_owner_runner(self):
         cgroup=artifacts.profiles(["sandboxer"],"x86_64",{"sandboxer":["sandbox.cgroup.sh"]})
         self.assertEqual(artifacts.planned_helpers(cgroup)["cgroup-fork-probe"],"sandboxer")
+        owner_runner=artifacts.profiles(["sandboxer"],"x86_64")
+        self.assertEqual(artifacts.planned_helpers(owner_runner)["cgroup-fork-probe"],"sandboxer")
         lifecycle=artifacts.profiles(["sandboxer"],"x86_64",{"sandboxer":["sandbox.lifecycle.sh"]})
         self.assertNotIn("cgroup-fork-probe",artifacts.planned_helpers(lifecycle))
         arm=artifacts.profiles(["sandboxer"],"aarch64",{"sandboxer":["sandbox.cgroup.sh"]})
