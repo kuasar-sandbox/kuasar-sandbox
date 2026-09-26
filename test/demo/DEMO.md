@@ -152,7 +152,7 @@ Conductor listens on `127.0.0.1:443`; the independent Proxy listens on `127.0.0.
 
 The vSwitch assigns each sandbox a floating IP from `100.100.96.0/20`, while the E2B guest profile uses the reusable inner `169.254.0.21/30` address and `169.254.0.22` next hop. The run adds uniquely tagged forwarding and masquerade rules. The local Registry is exposed to builder MicroVMs through `--mgmt-service` on `169.254.169.254`. VersityGW stays on host loopback for the host-side COPY path; it does not use this guest route. Neither service is made externally reachable by the script.
 
-The Demo verifies both direct `http://<floating-ip>:8000` access and the authenticated E2B data address `https://8000-<sid>.<domain>`, using the real `X-Access-Token`. Guest egress is an assertion of the existing Demo NAT path, not a new product Egress implementation.
+The Demo verifies both direct `http://<floating-ip>:8000` access and the authenticated E2B data address `https://8000-<sid>.<domain>`, using the real `X-Access-Token`. Guest egress is an assertion of the existing Demo NAT path, not a new product Egress implementation. By default the Demo directly requests `http://1.1.1.1`. In proxy-only networks, set `DEMO_EGRESS_PROXY` to a proxy address reachable from the guest and optionally set `DEMO_EGRESS_URL` to an approved HTTP or HTTPS target. The proxy path is still a strict guest-to-proxy-to-target assertion; `DEMO_NETDIAG=1` remains diagnostic only.
 
 ## 8. Troubleshooting and See Also
 

@@ -379,7 +379,7 @@ sed -i '/^preview_version:/a previous_preview_version: preview.20260810' \
   > "$TMP/historical-preview-selection.tsv"
 
 bash -n "$ROOT/release/preview-coordinator.sh" "$ROOT/release/delete-preview.sh"
-python3 -m py_compile "$ROOT/release/selection.py" \
+python3 -m py_compile "$ROOT/release/kuasar_deploy.py" "$ROOT/release/kuasar_deploy_test.py" "$ROOT/release/selection.py" \
   "$ROOT/release/preview-selection.py" "$ROOT/release/preview_coordinator.py" \
   "$ROOT/release/formal_coordinator.py" "$ROOT/release/preview_gc.py"
 for workflow in daily-preview.yml daily-preview-branch.yml aggregate-release.yml \

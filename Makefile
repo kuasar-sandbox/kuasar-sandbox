@@ -199,6 +199,7 @@ test-ci-tools:
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
 
 test-release-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 release/kuasar_deploy_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test-environment-tools.py
 	bash test/demo/test_demo_safety.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_state_assertions.py

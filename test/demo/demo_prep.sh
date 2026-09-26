@@ -482,6 +482,20 @@ probe_owned_zot_manifest() {
     esac
 }
 
+destination_manifest_is_absent() {
+    local status
+    status="$(curl -sS --max-time 10 --noproxy '*' \
+        -H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+        -o /dev/null -w '%{http_code}' \
+        "http://$REGISTRY/v2/$REGISTRY_NS/base/manifests/$BASE_TAG")" \
+        || demo_die "could not query the destination registry manifest for $BASE_TAG_REF"
+    case "$status" in
+        404) return 0 ;;
+        200) return 1 ;;
+        *) demo_die "destination registry manifest query for $BASE_TAG_REF returned HTTP $status" ;;
+    esac
+}
+
 push_base_image() {
     if ! docker push "$BASE_TAG_REF" >"$LOG_DIR/push.log" 2>&1; then
         echo "docker push output for $BASE_TAG_REF:" >&2
@@ -505,8 +519,8 @@ elif docker pull --platform linux/amd64 "$BASE_TAG_REF" >"$LOG_DIR/destination-p
         || demo_die "$BASE_TAG_REF already names different content; refusing to overwrite it"
     say "base image already seeded and content-matched: $BASE_TAG_REF"
 else
-    if ! grep -Eqi 'manifest unknown|manifest.*not found|not found: manifest' "$LOG_DIR/destination-pull.log"; then
-        demo_die "could not determine whether $BASE_TAG_REF is absent; refusing to overwrite it"
+    if ! destination_manifest_is_absent; then
+        demo_die "$BASE_TAG_REF exists but Docker could not pull it; refusing to overwrite it"
     fi
     say "seeding immutable base image $E2E_IMAGE"
     docker tag "$SOURCE_IMAGE_ID" "$BASE_TAG_REF"
