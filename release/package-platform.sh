@@ -26,6 +26,10 @@ validate_archive() {
     || release_fail "platform archive is missing docs/kuasar-sandbox.md"
   grep -Fx './test/e2e/run_all.sh' "$listing" >/dev/null \
     || release_fail "platform archive is missing test/e2e/run_all.sh"
+  grep -Fx './test/e2e/e2e' "$listing" >/dev/null \
+    || release_fail "platform archive is missing test/e2e/e2e"
+  grep -Fx './test/e2e/lib/common.sh' "$listing" >/dev/null \
+    || release_fail "platform archive is missing test/e2e/lib/common.sh"
   local owner
   for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
     grep -Fx "./test/e2e/$owner/run_all.sh" "$listing" >/dev/null \

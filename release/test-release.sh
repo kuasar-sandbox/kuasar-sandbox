@@ -91,6 +91,22 @@ EOF
 done < "$TMP/selection.tsv"
 printf '#!/usr/bin/env bash\necho "pinned orchestrator E2E"\n' \
   > "$TMP/fetched/test-sources/orchestrator/test/e2e/run_all.sh"
+# Model the current mixed #172 migration: accelerator is case-only, while the
+# other fixtures retain the legacy owner entry point.
+accelerator_suite="$TMP/fetched/test-sources/accelerator/test/e2e"
+rm "$accelerator_suite/run_all.sh"
+mkdir -p "$accelerator_suite/cases"
+cat > "$accelerator_suite/cases/storage.fixture.sh" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+echo 'accelerator case-only fixture'
+EOF
+chmod 0644 "$accelerator_suite/cases/storage.fixture.sh"
+connector_suite="$TMP/fetched/test-sources/connector/test/e2e"
+mkdir -p "$connector_suite/cases"
+printf '#!/usr/bin/env bash\necho connector-case\n' \
+  > "$connector_suite/cases/connector.fixture.sh"
+chmod 0644 "$connector_suite/cases/connector.fixture.sh"
 printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux.md"
 printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
 printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
@@ -122,12 +138,63 @@ grep -Fq "$foreign_unit archive contains another release unit's material namespa
 
 SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
+mkdir -p "$TMP/generated-runner"
+tar -xzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
+  -C "$TMP/generated-runner" ./test/e2e/accelerator/run_all.sh
+generated_accelerator_runner="$TMP/generated-runner/test/e2e/accelerator/run_all.sh"
+[ -x "$generated_accelerator_runner" ] \
+  || release_fail "case-only owner compatibility runner is not executable"
+grep -Fq -- '--include storage.fixture.sh' "$generated_accelerator_runner" \
+  || release_fail "case-only owner runner omits its exact case"
+if grep -Fq -- '--include connector.fixture.sh' "$generated_accelerator_runner"; then
+  release_fail "case-only owner runner can select another owner's case"
+fi
 tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" ./test/e2e/orchestrator/run_all.sh \
   > "$TMP/packaged-orchestrator-test"
 cmp "$TMP/packaged-orchestrator-test" "$TMP/fetched/test-sources/orchestrator/test/e2e/run_all.sh"
 if cmp -s "$TMP/packaged-orchestrator-test" "$TMP/fetched/sources/orchestrator/test/e2e/run_all.sh"; then
   release_fail "platform package used the product tag's test instead of the independent pin"
 fi
+
+assert_assembly_rejected() {
+  local name=$1 expected=$2 tests output
+  tests="$TMP/tests-$name"
+  output="$TMP/output-$name"
+  cp -a "$TMP/fetched/test-sources" "$tests"
+  shift 2
+  "$@" "$tests"
+  if E2E_SOURCE_ROOT="$tests" "$ROOT/test/e2e/assemble.sh" "$output" \
+      "$FORMAL_ROOT" "$TMP/fetched/sources/accelerator" \
+      "$TMP/fetched/sources/connector" "$TMP/fetched/sources/runtime" \
+      "$TMP/fetched/sources/sandboxer" "$TMP/fetched/sources/orchestrator" \
+      > "$TMP/$name.log" 2>&1; then
+    release_fail "assembler accepted $name fixture"
+  fi
+  grep -Fq "$expected" "$TMP/$name.log" \
+    || release_fail "$name fixture failed outside its intended guard"
+}
+
+remove_owner_inputs() {
+  rm -f "$1/connector/test/e2e/run_all.sh"
+  rm -rf "$1/connector/test/e2e/cases"
+}
+assert_assembly_rejected missing-owner \
+  'connector source is missing valid test/e2e/cases/*.sh and executable test/e2e/run_all.sh' \
+  remove_owner_inputs
+
+add_duplicate_case() {
+  mkdir -p "$1/connector/test/e2e/cases"
+  cp "$1/accelerator/test/e2e/cases/storage.fixture.sh" \
+    "$1/connector/test/e2e/cases/storage.fixture.sh"
+}
+assert_assembly_rejected duplicate-case \
+  'duplicate E2E case id from connector: storage.fixture.sh' add_duplicate_case
+
+add_suite_symlink() {
+  ln -s run_all.sh "$1/sandboxer/test/e2e/linked-runner"
+}
+assert_assembly_rejected suite-symlink \
+  'sandboxer e2e suite contains a symbolic link' add_suite_symlink
 while IFS=$'\t' read -r unit tag; do
   archive="$(component_archive "$unit" "$tag")"
   cmp "$TMP/fetched/components/$unit/$archive" "$TMP/bundle/assets/$archive"
