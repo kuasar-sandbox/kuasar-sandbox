@@ -119,13 +119,47 @@ class GuestFixturePathTests(unittest.TestCase):
             plan = {"candidate_cases": {"guest-runtime": ["image.flatten.sh"]}}
             self.assertEqual(prepare.guest_fixture_script(plan, workspace), migrated)
 
+    def test_exact_assets_guest_uses_packaged_normalized_library(self):
+        with tempfile.TemporaryDirectory(prefix="kuasar-guest-fixture-") as directory:
+            workspace = Path(directory)
+            root = workspace / "test/e2e"
+            (root / "lib").mkdir(parents=True)
+            helper = root / "guest-runtime/lib/fixture.py"
+            helper.parent.mkdir(parents=True)
+            helper.write_text("# pinned guest fixture\n")
+            case = root / "guest-runtime/cases/image.flatten.sh"
+            case.parent.mkdir()
+            case.write_text("#!/bin/sh\nexit 0\n")
+            prepare.artifacts.normalize_e2e_cases(workspace)
+            plan = {"mode": "exact-assets", "candidate_cases": {}}
+            self.assertEqual(prepare.guest_fixture_script(plan, workspace),
+                             root / "lib/guest-runtime/fixture.py")
+
+    def test_exact_assets_rejects_invalid_normalized_helper_despite_legacy_copy(self):
+        for kind in ("symlink", "dangling", "directory"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory(
+                    prefix="kuasar-guest-fixture-") as directory:
+                workspace = Path(directory)
+                legacy = workspace / "test/e2e/guest-runtime/fixture.py"
+                legacy.parent.mkdir(parents=True)
+                legacy.write_text("# legacy fixture\n")
+                migrated = workspace / "test/e2e/lib/guest-runtime/fixture.py"
+                migrated.parent.mkdir(parents=True)
+                if kind == "directory":
+                    migrated.mkdir()
+                else:
+                    migrated.symlink_to(legacy if kind == "symlink" else workspace / "missing")
+                with self.assertRaisesRegex(ValueError, "missing prepared guest-runtime fixture helper"):
+                    prepare.guest_fixture_script({"mode": "exact-assets"}, workspace)
+
     def test_unmigrated_guest_keeps_legacy_overlay_path(self):
         with tempfile.TemporaryDirectory(prefix="kuasar-guest-fixture-") as directory:
             workspace = Path(directory)
             legacy = workspace / "test/e2e/guest-runtime/fixture.py"
             legacy.parent.mkdir(parents=True)
             legacy.write_text("# legacy fixture\n")
-            self.assertEqual(prepare.guest_fixture_script({}, workspace), legacy)
+            for plan in ({}, {"mode": "exact-assets", "candidate_cases": {}}):
+                self.assertEqual(prepare.guest_fixture_script(plan, workspace), legacy)
 
     def test_selected_guest_fixture_must_be_a_real_file(self):
         with tempfile.TemporaryDirectory(prefix="kuasar-guest-fixture-") as directory:
