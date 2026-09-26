@@ -198,7 +198,10 @@ def planned_helpers(profile):
                         "orch-cli.test": "orchestrator"})
     if "sandboxer" in owners:
         helpers["usage-probe"] = "sandboxer"
-        if "test/e2e/sandboxer/cases/sandbox.cgroup.sh" in cases:
+        # A selected owner runner can be a generated compatibility entrypoint
+        # over the owner's exact case tree, including sandbox.cgroup.sh.
+        if cases & {"test/e2e/sandboxer/cases/sandbox.cgroup.sh",
+                    "test/e2e/sandboxer/run_all.sh"}:
             helpers["cgroup-fork-probe"] = "sandboxer"
     return helpers
 
