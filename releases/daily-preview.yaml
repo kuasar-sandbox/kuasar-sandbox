@@ -1,16 +1,16 @@
 version: release-v0.1.6
 previous_version: release-v0.1.5
-preview_version: preview.20260926
+preview_version: preview.20260927
 components:
   accelerator: v0.1.6-preview.20260926
   connector: v0.1.5-preview.20260926
-  sandboxer: v0.1.6-preview.20260926
+  sandboxer: v0.1.6-preview.20260927
   orchestrator: v0.1.6-preview.20260926
-  runtime: runtime-v0.1.6-preview.20260926
+  runtime: runtime-v0.1.6-preview.20260927
   vmlinux: vmlinux-v0.1.3
 test_revisions:
   accelerator: 7655959b4a330a55ec9e53bdaa6a1d5b47c2314e
   connector: 89af68b40f9e0b9b4929d3979a3e4cf022637ca2
   guest-runtime: 812b251f23642baa2f9b294546222e1935824965
-  sandboxer: 429f76c127363ca30b4043307cacfe84441ecd9b
+  sandboxer: 424dac2f3257690051a8cbab5f0fce6b152ad198
   orchestrator: 2b45c488e64fb15aaae5429f26c40779a8915c65
