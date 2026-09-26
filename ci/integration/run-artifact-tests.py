@@ -61,6 +61,12 @@ def requires_privilege(case, rewritten, generated_runners):
     return rewritten or case in generated_runners
 
 
+def privilege_environment(prepared, environment_path):
+    selected = dict(prepared)
+    selected["PATH"] = environment_path
+    return selected
+
+
 def execute(plan, arch, shard, workspace, result_path):
     provenance = artifacts.verify_workspace(workspace, plan, arch)
     artifacts.require(platform.machine() == arch, "E2E requires the selected native target runner")
@@ -132,6 +138,7 @@ def execute(plan, arch, shard, workspace, result_path):
                 elif "python" in images:
                     selected.update(E2E_IMAGE=images["python"]["image_id"], IMAGE=images["python"]["image_id"])
                 if requires_privilege(case, rewritten, generated_runners):
+                    selected = privilege_environment(selected, environment["PATH"])
                     command = privileged_command(command, selected)
                 case_started = time.monotonic()
                 completed = subprocess.run(command, cwd=state, env={**environment, **selected})
