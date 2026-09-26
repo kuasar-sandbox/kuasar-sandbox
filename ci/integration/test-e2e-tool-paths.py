@@ -168,6 +168,17 @@ class CaseBridgeContracts(unittest.TestCase):
         with patch.object(executor.os, 'geteuid', return_value=0):
             self.assertEqual(executor.privileged_command(command, prepared), command)
 
+    def test_privilege_environment_adds_only_trusted_tool_path(self):
+        executor = load_module('case_privilege_environment', ROOT / 'ci/integration/run-artifact-tests.py')
+        prepared = {'BIN': '/prepared/bin', 'E2E_LIB': '/prepared/test/e2e/lib'}
+        selected = executor.privilege_environment(prepared, '/trusted/bootstrap/bin:/usr/bin')
+        self.assertEqual(selected, {
+            'BIN': '/prepared/bin',
+            'E2E_LIB': '/prepared/test/e2e/lib',
+            'PATH': '/trusted/bootstrap/bin:/usr/bin',
+        })
+        self.assertEqual(prepared, {'BIN': '/prepared/bin', 'E2E_LIB': '/prepared/test/e2e/lib'})
+
     def test_generated_compatibility_registry_is_exact_and_owner_scoped(self):
         executor = load_module('generated_compatibility_executor', ROOT / 'ci/integration/run-artifact-tests.py')
         with tempfile.TemporaryDirectory(prefix='kuasar-generated-runners-') as directory:
