@@ -168,6 +168,33 @@ class CaseBridgeContracts(unittest.TestCase):
         with patch.object(executor.os, 'geteuid', return_value=0):
             self.assertEqual(executor.privileged_command(command, prepared), command)
 
+    def test_generated_compatibility_registry_is_exact_and_owner_scoped(self):
+        executor = load_module('generated_compatibility_executor', ROOT / 'ci/integration/run-artifact-tests.py')
+        with tempfile.TemporaryDirectory(prefix='kuasar-generated-runners-') as directory:
+            workspace = Path(directory)
+            runner = workspace / 'test/e2e/connector/run_all.sh'
+            runner.parent.mkdir(parents=True)
+            runner.write_text('#!/bin/sh\nexit 0\n')
+            runner.chmod(0o755)
+            registry = workspace / 'test/e2e/generated-compatibility-runners'
+            registry.write_text('test/e2e/connector/run_all.sh\n')
+            self.assertEqual(executor.generated_compatibility_runners(workspace),
+                             {'test/e2e/connector/run_all.sh'})
+            for invalid in (
+                    'test/e2e/connector/run_all.sh\ntest/e2e/connector/run_all.sh\n',
+                    'test/e2e/platform/run_all.sh\n', '../connector/run_all.sh\n'):
+                registry.write_text(invalid)
+                with self.assertRaises(ValueError):
+                    executor.generated_compatibility_runners(workspace)
+            registry.unlink()
+            registry.symlink_to(runner)
+            with self.assertRaisesRegex(ValueError, 'missing generated compatibility runner registry'):
+                executor.generated_compatibility_runners(workspace)
+        generated = {'test/e2e/connector/run_all.sh'}
+        self.assertTrue(executor.requires_privilege('test/e2e/connector/run_all.sh', False, generated))
+        self.assertTrue(executor.requires_privilege('test/e2e/connector/cases/network.tap.sh', True, generated))
+        self.assertFalse(executor.requires_privilege('test/e2e/sandboxer/run_all.sh', False, generated))
+
 
 class ToolPaths(unittest.TestCase):
     def setUp(self):

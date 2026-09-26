@@ -30,6 +30,8 @@ validate_archive() {
     || release_fail "platform archive is missing test/e2e/e2e"
   grep -Fx './test/e2e/lib/common.sh' "$listing" >/dev/null \
     || release_fail "platform archive is missing test/e2e/lib/common.sh"
+  grep -Fx './test/e2e/generated-compatibility-runners' "$listing" >/dev/null \
+    || release_fail "platform archive is missing generated compatibility runner registry"
   local owner
   for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
     grep -Fx "./test/e2e/$owner/run_all.sh" "$listing" >/dev/null \
