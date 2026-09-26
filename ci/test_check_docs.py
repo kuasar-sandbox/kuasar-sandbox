@@ -33,6 +33,37 @@ class DocumentationChecks(unittest.TestCase):
         self.assertEqual(docs.check_file(self.root, path), [])
         self.assertEqual(docs.check_file(self.root, self.root / 'a_zh.md'), [])
 
+    def test_content_before_selector(self):
+        header = '[English](a.md) | [简体中文](a_zh.md)\n\n'
+        for prefix in ('# Introduction\n\n', 'Introduction.\n\n'):
+            for misplaced, other in (('a.md', 'a_zh.md'), ('a_zh.md', 'a.md')):
+                self.write('a.md', (prefix if misplaced == 'a.md' else '') + header + '# Guide\n')
+                self.write('a_zh.md', (prefix if misplaced == 'a_zh.md' else '') + header + '# 指南\n')
+                for checked in ('a.md', 'a_zh.md'):
+                    with self.subTest(prefix=prefix, misplaced=misplaced, checked=checked):
+                        result = docs.check_file(self.root, self.root / checked)
+                        self.assertIn(
+                            f'{misplaced}: missing reciprocal language link to {other} on first non-empty line',
+                            result,
+                        )
+
+    def test_pair_with_leading_blank_lines(self):
+        header = '[English](a.md) | [简体中文](a_zh.md)\n\n'
+        for blanks in ('\n', '\n \t\n' * 3):
+            self.write('a.md', blanks + header + '# Guide\n')
+            self.write('a_zh.md', blanks + header + '# 指南\n')
+            for checked in ('a.md', 'a_zh.md'):
+                with self.subTest(blanks=blanks, checked=checked):
+                    self.assertEqual(docs.check_file(self.root, self.root / checked), [])
+
+    def test_selector_after_blanks_does_not_hide_chinese_prose(self):
+        header = '\n' * 6 + '[English](a.md) | [简体中文](a_zh.md)\n\n'
+        path = self.write('a.md', header + '未翻译\n')
+        self.write('a_zh.md', header + '# 指南\n')
+        self.assertEqual(docs.check_file(self.root, path), [
+            'a.md:9: Chinese prose in English default (translate or justify this line)',
+        ])
+
     def test_missing_english(self):
         path = self.write('a_zh.md', '# 指南\n')
         self.assertTrue(any('missing English' in item for item in docs.check_file(self.root, path)))
