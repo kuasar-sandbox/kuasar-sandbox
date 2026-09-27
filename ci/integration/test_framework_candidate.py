@@ -16,7 +16,7 @@ class FrameworkCandidateTests(unittest.TestCase):
     def setUp(self):
         self.base, self.head, self.merge = ('1' * 40, '2' * 40, '3' * 40)
         self.repo = candidate.PLATFORM
-        self.ref = f'refs/heads/ci/framework/pr-188/{self.head}'
+        self.ref = f'refs/heads/ci/framework/pr-188/{self.merge}'
         self.pr = {'number': 188, 'state': 'open', 'draft': False, 'body': '',
                    'head': {'sha': self.head, 'repo': {'full_name': self.repo}},
                    'base': {'sha': self.base, 'ref': 'main', 'repo': {'full_name': self.repo}},
@@ -45,8 +45,8 @@ class FrameworkCandidateTests(unittest.TestCase):
     def test_unrelated_or_malformed_push_refs_are_rejected(self):
         for changes in [{'repository': 'outside/fork'}, {'ref': 'refs/heads/main'},
                         {'ref': self.ref + '/extra'}, {'ref': self.ref.replace('pr-188', 'pr-0188')},
-                        {'ref': self.ref.replace(self.head, self.head[:7])}, {'sha': self.merge[:7]},
-                        {'ref': self.ref.replace(self.head, '4' * 40)}]:
+                        {'ref': self.ref.replace(self.merge, self.merge[:7])}, {'sha': self.merge[:7]},
+                        {'ref': self.ref.replace(self.merge, self.head)}]:
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 self.resolve(**changes)
 
@@ -78,6 +78,21 @@ class FrameworkCandidateTests(unittest.TestCase):
             else: self.data[f'repos/{self.repo}/git/ref/{fault}']['object']['sha'] = '4' * 40
             with self.subTest(fault=fault), self.assertRaises(ValueError):
                 self.resolve()
+
+    def test_regenerated_merge_uses_a_new_ref_without_changing_head(self):
+        previous = self.merge
+        self.merge = '4' * 40
+        self.pr['merge_commit_sha'] = self.merge
+        self.commit['sha'] = self.merge
+        self.data[f'repos/{self.repo}/git/commits/{self.merge}'] = self.commit
+        self.data[f'repos/{self.repo}/git/ref/pull/188/merge']['object']['sha'] = self.merge
+        with self.assertRaises(ValueError):
+            self.resolve(sha=previous)
+        with self.assertRaises(ValueError):
+            self.resolve()
+        record = self.resolve(ref=self.ref.replace(previous, self.merge))
+        self.assertEqual(record['head_sha'], self.head)
+        self.assertEqual(record['candidate_sha'], self.merge)
 
     def test_entry_outputs_and_final_input_revalidation(self):
         with tempfile.TemporaryDirectory() as directory:

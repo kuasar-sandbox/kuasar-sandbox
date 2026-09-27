@@ -18,13 +18,15 @@ def resolve(repository, ref, sha, fetch):
     require(repository == PLATFORM, 'framework candidate requires the platform repository')
     match = re.fullmatch(r'refs/heads/ci/framework/pr-([1-9][0-9]*)/([0-9a-f]{40})', ref)
     require(match and re.fullmatch(r'[0-9a-f]{40}', sha), 'invalid framework candidate ref or SHA')
-    number, head = match.groups()
+    number, candidate = match.groups()
+    require(candidate == sha, 'framework candidate ref must identify the pushed merge commit')
     pr = fetch(f'repos/{repository}/pulls/{number}')
     require(pr['number'] == int(number) and pr['state'] == 'open' and pr['draft'] is False,
             'framework candidate requires an open Ready PR')
     require(pr['head']['repo']['full_name'] == repository and pr['base']['repo']['full_name'] == repository,
             'framework candidate must be a same-repository PR')
-    require(pr['head']['sha'] == head and pr['merge_commit_sha'] == sha, 'framework candidate is stale')
+    head = pr['head']['sha']
+    require(re.fullmatch(r'[0-9a-f]{40}', head) and pr['merge_commit_sha'] == sha, 'framework candidate is stale')
     require(re.search(r'<!--\s*kuasar-(?:ci|bms)-companions\b', pr.get('body') or '') is None,
             'framework candidate cannot omit companions')
     base, base_ref = pr['base']['sha'], pr['base']['ref']

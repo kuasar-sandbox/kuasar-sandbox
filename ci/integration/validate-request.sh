@@ -26,8 +26,8 @@ case "$INTEGRATION_MODE" in
           && [ "$TRUSTED_WORKFLOW_SHA" = "$CANDIDATE_SHA" ] \
           && [ "$GITHUB_SHA" = "$CANDIDATE_SHA" ] \
           && [ "$COMPANION_CANDIDATES" = '[]' ] \
-          && [ "$GITHUB_REF" = "refs/heads/ci/framework/pr-$CANDIDATE_PR/$CANDIDATE_HEAD_SHA" ] \
-          || { echo "framework push must name the exact platform PR and head" >&2; exit 1; }
+          && [ "$GITHUB_REF" = "refs/heads/ci/framework/pr-$CANDIDATE_PR/$CANDIDATE_SHA" ] \
+          || { echo "framework push must name the exact platform PR and merge commit" >&2; exit 1; }
         ;;
       *) echo "source Integration E2E requires an admitted PR or framework candidate push" >&2; exit 1 ;;
     esac

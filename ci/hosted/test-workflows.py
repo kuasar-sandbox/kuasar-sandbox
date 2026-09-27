@@ -103,7 +103,8 @@ def check_request_rejection():
                                      'ref': ref, 'after': sha, 'deleted': False}))
         env.update(GITHUB_EVENT_NAME='push', GITHUB_REF=ref)
         for overrides, allowed in (({}, True), ({'GITHUB_REF': 'refs/heads/main'}, False),
-                                   ({'CANDIDATE_PR': '2'}, False), ({'CANDIDATE_HEAD_SHA': '2' * 40}, False),
+                                   ({'CANDIDATE_PR': '2'}, False), ({'CANDIDATE_HEAD_SHA': '2' * 7}, False),
+                                   ({'CANDIDATE_HEAD_SHA': '2' * 40}, True),
                                    ({'CANDIDATE_SHA': '2' * 40}, False), ({'GITHUB_SHA': '2' * 40}, False),
                                    ({'TRUSTED_WORKFLOW_SHA': '2' * 40}, False),
                                    ({'CANDIDATE_REPOSITORY': 'kuasar-sandbox/connector'}, False),
