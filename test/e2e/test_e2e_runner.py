@@ -109,6 +109,33 @@ class SelectionTests(unittest.TestCase):
             self.assertFalse((work / "run").exists())
             self.assertFalse((work / "out").exists())
 
+    def test_sandbox_default_disk_state_is_private_per_case(self):
+        with tempfile.TemporaryDirectory(prefix='e2e-private-disks-') as directory:
+            root = Path(directory)
+            work = root / 'prepared'
+            (work / 'bin').mkdir(parents=True)
+            cases = work / 'test/e2e/cases'
+            cases.mkdir(parents=True)
+            names = ['basic.one.sh', 'storage.one.sh']
+            for name in names:
+                (cases / name).write_text(
+                    'set -eu\n'
+                    'case "$SANDBOX_BASE_ROOT" in "$WORK/"*) ;; *) exit 37 ;; esac\n'
+                    '[ ! -e "$SANDBOX_BASE_ROOT/marker" ]\n'
+                    'mkdir -p "$SANDBOX_BASE_ROOT"\n'
+                    'printf private > "$SANDBOX_BASE_ROOT/marker"\n'
+                    'printf "%s" "$SANDBOX_BASE_ROOT" > "$OUT/base-root"\n')
+            runner.workspace.seal(work, {'arch': platform.machine(), 'prepared_cases': names})
+            args = self.args(all=True, workdir=str(work), arch=platform.machine(),
+                             run_root=str(root / 'state'), out_root=str(root / 'output'), result=None)
+            host_root = root / 'host-default'
+            with patch.dict(os.environ, {'SANDBOX_BASE_ROOT': str(host_root)}):
+                self.assertEqual(runner.cmd_run(args), 0)
+            destinations = [(root / 'output' / name / 'base-root').read_text() for name in names]
+            self.assertEqual(len(set(destinations)), 2)
+            self.assertTrue(all(Path(path).is_relative_to(root / 'state') for path in destinations))
+            self.assertFalse(host_root.exists())
+
 
 class PreparedRunnerTests(unittest.TestCase):
     def setUp(self):

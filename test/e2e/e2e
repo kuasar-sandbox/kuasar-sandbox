@@ -193,7 +193,11 @@ def cmd_run(args: argparse.Namespace) -> int:
             case_out = out_root / case_id
             case_work.mkdir(parents=True)
             case_out.mkdir(parents=True, exist_ok=True)
-            env = env_base | workspace.case_environment(work, provenance, case_id) | {"WORK": str(case_work), "OUT": str(case_out)}
+            env = env_base | workspace.case_environment(work, provenance, case_id) | {
+                "WORK": str(case_work), "OUT": str(case_out),
+                # Sandbox auto-created disk diffs are mutable case state too.
+                "SANDBOX_BASE_ROOT": str(case_work / "sandbox-base"),
+            }
             env.update(case_diagnostics(work, case_id, case_out))
             print(f"==> {case_id}", flush=True)
             started = time.monotonic()
