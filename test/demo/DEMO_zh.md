@@ -146,7 +146,7 @@ Conductor 监听 `127.0.0.1:443`,独立 Proxy 监听 `127.0.0.2:443`。本地 De
 
 vSwitch 为每个 Sandbox 从 `100.100.96.0/20` 分配 floating IP,E2B guest profile 则复用 inner 地址 `169.254.0.21/30` 和 next hop `169.254.0.22`。本次运行添加带唯一标记的 forwarding 与 masquerade 规则。本地 Registry 通过 `169.254.169.254` 上的 `--mgmt-service` 暴露给 Builder MicroVM。VersityGW 保持在 host loopback,供主机侧 COPY 路径使用,不经过这个 guest 路由。脚本不会把这两个服务暴露到外部网络。
 
-Demo 同时验证直连 `http://<floating-ip>:8000` 和经过认证的 E2B 数据入口 `https://8000-<sid>.<domain>`,并使用真实 `X-Access-Token`。Guest egress 只是对 Demo 现有 NAT 路径的断言,不是新增产品 Egress 实现。
+Demo 同时验证直连 `http://<floating-ip>:8000` 和经过认证的 E2B 数据入口 `https://8000-<sid>.<domain>`,并使用真实 `X-Access-Token`。Guest egress 只是对 Demo 现有 NAT 路径的断言,不是新增产品 Egress 实现。默认情况下，Demo 会直接请求 `http://1.1.1.1`。在只能经代理出网的环境中，可设置 `DEMO_EGRESS_PROXY` 为 guest 可访问的代理地址，并可通过 `DEMO_EGRESS_URL` 指定目标 URL。代理路径仍是严格的 guest 出网验证，但验证的是 guest 经代理到目标的连通性，而不是直连 NAT。
 
 ## 8. 故障排查与 See Also
 

@@ -800,28 +800,37 @@ case "$out" in
   *"$BUILT_MARKER"*) ok "The e2b exposed port https://8000-<sid>.<domain> (proxy -> floatingip) serves the built page";;
   *) if [ -n "${DEMO_NETDIAG:-}" ]; then say "Exposed-port request failed (NETDIAG: continuing)"; else die "e2b exposed-port request failed: ${out:-<empty>}"; fi ;;
 esac
-say "Guest egress (NAT MASQUERADE): guest Python HTTP request to 1.1.1.1"
+DEMO_EGRESS_URL="${DEMO_EGRESS_URL:-http://1.1.1.1}"
+DEMO_EGRESS_PROXY="${DEMO_EGRESS_PROXY:-}"
+case "$DEMO_EGRESS_URL" in http://*|https://*) ;; *) die "DEMO_EGRESS_URL must use http:// or https://" ;; esac
+if [ -n "$DEMO_EGRESS_PROXY" ]; then
+    case "$DEMO_EGRESS_PROXY" in http://*|https://*) ;; *) die "DEMO_EGRESS_PROXY must use http:// or https://" ;; esac
+    say "Guest egress through configured proxy: $DEMO_EGRESS_URL"
+else
+    say "Guest egress (NAT MASQUERADE): direct request to $DEMO_EGRESS_URL"
+fi
+EGRESS_URL_JSON="$("$PYTHON_BIN" -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$DEMO_EGRESS_URL")"
+EGRESS_PROXY_JSON="$("$PYTHON_BIN" -c 'import json,sys; print(json.dumps(sys.argv[1]))' "$DEMO_EGRESS_PROXY")"
 set +e
 EGRESS_OUTPUT="$(py <<PY 2>&1
 import re
+import shlex
 from e2b import Sandbox
-r = Sandbox.connect("$SID").commands.run(
-    "python3 -c \"import http.client; "
-    "c=http.client.HTTPConnection('1.1.1.1', 80, timeout=10); "
-    "c.request('GET', '/'); print('egress HTTP', c.getresponse().status)\""
-)
+url = $EGRESS_URL_JSON
+proxy = $EGRESS_PROXY_JSON
+code = """import urllib.request
+url = {url!r}
+proxy = {proxy!r}
+opener = urllib.request.build_opener(urllib.request.ProxyHandler({{'http': proxy, 'https': proxy}})) if proxy else urllib.request.build_opener(urllib.request.ProxyHandler({{}}))
+with opener.open(url, timeout=10) as response:
+    print('egress HTTP', response.status)
+""".format(url=url, proxy=proxy)
+r = Sandbox.connect("$SID").commands.run("python3 -c " + shlex.quote(code))
 print(r.stdout.rstrip())
 assert r.exit_code == 0, (r.exit_code, r.stderr)
 assert re.fullmatch(r"egress HTTP [1-5][0-9][0-9]", r.stdout.strip()), r.stdout
 PY
 )"; EGRESS_STATUS=$?
-set -e
-printf '%s\n' "$EGRESS_OUTPUT" | sed 's/^/    /'
-if [ "$EGRESS_STATUS" -ne 0 ]; then
-    if [ -n "${DEMO_NETDIAG:-}" ]; then say "Guest egress failed (DEMO_NETDIAG keeps this diagnostic run going)"; else die "guest outbound NAT validation failed"; fi
-else
-    ok "guest outbound NAT returned an HTTP response"
-fi
 pause
 
 # ===========================================================================

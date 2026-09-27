@@ -6,6 +6,8 @@ The platform consists of independently deployed processes communicating through 
 
 Each component's design document owns its CLI, configuration schema and internal behavior. This guide explains where processes run, how they find one another and their ordering dependencies.
 
+For a supported single-host Release validation workflow, see [Release quick-start deployment](../release/README-deployment.md).
+
 ## 1. Role overview
 
 Select roles according to the data path and control-plane topology. Local files, shared files and Manifest/store/cache are separate choices; Manifest and caching are not prerequisites for either standalone or cluster deployment.
