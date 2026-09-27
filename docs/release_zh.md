@@ -94,7 +94,8 @@ test_revisions:
 
 Daily 写入可信计划已经解析的组件源码精确 HEAD，即使产品 unit 被复用。维护选择缺少组件源码分支时，必须已有明确提交的测试 pin。
 准备新 Stable 选择时应提交明确的 pin；
-平台测试使用聚合源码 SHA。platform 包从测试 pin 取得各 owner 的完整 E2E 树，组件文档和产品仍使用所选 unit 源码。
+平台测试使用聚合源码 SHA。platform 包从各精确 test pin 组装扁平用例和按 owner 命名的库，并携带双架构预构建 helper；组件文档和产品仍使用所选 unit 源码。
+更早的 helper build 还按提交的版本/摘要 lock 获取 Python 3.12 完整 Demo wheel 依赖闭包。打包要求两种架构的本地 wheel 和包名/版本/摘要 manifest；公开 prepare 仅从这些 wheel 离线安装，不使用 index。
 helper 编译、prepared 输入、结果和现有发布验证 binding 保留相同 pin，后续 baseline 对照提交清单核验。
 暂存的 `test-revisions.json` 仅供内部验证，公开资产名称和产品字节不变。新打包缺失或错配 pin 时失败；
 历史清单和 Release 继续按原契约读取，不补写或修改。
@@ -334,15 +335,17 @@ runtime、vmlinux 保留独立包名。新 aggregate 包含架构无关的 platf
 
 不发布项目生成的 release metadata JSON,也不重复上传 GitHub 自动提供的源码归档。
 版本选择 YAML 只在仓库维护,既不是 Release 资产,也不进入 platform 包。
-组件 archive 不携带 `docs/` 或 `test/e2e/`;aggregate prepare 从所选组件源码 Tag 收集,
-统一写入 platform archive(§8.1)。
+组件 archive 不携带 `docs/` 或 `test/e2e/`；aggregate assembly 从所选产品源码 tag 收集文档，
+从独立 test pin 收集 E2E 输入，统一写入 platform archive（§8.1）。
 
 组件原生/ARM 交叉构建在两个独立 x86 job 执行，复用相同精确源码与依赖版本，校验后原样组装双架构包。
 依赖 Release 必须公开、完整并解析为轻量 tag 的精确 commit，build checkout 不保留凭据。
-聚合 prepare 下载六个所选 Release，校验 API size/digest、SHA-256、路径、归属与跨包覆盖，并生成 platform 包。
-暂存字节通过共享的每架构 helper build → prepare → E2E 原语：x86 在真实 KVM runner 跑六个 owner；
-ARM 原生运行预先声明的 accelerator/guest-runtime 非 KVM 子集。源码检查是独立必需 job。
-publish 必须收齐两个成功结果，在 `kuasar-integration-validation` 绑定 profile、源码身份和资产摘要，原样上传归档。
+聚合 prepare 下载六个所选 Release，校验 API size/digest、SHA-256、路径、归属与跨包覆盖，
+随后在无凭据源码步骤中构建固定测试 helper，并生成确定性的 platform 包。
+暂存字节通过共享的公开 prepare → 聚焦用例 → 公开 run 合同，不重建产品或 helper。
+x86 在真实 KVM runner 运行九个 suite 中的所选用例；ARM 原生运行预先声明的 accelerator/guest-runtime 非 KVM 子集。
+干净运行时中的 prepare 和所选完整 suite 执行保留 Go、Rust、组件源码树缺失的验证证据。源码检查是独立必需 job。
+publish 必须收齐两个架构的成功结果，在 `kuasar-integration-validation` 绑定用例选择、源码身份和资产摘要，原样上传归档。
 
 Preview、维护分支 Stable 和主线 Stable 使用相同资产与发行资产验证门禁;差别只在发行状态与
 Latest 策略。

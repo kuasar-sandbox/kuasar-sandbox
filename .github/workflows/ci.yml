@@ -1,16 +1,52 @@
 name: CI
 
 on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   pull_request_target:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
 
 permissions:
   contents: read
   pull-requests: read
-  statuses: write
+
+concurrency:
+  group: platform-framework-${{ github.event_name }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   ci:
+    if: >-
+      github.event.repository.visibility == 'public' &&
+      github.event.repository.full_name == github.repository &&
+      github.event_name == 'pull_request' &&
+      github.repository == 'kuasar-sandbox/kuasar-sandbox' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false
+    # Local reusable calls resolve at this exact PR merge commit. Framework
+    # validation gets read-only API access and no control/release secrets.
+    uses: ./.github/workflows/integration-tests.yml
+    with:
+      mode: source
+      candidate_repository: ${{ github.repository }}
+      pull_request_number: ${{ format('{0}', github.event.pull_request.number) }}
+      candidate_sha: ${{ github.sha }}
+      base_sha: ${{ github.event.pull_request.base.sha }}
+      base_ref: ${{ github.event.pull_request.base.ref }}
+      head_sha: ${{ github.event.pull_request.head.sha }}
+
+  trusted-fork:
+    name: ci
+    if: >-
+      github.event.repository.visibility == 'public' &&
+      github.event.repository.full_name == github.repository &&
+      github.event_name == 'pull_request_target' &&
+      github.event.pull_request.head.repo.full_name != github.repository
+    # Preserve existing trusted admission and active-membership checks for forks.
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
     uses: kuasar-sandbox/kuasar-sandbox/.github/workflows/ci-entry.yml@main
     secrets:
       KUASAR_CI_APP_PRIVATE_KEY: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}

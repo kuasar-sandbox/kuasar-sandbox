@@ -24,19 +24,17 @@ validate_archive() {
   ' "$listing" || release_fail "platform archive contains an unsafe path"
   grep -Fx './docs/kuasar-sandbox.md' "$listing" >/dev/null \
     || release_fail "platform archive is missing docs/kuasar-sandbox.md"
-  grep -Fx './test/e2e/run_all.sh' "$listing" >/dev/null \
-    || release_fail "platform archive is missing test/e2e/run_all.sh"
   grep -Fx './test/e2e/e2e' "$listing" >/dev/null \
     || release_fail "platform archive is missing test/e2e/e2e"
   grep -Fx './test/e2e/lib/common.sh' "$listing" >/dev/null \
     || release_fail "platform archive is missing test/e2e/lib/common.sh"
-  grep -Fx './test/e2e/generated-compatibility-runners' "$listing" >/dev/null \
-    || release_fail "platform archive is missing generated compatibility runner registry"
+  grep -Fx './test/e2e/lib/workspace.py' "$listing" >/dev/null \
+    || release_fail "platform archive is missing prepared workspace helpers"
+  if grep -E '^\./test/e2e/([^/]+/)?run_all\.sh$|generated-compatibility-runners' "$listing" >/dev/null; then
+    release_fail "platform archive contains a superseded E2E runner"
+  fi
+  python3 -B "$ROOT/release/validate-e2e-package.py" "$archive"
   local owner
-  for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
-    grep -Fx "./test/e2e/$owner/run_all.sh" "$listing" >/dev/null \
-      || release_fail "platform archive is missing test/e2e/$owner/run_all.sh"
-  done
   for owner in accelerator connector guest-runtime sandboxer orchestrator; do
     grep -Fx "./docs/$owner.md" "$listing" >/dev/null \
       || release_fail "platform archive is missing docs/$owner.md"
@@ -82,6 +80,7 @@ package_archive() {
   resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$work/docs-refs.tsv"
   printf 'platform\t%s\n' "$version" >> "$work/docs-refs.tsv"
   E2E_SOURCE_ROOT="$test_sources" DOCS_SOURCE_REFS="$work/docs-refs.tsv" DOCS_VMLINUX_SOURCE="$sources/vmlinux" \
+    E2E_HELPER_ROOT="${E2E_HELPER_ROOT:?provide the prebuilt E2E helper packages}" \
     "$ROOT/test/e2e/assemble.sh" "$stage" "$PLATFORM_SOURCE_ROOT" \
     "$sources/accelerator" "$sources/connector" "$sources/runtime" \
     "$sources/sandboxer" "$sources/orchestrator"

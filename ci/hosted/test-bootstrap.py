@@ -22,6 +22,7 @@ class BootstrapTests(unittest.TestCase):
         required = {
             "control": {"curl", "git", "jq", "python3", "python3-yaml", "util-linux"},
             "release-control": {"curl", "git", "jq"},
+            "helper-build": {"curl", "git", "jq", "build-essential"},
             "kernel": {"build-essential", "bc", "bison", "flex", "libelf-dev", "libssl-dev", "libncurses-dev", "pkg-config", "time"},
             "runtime": {"autoconf", "automake", "libtool", "patch", "uuid-dev", "libgcrypt20-dev", "libgpg-error-dev", "libssl-dev", "liblz4-dev", "libzstd-dev", "zlib1g-dev", "libfuse3-dev"},
             "runtime-publish": {"autoconf", "automake", "libtool", "patch", "uuid-dev", "libgcrypt20-dev", "libgpg-error-dev", "libssl-dev"},
@@ -61,6 +62,12 @@ class BootstrapTests(unittest.TestCase):
                 native = packages(profile)
                 self.assertLessEqual(crypto, native)
                 self.assertFalse(target & native)
+
+    def test_prepare_has_wheel_installer_without_enabling_go(self):
+        result = shell('select_profile artifact-prepare; printf "%s\\n" "${packages[@]}"; echo "go=$with_go"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("python3-pip", result.stdout.splitlines())
+        self.assertIn("go=false", result.stdout.splitlines())
 
     def test_full_suite_utilities_and_exact_assets_build_scope(self):
         for profile in ("source", "exact-assets"):
@@ -218,7 +225,8 @@ configure_cross_apt
         self.assertNotIn("configure_exact_network", source)
         self.assertNotIn("linux-tools-common", source)
         executor = (BOOTSTRAP.resolve().parents[2] / "ci/integration/run-artifact-tests.py").read_text()
-        self.assertIn('"CONNECTOR_E2E"', executor)
+        self.assertIn('test/e2e/e2e', executor)
+        self.assertNotIn('requires_privilege', executor)
 
     def test_required_tools_fail_closed(self):
         self.assertNotEqual(shell("need kuasar_nonexistent_required_tool").returncode, 0)

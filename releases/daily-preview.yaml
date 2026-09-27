@@ -13,4 +13,4 @@ test_revisions:
   connector: 89af68b40f9e0b9b4929d3979a3e4cf022637ca2
   guest-runtime: 812b251f23642baa2f9b294546222e1935824965
   sandboxer: 424dac2f3257690051a8cbab5f0fce6b152ad198
-  orchestrator: 2b45c488e64fb15aaae5429f26c40779a8915c65
+  orchestrator: 1d218e82171be28982d9c46dc83d6ea5706722dd

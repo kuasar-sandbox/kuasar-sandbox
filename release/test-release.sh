@@ -39,6 +39,12 @@ FORMAL_ROOT="$TMP/formal-root"
 mkdir -p "$FORMAL_ROOT"
 tar -C "$ROOT" --exclude='./.git' -cf - . | tar -x -C "$FORMAL_ROOT"
 write_preview_base_fixture "$FORMAL_ROOT/releases/release.yaml"
+python3 - "$ROOT/ci/integration" "$FORMAL_ROOT/test/demo" "$TMP/demo-wheels" <<'PY'
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from test_fixtures import make_demo_wheelhouse
+make_demo_wheelhouse(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]))
+PY
 git -C "$FORMAL_ROOT" init -q
 git -C "$FORMAL_ROOT" config user.name release-test
 git -C "$FORMAL_ROOT" config user.email release-test@example.invalid
@@ -74,15 +80,15 @@ while IFS=$'\t' read -r unit tag; do
   printf "Fixture updates for \`%s\`.\n" "$unit" > "$TMP/fetched/updates/$unit.md"
 
   source_root="$TMP/fetched/sources/$unit"
-  mkdir -p "$source_root/docs" "$source_root/test/e2e"
+  mkdir -p "$source_root/docs" "$source_root/test/e2e/cases"
   printf '# %s source fixture\n' "$unit" > "$source_root/README.md"
   printf '%s docs\n' "$unit" > "$source_root/docs/$unit-detail.md"
-  cat > "$source_root/test/e2e/run_all.sh" <<EOF
+  cat > "$source_root/test/e2e/cases/basic.$unit-fixture.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 echo "$unit fixture E2E"
 EOF
-  chmod +x "$source_root/test/e2e/run_all.sh"
+  chmod +x "$source_root/test/e2e/cases/basic.$unit-fixture.sh"
   if [ "$unit" != vmlinux ]; then
     owner="$unit"
     [ "$owner" != runtime ] || owner=guest-runtime
@@ -90,11 +96,10 @@ EOF
   fi
 done < "$TMP/selection.tsv"
 printf '#!/usr/bin/env bash\necho "pinned orchestrator E2E"\n' \
-  > "$TMP/fetched/test-sources/orchestrator/test/e2e/run_all.sh"
-# Model the current mixed #172 migration: accelerator is case-only, while the
-# other fixtures retain the legacy owner entry point.
+  > "$TMP/fetched/test-sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"
+# Every selected test source is case-only. Owner boundaries do not affect
+# public suite selection, and credentialed OBS remains an explicit exclusion.
 accelerator_suite="$TMP/fetched/test-sources/accelerator/test/e2e"
-rm "$accelerator_suite/run_all.sh"
 mkdir -p "$accelerator_suite/cases"
 cat > "$accelerator_suite/cases/storage.fixture.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -102,7 +107,7 @@ set -euo pipefail
 echo 'accelerator case-only fixture'
 EOF
 chmod 0644 "$accelerator_suite/cases/storage.fixture.sh"
-# The ordinary profile excludes this opt-in credentialed case.
+# Normal CI selection excludes this opt-in credentialed case.
 printf '#!/usr/bin/env bash\necho "unexpected credentialed OBS selection" >&2\nexit 91\n' \
   > "$accelerator_suite/cases/storage.obs.sh"
 connector_suite="$TMP/fetched/test-sources/connector/test/e2e"
@@ -110,6 +115,28 @@ mkdir -p "$connector_suite/cases"
 printf '#!/usr/bin/env bash\necho connector-case\n' \
   > "$connector_suite/cases/storage.connector-fixture.sh"
 chmod 0644 "$connector_suite/cases/storage.connector-fixture.sh"
+python3 - "$TMP/fetched/e2e-helpers" "$TMP/fetched/test-revisions.json" <<'PY'
+import hashlib, json, pathlib, struct, sys
+root = pathlib.Path(sys.argv[1])
+pins = json.loads(pathlib.Path(sys.argv[2]).read_text())
+for arch, machine in (('x86_64', 62), ('aarch64', 183)):
+    directory = root / arch
+    directory.mkdir(parents=True)
+    names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'usage-probe']
+    if arch == 'x86_64': names.append('cgroup-fork-probe')
+    records = {}
+    for name in names:
+        header = bytearray(64)
+        header[:7] = b'\x7fELF\x02\x01\x01'
+        struct.pack_into('<H', header, 18, machine)
+        data = bytes(header) + name.encode()
+        (directory / name).write_bytes(data)
+        (directory / name).chmod(0o755)
+        owner = 'orchestrator' if name in {'custom-proxy', 'telemetry-grpc-probe'} else 'sandboxer'
+        records[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'source_sha': '1' * 40 if name in {'zot', 'versitygw'} else pins[owner]}
+    (directory / 'helpers.json').write_text(json.dumps({'arch': arch, 'framework_sha': '1' * 40, 'test_revisions': pins, 'helpers': records}))
+PY
+cp -a "$TMP/demo-wheels" "$TMP/fetched/e2e-wheels"
 printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux.md"
 printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
 printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
@@ -137,31 +164,17 @@ if SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
 fi
 grep -Fq "$foreign_unit archive contains another release unit's material namespace" \
   "$TMP/foreign-material.out" \
-  || release_fail "foreign material fixture failed outside the namespace check"
+  || { cat "$TMP/foreign-material.out" >&2; release_fail "foreign material fixture failed outside the namespace check"; }
 
 SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
-mkdir -p "$TMP/generated-runner"
-tar -xzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
-  -C "$TMP/generated-runner" ./test/e2e/accelerator/run_all.sh
-generated_accelerator_runner="$TMP/generated-runner/test/e2e/accelerator/run_all.sh"
-[ -x "$generated_accelerator_runner" ] \
-  || release_fail "case-only owner compatibility runner is not executable"
-grep -Fq -- '--include storage.fixture.sh' "$generated_accelerator_runner" \
-  || release_fail "case-only owner runner omits its exact case"
-if grep -Fq -- '--include storage.connector-fixture.sh' "$generated_accelerator_runner"; then
-  release_fail "case-only owner runner can select another owner's case"
+if tar -tzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" | grep -E '/run_all\.sh$|generated-compatibility' >/dev/null; then
+  release_fail "platform package retained a superseded owner runner"
 fi
-tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
-  ./test/e2e/generated-compatibility-runners > "$TMP/generated-runners"
-printf '%s\n' \
-  'test/e2e/accelerator/run_all.sh' > "$TMP/expected-generated-runners"
-cmp "$TMP/expected-generated-runners" "$TMP/generated-runners" \
-  || release_fail "generated compatibility runner registry differs from case-only owners"
-tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" ./test/e2e/orchestrator/run_all.sh \
+tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" ./test/e2e/cases/basic.orchestrator-fixture.sh \
   > "$TMP/packaged-orchestrator-test"
-cmp "$TMP/packaged-orchestrator-test" "$TMP/fetched/test-sources/orchestrator/test/e2e/run_all.sh"
-if cmp -s "$TMP/packaged-orchestrator-test" "$TMP/fetched/sources/orchestrator/test/e2e/run_all.sh"; then
+cmp "$TMP/packaged-orchestrator-test" "$TMP/fetched/test-sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"
+if cmp -s "$TMP/packaged-orchestrator-test" "$TMP/fetched/sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"; then
   release_fail "platform package used the product tag's test instead of the independent pin"
 fi
 
@@ -184,11 +197,10 @@ assert_assembly_rejected() {
 }
 
 remove_owner_inputs() {
-  rm -f "$1/connector/test/e2e/run_all.sh"
   rm -rf "$1/connector/test/e2e/cases"
 }
 assert_assembly_rejected missing-owner \
-  'connector source is missing valid test/e2e/cases/*.sh and executable test/e2e/run_all.sh' \
+  'missing case directory:' \
   remove_owner_inputs
 
 add_duplicate_case() {
@@ -197,19 +209,19 @@ add_duplicate_case() {
     "$1/connector/test/e2e/cases/storage.fixture.sh"
 }
 assert_assembly_rejected duplicate-case \
-  'duplicate E2E case id from connector: storage.fixture.sh' add_duplicate_case
+  'duplicate E2E case ID: storage.fixture.sh (connector)' add_duplicate_case
 
-leave_only_excluded_case() {
-  rm "$1/accelerator/test/e2e/cases/storage.fixture.sh"
+add_unsupported_suite() {
+  printf 'exit 0\n' > "$1/accelerator/test/e2e/cases/perf.fixture.sh"
 }
-assert_assembly_rejected excluded-only \
-  'accelerator source has no default E2E cases' leave_only_excluded_case
+assert_assembly_rejected unsupported-suite \
+  'unsupported suite in case file: perf.fixture.sh' add_unsupported_suite
 
 add_suite_symlink() {
-  ln -s run_all.sh "$1/sandboxer/test/e2e/linked-runner"
+  ln -s cases/basic.sandboxer-fixture.sh "$1/sandboxer/test/e2e/linked-case"
 }
 assert_assembly_rejected suite-symlink \
-  'sandboxer e2e suite contains a symbolic link' add_suite_symlink
+  'sandboxer E2E source is missing or contains symbolic links' add_suite_symlink
 while IFS=$'\t' read -r unit tag; do
   archive="$(component_archive "$unit" "$tag")"
   cmp "$TMP/fetched/components/$unit/$archive" "$TMP/bundle/assets/$archive"
@@ -289,24 +301,19 @@ fi
 
 "$FORMAL_ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/bundle" "$TMP/install"
 [ -f "$TMP/install/docs/kuasar-sandbox.md" ] || release_fail "platform docs were not extracted"
-[ -x "$TMP/install/test/e2e/run_all.sh" ] || release_fail "platform E2E runner was not extracted"
-bash -n "$TMP/install/test/e2e/accelerator/run_all.sh"
-if ! BIN="$TMP/install/bin" bash "$TMP/install/test/e2e/accelerator/run_all.sh" \
-    > "$TMP/generated-runner.out" 2>&1; then
-  cat "$TMP/generated-runner.out" >&2
-  release_fail "generated owner runner failed its ordinary profile"
-fi
-grep -Fq 'PASS storage.fixture.sh' "$TMP/generated-runner.out" \
-  || release_fail "generated owner runner did not execute its ordinary case"
-if grep -Eq 'connector-case|storage.obs.sh' "$TMP/generated-runner.out"; then
-  release_fail "generated owner runner selected a foreign or excluded case"
+[ -x "$TMP/install/test/e2e/e2e" ] || release_fail "public E2E runner was not extracted"
+python3 -B "$TMP/install/test/e2e/e2e" prepare --release-dir "$TMP/install" \
+  --workdir "$TMP/prepared" --suite storage --exclude storage.obs.sh
+python3 -B "$TMP/prepared/test/e2e/e2e" run --workdir "$TMP/prepared" \
+  --suite storage --exclude storage.obs.sh > "$TMP/cases.out"
+for case in storage.fixture.sh storage.connector-fixture.sh; do
+  grep -Fq "PASS $case" "$TMP/cases.out" || release_fail "suite omitted $case"
+done
+if grep -Fq 'PASS storage.obs.sh' "$TMP/cases.out"; then
+  release_fail "explicit OBS exclusion was ignored"
 fi
 [ -f "$TMP/install/test/e2e/cases/storage.obs.sh" ] \
   || release_fail "opt-in credentialed case was removed from the package"
-for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
-  [ -x "$TMP/install/test/e2e/$owner/run_all.sh" ] \
-    || release_fail "$owner E2E runner was not aggregated"
-done
 for component in accelerator connector guest-runtime sandboxer orchestrator; do
   [ -f "$TMP/install/docs/$component.md" ] \
     || release_fail "$component README was not aggregated"
@@ -315,24 +322,6 @@ grep -Fqx 'selected vmlinux docs' "$TMP/install/docs/vmlinux.md" \
   || release_fail "vmlinux docs did not come from the selected vmlinux source"
 grep -Fqx 'selected Chinese vmlinux docs' "$TMP/install/docs/vmlinux_zh.md" \
   || release_fail "Chinese vmlinux docs did not come from the selected vmlinux source"
-
-runner_root="$TMP/runner-root"
-mkdir -p "$runner_root/bin" "$runner_root/test/e2e"
-install -m 0755 "$TMP/install/test/e2e/run_all.sh" "$runner_root/test/e2e/run_all.sh"
-for owner in accelerator connector guest-runtime sandboxer orchestrator platform; do
-  mkdir -p "$runner_root/test/e2e/$owner"
-  cat > "$runner_root/test/e2e/$owner/run_all.sh" <<EOF
-#!/usr/bin/env bash
-set -euo pipefail
-[ "\$BIN" = "$runner_root/bin" ]
-echo "$owner owner runner"
-EOF
-  chmod +x "$runner_root/test/e2e/$owner/run_all.sh"
-done
-BIN="$runner_root/bin" ZOT_BIN=/bin/true VGW_BIN=/bin/true \
-  bash "$runner_root/test/e2e/run_all.sh" > "$TMP/runner.out"
-grep -Fq '==> full release e2e: OK' "$TMP/runner.out" \
-  || release_fail "platform E2E runner did not complete its owner-runner check"
 
 for unit in "${RELEASE_UNITS[@]}"; do
   [ -x "$TMP/install/bin/$unit" ] || release_fail "$unit fixture was not extracted"

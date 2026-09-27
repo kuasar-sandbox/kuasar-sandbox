@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 import artifacts as ARTIFACTS
+from test_fixtures import CASES, selection, make_demo_wheelhouse
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('assemble_docs', ROOT / 'test/e2e/assemble_docs.py')
@@ -25,6 +26,143 @@ def load_module(name, path):
     return module
 
 
+class DemoSDKFixtures(unittest.TestCase):
+    def setUp(self):
+        self.prepare = load_module('demo_sdk_prepare', ROOT / 'test/e2e/lib/workspace.py')
+        temporary = tempfile.TemporaryDirectory(prefix='kuasar-demo-sdk-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.requirements = self.root / 'test/demo/requirements.txt'
+        self.arch = self.prepare.platform.machine()
+        self.wheels = self.root / 'test/demo/wheels' / self.arch
+        make_demo_wheelhouse(self.requirements.parent, self.wheels.parent, (self.arch,))
+
+    def test_wheel_tree_is_complete_without_host_packages_or_bytecode(self):
+        # Run the production installer unchanged; no test-injected offline flags.
+        real_run = subprocess.run
+        commands = []
+        def record_run(command, **kwargs):
+            commands.append(command)
+            return real_run(command, **kwargs)
+        with patch.dict(os.environ, {'PIP_INDEX_URL': 'https://index.invalid/unreachable'}), \
+             patch.object(self.prepare.subprocess, 'run', side_effect=record_run):
+            record = self.prepare.prepare_demo_sdk(self.root)
+        self.assertEqual(record['requirements_sha256'], ARTIFACTS.digest(self.requirements))
+        self.assertEqual(record['files'], ARTIFACTS.tree_files(self.root / record['directory']))
+        self.assertIn('e2b/__init__.py', record['files'])
+        self.assertIn('prepared_dependency/__init__.py', record['files'])
+        self.assertEqual(record['wheelhouse'], json.loads((self.wheels / 'manifest.json').read_text()))
+        self.assertTrue({'--no-index', '--require-hashes', '--find-links'} <= set(commands[0]))
+        self.assertEqual(commands[0][commands[0].index('--find-links') + 1], str(self.wheels))
+        self.assertTrue({'--only-binary=:all:', '--no-compile', '--ignore-installed', '--isolated'} <= set(commands[0]))
+        self.assertTrue({'-I', '-S', '-B'} <= set(commands[1]))
+        self.assertFalse(any('__pycache__' in name for name in record['files']))
+        with self.assertRaisesRegex(ValueError, 'already exists'):
+            self.prepare.prepare_demo_sdk(self.root)
+
+    def test_missing_requirements_fails_before_installation(self):
+        self.requirements.unlink()
+        with patch.object(self.prepare.subprocess, 'run') as run, \
+             self.assertRaisesRegex(ValueError, 'requirements'):
+            self.prepare.prepare_demo_sdk(self.root)
+        run.assert_not_called()
+
+    def test_missing_changed_or_unlocked_wheels_fail_before_installation(self):
+        wheel = self.wheels / 'prepared_dependency-1.0-py3-none-any.whl'
+        content = wheel.read_bytes()
+        for fault in ('missing', 'changed', 'unlocked'):
+            with self.subTest(fault=fault):
+                if fault == 'missing': wheel.unlink()
+                elif fault == 'changed': wheel.write_bytes(content + b'tampered')
+                else:
+                    wheel.write_bytes(content)
+                    (self.wheels / 'unexpected.whl').write_bytes(b'unlocked')
+                with patch.object(self.prepare.subprocess, 'run') as run, self.assertRaises(ValueError):
+                    self.prepare.prepare_demo_sdk(self.root)
+                run.assert_not_called()
+
+    def test_manifest_cannot_hide_missing_transitive_dependency(self):
+        path = self.wheels / 'manifest.json'
+        manifest = json.loads(path.read_text())
+        name = 'prepared_dependency-1.0-py3-none-any.whl'
+        (self.wheels / name).unlink()
+        del manifest['wheels'][name]
+        path.write_text(json.dumps(manifest))
+        with patch.object(self.prepare.subprocess, 'run') as run, \
+             self.assertRaisesRegex(ValueError, 'incomplete Demo wheel closure'):
+            self.prepare.prepare_demo_sdk(self.root)
+        run.assert_not_called()
+
+    def test_lock_and_package_versions_are_bound_before_installation(self):
+        path = self.wheels / 'manifest.json'
+        manifest = json.loads(path.read_text())
+        for fault in ('version', 'lock', 'arch'):
+            changed = json.loads(json.dumps(manifest))
+            if fault == 'version': changed['wheels']['e2b-2.25.1-py3-none-any.whl']['version'] = '0.0.0'
+            elif fault == 'lock': changed['lock_sha256'] = '0' * 64
+            else: changed['arch'] = 'other'
+            path.write_text(json.dumps(changed))
+            with self.subTest(fault=fault), patch.object(self.prepare.subprocess, 'run') as run, self.assertRaises(ValueError):
+                self.prepare.prepare_demo_sdk(self.root)
+            run.assert_not_called()
+
+
+    def test_install_failure_is_not_replaced_by_host_sdk(self):
+        with patch.object(self.prepare.subprocess, 'run',
+                          side_effect=subprocess.CalledProcessError(23, ['pip'])) as run, \
+             self.assertRaises(subprocess.CalledProcessError) as failure:
+            self.prepare.prepare_demo_sdk(self.root)
+        self.assertEqual(failure.exception.returncode, 23)
+        self.assertEqual(run.call_count, 1)
+
+    def test_missing_installed_sdk_fails_before_import(self):
+        with patch.object(self.prepare.subprocess, 'run') as run, \
+             self.assertRaisesRegex(ValueError, 'missing e2b'):
+            self.prepare.prepare_demo_sdk(self.root)
+        self.assertEqual(run.call_count, 1)
+
+    def test_host_pythonpath_cannot_supply_missing_sdk_dependency(self):
+        host = self.root / 'host'
+        host.mkdir()
+        (host / 'host_only_dependency.py').write_text('value = 1\n')
+        real_run = subprocess.run
+        def incomplete_install(command, **kwargs):
+            if 'pip' in command:
+                package = self.root / 'fixtures/demo-sdk/e2b'
+                package.mkdir(parents=True)
+                (package / '__init__.py').write_text('import host_only_dependency\n')
+                return subprocess.CompletedProcess(command, 0)
+            return real_run(command, capture_output=True, **kwargs)
+        with patch.dict(os.environ, {'PYTHONPATH': str(host)}), \
+             patch.object(self.prepare.subprocess, 'run', side_effect=incomplete_install), \
+             self.assertRaises(subprocess.CalledProcessError) as failure:
+            self.prepare.prepare_demo_sdk(self.root)
+        self.assertIn(b'host_only_dependency', failure.exception.stderr)
+
+    def test_source_build_fetches_hash_locked_wheels_and_records_their_metadata(self):
+        builder = load_module('demo_wheel_builder', ROOT / 'ci/integration/build_demo_wheels.py')
+        destination = self.root / 'built-wheels'
+        commands = []
+        def prepared_download(command, **kwargs):
+            commands.append(command)
+            for wheel in self.wheels.glob('*.whl'):
+                shutil.copyfile(wheel, destination / wheel.name)
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(builder.subprocess, 'run', side_effect=prepared_download):
+            builder.build(self.requirements.parent, self.arch, destination)
+        self.assertTrue({'download', '--only-binary=:all:', '--require-hashes'} <= set(commands[0]))
+        self.assertEqual(commands[0][commands[0].index('--requirement') + 1], str(self.requirements.with_suffix('.lock')))
+        self.assertEqual(json.loads((destination / 'manifest.json').read_text()),
+                         json.loads((self.wheels / 'manifest.json').read_text()))
+
+    def test_source_build_rejects_credentials_before_download(self):
+        builder = load_module('demo_wheel_credentials', ROOT / 'ci/integration/build_demo_wheels.py')
+        with patch.dict(os.environ, {'GH_TOKEN': 'fixture-token'}), \
+             patch.object(builder.subprocess, 'run') as run, self.assertRaisesRegex(ValueError, 'must not receive GH_TOKEN'):
+            builder.build(self.requirements.parent, self.arch, self.root / 'built-wheels')
+        run.assert_not_called()
+
+
 class CaseBridgeContracts(unittest.TestCase):
     def test_case_filename_is_the_only_suite_contract(self):
         for name in ('basic.cli.sh', 'storage.cache-membership.sh', 'image.flatten.sh',
@@ -36,43 +174,43 @@ class CaseBridgeContracts(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 ARTIFACTS.case_name(name)
 
-    def test_candidate_profile_uses_exact_cases_without_run_all(self):
-        cases = {'accelerator': ['image.manifest.sh', 'storage.cache.sh', 'storage.obs.sh']}
-        profile = ARTIFACTS.profiles(['accelerator'], 'x86_64', cases)
-        self.assertEqual(profile['cases'], [
-            'test/e2e/accelerator/cases/image.manifest.sh',
-            'test/e2e/accelerator/cases/storage.cache.sh',
-        ])
-        self.assertNotIn('test/e2e/accelerator/run_all.sh', profile['cases'])
-        self.assertEqual(profile['exclusions'][0]['case'], 'storage.obs.sh')
-        with self.assertRaisesRegex(ValueError, 'candidate case list'):
-            ARTIFACTS.profiles(['connector'], 'x86_64',
-                               {'connector': ['network.tap.sh', 'network.geneve-ip.sh']})
+    def test_suites_span_exact_owner_case_files_and_exclude_obs(self):
+        selected = selection(['accelerator'], 'x86_64')
+        self.assertEqual(selected['cases'], ['image.guest-fixture.sh', 'image.manifest.sh', 'storage.cache.sh'])
+        self.assertEqual(selected['exclusions'][0]['case'], 'storage.obs.sh')
+        with self.assertRaisesRegex(ValueError, 'invalid case list'):
+            selection(['connector'], 'x86_64', {'connector': ['network.tap.sh', 'network.geneve-ip.sh']})
+        with self.assertRaisesRegex(ValueError, 'incomplete test case source set'):
+            ARTIFACTS.suite_selection(['connector'], 'x86_64', {'connector': ['network.tap.sh']})
 
     def test_normalization_is_flat_and_rejects_duplicate_case_ids(self):
-        with tempfile.TemporaryDirectory(prefix='kuasar-case-bridge-') as directory:
+        with tempfile.TemporaryDirectory(prefix='kuasar-cases-') as directory:
             root = Path(directory) / 'test/e2e'
             (root / 'lib').mkdir(parents=True)
-            for owner, name in (('connector', 'network.tap.sh'), ('guest-runtime', 'image.flatten.sh')):
-                case = root / owner / 'cases' / name
-                case.parent.mkdir(parents=True)
-                case.write_text('#!/bin/sh\nexit 0\n')
-                case.chmod(0o644)
-                helper = root / owner / 'lib' / 'helper.py'
-                helper.parent.mkdir(parents=True)
+            for owner, names in CASES.items():
+                for name in names:
+                    case = root / owner / 'cases' / name
+                    case.parent.mkdir(parents=True, exist_ok=True)
+                    case.write_text('exit 0\n')
+                    case.chmod(0o644)
+                helper = root / owner / 'lib/helper.py'
+                helper.parent.mkdir()
                 helper.write_text(owner)
-            seen = ARTIFACTS.normalize_e2e_cases(Path(directory))
-            self.assertEqual(seen, {'image.flatten.sh': 'guest-runtime', 'network.tap.sh': 'connector'})
-            self.assertEqual((root / 'cases/network.tap.sh').read_text(), '#!/bin/sh\nexit 0\n')
+            expected = {name: owner for owner, names in CASES.items() for name in names}
+            self.assertEqual(ARTIFACTS.normalize_e2e_cases(Path(directory), CASES, from_owners=True), expected)
+            self.assertEqual((root / 'cases/network.tap.sh').read_text(), 'exit 0\n')
+            self.assertEqual((root / 'cases/network.tap.sh').stat().st_mode & 0o777, 0o644)
             self.assertEqual((root / 'lib/connector/helper.py').read_text(), 'connector')
-            duplicate = root / 'accelerator/cases/network.tap.sh'
-            duplicate.parent.mkdir(parents=True)
-            duplicate.write_text('#!/bin/sh\nexit 0\n')
-            duplicate.chmod(0o644)
+            self.assertFalse(any((root / owner).exists() for owner in CASES))
+            self.assertEqual(ARTIFACTS.normalize_e2e_cases(Path(directory), CASES, from_owners=False), expected)
+            duplicate = CASES | {'accelerator': ['network.tap.sh']}
             with self.assertRaisesRegex(ValueError, 'duplicate E2E case ID'):
-                ARTIFACTS.normalize_e2e_cases(Path(directory))
+                ARTIFACTS.normalize_e2e_cases(Path(directory), duplicate, from_owners=False)
+            (root / 'connector').mkdir()
+            with self.assertRaisesRegex(ValueError, 'only flat product cases'):
+                ARTIFACTS.normalize_e2e_cases(Path(directory), CASES, from_owners=False)
 
-    def test_resolver_switches_only_after_run_all_is_removed(self):
+    def test_resolver_rejects_legacy_missing_and_malformed_source_cases(self):
         resolver = load_module('case_bridge_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
         listing = [
             {'type': 'file', 'name': 'network.tap.sh'},
@@ -81,7 +219,8 @@ class CaseBridgeContracts(unittest.TestCase):
         legacy = {'type': 'file', 'name': 'run_all.sh'}
         with patch.object(resolver.release, 'api_optional', return_value=legacy) as api, \
              patch.object(resolver.release, 'gh') as gh:
-            self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'), [])
+            with self.assertRaises(ValueError):
+                resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
         self.assertEqual(api.call_count, 1)
         self.assertEqual(gh.call_count, 0)
         self.assertIn('test/e2e/run_all.sh', api.call_args.args[0])
@@ -97,7 +236,8 @@ class CaseBridgeContracts(unittest.TestCase):
         missing = subprocess.CompletedProcess(['gh'], 1, '', 'gh: Not Found (HTTP 404)')
         with patch.object(resolver.release, 'api_optional', return_value=None), \
              patch.object(resolver.release, 'gh', return_value=missing):
-            self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'), [])
+            with self.assertRaises(ValueError):
+                resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
 
         not_directory = subprocess.CompletedProcess(['gh'], 0, json.dumps({'type': 'file'}), '')
         with patch.object(resolver.release, 'api_optional', return_value=None), \
@@ -118,93 +258,51 @@ class CaseBridgeContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'unsupported E2E suite'):
                 resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
 
-    def test_executor_uses_public_runner_for_rewritten_case(self):
-        executor = load_module('case_bridge_executor', ROOT / 'ci/integration/run-artifact-tests.py')
-        with tempfile.TemporaryDirectory(prefix='kuasar-case-exec-') as directory:
-            workspace = Path(directory) / 'prepared'
-            internal_case = 'test/e2e/connector/cases/network.tap.sh'
-            case = workspace / 'test/e2e/cases/network.tap.sh'
-            case.parent.mkdir(parents=True)
-            (workspace / 'bin').mkdir()
-            (workspace / 'test/e2e/lib').mkdir(parents=True)
-            shutil.copy2(ROOT / 'test/e2e/e2e', workspace / 'test/e2e/e2e')
-            case.write_text(
-                '#!/bin/sh\nset -eu\n'
-                '[ "$(id -u)" -eq 0 ]\n'
-                f'[ "$E2E_WORKSPACE" = "{workspace}" ]\n'
-                f'[ "$E2E_LIB" = "{workspace}/test/e2e/lib" ]\n'
-                '[ "$E2E_ARCH" = x86_64 ]\n'
-                'case "$WORK" in /var/tmp/ki-*/cases/network.tap.sh) ;; *) exit 41 ;; esac\n'
-                'case "$OUT" in /var/tmp/ki-*/out/network.tap.sh) ;; *) exit 42 ;; esac\n'
-                'printf ok > "$OUT/result"\n')
-            case.chmod(0o644)
-            (workspace / 'provenance.json').write_text('{}')
-            revisions = ARTIFACTS.release_test_revisions(
-                {owner: 'd' * 40 for owner in ARTIFACTS.OWNERS if owner != 'platform'}, 'd' * 40)
-            profile = {'cases': [internal_case], 'required_products': [], 'exclusions': [], 'name': 'x86-owner-kvm'}
-            provenance = {'profile': profile, 'helpers': {}, 'embedded': {'init': 'a' * 64},
-                          'test_revisions': revisions}
-            plan = {'schema': 1, 'framework_sha': 'a' * 40, 'test_revisions': revisions,
-                    'lanes': {'x86_64': {'extra_checks': {}}, 'aarch64': {}}, 'owners': ['connector']}
-            result = Path(directory) / 'result.json'
-            credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
-            credentials['E2E_LIB'] = '/not-the-prepared-library'
-            with patch.object(executor.artifacts, 'verify_workspace', return_value=provenance), \
-                 patch.object(executor.platform, 'machine', return_value='x86_64'), \
-                 patch.dict(os.environ, credentials):
-                record = executor.execute(plan, 'x86_64', 'core', workspace, result)
-            self.assertEqual(record['conclusion'], 'success')
-            self.assertEqual(record['timings'][0]['exit_code'], 0)
-
-
-    def test_privilege_boundary_forwards_only_prepared_input_names(self):
-        executor = load_module('case_privilege_executor', ROOT / 'ci/integration/run-artifact-tests.py')
-        command = ['python3', '/prepared/test/e2e/e2e', 'run', '--include', 'network.tap.sh']
-        prepared = {'BIN': '/prepared/bin', 'E2E_LIB': '/prepared/test/e2e/lib', 'PATH': '/host/tools'}
-        with patch.object(executor.os, 'geteuid', return_value=1000), \
-             patch.dict(os.environ, {'UNRELATED_SECRET': 'must-not-forward'}):
+    def test_privilege_boundary_forwards_only_declared_environment_names(self):
+        executor = load_module('execution_boundary', ROOT / 'ci/integration/execution.py')
+        command = ['python3', '/prepared/test/e2e/e2e', 'run']
+        prepared = {'PATH': '/trusted/bin:/usr/bin', 'TMPDIR': '/var/tmp/private'}
+        with patch.object(executor.os, 'geteuid', return_value=1000):
             self.assertEqual(executor.privileged_command(command, prepared),
-                             ['sudo', '-n', '--preserve-env=BIN,E2E_LIB,PATH', '--', *command])
+                             ['sudo', '-n', '--', 'env', 'PATH=/trusted/bin:/usr/bin', 'TMPDIR=/var/tmp/private', *command])
         with patch.object(executor.os, 'geteuid', return_value=0):
             self.assertEqual(executor.privileged_command(command, prepared), command)
 
-    def test_privilege_environment_adds_only_trusted_tool_path(self):
-        executor = load_module('case_privilege_environment', ROOT / 'ci/integration/run-artifact-tests.py')
-        prepared = {'BIN': '/prepared/bin', 'E2E_LIB': '/prepared/test/e2e/lib'}
-        selected = executor.privilege_environment(prepared, '/trusted/bootstrap/bin:/usr/bin')
-        self.assertEqual(selected, {
-            'BIN': '/prepared/bin',
-            'E2E_LIB': '/prepared/test/e2e/lib',
-            'PATH': '/trusted/bootstrap/bin:/usr/bin',
-        })
-        self.assertEqual(prepared, {'BIN': '/prepared/bin', 'E2E_LIB': '/prepared/test/e2e/lib'})
+    def test_clean_execution_exposes_only_prepared_inputs_and_private_state(self):
+        executor = load_module('clean_execution', ROOT / 'ci/integration/execution.py')
+        command = executor.clean_command('sha256:' + 'a' * 64, Path('/prepared'), Path('/var/tmp/private'),
+                                         ['--arch', 'x86_64', '--suite', 'snapshot'])
+        self.assertIn('--pull=never', command)
+        self.assertIn('--read-only', command)
+        mounts = [command[index + 1] for index, value in enumerate(command) if value == '--mount']
+        self.assertEqual(mounts, ['type=bind,src=/prepared,dst=/inputs,readonly',
+                                  'type=bind,src=/var/tmp/private,dst=/state',
+                                  'type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock'])
+        for tool in ('go', 'cargo', 'rustc'):
+            self.assertIn(tool, command[command.index('-c') + 1])
+        with self.assertRaisesRegex(ValueError, 'immutable runtime image'):
+            executor.clean_command('ubuntu:latest', Path('/prepared'), Path('/state'), [])
 
-    def test_generated_compatibility_registry_is_exact_and_owner_scoped(self):
-        executor = load_module('generated_compatibility_executor', ROOT / 'ci/integration/run-artifact-tests.py')
-        with tempfile.TemporaryDirectory(prefix='kuasar-generated-runners-') as directory:
-            workspace = Path(directory)
-            runner = workspace / 'test/e2e/connector/run_all.sh'
-            runner.parent.mkdir(parents=True)
-            runner.write_text('#!/bin/sh\nexit 0\n')
-            runner.chmod(0o755)
-            registry = workspace / 'test/e2e/generated-compatibility-runners'
-            registry.write_text('test/e2e/connector/run_all.sh\n')
-            self.assertEqual(executor.generated_compatibility_runners(workspace),
-                             {'test/e2e/connector/run_all.sh'})
-            for invalid in (
-                    'test/e2e/connector/run_all.sh\ntest/e2e/connector/run_all.sh\n',
-                    'test/e2e/platform/run_all.sh\n', '../connector/run_all.sh\n'):
-                registry.write_text(invalid)
-                with self.assertRaises(ValueError):
-                    executor.generated_compatibility_runners(workspace)
-            registry.unlink()
-            registry.symlink_to(runner)
-            with self.assertRaisesRegex(ValueError, 'missing generated compatibility runner registry'):
-                executor.generated_compatibility_runners(workspace)
-        generated = {'test/e2e/connector/run_all.sh'}
-        self.assertTrue(executor.requires_privilege('test/e2e/connector/run_all.sh', False, generated))
-        self.assertTrue(executor.requires_privilege('test/e2e/connector/cases/network.tap.sh', True, generated))
-        self.assertFalse(executor.requires_privilege('test/e2e/sandboxer/run_all.sh', False, generated))
+    def test_clean_preparation_preserves_input_boundary_and_output_ownership(self):
+        from types import SimpleNamespace
+        executor = load_module('clean_prepare', ROOT / 'ci/integration/execution.py')
+        with patch.object(executor.os, 'getuid', return_value=1001), \
+             patch.object(executor.os, 'getgid', return_value=1001), \
+             patch.object(executor.Path, 'stat', return_value=SimpleNamespace(st_gid=123)):
+            command = executor.clean_prepare_command('sha256:' + 'a' * 64, Path('/composed/x86_64'),
+                                                      Path('/prepared/x86_64'), ['--suite', 'storage'])
+        self.assertEqual(command[command.index('--user') + 1], '1001:1001')
+        self.assertEqual(command[command.index('--group-add') + 1], '123')
+        self.assertIn('type=bind,src=/composed/x86_64,dst=/release,readonly', command)
+        self.assertIn('type=bind,src=/prepared,dst=/prepared', command)
+        self.assertIn('--workdir /prepared/x86_64', command[command.index('-c') + 1])
+        self.assertNotIn('--privileged', command)
+
+    def test_execution_rejects_credentials_before_launching_cases(self):
+        executor = load_module('execution_credentials', ROOT / 'ci/integration/execution.py')
+        with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, GH_TOKEN='fixture-token'):
+            with self.assertRaisesRegex(ValueError, 'must not receive GH_TOKEN'):
+                executor.environment(Path(directory))
 
 
 class ToolPaths(unittest.TestCase):
