@@ -135,6 +135,15 @@ class GuestFixturePathTests(unittest.TestCase):
             self.assertEqual(prepare.guest_fixture_script(plan, workspace),
                              root / "lib/guest-runtime/fixture.py")
 
+    def test_platform_source_candidate_uses_migrated_baseline_guest_helper(self):
+        with tempfile.TemporaryDirectory(prefix="kuasar-baseline-guest-fixture-") as directory:
+            workspace = Path(directory)
+            helper = workspace / "test/e2e/lib/guest-runtime/fixture.py"
+            helper.parent.mkdir(parents=True)
+            helper.write_text("# exact baseline test revision\n")
+            plan = {"mode": "source", "owners": ["platform"], "candidate_cases": {}}
+            self.assertEqual(prepare.guest_fixture_script(plan, workspace), helper)
+
     def test_exact_assets_rejects_invalid_normalized_helper_despite_legacy_copy(self):
         for kind in ("symlink", "dangling", "directory"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory(
