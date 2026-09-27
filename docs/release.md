@@ -79,7 +79,7 @@ test_revisions:
   orchestrator: <orchestrator-test-sha>
 ```
 
-Daily records the exact component source heads already resolved by its trusted plan, even when product units are reused. A maintenance selection with no component source branch requires an explicit committed test pin. Commit explicit pins when preparing a new Stable selection. Platform tests use the aggregate source SHA. The platform package assembles flat cases and namespaced libraries from each exact test pin, together with both architectures of prebuilt helpers; component documentation and products keep their selected unit sources. The earlier helper build also fetches the complete Python 3.12 Demo wheel closure using the committed version/hash lock. Packaging requires both architectures of local wheels and their package/version/digest manifests; public preparation installs only those wheels without an index. Helper builds, prepared inputs, results and the existing publication validation binding carry the same pins, which later baselines verify against the committed manifest. The staged `test-revisions.json` receipt is internal to validation; published asset names and product bytes do not change. New packaging rejects missing or mismatched pins. Historical manifests/releases remain readable under their original contract and are never amended.
+Daily records the exact component source heads already resolved by its trusted plan, even when product units are reused. A maintenance selection with no component source branch requires an explicit committed test pin. Commit explicit pins when preparing a new Stable selection. Platform tests use the aggregate source SHA. The platform package assembles flat cases and namespaced libraries from each exact test pin, together with both architectures of prebuilt helpers; component documentation uses those same test pins so invocation fixes ship with the cases. Products keep their selected unit versions, and kernel documentation keeps its independently selected vmlinux source. The earlier helper build also fetches the complete Python 3.12 Demo wheel closure using the committed version/hash lock. Packaging requires both architectures of local wheels and their package/version/digest manifests; public preparation installs only those wheels without an index. Helper builds, prepared inputs, results and the existing publication validation binding carry the same pins, which later baselines verify against the committed manifest. The staged `test-revisions.json` receipt is internal to validation; published asset names and product bytes do not change. New packaging rejects missing or mismatched pins. Historical manifests/releases remain readable under their original contract and are never amended.
 
 Advance `previous_preview_version` only after the current aggregate has a complete published Release. When an unpublished selection rolls over to a new date, retain its existing baseline (or keep the field absent for the first Preview). An abandoned selection may contain component tags that were never published and cannot serve as an update baseline.
 
@@ -223,7 +223,7 @@ make test-ci-tools
 
 Each new component Release contains its x86_64 archive, aarch64 archive and `SHA256SUMS`. Runtime and vmlinux retain independent archive names. A new aggregate contains one architecture-neutral platform archive, twelve unchanged component archives and unified `SHA256SUMS`: fourteen explicit assets. Existing AMD64-only releases retain their historical two/eight-asset contract and are never amended with ARM files.
 
-Do not publish generated release-metadata JSON or duplicate GitHub's automatically supplied source archives. Selection YAML remains in the repository, not in Release assets or the platform package. Component archives exclude `docs/` and `test/e2e/`; aggregate assembly collects documentation from the selected product source tags and E2E inputs from the independent test pins into the platform archive (§8.1).
+Do not publish generated release-metadata JSON or duplicate GitHub's automatically supplied source archives. Selection YAML remains in the repository, not in Release assets or the platform package. Component archives exclude `docs/` and `test/e2e/`; aggregate assembly collects component documentation and E2E inputs from the independent test pins into the platform archive (§8.1). Kernel documentation follows the separately selected vmlinux product source.
 
 Component workflows build and test at the selected source SHA. Aggregate prepare downloads the six complete manifest-selected Releases, validates GitHub size/digest, component SHA-256, internal paths and cross-package collisions, then builds the pinned test helpers in a credential-free source step and creates a deterministic platform package. The staged bytes enter the shared public prepare → focused case → public run contract without rebuilding products or helpers. Native x86 runs the selected cases across all nine suites on a real KVM runner; native ARM runs the predeclared accelerator/guest-runtime non-KVM subset. Clean-runtime preparation and selected full-suite execution retain evidence that Go, Rust and component sources are absent. Source-dependent checks are separate required jobs. Publish requires both explicit architecture results, binds their selections/source identities/asset digests in `kuasar-integration-validation`, and uploads the original archives unchanged.
 
@@ -233,7 +233,8 @@ Preview, maintenance Stable and mainline Stable use identical asset contracts an
 ### 8.1 Documentation payload and source mapping
 
 The platform archive assembles documentation from the project repository and the
-selected component sources. Source navigation and archive navigation use
+component sources pinned by `test_revisions`, with kernel documentation from the
+separately selected vmlinux source. Source navigation and archive navigation use
 different layouts. `test/e2e/assemble_docs.py`, called by the existing E2E
 assembler, copies documentation and rewrites its links after owner suites have
 been copied. It does not edit executable examples, scripts, configuration values
@@ -271,11 +272,12 @@ to the component README. English is the fallback when no Chinese edition exists.
 Direct file links and directory links with explicit fragments keep their named
 file or default README target, preserving the original anchor contract.
 
-The release packager obtains component references from the existing selected
-release manifest and uses the aggregate version for project source URLs. It
-passes these references only to documentation assembly; it does not alter version
-selection. For direct source assembly, Git HEAD is used when available, otherwise
-source links use `main`. A local acceptance run can provide a tab-separated
+The release packager obtains exact component references from the selected
+manifest's `test_revisions` and uses the aggregate version for project source URLs.
+Documentation and cases therefore refer to the same source snapshot; test-only
+invocation fixes do not require a product release. These documentation references
+do not change product versions or archive bytes. For direct source assembly, Git
+HEAD is used when available, otherwise source links use `main`. A local acceptance run can provide a tab-separated
 `DOCS_SOURCE_REFS` file containing owner and exact source revision. This is
 assembly metadata, not a runtime configuration option.
 
@@ -283,7 +285,7 @@ The runtime and vmlinux units can select different guest-runtime commits. The
 release packager therefore supplies `DOCS_VMLINUX_SOURCE` independently and takes
 both `vmlinux.md` and `vmlinux_zh.md` from that selected kernel source. If an older
 selected kernel has no Chinese counterpart, assembly does not substitute a
-Chinese document from the runtime unit's different revision.
+Chinese document from the independently pinned guest-runtime test source.
 
 Recognized cross-repository `main` links to included documents resolve within the
 assembled set. Absolute GitHub `main` links to other files or directories that
@@ -304,9 +306,10 @@ make test-release-tools
 The focused tests exercise language selectors, native-build links, source URLs,
 unchanged executable content, cross-repository links, collisions, symbolic links
 and independent kernel-language selection. The release tests also unpack the
-actual platform tarball and check that both kernel documents came from the
-selected vmlinux source. Final acceptance must additionally run assembly on the
-actual reviewed source set, inspect the extracted archive, and validate all
+actual platform tarball and check that component guidance and source links use
+the exact test pins while both kernel documents come from the selected vmlinux
+source, even when those snapshots differ. Final acceptance must additionally run
+assembly on the actual reviewed source set, inspect the extracted archive, and validate all
 relative paths and heading fragments. Translation completeness is a separate
 semantic review; a passing package check is not evidence that pending documents
 have been translated.

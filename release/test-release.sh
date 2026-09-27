@@ -115,6 +115,18 @@ mkdir -p "$connector_suite/cases"
 printf '#!/usr/bin/env bash\necho connector-case\n' \
   > "$connector_suite/cases/storage.connector-fixture.sh"
 chmod 0644 "$connector_suite/cases/storage.connector-fixture.sh"
+# Test-only guidance updates must ship with the independent test pin even
+# while the selected product archive and its older documentation stay fixed.
+for suffix in '' _zh; do
+  cat > "$TMP/fetched/test-sources/connector/README$suffix.md" <<'EOF'
+[English](README.md) | [简体中文](README_zh.md)
+# Prepared network fixture
+Use the shared prepared runner.
+[Current case](test/e2e/cases/storage.connector-fixture.sh)
+EOF
+  printf 'Current prepared network guide\n' \
+    > "$TMP/fetched/test-sources/connector/docs/connector-detail$suffix.md"
+done
 python3 - "$TMP/fetched/e2e-helpers" "$TMP/fetched/test-revisions.json" <<'PY'
 import hashlib, json, pathlib, struct, sys
 root = pathlib.Path(sys.argv[1])
@@ -141,6 +153,8 @@ printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vml
 printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
 printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
 printf 'selected Chinese vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux_zh.md"
+printf 'test pin kernel docs must not win\n' > "$TMP/fetched/test-sources/guest-runtime/docs/vmlinux.md"
+printf 'test pin Chinese kernel docs must not win\n' > "$TMP/fetched/test-sources/guest-runtime/docs/vmlinux_zh.md"
 
 cp -a "$TMP/fetched" "$TMP/fetched-foreign-material"
 foreign_unit=connector
@@ -177,6 +191,18 @@ cmp "$TMP/packaged-orchestrator-test" "$TMP/fetched/test-sources/orchestrator/te
 if cmp -s "$TMP/packaged-orchestrator-test" "$TMP/fetched/sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"; then
   release_fail "platform package used the product tag's test instead of the independent pin"
 fi
+for suffix in '' _zh; do
+  tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./docs/connector$suffix.md" \
+    > "$TMP/packaged-connector-doc"
+  grep -Fq 'Use the shared prepared runner.' "$TMP/packaged-connector-doc" \
+    || release_fail "platform package used stale product-tag invocation guidance"
+  grep -Fq '/connector/blob/0000000000000000000000000000000000000001/test/e2e/cases/storage.connector-fixture.sh' \
+    "$TMP/packaged-connector-doc" \
+    || release_fail "packaged guidance source link does not use its exact test pin"
+  tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./docs/connector-detail$suffix.md" \
+    > "$TMP/packaged-connector-guide"
+  cmp "$TMP/packaged-connector-guide" "$TMP/fetched/test-sources/connector/docs/connector-detail$suffix.md"
+done
 
 assert_assembly_rejected() {
   local name=$1 expected=$2 tests output

@@ -78,12 +78,24 @@ package_archive() {
   [ -f "$sources/vmlinux/docs/vmlinux.md" ] \
     || release_fail "vmlinux source is missing docs/vmlinux.md"
   resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$work/docs-refs.tsv"
+  python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --test-revisions \
+    > "$work/test-revisions.json"
+  python3 - "$work/docs-refs.tsv" "$work/test-revisions.json" <<'PY'
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+pins = json.loads(pathlib.Path(sys.argv[2]).read_text())
+refs = dict(line.split('\t') for line in path.read_text().splitlines())
+for unit in refs:
+    if unit != 'vmlinux':
+        refs[unit] = pins['guest-runtime' if unit == 'runtime' else unit]
+path.write_text(''.join(f'{unit}\t{ref}\n' for unit, ref in refs.items()))
+PY
   printf 'platform\t%s\n' "$version" >> "$work/docs-refs.tsv"
   E2E_SOURCE_ROOT="$test_sources" DOCS_SOURCE_REFS="$work/docs-refs.tsv" DOCS_VMLINUX_SOURCE="$sources/vmlinux" \
     E2E_HELPER_ROOT="${E2E_HELPER_ROOT:?provide the prebuilt E2E helper packages}" \
     "$ROOT/test/e2e/assemble.sh" "$stage" "$PLATFORM_SOURCE_ROOT" \
-    "$sources/accelerator" "$sources/connector" "$sources/runtime" \
-    "$sources/sandboxer" "$sources/orchestrator"
+    "$test_sources/accelerator" "$test_sources/connector" "$test_sources/guest-runtime" \
+    "$test_sources/sandboxer" "$test_sources/orchestrator"
   archive="$(platform_archive "$version")"
   tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
     --pax-option=delete=atime,delete=ctime -czf "$output/assets/$archive" -C "$stage" .
