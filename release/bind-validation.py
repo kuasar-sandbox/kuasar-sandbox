@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind release notes to the exact staged bytes and both successful profiles."""
+"""Bind release notes to the exact staged bytes and both successful architecture selections."""
 import argparse
 import json
 from pathlib import Path

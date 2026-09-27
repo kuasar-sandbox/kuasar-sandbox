@@ -39,7 +39,7 @@ import sys
 import tempfile
 
 root = pathlib.Path(sys.argv[1])
-warm = (root / 'test/e2e/platform/e2e_warmpool_dedup.sh').read_text()
+warm = (root / 'test/perf/warmpool-dedup.sh').read_text()
 perf = (root / 'test/perf/sandbox-perf-manifest.sh').read_text()
 
 def fields(document):
@@ -130,6 +130,7 @@ PY
 # Exercise both repository and visibility branches; literal workflow lines no
 # longer describe the staged guest-runtime exception to the existing pools.
 python3 "$SCRIPT_DIR/../hosted/test-workflows.py"
+python3 "$SCRIPT_DIR/test_framework_candidate.py"
 
 provisioner="$SCRIPT_DIR/../runner/provision.sh"
 bash "$SCRIPT_DIR/test-runner-native-materials.sh" "$provisioner"
@@ -302,7 +303,8 @@ for retired in ("platform-bms.yml", "bms-entry.yml", "bms-e2e.yml"):
     assert not (root / ".github/workflows" / retired).exists()
 assert not (root / "ci/bms").exists()
 caller = (root / ".github/workflows/ci.yml").read_text()
-assert "  ci:\n    uses: kuasar-sandbox/kuasar-sandbox/.github/workflows/ci-entry.yml@main" in caller
+assert "uses: ./.github/workflows/integration-tests.yml" in caller
+assert "uses: kuasar-sandbox/kuasar-sandbox/.github/workflows/ci-entry.yml@main" in caller
 assert "previous-required-check" not in caller
 assert "bms / finalize" not in caller
 aggregate = (root / ".github/workflows/aggregate-release.yml").read_text()

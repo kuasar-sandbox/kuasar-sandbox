@@ -5,9 +5,8 @@
 # symlinks under bin/). `make release` converges an explicitly selected
 # release-v* version.
 #
-# Component E2E suites live beside their implementations. `make test-e2e`
-# assembles those suites with the platform-owned cross-product cases and runs
-# the same test/e2e/run_all.sh layout shipped by an aggregate release.
+# Product E2E consumes a complete prebuilt release tree through one public
+# prepare/run entry. Component source gates and helper builds are independent.
 
 SHELL    := /bin/bash
 ORG      := $(abspath $(CURDIR)/..)
@@ -43,10 +42,10 @@ CI_TIMED       := ci/integration/ci-timed.sh
 GO_REPOS       := accelerator sandboxer guest-runtime connector orchestrator
 ZOT_VERSION    ?= v2.1.17
 
-PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf-density
+PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf-density perf-warmpool-dedup
 
 .PHONY: all build collect e2e-zot e2e-versitygw e2e-tools assemble-e2e release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
-	        bench e2e-fixtures test-e2e test-e2e-prebuilt perf dedup-report \
+	        bench e2e-fixtures test-e2e perf dedup-report \
 	        $(PERF_TARGETS)
 
 all: build
@@ -57,7 +56,7 @@ all: build
 # flatten-ctl. Each sub-repo's `build` builds every binary it ships. After all
 # sub-builds, `collect` assembles sub-repo artifacts under bin/$(TARGET_ARCH)/.
 # Environment tools used only by tests are kept under build/e2e-tools/ and are
-# never packaged as release artifacts.
+# packaged separately from product binaries in the platform E2E helper package.
 build:
 	$(CI_TIMED) build/guest-native $(MAKE) -C $(ORG)/guest-runtime/native-deps build
 	$(CI_TIMED) build/accelerator $(MAKE) -C $(ORG)/accelerator build
@@ -79,6 +78,7 @@ e2e-tools: e2e-zot e2e-versitygw
 # helpers in its prepared workspace and never invokes this source target.
 e2e-fixtures:
 	$(MAKE) -C $(ORG)/sandboxer TARGET_ARCH="$(TARGET_ARCH)" E2E_FIXTURE_DIR="$(abspath $(E2E_TOOL_DIR))" e2e-usage-probe
+	@if [ "$(TARGET_ARCH)" = x86_64 ]; then $(MAKE) -C $(ORG)/sandboxer TARGET_ARCH="$(TARGET_ARCH)" E2E_FIXTURE_DIR="$(abspath $(E2E_TOOL_DIR))" e2e-cgroup-fork-probe; fi
 	bash $(ORG)/orchestrator/scripts/ci-e2e-build.sh fixtures "$(TARGET_ARCH)" "$(abspath $(E2E_TOOL_DIR))"
 
 # Assemble bin/$(TARGET_ARCH)/ from each sub-repo's per-arch bin per the
@@ -124,17 +124,15 @@ assemble-e2e:
 		$(ORG)/accelerator $(ORG)/connector $(ORG)/guest-runtime \
 		$(ORG)/sandboxer $(ORG)/orchestrator
 
-# Candidate source and exact release assets both pass this owner-aggregated
-# runner. OBS remains opt-in through OBS_E2E=1 in accelerator/test/e2e/run_all.sh.
-test-e2e: build e2e-tools e2e-fixtures assemble-e2e
-	bash $(ORG)/connector/scripts/ci-source-checks.sh
-	bash $(ORG)/sandboxer/scripts/ci-source-checks.sh
-	bash $(ORG)/orchestrator/scripts/ci-source-checks.sh
-	$(MAKE) test-uffd-performance-gate
-	$(CI_TIMED) e2e/run-all env BIN=$(SBIN) ZOT_BIN=$(E2E_ZOT_BIN) \
-		USAGE_PROBE_BIN=$(abspath $(E2E_TOOL_DIR))/usage-probe \
-		VGW_BIN=$(E2E_VGW_BIN) CUSTOM_PROXY_BIN=$(abspath $(E2E_TOOL_DIR))/custom-proxy \
-		TELEMETRY_GRPC_PROBE_BIN=$(abspath $(E2E_TOOL_DIR))/telemetry-grpc-probe bash $(E2E_SUITE_DIR)/test/e2e/run_all.sh
+# The release tree contains products, cases, helpers and the public runner.
+# Selection is a union of suites and filenames, minus excluded filenames.
+RELEASE_DIR ?=
+E2E_WORKDIR ?=
+E2E_ARGS ?= --all --exclude storage.obs.sh
+test-e2e:
+	@[ -n "$(RELEASE_DIR)" ] && [ -n "$(E2E_WORKDIR)" ] || { echo "RELEASE_DIR and fresh E2E_WORKDIR are required" >&2; exit 1; }
+	python3 -B "$(RELEASE_DIR)/test/e2e/e2e" prepare --release-dir "$(RELEASE_DIR)" --workdir "$(E2E_WORKDIR)" --arch "$(TARGET_ARCH)" $(E2E_ARGS)
+	sudo -n python3 -B "$(E2E_WORKDIR)/test/e2e/e2e" run --workdir "$(E2E_WORKDIR)" --arch "$(TARGET_ARCH)" $(E2E_ARGS)
 
 # Aggregate releases validate the already-published archives. This target never
 # invokes a component build; bin/<arch>/ must be populated by the release fetcher.
@@ -143,12 +141,6 @@ verify-prebuilt:
 		case "$$repo" in ''|\#*) continue ;; esac; \
 		[ -f "$(SBIN)/$$name" ] || { echo "missing prebuilt release input: $$name" >&2; exit 1; }; \
 	done < $(BIN_INPUTS_MANIFEST)
-
-test-e2e-prebuilt: verify-prebuilt e2e-tools e2e-fixtures assemble-e2e
-	$(CI_TIMED) e2e/run-all env BIN=$(SBIN) ZOT_BIN=$(E2E_ZOT_BIN) \
-		USAGE_PROBE_BIN=$(abspath $(E2E_TOOL_DIR))/usage-probe \
-		VGW_BIN=$(E2E_VGW_BIN) CUSTOM_PROXY_BIN=$(abspath $(E2E_TOOL_DIR))/custom-proxy \
-		TELEMETRY_GRPC_PROBE_BIN=$(abspath $(E2E_TOOL_DIR))/telemetry-grpc-probe bash $(E2E_SUITE_DIR)/test/e2e/run_all.sh
 
 # perf harnesses living in this repo (cross-repo binary use).
 perf-sandbox: build assemble-e2e
@@ -159,6 +151,8 @@ perf-sandbox-working-set: build
 	BIN=$(SBIN) bash test/perf/sandbox-perf-working-set.sh
 perf-density: build
 	BIN=$(SBIN) bash test/perf/density-perf.sh
+perf-warmpool-dedup: build
+	BIN=$(SBIN) bash test/perf/warmpool-dedup.sh
 
 # Aggregate perf: accelerator's perf-cache + this repo's perfs.
 perf: build
@@ -199,6 +193,7 @@ test-ci-tools:
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
 
 test-release-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 release/test_e2e_package.py
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test-environment-tools.py
 	bash test/demo/test_demo_safety.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_state_assertions.py
@@ -232,8 +227,7 @@ help:
 	@echo "  e2e-tools     ensure local test environment tools under build/e2e-tools/\$$(TARGET_ARCH)/"
 	@echo "  release       publish a selected aggregate (RELEASE_VERSION=release-vX.Y.Z)"
 	@echo "  assemble-e2e  assemble component-owned and platform-owned suites"
-	@echo "  test-e2e      build and run the complete assembled test/e2e/run_all.sh gate"
-	@echo "  test-e2e-prebuilt  run full compatibility E2E from fetched release binaries without rebuilding"
+	@echo "  test-e2e      prepare and run RELEASE_DIR inputs in a fresh E2E_WORKDIR"
 	@echo "  demo          run the e2b end-to-end demo (test/demo/demo_e2b.sh; DEMO_PAUSE=1 to step through)"
 	@echo "  perf          aggregate: accelerator perf-cache + this repo's perf-sandbox/-manifest/-density"
 	@echo "  bench         Go micro-benchmarks across every Go sub-repo"

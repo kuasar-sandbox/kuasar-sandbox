@@ -65,8 +65,7 @@ fetch_components() {
       test_sha="$(jq -er --arg owner "$owner" '.[$owner]' "$output/test-revisions.json")"
       test_source="$output/test-sources/$owner"
       if [ "$test_sha" = "$source_sha" ]; then
-        mkdir -p "$test_source/test"
-        cp -a "$output/sources/$unit/test/e2e" "$test_source/test/e2e"
+        cp -a "$output/sources/$unit" "$test_source"
       else
         fetch_component_source "$repository" "$test_sha" "$test_source"
       fi
@@ -235,8 +234,11 @@ assemble_release() {
     || release_fail "fetched test pins do not match the selected platform source"
 
   platform_bundle="$work/platform-bundle"
-  "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$fetched/test-sources" "$platform_bundle"
+  E2E_HELPER_ROOT="${E2E_HELPER_ROOT:-$fetched/e2e-helpers}" \
+    E2E_WHEEL_ROOT="${E2E_WHEEL_ROOT:-$fetched/e2e-wheels}" \
+    "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$fetched/test-sources" "$platform_bundle"
   platform_name="$(platform_archive "$version")"
+  python3 "$ROOT/release/validate-e2e-package.py" "$platform_bundle/assets/$platform_name" "$fetched/test-revisions.json"
   mkdir -p "$output/assets"
   install -m 0644 "$platform_bundle/assets/$platform_name" "$output/assets/$platform_name"
   install -m 0644 "$expected_selection" "$output/selection.tsv"

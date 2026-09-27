@@ -202,16 +202,14 @@ placer 只做 group 导入和放置建议,最终资源确认在 node admission.�
 
 ## 7. Release 与 CI 证据
 
-源码候选的端到端集成测试会构建精确 revision,运行 owner E2E,UFFD regression gate 和 working-set
-smoke,并上传 `ci-metadata-<run-id>-<attempt>` artifact.聚合 Release 的 exact-assets 模式
-从同一个聚合包解压所有资产,在真实 KVM 上运行完整 `test/e2e/run_all.sh`.
+源码候选 CI 在公共 prepare 之前构建精确产品与 helper revision。产品 E2E 通过 `test/e2e/e2e` 运行扁平用例；源码/unit/race/vet 和 UFFD 性能保持独立，working-set smoke 有单独必需 job 和结果。exact-assets 验证消费包中的产品、helper 和 runner，不重新构建它们。架构结果记录每个已选用例、明确排除项及预备输入身份。
 
 工作流与证据入口:
 
 - [`.github/workflows/integration-tests.yml`](../.github/workflows/integration-tests.yml):源码候选的
   端到端集成测试与发行资产验证;
 - [`test/perf/`](../test/perf/):主仓性能 harness 与报告生成器;
-- [`test/e2e/run_all.sh`](../test/e2e/run_all.sh):聚合预构建 owner + platform E2E.
+- [`test/e2e/e2e`](../test/e2e/e2e):公共预构建产品用例 runner。
 
 绿色聚合状态本身不是某个性能结论的证据.引用结果时必须给出 Run URL,base/head SHA,
 运行模式,相关 job log 和下载后的原始 artifact.如果 workflow 只运行 smoke,必须明确写
