@@ -16,10 +16,14 @@ if: github.event.repository.visibility == 'public' && github.event.repository.fu
 非公开调用不分配 hosted job，也不构成成功验收。没有私有 ARM 队列、新私有适配、larger/付费 fallback。
 既有 runner 运维资料仍在 [ci/runner](../ci/runner/README.md)，新流程不修改其服务。
 
-`pull_request_target` 仍只接受 `main` 和 `release/vMAJOR.MINOR.x`。非 draft 同仓 PR 自动准入；
+组件调用方和平台 fork 使用可信 main 上的 `pull_request_target` 控制流程，只接受 `main` 和 `release/vMAJOR.MINOR.x`。非 draft 的组件同仓 PR 自动准入；
 fork 准入仍查询当前 active 组织成员身份，不能以 `author_association` 代替。
 admission 复核当前 PR/base/head 和 integration commit 的两个父提交，并向该 integration commit
 写入 `kuasar/ci-exact-head=pending`。draft、外部 fork 和冲突都不能得到 E2E 成功结论。
+
+平台同仓 PR 使用 `pull_request`，在精确的两父 merge commit 上调用本地 reusable workflow，使框架变更在合入 main 前验证自己的 prepare/run 合同。
+该流程只有读取权限，不继承 App secret；解析前以及所有必需源码/build/prepare/产品/性能阶段完成后，均复核当前 PR/base/head，
+并为精确 merge candidate 报告既有必需检查 `ci / finalize`。draft 不分配产品 job。组件和 fork 调用方保留既有可信 admission/finalize。
 
 App key 和短期控制 token 只进入受信任的 admission/finalize 与发布控制 job。
 产品/helper 构建、源码检查、prepare、E2E 都不接收 App key，候选代码在新的标准 job 执行。
@@ -98,6 +102,12 @@ E2E 只 checkout 可信执行器并下载目标 prepared workspace，执行前�
 每个 shard 使用短路径、磁盘支持的私有可变目录，socket、direct I/O、Docker 配置、性能状态均在不可变输入之外。
 源码依赖的 connector/sandboxer/orchestrator unit/race/vet、真实 pinned-BPF 统计、ENOSPC、Collector/usage harness 回归和 UFFD benchmark 保留为独立必需源码 job。
 source 模式 x86 sandboxer/platform 还用同一组制品保留 A/B/C/D `off/auto × cold/warm` working-set smoke。
+
+平台源码验证使用已有精确测试 pin 准备已迁移 baseline 的 case 树，并直接调用规范 case 文件。若某个 pin 的源码仍包含真实旧 runner，则保留其完整断言集合。该步骤不重建 baseline 产品，也不依赖生成的 wrapper 分发。
+
+CI 执行边界为每个已选 prepared profile 提供产品 case 所需权限和可信 bootstrap 工具路径，不依赖生成的 owner-runner registry。跨 `sudo` 只保留显式准备的输入变量与该工具路径，不保留无关环境变量。
+
+`snapshot.read-recovery.sh` 失败时，在 cleanup 前将用例、阶段、失败行及有界固定词表错误证据保留在 job 日志中。诊断保留测试的原始退出状态。
 
 ## 4. Daily 与 Stable
 

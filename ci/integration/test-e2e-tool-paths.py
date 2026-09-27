@@ -118,6 +118,40 @@ class CaseBridgeContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'unsupported E2E suite'):
                 resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
 
+    def test_platform_runs_migrated_baselines_as_exact_cases(self):
+        resolver = load_module('baseline_case_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
+        revisions = ARTIFACTS.release_test_revisions(
+            {owner: 'b' * 40 for owner in ARTIFACTS.OWNERS if owner != 'platform'}, 'a' * 40)
+        owners, overlays, cases = ['platform'], ['platform'], {}
+        migrated = {'accelerator': ['storage.cache.sh'], 'connector': ['network.tap.sh'],
+                    'guest-runtime': ['image.flatten.sh'], 'sandboxer': ['sandbox.cgroup.sh']}
+        def names(repository, sha, owner):
+            self.assertEqual(repository, revisions[owner]['repository'])
+            self.assertEqual(sha, revisions[owner]['sha'])
+            return migrated.get(owner, [])
+        with patch.object(resolver, 'candidate_case_names', side_effect=names):
+            resolver.include_migrated_baselines(owners, overlays, cases, revisions)
+        self.assertEqual(set(overlays), {'platform', *migrated})
+        self.assertEqual(cases, migrated)
+        profile = ARTIFACTS.profiles(owners, 'x86_64', cases)
+        for owner, entries in migrated.items():
+            self.assertIn(f'test/e2e/{owner}/cases/{entries[0]}', profile['cases'])
+            self.assertNotIn(f'test/e2e/{owner}/run_all.sh', profile['cases'])
+        # An owner with real legacy assertions is not replaced by its partial cases.
+        self.assertIn('test/e2e/orchestrator/run_all.sh', profile['cases'])
+        self.assertEqual(ARTIFACTS.changed_products({'platform': ['ci/integration/resolve-artifacts.py']}), [])
+
+    def test_component_selection_does_not_expand_to_other_baselines(self):
+        resolver = load_module('component_case_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
+        owners, overlays = ['connector'], ['connector']
+        cases = {'connector': ['network.tap.sh']}
+        with patch.object(resolver, 'candidate_case_names') as query:
+            resolver.include_migrated_baselines(owners, overlays, cases, {})
+        query.assert_not_called()
+        self.assertEqual(owners, ['connector'])
+        self.assertEqual(overlays, ['connector'])
+        self.assertEqual(cases, {'connector': ['network.tap.sh']})
+
     def test_executor_uses_public_runner_for_rewritten_case(self):
         executor = load_module('case_bridge_executor', ROOT / 'ci/integration/run-artifact-tests.py')
         with tempfile.TemporaryDirectory(prefix='kuasar-case-exec-') as directory:
@@ -164,9 +198,52 @@ class CaseBridgeContracts(unittest.TestCase):
         with patch.object(executor.os, 'geteuid', return_value=1000), \
              patch.dict(os.environ, {'UNRELATED_SECRET': 'must-not-forward'}):
             self.assertEqual(executor.privileged_command(command, prepared),
-                             ['sudo', '-n', '--preserve-env=BIN,E2E_LIB,PATH', '--', *command])
+                             ['sudo', '-n', '--', 'env', 'BIN=/prepared/bin',
+                              'E2E_LIB=/prepared/test/e2e/lib', 'PATH=/host/tools', *command])
         with patch.object(executor.os, 'geteuid', return_value=0):
             self.assertEqual(executor.privileged_command(command, prepared), command)
+
+    def test_public_recovery_failure_reports_redacted_diagnostics_through_sudo(self):
+        executor = load_module('recovery_diagnostic_executor', ROOT / 'ci/integration/run-artifact-tests.py')
+        with tempfile.TemporaryDirectory(prefix='kuasar-recovery-') as directory:
+            workspace = Path(directory) / 'prepared'
+            (workspace / 'bin').mkdir(parents=True)
+            cases = workspace / 'test/e2e/cases'
+            cases.mkdir(parents=True)
+            library = workspace / 'test/e2e/lib/platform'
+            library.mkdir(parents=True)
+            for name in ('failure-diagnostics.sh', 'failure_diagnostics.py'):
+                shutil.copy2(ROOT / 'test/e2e/platform/lib' / name, library / name)
+            shutil.copy2(ROOT / 'test/e2e/e2e', workspace / 'test/e2e/e2e')
+            (cases / 'snapshot.read-recovery.sh').write_text(
+                'set -euo pipefail\ncleanup() { exit "$?"; }\ntrap cleanup EXIT\n'
+                'printf "context canceled private-capability\\n" > "$WORK/seed.snapshot.log"\n'
+                'SNAP=$(exit 17)\n')
+            (workspace / 'provenance.json').write_text('{}')
+            profile = {'cases': ['test/e2e/sandboxer/cases/snapshot.read-recovery.sh'],
+                       'required_products': [], 'exclusions': [], 'name': 'x86-owner-kvm'}
+            provenance = {'profile': profile, 'helpers': {}, 'embedded': {'init': 'a' * 64},
+                          'test_revisions': {}}
+            plan = {'schema': 1, 'framework_sha': 'a' * 40, 'test_revisions': {},
+                    'lanes': {'x86_64': {'extra_checks': {}}, 'aarch64': {}}, 'owners': ['sandboxer']}
+            observed = []
+            run = subprocess.run
+            def capture(command, **kwargs):
+                result = run(command, **kwargs, capture_output=True, text=True)
+                if any(str(arg).endswith('/test/e2e/e2e') for arg in command):
+                    observed.append(result)
+                return result
+            credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
+            with patch.object(executor.artifacts, 'verify_workspace', return_value=provenance), \
+                 patch.object(executor.platform, 'machine', return_value='x86_64'), \
+                 patch.dict(os.environ, credentials), patch.object(executor.subprocess, 'run', side_effect=capture), \
+                 self.assertRaisesRegex(ValueError, 'selected case failed'):
+                executor.execute(plan, 'x86_64', 'sandboxer', workspace, Path(directory) / 'result.json')
+            self.assertEqual(len(observed), 1)
+            self.assertNotEqual(observed[0].returncode, 0)
+            self.assertIn('source=snapshot.read-recovery.sh line=5 exit=17', observed[0].stderr)
+            self.assertIn('"error_terms": ["context canceled"]', observed[0].stderr)
+            self.assertNotIn('private-capability', observed[0].stderr)
 
     def test_privilege_environment_adds_only_trusted_tool_path(self):
         executor = load_module('case_privilege_environment', ROOT / 'ci/integration/run-artifact-tests.py')
@@ -179,32 +256,44 @@ class CaseBridgeContracts(unittest.TestCase):
         })
         self.assertEqual(prepared, {'BIN': '/prepared/bin', 'E2E_LIB': '/prepared/test/e2e/lib'})
 
-    def test_generated_compatibility_registry_is_exact_and_owner_scoped(self):
-        executor = load_module('generated_compatibility_executor', ROOT / 'ci/integration/run-artifact-tests.py')
-        with tempfile.TemporaryDirectory(prefix='kuasar-generated-runners-') as directory:
-            workspace = Path(directory)
-            runner = workspace / 'test/e2e/connector/run_all.sh'
-            runner.parent.mkdir(parents=True)
-            runner.write_text('#!/bin/sh\nexit 0\n')
-            runner.chmod(0o755)
-            registry = workspace / 'test/e2e/generated-compatibility-runners'
-            registry.write_text('test/e2e/connector/run_all.sh\n')
-            self.assertEqual(executor.generated_compatibility_runners(workspace),
-                             {'test/e2e/connector/run_all.sh'})
-            for invalid in (
-                    'test/e2e/connector/run_all.sh\ntest/e2e/connector/run_all.sh\n',
-                    'test/e2e/platform/run_all.sh\n', '../connector/run_all.sh\n'):
-                registry.write_text(invalid)
-                with self.assertRaises(ValueError):
-                    executor.generated_compatibility_runners(workspace)
-            registry.unlink()
-            registry.symlink_to(runner)
-            with self.assertRaisesRegex(ValueError, 'missing generated compatibility runner registry'):
-                executor.generated_compatibility_runners(workspace)
-        generated = {'test/e2e/connector/run_all.sh'}
-        self.assertTrue(executor.requires_privilege('test/e2e/connector/run_all.sh', False, generated))
-        self.assertTrue(executor.requires_privilege('test/e2e/connector/cases/network.tap.sh', True, generated))
-        self.assertFalse(executor.requires_privilege('test/e2e/sandboxer/run_all.sh', False, generated))
+    def test_baseline_profiles_keep_root_and_tool_path_without_a_registry(self):
+        executor = load_module('baseline_profile_executor', ROOT / 'ci/integration/run-artifact-tests.py')
+        for mode, stale_registry in (('source', False), ('source', True), ('exact-assets', False)):
+            with self.subTest(mode=mode, stale_registry=stale_registry), \
+                 tempfile.TemporaryDirectory(prefix='kuasar-baseline-exec-') as directory:
+                workspace = Path(directory) / 'prepared'
+                entry = 'test/e2e/connector/run_all.sh'
+                case = workspace / entry
+                case.parent.mkdir(parents=True)
+                # A shell fixture models an existing baseline owner; no product
+                # runner is created or restored by the implementation.
+                case.write_text('#!/bin/sh\nset -eu\n'
+                                '[ "$(id -u)" -eq 0 ]\n'
+                                'prepared-path-probe\n')
+                (workspace / 'provenance.json').write_text('{}')
+                if stale_registry:
+                    (workspace / 'test/e2e/generated-compatibility-runners').write_text(
+                        'test/e2e/guest-runtime/run_all.sh\n')
+                tools = Path(directory) / 'tools'
+                tools.mkdir()
+                probe = tools / 'prepared-path-probe'
+                probe.write_text('#!/bin/sh\nexit 0\n')
+                probe.chmod(0o755)
+                profile = {'cases': [entry], 'required_products': [], 'exclusions': [],
+                           'name': 'x86-owner-kvm'}
+                provenance = {'profile': profile, 'helpers': {}, 'embedded': {'init': 'a' * 64},
+                              'test_revisions': {}}
+                plan = {'mode': mode, 'lanes': {'x86_64': {'extra_checks': {}}}}
+                environment = {key: '' for key in (
+                    'GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
+                environment['PATH'] = str(tools) + os.pathsep + os.environ['PATH']
+                result = Path(directory) / 'result.json'
+                with patch.object(executor.artifacts, 'verify_workspace', return_value=provenance), \
+                     patch.object(executor.platform, 'machine', return_value='x86_64'), \
+                     patch.dict(os.environ, environment):
+                    record = executor.execute(plan, 'x86_64', 'core', workspace, result)
+                self.assertEqual(record['conclusion'], 'success')
+                self.assertEqual(record['timings'][0]['exit_code'], 0)
 
 
 class ToolPaths(unittest.TestCase):

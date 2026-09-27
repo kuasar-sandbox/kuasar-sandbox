@@ -25,10 +25,10 @@ class FailureDiagnostics(unittest.TestCase):
         self.metrics = self.root / "metrics"
         self.cleanup = self.root / "cleanup-status"
 
-    def run_case(self, body, *, case="read-recovery", cleanup="", blocked_output=False):
+    def run_case(self, body, *, case="read-recovery", cleanup="", blocked_output=False, filename=None):
         name = {"read-recovery": "e2e_sandbox_read_recovery.sh", "registry-n3": "e2e_cluster_stub.sh",
                 "unrelated": "e2e_unrelated.sh"}[case]
-        path = self.root / name
+        path = self.root / (filename or name)
         text = '''#!/usr/bin/env bash
 set -euo pipefail
 cleanup() {
@@ -79,6 +79,17 @@ fail() { exit 19; }
         self.assertEqual(report["line"], lines.index('[ "$code" = 200 ] || fail "private argument"') + 1)
         self.assertNotIn("raw-secret", json.dumps(reports))
         self.assertNotIn("private argument", result.stderr)
+
+    def test_canonical_recovery_failure_keeps_status_line_and_redacted_job_evidence(self):
+        (self.work / "seed.snapshot.log").write_text("context canceled private-capability\n")
+        result, reports, lines = self.run_case('SNAP=$(exit 17)\n', filename="snapshot.read-recovery.sh")
+        self.assertEqual(result.returncode, 17, result.stderr)
+        self.assertEqual(self.cleanup.read_text(), "17\n")
+        self.assertEqual(len(reports), 1)
+        self.assertEqual(reports[0]["source"], "snapshot.read-recovery.sh")
+        self.assertEqual(reports[0]["line"], lines.index("SNAP=$(exit 17)") + 1)
+        self.assertIn('"error_terms": ["context canceled"]', result.stderr)
+        self.assertNotIn("private-capability", result.stderr)
 
     def test_cleanup_failure_cannot_replace_original_failure(self):
         result, reports, _ = self.run_case("exit 17\n", cleanup="    return 23\n")

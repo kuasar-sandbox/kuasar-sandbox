@@ -198,6 +198,23 @@ def product_source_map(products, sources, kernel_sha):
     return result
 
 
+def include_migrated_baselines(owners, overlays, case_names, tests):
+    """A platform candidate executes the exact migrated baseline case trees."""
+    if "platform" not in owners:
+        return
+    for owner in artifacts.OWNERS:
+        if owner in overlays:
+            continue
+        record = tests[owner]
+        names = candidate_case_names(record["repository"], record["sha"], owner)
+        if names:
+            # These are test-only overlays at the existing immutable test pin.
+            # A genuine legacy owner keeps its complete existing runner.
+            owners.append(owner)
+            overlays.append(owner)
+            case_names[owner] = names
+
+
 def source_plan(framework_sha):
     primary = {"repository": os.environ["CANDIDATE_REPOSITORY"], "candidate_sha": os.environ["CANDIDATE_SHA"],
                "base_sha": os.environ["CANDIDATE_BASE_SHA"], "head_sha": os.environ["CANDIDATE_HEAD_SHA"],
@@ -233,6 +250,7 @@ def source_plan(framework_sha):
         overlays.append(owner)
         if owner == "guest-runtime":
             kernel_sha = record["candidate_sha"]
+    include_migrated_baselines(owners, overlays, candidate_cases, tests)
     products = artifacts.changed_products(changes)
     # Reuse #150/#151's Makefile input projection instead of treating a change
     # to an unrelated native target as a kernel change.

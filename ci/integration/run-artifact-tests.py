@@ -34,31 +34,10 @@ def privileged_command(command, prepared):
     # the CI boundary, forwarding only explicitly prepared inputs, never -E.
     if os.geteuid() == 0:
         return command
-    return ["sudo", "-n", "--preserve-env=" + ",".join(sorted(prepared)), "--", *command]
-
-
-def generated_compatibility_runners(workspace, required=False):
-    """Read trusted assembly output identifying synthesized legacy-shaped runners."""
-    registry = workspace / "test/e2e/generated-compatibility-runners"
-    if not registry.exists() and not registry.is_symlink() and not required:
-        return set()
-    artifacts.require(registry.is_file() and not registry.is_symlink(),
-                      "missing generated compatibility runner registry")
-    entries = registry.read_text().splitlines()
-    artifacts.require(entries == sorted(set(entries)),
-                      "invalid generated compatibility runner registry")
-    allowed = {f"test/e2e/{owner}/run_all.sh" for owner in artifacts.OWNERS if owner != "platform"}
-    artifacts.require(set(entries) <= allowed,
-                      "invalid generated compatibility runner path")
-    for entry in entries:
-        path = workspace / artifacts.relative(entry)
-        artifacts.require(path.is_file() and not path.is_symlink(),
-                          "missing generated compatibility runner")
-    return set(entries)
-
-
-def requires_privilege(case, rewritten, generated_runners):
-    return rewritten or case in generated_runners
+    # The setuid loader strips TMPDIR before sudo sees --preserve-env.
+    # Supply only the prepared variables after elevation, as literal argv.
+    return ["sudo", "-n", "--", "env",
+            *(f"{key}={value}" for key, value in sorted(prepared.items())), *command]
 
 
 def privilege_environment(prepared, environment_path):
@@ -81,8 +60,6 @@ def execute(plan, arch, shard, workspace, result_path):
               "extra_checks": plan["lanes"][arch].get("extra_checks", {}).get(shard, [])}
     started = time.monotonic()
     result_path.parent.mkdir(parents=True, exist_ok=True)
-    generated_runners = generated_compatibility_runners(
-        workspace, required=plan.get("mode") == "exact-assets")
     try:
         # Short private disk-backed paths preserve the existing Unix socket and
         # direct-I/O test contracts; long Actions workspace paths exceed sun_path.
@@ -129,6 +106,10 @@ def execute(plan, arch, shard, workspace, result_path):
                                "--workdir", str(workspace), "--arch", arch,
                                "--run-root", str(state / "cases"), "--out-root", str(state / "out"),
                                "--include", case_id]
+                    if case_id == "snapshot.read-recovery.sh":
+                        # Preserve the existing bounded failure collector when
+                        # this migrated case is dispatched by the public runner.
+                        selected["BASH_ENV"] = str(workspace / "test/e2e/lib/platform/failure-diagnostics.sh")
                 else:
                     command = ["bash", str(workspace / case)]
                 if owner == "accelerator":
@@ -137,9 +118,12 @@ def execute(plan, arch, shard, workspace, result_path):
                     selected["E2E_IMAGE"] = images["guest-runtime"]["image_id"]
                 elif "python" in images:
                     selected.update(E2E_IMAGE=images["python"]["image_id"], IMAGE=images["python"]["image_id"])
-                if requires_privilege(case, rewritten, generated_runners):
-                    selected = privilege_environment(selected, environment["PATH"])
-                    command = privileged_command(command, selected)
+                # The prepared profile selects product cases for this isolated
+                # runner. Preserve their root/tool prerequisites directly; a
+                # baseline owner must not lose them when an overlay retires a
+                # generated entrypoint or its old assembly registry.
+                selected = privilege_environment(selected, environment["PATH"])
+                command = privileged_command(command, selected)
                 case_started = time.monotonic()
                 completed = subprocess.run(command, cwd=state, env={**environment, **selected})
                 result["timings"].append({"case": case, "wall_seconds": time.monotonic() - case_started, "exit_code": completed.returncode})
