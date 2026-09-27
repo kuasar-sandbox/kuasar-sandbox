@@ -203,6 +203,48 @@ class CaseBridgeContracts(unittest.TestCase):
         with patch.object(executor.os, 'geteuid', return_value=0):
             self.assertEqual(executor.privileged_command(command, prepared), command)
 
+    def test_public_recovery_failure_reports_redacted_diagnostics_through_sudo(self):
+        executor = load_module('recovery_diagnostic_executor', ROOT / 'ci/integration/run-artifact-tests.py')
+        with tempfile.TemporaryDirectory(prefix='kuasar-recovery-') as directory:
+            workspace = Path(directory) / 'prepared'
+            (workspace / 'bin').mkdir(parents=True)
+            cases = workspace / 'test/e2e/cases'
+            cases.mkdir(parents=True)
+            library = workspace / 'test/e2e/lib/platform'
+            library.mkdir(parents=True)
+            for name in ('failure-diagnostics.sh', 'failure_diagnostics.py'):
+                shutil.copy2(ROOT / 'test/e2e/platform/lib' / name, library / name)
+            shutil.copy2(ROOT / 'test/e2e/e2e', workspace / 'test/e2e/e2e')
+            (cases / 'snapshot.read-recovery.sh').write_text(
+                'set -euo pipefail\ncleanup() { exit "$?"; }\ntrap cleanup EXIT\n'
+                'printf "context canceled private-capability\\n" > "$WORK/seed.snapshot.log"\n'
+                'SNAP=$(exit 17)\n')
+            (workspace / 'provenance.json').write_text('{}')
+            profile = {'cases': ['test/e2e/sandboxer/cases/snapshot.read-recovery.sh'],
+                       'required_products': [], 'exclusions': [], 'name': 'x86-owner-kvm'}
+            provenance = {'profile': profile, 'helpers': {}, 'embedded': {'init': 'a' * 64},
+                          'test_revisions': {}}
+            plan = {'schema': 1, 'framework_sha': 'a' * 40, 'test_revisions': {},
+                    'lanes': {'x86_64': {'extra_checks': {}}, 'aarch64': {}}, 'owners': ['sandboxer']}
+            observed = []
+            run = subprocess.run
+            def capture(command, **kwargs):
+                result = run(command, **kwargs, capture_output=True, text=True)
+                if any(str(arg).endswith('/test/e2e/e2e') for arg in command):
+                    observed.append(result)
+                return result
+            credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
+            with patch.object(executor.artifacts, 'verify_workspace', return_value=provenance), \
+                 patch.object(executor.platform, 'machine', return_value='x86_64'), \
+                 patch.dict(os.environ, credentials), patch.object(executor.subprocess, 'run', side_effect=capture), \
+                 self.assertRaisesRegex(ValueError, 'selected case failed'):
+                executor.execute(plan, 'x86_64', 'sandboxer', workspace, Path(directory) / 'result.json')
+            self.assertEqual(len(observed), 1)
+            self.assertNotEqual(observed[0].returncode, 0)
+            self.assertIn('source=snapshot.read-recovery.sh line=5 exit=17', observed[0].stderr)
+            self.assertIn('"error_terms": ["context canceled"]', observed[0].stderr)
+            self.assertNotIn('private-capability', observed[0].stderr)
+
     def test_privilege_environment_adds_only_trusted_tool_path(self):
         executor = load_module('case_privilege_environment', ROOT / 'ci/integration/run-artifact-tests.py')
         prepared = {'BIN': '/prepared/bin', 'E2E_LIB': '/prepared/test/e2e/lib'}

@@ -106,6 +106,10 @@ def execute(plan, arch, shard, workspace, result_path):
                                "--workdir", str(workspace), "--arch", arch,
                                "--run-root", str(state / "cases"), "--out-root", str(state / "out"),
                                "--include", case_id]
+                    if case_id == "snapshot.read-recovery.sh":
+                        # Preserve the existing bounded failure collector when
+                        # this migrated case is dispatched by the public runner.
+                        selected["BASH_ENV"] = str(workspace / "test/e2e/lib/platform/failure-diagnostics.sh")
                 else:
                     command = ["bash", str(workspace / case)]
                 if owner == "accelerator":

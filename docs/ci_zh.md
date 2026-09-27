@@ -107,6 +107,8 @@ source 模式 x86 sandboxer/platform 还用同一组制品保留 A/B/C/D `off/au
 
 CI 执行边界为每个已选 prepared profile 提供产品 case 所需权限和可信 bootstrap 工具路径，不依赖生成的 owner-runner registry。跨 `sudo` 只保留显式准备的输入变量与该工具路径，不保留无关环境变量。
 
+`snapshot.read-recovery.sh` 失败时，在 cleanup 前将用例、阶段、失败行及有界固定词表错误证据保留在 job 日志中。诊断保留测试的原始退出状态。
+
 ## 4. Daily 与 Stable
 
 `exact-assets` 仅接受实际公开的平台 aggregate workflow。

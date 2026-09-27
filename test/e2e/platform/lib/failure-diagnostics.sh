@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # BASH_ENV for two existing cases; all other shells retain their normal traps.
 case "${0##*/}:${CLUSTER_STUB_CASE:-}" in
-    e2e_sandbox_read_recovery.sh:*) _kd_case=read-recovery ;;
+    e2e_sandbox_read_recovery.sh:*|snapshot.read-recovery.sh:*) _kd_case=read-recovery ;;
     e2e_cluster_stub.sh:registry-n3) _kd_case=registry-n3 ;;
     *) return 0 ;;
 esac

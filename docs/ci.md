@@ -62,6 +62,8 @@ Platform source validation prepares migrated baseline case trees at their existi
 
 Product-case privilege and the trusted bootstrap tool path are supplied at the CI execution boundary for every selected prepared profile. They do not depend on a generated owner-runner registry. Only explicitly prepared input variables and that tool path cross `sudo`; unrelated environment variables are not preserved.
 
+Failures in `snapshot.read-recovery.sh` retain the case, phase, failing line and bounded fixed-vocabulary error evidence in the job log before cleanup. Diagnostics preserve the original test exit status.
+
 ## 4. Daily and Stable
 
 `exact-assets` is callable only by the actual public platform aggregate workflow. Its plan binds the exact committed manifest and staged fourteen-file asset set (platform + twelve component archives + SHA256SUMS). It selects no product rebuilds. Each target uses the same download/compose/prepare/profile/result primitives as PR mode; helper preparation may compile test tools from the exact selected test revisions. The separate required source checks remain outside artifact E2E.
