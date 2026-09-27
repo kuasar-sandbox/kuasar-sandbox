@@ -98,6 +98,19 @@ def check_request_rejection():
             event.write_text(json.dumps(data))
             result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=5)
             assert result.returncode != 0, fault
+        ref = 'refs/heads/ci/framework/pr-1/' + sha
+        event.write_text(json.dumps({'repository': {'full_name': repository, 'visibility': 'public'},
+                                     'ref': ref, 'after': sha, 'deleted': False}))
+        env.update(GITHUB_EVENT_NAME='push', GITHUB_REF=ref)
+        for overrides, allowed in (({}, True), ({'GITHUB_REF': 'refs/heads/main'}, False),
+                                   ({'CANDIDATE_PR': '2'}, False), ({'CANDIDATE_HEAD_SHA': '2' * 40}, False),
+                                   ({'CANDIDATE_SHA': '2' * 40}, False), ({'GITHUB_SHA': '2' * 40}, False),
+                                   ({'TRUSTED_WORKFLOW_SHA': '2' * 40}, False),
+                                   ({'CANDIDATE_REPOSITORY': 'kuasar-sandbox/connector'}, False),
+                                   ({'COMPANION_CANDIDATES': '[{}]'}, False)):
+            result = subprocess.run(['bash', '-c', script], env={**env, **overrides},
+                                    capture_output=True, text=True, timeout=5)
+            assert (result.returncode == 0) == allowed, (overrides, result.stderr)
 
 
 def check():
@@ -155,6 +168,13 @@ def check():
     assert expression(fork["if"], context) is False
     assert "github.event_name" in load("integration-tests.yml")["concurrency"]["group"]
     assert any("validate-source-set.sh" in step.get("run", "") for step in integration["results"]["steps"])
+    push = load('framework-candidate.yml')
+    assert push['permissions'] == {'contents': 'read', 'pull-requests': 'read'}
+    assert push['jobs']['ci']['uses'] == './.github/workflows/integration-tests.yml'
+    assert push['jobs']['ci']['needs'] == 'candidate' and 'secrets' not in push['jobs']['ci']
+    context['github']['event_name'] = 'push'
+    assert expression(integration['results']['name'], context) == 'finalize'
+    assert 'framework_candidate.py' in (ROOT / 'ci/integration/validate-source-set.sh').read_text()
     assert entry["e2e"]["uses"] == "./.github/workflows/integration-tests.yml"
     assert entry["e2e"]["with"]["candidate_repository"] == "${{ github.repository }}"
     for job in (entry["admission"], entry["finalize"]):

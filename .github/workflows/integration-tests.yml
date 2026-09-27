@@ -191,7 +191,7 @@ jobs:
   results:
     # Platform self-validation retains the repository's required check name.
     # Component callers keep their outer trusted ci-entry finalizer.
-    name: ${{ github.event_name == 'pull_request' && 'finalize' || 'results' }}
+    name: ${{ (github.event_name == 'pull_request' || github.event_name == 'push') && 'finalize' || 'results' }}
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     needs: [resolve, x86_64, aarch64, source-checks]
     runs-on: ubuntu-latest

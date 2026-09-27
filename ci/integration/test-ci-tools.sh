@@ -130,6 +130,7 @@ PY
 # Exercise both repository and visibility branches; literal workflow lines no
 # longer describe the staged guest-runtime exception to the existing pools.
 python3 "$SCRIPT_DIR/../hosted/test-workflows.py"
+python3 "$SCRIPT_DIR/test_framework_candidate.py"
 
 provisioner="$SCRIPT_DIR/../runner/provision.sh"
 bash "$SCRIPT_DIR/test-runner-native-materials.sh" "$provisioner"

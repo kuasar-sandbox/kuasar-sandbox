@@ -109,8 +109,12 @@ validate_companion() {
     ' <<< "$snapshot" >/dev/null
 }
 
-validate_primary \
-  || { echo "candidate no longer matches the exact open pull request" >&2; exit 1; }
+if [ "${GITHUB_EVENT_NAME:-}" = push ]; then
+  python3 -B "$(dirname "${BASH_SOURCE[0]}")/framework_candidate.py" --verify-inputs
+else
+  validate_primary \
+    || { echo "candidate no longer matches the exact open pull request" >&2; exit 1; }
+fi
 while IFS= read -r companion; do
   validate_companion "$companion" \
     || { echo "companion no longer matches the exact open pull request" >&2; exit 1; }
