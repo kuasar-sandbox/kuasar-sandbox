@@ -121,6 +121,8 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 可信预检和结果记录绑定不可变运行时镜像 ID，以及编译器/源码树缺失的验证证据；零用例静态 lane 不算产品验收。
 容器输入只读，可变用例目录和输出目录独立。
 
+`snapshot.read-recovery.sh` 失败时，在 cleanup 前将用例、阶段、失败行及有界固定词表错误证据保留在 job 日志中。诊断保留测试的原始退出状态。
+
 ## 4. Daily 与 Stable
 
 `exact-assets` 仅接受实际公开的平台 aggregate workflow。

@@ -67,6 +67,7 @@ fail() { exit 19; }
         self.assertEqual(report["source"], "snapshot.read-recovery.sh")
         self.assertEqual(report["line"], lines.index("SNAP=$(exit 17)") + 1)
         self.assertEqual(report["logs"]["seed.snapshot.log"]["excerpts"][0]["error_terms"], ["context deadline exceeded"])
+        self.assertIn('"error_terms": ["context deadline exceeded"]', result.stderr)
         self.assertNotIn(secret, json.dumps(reports) + result.stdout + result.stderr)
 
     def test_explicit_cluster_fail_retains_call_line_phase_and_http_status(self):

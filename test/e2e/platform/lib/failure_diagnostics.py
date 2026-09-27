@@ -83,7 +83,10 @@ def collect(case, phase, source, line, status, work, output, http_status):
 
 if __name__ == "__main__":
     try:
-        collect(*sys.argv[1:])
+        record = collect(*sys.argv[1:])
+        # The case owns its private state, which CI removes after execution.
+        # Retain only the collector's closed-vocabulary result in the job log.
+        print(record.read_text(), end="", file=sys.stderr)
     except Exception:
         # No traceback containing private paths, config, or file contents.
         print("Cannot collect bounded E2E failure diagnostics", file=sys.stderr)

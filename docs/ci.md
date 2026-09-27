@@ -66,6 +66,8 @@ CI supplies root privileges and the trusted tool path directly when launching se
 
 All nonempty lanes prepare inside a runtime-only container with no Go, Rust or C/C++ compilers and no component source trees. The full storage and snapshot suites also execute there, covering non-KVM and KVM contracts; applicable native ARM image cases use the same boundary. Cases requiring host systemd retain their native-host job. Trusted preflight and result records bind the immutable runtime image ID and the verified absence of compilers/source trees; static zero-case lanes do not count as product acceptance. Container inputs are read-only and mutable case/output directories are separate.
 
+Failures in `snapshot.read-recovery.sh` retain the case, phase, failing line and bounded fixed-vocabulary error evidence in the job log before cleanup. Diagnostics preserve the original test exit status.
+
 ## 4. Daily and Stable
 
 `exact-assets` is callable only by the actual public platform aggregate workflow. Its plan binds the exact committed manifest and staged fourteen-file asset set (platform + twelve component archives + SHA256SUMS). It selects no product or helper rebuilds. Each target uses the same download/compose/public-prepare/public-run/result primitives as PR mode and consumes the prebuilt helper packages from the exact staged platform archive. The separate required source checks remain outside artifact E2E.
