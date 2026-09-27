@@ -118,6 +118,40 @@ class CaseBridgeContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'unsupported E2E suite'):
                 resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
 
+    def test_platform_runs_migrated_baselines_as_exact_cases(self):
+        resolver = load_module('baseline_case_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
+        revisions = ARTIFACTS.release_test_revisions(
+            {owner: 'b' * 40 for owner in ARTIFACTS.OWNERS if owner != 'platform'}, 'a' * 40)
+        owners, overlays, cases = ['platform'], ['platform'], {}
+        migrated = {'accelerator': ['storage.cache.sh'], 'connector': ['network.tap.sh'],
+                    'guest-runtime': ['image.flatten.sh'], 'sandboxer': ['sandbox.cgroup.sh']}
+        def names(repository, sha, owner):
+            self.assertEqual(repository, revisions[owner]['repository'])
+            self.assertEqual(sha, revisions[owner]['sha'])
+            return migrated.get(owner, [])
+        with patch.object(resolver, 'candidate_case_names', side_effect=names):
+            resolver.include_migrated_baselines(owners, overlays, cases, revisions)
+        self.assertEqual(set(overlays), {'platform', *migrated})
+        self.assertEqual(cases, migrated)
+        profile = ARTIFACTS.profiles(owners, 'x86_64', cases)
+        for owner, entries in migrated.items():
+            self.assertIn(f'test/e2e/{owner}/cases/{entries[0]}', profile['cases'])
+            self.assertNotIn(f'test/e2e/{owner}/run_all.sh', profile['cases'])
+        # An owner with real legacy assertions is not replaced by its partial cases.
+        self.assertIn('test/e2e/orchestrator/run_all.sh', profile['cases'])
+        self.assertEqual(ARTIFACTS.changed_products({'platform': ['ci/integration/resolve-artifacts.py']}), [])
+
+    def test_component_selection_does_not_expand_to_other_baselines(self):
+        resolver = load_module('component_case_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
+        owners, overlays = ['connector'], ['connector']
+        cases = {'connector': ['network.tap.sh']}
+        with patch.object(resolver, 'candidate_case_names') as query:
+            resolver.include_migrated_baselines(owners, overlays, cases, {})
+        query.assert_not_called()
+        self.assertEqual(owners, ['connector'])
+        self.assertEqual(overlays, ['connector'])
+        self.assertEqual(cases, {'connector': ['network.tap.sh']})
+
     def test_executor_uses_public_runner_for_rewritten_case(self):
         executor = load_module('case_bridge_executor', ROOT / 'ci/integration/run-artifact-tests.py')
         with tempfile.TemporaryDirectory(prefix='kuasar-case-exec-') as directory:
