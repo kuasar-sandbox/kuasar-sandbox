@@ -45,10 +45,9 @@ def guest_fixture_script(plan, workspace):
     """Resolve the guest image fixture at the layout declared by the migration state."""
     migrated = bool(plan.get("candidate_cases", {}).get("guest-runtime"))
     normalized = workspace / "test/e2e/lib/guest-runtime/fixture.py"
-    # Exact-assets plans have no test overlays. Their validated package may
-    # already carry the migrated library even though candidate_cases is empty.
-    if plan.get("mode") == "exact-assets":
-        migrated = normalized.exists() or normalized.is_symlink()
+    # A baseline owner can already use the normalized package layout in either
+    # source or exact-assets mode, without appearing among candidate overlays.
+    migrated = migrated or normalized.exists() or normalized.is_symlink()
     path = normalized if migrated else workspace / "test/e2e/guest-runtime/fixture.py"
     artifacts.require(path.is_file() and not path.is_symlink(),
                       "missing prepared guest-runtime fixture helper")

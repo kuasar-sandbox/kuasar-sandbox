@@ -73,6 +73,42 @@ def runtime(root, arch, files):
     return prefix + footer(hashlib.sha256(prefix).hexdigest())
 
 
+class ArtifactPreparationContracts(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("artifact_prepare", Path(__file__).with_name("prepare-artifacts.py"))
+        self.prepare = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.prepare)
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.root = Path(self.directory.name)
+        self.normalized = self.root / "test/e2e/lib/guest-runtime/fixture.py"
+        self.legacy = self.root / "test/e2e/guest-runtime/fixture.py"
+        self.normalized.parent.mkdir(parents=True)
+        self.legacy.parent.mkdir(parents=True)
+
+    def test_baseline_normalized_fixture_works_without_candidate_overlay(self):
+        self.normalized.write_text("# maintained prepared fixture\n")
+        for mode in ("source", "exact-assets"):
+            with self.subTest(mode=mode):
+                self.assertEqual(self.prepare.guest_fixture_script({"mode": mode, "candidate_cases": {}}, self.root), self.normalized)
+
+    def test_declared_migration_cannot_fall_back_to_legacy_fixture(self):
+        self.legacy.write_text("# legacy prepared fixture\n")
+        with self.assertRaisesRegex(ValueError, "missing prepared"):
+            self.prepare.guest_fixture_script({"mode": "source", "candidate_cases": {"guest-runtime": ["image.flatten.sh"]}}, self.root)
+
+    def test_normalized_symlink_cannot_fall_back_to_legacy_fixture(self):
+        self.legacy.write_text("# legacy prepared fixture\n")
+        self.normalized.symlink_to(self.legacy)
+        for mode in ("source", "exact-assets"):
+            with self.subTest(mode=mode), self.assertRaisesRegex(ValueError, "missing prepared"):
+                self.prepare.guest_fixture_script({"mode": mode}, self.root)
+
+    def test_unmigrated_prepared_package_keeps_its_actual_fixture(self):
+        self.legacy.write_text("# legacy prepared fixture\n")
+        self.assertEqual(self.prepare.guest_fixture_script({"mode": "source"}, self.root), self.legacy)
+
+
 class ArtifactBuildContracts(unittest.TestCase):
     def test_helper_checkout_uses_test_pin_and_preserves_product_source(self):
         spec = importlib.util.spec_from_file_location("builder", Path(__file__).with_name("build-artifacts.py"))
