@@ -9,10 +9,9 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
-import zipfile
 
 import artifacts as ARTIFACTS
-from test_fixtures import CASES, selection
+from test_fixtures import CASES, selection, make_demo_wheelhouse
 
 ROOT = Path(__file__).resolve().parents[2]
 SPEC = importlib.util.spec_from_file_location('assemble_docs', ROOT / 'test/e2e/assemble_docs.py')
@@ -34,32 +33,27 @@ class DemoSDKFixtures(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.requirements = self.root / 'test/demo/requirements.txt'
-        self.requirements.parent.mkdir(parents=True)
-        self.requirements.write_text('e2b==2.25.1\n')
+        self.arch = self.prepare.platform.machine()
+        self.wheels = self.root / 'test/demo/wheels' / self.arch
+        make_demo_wheelhouse(self.requirements.parent, self.wheels.parent, (self.arch,))
 
     def test_wheel_tree_is_complete_without_host_packages_or_bytecode(self):
-        # Exercise the real installer offline with a small wheel.
-        wheels = self.root / 'wheels'
-        wheels.mkdir()
-        with zipfile.ZipFile(wheels / 'e2b-2.25.1-py3-none-any.whl', 'w') as wheel:
-            wheel.writestr('e2b/__init__.py', 'value = "prepared SDK"\n')
-            wheel.writestr('e2b-2.25.1.dist-info/METADATA',
-                           'Metadata-Version: 2.1\nName: e2b\nVersion: 2.25.1\n')
-            wheel.writestr('e2b-2.25.1.dist-info/WHEEL',
-                           'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n')
-            wheel.writestr('e2b-2.25.1.dist-info/RECORD', '')
+        # Run the production installer unchanged; no test-injected offline flags.
         real_run = subprocess.run
         commands = []
-        def offline_run(command, **kwargs):
+        def record_run(command, **kwargs):
             commands.append(command)
-            if 'pip' in command:
-                command = [*command, '--no-index', '--find-links', str(wheels)]
             return real_run(command, **kwargs)
-        with patch.object(self.prepare.subprocess, 'run', side_effect=offline_run):
+        with patch.dict(os.environ, {'PIP_INDEX_URL': 'https://index.invalid/unreachable'}), \
+             patch.object(self.prepare.subprocess, 'run', side_effect=record_run):
             record = self.prepare.prepare_demo_sdk(self.root)
         self.assertEqual(record['requirements_sha256'], ARTIFACTS.digest(self.requirements))
         self.assertEqual(record['files'], ARTIFACTS.tree_files(self.root / record['directory']))
         self.assertIn('e2b/__init__.py', record['files'])
+        self.assertIn('prepared_dependency/__init__.py', record['files'])
+        self.assertEqual(record['wheelhouse'], json.loads((self.wheels / 'manifest.json').read_text()))
+        self.assertTrue({'--no-index', '--require-hashes', '--find-links'} <= set(commands[0]))
+        self.assertEqual(commands[0][commands[0].index('--find-links') + 1], str(self.wheels))
         self.assertTrue({'--only-binary=:all:', '--no-compile', '--ignore-installed', '--isolated'} <= set(commands[0]))
         self.assertTrue({'-I', '-S', '-B'} <= set(commands[1]))
         self.assertFalse(any('__pycache__' in name for name in record['files']))
@@ -72,6 +66,46 @@ class DemoSDKFixtures(unittest.TestCase):
              self.assertRaisesRegex(ValueError, 'requirements'):
             self.prepare.prepare_demo_sdk(self.root)
         run.assert_not_called()
+
+    def test_missing_changed_or_unlocked_wheels_fail_before_installation(self):
+        wheel = self.wheels / 'prepared_dependency-1.0-py3-none-any.whl'
+        content = wheel.read_bytes()
+        for fault in ('missing', 'changed', 'unlocked'):
+            with self.subTest(fault=fault):
+                if fault == 'missing': wheel.unlink()
+                elif fault == 'changed': wheel.write_bytes(content + b'tampered')
+                else:
+                    wheel.write_bytes(content)
+                    (self.wheels / 'unexpected.whl').write_bytes(b'unlocked')
+                with patch.object(self.prepare.subprocess, 'run') as run, self.assertRaises(ValueError):
+                    self.prepare.prepare_demo_sdk(self.root)
+                run.assert_not_called()
+
+    def test_manifest_cannot_hide_missing_transitive_dependency(self):
+        path = self.wheels / 'manifest.json'
+        manifest = json.loads(path.read_text())
+        name = 'prepared_dependency-1.0-py3-none-any.whl'
+        (self.wheels / name).unlink()
+        del manifest['wheels'][name]
+        path.write_text(json.dumps(manifest))
+        with patch.object(self.prepare.subprocess, 'run') as run, \
+             self.assertRaisesRegex(ValueError, 'incomplete Demo wheel closure'):
+            self.prepare.prepare_demo_sdk(self.root)
+        run.assert_not_called()
+
+    def test_lock_and_package_versions_are_bound_before_installation(self):
+        path = self.wheels / 'manifest.json'
+        manifest = json.loads(path.read_text())
+        for fault in ('version', 'lock', 'arch'):
+            changed = json.loads(json.dumps(manifest))
+            if fault == 'version': changed['wheels']['e2b-2.25.1-py3-none-any.whl']['version'] = '0.0.0'
+            elif fault == 'lock': changed['lock_sha256'] = '0' * 64
+            else: changed['arch'] = 'other'
+            path.write_text(json.dumps(changed))
+            with self.subTest(fault=fault), patch.object(self.prepare.subprocess, 'run') as run, self.assertRaises(ValueError):
+                self.prepare.prepare_demo_sdk(self.root)
+            run.assert_not_called()
+
 
     def test_install_failure_is_not_replaced_by_host_sdk(self):
         with patch.object(self.prepare.subprocess, 'run',
@@ -104,6 +138,29 @@ class DemoSDKFixtures(unittest.TestCase):
              self.assertRaises(subprocess.CalledProcessError) as failure:
             self.prepare.prepare_demo_sdk(self.root)
         self.assertIn(b'host_only_dependency', failure.exception.stderr)
+
+    def test_source_build_fetches_hash_locked_wheels_and_records_their_metadata(self):
+        builder = load_module('demo_wheel_builder', ROOT / 'ci/integration/build_demo_wheels.py')
+        destination = self.root / 'built-wheels'
+        commands = []
+        def prepared_download(command, **kwargs):
+            commands.append(command)
+            for wheel in self.wheels.glob('*.whl'):
+                shutil.copyfile(wheel, destination / wheel.name)
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(builder.subprocess, 'run', side_effect=prepared_download):
+            builder.build(self.requirements.parent, self.arch, destination)
+        self.assertTrue({'download', '--only-binary=:all:', '--require-hashes'} <= set(commands[0]))
+        self.assertEqual(commands[0][commands[0].index('--requirement') + 1], str(self.requirements.with_suffix('.lock')))
+        self.assertEqual(json.loads((destination / 'manifest.json').read_text()),
+                         json.loads((self.wheels / 'manifest.json').read_text()))
+
+    def test_source_build_rejects_credentials_before_download(self):
+        builder = load_module('demo_wheel_credentials', ROOT / 'ci/integration/build_demo_wheels.py')
+        with patch.dict(os.environ, {'GH_TOKEN': 'fixture-token'}), \
+             patch.object(builder.subprocess, 'run') as run, self.assertRaisesRegex(ValueError, 'must not receive GH_TOKEN'):
+            builder.build(self.requirements.parent, self.arch, self.root / 'built-wheels')
+        run.assert_not_called()
 
 
 class CaseBridgeContracts(unittest.TestCase):

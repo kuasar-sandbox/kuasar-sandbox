@@ -36,6 +36,7 @@ class DocumentationPackageTest(unittest.TestCase):
         runner.chmod(0o755)
         (platform / 'test/e2e/lib/common.sh').write_text('# common E2E helpers\\n')
         shutil.copyfile(ROOT / 'test/e2e/lib/workspace.py', platform / 'test/e2e/lib/workspace.py')
+        shutil.copyfile(ROOT / 'test/e2e/lib/demo_wheels.py', platform / 'test/e2e/lib/demo_wheels.py')
         (self.root / 'refs.tsv').write_text(''.join(f'{o}\t{o}-revision\n' for o in (*OWNERS, 'vmlinux')))
 
     def assemble(self, *, kernel=False, success=True):

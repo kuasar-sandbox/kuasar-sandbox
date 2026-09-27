@@ -39,6 +39,12 @@ FORMAL_ROOT="$TMP/formal-root"
 mkdir -p "$FORMAL_ROOT"
 tar -C "$ROOT" --exclude='./.git' -cf - . | tar -x -C "$FORMAL_ROOT"
 write_preview_base_fixture "$FORMAL_ROOT/releases/release.yaml"
+python3 - "$ROOT/ci/integration" "$FORMAL_ROOT/test/demo" "$TMP/demo-wheels" <<'PY'
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from test_fixtures import make_demo_wheelhouse
+make_demo_wheelhouse(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]))
+PY
 git -C "$FORMAL_ROOT" init -q
 git -C "$FORMAL_ROOT" config user.name release-test
 git -C "$FORMAL_ROOT" config user.email release-test@example.invalid
@@ -130,6 +136,7 @@ for arch, machine in (('x86_64', 62), ('aarch64', 183)):
         records[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'source_sha': '1' * 40 if name in {'zot', 'versitygw'} else pins[owner]}
     (directory / 'helpers.json').write_text(json.dumps({'arch': arch, 'framework_sha': '1' * 40, 'test_revisions': pins, 'helpers': records}))
 PY
+cp -a "$TMP/demo-wheels" "$TMP/fetched/e2e-wheels"
 printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux.md"
 printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
 printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"

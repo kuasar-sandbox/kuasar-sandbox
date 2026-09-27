@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """Validate flat cases and prebuilt helper bytes without executing archive code."""
 import hashlib
+import importlib.util
 import json
 import re
 from pathlib import Path
 import struct
 import sys
 import tarfile
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci/integration'))
 import artifacts
+
+spec = importlib.util.spec_from_file_location('demo_wheels', Path(__file__).resolve().parents[1] / 'test/e2e/lib/demo_wheels.py')
+demo_wheels = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(demo_wheels)
 
 
 def validate(path, expected_pins=None):
@@ -35,6 +41,18 @@ def validate(path, expected_pins=None):
         for name in members:
             if name.startswith('test/e2e/helpers/'):
                 artifacts.require(Path(name).parts[3] in artifacts.ARCHES, 'unknown helper architecture')
+        if 'test/e2e/cases/basic.demo.sh' in cases:
+            # Validate with the controller's code, never with code from the archive.
+            with tempfile.TemporaryDirectory(prefix='release-demo-wheels-') as directory:
+                demo = Path(directory)
+                for name, entry in members.items():
+                    if name in {'test/demo/requirements.txt', 'test/demo/requirements.lock'} or name.startswith('test/demo/wheels/'):
+                        if entry.isfile():
+                            target = demo / name.removeprefix('test/demo/')
+                            target.parent.mkdir(parents=True, exist_ok=True)
+                            target.write_bytes(archive.extractfile(entry).read())
+                for arch in artifacts.ARCHES:
+                    demo_wheels.validate(demo / 'wheels' / arch, demo / 'requirements.lock', demo / 'requirements.txt', arch)
         previous = None
         for arch in artifacts.ARCHES:
             root = f'test/e2e/helpers/{arch}/'

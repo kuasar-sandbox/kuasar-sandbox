@@ -6,8 +6,22 @@ set -euo pipefail
 [[ "$TRUSTED_WORKFLOW_SHA" =~ ^[0-9a-f]{40}$ ]]
 case "$INTEGRATION_MODE" in
   source)
-    [ "$GITHUB_EVENT_NAME" = pull_request_target ] \
-      || { echo "source Integration E2E requires pull_request_target" >&2; exit 1; }
+    case "$GITHUB_EVENT_NAME" in
+      pull_request_target) ;;
+      pull_request)
+        # Only the platform framework validates itself from an exact same-repo
+        # merge commit. This route has no write token or inherited App secrets.
+        [ "$GITHUB_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ] \
+          && [ "$CANDIDATE_REPOSITORY" = "$GITHUB_REPOSITORY" ] \
+          && [ "$TRUSTED_WORKFLOW_SHA" = "$CANDIDATE_SHA" ] \
+          && [ "$GITHUB_SHA" = "$CANDIDATE_SHA" ] \
+          && [ "$COMPANION_CANDIDATES" = '[]' ] \
+          && jq -e --arg repo "$GITHUB_REPOSITORY" \
+            '.pull_request.head.repo.full_name == $repo' "$GITHUB_EVENT_PATH" >/dev/null \
+          || { echo "framework CI requires the exact same-repository platform merge candidate" >&2; exit 1; }
+        ;;
+      *) echo "source Integration E2E requires pull_request_target or platform pull_request" >&2; exit 1 ;;
+    esac
     [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$ ]]
     for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do
       value=${!variable}
@@ -49,7 +63,7 @@ case "$INTEGRATION_MODE" in
         and .pull_request.base.sha == $base
         and .pull_request.head.sha == $head
       ' "$GITHUB_EVENT_PATH" >/dev/null \
-      || { echo "pull_request_target inputs do not match the admitted event" >&2; exit 1; }
+      || { echo "PR inputs do not match the admitted event" >&2; exit 1; }
     ;;
     exact-assets)
       [ "$GITHUB_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ] \

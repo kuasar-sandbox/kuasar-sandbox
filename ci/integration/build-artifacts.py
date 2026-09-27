@@ -13,6 +13,7 @@ import tempfile
 
 import artifacts
 import build_helpers
+import build_demo_wheels
 
 ROOT = Path(__file__).resolve().parents[2]
 LIBRARIES = {"sandboxer": ("accelerator", "connector"), "guest-runtime": ("accelerator",),
@@ -206,6 +207,9 @@ def build(plan, arch, assets, sources, output):
         else:
             shutil.copytree(pinned / "test/e2e", destination)
     helpers = artifacts.planned_helpers(lane["selection"]) if plan["mode"] == "source" else {}
+    if plan['mode'] == 'source' and 'basic.demo.sh' in lane['selection']['cases']:
+        demo = output / artifacts.test_overlay_root('platform') / 'demo'
+        build_demo_wheels.build(demo, arch, demo / 'wheels' / arch)
     if helpers:
         helper_source = helper_sources(plan, arch, sources)
         build_helpers.build(helper_source, arch, output / "helpers", helpers, environment)

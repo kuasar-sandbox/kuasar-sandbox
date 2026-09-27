@@ -129,7 +129,7 @@ jobs:
           taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           python3 -B control/release/build-e2e-helpers.py \
             --sources fetched/test-sources --test-revisions fetched/test-revisions.json \
-            --output fetched/e2e-helpers
+            --output fetched/e2e-helpers --wheels-output fetched/e2e-wheels --platform-source platform
 
       - name: Assemble exact products, cases and prebuilt helpers
         env:

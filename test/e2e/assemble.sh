@@ -59,6 +59,9 @@ copy_cases platform "$PLATFORM/test/e2e/platform"
 if [[ -n "${E2E_HELPER_ROOT:-}" ]]; then
     cp -a "$E2E_HELPER_ROOT" "$OUTPUT/test/e2e/helpers"
 fi
+if [[ -n "${E2E_WHEEL_ROOT:-}" ]]; then
+    cp -a "$E2E_WHEEL_ROOT" "$OUTPUT/test/demo/wheels"
+fi
 python3 -B "$(dirname "${BASH_SOURCE[0]}")/assemble_docs.py" \
     "$OUTPUT" "$PLATFORM" "${SOURCES[@]}"
 python3 -B "$OUTPUT/test/e2e/e2e" list --all

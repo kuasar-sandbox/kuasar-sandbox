@@ -235,6 +235,7 @@ assemble_release() {
 
   platform_bundle="$work/platform-bundle"
   E2E_HELPER_ROOT="${E2E_HELPER_ROOT:-$fetched/e2e-helpers}" \
+    E2E_WHEEL_ROOT="${E2E_WHEEL_ROOT:-$fetched/e2e-wheels}" \
     "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$fetched/test-sources" "$platform_bundle"
   platform_name="$(platform_archive "$version")"
   python3 "$ROOT/release/validate-e2e-package.py" "$platform_bundle/assets/$platform_name" "$fetched/test-revisions.json"

@@ -16,10 +16,14 @@ if: github.event.repository.visibility == 'public' && github.event.repository.fu
 非公开调用不分配 hosted job，也不构成成功验收。没有私有 ARM 队列、新私有适配、larger/付费 fallback。
 既有 runner 运维资料仍在 [ci/runner](../ci/runner/README.md)，新流程不修改其服务。
 
-`pull_request_target` 仍只接受 `main` 和 `release/vMAJOR.MINOR.x`。非 draft 同仓 PR 自动准入；
+组件调用方和平台 fork 使用可信 main 上的 `pull_request_target` 控制流程，只接受 `main` 和 `release/vMAJOR.MINOR.x`。非 draft 的组件同仓 PR 自动准入；
 fork 准入仍查询当前 active 组织成员身份，不能以 `author_association` 代替。
 admission 复核当前 PR/base/head 和 integration commit 的两个父提交，并向该 integration commit
 写入 `kuasar/ci-exact-head=pending`。draft、外部 fork 和冲突都不能得到 E2E 成功结论。
+
+平台同仓 PR 使用 `pull_request`，在精确的两父 merge commit 上调用本地 reusable workflow，使框架变更在合入 main 前验证自己的 prepare/run 合同。
+该流程只有读取权限，不继承 App secret；解析前以及所有必需源码/build/prepare/产品/性能阶段完成后，均复核当前 PR/base/head，
+并在 merge candidate 上报告既有必需检查 `ci / finalize`。draft 不分配产品 job。组件和 fork 调用方保留既有可信 admission/finalize。
 
 App key 和短期控制 token 只进入受信任的 admission/finalize 与发布控制 job。
 产品/helper 构建、源码检查、prepare、E2E 都不接收 App key，候选代码在新的标准 job 执行。
@@ -95,8 +99,10 @@ owner 测试 revision 与产品 tag 独立。新聚合在维护清单的 `test_r
 内部 CI shard 按 suite 分组精确文件，plan 在执行前记录所选用例和架构排除项。
 
 source/helper build 生成目标架构的 zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe，
-以及 x86 cgroup probe。发布包携带两种架构的 helper、精确测试 pin 和摘要。prepare 消费这些二进制，
-准备 manifest archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像和仅来自 wheel 的 Demo SDK。
+以及 x86 cgroup probe。发布包携带两种架构的 helper、精确测试 pin 和摘要。同一更早的 build 阶段按 `test/demo/requirements.lock`
+获取 Python 3.12 的完整 Demo SDK wheel 依赖闭包，固定全部版本及 wheel 摘要；发布包携带两种架构的 wheelhouse。prepare 消费这些二进制，
+准备 manifest archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像，并仅从本地 wheelhouse 通过
+`--no-index --find-links` 和 `--require-hashes` 安装 Demo SDK。wheel 缺失或变化时在安装前失败。provenance 绑定包名、版本、wheel 摘要、lock 身份和安装后的文件树。
 它调用与下载发布包相同的公开 prepare 入口，并检查已有产品/测试输入没有变化。Capture helper 测试保留在独立 orchestrator 源码 gate。
 工作区包含 `bin/`、`test/`、`fixtures/`、`images/`、材料及 `provenance.json`。真实 Build、flatten、snapshot、publish、restore 仍在聚焦的产品用例中执行。
 

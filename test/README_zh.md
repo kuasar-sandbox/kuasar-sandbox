@@ -6,7 +6,7 @@
 
 组件在自己的 `test/e2e/cases/` 和 `test/e2e/lib/` 维护用例及底层 helper。主仓维护 `test/e2e/platform/cases/basic.demo.sh`。源码组装阶段从精确测试 revision 复制用例到扁平的 `test/e2e/cases/`，helper 放入 `test/e2e/lib/<owner>/`。重复 ID、未知 suite 和 owner runner 都会被拒绝。维护归属不影响公共选择语义。
 
-platform 包携带公共 `test/e2e/e2e` runner 和两个架构的预构建 helper。prepare 解析镜像并从 wheel 安装固定 Demo SDK，记录文件摘要、权限和镜像内容 ID。执行只消费不可变工作区，不构建产品或 helper、不发现兄弟源码树、不拉取替代镜像、不使用宿主机 helper。被测 Build、flatten、snapshot 和发布操作仍真实执行。
+platform 包携带公共 `test/e2e/e2e` runner 和两个架构的预构建 helper。更早的 source/release build 按 `test/demo/requirements.lock` 获取完整 Demo SDK wheel 依赖闭包，并打包两种架构的 wheelhouse。prepare 解析镜像，仅从本地 hash-locked wheel 安装 SDK（`--no-index --find-links`、`--require-hashes`），记录包名/版本/wheel 身份、安装文件摘要、权限和镜像内容 ID。wheel 缺失或变化时失败。执行只消费不可变工作区，不构建产品或 helper、不发现兄弟源码树、不拉取替代镜像、不使用宿主机 helper。被测 Build、flatten、snapshot 和发布操作仍真实执行。
 
 ```bash
 python3 /release/test/e2e/e2e list --suite storage

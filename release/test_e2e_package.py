@@ -13,6 +13,7 @@ import unittest
 spec = importlib.util.spec_from_file_location('e2e_package', Path(__file__).with_name('validate-e2e-package.py'))
 package = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(package)
+from test_fixtures import make_demo_wheelhouse
 
 
 class PrebuiltPackage(unittest.TestCase):
@@ -47,6 +48,33 @@ class PrebuiltPackage(unittest.TestCase):
 
     def test_both_architectures_have_complete_exact_helpers(self):
         self.validate()
+
+    def add_demo(self):
+        self.files['test/e2e/cases/basic.demo.sh'] = (b'exit 0\n', 0o644)
+        with tempfile.TemporaryDirectory() as directory:
+            demo = Path(directory)
+            make_demo_wheelhouse(demo, demo / 'wheels')
+            for path in demo.rglob('*'):
+                if path.is_file():
+                    self.files['test/demo/' + str(path.relative_to(demo))] = (path.read_bytes(), 0o644)
+
+    def test_demo_requires_both_architectures_of_complete_wheel_inputs(self):
+        self.add_demo()
+        self.validate()
+        del self.files['test/demo/wheels/aarch64/manifest.json']
+        with self.assertRaisesRegex(ValueError, 'missing Demo wheel manifest'):
+            self.validate()
+
+    def test_demo_missing_and_tampered_dependency_cannot_be_published(self):
+        self.add_demo()
+        name = 'test/demo/wheels/x86_64/prepared_dependency-1.0-py3-none-any.whl'
+        data, mode = self.files[name]
+        self.files[name] = (data + b'tamper', mode)
+        with self.assertRaisesRegex(ValueError, 'checksum mismatch'):
+            self.validate()
+        del self.files[name]
+        with self.assertRaisesRegex(ValueError, 'missing or undeclared Demo wheels'):
+            self.validate()
 
     def test_selected_pin_mismatch_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'pins differ'):

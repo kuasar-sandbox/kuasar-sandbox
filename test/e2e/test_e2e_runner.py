@@ -122,6 +122,7 @@ class PreparedRunnerTests(unittest.TestCase):
         shutil.copyfile(MODULE, self.release / 'test/e2e/e2e')
         shutil.copyfile(MODULE.parent / 'lib/common.sh', self.release / 'test/e2e/lib/common.sh')
         shutil.copyfile(MODULE.parent / 'lib/workspace.py', self.release / 'test/e2e/lib/workspace.py')
+        shutil.copyfile(MODULE.parent / 'lib/demo_wheels.py', self.release / 'test/e2e/lib/demo_wheels.py')
         helpers = self.release / 'test/e2e/helpers' / platform.machine()
         helpers.mkdir(parents=True)
         (helpers / 'helpers.json').write_text(json.dumps({'arch': platform.machine(), 'helpers': {}}))

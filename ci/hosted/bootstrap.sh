@@ -28,7 +28,7 @@ select_profile() {
     case "$profile" in
         control) ;;
         release-control) with_go=true ;;
-        helper-build) with_go=true; packages+=(build-essential) ;;
+        helper-build) with_go=true; packages+=(build-essential python3-pip) ;;
         kernel) with_go=true; with_kernel=true ;;
         runtime|runtime-publish) with_go=true; with_native=true; with_readers=true ;;
         source) with_go=true; with_native=true; with_kernel=true; with_readers=true; with_vm=true ;;

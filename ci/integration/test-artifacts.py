@@ -161,6 +161,7 @@ class ArtifactBuildContracts(unittest.TestCase):
             output = root / "build-output"
             credentials = {key: "" for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}
             with patch.object(builder, "ROOT", root), patch.object(builder.build_helpers, "ROOT", root), \
+                 patch.object(builder.build_demo_wheels, "build"), \
                  patch.object(builder, "materialize"), patch.object(builder, "test_source", return_value=root), patch.object(builder, "helper_sources", return_value=root), \
                  patch.object(builder.platform, "machine", return_value="x86_64"), \
                  patch.object(builder.subprocess, "check_output", return_value=("a" * 40 + "\n")), \
@@ -380,6 +381,7 @@ class ArtifactContracts(unittest.TestCase):
                 runner = Path(__file__).resolve().parents[2] / "test/e2e"
                 shutil.copy2(runner / "e2e", source / "e2e/e2e")
                 shutil.copy2(runner / "lib/workspace.py", lib / "workspace.py")
+                shutil.copy2(runner / "lib/demo_wheels.py", lib / "demo_wheels.py")
                 shutil.copy2(runner / "lib/common.sh", lib / "common.sh")
             test_records[owner] = subject.tree_files(source)
         self.metadata = {"plan_id": subject.identity(self.plan), "arch": arch, "products": records,
