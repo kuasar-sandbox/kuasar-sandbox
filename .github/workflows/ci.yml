@@ -36,6 +36,7 @@ jobs:
       head_sha: ${{ github.event.pull_request.head.sha }}
 
   framework-result:
+    name: ci / finalize
     if: >-
       always() &&
       github.event.repository.visibility == 'public' &&
