@@ -62,6 +62,12 @@ class BootstrapTests(unittest.TestCase):
                 self.assertLessEqual(crypto, native)
                 self.assertFalse(target & native)
 
+    def test_prepare_has_wheel_installer_without_enabling_go(self):
+        result = shell('select_profile artifact-prepare; printf "%s\\n" "${packages[@]}"; echo "go=$with_go"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("python3-pip", result.stdout.splitlines())
+        self.assertIn("go=false", result.stdout.splitlines())
+
     def test_full_suite_utilities_and_exact_assets_build_scope(self):
         for profile in ("source", "exact-assets"):
             result = shell('select_profile "$PROFILE"; printf "%s\\n" "${packages[@]}"', PROFILE=profile)

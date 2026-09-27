@@ -46,7 +46,7 @@ select_profile() {
         packages+=(bc bison flex libelf-dev libssl-dev libncurses-dev)
     fi
     if $with_native || $with_readers; then
-        packages+=(autoconf automake libtool uuid-dev)
+        packages+=(autoconf automake libtool uuid-dev python3-pip)
     fi
     if $with_native; then
         packages+=(patch libssl-dev liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)

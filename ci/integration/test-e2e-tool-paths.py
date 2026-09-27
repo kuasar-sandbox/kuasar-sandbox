@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 import artifacts as ARTIFACTS
 
@@ -23,6 +24,85 @@ def load_module(name, path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+class DemoSDKFixtures(unittest.TestCase):
+    def setUp(self):
+        self.prepare = load_module('demo_sdk_prepare', ROOT / 'ci/integration/prepare-artifacts.py')
+        temporary = tempfile.TemporaryDirectory(prefix='kuasar-demo-sdk-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.requirements = self.root / 'test/demo/requirements.txt'
+        self.requirements.parent.mkdir(parents=True)
+        self.requirements.write_text('e2b==2.25.1\n')
+
+    def test_wheel_tree_is_complete_without_host_packages_or_bytecode(self):
+        # Exercise the real installer offline with a small wheel.
+        wheels = self.root / 'wheels'
+        wheels.mkdir()
+        with zipfile.ZipFile(wheels / 'e2b-2.25.1-py3-none-any.whl', 'w') as wheel:
+            wheel.writestr('e2b/__init__.py', 'value = "prepared SDK"\n')
+            wheel.writestr('e2b-2.25.1.dist-info/METADATA',
+                           'Metadata-Version: 2.1\nName: e2b\nVersion: 2.25.1\n')
+            wheel.writestr('e2b-2.25.1.dist-info/WHEEL',
+                           'Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n')
+            wheel.writestr('e2b-2.25.1.dist-info/RECORD', '')
+        real_run = subprocess.run
+        commands = []
+        def offline_run(command, **kwargs):
+            commands.append(command)
+            if 'pip' in command:
+                command = [*command, '--no-index', '--find-links', str(wheels)]
+            return real_run(command, **kwargs)
+        with patch.object(self.prepare.subprocess, 'run', side_effect=offline_run):
+            record = self.prepare.prepare_demo_sdk(self.root)
+        self.assertEqual(record['requirements_sha256'], ARTIFACTS.digest(self.requirements))
+        self.assertEqual(record['files'], ARTIFACTS.tree_files(self.root / record['directory']))
+        self.assertIn('e2b/__init__.py', record['files'])
+        self.assertTrue({'--only-binary=:all:', '--no-compile', '--ignore-installed', '--isolated'} <= set(commands[0]))
+        self.assertTrue({'-I', '-S', '-B'} <= set(commands[1]))
+        self.assertFalse(any('__pycache__' in name for name in record['files']))
+        with self.assertRaisesRegex(ValueError, 'already exists'):
+            self.prepare.prepare_demo_sdk(self.root)
+
+    def test_missing_requirements_fails_before_installation(self):
+        self.requirements.unlink()
+        with patch.object(self.prepare.subprocess, 'run') as run, \
+             self.assertRaisesRegex(ValueError, 'requirements'):
+            self.prepare.prepare_demo_sdk(self.root)
+        run.assert_not_called()
+
+    def test_install_failure_is_not_replaced_by_host_sdk(self):
+        with patch.object(self.prepare.subprocess, 'run',
+                          side_effect=subprocess.CalledProcessError(23, ['pip'])) as run, \
+             self.assertRaises(subprocess.CalledProcessError) as failure:
+            self.prepare.prepare_demo_sdk(self.root)
+        self.assertEqual(failure.exception.returncode, 23)
+        self.assertEqual(run.call_count, 1)
+
+    def test_missing_installed_sdk_fails_before_import(self):
+        with patch.object(self.prepare.subprocess, 'run') as run, \
+             self.assertRaisesRegex(ValueError, 'missing e2b'):
+            self.prepare.prepare_demo_sdk(self.root)
+        self.assertEqual(run.call_count, 1)
+
+    def test_host_pythonpath_cannot_supply_missing_sdk_dependency(self):
+        host = self.root / 'host'
+        host.mkdir()
+        (host / 'host_only_dependency.py').write_text('value = 1\n')
+        real_run = subprocess.run
+        def incomplete_install(command, **kwargs):
+            if 'pip' in command:
+                package = self.root / 'fixtures/demo-sdk/e2b'
+                package.mkdir(parents=True)
+                (package / '__init__.py').write_text('import host_only_dependency\n')
+                return subprocess.CompletedProcess(command, 0)
+            return real_run(command, capture_output=True, **kwargs)
+        with patch.dict(os.environ, {'PYTHONPATH': str(host)}), \
+             patch.object(self.prepare.subprocess, 'run', side_effect=incomplete_install), \
+             self.assertRaises(subprocess.CalledProcessError) as failure:
+            self.prepare.prepare_demo_sdk(self.root)
+        self.assertIn(b'host_only_dependency', failure.exception.stderr)
 
 
 class CaseBridgeContracts(unittest.TestCase):
