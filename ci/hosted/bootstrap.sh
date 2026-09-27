@@ -28,6 +28,7 @@ select_profile() {
     case "$profile" in
         control) ;;
         release-control) with_go=true ;;
+        helper-build) with_go=true; packages+=(build-essential) ;;
         kernel) with_go=true; with_kernel=true ;;
         runtime|runtime-publish) with_go=true; with_native=true; with_readers=true ;;
         source) with_go=true; with_native=true; with_kernel=true; with_readers=true; with_vm=true ;;
@@ -259,7 +260,7 @@ PY
 
 main() {
     if [ "$#" -ne 2 ] || [ "$1" != --profile ]; then
-        die "usage: bootstrap.sh --profile control|release-control|kernel|runtime|runtime-publish|source|exact-assets|artifact-build|artifact-cross|artifact-prepare|artifact-x86|artifact-arm"
+        die "usage: bootstrap.sh --profile control|release-control|helper-build|kernel|runtime|runtime-publish|source|exact-assets|artifact-build|artifact-cross|artifact-prepare|artifact-x86|artifact-arm"
     fi
     select_profile "$2"
     case "$profile:$(uname -m)" in

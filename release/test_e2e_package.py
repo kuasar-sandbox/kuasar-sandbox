@@ -1,0 +1,96 @@
+"""Reject unusable or misbound prebuilt helper packages before publication."""
+import copy
+import hashlib
+import importlib.util
+import io
+import json
+from pathlib import Path
+import struct
+import tarfile
+import tempfile
+import unittest
+
+spec = importlib.util.spec_from_file_location('e2e_package', Path(__file__).with_name('validate-e2e-package.py'))
+package = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(package)
+
+
+class PrebuiltPackage(unittest.TestCase):
+    def setUp(self):
+        self.pins = {owner: 'a' * 40 for owner in package.artifacts.OWNERS if owner != 'platform'}
+        self.metadata, self.files = {}, {'test/e2e/cases/basic.fixture.sh': (b'exit 0\n', 0o644)}
+        for arch, machine in [('x86_64', 62), ('aarch64', 183)]:
+            names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'usage-probe']
+            if arch == 'x86_64': names += ['cgroup-fork-probe']
+            helpers = {}
+            for name in names:
+                data = bytearray(64)
+                data[:7] = b'\x7fELF\x02\x01\x01'
+                struct.pack_into('<H', data, 18, machine)
+                self.files[f'test/e2e/helpers/{arch}/{name}'] = (bytes(data), 0o755)
+                helpers[name] = {'sha256': hashlib.sha256(data).hexdigest(),
+                                 'source_sha': ('b' if name in {'zot', 'versitygw'} else 'a') * 40}
+            self.metadata[arch] = {'arch': arch, 'framework_sha': 'b' * 40,
+                                   'test_revisions': copy.deepcopy(self.pins), 'helpers': helpers}
+
+    def validate(self, expected=None):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'package.tar.gz'
+            files = self.files | {f'test/e2e/helpers/{arch}/helpers.json': (json.dumps(record).encode(), 0o644)
+                                  for arch, record in self.metadata.items()}
+            with tarfile.open(path, 'w:gz') as output:
+                for name, (data, mode) in files.items():
+                    member = tarfile.TarInfo(name)
+                    member.size, member.mode = len(data), mode
+                    output.addfile(member, io.BytesIO(data))
+            package.validate(path, self.pins if expected is None else expected)
+
+    def test_both_architectures_have_complete_exact_helpers(self):
+        self.validate()
+
+    def test_selected_pin_mismatch_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'pins differ'):
+            self.validate(self.pins | {'orchestrator': 'c' * 40})
+
+    def test_architecture_source_sets_must_agree(self):
+        self.metadata['aarch64']['framework_sha'] = 'c' * 40
+        with self.assertRaisesRegex(ValueError, 'source sets differ'):
+            self.validate()
+
+    def test_wrong_architecture_and_missing_helper_are_rejected(self):
+        name = 'test/e2e/helpers/aarch64/usage-probe'
+        self.files[name] = self.files[name.replace('aarch64', 'x86_64')]
+        with self.assertRaisesRegex(ValueError, 'binary architecture'):
+            self.validate()
+        del self.files[name]
+        with self.assertRaisesRegex(ValueError, 'undeclared helper'):
+            self.validate()
+
+    def test_changed_bytes_and_nonexecutable_mode_are_rejected(self):
+        name = 'test/e2e/helpers/x86_64/custom-proxy'
+        data, _ = self.files[name]
+        self.files[name] = (data + b'tamper', 0o755)
+        with self.assertRaisesRegex(ValueError, 'checksum'):
+            self.validate()
+        self.files[name] = (data, 0o644)
+        with self.assertRaisesRegex(ValueError, 'permissions'):
+            self.validate()
+
+    def test_helper_source_identity_is_bound(self):
+        self.metadata['x86_64']['helpers']['usage-probe']['source_sha'] = 'c' * 40
+        with self.assertRaisesRegex(ValueError, 'source identity'):
+            self.validate()
+
+    def test_unknown_architecture_and_owner_runner_are_rejected(self):
+        name = 'test/e2e/helpers/ppc64le/tool'
+        self.files[name] = (b'not a selected architecture', 0o755)
+        with self.assertRaisesRegex(ValueError, 'unknown helper architecture'):
+            self.validate()
+        del self.files[name]
+        self.files['test/e2e/connector/run_all.sh'] = (b'exit 0', 0o755)
+        with self.assertRaisesRegex(ValueError, 'superseded owner'):
+            self.validate()
+
+
+if __name__ == '__main__':
+    unittest.main()

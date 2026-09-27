@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# e2e_warmpool_dedup.sh — measure cross-sandbox dedup ratios for the
+# warmpool-dedup.sh — measure cross-sandbox dedup ratios for the
 # warm-pool startup model.
 #
 # Workload: cold-start N independent sandboxes off the SAME container
@@ -31,7 +31,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 . "$REPO_ROOT/test/lib/tarstream.sh"
 BIN="${BIN:-$REPO_ROOT/bin}"
 IMAGE="${IMAGE:-python:3.12-slim}"
@@ -40,7 +40,7 @@ TICKS="${WARMPOOL_TICKS:-10}"
 
 skip() {
     echo
-    echo "==> e2e_warmpool_dedup: skipping ($*)"
+    echo "==> warmpool-dedup: skipping ($*)"
     if [ "${REQUIRE_KVM:-0}" = "1" ]; then exit 1; fi
     exit 0
 }
@@ -293,14 +293,14 @@ EOF
 
     # Wait for the guest to reach the target TICK.
     for _ in $(seq 1 600); do
-        if grep -qE "^TICK $TICKS[[:space:]]*\$" "$LOG" 2>/dev/null; then break; fi
+        if grep -qE "^TICK ${TICKS}[[:space:]]*\$" "$LOG" 2>/dev/null; then break; fi
         if ! kill -0 "$SBPID" 2>/dev/null; then
             echo "FAIL: sandbox $i exited before TICK $TICKS"
             tail -40 "$LOG"; exit 1
         fi
         sleep 0.05
     done
-    if ! grep -qE "^TICK $TICKS[[:space:]]*\$" "$LOG" 2>/dev/null; then
+    if ! grep -qE "^TICK ${TICKS}[[:space:]]*\$" "$LOG" 2>/dev/null; then
         echo "FAIL: sandbox $i timed out before TICK $TICKS"
         tail -40 "$LOG"; exit 1
     fi
@@ -524,4 +524,4 @@ if [ "$sum_per_manifest" -gt 0 ] && [ "$total_chunks_in_store" -gt 0 ]; then
 fi
 
 echo
-echo "==> e2e_warmpool_dedup: OK"
+echo "==> warmpool-dedup: OK"

@@ -107,7 +107,7 @@ jobs:
           repositories: accelerator,connector,guest-runtime,orchestrator,sandboxer
           permission-contents: read
 
-      - name: Fetch and assemble exact release assets
+      - name: Fetch exact release assets and test sources
         env:
           GH_TOKEN: ${{ steps.source-token.outputs.token }}
           PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
@@ -119,8 +119,26 @@ jobs:
             "${{ steps.request.outputs.source_sha }}")
           export SOURCE_DATE_EPOCH
           control/release/aggregate-release.sh fetch "$VERSION" fetched
-          control/release/aggregate-release.sh assemble \
-            "$VERSION" fetched aggregate-stage
+      - name: Bootstrap bounded test-helper builds
+        run: bash control/ci/hosted/bootstrap.sh --profile helper-build
+
+      - name: Build immutable E2E helper packages without release credentials
+        env:
+          KUASAR_CI_DIR: ${{ github.workspace }}/helper-build-metrics
+        run: |
+          taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
+          python3 -B control/release/build-e2e-helpers.py \
+            --sources fetched/test-sources --test-revisions fetched/test-revisions.json \
+            --output fetched/e2e-helpers
+
+      - name: Assemble exact products, cases and prebuilt helpers
+        env:
+          PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
+          VERSION: ${{ steps.request.outputs.version }}
+        run: |
+          export SOURCE_DATE_EPOCH=$(git -C "$PLATFORM_SOURCE_ROOT" show -s --format=%ct \
+            "${{ steps.request.outputs.source_sha }}")
+          control/release/aggregate-release.sh assemble "$VERSION" fetched aggregate-stage
 
       - name: Upload exact aggregate stage
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

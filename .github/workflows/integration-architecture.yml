@@ -31,6 +31,8 @@ jobs:
     timeout-minutes: 180
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
+      performance: ${{ steps.plan.outputs.performance }}
+      product_cases: ${{ steps.plan.outputs.product_cases }}
     env:
       TARGET_ARCH: ${{ inputs.arch }}
       KUASAR_CI_DIR: ${{ github.workspace }}/build-metrics
@@ -59,9 +61,11 @@ jobs:
           plan = json.load(open('plan/plan.json'))
           artifacts.check_plan(plan)
           artifacts.require(plan['framework_sha'] == os.environ['FRAMEWORK_SHA'], 'framework revision mismatch')
-          groups = artifacts.shards(plan['lanes'][os.environ['TARGET_ARCH']]['profile'])
+          groups = artifacts.shards(plan['lanes'][os.environ['TARGET_ARCH']]['selection'])
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('shards=' + json.dumps(list(groups)) + '\n')
+              output.write('performance=' + json.dumps(bool(plan['lanes'][os.environ['TARGET_ARCH']]['performance'])) + '\n')
+              output.write('product_cases=' + json.dumps(bool(plan['lanes'][os.environ['TARGET_ARCH']]['selection']['cases'])) + '\n')
           PYTHON
       - name: Bootstrap existing native or cross recipes
         run: |
@@ -122,11 +126,20 @@ jobs:
           path: transport
       - name: Bootstrap native archive readers
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
+      - name: Prepare a runtime without Go, Rust or component sources
+        if: needs.build.outputs.product_cases == 'true'
+        run: |
+          docker build --file framework/ci/hosted/e2e-runtime.Dockerfile \
+            --tag "kuasar-e2e-prepare:${GITHUB_RUN_ID}-${TARGET_ARCH}" framework/ci/hosted
+          image=$(docker image inspect --format '{{.Id}}' "kuasar-e2e-prepare:${GITHUB_RUN_ID}-${TARGET_ARCH}")
+          echo "KUASAR_CLEAN_PREPARE_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Compose and prepare this architecture once
         run: |
           python3 -B framework/ci/integration/transport.py extract transport/build-inputs.tar.gz inputs
+          clean=()
+          if [ -n "${KUASAR_CLEAN_PREPARE_IMAGE:-}" ]; then clean=(--clean-image "$KUASAR_CLEAN_PREPARE_IMAGE"); fi
           /usr/bin/time -o prepare-time.txt -f 'prepare wall_seconds=%e' \
-            python3 -B framework/ci/integration/prepare-artifacts.py --plan plan/plan.json \
+            python3 -B framework/ci/integration/prepare-artifacts.py "${clean[@]}" --plan plan/plan.json \
             --arch "$TARGET_ARCH" --assets inputs/assets --delta inputs/delta --workspace "prepared/$TARGET_ARCH"
           cp inputs/build-time.txt build-time.txt
           tar -czf prepared.tar.gz -C prepared "$TARGET_ARCH"
@@ -188,10 +201,19 @@ jobs:
           profile=artifact-x86
           if [ "$TARGET_ARCH" = aarch64 ]; then profile=artifact-arm; fi
           bash framework/ci/hosted/bootstrap.sh --profile "$profile"
+      - name: Prepare an isolated runtime without Go, Rust or component sources
+        if: matrix.shard == 'storage' || matrix.shard == 'snapshot' || (inputs.arch == 'aarch64' && matrix.shard == 'image')
+        run: |
+          docker build --file framework/ci/hosted/e2e-runtime.Dockerfile \
+            --tag "kuasar-e2e-runtime:${GITHUB_RUN_ID}-${TARGET_ARCH}-${TEST_SHARD}" framework/ci/hosted
+          image=$(docker image inspect --format '{{.Id}}' "kuasar-e2e-runtime:${GITHUB_RUN_ID}-${TARGET_ARCH}-${TEST_SHARD}")
+          echo "KUASAR_CLEAN_E2E_IMAGE=$image" >> "$GITHUB_ENV"
       - name: Run selected cases from immutable prepared inputs
         run: |
           python3 -B framework/ci/integration/transport.py extract transport/prepared.tar.gz prepared
-          python3 -B framework/ci/integration/run-artifact-tests.py --plan plan/plan.json \
+          clean=()
+          if [ -n "${KUASAR_CLEAN_E2E_IMAGE:-}" ]; then clean=(--clean-image "$KUASAR_CLEAN_E2E_IMAGE"); fi
+          python3 -B framework/ci/integration/run-artifact-tests.py "${clean[@]}" --plan plan/plan.json \
             --arch "$TARGET_ARCH" --shard "$TEST_SHARD" --workspace "prepared/$TARGET_ARCH" \
             --result "results/$TEST_SHARD.json"
       - name: Upload exact shard result
@@ -204,9 +226,56 @@ jobs:
           retention-days: 7
           overwrite: true
 
+  performance:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.build.outputs.performance == 'true'
+    needs: [build, prepare]
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    timeout-minutes: 120
+    env:
+      TARGET_ARCH: ${{ inputs.arch }}
+    steps:
+      - name: Check out only the trusted executor
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kuasar-sandbox/kuasar-sandbox
+          ref: ${{ inputs.framework_sha }}
+          path: framework
+          persist-credentials: false
+          sparse-checkout: |
+            ci/hosted
+            ci/integration
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.plan_artifact }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}
+          path: transport
+      - name: Bootstrap declared native execution profile
+        run: |
+          profile=artifact-x86
+          if [ "$TARGET_ARCH" = aarch64 ]; then profile=artifact-arm; fi
+          bash framework/ci/hosted/bootstrap.sh --profile "$profile"
+      - name: Run the independent working-set performance gate
+        run: |
+          python3 -B framework/ci/integration/transport.py extract transport/prepared.tar.gz prepared
+          python3 -B framework/ci/integration/run-artifact-performance.py --plan plan/plan.json \
+            --arch "$TARGET_ARCH" --workspace "prepared/$TARGET_ARCH" \
+            --result "results/performance.json"
+      - name: Upload independent performance evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-shard-${{ inputs.arch }}-performance-${{ github.run_id }}
+          path: results/performance.json
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
   result:
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: [build, prepare, e2e]
+    needs: [build, prepare, e2e, performance]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -217,7 +286,15 @@ jobs:
           BUILD_RESULT: ${{ needs.build.result }}
           PREPARE_RESULT: ${{ needs.prepare.result }}
           E2E_RESULT: ${{ needs.e2e.result }}
-        run: test "$BUILD_RESULT/$PREPARE_RESULT/$E2E_RESULT" = success/success/success
+          PERFORMANCE_RESULT: ${{ needs.performance.result }}
+          PERFORMANCE_REQUIRED: ${{ needs.build.outputs.performance }}
+        run: |
+          test "$BUILD_RESULT/$PREPARE_RESULT/$E2E_RESULT" = success/success/success
+          if [ "$PERFORMANCE_REQUIRED" = true ]; then
+            test "$PERFORMANCE_RESULT" = success
+          else
+            test "$PERFORMANCE_RESULT" = skipped
+          fi
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kuasar-sandbox/kuasar-sandbox

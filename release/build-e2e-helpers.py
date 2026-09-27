@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""Build both helper packages from the independently pinned test sources."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / 'ci/integration'))
+import artifacts
+import build_helpers
+
+
+def build(test_sources, pins, output):
+    artifacts.require(not output.exists(), 'helper packages need a fresh output')
+    artifacts.require(set(pins) == set(artifacts.OWNERS) - {'platform'}, 'incomplete helper test revisions')
+    framework_sha = subprocess.check_output(['git', '-C', ROOT, 'rev-parse', 'HEAD'], text=True).strip()
+    for owner in pins:
+        artifacts.require((test_sources / owner / 'go.mod').is_file(), f'missing complete pinned helper source: {owner}')
+    helpers = {'zot': 'framework', 'versitygw': 'framework', 'custom-proxy': 'orchestrator',
+               'telemetry-grpc-probe': 'orchestrator', 'usage-probe': 'sandboxer'}
+    with tempfile.TemporaryDirectory(prefix='release-helper-sources-') as directory:
+        sources = Path(directory) / 'sources'
+        # Work in a private copy; source assembly still sees its exact inputs.
+        shutil.copytree(test_sources, sources)
+        environment = {**os.environ, 'GOWORK': str(sources / 'go.work')}
+        subprocess.run(['go', 'work', 'init', *('./' + owner for owner in sorted(pins))], cwd=sources,
+                       env={**environment, 'GOWORK': 'off'}, check=True)
+        for arch in artifacts.ARCHES:
+            selected = dict(helpers)
+            if arch == 'x86_64': selected['cgroup-fork-probe'] = 'sandboxer'
+            destination = output / arch
+            build_helpers.build(sources, arch, destination, selected, environment)
+            records = {name: {'sha256': artifacts.digest(destination / name),
+                             'source_sha': framework_sha if owner == 'framework' else pins[owner]}
+                       for name, owner in selected.items()}
+            (destination / 'helpers.json').write_bytes(artifacts.canonical(
+                {'arch': arch, 'framework_sha': framework_sha, 'test_revisions': pins, 'helpers': records}) + b'\n')
+
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--sources', type=Path, required=True)
+    parser.add_argument('--test-revisions', type=Path, required=True)
+    parser.add_argument('--output', type=Path, required=True)
+    args = parser.parse_args()
+    build(args.sources.resolve(), json.loads(args.test_revisions.read_text()), args.output.resolve())

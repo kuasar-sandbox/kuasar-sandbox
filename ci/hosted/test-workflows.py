@@ -146,9 +146,16 @@ def check():
     source = (ROOT / "ci/integration/run-source-checks.py").read_text()
     assert "uffd-performance-gate.sh" in source and "ci-source-checks.sh" in source
     runtime = (ROOT / "ci/integration/run-artifact-tests.py").read_text()
-    assert "working-set-netns.sh" in runtime and "PERF_ITERS" in runtime
-    for flag in ("KVM", "EXEC", "CLUSTER_STUB", "CLUSTER_REAL", "ORCH", "PROXY", "BUILDER", "RUNTASK", "CONNECTOR_E2E", "GUEST_RUNTIME"):
-        assert '"' + flag + '"' in runtime
+    performance = (ROOT / "ci/integration/run-artifact-performance.py").read_text()
+    assert 'test/e2e/e2e' in runtime and 'working-set-netns.sh' not in runtime
+    assert "working-set-netns.sh" in performance and "PERF_ITERS" in performance
+    assert lanes["performance"]["needs"] == ["build", "prepare"]
+    assert lanes["result"]["needs"] == ["build", "prepare", "e2e", "performance"]
+    for required in ("true", "false", ""):
+        context = {"github": {"repository": "kuasar-sandbox/kuasar-sandbox", "event": {"repository": {
+                    "visibility": "public", "full_name": "kuasar-sandbox/kuasar-sandbox"}}},
+                   "needs": {"build": {"outputs": {"performance": required}}}}
+        assert expression(lanes["performance"]["if"], context) == (required == "true")
     print(f"hosted-workflows: {count} non-public allocation checks; independent lanes, exact requests and required checks PASS")
 
 

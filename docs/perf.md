@@ -166,13 +166,13 @@ Placer only imports groups and recommends placement. Node admission performs fin
 
 ## 7. Release and CI evidence
 
-Source-candidate Integration E2E builds exact revisions, runs owner E2E, the UFFD regression gate and working-set smoke, and uploads a `ci-metadata-<run-id>-<attempt>` artifact. Aggregate-release exact-assets mode extracts all assets from the same aggregate package and runs the complete `test/e2e/run_all.sh` on real KVM.
+Source-candidate CI builds exact product and helper revisions before shared preparation. Product E2E runs flat cases through `test/e2e/e2e`; source/unit/race/vet and UFFD performance remain separate, and working-set smoke has an independent required job and result. Exact-assets validation consumes the packaged products, helpers and runner without rebuilding them. Architecture results record each selected case, explicit exclusions and the prepared input identity.
 
 Workflow and evidence entry points:
 
 - [`.github/workflows/integration-tests.yml`](../.github/workflows/integration-tests.yml): source-candidate Integration E2E and release asset validation;
 - [`test/perf/`](../test/perf/): project performance harnesses and report generators;
-- [`test/e2e/run_all.sh`](../test/e2e/run_all.sh): aggregate prebuilt owner and platform E2E.
+- [`test/e2e/e2e`](../test/e2e/e2e): shared prepared-product case runner.
 
 A green aggregate status alone is not evidence for a performance claim. Cite the run URL, base/head SHA, mode, relevant job log and downloaded raw artifact. If a workflow ran only smoke tests, identify it as `smoke`; do not relabel it as complete statistical validation.
 

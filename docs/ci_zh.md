@@ -81,29 +81,41 @@ EROFS 使用目标静态依赖与目标 pkg-config；host `BUILD_MKFS_EROFS`、R
 不使用 `NO_ROCKSDB`，也不建立环境 Go/Rust 二进制字节白名单。
 
 prepare 在组装前校验包路径/类型/权限/归属、摘要、必要产品和 runtime 内嵌身份。
-两个架构独立解压；候选测试 owner 整棵目录替换，包括 helper 和删除文件残留检查。
-其余测试来自所选 platform 包，按 owner 记录 test revision，与可信 framework SHA 分开。
+两个架构独立解压。source 模式覆盖六个精确测试 owner 的完整目录，组装为扁平用例目录和按 owner 命名的底层库；
+exact-assets 模式直接消费 platform 包中的同一布局。两条路径都拒绝旧 owner runner 和重复用例 ID。
+按 owner 记录 test revision，与可信 framework SHA 分开。
 
 owner 测试 revision 与产品 tag 独立。新聚合在维护清单的 `test_revisions` 中提交五个组件的完整测试 SHA，
 平台测试使用聚合源码提交。打包和依赖源码的 helper 编译都使用这些精确 pin；helper 与所选产品需要不同 revision 时，
 使用独立源码工作区。prepared provenance、shard/架构结果及现有发布验证 binding 均保留 pin，后续 baseline 核验并复用它们。
 缺失或不匹配会失败，不回退到产品 tag 或执行时的分支 HEAD；仅测试变更不会重建复用的产品。
 
-prepare 提供 manifest Docker archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像以及目标 helper
-(zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe、orchestrator CLI tests). orchestrator profile 在既有 helper build 中按精确 test pin 编译 `orch-cli.test`,并通过 `ORCH_CLI_TEST_BIN` 提供给 owner runner;其摘要、目标架构和测试 revision 与其他 helper 一样接受 preparation/provenance 校验. 它消费独立选择的 `BIN` 产品. 工作区包含 `bin/`、`test/`、`fixtures/`、`images/`、材料及 `provenance.json`.
-这些是测试输入；被测业务 Build、flatten、snapshot、publish、restore 仍在原有 E2E 用例执行。
+产品合同为预构建产品 → `e2e prepare` → `<suite>.<case>.sh` → 共享公开入口 `e2e run`。完整文件名就是用例 ID，
+首段只能是 `basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder` 或 `telemetry`。
+内部 CI shard 按 suite 分组精确文件，plan 在执行前记录所选用例和架构排除项。
+
+source/helper build 生成目标架构的 zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe，
+以及 x86 cgroup probe。发布包携带两种架构的 helper、精确测试 pin 和摘要。prepare 消费这些二进制，
+准备 manifest archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像和仅来自 wheel 的 Demo SDK。
+它调用与下载发布包相同的公开 prepare 入口，并检查已有产品/测试输入没有变化。Capture helper 测试保留在独立 orchestrator 源码 gate。
+工作区包含 `bin/`、`test/`、`fixtures/`、`images/`、材料及 `provenance.json`。真实 Build、flatten、snapshot、publish、restore 仍在聚焦的产品用例中执行。
 
 E2E 只 checkout 可信执行器并下载目标 prepared workspace，执行前后核验全部文件摘要和权限。
 它不 checkout 组件源码，不隐式进行产品 Go/Cargo/kernel 编译。
 每个 shard 使用短路径、磁盘支持的私有可变目录，socket、direct I/O、Docker 配置、性能状态均在不可变输入之外。
 源码依赖的 connector/sandboxer/orchestrator unit/race/vet、真实 pinned-BPF 统计、ENOSPC、Collector/usage harness 回归和 UFFD benchmark 保留为独立必需源码 job。
-source 模式 x86 sandboxer/platform 还用同一组制品保留 A/B/C/D `off/auto × cold/warm` working-set smoke。
+source 模式 x86 sandboxer/platform 还在独立性能 job 中，用同一组制品保留 A/B/C/D `off/auto × cold/warm` working-set smoke。
+
+所有非空 lane 都在没有 Go、Rust 和组件源码树的运行时容器中 prepare。完整 storage 和 snapshot 套件也在该容器中执行，
+覆盖非 KVM 和 KVM 合同；适用的原生 ARM image 用例使用相同边界。需要 host systemd 的用例保留原生 host job。
+可信预检和结果记录绑定不可变运行时镜像 ID，以及编译器/源码树缺失的验证证据；零用例静态 lane 不算产品验收。
+容器输入只读，可变用例目录和输出目录独立。
 
 ## 4. Daily 与 Stable
 
 `exact-assets` 仅接受实际公开的平台 aggregate workflow。
-plan 固定提交清单与暂存的十四项资产（platform + 十二个组件架构包 + SHA256SUMS），不选择产品重建。
-各 target 与 PR 共用 download/compose/prepare/profile/result 原语；测试 helper 可从所选精确测试源码预先构建，
+plan 固定提交清单与暂存的十四项资产（platform + 十二个组件架构包 + SHA256SUMS），不选择产品或 helper 重建。
+各 target 与 PR 共用 download/compose/公开 prepare/公开 run/result 原语，并直接消费精确暂存 platform archive 中的预构建 helper 包。
 必需源码检查始终与 artifact E2E 分离。
 
 publish 再次核对双架构成功结果与暂存摘要，原样发布归档，不重新编译。
@@ -154,13 +166,15 @@ CPU affinity 和 Go/Cargo 并发由可用 CPU/内存限制。
 
 证据 artifact 包括 `integration-plan`、每架构 `integration-provenance`、每 shard `integration-shard`、
 `integration-source-result`、两个 `integration-architecture-result` 和最终 `integration-validation`，均带 run ID/attempt。
-provenance 记录基线资产、产品来源/hash、精确源码/测试/框架、内嵌载荷、实际工具/native key、helper/fixture hash、权限及既定 profile。
+provenance 记录基线资产、产品来源/hash、精确源码/测试/框架、内嵌载荷、实际工具/native key、helper/fixture hash、权限及既定用例选择。独立 working-set 结果使用 `integration-performance`；
+干净环境的 prepare/run 结果记录经验证的运行时环境。
 结果记录所选用例、退出码、耗时和 prepared provenance 摘要。
 聚合 cleanup 仅移除大型 build/prepared/stage 传输物，验证元数据保留七天；不上传含测试凭据的原始运行状态。
 
 轻量合同检查沿用 `make test-ci-tools test-release-tools test-perf-tools`，需可信 EROFS readers 与 `KUASAR_RUNTIME_READER`。
-组件 release/workflow/fixture 检查保留原入口。开发者 `make test-e2e` 仍先准备源码产品/helper，再运行 owner 套件，
-与 hosted artifact executor 分开。合同 fixture 和原生预检不能代替实际公开标准 runner 验收。
+组件 release/workflow/fixture 检查保留原入口。开发者 `make test-e2e RELEASE_DIR=... E2E_WORKDIR=...`
+封装相同的公开 prepare/run，不编译产品或 helper。源码构建、helper 和性能目标保持独立。
+合同 fixture 和原生预检不能代替实际公开标准 runner 验收。
 
 ## 7. 首轮覆盖与切换
 

@@ -2,21 +2,34 @@
 
 # Test organization
 
-The project repository provides a shared test environment and aggregate release packaging. It does not keep copies of component-specific E2E tests.
+Product E2E follows one contract: **prebuilt products → prepare → `<suite>.<case>.sh` → shared public runner**. The complete filename is the case ID; its first segment is the suite. The nine suites are `basic`, `storage`, `image`, `network`, `sandbox`, `snapshot`, `orchestrator`, `builder` and `telemetry`.
 
-- Each component owns its cases and `run_all.sh` under its own `test/e2e/`.
-- `test/e2e/assemble.sh` assembles owner directories from the five component source trees.
-- `test/e2e/run_all.sh` is the full entry point shared by source Integration E2E and release packages.
-- `test/e2e/platform/` contains only tests of genuinely cross-component combinations.
-- `test/perf/` and `test/demo/` remain owned by the project repository.
+Components maintain their own `test/e2e/cases/` and low-level `test/e2e/lib/` helpers. Platform owns `test/e2e/platform/cases/basic.demo.sh`. Source-time assembly copies exact selected test revisions into one flat `test/e2e/cases/` directory and namespaces helpers under `test/e2e/lib/<owner>/`. Duplicate IDs, unknown suites and owner runners are rejected. Ownership does not change public selection.
 
-From the source workspace:
+The platform archive carries the shared `test/e2e/e2e` runner and prebuilt helpers for both architectures. Preparation resolves images and installs the pinned Demo SDK from wheels, then records file hashes, modes and image content IDs. Execution consumes that immutable workspace. It does not build products/helpers, discover sibling source trees, pull replacement images or use host helper binaries. Tested Build, flatten, snapshot and publication operations remain real.
 
 ```bash
-make build
-make test-e2e
+python3 /release/test/e2e/e2e list --suite storage
+python3 /release/test/e2e/e2e prepare --release-dir /release --workdir /tmp/kuasar-prepared --suite storage --exclude storage.obs.sh
+sudo python3 /tmp/kuasar-prepared/test/e2e/e2e run --workdir /tmp/kuasar-prepared --suite storage --exclude storage.obs.sh
 ```
 
-`make test-e2e` assembles `build/e2e-suite/` from the candidate component sources, then runs its `test/e2e/run_all.sh`. Aggregate releases produce the same layout from GitHub source archives at the selected component tags. Source PRs and release asset validation therefore use the same owner entry points.
+`--suite` and `--include` form a union; `--exclude` removes full filenames. Unknown selectors and empty selections fail. `--all` includes credentialed `storage.obs.sh`; normal public CI explicitly excludes it. There are no owner, tag, capability or fixture-graph selectors. The Makefile wrapper requires `RELEASE_DIR`, a fresh `E2E_WORKDIR` and optional `E2E_ARGS`.
 
-For release-package usage and prerequisites, see [QUICKSTART.md](QUICKSTART.md).
+CI resolves exact test filenames and selects broad suites for changed owners. Source builds finish before preparation. Products retain their own source closure while test scripts and helper binaries use independent test pins. CI preparation runs in an isolated runtime with no Go/Rust toolchains or component source trees. Every suite shard invokes the same packaged runner; storage, snapshot and ARM image acceptance also use an isolated runtime. Preparation and execution image IDs and environment checks are bound to their results. Results require every selected case's successful exit and one unchanged prepared input identity. ARM selects accelerator and guest-runtime non-KVM cases; exclusions are explicit. A static lane has zero product cases and is never product E2E acceptance.
+
+Unit, race, vet, source helper, UFFD performance and working-set gates remain independent. `test/perf/warmpool-dedup.sh` retains the warm-pool characterization and its data/measurement assertions under `make perf-warmpool-dedup`; it is not a correctness suite. Component source checks stay in their owning repositories.
+
+The platform assertion owners are:
+
+| Contract | Maintained owner |
+| --- | --- |
+| Foreign listener refusal and survival; exact owned reset | `basic.demo.sh` plus Demo safety helpers |
+| Repeated prep, root ownership, 0700 directory and 0600 state | `basic.demo.sh` |
+| Real Build/COPY, Quick Start lifecycle, SDK exec/files, template fan-out, migration and data | `basic.demo.sh` invoking the documented `test/demo/demo_e2b.sh` flow |
+| Stop/start durable prep, stale sockets and cleanup failure status | `basic.demo.sh` plus Demo process/state source tests |
+| Exact wheel-only SDK, isolated import and immutable inputs | Shared preparation and `test-e2e-tool-paths.py` |
+| Bounded recovery diagnostics, redaction, original exit/cleanup and descriptor closure | Platform diagnostics helpers; `snapshot.read-recovery.sh` and `orchestrator.cluster-recovery.sh` |
+| Warm-pool dedup workload and measurements | `test/perf/warmpool-dedup.sh` |
+
+See [QUICKSTART.md](QUICKSTART.md) for release inputs, prerequisites and acceptance evidence.

@@ -19,6 +19,7 @@ import zipfile
 
 import artifacts as subject
 import transport
+from test_fixtures import CASES, selection, select_plan, architecture_result
 
 
 def test_revisions(sha="d" * 40):
@@ -89,19 +90,18 @@ class ArtifactBuildContracts(unittest.TestCase):
             git("config", "user.email", "test-pin@example.invalid")
             (repository / "cmd").mkdir()
             (repository / "cmd/product").write_bytes(b"unchanged product input")
-            (repository / "go.mod").write_text("module cli-helper-fixture\n\ngo 1.26.1\n")
-            test = repository / "internal/orch/capture_test.go"
+            (repository / "go.mod").write_text("module proxy-helper-fixture\n\ngo 1.26.1\n")
+            test = repository / "cmd/custom-proxy/main.go"
             test.parent.mkdir(parents=True)
-            test.write_text('package orch\nimport "testing"\n'
-                            'func TestCapturePairCLIToPausedDatabase(t *testing.T) { t.Log("old CLI test") }\n')
+            test.write_text('package main\nimport "fmt"\n'
+                            'func main() { fmt.Println("old helper") }\n')
             script = repository / "scripts/ci-e2e-build.sh"
             script.parent.mkdir()
-            script.write_text('printf "old helper" > "$3/custom-proxy"\n')
+            script.write_text('cd "$(dirname "$0")/.."; GOWORK=off go build -o "$3/custom-proxy" ./cmd/custom-proxy\n')
             git("add", ".")
             git("commit", "-qm", "product and old helper")
             product = git("rev-parse", "HEAD").decode().strip()
-            script.write_text('printf "pinned helper" > "$3/custom-proxy"\n')
-            test.write_text(test.read_text().replace("old CLI test", "pinned CLI test"))
+            test.write_text(test.read_text().replace("old helper", "pinned helper"))
             git("add", ".")
             git("commit", "-qm", "helper-only change")
             pin = git("rev-parse", "HEAD").decode().strip()
@@ -112,9 +112,9 @@ class ArtifactBuildContracts(unittest.TestCase):
                         tree.extractall(destination, filter="data")
             for rebuild in (False, True):
                 plan = {"sources": test_revisions(product), "test_revisions": test_revisions(product),
-                        "test_overlays": [], "product_sources":
+                        "mode": "source", "test_overlays": list(subject.OWNERS), "product_sources":
                         {"node-ctl": {"kuasar-sandbox/orchestrator": product}} if rebuild else {},
-                        "lanes": {"x86_64": {"profile": subject.profiles(["orchestrator"], "x86_64")}}}
+                        "lanes": {"x86_64": {"selection": selection(["orchestrator"], "x86_64")}}}
                 plan["test_revisions"]["orchestrator"]["sha"] = pin
                 sources = root / str(rebuild)
                 with patch.object(builder, "checkout", side_effect=checkout):
@@ -127,22 +127,19 @@ class ArtifactBuildContracts(unittest.TestCase):
                 output.mkdir()
                 subprocess.run(["bash", str(helper / "orchestrator/scripts/ci-e2e-build.sh"),
                                 "fixtures", "x86_64", str(output)], check=True)
-                self.assertEqual((output / "custom-proxy").read_bytes(), b"pinned helper")
-                builder.build_orchestrator_cli_tests(helper, "x86_64", output, os.environ.copy())
-                result = subprocess.check_output([str(output / "orch-cli.test"), "-test.v"], text=True)
-                self.assertIn("pinned CLI test", result)
-                self.assertNotIn("old CLI test", result)
+                result = subprocess.check_output([str(output / "custom-proxy")], text=True)
+                self.assertEqual(result, "pinned helper\n")
                 if rebuild:
-                    self.assertIn("old helper", (sources / "orchestrator/scripts/ci-e2e-build.sh").read_text())
+                    self.assertIn("old helper", (sources / "orchestrator/cmd/custom-proxy/main.go").read_text())
 
     def test_build_launches_nonexecutable_framework_helper_and_preserves_failure(self):
         spec = importlib.util.spec_from_file_location("builder", Path(__file__).with_name("build-artifacts.py"))
         builder = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(builder)
-        plan = {"schema": 1, "framework_sha": "a" * 40, "owners": ["platform"],
-                "test_overlays": [], "product_sources": {}, "test_revisions": test_revisions(),
+        plan = {"schema": 2, "mode": "source", "case_files": CASES, "framework_sha": "a" * 40, "owners": ["platform"],
+                "test_overlays": list(subject.OWNERS), "product_sources": {}, "test_revisions": test_revisions(),
                 "sources": test_revisions(),
-                "lanes": {arch: {"products": [], "profile": subject.profiles(["platform"], arch)}
+                "lanes": {arch: {"products": [], "performance": ["working-set-smoke"] if arch == "x86_64" else [], "selection": selection(["platform"], arch)}
                           for arch in subject.ARCHES}}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -156,9 +153,15 @@ class ArtifactBuildContracts(unittest.TestCase):
                               'printf "%s\\n" "$TARGET_ARCH" > "$KUASAR_E2E_TOOL_OUTPUT/invoked"\n'
                               'exit 23\n')
             helper.chmod(0o644)  # Match the framework script's Git mode.
+            for owner, names in CASES.items():
+                for name in names:
+                    case = root / "test/e2e" / ("platform/cases" if owner == "platform" else "cases") / name
+                    case.parent.mkdir(parents=True, exist_ok=True)
+                    case.write_text("exit 0\n")
             output = root / "build-output"
             credentials = {key: "" for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}
-            with patch.object(builder, "ROOT", root), patch.object(builder, "materialize"), \
+            with patch.object(builder, "ROOT", root), patch.object(builder.build_helpers, "ROOT", root), \
+                 patch.object(builder, "materialize"), patch.object(builder, "test_source", return_value=root), patch.object(builder, "helper_sources", return_value=root), \
                  patch.object(builder.platform, "machine", return_value="x86_64"), \
                  patch.object(builder.subprocess, "check_output", return_value=("a" * 40 + "\n")), \
                  patch.dict(os.environ, credentials):
@@ -171,148 +174,146 @@ class ArtifactBuildContracts(unittest.TestCase):
 
 class ArtifactExecutionContracts(unittest.TestCase):
     def setUp(self):
-        spec = importlib.util.spec_from_file_location("executor", Path(__file__).with_name("run-artifact-tests.py"))
-        self.executor = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.executor)
+        def load(name, file):
+            spec = importlib.util.spec_from_file_location(name, Path(__file__).with_name(file))
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+        self.executor = load('executor', 'run-artifact-tests.py')
+        self.performance = load('performance', 'run-artifact-performance.py')
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
-        self.root = Path(self.temporary.name)
-        (self.root / "bin").mkdir()
-        (self.root / "provenance.json").write_text("{}")
-        self.case = "test/e2e/accelerator/run_all.sh"
-        script = self.root / self.case
-        script.parent.mkdir(parents=True)
-        script.write_text('set -eu\nprintf "%s" "$TMPDIR" > "$BIN/scratch"\n'
-                          'sudo -n install -d -o root -g root -m 700 "$TMPDIR/owned"\n'
-                          'sudo -n touch "$TMPDIR/owned/source-set.json"\n')
-        self.plan = {"lanes": {"x86_64": {}}, "test_revisions": test_revisions()}
-        self.provenance = {"profile": {"cases": [self.case]}, "helpers": {}, "embedded": {"init": "a" * 64},
-                           "test_revisions": test_revisions()}
-        self.result = self.root / "result.json"
+        self.root = Path(self.temporary.name) / 'prepared'
+        (self.root / 'bin').mkdir(parents=True)
+        source = Path(__file__).resolve().parents[2] / 'test/e2e'
+        shutil.copytree(source / 'lib', self.root / 'test/e2e/lib')
+        shutil.copy2(source / 'e2e', self.root / 'test/e2e/e2e')
+        spec = importlib.util.spec_from_file_location('prepared_inputs', source / 'lib/workspace.py')
+        self.inputs = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.inputs)
+        self.case = 'storage.fixture.sh'
+        script = self.root / 'test/e2e/cases' / self.case
+        script.parent.mkdir()
+        self.marker = self.root.parent / 'scratch-marker'
+        script.write_text('set -eu\nprintf "%s" "$TMPDIR" > "' + str(self.marker) + '"\n'
+                          'install -d -m 700 "$TMPDIR/owned"\ntouch "$TMPDIR/owned/state"\n')
+        self.plan = {'lanes': {'x86_64': {'performance': []}}, 'test_revisions': test_revisions()}
+        self.provenance = {'arch': 'x86_64', 'selection': {'cases': [self.case]}, 'helpers': {},
+                           'embedded': {'init': 'a' * 64}, 'test_revisions': test_revisions(),
+                           'prepared_cases': [self.case]}
+        self.result = self.root.parent / 'result.json'
         self.addCleanup(self.remove_scratch)
 
     def remove_scratch(self):
-        marker = self.root / "bin/scratch"
-        if marker.exists():
-            state = Path(marker.read_text()).parent
-            self.assertEqual(state.parent, Path("/var/tmp"))
-            self.assertTrue(state.name.startswith("ki-"))
-            subprocess.run(["sudo", "-n", "rm", "-rf", "--", str(state)], check=True)
+        if self.marker.exists():
+            state = Path(self.marker.read_text()).parent
+            self.assertEqual(state.parent, Path('/var/tmp'))
+            self.assertTrue(state.name.startswith('ki-'))
+            subprocess.run(['sudo', '-n', 'rm', '-rf', '--', str(state)], check=True)
 
-    def execute(self, shard="core"):
-        credentials = {key: "" for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}
-        with patch.object(self.executor.artifacts, "verify_workspace", return_value=self.provenance), \
-             patch.object(self.executor.platform, "machine", return_value="x86_64"), patch.dict(os.environ, credentials):
-            return self.executor.execute(self.plan, "x86_64", shard, self.root, self.result)
+    def execute(self, shard='storage', performance=False):
+        self.inputs.seal(self.root, self.provenance)
+        credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
+        with patch.object(self.executor.artifacts, 'verify_workspace', return_value=self.provenance), \
+             patch.object(self.executor.platform, 'machine', return_value='x86_64'), patch.dict(os.environ, credentials):
+            if performance:
+                return self.performance.execute(self.plan, 'x86_64', self.root, self.result)
+            return self.executor.execute(self.plan, 'x86_64', shard, self.root, self.result)
 
-    def test_orchestrator_receives_prepared_cli_helper_and_selected_products(self):
-        case = "test/e2e/orchestrator/run_all.sh"
-        script = self.root / case
-        script.parent.mkdir(parents=True)
-        script.write_text('set -eu\n[ "$ORCH_CLI_TEST_BIN" = "$(dirname "$BIN")/fixtures/bin/orch-cli.test" ]\n')
-        self.provenance["profile"]["cases"] = [case]
-        self.provenance["helpers"] = {"orch-cli.test": {}}
-        self.assertEqual(self.execute("orchestrator")["conclusion"], "success")
+    def image(self, *, identity=None, architecture='amd64'):
+        archive = self.root / 'image.tar'
+        archive.write_bytes(b'prepared image')
+        expected = 'sha256:' + 'b' * 64
+        self.provenance['images'] = {'python': {'archive': archive.name, 'sha256': subject.digest(archive),
+                                               'image_id': expected, 'platform': 'linux/amd64'}}
+        binary = self.root.parent / 'host-bin'
+        binary.mkdir(exist_ok=True)
+        record = [{'Id': identity or expected, 'Os': 'linux', 'Architecture': architecture}]
+        docker = binary / 'docker'
+        docker.write_text('#!/usr/bin/env python3\nimport sys\n'
+                          'if sys.argv[1:3] == ["image", "inspect"]: print(' + repr(json.dumps(record)) + ')\n')
+        docker.chmod(0o755)
+        return str(binary) + os.pathsep + os.environ['PATH']
+
+    def test_orchestrator_receives_prepared_proxy_helper_and_selected_products(self):
+        case = 'orchestrator.proxy.sh'
+        (self.root / 'test/e2e/cases' / case).write_text(
+            'set -eu\n[ "$CUSTOM_PROXY_BIN" = "$(dirname "$BIN")/fixtures/bin/custom-proxy" ]\n')
+        self.provenance['selection']['cases'] = self.provenance['prepared_cases'] = [case]
+        self.provenance['helpers'] = {'custom-proxy': {}}
+        self.assertEqual(self.execute('orchestrator')['conclusion'], 'success')
 
     def test_working_set_receives_exact_source_manifest_and_preserves_exit(self):
-        case = "test/e2e/sandboxer/run_all.sh"
-        script = self.root / case
-        script.parent.mkdir(parents=True)
-        script.write_text("exit 0\n")
-        self.provenance["profile"]["cases"] = [case]
-        self.plan["sources"] = test_revisions("c" * 40)
-        self.plan["lanes"]["x86_64"]["extra_checks"] = {"sandboxer": ["working-set-smoke"]}
-        perf = self.root / "test/perf"
+        self.plan['sources'] = test_revisions('c' * 40)
+        self.plan['lanes']['x86_64']['performance'] = ['working-set-smoke']
+        perf = self.root / 'test/perf'
         perf.mkdir()
-        (perf / "working-set-netns.sh").write_text('exec bash "$@"\n')
-        (perf / "sandbox-perf-working-set.sh").write_text(
-            'set -eu\ncp "$KUASAR_REVISION_MANIFEST" "$BIN/recorded-revisions.tsv"\n'
-            'exit "$TEST_WORKING_SET_EXIT"\n')
-        archive = self.root / "image.tar"
-        archive.write_bytes(b"prepared image")
-        identity = "sha256:" + "b" * 64
-        self.provenance["images"] = {"python": {"archive": archive.name, "sha256": subject.digest(archive),
-                                               "image_id": identity, "platform": "linux/amd64"}}
-        original_run = subprocess.run
-        def run(command, **kwargs):
-            if command[:3] == ["docker", "image", "load"]:
-                return subprocess.CompletedProcess(command, 0)
-            return original_run(command, **kwargs)
-        image = [{"Id": identity, "Os": "linux", "Architecture": "amd64"}]
+        (perf / 'working-set-netns.sh').write_text('exec bash "$@"\n')
+        recorded = self.root.parent / 'recorded-revisions.tsv'
+        (perf / 'sandbox-perf-working-set.sh').write_text(
+            'set -eu\ncp "$KUASAR_REVISION_MANIFEST" "' + str(recorded) + '"\nexit "$TEST_WORKING_SET_EXIT"\n')
+        path = self.image()
         for exit_code in (0, 41):
-            with self.subTest(exit_code=exit_code), patch.dict(os.environ, TEST_WORKING_SET_EXIT=str(exit_code)), \
-                 patch.object(self.executor.subprocess, "run", side_effect=run), \
-                 patch.object(self.executor.subprocess, "check_output", return_value=json.dumps(image).encode()):
+            with self.subTest(exit_code=exit_code), patch.dict(os.environ, PATH=path, TEST_WORKING_SET_EXIT=str(exit_code)):
                 if exit_code:
-                    with self.assertRaisesRegex(ValueError, "selected working-set smoke failed"):
-                        self.execute("sandboxer")
+                    with self.assertRaisesRegex(ValueError, 'working-set smoke failed'):
+                        self.execute(performance=True)
                 else:
-                    self.execute("sandboxer")
+                    self.execute(performance=True)
                 result = json.loads(self.result.read_text())
-                self.assertEqual(result["conclusion"], "failure" if exit_code else "success")
-                self.assertEqual([item["exit_code"] for item in result["timings"]], [0, exit_code])
-                with (self.root / "bin/recorded-revisions.tsv").open() as manifest:
-                    rows = list(csv.DictReader(manifest, delimiter="\t"))
-                self.assertEqual(rows, [{"repository": record["repository"], "requested_ref": record["sha"],
-                                         "resolved_sha": record["sha"], "role": record["role"]}
-                                        for record in self.plan["sources"].values()])
+                self.assertEqual(result['conclusion'], 'failure' if exit_code else 'success')
+                self.assertEqual([item['exit_code'] for item in result['timings']], [exit_code])
+                with recorded.open() as manifest:
+                    rows = list(csv.DictReader(manifest, delimiter='\t'))
+                self.assertEqual(rows, [{'repository': record['repository'], 'requested_ref': record['sha'],
+                                         'resolved_sha': record['sha'], 'role': record['role']}
+                                        for record in self.plan['sources'].values()])
 
     def test_privileged_case_state_is_removed_before_success(self):
         result = self.execute()
-        self.assertEqual(result["conclusion"], "success")
-        self.assertEqual(result["timings"][0]["exit_code"], 0)
-        self.assertFalse(Path((self.root / "bin/scratch").read_text()).parent.exists())
+        self.assertEqual(result['conclusion'], 'success')
+        self.assertEqual(result['timings'][0]['exit_code'], 0)
+        self.assertFalse(Path(self.marker.read_text()).parent.exists())
 
     def test_cleanup_failure_keeps_result_failed(self):
         original_run = subprocess.run
         def run(command, **kwargs):
-            if command[:5] == ["sudo", "-n", "rm", "-rf", "--"]:
+            if command[:5] == ['sudo', '-n', 'rm', '-rf', '--']:
                 raise subprocess.CalledProcessError(23, command)
             return original_run(command, **kwargs)
-        with patch.object(self.executor.shutil, "rmtree", side_effect=PermissionError("root-owned state")), \
-             patch.object(self.executor.subprocess, "run", side_effect=run):
+        with patch.object(self.executor.execution.shutil, 'rmtree', side_effect=PermissionError('root-owned state')), \
+             patch.object(self.executor.subprocess, 'run', side_effect=run):
             with self.assertRaises(subprocess.CalledProcessError) as failure:
                 self.execute()
         self.assertEqual(failure.exception.returncode, 23)
         result = json.loads(self.result.read_text())
-        self.assertEqual(result["timings"][0]["exit_code"], 0)
-        self.assertEqual(result["conclusion"], "failure")
+        self.assertEqual(result['timings'][0]['exit_code'], 0)
+        self.assertEqual(result['conclusion'], 'failure')
 
     def test_loaded_image_identity_and_platform_are_required_before_case_execution(self):
-        archive = self.root / "image.tar"
-        archive.write_bytes(b"prepared image bytes")
-        identity = "sha256:" + "b" * 64
-        self.provenance["images"] = {"python": {"archive": archive.name, "sha256": subject.digest(archive),
-                                               "image_id": identity, "platform": "linux/amd64"}}
-        original_run = subprocess.run
-        def run(command, **kwargs):
-            if command[:3] == ["docker", "image", "load"]:
-                return subprocess.CompletedProcess(command, 0)
-            if command[0] == "bash":
-                self.assertEqual(kwargs["env"]["E2E_IMAGE"], identity)
-            return original_run(command, **kwargs)
-        for record in ({"Id": identity, "Os": "linux", "Architecture": "arm64"},
-                       {"Id": "sha256:" + "c" * 64, "Os": "linux", "Architecture": "amd64"}):
-            with self.subTest(record=record), patch.object(self.executor.subprocess, "run", side_effect=run), \
-                 patch.object(self.executor.subprocess, "check_output", return_value=json.dumps([record]).encode()):
-                with self.assertRaisesRegex(ValueError, "loaded image differs"):
+        for options in ({'architecture': 'arm64'}, {'identity': 'sha256:' + 'c' * 64}):
+            with self.subTest(options=options), patch.dict(os.environ, PATH=self.image(**options)):
+                with self.assertRaisesRegex(ValueError, 'public runner reported failure'):
                     self.execute()
-            self.assertEqual(json.loads(self.result.read_text())["timings"], [])
-            self.assertEqual(json.loads(self.result.read_text())["conclusion"], "failure")
-        record = {"Id": identity, "Os": "linux", "Architecture": "amd64"}
-        with patch.object(self.executor.subprocess, "run", side_effect=run), \
-             patch.object(self.executor.subprocess, "check_output", return_value=json.dumps([record]).encode()):
-            self.assertEqual(self.execute()["conclusion"], "success")
+            self.assertEqual(json.loads(self.result.read_text())['timings'], [])
+            self.assertEqual(json.loads(self.result.read_text())['conclusion'], 'failure')
+            self.assertFalse(self.marker.exists())
+        with patch.dict(os.environ, PATH=self.image()):
+            self.assertEqual(self.execute()['conclusion'], 'success')
 
     def test_changed_image_archive_is_rejected_before_docker_load(self):
-        archive = self.root / "image.tar"
-        archive.write_bytes(b"changed bytes")
-        self.provenance["images"] = {"python": {"archive": archive.name, "sha256": "0" * 64}}
-        with patch.object(self.executor.subprocess, "run") as command:
-            with self.assertRaisesRegex(ValueError, "prepared image bytes changed"):
-                self.execute()
-        command.assert_not_called()
-        self.assertEqual(json.loads(self.result.read_text())["conclusion"], "failure")
+        path = self.image()
+        self.provenance['images']['python']['sha256'] = '0' * 64
+        with patch.dict(os.environ, PATH=path), self.assertRaisesRegex(ValueError, 'public runner reported failure'):
+            self.execute()
+        self.assertFalse(self.marker.exists())
+        self.assertEqual(json.loads(self.result.read_text())['conclusion'], 'failure')
+
+    def test_missing_execution_records_cannot_claim_success(self):
+        with self.assertRaisesRegex(ValueError, 'execution evidence'):
+            subject.check_timings([], [self.case])
+        with self.assertRaisesRegex(ValueError, 'did not pass'):
+            subject.check_timings([{'case': self.case, 'exit_code': 1, 'wall_seconds': 0.1}], [self.case])
 
 
 class ArtifactContracts(unittest.TestCase):
@@ -331,13 +332,13 @@ class ArtifactContracts(unittest.TestCase):
         self.assets = self.root / "assets"
         self.assets.mkdir()
         self.plan = {
-            "schema": 1, "framework_sha": "a" * 40, "owners": ["accelerator"],
+            "schema": 2, "mode": "source", "case_files": CASES, "framework_sha": "a" * 40, "owners": ["accelerator"],
             "baseline": {"version": "release-v1.2.3", "sha": "b" * 40, "units": {
                 unit: {"version": (unit + "-" if unit in ("runtime", "vmlinux") else "") + "v1.2.3",
                        "sha": "c" * 40} for unit in subject.UNITS}, "assets": []},
-            "lanes": {arch: {"products": ["manifest-ctl"], "profile": subject.profiles(["accelerator"], arch)}
+            "lanes": {arch: {"products": ["manifest-ctl"], "performance": [], "selection": selection(["accelerator"], arch)}
                       for arch in subject.ARCHES},
-            "test_overlays": ["accelerator"],
+            "test_overlays": list(subject.OWNERS),
             "test_revisions": test_revisions(),
             "product_sources": {"manifest-ctl": {"accelerator": "e" * 40}},
         }
@@ -365,25 +366,63 @@ class ArtifactContracts(unittest.TestCase):
             path.write_bytes(elf(arch, "candidate " + name))
             path.chmod(0o755)
             records[name] = {"sha256": subject.digest(path), "sources": self.plan["product_sources"][name]}
-        tests = root / "test/e2e/accelerator"
-        (tests / "lib").mkdir(parents=True)
-        (tests / "run_all.sh").write_text("#!/bin/sh\nexit 0\n")
-        (tests / "run_all.sh").chmod(0o755)
-        (tests / "lib/new-helper.py").write_text("new helper")
-        framework = root / "framework-tests"
-        (framework / "lib").mkdir(parents=True)
-        (framework / "e2e").write_text("#!/usr/bin/env python3\n")
-        (framework / "e2e").chmod(0o755)
-        (framework / "lib/common.sh").write_text("#!/usr/bin/env bash\n")
+        test_records = {}
+        for owner, names in self.plan["case_files"].items():
+            source = root / subject.test_overlay_root(owner)
+            for name in names:
+                case = source / subject.overlay_case_path(owner, name)
+                case.parent.mkdir(parents=True, exist_ok=True)
+                case.write_text("#!/bin/sh\nexit 0\n")
+            lib = source / ("e2e/lib" if owner == "platform" else "lib")
+            lib.mkdir(parents=True)
+            (lib / "new-helper.py").write_text("new helper")
+            if owner == "platform":
+                runner = Path(__file__).resolve().parents[2] / "test/e2e"
+                shutil.copy2(runner / "e2e", source / "e2e/e2e")
+                shutil.copy2(runner / "lib/workspace.py", lib / "workspace.py")
+                shutil.copy2(runner / "lib/common.sh", lib / "common.sh")
+            test_records[owner] = subject.tree_files(source)
         self.metadata = {"plan_id": subject.identity(self.plan), "arch": arch, "products": records,
                          "test_revisions": self.plan["test_revisions"],
-                         "framework_tests": subject.tree_files(framework),
-                         "tests": {"accelerator": subject.tree_files(tests)}, "build_context": {"host": "x86_64"}}
+                         "tests": test_records, "helpers": {}, "build_context": {"host": "x86_64"}}
         (root / "outputs.json").write_text(json.dumps(self.metadata))
         return root
 
     def compose(self, arch="x86_64", delta=None):
         return subject.compose(self.plan, arch, self.assets, delta or self.delta(arch), self.root / "workspaces" / arch)
+
+    def preparation(self, *, mutate=False):
+        spec = importlib.util.spec_from_file_location('ci_prepare', Path(__file__).with_name('prepare-artifacts.py'))
+        prepare = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(prepare)
+        select_plan(self.plan, ['connector'])
+        delta = self.delta()
+        workspace = self.root / 'prepared/x86_64'
+        original_run = subprocess.run
+        def invoke(command, **kwargs):
+            result = original_run(command, **kwargs)
+            if mutate and 'prepare' in command and any(str(arg).endswith('/test/e2e/e2e') for arg in command):
+                product = workspace / 'bin/manifest-ctl'
+                product.write_bytes(b'changed during preparation')
+                provenance = json.loads((workspace / 'provenance.json').read_text())
+                provenance['files']['bin/manifest-ctl'] = subject.digest(product)
+                (workspace / 'provenance.json').write_text(json.dumps(provenance))
+            return result
+        with patch.object(prepare.subprocess, 'run', side_effect=invoke):
+            return prepare.prepare(self.plan, 'x86_64', self.assets, delta, workspace)
+
+    def test_ci_preparation_calls_the_packaged_public_entry(self):
+        prepared = self.preparation()
+        self.assertEqual(prepared['prepared_cases'], ['network.tap.sh'])
+        self.assertEqual(prepared['preparation_environment'], {'kind': 'native-host'})
+        self.assertIn('ARCH', prepared['files'])
+        self.assertEqual(prepared['files']['test/e2e/cases/network.tap.sh'],
+                         hashlib.sha256(b'#!/bin/sh\nexit 0\n').hexdigest())
+        self.assertFalse(list((self.root / 'prepared').glob('compose-*')))
+
+    def test_public_preparation_cannot_reseal_changed_products(self):
+        with self.assertRaisesRegex(ValueError, 'public preparation modified composed'):
+            self.preparation(mutate=True)
 
     def test_two_isolated_architectures_retain_baseline_bytes_and_replace_complete_owner(self):
         for arch in subject.ARCHES:
@@ -392,8 +431,8 @@ class ArtifactContracts(unittest.TestCase):
             self.assertEqual(provenance["products"]["store-ctl"]["sha256"],
                              hashlib.sha256(self.files[arch]["store-ctl"]).hexdigest())
             self.assertEqual(provenance["products"]["manifest-ctl"]["origin"], "candidate")
-            self.assertFalse((workspace / "test/e2e/accelerator/lib/removed-helper.py").exists())
-            self.assertTrue((workspace / "test/e2e/accelerator/lib/new-helper.py").exists())
+            self.assertFalse((workspace / "test/e2e/lib/accelerator/removed-helper.py").exists())
+            self.assertTrue((workspace / "test/e2e/lib/accelerator/new-helper.py").exists())
             subject.verify_workspace(workspace, self.plan, arch)
         self.assertNotEqual(subject.digest(self.root / "workspaces/x86_64/bin/manifest-ctl"),
                             subject.digest(self.root / "workspaces/aarch64/bin/manifest-ctl"))
@@ -416,7 +455,7 @@ class ArtifactContracts(unittest.TestCase):
                 self.assertEqual(product["origin"], "baseline")
                 self.assertEqual(product["sha256"], hashlib.sha256(self.files[arch][name]).hexdigest())
             workspace = self.root / "workspaces" / arch
-            self.assertEqual((workspace / "test/e2e/accelerator/lib/new-helper.py").read_text(), "new helper")
+            self.assertEqual((workspace / "test/e2e/lib/accelerator/new-helper.py").read_text(), "new helper")
             self.assertEqual(provenance["test_revisions"], self.plan["test_revisions"])
             broken = json.loads((workspace / "provenance.json").read_text())
             broken["test_revisions"]["accelerator"]["sha"] = "c" * 40
@@ -444,7 +483,7 @@ class ArtifactContracts(unittest.TestCase):
         pin_file = self.root / "test-revisions.json"
         pin_file.write_text(json.dumps(pins))
         (self.assets / "SHA256SUMS").write_text("".join(f"{value}  {name}\n" for name, value in subject.tree_files(self.assets).items()))
-        with patch.object(resolver, "source_text", return_value=manifest), patch.object(resolver, "public"), \
+        with patch.object(resolver, "source_text", return_value=manifest), patch.object(resolver, "public"), patch.object(resolver, "case_files", return_value=CASES), \
              patch.object(resolver.release, "tag_sha", side_effect=lambda repo, tag: sha if repo == resolver.PLATFORM else "c" * 40), \
              patch.dict(os.environ, {"RELEASE_VERSION": version, "PLATFORM_SOURCE_SHA": sha}):
             plan = resolver.exact_assets_plan("a" * 40, self.root)
@@ -457,8 +496,7 @@ class ArtifactContracts(unittest.TestCase):
             with self.assertRaises(FileNotFoundError):
                 resolver.exact_assets_plan("a" * 40, self.root)
             pin_file.write_text(json.dumps(pins))
-            results = {arch: {"arch": arch, "plan_id": subject.identity(plan), "conclusion": "success",
-                "test_revisions": plan["test_revisions"], "profile": plan["lanes"][arch]["profile"]} for arch in subject.ARCHES}
+            results = {arch: architecture_result(plan, arch) for arch in subject.ARCHES}
             wrong = copy.deepcopy(results)
             wrong["aarch64"]["test_revisions"]["orchestrator"]["sha"] = "c" * 40
             with self.assertRaisesRegex(ValueError, "result test pins"):
@@ -523,13 +561,11 @@ class ArtifactContracts(unittest.TestCase):
             self.compose()
 
     def test_usage_probe_is_a_required_target_helper(self):
-        self.plan["owners"] = ["sandboxer"]
-        for arch in subject.ARCHES:
-            self.plan["lanes"][arch]["profile"] = subject.profiles(["sandboxer"], arch)
+        select_plan(self.plan, ["sandboxer"])
         delta = self.delta()
         with self.assertRaisesRegex(ValueError, "helper selection differs"):
             self.compose(delta=delta)
-        helpers = subject.planned_helpers(self.plan["lanes"]["x86_64"]["profile"])
+        helpers = subject.planned_helpers(self.plan["lanes"]["x86_64"]["selection"])
         self.assertEqual(helpers["usage-probe"], "sandboxer")
         (delta / "helpers").mkdir()
         self.metadata["helpers"] = {}
@@ -547,15 +583,13 @@ class ArtifactContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "prepared workspace changed"):
             subject.verify_workspace(self.root / "workspaces/x86_64", self.plan, "x86_64")
 
-    def test_cli_helper_requires_exact_test_pin_and_survives_preparation(self):
-        self.plan["owners"] = ["orchestrator"]
-        for arch in subject.ARCHES:
-            self.plan["lanes"][arch]["profile"] = subject.profiles(["orchestrator"], arch)
+    def test_proxy_helper_requires_exact_test_pin_and_survives_preparation(self):
+        select_plan(self.plan, ["orchestrator"])
         self.plan["test_revisions"]["orchestrator"]["sha"] = "f" * 40
         delta = self.delta()
-        helpers = subject.planned_helpers(self.plan["lanes"]["x86_64"]["profile"])
-        self.assertEqual(helpers["orch-cli.test"], "orchestrator")
-        self.assertNotIn("orch-cli.test", subject.planned_helpers(self.plan["lanes"]["aarch64"]["profile"]))
+        helpers = subject.planned_helpers(self.plan["lanes"]["x86_64"]["selection"])
+        self.assertEqual(helpers["custom-proxy"], "orchestrator")
+        self.assertNotIn("custom-proxy", subject.planned_helpers(self.plan["lanes"]["aarch64"]["selection"]))
         with self.assertRaisesRegex(ValueError, "helper selection differs"):
             self.compose(delta=delta)
         (delta / "helpers").mkdir()
@@ -566,16 +600,16 @@ class ArtifactContracts(unittest.TestCase):
             path.chmod(0o755)
             self.metadata["helpers"][name] = {"sha256": subject.digest(path), "source_sha":
                 self.plan["framework_sha"] if owner == "framework" else self.plan["test_revisions"][owner]["sha"]}
-        helper = self.metadata["helpers"]["orch-cli.test"]
+        helper = self.metadata["helpers"]["custom-proxy"]
         helper["source_sha"] = "c" * 40
         (delta / "outputs.json").write_text(json.dumps(self.metadata))
-        with self.assertRaisesRegex(ValueError, "test helper identity mismatch: orch-cli.test"):
+        with self.assertRaisesRegex(ValueError, "test helper identity mismatch: custom-proxy"):
             self.compose(delta=delta)
         helper["source_sha"] = "f" * 40
         (delta / "outputs.json").write_text(json.dumps(self.metadata))
         provenance = self.compose(delta=delta)
-        prepared = self.root / "workspaces/x86_64/fixtures/bin/orch-cli.test"
-        self.assertEqual(subject.digest(prepared), provenance["helpers"]["orch-cli.test"]["sha256"])
+        prepared = self.root / "workspaces/x86_64/fixtures/bin/custom-proxy"
+        self.assertEqual(subject.digest(prepared), provenance["helpers"]["custom-proxy"]["sha256"])
         prepared.unlink()
         with self.assertRaisesRegex(ValueError, "prepared workspace changed"):
             subject.verify_workspace(self.root / "workspaces/x86_64", self.plan, "x86_64")
@@ -593,17 +627,11 @@ class ArtifactContracts(unittest.TestCase):
                                            for entry in self.plan["baseline"]["assets"]]
         provenance = self.compose()
         self.assertNotEqual(provenance["embedded"]["init"], provenance["products"]["sandbox-init"]["sha256"])
-        spec = importlib.util.spec_from_file_location("executor", Path(__file__).with_name("run-artifact-tests.py"))
-        executor = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(executor)
-        def execute(command, *, cwd, env):
-            self.assertEqual(env["KUASAR_EXPECTED_RUNTIME_INIT_SHA256"], provenance["embedded"]["init"])
-            return subprocess.CompletedProcess(command, 0)
-        with patch.object(executor.platform, "machine", return_value="x86_64"), \
-             patch.object(executor.subprocess, "run", side_effect=execute) as case:
-            result = executor.execute(self.plan, "x86_64", "core", self.root / "workspaces/x86_64", self.root / "result.json")
-            self.assertEqual(result["conclusion"], "success")
-            self.assertEqual(case.call_count, 1)
+        spec = importlib.util.spec_from_file_location("prepared_inputs", Path(__file__).resolve().parents[2] / "test/e2e/lib/workspace.py")
+        inputs = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(inputs)
+        environment = inputs.case_environment(self.root / "workspaces/x86_64", provenance, "sandbox.lifecycle.sh")
+        self.assertEqual(environment["KUASAR_EXPECTED_RUNTIME_INIT_SHA256"], provenance["embedded"]["init"])
 
     def test_missing_selected_inputs_cannot_fall_back_to_source(self):
         self.plan["baseline"]["assets"] = [record for record in self.plan["baseline"]["assets"]
@@ -611,10 +639,10 @@ class ArtifactContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "explicit ARM initialization"):
             self.compose("aarch64")
         delta = self.delta()
-        (delta / "test/e2e/accelerator/run_all.sh").unlink()
-        self.metadata["tests"]["accelerator"].pop("run_all.sh")
+        (delta / "test/e2e/accelerator/cases/storage.cache.sh").unlink()
+        self.metadata["tests"]["accelerator"].pop("cases/storage.cache.sh")
         (delta / "outputs.json").write_text(json.dumps(self.metadata))
-        with self.assertRaisesRegex(ValueError, "missing candidate owner entry"):
+        with self.assertRaisesRegex(ValueError, "missing pinned case"):
             self.compose(delta=delta)
 
     def test_orchestrator_config_and_app_are_product_inputs(self):
@@ -635,31 +663,47 @@ class ArtifactContracts(unittest.TestCase):
         self.assertIn("sandbox-runtime.bundle", products)
         self.assertNotIn("sandbox-ctl", products)
 
-    def test_results_require_both_exact_architectures_and_predeclared_profiles(self):
-        results = {arch: {"arch": arch, "plan_id": subject.identity(self.plan), "conclusion": "success",
-                          "test_revisions": self.plan["test_revisions"],
-                          "profile": self.plan["lanes"][arch]["profile"]} for arch in subject.ARCHES}
+    def test_results_require_both_exact_architectures_and_predeclared_suites(self):
+        results = {arch: architecture_result(self.plan, arch) for arch in subject.ARCHES}
         subject.collect_results(self.plan, results)
         with self.assertRaisesRegex(ValueError, "both architecture"):
             subject.collect_results(self.plan, {"x86_64": results["x86_64"]})
         results["aarch64"] = copy.deepcopy(results["aarch64"])
-        results["aarch64"]["profile"]["cases"] = []
+        results["aarch64"]["selection"]["cases"] = []
         with self.assertRaisesRegex(ValueError, "did not pass"):
             subject.collect_results(self.plan, results)
 
     def test_shards_require_all_selected_cases_and_one_prepared_identity(self):
-        self.plan["owners"] = ["platform"]
-        for arch in subject.ARCHES:
-            self.plan["lanes"][arch]["profile"] = subject.profiles(["platform"], arch)
+        select_plan(self.plan, ["platform"])
         arch = "x86_64"
         results = {shard: {"arch": arch, "shard": shard, "plan_id": subject.identity(self.plan),
                           "test_revisions": self.plan["test_revisions"],
-                          "cases": cases, "conclusion": "success", "provenance_sha256": "a" * 64}
-                   for shard, cases in subject.shards(self.plan["lanes"][arch]["profile"]).items()}
+                          "cases": cases, "conclusion": "success", "provenance_sha256": "a" * 64,
+                          "timings": [{"case": case, "exit_code": 0, "wall_seconds": 0.1} for case in cases]}
+                   for shard, cases in subject.shards(self.plan["lanes"][arch]["selection"]).items()}
+        for shard, record in results.items():
+            if record['cases']:
+                record['preparation_environment'] = {'kind': 'clean-container', 'verified': True,
+                                                    'compilers': [], 'component_source_trees': [], 'image_id': 'sha256:' + 'd' * 64}
+            if subject.requires_clean_runtime(arch, shard):
+                record['environment'] = {'kind': 'clean-container', 'verified': True,
+                                         'compilers': [], 'component_source_trees': [], 'image_id': 'sha256:' + 'e' * 64}
+        results['performance'] = {'arch': arch, 'plan_id': subject.identity(self.plan),
+                                  'test_revisions': self.plan['test_revisions'], 'conclusion': 'success',
+                                  'provenance_sha256': 'a' * 64, 'checks': ['working-set-smoke'],
+                                  'timings': [{'case': 'working-set-smoke', 'exit_code': 0, 'wall_seconds': 0.1}]}
         subject.collect_shard_results(self.plan, arch, results)
+        missing_prepare = copy.deepcopy(results)
+        missing_prepare['storage']['preparation_environment']['verified'] = False
+        with self.assertRaisesRegex(ValueError, 'source/compiler-free'):
+            subject.collect_shard_results(self.plan, arch, missing_prepare)
+        missing_clean = copy.deepcopy(results)
+        missing_clean['storage']['environment']['verified'] = False
+        with self.assertRaisesRegex(ValueError, 'source/compiler-free'):
+            subject.collect_shard_results(self.plan, arch, missing_clean)
         incomplete = dict(results)
-        del incomplete["sandboxer"]
-        with self.assertRaisesRegex(ValueError, "shard results"):
+        del incomplete["sandbox"]
+        with self.assertRaisesRegex(ValueError, "validation results"):
             subject.collect_shard_results(self.plan, arch, incomplete)
         results["orchestrator"]["provenance_sha256"] = "b" * 64
         with self.assertRaisesRegex(ValueError, "different prepared"):
@@ -691,10 +735,9 @@ class ArtifactContracts(unittest.TestCase):
         binding = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(binding)
         self.plan["mode"] = "exact-assets"
+        self.plan["test_overlays"] = []
         self.plan["baseline"]["staged"] = True
-        results = {arch: {"arch": arch, "plan_id": subject.identity(self.plan), "conclusion": "success",
-                          "test_revisions": self.plan["test_revisions"],
-                          "profile": self.plan["lanes"][arch]["profile"]} for arch in subject.ARCHES}
+        results = {arch: architecture_result(self.plan, arch) for arch in subject.ARCHES}
         validation = subject.collect_results(self.plan, results)
         notes = self.root / "release-notes.md"
         (self.root / "test-revisions.json").write_text(json.dumps(
@@ -724,9 +767,7 @@ class ArtifactContracts(unittest.TestCase):
             code = 33 if cwd.name == "connector" and command == ["bash", "scripts/ci-source-checks.sh"] else 0
             return subprocess.CompletedProcess(command, code)
         for owner in ("connector", "platform"):
-            self.plan["owners"] = [owner]
-            for arch in subject.ARCHES:
-                self.plan["lanes"][arch]["profile"] = subject.profiles([owner], arch)
+            select_plan(self.plan, [owner])
             result = self.root / (owner + "-source-result.json")
             with patch.object(source_checks.build, "checkout", side_effect=checkout), \
                  patch.object(source_checks.subprocess, "run", side_effect=execute):

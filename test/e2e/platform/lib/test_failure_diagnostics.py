@@ -25,9 +25,9 @@ class FailureDiagnostics(unittest.TestCase):
         self.metrics = self.root / "metrics"
         self.cleanup = self.root / "cleanup-status"
 
-    def run_case(self, body, *, case="read-recovery", cleanup="", blocked_output=False):
-        name = {"read-recovery": "e2e_sandbox_read_recovery.sh", "registry-n3": "e2e_cluster_stub.sh",
-                "unrelated": "e2e_unrelated.sh"}[case]
+    def run_case(self, body, *, case="snapshot.read-recovery.sh", cleanup="", blocked_output=False):
+        name = {"snapshot.read-recovery.sh": "snapshot.read-recovery.sh", "orchestrator.cluster-recovery.sh": "orchestrator.cluster-recovery.sh",
+                "unrelated": "basic.unrelated.sh"}[case]
         path = self.root / name
         text = '''#!/usr/bin/env bash
 set -euo pipefail
@@ -40,6 +40,7 @@ cleanup() {
 trap cleanup EXIT
 launch() { :; }
 step() { :; }
+run_redirect_flow() { :; }
 fail() { exit 19; }
 ''' + body
         path.write_text(text)
@@ -62,20 +63,20 @@ fail() { exit 19; }
         self.assertFalse(self.work.exists())
         self.assertEqual(len(reports), 1)
         report = reports[0]
-        self.assertEqual((report["case"], report["phase"], report["exit_code"]), ("read-recovery", "seed-snapshot", 17))
-        self.assertEqual(report["source"], "e2e_sandbox_read_recovery.sh")
+        self.assertEqual((report["case"], report["phase"], report["exit_code"]), ("snapshot.read-recovery.sh", "seed-snapshot", 17))
+        self.assertEqual(report["source"], "snapshot.read-recovery.sh")
         self.assertEqual(report["line"], lines.index("SNAP=$(exit 17)") + 1)
         self.assertEqual(report["logs"]["seed.snapshot.log"]["excerpts"][0]["error_terms"], ["context deadline exceeded"])
         self.assertNotIn(secret, json.dumps(reports) + result.stdout + result.stderr)
 
     def test_explicit_cluster_fail_retains_call_line_phase_and_http_status(self):
-        (self.work / "build-status.body").write_text('{"error":"Bad Gateway","api_secret":"raw-secret"}')
-        body = 'step "checking build follow-up forwarding through the node API endpoint"\ncode=502\n[ "$code" = 200 ] || fail "private argument"\n'
-        result, reports, lines = self.run_case(body, case="registry-n3")
+        (self.work / "create.response").write_text('{"error":"Bad Gateway","api_secret":"raw-secret"}')
+        body = 'run_redirect_flow\ncode=502\n[ "$code" = 200 ] || fail "private argument"\n'
+        result, reports, lines = self.run_case(body, case="orchestrator.cluster-recovery.sh")
         self.assertEqual(result.returncode, 19, result.stderr)
         self.assertEqual(self.cleanup.read_text(), "19\n")
         report = reports[0]
-        self.assertEqual((report["phase"], report["http_status"]), ("build-status", 502))
+        self.assertEqual((report["phase"], report["http_status"]), ("registry-recovery", 502))
         self.assertEqual(report["line"], lines.index('[ "$code" = 200 ] || fail "private argument"') + 1)
         self.assertNotIn("raw-secret", json.dumps(reports))
         self.assertNotIn("private argument", result.stderr)
@@ -109,22 +110,6 @@ fail() { exit 19; }
         self.assertEqual(reports, [])
         self.assertNotIn("E2E failure:", result.stderr)
 
-    def test_existing_privileged_reexec_keeps_hook_when_sudo_filters_bash_env(self):
-        sudo = self.root / "sudo"
-        sudo.write_text('#!/bin/bash\nset -eu\n[ "$1" = -nE ]; shift\nunset BASH_ENV\nexec "$@"\n')
-        sudo.chmod(0o755)
-        body = '''if [ -z "${DIAGNOSTIC_REEXECED:-}" ]; then
-    export DIAGNOSTIC_REEXECED=1
-    exec sudo -nE bash "$0" "$@"
-fi
-SNAP=$(exit 17)
-'''
-        result, reports, lines = self.run_case(body)
-        self.assertEqual(result.returncode, 17, result.stderr)
-        self.assertEqual(self.cleanup.read_text(), "17\n")
-        self.assertEqual(len(reports), 1)
-        self.assertEqual(reports[0]["line"], lines.index("SNAP=$(exit 17)") + 1)
-
     def test_exec_still_closes_readiness_descriptors(self):
         result, reports, _ = self.run_case('''exec {fd}>"$WORK/readiness"
 saved_fd=$fd
@@ -135,47 +120,29 @@ exec {fd}>&-
         self.assertEqual(reports, [])
 
     def test_missing_work_still_records_failure_identity(self):
-        path = diagnostics.collect("read-recovery", "setup", "case.sh", "12", "17",
+        path = diagnostics.collect("snapshot.read-recovery.sh", "setup", "case.sh", "12", "17",
                                    str(self.work / "missing"), str(self.metrics), "")
         report = json.loads(path.read_text())
         self.assertEqual(report["exit_code"], 17)
         self.assertTrue(report["logs_unavailable"])
 
-    def test_trusted_source_entry_enables_hook_only_in_source_ci_layout(self):
-        # The current trusted workflow lacks BASH_ENV. Its assembled source
-        # entry must enable the hook without extending release/artifact E2E.
-        for layout, ci, active in (("build/e2e-suite", True, True),
-                                   ("release", True, False),
-                                   ("prepared/x86_64", True, False),
-                                   ("developer/build/e2e-suite", False, False)):
-            with self.subTest(layout=layout, ci=ci):
-                suite = self.root / layout / "test/e2e"
-                metrics = self.root / layout / "metrics"
-                (suite / "sandboxer").mkdir(parents=True)
-                (suite / "platform/lib").mkdir(parents=True)
-                shutil.copyfile(ROOT.parents[1] / "run_all.sh", suite / "run_all.sh")
-                for name in ("failure-diagnostics.sh", "failure_diagnostics.py"):
-                    shutil.copyfile(ROOT / name, suite / "platform/lib" / name)
-                runner = suite / "sandboxer/run_all.sh"
-                runner.write_text('#!/bin/bash\nbash "$(dirname "$0")/e2e_sandbox_read_recovery.sh"\n')
-                runner.chmod(0o755)
-                case = suite / "sandboxer/e2e_sandbox_read_recovery.sh"
-                case.write_text('set -eu\ncleanup() { rm -rf "$WORK"; }\ntrap cleanup EXIT\nSNAP=$(exit 17)\n')
-                environment = {**os.environ, "KUASAR_E2E_SHARD": "sandboxer",
-                               "WORK": str(self.work), "ZOT_BIN": "/unused/zot", "VGW_BIN": "/unused/gateway"}
-                environment.pop("BASH_ENV", None)
-                environment.pop("KUASAR_CI_DIR", None)
-                if ci:
-                    environment["KUASAR_CI_DIR"] = str(metrics)
-                result = subprocess.run(["bash", str(suite / "run_all.sh")], env=environment,
-                                        text=True, capture_output=True, timeout=10)
-                self.assertEqual(result.returncode, 17, result.stderr)
-                reports = [json.loads(p.read_text()) for p in metrics.glob("e2e-failures/*.json")]
-                self.assertEqual(len(reports), int(active))
-                if active:
-                    self.assertEqual((reports[0]["line"], reports[0]["exit_code"]), (4, 17))
-                else:
-                    self.assertNotIn("E2E failure:", result.stderr)
+    def test_public_runner_enables_only_prepared_recovery_hook(self):
+        import importlib.machinery
+        entry = ROOT.parents[1] / "e2e"
+        spec = importlib.util.spec_from_loader("e2e_diagnostics", importlib.machinery.SourceFileLoader("e2e_diagnostics", str(entry)))
+        runner = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(runner)
+        helper = self.root / "test/e2e/lib/platform/failure-diagnostics.sh"
+        helper.parent.mkdir(parents=True)
+        helper.write_bytes((ROOT / "failure-diagnostics.sh").read_bytes())
+        for case in ("snapshot.read-recovery.sh", "orchestrator.cluster-recovery.sh"):
+            env = runner.case_diagnostics(self.root, case, self.metrics)
+            self.assertEqual(env["BASH_ENV"], str(helper))
+            self.assertEqual(env["KUASAR_CI_DIR"], str(self.metrics))
+        self.assertEqual(runner.case_diagnostics(self.root, "basic.other.sh", self.metrics), {})
+        helper.unlink()
+        with self.assertRaisesRegex(ValueError, "missing prepared platform"):
+            runner.case_diagnostics(self.root, "snapshot.read-recovery.sh", self.metrics)
 
     def test_collector_is_bounded_and_never_copies_raw_text_or_symlinks(self):
         secret = "unknown-credential-format-should-also-be-withheld"
@@ -183,7 +150,7 @@ exec {fd}>&-
         (self.root / "outside").write_text("permission denied " + secret)
         (self.work / "seed.log").symlink_to(self.root / "outside")
         os.mkfifo(self.work / "proxy.log")
-        path = diagnostics.collect("read-recovery", "setup", "case.sh", "12", "17", str(self.work), str(self.metrics), "")
+        path = diagnostics.collect("snapshot.read-recovery.sh", "setup", "case.sh", "12", "17", str(self.work), str(self.metrics), "")
         report = json.loads(path.read_text())
         self.assertNotIn(secret, path.read_text())
         self.assertNotIn("seed.log", report["logs"])

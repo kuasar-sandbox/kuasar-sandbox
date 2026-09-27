@@ -2,6 +2,7 @@
 import importlib.util
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -23,18 +24,18 @@ class DocumentationPackageTest(unittest.TestCase):
             (source / 'docs').mkdir(parents=True)
             (source / 'test/e2e').mkdir(parents=True)
             (source / 'README.md').write_text(f'# {owner}\n')
-            script = source / 'test/e2e/run_all.sh'
+            cases = source / ('test/e2e/platform/cases' if owner == 'platform' else 'test/e2e/cases')
+            cases.mkdir(parents=True)
+            script = cases / f'basic.{owner}-fixture.sh'
             script.write_text('#!/bin/sh\nprintf "owner suite\\n"\n')
             script.chmod(0o755)
         platform = self.root / 'platform'
         (platform / 'test/e2e/lib').mkdir(parents=True)
         runner = platform / 'test/e2e/e2e'
-        runner.write_text('#!/bin/sh\nprintf "unified suite runner\\n"\n')
+        shutil.copyfile(ROOT / 'test/e2e/e2e', runner)
         runner.chmod(0o755)
         (platform / 'test/e2e/lib/common.sh').write_text('# common E2E helpers\\n')
-        (platform / 'test/e2e/platform').mkdir()
-        (platform / 'test/e2e/platform/run_all.sh').write_bytes((platform / 'test/e2e/run_all.sh').read_bytes())
-        (platform / 'test/e2e/platform/run_all.sh').chmod(0o755)
+        shutil.copyfile(ROOT / 'test/e2e/lib/workspace.py', platform / 'test/e2e/lib/workspace.py')
         (self.root / 'refs.tsv').write_text(''.join(f'{o}\t{o}-revision\n' for o in (*OWNERS, 'vmlinux')))
 
     def assemble(self, *, kernel=False, success=True):
@@ -76,14 +77,17 @@ class DocumentationPackageTest(unittest.TestCase):
         self.assertIn('echo "[not-a-link](does-not-exist)"', text)
         self.assertIn('[spec](../../switch.md#wire)', (output / 'docs/connector/native-deps/README.md').read_text())
         for owner in OWNERS:
-            source = self.root / owner / ('test/e2e/platform' if owner == 'platform' else 'test/e2e') / 'run_all.sh'
-            target = output / 'test/e2e' / owner / 'run_all.sh'
+            source = self.root / owner / ('test/e2e/platform/cases' if owner == 'platform' else 'test/e2e/cases') / f'basic.{owner}-fixture.sh'
+            target = output / 'test/e2e/cases' / source.name
             self.assertEqual(source.read_bytes(), target.read_bytes())
             self.assertTrue(os.access(target, os.X_OK))
+            self.assertFalse((output / 'test/e2e' / owner).exists())
         self.assertTrue(os.access(output / 'test/e2e/e2e', os.X_OK))
         self.assertTrue((output / 'test/e2e/lib/common.sh').is_file())
         self.assertFalse((output / 'test/e2e/assemble.sh').exists())
         self.assertFalse((output / 'test/e2e/assemble_docs.py').exists())
+        self.assertFalse((output / 'test/e2e/run_all.sh').exists())
+        self.assertFalse((output / 'test/e2e/generated-compatibility-runners').exists())
 
     def test_kernel_pair_uses_independently_selected_source(self):
         for owner, prefix in [('guest-runtime', 'runtime'), ('vmlinux', 'selected')]:
