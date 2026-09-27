@@ -35,6 +35,36 @@ jobs:
       base_ref: ${{ github.event.pull_request.base.ref }}
       head_sha: ${{ github.event.pull_request.head.sha }}
 
+  framework-result:
+    if: >-
+      always() &&
+      github.event.repository.visibility == 'public' &&
+      github.event.repository.full_name == github.repository &&
+      github.event_name == 'pull_request' &&
+      github.repository == 'kuasar-sandbox/kuasar-sandbox' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.draft == false
+    needs: ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Only this final controller can publish the actual merge result. Source,
+    # build, prepare and product execution keep their read-only job tokens.
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: ci/integration
+      - name: Recheck and publish the exact framework merge result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INTEGRATION_RESULT: ${{ needs.ci.result }}
+        run: python3 -B ci/integration/finalize_framework.py
+
   trusted-fork:
     name: ci
     if: >-

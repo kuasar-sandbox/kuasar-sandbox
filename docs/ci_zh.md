@@ -22,15 +22,13 @@ admission 复核当前 PR/base/head 和 integration commit 的两个父提交，
 写入 `kuasar/ci-exact-head=pending`。draft、外部 fork 和冲突都不能得到 E2E 成功结论。
 
 平台同仓 PR 使用 `pull_request`，在精确的两父 merge commit 上调用本地 reusable workflow，使框架变更在合入 main 前验证自己的 prepare/run 合同。
-该流程只有读取权限，不继承 App secret；解析前以及所有必需源码/build/prepare/产品/性能阶段完成后，均复核当前 PR/base/head，
-并为精确 merge candidate 报告既有必需检查 `ci / finalize`。draft 不分配产品 job。组件和 fork 调用方保留既有可信 admission/finalize。
+源码、build、prepare 和产品执行只接收只读 job token，不继承 App secret。所有选中阶段（包括源码/UFFD 和性能）均必须通过，integration result 才能成功。
+draft 不分配产品 job。组件和 fork 调用方保留既有可信 admission/finalize。
 
-框架切换无法通过 main 上的控制器执行时，同一完整流水线可以直接在当前 test merge commit 上报告检查。
-先完成 PR 元数据更新，再获取 `refs/pull/<number>/merge` 并核对有序 base/head 父提交，将该精确提交推送到新的
-`ci/framework/pr-<number>/<full-merge-sha>` 分支，不强制更新。GitHub 可能保留父提交和 tree 但重新生成 merge commit；新的 merge SHA 必须使用独立验证 ref。只读的 `Framework candidate` push workflow
-拒绝无关 ref、fork、Draft/已关闭 PR、遗漏 companion，以及过期的 merge/head/base ref；验收前再次复核当前身份。
-该流程实际执行源码/build/prepare/E2E/性能阶段，不手工发布 check/status，也不更改保护规则。
-test merge commit 上存在检查时，GitHub 在该提交上评估必需检查。保留此前失败记录，正常合并后删除任务拥有的验证分支。
+完整流水线结束后，独立的 `framework-result` 控制 job 对照已测试的事件再次核对公开同仓 PR、Ready 状态、精确 merge/head/base ref 和有序父提交。
+只有该控制 job 接收 `statuses: write`，用于向该精确 merge SHA 发布实际的 `ci / finalize` commit status。
+流水线失败、取消或跳过均报告失败；ref 变化或事件无效时不发布结果。框架切换期间，main 上的控制器仍使用旧执行器，该自动结果将必需检查绑定到实际测试的 merge。
+该流程不更改仓库权限或保护设置，不手工发布成功，也不替代任何源码/产品 gate。保留此前失败记录。
 
 App key 和短期控制 token 只进入受信任的 admission/finalize 与发布控制 job。
 产品/helper 构建、源码检查、prepare、E2E 都不接收 App key，候选代码在新的标准 job 执行。

@@ -20,16 +20,7 @@ case "$INTEGRATION_MODE" in
             '.pull_request.head.repo.full_name == $repo' "$GITHUB_EVENT_PATH" >/dev/null \
           || { echo "framework CI requires the exact same-repository platform merge candidate" >&2; exit 1; }
         ;;
-      push)
-        [ "$GITHUB_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ] \
-          && [ "$CANDIDATE_REPOSITORY" = "$GITHUB_REPOSITORY" ] \
-          && [ "$TRUSTED_WORKFLOW_SHA" = "$CANDIDATE_SHA" ] \
-          && [ "$GITHUB_SHA" = "$CANDIDATE_SHA" ] \
-          && [ "$COMPANION_CANDIDATES" = '[]' ] \
-          && [ "$GITHUB_REF" = "refs/heads/ci/framework/pr-$CANDIDATE_PR/$CANDIDATE_SHA" ] \
-          || { echo "framework push must name the exact platform PR and merge commit" >&2; exit 1; }
-        ;;
-      *) echo "source Integration E2E requires an admitted PR or framework candidate push" >&2; exit 1 ;;
+      *) echo "source Integration E2E requires an admitted PR event" >&2; exit 1 ;;
     esac
     [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$ ]]
     for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do
@@ -57,13 +48,6 @@ case "$INTEGRATION_MODE" in
       )
     ' <<< "$COMPANION_CANDIDATES" >/dev/null \
       || { echo "companion_candidates is not a valid exact source set" >&2; exit 1; }
-    if [ "$GITHUB_EVENT_NAME" = push ]; then
-      jq -e --arg repository "$CANDIDATE_REPOSITORY" --arg ref "$GITHUB_REF" --arg sha "$CANDIDATE_SHA" '
-        .repository.full_name == $repository and .repository.visibility == "public"
-        and .ref == $ref and .after == $sha and .deleted == false
-      ' "$GITHUB_EVENT_PATH" >/dev/null \
-        || { echo "framework candidate inputs do not match the push event" >&2; exit 1; }
-    else
     jq -e \
       --arg repository "$CANDIDATE_REPOSITORY" \
       --argjson number "$CANDIDATE_PR" \
@@ -80,7 +64,6 @@ case "$INTEGRATION_MODE" in
         and .pull_request.head.sha == $head
       ' "$GITHUB_EVENT_PATH" >/dev/null \
       || { echo "PR inputs do not match the admitted event" >&2; exit 1; }
-    fi
     ;;
     exact-assets)
       [ "$GITHUB_REPOSITORY" = kuasar-sandbox/kuasar-sandbox ] \
