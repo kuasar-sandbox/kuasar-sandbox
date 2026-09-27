@@ -154,6 +154,7 @@ def check():
     assert expression(platform["if"], context) is False
     assert expression(fork["if"], context) is False
     assert "github.event_name" in load("integration-tests.yml")["concurrency"]["group"]
+    assert "github.event_name" in load("ci-entry.yml")["concurrency"]["group"]
     assert any("validate-source-set.sh" in step.get("run", "") for step in integration["results"]["steps"])
     assert entry["e2e"]["uses"] == "./.github/workflows/integration-tests.yml"
     assert entry["e2e"]["with"]["candidate_repository"] == "${{ github.repository }}"
