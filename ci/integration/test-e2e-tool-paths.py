@@ -298,6 +298,23 @@ class CaseBridgeContracts(unittest.TestCase):
         self.assertIn('--workdir /prepared/x86_64', command[command.index('-c') + 1])
         self.assertNotIn('--privileged', command)
 
+    def test_runtime_preflight_rejects_available_language_compilers(self):
+        execution = load_module('compiler_preflight', ROOT / 'ci/integration/execution.py')
+        with tempfile.TemporaryDirectory(prefix='kuasar-compiler-preflight-') as directory:
+            tools = Path(directory) / 'tools'
+            tools.mkdir()
+            for compiler in ('go', 'cargo', 'rustc', 'cc', 'gcc', 'g++', 'clang', 'clang++'):
+                with self.subTest(compiler=compiler):
+                    executable = tools / compiler
+                    executable.write_text('#!/bin/sh\nexit 0\n')
+                    executable.chmod(0o755)
+                    result = subprocess.run(
+                        ['/bin/sh', '-c', execution.runtime_preflight('/prepared')],
+                        env={'PATH': str(tools)}, text=True, capture_output=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('unexpected compiler: ' + compiler, result.stderr)
+                    executable.unlink()
+
     def test_execution_rejects_credentials_before_launching_cases(self):
         executor = load_module('execution_credentials', ROOT / 'ci/integration/execution.py')
         with tempfile.TemporaryDirectory() as directory, patch.dict(os.environ, GH_TOKEN='fixture-token'):

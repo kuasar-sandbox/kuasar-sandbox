@@ -116,7 +116,7 @@ source 模式 x86 sandboxer/platform 还在独立性能 job 中，用同一组�
 
 CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径。跨 `sudo` 只传递显式准备的输入（包括私有状态目录）；执行不读取生成的 owner-runner registry。
 
-所有非空 lane 都在没有 Go、Rust 和组件源码树的运行时容器中 prepare。完整 storage 和 snapshot 套件也在该容器中执行，
+所有非空 lane 都在没有 Go、Rust、C/C++ 编译器及组件源码树的运行时容器中 prepare。完整 storage 和 snapshot 套件也在该容器中执行，
 覆盖非 KVM 和 KVM 合同；适用的原生 ARM image 用例使用相同边界。需要 host systemd 的用例保留原生 host job。
 可信预检和结果记录绑定不可变运行时镜像 ID，以及编译器/源码树缺失的验证证据；零用例静态 lane 不算产品验收。
 容器输入只读，可变用例目录和输出目录独立。

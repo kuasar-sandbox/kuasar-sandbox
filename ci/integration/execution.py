@@ -52,7 +52,7 @@ def result_record(plan, arch, provenance, workspace):
 
 
 def runtime_preflight(root):
-    return ('set -eu; for tool in go cargo rustc; do '
+    return ('set -eu; for tool in go cargo rustc cc gcc g++ clang clang++; do '
             'if command -v "$tool" >/dev/null 2>&1; then echo "unexpected compiler: $tool" >&2; exit 1; fi; done; '
             'test ! -d /usr/local/go; test ! -d /root/.cargo; '
             f'test ! -e {root}/go.mod; test ! -e {root}/Cargo.toml; '

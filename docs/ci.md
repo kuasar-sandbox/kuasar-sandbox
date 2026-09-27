@@ -64,7 +64,7 @@ The E2E job checks out only the trusted executor, downloads its prepared target 
 
 CI supplies root privileges and the trusted tool path directly when launching selected prepared cases. Only explicit prepared inputs cross `sudo`, including the private state directory; execution does not consult a generated owner-runner registry.
 
-All nonempty lanes prepare inside a runtime-only container with no Go, Rust or component source trees. The full storage and snapshot suites also execute there, covering non-KVM and KVM contracts; applicable native ARM image cases use the same boundary. Cases requiring host systemd retain their native-host job. Trusted preflight and result records bind the immutable runtime image ID and the verified absence of compilers/source trees; static zero-case lanes do not count as product acceptance. Container inputs are read-only and mutable case/output directories are separate.
+All nonempty lanes prepare inside a runtime-only container with no Go, Rust or C/C++ compilers and no component source trees. The full storage and snapshot suites also execute there, covering non-KVM and KVM contracts; applicable native ARM image cases use the same boundary. Cases requiring host systemd retain their native-host job. Trusted preflight and result records bind the immutable runtime image ID and the verified absence of compilers/source trees; static zero-case lanes do not count as product acceptance. Container inputs are read-only and mutable case/output directories are separate.
 
 ## 4. Daily and Stable
 

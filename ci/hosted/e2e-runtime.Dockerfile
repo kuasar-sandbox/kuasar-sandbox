@@ -6,4 +6,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     libstdc++6 liburing2 libzstd1 openssl procps psmisc python3 python3-pip redis-server socat strace \
     tar unzip util-linux xz-utils zstd \
     && rm -rf /var/lib/apt/lists/* \
-    && ! command -v go && ! command -v cargo && ! command -v rustc
+    && for tool in go cargo rustc cc gcc g++ clang clang++; do \
+        if command -v "$tool" >/dev/null 2>&1; then echo "unexpected compiler: $tool" >&2; exit 1; fi; \
+    done
