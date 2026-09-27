@@ -61,7 +61,8 @@ def check_request_rejection():
         event = Path(directory) / "event.json"
         event.write_text(json.dumps({"repository": {"full_name": repository}, "pull_request": {
             "number": 1, "state": "open", "draft": False,
-            "base": {"ref": "main", "sha": sha, "repo": {"full_name": repository}}, "head": {"sha": sha}}}))
+            "base": {"ref": "main", "sha": sha, "repo": {"full_name": repository}},
+            "head": {"sha": sha, "repo": {"full_name": repository}}}}))
         env = dict(os.environ, GITHUB_REPOSITORY=repository, TRUSTED_WORKFLOW_REPOSITORY=repository, TRUSTED_WORKFLOW_SHA=sha,
                    GITHUB_EVENT_NAME="pull_request_target", GITHUB_EVENT_PATH=str(event),
                    CANDIDATE_REPOSITORY=repository, CANDIDATE_SHA=sha, CANDIDATE_BASE_SHA=sha,
@@ -78,6 +79,25 @@ def check_request_rejection():
             assert (result.returncode == 0) == (message is None), (overrides, result.stderr)
             if message:
                 assert message in result.stderr, (overrides, result.stderr)
+        env.update(GITHUB_EVENT_NAME="pull_request", GITHUB_SHA=sha)
+        for overrides, allowed in (({}, True), ({"GITHUB_SHA": "2" * 40}, False),
+                                   ({"TRUSTED_WORKFLOW_SHA": "2" * 40}, False),
+                                   ({"CANDIDATE_REPOSITORY": "kuasar-sandbox/connector"}, False),
+                                   ({"CANDIDATE_BASE_SHA": "2" * 40}, False),
+                                   ({"CANDIDATE_HEAD_SHA": "2" * 40}, False),
+                                   ({"COMPANION_CANDIDATES": '[{}]'}, False)):
+            result = subprocess.run(["bash", "-c", script], env={**env, **overrides},
+                                    capture_output=True, text=True, timeout=5)
+            assert (result.returncode == 0) == allowed, (overrides, result.stderr)
+        original = event.read_text()
+        for fault in ("fork", "draft", "closed"):
+            data = json.loads(original)
+            if fault == "fork": data["pull_request"]["head"]["repo"]["full_name"] = "outside/fork"
+            elif fault == "draft": data["pull_request"]["draft"] = True
+            else: data["pull_request"]["state"] = "closed"
+            event.write_text(json.dumps(data))
+            result = subprocess.run(["bash", "-c", script], env=env, capture_output=True, text=True, timeout=5)
+            assert result.returncode != 0, fault
 
 
 def check():
@@ -109,6 +129,32 @@ def check():
                 if not str(job["runs-on"]).startswith("${{"):
                     assert job["runs-on"] == "ubuntu-latest", (name, job["runs-on"])
     check_request_rejection()
+    caller = load("ci.yml")
+    assert caller["permissions"] == {"contents": "read", "pull-requests": "read"}
+    platform = caller["jobs"]["ci"]
+    assert platform["uses"] == "./.github/workflows/integration-tests.yml"
+    assert "secrets" not in platform and "permissions" not in platform
+    assert platform["with"]["candidate_sha"] == "${{ github.sha }}"
+    context = {"github": {"repository": "kuasar-sandbox/kuasar-sandbox", "event_name": "pull_request",
+               "event": {"repository": {"visibility": "public", "full_name": "kuasar-sandbox/kuasar-sandbox"},
+                         "pull_request": {"draft": False, "head": {"repo": {"full_name": "kuasar-sandbox/kuasar-sandbox"}}}}},
+               "false": False}
+    assert expression(platform["if"], context) is True
+    assert expression(integration["results"]["name"], context) == "finalize"
+    for event in ("pull_request_target", "workflow_dispatch"):
+        context["github"]["event_name"] = event
+        assert expression(platform["if"], context) is False
+        assert expression(integration["results"]["name"], context) == "results"
+    context["github"]["event_name"] = "pull_request_target"
+    context["github"]["event"]["pull_request"]["head"]["repo"]["full_name"] = "outside/fork"
+    fork = caller["jobs"]["trusted-fork"]
+    assert expression(fork["if"], context) is True
+    assert fork["name"] == "ci" and fork["uses"].endswith("/ci-entry.yml@main")
+    context["github"]["event_name"] = "pull_request"
+    assert expression(platform["if"], context) is False
+    assert expression(fork["if"], context) is False
+    assert "github.event_name" in load("integration-tests.yml")["concurrency"]["group"]
+    assert any("validate-source-set.sh" in step.get("run", "") for step in integration["results"]["steps"])
     assert entry["e2e"]["uses"] == "./.github/workflows/integration-tests.yml"
     assert entry["e2e"]["with"]["candidate_repository"] == "${{ github.repository }}"
     for job in (entry["admission"], entry["finalize"]):

@@ -63,7 +63,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: integration-${{ inputs.mode }}-${{ inputs.candidate_repository || inputs.release_version }}-${{ inputs.candidate_sha || github.run_id }}
+  group: integration-${{ github.event_name }}-${{ inputs.mode }}-${{ inputs.candidate_repository || inputs.release_version }}-${{ inputs.candidate_sha || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -189,6 +189,9 @@ jobs:
           overwrite: true
 
   results:
+    # Platform self-validation retains the repository's required check name.
+    # Component callers keep their outer trusted ci-entry finalizer.
+    name: ${{ github.event_name == 'pull_request' && 'finalize' || 'results' }}
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     needs: [resolve, x86_64, aarch64, source-checks]
     runs-on: ubuntu-latest
@@ -222,6 +225,19 @@ jobs:
         run: |
           python3 -B framework/ci/integration/artifacts.py results \
             --plan plan/plan.json --results results > validation.json
+      - name: Recheck the current exact source candidate before acceptance
+        if: inputs.mode == 'source'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CALLER_TOKEN: ${{ github.token }}
+          CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
+          CANDIDATE_PR: ${{ inputs.pull_request_number }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CANDIDATE_BASE_SHA: ${{ inputs.base_sha }}
+          CANDIDATE_BASE_REF: ${{ inputs.base_ref }}
+          CANDIDATE_HEAD_SHA: ${{ inputs.head_sha }}
+          COMPANION_CANDIDATES: ${{ inputs.companion_candidates }}
+        run: bash framework/ci/integration/validate-source-set.sh
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-validation-${{ github.run_id }}
