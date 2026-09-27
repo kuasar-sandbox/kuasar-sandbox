@@ -164,7 +164,8 @@ class CaseBridgeContracts(unittest.TestCase):
         with patch.object(executor.os, 'geteuid', return_value=1000), \
              patch.dict(os.environ, {'UNRELATED_SECRET': 'must-not-forward'}):
             self.assertEqual(executor.privileged_command(command, prepared),
-                             ['sudo', '-n', '--preserve-env=BIN,E2E_LIB,PATH', '--', *command])
+                             ['sudo', '-n', '--', 'env', 'BIN=/prepared/bin',
+                              'E2E_LIB=/prepared/test/e2e/lib', 'PATH=/host/tools', *command])
         with patch.object(executor.os, 'geteuid', return_value=0):
             self.assertEqual(executor.privileged_command(command, prepared), command)
 
@@ -179,32 +180,44 @@ class CaseBridgeContracts(unittest.TestCase):
         })
         self.assertEqual(prepared, {'BIN': '/prepared/bin', 'E2E_LIB': '/prepared/test/e2e/lib'})
 
-    def test_generated_compatibility_registry_is_exact_and_owner_scoped(self):
-        executor = load_module('generated_compatibility_executor', ROOT / 'ci/integration/run-artifact-tests.py')
-        with tempfile.TemporaryDirectory(prefix='kuasar-generated-runners-') as directory:
-            workspace = Path(directory)
-            runner = workspace / 'test/e2e/connector/run_all.sh'
-            runner.parent.mkdir(parents=True)
-            runner.write_text('#!/bin/sh\nexit 0\n')
-            runner.chmod(0o755)
-            registry = workspace / 'test/e2e/generated-compatibility-runners'
-            registry.write_text('test/e2e/connector/run_all.sh\n')
-            self.assertEqual(executor.generated_compatibility_runners(workspace),
-                             {'test/e2e/connector/run_all.sh'})
-            for invalid in (
-                    'test/e2e/connector/run_all.sh\ntest/e2e/connector/run_all.sh\n',
-                    'test/e2e/platform/run_all.sh\n', '../connector/run_all.sh\n'):
-                registry.write_text(invalid)
-                with self.assertRaises(ValueError):
-                    executor.generated_compatibility_runners(workspace)
-            registry.unlink()
-            registry.symlink_to(runner)
-            with self.assertRaisesRegex(ValueError, 'missing generated compatibility runner registry'):
-                executor.generated_compatibility_runners(workspace)
-        generated = {'test/e2e/connector/run_all.sh'}
-        self.assertTrue(executor.requires_privilege('test/e2e/connector/run_all.sh', False, generated))
-        self.assertTrue(executor.requires_privilege('test/e2e/connector/cases/network.tap.sh', True, generated))
-        self.assertFalse(executor.requires_privilege('test/e2e/sandboxer/run_all.sh', False, generated))
+    def test_baseline_profiles_keep_root_and_tool_path_without_a_registry(self):
+        executor = load_module('baseline_profile_executor', ROOT / 'ci/integration/run-artifact-tests.py')
+        for mode, stale_registry in (('source', False), ('source', True), ('exact-assets', False)):
+            with self.subTest(mode=mode, stale_registry=stale_registry), \
+                 tempfile.TemporaryDirectory(prefix='kuasar-baseline-exec-') as directory:
+                workspace = Path(directory) / 'prepared'
+                entry = 'test/e2e/connector/run_all.sh'
+                case = workspace / entry
+                case.parent.mkdir(parents=True)
+                # A shell fixture models an existing baseline owner; no product
+                # runner is created or restored by the implementation.
+                case.write_text('#!/bin/sh\nset -eu\n'
+                                '[ "$(id -u)" -eq 0 ]\n'
+                                'prepared-path-probe\n')
+                (workspace / 'provenance.json').write_text('{}')
+                if stale_registry:
+                    (workspace / 'test/e2e/generated-compatibility-runners').write_text(
+                        'test/e2e/guest-runtime/run_all.sh\n')
+                tools = Path(directory) / 'tools'
+                tools.mkdir()
+                probe = tools / 'prepared-path-probe'
+                probe.write_text('#!/bin/sh\nexit 0\n')
+                probe.chmod(0o755)
+                profile = {'cases': [entry], 'required_products': [], 'exclusions': [],
+                           'name': 'x86-owner-kvm'}
+                provenance = {'profile': profile, 'helpers': {}, 'embedded': {'init': 'a' * 64},
+                              'test_revisions': {}}
+                plan = {'mode': mode, 'lanes': {'x86_64': {'extra_checks': {}}}}
+                environment = {key: '' for key in (
+                    'GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
+                environment['PATH'] = str(tools) + os.pathsep + os.environ['PATH']
+                result = Path(directory) / 'result.json'
+                with patch.object(executor.artifacts, 'verify_workspace', return_value=provenance), \
+                     patch.object(executor.platform, 'machine', return_value='x86_64'), \
+                     patch.dict(os.environ, environment):
+                    record = executor.execute(plan, 'x86_64', 'core', workspace, result)
+                self.assertEqual(record['conclusion'], 'success')
+                self.assertEqual(record['timings'][0]['exit_code'], 0)
 
 
 class ToolPaths(unittest.TestCase):

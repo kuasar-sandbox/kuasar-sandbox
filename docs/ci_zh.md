@@ -103,6 +103,8 @@ E2E 只 checkout 可信执行器并下载目标 prepared workspace，执行前�
 源码依赖的 connector/sandboxer/orchestrator unit/race/vet、真实 pinned-BPF 统计、ENOSPC、Collector/usage harness 回归和 UFFD benchmark 保留为独立必需源码 job。
 source 模式 x86 sandboxer/platform 还用同一组制品保留 A/B/C/D `off/auto × cold/warm` working-set smoke。
 
+CI 执行边界为每个已选 prepared profile 提供产品 case 所需权限和可信 bootstrap 工具路径，不依赖生成的 owner-runner registry。跨 `sudo` 只保留显式准备的输入变量与该工具路径，不保留无关环境变量。
+
 ## 4. Daily 与 Stable
 
 `exact-assets` 仅接受实际公开的平台 aggregate workflow。

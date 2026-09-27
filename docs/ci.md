@@ -58,6 +58,8 @@ Preparation supplies manifest Docker archives, the guest flatten fixture, resolv
 
 The E2E job checks out only the trusted executor, downloads its prepared target and verifies all files/modes before and after execution. It does not check out component sources or invoke product Go/Cargo/kernel builds. Each shard owns a short disk-backed mutable directory; Unix sockets, direct I/O, Docker configuration and performance output stay outside immutable inputs. Source-dependent connector/sandboxer/orchestrator unit/race/vet, real pinned-BPF stats, ENOSPC, Collector/usage harness regressions and UFFD source benchmarks run in a separate required source job. Source-mode x86 sandboxer/platform also retain the existing A/B/C/D `off/auto × cold/warm` working-set smoke using the same prepared product bytes.
 
+Product-case privilege and the trusted bootstrap tool path are supplied at the CI execution boundary for every selected prepared profile. They do not depend on a generated owner-runner registry. Only explicitly prepared input variables and that tool path cross `sudo`; unrelated environment variables are not preserved.
+
 ## 4. Daily and Stable
 
 `exact-assets` is callable only by the actual public platform aggregate workflow. Its plan binds the exact committed manifest and staged fourteen-file asset set (platform + twelve component archives + SHA256SUMS). It selects no product rebuilds. Each target uses the same download/compose/prepare/profile/result primitives as PR mode; helper preparation may compile test tools from the exact selected test revisions. The separate required source checks remain outside artifact E2E.

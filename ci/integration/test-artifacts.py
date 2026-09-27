@@ -324,7 +324,7 @@ class ArtifactExecutionContracts(unittest.TestCase):
         def run(command, **kwargs):
             if command[:3] == ["docker", "image", "load"]:
                 return subprocess.CompletedProcess(command, 0)
-            if command[0] == "bash":
+            if command[-2:] == ["bash", str(self.root / self.case)]:
                 self.assertEqual(kwargs["env"]["E2E_IMAGE"], identity)
             return original_run(command, **kwargs)
         for record in ({"Id": identity, "Os": "linux", "Architecture": "arm64"},
