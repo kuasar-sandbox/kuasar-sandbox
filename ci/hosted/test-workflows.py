@@ -144,11 +144,11 @@ def check():
                          "pull_request": {"draft": False, "head": {"repo": {"full_name": "kuasar-sandbox/kuasar-sandbox"}}}}},
                "false": False}
     assert expression(platform["if"], context) is True
-    assert integration["results"]["name"] == "results"
+    assert expression(integration["results"]["name"], context) == "finalize"
     for event in ("pull_request_target", "workflow_dispatch"):
         context["github"]["event_name"] = event
         assert expression(platform["if"], context) is False
-        assert integration["results"]["name"] == "results"
+        assert expression(integration["results"]["name"], context) == "results"
     context["github"]["event_name"] = "pull_request_target"
     context["github"]["event"]["pull_request"]["head"]["repo"]["full_name"] = "outside/fork"
     fork = caller["jobs"]["trusted-fork"]
@@ -158,28 +158,8 @@ def check():
     assert expression(platform["if"], context) is False
     assert expression(fork["if"], context) is False
     assert "github.event_name" in load("integration-tests.yml")["concurrency"]["group"]
+    assert "github.event_name" in load("ci-entry.yml")["concurrency"]["group"]
     assert any("validate-source-set.sh" in step.get("run", "") for step in integration["results"]["steps"])
-    finalizer = caller['jobs']['framework-result']
-    assert finalizer['name'] == 'ci / finalize'
-    assert finalizer['needs'] == 'ci' and finalizer['if'].startswith('always()')
-    assert finalizer['permissions'] == {'contents': 'read', 'pull-requests': 'read', 'statuses': 'write'}
-    assert 'secrets' not in finalizer and 'KUASAR_CI_APP_PRIVATE_KEY' not in json.dumps(finalizer)
-    assert finalizer['steps'][0]['with']['ref'] == '${{ github.sha }}'
-    assert finalizer['steps'][0]['with']['persist-credentials'] is False
-    assert finalizer['steps'][-1]['env']['INTEGRATION_RESULT'] == '${{ needs.ci.result }}'
-    assert 'finalize_framework.py' in finalizer['steps'][-1]['run']
-    context['github']['event']['pull_request']['head']['repo']['full_name'] = 'kuasar-sandbox/kuasar-sandbox'
-    context['github']['event_name'] = 'pull_request'
-    assert expression(finalizer['if'], context) is True
-    for event in ('pull_request_target', 'push', 'workflow_dispatch'):
-        context['github']['event_name'] = event
-        assert expression(finalizer['if'], context) is False
-    context['github']['event_name'] = 'pull_request'
-    context['github']['event']['pull_request']['draft'] = True
-    assert expression(finalizer['if'], context) is False
-    context['github']['event']['pull_request']['draft'] = False
-    context['github']['event']['pull_request']['head']['repo']['full_name'] = 'outside/fork'
-    assert expression(finalizer['if'], context) is False
     assert entry["e2e"]["uses"] == "./.github/workflows/integration-tests.yml"
     assert entry["e2e"]["with"]["candidate_repository"] == "${{ github.repository }}"
     for job in (entry["admission"], entry["finalize"]):

@@ -25,10 +25,7 @@ admission 复核当前 PR/base/head 和 integration commit 的两个父提交，
 源码、build、prepare 和产品执行只接收只读 job token，不继承 App secret。所有选中阶段（包括源码/UFFD 和性能）均必须通过，integration result 才能成功。
 draft 不分配产品 job。组件和 fork 调用方保留既有可信 admission/finalize。
 
-完整流水线结束后，独立的 `framework-result` 控制 job 对照已测试的事件再次核对公开同仓 PR、Ready 状态、精确 merge/head/base ref 和有序父提交。
-只有该控制 job 接收 `statuses: write`，用于向该精确 merge SHA 发布实际的 `ci / finalize` commit status。
-流水线失败、取消或跳过均报告失败；ref 变化或事件无效时不发布结果。框架切换期间，main 上的控制器仍使用旧执行器，该自动结果将必需检查绑定到实际测试的 merge。
-该流程不更改仓库权限或保护设置，不手工发布成功，也不替代任何源码/产品 gate。保留此前失败记录。
+必需的 `ci / finalize` job 汇总平台 PR 的完整结果，并在成功前复核当前 source set。它只使用只读 API 权限，不需要独立的 commit-status 发布器。
 
 App key 和短期控制 token 只进入受信任的 admission/finalize 与发布控制 job。
 产品/helper 构建、源码检查、prepare、E2E 都不接收 App key，候选代码在新的标准 job 执行。
