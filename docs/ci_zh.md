@@ -27,6 +27,8 @@ draft 不分配产品 job。组件和 fork 调用方保留既有可信 admission
 
 必需的 `ci / finalize` job 汇总平台 PR 的完整结果，并在成功前复核当前 source set。它只使用只读 API 权限，不需要独立的 commit-status 发布器。
 
+Admission 失败或 Draft 延迟执行时，可信 finalizer 不得成功结束。除 PR 元数据和 integration commit 的有序双亲外，还会重新读取主候选目标分支 ref，避免缓存的 PR 响应让旧 base 被误验收。可信 finalize 还复用当前 source-set 校验器比较有效 companion 声明；无关正文编辑不会使候选失效。每个已选择的源码/架构阶段都必须实际成功；Actions 的 skipped 或 neutral 状态不是产品验证。服务端 required-check 配置与工作流结果是两个独立控制点，需要一起核对。非成员 Fork 的处理见[外部贡献接收流程](../CONTRIBUTING_zh.md#ci-准入与外部贡献)；重跑被拒绝的 Fork 不会改变作者成员身份。本契约不新增批准票数或特定评审机器人要求。
+
 App key 和短期控制 token 只进入受信任的 admission/finalize 与发布控制 job。
 产品/helper 构建、源码检查、prepare、E2E 都不接收 App key，候选代码在新的标准 job 执行。
 公开源码以匿名精确 SHA 获取，checkout 不保留凭据；Actions token 只用于可信 API/下载步骤。

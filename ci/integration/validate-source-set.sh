@@ -19,10 +19,49 @@ caller_api_get() {
     "https://api.github.com$1"
 }
 
+# Compare only the effective declaration, not unrelated PR prose edits.
+validate_declaration() {
+  local pr=$1 body lines result expected actual
+  body=$(jq -r '.body // ""' <<< "$pr" | tr -d '\r') || return 1
+  result=0
+  lines=$(awk '
+    BEGIN { inside=0; starts=0; ends=0 }
+    /kuasar-bms-companions/ { invalid=1; exit 2 }
+    /^<!--[[:space:]]*kuasar-ci-companions[[:space:]]*$/ {
+      starts++; if (inside) exit 2; inside=1; next
+    }
+    inside && /^[[:space:]]*-->[[:space:]]*$/ { ends++; inside=0; next }
+    inside { print }
+    END {
+      if (invalid) exit 2
+      if (starts == 0) exit 3
+      if (starts != 1 || ends != 1 || inside) exit 2
+    }
+  ' <<< "$body") || result=$?
+  case "$result" in
+    0)
+      actual=$(sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e '/^$/d' <<< "$lines" | LC_ALL=C sort)
+      [ -n "$actual" ] || return 1
+      ;;
+    3)
+      if grep -Fq '<!-- kuasar-ci-companions' <<< "$body"; then return 1; fi
+      actual=""
+      ;;
+    *) return 1 ;;
+  esac
+  expected=$(jq -er '
+    if type == "array" then
+      map(.repository + "#" + (.pull_request_number | tostring)) | sort | join("\n")
+    else error("companion candidates must be an array") end
+  ' <<< "$COMPANION_CANDIDATES") || return 1
+  [ "$actual" = "$expected" ]
+}
+
 validate_primary() {
-  local response pr
+  local response pr base_branch
   response=$(source_api_get "/repos/$CANDIDATE_REPOSITORY/git/commits/$CANDIDATE_SHA")
   pr=$(caller_api_get "/repos/$CANDIDATE_REPOSITORY/pulls/$CANDIDATE_PR")
+  base_branch=$(source_api_get "/repos/$CANDIDATE_REPOSITORY/git/ref/heads/$CANDIDATE_BASE_REF")
   jq -e \
     --arg candidate "$CANDIDATE_SHA" \
     --arg base "$CANDIDATE_BASE_SHA" \
@@ -47,7 +86,10 @@ validate_primary() {
         and .base.sha == $base
         and .head.sha == $head
         and .merge_commit_sha == $candidate
-      ' <<< "$pr" >/dev/null
+      ' <<< "$pr" >/dev/null \
+    && jq -e --arg base "$CANDIDATE_BASE_SHA" '.object.sha == $base' \
+      <<< "$base_branch" >/dev/null \
+    && validate_declaration "$pr"
 }
 
 validate_companion() {

@@ -22,6 +22,38 @@ Keep each pull request focused, link the relevant issue when one exists, and
 describe the validation performed. Do not include credentials, private data, or
 unrelated generated files.
 
+## CI eligibility and external contributions
+
+Anyone may open and discuss a public Fork PR. Automatic Integration E2E currently
+admits ready same-repository PRs and Fork PRs whose **PR author is an active
+organization member**. The membership lookup is current; `author_association`, a
+review approval, or a maintainer clicking **Re-run** does not make a non-member
+Fork eligible. Main-repository framework PRs use their existing read-only
+self-validation path. See the [CI contract](docs/ci.md) for exact candidate checks.
+
+A maintainer can receive an external contribution without granting the contributor
+organization membership or exposing control credentials:
+
+1. Record the original PR, target branch, and exact commits being considered. Fetch
+   its public PR head from the owning upstream repository and inspect the complete
+   diff, including workflow, build-script and dependency changes. Do not execute an
+   unreviewed checkout with maintainer credentials or in a shared privileged environment.
+2. After reviewing those commits, create a focused organization-repository branch
+   from the current target. Apply only the reviewed commits with `git cherry-pick -x`
+   (or an equivalent attribution-preserving import); retain the original author and
+   link the original PR and source commits in the new PR. Do not overwrite existing
+   branches or copy credentials into the candidate.
+3. Let the adopted PR run the normal source/artifact checks and merge through the
+   normal repository rules. Review the final diff and actual current head/base
+   results; adoption is not validation and does not create a successful status.
+4. Report the adopted PR and outcome on the original PR. Any subsequent external
+   commits require a fresh review and a new validated candidate; they are not
+   automatically included by the earlier adoption.
+
+No particular review bot, additional approval count or formal review format is
+required by this procedure. It does not authorize bypassing repository rules.
+Control/App/release credentials remain outside candidate execution jobs.
+
 <a id="documentation-language-and-review-policy"></a>
 ## Documentation contributions
 
