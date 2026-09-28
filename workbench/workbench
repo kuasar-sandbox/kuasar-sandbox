@@ -291,8 +291,12 @@ def diagnostics(state, data):
     (state / 'output').mkdir(exist_ok=True)
     container = owned_container(data)
     if container:
+        stamp = str(time.time_ns())
+        evidence = {'id': container['Id'], 'state': container['State'],
+                    'apparmor': container.get('AppArmorProfile')}
+        (state / 'output' / ('container-' + stamp + '.json')).write_text(json.dumps(evidence, indent=2) + '\n')
         result = subprocess.run(['docker', 'logs', '--tail', '500', container['Id']], capture_output=True, timeout=30)
-        (state / 'output' / ('startup-' + str(time.time_ns()) + '.log')).write_bytes(result.stdout + result.stderr)
+        (state / 'output' / ('startup-' + stamp + '.log')).write_bytes(result.stdout + result.stderr)
 
 
 def start(args):

@@ -134,6 +134,21 @@ class CollectorTests(unittest.TestCase):
 
 
 class LauncherTests(unittest.TestCase):
+    def test_startup_diagnostics_retain_exit_state_without_stdout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            state = Path(directory)
+            container = {'Id': 'owned-id', 'State': {'Running': False, 'ExitCode': 1,
+                         'OOMKilled': False, 'Error': ''}, 'AppArmorProfile': 'owned-profile'}
+            with patch.object(launcher, 'owned_container', return_value=container), patch.object(
+                    launcher.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0, b'', b'')):
+                launcher.diagnostics(state, {})
+            records = list((state / 'output').glob('container-*.json'))
+            self.assertEqual(len(records), 1)
+            evidence = json.loads(records[0].read_text())
+            self.assertEqual(evidence['state']['ExitCode'], 1)
+            self.assertEqual(evidence['apparmor'], 'owned-profile')
+            self.assertEqual(len(list((state / 'output').glob('startup-*.log'))), 1)
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

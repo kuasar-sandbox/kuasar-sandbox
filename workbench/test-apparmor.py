@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real enforcing Ubuntu mount/inner-Docker test, separate from KVM qualification."""
 import argparse
+import datetime
 import importlib.machinery
 import importlib.util
 import json
@@ -34,6 +35,7 @@ def qualify(image, root):
     result = {'qualification': 'enforcing-AppArmor-mounts-and-private-Docker', 'kvm_tested': False,
               'image_id': checked['image_id'], 'conclusion': 'failure', 'host_apparmor_before': 'Y'}
     started = time.monotonic()
+    since = datetime.datetime.now(datetime.timezone.utc).isoformat()
     state = data = None
     try:
         # Acquire this small test input with the host's configured Docker
@@ -49,6 +51,7 @@ def qualify(image, root):
                               'directory': str(state), 'container_name': 'kuasar-workbench-' + args.name, 'status': 'creating'}
             launcher.save(state, data)
             launcher.load_apparmor(state, data)
+            result['profile'] = dict(data['apparmor'])
             command = launcher.create_command(args, state, data)
             # Intentionally test only the LSM/mount/daemon part on hosted
             # machines without KVM. Public start still requires every device
@@ -102,13 +105,31 @@ def qualify(image, root):
                       inner_pid_in_outer_namespace=int(inner_pid), outer_context=expected, inner_context=expected,
                       host_apparmor_after='Y', inner_detection=execute('cat', str(launcher.APPARMOR_ENABLED)),
                       forbidden_mounts='denied')
+    except BaseException as error:
+        result['error'] = str(error)
+        raise
     finally:
         if data is not None:
             launcher.diagnostics(state, data)
+            # Keep only this instance's audit events, never unrelated host logs.
+            # systemd can exit before Docker has any stdout/stderr to collect.
+            for name, command in (
+                ('apparmor-audit.log', ['journalctl', '-k', '--since', since, '--no-pager', '-n', '2000']),
+                ('system-journal.log', ['journalctl', '--directory', str(state / 'journal'), '--no-pager', '-n', '500']),
+            ):
+                try:
+                    text = launcher.host_command(command)
+                    if name == 'apparmor-audit.log':
+                        profile = data.get('apparmor', {}).get('name', '')
+                        text = '\n'.join(line for line in text.splitlines() if profile and profile in line) + '\n'
+                    (state / 'output' / name).write_text(text)
+                except Exception as error:
+                    result.setdefault('diagnostic_errors', []).append(f'{name}: {error}')
             try:
                 subprocess.run([sys.executable, '-B', ROOT / 'workbench', '--root', args.root,
                                 '--name', args.name, 'cleanup'], check=True, timeout=420)
-                require(data['apparmor']['name'] not in launcher.apparmor_profiles(), 'owned profile leaked')
+                if data.get('apparmor'):
+                    require(data['apparmor']['name'] not in launcher.apparmor_profiles(), 'owned profile leaked')
                 result['cleanup'] = 'owned container, daemon data and profile removed; output retained'
             except Exception as error:
                 result.update(conclusion='failure', cleanup_error=str(error))
