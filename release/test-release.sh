@@ -127,6 +127,17 @@ EOF
   printf 'Current prepared network guide\n' \
     > "$TMP/fetched/test-sources/connector/docs/connector-detail$suffix.md"
 done
+# These maintained owner guides are shipped beside the canonical flat cases.
+# Exercise real tar directory entries as well as both language editions.
+for owner in accelerator guest-runtime; do
+  for suffix in '' _zh; do
+    cat > "$TMP/fetched/test-sources/$owner/test/e2e/README$suffix.md" <<'EOF'
+[English](README.md) | [简体中文](README_zh.md)
+# Prepared E2E
+Use the shared prepared runner.
+EOF
+  done
+done
 python3 - "$TMP/fetched/e2e-helpers" "$TMP/fetched/test-revisions.json" <<'PY'
 import hashlib, json, pathlib, struct, sys
 root = pathlib.Path(sys.argv[1])
@@ -202,6 +213,13 @@ for suffix in '' _zh; do
   tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./docs/connector-detail$suffix.md" \
     > "$TMP/packaged-connector-guide"
   cmp "$TMP/packaged-connector-guide" "$TMP/fetched/test-sources/connector/docs/connector-detail$suffix.md"
+done
+for owner in accelerator guest-runtime; do
+  for suffix in '' _zh; do
+    tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./test/e2e/$owner/README$suffix.md" \
+      > "$TMP/packaged-owner-guide"
+    cmp "$TMP/packaged-owner-guide" "$TMP/fetched/test-sources/$owner/test/e2e/README$suffix.md"
+  done
 done
 
 assert_assembly_rejected() {

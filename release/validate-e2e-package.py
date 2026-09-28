@@ -34,10 +34,11 @@ def validate(path, expected_pins=None):
         for name in cases:
             artifacts.case_name(name.removeprefix('test/e2e/cases/'))
             artifacts.require(members[name].isfile(), 'product case is not a file')
-        allowed = {'cases', 'lib', 'helpers', 'e2e'}
-        for name in members:
-            if name.startswith('test/e2e/'):
-                artifacts.require(Path(name).parts[2] in allowed, 'superseded owner E2E content in platform archive')
+        artifacts.validate_e2e_layout(
+            {name.removeprefix('test/e2e/'): entry.mode for name, entry in members.items()
+             if name.startswith('test/e2e/') and entry.isfile()},
+            (name.removeprefix('test/e2e/') for name, entry in members.items()
+             if name.startswith('test/e2e/') and entry.isdir()))
         for name in members:
             if name.startswith('test/e2e/helpers/'):
                 artifacts.require(Path(name).parts[3] in artifacts.ARCHES, 'unknown helper architecture')

@@ -20,6 +20,7 @@ class PrebuiltPackage(unittest.TestCase):
     def setUp(self):
         self.pins = {owner: 'a' * 40 for owner in package.artifacts.OWNERS if owner != 'platform'}
         self.metadata, self.files = {}, {'test/e2e/cases/basic.fixture.sh': (b'exit 0\n', 0o644)}
+        self.directories = []
         for arch, machine in [('x86_64', 62), ('aarch64', 183)]:
             names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'usage-probe']
             if arch == 'x86_64': names += ['cgroup-fork-probe']
@@ -40,6 +41,10 @@ class PrebuiltPackage(unittest.TestCase):
             files = self.files | {f'test/e2e/helpers/{arch}/helpers.json': (json.dumps(record).encode(), 0o644)
                                   for arch, record in self.metadata.items()}
             with tarfile.open(path, 'w:gz') as output:
+                for name in self.directories:
+                    member = tarfile.TarInfo(name)
+                    member.type, member.mode = tarfile.DIRTYPE, 0o755
+                    output.addfile(member)
                 for name, (data, mode) in files.items():
                     member = tarfile.TarInfo(name)
                     member.size, member.mode = len(data), mode
@@ -48,6 +53,33 @@ class PrebuiltPackage(unittest.TestCase):
 
     def test_both_architectures_have_complete_exact_helpers(self):
         self.validate()
+
+    def test_owner_guides_and_their_directories_are_packaged(self):
+        for owner in ('accelerator', 'guest-runtime'):
+            self.directories += [f'test/e2e/{owner}', f'test/e2e/{owner}/guides']
+            for name in ('README.md', 'README_zh.md', 'guides/preparation.md'):
+                self.files[f'test/e2e/{owner}/{name}'] = (b'# Prepared E2E\n', 0o644)
+        self.validate()
+
+    def test_guides_do_not_admit_legacy_or_executable_owner_content(self):
+        self.files['test/e2e/accelerator/README.md'] = (b'# Prepared E2E\n', 0o644)
+        for name, mode in [('accelerator/run_all.sh', 0o755),
+                           ('accelerator/cases/storage.cache.sh', 0o644),
+                           ('accelerator/notes.txt', 0o644),
+                           ('accelerator/execute.md', 0o755),
+                           ('unknown/README.md', 0o644)]:
+            with self.subTest(name=name):
+                path = 'test/e2e/' + name
+                self.files[path] = (b'content\n', mode)
+                with self.assertRaisesRegex(ValueError, 'superseded owner'):
+                    self.validate()
+                del self.files[path]
+
+    def test_unrelated_empty_owner_directory_is_rejected(self):
+        self.files['test/e2e/accelerator/README.md'] = (b'# Prepared E2E\n', 0o644)
+        self.directories = ['test/e2e/accelerator/cases']
+        with self.assertRaisesRegex(ValueError, 'superseded owner'):
+            self.validate()
 
     def add_demo(self):
         self.files['test/e2e/cases/basic.demo.sh'] = (b'exit 0\n', 0o644)
