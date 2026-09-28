@@ -159,6 +159,12 @@ identity and start time. Results and retained output stay in that task path.
 These checks supplement native full builds and the current public E2E cases;
 they do not replace compiler-free release acceptance.
 
+Before building the image, `python3 -B workbench/test-apparmor-mounts.py --root <new-task-path>`
+checks the detection mask, named network namespaces, Docker-style pivot/old-root
+propagation, denied unrelated mounts and owned profile cleanup in private namespaces.
+It requires host `apparmor_parser`, `aa-exec`, `unshare`, `ip` and root or `sudo -n`;
+it does not qualify Docker or KVM. Public x86 CI runs it before the full image test.
+
 On enforcing Ubuntu, `test-apparmor.py --image "$IMAGE" --root <new-task-path>`
 checks the outer and inner PID contexts, private mounts/daemon, denied unrelated
 mounts, unchanged host enforcement and owned cleanup. Public native x86 CI

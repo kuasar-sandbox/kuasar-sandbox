@@ -35,6 +35,9 @@ def qualify(plan, root):
               'framework_sha': plan['framework_sha'], 'source_revisions': plan['test_revisions'], 'conclusion': 'failure'}
     launcher = [sys.executable, '-B', str(ROOT / 'workbench/workbench'), '--root', str(root / 'instances'), '--name', 'native-build']
     try:
+        if platform.machine() == 'x86_64':
+            subprocess.run([sys.executable, '-B', ROOT / 'workbench/test-apparmor-mounts.py',
+                            '--root', str(root / 'apparmor-mounts')], check=True, timeout=120)
         # The full source build qualifies toolchain completeness against the
         # exact current test revisions. Its binaries never enter release assets.
         owner_build = module('workbench_owner_build', ROOT / 'ci/integration/build-artifacts.py')

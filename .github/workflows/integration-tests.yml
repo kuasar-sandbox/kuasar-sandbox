@@ -229,6 +229,7 @@ jobs:
             ${{ runner.temp }}/workbench-native/instances/native-build/output/
             ${{ runner.temp }}/workbench-native/apparmor/result.json
             ${{ runner.temp }}/workbench-native/apparmor/instances/*/output/
+            ${{ runner.temp }}/workbench-native/apparmor-mounts/
           if-no-files-found: error
           retention-days: 7
 

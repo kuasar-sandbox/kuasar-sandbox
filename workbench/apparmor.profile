@@ -53,12 +53,13 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
 
   # Observed systemd-generator hardening: read-only bind remounts only,
   # including the mount roots (subtree rules do not cover the root itself).
-  remount options in (ro,bind,nosuid,nodev,noexec,relatime) /{var/log/journal,dev,build,work,output,var/lib/containerd}/,
+  remount options in (ro,bind,nosuid,nodev,noexec,relatime) /{var/log/journal,dev,build,work,work/home,output,inputs/release,var/lib/containerd,var/lib/docker}/,
   remount options in (ro,bind,nosuid,nodev,noexec,relatime) /dev/{mqueue,pts}/,
-  remount options=(ro,bind) /etc/hosts,
+  remount options=(ro,bind) /etc/{hosts,hostname,resolv.conf,machine-id},
   remount options=(ro,bind) /,
   mount options=(rw,rslave) -> /dev/,
   mount options=(rw,rbind) / -> /run/systemd/mount-rootfs/,
+  mount fstype=tmpfs -> /dev/shm/,
   mount options=(rw,shared) -> /var/lib/docker/,
 
   # systemd private unit mounts and nested Docker's own roots. No blanket
@@ -77,6 +78,9 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   mount options in (rw,private,rprivate,slave,rslave) -> /,
   mount options in (rw,private,rprivate,slave,rslave) -> /var/lib/docker/**,
   mount options in (rw,private,rprivate,slave,rslave) -> /var/lib/containerd/**,
+  # Docker's archive unpacker pivots into its private storage first, then
+  # makes the detached old root private at this generated mountpoint.
+  mount options=(rw,rprivate) -> /.pivot_root[0-9]*/,
   # ip netns uses this private /run subtree for namespace handles.
   mount options=(rw,rshared) -> /run/netns/,
   mount options=(rw,rbind) /run/netns/ -> /run/netns/,

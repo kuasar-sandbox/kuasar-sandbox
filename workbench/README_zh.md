@@ -130,6 +130,11 @@ aarch64 --output <new-directory>` 使用公共 runner 的发现逻辑和共享�
 和保留输出位于该任务目录。这些检查补充原生完整构建和当前公共 E2E 用例，不能
 替代无编译器的发布验收。
 
+构建镜像之前，可运行 `python3 -B workbench/test-apparmor-mounts.py --root <new-task-path>`，
+在私有命名空间验证检测掩蔽、具名网络命名空间、Docker 式 pivot/旧根传播、无关挂载
+被拒绝以及所有权策略清理。它需要主机 `apparmor_parser`、`aa-exec`、`unshare`、`ip`
+及 root 或 `sudo -n`；它不构成 Docker 或 KVM 验收。公共 x86 CI 在完整镜像测试前运行它。
+
 在启用 enforcing AppArmor 的 Ubuntu 上，运行
 `test-apparmor.py --image "$IMAGE" --root <new-task-path>`，检查外层与内层 PID
 上下文、私有挂载/守护进程、无关挂载被拒绝、主机强制执行状态未变化以及所有权
