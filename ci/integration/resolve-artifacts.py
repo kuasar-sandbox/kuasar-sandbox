@@ -95,6 +95,9 @@ def historical_case_files(records):
         legacy = release.api_optional(f"repos/{record['repository']}/contents/{path}?ref={record['sha']}")
         if legacy is None:
             result[owner] = candidate_case_names(record['repository'], record['sha'], owner)
+        else:
+            artifacts.require(isinstance(legacy, dict) and legacy.get('type') == 'file',
+                              'historical owner entry is not a file')
     return result
 
 
