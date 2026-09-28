@@ -191,6 +191,35 @@ class CaseBridgeContracts(unittest.TestCase):
             self.assertEqual(record['timings'][0]['exit_code'], 0)
 
 
+    def test_staged_case_socket_path_uses_direct_public_runner(self):
+        executor = load_module('staged_socket_executor', ROOT / 'ci/integration/run-artifact-tests.py')
+        with tempfile.TemporaryDirectory(prefix='release-socket-') as directory:
+            workspace = Path(directory) / 'prepared'
+            cases = workspace / 'test/e2e/cases'
+            cases.mkdir(parents=True)
+            (workspace / 'bin').mkdir()
+            (workspace / 'test/e2e/lib').mkdir()
+            shutil.copy2(ROOT / 'test/e2e/e2e', workspace / 'test/e2e/e2e')
+            (cases / 'sandbox.cgroup.sh').write_text(
+                'set -eu\npython3 - "$WORK" <<\'PY\'\n'
+                'from pathlib import Path\nimport socket, sys\n'
+                'path = Path(sys.argv[1]) / "false-shared/runtime/cg-false-shared-10672/uffd.sock"\n'
+                'path.parent.mkdir(parents=True)\n'
+                'with socket.socket(socket.AF_UNIX) as sock: sock.bind(str(path))\n'
+                'PY\n')
+            (workspace / 'provenance.json').write_text('{}')
+            profile = ARTIFACTS.profiles(['sandboxer'], 'x86_64', {'sandboxer': ['sandbox.cgroup.sh']})
+            provenance = {'profile': profile, 'helpers': {}, 'embedded': {'init': 'a' * 64}, 'test_revisions': {}}
+            plan = {'schema': 1, 'mode': 'exact-assets', 'framework_sha': 'a' * 40,
+                    'lanes': {'x86_64': {}}, 'owners': ['sandboxer']}
+            credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
+            with patch.object(executor.artifacts, 'verify_workspace', return_value=provenance), \
+                 patch.object(executor.platform, 'machine', return_value='x86_64'), \
+                 patch.dict(os.environ, credentials):
+                result = executor.execute(plan, 'x86_64', 'sandboxer', workspace, Path(directory) / 'result.json')
+            self.assertEqual(result['conclusion'], 'success')
+            self.assertEqual(result['cases'], ['test/e2e/sandboxer/cases/sandbox.cgroup.sh'])
+
     def test_privilege_boundary_forwards_only_prepared_input_names(self):
         executor = load_module('case_privilege_executor', ROOT / 'ci/integration/run-artifact-tests.py')
         command = ['python3', '/prepared/test/e2e/e2e', 'run', '--include', 'network.tap.sh']

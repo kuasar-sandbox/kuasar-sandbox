@@ -340,8 +340,11 @@ runtime、vmlinux 保留独立包名。新 aggregate 包含架构无关的 platf
 组件原生/ARM 交叉构建在两个独立 x86 job 执行，复用相同精确源码与依赖版本，校验后原样组装双架构包。
 依赖 Release 必须公开、完整并解析为轻量 tag 的精确 commit，build checkout 不保留凭据。
 聚合 prepare 下载六个所选 Release，校验 API size/digest、SHA-256、路径、归属与跨包覆盖，并生成 platform 包。
-暂存字节通过共享的每架构 helper build → prepare → E2E 原语：x86 在真实 KVM runner 跑六个 owner；
-ARM 原生运行预先声明的 accelerator/guest-runtime 非 KVM 子集。源码检查是独立必需 job。
+暂存字节通过共享的每架构 helper build → prepare → E2E 原语：x86 在真实 KVM runner 跑完整的所选契约；
+ARM 原生运行预先声明的 accelerator/guest-runtime 非 KVM 子集。对于每个已迁移 owner，解析阶段
+从其已提交 test pin 声明精确用例文件名，再通过公共 runner 使用短的私有状态路径执行。用例直接来自
+暂存归档，无需源码 overlay 或产品重建，不再执行已退役 owner 的包装入口。真正保留旧用例的 owner
+在其切换验收前继续使用完整入口。源码检查是独立必需 job。
 publish 必须收齐两个成功结果，在 `kuasar-integration-validation` 绑定 profile、源码身份和资产摘要，原样上传归档。
 
 Preview、维护分支 Stable 和主线 Stable 使用相同资产与发行资产验证门禁;差别只在发行状态与

@@ -384,8 +384,11 @@ def check_plan(plan):
     require(re.fullmatch(r"[0-9a-f]{40}", plan["framework_sha"]), "missing exact framework revision")
     require(set(plan["lanes"]) == set(ARCHES), "plan must contain both architectures")
     candidate_cases = plan.get("candidate_cases", {})
-    require(isinstance(candidate_cases, dict) and set(candidate_cases) <= set(plan.get("test_overlays", [])),
-            "candidate case ownership differs from test overlays")
+    # Exact-assets cases are already in the hash-bound staged archive; source
+    # candidates alone need overlays. Neither mode may replace product bytes.
+    case_owners = plan["test_revisions"] if plan.get("mode") == "exact-assets" else plan.get("test_overlays", [])
+    require(isinstance(candidate_cases, dict) and set(candidate_cases) <= set(case_owners),
+            "candidate case ownership differs from declared test sources")
     for owner, names in candidate_cases.items():
         require(owner in OWNERS and isinstance(names, list) and names and names == sorted(set(names)),
                 f"invalid candidate case list for {owner}")
