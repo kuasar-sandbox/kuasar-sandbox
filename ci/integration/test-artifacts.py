@@ -74,6 +74,38 @@ def runtime(root, arch, files):
     return prefix + footer(hashlib.sha256(prefix).hexdigest())
 
 
+class ReleasedCaseLayout(unittest.TestCase):
+    def test_prepare_retains_guides_but_rejects_owner_execution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            stage = Path(directory)
+            root = stage / 'test/e2e'
+            case = root / 'cases/storage.fixture.sh'
+            case.parent.mkdir(parents=True)
+            case.write_text('exit 0\n')
+            guide = root / 'accelerator/README.md'
+            guide.parent.mkdir()
+            guide.write_text('# Prepared E2E\n')
+            files = {owner: [] for owner in subject.OWNERS}
+            files['accelerator'] = [case.name]
+            self.assertEqual(subject.normalize_e2e_cases(stage, files, from_owners=False),
+                             {case.name: 'accelerator'})
+            self.assertEqual(guide.read_text(), '# Prepared E2E\n')
+            for name, mode in [('accelerator/run_all.sh', 0o755),
+                               ('accelerator/cases/storage.fixture.sh', 0o644),
+                               ('accelerator/execute.md', 0o755),
+                               ('unknown/README.md', 0o644)]:
+                with self.subTest(name=name):
+                    path = root / name
+                    path.parent.mkdir(exist_ok=True)
+                    path.write_text('content\n')
+                    path.chmod(mode)
+                    with self.assertRaisesRegex(ValueError, 'superseded owner'):
+                        subject.normalize_e2e_cases(stage, files, from_owners=False)
+                    path.unlink()
+                    if path.parent != guide.parent:
+                        path.parent.rmdir()
+
+
 class ArtifactBuildContracts(unittest.TestCase):
     def test_helper_checkout_uses_test_pin_and_preserves_product_source(self):
         spec = importlib.util.spec_from_file_location("builder", Path(__file__).with_name("build-artifacts.py"))

@@ -262,6 +262,18 @@ def platform_test_path(path):
     return not path.startswith('scripts/')
 
 
+def validate_e2e_layout(files, directories=()):
+    """Keep runtime inputs flat while retaining non-executable owner guides."""
+    guides = {name for name, mode in files.items()
+              if len(Path(name).parts) > 1 and Path(name).parts[0] in OWNERS
+              and Path(name).suffix == '.md' and not mode & 0o111}
+    documentation = guides | {str(parent) for name in guides for parent in Path(name).parents
+                              if parent != Path('.')}
+    for name in [*files, *directories]:
+        require(Path(name).parts[0] in {'cases', 'lib', 'helpers', 'e2e'} or name in documentation,
+                f'superseded owner E2E content: {name}')
+
+
 def normalize_e2e_cases(stage, case_files, *, from_owners):
     """Expose owner cases/libs through the one public prepared-runner layout."""
     root = stage / "test/e2e"
@@ -269,7 +281,12 @@ def normalize_e2e_cases(stage, case_files, *, from_owners):
     expected = {name: owner for owner, names in case_files.items() for name in names}
     require(len(expected) == sum(map(len, case_files.values())), 'duplicate E2E case ID')
     if not from_owners:
-        require(cases.is_dir() and not any((root / owner).exists() for owner in OWNERS), 'release must contain only flat product cases')
+        require(cases.is_dir(), 'release must contain flat product cases')
+        entries = list(root.rglob('*'))
+        require(all(not path.is_symlink() and (path.is_file() or path.is_dir()) for path in entries),
+                'non-regular released E2E content')
+        validate_e2e_layout({str(path.relative_to(root)): path.stat().st_mode for path in entries if path.is_file()},
+                            (str(path.relative_to(root)) for path in entries if path.is_dir()))
         require(set(tree_files(cases)) == set(expected), 'release case files differ from pinned test sources')
         return expected
     if cases.exists():
