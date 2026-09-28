@@ -24,6 +24,20 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin" "$TMP/state"
+# Unit-only registry call double. Real registry identity checks are covered by
+# test_workbench_registry.py and require separate actual Preview acceptance.
+real_python=$(command -v python3)
+cat > "$TMP/bin/python3" <<'PYTHON'
+#!/bin/bash
+set -euo pipefail
+if [ "${1:-}" = -B ] && [[ "${2:-}" = */release/workbench_registry.py ]]; then
+  printf '%s\n' "$*" >> "$FAKE_GH_STATE/registry-calls"
+  exit 0
+fi
+exec "$REAL_TEST_PYTHON" "$@"
+PYTHON
+chmod +x "$TMP/bin/python3"
+export REAL_TEST_PYTHON="$real_python"
 
 cat > "$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
@@ -116,6 +130,10 @@ if [ "${1:-}" = api ]; then
       printf '%s\n' "$((count + 1))" > "$state/delete-count"
       ;;
     "PATCH repos/$repository/releases/77")
+      if jq -e 'has("body") and (has("draft") | not)' "$request" >/dev/null; then
+        emit "$(release_state)" "$filter"
+        exit 0
+      fi
       [ "$(jq -er '.draft' "$request")" = false ] || exit 2
       jq -r '.prerelease' "$request" > "$state/release-prerelease"
       jq -er '.make_latest' "$request" > "$state/make-latest"
@@ -184,8 +202,8 @@ fi
   || { echo "test-publisher: interrupted publish did not leave a draft" >&2; exit 1; }
 env "${common_env[@]}" "$PUBLISHER" publish \
   "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF"
-[ "$(cat "$TMP/state/delete-count")" = 1 ] \
-  || { echo "test-publisher: retry did not replace the stale draft" >&2; exit 1; }
+[ ! -e "$TMP/state/delete-count" ] \
+  || { echo "test-publisher: retry replaced an existing draft instead of verifying its bytes" >&2; exit 1; }
 [ "$(cat "$TMP/state/tag")" = "$COMMIT" ] \
   || { echo "test-publisher: tag points to the wrong commit" >&2; exit 1; }
 [ "$(cat "$TMP/state/release-draft")" = false ] \

@@ -107,10 +107,6 @@ publish_bundle() {
 
   local drafts="$TMP/drafts"
   find_draft_release "$version" "$drafts"
-  # Publish only the validated saved images, then bind their public registry
-  # identities into the same release notes before making GitHub assets public.
-  python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit"
-
   local files=() file name existing
   if [ "$(jq 'length' "$drafts")" -eq 1 ]; then
     jq '.[0]' "$drafts" > "$release_state"
@@ -132,12 +128,19 @@ publish_bundle() {
           <<< "$existing" >/dev/null || release_fail "existing draft asset differs: $name"
       fi
     done < <(find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
+  else
+    while IFS= read -r file; do files+=("$file"); done \
+      < <(find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
+  fi
+
+  # Ownership and all existing asset bytes are checked before registry writes.
+  # The registry publisher also refuses conflicting existing image tags.
+  python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit"
+  if [ "$(jq 'length' "$drafts")" -eq 1 ]; then
     [ "${#files[@]}" -eq 0 ] || gh release upload "$version" "${files[@]}" --repo "$REPOSITORY"
     jq -n --rawfile body "$bundle/release-notes.md" '{body: $body}' \
       | gh api --method PATCH "repos/$REPOSITORY/releases/$(jq -er .id "$release_state")" --input - >/dev/null
   else
-    while IFS= read -r file; do files+=("$file"); done \
-      < <(find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
     gh release create "$version" "${files[@]}" --repo "$REPOSITORY" --draft --verify-tag \
       --target "$commit" --title "$version" --notes-file "$bundle/release-notes.md" >/dev/null
   fi

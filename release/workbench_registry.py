@@ -72,7 +72,7 @@ def check_index(raw, children):
 
 
 def publish(bundle, version, revision):
-    selection.aggregate_version(version)
+    require(selection.AGGREGATE_RE.fullmatch(version), "invalid aggregate version")
     receipts = {arch: workbench_assets.validate(bundle / 'assets', version, arch, revision,
                                                receipt_directory=bundle / 'workbench') for arch in PLATFORMS}
     notes = bundle / 'release-notes.md'

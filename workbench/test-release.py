@@ -7,6 +7,8 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
+import threading
 import subprocess
 import sys
 import time
@@ -37,6 +39,8 @@ def qualify(plan, stage, root, cpus, memory_gib):
                       'workbench qualification requires the exact new-contract stage')
     artifacts.require(subprocess.check_output(['git', '-C', ROOT, 'rev-parse', 'HEAD'], text=True).strip()
                       == plan['framework_sha'], 'workbench executor differs from trusted framework')
+    for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY'):
+        artifacts.require(not os.environ.get(key), f'workbench qualification must not receive {key}')
     arch = platform.machine()
     version, revision = plan['baseline']['version'], plan['baseline']['sha']
     root.mkdir(parents=True, exist_ok=False)
@@ -49,6 +53,16 @@ def qualify(plan, stage, root, cpus, memory_gib):
                   input_assets={item['name']: item['digest'] for item in plan['baseline']['assets'] if item['name'] != 'SHA256SUMS'})
     command = [sys.executable, '-B', ROOT / 'workbench/workbench', '--root', root / 'instances', '--name', 'offline']
     state = root / 'instances/offline'
+    disk = {'scope': 'observed host filesystem usage', 'sample_seconds': 1,
+            'used_before': shutil.disk_usage(root).used, 'peak_used': 0}
+    stopped = threading.Event()
+    def sample_disk():
+        while True:
+            disk['peak_used'] = max(disk['peak_used'], shutil.disk_usage(root).used)
+            if stopped.wait(1):
+                return
+    monitor = threading.Thread(target=sample_disk, daemon=True)
+    monitor.start()
     try:
         imported = time.monotonic()
         launcher.docker('load', '-i', stage / 'assets' / receipt['archive'], timeout=900)
@@ -97,7 +111,7 @@ def qualify(plan, stage, root, cpus, memory_gib):
         subprocess.run([*command, 'stop'], check=True)
         result['isolation'] = lifecycle.exercise(argparse.Namespace(image=image, root=root / 'isolation', protect_container=[]))
         if result['host_apparmor_enabled']:
-            result['apparmor'] = apparmor.qualify(image, root / 'apparmor')
+            result['apparmor'] = apparmor.qualify(image, root / 'apparmor', inner_archive=state / 'work/prepared/images/busybox.tar')
         result['conclusion'] = 'success'
     except BaseException as error:
         result['error'] = str(error)
@@ -108,9 +122,14 @@ def qualify(plan, stage, root, cpus, memory_gib):
                 subprocess.run([*command, 'cleanup'], check=True, timeout=420)
             except Exception as error:
                 result.update(conclusion='failure', cleanup_error=str(error))
+        stopped.set()
+        monitor.join(timeout=5)
+        artifacts.require(not monitor.is_alive(), 'disk sampler did not stop')
+        disk['peak_increase'] = max(0, disk['peak_used'] - disk['used_before'])
+        result['disk'] = disk
         result['wall_seconds'] = time.monotonic() - started
         # Report actual allocated task storage, not an implied filesystem quota.
-        result['retained_task_bytes'] = int(subprocess.check_output(['du', '-s', '-B1', root], text=True).split()[0])
+        result['retained_task_bytes'] = int(launcher.host_command(['du', '-s', '-B1', str(root)]).split()[0])
         (root / 'result.json').write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
     artifacts.require(result['conclusion'] == 'success', 'workbench cleanup failed')
     return result

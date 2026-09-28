@@ -6,6 +6,7 @@ import importlib.machinery
 import importlib.util
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -21,7 +22,7 @@ sys.path.insert(0, str(ROOT.parent / 'test/e2e/lib'))
 import workspace
 
 
-def qualify(image, root):
+def qualify(image, root, *, inner_archive=None):
     root.mkdir(parents=True, exist_ok=False)
     require = launcher.require
     require(launcher.apparmor_enabled(), 'this qualification requires host AppArmor enabled; it cannot skip')
@@ -41,9 +42,15 @@ def qualify(image, root):
         # Acquire this small test input with the host's configured Docker
         # transport. This is a tools/LSM check, not release image selection.
         request = workspace.external_image_requests(['sandbox.lifecycle.sh'], checked['arch'])['busybox']
-        launcher.docker('pull', '--platform', request['platform'], request['reference'], timeout=180)
         archive = args.inputs / 'inner.tar'
-        launcher.docker('save', '-o', archive, request['reference'], timeout=120)
+        if inner_archive is None:
+            launcher.docker('pull', '--platform', request['platform'], request['reference'], timeout=180)
+            launcher.docker('save', '-o', archive, request['reference'], timeout=120)
+        else:
+            require(inner_archive.is_file() and not inner_archive.is_symlink(), 'missing verified offline LSM test input')
+            shutil.copyfile(inner_archive, archive)
+            require(workspace.digest(archive) == workspace.digest(inner_archive), 'offline LSM input changed while copying')
+        archive.chmod(0o444)
         verified = workspace.verify_image_archive(archive, request['platform'])
         result['inner_image'] = {'image_id': verified['image_id'], 'sha256': workspace.digest(archive)}
         with launcher.locked(args, create=True) as state:

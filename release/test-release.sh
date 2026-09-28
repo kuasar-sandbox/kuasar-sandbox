@@ -19,7 +19,7 @@ resolve_selection "$ROOT" "$PREVIEW_VERSION" "$TMP/current-preview-selection.tsv
 write_preview_base_fixture() {
   local output="$1" unit tag
   {
-    printf 'version: %s\ncomponents:\n' "$PREVIEW_BASE"
+    printf 'version: %s\ndelivery: workbench-v1\ncomponents:\n' "$PREVIEW_BASE"
     while IFS=$'\t' read -r unit tag; do
       printf '  %s: %s\n' "$unit" "${tag%%-preview.*}"
     done < "$TMP/current-preview-selection.tsv"
@@ -76,7 +76,8 @@ while IFS=$'\t' read -r unit tag; do
     > "$stage/share/sources/$unit/SOURCES.tsv"
   tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@1700000000' \
     -czf "$directory/$archive" -C "$stage" .
-  (cd "$directory" && sha256sum "$archive" > SHA256SUMS)
+  cp "$directory/$archive" "$directory/$(component_archive "$unit" "$tag" aarch64)"
+  (cd "$directory" && sha256sum ./*.tar.gz | sed 's@  ./@  @' > SHA256SUMS)
   printf "Fixture updates for \`%s\`.\n" "$unit" > "$TMP/fetched/updates/$unit.md"
 
   source_root="$TMP/fetched/sources/$unit"
@@ -182,6 +183,32 @@ printf 'selected Chinese vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vm
 printf 'test pin kernel docs must not win\n' > "$TMP/fetched/test-sources/guest-runtime/docs/vmlinux.md"
 printf 'test pin Chinese kernel docs must not win\n' > "$TMP/fetched/test-sources/guest-runtime/docs/vmlinux_zh.md"
 
+# Small real Docker-archive envelopes test packaging/identity only. They have
+# no runtime layers and are never claimed as executable workbench acceptance.
+python3 - "$ROOT/release" "$TMP/fetched/workbench" "$VERSION" "$(git -C "$FORMAL_ROOT" rev-parse HEAD)" <<'PYWORKBENCH'
+import hashlib, io, json, pathlib, sys, tarfile
+sys.path.insert(0, sys.argv[1])
+import selection
+root, version, revision = pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4]
+root.mkdir()
+for arch, platform in [('x86_64', 'amd64'), ('aarch64', 'arm64')]:
+    config = json.dumps({'os': 'linux', 'architecture': platform, 'rootfs': {'type': 'layers', 'diff_ids': []},
+        'config': {'Labels': {'org.opencontainers.image.version': version,
+        'org.opencontainers.image.revision': revision,
+        'org.opencontainers.image.source': 'https://github.com/kuasar-sandbox/kuasar-sandbox'}}}).encode()
+    manifest = json.dumps([{'Config': 'config.json', 'Layers': [],
+        'RepoTags': ['ghcr.io/kuasar-sandbox/workbench:' + version.removeprefix('release-')]}]).encode()
+    path = root / selection.workbench_archive(version, arch)
+    with tarfile.open(path, 'w:gz') as archive:
+        for name, value in [('config.json', config), ('manifest.json', manifest)]:
+            member = tarfile.TarInfo(name); member.size = len(value); member.mode = 0o644
+            archive.addfile(member, io.BytesIO(value))
+    (root / f'workbench-{arch}.json').write_text(json.dumps({'aggregate_version': version, 'arch': arch,
+        'source_revision': revision, 'archive': path.name, 'size': path.stat().st_size,
+        'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+        'image_id': 'sha256:' + hashlib.sha256(config).hexdigest(), 'compression_seconds': 0.1}))
+PYWORKBENCH
+
 cp -a "$TMP/fetched" "$TMP/fetched-foreign-material"
 foreign_unit=connector
 foreign_tag="$(awk -F '\t' -v unit="$foreign_unit" '$1 == unit {print $2}' \
@@ -195,7 +222,7 @@ printf 'foreign namespace fixture\n' \
   > "$TMP/foreign-stage/share/licenses/accelerator/injected/LICENSE"
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@1700000000' \
   -czf "$foreign_dir/$foreign_archive" -C "$TMP/foreign-stage" .
-(cd "$foreign_dir" && sha256sum "$foreign_archive" > SHA256SUMS)
+(cd "$foreign_dir" && sha256sum ./*.tar.gz | sed 's@  ./@  @' > SHA256SUMS)
 if SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" \
     "$TMP/fetched-foreign-material" "$TMP/foreign-bundle" \
@@ -305,10 +332,10 @@ PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/test-publisher.sh" "$ROOT/release/publish-release.sh" \
   "$TMP/bundle" kuasar-sandbox/kuasar-sandbox "$VERSION" \
-  1111111111111111111111111111111111111111 main
+  "$(git -C "$FORMAL_ROOT" rev-parse HEAD)" main
 
-[ "$(find "$TMP/bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 8 ] \
-  || release_fail "aggregate bundle must contain exactly eight assets"
+[ "$(find "$TMP/bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 16 ] \
+  || release_fail "aggregate bundle must contain exactly sixteen assets"
 [ ! -e "$TMP/bundle/release.json" ] || release_fail "aggregate bundle contains release.json"
 if find "$TMP/bundle/assets" -maxdepth 1 -type f -name 'release-*.yaml' | grep -q .; then
   release_fail "aggregate assets contain a release manifest"
@@ -404,7 +431,7 @@ while IFS=$'\t' read -r unit tag; do
 done < "$TMP/selection.tsv"
 SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched-dual" "$TMP/dual-bundle"
-[ "$(find "$TMP/dual-bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 14 ] \
+[ "$(find "$TMP/dual-bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 16 ] \
   || release_fail 'dual aggregate does not contain both exact architecture sets'
 for arch in x86_64 aarch64; do
   "$FORMAL_ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/dual-bundle" "$TMP/install-$arch" "$arch"

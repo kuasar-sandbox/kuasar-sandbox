@@ -619,16 +619,45 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
                 'workbench requires offline preparation from empty private Docker state')
         require(record.get('isolation', {}).get('complete') is True
                 and record['isolation'].get('image') == record['image_id'], 'workbench isolation did not pass on the tested image')
-        require(record.get('preflight', {}).get('kvm') == 'api-12', 'workbench native KVM preflight did not pass')
+        preflight = record.get('preflight', {})
+        require(all(preflight.get(key) == value for key, value in {
+            'arch': arch, 'page_size': 4096, 'kvm': 'api-12', 'tun': 'create-close',
+            'uffd': 'api-ioctl', 'bpf': 'create-pin-remove'}.items()), 'workbench native system preflight did not pass')
+        require(preflight.get('docker', {}).get('driver') == 'overlay2'
+                and preflight['docker'].get('root') == '/var/lib/docker'
+                and preflight.get('containerd') == {'root': '/var/lib/containerd', 'state': '/run/containerd'},
+                'workbench daemons do not use their private storage')
         require(record.get('cases') == workbench_cases(case_files, arch) and record.get('timings'),
                 'workbench cases differ from the complete declared selection')
         require(record.get('input_assets') == expected_assets, 'workbench input assets differ from the aggregate')
         check_timings(record['timings'], record['cases'])
-        require(record.get('host_apparmor_enabled') in (True, False), 'missing workbench host LSM observation')
+        require(isinstance(record.get('host_apparmor_enabled'), bool), 'missing workbench host LSM observation')
         if record['host_apparmor_enabled']:
-            require(record.get('apparmor', {}).get('conclusion') == 'success'
-                    and record['apparmor'].get('image_id') == record['image_id'], 'enforcing host nested Docker was not qualified')
+            lsm = record.get('apparmor', {})
+            profile = lsm.get('profile', {}).get('name', '')
+            require(re.fullmatch(r'kuasar-workbench-v1-u[0-9]+-[0-9a-f]{32}', profile)
+                    and lsm.get('conclusion') == 'success' and lsm.get('image_id') == record['image_id']
+                    and lsm.get('outer_context') == lsm.get('inner_context') == profile + ' (enforce)'
+                    and lsm.get('host_apparmor_before') == lsm.get('host_apparmor_after') == 'Y'
+                    and lsm.get('inner_detection') == '' and lsm.get('forbidden_mounts') == 'denied'
+                    and lsm.get('cleanup') == 'owned container, daemon data and profile removed; output retained',
+                    'enforcing host nested Docker was not qualified')
     return results
+
+
+def check_registry_binding(version, binding):
+    registry = binding.get('registry', {})
+    require(registry.get('reference') == 'ghcr.io/kuasar-sandbox/workbench:' + version.removeprefix('release-')
+            and re.fullmatch(r'sha256:[0-9a-f]{64}', registry.get('digest', '')), 'missing aggregate registry identity')
+    records = registry.get('architectures', {})
+    require(set(records) == set(ARCHES), 'registry must select both native architectures')
+    for arch, row in records.items():
+        result = binding['workbench'][arch]
+        require(re.fullmatch(r'sha256:[0-9a-f]{64}', row.get('digest', ''))
+                and isinstance(row.get('size'), int) and row['size'] > 0
+                and row.get('image_id') == result['image_id']
+                and row.get('archive_sha256') == result['sha256'], 'registry/offline workbench identity differs')
+    return registry
 
 
 def collect_results(plan, results):
