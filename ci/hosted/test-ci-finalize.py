@@ -231,13 +231,18 @@ else:
         stage = next(step['run'] for step in data['jobs']['results']['steps']
                      if step.get('name') == 'Require every selected stage')
         good = {'RESOLVE_RESULT': 'success', 'X86_RESULT': 'success',
-                'ARM_RESULT': 'success', 'SOURCE_RESULT': 'success'}
+                'ARM_RESULT': 'success', 'SOURCE_RESULT': 'success',
+                'WORKBENCH_SELECTED': 'true', 'WORKBENCH_RESULT': 'success'}
         self.assertEqual(subprocess.run(['bash', '-c', stage], env={**self.env, **good}).returncode, 0)
         for name in good:
             for value in ('failure', 'cancelled', 'skipped', 'neutral', ''):
                 with self.subTest(stage=name, result=value):
                     env = {**self.env, **good, name: value}
                     self.assertNotEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
+        env = {**self.env, **good, 'WORKBENCH_SELECTED': 'false', 'WORKBENCH_RESULT': 'skipped'}
+        self.assertEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
+        env['WORKBENCH_RESULT'] = 'success'
+        self.assertNotEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
 
 
 if __name__ == '__main__':

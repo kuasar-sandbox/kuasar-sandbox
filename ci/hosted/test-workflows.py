@@ -179,7 +179,12 @@ def check():
     assert "inputs.arch" in lanes["e2e"]["concurrency"]["group"]
     for arch, runner in (("x86_64", "ubuntu-latest"), ("aarch64", "ubuntu-24.04-arm")):
         assert expression(lanes["e2e"]["runs-on"], {"inputs": {"arch": arch}}) == runner
-    assert integration["results"]["needs"] == ["resolve", "x86_64", "aarch64", "source-checks"]
+    assert integration["results"]["needs"] == ["resolve", "x86_64", "aarch64", "source-checks", "workbench-native"]
+    native = integration['workbench-native']
+    assert native['needs'] == 'resolve'
+    assert {(item['arch'], item['runner']) for item in native['strategy']['matrix']['include']} == {
+        ('x86_64', 'ubuntu-24.04'), ('aarch64', 'ubuntu-24.04-arm')}
+    assert 'continue-on-error' not in json.dumps(native)
     for job in lanes.values():
         assert "KUASAR_CI_APP_PRIVATE_KEY" not in json.dumps(job)
         assert "continue-on-error" not in json.dumps(job)
