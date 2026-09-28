@@ -55,6 +55,8 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   # mount grant, host cgroup bind, block-device filesystem or securityfs mount.
   mount fstype=(tmpfs,proc,sysfs,devpts,mqueue,cgroup2,overlay) -> /var/lib/docker/**,
   mount fstype=(tmpfs,proc,sysfs,devpts,mqueue,cgroup2,overlay) -> /var/lib/containerd/**,
+  # systemd generators mount a private tmpfs at /tmp itself before journald.
+  mount fstype=tmpfs -> /tmp/,
   mount fstype=tmpfs -> /{run,tmp}/**,
   mount options in (rw,ro,bind,rbind) /** -> /var/lib/docker/**,
   mount options in (rw,ro,bind,rbind) /** -> /var/lib/containerd/**,
