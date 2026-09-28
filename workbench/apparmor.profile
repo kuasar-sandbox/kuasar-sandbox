@@ -49,7 +49,7 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   # Hide only inner dockerd's detection input. Host enforcement stays enabled;
   # descendants cannot load profiles or escape this profile through exec.
   mount options=(rw,bind) /dev/null -> /sys/module/apparmor/parameters/enabled,
-  remount options=(ro,bind) /sys/module/apparmor/parameters/enabled,
+  remount /sys/module/apparmor/parameters/enabled,
 
   # systemd private unit mounts and nested Docker's own roots. No blanket
   # mount grant, host cgroup bind, block-device filesystem or securityfs mount.
