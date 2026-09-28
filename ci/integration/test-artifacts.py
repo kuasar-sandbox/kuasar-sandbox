@@ -504,6 +504,12 @@ class ArtifactContracts(unittest.TestCase):
              patch.object(resolver.release, "tag_sha", side_effect=lambda repo, tag: sha if repo == resolver.PLATFORM else "c" * 40), \
              patch.dict(os.environ, {"RELEASE_VERSION": version, "PLATFORM_SOURCE_SHA": sha}):
             plan = resolver.exact_assets_plan("a" * 40, self.root)
+            self.assertEqual(plan["case_files"], CASES)
+            self.assertEqual(plan["test_overlays"], [])
+            self.assertEqual(plan["product_sources"], {})
+            selected = plan["lanes"]["x86_64"]["selection"]["cases"]
+            self.assertIn("sandbox.lifecycle.sh", selected)
+            self.assertFalse(any(name.endswith("run_all.sh") for name in selected))
             self.assertEqual(plan["test_revisions"]["orchestrator"]["sha"], "f" * 40)
             self.assertEqual(plan["baseline"]["units"]["orchestrator"]["sha"], "c" * 40)
             pin_file.write_text(json.dumps({**pins, "orchestrator": "c" * 40}))
@@ -539,7 +545,11 @@ class ArtifactContracts(unittest.TestCase):
                     state["body"] = "<!-- kuasar-integration-validation " + json.dumps(historical) + " -->"
                     with patch.object(resolver, "historical_case_files", return_value=old_cases):
                         self.assertEqual(resolver.aggregate(version)["test_revisions"], plan["test_revisions"])
-                        historical["architectures"]["x86_64"]["profile"]["cases"].pop()
+                        entries = historical["architectures"]["x86_64"]["profile"]["cases"]
+                        if old_cases:
+                            entries.remove("test/e2e/sandboxer/cases/sandbox.lifecycle.sh")
+                        else:
+                            entries.pop()
                         state["body"] = "<!-- kuasar-integration-validation " + json.dumps(historical) + " -->"
                         with self.assertRaisesRegex(ValueError, "predeclared architecture profile"):
                             resolver.aggregate(version)

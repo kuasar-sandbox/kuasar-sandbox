@@ -343,6 +343,7 @@ runtime、vmlinux 保留独立包名。新 aggregate 包含架构无关的 platf
 聚合 prepare 下载六个所选 Release，校验 API size/digest、SHA-256、路径、归属与跨包覆盖，
 随后在无凭据源码步骤中构建固定测试 helper，并生成确定性的 platform 包。
 暂存字节通过共享的公开 prepare → 聚焦用例 → 公开 run 合同，不重建产品或 helper。
+解析阶段按已提交 test pin 声明精确用例文件名；执行使用短的私有状态路径，直接读取暂存归档中的用例，无需源码 overlay。
 x86 在真实 KVM runner 运行九个 suite 中的所选用例；ARM 原生运行预先声明的 accelerator/guest-runtime 非 KVM 子集。
 干净运行时中的 prepare 和所选完整 suite 执行保留 Go、Rust、组件源码树缺失的验证证据。源码检查是独立必需 job。
 publish 必须收齐两个架构的成功结果，在 `kuasar-integration-validation` 绑定用例选择、源码身份和资产摘要，原样上传归档。
