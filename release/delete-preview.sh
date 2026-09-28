@@ -33,6 +33,14 @@ gh api \
 BASE="$(awk '/^version:[[:space:]]+/ {print $2}' "$TMP/daily-preview.yaml")"
 PREVIEW="$(awk '/^preview_version:[[:space:]]+/ {print $2}' \
   "$TMP/daily-preview.yaml")"
+DELIVERY=$(python3 - "$ROOT/release" "$TMP/daily-preview.yaml" <<'PYDELIVERY'
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+import selection
+p=pathlib.Path(sys.argv[2])
+print(selection.delivery(selection.read_simple_yaml(p.read_text(), str(p)), str(p)))
+PYDELIVERY
+)
 if [ "$BASE-$PREVIEW" = "$TAG" ]; then
   [ "$(awk '/^components:[[:space:]]*$/ {count++} END {print count + 0}' \
     "$TMP/daily-preview.yaml")" -eq 1 ] \
@@ -62,6 +70,7 @@ elif [ "$MODE" = gc ]; then
   # history used to build the GC plan.
   resolve_selection "$ROOT" "$TAG" "$TMP/selection.tsv"
   CANONICAL_COMMIT="$("$ROOT/release/selection.py" "$ROOT" "$TAG" --commit)"
+  DELIVERY=$(release_delivery "$ROOT" "$TAG")
   [[ "$CANONICAL_COMMIT" =~ ^[0-9a-f]{40}$ ]] \
     || fail "cannot resolve canonical manifest commit for $TAG"
   if [ -n "$PREVIEW" ]; then
@@ -85,6 +94,11 @@ fi
     component_archive "$unit" "$selected" aarch64
   done < "$TMP/selection.tsv"
 } | LC_ALL=C sort > "$TMP/expected-dual-assets"
+if [ "$DELIVERY" = workbench-v1 ]; then
+  for arch in x86_64 aarch64; do workbench_archive "$TAG" "$arch"; done >> "$TMP/expected-dual-assets"
+  LC_ALL=C sort -o "$TMP/expected-dual-assets" "$TMP/expected-dual-assets"
+  cp "$TMP/expected-dual-assets" "$TMP/expected-assets"
+fi
 
 gh api --paginate --slurp "repos/$REPOSITORY/releases?per_page=100" \
   | jq --arg tag "$TAG" '[.[][] | select(.tag_name == $tag)]' > "$TMP/releases"
@@ -98,7 +112,7 @@ if [ "$(jq 'length' "$TMP/releases")" -eq 1 ]; then
   if jq -e '
       .draft == false
       and .prerelease == true
-      and ((.assets | length == 8) or (.assets | length == 14))
+      and ((.assets | length) == ([.assets[].name] | unique | length))
       and all(.assets[]; .state == "uploaded")
     ' "$TMP/release" >/dev/null; then
     jq -r '.assets[].name' "$TMP/release" | LC_ALL=C sort > "$TMP/actual-assets"
@@ -127,6 +141,10 @@ elif grep -q '(HTTP 404)' "$TMP/ref-error"; then
 else
   cat "$TMP/ref-error" >&2
   exit 1
+fi
+
+if [ "$DELIVERY" = workbench-v1 ]; then
+  python3 -B "$ROOT/release/workbench_gc.py" "$TAG" "$SOURCE_SHA"
 fi
 
 if [ "$(jq 'length' "$TMP/releases")" -eq 1 ]; then

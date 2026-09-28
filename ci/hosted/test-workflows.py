@@ -179,12 +179,32 @@ def check():
     assert "inputs.arch" in lanes["e2e"]["concurrency"]["group"]
     for arch, runner in (("x86_64", "ubuntu-latest"), ("aarch64", "ubuntu-24.04-arm")):
         assert expression(lanes["e2e"]["runs-on"], {"inputs": {"arch": arch}}) == runner
-    assert integration["results"]["needs"] == ["resolve", "x86_64", "aarch64", "source-checks", "workbench-native"]
+    assert integration["results"]["needs"] == ["resolve", "x86_64", "aarch64", "source-checks", "workbench-native", "workbench-release"]
     native = integration['workbench-native']
     assert native['needs'] == 'resolve'
     assert {(item['arch'], item['runner']) for item in native['strategy']['matrix']['include']} == {
         ('x86_64', 'ubuntu-24.04'), ('aarch64', 'ubuntu-24.04-arm')}
     assert 'continue-on-error' not in json.dumps(native)
+    released = integration['workbench-release']
+    assert released['needs'] == 'resolve'
+    assert released['strategy']['matrix'] == native['strategy']['matrix']
+    assert 'continue-on-error' not in json.dumps(released)
+    assert 'KUASAR_CI_APP_PRIVATE_KEY' not in json.dumps(released)
+    for step in released['steps']:
+        if 'actions/checkout@' in step.get('uses', ''):
+            assert step['with']['ref'] == '${{ needs.resolve.outputs.framework_sha }}'
+            assert step['with']['persist-credentials'] is False
+    required = integration['results']['steps'][0]
+    assert required['env']['WORKBENCH_RELEASE_RESULT'] == '${{ needs.workbench-release.result }}'
+    script = required['run']
+    for mode, value, success in [('exact-assets', 'success', True), ('exact-assets', 'skipped', False),
+                                 ('exact-assets', 'failure', False), ('source', 'skipped', True),
+                                 ('source', 'success', False), ('', 'skipped', False)]:
+        environment = dict(os.environ, RESOLVE_RESULT='success', X86_RESULT='success', ARM_RESULT='success',
+                           SOURCE_RESULT='success', WORKBENCH_SELECTED='false', WORKBENCH_RESULT='skipped',
+                           INTEGRATION_MODE=mode, WORKBENCH_RELEASE_RESULT=value)
+        outcome = subprocess.run(['bash', '-c', script], env=environment, capture_output=True)
+        assert (outcome.returncode == 0) == success, (mode, value, outcome.stderr)
     for job in lanes.values():
         assert "KUASAR_CI_APP_PRIVATE_KEY" not in json.dumps(job)
         assert "continue-on-error" not in json.dumps(job)

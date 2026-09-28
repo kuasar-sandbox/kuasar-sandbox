@@ -47,6 +47,7 @@ class Candidate:
 class CanonicalSnapshot:
     commit: str
     components: dict[str, str]
+    delivery: str = "historical"
 
 
 class GCError(RuntimeError):
@@ -104,7 +105,7 @@ def platform_release_status(
             if canonical is not None:
                 validate_platform_ownership(tag, release, sha, canonical)
                 expected = coordinator.platform_asset_names_for_components(
-                    tag, canonical.components
+                    tag, canonical.components, delivery=canonical.delivery
                 )
     complete = (
         release.get("draft") is False
@@ -180,7 +181,7 @@ def stable_release(
     return release
 
 
-def parse_snapshot(commit: str) -> tuple[str, dict[str, str]] | None:
+def parse_snapshot(commit: str) -> tuple[str, dict[str, str], str] | None:
     content = git("show", f"{commit}:releases/daily-preview.yaml", check=False)
     if not content:
         return None
@@ -195,7 +196,7 @@ def parse_snapshot(commit: str) -> tuple[str, dict[str, str]] | None:
         )
     except coordinator.selection.ManifestError as error:
         raise GCError(str(error)) from error
-    return aggregate, components
+    return aggregate, components, coordinator.selection.delivery(raw, commit)
 
 
 def canonical_snapshots(
@@ -214,11 +215,11 @@ def canonical_snapshots(
         snapshot = parse_snapshot(commit)
         if snapshot is None:
             continue
-        aggregate, components = snapshot
+        aggregate, components, delivery = snapshot
         if aggregate.startswith(f"{version}-preview."):
             # git log is newest first; keep the final canonical selection when
             # one Preview date was committed more than once.
-            snapshots.setdefault(aggregate, CanonicalSnapshot(commit, components))
+            snapshots.setdefault(aggregate, CanonicalSnapshot(commit, components, delivery))
     return snapshots
 
 
@@ -270,7 +271,7 @@ def retained_snapshot(
         snapshot = parse_snapshot(source_sha)
         if snapshot is None or snapshot[0] != tag:
             raise GCError(f"retained pre-contract Preview has no Stable history: {tag}")
-        canonical = CanonicalSnapshot(source_sha, snapshot[1])
+        canonical = CanonicalSnapshot(source_sha, snapshot[1], snapshot[2])
     validate_platform_ownership(tag, release, source_sha, canonical)
     return canonical
 

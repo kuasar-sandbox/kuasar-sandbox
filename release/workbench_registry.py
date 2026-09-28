@@ -29,7 +29,7 @@ def digest(raw):
 
 def inspect_raw(reference, auth, *, config=False, missing=False):
     command = ['skopeo', 'inspect', '--authfile', str(auth), '--config' if config else '--raw', 'docker://' + reference]
-    result = subprocess.run(command, capture_output=True)
+    result = subprocess.run(command, capture_output=True, timeout=120)
     if result.returncode:
         error = result.stderr.decode(errors='replace')
         # Authentication, transport and registry failures must not authorize a

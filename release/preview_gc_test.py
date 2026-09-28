@@ -136,8 +136,8 @@ class PreviewGCTest(unittest.TestCase):
                 preview_gc,
                 "parse_snapshot",
                 side_effect=(
-                    (aggregate, {"connector": "v1.0.2-preview.20260831"}),
-                    (aggregate, {"connector": "v1.0.1-preview.20260831"}),
+                    (aggregate, {"connector": "v1.0.2-preview.20260831"}, "historical"),
+                    (aggregate, {"connector": "v1.0.1-preview.20260831"}, "historical"),
                 ),
             ),
         ):
@@ -155,7 +155,7 @@ class PreviewGCTest(unittest.TestCase):
         ]
         with (
             mock.patch.object(preview_gc, "git", return_value="third\nsecond\nfirst"),
-            mock.patch.object(preview_gc, "parse_snapshot", side_effect=[(tag, {}) for tag in reversed(tags)]),
+            mock.patch.object(preview_gc, "parse_snapshot", side_effect=[(tag, {}, "historical") for tag in reversed(tags)]),
         ):
             snapshots = preview_gc.canonical_snapshots("f" * 40, "release-v1.2.3")
         self.assertEqual(set(snapshots), set(tags))

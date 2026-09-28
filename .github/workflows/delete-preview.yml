@@ -33,6 +33,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      packages: write
     steps:
       - name: Require trusted cleanup controller
         run: |
@@ -52,7 +53,10 @@ jobs:
           gh_help="$(gh api --help)"
           [[ "$gh_help" == *--slurp* ]] || { echo "environment gh must support api --slurp" >&2; exit 1; }
 
-      - name: Delete Preview release, assets, and tag
+      - name: Install registry inspection tooling
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+
+      - name: Delete Preview release, assets, owned registry references, and tag
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version }}
