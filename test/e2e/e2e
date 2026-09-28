@@ -111,9 +111,11 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     release = Path(args.release_dir).resolve()
     work = Path(args.workdir).resolve()
     arch = normalize_arch(args.arch)
+    deps_dir, offline = workspace.dependency_options(args.deps_dir, args.offline)
     if work.exists():
         raise SystemExit(f"workdir already exists: {work}")
     workspace.require(not work.is_relative_to(release), "workdir must be outside release-dir")
+    workspace.require(deps_dir is None or not work.is_relative_to(deps_dir), "workdir must be outside deps-dir")
     if not (args.suite or args.include or args.exclude or args.all):
         args.all = True
     cases = selected(args, release / "test/e2e/cases")
@@ -126,31 +128,38 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     if source_bin is None:
         raise SystemExit(f"release has no bin directory for {arch}: {release}")
 
-    work.mkdir(parents=True)
-    workspace.files(source_bin)
-    shutil.copytree(source_bin, work / "bin")
-    for name in ("test", "docs", "share", "deploy", "fixtures", "images", "manifests"):
-        source = release / name
-        if source.exists():
-            workspace.files(source)
-            shutil.copytree(source, work / name)
-    if "helpers" not in provenance:
-        helper_root = work / "test/e2e/helpers" / arch
-        metadata = json.loads((helper_root / "helpers.json").read_text())
-        workspace.require(metadata["arch"] == arch, "helper package has the wrong architecture")
-        helpers = metadata["helpers"]
-        workspace.require(set(workspace.files(helper_root)) == {"helpers.json", *helpers}, "undeclared helper package files")
-        (work / "fixtures/bin").mkdir(parents=True, exist_ok=True)
-        for name, record in helpers.items():
-            workspace.require(name in workspace.HELPERS and workspace.digest(helper_root / name) == record["sha256"],
-                              f"helper package identity mismatch: {name}")
-            workspace.check_helper(helper_root / name, arch)
-            shutil.copy2(helper_root / name, work / "fixtures/bin" / name)
-        provenance["helpers"] = helpers
-    (work / "ARCH").write_text(arch + "\n", encoding="utf-8")
-    provenance.update(workspace.prepare_fixtures(work, arch, [case.name for case in cases]))
-    provenance["prepared_cases"] = [case.name for case in cases]
-    workspace.seal(work, provenance)
+    destination = work
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f'.{destination.name}-prepare-', dir=destination.parent) as directory:
+        work = Path(directory) / 'inputs'
+        work.mkdir()
+        workspace.files(source_bin)
+        shutil.copytree(source_bin, work / "bin")
+        for name in ("test", "docs", "share", "deploy", "fixtures", "images", "manifests"):
+            source = release / name
+            if source.exists():
+                workspace.files(source)
+                shutil.copytree(source, work / name)
+        if "helpers" not in provenance:
+            helper_root = work / "test/e2e/helpers" / arch
+            metadata = json.loads((helper_root / "helpers.json").read_text())
+            workspace.require(metadata["arch"] == arch, "helper package has the wrong architecture")
+            helpers = metadata["helpers"]
+            workspace.require(set(workspace.files(helper_root)) == {"helpers.json", *helpers}, "undeclared helper package files")
+            (work / "fixtures/bin").mkdir(parents=True, exist_ok=True)
+            for name, record in helpers.items():
+                workspace.require(name in workspace.HELPERS and workspace.digest(helper_root / name) == record["sha256"],
+                                  f"helper package identity mismatch: {name}")
+                workspace.check_helper(helper_root / name, arch)
+                shutil.copy2(helper_root / name, work / "fixtures/bin" / name)
+            provenance["helpers"] = helpers
+        (work / "ARCH").write_text(arch + "\n", encoding="utf-8")
+        provenance.update(workspace.prepare_fixtures(work, arch, [case.name for case in cases], deps_dir, offline))
+        provenance["prepared_cases"] = [case.name for case in cases]
+        workspace.seal(work, provenance)
+        workspace.require(not destination.exists(), f'workdir already exists: {destination}')
+        work.rename(destination)
+    work = destination
     print(work)
     return 0
 
@@ -236,6 +245,8 @@ def main() -> int:
     p.add_argument("--release-dir", required=True)
     p.add_argument("--workdir", required=True)
     p.add_argument("--arch", default=platform.machine())
+    p.add_argument("--deps-dir", help="local image archives and images.json; overrides E2E_DEPS_DIR")
+    p.add_argument("--offline", action="store_true", help="prohibit dependency downloads (also E2E_OFFLINE=1)")
     p.set_defaults(func=cmd_prepare)
 
     p = sub.add_parser("run")

@@ -45,7 +45,7 @@ Packaging validates archive paths, cross-package collisions, helper architecture
 <a id="3-前置条件"></a>
 ## 3. Prerequisites
 
-Full native x86 execution requires Linux, systemd, cgroup v2, usable `/dev/kvm`, root or noninteractive `sudo`, Docker, iproute2, curl, Python 3.11+, openssl, EROFS readers, mkfs.ext4 and the ordinary utilities required by the selected scripts. Preparation needs network access to the declared images and pinned Python wheels. Registry/gateway/probe binaries come from the package.
+Full native x86 execution requires Linux, systemd, cgroup v2, usable `/dev/kvm`, root or noninteractive `sudo`, Docker, iproute2, curl, Python 3.11+ (Python 3.12 for the packaged Demo SDK), openssl, EROFS readers, mkfs.ext4 and the ordinary utilities required by the selected scripts. Preparation uses local image inputs when configured and otherwise downloads the selected external images. The hash-locked Python wheels and registry/gateway/probe binaries come from the package.
 
 No Go or Rust compiler or component source checkout is needed during preparation or product execution. The runner rejects missing prepared inputs; it does not substitute host helper binaries or pull images while running cases. Prepared inputs must remain unchanged. Mutable case state and result files live outside the prepared directory.
 
@@ -64,6 +64,24 @@ sudo python3 "$prepared/test/e2e/e2e" run --workdir "$prepared" \
 Use a fresh preparation directory. Preparation acquires immutable image archives and the Demo SDK, records hashes and permissions, and does not compile products or helpers. Execution loads those image archives, invokes each selected Bash case, records its full filename, elapsed time and exit status, and verifies the input tree again. Real tested Build, flatten, snapshot and publication operations remain in the cases.
 
 A nonzero case, missing prerequisite or changed input fails the run. `PASS <filename>` and `result.json` refer only to executed cases. Draft skips and static architecture checks are not product acceptance. `storage.obs.sh` requires explicit selection and its documented external storage credentials; keep it excluded for ordinary public validation.
+
+### Local and offline preparation
+
+After acquiring and verifying the release and dependency inputs, select a local image directory:
+
+```bash
+python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
+    --workdir /var/tmp/offline-prepared --arch x86_64 --all --exclude storage.obs.sh \
+    --deps-dir /inputs/deps --offline
+```
+
+`E2E_DEPS_DIR` is the directory alias; `--deps-dir` takes precedence. `E2E_OFFLINE` accepts only `0` or `1`. `--offline` always prohibits dependency downloads, including when `E2E_OFFLINE=0`. With neither flag nor environment configuration, preparation retains its online behavior. `E2E_OFFLINE=0` without `--offline` permits remote fallback for missing inputs. An explicitly empty, missing or symbolic-link directory fails. When using `sudo`, pass these options explicitly after the privilege transition; do not preserve the whole user environment.
+
+The directory contains a flat `images.json` list and Docker image archives. Each record has `reference`, `platform` (`linux/amd64` or `linux/arm64`), `image_id` (config SHA-256), relative `archive`, and `sha256` (archive bytes). Registry evidence consists of `manifest` (the exact raw JSON text), `manifest_digest`, and `registry_digest`; an index response also includes exact raw `index` text and `index_digest`. These are separate identities. The manifest must hash to its recorded digest and bind the archive's actual config; every archived layer must match that config's uncompressed layer digest. An index must bind exactly one matching platform manifest. An `@sha256:...` request must match the verified registry response digest. A self-declared digest field alone is rejected. A moving tag's recorded resolution is consumed without a remote freshness check; obtain the directory from verified release inputs, since offline content checks cannot authenticate an arbitrary author's tag mapping.
+
+Preparation matches the exact requested reference and platform. Valid selected archives are copied without loading/saving them again; only locally derived orchestrator fixtures need to load the Python base into Docker during preparation. Missing selected inputs fail offline with their reference, platform and search location. Online mode may download missing inputs, but corrupt, unsafe, ambiguous or wrong-identity matches always fail without remote repair. Archives and description paths cannot escape the directory or use symbolic links; unsafe archive paths, duplicate members and links/devices are rejected. Unselected archives are not prerequisites. Completed preparation records image evidence and hashes/modes in `provenance.json`; failed preparation does not create the requested workspace.
+
+Offline controls dependency acquisition. It neither changes case selection nor prohibits local Guest/Registry/Store/Proxy traffic. Helpers still come from their exact package and the Demo SDK still installs exclusively from its local hash-locked wheelhouse. Credentialed OBS is never silently skipped. CI's `prepare-artifacts.py` passes the same options to the public runner and mounts a configured dependency directory read-only for clean preparation, separately from writable output.
 
 <a id="5-运行组件或单项用例"></a>
 ## 5. Select suites or individual cases

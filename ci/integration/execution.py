@@ -81,12 +81,26 @@ def clean_command(image, workspace, state, arguments):
             image, 'bash', '-c', preflight, 'clean-e2e', *arguments]
 
 
-def clean_prepare_command(image, release, work, arguments):
+def clean_prepare_command(image, release, work, arguments, deps_dir=None):
     runtime_identity(image)
     artifacts.require(work.name in artifacts.ARCHES, 'clean preparation requires an architecture directory')
     preflight = (runtime_preflight('/release') +
                  'exec python3 -B /release/test/e2e/e2e prepare --release-dir /release '
                  f'--workdir /prepared/{work.name} "$@"')
+    inputs = []
+    if deps_dir is not None:
+        directory = Path(deps_dir)
+        artifacts.require(str(deps_dir) != '' and directory.is_dir() and not directory.is_symlink(),
+                          f'missing or unsafe deps-dir: {deps_dir}')
+        directory = directory.resolve()
+        artifacts.require(not directory.is_relative_to(work.parent.resolve()) and
+                          not work.parent.resolve().is_relative_to(directory),
+                          'deps-dir must be separate from the writable preparation mount')
+        artifacts.require(',' not in str(directory), 'deps-dir cannot contain a Docker mount separator')
+        inputs += ['--mount', f'type=bind,src={directory},dst=/deps,readonly']
+        arguments = [*arguments, '--deps-dir', '/deps']
+    if 'E2E_OFFLINE' in os.environ:
+        inputs += ['--env', 'E2E_OFFLINE=' + os.environ['E2E_OFFLINE']]
     return ['docker', 'run', '--rm', '--pull=never', '--network=host', '--read-only',
             '--user', f'{os.getuid()}:{os.getgid()}', '--group-add', str(Path('/var/run/docker.sock').stat().st_gid),
             '--mount', f'type=bind,src={release},dst=/release,readonly',
@@ -94,4 +108,4 @@ def clean_prepare_command(image, release, work, arguments):
             '--mount', 'type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock',
             '--tmpfs', '/run', '--tmpfs', '/tmp', '--env', 'DOCKER_CONFIG=/tmp/docker',
             '--env', 'PYTHONDONTWRITEBYTECODE=1', '--env', 'HOME=/tmp/e2e-home',
-            image, 'bash', '-c', preflight, 'clean-prepare', *arguments]
+            *inputs, image, 'bash', '-c', preflight, 'clean-prepare', *arguments]
