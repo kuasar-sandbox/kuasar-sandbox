@@ -61,12 +61,21 @@ def child():
         finally:
             os.close(fd)
     os.close(proc)
-    for name in ('bus', 'fs', 'irq', 'sys', 'sysrq-trigger'):
+    for name in ('asound', 'bus', 'fs', 'irq', 'sys', 'sysrq-trigger'):
         target = '/proc/' + name
+        if not Path(target).exists():
+            continue
         subprocess.run(['mount', '--rbind', target, target], check=True)
         subprocess.run(['mount', '-o', 'remount,bind,ro', target], check=True)
         forbidden = subprocess.run(['mount', '-o', 'remount,bind,rw', target], capture_output=True)
         assert forbidden.returncode != 0, 'profile allowed writable proc remount: ' + target
+    # OCI's default masked paths use read-only tmpfs for directories and
+    # /dev/null bind mounts for files. Prove only those exact destinations.
+    if Path('/proc/acpi').is_dir():
+        subprocess.run(['mount', '-t', 'tmpfs', '-o', 'ro', 'tmpfs', '/proc/acpi'], check=True)
+        forbidden = subprocess.run(['mount', '-o', 'remount,rw', '/proc/acpi'], capture_output=True)
+        assert forbidden.returncode != 0, 'profile allowed writable masked proc directory'
+    subprocess.run(['mount', '--bind', '/dev/null', '/proc/kcore'], check=True)
     root = b'/var/lib/docker/pivot-test'
     os.mkdir(root)
     call('mount', b'tmpfs', root, b'tmpfs', 0, None)
