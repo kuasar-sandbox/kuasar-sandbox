@@ -21,10 +21,14 @@ overlay2. Build mode needs none of the KVM or additional capability grants.
 An invoking ordinary UID must have access to Docker and its own writable
 checkout and instance directory; Docker access itself is a host trust boundary.
 
-The launcher keeps the host's LSM policy enabled. If that policy denies the
-required private mounts or operations, startup fails and retains diagnostics.
-It does not change host modules, sysctls, security profiles or services. A
-successful host `check` is only an initial check: `start` exercises the actual
+On an AppArmor host, system mode requires the host's `apparmor_parser` and root
+or non-interactive `sudo` permission to load/remove a unique instance profile.
+The launcher records its name, version and content hash, adds it in enforcing
+mode and verifies the outer PID's actual context. It never replaces
+`docker-default` or another host profile. If it cannot manage or enforce its
+own profile, startup fails and retains diagnostics. Build mode does not load
+profiles or gain permissions. Host modules, sysctls and services are unchanged.
+A successful host `check` is only an initial check: `start` exercises the actual
 private services, namespaces, delegation and device/syscall interfaces.
 
 Acquire the selected release's image through its registry tag or verify its
@@ -103,7 +107,9 @@ and requires the original image and mode. Use a fresh name to change those
 settings. `cleanup` stops and removes only the recorded container, network and
 daemon data; it preserves work, build, home, journal and output directories.
 Add `--delete-output` explicitly to delete those directories too. Ownership
-records remain as evidence; use a new instance name after cleanup.
+records remain as evidence; use a new instance name after cleanup. The owned
+AppArmor profile is removed only after its container is removed; a foreign
+container using the same profile prevents removal.
 
 Each system instance has a distinct machine ID and PID/UTS/IPC/mount/network/
 cgroup namespaces, private bpffs, Docker and containerd roots and state, sockets,
@@ -112,6 +118,14 @@ SYS_PTRACE in addition to Docker's default capabilities. The retained default
 seccomp policy permits only the additional userfaultfd, pivot_root and keyctl
 operations needed by this environment. It never receives the host Docker
 socket, host root, whole host cgroup tree or host BPF pins.
+
+The outer AppArmor profile permits the private mount/cgroup/bpffs and nested
+Docker operations while retaining proc/sys/firmware/securityfs restrictions.
+Inside this already-confined mount namespace, a read-only null bind masks
+`/sys/module/apparmor/parameters/enabled`. This prevents inner dockerd from
+trying to manage the host's AppArmor profiles. It does not disable host
+AppArmor: inner processes inherit the enforced outer profile, with no profile
+transition or securityfs-management permission.
 
 CPU affinity comes from the invoking process's available CPUs, with explicit
 CPU, memory and process limits. Free space checks are capacity checks, not disk
@@ -145,8 +159,17 @@ identity and start time. Results and retained output stay in that task path.
 These checks supplement native full builds and the current public E2E cases;
 they do not replace compiler-free release acceptance.
 
+On enforcing Ubuntu, `test-apparmor.py --image "$IMAGE" --root <new-task-path>`
+checks the outer and inner PID contexts, private mounts/daemon, denied unrelated
+mounts, unchanged host enforcement and owned cleanup. Public native x86 CI
+requires this check. It intentionally omits KVM/TUN device qualification so it
+can run on hosted machines without KVM; it cannot replace full system/KVM E2E.
+
 The bundled [seccomp base](seccomp-default.json) is Moby's default profile at
 [65adc7e022c97f55e45c054ff012988027733b87](https://github.com/moby/profiles/blob/65adc7e022c97f55e45c054ff012988027733b87/seccomp/default.json),
 with its [Apache 2.0 license](LICENSE.seccomp). `workbench` derives the small
 capability/argument-constrained additions per instance; the base remains
 unchanged. Upstream distribution licenses remain with the installed tools.
+The [outer AppArmor template](apparmor.profile) derives from
+[Moby v26.1.3](https://github.com/moby/moby/blob/v26.1.3/profiles/apparmor/template.go),
+with its [Apache 2.0 license](LICENSE.apparmor); its nesting changes are maintained here.

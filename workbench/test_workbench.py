@@ -231,5 +231,90 @@ class NativeSelectionTests(unittest.TestCase):
             changes.assert_not_called()
 
 
+class AppArmorTests(LauncherTests):
+    def test_load_restart_remove_only_the_owned_enforcing_profile(self):
+        profiles = {'docker-default': 'enforce)'}
+        calls = []
+        def parser(action, source):
+            name = self.data['apparmor']['name']
+            self.assertNotEqual(name, 'docker-default')
+            calls.append(action)
+            if action == '--add':
+                self.assertNotIn(name, profiles)
+                profiles[name] = 'enforce)'
+            elif action == '--remove':
+                del profiles[name]
+            else:
+                self.fail('profile replacement is forbidden')
+        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
+                launcher, 'apparmor_profiles', side_effect=lambda: dict(profiles)), patch.object(
+                launcher, 'apparmor_parser', side_effect=parser), patch.object(launcher, 'docker', return_value=''):
+            launcher.load_apparmor(self.state, self.data)
+            launcher.load_apparmor(self.state, self.data)
+            command = self.command()
+            self.assertIn('apparmor=' + self.data['apparmor']['name'], command)
+            self.assertNotIn('apparmor=unconfined', command)
+            launcher.remove_apparmor(self.state, self.data)
+            launcher.remove_apparmor(self.state, self.data)
+        self.assertEqual(calls, ['--add', '--remove'])
+        self.assertEqual(profiles, {'docker-default': 'enforce)'})
+
+    def test_foreign_profile_collision_and_missing_manager_fail_closed(self):
+        name = f"kuasar-workbench-v1-u{os.getuid()}-{self.data['id']}"
+        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
+                launcher, 'apparmor_profiles', return_value={name: 'enforce)'}), patch.object(launcher, 'apparmor_parser') as parser:
+            with self.assertRaisesRegex(ValueError, 'foreign AppArmor'):
+                launcher.load_apparmor(self.state, self.data)
+            parser.assert_not_called()
+        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
+                launcher, 'apparmor_profiles', return_value={}), patch.object(launcher.shutil, 'which', return_value=None):
+            with self.assertRaisesRegex(ValueError, 'needs host apparmor_parser'):
+                launcher.load_apparmor(self.state, self.data)
+        self.assertFalse(self.data['apparmor']['loaded'])
+
+    def test_changed_profile_and_foreign_container_prevent_removal(self):
+        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
+                launcher, 'apparmor_profiles', side_effect=[{}, {f"kuasar-workbench-v1-u{os.getuid()}-{self.data['id']}": 'enforce)'}]), patch.object(launcher, 'apparmor_parser'):
+            launcher.load_apparmor(self.state, self.data)
+        profiles = {self.data['apparmor']['name']: 'enforce)'}
+        with patch.object(launcher, 'apparmor_profiles', return_value=profiles), patch.object(
+                launcher, 'docker', side_effect=['foreign', json.dumps([{'AppArmorProfile': self.data['apparmor']['name']}])]), patch.object(
+                launcher, 'apparmor_parser') as parser:
+            with self.assertRaisesRegex(ValueError, 'still belongs to a container'):
+                launcher.remove_apparmor(self.state, self.data)
+            parser.assert_not_called()
+        (self.state / 'apparmor.profile').write_text('changed')
+        with patch.object(launcher, 'apparmor_parser') as parser:
+            with self.assertRaisesRegex(ValueError, 'profile changed'):
+                launcher.remove_apparmor(self.state, self.data)
+            parser.assert_not_called()
+
+    def test_outer_context_must_enforce_and_inner_detection_mask_is_required(self):
+        self.data['apparmor'] = {'name': 'owned'}
+        self.data['container_id'] = 'container'
+        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
+                launcher, 'apparmor_profiles', return_value={'owned': 'enforce)'}):
+            for output in ('unconfined', 'owned (complain)'):
+                with patch.object(launcher, 'docker', return_value=output):
+                    with self.assertRaisesRegex(ValueError, 'not confined'):
+                        launcher.check_apparmor(self.data)
+            with patch.object(launcher, 'docker', side_effect=['owned (enforce)', 'Y']):
+                with self.assertRaisesRegex(ValueError, 'detection was not masked'):
+                    launcher.check_apparmor(self.data)
+            with patch.object(launcher, 'docker', side_effect=['owned (enforce)', '']):
+                launcher.check_apparmor(self.data)
+
+    def test_profile_keeps_host_security_restrictions_and_build_mode_unchanged(self):
+        source = (ROOT / 'apparmor.profile').read_text()
+        self.assertIn('deny /sys/kernel/security/** rwklx,', source)
+        self.assertIn('deny /proc/sysrq-trigger rwklx,', source)
+        self.assertNotIn('change_profile ->', source)
+        self.assertNotIn('\n  mount,', source)
+        self.data['apparmor'] = {'name': 'system-only'}
+        command = self.command(mode='build', source=self.source, inputs=None)
+        self.assertFalse(any(value.startswith('apparmor=') for value in command))
+        self.assertFalse(any(value.startswith('--cap-add') for value in command))
+
+
 if __name__ == '__main__':
     unittest.main()

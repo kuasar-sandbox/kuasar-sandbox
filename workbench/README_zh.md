@@ -19,9 +19,12 @@ Unix Docker 端点。Docker Desktop、远程 Docker 端点、架构模拟、Podm
 KVM 或额外 capability。调用启动器的普通 UID 必须能访问 Docker，并拥有可写的源码
 检出和实例目录；Docker 访问权限本身就是主机信任边界。
 
-启动器保留主机 LSM 策略。如果该策略拒绝所需的私有挂载或操作，启动会失败并保留
-诊断。启动器不修改主机模块、sysctl、安全策略或服务。主机 `check` 成功仅表示初步
-检查通过；`start` 会实际验证私有服务、命名空间、委派及设备/系统调用接口。
+在 AppArmor 主机上，系统模式需要主机 `apparmor_parser`，以及 root 或非交互式
+`sudo` 权限，以加载/移除唯一的实例策略。启动器记录策略名称、版本和内容哈希，
+以 enforcing 模式添加，并验证外层 PID 的实际上下文。它不会替换 `docker-default`
+或其他主机策略。无法管理或强制执行自己的策略时，启动失败并保留诊断。构建模式
+不加载策略，也不增加权限。主机模块、sysctl 和服务保持不变。主机 `check` 成功仅
+表示初步检查通过；`start` 会实际验证私有服务、命名空间、委派及设备/系统调用接口。
 
 通过选定发布版的 registry 标签获取镜像，或验证 `SHA256SUMS` 中的条目后，用
 `docker load` 导入本机架构的 `workbench-<arch>-v*.tar.gz`。这是 gzip 压缩的 Docker
@@ -87,12 +90,19 @@ python3 workbench/workbench --root "$STATE" --name e2e exec -- \
 的容器、网络和守护进程数据，保留 work、build、home、journal 和 output 目录。
 显式添加 `--delete-output` 才会同时删除这些目录。所有权记录作为证据保留；清理后
 请使用新的实例名称。
+仅在移除容器之后才移除其拥有的 AppArmor 策略；若其他容器使用同名策略，则拒绝移除。
 
 每个系统实例具有独立的 machine ID 和 PID/UTS/IPC/mount/network/cgroup 命名空间、
 私有 bpffs、Docker 和 containerd 根目录与状态、套接字以及只读发布输入。除 Docker
 默认 capability 外，它获得 SYS_ADMIN、NET_ADMIN、SYS_PTRACE 和 KVM/TUN 设备。
 保留的默认 seccomp 策略仅额外允许该环境需要的 userfaultfd、pivot_root 和 keyctl
 操作。实例不会获得主机 Docker 套接字、主机根目录、整个主机 cgroup 树或主机 BPF pin。
+
+外层 AppArmor 策略允许私有 mount/cgroup/bpffs 和嵌套 Docker 操作，同时保留
+proc/sys/firmware/securityfs 限制。在这个已受约束的挂载命名空间中，只读 null
+绑定挂载遮蔽 `/sys/module/apparmor/parameters/enabled`，阻止内层 dockerd 尝试
+管理主机 AppArmor 策略。这不会关闭主机 AppArmor：内层进程继承外层 enforcing
+策略，没有策略切换或 securityfs 管理权限。
 
 CPU 亲和性从调用进程可用的 CPU 中选择，并设置明确的 CPU、内存和进程数限制。
 空闲空间检查是容量检查，不是磁盘配额。实例仍共享主机内核、磁盘和 NIC 竞争。该
@@ -120,7 +130,16 @@ aarch64 --output <new-directory>` 使用公共 runner 的发现逻辑和共享�
 和保留输出位于该任务目录。这些检查补充原生完整构建和当前公共 E2E 用例，不能
 替代无编译器的发布验收。
 
+在启用 enforcing AppArmor 的 Ubuntu 上，运行
+`test-apparmor.py --image "$IMAGE" --root <new-task-path>`，检查外层与内层 PID
+上下文、私有挂载/守护进程、无关挂载被拒绝、主机强制执行状态未变化以及所有权
+清理。公共原生 x86 CI 要求此检查通过。该检查明确不验证 KVM/TUN 设备，因此可以
+在无 KVM 的托管机器运行；它不能替代完整系统/KVM E2E。
+
 附带的 [seccomp 基础策略](seccomp-default.json) 来自 Moby 默认策略
 [65adc7e022c97f55e45c054ff012988027733b87](https://github.com/moby/profiles/blob/65adc7e022c97f55e45c054ff012988027733b87/seccomp/default.json)，
 同时保留其 [Apache 2.0 许可证](LICENSE.seccomp)。`workbench` 为每个实例生成少量
 受 capability/参数约束的附加规则，基础策略保持原样。上游发行版许可证随工具保留。
+[外层 AppArmor 模板](apparmor.profile) 派生自
+[Moby v26.1.3](https://github.com/moby/moby/blob/v26.1.3/profiles/apparmor/template.go)，
+保留其 [Apache 2.0 许可证](LICENSE.apparmor)；嵌套运行所需的调整在此维护。

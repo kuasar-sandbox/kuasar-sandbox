@@ -49,6 +49,12 @@ def qualify(plan, root):
         image_build = module('workbench_image_build', sources / 'platform/workbench/build.py')
         receipt = image_build.build(plan['baseline']['version'], platform.machine(), cases, deps, root / 'image', 2, 6)
         result['build_image'] = receipt
+        if platform.machine() == 'x86_64':
+            # Ubuntu hosted KVM availability is independent of this required
+            # enforcing-AppArmor check. Full KVM/E2E acceptance remains separate.
+            subprocess.run([sys.executable, '-B', sources / 'platform/workbench/test-apparmor.py',
+                            '--image', receipt['image_id'], '--root', str(root / 'apparmor')], check=True, timeout=600)
+            result['apparmor'] = json.loads((root / 'apparmor/result.json').read_text())
         # This toolchain qualification image deliberately has no selected E2E
         # image inputs. Joint release qualification builds the complete image.
         subprocess.run([*launcher, 'start', '--image', receipt['image_id'], '--mode', 'build',

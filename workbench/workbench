@@ -3,6 +3,7 @@
 import argparse
 from contextlib import contextmanager
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -17,6 +18,8 @@ import uuid
 ROOT = Path(__file__).resolve().parent
 LABEL = 'org.kuasar.workbench.instance'
 NAMESPACES = ('pid', 'uts', 'ipc', 'mnt', 'net', 'cgroup')
+APPARMOR_ENABLED = Path('/sys/module/apparmor/parameters/enabled')
+APPARMOR_PROFILES = Path('/sys/kernel/security/apparmor/profiles')
 
 
 def require(condition, message):
@@ -43,6 +46,104 @@ def save(state, data):
     temporary.write_text(json.dumps(data, sort_keys=True, indent=2) + '\n')
     temporary.chmod(0o600)
     temporary.replace(state / 'instance.json')
+
+
+def host_command(command, **kwargs):
+    # Only fixed parser/read commands use sudo. Never preserve the caller's
+    # environment or let a nested daemon manage host-global profiles.
+    prefix = [] if os.getuid() == 0 else ['sudo', '-n']
+    return subprocess.run([*prefix, *command], check=True, capture_output=True,
+                          text=True, timeout=30, **kwargs).stdout
+
+
+def apparmor_enabled():
+    return APPARMOR_ENABLED.exists() and APPARMOR_ENABLED.read_text().strip() == 'Y'
+
+
+def apparmor_profiles():
+    require(APPARMOR_PROFILES.is_file(), 'AppArmor is enabled but securityfs profile state is unavailable; host configuration is not changed')
+    try:
+        value = APPARMOR_PROFILES.read_text()
+    except PermissionError:
+        value = host_command(['cat', str(APPARMOR_PROFILES)])
+    return dict(line.rsplit(' (', 1) for line in value.splitlines())
+
+
+def apparmor_source(state, data):
+    profile = data['apparmor']
+    expected = f"kuasar-workbench-v1-u{data['owner_uid']}-{data['id']}"
+    require(profile['version'] == 1 and profile['name'] == expected and
+            re.fullmatch(r'kuasar-workbench-v1-u[0-9]+-[0-9a-f]{32}', expected), 'foreign AppArmor ownership/version')
+    path = state / 'apparmor.profile'
+    require(path.is_file() and not path.is_symlink(), 'missing or unsafe owned AppArmor profile')
+    source = path.read_text()
+    require(hashlib.sha256(source.encode()).hexdigest() == profile['sha256'], 'owned AppArmor profile changed')
+    require(f'profile {expected} ' in source, 'AppArmor profile name differs from ownership record')
+    return source
+
+
+def apparmor_parser(action, source):
+    parser = shutil.which('apparmor_parser')
+    require(parser, 'system mode on an AppArmor host needs host apparmor_parser and permission to manage its own profile (root or sudo -n)')
+    require(action in ('--add', '--remove'), 'profile replacement is never permitted')
+    host_command([parser, action, '--skip-cache', '--skip-read-cache', '--jobs', '1'], input=source)
+
+
+def load_apparmor(state, data):
+    if not apparmor_enabled():
+        require(not data.get('apparmor'), 'recorded AppArmor enforcement is no longer enabled')
+        return
+    loaded = apparmor_profiles()
+    name = f"kuasar-workbench-v1-u{data['owner_uid']}-{data['id']}"
+    source = (ROOT / 'apparmor.profile').read_text().replace('@PROFILE@', name)
+    if 'apparmor' in data:
+        require(apparmor_source(state, data) == source, 'restart needs the recorded AppArmor profile version')
+        if name in loaded:
+            require(data['apparmor']['loaded'] and loaded[name] == 'enforce)', 'profile collision or non-enforcing owned profile')
+            return
+    else:
+        require(name not in loaded, 'foreign AppArmor profile collision; refusing adoption')
+        path = state / 'apparmor.profile'
+        require(not path.exists() and not path.is_symlink(), 'AppArmor profile path already exists')
+        path.write_text(source)
+        path.chmod(0o600)
+        data['apparmor'] = {'version': 1, 'name': name, 'sha256': hashlib.sha256(source.encode()).hexdigest(), 'loaded': False}
+        save(state, data)
+    apparmor_parser('--add', source)
+    # Record successful ownership before verification, so a failed verification
+    # retains a removable owned profile rather than leaking an untracked policy.
+    data['apparmor']['loaded'] = True
+    save(state, data)
+    require(apparmor_profiles().get(name) == 'enforce)', 'owned AppArmor profile is not enforcing')
+
+
+def remove_apparmor(state, data):
+    if not data.get('apparmor'):
+        return
+    source = apparmor_source(state, data)
+    name = data['apparmor']['name']
+    loaded = apparmor_profiles()
+    if name in loaded:
+        require(data['apparmor']['loaded'] and loaded[name] == 'enforce)', 'refusing removal of an unowned or changed AppArmor profile')
+        identities = docker('ps', '-aq').split()
+        if identities:
+            containers = json.loads(docker('container', 'inspect', *identities))
+            require(not any(c.get('AppArmorProfile') == name for c in containers), 'AppArmor profile still belongs to a container; retaining policy')
+        apparmor_parser('--remove', source)
+        require(name not in apparmor_profiles(), 'owned AppArmor profile removal failed')
+    data['apparmor']['loaded'] = False
+    save(state, data)
+
+
+def check_apparmor(data):
+    if not data.get('apparmor'):
+        return
+    name = data['apparmor']['name']
+    require(apparmor_enabled() and apparmor_profiles().get(name) == 'enforce)', 'host AppArmor enforcement changed')
+    actual = docker('exec', data['container_id'], 'cat', '/proc/1/attr/current')
+    require(actual == name + ' (enforce)', f'outer PID 1 is not confined by its owned profile: {actual}')
+    masked = docker('exec', data['container_id'], 'cat', str(APPARMOR_ENABLED))
+    require(masked == '', 'nested Docker AppArmor detection was not masked')
 
 
 @contextmanager
@@ -177,6 +278,8 @@ def create_command(args, state, data):
         command += ['--cap-add=SYS_ADMIN', '--cap-add=NET_ADMIN', '--cap-add=SYS_PTRACE',
                     '--security-opt', 'seccomp=' + str(profile), '--ulimit', 'memlock=-1:-1',
                     '--device', '/dev/kvm', '--device', '/dev/net/tun']
+        if data.get('apparmor'):
+            command += ['--security-opt', 'apparmor=' + data['apparmor']['name']]
         command += bind(state / 'machine-id', '/etc/machine-id', True)
         command += bind(state / 'docker', '/var/lib/docker') + bind(state / 'containerd', '/var/lib/containerd')
         command += bind(state / 'journal', '/var/log/journal')
@@ -201,6 +304,8 @@ def start(args):
             container = owned_container(data)
             require(container is not None, 'recorded container is missing; inspect evidence and clean up before recreating')
             require(not container['State']['Running'], 'instance is already running')
+            if args.mode == 'system':
+                load_apparmor(state, data)
         else:
             require(not any(state.iterdir()), 'instance directory is not empty; refusing adoption')
             name = 'kuasar-workbench-' + args.name
@@ -209,6 +314,8 @@ def start(args):
                               'directory': str(state), 'container_name': name, 'status': 'creating'}
             save(state, data)
             try:
+                if args.mode == 'system':
+                    load_apparmor(state, data)
                 if args.network == 'bridge':
                     data['network_id'] = docker('network', 'create', '--label', LABEL + '=' + data['id'],
                                                 'kuasar-workbench-' + data['id'])
@@ -238,6 +345,7 @@ def start(args):
                     raise TimeoutError('private Docker/containerd startup timed out; instance and diagnostics retained')
                 data['preflight'] = json.loads(docker('exec', data['container_id'], 'python3', '-B',
                     '/usr/local/lib/workbench/check-system.py', '--host-namespaces', json.dumps(data['host_namespaces']), timeout=90))
+                check_apparmor(data)
             data['status'] = 'running'
             save(state, data)
             print(json.dumps({'instance': args.name, 'container_id': data['container_id'], 'image_id': data['image_id']}))
@@ -312,6 +420,7 @@ def main():
             container = owned_container(data)
             if container:
                 docker('rm', container['Id'])
+            remove_apparmor(state, data)
             if data.get('network_id'):
                 network = inspect('network', data['network_id'])
                 if network:

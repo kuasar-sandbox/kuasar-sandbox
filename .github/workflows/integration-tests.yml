@@ -227,6 +227,8 @@ jobs:
           path: |
             ${{ runner.temp }}/workbench-native/result.json
             ${{ runner.temp }}/workbench-native/instances/native-build/output/
+            ${{ runner.temp }}/workbench-native/apparmor/result.json
+            ${{ runner.temp }}/workbench-native/apparmor/instances/*/output/
           if-no-files-found: error
           retention-days: 7
 
