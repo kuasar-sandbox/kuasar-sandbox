@@ -20,7 +20,7 @@ case "$INTEGRATION_MODE" in
             '.pull_request.head.repo.full_name == $repo' "$GITHUB_EVENT_PATH" >/dev/null \
           || { echo "framework CI requires the exact same-repository platform merge candidate" >&2; exit 1; }
         ;;
-      *) echo "source Integration E2E requires pull_request_target or platform pull_request" >&2; exit 1 ;;
+      *) echo "source Integration E2E requires an admitted PR event" >&2; exit 1 ;;
     esac
     [[ "$CANDIDATE_REPOSITORY" =~ ^kuasar-sandbox/(accelerator|connector|guest-runtime|kuasar-sandbox|orchestrator|sandboxer)$ ]]
     for variable in CANDIDATE_SHA CANDIDATE_BASE_SHA CANDIDATE_HEAD_SHA; do

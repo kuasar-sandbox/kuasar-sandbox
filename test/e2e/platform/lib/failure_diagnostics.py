@@ -9,9 +9,9 @@ import sys
 import tempfile
 
 FILES = {
-    "read-recovery": ("seed.snapshot.log", "recovered.snapshot.log", "fatal.snapshot.log",
+    "snapshot.read-recovery.sh": ("seed.snapshot.log", "recovered.snapshot.log", "fatal.snapshot.log",
                       "cow.log", "seed.log", "recovered.log", "verified.log", "cache.log", "proxy.log", "store.log"),
-    "registry-n3": ("build-status.body", "router.log", "node-stub.log", "placer-1.log",
+    "orchestrator.cluster-recovery.sh": ("create.response", "router.log", "node.log", "placer-1.log",
                     "registry-1.log", "registry-2.log", "registry-3.log"),
 }
 # Closed vocabulary: retaining arbitrary log messages with a token denylist
@@ -45,7 +45,7 @@ def collect(case, phase, source, line, status, work, output, http_status):
         raise ValueError("invalid source identity")
     record = {"case": case, "phase": phase, "source": source, "line": int(line),
               "exit_code": int(status), "logs": {}, "redaction": "fixed error vocabulary only"}
-    if case == "registry-n3" and re.fullmatch(r"[1-5][0-9]{2}", http_status):
+    if case == "orchestrator.cluster-recovery.sh" and re.fullmatch(r"[1-5][0-9]{2}", http_status):
         record["http_status"] = int(http_status)
     if work:
         try:

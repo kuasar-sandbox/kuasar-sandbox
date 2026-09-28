@@ -28,6 +28,7 @@ select_profile() {
     case "$profile" in
         control) ;;
         release-control) with_go=true ;;
+        helper-build) with_go=true; packages+=(build-essential python3-pip) ;;
         kernel) with_go=true; with_kernel=true ;;
         runtime|runtime-publish) with_go=true; with_native=true; with_readers=true ;;
         source) with_go=true; with_native=true; with_kernel=true; with_readers=true; with_vm=true ;;
@@ -46,7 +47,7 @@ select_profile() {
         packages+=(bc bison flex libelf-dev libssl-dev libncurses-dev)
     fi
     if $with_native || $with_readers; then
-        packages+=(autoconf automake libtool uuid-dev)
+        packages+=(autoconf automake libtool uuid-dev python3-pip)
     fi
     if $with_native; then
         packages+=(patch libssl-dev liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)
@@ -259,7 +260,7 @@ PY
 
 main() {
     if [ "$#" -ne 2 ] || [ "$1" != --profile ]; then
-        die "usage: bootstrap.sh --profile control|release-control|kernel|runtime|runtime-publish|source|exact-assets|artifact-build|artifact-cross|artifact-prepare|artifact-x86|artifact-arm"
+        die "usage: bootstrap.sh --profile control|release-control|helper-build|kernel|runtime|runtime-publish|source|exact-assets|artifact-build|artifact-cross|artifact-prepare|artifact-x86|artifact-arm"
     fi
     select_profile "$2"
     case "$profile:$(uname -m)" in

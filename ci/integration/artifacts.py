@@ -83,7 +83,7 @@ def case_name(value):
 def changed_products(changes):
     """Small product closure; source libraries do not imply standalone rebuilds.
 
-    Each caller runs its owner cases. Linked flatten and embedded init/flatten
+    Each caller selects broad suites from its owned case filenames. Linked flatten and embedded init/flatten
     are explicit products; native inputs select only their own native outputs.
     Unchanged sibling CLIs are supplied by the same aggregate baseline.
     """
@@ -133,76 +133,72 @@ def changed_products(changes):
     return sorted(products)
 
 
-def profiles(owners, arch, candidate_cases=None):
-    """Build the transitional internal shard profile from exact case filenames.
+DEFAULT_SUITES = {
+    "accelerator": {"storage", "image"}, "connector": {"network"},
+    "guest-runtime": {"image", "sandbox"},
+    "sandboxer": {"basic", "sandbox", "snapshot", "telemetry"},
+    "orchestrator": {"basic", "orchestrator", "builder", "telemetry"},
+    "platform": set(SUITES),
+}
 
-    Owner profiles remain an internal CI scheduling detail until the final suite
-    cutover. Once an admitted candidate supplies rewritten cases, those cases are
-    the executable entries; a deleted owner run_all.sh is never synthesized.
-    """
-    candidate_cases = candidate_cases or {}
-    require(arch in ARCHES and set(owners) <= set(OWNERS), "invalid profile request")
-    require(isinstance(candidate_cases, dict) and set(candidate_cases) <= set(owners),
-            "candidate case ownership differs from selected owners")
-    for owner, names in candidate_cases.items():
-        require(isinstance(names, list) and names and names == sorted(set(names)),
-                f"invalid candidate case list for {owner}")
+
+def suite_selection(owners, arch, case_files):
+    """Select broad suites from exact source filenames, then apply lane limits."""
+    require(arch in ARCHES and set(owners) <= set(OWNERS), "invalid suite selection request")
+    require(isinstance(case_files, dict) and set(case_files) == set(OWNERS), "incomplete test case source set")
+    all_cases, by_owner = {}, {}
+    for owner, names in case_files.items():
+        require(isinstance(names, list) and names and names == sorted(set(names)), f"invalid case list for {owner}")
+        by_owner[owner] = set(names)
         for name in names:
             case_name(name)
-    selected = set(OWNERS if "platform" in owners else owners)
+            require(name not in all_cases, f"duplicate E2E case ID: {name}")
+            all_cases[name] = owner
+    suites = set().union(*(DEFAULT_SUITES[owner] for owner in owners))
+    # An owner's cases outside its defaults expand the selected suites too;
+    # e.g. sandboxer's image and network cases must retain their CI coverage.
+    suites.update(name.split('.')[0] for owner in owners for name in case_files[owner])
+    chosen = {name for name in all_cases if name.split('.')[0] in suites}
     exclusions = []
-    if "accelerator" in selected:
-        accelerator_cases = candidate_cases.get("accelerator", [])
-        if "storage.obs.sh" in accelerator_cases:
-            exclusions.append({"owner": "accelerator", "case": "storage.obs.sh", "reason": "credentialed OBS case is not selected"})
-        elif not accelerator_cases:
-            exclusions.append({"owner": "accelerator", "case": "e2e_obs.sh", "reason": "credentialed OBS suite is not selected"})
-    if arch == "aarch64":
-        for owner in sorted(selected - {"accelerator", "guest-runtime"}):
-            exclusions.append({"owner": owner, "reason": "no selected independent ARM non-KVM owner suite"})
-        selected &= {"accelerator", "guest-runtime"}
-    cases = []
-    for owner in OWNERS:
-        if owner not in selected:
-            continue
-        names = candidate_cases.get(owner, [])
-        if names:
-            cases.extend(f"test/e2e/{owner}/cases/{name}" for name in names
-                         if not (owner == "accelerator" and name == "storage.obs.sh"))
-        else:
-            cases.append(f"test/e2e/{owner}/run_all.sh")
-    required = set().union(*(REQUIRED[owner] for owner in selected))
-    return {"cases": cases, "required_products": sorted(required), "exclusions": exclusions,
-            "name": "x86-owner-kvm" if arch == "x86_64" else ("arm-native-non-kvm" if cases else "arm-static-only")}
+    if 'storage.obs.sh' in chosen:
+        chosen.remove('storage.obs.sh')
+        exclusions.append({'case': 'storage.obs.sh', 'reason': 'credentialed OBS case requires explicit opt-in'})
+    if arch == 'aarch64':
+        supported = by_owner['accelerator'] | by_owner['guest-runtime']
+        for name in sorted(chosen - supported):
+            exclusions.append({'case': name, 'reason': 'outside the accepted native ARM non-KVM subset'})
+        chosen &= supported
+    required = set().union(*(REQUIRED[all_cases[name]] for name in chosen))
+    return {'suites': sorted(suites), 'cases': sorted(chosen), 'required_products': sorted(required),
+            'exclusions': exclusions}
 
 
-def shards(profile):
+def shards(selection):
     result = {}
-    for case in profile["cases"]:
-        owner = PurePosixPath(case).parts[2]
-        shard = owner if owner in ("sandboxer", "orchestrator") else "core"
-        result.setdefault(shard, []).append(case)
-    return result or {"static": []}
+    for case in selection['cases']:
+        suite = case.split('.')[0]
+        result.setdefault(suite, []).append(case)
+    return result or {'static': []}
 
 
-def planned_helpers(profile):
-    cases = set(profile["cases"])
-    owners = {PurePosixPath(case).parts[2] for case in cases}
+def planned_helpers(selection):
+    cases = set(selection['cases'])
+    orchestrator = any(name.startswith(('orchestrator.', 'builder.')) for name in cases)
+    orchestrator |= bool(cases & {'telemetry.backends.sh', 'telemetry.guest.sh', 'telemetry.proxy.sh'})
+    sandboxer = any(name.startswith(('sandbox.', 'snapshot.')) for name in cases)
+    sandboxer |= bool(cases & {'network.tapfd.sh', 'image.manifest-boot.sh', 'image.sandbox-assembly.sh',
+                               'telemetry.usage.sh', 'telemetry.usage-faults.sh', 'telemetry.source-faults.sh'})
     helpers = {}
-    if owners & {"guest-runtime", "sandboxer", "orchestrator", "platform"}:
-        helpers["zot"] = "framework"
-    if owners & {"orchestrator", "platform"}:
-        helpers["versitygw"] = "framework"
-    if "orchestrator" in owners:
-        helpers.update({"custom-proxy": "orchestrator", "telemetry-grpc-probe": "orchestrator",
-                        "orch-cli.test": "orchestrator"})
-    if "sandboxer" in owners:
-        helpers["usage-probe"] = "sandboxer"
-        # A selected owner runner can be a generated compatibility entrypoint
-        # over the owner's exact case tree, including sandbox.cgroup.sh.
-        if cases & {"test/e2e/sandboxer/cases/sandbox.cgroup.sh",
-                    "test/e2e/sandboxer/run_all.sh"}:
-            helpers["cgroup-fork-probe"] = "sandboxer"
+    if orchestrator or sandboxer or cases & {'basic.demo.sh', 'image.flatten.sh', 'image.registry.sh'}:
+        helpers['zot'] = 'framework'
+    if orchestrator or 'basic.demo.sh' in cases:
+        helpers['versitygw'] = 'framework'
+    if orchestrator:
+        helpers.update({'custom-proxy': 'orchestrator', 'telemetry-grpc-probe': 'orchestrator'})
+    if sandboxer:
+        helpers['usage-probe'] = 'sandboxer'
+    if 'sandbox.cgroup.sh' in cases:
+        helpers['cgroup-fork-probe'] = 'sandboxer'
     return helpers
 
 
@@ -261,15 +257,21 @@ def overlay_case_path(owner, name):
 
 def platform_test_path(path):
     relative(path)
-    return (not path.startswith("scripts/")
-            and not any(path.startswith(f"e2e/{owner}/") for owner in OWNERS if owner != "platform")
-            and path not in ("e2e/assemble.sh", "e2e/assemble_docs.py"))
+    if path.startswith('e2e/'):
+        return path == 'e2e/e2e' or path.startswith(('e2e/lib/', 'e2e/platform/'))
+    return not path.startswith('scripts/')
 
 
-def normalize_e2e_cases(stage):
+def normalize_e2e_cases(stage, case_files, *, from_owners):
     """Expose owner cases/libs through the one public prepared-runner layout."""
     root = stage / "test/e2e"
     cases = root / "cases"
+    expected = {name: owner for owner, names in case_files.items() for name in names}
+    require(len(expected) == sum(map(len, case_files.values())), 'duplicate E2E case ID')
+    if not from_owners:
+        require(cases.is_dir() and not any((root / owner).exists() for owner in OWNERS), 'release must contain only flat product cases')
+        require(set(tree_files(cases)) == set(expected), 'release case files differ from pinned test sources')
+        return expected
     if cases.exists():
         shutil.rmtree(cases)
     cases.mkdir()
@@ -290,6 +292,9 @@ def normalize_e2e_cases(stage):
             if target.exists():
                 shutil.rmtree(target)
             shutil.copytree(owner_lib, target)
+        require(seen.keys() & set(case_files[owner]) == set(case_files[owner]), f'missing pinned case files: {owner}')
+        shutil.rmtree(suite)
+    require(seen == expected, 'assembled case files differ from pinned test sources')
     return seen
 
 
@@ -380,16 +385,13 @@ def release_test_revisions(pins, platform_sha):
 
 
 def check_plan(plan):
-    require(plan["schema"] == 1, "unsupported integration plan")
+    require(plan["schema"] == 2, "unsupported integration plan")
     require(re.fullmatch(r"[0-9a-f]{40}", plan["framework_sha"]), "missing exact framework revision")
     require(set(plan["lanes"]) == set(ARCHES), "plan must contain both architectures")
-    candidate_cases = plan.get("candidate_cases", {})
-    # Exact-assets cases are already in the hash-bound staged archive; source
-    # candidates alone need overlays. Neither mode may replace product bytes.
-    case_owners = plan["test_revisions"] if plan.get("mode") == "exact-assets" else plan.get("test_overlays", [])
-    require(isinstance(candidate_cases, dict) and set(candidate_cases) <= set(case_owners),
-            "candidate case ownership differs from declared test sources")
-    for owner, names in candidate_cases.items():
+    case_files = plan["case_files"]
+    require(set(plan["test_overlays"]) == (set(OWNERS) if plan["mode"] == "source" else set()),
+            "test overlays differ from the exact input mode")
+    for owner, names in case_files.items():
         require(owner in OWNERS and isinstance(names, list) and names and names == sorted(set(names)),
                 f"invalid candidate case list for {owner}")
         for name in names:
@@ -398,9 +400,9 @@ def check_plan(plan):
         require(lane["products"] == sorted(set(lane["products"])) and set(lane["products"]) <= set(PRODUCTS),
                 "invalid affected product set")
         require(lane.get("embedded_products", []) in ([], ["envd"]), "unknown embedded product")
-        require(lane["profile"] == profiles(plan["owners"], arch, candidate_cases), "profile differs from trusted owner selection")
-        expected_extra = {"sandboxer": ["working-set-smoke"]} if plan.get("mode") == "source" and arch == "x86_64" and set(plan["owners"]) & {"platform", "sandboxer"} else {}
-        require(lane.get("extra_checks", {}) == expected_extra, "extra checks differ from trusted mode/owner selection")
+        require(lane["selection"] == suite_selection(plan["owners"], arch, case_files), "suite selection differs from trusted source filenames")
+        expected_perf = ["working-set-smoke"] if plan["mode"] == "source" and arch == "x86_64" and set(plan["owners"]) & {"platform", "sandboxer"} else []
+        require(lane["performance"] == expected_perf, "performance checks differ from trusted mode/owner selection")
     validate_test_revisions(plan.get("test_revisions"))
     return identity(plan)
 
@@ -411,7 +413,7 @@ def compose(plan, arch, assets, delta, output):
             "prepare needs a fresh, architecture-named destination")
     lane = plan["lanes"][arch]
     baseline = plan["baseline"]
-    candidate_cases = plan.get("candidate_cases", {})
+    case_files = plan.get("case_files", {})
     expected_assets = {archive_name(unit, record["version"], arch): unit
                        for unit, record in baseline["units"].items()}
     require(set(baseline["units"]) == set(UNITS), "incomplete aggregate unit selection")
@@ -432,13 +434,9 @@ def compose(plan, arch, assets, delta, output):
     require(set(metadata["tests"]) == set(plan["test_overlays"]), "candidate test ownership differs from plan")
     require(set(metadata.get("embedded", {})) == set(lane.get("embedded_products", [])),
             "candidate embedded ownership differs from plan")
-    helpers = planned_helpers(lane["profile"])
+    helpers = planned_helpers(lane["selection"]) if plan["mode"] == "source" else {}
     require(set(metadata.get("helpers", {})) == set(helpers), "test helper selection differs from plan")
-    framework_tests = metadata.get("framework_tests", {})
-    require(isinstance(framework_tests, dict) and "e2e" in framework_tests and "lib/common.sh" in framework_tests,
-            "candidate is missing trusted framework E2E files")
-    require(tree_files(delta / "framework-tests") == framework_tests, "framework E2E file digest mismatch")
-    expected_delta = {"outputs.json"} | {f"framework-tests/{name}" for name in framework_tests}
+    expected_delta = {"outputs.json"}
     for name, record in metadata["products"].items():
         file = delta / "bin" / name
         require(file.is_file() and not file.is_symlink() and digest(file) == record["sha256"],
@@ -465,14 +463,9 @@ def compose(plan, arch, assets, delta, output):
         root = delta / directory
         require(owner in OWNERS and tree_files(root) == files,
                 f"candidate test directory digest mismatch: {owner}")
-        names = candidate_cases.get(owner, [])
-        if names:
-            for name in names:
-                entry = overlay_case_path(owner, name)
-                require(entry in files, f"missing candidate case: {owner}/{name}")
-        else:
-            entry = "e2e/platform/run_all.sh" if owner == "platform" else "run_all.sh"
-            require(entry in files, f"missing candidate owner entry: {owner}")
+        for name in case_files[owner]:
+            entry = overlay_case_path(owner, name)
+            require(entry in files, f"missing pinned case: {owner}/{name}")
         if owner == "platform":
             require(all(platform_test_path(name) for name in files), "platform cannot replace another test owner")
         expected_delta.update(f"{directory}/{name}" for name in files)
@@ -488,23 +481,19 @@ def compose(plan, arch, assets, delta, output):
         original_embedded = runtime_payloads(stage, arch)
         for name in lane["products"]:
             shutil.copy2(delta / "bin" / name, stage / "bin" / name)
-        for owner in plan["test_overlays"]:
-            source = delta / test_overlay_root(owner)
-            if owner == "platform":
-                for path in list((stage / "test").rglob("*")):
-                    relative_path = str(path.relative_to(stage / "test"))
-                    if path.is_file() and platform_test_path(relative_path):
-                        path.unlink()
-                shutil.copytree(source, stage / "test", dirs_exist_ok=True)
-            else:
-                destination = stage / "test/e2e" / owner
-                shutil.rmtree(destination)
-                shutil.copytree(source, destination)
-        shutil.copytree(delta / "framework-tests", stage / "test/e2e", dirs_exist_ok=True)
-        normalized = normalize_e2e_cases(stage)
-        for owner, names in candidate_cases.items():
-            for name in names:
-                require(normalized.get(name) == owner, f"prepared candidate case ownership changed: {name}")
+        if plan["mode"] == "source":
+            shutil.rmtree(stage / "test/e2e")
+            for owner in plan["test_overlays"]:
+                source = delta / test_overlay_root(owner)
+                if owner == "platform":
+                    for path in list((stage / "test").rglob("*")):
+                        relative_path = str(path.relative_to(stage / "test"))
+                        if path.is_file() and platform_test_path(relative_path):
+                            path.unlink()
+                    shutil.copytree(source, stage / "test", dirs_exist_ok=True)
+                else:
+                    shutil.copytree(source, stage / "test/e2e" / owner)
+        normalize_e2e_cases(stage, case_files, from_owners=plan["mode"] == "source")
         products = {}
         for name, unit in PRODUCTS.items():
             path = stage / "bin" / name
@@ -520,12 +509,29 @@ def compose(plan, arch, assets, delta, output):
                     f"final product bytes differ from their origin: {name}")
             products[name] = {"sha256": actual, "unit": unit, "origin": "candidate" if candidate else "baseline",
                               "sources": plan["product_sources"][name] if candidate else baseline["units"][unit]}
-        for case in lane["profile"]["cases"]:
-            path = stage / relative(case)
+        for case in lane["selection"]["cases"]:
+            path = stage / "test/e2e/cases" / case_name(case)
             require(path.is_file(), f"missing selected test entry: {case}")
         for directory in ("images", "manifests", "fixtures"):
             (stage / directory).mkdir(exist_ok=True)
-        if helpers:
+        helper_records = metadata.get("helpers", {})
+        if plan["mode"] == "exact-assets":
+            package = stage / "test/e2e/helpers" / arch
+            declared = json.loads((package / "helpers.json").read_text())
+            require(declared["arch"] == arch and declared["test_revisions"] ==
+                    {owner: record["sha"] for owner, record in plan["test_revisions"].items() if owner != "platform"},
+                    "packaged helper test pins differ from the release plan")
+            helper_records = {}
+            for name, owner in planned_helpers(lane["selection"]).items():
+                record = declared["helpers"][name]
+                revision = declared["framework_sha"] if owner == "framework" else plan["test_revisions"][owner]["sha"]
+                require(record["sha256"] == digest(package / name) and record["source_sha"] == revision,
+                        f"packaged helper identity mismatch: {name}")
+                check_architecture(package / name, arch)
+                (stage / "fixtures/bin").mkdir(exist_ok=True)
+                shutil.copy2(package / name, stage / "fixtures/bin" / name)
+                helper_records[name] = record
+        elif helpers:
             shutil.copytree(delta / "helpers", stage / "fixtures/bin")
         expected_init = products["sandbox-init"]["sha256"] if "sandbox-init" in lane["products"] else original_embedded["init"]
         expected_envd = metadata.get("embedded", {}).get("envd", {}).get("sha256", original_embedded["envd"])
@@ -537,10 +543,10 @@ def compose(plan, arch, assets, delta, output):
                     "embedded init differs from the selected product")
             for name in ("flatten-ctl", "mkfs.erofs"):
                 require(embedded[name] == products[name]["sha256"], f"embedded {name} differs from the selected product")
-        provenance = {"schema": 1, "plan_id": plan_id, "arch": arch, "framework_sha": plan["framework_sha"],
+        provenance = {"schema": 2, "plan_id": plan_id, "arch": arch, "framework_sha": plan["framework_sha"],
                       "baseline": baseline, "products": products, "test_revisions": plan["test_revisions"],
-                      "build_context": metadata["build_context"], "profile": lane["profile"],
-                      "embedded": embedded, "helpers": metadata.get("helpers", {}),
+                      "build_context": metadata["build_context"], "selection": lane["selection"],
+                      "embedded": embedded, "helpers": helper_records,
                       "files": tree_files(stage), "modes": tree_modes(stage)}
         (stage / "provenance.json").write_bytes(canonical(provenance) + b"\n")
         stage.rename(output)
@@ -557,7 +563,7 @@ def verify_workspace(workspace, plan, arch):
     modes = tree_modes(workspace)
     del modes["provenance.json"]
     require(modes == provenance["modes"], "prepared workspace permissions changed")
-    require(provenance["profile"] == plan["lanes"][arch]["profile"], "selected profile changed after preparation")
+    require(provenance["selection"] == plan["lanes"][arch]["selection"], "selected cases changed after preparation")
     require(provenance.get("test_revisions") == plan["test_revisions"], "prepared test pins differ from plan")
     return provenance
 
@@ -568,15 +574,40 @@ def collect_results(plan, results):
         record = results[arch]
         require(record["plan_id"] == check_plan(plan) and record["arch"] == arch,
                 "result belongs to a different plan or architecture")
-        require(record["conclusion"] == "success" and record["profile"] == plan["lanes"][arch]["profile"],
+        require(record["conclusion"] == "success" and record["selection"] == plan["lanes"][arch]["selection"],
                 f"selected {arch} validation did not pass")
         require(record.get("test_revisions") == plan["test_revisions"], "result test pins differ from plan")
+        shards = dict(record['shards'])
+        if record.get('performance') is not None:
+            shards['performance'] = record['performance']
+        require(record == collect_shard_results(plan, arch, shards), 'architecture execution evidence differs from plan')
     return {"plan_id": identity(plan), "test_revisions": plan["test_revisions"], "architectures": results}
 
 
+def check_timings(timings, cases):
+    require(isinstance(timings, list) and [record['case'] for record in timings] == cases,
+            'missing or duplicated case execution evidence')
+    require(all(record['exit_code'] == 0 and isinstance(record['wall_seconds'], (int, float)) and
+                record['wall_seconds'] >= 0 for record in timings), 'case execution did not pass')
+
+
+def requires_clean_runtime(arch, shard):
+    return shard in {'storage', 'snapshot'} or (arch == 'aarch64' and shard == 'image')
+
+
+def check_clean_environment(environment):
+    require(isinstance(environment, dict) and environment.get('kind') == 'clean-container' and
+            environment.get('verified') is True and environment.get('compilers') == [] and
+            environment.get('component_source_trees') == [] and
+            re.fullmatch(r'sha256:[0-9a-f]{64}', environment.get('image_id', '')),
+            'missing source/compiler-free execution evidence')
+
+
 def collect_shard_results(plan, arch, results):
-    expected = shards(plan["lanes"][arch]["profile"])
-    require(set(results) == set(expected), f"missing or unexpected {arch} shard results")
+    expected = shards(plan["lanes"][arch]["selection"])
+    performance = plan['lanes'][arch]['performance']
+    require(set(results) == set(expected) | ({'performance'} if performance else set()),
+            f"missing or unexpected {arch} validation results")
     prepared = set()
     for shard, cases in expected.items():
         result = results[shard]
@@ -584,14 +615,25 @@ def collect_shard_results(plan, arch, results):
                 "shard result has the wrong immutable input identity")
         require(result["conclusion"] == "success" and result["cases"] == cases,
                 "selected shard validation did not pass")
-        require(result.get("extra_checks", []) == plan["lanes"][arch].get("extra_checks", {}).get(shard, []),
-                "required extra checks are missing")
+        check_timings(result['timings'], cases)
+        if cases:
+            check_clean_environment(result.get('preparation_environment'))
+        if requires_clean_runtime(arch, shard):
+            check_clean_environment(result.get('environment'))
         require(result.get("test_revisions") == plan["test_revisions"], "shard test pins differ from plan")
         require(re.fullmatch(r"[0-9a-f]{64}", result["provenance_sha256"]), "missing prepared input identity")
         prepared.add(result["provenance_sha256"])
+    if performance:
+        result = results['performance']
+        require(result['arch'] == arch and result['plan_id'] == identity(plan) and
+                result['test_revisions'] == plan['test_revisions'] and result['conclusion'] == 'success' and
+                result['checks'] == performance, 'independent performance gate did not pass')
+        check_timings(result['timings'], performance)
+        prepared.add(result['provenance_sha256'])
     require(len(prepared) == 1, "shards executed different prepared workspaces")
     return {"arch": arch, "plan_id": identity(plan), "conclusion": "success",
-            "profile": plan["lanes"][arch]["profile"], "shards": results, "provenance_sha256": prepared.pop(),
+            "selection": plan["lanes"][arch]["selection"], "shards": {key: results[key] for key in expected},
+            "performance": results.get('performance'), "provenance_sha256": prepared.pop(),
             "test_revisions": plan["test_revisions"]}
 
 

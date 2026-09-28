@@ -12,6 +12,8 @@ import subprocess
 import tempfile
 
 import artifacts
+import build_helpers
+import build_demo_wheels
 
 ROOT = Path(__file__).resolve().parents[2]
 LIBRARIES = {"sandboxer": ("accelerator", "connector"), "guest-runtime": ("accelerator",),
@@ -37,17 +39,16 @@ def checkout(repository, sha, destination):
     artifacts.require(actual == sha, "materialized source differs from the admitted revision")
 
 
-def source_owners(plan, arch):
+def compiled_owners(plan, arch):
     lane = plan["lanes"][arch]
-    owners = set(plan["test_overlays"])
     compiled = {repository.split("/")[1] for records in plan["product_sources"].values() for repository in records}
     if lane.get("embedded_products"):
         compiled.add("guest-runtime")
-    for name, owner in artifacts.planned_helpers(lane["profile"]).items():
-        if name in ("usage-probe", "cgroup-fork-probe"):
-            owners.add(owner)  # standalone test helper; no sibling library checkout
-        elif owner != "framework":
-            compiled.add(owner)
+    return dependencies(compiled)
+
+
+def dependencies(owners):
+    compiled = set(owners)
     pending = list(compiled)
     while pending:
         owner = pending.pop()
@@ -55,18 +56,17 @@ def source_owners(plan, arch):
             if dependency not in compiled:
                 compiled.add(dependency)
                 pending.append(dependency)
-    return owners | compiled
+    return compiled
+
+
+def source_owners(plan, arch):
+    return set(plan["test_overlays"]) | compiled_owners(plan, arch)
 
 
 def build_records(plan, arch):
     records = dict(plan["sources"])
-    products = {repository.split("/")[1] for inputs in plan["product_sources"].values() for repository in inputs}
-    helpers = set(artifacts.planned_helpers(plan["lanes"][arch]["profile"]).values()) - {"framework"}
-    for owner in helpers - products:
+    for owner in set(plan["test_overlays"]) - compiled_owners(plan, arch):
         records[owner] = plan["test_revisions"][owner]
-    for owner in plan["test_overlays"]:
-        artifacts.require(records[owner]["sha"] == plan["test_revisions"][owner]["sha"],
-                          "candidate test checkout differs from its pin")
     return records
 
 
@@ -87,23 +87,29 @@ def materialize(plan, arch, root):
 
 
 def helper_sources(plan, arch, sources):
-    owners = set(artifacts.planned_helpers(plan["lanes"][arch]["profile"]).values()) - {"framework"}
+    owners = set(artifacts.planned_helpers(plan["lanes"][arch]["selection"]).values()) - {"framework"}
+    required = dependencies(owners)
     records = build_records(plan, arch)
-    if all(records[owner]["sha"] == plan["test_revisions"][owner]["sha"] for owner in owners):
+    if all((sources / owner).is_dir() and records[owner]["sha"] == plan["test_revisions"][owner]["sha"]
+           for owner in required):
         return sources
     # A linked product can still require the baseline source while its test
     # helper has an independently newer pin. Keep those compiler inputs apart.
-    required = set(owners)
-    pending = list(owners)
-    while pending:
-        for dependency in LIBRARIES.get(pending.pop(), ()):
-            if dependency not in required:
-                required.add(dependency)
-                pending.append(dependency)
-    records.update({owner: plan["test_revisions"][owner] for owner in owners})
     root = sources / "test-helpers"
-    checkout_records({owner: records[owner] for owner in required}, root)
+    checkout_records({owner: plan["test_revisions"][owner] for owner in required}, root)
     return root
+
+
+def test_source(plan, arch, sources, owner):
+    record = plan["test_revisions"][owner]
+    if build_records(plan, arch)[owner]["sha"] == record["sha"]:
+        return sources / owner
+    # Source overlays are independent of the library revisions compiled into
+    # products. Never replace a product checkout just to obtain newer tests.
+    destination = sources / "test-overlays" / owner
+    destination.parent.mkdir(exist_ok=True)
+    checkout(record["repository"], record["sha"], destination)
+    return destination
 
 
 def baseline_tree(plan, arch, assets, output):
@@ -114,15 +120,6 @@ def baseline_tree(plan, arch, assets, output):
         expected = next(item for item in plan["baseline"]["assets"] if item["name"] == name)
         artifacts.require("sha256:" + artifacts.digest(assets / name) == expected["digest"], "build baseline bytes differ from plan")
         artifacts.unpack(assets / name, output, unit, seen)
-
-
-def build_orchestrator_cli_tests(sources, arch, output, environment):
-    # Compile the owner tests from helper_sources' exact test pin. They consume
-    # the independently selected product bytes only in the prepared E2E job.
-    selected = {**environment, "GOWORK": "off", "GOOS": "linux", "CGO_ENABLED": "0",
-                "GOARCH": {"x86_64": "amd64", "aarch64": "arm64"}[arch]}
-    run(["go", "test", "-c", "-trimpath", "-o", output / "orch-cli.test", "./internal/orch"],
-        cwd=sources / "orchestrator", environment=selected)
 
 
 def build(plan, arch, assets, sources, output):
@@ -138,10 +135,6 @@ def build(plan, arch, assets, sources, output):
     (output / "bin").mkdir(parents=True)
     actual_framework = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
     artifacts.require(actual_framework == plan["framework_sha"], "framework checkout differs from admitted revision")
-    framework_tests = output / "framework-tests"
-    framework_tests.mkdir()
-    shutil.copy2(ROOT / "test/e2e/e2e", framework_tests / "e2e")
-    shutil.copytree(ROOT / "test/e2e/lib", framework_tests / "lib")
     environment.update(TARGET_ARCH=arch, KUASAR_WORKSPACE_ROOT=str(sources))
     lane = plan["lanes"][arch]
     kernel_root = sources
@@ -203,35 +196,23 @@ def build(plan, arch, assets, sources, output):
             shutil.copy2(sources / "guest-runtime/bin" / arch / "sandbox-runtime.bundle", output / "bin/sandbox-runtime.bundle")
     for owner in plan["test_overlays"]:
         destination = output / artifacts.test_overlay_root(owner)
+        pinned = test_source(plan, arch, sources, owner)
         if owner == "platform":
-            source = sources / owner / "test"
+            source = pinned / "test"
             for name in artifacts.tree_files(source):
                 if artifacts.platform_test_path(name):
                     target = destination / name
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source / name, target)
         else:
-            shutil.copytree(sources / owner / "test/e2e", destination)
-    helpers = artifacts.planned_helpers(lane["profile"])
+            shutil.copytree(pinned / "test/e2e", destination)
+    helpers = artifacts.planned_helpers(lane["selection"]) if plan["mode"] == "source" else {}
+    if plan['mode'] == 'source' and 'basic.demo.sh' in lane['selection']['cases']:
+        demo = output / artifacts.test_overlay_root('platform') / 'demo'
+        build_demo_wheels.build(demo, arch, demo / 'wheels' / arch)
     if helpers:
-        helper_root = output / "helpers"
-        helper_root.mkdir()
         helper_source = helper_sources(plan, arch, sources)
-        helper_environment = {**environment, "KUASAR_WORKSPACE_ROOT": str(helper_source)}
-        if "versitygw" in helpers:
-            run(["bash", ROOT / "ci/hosted/exact-assets-tools.sh"], environment={**environment, "KUASAR_E2E_TOOL_OUTPUT": str(helper_root)})
-        elif "zot" in helpers:
-            run(["bash", ROOT / "ci/integration/ensure-zot.sh"], environment={**environment, "BINDIR": str(helper_root)})
-        if "custom-proxy" in helpers:
-            run(["bash", helper_source / "orchestrator/scripts/ci-e2e-build.sh", "fixtures", arch, helper_root], environment=helper_environment)
-        if "orch-cli.test" in helpers:
-            build_orchestrator_cli_tests(helper_source, arch, helper_root, helper_environment)
-        if "usage-probe" in helpers:
-            run(["make", "-C", helper_source / "sandboxer", f"TARGET_ARCH={arch}",
-                 f"E2E_FIXTURE_DIR={helper_root}", "e2e-usage-probe"], environment=helper_environment)
-        if "cgroup-fork-probe" in helpers:
-            run(["make", "-C", helper_source / "sandboxer", f"TARGET_ARCH={arch}",
-                 f"E2E_FIXTURE_DIR={helper_root}", "e2e-cgroup-fork-probe"], environment=helper_environment)
+        build_helpers.build(helper_source, arch, output / "helpers", helpers, environment)
     # Match the existing release packagers' executable/data modes independently
     # of the caller's umask. Tar transport preserves these through Actions.
     for name in artifacts.tree_files(output):
@@ -239,7 +220,6 @@ def build(plan, arch, assets, sources, output):
         executable = file.stat().st_mode & 0o111
         file.chmod(0o755 if executable else 0o644)
     metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "products": {}, "embedded": {}, "tests": {}, "helpers": {},
-                "framework_tests": artifacts.tree_files(output / "framework-tests"),
                 "test_revisions": plan["test_revisions"],
                 "build_context": {"host": platform.machine(), "target": arch, "tools": {}, "native_inputs": {}}}
     for name in lane["products"]:

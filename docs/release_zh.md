@@ -94,7 +94,8 @@ test_revisions:
 
 Daily 写入可信计划已经解析的组件源码精确 HEAD，即使产品 unit 被复用。维护选择缺少组件源码分支时，必须已有明确提交的测试 pin。
 准备新 Stable 选择时应提交明确的 pin；
-平台测试使用聚合源码 SHA。platform 包从测试 pin 取得各 owner 的完整 E2E 树，组件文档和产品仍使用所选 unit 源码。
+平台测试使用聚合源码 SHA。platform 包从各精确 test pin 组装扁平用例和按 owner 命名的库，并携带双架构预构建 helper；组件文档使用相同 test pin，确保调用说明修正与用例一起交付。产品保留所选 unit 版本，kernel 文档仍使用独立选择的 vmlinux 源码。
+更早的 helper build 还按提交的版本/摘要 lock 获取 Python 3.12 完整 Demo wheel 依赖闭包。打包要求两种架构的本地 wheel 和包名/版本/摘要 manifest；公开 prepare 仅从这些 wheel 离线安装，不使用 index。
 helper 编译、prepared 输入、结果和现有发布验证 binding 保留相同 pin，后续 baseline 对照提交清单核验。
 暂存的 `test-revisions.json` 仅供内部验证，公开资产名称和产品字节不变。新打包缺失或错配 pin 时失败；
 历史清单和 Release 继续按原契约读取，不补写或修改。
@@ -334,18 +335,18 @@ runtime、vmlinux 保留独立包名。新 aggregate 包含架构无关的 platf
 
 不发布项目生成的 release metadata JSON,也不重复上传 GitHub 自动提供的源码归档。
 版本选择 YAML 只在仓库维护,既不是 Release 资产,也不进入 platform 包。
-组件 archive 不携带 `docs/` 或 `test/e2e/`;aggregate prepare 从所选组件源码 Tag 收集,
-统一写入 platform archive(§8.1)。
+组件 archive 不携带 `docs/` 或 `test/e2e/`；aggregate assembly 从独立 test pin 收集组件文档
+和 E2E 输入，统一写入 platform archive（§8.1）。kernel 文档使用单独选择的 vmlinux 产品源码。
 
 组件原生/ARM 交叉构建在两个独立 x86 job 执行，复用相同精确源码与依赖版本，校验后原样组装双架构包。
 依赖 Release 必须公开、完整并解析为轻量 tag 的精确 commit，build checkout 不保留凭据。
-聚合 prepare 下载六个所选 Release，校验 API size/digest、SHA-256、路径、归属与跨包覆盖，并生成 platform 包。
-暂存字节通过共享的每架构 helper build → prepare → E2E 原语：x86 在真实 KVM runner 跑完整的所选契约；
-ARM 原生运行预先声明的 accelerator/guest-runtime 非 KVM 子集。对于每个已迁移 owner，解析阶段
-从其已提交 test pin 声明精确用例文件名，再通过公共 runner 使用短的私有状态路径执行。用例直接来自
-暂存归档，无需源码 overlay 或产品重建，不再执行已退役 owner 的包装入口。真正保留旧用例的 owner
-在其切换验收前继续使用完整入口。源码检查是独立必需 job。
-publish 必须收齐两个成功结果，在 `kuasar-integration-validation` 绑定 profile、源码身份和资产摘要，原样上传归档。
+聚合 prepare 下载六个所选 Release，校验 API size/digest、SHA-256、路径、归属与跨包覆盖，
+随后在无凭据源码步骤中构建固定测试 helper，并生成确定性的 platform 包。
+暂存字节通过共享的公开 prepare → 聚焦用例 → 公开 run 合同，不重建产品或 helper。
+解析阶段按已提交 test pin 声明精确用例文件名；执行使用短的私有状态路径，直接读取暂存归档中的用例，无需源码 overlay。
+x86 在真实 KVM runner 运行九个 suite 中的所选用例；ARM 原生运行预先声明的 accelerator/guest-runtime 非 KVM 子集。
+干净运行时中的 prepare 和所选完整 suite 执行保留 Go、Rust、组件源码树缺失的验证证据。源码检查是独立必需 job。
+publish 必须收齐两个架构的成功结果，在 `kuasar-integration-validation` 绑定用例选择、源码身份和资产摘要，原样上传归档。
 
 Preview、维护分支 Stable 和主线 Stable 使用相同资产与发行资产验证门禁;差别只在发行状态与
 Latest 策略。
@@ -353,7 +354,8 @@ Latest 策略。
 <a id="平台包中的文档"></a>
 ### 8.1 文档载荷与源码映射
 
-平台归档从项目主仓与所选组件源码组装文档。源码导航与归档导航使用不同的目录布局。
+平台归档从项目主仓与 `test_revisions` 固定的组件源码组装文档，kernel 文档来自单独选择的
+vmlinux 源码。源码导航与归档导航使用不同的目录布局。
 现有 E2E 组装器复制各 owner 的用例后，调用 `test/e2e/assemble_docs.py` 复制文档并改写
 文档链接。该步骤不修改可执行示例、脚本、配置值或组件二进制。
 
@@ -383,14 +385,15 @@ Latest 策略。
 README 的组件 `docs/` 链接；没有中文版时回退到英文。直接文件链接和带显式 fragment
 的目录链接保留指定文件或默认 README 目标，以维持原有锚点契约。
 
-发布打包器从既有的所选发布清单读取组件引用，并使用聚合版本构造主仓源码链接。
-这些引用仅传给文档组装，不改变版本选择。直接从源码组装时，有 Git 元数据则使用 HEAD，
+发布打包器从所选清单的 `test_revisions` 读取组件精确引用，并使用聚合版本构造主仓源码链接。
+文档与用例因此引用相同源码快照；仅涉及测试调用说明的修正无需重新发布产品。
+这些文档引用不改变产品版本或归档字节。直接从源码组装时，有 Git 元数据则使用 HEAD，
 否则源码链接使用 `main`。本地验收可以提供制表符分隔的 `DOCS_SOURCE_REFS` 文件，每行
 包含 owner 和精确源码 revision。这是组装元数据，不是运行时配置项。
 
 runtime 与 vmlinux 单元可以选择 guest-runtime 的不同提交。因此发布打包器单独提供
 `DOCS_VMLINUX_SOURCE`，从所选 kernel 源码同时取得 `vmlinux.md` 和 `vmlinux_zh.md`。
-若所选旧 kernel 没有中文对应文档，不会用 runtime 单元另一 revision 的中文文档替代。
+若所选旧 kernel 没有中文对应文档，不会用独立固定的 guest-runtime 测试源码中的中文文档替代。
 
 可以识别且指向已包含文档的跨仓 `main` 链接在组装集合内解析。绝对 GitHub `main` 链接
 若指向所选源码中存在的其他文件或目录，则与相对源码链接一样固定到该源码的所选引用，
@@ -406,8 +409,9 @@ make test-release-tools
 ```
 
 专项测试覆盖语言选择、原生构建链接、源码 URL、可执行内容不变、跨仓链接、路径冲突、
-符号链接和 kernel 语言版本独立选择。发布测试还会解包实际平台 tarball，检查两份 kernel
-文档均来自所选 vmlinux 源码。最终验收还必须用实际检视的源码集合执行组装、检查解包产物，
+符号链接和 kernel 语言版本独立选择。发布测试还会解包实际平台 tarball，检查组件调用说明
+和源码链接使用精确 test pin，而两份 kernel 文档均来自所选 vmlinux 源码，即使这些快照不同。
+最终验收还必须用实际检视的源码集合执行组装、检查解包产物，
 并验证全部相对路径和标题锚点。翻译完整性需要单独进行语义检视；打包检查通过不能证明
 尚未完成的文档已翻译。
 

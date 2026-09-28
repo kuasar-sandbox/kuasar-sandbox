@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
-# BASH_ENV for two existing cases; all other shells retain their normal traps.
-case "${0##*/}:${CLUSTER_STUB_CASE:-}" in
-    e2e_sandbox_read_recovery.sh:*|snapshot.read-recovery.sh:*) _kd_case=read-recovery ;;
-    e2e_cluster_stub.sh:registry-n3) _kd_case=registry-n3 ;;
+# Bounded diagnostics for maintained recovery cases; every other shell is unchanged.
+case "${0##*/}" in
+    snapshot.read-recovery.sh|orchestrator.cluster-recovery.sh) _kd_case=${0##*/} ;;
     *) return 0 ;;
 esac
 [[ -n ${KUASAR_CI_DIR:-} ]] || return 0
 _kd_reader="${BASH_SOURCE[0]%/*}/failure_diagnostics.py"
-_kd_env=${BASH_SOURCE[0]}
-_kd_argv=("$@")
 _kd_phase=setup _kd_line=0 _kd_source="${0##*/}" _kd_error=0
 
 _kd_debug() {
@@ -16,12 +13,6 @@ _kd_debug() {
     [[ ${2##*/} = "${0##*/}" ]] || return 0
     _kd_line=$1 _kd_source=${2##*/}
     case "$3" in
-        'exec sudo -nE bash "$0" "$@"')
-            # Preserve this existing privileged re-exec despite sudo filtering
-            # BASH_ENV. Never shadow exec: that changes {fd}>&- semantics.
-            if [[ $_kd_case = read-recovery ]]; then
-                builtin exec sudo -nE env BASH_ENV="$_kd_env" bash "$0" "${_kd_argv[@]}"
-            fi ;;
         'launch cow '*) _kd_phase=cow-read ;;
         'launch seed '*) _kd_phase=seed-start ;;
         'SNAP='*) _kd_phase=seed-snapshot ;;
@@ -31,8 +22,8 @@ _kd_debug() {
         'wait "$CAPTURE_PID"'*) _kd_phase=capture-completion ;;
         'launch verified '*) _kd_phase=restore-verification ;;
         'FATAL_FAULT_BASE='*) _kd_phase=fatal-source ;;
-        'step "checking build_register"') _kd_phase=build-register ;;
-        'step "checking build follow-up forwarding through the node API endpoint"') _kd_phase=build-status ;;
+        'REDIRECT_SELECTION='*) _kd_phase=registry-selection ;;
+        'run_redirect_flow'*) _kd_phase=registry-recovery ;;
     esac
     return 0
 }
