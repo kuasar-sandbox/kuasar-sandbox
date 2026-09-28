@@ -244,6 +244,21 @@ class ArtifactExecutionContracts(unittest.TestCase):
         self.provenance['helpers'] = {'custom-proxy': {}}
         self.assertEqual(self.execute('orchestrator')['conclusion'], 'success')
 
+    def test_staged_case_socket_path_uses_direct_public_runner(self):
+        case = 'sandbox.cgroup.sh'
+        (self.root / 'test/e2e/cases' / case).write_text(
+            'set -eu\npython3 - "$WORK" <<\'PY\'\n'
+            'from pathlib import Path\nimport socket, sys\n'
+            'path = Path(sys.argv[1]) / "false-shared/runtime/cg-false-shared-10672/uffd.sock"\n'
+            'path.parent.mkdir(parents=True)\n'
+            'with socket.socket(socket.AF_UNIX) as sock: sock.bind(str(path))\n'
+            'PY\n')
+        self.provenance['selection']['cases'] = self.provenance['prepared_cases'] = [case]
+        self.plan['mode'] = 'exact-assets'
+        result = self.execute('sandbox')
+        self.assertEqual(result['conclusion'], 'success')
+        self.assertEqual(result['cases'], [case])
+
     def test_working_set_receives_exact_source_manifest_and_preserves_exit(self):
         self.plan['sources'] = test_revisions('c' * 40)
         self.plan['lanes']['x86_64']['performance'] = ['working-set-smoke']
