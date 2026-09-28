@@ -76,6 +76,11 @@ def child():
         forbidden = subprocess.run(['mount', '-o', 'remount,rw', '/proc/acpi'], capture_output=True)
         assert forbidden.returncode != 0, 'profile allowed writable masked proc directory'
     subprocess.run(['mount', '--bind', '/dev/null', '/proc/kcore'], check=True)
+    Path('/run/docker/netns').mkdir(parents=True, exist_ok=True)
+    netns = Path('/run/docker/netns/workbench-test')
+    netns.touch()
+    subprocess.run(['mount', '--bind', '/proc/self/ns/net', str(netns)], check=True)
+    subprocess.run(['umount', str(netns)], check=True)
     root = b'/var/lib/docker/pivot-test'
     os.mkdir(root)
     call('mount', b'tmpfs', root, b'tmpfs', 0, None)

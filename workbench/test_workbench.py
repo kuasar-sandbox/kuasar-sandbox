@@ -331,6 +331,7 @@ class AppArmorTests(LauncherTests):
         self.assertIn('remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/{asound,bus,fs,irq,sys}/,', source)
         self.assertIn('mount fstype=tmpfs options=(ro) -> /proc/{acpi,scsi}/,', source)
         self.assertIn('mount options=(rw,bind) /dev/null -> /proc/{interrupts,kcore,keys,latency_stats,sched_debug,timer_list,timer_stats},', source)
+        self.assertIn('mount options=(rw,bind) / -> /run/docker/netns/*,', source)
         self.assertNotIn('  remount /proc/{bus,fs,irq,sys}/,', source)
         dockerfile = (ROOT / 'Dockerfile').read_text()
         self.assertIn('systemd-logind.service redis-server.service', dockerfile)

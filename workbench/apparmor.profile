@@ -140,6 +140,9 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   mount fstype=tmpfs options=(ro) -> /sys/firmware/,
   mount fstype=tmpfs options=(ro) -> /sys/devices/virtual/powercap/,
   mount options=(rw,bind) /dev/null -> /proc/{interrupts,kcore,keys,latency_stats,sched_debug,timer_list,timer_stats},
+  # Inner dockerd persists a private network namespace handle under its own
+  # /run tree. The source is only a network-namespace fd exposed through proc.
+  mount options=(rw,bind) / -> /run/docker/netns/*,
   pivot_root /var/lib/docker/**,
   pivot_root /var/lib/containerd/**,
 }
