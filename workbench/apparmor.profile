@@ -67,6 +67,11 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   mount options in (rw,private,rprivate,slave,rslave) -> /,
   mount options in (rw,private,rprivate,slave,rslave) -> /var/lib/docker/**,
   mount options in (rw,private,rprivate,slave,rslave) -> /var/lib/containerd/**,
+  # ip netns uses this private /run subtree for namespace handles.
+  mount options=(rw,rshared) -> /run/netns/,
+  mount options=(rw,rbind) /run/netns/ -> /run/netns/,
+  # AppArmor reports the nsfs handle source as its filesystem root.
+  mount options=(rw,bind) / -> /run/netns/*,
   pivot_root /var/lib/docker/**,
   pivot_root /var/lib/containerd/**,
 }
