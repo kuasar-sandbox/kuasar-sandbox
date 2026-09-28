@@ -86,6 +86,12 @@ def candidate_case_names(repository, sha, owner):
     return names
 
 
+def release_case_names(tests):
+    """Bind migrated release entries to filenames at the committed test pins."""
+    return {owner: names for owner, record in tests.items()
+            if (names := candidate_case_names(record["repository"], record["sha"], owner))}
+
+
 def aggregate(version, *, require_dual=True):
     """Historical x86-only releases remain valid; normal dual lanes need ARM."""
     state = release.api_optional(f"repos/{PLATFORM}/releases/tags/{version}")
@@ -129,9 +135,15 @@ def aggregate(version, *, require_dual=True):
         pins = release.selection.test_revisions(release.selection.read_simple_yaml(manifest, relative), relative)
         tests = artifacts.release_test_revisions(pins, sha)
         artifacts.require(binding.get("test_revisions") == tests, "published test pins differ from committed selection")
+        # Immutable earlier releases retain owner-profile evidence. New staged
+        # releases declare each migrated case before preparation and execution.
+        cases = release_case_names(tests) if any(
+            "/cases/" in case for result in binding["architectures"].values()
+            for case in result["profile"]["cases"]) else {}
+        owners = sorted({"platform", *cases})
         for arch, result in binding["architectures"].items():
             artifacts.require(result["arch"] == arch and result["conclusion"] == "success"
-                              and result["profile"] == artifacts.profiles(["platform"], arch)
+                              and result["profile"] == artifacts.profiles(owners, arch, cases)
                               and result.get("test_revisions") == tests,
                               "aggregate did not pass its predeclared architecture profile")
         validation = binding["architectures"]
@@ -313,10 +325,12 @@ def exact_assets_plan(framework_sha, stage):
     sources = {owner: {"repository": repository, "sha": sha if owner == "platform" else
                       unit_records["runtime" if owner == "guest-runtime" else owner]["sha"], "role": "release"}
                for owner, repository in REPOSITORIES.items()}
+    cases = release_case_names(tests)
+    owners = sorted({"platform", *cases})
     plan = {"schema": 1, "mode": "exact-assets", "framework_sha": exact_sha(framework_sha), "baseline": baseline,
-            "candidate_records": [], "owners": ["platform"], "sources": sources, "kernel_sha": unit_records["vmlinux"]["sha"],
-            "test_revisions": tests, "test_overlays": [], "candidate_cases": {}, "product_sources": {}, "embedded_sources": {},
-            "lanes": {arch: {"products": [], "embedded_products": [], "profile": artifacts.profiles(["platform"], arch)}
+            "candidate_records": [], "owners": owners, "sources": sources, "kernel_sha": unit_records["vmlinux"]["sha"],
+            "test_revisions": tests, "test_overlays": [], "candidate_cases": cases, "product_sources": {}, "embedded_sources": {},
+            "lanes": {arch: {"products": [], "embedded_products": [], "profile": artifacts.profiles(owners, arch, cases)}
                       for arch in artifacts.ARCHES}}
     artifacts.check_plan(plan)
     return plan

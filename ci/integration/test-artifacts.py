@@ -480,10 +480,18 @@ class ArtifactContracts(unittest.TestCase):
         pin_file = self.root / "test-revisions.json"
         pin_file.write_text(json.dumps(pins))
         (self.assets / "SHA256SUMS").write_text("".join(f"{value}  {name}\n" for name, value in subject.tree_files(self.assets).items()))
+        cases = {"sandboxer": ["sandbox.cgroup.sh", "snapshot.remote-chain.sh"]}
         with patch.object(resolver, "source_text", return_value=manifest), patch.object(resolver, "public"), \
+             patch.object(resolver, "candidate_case_names", side_effect=lambda repo, pin, owner: cases.get(owner, [])), \
              patch.object(resolver.release, "tag_sha", side_effect=lambda repo, tag: sha if repo == resolver.PLATFORM else "c" * 40), \
              patch.dict(os.environ, {"RELEASE_VERSION": version, "PLATFORM_SOURCE_SHA": sha}):
             plan = resolver.exact_assets_plan("a" * 40, self.root)
+            self.assertEqual(plan["candidate_cases"], cases)
+            self.assertEqual(plan["test_overlays"], [])
+            self.assertEqual(plan["product_sources"], {})
+            selected = plan["lanes"]["x86_64"]["profile"]["cases"]
+            self.assertIn("test/e2e/sandboxer/cases/sandbox.cgroup.sh", selected)
+            self.assertNotIn("test/e2e/sandboxer/run_all.sh", selected)
             self.assertEqual(plan["test_revisions"]["orchestrator"]["sha"], "f" * 40)
             self.assertEqual(plan["baseline"]["units"]["orchestrator"]["sha"], "c" * 40)
             pin_file.write_text(json.dumps({**pins, "orchestrator": "c" * 40}))
@@ -511,6 +519,14 @@ class ArtifactContracts(unittest.TestCase):
                  patch.object(resolver.release, "aggregate_runs", return_value=[run]):
                 baseline = resolver.aggregate(version)
                 self.assertEqual(baseline["test_revisions"], plan["test_revisions"])
+                original_body = state["body"]
+                omitted = json.loads(resolver.PROFILE_BINDING.search(original_body)[1])
+                omitted["architectures"]["x86_64"]["profile"]["cases"].remove(
+                    "test/e2e/sandboxer/cases/snapshot.remote-chain.sh")
+                state["body"] = "<!-- kuasar-integration-validation " + json.dumps(omitted) + " -->"
+                with self.assertRaisesRegex(ValueError, "predeclared architecture profile"):
+                    resolver.aggregate(version)
+                state["body"] = original_body
                 with patch.object(resolver, "baseline", return_value=baseline), \
                      patch.object(resolver, "changed_files", return_value=["docs/ci.md"]), \
                      patch.object(resolver, "candidate_case_names", return_value=[]), \
