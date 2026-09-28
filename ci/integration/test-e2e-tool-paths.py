@@ -207,7 +207,7 @@ class CaseBridgeContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'duplicate E2E case ID'):
                 ARTIFACTS.normalize_e2e_cases(Path(directory), duplicate, from_owners=False)
             (root / 'connector').mkdir()
-            with self.assertRaisesRegex(ValueError, 'only flat product cases'):
+            with self.assertRaisesRegex(ValueError, 'superseded owner E2E content: connector'):
                 ARTIFACTS.normalize_e2e_cases(Path(directory), CASES, from_owners=False)
 
     def test_resolver_rejects_legacy_missing_and_malformed_source_cases(self):
