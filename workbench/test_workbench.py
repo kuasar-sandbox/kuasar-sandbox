@@ -327,9 +327,9 @@ class AppArmorTests(LauncherTests):
         self.assertNotIn('\n  mount,', source)
         # runc's read-only proc remount flags vary by kernel/runtime; keep the
         # destination exact while accepting only a remount on those paths.
-        self.assertIn('remount /proc/{bus,fs,irq,sys}/,', source)
-        self.assertIn('remount /proc/sysrq-trigger,', source)
-        self.assertNotIn('remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/', source)
+        self.assertIn('remount options=(ro,bind,nosuid,nodev,noexec) /proc/{bus,fs,irq,sys}/,', source)
+        self.assertIn('remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/{bus,fs,irq,sys}/,', source)
+        self.assertNotIn('  remount /proc/{bus,fs,irq,sys}/,', source)
         dockerfile = (ROOT / 'Dockerfile').read_text()
         self.assertIn('systemd-logind.service redis-server.service', dockerfile)
         self.data['apparmor'] = {'name': 'system-only'}
