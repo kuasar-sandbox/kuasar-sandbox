@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT / 'test/e2e/lib'))
 sys.path.insert(0, str(ROOT / 'release'))
 import workspace
 import selection
+from workbench_assets import check_size
 
 
 def build(version, arch, cases, deps, output, cpus=2, memory_gib=6):
@@ -72,17 +73,20 @@ def build(version, arch, cases, deps, output, cpus=2, memory_gib=6):
             workspace.require(json.loads(previous.stdout)[0]['Id'] == image['Id'], 'same-version local image differs; refusing replacement')
         subprocess.run(['docker', 'image', 'tag', image['Id'], canonical], check=True)
         temporary = archive.with_suffix('.part')
+        compression_started = time.monotonic()
         with temporary.open('xb') as stream, gzip.GzipFile(fileobj=stream, mode='wb', mtime=0, compresslevel=1) as compressed:
             with subprocess.Popen(['docker', 'image', 'save', canonical], stdout=subprocess.PIPE) as process:
                 shutil.copyfileobj(process.stdout, compressed)
                 workspace.require(process.wait() == 0, 'Docker image export failed')
+        compression_seconds = time.monotonic() - compression_started
+        check_size(temporary)
         verified = workspace.verify_image_archive(temporary, 'linux/' + image['Architecture'])
         workspace.require(verified['image_id'] == image['Id'], 'exported image differs from the built image')
         temporary.rename(archive)
         record = {'aggregate_version': version, 'arch': arch, 'source_revision': revision,
                   'image_id': image['Id'], 'archive': archive.name, 'sha256': workspace.digest(archive),
                   'size': archive.stat().st_size, 'image_size': image['Size'], 'context_files': context_files,
-                  'external_images': records, 'wall_seconds': time.monotonic() - started}
+                  'external_images': records, 'compression_seconds': compression_seconds, 'wall_seconds': time.monotonic() - started}
         receipt.write_text(json.dumps(record, sort_keys=True, indent=2) + '\n')
     return record
 

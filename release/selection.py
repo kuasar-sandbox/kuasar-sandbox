@@ -97,6 +97,23 @@ def test_revisions(config: dict[str, object], source: str) -> dict[str, str]:
     return dict(pins)
 
 
+DELIVERY = 'workbench-v1'
+
+
+def delivery(config: dict[str, object], source: str) -> str:
+    """Read the committed contract, never infer history from missing assets."""
+    value = config.get('delivery', 'historical')
+    if value not in ('historical', DELIVERY) or ('delivery' in config and value == 'historical'):
+        raise ManifestError(f'unsupported delivery contract in {source}: {value}')
+    return str(value)
+
+
+def workbench_archive(version: str, arch: str) -> str:
+    if AGGREGATE_RE.fullmatch(version) is None or arch not in ('x86_64', 'aarch64'):
+        raise ManifestError('invalid workbench aggregate version or architecture')
+    return f'workbench-{arch}-{version.removeprefix("release-")}.tar.gz'
+
+
 def require_stable(value: object, field: str, source: str) -> str:
     if not isinstance(value, str) or STABLE_RE.fullmatch(value) is None:
         raise ManifestError(f"{field} in {source} must be a stable aggregate version")
@@ -147,7 +164,7 @@ def parse_manifest(
 ) -> tuple[str, str | None, dict[str, str]]:
     config = read_simple_yaml(text, source)
     required = {"version", "components"}
-    optional = {"previous_version", "test_revisions"}
+    optional = {"previous_version", "test_revisions", "delivery"}
     if preview:
         required.add("preview_version")
         optional.add("previous_preview_version")
@@ -155,6 +172,7 @@ def parse_manifest(
     if not required <= keys or not keys <= required | optional:
         expected = ", ".join(sorted(required | optional))
         raise ManifestError(f"top-level keys in {source} must be: {expected}")
+    delivery(config, source)
     # Historical selections remain readable under their original contract.
     # New aggregate packaging requires all pins through --test-revisions.
     if "test_revisions" in config:
@@ -304,14 +322,18 @@ def resolve(root: pathlib.Path, version: str) -> tuple[str | None, dict[str, str
     return previous, components
 
 
-def resolve_test_revisions(root: pathlib.Path, version: str) -> dict[str, str]:
+def resolve_config(root: pathlib.Path, version: str) -> dict[str, object]:
     commit, _, _ = resolve_record(root, version)
     preview = "-preview." in version
     relative = "releases/daily-preview.yaml" if preview else "releases/release.yaml"
     text = (root / relative).read_text(encoding="utf-8")
     if parse_manifest(text, relative, preview)[0] != version:
         text = subprocess.check_output(["git", "-C", str(root), "show", f"{commit}:{relative}"], text=True)
-    return test_revisions(read_simple_yaml(text, relative), relative)
+    return read_simple_yaml(text, relative)
+
+
+def resolve_test_revisions(root: pathlib.Path, version: str) -> dict[str, str]:
+    return test_revisions(resolve_config(root, version), version)
 
 
 def main() -> None:
@@ -324,13 +346,19 @@ def main() -> None:
     if len(sys.argv) not in (3, 4):
         fail(
             "usage: selection.py <platform-root> "
-            "<release-version> [--previous|--commit|--test-revisions] | --validate-current"
+            "<release-version> [--previous|--commit|--test-revisions|--delivery] | --validate-current"
         )
-    if len(sys.argv) == 4 and sys.argv[3] not in ("--previous", "--commit", "--test-revisions"):
+    if len(sys.argv) == 4 and sys.argv[3] not in ("--previous", "--commit", "--test-revisions", "--delivery"):
         fail(
             "usage: selection.py <platform-root> "
-            "<release-version> [--previous|--commit|--test-revisions]"
+            "<release-version> [--previous|--commit|--test-revisions|--delivery]"
         )
+    if len(sys.argv) == 4 and sys.argv[3] == '--delivery':
+        try:
+            print(delivery(resolve_config(pathlib.Path(sys.argv[1]), sys.argv[2]), sys.argv[2]))
+        except ManifestError as error:
+            fail(str(error))
+        return
     if len(sys.argv) == 4 and sys.argv[3] == "--test-revisions":
         try:
             print(json.dumps(resolve_test_revisions(pathlib.Path(sys.argv[1]), sys.argv[2]), sort_keys=True))

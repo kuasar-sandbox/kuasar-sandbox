@@ -231,13 +231,19 @@ def archive_name(unit: str, tag: str, arch: str = "x86_64") -> str:
 
 
 def platform_asset_names_for_components(
-    tag: str, components: dict[str, str], architectures: tuple[str, ...] = ("x86_64",)
+    tag: str, components: dict[str, str], architectures: tuple[str, ...] = ("x86_64",),
+    delivery: str = "historical",
 ) -> set[str]:
+    if delivery == selection.DELIVERY:
+        architectures = ('x86_64', 'aarch64')
+    elif delivery != 'historical':
+        raise ValueError('unsupported aggregate delivery contract')
     return {
         "SHA256SUMS",
         archive_name("platform", tag),
         *(archive_name(unit, components[unit], arch) for unit in selection.UNITS for arch in architectures),
-    }
+    } | ({selection.workbench_archive(tag, arch) for arch in architectures}
+         if delivery == selection.DELIVERY else set())
 
 
 def platform_asset_names(tag: str, sha: str) -> set[str]:
@@ -260,7 +266,8 @@ def platform_asset_names(tag: str, sha: str) -> set[str]:
         raise Deferred(f"platform {tag} has an invalid release manifest at {sha}") from error
     if aggregate != tag:
         raise Deferred(f"platform manifest at {sha} selects {aggregate}, not {tag}")
-    return platform_asset_names_for_components(tag, components)
+    contract = selection.delivery(selection.read_simple_yaml(content, relative), relative)
+    return platform_asset_names_for_components(tag, components, delivery=contract)
 
 
 def tag_sha(repository: str, tag: str) -> str | None:
@@ -923,7 +930,7 @@ def render_manifest(
     plans: dict[str, Plan],
     fixed_pins: dict[str, str] | None = None,
 ) -> str:
-    lines = [f"version: {base}"]
+    lines = [f"version: {base}", f"delivery: {selection.DELIVERY}"]
     if previous is not None:
         lines.append(f"previous_version: {previous}")
     lines.append(f"preview_version: preview.{date}")
