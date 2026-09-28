@@ -25,7 +25,7 @@ def source_files(root: Path, owner: str):
     for stem in GUIDES[owner]:
         yield Path(stem + '.md')
         translated = Path(stem + '_zh.md')
-        if (root / translated).exists():
+        if (root / translated).exists() or (root / translated).is_symlink() or (owner in {'accelerator', 'guest-runtime'} and stem == 'test/e2e/README'):
             yield translated
     # Legal material is not filtered by audience or rewritten as user guidance.
     for path in sorted(root.iterdir()):
@@ -83,7 +83,7 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
                 raise ValueError(f'documentation collision at {dest}: {inputs[dest][0]} and {owner}')
             inputs[dest] = (owner, path)
             mapping[owner, path.as_posix()] = dest
-            if owner == 'vmlinux':
+            if owner == 'vmlinux' and path.as_posix() in {'docs/vmlinux.md', 'docs/vmlinux_zh.md'}:
                 mapping['guest-runtime', path.as_posix()] = dest
 
     def rewrite_url(raw: str, owner: str, path: Path, dest: Path) -> str:

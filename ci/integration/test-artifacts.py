@@ -75,6 +75,26 @@ def runtime(root, arch, files):
 
 
 class ReleasedCaseLayout(unittest.TestCase):
+    def test_platform_user_material_and_historical_docs_keep_ownership(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = root / 'platform.tar.gz'
+            files = {'guide/connector/README.md': b'# User guide\n',
+                     'guide/licenses/connector/LICENSE': b'Legal text\n',
+                     'workbench/workbench': b'#!/usr/bin/python3\n',
+                     'docs/connector.md': b'# Historical guide\n'}
+            archive(payload, files)
+            seen = {}
+            subject.unpack(payload, root / 'release', 'platform', seen)
+            for name, content in files.items():
+                self.assertEqual((root / 'release' / name).read_bytes(), content)
+                self.assertEqual(seen[name], 'platform')
+            with self.assertRaisesRegex(ValueError, 'conflicting archive ownership'):
+                subject.unpack(payload, root / 'release', 'platform', seen)
+            archive(payload, {'bin/node': b'not a platform product'})
+            with self.assertRaisesRegex(ValueError, 'platform cannot own'):
+                subject.unpack(payload, root / 'release', 'platform', {})
+
     def test_prepare_retains_guides_but_rejects_owner_execution(self):
         with tempfile.TemporaryDirectory() as directory:
             stage = Path(directory)

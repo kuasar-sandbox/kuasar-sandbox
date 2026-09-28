@@ -38,6 +38,9 @@ class DocumentationPackageTest(unittest.TestCase):
                 path = source / (stem + '.md')
                 path.parent.mkdir(parents=True, exist_ok=True)
                 if not path.exists(): path.write_text('# User guide\n')
+            if owner in {'accelerator', 'guest-runtime'}:
+                for suffix in ('', '_zh'):
+                    (source / f'test/e2e/README{suffix}.md').write_text('[English](README.md) | [简体中文](README_zh.md)\n# Guide fixture\n')
             if owner in OWNER_LIBRARIES:
                 suite = source / ('test/e2e/platform' if owner == 'platform' else 'test/e2e')
                 for name in OWNER_LIBRARIES[owner]:
@@ -123,6 +126,21 @@ class DocumentationPackageTest(unittest.TestCase):
         (self.root / 'vmlinux/docs/vmlinux.md').write_text('# Selected older kernel\n')
         output, _ = self.assemble(kernel=True)
         self.assertFalse((output / 'guide/vmlinux/vmlinux_zh.md').exists())
+
+    def test_kernel_legal_links_do_not_replace_runtime_legal_identity(self):
+        for owner in ('guest-runtime', 'vmlinux'):
+            (self.root / owner / 'LICENSE').write_text(owner + ' legal bytes\n')
+        (self.root / 'guest-runtime/README.md').write_text('[License](LICENSE)\n')
+        (self.root / 'vmlinux/docs/vmlinux.md').write_text('[License](../LICENSE)\n')
+        output, _ = self.assemble(kernel=True)
+        for owner, filename in [('guest-runtime', 'README.md'), ('vmlinux', 'vmlinux.md')]:
+            self.assertIn(f'../licenses/{owner}/LICENSE', (output / 'guide' / owner / filename).read_text())
+            self.assertEqual((output / 'guide/licenses' / owner / 'LICENSE').read_text(), owner + ' legal bytes\n')
+
+    def test_missing_maintained_e2e_translation_is_rejected(self):
+        (self.root / 'accelerator/test/e2e/README_zh.md').unlink()
+        _, result = self.assemble(success=False)
+        self.assertIn('missing documentation input: accelerator/test/e2e/README_zh.md', result.stderr)
 
     def test_cross_repository_links_and_historical_revisions(self):
         (self.root / 'connector/docs/tapfd.md').write_text('# Wire\n')
