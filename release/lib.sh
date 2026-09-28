@@ -74,6 +74,16 @@ platform_archive() {
   printf 'platform-%s.tar.gz\n' "$1"
 }
 
+workbench_archive() {
+  validate_aggregate_version "$1"
+  case "$2" in x86_64|aarch64) ;; *) release_fail 'unsupported workbench architecture' ;; esac
+  printf 'workbench-%s-%s.tar.gz\n' "$2" "${1#release-}"
+}
+
+release_delivery() {
+  python3 "$RELEASE_TOOL_ROOT/release/selection.py" "$1" "$2" --delivery
+}
+
 resolve_selection() {
   local root="$1" version="$2" output="$3"
   validate_aggregate_version "$version"

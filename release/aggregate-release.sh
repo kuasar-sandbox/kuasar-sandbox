@@ -255,6 +255,17 @@ assemble_release() {
     done
   done < "$expected_selection"
 
+  local delivery source_sha
+  delivery=$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")
+  [ "$delivery" = workbench-v1 ] || release_fail 'new aggregate assembly requires delivery: workbench-v1 in the selected manifest'
+  source_sha=$(python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --commit)
+  python3 -B "$ROOT/release/workbench_assets.py" "$fetched/workbench" "$version" "$source_sha" > "$work/workbench.json"
+  mkdir -p "$output/workbench"
+  for arch in x86_64 aarch64; do
+    install -m 0644 "$fetched/workbench/$(workbench_archive "$version" "$arch")" "$output/assets/"
+    install -m 0644 "$fetched/workbench/workbench-$arch.json" "$output/workbench/"
+  done
+
   find "$output/assets" -maxdepth 1 -type f -printf '%f\n' \
     | LC_ALL=C sort > "$work/asset-names"
   (cd "$output/assets" && xargs sha256sum < "$work/asset-names") > "$output/assets/SHA256SUMS"
@@ -321,7 +332,11 @@ write_release_notes() {
 # Existing x86-only releases retain their original contract. A dual aggregate
 # contains every ARM unit; a partially populated target is never accepted.
 bundle_arches() {
-  local bundle=$1
+  local bundle=$1 version=$2
+  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = workbench-v1 ]; then
+    printf 'x86_64\naarch64\n'
+    return
+  fi
   printf 'x86_64\n'
   if find "$bundle/assets" -maxdepth 1 -name '*aarch64*.tar.gz' | grep -q .; then printf 'aarch64\n'; fi
 }
@@ -336,6 +351,9 @@ expected_asset_names() {
       component_archive "$unit" "$tag" "$arch"
     done < "$selection"
   done
+  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = workbench-v1 ]; then
+    for arch in "${arches[@]}"; do workbench_archive "$version" "$arch"; done
+  fi
   printf 'SHA256SUMS\n'
 }
 
@@ -376,7 +394,7 @@ validate_bundle() {
       || release_fail "aggregate release notes are missing $unit updates"
   done < "$expected_selection"
   local arches=() arch
-  mapfile -t arches < <(bundle_arches "$bundle")
+  mapfile -t arches < <(bundle_arches "$bundle" "$version")
   expected_asset_names "$version" "$expected_selection" "${arches[@]}" | LC_ALL=C sort > "$expected_names"
   find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$actual_names"
   cmp -s "$expected_names" "$actual_names" \
@@ -384,7 +402,13 @@ validate_bundle() {
   (cd "$bundle/assets" && sha256sum --quiet -c SHA256SUMS) \
     || release_fail "aggregate SHA256SUMS validation failed"
   "$ROOT/release/package-platform.sh" validate "$version" \
-    "$bundle/assets/$(platform_archive "$version")"
+    "$bundle/assets/$(platform_archive "$version")" "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")"
+
+  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = workbench-v1 ]; then
+    local source_sha
+    source_sha=$(python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --commit)
+    python3 -B "$ROOT/release/workbench_assets.py" "$bundle/assets" "$version" "$source_sha" --receipts "$bundle/workbench" >/dev/null
+  fi
 
   local seen tag archive
   seen="$(mktemp)"
@@ -410,6 +434,7 @@ extract_bundle() {
   local name
   while IFS= read -r name; do
     [ "$name" = SHA256SUMS ] && continue
+    [[ "$name" = workbench-* ]] && continue # Docker import is separate from release extraction.
     tar -xzf "$bundle/assets/$name" -C "$install"
   done < <(expected_asset_names "$version" "$bundle/selection.tsv" "$arch")
 }
