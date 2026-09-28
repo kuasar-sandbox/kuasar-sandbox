@@ -121,17 +121,25 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   mount fstype=sysfs -> /sys/,
   # After pivot, runc hardens the inner proc mount with self-binds followed
   # only by read-only remounts. No alternate source or writable remount grant.
+  mount options=(rw,rbind) /proc/asound/ -> /proc/asound/,
   mount options=(rw,rbind) /proc/bus/ -> /proc/bus/,
   mount options=(rw,rbind) /proc/fs/ -> /proc/fs/,
   mount options=(rw,rbind) /proc/irq/ -> /proc/irq/,
   mount options=(rw,rbind) /proc/sys/ -> /proc/sys/,
   mount options=(rw,rbind) /proc/sysrq-trigger -> /proc/sysrq-trigger,
-  remount options=(ro,bind) /proc/{bus,fs,irq,sys}/,
-  remount options=(ro,bind,nosuid,nodev,noexec) /proc/{bus,fs,irq,sys}/,
-  remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/{bus,fs,irq,sys}/,
+  remount options=(ro,bind) /proc/{asound,bus,fs,irq,sys}/,
+  remount options=(ro,bind,nosuid,nodev,noexec) /proc/{asound,bus,fs,irq,sys}/,
+  remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/{asound,bus,fs,irq,sys}/,
   remount options=(ro,bind) /proc/sysrq-trigger,
   remount options=(ro,bind,nosuid,nodev,noexec) /proc/sysrq-trigger,
   remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/sysrq-trigger,
+  # Standard OCI masked paths used by nested runc: directories become
+  # read-only tmpfs and file targets become /dev/null binds. These exact
+  # destinations cannot expose or make the underlying host proc/sysfs writable.
+  mount fstype=tmpfs options=(ro) -> /proc/{acpi,scsi}/,
+  mount fstype=tmpfs options=(ro) -> /sys/firmware/,
+  mount fstype=tmpfs options=(ro) -> /sys/devices/virtual/powercap/,
+  mount options=(rw,bind) /dev/null -> /proc/{interrupts,kcore,keys,latency_stats,sched_debug,timer_list,timer_stats},
   pivot_root /var/lib/docker/**,
   pivot_root /var/lib/containerd/**,
 }
