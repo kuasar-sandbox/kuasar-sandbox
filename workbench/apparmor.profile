@@ -51,6 +51,13 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   mount options=(rw,bind) /dev/null -> /sys/module/apparmor/parameters/enabled,
   remount /sys/module/apparmor/parameters/enabled,
 
+  # Observed systemd-generator hardening: read-only bind remounts only,
+  # including the mount roots (subtree rules do not cover the root itself).
+  remount options in (ro,bind,nosuid,nodev,noexec,relatime) /{var/log/journal,dev,build,work,output,var/lib/containerd}/,
+  remount options in (ro,bind,nosuid,nodev,noexec,relatime) /dev/{mqueue,pts}/,
+  remount options=(ro,bind) /etc/hosts,
+  mount options=(rw,shared) -> /var/lib/docker/,
+
   # systemd private unit mounts and nested Docker's own roots. No blanket
   # mount grant, host cgroup bind, block-device filesystem or securityfs mount.
   mount fstype=(tmpfs,proc,sysfs,devpts,mqueue,cgroup2,overlay) -> /var/lib/docker/**,

@@ -91,6 +91,9 @@ assert {'cpu','cpuset','memory','pids','io'} <= set((child/'cgroup.controllers')
     subprocess.run(['systemd-run', '--quiet', '--wait', '--pipe', '--collect',
                     '--unit=workbench-check-' + uuid.uuid4().hex, '--property=Delegate=yes',
                     'python3', '-B', '-c', program], check=True, timeout=30)
+    plugins = [line.split() for line in output('ctr', 'plugins', 'ls').splitlines()[1:]]
+    require(not any(row[0] == 'io.containerd.cri.v1' or row[:2] == ['io.containerd.grpc.v1', 'cri'] for row in plugins),
+            'private containerd must not start CRI services')
     return {'arch': arch, 'page_size': 4096, 'namespaces': namespaces,
             'lsm_context': Path('/proc/self/attr/current').read_text().strip(),
             'machine_id': Path('/etc/machine-id').read_text().strip(), 'controllers': sorted(controllers),

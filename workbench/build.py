@@ -72,7 +72,7 @@ def build(version, arch, cases, deps, output, cpus=2, memory_gib=6):
             workspace.require(json.loads(previous.stdout)[0]['Id'] == image['Id'], 'same-version local image differs; refusing replacement')
         subprocess.run(['docker', 'image', 'tag', image['Id'], canonical], check=True)
         temporary = archive.with_suffix('.part')
-        with temporary.open('xb') as stream, gzip.GzipFile(fileobj=stream, mode='wb', mtime=0) as compressed:
+        with temporary.open('xb') as stream, gzip.GzipFile(fileobj=stream, mode='wb', mtime=0, compresslevel=1) as compressed:
             with subprocess.Popen(['docker', 'image', 'save', canonical], stdout=subprocess.PIPE) as process:
                 shutil.copyfileobj(process.stdout, compressed)
                 workspace.require(process.wait() == 0, 'Docker image export failed')

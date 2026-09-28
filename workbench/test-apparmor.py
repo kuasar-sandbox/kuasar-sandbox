@@ -85,6 +85,12 @@ def qualify(image, root):
         execute('ip', '-n', 'same-netns', 'link', 'set', 'lo', 'up')
         execute('ip', 'netns', 'delete', 'same-netns')
         result['network_namespace'] = 'create-configure-delete'
+        result['outer_context'] = execute('cat', '/proc/1/attr/current')
+        result['inner_detection'] = execute('cat', str(launcher.APPARMOR_ENABLED))
+        # Startup unit denials can exhaust the kernel audit burst. A bounded
+        # quiet interval preserves the next nested-runtime denial without
+        # changing the host audit rate or any enforcement setting.
+        time.sleep(6)
         execute('docker', 'load', '-i', '/inputs/release/inner.tar')
         execute('docker', 'run', '-d', '--name', 'same-inner', '--network=none', verified['image_id'], 'sleep', '300')
         inner_pid = execute('docker', 'inspect', 'same-inner', '--format', '{{.State.Pid}}')
