@@ -203,7 +203,7 @@ sandbox.kill()
 
 ```text
 docs/             System design, deployment, performance, CI, and release docs
-test/e2e/         Owner suites, run_all.sh, and platform integration cases
+test/e2e/         公共 runner、扁平 suite 用例和预备输入 helper
 test/perf|demo/   Platform performance and demo scripts
 ci/integration/   CI helpers and source-cache maintenance
 ci/native-cache/  vmlinux, erofs, envd, RocksDB, and Cloud Hypervisor cache
@@ -224,14 +224,12 @@ releases/         Stable and daily Preview aggregate selections
 ```bash
 make -C kuasar-sandbox build
 make -C kuasar-sandbox test
-make -C kuasar-sandbox test-e2e
+make -C kuasar-sandbox test-e2e RELEASE_DIR=/release E2E_WORKDIR=/tmp/kuasar-prepared
 make -C kuasar-sandbox perf
 make -C kuasar-sandbox demo
 ```
 
-组件用例位于各自仓的 `test/e2e/`,入口统一为 `run_all.sh`.`make test-e2e` 先把候选
-组件源码与其余组件源码组装为 `test/e2e/<owner>/` 布局,再运行与 platform 发布包完全相同
-的顶层入口;需要多仓制品的用例仍由其功能所属组件维护.
+产品 E2E 通过 `test/e2e/e2e prepare` 和 `run` 消费预构建制品。完整的 `<suite>.<case>.sh` 文件名标识九个 suite 中的用例；组件归属只决定源码维护位置。prepare 获取不可变镜像与固定 Demo SDK；执行使用预备制品、helper 和镜像，不发现源码、不编译、不自动拉取。unit/race/vet、UFFD 和性能门禁保持独立。详见[测试组织](test/README_zh.md)和[发布验证指南](test/QUICKSTART_zh.md)。
 
 单仓构建仍从组件仓执行.例如:
 

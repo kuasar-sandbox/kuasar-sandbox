@@ -39,7 +39,7 @@ import sys
 import tempfile
 
 root = pathlib.Path(sys.argv[1])
-warm = (root / 'test/e2e/platform/e2e_warmpool_dedup.sh').read_text()
+warm = (root / 'test/perf/warmpool-dedup.sh').read_text()
 perf = (root / 'test/perf/sandbox-perf-manifest.sh').read_text()
 
 def fields(document):

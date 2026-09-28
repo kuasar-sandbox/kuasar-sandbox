@@ -1,129 +1,100 @@
 [English](QUICKSTART.md) | [简体中文](QUICKSTART_zh.md)
 
-# Platform release 测试指南
+# 平台发布验证指南
 
-> 本文是 Aggregate Release Validation Guide,用于完整 E2E 和发布验收,不是首次安装指南.
-> 普通用户请先阅读 [Quick Start](../docs/quickstart_zh.md).
+本指南覆盖聚合产品 E2E 与发布验收。首次安装请使用[快速开始](../docs/quickstart_zh.md)。
 
-本文件位于 `platform-release-vX.Y.Z.tar.gz` 的 `test/QUICKSTART.md`。platform 包集中交付
-系统及组件文档、组件 E2E、platform 组合用例、性能脚本和 demo;六个组件包只交付运行制品。
-把同一个聚合 Release 的七个 archive 解压到同一目录后即可执行完整验证。
+platform 包包含文档、公共 runner、扁平用例、预构建测试 helper、性能脚本和 Demo；六个组件包包含运行制品。使用同一聚合 Release 的 platform 包及目标架构的六个组件包。
 
+<a id="1-解包布局"></a>
 ## 1. 解包布局
 
 ```text
 <release-dir>/
-├── bin/                         六个组件包提供的运行制品
-├── deploy/                      组件部署文件
-├── docs/                        platform 与五个组件的聚合文档
+├── bin/                         单架构预构建产品
+├── deploy/
+├── docs/
 └── test/
     ├── QUICKSTART.md
     ├── e2e/
-    │   ├── run_all.sh           完整发布门禁
-    │   ├── accelerator/
-    │   ├── connector/
-    │   ├── guest-runtime/
-    │   ├── sandboxer/
-    │   ├── orchestrator/
-    │   └── platform/            真正跨组件组合本身的用例
+    │   ├── e2e                  公共 list / prepare / run 入口
+    │   ├── cases/               <suite>.<case>.sh
+    │   ├── lib/                 按 owner 命名空间组织的底层 helper
+    │   └── helpers/<arch>/      预构建程序及源码/摘要清单
     ├── perf/
     └── demo/
 ```
 
-各 owner 目录只有一个稳定入口 `run_all.sh`。组件特性用例始终保存在对应组件目录,即使它
-依赖其他仓的二进制、KVM 或 platform 提供的服务环境。platform 目录只保存无法归属于单一
-组件的组合用例。
+完整文件名是用例 ID。第一段属于九个 suite 之一：`basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder`、`telemetry`。没有 owner runner 或第二条产品执行路径。
 
-## 2. 解压与校验
+<a id="2-解压与校验"></a>
+## 2. 校验与解压
 
-下载同一聚合 Release 的全部显式资产后先校验:
+按 Release 校验和验证下载资产。只将目标架构的六个组件包与匹配 platform 包解压到同一全新目录。不要把两个架构覆盖到同一 `bin/`，不要混用不同聚合 Release。
 
 ```bash
 sha256sum --quiet -c SHA256SUMS
 mkdir kuasar-sandbox-release
-for archive in *.tar.gz; do
-    tar -xzf "$archive" -C kuasar-sandbox-release
-done
-cd kuasar-sandbox-release
+# 将名称替换为明确选定的 Release 资产。
+tar -xzf platform-release-vX.Y.Z.tar.gz -C kuasar-sandbox-release
+# 再将选定的六个组件归档解压到同一目录。
 ```
 
-archive 已由发布流程检查路径安全和跨包覆盖。不要混用不同聚合 Release 下载的
-`SHA256SUMS`、platform 包和组件包。
+打包验证路径、跨包冲突、helper 架构、摘要及独立测试源码 pin。产品与测试可以来自不同 revision，其身份分别记录。
 
+<a id="3-前置条件"></a>
 ## 3. 前置条件
 
-完整门禁需要:
+完整原生 x86 执行要求 Linux、systemd、cgroup v2、可用 `/dev/kvm`、root 或非交互 `sudo`，以及 Docker、iproute2、curl、Python 3.11+、openssl、EROFS reader、mkfs.ext4 和已选脚本要求的普通工具。prepare 需要访问声明的镜像和固定 Python wheel。registry/gateway/probe 程序来自包内。
 
-- Linux x86_64、systemd、cgroup v2 与可读写 `/dev/kvm`;
-- root 或无交互 `sudo`;
-- Docker、iproute2、curl、Python 3、openssl、mkfs.ext4;
-- 可执行的本地 OCI registry `zot`;
-- 可执行的 S3-compatible 测试网关 `versitygw`;
-- 能拉取用例使用的基础镜像,或预先准备对应镜像。
+prepare 和产品执行不需要 Go/Rust 编译器或组件源码 checkout。缺少预备输入时 runner 失败，不使用宿主机 helper，不在执行时拉取镜像。预备输入必须保持不变；可变用例状态和结果文件位于预备目录之外。
 
-`bin/` 默认从解压根目录自动定位,也可用 `BIN=/path/to/bin` 覆盖。OBS 用例是唯一的凭据型
-可选套件;只有设置 `OBS_E2E=1` 才运行。
-
-## 4. 运行完整门禁
+<a id="4-运行完整门禁"></a>
+## 4. 准备并执行
 
 ```bash
-ZOT_BIN=/path/to/zot \
-VGW_BIN=/path/to/versitygw \
-bash test/e2e/run_all.sh
+release_dir="$PWD/kuasar-sandbox-release"
+prepared="/var/tmp/kuasar-prepared"
+python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
+    --workdir "$prepared" --arch x86_64 --all --exclude storage.obs.sh
+sudo python3 "$prepared/test/e2e/e2e" run --workdir "$prepared" \
+    --all --exclude storage.obs.sh --result /var/tmp/kuasar-e2e-result.json
 ```
 
-顶层入口依次执行 accelerator、connector、guest-runtime、sandboxer、orchestrator 和
-platform 的 `run_all.sh`。任一 owner 失败即停止,成功结尾为:
+使用全新 prepare 目录。prepare 获取不可变镜像归档与 Demo SDK，记录摘要和权限，不编译产品或 helper。执行加载这些镜像归档，逐个调用 Bash 用例，记录完整文件名、耗时、退出状态，再验证输入树。被测 Build、flatten、snapshot 和发布操作仍真实执行。
 
-```text
-==> full release e2e: OK
-```
+任何非零退出、缺少前置条件或输入变化都会失败。`PASS <filename>` 和 `result.json` 只代表实际执行的用例；Draft 跳过与静态架构检查不算产品验收。`storage.obs.sh` 需要显式选择及其文档声明的外部存储凭据，普通公共验证保持排除。
 
-## 5. 运行组件或单项用例
-
-只运行一个 owner:
+<a id="5-运行组件或单项用例"></a>
+## 5. 选择 suite 或单个用例
 
 ```bash
-BIN=$PWD/bin bash test/e2e/accelerator/run_all.sh
-BIN=$PWD/bin bash test/e2e/sandboxer/run_all.sh
-BIN=$PWD/bin ZOT_BIN=/path/to/zot VGW_BIN=/path/to/versitygw \
-    bash test/e2e/orchestrator/run_all.sh
+python3 "$release_dir/test/e2e/e2e" list --suite storage
+python3 "$release_dir/test/e2e/e2e" list --suite snapshot --include image.flatten.sh
+python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
+    --workdir /var/tmp/storage-prepared --suite storage --exclude storage.obs.sh
+sudo python3 /var/tmp/storage-prepared/test/e2e/e2e run \
+    --workdir /var/tmp/storage-prepared --suite storage --exclude storage.obs.sh
 ```
 
-直接运行单项时,按脚本头部说明设置环境:
+重复的 `--suite` 与 `--include` 取并集，再按文件名排除。未知 suite、未知文件名或空结果都会失败；运行未 prepare 的用例也会失败。一个完整 suite 可以跨多个组件 owner，源码归属见[测试组织](README_zh.md)。
 
-```bash
-BIN=$PWD/bin bash test/e2e/sandboxer/e2e_sandbox_cold.sh
-BIN=$PWD/bin ZOT_BIN=/path/to/zot \
-    bash test/e2e/orchestrator/e2e_run_builder.sh
-```
+ARM CI 选择 accelerator 的 storage/image 及 guest-runtime 的 flatten/registry 用例，排除需要凭据的 OBS。其他用例明确记录为该 lane 的排除项；ARM 构建或 static lane 不证明这些用例可运行。源码 unit/race/vet、helper、UFFD 和 working-set 门禁独立于九个产品 suite。
 
-主要归属为:
+<a id="6-perf-与-demo"></a>
+## 6. 性能与 Demo
 
-- accelerator:manifest、cache、store、OBS;
-- connector:eBPF/TC 网络拓扑与 tap;
-- guest-runtime:OCI 展平与 runtime bundle;
-- sandboxer:冷启动、磁盘、快照、恢复、stdio、tapfd;
-- orchestrator:node/proxy、builder、exec、MMDS、cluster、resource density;
-- platform:跨 sandboxer/accelerator 组合验证,当前包括沿用历史名称的
-  `e2e_warmpool_dedup.sh`。用例名称不代表对跨虚机快照去重率作通用承诺。
+`basic.demo.sh` 用预备产品、镜像和 SDK 运行文档中的 Demo，保留真实 COPY/Build、Quick Start、exec/files、fan-out、迁移、持久准备与清理断言。独立用户 Demo 用法仍见 [Demo 指南](demo/DEMO_zh.md)。
 
-## 6. Perf 与 demo
+性能 harness 留在 `test/perf/`。warm-pool 表征入口为 `test/perf/warmpool-dedup.sh`，名称不代表一般性的跨 VM snapshot 去重保证。UFFD 性能和 working-set smoke 保持独立源码门禁。smoke 结果不是统计性能验收；需引用精确 revision、job 日志和原始测量。
 
-性能入口位于 `test/perf/`,e2b SDK 演示位于 `test/demo/`。它们与 E2E 共享同一个 `bin/`
-布局,但不属于组件 PR 的 `run_all.sh` correctness 门禁。常用入口:
+<a id="7-排错"></a>
+## 7. 排错与验收
 
-```bash
-BIN=$PWD/bin bash test/perf/sandbox-perf.sh
-bash test/demo/demo_prep.sh
-sudo bash test/demo/demo_e2b.sh
-```
+- 缺少产品/helper：使用完整匹配的发行输入；执行没有源码或宿主机回退。
+- 摘要或权限变化：从已验证发行输入创建全新预备目录。
+- 缺少 `/dev/kvm`、systemd 或权限：在满足所选用例前置条件的主机执行。
+- 镜像或 SDK 获取失败：修复 prepare 的访问条件后使用全新目录；执行不会拉取或安装替代项。
+- 用例失败：检查输出与记录的退出码。恢复诊断只保留有界错误词汇，不复制原始 capability。
 
-## 7. 排错
-
-- `missing executable .../run_all.sh`:platform 包与组件选择不完整或混用了不同版本;
-- `missing ... in BIN`:没有解压全部六个组件 archive;
-- `/dev/kvm` 不可用:检查设备权限与 runner 虚拟化配置;
-- `sudo -n` 失败:为测试 runner 配置所需的无交互权限;
-- 镜像拉取失败:预拉取脚本指定的镜像或配置可用镜像代理;
-- 需要保留现场:按具体脚本支持设置 `E2E_KEEP=1`。
+验收要求精确 head/base 和测试/产品/helper 来源身份、必需源码门禁成功及真实原生产品结果。干净发行验收还需证明无组件源码树和 Go/Rust 工具链，覆盖一个完整非 KVM suite、一个完整 KVM suite 及适用 ARM 非 KVM 选择。保留失败和跳过结果；本地 fixture 测试不能替代公共 runner 验收。

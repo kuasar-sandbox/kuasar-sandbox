@@ -172,7 +172,7 @@ The project repository contains:
 
 ```text
 docs/              System design, deployment, performance, CI, and release documents
-test/e2e/          Owner suites, run_all.sh, and platform integration cases
+test/e2e/          Shared runner, flat suite cases and prepared-input helpers
 test/perf|demo/    Platform performance and demonstration scripts
 ci/integration/    CI helpers and source-cache maintenance
 ci/native-cache/   VMLinux, EROFS, Envd, RocksDB, and Cloud Hypervisor cache support
@@ -191,7 +191,7 @@ A complete source build is driven from this project repository and consumes the 
 ```bash
 make -C kuasar-sandbox build
 make -C kuasar-sandbox test
-make -C kuasar-sandbox test-e2e
+make -C kuasar-sandbox test-e2e RELEASE_DIR=/release E2E_WORKDIR=/tmp/kuasar-prepared
 make -C kuasar-sandbox perf
 make -C kuasar-sandbox demo
 ```
@@ -202,7 +202,7 @@ Runtime files are collected into `bin/<arch>/` according to [`release/bin-inputs
 GOWORK=off make -C sandboxer build
 ```
 
-Component suites live in their owner's `test/e2e/`, with `run_all.sh` as the common entry. `make test-e2e` assembles the selected source set into `test/e2e/<owner>/` and invokes the same top-level entry as the platform package. A case that consumes several components still belongs to the component owning its behavior.
+Product E2E consumes prebuilt products through `test/e2e/e2e prepare` and `run`. Full `<suite>.<case>.sh` filenames identify cases across nine suites; component ownership only determines where source cases are maintained. Preparation acquires immutable images and the pinned Demo SDK; execution uses prepared products, helpers and images without source discovery, compilation or automatic pulls. Unit/race/vet, UFFD and performance gates stay independent. See [test organization](test/README.md) and the [release validation guide](test/QUICKSTART.md).
 
 Release-tool tests do not contact GitHub or build the real native dependencies:
 

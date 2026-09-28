@@ -65,17 +65,13 @@ def optional_contents_listing(endpoint, owner):
 
 
 def candidate_case_names(repository, sha, owner):
-    """Read the flat rewritten case set only after the owner runner is retired."""
+    """Read exact case filenames; retired owner entry points are not executable inputs."""
     legacy_path = "test/e2e/platform/run_all.sh" if owner == "platform" else "test/e2e/run_all.sh"
     legacy = release.api_optional(f"repos/{repository}/contents/{legacy_path}?ref={quote(sha, safe='')}")
-    if legacy is not None:
-        artifacts.require(isinstance(legacy, dict) and legacy.get("type") == "file",
-                          f"candidate owner entry is not a file: {owner}")
-        return []
+    artifacts.require(legacy is None, f"superseded owner runner in selected test source: {owner}")
     path = "test/e2e/platform/cases" if owner == "platform" else "test/e2e/cases"
     listing = optional_contents_listing(f"repos/{repository}/contents/{path}?ref={quote(sha, safe='')}", owner)
-    if listing is None:
-        return []
+    artifacts.require(listing, f"selected test revision has no case files: {owner}")
     names = []
     for entry in listing:
         artifacts.require(entry.get("type") == "file" and isinstance(entry.get("name"), str),
@@ -86,10 +82,49 @@ def candidate_case_names(repository, sha, owner):
     return names
 
 
-def release_case_names(tests):
-    """Bind migrated release entries to filenames at the committed test pins."""
-    return {owner: names for owner, record in tests.items()
-            if (names := candidate_case_names(record["repository"], record["sha"], owner))}
+def case_files(records):
+    return {owner: candidate_case_names(record['repository'], record['sha'], owner)
+            for owner, record in records.items()}
+
+
+def historical_case_files(records):
+    """Read the exact case set for bootstrap evidence without executing old entries."""
+    result = {}
+    for owner, record in records.items():
+        path = 'test/e2e/platform/run_all.sh' if owner == 'platform' else 'test/e2e/run_all.sh'
+        legacy = release.api_optional(f"repos/{record['repository']}/contents/{path}?ref={record['sha']}")
+        if legacy is None:
+            result[owner] = candidate_case_names(record['repository'], record['sha'], owner)
+        else:
+            artifacts.require(isinstance(legacy, dict) and legacy.get('type') == 'file',
+                              'historical owner entry is not a file')
+    return result
+
+
+def historical_profile(arch, cases=None):
+    """Interpret immutable pre-cutover release evidence, never execute its entries."""
+    cases = cases or {}
+    owners = set(artifacts.OWNERS if arch == 'x86_64' else ('accelerator', 'guest-runtime'))
+    exclusions = [{'owner': 'accelerator', 'case': 'storage.obs.sh', 'reason': 'credentialed OBS case is not selected'}]
+    if not cases.get('accelerator'):
+        exclusions = [{'owner': 'accelerator', 'case': 'e2e_obs.sh', 'reason': 'credentialed OBS suite is not selected'}]
+    elif 'storage.obs.sh' not in cases['accelerator']:
+        exclusions = []
+    if arch == 'aarch64':
+        exclusions.extend({'owner': owner, 'reason': 'no selected independent ARM non-KVM owner suite'}
+                          for owner in sorted(set(artifacts.OWNERS) - owners))
+    entries = []
+    for owner in artifacts.OWNERS:
+        if owner not in owners:
+            continue
+        if cases.get(owner):
+            entries.extend(f'test/e2e/{owner}/cases/{name}' for name in cases[owner]
+                           if not (owner == 'accelerator' and name == 'storage.obs.sh'))
+        else:
+            entries.append(f'test/e2e/{owner}/run_all.sh')
+    return {'cases': entries,
+            'required_products': sorted(set().union(*(artifacts.REQUIRED[owner] for owner in owners))),
+            'exclusions': exclusions, 'name': 'x86-owner-kvm' if arch == 'x86_64' else 'arm-native-non-kvm'}
 
 
 def aggregate(version, *, require_dual=True):
@@ -135,15 +170,17 @@ def aggregate(version, *, require_dual=True):
         pins = release.selection.test_revisions(release.selection.read_simple_yaml(manifest, relative), relative)
         tests = artifacts.release_test_revisions(pins, sha)
         artifacts.require(binding.get("test_revisions") == tests, "published test pins differ from committed selection")
-        # Immutable earlier releases retain owner-profile evidence. New staged
-        # releases declare each migrated case before preparation and execution.
-        cases = release_case_names(tests) if any(
-            "/cases/" in case for result in binding["architectures"].values()
-            for case in result["profile"]["cases"]) else {}
-        owners = sorted({"platform", *cases})
+        bootstrap_cases = historical_case_files(tests) if any(
+            '/cases/' in case for result in binding['architectures'].values()
+            for case in result.get('profile', {}).get('cases', [])) else {}
         for arch, result in binding["architectures"].items():
+            if 'selection' in result:
+                expected = artifacts.suite_selection(['platform'], arch, case_files(tests))
+                actual = result['selection']
+            else:
+                expected, actual = historical_profile(arch, bootstrap_cases), result.get('profile')
             artifacts.require(result["arch"] == arch and result["conclusion"] == "success"
-                              and result["profile"] == artifacts.profiles(owners, arch, cases)
+                              and actual == expected
                               and result.get("test_revisions") == tests,
                               "aggregate did not pass its predeclared architecture profile")
         validation = binding["architectures"]
@@ -210,23 +247,6 @@ def product_source_map(products, sources, kernel_sha):
     return result
 
 
-def include_migrated_baselines(owners, overlays, case_names, tests):
-    """A platform candidate executes the exact migrated baseline case trees."""
-    if "platform" not in owners:
-        return
-    for owner in artifacts.OWNERS:
-        if owner in overlays:
-            continue
-        record = tests[owner]
-        names = candidate_case_names(record["repository"], record["sha"], owner)
-        if names:
-            # These are test-only overlays at the existing immutable test pin.
-            # A genuine legacy owner keeps its complete existing runner.
-            owners.append(owner)
-            overlays.append(owner)
-            case_names[owner] = names
-
-
 def source_plan(framework_sha):
     primary = {"repository": os.environ["CANDIDATE_REPOSITORY"], "candidate_sha": os.environ["CANDIDATE_SHA"],
                "base_sha": os.environ["CANDIDATE_BASE_SHA"], "head_sha": os.environ["CANDIDATE_HEAD_SHA"],
@@ -241,9 +261,15 @@ def source_plan(framework_sha):
     sources = {owner: {"repository": repository, "sha": selected["sha"] if owner == "platform" else
                       selected["units"]["runtime" if owner == "guest-runtime" else owner]["sha"], "role": "baseline"}
                for owner, repository in REPOSITORIES.items()}
-    tests = {owner: dict(record) for owner, record in
-             artifacts.validate_test_revisions(selected.get("test_revisions")).items()}
-    changes, owners, overlays, candidate_cases = {}, [], [], {}
+    # Test pins are maintained independently of immutable product releases.
+    # A platform candidate's committed selection can advance migration tests
+    # without rebuilding or substituting any baseline product.
+    selection_sha = platform_record['candidate_sha'] if platform_record else platform_sha
+    relative = 'releases/daily-preview.yaml' if base_ref == 'main' else 'releases/release.yaml'
+    manifest = source_text(PLATFORM, selection_sha, relative)
+    pins = release.selection.test_revisions(release.selection.read_simple_yaml(manifest, relative), relative)
+    tests = artifacts.release_test_revisions(pins, selection_sha)
+    changes, owners = {}, []
     kernel_sha = selected["units"]["vmlinux"]["sha"]
     for record in records:
         owner = "platform" if record["repository"] == PLATFORM else record["repository"].split("/")[1]
@@ -255,14 +281,9 @@ def source_plan(framework_sha):
         sources[owner] = {"repository": record["repository"], "sha": exact_sha(record["candidate_sha"]),
                           "role": "candidate" if record is primary else "companion"}
         tests[owner] = dict(sources[owner])
-        names = candidate_case_names(record["repository"], record["candidate_sha"], owner)
-        if names:
-            candidate_cases[owner] = names
         owners.append(owner)
-        overlays.append(owner)
         if owner == "guest-runtime":
             kernel_sha = record["candidate_sha"]
-    include_migrated_baselines(owners, overlays, candidate_cases, tests)
     products = artifacts.changed_products(changes)
     # Reuse #150/#151's Makefile input projection instead of treating a change
     # to an unrelated native target as a kernel change.
@@ -283,15 +304,16 @@ def source_plan(framework_sha):
         if not other_kernel and release.preview_selection.vmlinux_make_inputs(old) == release.preview_selection.vmlinux_make_inputs(new):
             products.remove("vmlinux")
     embedded = ["envd"] if any(path in ("native-deps/deps/build-envd.sh", "native-deps/deps/common.sh", "native-deps/Makefile") for path in guest_changes) else []
-    plan = {"schema": 1, "mode": "source", "framework_sha": exact_sha(framework_sha), "baseline": selected,
+    selected_files = case_files(tests)
+    plan = {"schema": 2, "mode": "source", "framework_sha": exact_sha(framework_sha), "baseline": selected,
             "candidate_records": records, "owners": sorted(owners), "changes": changes,
             "sources": sources, "kernel_sha": kernel_sha,
-            "test_revisions": tests, "test_overlays": sorted(overlays), "candidate_cases": candidate_cases,
+            "test_revisions": tests, "test_overlays": sorted(artifacts.OWNERS), "case_files": selected_files,
             "product_sources": product_source_map(products, sources, kernel_sha),
             "embedded_sources": {"envd": {REPOSITORIES["guest-runtime"]: sources["guest-runtime"]["sha"]}},
             "lanes": {arch: {"products": products, "embedded_products": embedded,
-                             "extra_checks": {"sandboxer": ["working-set-smoke"]} if arch == "x86_64" and set(owners) & {"platform", "sandboxer"} else {},
-                             "profile": artifacts.profiles(owners, arch, candidate_cases)} for arch in artifacts.ARCHES}}
+                             "performance": ["working-set-smoke"] if arch == "x86_64" and set(owners) & {"platform", "sandboxer"} else [],
+                             "selection": artifacts.suite_selection(owners, arch, selected_files)} for arch in artifacts.ARCHES}}
     artifacts.check_plan(plan)
     return plan
 
@@ -325,12 +347,12 @@ def exact_assets_plan(framework_sha, stage):
     sources = {owner: {"repository": repository, "sha": sha if owner == "platform" else
                       unit_records["runtime" if owner == "guest-runtime" else owner]["sha"], "role": "release"}
                for owner, repository in REPOSITORIES.items()}
-    cases = release_case_names(tests)
-    owners = sorted({"platform", *cases})
-    plan = {"schema": 1, "mode": "exact-assets", "framework_sha": exact_sha(framework_sha), "baseline": baseline,
-            "candidate_records": [], "owners": owners, "sources": sources, "kernel_sha": unit_records["vmlinux"]["sha"],
-            "test_revisions": tests, "test_overlays": [], "candidate_cases": cases, "product_sources": {}, "embedded_sources": {},
-            "lanes": {arch: {"products": [], "embedded_products": [], "profile": artifacts.profiles(owners, arch, cases)}
+    selected_files = case_files(tests)
+    plan = {"schema": 2, "mode": "exact-assets", "framework_sha": exact_sha(framework_sha), "baseline": baseline,
+            "candidate_records": [], "owners": ["platform"], "sources": sources, "kernel_sha": unit_records["vmlinux"]["sha"],
+            "test_revisions": tests, "test_overlays": [], "case_files": selected_files, "product_sources": {}, "embedded_sources": {},
+            "lanes": {arch: {"products": [], "embedded_products": [], "performance": [],
+                             "selection": artifacts.suite_selection(["platform"], arch, selected_files)}
                       for arch in artifacts.ARCHES}}
     artifacts.check_plan(plan)
     return plan
