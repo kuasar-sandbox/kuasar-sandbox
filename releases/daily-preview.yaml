@@ -10,7 +10,7 @@ components:
   runtime: runtime-v0.1.6-preview.20260927
   vmlinux: vmlinux-v0.1.3
 test_revisions:
-  accelerator: 7655959b4a330a55ec9e53bdaa6a1d5b47c2314e
+  accelerator: b2e0273657ba093704441a25d843215bf35cd3a1
   connector: b6e40e557103857147191998cad922a8d32c06d9
   guest-runtime: 974b425fb102acb8910f1197cf4842d4cd073029
   sandboxer: 440ebee0aa777d21f556e7f906b6d1e96af84f70
