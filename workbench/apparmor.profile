@@ -56,6 +56,9 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   remount options in (ro,bind,nosuid,nodev,noexec,relatime) /{var/log/journal,dev,build,work,output,var/lib/containerd}/,
   remount options in (ro,bind,nosuid,nodev,noexec,relatime) /dev/{mqueue,pts}/,
   remount options=(ro,bind) /etc/hosts,
+  remount options=(ro,bind) /,
+  mount options=(rw,rslave) -> /dev/,
+  mount options=(rw,rbind) / -> /run/systemd/mount-rootfs/,
   mount options=(rw,shared) -> /var/lib/docker/,
 
   # systemd private unit mounts and nested Docker's own roots. No blanket
@@ -79,6 +82,9 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   mount options=(rw,rbind) /run/netns/ -> /run/netns/,
   # AppArmor reports the nsfs handle source as its filesystem root.
   mount options=(rw,bind) / -> /run/netns/*,
+  # ip netns switches sysfs to the selected network namespace. Existing sysfs
+  # write/securityfs denials still apply to the newly mounted filesystem.
+  mount fstype=sysfs -> /sys/,
   pivot_root /var/lib/docker/**,
   pivot_root /var/lib/containerd/**,
 }

@@ -81,6 +81,8 @@ def qualify(image, root):
         require(execute('findmnt', '-n', '-o', 'FSTYPE', '--target', '/sys/fs/bpf') == 'bpf', 'missing bpffs mount')
         require(execute('docker', 'info', '--format', '{{.Driver}} {{.DockerRootDir}}') == 'overlay2 /var/lib/docker',
                 'private daemon storage differs')
+        # Keep runtime denials out of systemd startup's kernel audit burst.
+        time.sleep(6)
         execute('ip', 'netns', 'add', 'same-netns')
         execute('ip', '-n', 'same-netns', 'link', 'set', 'lo', 'up')
         execute('ip', 'netns', 'delete', 'same-netns')
