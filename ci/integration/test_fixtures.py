@@ -80,3 +80,33 @@ def architecture_result(plan, arch):
                                   'provenance_sha256': 'a' * 64, 'checks': checks,
                                   'timings': [{'case': case, 'exit_code': 0, 'wall_seconds': 0.1} for case in checks]}
     return artifacts.collect_shard_results(plan, arch, records)
+
+# Non-executable result fixtures for binding/reader unit tests. Runtime
+# acceptance always comes from the real staged workbench test, not this helper.
+WORKBENCH_CASES = CASES | {'sandboxer': sorted([*CASES['sandboxer'], 'network.tapfd.sh', 'snapshot.restore.sh'])}
+
+
+def workbench_results(plan, receipts):
+    result = {}
+    for arch, receipt in receipts.items():
+        cases = artifacts.workbench_cases(plan['case_files'], arch)
+        result[arch] = dict(receipt, conclusion='success', plan_id=artifacts.identity(plan),
+            framework_sha=plan['framework_sha'], test_revisions=plan['test_revisions'],
+            offline=True, empty_private_daemon=True, isolation={'complete': True, 'image': receipt['image_id']},
+            cases=cases, timings=[{'case': name, 'exit_code': 0, 'wall_seconds': .1} for name in cases],
+            input_assets={row['name']: row['digest'] for row in plan['baseline']['assets'] if row['name'] != 'SHA256SUMS'},
+            preflight={'arch': arch, 'page_size': 4096, 'kvm': 'api-12', 'tun': 'create-close',
+                'uffd': 'api-ioctl', 'bpf': 'create-pin-remove',
+                'docker': {'driver': 'overlay2', 'root': '/var/lib/docker'},
+                'containerd': {'root': '/var/lib/containerd', 'state': '/run/containerd'}},
+            host_apparmor_enabled=False, compression_seconds=.1, import_seconds=.1, start_seconds=.1,
+            wall_seconds=1, retained_task_bytes=100, disk={'used_before': 100, 'peak_used': 200, 'peak_increase': 100})
+    return result
+
+
+def registry_binding(version, results):
+    return {'reference': 'ghcr.io/kuasar-sandbox/workbench:' + version.removeprefix('release-'),
+            'digest': 'sha256:' + 'f' * 64, 'architectures': {
+                arch: {'digest': 'sha256:' + str(index) * 64, 'size': 100,
+                       'image_id': row['image_id'], 'archive_sha256': row['sha256']}
+                for index, (arch, row) in enumerate(results.items(), 1)}}
