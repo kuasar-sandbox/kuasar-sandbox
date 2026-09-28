@@ -87,14 +87,39 @@ def case_files(records):
             for owner, record in records.items()}
 
 
-def historical_profile(arch):
+def historical_case_files(records):
+    """Read the exact case set for bootstrap evidence without executing old entries."""
+    result = {}
+    for owner, record in records.items():
+        path = 'test/e2e/platform/run_all.sh' if owner == 'platform' else 'test/e2e/run_all.sh'
+        legacy = release.api_optional(f"repos/{record['repository']}/contents/{path}?ref={record['sha']}")
+        if legacy is None:
+            result[owner] = candidate_case_names(record['repository'], record['sha'], owner)
+    return result
+
+
+def historical_profile(arch, cases=None):
     """Interpret immutable pre-cutover release evidence, never execute its entries."""
+    cases = cases or {}
     owners = set(artifacts.OWNERS if arch == 'x86_64' else ('accelerator', 'guest-runtime'))
-    exclusions = [{'owner': 'accelerator', 'case': 'e2e_obs.sh', 'reason': 'credentialed OBS suite is not selected'}]
+    exclusions = [{'owner': 'accelerator', 'case': 'storage.obs.sh', 'reason': 'credentialed OBS case is not selected'}]
+    if not cases.get('accelerator'):
+        exclusions = [{'owner': 'accelerator', 'case': 'e2e_obs.sh', 'reason': 'credentialed OBS suite is not selected'}]
+    elif 'storage.obs.sh' not in cases['accelerator']:
+        exclusions = []
     if arch == 'aarch64':
         exclusions.extend({'owner': owner, 'reason': 'no selected independent ARM non-KVM owner suite'}
                           for owner in sorted(set(artifacts.OWNERS) - owners))
-    return {'cases': [f'test/e2e/{owner}/run_all.sh' for owner in artifacts.OWNERS if owner in owners],
+    entries = []
+    for owner in artifacts.OWNERS:
+        if owner not in owners:
+            continue
+        if cases.get(owner):
+            entries.extend(f'test/e2e/{owner}/cases/{name}' for name in cases[owner]
+                           if not (owner == 'accelerator' and name == 'storage.obs.sh'))
+        else:
+            entries.append(f'test/e2e/{owner}/run_all.sh')
+    return {'cases': entries,
             'required_products': sorted(set().union(*(artifacts.REQUIRED[owner] for owner in owners))),
             'exclusions': exclusions, 'name': 'x86-owner-kvm' if arch == 'x86_64' else 'arm-native-non-kvm'}
 
@@ -142,12 +167,15 @@ def aggregate(version, *, require_dual=True):
         pins = release.selection.test_revisions(release.selection.read_simple_yaml(manifest, relative), relative)
         tests = artifacts.release_test_revisions(pins, sha)
         artifacts.require(binding.get("test_revisions") == tests, "published test pins differ from committed selection")
+        bootstrap_cases = historical_case_files(tests) if any(
+            '/cases/' in case for result in binding['architectures'].values()
+            for case in result.get('profile', {}).get('cases', [])) else {}
         for arch, result in binding["architectures"].items():
             if 'selection' in result:
                 expected = artifacts.suite_selection(['platform'], arch, case_files(tests))
                 actual = result['selection']
             else:
-                expected, actual = historical_profile(arch), result.get('profile')
+                expected, actual = historical_profile(arch, bootstrap_cases), result.get('profile')
             artifacts.require(result["arch"] == arch and result["conclusion"] == "success"
                               and actual == expected
                               and result.get("test_revisions") == tests,

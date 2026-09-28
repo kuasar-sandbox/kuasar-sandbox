@@ -515,6 +515,20 @@ class ArtifactContracts(unittest.TestCase):
                  patch.object(resolver.release, "aggregate_runs", return_value=[run]):
                 baseline = resolver.aggregate(version)
                 self.assertEqual(baseline["test_revisions"], plan["test_revisions"])
+                original_body = state["body"]
+                for old_cases in ({}, {owner: names for owner, names in CASES.items() if owner != "platform"}):
+                    historical = json.loads(resolver.PROFILE_BINDING.search(original_body)[1])
+                    for arch, result in historical["architectures"].items():
+                        result.pop("selection")
+                        result["profile"] = resolver.historical_profile(arch, old_cases)
+                    state["body"] = "<!-- kuasar-integration-validation " + json.dumps(historical) + " -->"
+                    with patch.object(resolver, "historical_case_files", return_value=old_cases):
+                        self.assertEqual(resolver.aggregate(version)["test_revisions"], plan["test_revisions"])
+                        historical["architectures"]["x86_64"]["profile"]["cases"].pop()
+                        state["body"] = "<!-- kuasar-integration-validation " + json.dumps(historical) + " -->"
+                        with self.assertRaisesRegex(ValueError, "predeclared architecture profile"):
+                            resolver.aggregate(version)
+                state["body"] = original_body
                 with patch.object(resolver, "baseline", return_value=baseline), \
                      patch.object(resolver, "changed_files", return_value=["docs/ci.md"]), \
                      patch.object(resolver, "candidate_case_names", return_value=[]), \
