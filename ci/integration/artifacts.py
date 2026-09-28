@@ -405,6 +405,16 @@ def check_plan(plan):
     require(plan["schema"] == 2, "unsupported integration plan")
     require(re.fullmatch(r"[0-9a-f]{40}", plan["framework_sha"]), "missing exact framework revision")
     require(set(plan["lanes"]) == set(ARCHES), "plan must contain both architectures")
+    contract = plan['baseline'].get('delivery', 'historical')
+    require(contract in ('historical', 'workbench-v1'), 'unsupported aggregate delivery contract')
+    if contract == 'workbench-v1':
+        baseline = plan['baseline']
+        expected = {'SHA256SUMS', 'platform-' + baseline['version'] + '.tar.gz'}
+        expected.update(archive_name(unit, record['version'], arch)
+                        for unit, record in baseline['units'].items() for arch in ARCHES)
+        expected.update(f'workbench-{arch}-{baseline["version"].removeprefix("release-")}.tar.gz' for arch in ARCHES)
+        names = [record['name'] for record in baseline['assets']]
+        require(set(names) == expected and len(names) == len(expected), 'new aggregate lacks its complete declared assets')
     case_files = plan["case_files"]
     require(set(plan["test_overlays"]) == (set(OWNERS) if plan["mode"] == "source" else set()),
             "test overlays differ from the exact input mode")

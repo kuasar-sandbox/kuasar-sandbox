@@ -131,26 +131,127 @@ jobs:
             --sources fetched/test-sources --test-revisions fetched/test-revisions.json \
             --output fetched/e2e-helpers --wheels-output fetched/e2e-wheels --platform-source platform
 
-      - name: Assemble exact products, cases and prebuilt helpers
+      - name: Collect the shared external inputs once for both native images
         env:
           PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
           VERSION: ${{ steps.request.outputs.version }}
+          E2E_HELPER_ROOT: ${{ github.workspace }}/fetched/e2e-helpers
+          E2E_WHEEL_ROOT: ${{ github.workspace }}/fetched/e2e-wheels
         run: |
-          export SOURCE_DATE_EPOCH=$(git -C "$PLATFORM_SOURCE_ROOT" show -s --format=%ct \
-            "${{ steps.request.outputs.source_sha }}")
-          control/release/aggregate-release.sh assemble "$VERSION" fetched aggregate-stage
-
-      - name: Upload exact aggregate stage
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends skopeo
+          export SOURCE_DATE_EPOCH=$(git -C platform show -s --format=%ct HEAD)
+          control/release/package-platform.sh package "$VERSION" fetched/sources fetched/test-sources platform-input
+          mkdir collected-platform
+          tar -xzf "platform-input/assets/platform-$VERSION.tar.gz" -C collected-platform
+          python3 -B platform/workbench/collect-inputs.py --cases collected-platform/test/e2e/cases \
+            --arch x86_64 --arch aarch64 --output collected-inputs
+          tar -cf workbench-inputs.tar collected-inputs collected-platform/test/e2e/cases
+          tar -cf fetched.tar fetched
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ steps.request.outputs.artifact }}
+          name: workbench-inputs-${{ github.run_id }}
+          path: workbench-inputs.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aggregate-inputs-${{ github.run_id }}
+          path: fetched.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  workbench-build:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          path: platform
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: workbench-inputs-${{ github.run_id }}
+          path: transport
+      - name: Build and save the native aggregate image without publication credentials
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          python3 -B platform/ci/integration/transport.py extract transport/workbench-inputs.tar inputs
+          python3 -B platform/workbench/build.py --version "$VERSION" --arch "$TARGET_ARCH" \
+            --cases inputs/collected-platform/test/e2e/cases --deps-dir inputs/collected-inputs \
+            --output image --cpus 2 --memory-gib 6
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workbench-image-${{ matrix.arch }}-${{ github.run_id }}
+          path: image/workbench-*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  stage:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    needs: [prepare, workbench-build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          path: platform
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: aggregate-inputs-${{ github.run_id }}
+          path: transport
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: workbench-image-*-${{ github.run_id }}
+          path: workbench-images
+          merge-multiple: true
+      - name: Assemble the complete declared set without repackaging products
+        env:
+          PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
+          mv workbench-images inputs/fetched/workbench
+          export SOURCE_DATE_EPOCH=$(git -C platform show -s --format=%ct HEAD)
+          control/release/aggregate-release.sh assemble "$VERSION" inputs/fetched aggregate-stage
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ needs.prepare.outputs.artifact }}
           path: aggregate-stage
+          compression-level: 0
           if-no-files-found: error
           retention-days: 1
 
   release-asset-validation:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: prepare
+    needs: [prepare, stage]
     permissions:
       contents: read
       pull-requests: read
@@ -168,6 +269,7 @@ jobs:
     permissions:
       actions: read
       contents: write
+      packages: write
     steps:
       - name: Check out trusted publish tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -201,8 +303,13 @@ jobs:
           name: integration-validation-${{ github.run_id }}
           path: validated
 
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: integration-workbench-result-*-${{ github.run_id }}
+          path: workbench-results
+          merge-multiple: true
       - name: Bind publication to the tested bytes
-        run: python3 -B release/bind-validation.py aggregate-stage validated/plan/plan.json validated/validation.json
+        run: python3 -B release/bind-validation.py aggregate-stage validated/plan/plan.json validated/validation.json --workbench workbench-results
 
       - name: Publish aggregate release
         env:
@@ -235,7 +342,7 @@ jobs:
           set -euo pipefail
           artifact_id_lines=$(gh api --paginate \
             "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name | test("^(aggregate-stage-|integration-build-|integration-prepared-)")) | .id')
+            --jq '.artifacts[] | select(.name | test("^(aggregate-stage-|aggregate-inputs-|workbench-inputs-|workbench-image-|integration-build-|integration-prepared-)")) | .id')
           artifact_ids=()
           if [[ -n "$artifact_id_lines" ]]; then
             mapfile -t artifact_ids <<< "$artifact_id_lines"
