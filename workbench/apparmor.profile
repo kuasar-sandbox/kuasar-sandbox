@@ -61,8 +61,8 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
 
   # Observed systemd-generator hardening: read-only bind remounts only,
   # including the mount roots (subtree rules do not cover the root itself).
-  remount options in (ro,bind,nosuid,nodev,noexec,relatime) /{var/log/journal,dev,build,work,work/home,output,inputs/release,var/lib/containerd,var/lib/docker}/,
-  remount options in (ro,bind,nosuid,nodev,noexec,relatime) /dev/{mqueue,pts}/,
+  remount options=(ro,bind) /{var/log/journal,dev,build,work,work/home,output,inputs/release,var/lib/containerd,var/lib/docker}/,
+  remount options=(ro,bind) /dev/{mqueue,pts}/,
   remount options=(ro,bind) /etc/{hosts,hostname,resolv.conf,machine-id},
   remount options=(ro,bind) /,
   mount options=(rw,rslave) -> /dev/,
@@ -70,6 +70,7 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   mount fstype=tmpfs -> /dev/shm/,
   mount fstype=proc -> /run/systemd/namespace-*/,
   mount options=(rw,move) /run/systemd/namespace-*/dev/ -> /run/systemd/mount-rootfs/dev/,
+  mount options=(rw,move) /run/systemd/namespace-*/ -> /run/systemd/mount-rootfs/proc/,
   pivot_root /run/systemd/mount-rootfs/,
   mount options=(rw,shared) -> /var/lib/docker/,
 
@@ -80,15 +81,33 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   # systemd generators mount a private tmpfs at /tmp itself before journald.
   mount fstype=tmpfs -> /tmp/,
   mount fstype=tmpfs -> /{run,tmp}/**,
-  mount options in (rw,ro,bind,rbind) /** -> /var/lib/docker/**,
-  mount options in (rw,ro,bind,rbind) /** -> /var/lib/containerd/**,
-  mount options in (rw,ro,bind,rbind) /** -> /run/systemd/**,
+  mount options=(rw,bind) /** -> /var/lib/docker/**,
+  mount options=(rw,rbind) /** -> /var/lib/docker/**,
+  mount options=(ro,bind) /** -> /var/lib/docker/**,
+  mount options=(ro,rbind) /** -> /var/lib/docker/**,
+  mount options=(rw,bind) /** -> /var/lib/containerd/**,
+  mount options=(rw,rbind) /** -> /var/lib/containerd/**,
+  mount options=(ro,bind) /** -> /var/lib/containerd/**,
+  mount options=(ro,rbind) /** -> /var/lib/containerd/**,
+  mount options=(rw,bind) /** -> /run/systemd/**,
+  mount options=(rw,rbind) /** -> /run/systemd/**,
+  mount options=(ro,bind) /** -> /run/systemd/**,
+  mount options=(ro,rbind) /** -> /run/systemd/**,
   remount /var/lib/docker/**,
   remount /var/lib/containerd/**,
   remount /run/systemd/**,
-  mount options in (rw,private,rprivate,slave,rslave) -> /,
-  mount options in (rw,private,rprivate,slave,rslave) -> /var/lib/docker/**,
-  mount options in (rw,private,rprivate,slave,rslave) -> /var/lib/containerd/**,
+  mount options=(rw,private) -> /,
+  mount options=(rw,rprivate) -> /,
+  mount options=(rw,slave) -> /,
+  mount options=(rw,rslave) -> /,
+  mount options=(rw,private) -> /var/lib/docker/**,
+  mount options=(rw,rprivate) -> /var/lib/docker/**,
+  mount options=(rw,slave) -> /var/lib/docker/**,
+  mount options=(rw,rslave) -> /var/lib/docker/**,
+  mount options=(rw,private) -> /var/lib/containerd/**,
+  mount options=(rw,rprivate) -> /var/lib/containerd/**,
+  mount options=(rw,slave) -> /var/lib/containerd/**,
+  mount options=(rw,rslave) -> /var/lib/containerd/**,
   # Docker's archive unpacker pivots into its private storage first, then
   # makes the detached old root private at this generated mountpoint.
   mount options=(rw,rprivate) -> /.pivot_root[0-9]*/,
@@ -100,6 +119,17 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   # ip netns switches sysfs to the selected network namespace. Existing sysfs
   # write/securityfs denials still apply to the newly mounted filesystem.
   mount fstype=sysfs -> /sys/,
+  # After pivot, runc hardens the inner proc mount with self-binds followed
+  # only by read-only remounts. No alternate source or writable remount grant.
+  mount options=(rw,rbind) /proc/bus/ -> /proc/bus/,
+  mount options=(rw,rbind) /proc/fs/ -> /proc/fs/,
+  mount options=(rw,rbind) /proc/irq/ -> /proc/irq/,
+  mount options=(rw,rbind) /proc/sys/ -> /proc/sys/,
+  mount options=(rw,rbind) /proc/sysrq-trigger -> /proc/sysrq-trigger,
+  remount options=(ro,bind) /proc/{bus,fs,irq,sys}/,
+  remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/{bus,fs,irq,sys}/,
+  remount options=(ro,bind) /proc/sysrq-trigger,
+  remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/sysrq-trigger,
   pivot_root /var/lib/docker/**,
   pivot_root /var/lib/containerd/**,
 }

@@ -34,6 +34,9 @@ def child():
     for filesystem in ('tmpfs', 'securityfs'):
         result = subprocess.run(['mount', '-t', filesystem, filesystem, '/mnt'], capture_output=True)
         assert result.returncode != 0, 'profile allowed unrelated ' + filesystem + ' mount'
+    result = subprocess.run(['unshare', '--mount', '--fork', '--kill-child=KILL', '--propagation', 'private',
+                             'mount', '-t', 'tmpfs', 'tmpfs', '/'], capture_output=True)
+    assert result.returncode != 0, 'profile allowed an unrelated filesystem over root'
     # Current runc opens sysctls through a detached proc clone. AppArmor sees
     # /sys/net/... there, so test the actual fd-reopen operation in this private
     # network namespace, and ensure sensitive detached proc entries stay denied.
@@ -58,6 +61,12 @@ def child():
         finally:
             os.close(fd)
     os.close(proc)
+    for name in ('bus', 'fs', 'irq', 'sys', 'sysrq-trigger'):
+        target = '/proc/' + name
+        subprocess.run(['mount', '--rbind', target, target], check=True)
+        subprocess.run(['mount', '-o', 'remount,bind,ro', target], check=True)
+        forbidden = subprocess.run(['mount', '-o', 'remount,bind,rw', target], capture_output=True)
+        assert forbidden.returncode != 0, 'profile allowed writable proc remount: ' + target
     root = b'/var/lib/docker/pivot-test'
     os.mkdir(root)
     call('mount', b'tmpfs', root, b'tmpfs', 0, None)
