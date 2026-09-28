@@ -253,6 +253,10 @@ jobs:
 
           if [ -z "$reason" ] && [ "$deferred" = false ]; then
             commit=$(api_get "/repos/$GITHUB_REPOSITORY/git/commits/$candidate_sha")
+            base_branch=$(api_get "/repos/$GITHUB_REPOSITORY/git/ref/heads/$base_ref")
+            if ! jq -e --arg base "$base_sha" '.object.sha == $base' <<< "$base_branch" >/dev/null; then
+              reason="base branch changed after this candidate was selected"
+            fi
             if ! jq -e \
               --arg candidate "$candidate_sha" \
               --arg base "$base_sha" \
@@ -510,7 +514,9 @@ jobs:
           repository: ${{ job.workflow_repository }}
           ref: ${{ job.workflow_sha }}
           path: trusted/platform
-          sparse-checkout: ci/hosted
+          sparse-checkout: |
+            ci/hosted
+            ci/integration
           persist-credentials: false
 
       - name: Bootstrap standard control runner
@@ -636,14 +642,14 @@ jobs:
           }
 
           if [ "$ADMISSION_RESULT" != success ]; then
-            echo "Admission already rejected this pull request"
-            exit 0
+            echo "Admission did not succeed; this candidate is not accepted" >&2
+            exit 1
           fi
 
           if [ "$ELIGIBLE" != true ]; then
             if ! [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-              echo "Draft pull request has no integration commit to mark pending"
-              exit 0
+              echo "Draft pull request has no accepted integration commit" >&2
+              exit 1
             fi
 
             pr=$(api_get "/repos/$GITHUB_REPOSITORY/pulls/$CANDIDATE_PR")
@@ -668,7 +674,8 @@ jobs:
             else
               echo "Deferred pull request changed; a newer event owns its status"
             fi
-            exit 0
+            # Pending/deferred is not a successful required merge check.
+            exit 1
           fi
 
           if ! [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
@@ -695,7 +702,7 @@ jobs:
             post_status \
               "$CANDIDATE_SHA" pending \
               "Integration E2E is deferred while this pull request is draft"
-            exit 0
+            exit 1
           fi
 
           final_state=failure
@@ -704,6 +711,7 @@ jobs:
             description="Integration E2E result: $E2E_RESULT"
           else
             commit=$(api_get "/repos/$GITHUB_REPOSITORY/git/commits/$CANDIDATE_SHA")
+            base_branch=$(api_get "/repos/$GITHUB_REPOSITORY/git/ref/heads/$CANDIDATE_BASE_REF")
             source_set_valid=true
             if [ "$COMPANION_CANDIDATES" != '[]' ]; then
               if [ -z "$COMPANION_TOKEN" ]; then
@@ -741,6 +749,7 @@ jobs:
                   and .parents[0].sha == $base
                   and .parents[1].sha == $head
                 ' <<< "$commit" >/dev/null \
+              && jq -e --arg base "$CANDIDATE_BASE_SHA" '.object.sha == $base' <<< "$base_branch" >/dev/null \
               && [ "$source_set_valid" = true ]; then
               final_state=success
               if [ "$COMPANION_CANDIDATES" = '[]' ]; then
@@ -750,6 +759,18 @@ jobs:
               fi
             else
               description="Pull request or companion source set changed while Integration E2E was running"
+            fi
+          fi
+
+          # Reuse the trusted source-set contract, including current PR-body
+          # companion membership. Candidate-produced result text is not authority.
+          if [ "$final_state" = success ]; then
+            if ! env GH_TOKEN="${COMPANION_TOKEN:-$GH_TOKEN}" \
+                CALLER_TOKEN="$GH_TOKEN" \
+                CANDIDATE_REPOSITORY="$GITHUB_REPOSITORY" \
+                bash trusted/platform/ci/integration/validate-source-set.sh; then
+              final_state=failure
+              description="Current source set or companion declaration changed before acceptance"
             fi
           fi
 

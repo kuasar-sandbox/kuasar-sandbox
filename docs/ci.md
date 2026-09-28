@@ -18,6 +18,8 @@ Same-repository platform PRs use `pull_request` and a local reusable workflow at
 
 The required `ci / finalize` job collects the complete platform PR result and rechecks the current source set before succeeding. It uses read-only API access; no separate commit-status publisher is needed.
 
+An admission failure or deferred Draft must not complete the trusted finalizer successfully. The primary target branch ref is read again, as well as the PR metadata and ordered integration parents, so a cached PR response cannot validate an older base. Trusted finalization also reuses the current source-set validator to compare the effective companion declaration; unrelated prose edits do not invalidate the candidate. Each selected source/architecture stage must actually succeed; a skipped or neutral Actions check is not product validation. Server-side required-check configuration and the workflow result are separate controls and must be checked together. The [external contribution reception procedure](../CONTRIBUTING.md#ci-eligibility-and-external-contributions) describes non-member Fork handling; rerunning a rejected Fork does not change author membership. This contract adds no approval quota or particular review bot.
+
 App keys and short-lived control tokens remain confined to trusted admission/finalization and release-control jobs. Product/helper builds, source checks, preparation and E2E never receive the App key. Candidate execution uses fresh standard jobs. Anonymous exact-SHA public source retrieval uses credential-free checkouts; the narrowly scoped Actions token is used only in trusted API/download steps. Publish has its own job and write permission.
 
 Atomic changes can declare reciprocal companions in the existing PR-body marker:
