@@ -440,6 +440,12 @@ def main():
                 if not path.exists():
                     continue
                 require(path.is_dir(), 'instance data path is not a directory')
+                # Build-mode daemon directories are intentionally unused. Avoid
+                # starting a privileged-file cleanup helper when there is
+                # literally nothing to remove.
+                if not any(path.iterdir()):
+                    path.rmdir()
+                    continue
                 # Daemon files can be root-owned. Give this task's data mount to
                 # a bounded cleanup container, never a host directory ancestor.
                 docker('run', '--rm', '--pull=never', '--network=none', '--cap-drop=ALL',
