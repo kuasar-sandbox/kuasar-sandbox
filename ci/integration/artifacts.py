@@ -585,6 +585,42 @@ def verify_workspace(workspace, plan, arch):
     return provenance
 
 
+def workbench_cases(case_files, arch):
+    cases = set(suite_selection(['platform'], arch, case_files)['cases'])
+    if arch == 'aarch64':
+        extra = {'sandbox.lifecycle.sh', 'snapshot.restore.sh', 'network.tapfd.sh'}
+        require(extra <= set().union(*(set(names) for names in case_files.values())), 'missing declared ARM workbench KVM/network cases')
+        cases |= extra
+    return sorted(cases)
+
+
+def check_workbench_results(version, source_sha, results, *, expected_assets, case_files):
+    """Bind system/offline evidence to each tested image and outer archive."""
+    require(isinstance(results, dict) and set(results) == set(ARCHES), 'both workbench architecture results are required')
+    for arch, record in results.items():
+        name = f'workbench-{arch}-{version.removeprefix("release-")}.tar.gz'
+        require(record.get('conclusion') == 'success' and record.get('arch') == arch
+                and record.get('aggregate_version') == version and record.get('source_revision') == source_sha,
+                'workbench validation has another source/version/architecture or did not pass')
+        require(record.get('archive') == name and 'sha256:' + record.get('sha256', '') == expected_assets.get(name)
+                and re.fullmatch(r'sha256:[0-9a-f]{64}', record.get('image_id', '')),
+                'workbench validation differs from staged archive/image identity')
+        require(record.get('offline') is True and record.get('empty_private_daemon') is True,
+                'workbench requires offline preparation from empty private Docker state')
+        require(record.get('isolation', {}).get('complete') is True
+                and record['isolation'].get('image') == record['image_id'], 'workbench isolation did not pass on the tested image')
+        require(record.get('preflight', {}).get('kvm') == 'api-12', 'workbench native KVM preflight did not pass')
+        require(record.get('cases') == workbench_cases(case_files, arch) and record.get('timings'),
+                'workbench cases differ from the complete declared selection')
+        require(record.get('input_assets') == expected_assets, 'workbench input assets differ from the aggregate')
+        check_timings(record['timings'], record['cases'])
+        require(record.get('host_apparmor_enabled') in (True, False), 'missing workbench host LSM observation')
+        if record['host_apparmor_enabled']:
+            require(record.get('apparmor', {}).get('conclusion') == 'success'
+                    and record['apparmor'].get('image_id') == record['image_id'], 'enforcing host nested Docker was not qualified')
+    return results
+
+
 def collect_results(plan, results):
     require(set(results) == set(ARCHES), "both architecture results are required")
     for arch in ARCHES:
