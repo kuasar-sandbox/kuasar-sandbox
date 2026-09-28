@@ -22,8 +22,8 @@ validate_archive() {
     /^\// { exit 1 }
     { path=$0; sub(/^\.\//, "", path); if (path ~ /(^|\/)\.\.($|\/)/) exit 1 }
   ' "$listing" || release_fail "platform archive contains an unsafe path"
-  grep -Fx './docs/kuasar-sandbox.md' "$listing" >/dev/null \
-    || release_fail "platform archive is missing docs/kuasar-sandbox.md"
+  grep -Fx './guide/kuasar-sandbox.md' "$listing" >/dev/null \
+    || release_fail "platform archive is missing guide/kuasar-sandbox.md"
   grep -Fx './test/e2e/e2e' "$listing" >/dev/null \
     || release_fail "platform archive is missing test/e2e/e2e"
   grep -Fx './test/e2e/lib/common.sh' "$listing" >/dev/null \
@@ -36,9 +36,14 @@ validate_archive() {
   python3 -B "$ROOT/release/validate-e2e-package.py" "$archive"
   local owner
   for owner in accelerator connector guest-runtime sandboxer orchestrator; do
-    grep -Fx "./docs/$owner.md" "$listing" >/dev/null \
-      || release_fail "platform archive is missing docs/$owner.md"
+    grep -Fx "./guide/$owner/README.md" "$listing" >/dev/null \
+      || release_fail "platform archive is missing guide/$owner/README.md"
   done
+  grep -Fx './workbench/workbench' "$listing" >/dev/null \
+    || release_fail 'platform archive is missing the workbench launcher'
+  if grep -E '/test_[^/]*$|/test/perf/|/assemble(_docs)?\.(sh|py)$|/package_inputs\.py$' "$listing" >/dev/null; then
+    release_fail 'platform archive contains source-only tests or assembly tools'
+  fi
   if grep -Fx './test/e2e/assemble.sh' "$listing" >/dev/null; then
     release_fail "platform archive contains the source-only E2E assembler"
   fi
@@ -47,11 +52,11 @@ validate_archive() {
   fi
   if awk '
     { path=$0; sub(/^\.\//, "", path) }
-    path != "" && path !~ /\/$/ && path !~ /^(docs|test)\// { exit 1 }
+    path != "" && path !~ /\/$/ && path !~ /^(guide|test|workbench)\// { exit 1 }
   ' "$listing"; then
     :
   else
-    release_fail "platform archive contains files outside docs/ and test/"
+    release_fail "platform archive contains files outside guide/, test/ and workbench/"
   fi
   rm -f "$listing"
 }
@@ -103,7 +108,7 @@ PY
   cat > "$output/release-notes.md" <<EOF
 Kuasar Sandbox platform integration package for $version.
 
-The package contains the system documentation and the deliverable cross-component E2E, performance, and demo suites. Component binaries are published as separate assets in the same aggregate release.
+The package contains the selected bilingual user guides, canonical E2E cases and runtime inputs, locked Demo dependencies, and the thin workbench launcher. Component binaries are published as separate assets in the same aggregate release.
 EOF
   rm -rf "$work"
 }

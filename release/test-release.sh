@@ -95,6 +95,21 @@ EOF
     cp -a "$source_root" "$TMP/fetched/test-sources/$owner"
   fi
 done < "$TMP/selection.tsv"
+python3 - "$ROOT" "$TMP/fetched/test-sources" <<'PYINPUTS'
+import pathlib, sys
+sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'test/e2e'))
+from package_inputs import GUIDES, OWNER_LIBRARIES
+root = pathlib.Path(sys.argv[2])
+for owner in ('accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator'):
+    for stem in GUIDES[owner]:
+        path = root / owner / (stem + '.md')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists(): path.write_text('# User fixture\n')
+    for name in OWNER_LIBRARIES[owner]:
+        path = root / owner / 'test/e2e/lib' / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text('# Runtime fixture\n')
+PYINPUTS
 printf '#!/usr/bin/env bash\necho "pinned orchestrator E2E"\n' \
   > "$TMP/fetched/test-sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"
 # Every selected test source is case-only. Owner boundaries do not affect
@@ -125,7 +140,7 @@ Use the shared prepared runner.
 [Current case](test/e2e/cases/storage.connector-fixture.sh)
 EOF
   printf 'Current prepared network guide\n' \
-    > "$TMP/fetched/test-sources/connector/docs/connector-detail$suffix.md"
+    > "$TMP/fetched/test-sources/connector/docs/vswitch-operations$suffix.md"
 done
 # These maintained owner guides are shipped beside the canonical flat cases.
 # Exercise real tar directory entries as well as both language editions.
@@ -203,16 +218,16 @@ if cmp -s "$TMP/packaged-orchestrator-test" "$TMP/fetched/sources/orchestrator/t
   release_fail "platform package used the product tag's test instead of the independent pin"
 fi
 for suffix in '' _zh; do
-  tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./docs/connector$suffix.md" \
+  tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./guide/connector/README$suffix.md" \
     > "$TMP/packaged-connector-doc"
   grep -Fq 'Use the shared prepared runner.' "$TMP/packaged-connector-doc" \
     || release_fail "platform package used stale product-tag invocation guidance"
   grep -Fq '/connector/blob/0000000000000000000000000000000000000001/test/e2e/cases/storage.connector-fixture.sh' \
     "$TMP/packaged-connector-doc" \
     || release_fail "packaged guidance source link does not use its exact test pin"
-  tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./docs/connector-detail$suffix.md" \
+  tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./guide/connector/vswitch-operations$suffix.md" \
     > "$TMP/packaged-connector-guide"
-  cmp "$TMP/packaged-connector-guide" "$TMP/fetched/test-sources/connector/docs/connector-detail$suffix.md"
+  cmp "$TMP/packaged-connector-guide" "$TMP/fetched/test-sources/connector/docs/vswitch-operations$suffix.md"
 done
 for owner in accelerator guest-runtime; do
   for suffix in '' _zh; do
@@ -344,7 +359,7 @@ if tar -tzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
 fi
 
 "$FORMAL_ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/bundle" "$TMP/install"
-[ -f "$TMP/install/docs/kuasar-sandbox.md" ] || release_fail "platform docs were not extracted"
+[ -f "$TMP/install/guide/kuasar-sandbox.md" ] || release_fail "platform docs were not extracted"
 [ -x "$TMP/install/test/e2e/e2e" ] || release_fail "public E2E runner was not extracted"
 python3 -B "$TMP/install/test/e2e/e2e" prepare --release-dir "$TMP/install" \
   --workdir "$TMP/prepared" --suite storage --exclude storage.obs.sh
@@ -359,12 +374,12 @@ fi
 [ -f "$TMP/install/test/e2e/cases/storage.obs.sh" ] \
   || release_fail "opt-in credentialed case was removed from the package"
 for component in accelerator connector guest-runtime sandboxer orchestrator; do
-  [ -f "$TMP/install/docs/$component.md" ] \
+  [ -f "$TMP/install/guide/$component/README.md" ] \
     || release_fail "$component README was not aggregated"
 done
-grep -Fqx 'selected vmlinux docs' "$TMP/install/docs/vmlinux.md" \
+grep -Fqx 'selected vmlinux docs' "$TMP/install/guide/vmlinux/vmlinux.md" \
   || release_fail "vmlinux docs did not come from the selected vmlinux source"
-grep -Fqx 'selected Chinese vmlinux docs' "$TMP/install/docs/vmlinux_zh.md" \
+grep -Fqx 'selected Chinese vmlinux docs' "$TMP/install/guide/vmlinux/vmlinux_zh.md" \
   || release_fail "Chinese vmlinux docs did not come from the selected vmlinux source"
 
 for unit in "${RELEASE_UNITS[@]}"; do

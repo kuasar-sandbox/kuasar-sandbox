@@ -13,17 +13,24 @@ SOURCES=("$@")
     echo 'assembly needs a fresh output and platform docs/test inputs' >&2; exit 1;
 }
 mkdir -p "$OUTPUT"
-cp -a "$PLATFORM/test" "$OUTPUT/"
-rm -rf "$OUTPUT/test/e2e"
-mkdir -p "$OUTPUT/test/e2e/cases"
-install -m 0755 "$PLATFORM/test/e2e/e2e" "$OUTPUT/test/e2e/e2e"
-cp -a "$PLATFORM/test/e2e/lib" "$OUTPUT/test/e2e/lib"
+ASSEMBLER=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+python3 -B - "$ASSEMBLER" "$PLATFORM" "$OUTPUT" <<'PYINPUTS'
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from package_inputs import PLATFORM_RUNTIME, copy_input
+source, target = map(pathlib.Path, sys.argv[2:])
+for path in PLATFORM_RUNTIME:
+    copy_input(source, pathlib.Path(path), target / path)
+(target / 'test/e2e/cases').mkdir()
+PYINPUTS
 
 copy_cases() {
     local owner=$1 suite=$2
-    python3 -B - "$owner" "$suite" "$OUTPUT/test/e2e" <<'PY'
+    python3 -B - "$owner" "$suite" "$OUTPUT/test/e2e" "$ASSEMBLER" <<'PY'
 import importlib.machinery, importlib.util, pathlib, shutil, sys
 owner, source, target = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
+sys.path.insert(0, sys.argv[4])
+from package_inputs import OWNER_LIBRARIES, copy_input
 loader = importlib.machinery.SourceFileLoader('assembled_runner', str(target / 'e2e'))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 runner = importlib.util.module_from_spec(spec)
@@ -40,8 +47,8 @@ for case in cases:
     if destination.exists():
         raise SystemExit(f'duplicate E2E case ID: {case.name} ({owner})')
     shutil.copy2(case, destination)
-if (source / 'lib').is_dir():
-    shutil.copytree(source / 'lib', target / 'lib' / owner)
+for name in OWNER_LIBRARIES[owner]:
+    copy_input(source, pathlib.Path('lib') / name, target / 'lib' / owner / name)
 PY
 }
 

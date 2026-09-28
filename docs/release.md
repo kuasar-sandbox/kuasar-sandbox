@@ -232,36 +232,49 @@ Preview, maintenance Stable and mainline Stable use identical asset contracts an
 <a id="documentation-in-the-platform-package"></a>
 ### 8.1 Documentation payload and source mapping
 
-The platform archive assembles documentation from the project repository and the
-component sources pinned by `test_revisions`, with kernel documentation from the
-separately selected vmlinux source. Source navigation and archive navigation use
-different layouts. `test/e2e/assemble_docs.py`, called by the existing E2E
-assembler, copies documentation and rewrites its links after owner suites have
-been copied. It does not edit executable examples, scripts, configuration values
-or component binaries.
+The platform archive uses the explicit source-time lists in
+`test/e2e/package_inputs.py`. Component inputs come from `test_revisions`;
+kernel guidance comes from the separately selected vmlinux source. The assembler
+copies canonical cases and the listed runtime libraries, Demo scripts and locks,
+prebuilt helpers, local wheels, and thin workbench host entrypoints. It does not
+copy the whole test tree or scan repositories for Markdown to include.
+`test/e2e/assemble_docs.py` rebases links in whole selected documents without
+editing sections, executable examples, configuration values or product binaries.
 
 #### Layout
 
 | Source | Archive destination |
 | --- | --- |
-| Project and component `docs/*` | `docs/*`, preserving existing flat entry points |
-| Component `README.md` / `README_zh.md` | `docs/<component>.md` / `docs/<component>_zh.md` |
-| Component native-build, example, contribution and license documents | `docs/<component>/<original-path>` |
-| Project documents outside `docs/` and `test/` | `docs/project/<original-path>` |
-| Project `test/` documentation | Its existing `test/` path |
-| Component `test/e2e/` documentation | `test/e2e/<component>/<original-relative-path>` |
+| Project README; quickstart, deployment, system and terminology guides | `guide/README*.md`, `guide/<topic>*.md` |
+| Component README and explicitly selected user contracts | `guide/<component>/<name>*.md` |
+| Independently selected kernel guide | `guide/vmlinux/vmlinux*.md` |
+| Project test README, QUICKSTART and Demo guide | Their existing `test/` paths |
+| Accelerator and guest-runtime E2E README pairs | `test/e2e/<component>/README*.md` |
+| Workbench instructions, launcher and its policies/attribution | `workbench/` |
+| Project/component license, NOTICE and LICENSES material | `guide/licenses/<owner>/<original-path>` |
 
-Both language versions are included when present. Existing complete English-only
-documents remain valid. License and attribution files retain their contents.
-Generated build outputs, dependency/vendor trees and Git metadata are excluded.
-Flat destination collisions and symbolic links in documentation inputs are
-rejected rather than silently overwriting another component's document.
+The component guide list covers accelerator cache/store/manifest/file artifacts,
+connector TAP-FD and switch operations, guest flatten/runtime, sandbox control
+and guest-init contracts, and orchestrator node/build/proxy/resource/journal/
+telemetry contracts. Both language editions are included when present. Existing
+complete English-only documents remain valid. The four maintained E2E guide
+files remain beside the canonical flat case set.
+
+Internal design/patch analysis, CI/release documentation, extension development,
+source regression tests and experimental performance tools remain in their
+source repositories. Links to these materials use the selected source reference;
+following a link does not pull an excluded document into the package. Source
+files are not deleted. Selected inputs must exist and be regular files; symbolic
+links and destination collisions fail assembly. License and attribution texts
+retain their contents; maintained Markdown license-scope navigation is rebased.
+Helpers and wheels retain their existing manifests, identities and validation.
+No component binaries are repackaged into the platform archive.
 
 #### Navigation and source versions
 
 Links to included documents, images and license files are rebased to their actual
-archive paths. Reciprocal language selectors follow the renamed component
-READMEs. Links to source files that are not included in the archive use GitHub
+archive paths. Reciprocal language selectors follow the component
+READMEs in their new directories. Links to source files that are not included in the archive use GitHub
 URLs for the corresponding source reference. Fenced code and inline-code
 examples remain unchanged. Ordinary inline links, reference definitions and
 HTML `href`/`src` attributes are handled; complex Markdown still requires review.
