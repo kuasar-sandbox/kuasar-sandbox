@@ -34,6 +34,30 @@ def child():
     for filesystem in ('tmpfs', 'securityfs'):
         result = subprocess.run(['mount', '-t', filesystem, filesystem, '/mnt'], capture_output=True)
         assert result.returncode != 0, 'profile allowed unrelated ' + filesystem + ' mount'
+    # Current runc opens sysctls through a detached proc clone. AppArmor sees
+    # /sys/net/... there, so test the actual fd-reopen operation in this private
+    # network namespace, and ensure sensitive detached proc entries stay denied.
+    proc = libc.syscall(428, -100, b'/proc', 1 | os.O_CLOEXEC)  # open_tree, CLONE
+    assert proc >= 0, os.strerror(ctypes.get_errno())
+    name = 'sys/net/ipv4/ip_unprivileged_port_start'
+    value = Path('/proc/' + name).read_text()
+    fd = os.open(name, os.O_PATH, dir_fd=proc)
+    with open('/proc/self/fd/' + str(fd), 'w') as stream:
+        stream.write(value)
+    os.close(fd)
+    for name, flags in [('sysrq-trigger', os.O_WRONLY), ('kcore', os.O_RDONLY)]:
+        fd = os.open(name, os.O_PATH, dir_fd=proc)
+        try:
+            try:
+                reopened = os.open('/proc/self/fd/' + str(fd), flags)
+            except PermissionError:
+                pass
+            else:
+                os.close(reopened)
+                raise AssertionError('detached protected proc entry allowed: ' + name)
+        finally:
+            os.close(fd)
+    os.close(proc)
     root = b'/var/lib/docker/pivot-test'
     os.mkdir(root)
     call('mount', b'tmpfs', root, b'tmpfs', 0, None)
@@ -46,7 +70,8 @@ def child():
     call('mount', None, b'/' + old, None, ctypes.c_ulong((1 << 18) | (1 << 14)), None)
     call('umount2', b'/' + old, 2)
     print(json.dumps({'context': context, 'mask': 'empty', 'netns': 'create-configure-delete',
-                      'forbidden_mounts': 'denied', 'pivot_old_root': 'private'}))
+                      'forbidden_mounts': 'denied', 'pivot_old_root': 'private',
+                      'detached_proc': 'private network sysctl allowed; sysrq/kcore denied'}))
 
 
 def qualify(root):

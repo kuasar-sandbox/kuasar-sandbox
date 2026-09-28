@@ -17,29 +17,37 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   ptrace (trace,read,tracedby,readby) peer=@PROFILE@,
 
   # Moby's proc restrictions, with only private network sysctls writable.
-  deny /proc/* w,
-  deny /proc/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9/]*}/** w,
-  deny /proc/sys/[^kn]** w,
-  deny /proc/sys/n[^e]** w,
-  deny /proc/sys/ne[^t]** w,
-  deny /proc/sys/net?** w,
-  deny /proc/sys/kernel/{?,??,[^s][^h][^m]**} w,
-  deny /proc/sysrq-trigger rwklx,
-  deny /proc/kcore rwklx,
+  audit deny /proc/* w,
+  audit deny /proc/{[^1-9],[^1-9][^0-9],[^1-9s][^0-9y][^0-9s],[^1-9][^0-9][^0-9][^0-9/]*}/** w,
+  audit deny /proc/sys/[^kn]** w,
+  audit deny /proc/sys/n[^e]** w,
+  audit deny /proc/sys/ne[^t]** w,
+  audit deny /proc/sys/net?** w,
+  audit deny /proc/sys/kernel/{?,??,[^s][^h][^m]**} w,
+  audit deny /proc/sysrq-trigger rwklx,
+  audit deny /sysrq-trigger rwklx,
+  audit deny /proc/kcore rwklx,
+  audit deny /kcore rwklx,
 
   # Retain sysfs/firmware/securityfs restrictions; bpffs and the namespaced
   # cgroup subtree are the only writable sysfs trees. No profile management.
-  deny /sys/[^f]*/** wklx,
-  deny /sys/f[^s]*/** wklx,
-  deny /sys/fs/[^bc]*/** wklx,
-  deny /sys/fs/b[^p]*/** wklx,
-  deny /sys/fs/bp[^f]*/** wklx,
-  deny /sys/fs/bpf?*/** wklx,
-  deny /sys/fs/c[^g]*/** wklx,
-  deny /sys/fs/cg[^r]*/** wklx,
-  deny /sys/firmware/** rwklx,
-  deny /sys/devices/virtual/powercap/** rwklx,
-  deny /sys/kernel/security/** rwklx,
+  # runc's detached proc mount reports /proc/sys/net paths as /sys/net.
+  # This alias also refers only to the caller's private network namespace;
+  # actual sysfs has no /sys/net tree. Keep every other sysfs tree restricted.
+  audit deny /sys/[^fn]*/** wklx,
+  audit deny /sys/n[^e]*/** wklx,
+  audit deny /sys/ne[^t]*/** wklx,
+  audit deny /sys/net?*/** wklx,
+  audit deny /sys/f[^s]*/** wklx,
+  audit deny /sys/fs/[^bc]*/** wklx,
+  audit deny /sys/fs/b[^p]*/** wklx,
+  audit deny /sys/fs/bp[^f]*/** wklx,
+  audit deny /sys/fs/bpf?*/** wklx,
+  audit deny /sys/fs/c[^g]*/** wklx,
+  audit deny /sys/fs/cg[^r]*/** wklx,
+  audit deny /sys/firmware/** rwklx,
+  audit deny /sys/devices/virtual/powercap/** rwklx,
+  audit deny /sys/kernel/security/** rwklx,
 
   # The outer Docker mount/cgroup namespaces exist before this profile starts.
   remount /sys/fs/cgroup/,
@@ -60,6 +68,9 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   mount options=(rw,rslave) -> /dev/,
   mount options=(rw,rbind) / -> /run/systemd/mount-rootfs/,
   mount fstype=tmpfs -> /dev/shm/,
+  mount fstype=proc -> /run/systemd/namespace-*/,
+  mount options=(rw,move) /run/systemd/namespace-*/dev/ -> /run/systemd/mount-rootfs/dev/,
+  pivot_root /run/systemd/mount-rootfs/,
   mount options=(rw,shared) -> /var/lib/docker/,
 
   # systemd private unit mounts and nested Docker's own roots. No blanket
