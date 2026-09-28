@@ -45,7 +45,7 @@ tar -xzf platform-release-vX.Y.Z.tar.gz -C kuasar-sandbox-release
 <a id="3-前置条件"></a>
 ## 3. 前置条件
 
-完整原生 x86 执行要求 Linux、systemd、cgroup v2、可用 `/dev/kvm`、root 或非交互 `sudo`，以及 Docker、iproute2、curl、Python 3.11+、openssl、EROFS reader、mkfs.ext4 和已选脚本要求的普通工具。prepare 需要访问声明的镜像和固定 Python wheel。registry/gateway/probe 程序来自包内。
+完整原生 x86 执行要求 Linux、systemd、cgroup v2、可用 `/dev/kvm`、root 或非交互 `sudo`，以及 Docker、iproute2、curl、Python 3.11+（包内 Demo SDK 要求 Python 3.12）、openssl、EROFS reader、mkfs.ext4 和已选脚本要求的普通工具。配置本地镜像输入时 prepare 优先使用本地输入，否则下载已选外部镜像。hash-locked Python wheel 和 registry/gateway/probe 程序来自包内。
 
 prepare 和产品执行不需要 Go/Rust 编译器或组件源码 checkout。缺少预备输入时 runner 失败，不使用宿主机 helper，不在执行时拉取镜像。预备输入必须保持不变；可变用例状态和结果文件位于预备目录之外。
 
@@ -64,6 +64,24 @@ sudo python3 "$prepared/test/e2e/e2e" run --workdir "$prepared" \
 使用全新 prepare 目录。prepare 获取不可变镜像归档与 Demo SDK，记录摘要和权限，不编译产品或 helper。执行加载这些镜像归档，逐个调用 Bash 用例，记录完整文件名、耗时、退出状态，再验证输入树。被测 Build、flatten、snapshot 和发布操作仍真实执行。
 
 任何非零退出、缺少前置条件或输入变化都会失败。`PASS <filename>` 和 `result.json` 只代表实际执行的用例；Draft 跳过与静态架构检查不算产品验收。`storage.obs.sh` 需要显式选择及其文档声明的外部存储凭据，普通公共验证保持排除。
+
+### 本地及离线准备
+
+获取并验证发行制品和依赖输入后，指定本地镜像目录：
+
+```bash
+python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
+    --workdir /var/tmp/offline-prepared --arch x86_64 --all --exclude storage.obs.sh \
+    --deps-dir /inputs/deps --offline
+```
+
+`E2E_DEPS_DIR` 是目录别名，`--deps-dir` 优先。`E2E_OFFLINE` 仅接受 `0` 或 `1`。`--offline` 始终禁止下载依赖，即使 `E2E_OFFLINE=0`。未设置选项或环境配置时，prepare 保持默认在线行为。未指定 `--offline` 时，`E2E_OFFLINE=0` 允许为缺失输入回退远端。显式为空、不存在或为符号链接的目录会失败。使用 `sudo` 时，在权限转换后显式传递这些选项，不保留整个用户环境。
+
+目录包含扁平的 `images.json` 列表及 Docker 镜像归档。每条记录有 `reference`、`platform`（`linux/amd64` 或 `linux/arm64`）、`image_id`（config SHA-256）、相对路径 `archive` 和 `sha256`（归档字节摘要）。Registry 证据包括 `manifest`（精确原始 JSON 文本）、`manifest_digest` 和 `registry_digest`；index 响应还包含精确原始 `index` 文本及 `index_digest`。这些身份互不等同。manifest 的摘要必须与记录一致，并绑定归档中实际的 config；归档中每一层必须符合 config 中对应的未压缩层摘要。index 必须绑定唯一匹配平台的 manifest。`@sha256:...` 请求必须符合已验证 registry 响应摘要。仅自行声明摘要字段会被拒绝。移动 tag 直接使用记录的解析结果，不向远端检查新鲜度；应从已验证的发行输入取得目录，因为离线内容检查无法认证任意作者提供的 tag 映射。
+
+prepare 精确匹配请求的 reference 与 platform。有效的已选归档直接复制，不重复加载/保存；只有本地派生 orchestrator fixture 时，prepare 才需要将 Python 基础镜像加载到 Docker。离线缺少已选输入时，错误包含 reference、platform 和查找位置。在线模式可下载缺失输入，但匹配记录损坏、不安全、有歧义或身份错误时始终失败，不从远端修复。归档与描述路径不得越出目录或使用符号链接；不安全的归档路径、重复成员、链接和设备会被拒绝。未选择的归档不是前置条件。完成时将镜像证据及文件摘要/权限记录到 `provenance.json`；失败的 prepare 不会创建请求的工作区。
+
+offline 控制依赖获取，不改变用例选择，也不禁止本地 Guest/Registry/Store/Proxy 流量。helper 仍来自精确匹配的包，Demo SDK 仍仅从本地 hash-locked wheelhouse 安装。需要凭据的 OBS 不会静默跳过。CI 的 `prepare-artifacts.py` 将相同选项传给公共 runner，并在 clean prepare 中将配置的依赖目录以只读方式挂载，与可写输出分离。
 
 <a id="5-运行组件或单项用例"></a>
 ## 5. 选择 suite 或单个用例

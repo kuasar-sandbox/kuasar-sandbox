@@ -16,6 +16,8 @@ sudo python3 /tmp/kuasar-prepared/test/e2e/e2e run --workdir /tmp/kuasar-prepare
 
 `--suite` 与 `--include` 取并集，`--exclude` 按完整文件名排除。未知选择和空集会失败。`--all` 包含需要凭据的 `storage.obs.sh`，公共 CI 明确排除该用例。没有 owner、tag、capability 或 fixture graph 选择器。Makefile 包装入口要求 `RELEASE_DIR`、全新的 `E2E_WORKDIR`，可选 `E2E_ARGS`。
 
+prepare 接受 `--deps-dir` / `E2E_DEPS_DIR` 指定已验证的本地镜像归档，以及 `--offline` / `E2E_OFFLINE=1` 禁止下载依赖。未配置时保持在线行为。本地匹配项验证时不向远端检查新鲜度，无效匹配项也不触发远端修复。外部请求来自单一用例/架构函数，构建期输入收集也可调用该函数。优先级、身份证据与失败行为见[本地及离线准备](QUICKSTART_zh.md#本地及离线准备)。
+
 CI 解析精确测试文件名，并按变更 owner 选择覆盖较广的 suite。源码构建先于 prepare 完成。产品保留自己的源码依赖闭包，测试脚本和 helper 使用独立测试 pin。CI prepare 在无 Go/Rust 工具链和组件源码树的隔离运行环境中执行。每个 suite shard 调用同一打包 runner；storage、snapshot 及 ARM image 验收也使用隔离运行环境，prepare 和执行镜像 ID 及环境检查绑定到结果；结果必须包含所有已选用例的成功退出及一致的不可变输入身份。ARM 选择 accelerator 和 guest-runtime 的非 KVM 用例，排除项明确记录。static lane 执行零个产品用例，不算产品 E2E 验收。
 
 unit、race、vet、源码 helper、UFFD 性能及 working-set 门禁保持独立。`test/perf/warmpool-dedup.sh` 在 `make perf-warmpool-dedup` 下保留 warm-pool 表征、数据与测量断言，不属于 correctness suite。组件源码门禁仍由各自仓库维护。

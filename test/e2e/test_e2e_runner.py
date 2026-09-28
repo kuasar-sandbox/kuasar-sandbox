@@ -154,7 +154,7 @@ class PreparedRunnerTests(unittest.TestCase):
         helpers.mkdir(parents=True)
         (helpers / 'helpers.json').write_text(json.dumps({'arch': platform.machine(), 'helpers': {}}))
         (self.release / 'test/e2e/cases/basic.fixture.sh').write_text('exit 0\n')
-        self.args = dict(suite=[], include=['basic.fixture.sh'], exclude=[], all=False,
+        self.args = dict(deps_dir=None, offline=False, suite=[], include=['basic.fixture.sh'], exclude=[], all=False,
                          arch=platform.machine(), release_dir=str(self.release), workdir=str(self.work),
                          run_root=str(self.root / 'run'), out_root=str(self.root / 'out'), result=None)
 
@@ -231,6 +231,94 @@ class PreparedRunnerTests(unittest.TestCase):
         (self.release / 'bin/host-product').symlink_to('/bin/true')
         with self.assertRaisesRegex(ValueError, 'symlink'):
             runner.cmd_prepare(self.args_with())
+        self.assertFalse(self.work.exists())
+
+    def test_failed_fixture_preparation_leaves_no_prepared_directory(self):
+        with patch.object(runner.workspace, 'prepare_fixtures', side_effect=ValueError('failed fixture')):
+            with self.assertRaisesRegex(ValueError, 'failed fixture'):
+                runner.cmd_prepare(self.args_with())
+        self.assertFalse(self.work.exists())
+        self.assertFalse(list(self.root.glob('.prepared-prepare-*')))
+
+    def test_public_cli_option_precedence_and_offline_zero_input_preparation(self):
+        deps = self.root / 'deps'
+        deps.mkdir()
+        command = [sys.executable, '-B', str(self.release / 'test/e2e/e2e'), 'prepare',
+                   '--release-dir', str(self.release), '--workdir', str(self.work),
+                   '--include', 'basic.fixture.sh', '--deps-dir', str(deps), '--offline']
+        result = runner.subprocess.run(command, capture_output=True, text=True,
+                                       env=os.environ | {'E2E_DEPS_DIR': '/missing', 'E2E_OFFLINE': '0'})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        runner.workspace.verify(self.work)
+
+    def test_public_environment_alias_fails_offline_before_creating_workspace(self):
+        (self.release / 'test/e2e/cases/sandbox.fixture.sh').write_text('exit 0\n')
+        deps = self.root / 'deps'
+        deps.mkdir()
+        command = [sys.executable, '-B', str(self.release / 'test/e2e/e2e'), 'prepare',
+                   '--release-dir', str(self.release), '--workdir', str(self.work),
+                   '--include', 'sandbox.fixture.sh']
+        result = runner.subprocess.run(command, capture_output=True, text=True,
+                                       env=os.environ | {'E2E_DEPS_DIR': str(deps), 'E2E_OFFLINE': '1'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('missing offline image: python:3.12-slim', result.stderr)
+        self.assertFalse(self.work.exists())
+        with self.assertRaisesRegex(ValueError, 'outside deps-dir'):
+            runner.cmd_prepare(self.args_with(deps_dir=str(deps), workdir=str(deps / 'prepared')))
+
+
+class PreparePassThroughTests(unittest.TestCase):
+    def test_ci_forwards_cli_and_environment_to_the_public_entry(self):
+        for clean in (None, 'sha256:' + 'a' * 64):
+            with self.subTest(clean=clean), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                work = root / 'prepared/x86_64'
+                deps = root / 'deps'
+                deps.mkdir()
+                original = {'selection': {'cases': ['sandbox.lifecycle.sh']}, 'files': {}, 'modes': {}}
+                def invoke(command, **kwargs):
+                    work.mkdir()
+                    (work / 'provenance.json').write_text(json.dumps({'prepared_cases': original['selection']['cases']}))
+                with patch.object(prepare.artifacts, 'compose', return_value=original), patch.object(
+                        prepare.artifacts, 'verify_workspace', return_value={'prepared_cases': original['selection']['cases'],
+                                                                           'files': {}, 'modes': {}}), patch.object(
+                        prepare.subprocess, 'run', side_effect=invoke) as run, patch.object(
+                        prepare.execution, 'clean_prepare_command', return_value=['clean-public-prepare']) as clean_command, patch.dict(
+                        os.environ, {'E2E_DEPS_DIR': '/wrong-ambient-directory'}):
+                    prepare.prepare({}, 'x86_64', root / 'assets', root / 'delta', work, clean, str(deps), True)
+                if clean:
+                    args = clean_command.call_args.args
+                    self.assertEqual(args[-1], str(deps))
+                    self.assertIn('--offline', args[-2])
+                else:
+                    command = run.call_args.args[0]
+                    self.assertIn('prepare', command)
+                    self.assertEqual(command[command.index('--deps-dir') + 1], str(deps))
+                    self.assertIn('--offline', command)
+
+    def test_clean_prepare_mount_is_read_only_and_environment_is_explicit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            deps = root / 'deps'
+            deps.mkdir()
+            # Only the existing Docker socket's stat is mocked; this test never runs Docker.
+            original_stat = Path.stat
+            def stat(path, *args, **kwargs):
+                return type('Socket', (), {'st_gid': 999})() if str(path) == '/var/run/docker.sock' else original_stat(path, *args, **kwargs)
+            with patch.object(Path, 'stat', stat), patch.dict(os.environ, {'E2E_OFFLINE': '0', 'UNRELATED_SECRET': 'private'}):
+                command = prepare.execution.clean_prepare_command('sha256:' + 'a' * 64, root / 'release',
+                    root / 'output/x86_64', ['--all', '--offline'], deps)
+            self.assertIn(f'type=bind,src={deps},dst=/deps,readonly', command)
+            self.assertEqual(command[command.index('--deps-dir') + 1], '/deps')
+            self.assertIn('--offline', command)
+            self.assertIn('E2E_OFFLINE=0', command)
+            self.assertNotIn('--env-file', command)
+            self.assertNotIn('UNRELATED_SECRET=private', command)
+            for bad in (root / 'missing', root, root / 'output'):
+                if bad.name == 'output': bad.mkdir()
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    prepare.execution.clean_prepare_command('sha256:' + 'a' * 64, root / 'release',
+                        root / 'output/x86_64', ['--all'], bad)
 
 
 class GuestFixturePathTests(unittest.TestCase):

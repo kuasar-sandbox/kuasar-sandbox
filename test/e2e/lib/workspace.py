@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import gzip
 import json
 import os
 from pathlib import Path
 import platform
+import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -128,11 +131,222 @@ def fixture_helper(root, owner, name):
     return path
 
 
-def prepare_fixtures(root, arch, cases):
+def dependency_options(deps_dir=None, offline=False, environment=None):
+    """Resolve the public CLI/environment options without detecting a container."""
+    environment = os.environ if environment is None else environment
+    value = environment.get('E2E_OFFLINE', '0')
+    require(value in ('0', '1'), 'E2E_OFFLINE must be 0 or 1')
+    directory = deps_dir if deps_dir is not None else environment.get('E2E_DEPS_DIR')
+    if directory is not None:
+        require(str(directory) != '', 'deps-dir must not be empty')
+        directory = Path(directory)
+        require(directory.is_dir() and not directory.is_symlink(), f'missing or unsafe deps-dir: {directory}')
+        directory = directory.resolve()
+    return directory, bool(offline or value == '1')
+
+
+def external_image_requests(cases, arch):
+    """The one case/architecture selection used by prepare and input collection."""
+    names = {Path(case).name for case in cases}
+    target = 'linux/' + {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch]
+    orchestrator = needs_orchestrator_images(names)
+    sandbox = any(name.startswith(('sandbox.', 'snapshot.', 'telemetry.')) for name in names)
+    sandbox |= bool(names & {'network.tapfd.sh', 'image.manifest-boot.sh', 'image.sandbox-assembly.sh'})
+    references = {}
+    if orchestrator or sandbox or 'basic.demo.sh' in names:
+        references['python'] = 'python:3.12-slim'
+    if sandbox:
+        references['busybox'] = 'busybox:latest'
+    if 'telemetry.backends.sh' in names:
+        references.update(BACKENDS)
+    return {label: {'reference': reference, 'platform': target} for label, reference in references.items()}
+
+
+def needs_orchestrator_images(names):
+    return (any(name.startswith(('orchestrator.', 'builder.')) for name in names) or
+            bool(set(names) & {'telemetry.backends.sh', 'telemetry.guest.sh', 'telemetry.proxy.sh'}))
+
+
+def relative_input(name):
+    require(isinstance(name, str) and name and '\\' not in name and '\x00' not in name and
+            not Path(name).is_absolute() and all(part not in ('', '.', '..') for part in name.split('/')),
+            f'unsafe dependency path: {name!r}')
+    return Path(name)
+
+
+def dependency_file(directory, name):
+    path = directory / relative_input(name)
+    for entry in (path, *path.parents):
+        if entry == directory:
+            break
+        require(not entry.is_symlink(), f'symlink in dependency path: {path}')
+    require(path.is_file() and not path.stat().st_mode & 0o7022, f'missing or unsafe dependency file: {path}')
+    return path
+
+
+def sha256_bytes(data):
+    return 'sha256:' + hashlib.sha256(data).hexdigest()
+
+
+def verify_image_archive(path, target):
+    """Verify a Docker-save archive without loading it or extracting its layers."""
+    with tarfile.open(path) as archive:
+        members = {}
+        for member in archive:
+            name = member.name.rstrip('/') if member.isdir() else member.name
+            relative_input(name)
+            require(name not in members, f'duplicate image archive path: {name}')
+            require(member.isfile() or member.isdir(), f'unsafe image archive member: {name}')
+            require(not member.mode & 0o7022, f'unsafe image archive permissions: {name}')
+            members[name] = member
+        for name in members:
+            require(all(str(parent) not in members or members[str(parent)].isdir()
+                        for parent in Path(name).parents), f'conflicting image archive path: {name}')
+
+        def regular(name):
+            relative_input(name)
+            require(name in members and members[name].isfile(), f'missing image archive member: {name}')
+            return archive.extractfile(members[name])
+
+        with regular('manifest.json') as stream:
+            manifests = json.load(stream)
+        require(isinstance(manifests, list) and len(manifests) == 1, 'fixture must describe exactly one image')
+        manifest = manifests[0]
+        with regular(manifest['Config']) as stream:
+            data = stream.read()
+        config = json.loads(data)
+        require(config['os'] + '/' + config['architecture'] == target, 'fixture has the wrong image platform')
+        rootfs = config['rootfs']
+        layers = manifest['Layers']
+        require(rootfs['type'] == 'layers' and isinstance(layers, list) and
+                len(layers) == len(rootfs['diff_ids']), 'image archive layer count differs from config')
+        for name, expected in zip(layers, rootfs['diff_ids']):
+            with regular(name) as stream:
+                compressed = stream.read(2) == b'\x1f\x8b'
+                stream.seek(0)
+                if compressed:
+                    with gzip.GzipFile(fileobj=stream) as expanded:
+                        actual = 'sha256:' + hashlib.file_digest(expanded, 'sha256').hexdigest()
+                else:
+                    actual = 'sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest()
+            require(actual == expected, f'image archive layer differs from config: {name}')
+        if 'index.json' in members:
+            # Recent Docker saves also have an OCI index. Docker/containerd can
+            # load that instead of manifest.json, so both must name one image.
+            def blob(descriptor):
+                identity = descriptor['digest']
+                require(re.fullmatch(r'sha256:[0-9a-f]{64}', identity), 'unsupported archive blob digest')
+                name = 'blobs/sha256/' + identity.split(':')[1]
+                with regular(name) as stream:
+                    require(members[name].size == descriptor['size'] and
+                            'sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest() == identity,
+                            'archive OCI descriptor mismatch')
+                return name
+
+            def manifests_from(index, seen):
+                result = []
+                for descriptor in index['manifests']:
+                    identity = descriptor['digest']
+                    require(identity not in seen, 'duplicate or recursive archive OCI descriptor')
+                    seen.add(identity)
+                    name = 'blobs/sha256/' + identity.split(':')[-1]
+                    if name not in members:
+                        continue  # Docker may retain index entries for unsaved platforms.
+                    with regular(blob(descriptor)) as stream:
+                        document = json.load(stream)
+                    require(document['schemaVersion'] == 2, 'unsupported archive OCI document')
+                    if 'manifests' in document:
+                        result.extend(manifests_from(document, seen))
+                    else:
+                        result.append(document)
+                return result
+
+            with regular('index.json') as stream:
+                index = json.load(stream)
+            require(index['schemaVersion'] == 2, 'unsupported archive OCI index')
+            oci = manifests_from(index, set())
+            require(len(oci) == 1, 'archive OCI index must describe exactly one saved image')
+            require(oci[0]['config']['digest'] == sha256_bytes(data) and
+                    blob(oci[0]['config']) == manifest['Config'] and
+                    [blob(layer) for layer in oci[0]['layers']] == layers,
+                    'archive OCI and Docker manifests disagree')
+        return {'image_id': sha256_bytes(data), 'config_size': len(data), 'layers': len(layers)}
+
+
+def verify_registry_identity(record, image):
+    """Bind raw registry evidence to config and verified uncompressed layer bytes.
+
+    A registry manifest binds its config digest; that config binds every layer's
+    diff_id. Archive hashes, config IDs and registry digests remain distinct.
+    """
+    require(isinstance(record['manifest'], str), 'registry manifest must contain raw JSON text')
+    manifest_bytes = record['manifest'].encode('utf-8')
+    manifest_digest = sha256_bytes(manifest_bytes)
+    require(manifest_digest == record['manifest_digest'], 'registry manifest digest mismatch')
+    manifest = json.loads(manifest_bytes)
+    require(manifest['schemaVersion'] == 2 and manifest['config']['digest'] == image['image_id'] and
+            manifest['config']['size'] == image['config_size'] and len(manifest['layers']) == image['layers'],
+            'registry manifest does not bind the archive config/layers')
+    resolved = manifest_digest
+    if 'index' in record:
+        require(isinstance(record['index'], str), 'registry index must contain raw JSON text')
+        index_bytes = record['index'].encode('utf-8')
+        resolved = sha256_bytes(index_bytes)
+        require(resolved == record['index_digest'], 'registry index digest mismatch')
+        index = json.loads(index_bytes)
+        require(index['schemaVersion'] == 2, 'unsupported registry index')
+        matching = [entry for entry in index['manifests']
+                    if entry.get('platform', {}).get('os', '') + '/' +
+                    entry.get('platform', {}).get('architecture', '') == record['platform']]
+        require(len(matching) == 1 and matching[0]['digest'] == manifest_digest and
+                matching[0]['size'] == len(manifest_bytes), 'registry index does not bind a unique target manifest')
+    else:
+        require('index_digest' not in record, 'registry index bytes are missing')
+    require(record['registry_digest'] == resolved, 'resolved registry digest mismatch')
+    if '@' in record['reference']:
+        require(record['reference'].rsplit('@', 1)[1] == resolved,
+                'requested registry digest does not match verified registry evidence')
+
+
+def local_image_inputs(requests, directory, offline):
+    """Validate all selected local inputs before any remote fallback is possible."""
+    records = []
+    description = directory / 'images.json' if directory is not None else None
+    if requests and description is not None and (description.exists() or description.is_symlink()):
+        records = json.loads(dependency_file(directory, 'images.json').read_text())
+        require(isinstance(records, list) and all(isinstance(record, dict) for record in records),
+                'images.json must contain a flat list of image records')
+    inputs = {}
+    for label, request in requests.items():
+        matches = [record for record in records if all(record.get(key) == value for key, value in request.items())]
+        location = str(description) if description is not None else '(no deps-dir configured)'
+        context = f"{request['reference']} {request['platform']} in {location}"
+        require(len(matches) <= 1, f'ambiguous local image: {context}')
+        if not matches:
+            require(not offline, f'missing offline image: {context}')
+            continue
+        record = matches[0]
+        try:
+            path = dependency_file(directory, record['archive'])
+            require(re.fullmatch(r'[0-9a-f]{64}', record['sha256']) and digest(path) == record['sha256'],
+                    'local image archive sha256 mismatch')
+            image = verify_image_archive(path, request['platform'])
+            require(image['image_id'] == record['image_id'], 'local image config ID mismatch')
+            verify_registry_identity(record, image)
+        except (KeyError, TypeError, ValueError, OSError, tarfile.TarError) as error:
+            raise ValueError(f'invalid local image: {context}: {error}') from error
+        inputs[label] = (path, record)
+    return inputs
+
+
+def prepare_fixtures(root, arch, cases, deps_dir=None, offline=False):
     """Prepare immutable inputs; Build/flatten/snapshot/publication stay in cases."""
     names = {Path(case).name for case in cases}
     go_arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch]
     target = 'linux/' + go_arch
+    deps_dir, offline = dependency_options(deps_dir, offline)
+    requests = external_image_requests(cases, arch)
+    local = local_image_inputs(requests, deps_dir, offline)
     before = files(root)
     before_modes = {name: (root / name).stat().st_mode & 0o7777 for name in before}
     fixtures, images, python = {}, {}, {}
@@ -156,31 +370,33 @@ def prepare_fixtures(root, arch, cases):
                         '--tag', reference, '--architecture', go_arch], check=True)
         images['guest-runtime'] = {'reference': reference, 'platform': target, 'image_id': image_id(path, go_arch),
                                   'archive': str(path.relative_to(root)), 'sha256': digest(path), 'owner': 'guest-runtime'}
-    orchestrator = any(name.startswith(('orchestrator.', 'builder.')) for name in names)
-    orchestrator |= bool(names & {'telemetry.backends.sh', 'telemetry.guest.sh', 'telemetry.proxy.sh'})
-    sandbox = any(name.startswith(('sandbox.', 'snapshot.', 'telemetry.')) for name in names)
-    sandbox |= bool(names & {'network.tapfd.sh', 'image.manifest-boot.sh', 'image.sandbox-assembly.sh'})
-    references = {}
-    if orchestrator or sandbox or 'basic.demo.sh' in names:
-        references['python'] = 'python:3.12-slim'
-    if sandbox:
-        references['busybox'] = 'busybox:latest'
-    if 'telemetry.backends.sh' in names:
-        references.update(BACKENDS)
+    orchestrator = needs_orchestrator_images(names)
     with tempfile.TemporaryDirectory(prefix='e2e-docker-') as config:
         environment = {**os.environ, 'DOCKER_CONFIG': config, 'PYTHONDONTWRITEBYTECODE': '1'}
         def save(label, reference, owner):
             path = root / 'images' / (label + '.tar')
             record = json.loads(subprocess.check_output(['docker', 'image', 'inspect', reference], env=environment))[0]
-            subprocess.run(['docker', 'image', 'save', '--output', str(path), reference], env=environment, check=True)
+            subprocess.run(['docker', 'image', 'save', '--output', str(path), record['Id']], env=environment, check=True)
             require(image_id(path, go_arch) == record['Id'], 'saved image differs from resolved input')
             images[label] = {'reference': reference, 'platform': target, 'image_id': record['Id'],
-                             'archive': str(path.relative_to(root)), 'sha256': digest(path), 'owner': owner}
-        for label, reference in references.items():
-            subprocess.run(['timeout', '3m', 'docker', 'pull', '--platform=' + target, reference], env=environment, check=True)
-            save(label, reference, 'platform')
+                             'archive': str(path.relative_to(root)), 'sha256': digest(path), 'owner': owner,
+                             'repo_digests': record.get('RepoDigests', [])}
+        for label, request in requests.items():
+            if label in local:
+                source, record = local[label]
+                path = root / 'images' / (label + '.tar')
+                shutil.copyfile(source, path)
+                require(digest(path) == record['sha256'], 'local image changed while copying')
+                path.chmod(0o444)
+                images[label] = {**record, 'archive': str(path.relative_to(root)), 'owner': 'platform'}
+            else:
+                reference = request['reference']
+                subprocess.run(['timeout', '3m', 'docker', 'pull', '--platform=' + target, reference], env=environment, check=True)
+                save(label, reference, 'platform')
         if orchestrator:
             require(platform.machine() == arch == 'x86_64', 'orchestrator image preparation requires native x86')
+            if 'python' in local:
+                load_images(root, {'images': {'python': images['python']}}, environment)
             for variant in ('base', 'execute'):
                 label = 'orchestrator-' + variant
                 reference = 'kuasar-e2e-' + label + ':' + images['python']['image_id'].split(':')[1][:16]
