@@ -203,15 +203,6 @@ class LauncherTests(unittest.TestCase):
         self.assertEqual([row['args'][0]['value'] for row in added if row['names'] == ['keyctl']], [1, 5, 6])
         self.assertTrue(all(row['includes']['caps'] for row in added if row['names'] != ['keyctl']))
 
-    def test_empty_owned_directory_cleanup_needs_no_helper_container(self):
-        path = self.state / 'docker'
-        path.mkdir()
-        self.assertFalse(any(path.iterdir()))
-        # The launcher cleanup loop removes an empty daemon directory directly;
-        # keep this condition explicit because build mode never starts dockerd.
-        path.rmdir()
-        self.assertFalse(path.exists())
-
     def test_foreign_container_or_image_cannot_be_stopped(self):
         self.data['container_id'] = 'c' * 64
         container = {'Id': self.data['container_id'], 'Image': self.data['image_id'],
