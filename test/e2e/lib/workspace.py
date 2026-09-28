@@ -376,7 +376,10 @@ def prepare_fixtures(root, arch, cases, deps_dir=None, offline=False):
         def save(label, reference, owner):
             path = root / 'images' / (label + '.tar')
             record = json.loads(subprocess.check_output(['docker', 'image', 'inspect', reference], env=environment))[0]
-            subprocess.run(['docker', 'image', 'save', '--output', str(path), record['Id']], env=environment, check=True)
+            # Keep the named reference in the archive. Cases create/remove
+            # temporary registry tags; without the prepared tag, removing the
+            # last such tag also deletes the image needed by subsequent cases.
+            subprocess.run(['docker', 'image', 'save', '--output', str(path), reference], env=environment, check=True)
             require(image_id(path, go_arch) == record['Id'], 'saved image differs from resolved input')
             images[label] = {'reference': reference, 'platform': target, 'image_id': record['Id'],
                              'archive': str(path.relative_to(root)), 'sha256': digest(path), 'owner': owner,

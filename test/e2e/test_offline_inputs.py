@@ -300,6 +300,9 @@ class InputTests(unittest.TestCase):
         self.assertEqual([call for call in calls if call[:3] == ['docker', 'image', 'load']],
                          [['docker', 'image', 'load', '--input', str(self.work / 'images/python.tar')]])
         self.assertEqual([call[-1] for call in calls if call[0] == 'bash'], ['base', 'execute'])
+        self.assertEqual([call[-1] for call in calls if call[:3] == ['docker', 'image', 'save']],
+                         ['kuasar-e2e-orchestrator-' + variant + ':' + self.record['image_id'].split(':')[1][:16]
+                          for variant in ('base', 'execute')])
         self.assertFalse(any('pull' in call for call in calls))
         self.assertEqual(set(result['images']), {'python', 'orchestrator-base', 'orchestrator-execute'})
 
@@ -320,7 +323,7 @@ class InputTests(unittest.TestCase):
                 workspace.prepare_fixtures(self.work, 'x86_64', ['sandbox.lifecycle.sh'], self.deps, True)
             run.assert_not_called()
 
-    def test_online_default_uses_existing_pull_and_saves_resolved_id(self):
+    def test_online_default_preserves_exported_references_and_checks_config_id(self):
         records = {self.record['reference']: self.record,
                    'busybox:latest': image_fixture(self.deps, 'busybox', 'busybox:latest')}
         def inspect(command, **kwargs):
@@ -328,7 +331,7 @@ class InputTests(unittest.TestCase):
             return json.dumps([{'Id': record['image_id'], 'RepoDigests': ['example@' + record['registry_digest']]}]).encode()
         def execute(command, **kwargs):
             if command[:3] == ['docker', 'image', 'save']:
-                record = next(record for record in records.values() if record['image_id'] == command[-1])
+                record = records[command[-1]]
                 shutil.copyfile(self.deps / record['archive'], command[4])
             return subprocess.CompletedProcess(command, 0)
         with patch.object(workspace.subprocess, 'run', side_effect=execute) as run, patch.object(
@@ -338,8 +341,8 @@ class InputTests(unittest.TestCase):
         self.assertEqual(pulls, [['timeout', '3m', 'docker', 'pull', '--platform=linux/amd64', reference]
                                  for reference in records])
         self.assertEqual(set(result['images']), {'python', 'busybox'})
-        self.assertTrue(all(call.args[0][-1].startswith('sha256:') for call in run.call_args_list
-                            if call.args[0][:3] == ['docker', 'image', 'save']))
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list
+                          if call.args[0][:3] == ['docker', 'image', 'save']], list(records))
 
 
 if __name__ == '__main__':
