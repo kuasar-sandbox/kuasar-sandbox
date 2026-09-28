@@ -126,10 +126,8 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   mount options=(rw,rbind) /proc/irq/ -> /proc/irq/,
   mount options=(rw,rbind) /proc/sys/ -> /proc/sys/,
   mount options=(rw,rbind) /proc/sysrq-trigger -> /proc/sysrq-trigger,
-  remount options=(ro,bind) /proc/{bus,fs,irq,sys}/,
-  remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/{bus,fs,irq,sys}/,
-  remount options=(ro,bind) /proc/sysrq-trigger,
-  remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/sysrq-trigger,
+  remount /proc/{bus,fs,irq,sys}/,
+  remount /proc/sysrq-trigger,
   pivot_root /var/lib/docker/**,
   pivot_root /var/lib/containerd/**,
 }

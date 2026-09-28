@@ -325,6 +325,13 @@ class AppArmorTests(LauncherTests):
         self.assertIn('deny /proc/sysrq-trigger rwklx,', source)
         self.assertNotIn('change_profile ->', source)
         self.assertNotIn('\n  mount,', source)
+        # runc's read-only proc remount flags vary by kernel/runtime; keep the
+        # destination exact while accepting only a remount on those paths.
+        self.assertIn('remount /proc/{bus,fs,irq,sys}/,', source)
+        self.assertIn('remount /proc/sysrq-trigger,', source)
+        self.assertNotIn('remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/', source)
+        dockerfile = (ROOT / 'Dockerfile').read_text()
+        self.assertIn('systemd-logind.service redis-server.service', dockerfile)
         self.data['apparmor'] = {'name': 'system-only'}
         command = self.command(mode='build', source=self.source, inputs=None)
         self.assertFalse(any(value.startswith('apparmor=') for value in command))

@@ -40,7 +40,7 @@ COPY LICENSE /usr/share/workbench/LICENSE
 COPY deps/ /opt/workbench/deps/
 RUN chmod 0755 /usr/local/sbin/workbench-system \
     && systemctl enable containerd.service docker.service \
-    && systemctl mask getty.target console-getty.service \
+    && systemctl mask getty.target console-getty.service systemd-logind.service redis-server.service \
     && rm -f /etc/machine-id /var/lib/dbus/machine-id \
     && touch /etc/machine-id \
     && ln -s /etc/machine-id /var/lib/dbus/machine-id \
