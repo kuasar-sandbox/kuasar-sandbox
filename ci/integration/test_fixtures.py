@@ -91,6 +91,7 @@ def workbench_results(plan, receipts):
     for arch, receipt in receipts.items():
         cases = artifacts.workbench_cases(plan['case_files'], arch)
         result[arch] = dict(receipt, conclusion='success', plan_id=artifacts.identity(plan),
+            qualification_scope='system', imported_image_id=receipt['image_id'], release_inputs_verified=True,
             framework_sha=plan['framework_sha'], test_revisions=plan['test_revisions'],
             offline=True, empty_private_daemon=True, isolation={'complete': True, 'image': receipt['image_id']},
             cases=cases, timings=[{'case': name, 'exit_code': 0, 'wall_seconds': .1} for name in cases],

@@ -156,6 +156,12 @@ class PreparedRunnerTests(unittest.TestCase):
         (self.release / 'test/e2e/cases/basic.fixture.sh').write_text('exit 0\n')
         (self.release / 'guide').mkdir()
         (self.release / 'guide/quickstart.md').write_text('# User guide\n')
+        (self.release / 'workbench').mkdir()
+        for name, mode in (('workbench', 0o755), ('apparmor.profile', 0o644),
+                           ('LICENSE.apparmor', 0o644)):
+            path = self.release / 'workbench' / name
+            path.write_text('packaged input: ' + name + '\n')
+            path.chmod(mode)
         self.args = dict(deps_dir=None, offline=False, suite=[], include=['basic.fixture.sh'], exclude=[], all=False,
                          arch=platform.machine(), release_dir=str(self.release), workdir=str(self.work),
                          run_root=str(self.root / 'run'), out_root=str(self.root / 'out'), result=None)
@@ -184,6 +190,10 @@ class PreparedRunnerTests(unittest.TestCase):
         self.assertEqual(prepared['files']['test/e2e/cases/basic.fixture.sh'],
                          before['test/e2e/cases/basic.fixture.sh'])
         self.assertEqual(prepared['files']['guide/quickstart.md'], before['guide/quickstart.md'])
+        for name in ('workbench/workbench', 'workbench/apparmor.profile', 'workbench/LICENSE.apparmor'):
+            self.assertEqual(prepared['files'][name], before[name])
+            self.assertEqual((self.work / name).stat().st_mode & 0o777,
+                             (self.release / name).stat().st_mode & 0o777)
 
     def test_failure_remains_failure_in_return_code_and_result(self):
         (self.release / 'test/e2e/cases/basic.fixture.sh').write_text('exit 23\n')

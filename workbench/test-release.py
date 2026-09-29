@@ -42,6 +42,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
     for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY'):
         artifacts.require(not os.environ.get(key), f'workbench qualification must not receive {key}')
     arch = platform.machine()
+    artifacts.require(not artifact_only or arch == 'aarch64', 'artifact-only qualification is restricted to hosted ARM')
     version, revision = plan['baseline']['version'], plan['baseline']['sha']
     root.mkdir(parents=True, exist_ok=False)
     receipt = workbench_assets.validate(stage / 'assets', version, arch, revision, receipt_directory=stage / 'workbench')
@@ -70,6 +71,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
         result['import_seconds'] = time.monotonic() - imported
         info = launcher.inspect('image', image)
         artifacts.require(info and info['Id'] == image, 'imported image differs from staged config')
+        result['imported_image_id'] = info['Id']
         release = root / 'release'
         release.mkdir()
         seen = {}
@@ -81,6 +83,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
             artifacts.require(path.stat().st_size == records[name]['size'] and 'sha256:' + artifacts.digest(path) == records[name]['digest'],
                               'release input bytes differ from exact stage: ' + name)
             artifacts.unpack(path, release, owner, seen)
+        result['release_inputs_verified'] = True
         cases = artifacts.workbench_cases(plan['case_files'], arch)
         result['cases'] = cases
         if artifact_only:
@@ -88,6 +91,8 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
             # staged archive, imported image identity and release inputs here;
             # native ARM KVM/system execution is a separate environment gate.
             result['qualification_scope'] = 'artifact-only'
+            result['planned_cases'] = result.pop('cases')
+            result['cases'] = []
             result['conclusion'] = 'success'
             return result
         result['qualification_scope'] = 'system'

@@ -83,7 +83,7 @@ python3 workbench/workbench --root "$STATE" --name e2e exec -- \
   --arch "$ARCH" --suite image --suite storage --exclude storage.obs.sh
 ```
 
-These suites are a minimal native ARM example. Release qualification also runs
+These suites are a minimal native ARM example. Hosted ARM release CI checks artifact bytes and image import only because it has no KVM device; this is not system/offline acceptance. Separate native KVM acceptance with the published image also runs
 `sandbox.lifecycle.sh`, `snapshot.restore.sh` and `network.tapfd.sh` on ARM; add
 those three `--include` options to both commands to exercise that scope. On x86_64 use the
 current full ordinary selection, `--all --exclude storage.obs.sh`, for both

@@ -71,7 +71,7 @@ python3 workbench/workbench --root "$STATE" --name e2e exec -- \
   --arch "$ARCH" --suite image --suite storage --exclude storage.obs.sh
 ```
 
-这些套件是原生 ARM 的最小示例。发布验收还在 ARM 执行 `sandbox.lifecycle.sh`、
+这些套件是原生 ARM 的最小示例。托管 ARM 发布 CI 没有 KVM 设备，因此仅检查资产字节和镜像导入，不代表系统或离线验收。使用已发布镜像的独立原生 KVM 验收还在 ARM 执行 `sandbox.lifecycle.sh`、
 `snapshot.restore.sh` 和 `network.tapfd.sh`；在两个命令都加入对应的三个 `--include`
 选项可覆盖该范围。在 x86_64 上，prepare 和 run 都应使用当前完整
 普通选择 `--all --exclude storage.obs.sh`。不得删除用例架构检查。需要凭据的 OBS

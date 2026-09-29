@@ -135,7 +135,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         work.mkdir()
         workspace.files(source_bin)
         shutil.copytree(source_bin, work / "bin")
-        for name in ("test", "docs", "guide", "share", "deploy", "fixtures", "images", "manifests"):
+        for name in ("test", "docs", "guide", "workbench", "share", "deploy", "fixtures", "images", "manifests"):
             source = release / name
             if source.exists():
                 workspace.files(source)
