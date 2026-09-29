@@ -424,6 +424,17 @@ def main():
             container = owned_container(data)
             if container:
                 docker('rm', container['Id'])
+                # Docker's inspect state can disappear before the confined
+                # container processes are fully reaped. Wait for the exact
+                # owned profile to have no remaining tasks before removing it;
+                # never weaken/remove a policy still confining descendants.
+                if data.get('apparmor'):
+                    name = data['apparmor']['name']
+                    deadline = time.monotonic() + 30
+                    while any(Path('/proc', pid, 'attr/current').read_text(errors='replace').strip().startswith(name + ' ')
+                              for pid in os.listdir('/proc') if pid.isdigit() and Path('/proc', pid, 'attr/current').is_file()):
+                        require(time.monotonic() < deadline, 'owned AppArmor profile still has live tasks after container removal')
+                        time.sleep(0.1)
             remove_apparmor(state, data)
             if data.get('network_id'):
                 network = inspect('network', data['network_id'])
