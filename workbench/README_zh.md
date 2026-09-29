@@ -30,7 +30,7 @@ KVM 或额外 capability。调用启动器的普通 UID 必须能访问 Docker�
 `docker load` 导入本机架构的 `workbench-<arch>-v*.tar.gz`。这是 gzip 压缩的 Docker
 镜像归档，不能解压到产品发布树。registry 标签为
 `ghcr.io/kuasar-sandbox/workbench:vX.Y.Z[-preview.YYYYMMDD[.N]]`，即聚合版本去掉
-`release-` 前缀。新的资产发布契约仅在聚合发布集成完成后启用。
+`release-` 前缀。新 `workbench-v1` 发布必须包含两个原生镜像归档；历史发布保留原有资产。
 
 ## 使用普通 UID 构建
 
@@ -71,7 +71,9 @@ python3 workbench/workbench --root "$STATE" --name e2e exec -- \
   --arch "$ARCH" --suite image --suite storage --exclude storage.obs.sh
 ```
 
-这些套件展示已接受的原生 ARM 选择。在 x86_64 上，prepare 和 run 都应使用当前完整
+这些套件是原生 ARM 的最小示例。发布验收还在 ARM 执行 `sandbox.lifecycle.sh`、
+`snapshot.restore.sh` 和 `network.tapfd.sh`；在两个命令都加入对应的三个 `--include`
+选项可覆盖该范围。在 x86_64 上，prepare 和 run 都应使用当前完整
 普通选择 `--all --exclude storage.obs.sh`。不得删除用例架构检查。需要凭据的 OBS
 仍由用户显式选择，并需要相应网络和凭据。
 

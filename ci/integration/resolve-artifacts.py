@@ -141,12 +141,16 @@ def aggregate(version, *, require_dual=True):
     manifest = source_text(PLATFORM, sha, relative)
     selected, _, units = release.selection.parse_manifest(manifest, f"{sha}:{relative}", "-preview." in version)
     artifacts.require(selected == version, "aggregate tag does not select its published version")
+    contract = release.selection.delivery(release.selection.read_simple_yaml(manifest, relative), relative)
     base_names = {"SHA256SUMS", f"platform-{version}.tar.gz"}
     x86 = {artifacts.archive_name(unit, tag, "x86_64") for unit, tag in units.items()}
     arm = {artifacts.archive_name(unit, tag, "aarch64") for unit, tag in units.items()}
     names = [item["name"] for item in state["assets"]]
     artifacts.require(len(names) == len(set(names)), "duplicate aggregate asset names")
-    if set(names) not in (base_names | x86, base_names | x86 | arm):
+    if contract == release.selection.DELIVERY:
+        expected_names = base_names | x86 | arm | {release.selection.workbench_archive(version, arch) for arch in artifacts.ARCHES}
+        artifacts.require(set(names) == expected_names, 'new aggregate is missing its declared complete workbench asset set')
+    elif set(names) not in (base_names | x86, base_names | x86 | arm):
         return None
     for asset in state["assets"]:
         artifacts.require(asset.get("state") == "uploaded" and isinstance(asset.get("size"), int)
@@ -178,12 +182,17 @@ def aggregate(version, *, require_dual=True):
                 expected = artifacts.suite_selection(['platform'], arch, case_files(tests))
                 actual = result['selection']
             else:
+                artifacts.require(contract != release.selection.DELIVERY, 'new aggregate requires the current explicit case selection')
                 expected, actual = historical_profile(arch, bootstrap_cases), result.get('profile')
             artifacts.require(result["arch"] == arch and result["conclusion"] == "success"
                               and actual == expected
                               and result.get("test_revisions") == tests,
                               "aggregate did not pass its predeclared architecture profile")
         validation = binding["architectures"]
+        if contract == release.selection.DELIVERY:
+            artifacts.require(binding.get('delivery') == contract, 'missing declared workbench validation binding')
+            artifacts.check_workbench_results(version, sha, binding.get('workbench'), expected_assets=binding['assets'], case_files=case_files(tests))
+            artifacts.check_registry_binding(version, binding)
     elif require_dual:
         raise ValueError(f"{version} is a valid historical x86-only baseline; explicit ARM initialization and new unit versions are required")
     unit_records = {}
@@ -191,7 +200,7 @@ def aggregate(version, *, require_dual=True):
         repository = REPOSITORIES[unit_owner(unit)]
         unit_records[unit] = {"version": tag, "repository": repository, "sha": exact_sha(release.tag_sha(repository, tag))}
     return {"repository": PLATFORM, "version": version, "sha": sha, "release_id": state["id"],
-            "units": unit_records, "validation": validation, "test_revisions": tests,
+            "units": unit_records, "validation": validation, "test_revisions": tests, "delivery": contract,
             "validation_run": max(runs, key=lambda run: run["id"])["html_url"],
             "assets": [{key: asset[key] for key in ("id", "name", "size", "digest")} for asset in state["assets"]]}
 
@@ -334,14 +343,18 @@ def exact_assets_plan(framework_sha, stage):
                       "staged selection differs from exact source")
     names = {"SHA256SUMS", f"platform-{version}.tar.gz"} | {
         artifacts.archive_name(unit, tag, arch) for unit, tag in units.items() for arch in artifacts.ARCHES}
+    contract = release.selection.delivery(release.selection.read_simple_yaml(manifest, relative), relative)
+    artifacts.require(contract == release.selection.DELIVERY, 'new stages require the committed workbench delivery contract')
+    names |= {release.selection.workbench_archive(version, arch) for arch in artifacts.ARCHES}
     files = artifacts.tree_files(stage / "assets")
-    artifacts.require(set(files) == names, "a new aggregate must explicitly stage both architecture asset sets")
+    artifacts.require(set(files) == names, "a new aggregate must stage both product and workbench architecture asset sets")
     unit_records = {}
     for unit, tag in units.items():
         repository = REPOSITORIES[unit_owner(unit)]
         public(repository)
         unit_records[unit] = {"version": tag, "repository": repository, "sha": exact_sha(release.tag_sha(repository, tag))}
     baseline = {"repository": PLATFORM, "version": version, "sha": sha, "units": unit_records, "staged": True,
+                "delivery": contract,
                 "assets": [{"name": name, "size": (stage / "assets" / name).stat().st_size,
                             "digest": "sha256:" + value} for name, value in sorted(files.items())]}
     sources = {owner: {"repository": repository, "sha": sha if owner == "platform" else

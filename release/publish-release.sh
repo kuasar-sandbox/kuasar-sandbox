@@ -47,7 +47,8 @@ check_release() {
   local version="$1"
   validate_aggregate_version "$version"
   if api_optional "repos/$REPOSITORY/releases/tags/$version" "$TMP/release"; then
-    release_fail "GitHub release already exists: $version"
+    [ "$(jq -r .draft "$TMP/release")" = true ] \
+      || release_fail "GitHub release already exists: $version"
   else
     local rc=$?
     [ "$rc" -eq 4 ] || exit "$rc"
@@ -97,7 +98,8 @@ publish_bundle() {
 
   local release_state="$TMP/release"
   if api_optional "repos/$REPOSITORY/releases/tags/$version" "$release_state"; then
-    release_fail "$version is already published; refusing to replace it"
+    [ "$(jq -r .draft "$release_state")" = true ] \
+      || release_fail "$version is already published; refusing to replace it"
   else
     local rc=$?
     [ "$rc" -eq 4 ] || exit "$rc"
@@ -105,16 +107,43 @@ publish_bundle() {
 
   local drafts="$TMP/drafts"
   find_draft_release "$version" "$drafts"
+  local files=() file name existing
   if [ "$(jq 'length' "$drafts")" -eq 1 ]; then
-    gh api --method DELETE "repos/$REPOSITORY/releases/$(jq -er '.[0].id' "$drafts")" >/dev/null
+    jq '.[0]' "$drafts" > "$release_state"
+    [ "$(jq -er .target_commitish "$release_state")" = "$commit" ] \
+      || release_fail "existing draft belongs to another source commit"
+    # A retry may fill absent assets, but must never replace same-name bytes.
+    while IFS= read -r name; do
+      [ -f "$bundle/assets/$name" ] || release_fail "unexpected existing draft asset: $name"
+    done < <(jq -r '.assets[].name' "$release_state")
+    while IFS= read -r file; do
+      name=$(basename "$file")
+      existing=$(jq -c --arg name "$name" '[.assets[] | select(.name == $name)]' "$release_state")
+      if [ "$(jq length <<< "$existing")" = 0 ]; then
+        files+=("$file")
+      else
+        jq -e --arg digest "sha256:$(sha256sum "$file" | awk '{print $1}')" \
+          --argjson size "$(stat -c '%s' "$file")" \
+          'length == 1 and .[0].digest == $digest and .[0].size == $size and .[0].state == "uploaded"' \
+          <<< "$existing" >/dev/null || release_fail "existing draft asset differs: $name"
+      fi
+    done < <(find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
+  else
+    while IFS= read -r file; do files+=("$file"); done \
+      < <(find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
   fi
 
-  local files=() file
-  while IFS= read -r file; do
-    files+=("$file")
-  done < <(find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
-  gh release create "$version" "${files[@]}" --repo "$REPOSITORY" --draft --verify-tag \
-    --target "$commit" --title "$version" --notes-file "$bundle/release-notes.md" >/dev/null
+  # Ownership and all existing asset bytes are checked before registry writes.
+  # The registry publisher also refuses conflicting existing image tags.
+  python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit"
+  if [ "$(jq 'length' "$drafts")" -eq 1 ]; then
+    [ "${#files[@]}" -eq 0 ] || gh release upload "$version" "${files[@]}" --repo "$REPOSITORY"
+    jq -n --rawfile body "$bundle/release-notes.md" '{body: $body}' \
+      | gh api --method PATCH "repos/$REPOSITORY/releases/$(jq -er .id "$release_state")" --input - >/dev/null
+  else
+    gh release create "$version" "${files[@]}" --repo "$REPOSITORY" --draft --verify-tag \
+      --target "$commit" --title "$version" --notes-file "$bundle/release-notes.md" >/dev/null
+  fi
 
   wait_for_draft_release "$version" "$drafts"
   jq '.[0]' "$drafts" > "$release_state"

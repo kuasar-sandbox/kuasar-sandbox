@@ -231,13 +231,19 @@ def archive_name(unit: str, tag: str, arch: str = "x86_64") -> str:
 
 
 def platform_asset_names_for_components(
-    tag: str, components: dict[str, str], architectures: tuple[str, ...] = ("x86_64",)
+    tag: str, components: dict[str, str], architectures: tuple[str, ...] = ("x86_64",),
+    delivery: str = "historical",
 ) -> set[str]:
+    if delivery == selection.DELIVERY:
+        architectures = ('x86_64', 'aarch64')
+    elif delivery != 'historical':
+        raise ValueError('unsupported aggregate delivery contract')
     return {
         "SHA256SUMS",
         archive_name("platform", tag),
         *(archive_name(unit, components[unit], arch) for unit in selection.UNITS for arch in architectures),
-    }
+    } | ({selection.workbench_archive(tag, arch) for arch in architectures}
+         if delivery == selection.DELIVERY else set())
 
 
 def platform_asset_names(tag: str, sha: str) -> set[str]:
@@ -260,7 +266,8 @@ def platform_asset_names(tag: str, sha: str) -> set[str]:
         raise Deferred(f"platform {tag} has an invalid release manifest at {sha}") from error
     if aggregate != tag:
         raise Deferred(f"platform manifest at {sha} selects {aggregate}, not {tag}")
-    return platform_asset_names_for_components(tag, components)
+    contract = selection.delivery(selection.read_simple_yaml(content, relative), relative)
+    return platform_asset_names_for_components(tag, components, delivery=contract)
 
 
 def tag_sha(repository: str, tag: str) -> str | None:
@@ -923,7 +930,7 @@ def render_manifest(
     plans: dict[str, Plan],
     fixed_pins: dict[str, str] | None = None,
 ) -> str:
-    lines = [f"version: {base}"]
+    lines = [f"version: {base}", f"delivery: {selection.DELIVERY}"]
     if previous is not None:
         lines.append(f"previous_version: {previous}")
     lines.append(f"preview_version: preview.{date}")
@@ -1095,6 +1102,50 @@ def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
     raise Pending(f"{action} incomplete aggregate cleanup for {tag}")
 
 
+def resume_workbench_publish(version: str, source_sha: str) -> bool:
+    """Retry only publication of the already validated immutable stage."""
+    runs = aggregate_runs(version)
+    if any(run_active(item) for item in runs):
+        return False
+    exact = [item for item in runs if item.get('display_title') == aggregate_run_title(version, source_sha)]
+    state = max(exact, key=lambda item: str(item.get('created_at', '')), default=None)
+    if state is None:
+        raise RuntimeError('partial workbench publication has no exact original workflow; retaining its bytes')
+    if sum(int(item.get('run_attempt', 1)) for item in exact) >= 3:
+        raise RuntimeError('aggregate publication failed after three attempts: ' + str(state.get('html_url')))
+    if state.get('conclusion') == 'success':
+        raise Pending('aggregate run is waiting for Release API convergence')
+    attempts = paginated(f"repos/{PLATFORM_REPOSITORY}/actions/runs/{state['id']}/jobs?filter=all&per_page=100", 'jobs')
+    # A publish-only rerun has no new prerequisite jobs. Keep the latest
+    # actual job for each name across attempts, including the unchanged gates.
+    latest = {}
+    for job in attempts:
+        previous = latest.get(job['name'])
+        if previous is None or job['id'] > previous['id']:
+            latest[job['name']] = job
+    jobs = list(latest.values())
+    publishers = [job for job in jobs if job.get('name') == 'publish']
+    required = ('prepare', 'stage', 'release-asset-validation / results')
+    for name in required:
+        matched = [job for job in jobs if job.get('name') == name]
+        if len(matched) != 1 or matched[0].get('status') != 'completed' or matched[0].get('conclusion') != 'success':
+            raise RuntimeError('cannot resume workbench publication without its successful original prerequisite: ' + name)
+    if len(publishers) != 1 or publishers[0].get('status') != 'completed' or publishers[0].get('conclusion') not in {'failure', 'cancelled', 'timed_out'}:
+        raise RuntimeError('partial workbench publication has no failed publish job; retaining its bytes')
+    artifacts = paginated(f"repos/{PLATFORM_REPOSITORY}/actions/runs/{state['id']}/artifacts?per_page=100", 'artifacts')
+    expected = f"aggregate-stage-{version}-{state['id']}"
+    stages = [item for item in artifacts if item.get('name') == expected]
+    if len(stages) != 1 or stages[0].get('expired') is not False:
+        raise RuntimeError('original workbench stage is unavailable; retain partial bytes and recover through owned cleanup with a fresh Preview selection')
+    # GitHub reruns this job and its dependents. Preparation, native builds and
+    # successful validation are not rerun or replaced; the publisher downloads
+    # that run's exact immutable stage and verifies source/head/bytes again.
+    gh('api', '--method', 'POST',
+       f"repos/{PLATFORM_REPOSITORY}/actions/jobs/{publishers[0]['id']}/rerun", '--silent')
+    print(f"==> resumed immutable workbench publication: {state.get('html_url')}")
+    return False
+
+
 def ensure_aggregate(version: str, source_sha: str) -> bool:
     status = platform_release(version)
     if status.complete:
@@ -1102,6 +1153,12 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
             raise Deferred(f"aggregate {version} exists on another platform commit")
         print(f"==> aggregate {version} is complete")
         return True
+    if status.partial and status.tag_sha == source_sha:
+        # Use the exact source declaration, never infer a legacy contract from
+        # absent image assets in a partial GitHub release.
+        expected = platform_asset_names(version, source_sha)
+        if selection.workbench_archive(version, 'x86_64') in expected:
+            return resume_workbench_publish(version, source_sha)
     if status.partial and "-preview." in version:
         recovery_sha = recoverable_source_sha(status)
         if recovery_sha is None:

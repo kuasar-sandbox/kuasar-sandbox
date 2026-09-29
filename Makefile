@@ -195,6 +195,7 @@ test-ci-tools:
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
 
 test-release-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s release -p 'test_workbench_*.py'
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test_e2e_package.py
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test-environment-tools.py
 	bash test/demo/test_demo_safety.sh

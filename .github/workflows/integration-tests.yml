@@ -233,12 +233,65 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  workbench-release:
+    if: inputs.mode == 'exact-assets' && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    needs: resolve
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.framework_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ needs.resolve.outputs.artifact }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.release_bundle_artifact }}
+          path: aggregate-stage
+      - name: Qualify staged image isolation and the public offline selection
+        run: |
+          python3 -B framework/workbench/test-release.py --plan plan/plan.json --stage aggregate-stage \
+            --root "$RUNNER_TEMP/workbench-release" --cpus 2 --memory-gib 8
+          cp "$RUNNER_TEMP/workbench-release/result.json" '${{ matrix.arch }}.json'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-workbench-result-${{ matrix.arch }}-${{ github.run_id }}
+          path: ${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Preserve owned workbench diagnostics even on failure
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-workbench-diagnostics-${{ matrix.arch }}-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/workbench-release/result.json
+            ${{ runner.temp }}/workbench-release/instances/*/output/
+            ${{ runner.temp }}/workbench-release/isolation/result.json
+            ${{ runner.temp }}/workbench-release/isolation/*/output/
+            ${{ runner.temp }}/workbench-release/apparmor/result.json
+            ${{ runner.temp }}/workbench-release/apparmor/instances/*/output/
+          if-no-files-found: error
+          retention-days: 7
+
   results:
     # Platform self-validation owns its required check after every stage.
     # Component callers keep their outer trusted ci-entry finalizer.
     name: ${{ github.event_name == 'pull_request' && 'finalize' || 'results' }}
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: [resolve, x86_64, aarch64, source-checks, workbench-native]
+    needs: [resolve, x86_64, aarch64, source-checks, workbench-native, workbench-release]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -250,6 +303,8 @@ jobs:
           SOURCE_RESULT: ${{ needs.source-checks.result }}
           WORKBENCH_SELECTED: ${{ needs.resolve.outputs.workbench }}
           WORKBENCH_RESULT: ${{ needs.workbench-native.result }}
+          INTEGRATION_MODE: ${{ inputs.mode }}
+          WORKBENCH_RELEASE_RESULT: ${{ needs.workbench-release.result }}
         run: |
           set -euo pipefail
           [ "$RESOLVE_RESULT" = success ] && [ "$X86_RESULT" = success ] \
@@ -257,6 +312,10 @@ jobs:
           case "$WORKBENCH_SELECTED:$WORKBENCH_RESULT" in
             true:success|false:skipped) ;;
             *) echo 'required native workbench qualification did not succeed' >&2; exit 1 ;;
+          esac
+          case "$INTEGRATION_MODE:$WORKBENCH_RELEASE_RESULT" in
+            exact-assets:success|source:skipped) ;;
+            *) echo 'required staged workbench qualification did not succeed' >&2; exit 1 ;;
           esac
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

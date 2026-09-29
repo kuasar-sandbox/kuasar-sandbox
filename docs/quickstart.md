@@ -55,7 +55,8 @@ set -euo pipefail
 RELEASE_VERSION="${RELEASE_VERSION:-}"
 RELEASE_METADATA="$(mktemp)"
 ASSETS_TSV="$(mktemp)"
-trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV"' EXIT
+SELECTION_MANIFEST="$(mktemp)"
+trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST"' EXIT
 
 if [ -n "$RELEASE_VERSION" ]; then
     [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]]
@@ -68,9 +69,14 @@ curl --fail --silent --show-error --location --retry 4 \
     -H 'X-GitHub-Api-Version: 2022-11-28' \
     "$RELEASE_API" >"$RELEASE_METADATA"
 
-RELEASE_VERSION="$(python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$ASSETS_TSV" <<'PY'
-import json, re, sys
-metadata, requested, output = sys.argv[1:]
+SOURCE_SHA="$(python3 -c 'import json,re,sys; value=json.load(open(sys.argv[1]))["target_commitish"]; assert re.fullmatch(r"[0-9a-f]{40}",value); print(value)' "$RELEASE_METADATA")"
+MANIFEST_PATH="$(python3 -c 'import json,sys; tag=json.load(open(sys.argv[1]))["tag_name"]; print("releases/daily-preview.yaml" if "-preview." in tag else "releases/release.yaml")' "$RELEASE_METADATA")"
+curl --fail --silent --show-error --location --retry 4 \
+    "https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/$SOURCE_SHA/$MANIFEST_PATH" >"$SELECTION_MANIFEST"
+
+RELEASE_VERSION="$(python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$ASSETS_TSV" "$SELECTION_MANIFEST" <<'PY'
+import json, os, re, sys
+metadata, requested, output, manifest = sys.argv[1:]
 release = json.load(open(metadata, encoding="utf-8"))
 tag = release.get("tag_name", "")
 tag_re = re.compile(r"^release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?$")
@@ -88,12 +94,48 @@ patterns = {
     "vmlinux": re.compile(r"^vmlinux-x86_64-v[^/]+\.tar\.gz$"),
 }
 assets = release.get("assets", [])
-assert len(assets) == 8, [a.get("name") for a in assets]
 names = [a.get("name", "") for a in assets]
+assert len(names) == len(set(names))
 assert names.count("SHA256SUMS") == 1
+bindings = re.findall(r"<!-- kuasar-integration-validation (.*?) -->", release.get("body", ""), re.S)
+assert len(bindings) <= 1
+binding = json.loads(bindings[0]) if bindings else {}
+# The exact source declares compatibility, never missing image assets/notes.
+fields = {}
+for line in open(manifest, encoding="utf-8"):
+    if line[:1].isspace() or not line.strip() or line.startswith("#"):
+        continue
+    key, separator, value = line.partition(":")
+    assert separator
+    if key in ("version", "preview_version", "delivery"):
+        assert key not in fields
+        fields[key] = value.strip()
+selected = fields["version"]
+if "-preview." in tag:
+    selected += "-" + fields["preview_version"]
+assert selected == tag
+contract = fields.get("delivery", "historical")
+assert "delivery" not in fields or contract == "workbench-v1"
+if contract == "workbench-v1":
+    assert binding.get("delivery") == contract
+roles = {"SHA256SUMS": "checksum"}
 for label, pattern in patterns.items():
     matches = [name for name in names if pattern.fullmatch(name)]
     assert len(matches) == 1, (label, matches)
+    roles[matches[0]] = "platform" if label == "platform" else "product"
+arm_patterns = [re.compile(pattern.pattern.replace("x86_64", "aarch64"))
+                for label, pattern in patterns.items() if label != "platform"]
+arm = [name for name in names if any(pattern.fullmatch(name) for pattern in arm_patterns)]
+if contract == "workbench-v1" or arm:
+    for pattern in arm_patterns:
+        assert sum(bool(pattern.fullmatch(name)) for name in names) == 1
+expected = set(roles) | set(arm)
+if contract == "workbench-v1":
+    expected |= {f"workbench-{arch}-{tag.removeprefix('release-')}.tar.gz" for arch in ("x86_64", "aarch64")}
+    if os.environ.get("DOWNLOAD_WORKBENCH", "0") == "1":
+        roles[f"workbench-x86_64-{tag.removeprefix('release-')}.tar.gz"] = "workbench"
+assert set(names) == expected, (sorted(names), sorted(expected))
+assert os.environ.get("DOWNLOAD_WORKBENCH", "0") in ("0", "1")
 prefix = f"https://github.com/kuasar-sandbox/kuasar-sandbox/releases/download/{tag}/"
 with open(output, "w", encoding="utf-8") as stream:
     for asset in sorted(assets, key=lambda item: item["name"]):
@@ -102,7 +144,8 @@ with open(output, "w", encoding="utf-8") as stream:
         assert url == prefix + name, url
         assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest or ""), (name, digest)
         assert isinstance(size, int) and size > 0, (name, size)
-        stream.write(f"{name}\t{url}\t{digest}\t{size}\n")
+        if name in roles:
+            stream.write(f"{name}\t{url}\t{digest}\t{size}\t{roles[name]}\n")
 print(tag)
 PY
 )"
@@ -115,19 +158,19 @@ mkdir -m 0755 "$DOWNLOAD_DIR"
 install -m 0644 "$RELEASE_METADATA" "$DOWNLOAD_DIR/release.json"
 install -m 0644 "$ASSETS_TSV" "$DOWNLOAD_DIR/assets.tsv"
 
-while IFS=$'\t' read -r name url digest size; do
+while IFS=$'\t' read -r name url digest size role; do
     curl --fail --silent --show-error --location --retry 4 \
         --output "$DOWNLOAD_DIR/$name.part" "$url"
     test "$(stat -c %s "$DOWNLOAD_DIR/$name.part")" = "$size"
     test "sha256:$(sha256sum "$DOWNLOAD_DIR/$name.part" | awk '{print $1}')" = "$digest"
     mv "$DOWNLOAD_DIR/$name.part" "$DOWNLOAD_DIR/$name"
 done <"$DOWNLOAD_DIR/assets.tsv"
-rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV"
+rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST"
 trap - EXIT
 printf 'Pinned aggregate Release: %s\n' "$RELEASE_VERSION"
 ```
 
-This does not use moving asset URLs after resolution. All eight explicit assets are obtained from the same concrete aggregate Release: one platform archive, six component release-unit archives, and `SHA256SUMS`.
+This pins one Release and reads its exact source selection to check the complete declared asset set, including both workbench architectures for `workbench-v1`. The download selects x86_64 products, platform-release and `SHA256SUMS`. Set `DOWNLOAD_WORKBENCH=1` before the block to also acquire the x86_64 workbench. Its archive is imported separately with `docker load -i "$DOWNLOAD_DIR/workbench-x86_64-${RELEASE_VERSION#release-}.tar.gz"`; follow the [workbench instructions](../workbench/README.md) for isolated builds and offline tests. Never extract workbench into the product tree.
 
 ## 3. Verify and extract without path collisions
 
@@ -137,14 +180,14 @@ The following validation checks `SHA256SUMS`, rejects unsupported tar entry type
 set -euo pipefail
 (
 cd "$DOWNLOAD_DIR"
-sha256sum --quiet --check SHA256SUMS
+sha256sum --quiet --check --ignore-missing SHA256SUMS
 )
 
 python3 - "$DOWNLOAD_DIR" <<'PY'
-import pathlib, re, sys, tarfile
+import json, pathlib, re, sys, tarfile
 root = pathlib.Path(sys.argv[1])
 rows = [line.split("\t") for line in (root / "assets.tsv").read_text().splitlines()]
-archives = [name for name, *_ in rows if name.endswith(".tar.gz")]
+archives = [row[0] for row in rows if row[4] in ("platform", "product")]
 checksum_re = re.compile(r"^([0-9a-f]{64}) [ *]([A-Za-z0-9._-]+)$")
 checksums = {}
 for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
@@ -153,7 +196,11 @@ for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
     digest, name = match.groups()
     assert name not in checksums
     checksums[name] = digest
-assert set(checksums) == set(archives), (sorted(checksums), sorted(archives))
+metadata = json.loads((root / "release.json").read_text())
+assert set(checksums) == {a["name"] for a in metadata["assets"] if a["name"] != "SHA256SUMS"}
+for name, _, digest, _, role in rows:
+    if role != "checksum":
+        assert "sha256:" + checksums[name] == digest
 types = {}
 for archive in archives:
     with tarfile.open(root / archive, "r:gz") as stream:
@@ -189,9 +236,9 @@ cleanup_stage() {
     case "$STAGE_DIR" in "$INSTALL_PARENT"/.kuasar-install.*) rm -rf -- "$STAGE_DIR" ;; esac
 }
 trap cleanup_stage EXIT
-while IFS=$'\t' read -r name _; do
-    case "$name" in
-        *.tar.gz) tar --extract --gzip --no-same-owner --no-same-permissions \
+while IFS=$'\t' read -r name url digest size role; do
+    case "$role" in
+        platform|product) tar --extract --gzip --no-same-owner --no-same-permissions \
             --file "$DOWNLOAD_DIR/$name" --directory "$STAGE_DIR" ;;
     esac
 done <"$DOWNLOAD_DIR/assets.tsv"
@@ -203,7 +250,8 @@ test -f "$STAGE_DIR/test/demo/demo_common.sh" || {
     exit 1
 }
 test -f "$STAGE_DIR/test/demo/requirements.txt"
-test -d "$STAGE_DIR/bin" && test -d "$STAGE_DIR/docs" && test -d "$STAGE_DIR/test"
+test -d "$STAGE_DIR/bin" && test -d "$STAGE_DIR/test"
+test -d "$STAGE_DIR/guide" || test -d "$STAGE_DIR/docs"
 for executable in "$STAGE_DIR/bin/cache-ctl" "$STAGE_DIR/bin/cloud-hypervisor"; do
     output="$(ldd "$executable" 2>&1)" || { printf '%s\n' "$output" >&2; exit 1; }
     ! grep -q 'not found' <<<"$output" || { printf '%s\n' "$output" >&2; exit 1; }

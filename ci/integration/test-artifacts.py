@@ -19,7 +19,7 @@ import zipfile
 
 import artifacts as subject
 import transport
-from test_fixtures import CASES, selection, select_plan, architecture_result
+from test_fixtures import CASES, WORKBENCH_CASES, selection, select_plan, architecture_result, workbench_results, registry_binding
 
 
 def test_revisions(sha="d" * 40):
@@ -189,6 +189,7 @@ class ArtifactBuildContracts(unittest.TestCase):
         builder = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(builder)
         plan = {"schema": 2, "mode": "source", "case_files": CASES, "framework_sha": "a" * 40, "owners": ["platform"],
+                "baseline": {"delivery": "historical"},
                 "test_overlays": list(subject.OWNERS), "product_sources": {}, "test_revisions": test_revisions(),
                 "sources": test_revisions(),
                 "lanes": {arch: {"products": [], "performance": ["working-set-smoke"] if arch == "x86_64" else [], "selection": selection(["platform"], arch)}
@@ -425,6 +426,29 @@ class ArtifactContracts(unittest.TestCase):
         tests["test/e2e/accelerator/lib/removed-helper.py"] = b"old helper"
         self.plan["baseline"]["assets"].append(archive(self.assets / "platform-release-v1.2.3.tar.gz", tests))
 
+    def workbench_stage(self):
+        """Identity fixtures for binding only; no image execution is simulated."""
+        version, sha = self.plan['baseline']['version'], self.plan['baseline']['sha']
+        (self.root / 'workbench').mkdir()
+        receipts = {}
+        for index, arch in enumerate(subject.ARCHES, 1):
+            name = f'workbench-{arch}-{version.removeprefix("release-")}.tar.gz'
+            path = self.assets / name
+            path.write_bytes(('unit-test image identity ' + arch).encode())
+            receipts[arch] = {'arch': arch, 'aggregate_version': version, 'source_revision': sha,
+                'archive': name, 'sha256': subject.digest(path), 'size': path.stat().st_size,
+                'image_id': 'sha256:' + str(index) * 64}
+            (self.root / 'workbench' / f'workbench-{arch}.json').write_text(json.dumps(receipts[arch]))
+        (self.assets / 'SHA256SUMS').write_text(''.join(f'{value}  {name}\n' for name, value in subject.tree_files(self.assets).items()))
+        self.plan['baseline'].update(delivery='workbench-v1', staged=True, assets=[
+            {'name': path.name, 'size': path.stat().st_size, 'digest': 'sha256:' + subject.digest(path)}
+            for path in sorted(self.assets.iterdir())])
+        self.plan.update(mode='exact-assets', case_files=WORKBENCH_CASES, owners=['platform'], test_overlays=[], product_sources={})
+        for arch in subject.ARCHES:
+            self.plan['lanes'][arch] = {'products': [], 'performance': [],
+                'selection': subject.suite_selection(['platform'], arch, WORKBENCH_CASES)}
+        return receipts
+
     def delta(self, arch="x86_64"):
         root = self.root / f"delta-{arch}"
         (root / "bin").mkdir(parents=True)
@@ -545,18 +569,18 @@ class ArtifactContracts(unittest.TestCase):
         version, sha = self.plan["baseline"]["version"], self.plan["baseline"]["sha"]
         units = self.plan["baseline"]["units"]
         pins = {owner: "f" * 40 for owner in subject.OWNERS if owner != "platform"}
-        manifest = "version: " + version + "\ncomponents:\n" + "".join(
+        manifest = "delivery: workbench-v1\nversion: " + version + "\ncomponents:\n" + "".join(
             f"  {unit}: {record['version']}\n" for unit, record in units.items())
         manifest += "test_revisions:\n" + "".join(f"  {owner}: {pin}\n" for owner, pin in pins.items())
         (self.root / "selection.tsv").write_text("".join(f"{unit}\t{units[unit]['version']}\n" for unit in subject.UNITS))
         pin_file = self.root / "test-revisions.json"
         pin_file.write_text(json.dumps(pins))
-        (self.assets / "SHA256SUMS").write_text("".join(f"{value}  {name}\n" for name, value in subject.tree_files(self.assets).items()))
-        with patch.object(resolver, "source_text", return_value=manifest), patch.object(resolver, "public"), patch.object(resolver, "case_files", return_value=CASES), \
+        receipts = self.workbench_stage()
+        with patch.object(resolver, "source_text", return_value=manifest), patch.object(resolver, "public"), patch.object(resolver, "case_files", return_value=WORKBENCH_CASES), \
              patch.object(resolver.release, "tag_sha", side_effect=lambda repo, tag: sha if repo == resolver.PLATFORM else "c" * 40), \
              patch.dict(os.environ, {"RELEASE_VERSION": version, "PLATFORM_SOURCE_SHA": sha}):
             plan = resolver.exact_assets_plan("a" * 40, self.root)
-            self.assertEqual(plan["case_files"], CASES)
+            self.assertEqual(plan["case_files"], WORKBENCH_CASES)
             self.assertEqual(plan["test_overlays"], [])
             self.assertEqual(plan["product_sources"], {})
             selected = plan["lanes"]["x86_64"]["selection"]["cases"]
@@ -578,7 +602,10 @@ class ArtifactContracts(unittest.TestCase):
                 subject.collect_results(plan, wrong)
             notes = self.root / "release-notes.md"
             notes.write_text("Exact stage\n")
-            binding.bind(self.root, plan, subject.collect_results(plan, results))
+            binding.bind(self.root, plan, subject.collect_results(plan, results), workbench_results(plan, receipts))
+            published = json.loads(resolver.PROFILE_BINDING.search(notes.read_text())[1])
+            published['registry'] = registry_binding(version, published['workbench'])
+            notes.write_text("<!-- kuasar-integration-validation " + json.dumps(published) + " -->")
             state = {"tag_name": version, "target_commitish": sha, "draft": False, "prerelease": False,
                 "id": 1, "body": notes.read_text(), "assets": [dict(record, id=index, state="uploaded")
                     for index, record in enumerate(plan["baseline"]["assets"], 1)]}
@@ -588,14 +615,19 @@ class ArtifactContracts(unittest.TestCase):
                  patch.object(resolver.release, "aggregate_runs", return_value=[run]):
                 baseline = resolver.aggregate(version)
                 self.assertEqual(baseline["test_revisions"], plan["test_revisions"])
-                original_body = state["body"]
+                original_body, original_assets = state["body"], state["assets"]
                 for old_cases in ({}, {owner: names for owner, names in CASES.items() if owner != "platform"}):
                     historical = json.loads(resolver.PROFILE_BINDING.search(original_body)[1])
+                    for field in ('delivery', 'workbench', 'registry'):
+                        historical.pop(field)
+                    historical['assets'] = {name: digest for name, digest in historical['assets'].items() if not name.startswith('workbench-')}
+                    state['assets'] = [row for row in original_assets if not row['name'].startswith('workbench-')]
                     for arch, result in historical["architectures"].items():
                         result.pop("selection")
                         result["profile"] = resolver.historical_profile(arch, old_cases)
                     state["body"] = "<!-- kuasar-integration-validation " + json.dumps(historical) + " -->"
-                    with patch.object(resolver, "historical_case_files", return_value=old_cases):
+                    with patch.object(resolver, "historical_case_files", return_value=old_cases), patch.object(
+                            resolver, 'source_text', return_value=manifest.replace('delivery: workbench-v1\n', '')):
                         self.assertEqual(resolver.aggregate(version)["test_revisions"], plan["test_revisions"])
                         entries = historical["architectures"]["x86_64"]["profile"]["cases"]
                         if old_cases:
@@ -605,7 +637,7 @@ class ArtifactContracts(unittest.TestCase):
                         state["body"] = "<!-- kuasar-integration-validation " + json.dumps(historical) + " -->"
                         with self.assertRaisesRegex(ValueError, "predeclared architecture profile"):
                             resolver.aggregate(version)
-                state["body"] = original_body
+                state["body"], state["assets"] = original_body, original_assets
                 with patch.object(resolver, "baseline", return_value=baseline), \
                      patch.object(resolver, "changed_files", return_value=["docs/ci.md"]), \
                      patch.object(resolver, "candidate_case_names", return_value=[]), \
@@ -827,9 +859,8 @@ class ArtifactContracts(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("binding", Path(__file__).resolve().parents[2] / "release/bind-validation.py")
         binding = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(binding)
-        self.plan["mode"] = "exact-assets"
-        self.plan["test_overlays"] = []
-        self.plan["baseline"]["staged"] = True
+        receipts = self.workbench_stage()
+        workbench = workbench_results(self.plan, receipts)
         results = {arch: architecture_result(self.plan, arch) for arch in subject.ARCHES}
         validation = subject.collect_results(self.plan, results)
         notes = self.root / "release-notes.md"
@@ -837,7 +868,7 @@ class ArtifactContracts(unittest.TestCase):
             {owner: record["sha"] for owner, record in self.plan["test_revisions"].items() if owner != "platform"}))
         notes.write_text("Original release notes\n")
         hashes = subject.tree_files(self.assets)
-        binding.bind(self.root, self.plan, validation)
+        binding.bind(self.root, self.plan, validation, workbench)
         self.assertEqual(subject.tree_files(self.assets), hashes)
         self.assertTrue(notes.read_text().startswith("Original release notes\n"))
         notes.write_text("Original release notes\n")
@@ -845,7 +876,7 @@ class ArtifactContracts(unittest.TestCase):
         with asset.open("ab") as output:
             output.write(b"changed after validation")
         with self.assertRaisesRegex(ValueError, "publisher bytes differ"):
-            binding.bind(self.root, self.plan, validation)
+            binding.bind(self.root, self.plan, validation, workbench)
         self.assertEqual(notes.read_text(), "Original release notes\n")
 
     def test_connector_source_failures_block_connector_and_platform(self):

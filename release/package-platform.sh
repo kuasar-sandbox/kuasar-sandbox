@@ -8,7 +8,12 @@ PLATFORM_SOURCE_ROOT="$(cd "${PLATFORM_SOURCE_ROOT:-$ROOT}" && pwd)"
 source "$ROOT/release/lib.sh"
 
 validate_archive() {
-  local version="$1" archive="$2"
+  local version="$1" archive="$2" contract="${3:-workbench-v1}" guide owner_path
+  case "$contract" in
+    workbench-v1) guide=guide; owner_path='guide/%s/README.md' ;;
+    historical) guide=docs; owner_path='docs/%s.md' ;;
+    *) release_fail 'unsupported platform delivery contract' ;;
+  esac
   [ -f "$archive" ] || release_fail "platform archive is missing: $archive"
   local expected
   expected="$(platform_archive "$version")"
@@ -22,8 +27,8 @@ validate_archive() {
     /^\// { exit 1 }
     { path=$0; sub(/^\.\//, "", path); if (path ~ /(^|\/)\.\.($|\/)/) exit 1 }
   ' "$listing" || release_fail "platform archive contains an unsafe path"
-  grep -Fx './guide/kuasar-sandbox.md' "$listing" >/dev/null \
-    || release_fail "platform archive is missing guide/kuasar-sandbox.md"
+  grep -Fx "./$guide/kuasar-sandbox.md" "$listing" >/dev/null \
+    || release_fail "platform archive is missing $guide/kuasar-sandbox.md"
   grep -Fx './test/e2e/e2e' "$listing" >/dev/null \
     || release_fail "platform archive is missing test/e2e/e2e"
   grep -Fx './test/e2e/lib/common.sh' "$listing" >/dev/null \
@@ -36,13 +41,15 @@ validate_archive() {
   python3 -B "$ROOT/release/validate-e2e-package.py" "$archive"
   local owner
   for owner in accelerator connector guest-runtime sandboxer orchestrator; do
-    grep -Fx "./guide/$owner/README.md" "$listing" >/dev/null \
+    grep -Fx "./$(printf "$owner_path" "$owner")" "$listing" >/dev/null \
       || release_fail "platform archive is missing guide/$owner/README.md"
   done
+  if [ "$contract" = workbench-v1 ]; then
   grep -Fx './workbench/workbench' "$listing" >/dev/null \
     || release_fail 'platform archive is missing the workbench launcher'
   if grep -E '/test_[^/]*$|/test/perf/|/assemble(_docs)?\.(sh|py)$|/package_inputs\.py$' "$listing" >/dev/null; then
     release_fail 'platform archive contains source-only tests or assembly tools'
+  fi
   fi
   if grep -Fx './test/e2e/assemble.sh' "$listing" >/dev/null; then
     release_fail "platform archive contains the source-only E2E assembler"
@@ -52,7 +59,7 @@ validate_archive() {
   fi
   if awk '
     { path=$0; sub(/^\.\//, "", path) }
-    path != "" && path !~ /\/$/ && path !~ /^(guide|test|workbench)\// { exit 1 }
+    path != "" && path !~ /\/$/ && path !~ /^(docs|guide|test|workbench)\// { exit 1 }
   ' "$listing"; then
     :
   else
@@ -120,9 +127,9 @@ case "${1:-}" in
     ;;
   validate)
     shift
-    [ "$#" -eq 2 ] || release_fail "usage: package-platform.sh validate <release-version> <archive>"
+    { [ "$#" -eq 2 ] || [ "$#" -eq 3 ]; } || release_fail "usage: package-platform.sh validate <release-version> <archive> [delivery]"
     validate_aggregate_version "$1"
-    validate_archive "$1" "$2"
+    validate_archive "$1" "$2" "${3:-workbench-v1}"
     ;;
   *)
     release_fail "usage: package-platform.sh <package <release-version> <component-source-dir> <test-source-dir> <output-dir>|validate <release-version> <archive>>"

@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -405,6 +406,16 @@ def check_plan(plan):
     require(plan["schema"] == 2, "unsupported integration plan")
     require(re.fullmatch(r"[0-9a-f]{40}", plan["framework_sha"]), "missing exact framework revision")
     require(set(plan["lanes"]) == set(ARCHES), "plan must contain both architectures")
+    contract = plan['baseline'].get('delivery', 'historical')
+    require(contract in ('historical', 'workbench-v1'), 'unsupported aggregate delivery contract')
+    if contract == 'workbench-v1':
+        baseline = plan['baseline']
+        expected = {'SHA256SUMS', 'platform-' + baseline['version'] + '.tar.gz'}
+        expected.update(archive_name(unit, record['version'], arch)
+                        for unit, record in baseline['units'].items() for arch in ARCHES)
+        expected.update(f'workbench-{arch}-{baseline["version"].removeprefix("release-")}.tar.gz' for arch in ARCHES)
+        names = [record['name'] for record in baseline['assets']]
+        require(set(names) == expected and len(names) == len(expected), 'new aggregate lacks its complete declared assets')
     case_files = plan["case_files"]
     require(set(plan["test_overlays"]) == (set(OWNERS) if plan["mode"] == "source" else set()),
             "test overlays differ from the exact input mode")
@@ -583,6 +594,85 @@ def verify_workspace(workspace, plan, arch):
     require(provenance["selection"] == plan["lanes"][arch]["selection"], "selected cases changed after preparation")
     require(provenance.get("test_revisions") == plan["test_revisions"], "prepared test pins differ from plan")
     return provenance
+
+
+def workbench_cases(case_files, arch):
+    cases = set(suite_selection(['platform'], arch, case_files)['cases'])
+    if arch == 'aarch64':
+        extra = {'sandbox.lifecycle.sh', 'snapshot.restore.sh', 'network.tapfd.sh'}
+        require(extra <= set().union(*(set(names) for names in case_files.values())), 'missing declared ARM workbench KVM/network cases')
+        cases |= extra
+    return sorted(cases)
+
+
+def check_workbench_results(version, source_sha, results, *, expected_assets, case_files):
+    """Bind system/offline evidence to each tested image and outer archive."""
+    require(isinstance(results, dict) and set(results) == set(ARCHES), 'both workbench architecture results are required')
+    for arch, record in results.items():
+        name = f'workbench-{arch}-{version.removeprefix("release-")}.tar.gz'
+        require(record.get('conclusion') == 'success' and record.get('arch') == arch
+                and record.get('aggregate_version') == version and record.get('source_revision') == source_sha,
+                'workbench validation has another source/version/architecture or did not pass')
+        require(record.get('archive') == name and 'sha256:' + record.get('sha256', '') == expected_assets.get(name)
+                and re.fullmatch(r'sha256:[0-9a-f]{64}', record.get('image_id', '')),
+                'workbench validation differs from staged archive/image identity')
+        require(type(record.get('size')) is int and 0 < record['size'] < 2 * 1024**3,
+                'workbench compressed archive must be smaller than 2 GiB')
+        for key in ('compression_seconds', 'import_seconds', 'start_seconds', 'wall_seconds'):
+            value = record.get(key)
+            require(type(value) in (int, float) and math.isfinite(value) and value >= 0,
+                    'missing or invalid workbench measurement: ' + key)
+        disk = record.get('disk', {})
+        require(type(record.get('retained_task_bytes')) is int and record['retained_task_bytes'] >= 0
+                and all(type(disk.get(key)) is int and disk[key] >= 0 for key in ('used_before', 'peak_used', 'peak_increase'))
+                and disk['peak_used'] >= disk['used_before']
+                and disk['peak_increase'] == disk['peak_used'] - disk['used_before'],
+                'missing or inconsistent workbench disk measurements')
+        require(record.get('offline') is True and record.get('empty_private_daemon') is True,
+                'workbench requires offline preparation from empty private Docker state')
+        require(record.get('isolation', {}).get('complete') is True
+                and record['isolation'].get('image') == record['image_id'], 'workbench isolation did not pass on the tested image')
+        preflight = record.get('preflight', {})
+        require(all(preflight.get(key) == value for key, value in {
+            'arch': arch, 'page_size': 4096, 'kvm': 'api-12', 'tun': 'create-close',
+            'uffd': 'api-ioctl', 'bpf': 'create-pin-remove'}.items()), 'workbench native system preflight did not pass')
+        require(preflight.get('docker', {}).get('driver') == 'overlay2'
+                and preflight['docker'].get('root') == '/var/lib/docker'
+                and preflight.get('containerd') == {'root': '/var/lib/containerd', 'state': '/run/containerd'},
+                'workbench daemons do not use their private storage')
+        require(record.get('cases') == workbench_cases(case_files, arch) and record.get('timings'),
+                'workbench cases differ from the complete declared selection')
+        require(record.get('input_assets') == expected_assets, 'workbench input assets differ from the aggregate')
+        check_timings(record['timings'], record['cases'])
+        require(re.fullmatch(r'[0-9a-f]{64}', record.get('provenance_sha256', '')),
+                'missing workbench prepared-workspace provenance digest')
+        require(isinstance(record.get('host_apparmor_enabled'), bool), 'missing workbench host LSM observation')
+        if record['host_apparmor_enabled']:
+            lsm = record.get('apparmor', {})
+            profile = lsm.get('profile', {}).get('name', '')
+            require(re.fullmatch(r'kuasar-workbench-v1-u[0-9]+-[0-9a-f]{32}', profile)
+                    and lsm.get('conclusion') == 'success' and lsm.get('image_id') == record['image_id']
+                    and lsm.get('outer_context') == lsm.get('inner_context') == profile + ' (enforce)'
+                    and lsm.get('host_apparmor_before') == lsm.get('host_apparmor_after') == 'Y'
+                    and lsm.get('inner_detection') == '' and lsm.get('forbidden_mounts') == 'denied'
+                    and lsm.get('cleanup') == 'owned container, daemon data and profile removed; output retained',
+                    'enforcing host nested Docker was not qualified')
+    return results
+
+
+def check_registry_binding(version, binding):
+    registry = binding.get('registry', {})
+    require(registry.get('reference') == 'ghcr.io/kuasar-sandbox/workbench:' + version.removeprefix('release-')
+            and re.fullmatch(r'sha256:[0-9a-f]{64}', registry.get('digest', '')), 'missing aggregate registry identity')
+    records = registry.get('architectures', {})
+    require(set(records) == set(ARCHES), 'registry must select both native architectures')
+    for arch, row in records.items():
+        result = binding['workbench'][arch]
+        require(re.fullmatch(r'sha256:[0-9a-f]{64}', row.get('digest', ''))
+                and isinstance(row.get('size'), int) and row['size'] > 0
+                and row.get('image_id') == result['image_id']
+                and row.get('archive_sha256') == result['sha256'], 'registry/offline workbench identity differs')
+    return registry
 
 
 def collect_results(plan, results):
