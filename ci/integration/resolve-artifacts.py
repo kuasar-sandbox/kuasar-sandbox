@@ -358,11 +358,26 @@ def exact_assets_plan(framework_sha, stage):
     return plan
 
 
+def workbench_requested(plan):
+    # Compare the admitted PR's actual base, independently of the published
+    # baseline. This also works for forks and platform companions without
+    # executing or relying on candidate files in the trusted framework checkout.
+    if plan['mode'] != 'source':
+        return False
+    for record in plan['candidate_records']:
+        if record['repository'] == PLATFORM:
+            paths = changed_files(PLATFORM, record['base_sha'], record['candidate_sha'])
+            if any(path.startswith('workbench/') for path in paths):
+                return True
+    return False
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--framework-sha", required=True)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--stage", type=Path)
+    parser.add_argument("--workbench-output", type=Path)
     args = parser.parse_args()
     # The existing event, exact-merge-parent and companion checks remain the
     # admission authority. This command is run only after those checks succeed.
@@ -370,6 +385,9 @@ def main():
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("xb") as output:
         output.write(artifacts.canonical(plan) + b"\n")
+    if args.workbench_output:
+        with args.workbench_output.open('x') as output:
+            output.write('true\n' if workbench_requested(plan) else 'false\n')
     print(f"resolved aggregate {plan['baseline']['version']} plan={artifacts.identity(plan)}")
 
 

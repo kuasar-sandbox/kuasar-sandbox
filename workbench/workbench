@@ -1,0 +1,516 @@
+#!/usr/bin/env python3
+"""Thin native Docker launcher for trusted Kuasar build and E2E tasks."""
+import argparse
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import time
+import uuid
+
+ROOT = Path(__file__).resolve().parent
+LABEL = 'org.kuasar.workbench.instance'
+NAMESPACES = ('pid', 'uts', 'ipc', 'mnt', 'net', 'cgroup')
+APPARMOR_ENABLED = Path('/sys/module/apparmor/parameters/enabled')
+APPARMOR_PROFILES = Path('/sys/kernel/security/apparmor/profiles')
+
+
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def docker(*arguments, timeout=60):
+    return subprocess.check_output(['docker', *map(str, arguments)], text=True, timeout=timeout).strip()
+
+
+def inspect(kind, identity):
+    result = subprocess.run(['docker', kind, 'inspect', identity], capture_output=True, text=True, timeout=30)
+    if result.returncode:
+        require('No such' in result.stderr or 'not found' in result.stderr, result.stderr.strip())
+        return None
+    records = json.loads(result.stdout)
+    require(len(records) == 1, f'ambiguous Docker {kind}: {identity}')
+    return records[0]
+
+
+def save(state, data):
+    temporary = state / '.instance.json.tmp'
+    temporary.write_text(json.dumps(data, sort_keys=True, indent=2) + '\n')
+    temporary.chmod(0o600)
+    temporary.replace(state / 'instance.json')
+
+
+def host_command(command, **kwargs):
+    # Only fixed parser/read commands use sudo. Never preserve the caller's
+    # environment or let a nested daemon manage host-global profiles.
+    prefix = [] if os.getuid() == 0 else ['sudo', '-n']
+    return subprocess.run([*prefix, *command], check=True, capture_output=True,
+                          text=True, timeout=30, **kwargs).stdout
+
+
+def apparmor_enabled():
+    return APPARMOR_ENABLED.exists() and APPARMOR_ENABLED.read_text().strip() == 'Y'
+
+
+def apparmor_profiles():
+    require(APPARMOR_PROFILES.is_file(), 'AppArmor is enabled but securityfs profile state is unavailable; host configuration is not changed')
+    try:
+        value = APPARMOR_PROFILES.read_text()
+    except PermissionError:
+        value = host_command(['cat', str(APPARMOR_PROFILES)])
+    return dict(line.rsplit(' (', 1) for line in value.splitlines())
+
+
+def apparmor_source(state, data):
+    profile = data['apparmor']
+    expected = f"kuasar-workbench-v1-u{data['owner_uid']}-{data['id']}"
+    require(profile['version'] == 1 and profile['name'] == expected and
+            re.fullmatch(r'kuasar-workbench-v1-u[0-9]+-[0-9a-f]{32}', expected), 'foreign AppArmor ownership/version')
+    path = state / 'apparmor.profile'
+    require(path.is_file() and not path.is_symlink(), 'missing or unsafe owned AppArmor profile')
+    source = path.read_text()
+    require(hashlib.sha256(source.encode()).hexdigest() == profile['sha256'], 'owned AppArmor profile changed')
+    require(f'profile {expected} ' in source, 'AppArmor profile name differs from ownership record')
+    return source
+
+
+def apparmor_parser(action, source):
+    parser = shutil.which('apparmor_parser')
+    require(parser, 'system mode on an AppArmor host needs host apparmor_parser and permission to manage its own profile (root or sudo -n)')
+    require(action in ('--add', '--remove'), 'profile replacement is never permitted')
+    host_command([parser, action, '--skip-cache', '--skip-read-cache', '--jobs', '1'], input=source)
+
+
+def load_apparmor(state, data):
+    if not apparmor_enabled():
+        require(not data.get('apparmor'), 'recorded AppArmor enforcement is no longer enabled')
+        return
+    loaded = apparmor_profiles()
+    name = f"kuasar-workbench-v1-u{data['owner_uid']}-{data['id']}"
+    source = (ROOT / 'apparmor.profile').read_text().replace('@PROFILE@', name)
+    if 'apparmor' in data:
+        require(apparmor_source(state, data) == source, 'restart needs the recorded AppArmor profile version')
+        if name in loaded:
+            require(data['apparmor']['loaded'] and loaded[name] == 'enforce)', 'profile collision or non-enforcing owned profile')
+            return
+    else:
+        require(name not in loaded, 'foreign AppArmor profile collision; refusing adoption')
+        path = state / 'apparmor.profile'
+        require(not path.exists() and not path.is_symlink(), 'AppArmor profile path already exists')
+        path.write_text(source)
+        path.chmod(0o600)
+        data['apparmor'] = {'version': 1, 'name': name, 'sha256': hashlib.sha256(source.encode()).hexdigest(), 'loaded': False}
+        save(state, data)
+    apparmor_parser('--add', source)
+    # Record successful ownership before verification, so a failed verification
+    # retains a removable owned profile rather than leaking an untracked policy.
+    data['apparmor']['loaded'] = True
+    save(state, data)
+    require(apparmor_profiles().get(name) == 'enforce)', 'owned AppArmor profile is not enforcing')
+
+
+# Read all thread labels as host root: ordinary Docker users cannot inspect
+# root-owned daemon tasks. ENOENT/ESRCH are normal process-exit races; EINVAL is
+# returned for kernel threads with no AppArmor task context. Other errors fail
+# closed. This fixed read-only program never signals or changes host processes.
+APPARMOR_TASK_SCAN = r"""
+import errno, json, os, sys
+from pathlib import Path
+matches = []
+for pid in os.listdir('/proc'):
+    if not pid.isdigit():
+        continue
+    try:
+        tasks = list(Path('/proc', pid, 'task').iterdir())
+        for task in tasks:
+            try:
+                context = (task / 'attr/current').read_text().strip()
+                if context.startswith(sys.argv[1] + ' '):
+                    matches.append(task.name)
+            except OSError as error:
+                if error.errno not in (errno.ENOENT, errno.ESRCH, errno.EINVAL):
+                    raise
+    except OSError as error:
+        if error.errno not in (errno.ENOENT, errno.ESRCH):
+            raise
+print(json.dumps(matches))
+"""
+
+
+def wait_apparmor_tasks(name):
+    deadline = time.monotonic() + 30
+    while True:
+        tasks = json.loads(host_command(['python3', '-I', '-c', APPARMOR_TASK_SCAN, name]))
+        if not tasks:
+            return
+        require(time.monotonic() < deadline,
+                'owned AppArmor profile still has live tasks after container removal: ' + ', '.join(tasks))
+        time.sleep(0.1)
+
+
+def remove_apparmor(state, data):
+    if not data.get('apparmor'):
+        return
+    source = apparmor_source(state, data)
+    name = data['apparmor']['name']
+    loaded = apparmor_profiles()
+    if name in loaded:
+        require(data['apparmor']['loaded'] and loaded[name] == 'enforce)', 'refusing removal of an unowned or changed AppArmor profile')
+        identities = docker('ps', '-aq').split()
+        if identities:
+            containers = json.loads(docker('container', 'inspect', *identities))
+            require(not any(c.get('AppArmorProfile') == name for c in containers), 'AppArmor profile still belongs to a container; retaining policy')
+        # Also applies to retries where Docker already removed the container.
+        wait_apparmor_tasks(name)
+        apparmor_parser('--remove', source)
+        require(name not in apparmor_profiles(), 'owned AppArmor profile removal failed')
+    data['apparmor']['loaded'] = False
+    save(state, data)
+
+
+def check_apparmor(data):
+    if not data.get('apparmor'):
+        return
+    name = data['apparmor']['name']
+    require(apparmor_enabled() and apparmor_profiles().get(name) == 'enforce)', 'host AppArmor enforcement changed')
+    actual = docker('exec', data['container_id'], 'cat', '/proc/1/attr/current')
+    require(actual == name + ' (enforce)', f'outer PID 1 is not confined by its owned profile: {actual}')
+    masked = docker('exec', data['container_id'], 'cat', str(APPARMOR_ENABLED))
+    require(masked == '', 'nested Docker AppArmor detection was not masked')
+
+
+@contextmanager
+def locked(args, create=False):
+    require(args.root is not None and args.name is not None, '--root and --name are required for instance operations')
+    require(re.fullmatch(r'[a-z0-9][a-z0-9-]{0,39}', args.name), 'name must contain 1–40 lowercase letters, digits or hyphens')
+    root = args.root.absolute()
+    require(root.resolve() == root, 'instance root cannot be a symlink or contain symlink parents')
+    if create:
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    require(root.is_dir() and root.stat().st_uid == os.getuid() and not root.stat().st_mode & 0o002,
+            'instance root must be owned by the invoking UID and not world-writable')
+    lock = root / '.workbench.lock'
+    require(not lock.is_symlink(), 'instance lock cannot be a symlink')
+    with lock.open('a') as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX)
+        state = root / args.name
+        require(not state.is_symlink(), 'instance directory cannot be a symlink')
+        if not state.exists():
+            require(create, f'unknown instance: {args.name}')
+            state.mkdir(mode=0o700)
+        require(state.is_dir() and state.stat().st_uid == os.getuid(), 'instance directory has a different owner')
+        yield state.resolve()
+
+
+def record(state):
+    path = state / 'instance.json'
+    require(path.is_file() and not path.is_symlink(), 'missing instance ownership record; refusing adoption')
+    data = json.loads(path.read_text())
+    require(data['owner_uid'] == os.getuid() and data['directory'] == str(state), 'foreign instance ownership record')
+    return data
+
+
+def owned_container(data):
+    container = inspect('container', data.get('container_id') or data['container_name'])
+    if container:
+        require(container['Config'].get('Labels', {}).get(LABEL) == data['id'] and
+                container['Config']['Labels'].get('org.kuasar.workbench.uid') == str(data['owner_uid']) and
+                container['Image'] == data['image_id'] and
+                (not data.get('container_id') or container['Id'] == data['container_id']),
+                'foreign container collision; refusing operation')
+    return container
+
+
+def host_check(image, mode):
+    require(platform.system() == 'Linux', 'workbench requires native Linux Docker Engine')
+    endpoint = os.environ.get('DOCKER_HOST') or docker('context', 'inspect', '--format', '{{.Endpoints.docker.Host}}')
+    require(endpoint.startswith('unix://'), 'run workbench on the native Docker host using its Unix endpoint')
+    info = json.loads(docker('info', '--format', '{{json .}}'))
+    arch = platform.machine()
+    require(info['OSType'] == 'linux' and info['KernelVersion'] == platform.release() and
+            info['Architecture'] == arch and 'Docker Desktop' not in info['OperatingSystem'],
+            'Docker server must use this native Linux host kernel and architecture')
+    require(arch in ('x86_64', 'aarch64'), f'unsupported architecture: {arch}')
+    image_info = inspect('image', image)
+    require(image_info is not None, 'image is not local; acquire and verify the matching release image first')
+    require(image_info['Os'] == 'linux' and image_info['Architecture'] == {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch],
+            'workbench image must match the native architecture')
+    labels = image_info['Config'].get('Labels') or {}
+    require(labels.get('org.opencontainers.image.source') == 'https://github.com/kuasar-sandbox/kuasar-sandbox',
+            'image is missing workbench source identity')
+    if mode == 'system':
+        require(str(info['CgroupVersion']) == '2', 'system mode requires cgroup v2')
+        require(not any('rootless' in value for value in info['SecurityOptions']),
+                'system mode requires a rootful Engine; ordinary UID builds do not')
+        require(os.sysconf('SC_PAGE_SIZE') == 4096, 'system mode requires a 4096-byte native host page size')
+        for path in ('/dev/kvm', '/dev/net/tun'):
+            require(Path(path).is_char_device(), f'required host device is missing: {path}; host configuration is not changed')
+    return {'arch': arch, 'image_id': image_info['Id'], 'version': labels.get('org.opencontainers.image.version'),
+            'host_namespaces': {kind: os.readlink('/proc/self/ns/' + kind) for kind in NAMESPACES},
+            'host_security': info['SecurityOptions'], 'mode': mode}
+
+
+def seccomp_profile():
+    profile = json.loads((ROOT / 'seccomp-default.json').read_text())
+    require(profile['defaultAction'] == 'SCMP_ACT_ERRNO', 'workbench seccomp must remain default-deny')
+    profile['syscalls'].extend([
+        {'names': ['userfaultfd'], 'action': 'SCMP_ACT_ALLOW', 'includes': {'caps': ['CAP_SYS_PTRACE']}},
+        {'names': ['pivot_root'], 'action': 'SCMP_ACT_ALLOW', 'includes': {'caps': ['CAP_SYS_ADMIN']}},
+        *({'names': ['keyctl'], 'action': 'SCMP_ACT_ALLOW',
+           'args': [{'index': 0, 'value': operation, 'op': 'SCMP_CMP_EQ'}]}
+          for operation in (1, 5, 6)),
+    ])
+    return profile
+
+
+def bind(source, destination, readonly=False):
+    require(',' not in str(source), 'mount paths cannot contain a Docker mount separator')
+    return ['--mount', f'type=bind,src={source},dst={destination}' + (',readonly' if readonly else '')]
+
+
+def create_command(args, state, data):
+    allowed = sorted(os.sched_getaffinity(0))
+    require(1 <= args.cpus <= len(allowed) and args.memory_gib >= 1 and args.pids >= 128, 'invalid CPU/memory/pids budget')
+    require(shutil.disk_usage(state).free >= 5 * 1024**3, 'at least 5 GiB free task storage is required; this is not a disk quota')
+    for name in ('work', 'output', 'build', 'home', 'docker', 'containerd', 'journal'):
+        require(not (state / name).is_symlink(), 'instance data directory cannot be a symlink')
+        (state / name).mkdir(exist_ok=True)
+    (state / 'build/tmp').mkdir(exist_ok=True)
+    command = ['create', '--name', data['container_name'], '--pull=never', '--cgroupns=private',
+               '--label', LABEL + '=' + data['id'], '--label', 'org.kuasar.workbench.uid=' + str(os.getuid()),
+               '--cpuset-cpus', ','.join(map(str, allowed[:args.cpus])), '--cpus', str(args.cpus),
+               '--memory', str(args.memory_gib) + 'g', '--memory-swap', str(args.memory_gib) + 'g',
+               '--pids-limit', str(args.pids), '--network', data.get('network_id') or 'none',
+               '--tmpfs', '/run', '--tmpfs', '/run/lock', '--tmpfs', '/tmp',
+               '--env', 'HOME=/work/home', '--env', 'CARGO_HOME=/work/home/.cargo',
+               '--env', 'TMPDIR=/build/tmp',
+               '--env', 'GOPATH=/work/home/go', '--env', 'GOCACHE=/work/home/go-cache',
+               '--env', 'GOMAXPROCS=' + str(args.cpus), '--env', 'CARGO_BUILD_JOBS=' + str(args.cpus)]
+    command += bind(state / 'work', '/work') + bind(state / 'home', '/work/home')
+    command += bind(state / 'output', '/output') + bind(state / 'build', '/build')
+    if args.inputs:
+        inputs = args.inputs.resolve()
+        require(inputs.is_dir() and not inputs.is_relative_to(state) and not state.is_relative_to(inputs),
+                'release inputs must be a separate directory, without instance state or host root')
+        command += bind(inputs, '/inputs/release', True)
+    if args.mode == 'build':
+        require(args.source is not None, 'build mode needs its own writable --source checkout')
+        source = args.source.resolve()
+        require(source.is_dir() and os.access(source, os.W_OK) and
+                not source.is_relative_to(state) and not state.is_relative_to(source),
+                'source checkout must be writable by the invoking UID and separate from instance state/host root')
+        command += bind(source, '/src')
+        command += ['--init', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--read-only',
+                    '--user', f'{os.getuid()}:{os.getgid()}', '--workdir', '/src', '--stop-signal=SIGTERM',
+                    data['image_id'], 'build', 'sleep', 'infinity']
+    else:
+        require(args.source is None, 'system mode consumes release inputs; use build mode for source checkouts')
+        (state / 'machine-id').write_text(data['id'] + '\n')
+        profile = state / 'seccomp.json'
+        profile.write_text(json.dumps(seccomp_profile()) + '\n')
+        command += ['--cap-add=SYS_ADMIN', '--cap-add=NET_ADMIN', '--cap-add=SYS_PTRACE',
+                    '--security-opt', 'seccomp=' + str(profile), '--ulimit', 'memlock=-1:-1',
+                    '--device', '/dev/kvm', '--device', '/dev/net/tun']
+        if data.get('apparmor'):
+            command += ['--security-opt', 'apparmor=' + data['apparmor']['name']]
+        command += bind(state / 'machine-id', '/etc/machine-id', True)
+        command += bind(state / 'docker', '/var/lib/docker') + bind(state / 'containerd', '/var/lib/containerd')
+        command += bind(state / 'journal', '/var/log/journal')
+        command += [data['image_id'], 'system']
+    return command
+
+
+def diagnostics(state, data):
+    (state / 'output').mkdir(exist_ok=True)
+    container = owned_container(data)
+    if container:
+        stamp = str(time.time_ns())
+        evidence = {'id': container['Id'], 'state': container['State'],
+                    'apparmor': container.get('AppArmorProfile')}
+        (state / 'output' / ('container-' + stamp + '.json')).write_text(json.dumps(evidence, indent=2) + '\n')
+        result = subprocess.run(['docker', 'logs', '--tail', '500', container['Id']], capture_output=True, timeout=30)
+        (state / 'output' / ('startup-' + stamp + '.log')).write_bytes(result.stdout + result.stderr)
+
+
+def start(args):
+    checked = host_check(args.image, args.mode)
+    with locked(args, create=True) as state:
+        if (state / 'instance.json').exists():
+            data = record(state)
+            require(data['image_id'] == checked['image_id'] and data['mode'] == args.mode, 'restart requires the original image and mode')
+            container = owned_container(data)
+            require(container is not None, 'recorded container is missing; inspect evidence and clean up before recreating')
+            require(not container['State']['Running'], 'instance is already running')
+            if args.mode == 'system':
+                load_apparmor(state, data)
+        else:
+            require(not any(state.iterdir()), 'instance directory is not empty; refusing adoption')
+            name = 'kuasar-workbench-' + args.name
+            require(inspect('container', name) is None, 'foreign container name collision; choose another instance name')
+            data = checked | {'id': uuid.uuid4().hex, 'owner_uid': os.getuid(), 'owner_gid': os.getgid(),
+                              'directory': str(state), 'container_name': name, 'status': 'creating'}
+            save(state, data)
+            try:
+                if args.mode == 'system':
+                    load_apparmor(state, data)
+                if args.network == 'bridge':
+                    data['network_id'] = docker('network', 'create', '--label', LABEL + '=' + data['id'],
+                                                'kuasar-workbench-' + data['id'])
+                    save(state, data)
+                data['container_id'] = docker(*create_command(args, state, data))
+                save(state, data)
+            except BaseException as error:
+                data['status'] = 'failed-start'
+                save(state, data)
+                (state / 'output').mkdir(exist_ok=True)
+                (state / 'output/create-failure.txt').write_text(str(error) + '\n')
+                diagnostics(state, data)
+                raise
+        try:
+            docker('start', data['container_id'])
+            if args.mode == 'system':
+                deadline = time.monotonic() + args.timeout
+                while time.monotonic() < deadline:
+                    container = owned_container(data)
+                    require(container and container['State']['Running'], 'system startup exited; diagnostics retained')
+                    ready = subprocess.run(['docker', 'exec', data['container_id'], 'systemctl', 'is-active', 'docker', 'containerd'],
+                                           capture_output=True, timeout=10)
+                    if ready.returncode == 0:
+                        break
+                    time.sleep(1)
+                else:
+                    raise TimeoutError('private Docker/containerd startup timed out; instance and diagnostics retained')
+                data['preflight'] = json.loads(docker('exec', data['container_id'], 'python3', '-B',
+                    '/usr/local/lib/workbench/check-system.py', '--host-namespaces', json.dumps(data['host_namespaces']), timeout=90))
+                check_apparmor(data)
+            data['status'] = 'running'
+            save(state, data)
+            print(json.dumps({'instance': args.name, 'container_id': data['container_id'], 'image_id': data['image_id']}))
+        except BaseException:
+            data['status'] = 'failed-start'
+            save(state, data)
+            diagnostics(state, data)
+            raise
+    return 0
+
+
+def stop_owned(state, data):
+    container = owned_container(data)
+    if container and container['State']['Running']:
+        diagnostics(state, data)
+        docker('stop', '--time', '60', container['Id'], timeout=75)
+        container = owned_container(data)
+        expected = (0, 143) if data['mode'] == 'build' else (0,)
+        require(container and not container['State']['Running'] and container['State']['ExitCode'] in expected,
+                'instance did not stop gracefully; diagnostics and data retained')
+    data['status'] = 'stopped'
+    save(state, data)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root', type=Path, help='task-owned instance state directory')
+    parser.add_argument('--name', help='instance name within that root')
+    sub = parser.add_subparsers(dest='command', required=True)
+    check = sub.add_parser('check')
+    check.add_argument('--image', required=True)
+    check.add_argument('--mode', choices=('build', 'system'), default='system')
+    create = sub.add_parser('start')
+    create.add_argument('--image', required=True)
+    create.add_argument('--mode', choices=('build', 'system'), default='system')
+    create.add_argument('--inputs', type=Path)
+    create.add_argument('--source', type=Path)
+    create.add_argument('--cpus', type=int, default=2)
+    create.add_argument('--memory-gib', type=int, default=8)
+    create.add_argument('--pids', type=int, default=4096)
+    create.add_argument('--network', choices=('none', 'bridge'), default='bridge')
+    create.add_argument('--timeout', type=int, default=60)
+    execute = sub.add_parser('exec')
+    execute.add_argument('arguments', nargs=argparse.REMAINDER)
+    sub.add_parser('stop')
+    cleanup = sub.add_parser('cleanup')
+    cleanup.add_argument('--delete-output', action='store_true', help='explicitly remove retained output, work and build files')
+    args = parser.parse_args()
+    if args.command == 'check':
+        print(json.dumps(host_check(args.image, args.mode), sort_keys=True))
+        return 0
+    if args.command == 'start':
+        require(1 <= args.timeout <= 300, 'startup timeout must be 1–300 seconds')
+        return start(args)
+    if args.command == 'exec':
+        with locked(args) as state:
+            data = record(state)
+            container = owned_container(data)
+            require(container and container['State']['Running'], 'instance is not running')
+            command = args.arguments[1:] if args.arguments[:1] == ['--'] else args.arguments
+            command = command or ['/bin/bash']
+            flags = ['-it'] if sys.stdin.isatty() else ['-i']
+            if data['mode'] == 'build':
+                flags += ['--user', f"{data['owner_uid']}:{data['owner_gid']}"]
+            identity = container['Id']
+        # A long command must not hold the lifecycle lock and prevent stop.
+        return subprocess.call(['docker', 'exec', *flags, identity, *command])
+    with locked(args) as state:
+        data = record(state)
+        stop_owned(state, data)
+        if args.command == 'cleanup':
+            container = owned_container(data)
+            if container:
+                docker('rm', container['Id'])
+            remove_apparmor(state, data)
+            if data.get('network_id'):
+                network = inspect('network', data['network_id'])
+                if network:
+                    require(network.get('Labels', {}).get(LABEL) == data['id'], 'foreign network; refusing cleanup')
+                    require(not network.get('Containers'), 'network still has attached containers; refusing cleanup')
+                    docker('network', 'rm', network['Id'])
+            directories = ['docker', 'containerd']
+            if args.delete_output:
+                directories += ['output', 'work', 'build', 'home', 'journal']
+            for name in directories:
+                path = state / name
+                require(not path.is_symlink(), 'unsafe instance data directory')
+                if not path.exists():
+                    continue
+                require(path.is_dir(), 'instance data path is not a directory')
+                # Build-mode daemon directories are intentionally unused. Avoid
+                # starting a privileged-file cleanup helper when there is
+                # literally nothing to remove.
+                try:
+                    empty = not any(path.iterdir())
+                except PermissionError:
+                    # Private daemon directories can be root-owned mode 0700.
+                    # The bounded helper below already handles their contents.
+                    empty = False
+                if empty:
+                    path.rmdir()
+                    continue
+                # Daemon files can be root-owned. Give this task's data mount to
+                # a bounded cleanup container, never a host directory ancestor.
+                docker('run', '--rm', '--pull=never', '--network=none', '--cap-drop=ALL',
+                       '--cap-add=DAC_OVERRIDE', '--cap-add=FOWNER', '--security-opt=no-new-privileges',
+                       '--read-only', '--memory=256m', '--cpus=1', '--pids-limit=32',
+                       '--label', LABEL + '=' + data['id'], *bind(path, '/owned'),
+                       '--entrypoint', 'python3', data['image_id'], '-B', '-c',
+                       'import pathlib,shutil; [(p.unlink() if p.is_symlink() or p.is_file() else shutil.rmtree(p)) '
+                       'for p in pathlib.Path("/owned").iterdir()]', timeout=300)
+                path.rmdir()
+            data['status'] = 'cleaned'
+            save(state, data)
+    return 0
+
+
+if __name__ == '__main__':
+    try:
+        raise SystemExit(main())
+    except (ValueError, OSError, subprocess.SubprocessError, TimeoutError) as error:
+        print(f'workbench: {error}', file=sys.stderr)
+        raise SystemExit(1)

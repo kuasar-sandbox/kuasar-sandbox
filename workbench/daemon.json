@@ -1,0 +1,7 @@
+{
+  "data-root": "/var/lib/docker",
+  "exec-root": "/run/docker",
+  "storage-driver": "overlay2",
+  "log-driver": "local",
+  "log-opts": {"max-size": "10m", "max-file": "3"}
+}
