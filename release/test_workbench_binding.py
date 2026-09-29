@@ -83,7 +83,7 @@ class BindingTests(unittest.TestCase):
                      ('cases', []), ('timings', []), ('image_id', 'sha256:' + '0' * 64),
                      ('input_assets', {}), ('source_revision', 'e' * 40), ('preflight', {}),
                      ('host_apparmor_enabled', True), ('disk', {}), ('size', 2 * 1024**3),
-                     ('compression_seconds', -1), ('import_seconds', float('nan')), ('start_seconds', True), ('isolation', {'complete': False})]
+                     ('provenance_sha256', ''), ('compression_seconds', -1), ('import_seconds', float('nan')), ('start_seconds', True), ('isolation', {'complete': False})]
         for key, value in mutations:
             broken = copy.deepcopy(self.results); broken['aarch64'][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):

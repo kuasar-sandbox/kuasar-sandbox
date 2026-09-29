@@ -644,6 +644,8 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
                 'workbench cases differ from the complete declared selection')
         require(record.get('input_assets') == expected_assets, 'workbench input assets differ from the aggregate')
         check_timings(record['timings'], record['cases'])
+        require(re.fullmatch(r'[0-9a-f]{64}', record.get('provenance_sha256', '')),
+                'missing workbench prepared-workspace provenance digest')
         require(isinstance(record.get('host_apparmor_enabled'), bool), 'missing workbench host LSM observation')
         if record['host_apparmor_enabled']:
             lsm = record.get('apparmor', {})

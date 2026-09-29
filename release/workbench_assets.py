@@ -1,6 +1,7 @@
 """Validate workbench asset bytes and flat image receipts for one aggregate."""
 import argparse
 import json
+import math
 from pathlib import Path
 import re
 import sys
@@ -50,7 +51,8 @@ def validate(directory, version, arch, revision, *, receipt_directory=None):
                           and labels.get('org.opencontainers.image.revision') == revision
                           and labels.get('org.opencontainers.image.source') == 'https://github.com/kuasar-sandbox/kuasar-sandbox',
                           'workbench config labels differ from selected release source')
-    workspace.require(isinstance(record.get('compression_seconds'), (int, float)) and record['compression_seconds'] >= 0,
+    workspace.require(type(record.get('compression_seconds')) in (int, float)
+                      and math.isfinite(record['compression_seconds']) and record['compression_seconds'] >= 0,
                       'missing actual workbench compression timing')
     return record
 
