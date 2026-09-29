@@ -101,7 +101,8 @@ def qualify(image, root, *, inner_archive=None):
         # changing the host audit rate or any enforcement setting.
         time.sleep(6)
         execute('docker', 'load', '-i', '/inputs/release/inner.tar')
-        execute('docker', 'run', '-d', '--name', 'same-inner', '--network=none', verified['image_id'], 'sleep', '300')
+        execute('docker', 'run', '-d', '--name', 'same-inner', '--network=none',
+                '--ulimit', 'nofile=262144:262144', verified['image_id'], 'sleep', '300')
         inner_pid = execute('docker', 'inspect', 'same-inner', '--format', '{{.State.Pid}}')
         require(inner_pid.isdecimal() and int(inner_pid) > 1, 'invalid inner PID')
         expected = data['apparmor']['name'] + ' (enforce)'

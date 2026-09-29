@@ -1,6 +1,10 @@
 {
   "go_version": "1.26.8",
   "rust_version": "1.98.1",
+  "erofs_readers": {
+    "url": "https://codeload.github.com/erofs/erofs-utils/tar.gz/refs/tags/v1.9.1",
+    "sha256": "a9ef5ab67c4b8d2d3e9ed71f39cd008bda653142a720d8a395a36f1110d0c432"
+  },
   "archives": {
     "x86_64": {
       "go": {

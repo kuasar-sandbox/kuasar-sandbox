@@ -45,7 +45,9 @@ Packaging validates archive paths, cross-package collisions, helper architecture
 <a id="3-前置条件"></a>
 ## 3. Prerequisites
 
-Full native x86 execution requires Linux, systemd, cgroup v2, usable `/dev/kvm`, root or noninteractive `sudo`, Docker, iproute2, curl, Python 3.11+ (Python 3.12 for the packaged Demo SDK), openssl, EROFS readers, mkfs.ext4 and the ordinary utilities required by the selected scripts. Preparation uses local image inputs when configured and otherwise downloads the selected external images. The hash-locked Python wheels and registry/gateway/probe binaries come from the package.
+Full native x86 execution requires Linux, systemd, cgroup v2, usable `/dev/kvm`, root or noninteractive `sudo`, Docker, iproute2, curl, Python 3.11+ (Python 3.12 for the packaged Demo SDK), openssl, EROFS readers (`fsck.erofs --extract` and `dump.erofs --cat`, supplied by workbench), mkfs.ext4 and the ordinary utilities required by the selected scripts. Preparation uses local image inputs when configured and otherwise downloads the selected external images. The hash-locked Python wheels and registry/gateway/probe binaries come from the package.
+
+For raw extracted releases, preparation reads the runtime bundle’s actual `/sbin/init` bytes and records their digest for telemetry assertions; it never substitutes the separately released sandbox-init binary or an ambient digest.
 
 No Go or Rust compiler or component source checkout is needed during preparation or product execution. The runner rejects missing prepared inputs; it does not substitute host helper binaries or pull images while running cases. Prepared inputs must remain unchanged. Mutable case state and result files live outside the prepared directory.
 

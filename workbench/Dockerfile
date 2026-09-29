@@ -39,6 +39,9 @@ COPY check-system.py /usr/local/lib/workbench/check-system.py
 COPY LICENSE /usr/share/workbench/LICENSE
 COPY deps/ /opt/workbench/deps/
 RUN chmod 0755 /usr/local/sbin/workbench-system \
+    && mkdir -p /etc/systemd/system/docker.service.d /etc/systemd/system/containerd.service.d \
+    && printf '[Service]\nLimitNOFILE=1048576\n' > /etc/systemd/system/docker.service.d/limits.conf \
+    && cp /etc/systemd/system/docker.service.d/limits.conf /etc/systemd/system/containerd.service.d/limits.conf \
     && systemctl enable containerd.service docker.service \
     && systemctl mask getty.target console-getty.service systemd-logind.service redis-server.service \
     && rm -f /etc/machine-id /var/lib/dbus/machine-id \

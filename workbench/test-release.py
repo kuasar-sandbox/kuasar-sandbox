@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Qualify the staged native image with the same public offline prepare/run."""
 import argparse
+import datetime
 import importlib.machinery
 import importlib.util
 import json
@@ -48,6 +49,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
     receipt = workbench_assets.validate(stage / 'assets', version, arch, revision, receipt_directory=stage / 'workbench')
     image = receipt['image_id']
     started = time.monotonic()
+    since = datetime.datetime.now(datetime.timezone.utc).isoformat()
     result = {key: receipt[key] for key in ('archive', 'image_id', 'sha256', 'arch', 'aggregate_version', 'source_revision', 'size', 'compression_seconds')}
     result.update(conclusion='failure', plan_id=artifacts.identity(plan), framework_sha=plan['framework_sha'],
                   test_revisions=plan['test_revisions'], host_apparmor_enabled=launcher.apparmor_enabled(),
@@ -97,26 +99,41 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
             return result
         result['qualification_scope'] = 'system'
         start = time.monotonic()
-        subprocess.run([*command, 'start', '--image', image, '--inputs', release, '--network', 'none',
+        subprocess.run([*command, 'start', '--image', image, '--inputs', release, '--network', 'bridge',
                         '--cpus', str(cpus), '--memory-gib', str(memory_gib), '--timeout', '90'], check=True)
         result['start_seconds'] = time.monotonic() - start
         instance = json.loads((state / 'instance.json').read_text())
         result['preflight'] = instance['preflight']
-        def execute(*args, timeout=900):
-            return subprocess.check_output([*map(str, command), 'exec', '--', *map(str, args)], text=True, timeout=timeout)
+        network = launcher.inspect('network', instance['network_id'])
+        artifacts.require(network and network['Labels'].get(launcher.LABEL) == instance['id'], 'network is not owned by this instance')
+        launcher.docker('network', 'disconnect', network['Id'], instance['container_id'])
+        def execute(*args, timeout=900, log=None):
+            invocation = [*map(str, command), 'exec', '--', *map(str, args)]
+            if log is not None:
+                with (state / 'output' / log).open('wb') as stream:
+                    subprocess.run(invocation, stdout=stream, stderr=subprocess.STDOUT, check=True, timeout=timeout)
+                return None
+            return subprocess.check_output(invocation, text=True, timeout=timeout)
         artifacts.require(execute('docker', 'image', 'ls', '-q').strip() == ''
                           and execute('docker', 'ps', '-aq').strip() == '', 'private Docker state was not empty')
         artifacts.require(not execute('ip', '-4', 'route', 'show', 'default').strip(), 'offline qualification has an external route')
         result['empty_private_daemon'] = True
+        result['preparation_network'] = 'none'
         # The selected official input image archives are already inside the
         # staged image. No host daemon/socket or registry transport is available.
         arguments = [item for case in cases for item in ('--include', case)]
         execute('python3', '-B', '/inputs/release/test/e2e/e2e', 'prepare', '--release-dir', '/inputs/release',
-                '--workdir', '/work/prepared', '--arch', arch, '--deps-dir', '/opt/workbench/deps', '--offline', *arguments)
+                '--workdir', '/work/prepared', '--arch', arch, '--deps-dir', '/opt/workbench/deps', '--offline', *arguments,
+                log='public-prepare.log')
         result['offline'] = True
+        # Offline is a preparation contract. The existing Demo later asserts
+        # real guest Internet egress; restore only this instance's own bridge.
+        launcher.docker('network', 'connect', network['Id'], instance['container_id'])
+        artifacts.require(execute('ip', '-4', 'route', 'show', 'default').strip(), 'execution bridge has no default route')
+        result['execution_network'] = 'owned-bridge'
         execute('python3', '-B', '/work/prepared/test/e2e/e2e', 'run', '--workdir', '/work/prepared', '--arch', arch,
                 '--run-root', '/work/cases', '--out-root', '/output/cases', '--result', '/output/public-result.json',
-                *arguments, timeout=10800)
+                *arguments, timeout=10800, log='public-run.log')
         report = json.loads((state / 'output/public-result.json').read_text())
         artifacts.require(report['conclusion'] == 'success' and report['arch'] == arch and report['cases'] == cases,
                           'public workbench execution differs from declared selection')
@@ -132,6 +149,23 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
         raise
     finally:
         if (state / 'instance.json').exists():
+            instance = json.loads((state / 'instance.json').read_text())
+            try:
+                launcher.diagnostics(state, instance)
+            except Exception as error:
+                result.setdefault('diagnostic_errors', []).append(str(error))
+            for name, diagnostic in (
+                ('apparmor-audit.log', ['journalctl', '-k', '--since', since, '--no-pager', '-n', '10000']),
+                ('system-journal.log', ['journalctl', '--directory', str(state / 'journal'), '--no-pager', '-n', '2000']),
+            ):
+                try:
+                    output = launcher.host_command(diagnostic)
+                    if name == 'apparmor-audit.log':
+                        profile = instance.get('apparmor', {}).get('name', '')
+                        output = '\n'.join(line for line in output.splitlines() if profile and profile in line) + '\n'
+                    (state / 'output' / name).write_text(output)
+                except Exception as error:
+                    result.setdefault('diagnostic_errors', []).append(f'{name}: {error}')
             try:
                 subprocess.run([*command, 'cleanup'], check=True, timeout=420)
             except Exception as error:

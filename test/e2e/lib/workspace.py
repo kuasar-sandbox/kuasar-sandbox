@@ -88,6 +88,30 @@ def verify(root):
     return provenance
 
 
+def runtime_init_identity(root, arch):
+    """Read the selected bundle's init as data, never execute an image payload."""
+    bundle = root / 'bin/sandbox-runtime.bundle'
+    fsck, dump = shutil.which('fsck.erofs'), shutil.which('dump.erofs')
+    require(fsck and dump, 'Runtime identity requires fsck.erofs and dump.erofs with --cat support')
+    subprocess.run([fsck, '--extract', str(bundle)], stdout=subprocess.DEVNULL, check=True)
+    metadata = subprocess.check_output([dump, '--path=/sbin/init', str(bundle)], text=True)
+    sizes = re.findall(r'^Size: ([0-9]+)\s+On-disk size: [0-9]+\s+regular file$', metadata, re.M)
+    require(len(sizes) == 1 and 0 < int(sizes[0]) and
+            len(re.findall(r'^Uid: 0\s+Gid: 0\s+Access: 0755/rwxr-xr-x$', metadata, re.M)) == 1,
+            'Runtime init must be a root-owned executable regular file')
+    with tempfile.TemporaryDirectory(prefix='runtime-init-') as directory:
+        target = Path(directory) / 'init'
+        with target.open('xb') as stream:
+            subprocess.run([dump, '--cat', '--path=/sbin/init', str(bundle)], stdout=stream, check=True)
+        require(target.stat().st_size == int(sizes[0]), 'Runtime init read size mismatch')
+        with target.open('rb') as stream:
+            header = stream.read(64)
+        require(len(header) == 64 and header[:7] == b'\x7fELF\x02\x01\x01' and
+                struct.unpack_from('<H', header, 18)[0] == {'x86_64': 62, 'aarch64': 183}[arch],
+                'Runtime init has the wrong architecture')
+        return digest(target)
+
+
 def prepare_demo_sdk(root, arch=None):
     requirements = root / 'test/demo/requirements.txt'
     require(requirements.is_file() and not requirements.is_symlink(), 'missing prepared Demo SDK requirements')

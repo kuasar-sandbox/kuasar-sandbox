@@ -29,6 +29,31 @@ def module(name, path):
 collector = module('workbench_collector', ROOT / 'collect-inputs.py')
 launcher = module('workbench_launcher', ROOT / 'workbench')
 fixtures = module('offline_test_images', ROOT.parent / 'test/e2e/test_offline_inputs.py')
+diagnostics = module('workbench_diagnostics', ROOT / 'collect-diagnostics.py')
+
+
+class DiagnosticTests(unittest.TestCase):
+    def test_root_only_outputs_are_bounded_regular_files_and_links_are_ignored(self):
+        import tarfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / 'instances/owned/output'
+            output.mkdir(parents=True)
+            (output / 'result.log').write_bytes(b'0123456789')
+            (output / 'result.log').chmod(0o600)
+            (root / 'secret').write_text('unrelated')
+            (output / 'link').symlink_to(root / 'secret')
+            (output / 'linked-directory').symlink_to(root, target_is_directory=True)
+            os.mkfifo(output / 'pipe')
+            stream = io.BytesIO()
+            diagnostics.collect(root, stream, per_file=4, total=8)
+            stream.seek(0)
+            with tarfile.open(fileobj=stream) as archive:
+                self.assertEqual(set(archive.getnames()), {'instances/owned/output/result.log', 'diagnostics-index.json'})
+                self.assertEqual(archive.extractfile('instances/owned/output/result.log').read(), b'6789')
+                index = json.load(archive.extractfile('diagnostics-index.json'))
+                self.assertEqual(index['instances/owned/output/result.log'], {'original_size': 10, 'retained_tail_size': 4})
+                self.assertTrue(all(item.isfile() and item.mode == 0o644 for item in archive.getmembers()))
 
 
 class CollectorTests(unittest.TestCase):
@@ -212,6 +237,7 @@ class LauncherTests(unittest.TestCase):
     def test_system_has_private_inputs_daemons_and_narrow_privileges(self):
         command = self.command()
         self.assertIn('--cgroupns=private', command)
+        self.assertIn('nofile=1048576:1048576', command)
         self.assertEqual({arg for arg in command if arg.startswith('--cap-add=')},
                          {'--cap-add=SYS_ADMIN', '--cap-add=NET_ADMIN', '--cap-add=SYS_PTRACE'})
         text = ' '.join(command)
@@ -229,6 +255,7 @@ class LauncherTests(unittest.TestCase):
         self.assertIn('--init', command)
         self.assertFalse(any(arg.startswith('--cap-add') for arg in command))
         self.assertNotIn('--device', command)
+        self.assertNotIn('--ulimit', command)
         self.assertIn(f'{os.getuid()}:{os.getgid()}', command)
         self.assertIn(f'type=bind,src={self.source},dst=/src', command)
         self.assertEqual(command[-3:], ['build', 'sleep', 'infinity'])

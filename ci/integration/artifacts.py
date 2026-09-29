@@ -641,11 +641,13 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
             require(record.get('cases') == [] and record.get('planned_cases') == workbench_cases(case_files, arch),
                     'artifact-only qualification must distinguish planned cases from execution')
             require(not any(key in record for key in ('offline', 'empty_private_daemon', 'isolation', 'preflight',
-                        'apparmor', 'timings', 'provenance_sha256', 'start_seconds')),
+                        'apparmor', 'timings', 'provenance_sha256', 'start_seconds', 'preparation_network', 'execution_network')),
                     'artifact-only qualification cannot claim system or offline execution')
             continue
         require(record.get('offline') is True and record.get('empty_private_daemon') is True,
                 'workbench requires offline preparation from empty private Docker state')
+        require(record.get('preparation_network') == 'none' and record.get('execution_network') == 'owned-bridge',
+                'workbench must block preparation fetches and retain the real guest-egress execution gate')
         require(record.get('isolation', {}).get('complete') is True
                 and record['isolation'].get('image') == record['image_id'], 'workbench isolation did not pass on the tested image')
         preflight = record.get('preflight', {})

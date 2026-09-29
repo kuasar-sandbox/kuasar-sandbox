@@ -273,18 +273,18 @@ jobs:
           path: ${{ matrix.arch }}.json
           if-no-files-found: error
           retention-days: 7
+      - name: Collect bounded owned workbench diagnostics
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/workbench-release" ]; then
+            sudo python3 -B framework/workbench/collect-diagnostics.py --root "$RUNNER_TEMP/workbench-release" > workbench-diagnostics.tar.gz
+          fi
       - name: Preserve owned workbench diagnostics even on failure
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-workbench-diagnostics-${{ matrix.arch }}-${{ github.run_id }}
-          path: |
-            ${{ runner.temp }}/workbench-release/result.json
-            ${{ runner.temp }}/workbench-release/instances/*/output/
-            ${{ runner.temp }}/workbench-release/isolation/result.json
-            ${{ runner.temp }}/workbench-release/isolation/*/output/
-            ${{ runner.temp }}/workbench-release/apparmor/result.json
-            ${{ runner.temp }}/workbench-release/apparmor/instances/*/output/
+          path: workbench-diagnostics.tar.gz
           if-no-files-found: error
           retention-days: 7
 

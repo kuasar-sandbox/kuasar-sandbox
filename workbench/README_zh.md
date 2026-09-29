@@ -74,7 +74,7 @@ python3 workbench/workbench --root "$STATE" --name e2e exec -- \
 这些套件是原生 ARM 的最小示例。托管 ARM 发布 CI 没有 KVM 设备，因此仅检查资产字节和镜像导入，不代表系统或离线验收。使用已发布镜像的独立原生 KVM 验收还在 ARM 执行 `sandbox.lifecycle.sh`、
 `snapshot.restore.sh` 和 `network.tapfd.sh`；在两个命令都加入对应的三个 `--include`
 选项可覆盖该范围。在 x86_64 上，prepare 和 run 都应使用当前完整
-普通选择 `--all --exclude storage.obs.sh`。不得删除用例架构检查。需要凭据的 OBS
+普通选择 `--all --exclude storage.obs.sh`。完整选择请使用 `--network bridge` 启动：prepare 的 `--offline` 仍禁止依赖下载，而 Demo 的 run 需要真实 Internet 出站访问。发布验收还会在 prepare 期间断开所属 bridge，仅在准备结束后重新连接。不得删除用例架构检查。需要凭据的 OBS
 仍由用户显式选择，并需要相应网络和凭据。
 
 `--network none` 移除外层实例的外部网络，私有 Guest、Registry、Store 和 Proxy
@@ -97,6 +97,7 @@ python3 workbench/workbench --root "$STATE" --name e2e exec -- \
 每个系统实例具有独立的 machine ID 和 PID/UTS/IPC/mount/network/cgroup 命名空间、
 私有 bpffs、Docker 和 containerd 根目录与状态、套接字以及只读发布输入。除 Docker
 默认 capability 外，它获得 SYS_ADMIN、NET_ADMIN、SYS_PTRACE 和 KVM/TUN 设备。
+系统模式将外层容器及私有 daemon unit 的 nofile 上限设为 1048576，让内层容器能够设置所需限制，无需 SYS_RESOURCE。
 保留的默认 seccomp 策略仅额外允许该环境需要的 userfaultfd、pivot_root 和 keyctl
 操作。实例不会获得主机 Docker 套接字、主机根目录、整个主机 cgroup 树或主机 BPF pin。
 

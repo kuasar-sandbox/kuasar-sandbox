@@ -79,7 +79,7 @@ class BindingTests(unittest.TestCase):
             binder.bind(self.root, self.plan, self.validation, {'x86_64': self.results['x86_64']})
 
     def test_incomplete_or_mismatched_system_evidence_cannot_publish(self):
-        mutations = [('offline', False), ('empty_private_daemon', False), ('conclusion', 'skipped'),
+        mutations = [('preparation_network', 'bridge'), ('execution_network', 'none'), ('offline', False), ('empty_private_daemon', False), ('conclusion', 'skipped'),
                      ('cases', []), ('timings', []), ('image_id', 'sha256:' + '0' * 64),
                      ('input_assets', {}), ('source_revision', 'e' * 40), ('preflight', {}),
                      ('host_apparmor_enabled', True), ('disk', {}), ('size', 2 * 1024**3),
@@ -97,7 +97,7 @@ class BindingTests(unittest.TestCase):
         record['planned_cases'] = record['cases']
         record['cases'] = []
         for key in ('offline', 'empty_private_daemon', 'isolation', 'preflight', 'apparmor',
-                    'timings', 'provenance_sha256', 'start_seconds'):
+                    'timings', 'provenance_sha256', 'start_seconds', 'preparation_network', 'execution_network'):
             record.pop(key, None)
         return results
 

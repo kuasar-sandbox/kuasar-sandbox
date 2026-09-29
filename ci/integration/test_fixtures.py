@@ -93,7 +93,7 @@ def workbench_results(plan, receipts):
         result[arch] = dict(receipt, conclusion='success', plan_id=artifacts.identity(plan),
             qualification_scope='system', imported_image_id=receipt['image_id'], release_inputs_verified=True,
             framework_sha=plan['framework_sha'], test_revisions=plan['test_revisions'],
-            offline=True, empty_private_daemon=True, isolation={'complete': True, 'image': receipt['image_id']},
+            offline=True, empty_private_daemon=True, preparation_network='none', execution_network='owned-bridge', isolation={'complete': True, 'image': receipt['image_id']},
             cases=cases, timings=[{'case': name, 'exit_code': 0, 'wall_seconds': .1} for name in cases],
             input_assets={row['name']: row['digest'] for row in plan['baseline']['assets'] if row['name'] != 'SHA256SUMS'},
             preflight={'arch': arch, 'page_size': 4096, 'kvm': 'api-12', 'tun': 'create-close',
