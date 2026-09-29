@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -615,6 +616,18 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
         require(record.get('archive') == name and 'sha256:' + record.get('sha256', '') == expected_assets.get(name)
                 and re.fullmatch(r'sha256:[0-9a-f]{64}', record.get('image_id', '')),
                 'workbench validation differs from staged archive/image identity')
+        require(type(record.get('size')) is int and 0 < record['size'] < 2 * 1024**3,
+                'workbench compressed archive must be smaller than 2 GiB')
+        for key in ('compression_seconds', 'import_seconds', 'start_seconds', 'wall_seconds'):
+            value = record.get(key)
+            require(type(value) in (int, float) and math.isfinite(value) and value >= 0,
+                    'missing or invalid workbench measurement: ' + key)
+        disk = record.get('disk', {})
+        require(type(record.get('retained_task_bytes')) is int and record['retained_task_bytes'] >= 0
+                and all(type(disk.get(key)) is int and disk[key] >= 0 for key in ('used_before', 'peak_used', 'peak_increase'))
+                and disk['peak_used'] >= disk['used_before']
+                and disk['peak_increase'] == disk['peak_used'] - disk['used_before'],
+                'missing or inconsistent workbench disk measurements')
         require(record.get('offline') is True and record.get('empty_private_daemon') is True,
                 'workbench requires offline preparation from empty private Docker state')
         require(record.get('isolation', {}).get('complete') is True

@@ -220,7 +220,7 @@ run 身份,不会用旧输入重跑或改写运行中清单。
 ## 5. 残缺发布恢复
 
 完整组件 Release 必须非 draft、prerelease 状态与 Tag 一致，且精确约定的归档与 `SHA256SUMS` 都已 uploaded。
-历史 AMD64-only 组件/聚合保留两项/八项契约，新双架构发布使用三项/十四项契约。ARM 集合残缺仍是残缺；
+历史 AMD64-only 组件/聚合保留两项/八项契约，双架构组件使用三项，历史双架构聚合保留十四项；新 `workbench-v1` 聚合必须具备全部十六项资产。ARM 集合残缺仍是残缺；
 旧 AMD64-only 发布不因初始化被重判为损坏或删除。
 
 选择器仅把完整 Release 的 Tag 当作候选。残缺状态不让整条 Daily schedule 失败:
@@ -330,8 +330,7 @@ make test-ci-tools
 ## 8. 发行资产验证
 
 每个新组件 Release 包含 x86_64、aarch64 两个 archive 与 `SHA256SUMS`。
-runtime、vmlinux 保留独立包名。新 aggregate 包含架构无关的 platform 包、十二个原样组件包及统一
-`SHA256SUMS`，共十四项资产。历史 AMD64-only 组件/聚合仍按两项/八项资产识别，绝不追加 ARM 文件或改写校验和。
+runtime、vmlinux 保留独立包名。两份维护中的聚合清单声明 `delivery: workbench-v1`。新 aggregate 包含架构无关的 platform 包、十二个原样组件包、两个原生 workbench Docker 镜像归档及统一 `SHA256SUMS`，共十六项资产。历史 AMD64-only 和双架构聚合保留八项/十四项原契约。reader 从精确 Tag 源码读取契约；缺失新资产绝不回退为历史兼容模式。
 
 不发布项目生成的 release metadata JSON,也不重复上传 GitHub 自动提供的源码归档。
 版本选择 YAML 只在仓库维护,既不是 Release 资产,也不进入 platform 包。
@@ -352,6 +351,14 @@ Preview、维护分支 Stable 和主线 Stable 使用相同资产与发行资产
 Latest 策略。
 
 <a id="平台包中的文档"></a>
+Workbench 的 prepare 与构建期 collector 共享规范用例发现和外部镜像请求函数。collector 在同一暂存请求中只解析一次移动 Tag，并用原始 registry manifest/config 证据绑定所复制的 Docker archive。原生构建每种架构的单个 gzip Docker 镜像归档，标注相同聚合版本和精确源码。实际压缩字节必须**小于 2 GiB**；超限或残缺输入在暂存/发布前失败。镜像只包含工具和外部输入，六个产品归档保持独立且与上游字节一致。
+
+新增原生 workbench 门禁导入这些精确暂存字节，从空的私有 Docker 状态、无外部路由开始，通过公开入口离线 prepare/run。x86 使用当前完整普通用例选择；ARM 保留已有原生覆盖，并执行 `sandbox.lifecycle.sh`、`snapshot.restore.sh`、`network.tapfd.sh`，不删除用例架构检查。私有 daemon 隔离、KVM/UFFD/TUN/BPF、启用时的 enforcing AppArmor 以及所有权清理都必须通过。工具链环境不能替代单独的无编译器 runtime 门禁。结果绑定精确 framework、测试 pin、产品摘要、archive/config 身份、实际压缩大小、压缩/导入/启动时间和观测到的磁盘峰值；磁盘观测不是配额。
+
+发布把已测试的保存镜像复制到 `ghcr.io/kuasar-sandbox/workbench:<去掉-release-前缀的聚合版本>`，验证两种架构的 config 身份和多架构 index，并检查匿名读取。registry digest、镜像 ID、离线 archive hash 含义各自独立。已有同名 Tag/资产必须匹配；重试只补传缺失资产，不覆盖测试字节。跨服务发布可恢复：只有 registry 和完整 GitHub 资产集合一致，GitHub draft 才公开。冲突时失败关闭，不改写历史源码和已发布字节。
+
+用户只解压所选产品架构与 `platform-release`；`workbench-<arch>-v*.tar.gz` 使用 `docker load` 导入，不能解压到产品目录。[快速开始](quickstart_zh.md) 检查声明集合并按显式资产类别下载。用户可以不下载 workbench，但新聚合发布必须包含两种架构镜像。
+
 ### 8.1 文档载荷与源码映射
 
 平台归档使用 `test/e2e/package_inputs.py` 中显式的构建期文件列表。组件输入来自
@@ -435,7 +442,7 @@ Stable 聚合发布后,该版本线进入 7 天回退窗口。`Preview GC` 从 S
 - `main` 和所有平台维护分支当前 Daily 清单引用的组件 Preview;
 - 正在运行发布或删除工作流的对象。
 
-计划阶段验证 Stable Release、Tag、八资产 digest、canonical 清单、Preview 归属、
+计划阶段验证 Stable Release、Tag、声明资产 digest、canonical 清单、Preview 归属、
 Release ID、可恢复源码 SHA 和 active run,并输出稳定排序计划及 SHA-256 digest。正式版
 已经关闭的当前 Daily 清单不再保护同版本 Preview;其他仍开放分支和保留聚合 Preview 的
 引用继续受保护。完整或残缺的 canonical Preview 都由本仓删除 wrapper 收敛。任何分页、
@@ -478,6 +485,8 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
   -f stable_version=release-v0.5.7 -f dry_run=false
 ```
+
+Workbench Preview 清理遵守同样的 canonical 版本/源码归属检查。删除自有 package version 前验证仓库关联、不可变 digest 和源码/版本 label，并保护活跃发布、其他保留 Release 的 binding、共享 Tag、保留 index 引用的子 manifest。不会 prune 无关或无 Tag 的镜像版本。历史发布保持原清理契约。
 
 ## 10. 权限与可靠性
 

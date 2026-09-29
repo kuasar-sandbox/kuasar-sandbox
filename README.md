@@ -117,8 +117,8 @@ The five components form the complete platform together, but each component can 
 
 - **Stable channel:** the GitHub Latest non-prerelease aggregate; resolve it once and retain its exact tag for every asset and checksum in one installation.
 - **Preview channel:** GitHub prereleases for development and evaluation; Preview does not replace the current Stable release.
-- **Prebuilt architecture:** current GitHub releases provide Linux x86_64 assets.
-- **Source-build architectures:** the Makefiles support `TARGET_ARCH=x86_64` and `TARGET_ARCH=aarch64`; source-build support does not mean that prebuilt release assets are published for both architectures.
+- **Prebuilt architecture:** new aggregate releases provide native Linux x86_64 and aarch64 assets; historical releases retain their declared architecture set.
+- **Source-build architectures:** the Makefiles support `TARGET_ARCH=x86_64` and `TARGET_ARCH=aarch64`; workbench supplies the native toolchain for either architecture.
 - **Version relationship:** components release independently; an aggregate release selects exact component versions and validates the combined system on real KVM infrastructure.
 
 `Stable` means a non-prerelease aggregate release. `Preview` means a prerelease aggregate release for development and evaluation. `Proposed` means a design or issue that must not be treated as delivered functionality.
@@ -224,7 +224,7 @@ The component repositories publish independent version lines:
 
 The project repository publishes aggregate versions named `release-vX.Y.Z`. An aggregate version may select different version numbers for different components. `releases/release.yaml` selects the next Stable aggregate, while `releases/daily-preview.yaml` selects the current daily Preview. The aggregate workflow resolves exact component tags, verifies the declared assets and checksums, assembles the platform archive, and runs cross-component validation before publishing.
 
-Current x86_64 aggregate releases contain one platform archive, six release-unit archives, and one aggregate `SHA256SUMS`. The source repositories remain independent; the aggregate release is the tested composition contract.
+New `workbench-v1` aggregates contain one platform archive with user guides, Demo and tests, six unchanged release-unit archives per architecture, both workbench images and aggregate `SHA256SUMS`. Extract only the selected native products plus platform-release. Import workbench separately with `docker load`, or acquire the matching multi-architecture registry tag. See the [workbench instructions](workbench/README.md) for ordinary UID builds and offline tests. The source repositories remain independent; all assets share one aggregate version.
 
 See [docs/release.md](docs/release.md) for the full asset contract, trust boundaries, failure recovery, and Preview state machine.
 

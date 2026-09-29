@@ -279,7 +279,7 @@ write_release_notes() {
   local version="$1" previous="$2" selection="$3" updates="$4" output="$5" unit tag
   {
     printf '# Kuasar Sandbox %s\n\n' "$version"
-    printf 'Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains the platform documentation/test package and the exact component archives validated by the declared profiles: established AMD64 suites and the available native ARM non-KVM subset. Historical AMD64-only releases retain their original coverage.\n\n'
+    printf 'Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains selected user guides, Demo and canonical tests, the original component archives, and both native workbench images under one aggregate version. AMD64 uses the current full ordinary case selection; ARM retains native image/storage coverage and adds workbench network, KVM lifecycle and snapshot/restore. Historical releases retain their original coverage.\n\n'
     printf '## Highlights\n\n'
     printf '%s\n' \
       '- Independent Guest Kernel isolation for each MicroVM sandbox.' \
@@ -293,10 +293,17 @@ write_release_notes() {
       printf '| `%s` | `%s` |\n' "$unit" "$tag"
     done < "$selection"
     printf '\nThe five component repositories version and publish independently. `guest-runtime` supplies the `runtime` and `vmlinux` release units but remains one component repository. This aggregate pins all six units as one tested platform combination.\n\n'
+    printf '## Asset categories\n\n'
+    printf '| Category | Contents | Use |\n|---|---|---|\n'
+    printf '| Products | Six original upstream archives per architecture | Extract only the selected native architecture |\n'
+    printf '| platform-release | Bilingual guides, Demo, canonical tests, helpers, locked wheels and launcher | Extract beside products |\n'
+    printf '| workbench | One gzip-compressed Docker image archive per architecture | Import separately with `docker load -i`; never extract into products |\n'
+    printf '| SHA256SUMS | All declared archive hashes | Verify downloaded bytes before use |\n\n'
+    printf 'The same tested images are available at `ghcr.io/kuasar-sandbox/workbench:%s`. Each compressed workbench archive is checked to be smaller than 2 GiB. The validation binding records its archive hash, image ID, registry identities, actual sizes, import/start timings and observed peak disk usage separately.\n\n' "${version#release-}"
     printf '## Supported environment\n\n'
-    printf 'Prebuilt assets target Linux x86_64 with glibc 2.38 or newer. A host needs systemd, cgroup v2, writable `/dev/kvm`, and root or non-interactive sudo. Source builds also support `TARGET_ARCH=aarch64`; aarch64 is not part of this prebuilt release.\n\n'
+    printf 'Prebuilt products and workbench target native Linux x86_64 and aarch64. System tests require cgroup v2, 4096-byte pages, KVM/TUN, UFFD/BPF and the documented native Docker host prerequisites. Ordinary UID builds need no KVM or added capabilities. AppArmor hosts keep an enforcing owned outer profile, including inner Docker descendants.\n\n'
     printf '## Quick Start\n\n'
-    printf 'Follow the [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/quickstart.md) to download all eight explicit assets from this aggregate, verify `SHA256SUMS`, prepare a template, and exercise create, guest exec, pause, reconnect/resume, kill, and cleanup with the unmodified E2B Python SDK.\n\n' "$version"
+    printf 'Follow the [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/quickstart.md) to select the native product/platform assets from this complete aggregate, optionally import workbench, verify `SHA256SUMS`, prepare a template, and exercise create, guest exec, pause, reconnect/resume, kill, and cleanup with the unmodified E2B Python SDK.\n\n' "$version"
     printf '## Production deployment\n\n'
     printf 'The system supports production deployment. Operators should complete workload-specific capacity validation and configure production TLS, durable storage, network policy, credentials, monitoring, and recovery for their topology. See [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/deployment.md).\n\n' "$version"
     printf '## Known limitations\n\n'

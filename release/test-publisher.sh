@@ -148,6 +148,27 @@ if [ "${1:-}" = api ]; then
   exit 0
 fi
 
+if [ "${1:-}" = release ] && [ "${2:-}" = upload ]; then
+  [ "${3:-}" = "$tag" ] || exit 2
+  shift 3
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --repo) shift 2 ;;
+      --clobber) echo 'overwrite forbidden' >&2; exit 2 ;;
+      *)
+        file="$1"
+        name=$(basename "$file")
+        ! jq -es --arg name "$name" 'any(.[]; .name == $name)' "$state/assets.ndjson" >/dev/null || exit 2
+        printf '%s\n' "$name" >> "$state/uploaded-on-retry"
+        jq -cn --arg name "$name" --arg digest "sha256:$(sha256sum "$file" | awk '{print $1}')" \
+          --argjson size "$(stat -c '%s' "$file")" \
+          '{name:$name,digest:$digest,size:$size,state:"uploaded"}' >> "$state/assets.ndjson"
+        shift ;;
+    esac
+  done
+  exit 0
+fi
+
 if [ "${1:-}" = release ] && [ "${2:-}" = create ]; then
   [ "${3:-}" = "$tag" ] || exit 2
   [ -f "$state/tag" ] || exit 2
@@ -200,8 +221,21 @@ if env "${common_env[@]}" FAKE_GH_FAIL_CREATE_ONCE=1 \
 fi
 [ "$(cat "$TMP/state/release-draft")" = true ] \
   || { echo "test-publisher: interrupted publish did not leave a draft" >&2; exit 1; }
+cp "$TMP/state/assets.ndjson" "$TMP/original-assets"
+registry_calls=$(wc -l < "$TMP/state/registry-calls")
+jq -sc '.[0].digest = "sha256:wrong" | .[]' "$TMP/original-assets" > "$TMP/state/assets.ndjson"
+if env "${common_env[@]}" "$PUBLISHER" publish \
+  "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF" > "$TMP/conflict.log" 2>&1; then
+  echo 'test-publisher: accepted conflicting existing asset bytes' >&2; exit 1
+fi
+grep -Fq 'existing draft asset differs' "$TMP/conflict.log"
+[ "$(wc -l < "$TMP/state/registry-calls")" = "$registry_calls" ]
+[ "$(cat "$TMP/state/release-draft")" = true ]
+missing=$(tail -n 1 "$TMP/original-assets" | jq -r .name)
+head -n -1 "$TMP/original-assets" > "$TMP/state/assets.ndjson"
 env "${common_env[@]}" "$PUBLISHER" publish \
   "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF"
+[ "$(cat "$TMP/state/uploaded-on-retry")" = "$missing" ]
 [ ! -e "$TMP/state/delete-count" ] \
   || { echo "test-publisher: retry replaced an existing draft instead of verifying its bytes" >&2; exit 1; }
 [ "$(cat "$TMP/state/tag")" = "$COMMIT" ] \

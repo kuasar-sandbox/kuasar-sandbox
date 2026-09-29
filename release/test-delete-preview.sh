@@ -113,4 +113,38 @@ for arches in x86_64 'x86_64 aarch64'; do
   [ ! -e "$log" ]
 done
 
+# New-contract recovery must protect a complete set and must run the owned
+# registry guard before removing an incomplete GitHub release. Unit-only
+# process double records that ordering; it never claims registry acceptance.
+real_python=$(command -v python3)
+cat > "$TMP/bin/python3" <<'PYTHON'
+#!/bin/bash
+set -euo pipefail
+if [ "${1:-}" = -B ] && [[ "${2:-}" = */release/workbench_gc.py ]]; then
+  printf '%s\n' "$3 $4" >> "$FAKE_REGISTRY_LOG"
+  exit "${FAKE_REGISTRY_EXIT:-0}"
+fi
+exec "$REAL_TEST_PYTHON" "$@"
+PYTHON
+chmod +x "$TMP/bin/python3"
+export REAL_TEST_PYTHON="$real_python"
+NEW_MANIFEST=$( { printf 'delivery: workbench-v1\n'; cat "$TMP/daily-preview.yaml"; } | base64 -w0)
+complete=$(printf '%s\n%s\n%s\n' "$names" "$(workbench_archive "$TAG" x86_64)" "$(workbench_archive "$TAG" aarch64)" | jq -Rsc 'split("\n")[:-1]')
+if PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=kuasar-sandbox/kuasar-sandbox \
+  FAKE_TAG="$TAG" FAKE_TARGET="$SOURCE_SHA" FAKE_COMPLETE_ASSETS="$complete" \
+  FAKE_DELETE_LOG="$TMP/new-deletes" FAKE_MANIFEST="$NEW_MANIFEST" FAKE_REGISTRY_LOG="$TMP/registry" \
+  bash "$SCRIPT_DIR/delete-preview.sh" "$TAG" "$SOURCE_SHA" incomplete > "$TMP/refusal" 2>&1; then
+  echo 'test-delete-preview: complete workbench aggregate was deleted' >&2; exit 1
+fi
+grep -Fq 'refusing incomplete recovery for a complete aggregate Preview' "$TMP/refusal"
+[ ! -e "$TMP/new-deletes" ] && [ ! -e "$TMP/registry" ]
+# The old fourteen-asset shape cannot make a new-contract release complete.
+if PATH="$TMP/bin:$PATH" GITHUB_REPOSITORY=kuasar-sandbox/kuasar-sandbox \
+  FAKE_TAG="$TAG" FAKE_TARGET="$SOURCE_SHA" FAKE_COMPLETE_ASSETS="$assets" \
+  FAKE_DELETE_LOG="$TMP/new-deletes" FAKE_MANIFEST="$NEW_MANIFEST" FAKE_REGISTRY_LOG="$TMP/registry" FAKE_REGISTRY_EXIT=23 \
+  bash "$SCRIPT_DIR/delete-preview.sh" "$TAG" "$SOURCE_SHA" incomplete > "$TMP/guard" 2>&1; then
+  echo 'test-delete-preview: ignored registry ownership guard failure' >&2; exit 1
+fi
+[ "$(cat "$TMP/registry")" = "$TAG $SOURCE_SHA" ] && [ ! -e "$TMP/new-deletes" ]
+
 echo "test-delete-preview: PASS"

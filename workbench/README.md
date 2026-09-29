@@ -36,8 +36,8 @@ Acquire the selected release's image through its registry tag or verify its
 `docker load`. This is a gzip-compressed Docker image archive; never extract it
 into the product release tree. The registry tag is
 `ghcr.io/kuasar-sandbox/workbench:vX.Y.Z[-preview.YYYYMMDD[.N]]`, using the
-aggregate version without the `release-` prefix. Publication of this new asset
-contract is enabled only with the aggregate release integration.
+aggregate version without the `release-` prefix. New `workbench-v1` releases
+require both native image archives; historical releases keep their original assets.
 
 ## Build with an ordinary UID
 
@@ -83,7 +83,9 @@ python3 workbench/workbench --root "$STATE" --name e2e exec -- \
   --arch "$ARCH" --suite image --suite storage --exclude storage.obs.sh
 ```
 
-These suites demonstrate the accepted native ARM selection. On x86_64 use the
+These suites are a minimal native ARM example. Release qualification also runs
+`sandbox.lifecycle.sh`, `snapshot.restore.sh` and `network.tapfd.sh` on ARM; add
+those three `--include` options to both commands to exercise that scope. On x86_64 use the
 current full ordinary selection, `--all --exclude storage.obs.sh`, for both
 prepare and run. Do not remove case architecture guards. Credentialed OBS
 remains an explicit choice requiring its own network and credentials.

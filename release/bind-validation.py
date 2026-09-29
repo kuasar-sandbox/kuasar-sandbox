@@ -33,7 +33,7 @@ def bind(bundle, plan, validation, workbench=None):
         artifacts.require(result['plan_id'] == artifacts.identity(plan) and result['framework_sha'] == plan['framework_sha']
                           and result['test_revisions'] == plan['test_revisions'], 'workbench executor provenance differs from plan')
         receipt = json.loads((bundle / 'workbench' / f'workbench-{arch}.json').read_text())
-        artifacts.require(result['image_id'] == receipt['image_id'] and result['sha256'] == receipt['sha256'],
+        artifacts.require(result['image_id'] == receipt['image_id'] and result['sha256'] == receipt['sha256'] and result['size'] == receipt['size'],
                           'workbench result differs from staged image receipt')
     notes.write_text(text + "\n<!-- kuasar-integration-validation " + artifacts.canonical(binding).decode() + " -->\n")
 

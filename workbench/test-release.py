@@ -55,6 +55,7 @@ def qualify(plan, stage, root, cpus, memory_gib):
     state = root / 'instances/offline'
     disk = {'scope': 'observed host filesystem usage', 'sample_seconds': 1,
             'used_before': shutil.disk_usage(root).used, 'peak_used': 0}
+    disk['peak_used'] = disk['used_before']
     stopped = threading.Event()
     def sample_disk():
         while True:

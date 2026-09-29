@@ -140,9 +140,9 @@ KVM / Local File / NAS / Object Storage / Network
 
 - **Stable 通道**:GitHub Latest 指向的非 prerelease 聚合版本;一次安装先解析一次,再对全部资产和校验和固定同一精确 Tag.
 - **Preview 通道**:作为 GitHub prerelease 保留,用于开发和评估,不替代当前 Stable.
-- **预构建 Release 架构**:当前 GitHub Release 提供 Linux x86_64 资产.
+- **预构建 Release 架构**:新聚合 Release 提供原生 Linux x86_64 和 aarch64 资产；历史发布保留其声明的架构集合。
 - **源码构建架构**:当前 Makefile 支持 `TARGET_ARCH=x86_64` 和
-  `TARGET_ARCH=aarch64`;源码可构建不表示该架构已经作为预构建 Release 资产发布.
+  `TARGET_ARCH=aarch64`;workbench 为两种架构提供原生工具链。
 - **版本关系**:组件独立发布版本,聚合版本固定选择一组精确组件版本并在真实 KVM
   上完成跨组件验证.
 
@@ -261,8 +261,7 @@ make -C kuasar-sandbox test-perf-tools
 聚合工作流解析精确组件 Tag、校验声明的资产与校验和、组装 platform archive,
 并在发布前运行跨组件验证。
 
-当前 x86_64 聚合版本包含一个 platform archive、六个发布单元 archive 和统一
-`SHA256SUMS`。源码仓保持独立,聚合版本是经过测试的组合契约。
+新 `workbench-v1` 聚合包含用户指南、Demo 和测试的 platform 包、每种架构六个原样发布单元归档、两个 workbench 镜像与统一 `SHA256SUMS`。只解压所选原生产品与 platform-release；workbench 使用 `docker load` 单独导入，或获取相同多架构 registry Tag。普通 UID 构建和离线测试见 [workbench 使用说明](workbench/README_zh.md)。源码仓保持独立，全部资产使用同一聚合版本。
 
 完整的两清单/历史和基线规则、维护分支选择、资产排除规则、人工发布命令、权限边界与
 失败恢复均由 [Release 规范](docs/release_zh.md) 维护。

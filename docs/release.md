@@ -142,7 +142,7 @@ The aggregate stage validates the current declared x86 and native ARM non-KVM pr
 
 ## 5. Recovering incomplete publication
 
-A complete component Release must be non-draft, have a prerelease state consistent with its tag, contain only its contracted archive set and `SHA256SUMS`, and have every asset uploaded. Historical AMD64-only components/aggregates keep their two/eight-asset contracts; new dual components/aggregates use three/fourteen assets. Partial ARM sets are incomplete, but an old AMD64-only release is never reclassified as corrupt or deleted to initialize ARM.
+A complete component Release must be non-draft, have a prerelease state consistent with its tag, contain only its contracted archive set and `SHA256SUMS`, and have every asset uploaded. Historical AMD64-only components/aggregates keep their two/eight-asset contracts; dual components use three assets; historical dual aggregates retain fourteen assets. New `workbench-v1` aggregates require all sixteen declared assets. Partial ARM sets are incomplete, but an old AMD64-only release is never reclassified as corrupt or deleted to initialize ARM.
 
 Only tags with complete Releases are selection candidates. Incomplete states do not fail the entire Daily schedule:
 
@@ -221,11 +221,19 @@ make test-ci-tools
 
 ## 8. Release asset validation
 
-Each new component Release contains its x86_64 archive, aarch64 archive and `SHA256SUMS`. Runtime and vmlinux retain independent archive names. A new aggregate contains one architecture-neutral platform archive, twelve unchanged component archives and unified `SHA256SUMS`: fourteen explicit assets. Existing AMD64-only releases retain their historical two/eight-asset contract and are never amended with ARM files.
+Each new component Release contains its x86_64 archive, aarch64 archive and `SHA256SUMS`. Runtime and vmlinux retain independent archive names. Both maintained aggregate selections declare `delivery: workbench-v1`. A new aggregate contains one architecture-neutral platform archive, twelve unchanged component archives, two native workbench Docker image archives and unified `SHA256SUMS`: sixteen explicit assets. Historical AMD64-only and dual-architecture aggregates retain their original eight/fourteen-asset contracts. The reader obtains the contract from the exact tagged source; missing new assets never selects historical compatibility.
 
 Do not publish generated release-metadata JSON or duplicate GitHub's automatically supplied source archives. Selection YAML remains in the repository, not in Release assets or the platform package. Component archives exclude `docs/` and `test/e2e/`; aggregate assembly collects component documentation and E2E inputs from the independent test pins into the platform archive (§8.1). Kernel documentation follows the separately selected vmlinux product source.
 
 Component workflows build and test at the selected source SHA. Aggregate prepare downloads the six complete manifest-selected Releases, validates GitHub size/digest, component SHA-256, internal paths and cross-package collisions, then builds the pinned test helpers in a credential-free source step and creates a deterministic platform package. The staged bytes enter the shared public prepare → focused case → public run contract without rebuilding products or helpers. Resolution declares exact case filenames at the committed test pins; execution uses short private state paths and reads cases directly from the staged archive without source overlays. Native x86 runs the selected cases across all nine suites on a real KVM runner; native ARM runs the predeclared accelerator/guest-runtime non-KVM subset. Clean-runtime preparation and selected full-suite execution retain evidence that Go, Rust and component sources are absent. Source-dependent checks are separate required jobs. Publish requires both explicit architecture results, binds their selections/source identities/asset digests in `kuasar-integration-validation`, and uploads the original archives unchanged.
+
+Workbench preparation uses the same canonical case discovery and external-image request function as public `prepare`. The collector resolves each moving tag once for the staged request and binds raw registry manifest/config evidence to the copied Docker archives. Native builds produce one gzip-compressed Docker image archive per architecture, with the aggregate version and exact source labels. The actual compressed bytes must be **smaller than 2 GiB**; oversized or partial inputs fail before staging/publication. The image contains tools and external inputs, while the six product archives remain separate and byte-identical to upstream.
+
+An additional native workbench gate imports those exact staged bytes and starts with empty private Docker state and no external route. It executes public offline prepare/run with the current full ordinary x86 selection. ARM retains its accepted native cases and additionally runs `sandbox.lifecycle.sh`, `snapshot.restore.sh` and `network.tapfd.sh`; case architecture guards remain intact. Private daemon isolation, KVM/UFFD/TUN/BPF, enforcing AppArmor when enabled, and owned cleanup must pass. This toolchain environment does not replace the separate compiler-free runtime gate. Results bind the exact framework, test pins, product hashes, archive/config identities, actual compressed size, compression/import/start time and observed peak disk usage; disk observations are not quotas.
+
+Publication copies the tested saved images to `ghcr.io/kuasar-sandbox/workbench:<aggregate-version-without-release-prefix>`, verifies both architecture config identities and the multi-architecture index, and checks anonymous access. Registry digests, image IDs and offline archive hashes have distinct meanings. Existing same-name tags/assets must match; retries upload missing assets without overwriting tested bytes. Cross-service publication is resumable: the GitHub draft becomes public only after the registry and complete GitHub asset set agree. A conflict fails closed. Original source history and published release bytes are not amended.
+
+Consumers extract only the selected product architecture plus `platform-release`; `workbench-<arch>-v*.tar.gz` is imported with `docker load`, never unpacked into that directory. The [Quick Start](quickstart.md) checks the declared set and selects explicit asset categories. Workbench is optional for users downloading products, but both image assets are mandatory for a new aggregate publication.
 
 Preview, maintenance Stable and mainline Stable use identical asset contracts and release asset validation gates. They differ only in release state and Latest policy.
 
@@ -354,6 +362,8 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
 gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
   -f stable_version=release-v0.5.7 -f dry_run=false
 ```
+
+Workbench Preview cleanup follows the same canonical version/source ownership checks. Before deleting an owned package version, it verifies repository association, immutable digest and source/version labels, and protects active publications, other live release bindings, shared tags and manifest children referenced by retained indexes. It never prunes unrelated or untagged image versions. Historical releases keep their original cleanup contract.
 
 ## 10. Permissions and reliability
 

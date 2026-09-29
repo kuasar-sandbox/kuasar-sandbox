@@ -6,6 +6,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'ci/integration'))
@@ -81,12 +82,50 @@ class BindingTests(unittest.TestCase):
         mutations = [('offline', False), ('empty_private_daemon', False), ('conclusion', 'skipped'),
                      ('cases', []), ('timings', []), ('image_id', 'sha256:' + '0' * 64),
                      ('input_assets', {}), ('source_revision', 'e' * 40), ('preflight', {}),
-                     ('host_apparmor_enabled', True), ('isolation', {'complete': False})]
+                     ('host_apparmor_enabled', True), ('disk', {}), ('size', 2 * 1024**3),
+                     ('compression_seconds', -1), ('import_seconds', float('nan')), ('start_seconds', True), ('isolation', {'complete': False})]
         for key, value in mutations:
             broken = copy.deepcopy(self.results); broken['aarch64'][key] = value
             with self.subTest(key=key), self.assertRaises(ValueError):
                 binder.bind(self.root, self.plan, self.validation, broken)
             self.assertEqual((self.root / 'release-notes.md').read_text(), 'Original notes\n')
+
+    def test_published_reader_requires_declared_assets_and_current_profiles(self):
+        spec = importlib.util.spec_from_file_location('workbench_release_reader', ROOT / 'ci/integration/resolve-artifacts.py')
+        reader = importlib.util.module_from_spec(spec); spec.loader.exec_module(reader)
+        binder.bind(self.root, self.plan, self.validation, self.results)
+        original = json.loads(reader.PROFILE_BINDING.search((self.root / 'release-notes.md').read_text())[1])
+        original['registry'] = registry_binding(self.version, self.results)
+        manifest = 'delivery: workbench-v1\nversion: ' + self.version + '\ncomponents:\n' + ''.join(
+            f"  {unit}: {row['version']}\n" for unit, row in self.plan['baseline']['units'].items())
+        manifest += 'test_revisions:\n' + ''.join(f"  {owner}: {row['sha']}\n"
+            for owner, row in self.plan['test_revisions'].items() if owner != 'platform')
+        assets = [dict(row, state='uploaded', id=index) for index, row in enumerate(self.plan['baseline']['assets'], 1)]
+        state = {'id': 1, 'tag_name': self.version, 'target_commitish': self.sha, 'draft': False, 'prerelease': False,
+                 'assets': assets}
+        def notes(binding):
+            state['body'] = '<!-- kuasar-integration-validation ' + json.dumps(binding) + ' -->'
+        run = {'id': 1, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://example.invalid/run',
+               'display_title': reader.release.aggregate_run_title(self.version, self.sha)}
+        with patch.object(reader.release, 'api_optional', return_value=state), patch.object(reader, 'source_text', return_value=manifest), patch.object(
+                reader.release, 'aggregate_runs', return_value=[run]), patch.object(reader, 'case_files', return_value=WORKBENCH_CASES), patch.object(
+                reader.release, 'tag_sha', side_effect=lambda repository, tag: self.sha if repository == reader.PLATFORM else 'c' * 40):
+            notes(original)
+            self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
+            state['assets'] = [row for row in assets if not row['name'].startswith('workbench-')]
+            with self.assertRaisesRegex(ValueError, 'complete workbench asset set'):
+                reader.aggregate(self.version)
+            state['assets'] = assets
+            broken = copy.deepcopy(original)
+            for arch, record in broken['architectures'].items():
+                record.pop('selection'); record['profile'] = reader.historical_profile(arch)
+            notes(broken)
+            with self.assertRaisesRegex(ValueError, 'current explicit case selection'):
+                reader.aggregate(self.version)
+            for field in ('workbench', 'registry', 'delivery'):
+                broken = copy.deepcopy(original); broken.pop(field); notes(broken)
+                with self.subTest(field=field), self.assertRaises(ValueError):
+                    reader.aggregate(self.version)
 
     def test_framework_and_test_provenance_remain_required(self):
         for key, value in [('plan_id', '0' * 64), ('framework_sha', 'e' * 40), ('test_revisions', {})]:

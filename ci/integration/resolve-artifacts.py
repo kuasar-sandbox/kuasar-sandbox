@@ -182,6 +182,7 @@ def aggregate(version, *, require_dual=True):
                 expected = artifacts.suite_selection(['platform'], arch, case_files(tests))
                 actual = result['selection']
             else:
+                artifacts.require(contract != release.selection.DELIVERY, 'new aggregate requires the current explicit case selection')
                 expected, actual = historical_profile(arch, bootstrap_cases), result.get('profile')
             artifacts.require(result["arch"] == arch and result["conclusion"] == "success"
                               and actual == expected
