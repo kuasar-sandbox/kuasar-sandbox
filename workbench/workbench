@@ -318,6 +318,7 @@ def create_command(args, state, data):
         profile.write_text(json.dumps(seccomp_profile()) + '\n')
         command += ['--cap-add=SYS_ADMIN', '--cap-add=NET_ADMIN', '--cap-add=SYS_PTRACE',
                     '--security-opt', 'seccomp=' + str(profile), '--ulimit', 'memlock=-1:-1',
+                    '--ulimit', 'nofile=1048576:1048576',
                     '--device', '/dev/kvm', '--device', '/dev/net/tun']
         if data.get('apparmor'):
             command += ['--security-opt', 'apparmor=' + data['apparmor']['name']]

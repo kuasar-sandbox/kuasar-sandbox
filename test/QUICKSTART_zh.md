@@ -45,7 +45,9 @@ tar -xzf platform-release-vX.Y.Z.tar.gz -C kuasar-sandbox-release
 <a id="3-前置条件"></a>
 ## 3. 前置条件
 
-完整原生 x86 执行要求 Linux、systemd、cgroup v2、可用 `/dev/kvm`、root 或非交互 `sudo`，以及 Docker、iproute2、curl、Python 3.11+（包内 Demo SDK 要求 Python 3.12）、openssl、EROFS reader、mkfs.ext4 和已选脚本要求的普通工具。配置本地镜像输入时 prepare 优先使用本地输入，否则下载已选外部镜像。hash-locked Python wheel 和 registry/gateway/probe 程序来自包内。
+完整原生 x86 执行要求 Linux、systemd、cgroup v2、可用 `/dev/kvm`、root 或非交互 `sudo`，以及 Docker、iproute2、curl、Python 3.11+（包内 Demo SDK 要求 Python 3.12）、openssl、EROFS reader（`fsck.erofs --extract` 和 `dump.erofs --cat`，workbench 已提供）、mkfs.ext4 和已选脚本要求的普通工具。配置本地镜像输入时 prepare 优先使用本地输入，否则下载已选外部镜像。hash-locked Python wheel 和 registry/gateway/probe 程序来自包内。
+
+对于直接解压的发行输入，prepare 读取 runtime bundle 中实际的 `/sbin/init` 字节并记录摘要，供 telemetry 断言使用；不会替换为独立发布的 sandbox-init 程序或环境变量中的摘要。
 
 prepare 和产品执行不需要 Go/Rust 编译器或组件源码 checkout。缺少预备输入时 runner 失败，不使用宿主机 helper，不在执行时拉取镜像。预备输入必须保持不变；可变用例状态和结果文件位于预备目录之外。
 

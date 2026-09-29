@@ -79,7 +79,7 @@ class BindingTests(unittest.TestCase):
             binder.bind(self.root, self.plan, self.validation, {'x86_64': self.results['x86_64']})
 
     def test_incomplete_or_mismatched_system_evidence_cannot_publish(self):
-        mutations = [('offline', False), ('empty_private_daemon', False), ('conclusion', 'skipped'),
+        mutations = [('preparation_network', 'bridge'), ('execution_network', 'none'), ('offline', False), ('empty_private_daemon', False), ('conclusion', 'skipped'),
                      ('cases', []), ('timings', []), ('image_id', 'sha256:' + '0' * 64),
                      ('input_assets', {}), ('source_revision', 'e' * 40), ('preflight', {}),
                      ('host_apparmor_enabled', True), ('disk', {}), ('size', 2 * 1024**3),
@@ -89,6 +89,38 @@ class BindingTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 binder.bind(self.root, self.plan, self.validation, broken)
             self.assertEqual((self.root / 'release-notes.md').read_text(), 'Original notes\n')
+
+    def artifact_only(self, arch='aarch64'):
+        results = copy.deepcopy(self.results)
+        record = results[arch]
+        record['qualification_scope'] = 'artifact-only'
+        record['planned_cases'] = record['cases']
+        record['cases'] = []
+        for key in ('offline', 'empty_private_daemon', 'isolation', 'preflight', 'apparmor',
+                    'timings', 'provenance_sha256', 'start_seconds', 'preparation_network', 'execution_network'):
+            record.pop(key, None)
+        return results
+
+    def test_explicit_hosted_arm_artifacts_bind_without_claiming_system_execution(self):
+        results = self.artifact_only()
+        binder.bind(self.root, self.plan, self.validation, results)
+        binding = json.loads((self.root / 'release-notes.md').read_text().split(
+            '<!-- kuasar-integration-validation ')[1].split(' -->')[0])
+        self.assertEqual(binding['workbench']['aarch64']['cases'], [])
+        self.assertEqual(binding['workbench']['aarch64']['qualification_scope'], 'artifact-only')
+        self.assertEqual(binding['workbench']['x86_64']['qualification_scope'], 'system')
+
+    def test_artifact_scope_is_never_inferred_or_accepted_as_system_proof(self):
+        for key, value in [('qualification_scope', None), ('qualification_scope', 'system'),
+                           ('imported_image_id', 'sha256:' + '0' * 64), ('release_inputs_verified', False),
+                           ('planned_cases', []), ('cases', ['sandbox.lifecycle.sh']),
+                           ('offline', True), ('preflight', {}), ('timings', [])]:
+            results = self.artifact_only()
+            results['aarch64'][key] = value
+            with self.subTest(key=key, value=value), self.assertRaises(ValueError):
+                binder.bind(self.root, self.plan, self.validation, results)
+        with self.assertRaisesRegex(ValueError, 'qualification scope'):
+            binder.bind(self.root, self.plan, self.validation, self.artifact_only('x86_64'))
 
     def test_published_reader_requires_declared_assets_and_current_profiles(self):
         spec = importlib.util.spec_from_file_location('workbench_release_reader', ROOT / 'ci/integration/resolve-artifacts.py')
@@ -112,6 +144,11 @@ class BindingTests(unittest.TestCase):
                 reader.release, 'tag_sha', side_effect=lambda repository, tag: self.sha if repository == reader.PLATFORM else 'c' * 40):
             notes(original)
             self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
+            artifact_binding = copy.deepcopy(original)
+            artifact_binding['workbench'] = self.artifact_only()
+            notes(artifact_binding)
+            self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
+            notes(original)
             state['assets'] = [row for row in assets if not row['name'].startswith('workbench-')]
             with self.assertRaisesRegex(ValueError, 'complete workbench asset set'):
                 reader.aggregate(self.version)

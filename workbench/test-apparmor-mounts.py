@@ -30,6 +30,8 @@ def child():
     subprocess.run(['ip', 'netns', 'add', 'same-netns'], check=True)
     subprocess.run(['ip', '-n', 'same-netns', 'link', 'set', 'lo', 'up'], check=True)
     subprocess.run(['ip', 'netns', 'delete', 'same-netns'], check=True)
+    subprocess.run(['unshare', '--mount', '--pid', '--fork', '--mount-proc',
+                    'sh', '-ceu', 'test "$$" = 1; test -r /proc/self/status'], check=True)
     assert Path('/sys/module/apparmor/parameters/enabled').read_text() == ''
     for filesystem in ('tmpfs', 'securityfs'):
         result = subprocess.run(['mount', '-t', filesystem, filesystem, '/mnt'], capture_output=True)
@@ -92,8 +94,15 @@ def child():
     os.chdir('/')
     call('mount', None, b'/' + old, None, ctypes.c_ulong((1 << 18) | (1 << 14)), None)
     call('umount2', b'/' + old, 2)
+    case = b'/work/cases/telemetry.usage-faults.sh/usage-faults/enospc-base'
+    os.makedirs(case)
+    call('mount', b'tmpfs', case, b'tmpfs', 0, b'size=256k')
+    call('umount2', case, 0)
+    os.mkdir('/work/forbidden-mount')
+    assert libc.mount(b'tmpfs', b'/work/forbidden-mount', b'tmpfs', 0, None) != 0
     print(json.dumps({'context': context, 'mask': 'empty', 'netns': 'create-configure-delete',
                       'forbidden_mounts': 'denied', 'pivot_old_root': 'private',
+                      'case_mounts': 'private PID proc and bounded ENOSPC tmpfs',
                       'detached_proc': 'private network sysctl allowed; sysrq/kcore denied'}))
 
 

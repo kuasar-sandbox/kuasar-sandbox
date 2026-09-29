@@ -618,7 +618,15 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
                 'workbench validation differs from staged archive/image identity')
         require(type(record.get('size')) is int and 0 < record['size'] < 2 * 1024**3,
                 'workbench compressed archive must be smaller than 2 GiB')
-        for key in ('compression_seconds', 'import_seconds', 'start_seconds', 'wall_seconds'):
+        scope = record.get('qualification_scope')
+        require(scope == 'system' or (arch == 'aarch64' and scope == 'artifact-only'),
+                'workbench requires an explicit supported qualification scope')
+        require(record.get('imported_image_id') == record['image_id']
+                and record.get('release_inputs_verified') is True,
+                'workbench archive import and release input verification are required')
+        require(record.get('input_assets') == expected_assets, 'workbench input assets differ from the aggregate')
+        for key in ('compression_seconds', 'import_seconds', 'wall_seconds',
+                    *(('start_seconds',) if scope == 'system' else ())):
             value = record.get(key)
             require(type(value) in (int, float) and math.isfinite(value) and value >= 0,
                     'missing or invalid workbench measurement: ' + key)
@@ -628,8 +636,18 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
                 and disk['peak_used'] >= disk['used_before']
                 and disk['peak_increase'] == disk['peak_used'] - disk['used_before'],
                 'missing or inconsistent workbench disk measurements')
+        require(isinstance(record.get('host_apparmor_enabled'), bool), 'missing workbench host LSM observation')
+        if scope == 'artifact-only':
+            require(record.get('cases') == [] and record.get('planned_cases') == workbench_cases(case_files, arch),
+                    'artifact-only qualification must distinguish planned cases from execution')
+            require(not any(key in record for key in ('offline', 'empty_private_daemon', 'isolation', 'preflight',
+                        'apparmor', 'timings', 'provenance_sha256', 'start_seconds', 'preparation_network', 'execution_network')),
+                    'artifact-only qualification cannot claim system or offline execution')
+            continue
         require(record.get('offline') is True and record.get('empty_private_daemon') is True,
                 'workbench requires offline preparation from empty private Docker state')
+        require(record.get('preparation_network') == 'none' and record.get('execution_network') == 'owned-bridge',
+                'workbench must block preparation fetches and retain the real guest-egress execution gate')
         require(record.get('isolation', {}).get('complete') is True
                 and record['isolation'].get('image') == record['image_id'], 'workbench isolation did not pass on the tested image')
         preflight = record.get('preflight', {})
@@ -642,11 +660,9 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
                 'workbench daemons do not use their private storage')
         require(record.get('cases') == workbench_cases(case_files, arch) and record.get('timings'),
                 'workbench cases differ from the complete declared selection')
-        require(record.get('input_assets') == expected_assets, 'workbench input assets differ from the aggregate')
         check_timings(record['timings'], record['cases'])
         require(re.fullmatch(r'[0-9a-f]{64}', record.get('provenance_sha256', '')),
                 'missing workbench prepared-workspace provenance digest')
-        require(isinstance(record.get('host_apparmor_enabled'), bool), 'missing workbench host LSM observation')
         if record['host_apparmor_enabled']:
             lsm = record.get('apparmor', {})
             profile = lsm.get('profile', {}).get('name', '')

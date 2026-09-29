@@ -135,7 +135,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
         work.mkdir()
         workspace.files(source_bin)
         shutil.copytree(source_bin, work / "bin")
-        for name in ("test", "docs", "share", "deploy", "fixtures", "images", "manifests"):
+        for name in ("test", "docs", "guide", "workbench", "share", "deploy", "fixtures", "images", "manifests"):
             source = release / name
             if source.exists():
                 workspace.files(source)
@@ -154,6 +154,8 @@ def cmd_prepare(args: argparse.Namespace) -> int:
                 shutil.copy2(helper_root / name, work / "fixtures/bin" / name)
             provenance["helpers"] = helpers
         (work / "ARCH").write_text(arch + "\n", encoding="utf-8")
+        if 'embedded' not in provenance and (work / 'bin/sandbox-runtime.bundle').is_file():
+            provenance['embedded'] = {'init': workspace.runtime_init_identity(work, arch)}
         provenance.update(workspace.prepare_fixtures(work, arch, [case.name for case in cases], deps_dir, offline))
         provenance["prepared_cases"] = [case.name for case in cases]
         workspace.seal(work, provenance)
@@ -188,7 +190,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     run_root.mkdir(parents=True, exist_ok=True)
     out_root.mkdir(parents=True, exist_ok=True)
     env_base = os.environ.copy()
-    for variable in (*workspace.HELPERS.values(), *workspace.IMAGE_VARIABLES.values(), "E2E_IMAGE", "IMAGE", "E2E_CASES_DIR", "E2E_LIB", "BASH_ENV"):
+    for variable in (*workspace.HELPERS.values(), *workspace.IMAGE_VARIABLES.values(), "E2E_IMAGE", "IMAGE", "E2E_CASES_DIR", "E2E_LIB", "BASH_ENV", "KUASAR_EXPECTED_RUNTIME_INIT_SHA256"):
         env_base.pop(variable, None)
     env_base["PYTHONDONTWRITEBYTECODE"] = "1"
     report = {"arch": arch, "cases": [case.name for case in cases], "timings": [],

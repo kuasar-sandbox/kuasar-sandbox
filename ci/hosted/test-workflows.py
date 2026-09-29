@@ -188,6 +188,8 @@ def check():
     released = integration['workbench-release']
     assert released['needs'] == 'resolve'
     assert released['strategy']['matrix'] == native['strategy']['matrix']
+    release_script = next(step['run'] for step in released['steps'] if step.get('name', '').startswith('Qualify staged'))
+    assert "matrix.arch" in release_script and '--artifact-only' in release_script
     assert 'continue-on-error' not in json.dumps(released)
     assert 'KUASAR_CI_APP_PRIVATE_KEY' not in json.dumps(released)
     for step in released['steps']:

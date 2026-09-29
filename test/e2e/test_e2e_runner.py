@@ -4,6 +4,9 @@ import json
 import os
 import platform
 import shutil
+import hashlib
+import struct
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -154,6 +157,14 @@ class PreparedRunnerTests(unittest.TestCase):
         helpers.mkdir(parents=True)
         (helpers / 'helpers.json').write_text(json.dumps({'arch': platform.machine(), 'helpers': {}}))
         (self.release / 'test/e2e/cases/basic.fixture.sh').write_text('exit 0\n')
+        (self.release / 'guide').mkdir()
+        (self.release / 'guide/quickstart.md').write_text('# User guide\n')
+        (self.release / 'workbench').mkdir()
+        for name, mode in (('workbench', 0o755), ('apparmor.profile', 0o644),
+                           ('LICENSE.apparmor', 0o644)):
+            path = self.release / 'workbench' / name
+            path.write_text('packaged input: ' + name + '\n')
+            path.chmod(mode)
         self.args = dict(deps_dir=None, offline=False, suite=[], include=['basic.fixture.sh'], exclude=[], all=False,
                          arch=platform.machine(), release_dir=str(self.release), workdir=str(self.work),
                          run_root=str(self.root / 'run'), out_root=str(self.root / 'out'), result=None)
@@ -178,8 +189,14 @@ class PreparedRunnerTests(unittest.TestCase):
         self.assertEqual(report['cases'], ['basic.fixture.sh'])
         self.assertEqual(report['conclusion'], 'success')
         self.assertEqual(report['timings'][0]['exit_code'], 0)
-        self.assertEqual(runner.workspace.verify(self.work)['files']['test/e2e/cases/basic.fixture.sh'],
+        prepared = runner.workspace.verify(self.work)
+        self.assertEqual(prepared['files']['test/e2e/cases/basic.fixture.sh'],
                          before['test/e2e/cases/basic.fixture.sh'])
+        self.assertEqual(prepared['files']['guide/quickstart.md'], before['guide/quickstart.md'])
+        for name in ('workbench/workbench', 'workbench/apparmor.profile', 'workbench/LICENSE.apparmor'):
+            self.assertEqual(prepared['files'][name], before[name])
+            self.assertEqual((self.work / name).stat().st_mode & 0o777,
+                             (self.release / name).stat().st_mode & 0o777)
 
     def test_failure_remains_failure_in_return_code_and_result(self):
         (self.release / 'test/e2e/cases/basic.fixture.sh').write_text('exit 23\n')
@@ -188,6 +205,18 @@ class PreparedRunnerTests(unittest.TestCase):
         report = json.loads((self.root / 'out/result.json').read_text())
         self.assertEqual(report['conclusion'], 'failure')
         self.assertEqual(report['timings'][0]['exit_code'], 23)
+
+    def test_raw_release_records_actual_runtime_init_and_overrides_ambient_identity(self):
+        (self.release / 'bin/sandbox-runtime.bundle').write_bytes(b'packaged runtime')
+        expected = 'a' * 64
+        case = self.release / 'test/e2e/cases/basic.fixture.sh'
+        case.write_text('test "$KUASAR_EXPECTED_RUNTIME_INIT_SHA256" = ' + expected + '\n')
+        with patch.object(runner.workspace, 'runtime_init_identity', return_value=expected) as reader:
+            runner.cmd_prepare(self.args_with())
+            self.assertEqual(reader.call_args.args[1], platform.machine())
+        with patch.dict(os.environ, {'KUASAR_EXPECTED_RUNTIME_INIT_SHA256': 'wrong ambient digest'}):
+            self.assertEqual(runner.cmd_run(self.args_with()), 0)
+        self.assertEqual(runner.workspace.verify(self.work)['embedded'], {'init': expected})
 
     def test_input_tampering_fails_before_case_execution(self):
         runner.cmd_prepare(self.args_with())
@@ -353,6 +382,35 @@ class GuestFixturePathTests(unittest.TestCase):
                     helper.symlink_to(target if kind == "symlink" else root / "missing")
                 with self.assertRaisesRegex(ValueError, "missing prepared guest-runtime"):
                     runner.workspace.fixture_helper(root, "guest-runtime", "fixture.py")
+
+
+class RuntimeInitIdentityTests(unittest.TestCase):
+    def test_reader_hashes_extracted_bytes_and_rejects_invalid_metadata_architecture_and_size(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'bin').mkdir()
+            (root / 'bin/sandbox-runtime.bundle').write_bytes(b'fixture')
+            payload = bytearray(64)
+            payload[:7] = b'\x7fELF\x02\x01\x01'
+            struct.pack_into('<H', payload, 18, 62)
+            metadata = 'Size: 64 On-disk size: 64 regular file\nUid: 0 Gid: 0 Access: 0755/rwxr-xr-x\n'
+            def read(command, **kwargs):
+                if '--cat' in command:
+                    kwargs['stdout'].write(payload)
+                return subprocess.CompletedProcess(command, 0)
+            with patch.object(runner.workspace.shutil, 'which', side_effect=lambda name: '/tools/' + name), patch.object(
+                    runner.workspace.subprocess, 'run', side_effect=read) as calls, patch.object(
+                    runner.workspace.subprocess, 'check_output', return_value=metadata) as info:
+                self.assertEqual(runner.workspace.runtime_init_identity(root, 'x86_64'), hashlib.sha256(payload).hexdigest())
+                self.assertIn('--extract', calls.call_args_list[0].args[0])
+                self.assertIn('--cat', calls.call_args_list[1].args[0])
+                with self.assertRaisesRegex(ValueError, 'architecture'):
+                    runner.workspace.runtime_init_identity(root, 'aarch64')
+                for invalid in (metadata.replace('64 On-disk', '65 On-disk'), metadata.replace('regular file', 'symbolic link'),
+                                metadata.replace('Uid: 0', 'Uid: 1')):
+                    info.return_value = invalid
+                    with self.assertRaises(ValueError):
+                        runner.workspace.runtime_init_identity(root, 'x86_64')
 
 
 if __name__ == "__main__":

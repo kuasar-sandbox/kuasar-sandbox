@@ -69,6 +69,9 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   mount options=(rw,rbind) / -> /run/systemd/mount-rootfs/,
   mount fstype=tmpfs -> /dev/shm/,
   mount fstype=proc -> /run/systemd/namespace-*/,
+  # The namespace-cleanup case creates a child PID namespace with its own
+  # proc mount. Existing proc write denials remain in force after the mount.
+  mount fstype=proc -> /proc/,
   mount options=(rw,move) /run/systemd/namespace-*/dev/ -> /run/systemd/mount-rootfs/dev/,
   mount options=(rw,move) /run/systemd/namespace-*/ -> /run/systemd/mount-rootfs/proc/,
   pivot_root /run/systemd/mount-rootfs/,
@@ -81,6 +84,8 @@ profile @PROFILE@ flags=(attach_disconnected,mediate_deleted) {
   # systemd generators mount a private tmpfs at /tmp itself before journald.
   mount fstype=tmpfs -> /tmp/,
   mount fstype=tmpfs -> /{run,tmp}/**,
+  # The canonical telemetry ENOSPC case mounts its bounded scratch filesystem.
+  mount fstype=tmpfs -> /work/**/usage-faults/enospc-base/,
   mount options=(rw,bind) /** -> /var/lib/docker/**,
   mount options=(rw,rbind) /** -> /var/lib/docker/**,
   mount options=(ro,bind) /** -> /var/lib/docker/**,

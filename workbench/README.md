@@ -83,11 +83,11 @@ python3 workbench/workbench --root "$STATE" --name e2e exec -- \
   --arch "$ARCH" --suite image --suite storage --exclude storage.obs.sh
 ```
 
-These suites are a minimal native ARM example. Release qualification also runs
+These suites are a minimal native ARM example. Hosted ARM release CI checks artifact bytes and image import only because it has no KVM device; this is not system/offline acceptance. Separate native KVM acceptance with the published image also runs
 `sandbox.lifecycle.sh`, `snapshot.restore.sh` and `network.tapfd.sh` on ARM; add
 those three `--include` options to both commands to exercise that scope. On x86_64 use the
 current full ordinary selection, `--all --exclude storage.obs.sh`, for both
-prepare and run. Do not remove case architecture guards. Credentialed OBS
+prepare and run. For that full selection, start with `--network bridge`: `--offline` still blocks dependency fetches during prepare, while the existing Demo requires real Internet egress during run. Release qualification additionally disconnects the owned bridge during prepare and restores it only afterward. Do not remove case architecture guards. Credentialed OBS
 remains an explicit choice requiring its own network and credentials.
 
 `--network none` removes external networking from the outer instance; private
@@ -116,7 +116,7 @@ container using the same profile prevents removal.
 Each system instance has a distinct machine ID and PID/UTS/IPC/mount/network/
 cgroup namespaces, private bpffs, Docker and containerd roots and state, sockets,
 and read-only release inputs. It receives KVM/TUN plus SYS_ADMIN, NET_ADMIN and
-SYS_PTRACE in addition to Docker's default capabilities. The retained default
+SYS_PTRACE in addition to Docker's default capabilities. System mode sets a bounded nofile limit of 1048576 for the outer container and private daemon units so nested containers can request their required limits without SYS_RESOURCE. The retained default
 seccomp policy permits only the additional userfaultfd, pivot_root and keyctl
 operations needed by this environment. It never receives the host Docker
 socket, host root, whole host cgroup tree or host BPF pins.
