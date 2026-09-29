@@ -219,6 +219,12 @@ jobs:
           path: plan
       - name: Qualify the complete native toolchain with ordinary UID builds
         run: python3 -B framework/workbench/test-build.py --plan plan/plan.json --root "$RUNNER_TEMP/workbench-native"
+      - name: Collect bounded native workbench diagnostics
+        if: always()
+        run: |
+          if [ -d "$RUNNER_TEMP/workbench-native" ]; then
+            sudo python3 -B framework/workbench/collect-diagnostics.py --root "$RUNNER_TEMP/workbench-native" > native-workbench-diagnostics.tar.gz
+          fi
       - name: Retain exact native build evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -226,7 +232,7 @@ jobs:
           name: workbench-native-${{ matrix.arch }}-${{ github.run_id }}
           path: |
             ${{ runner.temp }}/workbench-native/result.json
-            ${{ runner.temp }}/workbench-native/admin-smoke/
+            native-workbench-diagnostics.tar.gz
             ${{ runner.temp }}/workbench-native/instances/native-build/output/
           if-no-files-found: error
           retention-days: 7

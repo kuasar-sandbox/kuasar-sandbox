@@ -342,6 +342,22 @@ class LauncherTests(unittest.TestCase):
                         launcher.stop_owned(self.state, self.data)
 
 
+    def test_system_halt_accepts_namespace_sigint_but_not_kill_or_oom(self):
+        self.data['mode'] = 'system'
+        for code, oom, accepted in ((0, False, True), (130, False, True), (137, False, False),
+                                    (130, True, False), (1, False, False), (143, False, False)):
+            containers = [{'Id': 'owned', 'State': {'Running': True}},
+                          {'Id': 'owned', 'State': {'Running': False, 'ExitCode': code, 'OOMKilled': oom}}]
+            with self.subTest(code=code, oom=oom), patch.object(
+                    launcher, 'owned_container', side_effect=containers), patch.object(
+                    launcher, 'diagnostics'), patch.object(launcher, 'docker'):
+                if accepted:
+                    launcher.stop_owned(self.state, self.data)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'did not stop gracefully'):
+                        launcher.stop_owned(self.state, self.data)
+
+
 class NativeSelectionTests(unittest.TestCase):
     def test_native_build_uses_admitted_base_and_cannot_skip_on_lookup_failure(self):
         sys.path.insert(0, str(ROOT.parent / 'ci/integration'))

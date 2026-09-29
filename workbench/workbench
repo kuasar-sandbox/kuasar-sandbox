@@ -243,8 +243,13 @@ def stop_owned(state, data):
         diagnostics(state, data)
         docker('stop', '--time', '60', container['Id'], timeout=75)
         container = owned_container(data)
-        expected = (0, 143) if data['mode'] == 'build' else (0,)
-        require(container and not container['State']['Running'] and container['State']['ExitCode'] in expected,
+        # With CAP_SYS_BOOT, systemd's orderly halt invokes reboot(HALT) in
+        # the private PID namespace. Linux reports SIGINT to the parent (130).
+        # See reboot(2), "Behavior inside PID namespaces". Forced SIGKILL (137),
+        # OOM and other failures must not be accepted as a graceful shutdown.
+        expected = (0, 143) if data['mode'] == 'build' else (0, 130)
+        require(container and not container['State']['Running'] and
+                not container['State'].get('OOMKilled', False) and container['State']['ExitCode'] in expected,
                 'instance did not stop gracefully; diagnostics and data retained')
     data['status'] = 'stopped'
     save(state, data)
