@@ -14,8 +14,8 @@ class ResumeTests(unittest.TestCase):
     def setUp(self):
         self.run = {'id': 10, 'display_title': subject.aggregate_run_title(VERSION, SHA),
                     'created_at': '2026-09-29T01:00:00Z', 'status': 'completed', 'conclusion': 'failure', 'run_attempt': 1}
-        self.jobs = [{'name': name, 'conclusion': 'success', 'status': 'completed'}
-                     for name in ('prepare', 'stage', 'release-asset-validation / results')]
+        self.jobs = [{'id': index, 'name': name, 'conclusion': 'success', 'status': 'completed'}
+                     for index, name in enumerate(('prepare', 'stage', 'release-asset-validation / results'), 1)]
         self.jobs.append({'id': 20, 'name': 'publish', 'status': 'completed', 'conclusion': 'failure'})
         self.artifacts = [{'name': f'aggregate-stage-{VERSION}-10', 'expired': False}]
 
@@ -31,6 +31,16 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0].args, ('api', '--method', 'POST',
             f'repos/{subject.PLATFORM_REPOSITORY}/actions/jobs/20/rerun', '--silent'))
+
+    def test_second_publish_retry_keeps_prior_successful_prerequisites(self):
+        self.run['run_attempt'] = 2
+        self.jobs.insert(0, dict(self.jobs[-1], id=25))
+        result, calls = self.resume()
+        self.assertFalse(result)
+        self.assertIn('/actions/jobs/25/rerun', calls[0].args[-2])
+        self.jobs[0]['conclusion'] = 'success'
+        with self.assertRaisesRegex(RuntimeError, 'no failed publish job'):
+            self.resume()
 
     def test_expired_or_ambiguous_stage_and_failed_gate_prevent_resume(self):
         original = copy.deepcopy(self.artifacts)

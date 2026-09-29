@@ -1115,7 +1115,15 @@ def resume_workbench_publish(version: str, source_sha: str) -> bool:
         raise RuntimeError('aggregate publication failed after three attempts: ' + str(state.get('html_url')))
     if state.get('conclusion') == 'success':
         raise Pending('aggregate run is waiting for Release API convergence')
-    jobs = paginated(f"repos/{PLATFORM_REPOSITORY}/actions/runs/{state['id']}/jobs?filter=latest&per_page=100", 'jobs')
+    attempts = paginated(f"repos/{PLATFORM_REPOSITORY}/actions/runs/{state['id']}/jobs?filter=all&per_page=100", 'jobs')
+    # A publish-only rerun has no new prerequisite jobs. Keep the latest
+    # actual job for each name across attempts, including the unchanged gates.
+    latest = {}
+    for job in attempts:
+        previous = latest.get(job['name'])
+        if previous is None or job['id'] > previous['id']:
+            latest[job['name']] = job
+    jobs = list(latest.values())
     publishers = [job for job in jobs if job.get('name') == 'publish']
     required = ('prepare', 'stage', 'release-asset-validation / results')
     for name in required:
