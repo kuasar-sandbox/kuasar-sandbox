@@ -32,6 +32,7 @@ jobs:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     runs-on: ubuntu-latest
     permissions:
+      actions: read # Verify no aggregate publication is in flight before registry GC.
       contents: write
       packages: write
     steps:
