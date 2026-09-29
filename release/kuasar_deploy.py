@@ -280,12 +280,35 @@ def file_sha256(path: Path) -> str:
         return digest.hexdigest()
 
 
+X86_64_RELEASE_ASSETS = {
+    "platform": re.compile(r"platform-release-v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8})?\.tar\.gz"),
+    "accelerator": re.compile(r"accelerator-v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8})?-linux-x86_64\.tar\.gz"),
+    "connector": re.compile(r"connector-v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8})?-linux-x86_64\.tar\.gz"),
+    "orchestrator": re.compile(r"orchestrator-v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8})?-linux-x86_64\.tar\.gz"),
+    "sandboxer": re.compile(r"sandboxer-v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8})?-linux-x86_64\.tar\.gz"),
+    "runtime": re.compile(r"sandbox-runtime-x86_64-v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8})?\.tar\.gz"),
+    "kernel": re.compile(r"vmlinux-x86_64-v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8})?\.tar\.gz"),
+}
+
+
+def x86_64_release_entries(entries: list[tuple[str, str]], version: str | None = None) -> list[tuple[str, str]]:
+    """Select exactly one x86_64 archive for every aggregate-release role."""
+    selected: list[tuple[str, str]] = []
+    for role, pattern in X86_64_RELEASE_ASSETS.items():
+        matches = [(digest, name) for digest, name in entries if pattern.fullmatch(name)]
+        require(len(matches) == 1, f"release must contain exactly one x86_64 {role} archive; found {len(matches)}")
+        selected.append(matches[0])
+    if version is not None:
+        require(selected[0][1] == f"platform-{version}.tar.gz", f"release is missing x86_64 platform archive for {version}")
+    return selected
+
+
 def download_release(repository: str, version: str, download_dir: Path) -> None:
     base = release_download_base(repository, version)
     print(f"Downloading public Release {version} without GitHub authentication...")
     manifest = download_dir / "SHA256SUMS"
     download_file(f"{base}/SHA256SUMS", manifest)
-    entries = checksum_entries(manifest.read_text())
+    entries = x86_64_release_entries(checksum_entries(manifest.read_text()), version)
     for digest, name in entries:
         destination = download_dir / name
         if destination.is_file() and file_sha256(destination) == digest:
@@ -295,11 +318,15 @@ def download_release(repository: str, version: str, download_dir: Path) -> None:
         require(file_sha256(destination) == digest, f"SHA256 mismatch: {name}; retry to download again")
 
 
-def validate_release(download_dir: Path, install_dir: Path) -> None:
+def validate_release(download_dir: Path, install_dir: Path, version: str | None = None) -> None:
     require((download_dir / "SHA256SUMS").is_file(), "SHA256SUMS is missing")
-    entries = checksum_entries((download_dir / "SHA256SUMS").read_text())
-    archives = [download_dir / name for _, name in entries]
-    run(["sha256sum", "--quiet", "-c", "SHA256SUMS"], cwd=download_dir)
+    entries = x86_64_release_entries(checksum_entries((download_dir / "SHA256SUMS").read_text()), version)
+    archives = []
+    for digest, name in entries:
+        archive = download_dir / name
+        require(archive.is_file(), f"selected release archive is missing: {name}")
+        require(file_sha256(archive) == digest, f"SHA256 mismatch: {name}")
+        archives.append(archive)
 
     for archive in archives:
         run(["tar", "-xzf", str(archive), "-C", str(install_dir)])
@@ -337,7 +364,7 @@ def prepare_release(args: argparse.Namespace) -> Path:
 
     download_release(args.repository, args.version, download_dir)
     install_dir.mkdir(parents=True)
-    validate_release(download_dir, install_dir)
+    validate_release(download_dir, install_dir, args.version)
     prepare_python_environment(install_dir)
     print(f"Release prepared at {install_dir}")
     return install_dir
