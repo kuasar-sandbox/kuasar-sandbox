@@ -252,6 +252,43 @@ class InputTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'layer differs from config'):
             self.local()
 
+    def test_skopeo_legacy_alias_only_targets_a_verified_regular_layer(self):
+        path = self.deps / 'python.tar'
+        with tarfile.open(path) as archive:
+            config = archive.extractfile('config.json').read()
+            layer = archive.extractfile('layer.tar').read()
+        layer_name = workspace.sha256_bytes(layer).split(':')[1] + '.tar'
+        alias = 'a' * 64 + '/layer.tar'
+        extra = 'b' * 64 + '.tar'
+
+        def save(target, *, selected_alias=False, corrupt=False):
+            manifest = [{'Config': 'config.json', 'RepoTags': [],
+                         'Layers': [alias if selected_alias else layer_name]}]
+            with tarfile.open(path, 'w') as archive:
+                for name, data in {'manifest.json': json.dumps(manifest).encode(), 'config.json': config,
+                                   layer_name: layer + (b'corrupt' if corrupt else b''), extra: layer}.items():
+                    member = tarfile.TarInfo(name)
+                    member.size, member.mode = len(data), 0o444
+                    archive.addfile(member, io.BytesIO(data))
+                member = tarfile.TarInfo(alias)
+                member.type, member.linkname, member.mode = tarfile.SYMTYPE, target, 0
+                archive.addfile(member)
+            self.record['sha256'] = workspace.digest(path)
+
+        save('../' + layer_name)
+        self.local()
+        for target in ('../../' + layer_name, '/' + layer_name, '../config.json',
+                       '../' + extra, '../' + 'c' * 64 + '.tar', alias):
+            save(target)
+            with self.subTest(target=target), self.assertRaises(ValueError):
+                self.local()
+        save('../' + layer_name, selected_alias=True)
+        with self.assertRaisesRegex(ValueError, 'missing image archive member'):
+            self.local()
+        save('../' + layer_name, corrupt=True)
+        with self.assertRaisesRegex(ValueError, 'layer differs from config'):
+            self.local()
+
     def test_docker_archive_with_compressed_oci_blobs_binds_both_manifests(self):
         path = self.deps / 'python.tar'
         with tarfile.open(path) as source:

@@ -196,7 +196,12 @@ def verify_image_archive(path, target):
             name = member.name.rstrip('/') if member.isdir() else member.name
             relative_input(name)
             require(name not in members, f'duplicate image archive path: {name}')
-            require(member.isfile() or member.isdir(), f'unsafe image archive member: {name}')
+            # Skopeo's Docker writer adds v1 compatibility layer aliases.
+            # Never follow them: only this exact layout may refer back to a
+            # manifest-selected regular layer, checked after its bytes below.
+            legacy_alias = (member.issym() and re.fullmatch(r'[0-9a-f]{64}/layer\.tar', name)
+                            and re.fullmatch(r'\.\./[0-9a-f]{64}\.tar', member.linkname))
+            require(member.isfile() or member.isdir() or legacy_alias, f'unsafe image archive member: {name}')
             require(not member.mode & 0o7022, f'unsafe image archive permissions: {name}')
             members[name] = member
         for name in members:
@@ -230,6 +235,13 @@ def verify_image_archive(path, target):
                 else:
                     actual = 'sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest()
             require(actual == expected, f'image archive layer differs from config: {name}')
+        verified_layers = dict(zip(layers, rootfs['diff_ids']))
+        for member in members.values():
+            if member.issym():
+                target_name = member.linkname.removeprefix('../')
+                require(target_name in verified_layers and members[target_name].isfile()
+                        and target_name == verified_layers[target_name].removeprefix('sha256:') + '.tar',
+                        f'legacy image alias must target a verified regular layer: {member.name}')
         if 'index.json' in members:
             # Recent Docker saves also have an OCI index. Docker/containerd can
             # load that instead of manifest.json, so both must name one image.

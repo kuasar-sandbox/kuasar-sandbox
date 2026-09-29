@@ -26,6 +26,18 @@ def image(arch):
 
 
 class RegistryTests(unittest.TestCase):
+    def test_inspection_requests_raw_config_bytes_without_json_reformatting(self):
+        config, manifest, receipt = image('x86_64')
+        reference = subject.REPOSITORY + '@' + subject.digest(manifest)
+        def inspect(command, **kwargs):
+            self.assertIn('--raw', command)
+            payload = config if '--config' in command else manifest
+            return subprocess.CompletedProcess(command, 0, payload, b'')
+        with patch.object(subject.subprocess, 'run', side_effect=inspect):
+            raw = subject.inspect_raw(reference, Path('/anonymous'))
+            actual_config = subject.inspect_raw(reference, Path('/anonymous'), config=True)
+        self.assertEqual(subject.check_manifest(raw, actual_config, receipt)['image_id'], receipt['image_id'])
+
     def test_raw_config_bytes_must_match_verified_archive_id(self):
         config, manifest, receipt = image('x86_64')
         result = subject.check_manifest(manifest, config, receipt)

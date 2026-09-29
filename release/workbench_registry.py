@@ -28,7 +28,9 @@ def digest(raw):
 
 
 def inspect_raw(reference, auth, *, config=False, missing=False):
-    command = ['skopeo', 'inspect', '--authfile', str(auth), '--config' if config else '--raw', 'docker://' + reference]
+    # --config alone reformats JSON. Identity checks require the exact blob.
+    command = ['skopeo', 'inspect', '--authfile', str(auth), '--raw',
+               *(['--config'] if config else []), 'docker://' + reference]
     result = subprocess.run(command, capture_output=True, timeout=120)
     if result.returncode:
         error = result.stderr.decode(errors='replace')
