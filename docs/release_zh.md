@@ -354,29 +354,39 @@ Latest 策略。
 <a id="平台包中的文档"></a>
 ### 8.1 文档载荷与源码映射
 
-平台归档从项目主仓与 `test_revisions` 固定的组件源码组装文档，kernel 文档来自单独选择的
-vmlinux 源码。源码导航与归档导航使用不同的目录布局。
-现有 E2E 组装器复制各 owner 的用例后，调用 `test/e2e/assemble_docs.py` 复制文档并改写
-文档链接。该步骤不修改可执行示例、脚本、配置值或组件二进制。
+平台归档使用 `test/e2e/package_inputs.py` 中显式的构建期文件列表。组件输入来自
+`test_revisions`，kernel 指南来自单独选择的 vmlinux 源码。组装器复制规范用例、明确列出的
+运行库、Demo 脚本和锁文件、预构建 helper、本地 wheel，以及轻量 workbench 宿主机入口。
+不会复制整个 test 树，也不会扫描仓库中的 Markdown 来决定打包内容。
+`test/e2e/assemble_docs.py` 对完整的已选文档重写链接，不抽取章节、不改写可执行示例、
+配置值或产品二进制。
 
 #### 目录布局
 
 | 源码位置 | 归档位置 |
 | --- | --- |
-| 主仓与组件的 `docs/*` | `docs/*`，保留现有扁平入口 |
-| 组件 `README.md` / `README_zh.md` | `docs/<component>.md` / `docs/<component>_zh.md` |
-| 组件原生构建、示例、贡献及许可证说明 | `docs/<component>/<original-path>` |
-| 主仓 `docs/` 与 `test/` 以外的文档 | `docs/project/<original-path>` |
-| 主仓 `test/` 文档 | 原有 `test/` 路径 |
-| 组件 `test/e2e/` 文档 | `test/e2e/<component>/<original-relative-path>` |
+| 主仓 README；快速开始、部署、系统与术语指南 | `guide/README*.md`、`guide/<topic>*.md` |
+| 组件 README 与明确选择的用户契约 | `guide/<component>/<name>*.md` |
+| 独立选择的 kernel 指南 | `guide/vmlinux/vmlinux*.md` |
+| 主仓测试 README、QUICKSTART 与 Demo 指南 | 原有 `test/` 路径 |
+| accelerator 与 guest-runtime 的 E2E README 双语文件 | `test/e2e/<component>/README*.md` |
+| workbench 说明、启动器及其策略和归属声明 | `workbench/` |
+| 主仓/组件的许可证、NOTICE 与 LICENSES 材料 | `guide/licenses/<owner>/<original-path>` |
 
-存在两种语言时同时打包。已有的完整英文单语文档仍然有效。许可证和归属声明文件保留原文。
-不包含生成的构建输出、依赖/vendor 目录与 Git 元数据。扁平目标路径冲突及文档输入中的
-符号链接会被拒绝，不会静默覆盖另一个组件的文档。
+组件指南列表覆盖 accelerator 的 cache/store/manifest/file artifacts、connector 的 TAP-FD
+与交换机运维、guest flatten/runtime、sandbox 控制与 guest-init 契约，以及 orchestrator 的
+node/build/proxy/resource/journal/telemetry 契约。存在两种语言时同时打包，已有完整英文
+单语文档仍有效。四个维护中的 E2E 指南文件保留在规范扁平用例集合旁。
+
+内部设计/补丁分析、CI/发布文档、扩展开发、源码回归测试和实验性性能工具保留在源码仓库。
+指向这些材料的链接使用所选源码引用；不会因链接目标未打包就把它加入归档。源码文件不会
+被删除。已选输入必须存在且为普通文件，符号链接及目标冲突会使组装失败。许可证和归属
+声明保留原文，维护中的 Markdown 许可证范围文档仅重写导航。helper 和 wheel 保留原有
+清单、身份与验证。平台归档不重新打包组件二进制。
 
 #### 导航与源码版本
 
-指向已包含文档、图片和许可证文件的链接改为归档中的实际相对路径。组件 README 改名后，
+指向已包含文档、图片和许可证文件的链接改为归档中的实际相对路径。组件 README 移入新目录后，
 双向语言选择链接随之更新。指向未装入归档的源码文件时，使用相应源码 revision 的 GitHub
 链接。围栏代码块和行内代码示例保持不变。处理普通行内链接、引用定义以及 HTML
 `href`/`src` 属性；复杂 Markdown 仍需要人工复核。

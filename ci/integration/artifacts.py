@@ -360,7 +360,7 @@ def unpack(archive, destination, unit, seen):
                 continue
             require(name not in seen, f"conflicting archive ownership: {name}")
             if unit == "platform":
-                require(name.startswith(("test/", "docs/")), f"platform cannot own {name}")
+                require(name.startswith(("test/", "docs/", "guide/", "workbench/")), f"platform cannot own {name}")
             elif name.startswith("bin/"):
                 require(PRODUCTS.get(name[4:]) == unit, f"{unit} cannot own {name}")
             elif name.startswith("share/"):

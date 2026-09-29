@@ -8,6 +8,8 @@
 
 platform 包携带公共 `test/e2e/e2e` runner 和两个架构的预构建 helper。更早的 source/release build 按 `test/demo/requirements.lock` 获取完整 Demo SDK wheel 依赖闭包，并打包两种架构的 wheelhouse。prepare 解析镜像，仅从本地 hash-locked wheel 安装 SDK（`--no-index --find-links`、`--require-hashes`），记录包名/版本/wheel 身份、安装文件摘要、权限和镜像内容 ID。wheel 缺失或变化时失败。执行只消费不可变工作区，不构建产品或 helper、不发现兄弟源码树、不拉取替代镜像、不使用宿主机 helper。被测 Build、flatten、snapshot 和发布操作仍真实执行。
 
+发布包包含规范用例、显式列出的运行库与实际 Demo 输入。源码单元测试和性能工具保留在源码树中。所选双语用户指南位于 `guide/`，accelerator 与 guest-runtime 的 E2E README 双语文件仍位于 `test/e2e/<owner>/`。轻量宿主机启动器及说明位于 `workbench/`。helper 与 wheelhouse 保留原有契约。
+
 ```bash
 python3 /release/test/e2e/e2e list --suite storage
 python3 /release/test/e2e/e2e prepare --release-dir /release --workdir /tmp/kuasar-prepared --suite storage --exclude storage.obs.sh

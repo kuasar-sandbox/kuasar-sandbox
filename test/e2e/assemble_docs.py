@@ -8,6 +8,9 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from package_inputs import GUIDES, regular_input
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 OWNERS = ('platform', 'accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator')
@@ -20,33 +23,35 @@ CODE = re.compile(r'(`+).*?\1')
 FENCE = re.compile(r'^\s{0,3}(`{3,}|~{3,})')
 
 
-def source_files(root: Path):
-    for directory, dirs, files in os.walk(root):
-        relative = Path(directory).relative_to(root)
-        dirs[:] = sorted(d for d in dirs if d not in {
-            '.git', 'node_modules', 'vendor', 'third_party', 'third-party', '__pycache__'
-        } and relative / d not in {Path('build'), Path('bin'), Path('native-deps/build'), Path('native-deps/bin')})
-        for d in dirs:
-            if (Path(directory) / d).is_symlink():
-                raise ValueError(f'symbolic link in documentation source: {relative / d}')
-        for name in sorted(files):
-            path = relative / name
-            if path.suffix.lower() == '.md' or path.parts[0] in {'docs', 'LICENSES'} or path.name in {'LICENSE', 'NOTICE'}:
-                if (root / path).is_symlink():
-                    raise ValueError(f'symbolic link in documentation source: {path}')
-                yield path
+def source_files(root: Path, owner: str):
+    for stem in GUIDES[owner]:
+        yield Path(stem + '.md')
+        translated = Path(stem + '_zh.md')
+        if (root / translated).exists() or (root / translated).is_symlink() or (owner in {'accelerator', 'guest-runtime'} and stem == 'test/e2e/README'):
+            yield translated
+    # Legal material is not filtered by audience or rewritten as user guidance.
+    for path in sorted(root.iterdir()):
+        if path.name in {'LICENSE', 'NOTICE', 'COPYING', 'COPYRIGHT'} or path.name.startswith(('LICENSE.', 'LICENSE_')):
+            yield path.relative_to(root)
+    licenses = root / 'LICENSES'
+    if licenses.exists():
+        if licenses.is_symlink():
+            raise ValueError(f'symbolic link in legal inputs: {licenses}')
+        for path in sorted(licenses.rglob('*')):
+            if path.is_file() or path.is_symlink():
+                yield path.relative_to(root)
 
 
 def destination(owner: str, path: Path) -> Path:
-    if path.parts[0] == 'docs':
-        return path
-    if owner == 'platform' and path.parts[0] == 'test':
+    if path.parts[0] == 'LICENSES' or path.name in {'LICENSE', 'NOTICE', 'COPYING', 'COPYRIGHT'} or path.name.startswith(('LICENSE.', 'LICENSE_')):
+        return Path('guide/licenses') / owner / path
+    if owner == 'platform' and path.parts[0] in {'test', 'workbench'}:
         return path
     if path.parts[:2] == ('test', 'e2e'):
         return Path('test/e2e') / owner / Path(*path.parts[2:])
-    if owner != 'platform' and path.as_posix() in {'README.md', 'README_zh.md'}:
-        return Path('docs') / (owner + ('_zh' if path.stem.endswith('_zh') else '') + '.md')
-    return Path('docs') / ('project' if owner == 'platform' else owner) / path
+    if owner == 'platform':
+        return Path('guide') / (path.name if path.parts[0] == 'docs' else path)
+    return Path('guide') / owner / path.name
 
 
 def source_ref(root: Path) -> str:
@@ -66,7 +71,7 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
         roots = {**roots, 'vmlinux': kernel}
     refs = {owner: refs.get(owner, source_ref(root)) for owner, root in roots.items()}
     for owner, root in roots.items():
-        paths = [Path('docs/vmlinux.md'), Path('docs/vmlinux_zh.md')] if owner == 'vmlinux' else source_files(root)
+        paths = source_files(root, owner)
         for path in paths:
             if owner == 'guest-runtime' and kernel is not None and path.as_posix() in {'docs/vmlinux.md', 'docs/vmlinux_zh.md'}:
                 continue
@@ -74,12 +79,13 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
                 if owner == 'vmlinux' and path.name.endswith('_zh.md'):
                     continue  # Older selected kernel tags can be English-only.
                 raise ValueError(f'missing documentation input: {owner}/{path}')
+            regular_input(root, path)
             dest = destination(owner, path)
             if dest in inputs:
                 raise ValueError(f'documentation collision at {dest}: {inputs[dest][0]} and {owner}')
             inputs[dest] = (owner, path)
             mapping[owner, path.as_posix()] = dest
-            if owner == 'vmlinux':
+            if owner == 'vmlinux' and path.as_posix() in {'docs/vmlinux.md', 'docs/vmlinux_zh.md'}:
                 mapping['guest-runtime', path.as_posix()] = dest
 
     def rewrite_url(raw: str, owner: str, path: Path, dest: Path) -> str:

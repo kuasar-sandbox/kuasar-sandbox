@@ -8,6 +8,8 @@ Components maintain their own `test/e2e/cases/` and low-level `test/e2e/lib/` he
 
 The platform archive carries the shared `test/e2e/e2e` runner and prebuilt helpers for both architectures. The earlier source/release build fetches the complete Demo SDK wheel closure using `test/demo/requirements.lock` and packages both architecture wheelhouses. Preparation resolves images and installs the SDK only from those hash-locked local wheels (`--no-index --find-links`, `--require-hashes`), then records package/version/wheel identities, installed file hashes, modes and image content IDs. Missing or changed wheels fail closed. Execution consumes that immutable workspace. It does not build products/helpers, discover sibling source trees, pull replacement images or use host helper binaries. Tested Build, flatten, snapshot and publication operations remain real.
 
+The release package includes the canonical cases, explicitly listed runtime libraries and actual Demo inputs. Source unit tests and performance tools remain in the source tree. Selected bilingual user guides are under `guide/`; the accelerator and guest-runtime E2E README pairs remain under `test/e2e/<owner>/`. The thin host launcher and instructions are under `workbench/`. Helpers and wheelhouses keep their existing contracts.
+
 ```bash
 python3 /release/test/e2e/e2e list --suite storage
 python3 /release/test/e2e/e2e prepare --release-dir /release --workdir /tmp/kuasar-prepared --suite storage --exclude storage.obs.sh
