@@ -55,6 +55,17 @@ def check_manifest(raw, config, receipt):
     return {'digest': digest(raw), 'size': len(raw), 'image_id': receipt['image_id'], 'archive_sha256': receipt['sha256']}
 
 
+def verify_public_layers(reference, receipt, auth, destination):
+    """Read registry blobs anonymously and bind their expanded bytes to the archive config."""
+    require(reference.startswith(REPOSITORY + '@sha256:'), 'registry readback must use an immutable digest')
+    require(not destination.exists(), 'registry readback needs a fresh temporary archive')
+    subprocess.run(['skopeo', 'copy', '--authfile', str(auth), 'docker://' + reference,
+                    'docker-archive:' + str(destination)], check=True, timeout=1800)
+    verified = workbench_assets.workspace.verify_image_archive(destination, 'linux/' + PLATFORMS[receipt['arch']])
+    require(verified['image_id'] == receipt['image_id'], 'public registry layer/config bytes differ from the tested offline image')
+    destination.unlink()
+
+
 def check_index(raw, children):
     index = json.loads(raw)
     require(index.get('schemaVersion') == 2 and len(index.get('manifests', [])) == 2,
@@ -118,6 +129,9 @@ def publish(bundle, version, revision):
             public = inspect_raw(immutable, anonymous)
             require(public == raw, 'public registry manifest differs from the published bytes')
             check_manifest(public, inspect_raw(immutable, anonymous, config=True), receipt)
+            # Config/index identities alone do not prove readable layer bytes.
+            # This also checks reused tags on a resumed publication.
+            verify_public_layers(immutable, receipt, anonymous, root / 'public-image.tar')
         raw = inspect_raw(reference, auth, missing=True)
         if raw is None:
             environment = dict(os.environ, DOCKER_CONFIG=str(root))

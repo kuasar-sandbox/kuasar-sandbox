@@ -356,7 +356,7 @@ Workbench 的 prepare 与构建期 collector 共享规范用例发现和外部�
 
 新增原生 workbench 门禁导入这些精确暂存字节，从空的私有 Docker 状态、无外部路由开始，通过公开入口离线 prepare/run。x86 使用当前完整普通用例选择；ARM 保留已有原生覆盖，并执行 `sandbox.lifecycle.sh`、`snapshot.restore.sh`、`network.tapfd.sh`，不删除用例架构检查。私有 daemon 隔离、KVM/UFFD/TUN/BPF、启用时的 enforcing AppArmor 以及所有权清理都必须通过。工具链环境不能替代单独的无编译器 runtime 门禁。结果绑定精确 framework、测试 pin、产品摘要、archive/config 身份、实际压缩大小、压缩/导入/启动时间和观测到的磁盘峰值；磁盘观测不是配额。
 
-发布把已测试的保存镜像复制到 `ghcr.io/kuasar-sandbox/workbench:<去掉-release-前缀的聚合版本>`，验证两种架构的 config 身份和多架构 index，并检查匿名读取。registry digest、镜像 ID、离线 archive hash 含义各自独立。已有同名 Tag/资产必须匹配；重试只补传缺失资产，不覆盖测试字节。跨服务发布可恢复：只有 registry 和完整 GitHub 资产集合一致，GitHub draft 才公开。冲突时失败关闭，不改写历史源码和已发布字节。
+发布把已测试的保存镜像复制到 `ghcr.io/kuasar-sandbox/workbench:<去掉-release-前缀的聚合版本>`，验证两种架构的 config 身份和多架构 index，并匿名回读每个按 digest 固定的镜像到临时 Docker archive。归档校验器将每个解压后的镜像层与已测试离线镜像的 config 逐一绑定，发布重试也必须通过。registry digest、镜像 ID、离线 archive hash 含义各自独立。已有同名 Tag/资产必须匹配；重试只补传缺失资产，不覆盖测试字节。跨服务发布可恢复：只有 registry 和完整 GitHub 资产集合一致，GitHub draft 才公开。冲突时失败关闭，不改写历史源码和已发布字节。
 
 用户只解压所选产品架构与 `platform-release`；`workbench-<arch>-v*.tar.gz` 使用 `docker load` 导入，不能解压到产品目录。[快速开始](quickstart_zh.md) 检查声明集合并按显式资产类别下载。用户可以不下载 workbench，但新聚合发布必须包含两种架构镜像。
 
