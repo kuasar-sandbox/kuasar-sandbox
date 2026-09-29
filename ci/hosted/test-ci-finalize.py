@@ -232,7 +232,8 @@ else:
                      if step.get('name') == 'Require every selected stage')
         good = {'RESOLVE_RESULT': 'success', 'X86_RESULT': 'success',
                 'ARM_RESULT': 'success', 'SOURCE_RESULT': 'success',
-                'WORKBENCH_SELECTED': 'true', 'WORKBENCH_RESULT': 'success'}
+                'WORKBENCH_SELECTED': 'true', 'WORKBENCH_RESULT': 'success',
+                'INTEGRATION_MODE': 'exact-assets', 'WORKBENCH_RELEASE_RESULT': 'success'}
         self.assertEqual(subprocess.run(['bash', '-c', stage], env={**self.env, **good}).returncode, 0)
         for name in good:
             for value in ('failure', 'cancelled', 'skipped', 'neutral', ''):
@@ -243,6 +244,11 @@ else:
         self.assertEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
         env['WORKBENCH_RESULT'] = 'success'
         self.assertNotEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
+        env = {**self.env, **good, 'INTEGRATION_MODE': 'source', 'WORKBENCH_RELEASE_RESULT': 'skipped'}
+        self.assertEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
+        for value in ('success', 'failure', 'cancelled', 'neutral', ''):
+            env['WORKBENCH_RELEASE_RESULT'] = value
+            self.assertNotEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
 
 
 if __name__ == '__main__':
