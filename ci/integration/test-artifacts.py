@@ -189,6 +189,7 @@ class ArtifactBuildContracts(unittest.TestCase):
         builder = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(builder)
         plan = {"schema": 2, "mode": "source", "case_files": CASES, "framework_sha": "a" * 40, "owners": ["platform"],
+                "baseline": {"delivery": "historical"},
                 "test_overlays": list(subject.OWNERS), "product_sources": {}, "test_revisions": test_revisions(),
                 "sources": test_revisions(),
                 "lanes": {arch: {"products": [], "performance": ["working-set-smoke"] if arch == "x86_64" else [], "selection": selection(["platform"], arch)}
