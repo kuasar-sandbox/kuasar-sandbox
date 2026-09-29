@@ -117,6 +117,45 @@ def load_apparmor(state, data):
     require(apparmor_profiles().get(name) == 'enforce)', 'owned AppArmor profile is not enforcing')
 
 
+# Read all thread labels as host root: ordinary Docker users cannot inspect
+# root-owned daemon tasks. ENOENT/ESRCH are normal process-exit races; EINVAL is
+# returned for kernel threads with no AppArmor task context. Other errors fail
+# closed. This fixed read-only program never signals or changes host processes.
+APPARMOR_TASK_SCAN = r"""
+import errno, json, os, sys
+from pathlib import Path
+matches = []
+for pid in os.listdir('/proc'):
+    if not pid.isdigit():
+        continue
+    try:
+        tasks = list(Path('/proc', pid, 'task').iterdir())
+        for task in tasks:
+            try:
+                context = (task / 'attr/current').read_text().strip()
+                if context.startswith(sys.argv[1] + ' '):
+                    matches.append(task.name)
+            except OSError as error:
+                if error.errno not in (errno.ENOENT, errno.ESRCH, errno.EINVAL):
+                    raise
+    except OSError as error:
+        if error.errno not in (errno.ENOENT, errno.ESRCH):
+            raise
+print(json.dumps(matches))
+"""
+
+
+def wait_apparmor_tasks(name):
+    deadline = time.monotonic() + 30
+    while True:
+        tasks = json.loads(host_command(['python3', '-I', '-c', APPARMOR_TASK_SCAN, name]))
+        if not tasks:
+            return
+        require(time.monotonic() < deadline,
+                'owned AppArmor profile still has live tasks after container removal: ' + ', '.join(tasks))
+        time.sleep(0.1)
+
+
 def remove_apparmor(state, data):
     if not data.get('apparmor'):
         return
@@ -129,6 +168,8 @@ def remove_apparmor(state, data):
         if identities:
             containers = json.loads(docker('container', 'inspect', *identities))
             require(not any(c.get('AppArmorProfile') == name for c in containers), 'AppArmor profile still belongs to a container; retaining policy')
+        # Also applies to retries where Docker already removed the container.
+        wait_apparmor_tasks(name)
         apparmor_parser('--remove', source)
         require(name not in apparmor_profiles(), 'owned AppArmor profile removal failed')
     data['apparmor']['loaded'] = False
@@ -267,7 +308,7 @@ def create_command(args, state, data):
                 not source.is_relative_to(state) and not state.is_relative_to(source),
                 'source checkout must be writable by the invoking UID and separate from instance state/host root')
         command += bind(source, '/src')
-        command += ['--cap-drop=ALL', '--security-opt=no-new-privileges', '--read-only',
+        command += ['--init', '--cap-drop=ALL', '--security-opt=no-new-privileges', '--read-only',
                     '--user', f'{os.getuid()}:{os.getgid()}', '--workdir', '/src', '--stop-signal=SIGTERM',
                     data['image_id'], 'build', 'sleep', 'infinity']
     else:
@@ -424,17 +465,6 @@ def main():
             container = owned_container(data)
             if container:
                 docker('rm', container['Id'])
-                # Docker's inspect state can disappear before the confined
-                # container processes are fully reaped. Wait for the exact
-                # owned profile to have no remaining tasks before removing it;
-                # never weaken/remove a policy still confining descendants.
-                if data.get('apparmor'):
-                    name = data['apparmor']['name']
-                    deadline = time.monotonic() + 30
-                    while any(Path('/proc', pid, 'attr/current').read_text(errors='replace').strip().startswith(name + ' ')
-                              for pid in os.listdir('/proc') if pid.isdigit() and Path('/proc', pid, 'attr/current').is_file()):
-                        require(time.monotonic() < deadline, 'owned AppArmor profile still has live tasks after container removal')
-                        time.sleep(0.1)
             remove_apparmor(state, data)
             if data.get('network_id'):
                 network = inspect('network', data['network_id'])
@@ -454,7 +484,13 @@ def main():
                 # Build-mode daemon directories are intentionally unused. Avoid
                 # starting a privileged-file cleanup helper when there is
                 # literally nothing to remove.
-                if not any(path.iterdir()):
+                try:
+                    empty = not any(path.iterdir())
+                except PermissionError:
+                    # Private daemon directories can be root-owned mode 0700.
+                    # The bounded helper below already handles their contents.
+                    empty = False
+                if empty:
                     path.rmdir()
                     continue
                 # Daemon files can be root-owned. Give this task's data mount to

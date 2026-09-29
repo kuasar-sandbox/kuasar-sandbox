@@ -1,5 +1,8 @@
 """Collector identity and launcher ownership contracts; real system tests are separate."""
 import argparse
+from contextlib import nullcontext, redirect_stdout
+import errno
+import io
 import importlib.machinery
 import importlib.util
 import json
@@ -188,6 +191,7 @@ class LauncherTests(unittest.TestCase):
     def test_ordinary_uid_build_drops_capabilities_and_needs_no_devices(self):
         command = self.command(mode='build', source=self.source, inputs=None)
         self.assertIn('--cap-drop=ALL', command)
+        self.assertIn('--init', command)
         self.assertFalse(any(arg.startswith('--cap-add') for arg in command))
         self.assertNotIn('--device', command)
         self.assertIn(f'{os.getuid()}:{os.getgid()}', command)
@@ -227,6 +231,41 @@ class LauncherTests(unittest.TestCase):
                 self.fail('unsafe lock opened')
 
 
+    def test_cleanup_unreadable_daemon_directory_uses_bounded_helper(self):
+        directory = self.state / 'docker'
+        directory.mkdir()
+        original = Path.iterdir
+        def entries(path):
+            if path == directory:
+                raise PermissionError('root-owned daemon data')
+            return original(path)
+        with patch.object(launcher.sys, 'argv', ['workbench', '--root', str(self.root), '--name', 'state', 'cleanup']), patch.object(
+                launcher, 'locked', return_value=nullcontext(self.state)), patch.object(
+                launcher, 'record', return_value=self.data), patch.object(launcher, 'stop_owned'), patch.object(
+                launcher, 'owned_container', return_value=None), patch.object(launcher, 'remove_apparmor'), patch.object(
+                Path, 'iterdir', entries), patch.object(launcher, 'docker', return_value='') as docker:
+            self.assertEqual(launcher.main(), 0)
+        command = docker.call_args.args
+        self.assertEqual(command[:4], ('run', '--rm', '--pull=never', '--network=none'))
+        self.assertIn('--cap-drop=ALL', command)
+        self.assertIn(f'type=bind,src={directory},dst=/owned', command)
+        self.assertFalse(directory.exists())
+        self.assertEqual(self.data['status'], 'cleaned')
+
+    def test_build_stop_accepts_term_but_rejects_forced_kill(self):
+        self.data['mode'] = 'build'
+        for exit_code in (143, 137):
+            containers = [{'Id': 'owned', 'State': {'Running': True}},
+                          {'Id': 'owned', 'State': {'Running': False, 'ExitCode': exit_code}}]
+            with patch.object(launcher, 'owned_container', side_effect=containers), patch.object(
+                    launcher, 'diagnostics'), patch.object(launcher, 'docker'):
+                if exit_code == 143:
+                    launcher.stop_owned(self.state, self.data)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'did not stop gracefully'):
+                        launcher.stop_owned(self.state, self.data)
+
+
 class NativeSelectionTests(unittest.TestCase):
     def test_native_build_uses_admitted_base_and_cannot_skip_on_lookup_failure(self):
         sys.path.insert(0, str(ROOT.parent / 'ci/integration'))
@@ -263,7 +302,7 @@ class AppArmorTests(LauncherTests):
                 self.fail('profile replacement is forbidden')
         with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
                 launcher, 'apparmor_profiles', side_effect=lambda: dict(profiles)), patch.object(
-                launcher, 'apparmor_parser', side_effect=parser), patch.object(launcher, 'docker', return_value=''):
+                launcher, 'apparmor_parser', side_effect=parser), patch.object(launcher, 'docker', return_value=''), patch.object(launcher, 'wait_apparmor_tasks') as wait:
             launcher.load_apparmor(self.state, self.data)
             launcher.load_apparmor(self.state, self.data)
             command = self.command()
@@ -271,8 +310,56 @@ class AppArmorTests(LauncherTests):
             self.assertNotIn('apparmor=unconfined', command)
             launcher.remove_apparmor(self.state, self.data)
             launcher.remove_apparmor(self.state, self.data)
+        wait.assert_called_once_with(self.data['apparmor']['name'])
         self.assertEqual(calls, ['--add', '--remove'])
         self.assertEqual(profiles, {'docker-default': 'enforce)'})
+
+
+    def test_task_wait_is_bounded_and_read_failures_are_not_empty_state(self):
+        with patch.object(launcher, 'host_command', side_effect=['["123"]', '[]']) as command, patch.object(
+                launcher.time, 'sleep'):
+            launcher.wait_apparmor_tasks('owned')
+            self.assertEqual(command.call_count, 2)
+        with patch.object(launcher, 'host_command', return_value='["123"]'), patch.object(
+                launcher.time, 'monotonic', side_effect=[0, 31]):
+            with self.assertRaisesRegex(ValueError, 'still has live tasks.*123'):
+                launcher.wait_apparmor_tasks('owned')
+        with patch.object(launcher, 'host_command', side_effect=PermissionError('denied')):
+            with self.assertRaises(PermissionError):
+                launcher.wait_apparmor_tasks('owned')
+
+    def test_task_scan_checks_threads_and_tolerates_only_exit_races(self):
+        # Execute the actual fixed scanner with simulated proc entries; no
+        # Docker behavior is replaced in runtime qualification.
+        paths = [Path('/proc/123/task/123'), Path('/proc/123/task/124')]
+        for error in (FileNotFoundError(errno.ENOENT, 'exited'),
+                      ProcessLookupError(errno.ESRCH, 'exited'), OSError(errno.EINVAL, 'kernel thread')):
+            output = io.StringIO()
+            with patch('os.listdir', return_value=['123', 'self']), patch.object(Path, 'iterdir', return_value=iter(paths)), patch.object(
+                    Path, 'read_text', side_effect=[error, 'owned (enforce)']), patch.object(sys, 'argv', ['scan', 'owned']), redirect_stdout(output):
+                exec(launcher.APPARMOR_TASK_SCAN, {})
+            self.assertEqual(json.loads(output.getvalue()), ['124'])
+        with patch('os.listdir', return_value=['123']), patch.object(Path, 'iterdir', return_value=iter(paths)), patch.object(
+                Path, 'read_text', side_effect=PermissionError(errno.EACCES, 'denied')), patch.object(sys, 'argv', ['scan', 'owned']):
+            with self.assertRaises(PermissionError):
+                exec(launcher.APPARMOR_TASK_SCAN, {})
+        output = io.StringIO()
+        with patch('os.listdir', return_value=['123']), patch.object(Path, 'iterdir', return_value=iter(paths)), patch.object(
+                Path, 'read_text', side_effect=['owned-other (enforce)', 'unconfined']), patch.object(sys, 'argv', ['scan', 'owned']), redirect_stdout(output):
+            exec(launcher.APPARMOR_TASK_SCAN, {})
+        self.assertEqual(json.loads(output.getvalue()), [])
+
+    def test_retry_retains_profile_until_tasks_exit(self):
+        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
+                launcher, 'apparmor_profiles', side_effect=[{}, {f"kuasar-workbench-v1-u{os.getuid()}-{self.data['id']}": 'enforce)'}]), patch.object(launcher, 'apparmor_parser'):
+            launcher.load_apparmor(self.state, self.data)
+        with patch.object(launcher, 'apparmor_profiles', return_value={self.data['apparmor']['name']: 'enforce)'}), patch.object(
+                launcher, 'docker', return_value=''), patch.object(launcher, 'wait_apparmor_tasks', side_effect=ValueError('live tasks')), patch.object(
+                launcher, 'apparmor_parser') as parser:
+            with self.assertRaisesRegex(ValueError, 'live tasks'):
+                launcher.remove_apparmor(self.state, self.data)
+            parser.assert_not_called()
+            self.assertTrue(self.data['apparmor']['loaded'])
 
     def test_foreign_profile_collision_and_missing_manager_fail_closed(self):
         name = f"kuasar-workbench-v1-u{os.getuid()}-{self.data['id']}"
