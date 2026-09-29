@@ -85,6 +85,7 @@ class CollectorTests(unittest.TestCase):
         path = command[-1].removeprefix('docker-archive:').split(':', 1)[0]
         self.assertIn(':workbench-' + record['image_id'].split(':')[1], command[-1])
         shutil.copyfile(self.fixtures / record['archive'], path)
+        Path(path).chmod(0o600)  # Fixture transport permissions must not depend on the invoking umask.
         return subprocess.CompletedProcess(command, 0)
 
     def test_one_tag_resolution_supplies_both_architectures_and_reuse_is_offline(self):
@@ -234,20 +235,41 @@ class LauncherTests(unittest.TestCase):
         with patch.object(launcher.shutil, 'disk_usage', return_value=usage):
             return launcher.create_command(self.args(**values), self.state, self.data)
 
-    def test_system_has_private_inputs_daemons_and_narrow_privileges(self):
+    def test_system_uses_admin_privileges_without_host_policy_dependencies(self):
         command = self.command()
         self.assertIn('--cgroupns=private', command)
         self.assertIn('nofile=1048576:1048576', command)
-        self.assertEqual({arg for arg in command if arg.startswith('--cap-add=')},
-                         {'--cap-add=SYS_ADMIN', '--cap-add=NET_ADMIN', '--cap-add=SYS_PTRACE'})
+        self.assertIn('--privileged', command)
+        self.assertFalse(any(arg.startswith('--cap-add=') for arg in command))
+        self.assertNotIn('--cpuset-cpus', command)
+        self.assertNotIn('--security-opt', command)
         text = ' '.join(command)
-        for forbidden in ('--privileged', 'seccomp=unconfined', 'apparmor=unconfined', '/var/run/docker.sock',
-                          'src=/sys/fs/cgroup', '--network=host', '--pid=host', '--ipc=host'):
+        for forbidden in ('/var/run/docker.sock', '/run/docker.sock', 'src=/sys/fs/cgroup',
+                          '--network=host', '--pid=host', '--ipc=host', '--cgroupns=host'):
             self.assertNotIn(forbidden, text)
         self.assertIn(f'type=bind,src={self.inputs},dst=/inputs/release,readonly', command)
         self.assertIn(f'type=bind,src={self.state}/docker,dst=/var/lib/docker', command)
         self.assertIn(f'type=bind,src={self.state}/containerd,dst=/var/lib/containerd', command)
         self.assertEqual((self.state / 'machine-id').read_text().strip(), self.data['id'])
+
+    def test_system_check_needs_no_host_policy_tool_or_kvm(self):
+        info = {'OSType': 'linux', 'KernelVersion': 'kernel', 'Architecture': 'aarch64',
+                'OperatingSystem': 'test Linux', 'CgroupVersion': '2', 'SecurityOptions': ['name=apparmor']}
+        image = {'Os': 'linux', 'Architecture': 'arm64', 'Id': self.data['image_id'],
+                 'Config': {'Labels': {'org.opencontainers.image.source':
+                                      'https://github.com/kuasar-sandbox/kuasar-sandbox'}}}
+        with patch.dict(os.environ, {'DOCKER_HOST': 'unix:///var/run/docker.sock'}), patch.object(
+                launcher.platform, 'system', return_value='Linux'), patch.object(
+                launcher.platform, 'release', return_value='kernel'), patch.object(
+                launcher.platform, 'machine', return_value='aarch64'), patch.object(
+                launcher, 'docker', return_value=json.dumps(info)), patch.object(
+                launcher, 'inspect', return_value=image), patch.object(
+                launcher.shutil, 'which', side_effect=AssertionError('host policy-tool lookup')), patch.object(
+                launcher.os, 'sysconf', return_value=65536):
+            checked = launcher.host_check('image', 'system')
+        self.assertEqual(checked['mode'], 'system')
+        self.assertFalse(hasattr(launcher, 'load_apparmor'))
+        self.assertFalse(hasattr(launcher, 'seccomp_profile'))
 
     def test_ordinary_uid_build_drops_capabilities_and_needs_no_devices(self):
         command = self.command(mode='build', source=self.source, inputs=None)
@@ -260,14 +282,6 @@ class LauncherTests(unittest.TestCase):
         self.assertIn(f'type=bind,src={self.source},dst=/src', command)
         self.assertEqual(command[-3:], ['build', 'sleep', 'infinity'])
 
-    def test_seccomp_keeps_default_deny_and_argument_restrictions(self):
-        base = json.loads((ROOT / 'seccomp-default.json').read_text())
-        result = launcher.seccomp_profile()
-        self.assertEqual(result['defaultAction'], 'SCMP_ACT_ERRNO')
-        self.assertEqual(result['syscalls'][:len(base['syscalls'])], base['syscalls'])
-        added = result['syscalls'][len(base['syscalls']):]
-        self.assertEqual([row['args'][0]['value'] for row in added if row['names'] == ['keyctl']], [1, 5, 6])
-        self.assertTrue(all(row['includes']['caps'] for row in added if row['names'] != ['keyctl']))
 
     def test_foreign_container_or_image_cannot_be_stopped(self):
         self.data['container_id'] = 'c' * 64
@@ -304,7 +318,7 @@ class LauncherTests(unittest.TestCase):
         with patch.object(launcher.sys, 'argv', ['workbench', '--root', str(self.root), '--name', 'state', 'cleanup']), patch.object(
                 launcher, 'locked', return_value=nullcontext(self.state)), patch.object(
                 launcher, 'record', return_value=self.data), patch.object(launcher, 'stop_owned'), patch.object(
-                launcher, 'owned_container', return_value=None), patch.object(launcher, 'remove_apparmor'), patch.object(
+                launcher, 'owned_container', return_value=None), patch.object(
                 Path, 'iterdir', entries), patch.object(launcher, 'docker', return_value='') as docker:
             self.assertEqual(launcher.main(), 0)
         command = docker.call_args.args
@@ -322,6 +336,22 @@ class LauncherTests(unittest.TestCase):
             with patch.object(launcher, 'owned_container', side_effect=containers), patch.object(
                     launcher, 'diagnostics'), patch.object(launcher, 'docker'):
                 if exit_code == 143:
+                    launcher.stop_owned(self.state, self.data)
+                else:
+                    with self.assertRaisesRegex(ValueError, 'did not stop gracefully'):
+                        launcher.stop_owned(self.state, self.data)
+
+
+    def test_system_halt_accepts_namespace_sigint_but_not_kill_or_oom(self):
+        self.data['mode'] = 'system'
+        for code, oom, accepted in ((0, False, True), (130, False, True), (137, False, False),
+                                    (130, True, False), (1, False, False), (143, False, False)):
+            containers = [{'Id': 'owned', 'State': {'Running': True}},
+                          {'Id': 'owned', 'State': {'Running': False, 'ExitCode': code, 'OOMKilled': oom}}]
+            with self.subTest(code=code, oom=oom), patch.object(
+                    launcher, 'owned_container', side_effect=containers), patch.object(
+                    launcher, 'diagnostics'), patch.object(launcher, 'docker'):
+                if accepted:
                     launcher.stop_owned(self.state, self.data)
                 else:
                     with self.assertRaisesRegex(ValueError, 'did not stop gracefully'):
@@ -347,147 +377,6 @@ class NativeSelectionTests(unittest.TestCase):
             changes.assert_not_called()
 
 
-class AppArmorTests(LauncherTests):
-    def test_load_restart_remove_only_the_owned_enforcing_profile(self):
-        profiles = {'docker-default': 'enforce)'}
-        calls = []
-        def parser(action, source):
-            name = self.data['apparmor']['name']
-            self.assertNotEqual(name, 'docker-default')
-            calls.append(action)
-            if action == '--add':
-                self.assertNotIn(name, profiles)
-                profiles[name] = 'enforce)'
-            elif action == '--remove':
-                del profiles[name]
-            else:
-                self.fail('profile replacement is forbidden')
-        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
-                launcher, 'apparmor_profiles', side_effect=lambda: dict(profiles)), patch.object(
-                launcher, 'apparmor_parser', side_effect=parser), patch.object(launcher, 'docker', return_value=''), patch.object(launcher, 'wait_apparmor_tasks') as wait:
-            launcher.load_apparmor(self.state, self.data)
-            launcher.load_apparmor(self.state, self.data)
-            command = self.command()
-            self.assertIn('apparmor=' + self.data['apparmor']['name'], command)
-            self.assertNotIn('apparmor=unconfined', command)
-            launcher.remove_apparmor(self.state, self.data)
-            launcher.remove_apparmor(self.state, self.data)
-        wait.assert_called_once_with(self.data['apparmor']['name'])
-        self.assertEqual(calls, ['--add', '--remove'])
-        self.assertEqual(profiles, {'docker-default': 'enforce)'})
-
-
-    def test_task_wait_is_bounded_and_read_failures_are_not_empty_state(self):
-        with patch.object(launcher, 'host_command', side_effect=['["123"]', '[]']) as command, patch.object(
-                launcher.time, 'sleep'):
-            launcher.wait_apparmor_tasks('owned')
-            self.assertEqual(command.call_count, 2)
-        with patch.object(launcher, 'host_command', return_value='["123"]'), patch.object(
-                launcher.time, 'monotonic', side_effect=[0, 31]):
-            with self.assertRaisesRegex(ValueError, 'still has live tasks.*123'):
-                launcher.wait_apparmor_tasks('owned')
-        with patch.object(launcher, 'host_command', side_effect=PermissionError('denied')):
-            with self.assertRaises(PermissionError):
-                launcher.wait_apparmor_tasks('owned')
-
-    def test_task_scan_checks_threads_and_tolerates_only_exit_races(self):
-        # Execute the actual fixed scanner with simulated proc entries; no
-        # Docker behavior is replaced in runtime qualification.
-        paths = [Path('/proc/123/task/123'), Path('/proc/123/task/124')]
-        for error in (FileNotFoundError(errno.ENOENT, 'exited'),
-                      ProcessLookupError(errno.ESRCH, 'exited'), OSError(errno.EINVAL, 'kernel thread')):
-            output = io.StringIO()
-            with patch('os.listdir', return_value=['123', 'self']), patch.object(Path, 'iterdir', return_value=iter(paths)), patch.object(
-                    Path, 'read_text', side_effect=[error, 'owned (enforce)']), patch.object(sys, 'argv', ['scan', 'owned']), redirect_stdout(output):
-                exec(launcher.APPARMOR_TASK_SCAN, {})
-            self.assertEqual(json.loads(output.getvalue()), ['124'])
-        with patch('os.listdir', return_value=['123']), patch.object(Path, 'iterdir', return_value=iter(paths)), patch.object(
-                Path, 'read_text', side_effect=PermissionError(errno.EACCES, 'denied')), patch.object(sys, 'argv', ['scan', 'owned']):
-            with self.assertRaises(PermissionError):
-                exec(launcher.APPARMOR_TASK_SCAN, {})
-        output = io.StringIO()
-        with patch('os.listdir', return_value=['123']), patch.object(Path, 'iterdir', return_value=iter(paths)), patch.object(
-                Path, 'read_text', side_effect=['owned-other (enforce)', 'unconfined']), patch.object(sys, 'argv', ['scan', 'owned']), redirect_stdout(output):
-            exec(launcher.APPARMOR_TASK_SCAN, {})
-        self.assertEqual(json.loads(output.getvalue()), [])
-
-    def test_retry_retains_profile_until_tasks_exit(self):
-        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
-                launcher, 'apparmor_profiles', side_effect=[{}, {f"kuasar-workbench-v1-u{os.getuid()}-{self.data['id']}": 'enforce)'}]), patch.object(launcher, 'apparmor_parser'):
-            launcher.load_apparmor(self.state, self.data)
-        with patch.object(launcher, 'apparmor_profiles', return_value={self.data['apparmor']['name']: 'enforce)'}), patch.object(
-                launcher, 'docker', return_value=''), patch.object(launcher, 'wait_apparmor_tasks', side_effect=ValueError('live tasks')), patch.object(
-                launcher, 'apparmor_parser') as parser:
-            with self.assertRaisesRegex(ValueError, 'live tasks'):
-                launcher.remove_apparmor(self.state, self.data)
-            parser.assert_not_called()
-            self.assertTrue(self.data['apparmor']['loaded'])
-
-    def test_foreign_profile_collision_and_missing_manager_fail_closed(self):
-        name = f"kuasar-workbench-v1-u{os.getuid()}-{self.data['id']}"
-        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
-                launcher, 'apparmor_profiles', return_value={name: 'enforce)'}), patch.object(launcher, 'apparmor_parser') as parser:
-            with self.assertRaisesRegex(ValueError, 'foreign AppArmor'):
-                launcher.load_apparmor(self.state, self.data)
-            parser.assert_not_called()
-        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
-                launcher, 'apparmor_profiles', return_value={}), patch.object(launcher.shutil, 'which', return_value=None):
-            with self.assertRaisesRegex(ValueError, 'needs host apparmor_parser'):
-                launcher.load_apparmor(self.state, self.data)
-        self.assertFalse(self.data['apparmor']['loaded'])
-
-    def test_changed_profile_and_foreign_container_prevent_removal(self):
-        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
-                launcher, 'apparmor_profiles', side_effect=[{}, {f"kuasar-workbench-v1-u{os.getuid()}-{self.data['id']}": 'enforce)'}]), patch.object(launcher, 'apparmor_parser'):
-            launcher.load_apparmor(self.state, self.data)
-        profiles = {self.data['apparmor']['name']: 'enforce)'}
-        with patch.object(launcher, 'apparmor_profiles', return_value=profiles), patch.object(
-                launcher, 'docker', side_effect=['foreign', json.dumps([{'AppArmorProfile': self.data['apparmor']['name']}])]), patch.object(
-                launcher, 'apparmor_parser') as parser:
-            with self.assertRaisesRegex(ValueError, 'still belongs to a container'):
-                launcher.remove_apparmor(self.state, self.data)
-            parser.assert_not_called()
-        (self.state / 'apparmor.profile').write_text('changed')
-        with patch.object(launcher, 'apparmor_parser') as parser:
-            with self.assertRaisesRegex(ValueError, 'profile changed'):
-                launcher.remove_apparmor(self.state, self.data)
-            parser.assert_not_called()
-
-    def test_outer_context_must_enforce_and_inner_detection_mask_is_required(self):
-        self.data['apparmor'] = {'name': 'owned'}
-        self.data['container_id'] = 'container'
-        with patch.object(launcher, 'apparmor_enabled', return_value=True), patch.object(
-                launcher, 'apparmor_profiles', return_value={'owned': 'enforce)'}):
-            for output in ('unconfined', 'owned (complain)'):
-                with patch.object(launcher, 'docker', return_value=output):
-                    with self.assertRaisesRegex(ValueError, 'not confined'):
-                        launcher.check_apparmor(self.data)
-            with patch.object(launcher, 'docker', side_effect=['owned (enforce)', 'Y']):
-                with self.assertRaisesRegex(ValueError, 'detection was not masked'):
-                    launcher.check_apparmor(self.data)
-            with patch.object(launcher, 'docker', side_effect=['owned (enforce)', '']):
-                launcher.check_apparmor(self.data)
-
-    def test_profile_keeps_host_security_restrictions_and_build_mode_unchanged(self):
-        source = (ROOT / 'apparmor.profile').read_text()
-        self.assertIn('deny /sys/kernel/security/** rwklx,', source)
-        self.assertIn('deny /proc/sysrq-trigger rwklx,', source)
-        self.assertNotIn('change_profile ->', source)
-        self.assertNotIn('\n  mount,', source)
-        # runc's read-only proc remount flags vary by kernel/runtime; keep the
-        # destination exact while accepting only a remount on those paths.
-        self.assertIn('remount options=(ro,bind,nosuid,nodev,noexec) /proc/{asound,bus,fs,irq,sys}/,', source)
-        self.assertIn('remount options=(ro,bind,nosuid,nodev,noexec,relatime) /proc/{asound,bus,fs,irq,sys}/,', source)
-        self.assertIn('mount fstype=tmpfs options=(ro) -> /proc/{acpi,scsi}/,', source)
-        self.assertIn('mount options=(rw,bind) /dev/null -> /proc/{interrupts,kcore,keys,latency_stats,sched_debug,timer_list,timer_stats},', source)
-        self.assertIn('mount options=(rw,bind) / -> /run/docker/netns/*,', source)
-        self.assertNotIn('  remount /proc/{bus,fs,irq,sys}/,', source)
-        dockerfile = (ROOT / 'Dockerfile').read_text()
-        self.assertIn('systemd-logind.service redis-server.service', dockerfile)
-        self.data['apparmor'] = {'name': 'system-only'}
-        command = self.command(mode='build', source=self.source, inputs=None)
-        self.assertFalse(any(value.startswith('apparmor=') for value in command))
-        self.assertFalse(any(value.startswith('--cap-add') for value in command))
 
 
 if __name__ == '__main__':

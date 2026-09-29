@@ -15,21 +15,20 @@ Use native x86_64 or aarch64 Linux with Docker Engine and Python 3. The launcher
 uses the local Unix Docker endpoint. Docker Desktop, remote Docker endpoints,
 architecture emulation, Podman and runner registration are outside V1.
 
-System mode requires rootful Docker, cgroup v2 with cpu/cpuset/memory/pids/io
-delegation, 4096-byte host pages, KVM and TUN devices, userfaultfd, BPF and
-overlay2. Build mode needs none of the KVM or additional capability grants.
-An invoking ordinary UID must have access to Docker and its own writable
-checkout and instance directory; Docker access itself is a host trust boundary.
+System mode is a trusted administrator tool. It uses rootful Docker with
+`--privileged`, private namespaces and its own daemon data. Host requirements
+are native Linux, Docker Engine, Python 3, cgroup v2 with cpu/memory/pids
+controllers for the requested budgets, and storage suitable for the image's
+inner overlay2 daemon. No host AppArmor parser, profile loader, custom seccomp
+policy or alternate Docker build is required. Docker access already grants
+administrator-level authority; do not expose this environment to untrusted code.
 
-On an AppArmor host, system mode requires the host's `apparmor_parser` and root
-or non-interactive `sudo` permission to load/remove a unique instance profile.
-The launcher records its name, version and content hash, adds it in enforcing
-mode and verifies the outer PID's actual context. It never replaces
-`docker-default` or another host profile. If it cannot manage or enforce its
-own profile, startup fails and retains diagnostics. Build mode does not load
-profiles or gain permissions. Host modules, sysctls and services are unchanged.
-A successful host `check` is only an initial check: `start` exercises the actual
-private services, namespaces, delegation and device/syscall interfaces.
+Ordinary UID builds need a writable task checkout and state directory, without
+KVM or added system privileges. Generic system startup does not require KVM,
+4096-byte pages, userfaultfd or BPF. It checks systemd/private-daemon readiness
+and reports actual capability availability. Selected product tests still require
+their real devices and kernel features; unavailable capability is not a pass.
+Host profiles, global sysctls, modules and existing services are not managed.
 
 Acquire the selected release's image through its registry tag or verify its
 `SHA256SUMS` entry and import its native `workbench-<arch>-v*.tar.gz` with
@@ -109,31 +108,28 @@ and requires the original image and mode. Use a fresh name to change those
 settings. `cleanup` stops and removes only the recorded container, network and
 daemon data; it preserves work, build, home, journal and output directories.
 Add `--delete-output` explicitly to delete those directories too. Ownership
-records remain as evidence; use a new instance name after cleanup. The owned
-AppArmor profile is removed only after its container is removed; a foreign
-container using the same profile prevents removal.
+records remain as evidence; use a new instance name after cleanup. An older
+instance with recorded external policy state must be cleaned with its original
+launcher before switching versions; the new launcher does not alter that policy.
 
-Each system instance has a distinct machine ID and PID/UTS/IPC/mount/network/
-cgroup namespaces, private bpffs, Docker and containerd roots and state, sockets,
-and read-only release inputs. It receives KVM/TUN plus SYS_ADMIN, NET_ADMIN and
-SYS_PTRACE in addition to Docker's default capabilities. System mode sets a bounded nofile limit of 1048576 for the outer container and private daemon units so nested containers can request their required limits without SYS_RESOURCE. The retained default
-seccomp policy permits only the additional userfaultfd, pivot_root and keyctl
-operations needed by this environment. It never receives the host Docker
-socket, host root, whole host cgroup tree or host BPF pins.
+Each system instance retains private PID/UTS/IPC/mount/network/cgroup namespaces,
+bpffs, Docker/containerd sockets and data, and read-only release inputs. It does
+not use host namespaces, a host Docker socket or a host-root bind mount.
+System mode has administrator capabilities and host-device access through
+Docker privileged mode; these private resources avoid operational collisions,
+not a hostile-root security boundary. The nofile limit is 1048576 for the outer
+container and daemon units so nested services can use their required limits.
 
-The outer AppArmor profile permits the private mount/cgroup/bpffs and nested
-Docker operations while retaining proc/sys/firmware/securityfs restrictions.
-Inside this already-confined mount namespace, a read-only null bind masks
-`/sys/module/apparmor/parameters/enabled`. This prevents inner dockerd from
-trying to manage the host's AppArmor profiles. It does not disable host
-AppArmor: inner processes inherit the enforced outer profile, with no profile
-transition or securityfs-management permission.
+The entrypoint creates read-only private views of host-global sysfs/sysctl paths
+and disables container-inappropriate udev/module-loading units. A private bind
+masks inner Docker's AppArmor detection input so it does not load host policies.
+No host policy is added, replaced or removed. These are precautions against
+accidental service startup effects, not restrictions against a malicious admin.
 
-CPU affinity comes from the invoking process's available CPUs, with explicit
-CPU, memory and process limits. Free space checks are capacity checks, not disk
-quotas. Shared host kernel, disk and NIC contention remains. This environment
-is for trusted build/test tasks, not hostile-root multi-tenancy or independent
-performance measurements.
+CPU quota, memory and process budgets remain. Instances are not automatically
+pinned to the same first N host CPUs. Capacity checks are not disk quotas; host
+kernel, disk and NIC contention still exists. Use trusted administrator tasks,
+not untrusted multi-tenancy or claims of independent performance measurements.
 
 ## Maintainer build and verification
 
@@ -161,23 +157,13 @@ identity and start time. Results and retained output stay in that task path.
 These checks supplement native full builds and the current public E2E cases;
 they do not replace compiler-free release acceptance.
 
-Before building the image, `python3 -B workbench/test-apparmor-mounts.py --root <new-task-path>`
-checks the detection mask, named network namespaces, Docker-style pivot/old-root
-propagation, denied unrelated mounts and owned profile cleanup in private namespaces.
-It requires host `apparmor_parser`, `aa-exec`, `unshare`, `ip` and root or `sudo -n`;
-it does not qualify Docker or KVM. Public x86 CI runs it before the full image test.
+`test-system.py --smoke --image "$IMAGE" --root <new-task-path>` verifies two
+administrator instances with real inner containers, identical names/ports,
+private daemons and owned cleanup. Its tiny runtime fixture uses tools already
+inside the workbench; it needs no downloaded test image or KVM. Native CI runs
+this functional check instead of a host security-policy test. Full system E2E,
+actual KVM/UFFD/TUN/BPF checks and compiler-free acceptance remain separate and
+must pass for the declared product scope.
 
-On enforcing Ubuntu, `test-apparmor.py --image "$IMAGE" --root <new-task-path>`
-checks the outer and inner PID contexts, private mounts/daemon, denied unrelated
-mounts, unchanged host enforcement and owned cleanup. Public native x86 CI
-requires this check. It intentionally omits KVM/TUN device qualification so it
-can run on hosted machines without KVM; it cannot replace full system/KVM E2E.
-
-The bundled [seccomp base](seccomp-default.json) is Moby's default profile at
-[65adc7e022c97f55e45c054ff012988027733b87](https://github.com/moby/profiles/blob/65adc7e022c97f55e45c054ff012988027733b87/seccomp/default.json),
-with its [Apache 2.0 license](LICENSE.seccomp). `workbench` derives the small
-capability/argument-constrained additions per instance; the base remains
-unchanged. Upstream distribution licenses remain with the installed tools.
-The [outer AppArmor template](apparmor.profile) derives from
-[Moby v26.1.3](https://github.com/moby/moby/blob/v26.1.3/profiles/apparmor/template.go),
-with its [Apache 2.0 license](LICENSE.apparmor); its nesting changes are maintained here.
+Installed tools retain their upstream license and source records. The former
+custom policy sources and their unused vendor copies are no longer shipped.

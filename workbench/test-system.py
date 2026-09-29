@@ -19,6 +19,94 @@ def run(command, timeout=180, success=True):
     return result.stdout.strip() if success else result.stderr.strip()
 
 
+
+def smoke(image, root):
+    """Two administrator instances and real inner containers, without requiring KVM."""
+    root = Path(root).absolute()
+    root.mkdir(mode=0o700, parents=True, exist_ok=False)
+    names = ['admin-' + uuid.uuid4().hex[:12] + '-' + suffix for suffix in ('a', 'b')]
+    result = {'image': image, 'complete': False, 'checks': [], 'cleanup': {}}
+
+    def invoke(name, *arguments):
+        return run([sys.executable, '-B', LAUNCHER, '--root', root, '--name', name, *arguments])
+
+    # Real tools from the image form a tiny runtime fixture, without network,
+    # product sources, a fake Docker executable or an extra downloaded image.
+    program = r"""
+set -eu
+test -z "$(docker ps -aq)"
+test -z "$(ip -4 route show default)"
+python3 -B - <<'INNER'
+import re, subprocess, tarfile
+from pathlib import Path
+paths = {'/bin/sh', '/usr/bin/sleep'}
+for executable in sorted(paths):
+    text = subprocess.check_output(['ldd', executable], text=True)
+    paths.update(re.findall(r'(/[^\s()]+)', text))
+archive = Path('/work/admin-smoke-root.tar')
+with tarfile.open(archive, 'w', dereference=True) as out:
+    for path in sorted(paths):
+        if not Path(path).is_file():
+            raise RuntimeError('missing dynamic dependency: ' + path)
+        out.add(path, arcname=path.lstrip('/'), recursive=False)
+identity = subprocess.check_output(['docker', 'import', str(archive)], text=True).strip()
+subprocess.run(['docker', 'network', 'create', 'same-network'], check=True)
+subprocess.run(['docker', 'run', '-d', '--pull=never', '--name', 'same-inner',
+                '--network', 'same-network', '--memory=64m', '--pids-limit=32',
+                identity, '/usr/bin/sleep', 'infinity'], check=True)
+INNER
+cp /etc/machine-id /work/identity
+systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
+ /usr/bin/python3 -m http.server 18080 --bind 127.0.0.1 --directory /work
+"""
+    try:
+        states = []
+        for name in names:
+            invoke(name, 'start', '--image', image, '--network', 'none', '--cpus', '1',
+                   '--memory-gib', '2', '--timeout', '90')
+            state = json.loads((root / name / 'instance.json').read_text())
+            config = json.loads(run(['docker', 'inspect', state['container_id']]))[0]
+            assert config['HostConfig']['Privileged'] is True
+            assert config['HostConfig']['CgroupnsMode'] == 'private'
+            assert not config['HostConfig'].get('CpusetCpus')
+            assert not any(m['Source'] in ('/', '/var/run/docker.sock', '/run/docker.sock')
+                           for m in config['Mounts'])
+            states.append(state)
+            invoke(name, 'exec', '--', 'bash', '-ceu', program)
+        a, b = states
+        assert a['preflight']['machine_id'] != b['preflight']['machine_id']
+        assert all(a['preflight']['namespaces'][kind] != b['preflight']['namespaces'][kind]
+                   for kind in a['preflight']['namespaces'])
+        for name, state in zip(names, states):
+            content = invoke(name, 'exec', '--', 'curl', '--fail', '--silent', '--retry', '10',
+                             '--retry-connrefused', '--retry-delay', '1', 'http://127.0.0.1:18080/identity')
+            assert content == state['preflight']['machine_id']
+            assert invoke(name, 'exec', '--', 'docker', 'inspect', 'same-inner',
+                          '--format', '{{.State.Running}}') == 'true'
+        invoke(names[0], 'stop')
+        assert invoke(names[1], 'exec', '--', 'curl', '--fail', '--silent',
+                      'http://127.0.0.1:18080/identity') == b['preflight']['machine_id']
+        assert invoke(names[1], 'exec', '--', 'docker', 'inspect', 'same-inner',
+                      '--format', '{{.State.Running}}') == 'true'
+        result.update(complete=True, checks=['private namespaces and daemons',
+                      'real inner containers with identical names',
+                      'same systemd unit, network name and HTTP port coexist',
+                      'stopping A preserves B'])
+    finally:
+        for name in names:
+            if (root / name / 'instance.json').exists():
+                try:
+                    invoke(name, 'cleanup')
+                    assert json.loads((root / name / 'instance.json').read_text())['status'] == 'cleaned'
+                    result['cleanup'][name] = 'owned resources removed; output retained'
+                except Exception as error:
+                    result['cleanup'][name] = str(error)
+                    result['complete'] = False
+        (root / 'result.json').write_text(json.dumps(result, indent=2) + '\n')
+    assert result['complete'], 'administrator startup/cleanup failed; inspect result.json'
+    return result
+
+
 def exercise(args):
     root = args.root.absolute()
     root.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -155,4 +243,6 @@ if __name__ == '__main__':
     parser.add_argument('--image', required=True)
     parser.add_argument('--root', required=True, type=Path, help='new task directory; existing paths are refused')
     parser.add_argument('--protect-container', action='append', default=[])
-    print(json.dumps(exercise(parser.parse_args()), sort_keys=True))
+    parser.add_argument('--smoke', action='store_true', help='test generic system startup and inner Docker without test-image inputs or KVM')
+    args = parser.parse_args()
+    print(json.dumps(smoke(args.image, args.root) if args.smoke else exercise(args), sort_keys=True))

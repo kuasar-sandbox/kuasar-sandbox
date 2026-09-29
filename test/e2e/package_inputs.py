@@ -24,9 +24,7 @@ PLATFORM_RUNTIME = (
     'test/e2e/lib/demo_wheels.py', 'test/demo/demo_common.sh',
     'test/demo/demo_e2b.sh', 'test/demo/demo_prep.sh',
     'test/demo/requirements.txt', 'test/demo/requirements.lock',
-    'workbench/workbench', 'workbench/seccomp-default.json',
-    'workbench/apparmor.profile', 'workbench/LICENSE.seccomp',
-    'workbench/LICENSE.apparmor',
+    'workbench/workbench',
 )
 OWNER_LIBRARIES = {
     'platform': ('failure-diagnostics.sh', 'failure_diagnostics.py'),

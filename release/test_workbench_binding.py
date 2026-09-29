@@ -78,11 +78,17 @@ class BindingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'both workbench architecture'):
             binder.bind(self.root, self.plan, self.validation, {'x86_64': self.results['x86_64']})
 
+    def test_administrator_execution_needs_no_host_policy_observation(self):
+        for record in self.results.values():
+            self.assertNotIn('host_apparmor_enabled', record)
+            self.assertNotIn('apparmor', record)
+        binder.bind(self.root, self.plan, self.validation, self.results)
+
     def test_incomplete_or_mismatched_system_evidence_cannot_publish(self):
         mutations = [('preparation_network', 'bridge'), ('execution_network', 'none'), ('offline', False), ('empty_private_daemon', False), ('conclusion', 'skipped'),
                      ('cases', []), ('timings', []), ('image_id', 'sha256:' + '0' * 64),
                      ('input_assets', {}), ('source_revision', 'e' * 40), ('preflight', {}),
-                     ('host_apparmor_enabled', True), ('disk', {}), ('size', 2 * 1024**3),
+                     ('disk', {}), ('size', 2 * 1024**3),
                      ('provenance_sha256', ''), ('compression_seconds', -1), ('import_seconds', float('nan')), ('start_seconds', True), ('isolation', {'complete': False})]
         for key, value in mutations:
             broken = copy.deepcopy(self.results); broken['aarch64'][key] = value

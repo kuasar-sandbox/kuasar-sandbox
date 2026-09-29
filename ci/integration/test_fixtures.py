@@ -100,7 +100,7 @@ def workbench_results(plan, receipts):
                 'uffd': 'api-ioctl', 'bpf': 'create-pin-remove',
                 'docker': {'driver': 'overlay2', 'root': '/var/lib/docker'},
                 'containerd': {'root': '/var/lib/containerd', 'state': '/run/containerd'}},
-            host_apparmor_enabled=False, provenance_sha256='a' * 64, compression_seconds=.1, import_seconds=.1, start_seconds=.1,
+            provenance_sha256='a' * 64, compression_seconds=.1, import_seconds=.1, start_seconds=.1,
             wall_seconds=1, retained_task_bytes=100, disk={'used_before': 100, 'peak_used': 200, 'peak_increase': 100})
     return result
 

@@ -35,9 +35,6 @@ def qualify(plan, root):
               'framework_sha': plan['framework_sha'], 'source_revisions': plan['test_revisions'], 'conclusion': 'failure'}
     launcher = [sys.executable, '-B', str(ROOT / 'workbench/workbench'), '--root', str(root / 'instances'), '--name', 'native-build']
     try:
-        if platform.machine() == 'x86_64':
-            subprocess.run([sys.executable, '-B', ROOT / 'workbench/test-apparmor-mounts.py',
-                            '--root', str(root / 'apparmor-mounts')], check=True, timeout=120)
         # The full source build qualifies toolchain completeness against the
         # exact current test revisions. Its binaries never enter release assets.
         owner_build = module('workbench_owner_build', ROOT / 'ci/integration/build-artifacts.py')
@@ -52,12 +49,8 @@ def qualify(plan, root):
         image_build = module('workbench_image_build', sources / 'platform/workbench/build.py')
         receipt = image_build.build(plan['baseline']['version'], platform.machine(), cases, deps, root / 'image', 2, 6)
         result['build_image'] = receipt
-        if platform.machine() == 'x86_64':
-            # Ubuntu hosted KVM availability is independent of this required
-            # enforcing-AppArmor check. Full KVM/E2E acceptance remains separate.
-            subprocess.run([sys.executable, '-B', sources / 'platform/workbench/test-apparmor.py',
-                            '--image', receipt['image_id'], '--root', str(root / 'apparmor')], check=True, timeout=600)
-            result['apparmor'] = json.loads((root / 'apparmor/result.json').read_text())
+        systems = module('workbench_admin_smoke', sources / 'platform/workbench/test-system.py')
+        result['system_startup'] = systems.smoke(receipt['image_id'], root / 'admin-smoke')
         # This toolchain qualification image deliberately has no selected E2E
         # image inputs. Joint release qualification builds the complete image.
         subprocess.run([*launcher, 'start', '--image', receipt['image_id'], '--mode', 'build',
