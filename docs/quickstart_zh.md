@@ -55,7 +55,8 @@ set -euo pipefail
 RELEASE_VERSION="${RELEASE_VERSION:-}"
 RELEASE_METADATA="$(mktemp)"
 ASSETS_TSV="$(mktemp)"
-trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV"' EXIT
+SELECTION_MANIFEST="$(mktemp)"
+trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST"' EXIT
 
 if [ -n "$RELEASE_VERSION" ]; then
     [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]]
@@ -68,9 +69,14 @@ curl --fail --silent --show-error --location --retry 4 \
     -H 'X-GitHub-Api-Version: 2022-11-28' \
     "$RELEASE_API" >"$RELEASE_METADATA"
 
-RELEASE_VERSION="$(python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$ASSETS_TSV" <<'PY'
+SOURCE_SHA="$(python3 -c 'import json,re,sys; value=json.load(open(sys.argv[1]))["target_commitish"]; assert re.fullmatch(r"[0-9a-f]{40}",value); print(value)' "$RELEASE_METADATA")"
+MANIFEST_PATH="$(python3 -c 'import json,sys; tag=json.load(open(sys.argv[1]))["tag_name"]; print("releases/daily-preview.yaml" if "-preview." in tag else "releases/release.yaml")' "$RELEASE_METADATA")"
+curl --fail --silent --show-error --location --retry 4 \
+    "https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/$SOURCE_SHA/$MANIFEST_PATH" >"$SELECTION_MANIFEST"
+
+RELEASE_VERSION="$(python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$ASSETS_TSV" "$SELECTION_MANIFEST" <<'PY'
 import json, os, re, sys
-metadata, requested, output = sys.argv[1:]
+metadata, requested, output, manifest = sys.argv[1:]
 release = json.load(open(metadata, encoding="utf-8"))
 tag = release.get("tag_name", "")
 tag_re = re.compile(r"^release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?$")
@@ -94,8 +100,24 @@ assert names.count("SHA256SUMS") == 1
 bindings = re.findall(r"<!-- kuasar-integration-validation (.*?) -->", release.get("body", ""), re.S)
 assert len(bindings) <= 1
 binding = json.loads(bindings[0]) if bindings else {}
-contract = binding.get("delivery", "historical")
-assert contract in ("historical", "workbench-v1")
+# The exact source declares compatibility, never missing image assets/notes.
+fields = {}
+for line in open(manifest, encoding="utf-8"):
+    if line[:1].isspace() or not line.strip() or line.startswith("#"):
+        continue
+    key, separator, value = line.partition(":")
+    assert separator
+    if key in ("version", "preview_version", "delivery"):
+        assert key not in fields
+        fields[key] = value.strip()
+selected = fields["version"]
+if "-preview." in tag:
+    selected += "-" + fields["preview_version"]
+assert selected == tag
+contract = fields.get("delivery", "historical")
+assert "delivery" not in fields or contract == "workbench-v1"
+if contract == "workbench-v1":
+    assert binding.get("delivery") == contract
 roles = {"SHA256SUMS": "checksum"}
 for label, pattern in patterns.items():
     matches = [name for name in names if pattern.fullmatch(name)]
@@ -143,12 +165,12 @@ while IFS=$'\t' read -r name url digest size role; do
     test "sha256:$(sha256sum "$DOWNLOAD_DIR/$name.part" | awk '{print $1}')" = "$digest"
     mv "$DOWNLOAD_DIR/$name.part" "$DOWNLOAD_DIR/$name"
 done <"$DOWNLOAD_DIR/assets.tsv"
-rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV"
+rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST"
 trap - EXIT
 printf 'Pinned aggregate Release: %s\n' "$RELEASE_VERSION"
 ```
 
-这里固定同一 Release，并检查其声明的完整资产集合；`workbench-v1` 必须包含两种架构的 workbench。实际下载选择 x86_64 产品、platform-release 与 `SHA256SUMS`。执行前设置 `DOWNLOAD_WORKBENCH=1` 可同时获取 x86_64 workbench。使用 `docker load -i "$DOWNLOAD_DIR/workbench-x86_64-${RELEASE_VERSION#release-}.tar.gz"` 单独导入镜像，按 [workbench 使用说明](../workbench/README_zh.md) 进行隔离构建和离线测试。不要把 workbench 解压到产品目录。
+这里固定同一 Release，读取其精确源码清单并检查声明的完整资产集合；`workbench-v1` 必须包含两种架构的 workbench。实际下载选择 x86_64 产品、platform-release 与 `SHA256SUMS`。执行前设置 `DOWNLOAD_WORKBENCH=1` 可同时获取 x86_64 workbench。使用 `docker load -i "$DOWNLOAD_DIR/workbench-x86_64-${RELEASE_VERSION#release-}.tar.gz"` 单独导入镜像，按 [workbench 使用说明](../workbench/README_zh.md) 进行隔离构建和离线测试。不要把 workbench 解压到产品目录。
 
 ## 3. 校验并以无路径冲突方式解包
 
