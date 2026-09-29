@@ -79,7 +79,7 @@ python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
 
 目录包含扁平的 `images.json` 列表及 Docker 镜像归档。每条记录有 `reference`、`platform`（`linux/amd64` 或 `linux/arm64`）、`image_id`（config SHA-256）、相对路径 `archive` 和 `sha256`（归档字节摘要）。Registry 证据包括 `manifest`（精确原始 JSON 文本）、`manifest_digest` 和 `registry_digest`；index 响应还包含精确原始 `index` 文本及 `index_digest`。这些身份互不等同。manifest 的摘要必须与记录一致，并绑定归档中实际的 config；归档中每一层必须符合 config 中对应的未压缩层摘要。index 必须绑定唯一匹配平台的 manifest。`@sha256:...` 请求必须符合已验证 registry 响应摘要。仅自行声明摘要字段会被拒绝。移动 tag 直接使用记录的解析结果，不向远端检查新鲜度；应从已验证的发行输入取得目录，因为离线内容检查无法认证任意作者提供的 tag 映射。
 
-prepare 精确匹配请求的 reference 与 platform。有效的已选归档直接复制，不重复加载/保存；只有本地派生 orchestrator fixture 时，prepare 才需要将 Python 基础镜像加载到 Docker。离线缺少已选输入时，错误包含 reference、platform 和查找位置。在线模式可下载缺失输入，但匹配记录损坏、不安全、有歧义或身份错误时始终失败，不从远端修复。归档与描述路径不得越出目录或使用符号链接；不安全的归档路径、重复成员、链接和设备会被拒绝。未选择的归档不是前置条件。完成时将镜像证据及文件摘要/权限记录到 `provenance.json`；失败的 prepare 不会创建请求的工作区。
+prepare 精确匹配请求的 reference 与 platform。有效的已选归档直接复制，不重复加载/保存；只有本地派生 orchestrator fixture 时，prepare 才需要将 Python 基础镜像加载到 Docker。离线缺少已选输入时，错误包含 reference、platform 和查找位置。在线模式可下载缺失输入，但匹配记录损坏、不安全、有歧义或身份错误时始终失败，不从远端修复。归档与描述路径不得越出目录或使用符号链接；不安全的归档路径、重复成员、硬链接和设备会被拒绝。归档中只允许 Skopeo 的旧版 `<hex>/layer.tar` 符号链接别名指向 `../<diff-id>.tar`：目标必须是 manifest 选择的普通层文件，且其实际字节必须匹配 config 摘要。验证时不会跟随这些别名；选中的 config 和层必须仍为普通文件。未选择的归档不是前置条件。完成时将镜像证据及文件摘要/权限记录到 `provenance.json`；失败的 prepare 不会创建请求的工作区。
 
 offline 控制依赖获取，不改变用例选择，也不禁止本地 Guest/Registry/Store/Proxy 流量。helper 仍来自精确匹配的包，Demo SDK 仍仅从本地 hash-locked wheelhouse 安装。需要凭据的 OBS 不会静默跳过。CI 的 `prepare-artifacts.py` 将相同选项传给公共 runner，并在 clean prepare 中将配置的依赖目录以只读方式挂载，与可写输出分离。
 
