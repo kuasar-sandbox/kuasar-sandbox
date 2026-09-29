@@ -128,6 +128,41 @@ class CollectorTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'differs from requested digest'):
                 collector.resolve(request, {})
 
+    def test_tag_and_digest_transport_preserves_verified_request(self):
+        identity = collector.workspace.sha256_bytes(self.index)
+        reference = 'prom/prometheus:v3.5.0@' + identity
+        requests = [(arch, 'prometheus', {'reference': reference, 'platform': record['platform']})
+                    for arch, record in self.images.items()]
+
+        def inspect(command, **kwargs):
+            if command[-1] == 'docker://docker.io/prom/prometheus@' + identity:
+                return self.index
+            return self.inspect(command, **kwargs)
+
+        with patch.object(collector.subprocess, 'check_output', side_effect=inspect) as calls:
+            records = collector.resolve(requests, {})
+        self.assertEqual(len(calls.call_args_list), 3)
+        for record in records:
+            self.assertEqual(record['reference'], reference)
+            self.assertEqual(record['registry_digest'], identity)
+        for call in calls.call_args_list:
+            self.assertNotIn(':v3.5.0', call.args[0][-1])
+        with patch.object(collector.subprocess, 'check_output', return_value=self.index + b' '):
+            with self.assertRaisesRegex(ValueError, 'differs from requested digest'):
+                collector.resolve(requests, {})
+
+    def test_reference_normalization_preserves_ports_tags_and_digests(self):
+        digest = '@sha256:' + 'a' * 64
+        for reference, transport, repository in [
+            ('python:3.12-slim', 'docker.io/library/python:3.12-slim', 'docker.io/library/python'),
+            ('busybox' + digest, 'docker.io/library/busybox' + digest, 'docker.io/library/busybox'),
+            ('localhost:5000/team/image:v1' + digest, 'localhost:5000/team/image' + digest,
+             'localhost:5000/team/image'),
+            ('ghcr.io/team/image:v1', 'ghcr.io/team/image:v1', 'ghcr.io/team/image'),
+        ]:
+            with self.subTest(reference=reference):
+                self.assertEqual(collector.registry_reference(reference), (transport, repository))
+
     def test_cases_without_external_images_need_no_registry(self):
         with patch.object(collector.subprocess, 'check_output') as inspect, patch.object(collector.subprocess, 'run') as copy:
             collector.collect(['storage.cache.sh'], ['x86_64', 'aarch64'], self.output)
