@@ -26,7 +26,10 @@ def registry_reference(reference):
     prefix = '' if '/' in repository and ('.' in first or ':' in first or first == 'localhost') else 'docker.io/'
     if '/' not in repository:
         prefix += 'library/'
-    return prefix + reference, prefix + repository
+    # containers/image rejects name:tag@digest. The digest is authoritative;
+    # retain the original request in the catalog, but omit its tag in transport.
+    transport = repository + '@' + reference.split('@', 1)[1] if '@' in reference else reference
+    return prefix + transport, prefix + repository
 
 
 def resolve(requests, environment):
