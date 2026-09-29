@@ -160,8 +160,7 @@ class PreparedRunnerTests(unittest.TestCase):
         (self.release / 'guide').mkdir()
         (self.release / 'guide/quickstart.md').write_text('# User guide\n')
         (self.release / 'workbench').mkdir()
-        for name, mode in (('workbench', 0o755), ('apparmor.profile', 0o644),
-                           ('LICENSE.apparmor', 0o644)):
+        for name, mode in (('workbench', 0o755), ('README.md', 0o644)):
             path = self.release / 'workbench' / name
             path.write_text('packaged input: ' + name + '\n')
             path.chmod(mode)
@@ -193,7 +192,7 @@ class PreparedRunnerTests(unittest.TestCase):
         self.assertEqual(prepared['files']['test/e2e/cases/basic.fixture.sh'],
                          before['test/e2e/cases/basic.fixture.sh'])
         self.assertEqual(prepared['files']['guide/quickstart.md'], before['guide/quickstart.md'])
-        for name in ('workbench/workbench', 'workbench/apparmor.profile', 'workbench/LICENSE.apparmor'):
+        for name in ('workbench/workbench', 'workbench/README.md'):
             self.assertEqual(prepared['files'][name], before[name])
             self.assertEqual((self.work / name).stat().st_mode & 0o777,
                              (self.release / name).stat().st_mode & 0o777)

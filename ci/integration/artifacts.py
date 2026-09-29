@@ -636,7 +636,6 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
                 and disk['peak_used'] >= disk['used_before']
                 and disk['peak_increase'] == disk['peak_used'] - disk['used_before'],
                 'missing or inconsistent workbench disk measurements')
-        require(isinstance(record.get('host_apparmor_enabled'), bool), 'missing workbench host LSM observation')
         if scope == 'artifact-only':
             require(record.get('cases') == [] and record.get('planned_cases') == workbench_cases(case_files, arch),
                     'artifact-only qualification must distinguish planned cases from execution')
@@ -663,16 +662,6 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
         check_timings(record['timings'], record['cases'])
         require(re.fullmatch(r'[0-9a-f]{64}', record.get('provenance_sha256', '')),
                 'missing workbench prepared-workspace provenance digest')
-        if record['host_apparmor_enabled']:
-            lsm = record.get('apparmor', {})
-            profile = lsm.get('profile', {}).get('name', '')
-            require(re.fullmatch(r'kuasar-workbench-v1-u[0-9]+-[0-9a-f]{32}', profile)
-                    and lsm.get('conclusion') == 'success' and lsm.get('image_id') == record['image_id']
-                    and lsm.get('outer_context') == lsm.get('inner_context') == profile + ' (enforce)'
-                    and lsm.get('host_apparmor_before') == lsm.get('host_apparmor_after') == 'Y'
-                    and lsm.get('inner_detection') == '' and lsm.get('forbidden_mounts') == 'denied'
-                    and lsm.get('cleanup') == 'owned container, daemon data and profile removed; output retained',
-                    'enforcing host nested Docker was not qualified')
     return results
 
 

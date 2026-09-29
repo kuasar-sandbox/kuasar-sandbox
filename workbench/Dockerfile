@@ -6,7 +6,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && chmod 0755 /usr/sbin/policy-rc.d \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-       acl apparmor autoconf automake bc binutils bison build-essential ca-certificates \
+       acl autoconf automake bc binutils bison build-essential ca-certificates \
        clang cmake containerd cpio curl dbus diffutils docker.io e2fsprogs erofs-utils \
        file findutils flex gawk git gperf gzip iproute2 iptables iputils-ping jq kmod \
        libaio-dev libbpf-dev libbz2-dev libcap-dev libclang-dev libelf-dev libfuse3-dev \
@@ -44,6 +44,7 @@ RUN chmod 0755 /usr/local/sbin/workbench-system \
     && cp /etc/systemd/system/docker.service.d/limits.conf /etc/systemd/system/containerd.service.d/limits.conf \
     && systemctl enable containerd.service docker.service \
     && systemctl mask getty.target console-getty.service systemd-logind.service redis-server.service \
+       systemd-udevd.service systemd-udevd-control.socket systemd-udevd-kernel.socket systemd-modules-load.service \
     && rm -f /etc/machine-id /var/lib/dbus/machine-id \
     && touch /etc/machine-id \
     && ln -s /etc/machine-id /var/lib/dbus/machine-id \

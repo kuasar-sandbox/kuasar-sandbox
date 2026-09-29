@@ -31,7 +31,12 @@ def module(name, path):
 
 launcher = module('release_launcher', ROOT / 'workbench/workbench')
 lifecycle = module('release_lifecycle', ROOT / 'workbench/test-system.py')
-apparmor = module('release_apparmor', ROOT / 'workbench/test-apparmor.py')
+
+
+def host_output(command):
+    # CI-only read access to owned diagnostic files; deployment needs no sudo helper.
+    prefix = [] if os.getuid() == 0 else ['sudo', '-n']
+    return subprocess.check_output([*prefix, *map(str, command)], text=True, timeout=30)
 
 
 def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
@@ -52,7 +57,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
     since = datetime.datetime.now(datetime.timezone.utc).isoformat()
     result = {key: receipt[key] for key in ('archive', 'image_id', 'sha256', 'arch', 'aggregate_version', 'source_revision', 'size', 'compression_seconds')}
     result.update(conclusion='failure', plan_id=artifacts.identity(plan), framework_sha=plan['framework_sha'],
-                  test_revisions=plan['test_revisions'], host_apparmor_enabled=launcher.apparmor_enabled(),
+                  test_revisions=plan['test_revisions'],
                   input_assets={item['name']: item['digest'] for item in plan['baseline']['assets'] if item['name'] != 'SHA256SUMS'})
     command = [sys.executable, '-B', ROOT / 'workbench/workbench', '--root', root / 'instances', '--name', 'offline']
     state = root / 'instances/offline'
@@ -141,8 +146,6 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
         result.update(timings=report['timings'], provenance_sha256=report['provenance_sha256'])
         subprocess.run([*command, 'stop'], check=True)
         result['isolation'] = lifecycle.exercise(argparse.Namespace(image=image, root=root / 'isolation', protect_container=[]))
-        if result['host_apparmor_enabled']:
-            result['apparmor'] = apparmor.qualify(image, root / 'apparmor', inner_archive=state / 'work/prepared/images/busybox.tar')
         result['conclusion'] = 'success'
     except BaseException as error:
         result['error'] = str(error)
@@ -155,14 +158,10 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
             except Exception as error:
                 result.setdefault('diagnostic_errors', []).append(str(error))
             for name, diagnostic in (
-                ('apparmor-audit.log', ['journalctl', '-k', '--since', since, '--no-pager', '-n', '10000']),
                 ('system-journal.log', ['journalctl', '--directory', str(state / 'journal'), '--no-pager', '-n', '2000']),
             ):
                 try:
-                    output = launcher.host_command(diagnostic)
-                    if name == 'apparmor-audit.log':
-                        profile = instance.get('apparmor', {}).get('name', '')
-                        output = '\n'.join(line for line in output.splitlines() if profile and profile in line) + '\n'
+                    output = host_output(diagnostic)
                     (state / 'output' / name).write_text(output)
                 except Exception as error:
                     result.setdefault('diagnostic_errors', []).append(f'{name}: {error}')
@@ -177,7 +176,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
         result['disk'] = disk
         result['wall_seconds'] = time.monotonic() - started
         # Report actual allocated task storage, not an implied filesystem quota.
-        result['retained_task_bytes'] = int(launcher.host_command(['du', '-s', '-B1', str(root)]).split()[0])
+        result['retained_task_bytes'] = int(host_output(['du', '-s', '-B1', str(root)]).split()[0])
         (root / 'result.json').write_text(json.dumps(result, sort_keys=True, indent=2) + '\n')
     artifacts.require(result['conclusion'] == 'success', 'workbench cleanup failed')
     return result
