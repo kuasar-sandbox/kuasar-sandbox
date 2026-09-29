@@ -232,8 +232,9 @@ run 身份,不会用旧输入重跑或改写运行中清单。
 - 无组件维护分支的固定版本不完整:延后,不派生替代版本;
 - 确定性失败最多尝试三次,超过后分支协调器和扫描器均报告失败,不会靠覆盖 Tag 或手工拼资产恢复。组件
   发布和删除的普通 failure 只重跑失败 job;cancelled、timed out 等没有失败 job 的状态
-  重跑完整 workflow。聚合发布的任何非成功结果都创建同一精确输入的新 workflow run,
-  让 prepare 重新拉取组件 Release 并生成新的 exact stage;三次预算按这些 run 的
+  重跑完整 workflow。聚合构建/验证失败创建同一精确输入的新 workflow run，重新拉取组件 Release 并生成新的 exact stage。
+  对同一源码的残缺 `workbench-v1` 发布，控制器先核实原 prepare/stage/validation 成功且不可变 stage 仍保留，
+  然后只重跑失败的 publish job，不重建镜像或重跑健康验证；stage 缺失或重试耗尽时失败关闭；三次预算按这些 run 的
   `run_attempt` 总数累计。
 
 若未完成的聚合选择推进到新的上海日期或显式请求的更大修订号,控制器不再用旧日期 Tag 绑定新的组件 HEAD。
@@ -315,9 +316,9 @@ HEAD 触发聚合。主线 Stable 成功后成为 Latest;维护分支 Stable 保
 但不抢占主线 Latest。Stable 与 Preview 都必须由该 HEAD 当前清单直接选择;历史清单只
 用于解析已存在 Release 和 GC,不能通过手工 dispatch 回填成新的聚合发布。
 
-聚合 prepare 生成的短期 artifact 是一次 run 的不可变发布证据。聚合失败后不对旧 run
-执行 failed-job 或 full rerun,而是重新 dispatch 相同版本、源码分支和源码 SHA,确保新的
-prepare 重新下载当前组件 Release。控制器按精确 run name 汇总新旧 run 的尝试次数,总计
+聚合 prepare 生成的短期 artifact 是一次 run 的不可变发布证据。构建/验证失败后重新 dispatch 相同版本、源码分支和源码 SHA，确保新的 prepare 重新下载当前组件 Release。
+新契约的残缺发布失败后，由控制器验证原先的成功前置 job 和保留 stage，只重跑该 publish job；
+不要完整重跑旧 workflow 来替换镜像字节。控制器按精确 run name 汇总新旧 run 的尝试次数,总计
 三次后报告失败。
 
 本地发布工具验证入口为:

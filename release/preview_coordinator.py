@@ -1102,6 +1102,42 @@ def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
     raise Pending(f"{action} incomplete aggregate cleanup for {tag}")
 
 
+def resume_workbench_publish(version: str, source_sha: str) -> bool:
+    """Retry only publication of the already validated immutable stage."""
+    runs = aggregate_runs(version)
+    if any(run_active(item) for item in runs):
+        return False
+    exact = [item for item in runs if item.get('display_title') == aggregate_run_title(version, source_sha)]
+    state = max(exact, key=lambda item: str(item.get('created_at', '')), default=None)
+    if state is None:
+        raise RuntimeError('partial workbench publication has no exact original workflow; retaining its bytes')
+    if sum(int(item.get('run_attempt', 1)) for item in exact) >= 3:
+        raise RuntimeError('aggregate publication failed after three attempts: ' + str(state.get('html_url')))
+    if state.get('conclusion') == 'success':
+        raise Pending('aggregate run is waiting for Release API convergence')
+    jobs = paginated(f"repos/{PLATFORM_REPOSITORY}/actions/runs/{state['id']}/jobs?filter=latest&per_page=100", 'jobs')
+    publishers = [job for job in jobs if job.get('name') == 'publish']
+    required = ('prepare', 'stage', 'release-asset-validation / results')
+    for name in required:
+        matched = [job for job in jobs if job.get('name') == name]
+        if len(matched) != 1 or matched[0].get('status') != 'completed' or matched[0].get('conclusion') != 'success':
+            raise RuntimeError('cannot resume workbench publication without its successful original prerequisite: ' + name)
+    if len(publishers) != 1 or publishers[0].get('status') != 'completed' or publishers[0].get('conclusion') not in {'failure', 'cancelled', 'timed_out'}:
+        raise RuntimeError('partial workbench publication has no failed publish job; retaining its bytes')
+    artifacts = paginated(f"repos/{PLATFORM_REPOSITORY}/actions/runs/{state['id']}/artifacts?per_page=100", 'artifacts')
+    expected = f"aggregate-stage-{version}-{state['id']}"
+    stages = [item for item in artifacts if item.get('name') == expected]
+    if len(stages) != 1 or stages[0].get('expired') is not False:
+        raise RuntimeError('original workbench stage is unavailable; retain partial bytes and recover through owned cleanup with a fresh Preview selection')
+    # GitHub reruns this job and its dependents. Preparation, native builds and
+    # successful validation are not rerun or replaced; the publisher downloads
+    # that run's exact immutable stage and verifies source/head/bytes again.
+    gh('api', '--method', 'POST',
+       f"repos/{PLATFORM_REPOSITORY}/actions/jobs/{publishers[0]['id']}/rerun", '--silent')
+    print(f"==> resumed immutable workbench publication: {state.get('html_url')}")
+    return False
+
+
 def ensure_aggregate(version: str, source_sha: str) -> bool:
     status = platform_release(version)
     if status.complete:
@@ -1109,6 +1145,12 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
             raise Deferred(f"aggregate {version} exists on another platform commit")
         print(f"==> aggregate {version} is complete")
         return True
+    if status.partial and status.tag_sha == source_sha:
+        # Use the exact source declaration, never infer a legacy contract from
+        # absent image assets in a partial GitHub release.
+        expected = platform_asset_names(version, source_sha)
+        if selection.workbench_archive(version, 'x86_64') in expected:
+            return resume_workbench_publish(version, source_sha)
     if status.partial and "-preview." in version:
         recovery_sha = recoverable_source_sha(status)
         if recovery_sha is None:
