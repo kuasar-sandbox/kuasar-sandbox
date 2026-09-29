@@ -154,6 +154,8 @@ class PreparedRunnerTests(unittest.TestCase):
         helpers.mkdir(parents=True)
         (helpers / 'helpers.json').write_text(json.dumps({'arch': platform.machine(), 'helpers': {}}))
         (self.release / 'test/e2e/cases/basic.fixture.sh').write_text('exit 0\n')
+        (self.release / 'guide').mkdir()
+        (self.release / 'guide/quickstart.md').write_text('# User guide\n')
         self.args = dict(deps_dir=None, offline=False, suite=[], include=['basic.fixture.sh'], exclude=[], all=False,
                          arch=platform.machine(), release_dir=str(self.release), workdir=str(self.work),
                          run_root=str(self.root / 'run'), out_root=str(self.root / 'out'), result=None)
@@ -178,8 +180,10 @@ class PreparedRunnerTests(unittest.TestCase):
         self.assertEqual(report['cases'], ['basic.fixture.sh'])
         self.assertEqual(report['conclusion'], 'success')
         self.assertEqual(report['timings'][0]['exit_code'], 0)
-        self.assertEqual(runner.workspace.verify(self.work)['files']['test/e2e/cases/basic.fixture.sh'],
+        prepared = runner.workspace.verify(self.work)
+        self.assertEqual(prepared['files']['test/e2e/cases/basic.fixture.sh'],
                          before['test/e2e/cases/basic.fixture.sh'])
+        self.assertEqual(prepared['files']['guide/quickstart.md'], before['guide/quickstart.md'])
 
     def test_failure_remains_failure_in_return_code_and_result(self):
         (self.release / 'test/e2e/cases/basic.fixture.sh').write_text('exit 23\n')

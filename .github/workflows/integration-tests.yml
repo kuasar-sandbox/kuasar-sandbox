@@ -262,8 +262,10 @@ jobs:
           path: aggregate-stage
       - name: Qualify staged image isolation and the public offline selection
         run: |
+          extra=()
+          if [ '${{ matrix.arch }}' = aarch64 ]; then extra+=(--artifact-only); fi
           python3 -B framework/workbench/test-release.py --plan plan/plan.json --stage aggregate-stage \
-            --root "$RUNNER_TEMP/workbench-release" --cpus 2 --memory-gib 8
+            --root "$RUNNER_TEMP/workbench-release" --cpus 2 --memory-gib 8 "${extra[@]}"
           cp "$RUNNER_TEMP/workbench-release/result.json" '${{ matrix.arch }}.json'
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

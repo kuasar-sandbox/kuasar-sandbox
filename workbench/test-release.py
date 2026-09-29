@@ -33,7 +33,7 @@ lifecycle = module('release_lifecycle', ROOT / 'workbench/test-system.py')
 apparmor = module('release_apparmor', ROOT / 'workbench/test-apparmor.py')
 
 
-def qualify(plan, stage, root, cpus, memory_gib):
+def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
     artifacts.check_plan(plan)
     artifacts.require(plan['mode'] == 'exact-assets' and plan['baseline'].get('delivery') == selection.DELIVERY,
                       'workbench qualification requires the exact new-contract stage')
@@ -83,6 +83,14 @@ def qualify(plan, stage, root, cpus, memory_gib):
             artifacts.unpack(path, release, owner, seen)
         cases = artifacts.workbench_cases(plan['case_files'], arch)
         result['cases'] = cases
+        if artifact_only:
+            # Hosted ARM runners do not expose KVM. Still qualify the exact
+            # staged archive, imported image identity and release inputs here;
+            # native ARM KVM/system execution is a separate environment gate.
+            result['qualification_scope'] = 'artifact-only'
+            result['conclusion'] = 'success'
+            return result
+        result['qualification_scope'] = 'system'
         start = time.monotonic()
         subprocess.run([*command, 'start', '--image', image, '--inputs', release, '--network', 'none',
                         '--cpus', str(cpus), '--memory-gib', str(memory_gib), '--timeout', '90'], check=True)
@@ -143,5 +151,6 @@ if __name__ == '__main__':
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--cpus', type=int, default=2)
     parser.add_argument('--memory-gib', type=int, default=8)
+    parser.add_argument('--artifact-only', action='store_true', help='validate staged archive/image/release bytes without starting a KVM system container')
     args = parser.parse_args()
-    qualify(json.loads(args.plan.read_text()), args.stage.resolve(), args.root.resolve(), args.cpus, args.memory_gib)
+    qualify(json.loads(args.plan.read_text()), args.stage.resolve(), args.root.resolve(), args.cpus, args.memory_gib, args.artifact_only)
