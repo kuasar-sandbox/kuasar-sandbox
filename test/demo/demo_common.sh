@@ -46,6 +46,36 @@ if not codes.intersection({"MANIFEST_UNKNOWN", "NAME_UNKNOWN"}):
 PY
 }
 
+
+demo_remove_hosts_entries() { # run marker, hosts file (also usable by isolated tests)
+    [ "$#" -eq 2 ] || return 2
+    python3 - "$1" "$2" <<'PY_HOSTS'
+import fcntl
+import os
+import re
+import stat
+import sys
+
+marker, path = os.fsencode(sys.argv[1]), sys.argv[2]
+if not marker or b"\n" in marker or b"\r" in marker:
+    raise SystemExit("invalid Demo hosts marker")
+# /etc/hosts can be a Docker-managed bind mount. Keep its inode rather than
+# rename a temporary file over the mountpoint, which fails with EBUSY.
+with os.fdopen(os.open(path, os.O_RDWR | os.O_NOFOLLOW), "r+b") as stream:
+    if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+        raise SystemExit("Demo hosts path is not a regular file")
+    fcntl.flock(stream, fcntl.LOCK_EX)
+    original = stream.read()
+    owned = re.compile(rb"[ \t]# " + re.escape(marker) + rb"$")
+    remaining = b"".join(line for line in original.splitlines(keepends=True)
+                         if not owned.search(line.rstrip(b"\r\n")))
+    if remaining != original:
+        stream.seek(0)
+        stream.write(remaining)
+        stream.truncate()
+PY_HOSTS
+}
+
 demo_select_owner() {
     [ "$(id -u)" -eq 0 ] || demo_die "run this Demo entry point as root (use sudo -n env with explicit paths)"
     DEMO_OWNER_UID=0

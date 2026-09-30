@@ -126,6 +126,11 @@ masks inner Docker's AppArmor detection input so it does not load host policies.
 No host policy is added, replaced or removed. These are precautions against
 accidental service startup effects, not restrictions against a malicious admin.
 
+The image sets `DefaultTasksMax=infinity` for internal systemd units. The outer
+`--pids-limit` remains the environment-wide bound, and explicitly configured
+per-unit limits still apply. This avoids an implicit per-service ceiling that
+can prevent nested services from starting.
+
 CPU quota, memory and process budgets remain. Instances are not automatically
 pinned to the same first N host CPUs. Capacity checks are not disk quotas; host
 kernel, disk and NIC contention still exists. Use trusted administrator tasks,

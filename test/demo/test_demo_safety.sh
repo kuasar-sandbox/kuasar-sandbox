@@ -179,4 +179,23 @@ fi
 kill "$lock_child" 2>/dev/null || true
 wait "$lock_child" 2>/dev/null || true
 
+# Hosts can be a bind mount: retain the inode and only remove this run's suffix.
+hosts_fixture="$TEST_ROOT/hosts"
+printf '127.0.0.1 localhost\n127.0.0.2 own.example # kuasar-demo-proof\n127.0.0.3 other.example # kuasar-demo-proof-other\n# kuasar-demo-proof\n127.0.0.4 keep.example' >"$hosts_fixture"
+ln "$hosts_fixture" "$TEST_ROOT/hosts-same-inode"
+original_inode="$(stat -c '%d:%i' "$hosts_fixture")"
+demo_remove_hosts_entries kuasar-demo-proof "$hosts_fixture"
+[ "$(stat -c '%d:%i' "$hosts_fixture")" = "$original_inode" ]
+printf '127.0.0.1 localhost\n127.0.0.3 other.example # kuasar-demo-proof-other\n# kuasar-demo-proof\n127.0.0.4 keep.example' >"$TEST_ROOT/hosts-expected"
+cmp "$hosts_fixture" "$TEST_ROOT/hosts-expected"
+cmp "$TEST_ROOT/hosts-same-inode" "$TEST_ROOT/hosts-expected"
+demo_remove_hosts_entries kuasar-demo-proof "$hosts_fixture"
+cmp "$hosts_fixture" "$TEST_ROOT/hosts-expected"
+ln -s "$hosts_fixture" "$TEST_ROOT/hosts-link"
+if demo_remove_hosts_entries kuasar-demo-proof "$TEST_ROOT/hosts-link" >/dev/null 2>&1; then
+    echo "hosts cleanup followed a foreign link" >&2
+    exit 1
+fi
+cmp "$hosts_fixture" "$TEST_ROOT/hosts-expected"
+
 echo "PASS: Demo ownership and private-handoff safety"
