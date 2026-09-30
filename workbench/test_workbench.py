@@ -252,6 +252,15 @@ class LauncherTests(unittest.TestCase):
         self.assertIn(f'type=bind,src={self.state}/containerd,dst=/var/lib/containerd', command)
         self.assertEqual((self.state / 'machine-id').read_text().strip(), self.data['id'])
 
+    def test_temporary_binaries_can_execute_in_both_workbench_modes(self):
+        for mode in ('build', 'system'):
+            with self.subTest(mode=mode):
+                command = self.command(mode=mode, source=self.source if mode == 'build' else None)
+                mounts = [command[i + 1] for i, arg in enumerate(command) if arg == '--tmpfs']
+                self.assertIn('/tmp:exec', mounts)
+                self.assertIn('/run', mounts)
+                self.assertIn('/run/lock', mounts)
+
     def test_system_check_needs_no_host_policy_tool_or_kvm(self):
         info = {'OSType': 'linux', 'KernelVersion': 'kernel', 'Architecture': 'aarch64',
                 'OperatingSystem': 'test Linux', 'CgroupVersion': '2', 'SecurityOptions': ['name=apparmor']}

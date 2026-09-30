@@ -132,7 +132,7 @@ def create_command(args, state, data):
                '--cpus', str(args.cpus),
                '--memory', str(args.memory_gib) + 'g', '--memory-swap', str(args.memory_gib) + 'g',
                '--pids-limit', str(args.pids), '--network', data.get('network_id') or 'none',
-               '--tmpfs', '/run', '--tmpfs', '/run/lock', '--tmpfs', '/tmp',
+               '--tmpfs', '/run', '--tmpfs', '/run/lock', '--tmpfs', '/tmp:exec',
                '--env', 'HOME=/work/home', '--env', 'CARGO_HOME=/work/home/.cargo',
                '--env', 'TMPDIR=/build/tmp',
                '--env', 'GOPATH=/work/home/go', '--env', 'GOCACHE=/work/home/go-cache',

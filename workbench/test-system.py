@@ -36,6 +36,13 @@ def smoke(image, root):
 set -eu
 test -z "$(docker ps -aq)"
 test -z "$(ip -4 route show default)"
+# E2E helpers stage runnable tools in /tmp; ordinary file permissions alone
+# are insufficient when the tmpfs mount is noexec.
+temporary=$(mktemp /tmp/workbench-exec.XXXXXX)
+cp /bin/true "$temporary"
+chmod u+x "$temporary"
+"$temporary"
+rm -f "$temporary"
 python3 -B - <<'INNER'
 import re, subprocess, tarfile
 from pathlib import Path
@@ -88,7 +95,8 @@ systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
                       'http://127.0.0.1:18080/identity') == b['preflight']['machine_id']
         assert invoke(names[1], 'exec', '--', 'docker', 'inspect', 'same-inner',
                       '--format', '{{.State.Running}}') == 'true'
-        result.update(complete=True, checks=['private namespaces and daemons',
+        result.update(complete=True, checks=['temporary binaries execute from /tmp',
+                      'private namespaces and daemons',
                       'real inner containers with identical names',
                       'same systemd unit, network name and HTTP port coexist',
                       'stopping A preserves B'])
