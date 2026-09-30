@@ -42,6 +42,8 @@ RUN chmod 0755 /usr/local/sbin/workbench-system \
     && mkdir -p /etc/systemd/system/docker.service.d /etc/systemd/system/containerd.service.d \
     && printf '[Service]\nLimitNOFILE=1048576\n' > /etc/systemd/system/docker.service.d/limits.conf \
     && cp /etc/systemd/system/docker.service.d/limits.conf /etc/systemd/system/containerd.service.d/limits.conf \
+    && mkdir -p /etc/systemd/system.conf.d \
+    && printf '[Manager]\nDefaultTasksMax=infinity\n' > /etc/systemd/system.conf.d/workbench.conf \
     && systemctl enable containerd.service docker.service \
     && systemctl mask getty.target console-getty.service systemd-logind.service redis-server.service \
        systemd-udevd.service systemd-udevd-control.socket systemd-udevd-kernel.socket systemd-modules-load.service \

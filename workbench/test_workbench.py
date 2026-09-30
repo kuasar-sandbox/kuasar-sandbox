@@ -252,6 +252,12 @@ class LauncherTests(unittest.TestCase):
         self.assertIn(f'type=bind,src={self.state}/containerd,dst=/var/lib/containerd', command)
         self.assertEqual((self.state / 'machine-id').read_text().strip(), self.data['id'])
 
+    def test_nested_services_use_the_outer_task_budget(self):
+        recipe = (ROOT / 'Dockerfile').read_text()
+        self.assertIn('DefaultTasksMax=infinity', recipe)
+        command = self.command(pids=512)
+        self.assertEqual(command[command.index('--pids-limit') + 1], '512')
+
     def test_temporary_binaries_can_execute_in_both_workbench_modes(self):
         for mode in ('build', 'system'):
             with self.subTest(mode=mode):

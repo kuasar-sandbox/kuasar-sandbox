@@ -36,6 +36,9 @@ def smoke(image, root):
 set -eu
 test -z "$(docker ps -aq)"
 test -z "$(ip -4 route show default)"
+# Internal units must not inherit a fraction of the outer task budget.
+[ "$(systemctl show --property DefaultTasksMax --value)" = infinity ]
+[ "$(cat /sys/fs/cgroup/pids.max)" = 4096 ]
 # E2E helpers stage runnable tools in /tmp; ordinary file permissions alone
 # are insufficient when the tmpfs mount is noexec.
 temporary=$(mktemp /tmp/workbench-exec.XXXXXX)
@@ -75,6 +78,7 @@ systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
             config = json.loads(run(['docker', 'inspect', state['container_id']]))[0]
             assert config['HostConfig']['Privileged'] is True
             assert config['HostConfig']['CgroupnsMode'] == 'private'
+            assert config['HostConfig']['PidsLimit'] == 4096
             assert not config['HostConfig'].get('CpusetCpus')
             assert not any(m['Source'] in ('/', '/var/run/docker.sock', '/run/docker.sock')
                            for m in config['Mounts'])
@@ -96,6 +100,7 @@ systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
         assert invoke(names[1], 'exec', '--', 'docker', 'inspect', 'same-inner',
                       '--format', '{{.State.Running}}') == 'true'
         result.update(complete=True, checks=['temporary binaries execute from /tmp',
+                      'outer task budget retained without hidden per-unit limits',
                       'private namespaces and daemons',
                       'real inner containers with identical names',
                       'same systemd unit, network name and HTTP port coexist',

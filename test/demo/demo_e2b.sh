@@ -272,8 +272,8 @@ cleanup() {
         if ip netns list | awk '{print $1}' | grep -Fxq "$SW_NETNS"; then echo "  ! owned netns remains: $SW_NETNS" >&2; cleanup_failed=1; fi
     fi
     if [ "$HOSTS_OWNED" -eq 1 ]; then
-        sed -i "/[[:space:]]# $HOST_MARKER\$/d" /etc/hosts 2>/dev/null || cleanup_failed=1
-        grep -Fq "# $HOST_MARKER" /etc/hosts && cleanup_failed=1
+        demo_remove_hosts_entries "$HOST_MARKER" /etc/hosts || cleanup_failed=1
+        grep -Eq "[[:space:]]# $HOST_MARKER\$" /etc/hosts && cleanup_failed=1
     fi
     for path in "${!UNIT_HASHES[@]}"; do
         if [ ! -f "$path" ] || [ -L "$path" ]; then continue; fi
