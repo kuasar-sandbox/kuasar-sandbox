@@ -16,11 +16,9 @@ echo "Using prompts file: $PROMPTS_FILE"
 # Load user-specific configuration.
 CONFIG_FILE="${CONFIG_FILE:-$SCRIPT_DIR/config.env}"
 
-if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "ERROR: config file not found: $CONFIG_FILE" >&2
-    echo "fill in your own values in $CONFIG_FILE." >&2
-    exit 1
-fi
+set -a
+source "$CONFIG_FILE"
+set +a
 
 #sandbox and chat
 STABILITY_TIMEOUT=86400
