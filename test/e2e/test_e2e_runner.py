@@ -168,6 +168,34 @@ class PreparedRunnerTests(unittest.TestCase):
                          arch=platform.machine(), release_dir=str(self.release), workdir=str(self.work),
                          run_root=str(self.root / 'run'), out_root=str(self.root / 'out'), result=None)
 
+    def install_test_helpers(self, names):
+        # Test-only ELF headers let prepare validate identity/platform; never executed.
+        import struct
+        root = self.release / 'test/e2e/helpers' / platform.machine()
+        metadata = json.loads((root / 'helpers.json').read_text())
+        for name in names:
+            header = bytearray(64)
+            header[:7] = b'\x7fELF\x02\x01\x01'
+            struct.pack_into('<H', header, 18, 62 if platform.machine() == 'x86_64' else 183)
+            (root / name).write_bytes(header)
+            (root / name).chmod(0o755)
+            metadata['helpers'][name] = {'sha256': runner.workspace.digest(root / name)}
+        (root / 'helpers.json').write_text(json.dumps(metadata))
+
+    def test_missing_selected_helper_fails_before_fixture_work(self):
+        case = 'sandbox.cgroup.sh'
+        (self.release / 'test/e2e/cases' / case).write_text('exit 0\n')
+        self.install_test_helpers(['zot', 'usage-probe'])
+        with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
+            with self.assertRaisesRegex(ValueError, 'sandbox.cgroup.sh requires prepared helper.*cgroup-fork-probe'):
+                runner.cmd_prepare(self.args_with(include=[case]))
+        prepare.assert_not_called()
+        self.assertFalse(self.work.exists())
+
+    def test_unselected_cgroup_helper_is_not_required(self):
+        self.assertEqual(runner.cmd_prepare(self.args_with()), 0)
+        self.assertNotIn('cgroup-fork-probe', runner.workspace.verify(self.work)['helpers'])
+
     def args_with(self, **values):
         return type('Args', (), self.args | values)()
 
@@ -280,6 +308,7 @@ class PreparedRunnerTests(unittest.TestCase):
         runner.workspace.verify(self.work)
 
     def test_public_environment_alias_fails_offline_before_creating_workspace(self):
+        self.install_test_helpers(['zot', 'usage-probe'])
         (self.release / 'test/e2e/cases/sandbox.fixture.sh').write_text('exit 0\n')
         deps = self.root / 'deps'
         deps.mkdir()

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import math
 import os
@@ -21,6 +22,11 @@ import tarfile
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
+
+_workspace_spec = importlib.util.spec_from_file_location(
+    'public_e2e_workspace', ROOT / 'test/e2e/lib/workspace.py')
+_public_workspace = importlib.util.module_from_spec(_workspace_spec)
+_workspace_spec.loader.exec_module(_public_workspace)
 ARCHES = ("x86_64", "aarch64")
 OWNERS = ("accelerator", "connector", "guest-runtime", "sandboxer", "orchestrator", "platform")
 UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vmlinux")
@@ -183,24 +189,7 @@ def shards(selection):
 
 
 def planned_helpers(selection):
-    cases = set(selection['cases'])
-    orchestrator = any(name.startswith(('orchestrator.', 'builder.')) for name in cases)
-    orchestrator |= bool(cases & {'telemetry.backends.sh', 'telemetry.guest.sh', 'telemetry.proxy.sh'})
-    sandboxer = any(name.startswith(('sandbox.', 'snapshot.')) for name in cases)
-    sandboxer |= bool(cases & {'network.tapfd.sh', 'image.manifest-boot.sh', 'image.sandbox-assembly.sh',
-                               'telemetry.usage.sh', 'telemetry.usage-faults.sh', 'telemetry.source-faults.sh'})
-    helpers = {}
-    if orchestrator or sandboxer or cases & {'basic.demo.sh', 'image.flatten.sh', 'image.registry.sh'}:
-        helpers['zot'] = 'framework'
-    if orchestrator or 'basic.demo.sh' in cases:
-        helpers['versitygw'] = 'framework'
-    if orchestrator:
-        helpers.update({'custom-proxy': 'orchestrator', 'telemetry-grpc-probe': 'orchestrator'})
-    if sandboxer:
-        helpers['usage-probe'] = 'sandboxer'
-    if 'sandbox.cgroup.sh' in cases:
-        helpers['cgroup-fork-probe'] = 'sandboxer'
-    return helpers
+    return _public_workspace.required_helpers(selection['cases'])
 
 
 def archive_name(unit, version, arch):

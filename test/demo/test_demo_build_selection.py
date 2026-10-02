@@ -92,6 +92,9 @@ class DemoImagePreparation(unittest.TestCase):
     def prepare(self, reference, **changes):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
+            uname = root / "uname"
+            uname.write_text('#!/bin/sh\nprintf "%s\\n" "${TEST_HOST_ARCH:-x86_64}"\n')
+            uname.chmod(0o755)
             docker = root / "docker"
             docker.write_text('''#!/usr/bin/env python3
 import json, os, sys
@@ -134,7 +137,7 @@ print("200" if exists else "404")
             prep = Path(__file__).with_name("demo_prep.sh").read_text()
             # Run the actual input resolution and publish/readback path, with
             # only Docker and the owned Registry transport replaced by fixtures.
-            block = prep[prep.index('SOURCE_IMAGE_INFO=""'):prep.index('ENV_TMP=')]
+            block = prep[prep.index('DEMO_IMAGE_PLATFORM='):prep.index('ENV_TMP=')]
             script = 'set -euo pipefail\n. "$1"\nsay() { :; }\nok() { :; }\n' + block
             script += '\nprintf "%s\\n" "$SOURCE_IMAGE_ID" "$BASE_TAG" "$BASE_REF"\n'
             env = {"PATH": str(root) + os.pathsep + os.environ["PATH"], "LOG_DIR": str(root),
@@ -170,6 +173,31 @@ print("200" if exists else "404")
         result, calls = self.prepare("python:local", MISSING="1", KUASAR_ARTIFACT_E2E="0")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual([c for c in calls if c[0] == "pull"], [["pull", "--platform", "linux/amd64", "python:local"]])
+
+    def test_native_arm_prepared_and_standalone_images(self):
+        for artifact, missing in (("1", ""), ("0", "1")):
+            with self.subTest(artifact=artifact):
+                result, calls = self.prepare("python:local", TEST_HOST_ARCH="aarch64",
+                                             PLATFORM="linux/arm64", KUASAR_ARTIFACT_E2E=artifact,
+                                             MISSING=missing)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                pulls = [c for c in calls if c[0] == "pull"]
+                self.assertEqual(pulls, [] if artifact == "1" else
+                                 [["pull", "--platform", "linux/arm64", "python:local"]])
+
+    def test_arm_rejects_foreign_image_before_publish(self):
+        result, calls = self.prepare("python:local", TEST_HOST_ARCH="aarch64", PLATFORM="linux/amd64")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("must be linux/arm64, got linux/amd64", result.stderr)
+        self.assertFalse(any(c[0] in ("pull", "tag", "push") for c in calls))
+
+    def test_arm_external_registry_readback_uses_native_platform(self):
+        result, calls = self.prepare("python:local", TEST_HOST_ARCH="aarch64", PLATFORM="linux/arm64",
+                                     OWNED_ZOT="0", EXISTS="1")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        pulls = [c for c in calls if c[0] == "pull"]
+        self.assertEqual(len(pulls), 1)
+        self.assertEqual(pulls[0][1:3], ["--platform", "linux/arm64"])
 
     def test_destination_content_mismatch_is_never_overwritten(self):
         for owned in ("0", "1"):

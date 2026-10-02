@@ -428,11 +428,12 @@ else
     say "versitygw is absent; Quick Start may omit COPY, while the complete Demo will refuse to skip it"
 fi
 
+DEMO_IMAGE_PLATFORM="$(demo_native_platform)"
 SOURCE_IMAGE_INFO=""
 if ! SOURCE_IMAGE_INFO="$(docker image inspect --format '{{.Id}} {{.Os}}/{{.Architecture}}' "$E2E_IMAGE" 2>/dev/null)"; then
     [ "${KUASAR_ARTIFACT_E2E:-0}" != 1 ] \
         || demo_die "prepared E2E image is missing locally: $E2E_IMAGE"
-    if ! docker pull --platform linux/amd64 "$E2E_IMAGE" >"$LOG_DIR/source-pull.log" 2>&1; then
+    if ! docker pull --platform "$DEMO_IMAGE_PLATFORM" "$E2E_IMAGE" >"$LOG_DIR/source-pull.log" 2>&1; then
         echo "docker pull output for public source image $E2E_IMAGE:" >&2
         sed -n 'p' "$LOG_DIR/source-pull.log" >&2
         demo_die "docker pull failed for $E2E_IMAGE"
@@ -442,8 +443,8 @@ fi
 read -r SOURCE_IMAGE_ID SOURCE_IMAGE_PLATFORM <<<"$SOURCE_IMAGE_INFO"
 [[ "$SOURCE_IMAGE_ID" =~ ^sha256:[0-9a-f]{64}$ ]] \
     || demo_die "Docker returned an invalid source image identity"
-[ "$SOURCE_IMAGE_PLATFORM" = linux/amd64 ] \
-    || demo_die "Demo source image must be linux/amd64, got $SOURCE_IMAGE_PLATFORM"
+[ "$SOURCE_IMAGE_PLATFORM" = "$DEMO_IMAGE_PLATFORM" ] \
+    || demo_die "Demo source image must be $DEMO_IMAGE_PLATFORM, got $SOURCE_IMAGE_PLATFORM"
 BASE_TAG="sha-${SOURCE_IMAGE_ID#sha256:}"
 BASE_TAG_REF="$REGISTRY/$REGISTRY_NS/base:$BASE_TAG"
 BASE_REF=""
@@ -500,7 +501,7 @@ if [ "$OWNED_ZOT" -eq 1 ]; then
         probe_owned_zot_manifest \
             || demo_die "owned Zot still reports $BASE_TAG_REF absent after push"
     fi
-elif docker pull --platform linux/amd64 "$BASE_TAG_REF" >"$LOG_DIR/destination-pull.log" 2>&1; then
+elif docker pull --platform "$DEMO_IMAGE_PLATFORM" "$BASE_TAG_REF" >"$LOG_DIR/destination-pull.log" 2>&1; then
     [ "$(docker image inspect --format '{{.Id}}' "$BASE_TAG_REF")" = "$SOURCE_IMAGE_ID" ] \
         || demo_die "$BASE_TAG_REF already names different content; refusing to overwrite it"
     say "base image already seeded and content-matched: $BASE_TAG_REF"
@@ -511,7 +512,7 @@ else
     say "seeding immutable base image $E2E_IMAGE"
     docker tag "$SOURCE_IMAGE_ID" "$BASE_TAG_REF"
     push_base_image
-    docker pull --platform linux/amd64 "$BASE_TAG_REF" >>"$LOG_DIR/destination-pull.log" 2>&1 \
+    docker pull --platform "$DEMO_IMAGE_PLATFORM" "$BASE_TAG_REF" >>"$LOG_DIR/destination-pull.log" 2>&1 \
         || demo_die "could not read back $BASE_TAG_REF after push"
     [ "$(docker image inspect --format '{{.Id}}' "$BASE_TAG_REF")" = "$SOURCE_IMAGE_ID" ] \
         || demo_die "$BASE_TAG_REF content does not match $E2E_IMAGE after push"
