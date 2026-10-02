@@ -19,6 +19,20 @@ def run(command, timeout=180, success=True):
     return result.stdout.strip() if success else result.stderr.strip()
 
 
+def startup_fixture(image, tag, entrypoint, owner):
+    """Change startup metadata on a never-started container of the exact local image."""
+    container = run(['docker', 'create', '--pull=never', '--network=none',
+                     '--label', 'org.kuasar.workbench.test=' + owner,
+                     '--entrypoint', '/bin/true', image])
+    try:
+        # A config digest is a valid local Docker image ID, not a Dockerfile
+        # FROM reference. No builder, registry resolution or filesystem edit
+        # is needed for these negative startup fixtures.
+        return run(['docker', 'commit', '--change', 'ENTRYPOINT ' + json.dumps(entrypoint),
+                    '--change', 'CMD []', container, tag])
+    finally:
+        run(['docker', 'rm', '-v', container])
+
 
 def smoke(image, root):
     """Two administrator instances and real inner containers, without requiring KVM."""
@@ -70,6 +84,14 @@ systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
  /usr/bin/python3 -m http.server 18080 --bind 127.0.0.1 --directory /work
 """
     try:
+        tag = 'workbench-lifecycle:' + names[0] + '-probe'
+        entrypoint = ['sh', '-c', 'exit 42']
+        fixture = startup_fixture(image, tag, entrypoint, names[0])
+        try:
+            config = json.loads(run(['docker', 'image', 'inspect', fixture]))[0]['Config']
+            assert config['Entrypoint'] == entrypoint and not config['Cmd']
+        finally:
+            run(['docker', 'image', 'rm', '--no-prune', tag])
         states = []
         for name in names:
             invoke(name, 'start', '--image', image, '--network', 'none', '--cpus', '1',
@@ -99,7 +121,8 @@ systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
                       'http://127.0.0.1:18080/identity') == b['preflight']['machine_id']
         assert invoke(names[1], 'exec', '--', 'docker', 'inspect', 'same-inner',
                       '--format', '{{.State.Running}}') == 'true'
-        result.update(complete=True, checks=['temporary binaries execute from /tmp',
+        result.update(complete=True, checks=['startup fixtures use local image IDs without a builder or pull',
+                      'temporary binaries execute from /tmp',
                       'outer task budget retained without hidden per-unit limits',
                       'private namespaces and daemons',
                       'real inner containers with identical names',
@@ -203,15 +226,11 @@ curl --fail --silent http://127.0.0.1:18080/identity
         results['checks'].append('restart retains only owned disk state, resets bpffs, restores private daemons')
         # Negative startup images deliberately delay or fail PID 1. They use
         # real Docker; no fake executable is substituted for system acceptance.
-        delay = json.dumps(['python3', '-c', 'import signal,time; signal.signal(signal.SIGRTMIN+3,lambda *_:exit(0)); time.sleep(30)'])
+        delay = ['python3', '-c', 'import signal,time; signal.signal(signal.SIGRTMIN+3,lambda *_:exit(0)); time.sleep(30)']
         for name, entrypoint, timeout in ((names[2], delay, '1'),
-                                          (names[3], '["sh","-c","exit 42"]', '10')):
-            context = root / (name + '-context')
-            context.mkdir()
-            (context / 'Dockerfile').write_text(f'FROM {args.image}\nENTRYPOINT {entrypoint}\nCMD []\n')
+                                          (names[3], ['sh', '-c', 'exit 42'], '10')):
             tag = 'workbench-lifecycle:' + name
-            run(['docker', 'build', '--pull=false', '--memory=1g', '--cpu-period=100000', '--cpu-quota=100000',
-                 '--label', 'org.kuasar.workbench.test=' + identifier, '-t', tag, context])
+            startup_fixture(args.image, tag, entrypoint, identifier)
             derived.append(tag)
             launch(name, 'start', '--image', tag, '--cpus', '1', '--memory-gib', '1', '--network', 'none',
                    '--timeout', timeout, success=False)
@@ -245,7 +264,7 @@ curl --fail --silent http://127.0.0.1:18080/identity
         if foreign:
             run(['docker', 'rm', foreign])
         for tag in derived:
-            run(['docker', 'image', 'rm', tag])
+            run(['docker', 'image', 'rm', '--no-prune', tag])
         (root / 'result.json').write_text(json.dumps(results, sort_keys=True, indent=2) + '\n')
     assert results['complete'], 'lifecycle cleanup failed; inspect result.json'
     return results

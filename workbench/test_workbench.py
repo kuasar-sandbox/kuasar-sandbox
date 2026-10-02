@@ -30,6 +30,36 @@ collector = module('workbench_collector', ROOT / 'collect-inputs.py')
 launcher = module('workbench_launcher', ROOT / 'workbench')
 fixtures = module('offline_test_images', ROOT.parent / 'test/e2e/test_offline_inputs.py')
 diagnostics = module('workbench_diagnostics', ROOT / 'collect-diagnostics.py')
+systems = module('workbench_system_tests', ROOT / 'test-system.py')
+
+
+
+class StartupFixtureTests(unittest.TestCase):
+    def test_exact_local_image_id_needs_no_build_or_pull(self):
+        image = 'sha256:' + 'a' * 64
+        entrypoint = ['sh', '-c', 'exit 42']
+        with patch.object(systems, 'run', side_effect=['owned-container', 'derived-id', '']) as call:
+            self.assertEqual(systems.startup_fixture(image, 'fixture:test', entrypoint, 'owner'), 'derived-id')
+        commands = [item.args[0] for item in call.call_args_list]
+        self.assertEqual(commands, [
+            ['docker', 'create', '--pull=never', '--network=none', '--label',
+             'org.kuasar.workbench.test=owner', '--entrypoint', '/bin/true', image],
+            ['docker', 'commit', '--change', 'ENTRYPOINT ' + json.dumps(entrypoint),
+             '--change', 'CMD []', 'owned-container', 'fixture:test'],
+            ['docker', 'rm', '-v', 'owned-container'],
+        ])
+
+    def test_failed_commit_still_removes_only_its_never_started_container(self):
+        with patch.object(systems, 'run', side_effect=['owned-container', RuntimeError('commit failed'), '']) as call:
+            with self.assertRaisesRegex(RuntimeError, 'commit failed'):
+                systems.startup_fixture('sha256:' + 'a' * 64, 'fixture:test', ['sh'], 'owner')
+        self.assertEqual(call.call_args_list[-1].args[0], ['docker', 'rm', '-v', 'owned-container'])
+
+    def test_failed_create_cannot_remove_unowned_resources(self):
+        with patch.object(systems, 'run', side_effect=RuntimeError('missing local image')) as call:
+            with self.assertRaisesRegex(RuntimeError, 'missing local image'):
+                systems.startup_fixture('sha256:' + 'a' * 64, 'fixture:test', ['sh'], 'owner')
+        self.assertEqual(call.call_count, 1)
 
 
 class DiagnosticTests(unittest.TestCase):
