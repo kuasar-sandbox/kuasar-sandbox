@@ -30,6 +30,12 @@ def config_site_paths(environment):
     return (environment.get("CONFIG_SITE") or "/usr/local/share/config.site /usr/local/etc/config.site").split()
 
 
+def linker_map_paths(text):
+    """Return file-backed LOAD entries, excluding GNU ld's synthetic ARM BFD."""
+    return {line[5:].strip() for line in text.splitlines()
+            if line.startswith("LOAD ") and line[5:].strip() != "linker stubs"}
+
+
 def main():
     root = Path(sys.argv[1]).resolve()
     cross = sys.argv[2]
@@ -135,7 +141,7 @@ def main():
                        ["-o", str(work / "probe")], cwd=native, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         dependencies = (work / "probe.d").read_text().replace("\\\n", "").split(":", 1)[1]
         paths = set(shlex.split(dependencies.replace("$$", "$")))
-        paths.update(line[5:].strip() for line in (work / "probe.map").read_text().splitlines() if line.startswith("LOAD "))
+        paths.update(linker_map_paths((work / "probe.map").read_text()))
         for name in sorted(paths):
             path = Path(os.path.abspath(native / name))
             if not path.is_relative_to(work):

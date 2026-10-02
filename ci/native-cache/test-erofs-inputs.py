@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Real compiler regressions for cache keys; all modified inputs are private."""
 import os
+import platform
 import importlib.util
 from pathlib import Path
 import shutil
@@ -21,6 +22,17 @@ class InputsTests(unittest.TestCase):
         self.assertEqual(module.config_site_paths({"CONFIG_SITE": ""}), defaults)
         self.assertEqual(module.config_site_paths({"CONFIG_SITE": "/a/site /b/site"}), ["/a/site", "/b/site"])
 
+    def test_linker_map_preserves_real_paths_and_excludes_only_arm_pseudo_input(self):
+        spec = importlib.util.spec_from_file_location("erofs_inputs", CACHE.with_name("erofs-inputs.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        text = "\n".join(("LOAD /usr/lib/crt1.o", "LOAD linker stubs",
+                          "LOAD ./linker stubs", "LOAD /private/linker stubs",
+                          "LOAD missing-real-input.a", "OUTPUT(probe elf64-littleaarch64)"))
+        self.assertEqual(module.linker_map_paths(text),
+                         {"/usr/lib/crt1.o", "./linker stubs", "/private/linker stubs",
+                          "missing-real-input.a"})
+
     def test_consumed_inputs_and_source_relocation(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -31,7 +43,7 @@ class InputsTests(unittest.TestCase):
             (native / "source.tar.gz").write_bytes(b"source identity fixture\n")
             (native / "deps/build-erofs.sh").write_text("# --without-openssl legacy uuid recipe\n")
             (native / "deps/common.sh").write_text("# source fixture\n")
-            env = dict(os.environ, KUASAR_WORKSPACE_ROOT=str(workspace), CROSS_PREFIX="", TARGET_ARCH="x86_64")
+            env = dict(os.environ, KUASAR_WORKSPACE_ROOT=str(workspace), CROSS_PREFIX="", TARGET_ARCH=platform.machine())
             for name in ("EROFS_TARBALL", "EROFS_TARBALL_SHA256", "CC", "CFLAGS", "CPPFLAGS", "LDFLAGS", "LIBS", "PKG_CONFIG_SYSROOT_DIR", "PKG_CONFIG_LIBDIR"):
                 env.pop(name, None)
 
