@@ -1,12 +1,12 @@
 version: release-v0.1.6
 delivery: workbench-v1
 previous_version: release-v0.1.5
-preview_version: preview.20261002
+preview_version: preview.20261002.1
 previous_preview_version: preview.20260929
 components:
   accelerator: v0.1.6-preview.20261001
   connector: v0.1.5-preview.20260926
-  sandboxer: v0.1.6-preview.20261001
+  sandboxer: v0.1.6-preview.20261002.1
   orchestrator: v0.1.6-preview.20261001
   runtime: runtime-v0.1.6-preview.20261001
   vmlinux: vmlinux-v0.1.3
@@ -14,5 +14,5 @@ test_revisions:
   accelerator: 13a0fe972acec5cce852be193f773116fc97a0f1
   connector: 9744fa79117d45ecb1af1ebaefbb8fe53c7f4dbc
   guest-runtime: 974b425fb102acb8910f1197cf4842d4cd073029
-  sandboxer: 440ebee0aa777d21f556e7f906b6d1e96af84f70
+  sandboxer: dd5d55195257dcb29b07dd2a2da4e23cf47871c2
   orchestrator: fbac797c645734e4ebef185eef207a8e46fd83b9
