@@ -162,7 +162,7 @@ for arch, machine in (('x86_64', 62), ('aarch64', 183)):
     directory = root / arch
     directory.mkdir(parents=True)
     names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'usage-probe']
-    if arch == 'x86_64': names.append('cgroup-fork-probe')
+    names.append('cgroup-fork-probe')
     records = {}
     for name in names:
         header = bytearray(64)

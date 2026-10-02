@@ -140,11 +140,14 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             if source.exists():
                 workspace.files(source)
                 shutil.copytree(source, work / name)
+        selected_helpers = workspace.required_helpers([case.name for case in cases])
+        helper_identity = provenance
         if "helpers" not in provenance:
             helper_root = work / "test/e2e/helpers" / arch
             metadata = json.loads((helper_root / "helpers.json").read_text())
             workspace.require(metadata["arch"] == arch, "helper package has the wrong architecture")
             helpers = metadata["helpers"]
+            helper_identity = metadata
             workspace.require(set(workspace.files(helper_root)) == {"helpers.json", *helpers}, "undeclared helper package files")
             (work / "fixtures/bin").mkdir(parents=True, exist_ok=True)
             for name, record in helpers.items():
@@ -158,7 +161,14 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             missing = sorted(set(workspace.required_helpers([case.name])) - set(provenance['helpers']))
             workspace.require(not missing,
                               f"{case.name} requires prepared helper(s) {', '.join(missing)} for {arch}")
-        for name in workspace.required_helpers([case.name for case in cases]):
+        for name, owner in selected_helpers.items():
+            source = (helper_identity.get('framework_sha') if owner == 'framework' else
+                      helper_identity.get('test_revisions', {}).get(owner))
+            if isinstance(source, dict):
+                source = source.get('sha')
+            workspace.require(isinstance(source, str) and re.fullmatch(r'[0-9a-f]{40}', source) and
+                              provenance['helpers'][name].get('source_sha') == source,
+                              f"prepared helper source identity mismatch: {name} for {arch}")
             path = work / 'fixtures/bin' / name
             workspace.require(path.is_file() and not path.is_symlink() and
                               workspace.digest(path) == provenance['helpers'][name]['sha256'],

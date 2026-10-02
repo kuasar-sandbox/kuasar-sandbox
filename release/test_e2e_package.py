@@ -22,8 +22,7 @@ class PrebuiltPackage(unittest.TestCase):
         self.metadata, self.files = {}, {'test/e2e/cases/basic.fixture.sh': (b'exit 0\n', 0o644)}
         self.directories = []
         for arch, machine in [('x86_64', 62), ('aarch64', 183)]:
-            names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'usage-probe']
-            if arch == 'x86_64': names += ['cgroup-fork-probe']
+            names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'usage-probe', 'cgroup-fork-probe']
             helpers = {}
             for name in names:
                 data = bytearray(64)
@@ -53,6 +52,26 @@ class PrebuiltPackage(unittest.TestCase):
 
     def test_both_architectures_have_complete_exact_helpers(self):
         self.validate()
+
+    def test_arm_cgroup_probe_is_required_in_new_release_packages(self):
+        del self.metadata['aarch64']['helpers']['cgroup-fork-probe']
+        del self.files['test/e2e/helpers/aarch64/cgroup-fork-probe']
+        with self.assertRaisesRegex(ValueError, 'missing or unexpected prebuilt E2E helper'):
+            self.validate()
+
+    def test_arm_probe_architecture_hash_and_source_are_checked(self):
+        name = 'test/e2e/helpers/aarch64/cgroup-fork-probe'
+        data, mode = self.files[name]
+        self.files[name] = self.files[name.replace('aarch64', 'x86_64')]
+        with self.assertRaisesRegex(ValueError, 'binary architecture'):
+            self.validate()
+        self.files[name] = (data + b'tamper', mode)
+        with self.assertRaisesRegex(ValueError, 'checksum'):
+            self.validate()
+        self.files[name] = (data, mode)
+        self.metadata['aarch64']['helpers']['cgroup-fork-probe']['source_sha'] = 'c' * 40
+        with self.assertRaisesRegex(ValueError, 'source identity'):
+            self.validate()
 
     def test_owner_guides_and_their_directories_are_packaged(self):
         for owner in ('accelerator', 'guest-runtime'):

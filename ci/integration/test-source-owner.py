@@ -4,7 +4,7 @@ ROOT=pathlib.Path(__file__).resolve().parents[2]
 INTEGRATION=ROOT/"ci/integration"
 HELPER=INTEGRATION/"source-owner.sh"
 import artifacts
-from test_fixtures import selection
+from test_fixtures import CASES, selection
 
 def run(cmd,owner): return subprocess.run(["bash",str(HELPER),cmd,owner],text=True,capture_output=True)
 
@@ -69,6 +69,21 @@ class PreparedHelperSelectionTest(unittest.TestCase):
         self.assertNotIn("cgroup-fork-probe",artifacts.planned_helpers(lifecycle))
         arm=selection(["sandboxer"],"aarch64",{"sandboxer":["sandbox.cgroup.sh"]})
         self.assertNotIn("cgroup-fork-probe",artifacts.planned_helpers(arm))
+    def test_sparse_executor_import_does_not_require_preparation_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / 'ci/integration'
+            target.mkdir(parents=True)
+            shutil.copy2(INTEGRATION / 'artifacts.py', target / 'artifacts.py')
+            result = subprocess.run(['python3', '-B', '-c',
+                'import artifacts; assert artifacts.case_name("sandbox.cgroup.sh") == "sandbox.cgroup.sh"'],
+                cwd=target, text=True, capture_output=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_native_arm_full_selection_requires_the_same_probe(self):
+        native = artifacts.suite_selection(['sandboxer'], 'aarch64',
+                    CASES | {'sandboxer': ['sandbox.cgroup.sh']}, native_full=True)
+        self.assertEqual(artifacts.planned_helpers(native)['cgroup-fork-probe'], 'sandboxer')
+
     def test_cgroup_probe_uses_only_exact_sandboxer_test_source(self):
         profile=selection(["sandboxer"],"x86_64",{"sandboxer":["sandbox.cgroup.sh"]})
         plan={"lanes":{"x86_64":{"selection":profile,"embedded_products":[]}},"test_overlays":["sandboxer"],"product_sources":{}}

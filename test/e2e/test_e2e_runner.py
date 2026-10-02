@@ -179,7 +179,9 @@ class PreparedRunnerTests(unittest.TestCase):
             struct.pack_into('<H', header, 18, 62 if platform.machine() == 'x86_64' else 183)
             (root / name).write_bytes(header)
             (root / name).chmod(0o755)
-            metadata['helpers'][name] = {'sha256': runner.workspace.digest(root / name)}
+            metadata['framework_sha'] = 'a' * 40
+            metadata['test_revisions'] = {'sandboxer': 'a' * 40, 'orchestrator': 'a' * 40}
+            metadata['helpers'][name] = {'sha256': runner.workspace.digest(root / name), 'source_sha': 'a' * 40}
         (root / 'helpers.json').write_text(json.dumps(metadata))
 
     def test_missing_selected_helper_fails_before_fixture_work(self):
@@ -188,6 +190,20 @@ class PreparedRunnerTests(unittest.TestCase):
         self.install_test_helpers(['zot', 'usage-probe'])
         with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
             with self.assertRaisesRegex(ValueError, 'sandbox.cgroup.sh requires prepared helper.*cgroup-fork-probe'):
+                runner.cmd_prepare(self.args_with(include=[case]))
+        prepare.assert_not_called()
+        self.assertFalse(self.work.exists())
+
+    def test_selected_helper_source_mismatch_fails_before_fixture_work(self):
+        case = 'sandbox.cgroup.sh'
+        (self.release / 'test/e2e/cases' / case).write_text('exit 0\n')
+        self.install_test_helpers(['zot', 'usage-probe', 'cgroup-fork-probe'])
+        path = self.release / 'test/e2e/helpers' / platform.machine() / 'helpers.json'
+        metadata = json.loads(path.read_text())
+        metadata['helpers']['cgroup-fork-probe']['source_sha'] = 'b' * 40
+        path.write_text(json.dumps(metadata))
+        with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
+            with self.assertRaisesRegex(ValueError, 'helper source identity mismatch: cgroup-fork-probe'):
                 runner.cmd_prepare(self.args_with(include=[case]))
         prepare.assert_not_called()
         self.assertFalse(self.work.exists())

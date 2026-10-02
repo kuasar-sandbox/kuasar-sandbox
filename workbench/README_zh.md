@@ -71,11 +71,21 @@ python3 workbench/workbench --root "$STATE" --name e2e exec -- \
   --arch "$ARCH" --suite image --suite storage --exclude storage.obs.sh
 ```
 
-这些套件是原生 ARM 的最小示例。托管 ARM 发布 CI 没有 KVM 设备，因此仅检查资产字节和镜像导入，不代表系统或离线验收。使用已发布镜像的独立原生 KVM 验收还在 ARM 执行 `sandbox.lifecycle.sh`、
-`snapshot.restore.sh` 和 `network.tapfd.sh`；在两个命令都加入对应的三个 `--include`
-选项可覆盖该范围。在 x86_64 上，prepare 和 run 都应使用当前完整
-普通选择 `--all --exclude storage.obs.sh`。完整选择请使用 `--network bridge` 启动：prepare 的 `--offline` 仍禁止依赖下载，而 Demo 的 run 需要真实 Internet 出站访问。发布验收还会在 prepare 期间断开所属 bridge，仅在准备结束后重新连接。不得删除用例架构检查。需要凭据的 OBS
-仍由用户显式选择，并需要相应网络和凭据。
+以上示例只是子集，不代表完整覆盖。在原生 x86_64 和 aarch64 上，prepare 和 run
+都使用 `--all --exclude storage.obs.sh`，从选定发布版生成完整常规用例集合。
+ARM 全量执行要求真实 KVM/内核前置条件、支持 ARM PMEM/DAX 的 Guest 内核，
+以及发布包中的静态 ARM `cgroup-fork-probe`；必要输入缺失时在 prepare 阶段失败。
+用例数量随发布版文件变化，不固定为某次历史数量。
+
+全量选择使用 `--network bridge` 启动：prepare 的 `--offline` 禁止依赖下载，
+Demo 的 run 则要求真实 Internet 出站。发布验收还会在 prepare 期间断开所属
+bridge，准备完成后重新连接。保留全部架构、DAX 和退出码断言。
+需要凭据的 OBS 仍须显式选择，并提供相应网络和凭据。
+
+新的原生发布验收记录 `qualification_scope=native-full`，绑定完整用例列表、
+退出码、内核/helper/产品来源及 workbench 身份。历史 `system` 证据保留原有
+选择范围，不能改标为全量。没有 KVM 的托管 ARM 保留非 KVM CI 和
+`artifact-only` 发布验收，不声称完成系统或离线执行。
 
 `--network none` 移除外层实例的外部网络，私有 Guest、Registry、Store 和 Proxy
 通信仍然可用。镜像默认设置 `E2E_DEPS_DIR=/opt/workbench/deps` 和 `E2E_OFFLINE=1`。

@@ -23,10 +23,6 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 
-_workspace_spec = importlib.util.spec_from_file_location(
-    'public_e2e_workspace', ROOT / 'test/e2e/lib/workspace.py')
-_public_workspace = importlib.util.module_from_spec(_workspace_spec)
-_workspace_spec.loader.exec_module(_public_workspace)
 ARCHES = ("x86_64", "aarch64")
 OWNERS = ("accelerator", "connector", "guest-runtime", "sandboxer", "orchestrator", "platform")
 UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vmlinux")
@@ -149,7 +145,7 @@ DEFAULT_SUITES = {
 }
 
 
-def suite_selection(owners, arch, case_files):
+def suite_selection(owners, arch, case_files, *, native_full=False):
     """Select broad suites from exact source filenames, then apply lane limits."""
     require(arch in ARCHES and set(owners) <= set(OWNERS), "invalid suite selection request")
     require(isinstance(case_files, dict) and set(case_files) == set(OWNERS), "incomplete test case source set")
@@ -170,7 +166,7 @@ def suite_selection(owners, arch, case_files):
     if 'storage.obs.sh' in chosen:
         chosen.remove('storage.obs.sh')
         exclusions.append({'case': 'storage.obs.sh', 'reason': 'credentialed OBS case requires explicit opt-in'})
-    if arch == 'aarch64':
+    if arch == 'aarch64' and not native_full:
         supported = by_owner['accelerator'] | by_owner['guest-runtime']
         for name in sorted(chosen - supported):
             exclusions.append({'case': name, 'reason': 'outside the accepted native ARM non-KVM subset'})
@@ -189,7 +185,13 @@ def shards(selection):
 
 
 def planned_helpers(selection):
-    return _public_workspace.required_helpers(selection['cases'])
+    # Only build/compose needs the public preparation helper contract. Sparse
+    # execution/finalization checkouts must still import the metadata readers.
+    spec = importlib.util.spec_from_file_location(
+        'public_e2e_workspace', ROOT / 'test/e2e/lib/workspace.py')
+    workspace = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(workspace)
+    return workspace.required_helpers(selection['cases'])
 
 
 def archive_name(unit, version, arch):
@@ -585,9 +587,9 @@ def verify_workspace(workspace, plan, arch):
     return provenance
 
 
-def workbench_cases(case_files, arch):
-    cases = set(suite_selection(['platform'], arch, case_files)['cases'])
-    if arch == 'aarch64':
+def workbench_cases(case_files, arch, *, native_full=False):
+    cases = set(suite_selection(['platform'], arch, case_files, native_full=native_full)['cases'])
+    if arch == 'aarch64' and not native_full:
         extra = {'sandbox.lifecycle.sh', 'snapshot.restore.sh', 'network.tapfd.sh'}
         require(extra <= set().union(*(set(names) for names in case_files.values())), 'missing declared ARM workbench KVM/network cases')
         cases |= extra
@@ -608,14 +610,14 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
         require(type(record.get('size')) is int and 0 < record['size'] < 2 * 1024**3,
                 'workbench compressed archive must be smaller than 2 GiB')
         scope = record.get('qualification_scope')
-        require(scope == 'system' or (arch == 'aarch64' and scope == 'artifact-only'),
+        require(scope in ('system', 'native-full') or (arch == 'aarch64' and scope == 'artifact-only'),
                 'workbench requires an explicit supported qualification scope')
         require(record.get('imported_image_id') == record['image_id']
                 and record.get('release_inputs_verified') is True,
                 'workbench archive import and release input verification are required')
         require(record.get('input_assets') == expected_assets, 'workbench input assets differ from the aggregate')
         for key in ('compression_seconds', 'import_seconds', 'wall_seconds',
-                    *(('start_seconds',) if scope == 'system' else ())):
+                    *(('start_seconds',) if scope != 'artifact-only' else ())):
             value = record.get(key)
             require(type(value) in (int, float) and math.isfinite(value) and value >= 0,
                     'missing or invalid workbench measurement: ' + key)
@@ -646,7 +648,7 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
                 and preflight['docker'].get('root') == '/var/lib/docker'
                 and preflight.get('containerd') == {'root': '/var/lib/containerd', 'state': '/run/containerd'},
                 'workbench daemons do not use their private storage')
-        require(record.get('cases') == workbench_cases(case_files, arch) and record.get('timings'),
+        require(record.get('cases') == workbench_cases(case_files, arch, native_full=scope == 'native-full') and record.get('timings'),
                 'workbench cases differ from the complete declared selection')
         check_timings(record['timings'], record['cases'])
         require(re.fullmatch(r'[0-9a-f]{64}', record.get('provenance_sha256', '')),

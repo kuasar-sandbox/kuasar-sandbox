@@ -91,7 +91,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
                               'release input bytes differ from exact stage: ' + name)
             artifacts.unpack(path, release, owner, seen)
         result['release_inputs_verified'] = True
-        cases = artifacts.workbench_cases(plan['case_files'], arch)
+        cases = artifacts.workbench_cases(plan['case_files'], arch, native_full=not artifact_only)
         result['cases'] = cases
         if artifact_only:
             # Hosted ARM runners do not expose KVM. Still qualify the exact
@@ -102,7 +102,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
             result['cases'] = []
             result['conclusion'] = 'success'
             return result
-        result['qualification_scope'] = 'system'
+        result['qualification_scope'] = 'native-full'
         start = time.monotonic()
         subprocess.run([*command, 'start', '--image', image, '--inputs', release, '--network', 'bridge',
                         '--cpus', str(cpus), '--memory-gib', str(memory_gib), '--timeout', '90'], check=True)

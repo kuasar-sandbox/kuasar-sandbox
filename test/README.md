@@ -20,7 +20,15 @@ sudo python3 /tmp/kuasar-prepared/test/e2e/e2e run --workdir /tmp/kuasar-prepare
 
 Preparation accepts `--deps-dir` / `E2E_DEPS_DIR` for verified local image archives and `--offline` / `E2E_OFFLINE=1` to prohibit dependency downloads. Unconfigured environments remain online. Local matches are validated without remote freshness checks; invalid matches never trigger remote repair. External requests come from one case/architecture function, which build-time input collection can also call. See [local and offline preparation](QUICKSTART.md#local-and-offline-preparation) for precedence, identity evidence and failure behavior.
 
-CI resolves exact test filenames and selects broad suites for changed owners. Source builds finish before preparation. Products retain their own source closure while test scripts and helper binaries use independent test pins. CI preparation runs in an isolated runtime with no Go/Rust toolchains or component source trees. Every suite shard invokes the same packaged runner; storage, snapshot and ARM image acceptance also use an isolated runtime. Preparation and execution image IDs and environment checks are bound to their results. Results require every selected case's successful exit and one unchanged prepared input identity. ARM selects accelerator and guest-runtime non-KVM cases; exclusions are explicit. A static lane has zero product cases and is never product E2E acceptance.
+Native x86_64 and aarch64 use the same public `--all --exclude storage.obs.sh`
+selection. Preparation requires the real host, product, helper and image
+architectures to agree, including both orchestrator fixture variants. Selected
+helpers are checked before expensive generation; `sandbox.cgroup.sh` requires
+the exact-source static no-libc probe in that architecture's `helpers.json`.
+Unselected helpers are not prerequisites. Demo consumes the prepared local
+native image identity, never a replacement or a second ARM digest list.
+
+CI resolves exact test filenames and selects broad suites for changed owners. Source builds finish before preparation. Products retain their own source closure while test scripts and helper binaries use independent test pins. CI preparation runs in an isolated runtime with no Go/Rust toolchains or component source trees. Every suite shard invokes the same packaged runner; storage, snapshot and ARM image acceptance also use an isolated runtime. Preparation and execution image IDs and environment checks are bound to their results. Results require every selected case's successful exit and one unchanged prepared input identity. Hosted ARM CI selects accelerator and guest-runtime non-KVM cases; exclusions are explicit. A static lane has zero product cases and is never product E2E acceptance.
 
 Unit, race, vet, source helper, UFFD performance and working-set gates remain independent. `test/perf/warmpool-dedup.sh` retains the warm-pool characterization and its data/measurement assertions under `make perf-warmpool-dedup`; it is not a correctness suite. Component source checks stay in their owning repositories.
 
