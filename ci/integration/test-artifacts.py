@@ -74,6 +74,57 @@ def runtime(root, arch, files):
     return prefix + footer(hashlib.sha256(prefix).hexdigest())
 
 
+class SourceTestPinContracts(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location("source_pin_resolver", Path(__file__).with_name("resolve-artifacts.py"))
+        self.resolver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(self.resolver)
+        self.pins = {owner: "b" * 40 for owner in subject.OWNERS if owner != "platform"}
+        self.baseline = {"test_revisions": subject.release_test_revisions(self.pins, "a" * 40)}
+        self.record = {"base_sha": "c" * 40, "candidate_sha": "d" * 40}
+
+    def resolve(self, before, after, record=True):
+        def manifest(pins):
+            return "test_revisions:\n" + "".join(f"  {owner}: {sha}\n" for owner, sha in pins.items())
+        with patch.object(self.resolver, "source_text", side_effect=[manifest(before), manifest(after)]) as source:
+            result = self.resolver.source_test_revisions(self.baseline, self.record if record else None, "c" * 40, "main")
+        return result, source.call_count
+
+    def test_unpublished_inherited_pins_do_not_mix_with_predecessor_products(self):
+        inherited = {owner: "e" * 40 for owner in self.pins}
+        result, calls = self.resolve(inherited, inherited)
+        self.assertEqual(calls, 2)
+        for owner, sha in self.pins.items():
+            self.assertEqual(result[owner]["sha"], sha)
+        self.assertEqual(result["platform"]["sha"], self.record["candidate_sha"])
+
+    def test_explicit_platform_pin_change_is_preserved(self):
+        inherited = {owner: "e" * 40 for owner in self.pins}
+        result, _ = self.resolve(inherited, inherited | {"sandboxer": "f" * 40})
+        self.assertEqual(result["sandboxer"]["sha"], "f" * 40)
+        self.assertEqual(result["orchestrator"]["sha"], self.pins["orchestrator"])
+
+    def test_component_pr_uses_paired_baseline_before_its_owner_override(self):
+        result, calls = self.resolve({}, {}, record=False)
+        self.assertEqual(calls, 0)
+        self.assertEqual(result["orchestrator"]["sha"], self.pins["orchestrator"])
+        self.assertEqual(result["platform"]["sha"], "c" * 40)
+
+    def test_complete_release_retains_independent_test_pins(self):
+        result, _ = self.resolve(self.pins, self.pins)
+        self.assertEqual(result["orchestrator"], self.baseline["test_revisions"]["orchestrator"])
+
+    def test_missing_baseline_test_identity_is_not_guessed(self):
+        del self.baseline["test_revisions"]["orchestrator"]
+        with self.assertRaisesRegex(ValueError, "owner test pins"):
+            self.resolve(self.pins, self.pins)
+
+    def test_candidate_does_not_mutate_baseline_evidence(self):
+        before = json.dumps(self.baseline, sort_keys=True)
+        self.resolve(self.pins, self.pins | {"sandboxer": "f" * 40})
+        self.assertEqual(json.dumps(self.baseline, sort_keys=True), before)
+
+
 class ReleasedCaseLayout(unittest.TestCase):
     def test_platform_user_material_and_historical_docs_keep_ownership(self):
         with tempfile.TemporaryDirectory() as directory:

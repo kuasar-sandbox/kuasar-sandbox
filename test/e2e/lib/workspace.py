@@ -191,6 +191,29 @@ def needs_orchestrator_images(names):
             bool(set(names) & {'telemetry.backends.sh', 'telemetry.guest.sh', 'telemetry.proxy.sh'}))
 
 
+def required_helpers(cases):
+    """Return the existing case-selected helper owners for build and prepare."""
+    cases = set(cases)
+    orchestrator = any(name.startswith(('orchestrator.', 'builder.')) for name in cases)
+    orchestrator |= bool(cases & {'telemetry.backends.sh', 'telemetry.guest.sh', 'telemetry.proxy.sh'})
+    sandboxer = any(name.startswith(('sandbox.', 'snapshot.')) for name in cases)
+    sandboxer |= bool(cases & {'network.tapfd.sh', 'image.manifest-boot.sh', 'image.sandbox-assembly.sh',
+                               'telemetry.usage.sh', 'telemetry.usage-faults.sh', 'telemetry.source-faults.sh'})
+    helpers = {}
+    if orchestrator or sandboxer or cases & {'basic.demo.sh', 'image.flatten.sh', 'image.registry.sh'}:
+        helpers['zot'] = 'framework'
+    if orchestrator or 'basic.demo.sh' in cases:
+        helpers['versitygw'] = 'framework'
+    if orchestrator:
+        helpers.update({'custom-proxy': 'orchestrator', 'telemetry-grpc-probe': 'orchestrator'})
+    if sandboxer:
+        helpers['usage-probe'] = 'sandboxer'
+    if 'sandbox.cgroup.sh' in cases:
+        helpers['cgroup-fork-probe'] = 'sandboxer'
+    return helpers
+
+
+
 def relative_input(name):
     require(isinstance(name, str) and name and '\\' not in name and '\x00' not in name and
             not Path(name).is_absolute() and all(part not in ('', '.', '..') for part in name.split('/')),
@@ -433,7 +456,7 @@ def prepare_fixtures(root, arch, cases, deps_dir=None, offline=False):
                 subprocess.run(['timeout', '3m', 'docker', 'pull', '--platform=' + target, reference], env=environment, check=True)
                 save(label, reference, 'platform')
         if orchestrator:
-            require(platform.machine() == arch == 'x86_64', 'orchestrator image preparation requires native x86')
+            require(platform.machine() == arch, 'orchestrator image preparation requires the selected native architecture')
             if 'python' in local:
                 load_images(root, {'images': {'python': images['python']}}, environment)
             for variant in ('base', 'execute'):

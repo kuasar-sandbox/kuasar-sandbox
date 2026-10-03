@@ -70,8 +70,7 @@ def validate(path, expected_pins=None):
             artifacts.require(previous is None or previous == (framework, pins), 'architecture helper source sets differ')
             previous = (framework, pins)
             helpers = metadata['helpers']
-            required = {'zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'usage-probe'}
-            if arch == 'x86_64': required.add('cgroup-fork-probe')
+            required = {'zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'usage-probe', 'cgroup-fork-probe'}
             artifacts.require(set(helpers) == required, 'missing or unexpected prebuilt E2E helper')
             actual = {name.removeprefix(root) for name, entry in members.items() if name.startswith(root) and entry.isfile()}
             artifacts.require(actual == {'helpers.json', *helpers}, 'undeclared helper package files')

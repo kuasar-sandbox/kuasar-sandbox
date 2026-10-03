@@ -69,6 +69,42 @@ class BindingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'identity differs'):
             artifacts.check_registry_binding(self.version, binding)
 
+    def native_full(self):
+        results = copy.deepcopy(self.results)
+        for arch, record in results.items():
+            cases = artifacts.workbench_cases(self.plan['case_files'], arch, native_full=True)
+            record.update(qualification_scope='native-full', cases=cases,
+                          timings=[{'case': case, 'exit_code': 0, 'wall_seconds': .1} for case in cases])
+        return results
+
+    def test_native_full_has_equal_public_case_sets_without_changing_hosted_arm(self):
+        results = self.native_full()
+        self.assertEqual(results['aarch64']['cases'], results['x86_64']['cases'])
+        self.assertIn('orchestrator.exec.sh', results['aarch64']['cases'])
+        self.assertNotIn('storage.obs.sh', results['aarch64']['cases'])
+        self.assertNotIn('orchestrator.exec.sh', self.plan['lanes']['aarch64']['selection']['cases'])
+        binder.bind(self.root, self.plan, self.validation, results)
+
+    def test_old_system_and_artifact_evidence_cannot_be_relabelled_native_full(self):
+        for results in (copy.deepcopy(self.results), self.artifact_only()):
+            results['aarch64']['qualification_scope'] = 'native-full'
+            with self.assertRaises(ValueError):
+                binder.bind(self.root, self.plan, self.validation, results)
+
+    def test_native_full_rejects_missing_case_failure_or_missing_native_preflight(self):
+        for mutation in ('omit', 'fail', 'preflight'):
+            results = self.native_full()
+            record = results['aarch64']
+            if mutation == 'omit':
+                record['cases'].pop()
+                record['timings'].pop()
+            elif mutation == 'fail':
+                record['timings'][0]['exit_code'] = 1
+            else:
+                record['preflight'] = {}
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                binder.bind(self.root, self.plan, self.validation, results)
+
     def test_missing_arch_input_or_declared_asset_never_becomes_history(self):
         for name in ('workbench-aarch64-v1.2.3.tar.gz', artifacts.archive_name('connector', 'v1.2.3', 'aarch64')):
             broken = copy.deepcopy(self.plan)
@@ -153,6 +189,10 @@ class BindingTests(unittest.TestCase):
             artifact_binding = copy.deepcopy(original)
             artifact_binding['workbench'] = self.artifact_only()
             notes(artifact_binding)
+            self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
+            native_binding = copy.deepcopy(original)
+            native_binding['workbench'] = self.native_full()
+            notes(native_binding)
             self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
             notes(original)
             state['assets'] = [row for row in assets if not row['name'].startswith('workbench-')]

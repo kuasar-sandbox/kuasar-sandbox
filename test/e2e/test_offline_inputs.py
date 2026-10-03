@@ -343,6 +343,35 @@ class InputTests(unittest.TestCase):
         self.assertFalse(any('pull' in call for call in calls))
         self.assertEqual(set(result['images']), {'python', 'orchestrator-base', 'orchestrator-execute'})
 
+    def test_native_arm_derived_images_keep_arm_identity_and_no_pull(self):
+        self.record = image_fixture(self.deps, arch='arm64')
+        self.write_records()
+        helper = self.work / 'test/e2e/lib/orchestrator/prepare_base_image.sh'
+        helper.parent.mkdir(parents=True)
+        helper.write_text('# tested recipe invocation; no external commands in this test\n')
+        def execute(command, **kwargs):
+            if command[:3] == ['docker', 'image', 'save']:
+                shutil.copyfile(self.deps / self.record['archive'], command[4])
+            return subprocess.CompletedProcess(command, 0)
+        inspected = json.dumps([{'Id': self.record['image_id'], 'Os': 'linux', 'Architecture': 'arm64'}]).encode()
+        with patch.object(workspace.platform, 'machine', return_value='aarch64'), patch.object(
+                workspace.subprocess, 'run', side_effect=execute) as run, patch.object(
+                workspace.subprocess, 'check_output', return_value=inspected):
+            result = workspace.prepare_fixtures(self.work, 'aarch64', ['orchestrator.exec.sh'], self.deps, True)
+        calls = [call.args[0] for call in run.call_args_list]
+        self.assertEqual([c[-1] for c in calls if c[0] == 'bash'], ['base', 'execute'])
+        self.assertFalse(any('pull' in c for c in calls))
+        self.assertTrue(all(i['platform'] == 'linux/arm64' for i in result['images'].values()))
+
+    def test_orchestrator_cross_architecture_still_rejected(self):
+        self.record = image_fixture(self.deps, arch='arm64')
+        self.write_records()
+        with patch.object(workspace.platform, 'machine', return_value='x86_64'), patch.object(
+                workspace.subprocess, 'run') as run:
+            with self.assertRaisesRegex(ValueError, 'requires the selected native architecture'):
+                workspace.prepare_fixtures(self.work, 'aarch64', ['orchestrator.exec.sh'], self.deps, True)
+        run.assert_not_called()
+
     def test_missing_or_corrupt_selected_input_prevents_any_remote_repair(self):
         for offline in (True, False):
             self.record['sha256'] = 'f' * 64

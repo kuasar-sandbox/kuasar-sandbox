@@ -98,12 +98,14 @@ owner 测试 revision 与产品 tag 独立。新聚合在维护清单的 `test_r
 使用独立源码工作区。prepared provenance、shard/架构结果及现有发布验证 binding 均保留 pin，后续 baseline 核验并复用它们。
 缺失或不匹配会失败，不回退到产品 tag 或执行时的分支 HEAD；仅测试变更不会重建复用的产品。
 
+当基线解析使用显式声明的上一份已发布聚合时，未修改 owner 的测试 pin 与产品字节一起保留该聚合已经独立记录的身份，不能混入尚未发布成功的新清单中仅继承的 pin。平台 PR 相对其准入 base 显式修改的测试 pin 仍然生效；候选与 companion owner 仍使用各自精确集成源码的测试。这避免把新功能测试与旧产品混搭，不修改用例断言或发行选择。
+
 产品合同为预构建产品 → `e2e prepare` → `<suite>.<case>.sh` → 共享公开入口 `e2e run`。完整文件名就是用例 ID，
 首段只能是 `basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder` 或 `telemetry`。
 内部 CI shard 按 suite 分组精确文件，plan 在执行前记录所选用例和架构排除项。
 
 source/helper build 生成目标架构的 zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe，
-以及 x86 cgroup probe。发布包携带两种架构的 helper、精确测试 pin 和摘要。同一更早的 build 阶段按 `test/demo/requirements.lock`
+以及静态无 libc 的 x86_64/aarch64 cgroup probe。发布包携带两种架构的 helper、精确测试 pin 和摘要。同一更早的 build 阶段按 `test/demo/requirements.lock`
 获取 Python 3.12 的完整 Demo SDK wheel 依赖闭包，固定全部版本及 wheel 摘要；发布包携带两种架构的 wheelhouse。prepare 消费这些二进制，
 准备 manifest archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像，并仅从本地 wheelhouse 通过
 `--no-index --find-links` 和 `--require-hashes` 安装 Demo SDK。wheel 缺失或变化时在安装前失败。provenance 绑定包名、版本、wheel 摘要、lock 身份和安装后的文件树。

@@ -5,11 +5,18 @@
 # services, processes, network objects, and teardown order.
 
 DEMO_OWNER_MARKER_VERSION=kuasar-demo-owner-v1
-# One canonical linux/amd64 source image selection is shared by preparation
-# and Integration E2E. The E2E wrapper may prepend its existing registry
-# mirror, but it must not maintain a second digest list.
+# Resolve the native platform once. Artifact E2E supplies its already prepared
+# image; standalone Demo resolves this logical default once to an exact ID.
 # shellcheck disable=SC2034 # Used by scripts that source this helper.
-DEMO_DEFAULT_E2E_IMAGE=library/python:3.12-slim@sha256:2fe5997d249a808b8eeea52c58a1dbffbba28754dc11699ef5c029f2d818ce79
+DEMO_DEFAULT_E2E_IMAGE=python:3.12-slim
+
+demo_native_platform() {
+    case "$(uname -m)" in
+        x86_64|amd64) printf '%s\n' linux/amd64 ;;
+        aarch64|arm64) printf '%s\n' linux/arm64 ;;
+        *) echo 'unsupported native Demo architecture' >&2; return 1 ;;
+    esac
+}
 
 demo_die() {
     echo "  x $*" >&2

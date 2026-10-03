@@ -82,12 +82,24 @@ python3 workbench/workbench --root "$STATE" --name e2e exec -- \
   --arch "$ARCH" --suite image --suite storage --exclude storage.obs.sh
 ```
 
-These suites are a minimal native ARM example. Hosted ARM release CI checks artifact bytes and image import only because it has no KVM device; this is not system/offline acceptance. Separate native KVM acceptance with the published image also runs
-`sandbox.lifecycle.sh`, `snapshot.restore.sh` and `network.tapfd.sh` on ARM; add
-those three `--include` options to both commands to exercise that scope. On x86_64 use the
-current full ordinary selection, `--all --exclude storage.obs.sh`, for both
-prepare and run. For that full selection, start with `--network bridge`: `--offline` still blocks dependency fetches during prepare, while the existing Demo requires real Internet egress during run. Release qualification additionally disconnects the owned bridge during prepare and restores it only afterward. Do not remove case architecture guards. Credentialed OBS
-remains an explicit choice requiring its own network and credentials.
+The example is a subset, not full coverage. On both native x86_64 and aarch64,
+use `--all --exclude storage.obs.sh` for both prepare and run to select the
+complete ordinary cases from the chosen release. Full ARM execution requires
+actual KVM/kernel prerequisites, a Guest kernel with ARM PMEM/DAX support and
+the release's static ARM `cgroup-fork-probe`; missing inputs fail during prepare.
+The case count follows the release's files, not a fixed historical count.
+
+For full selection, start with `--network bridge`: `--offline` prohibits
+dependency fetches during prepare, while Demo requires real Internet egress
+in run. Release qualification also disconnects the owned bridge during prepare
+and reconnects it afterward. Keep every architecture, DAX and exit assertion.
+Credentialed OBS remains an explicit choice with its own network and credentials.
+
+New native release qualification records `qualification_scope=native-full`
+and binds the complete case list, exits, kernel/helper/product provenance and
+workbench identity. Historical `system` evidence keeps its original selection;
+it cannot be relabelled full. Hosted ARM without KVM retains non-KVM CI and
+`artifact-only` release qualification with no claimed system/offline execution.
 
 `--network none` removes external networking from the outer instance; private
 Guest, Registry, Store and Proxy traffic remains available. The image defaults
