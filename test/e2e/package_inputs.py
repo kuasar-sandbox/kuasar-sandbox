@@ -5,7 +5,7 @@ import shutil
 # Whole maintained user documents. Chinese counterparts are copied when present;
 # the source documentation checker owns the translation policy.
 GUIDES = {
-    'platform': ('README', 'docs/quickstart', 'docs/deployment',
+    'platform': ('README', 'docs/quickstart', 'docs/download', 'docs/deployment',
                  'docs/kuasar-sandbox', 'docs/terminology', 'test/README',
                  'test/QUICKSTART', 'test/demo/DEMO', 'workbench/README'),
     'accelerator': ('README', 'docs/cache', 'docs/cache-redis', 'docs/store',
@@ -22,7 +22,7 @@ GUIDES = {
 PLATFORM_RUNTIME = (
     'test/e2e/e2e', 'test/e2e/lib/common.sh', 'test/e2e/lib/workspace.py',
     'test/e2e/lib/demo_wheels.py', 'test/demo/demo_common.sh',
-    'test/demo/demo_e2b.sh', 'test/demo/demo_prep.sh',
+    'test/demo/demo_e2b.sh', 'test/demo/demo_prep.sh', 'test/demo/prepared.py',
     'test/demo/requirements.txt', 'test/demo/requirements.lock',
     'workbench/workbench',
 )

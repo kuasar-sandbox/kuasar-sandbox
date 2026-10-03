@@ -15,8 +15,8 @@
 主仓聚合入口:
 
 ```bash
-make perf
-make perf-sandbox
+make perf E2E_WORKDIR="$PREPARED"
+make perf-sandbox E2E_WORKDIR="$PREPARED"
 make perf-sandbox-manifest
 make perf-sandbox-working-set
 make perf-density
@@ -50,10 +50,16 @@ Manifest 和 density harness 还会按脚本检查 Docker,网络与文件系统�
 | Timing | 起止事件,是否包含下载/构建/导入,时钟来源和 timeout |
 | Source | harness 命令,环境变量,原始日志,machine-readable samples 和 CI Run URL |
 
-当前 `sandbox-perf.sh` 和 `sandbox-perf-manifest.sh` 的聚合输出只保留成功迭代并报告
-成功样本数 `N`;失败迭代只出现在完整运行日志中.使用这些入口时必须同时保存请求的
-`ITERS`,完整日志以及成功/失败/skip 计数.无法恢复总分母和失败率的聚合输出不能单独
-作为性能证据.
+`sandbox-perf.sh` 通过公共 runner 执行当前 `sandbox.lifecycle.sh` 和
+`image.manifest-boot.sh`，要求 `PREPARED` 已为这些用例完成准备。源码 harness 不随
+platform 发布，Makefile 直接从源码路径调用，不重新构建预备产品。Case wallclock
+包含用例设置、断言及清理，不是 `Sandbox.create()` 到就绪，也不与历史 T0→exit
+数值直接比较。原始 stats、runner result 和失败日志全部保留；可变用例状态使用独立短目录
+`$TMPDIR/kp-*`（默认 `/var/tmp`，workbench 内为 `/build/tmp`），避免 Unix socket
+路径过长，其位置记录在报告旁；首个失败会非零退出。
+`make perf` 的其他 harness 仍使用其源码构建输入；比较时必须记录各自来源，不能
+假定它们自动与 `PREPARED` 相同。`sandbox-perf-manifest.sh` 仍只聚合成功样本，引用
+其结果须同时保留请求次数、完整日志及成功/失败/skip 数，不能只依据成功样本数。
 
 结果缺少任一必要维度时,可以用于本地诊断,但不能作为项目级性能事实.设计阈值必须标注
 为 target 或 regression gate;门禁通过只说明该候选满足该测试合同,不自动形成生产 SLO.
@@ -94,7 +100,7 @@ origin.至少区分:
 
 ### 4.1 基础矩阵
 
-`test/perf/sandbox-perf.sh` 比较 file 和 Manifest cold-start 路径,
+`test/perf/sandbox-perf.sh` 表征当前 file/Manifest 生命周期用例（计时范围见上文）,
 `test/perf/sandbox-perf-manifest.sh` 展开 Manifest cold/hot cache,snapshot publish 和
 restore 场景.报告应至少包含:
 
@@ -228,7 +234,7 @@ make -C ../accelerator perf-cache
 
 ```bash
 GOWORK=off make -C ../sandboxer test
-make perf-sandbox
+make perf-sandbox E2E_WORKDIR="$PREPARED"
 make perf-sandbox-manifest
 make perf-sandbox-working-set
 make test-uffd-performance-gate

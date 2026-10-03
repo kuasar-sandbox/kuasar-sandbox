@@ -1,79 +1,133 @@
 [English](QUICKSTART.md) | [简体中文](QUICKSTART_zh.md)
 
-# Platform release validation guide
+# Platform release validation
 
-This guide covers aggregate product E2E and release acceptance. For first installation, use the [Quick Start](../docs/quickstart.md).
+This guide validates prebuilt product cases. For the first sandbox, use
+[Quick Start](../docs/quickstart.md); a short Demo is not full release acceptance.
+The public runner is the only product E2E execution path. Workbench supplies an
+environment, not another runner, product bundle or case selector.
 
-The platform package contains documentation, the common runner, flat cases, prebuilt test helpers, performance scripts and the Demo. Six component packages contain runtime artifacts. Use the platform archive and six component archives for one architecture from the same aggregate Release.
+<a id="1-extracted-layout"></a>
+## 1. Release inputs and layout
 
-<a id="1-解包布局"></a>
-## 1. Extracted layout
+Use [Acquire a matching release](../docs/download.md) to obtain one explicit
+aggregate's native products, platform materials and matching workbench image.
+The recipe validates every selected required file even when other architecture
+assets are intentionally not downloaded. Do not run a blanket checksum command
+that requires all unselected files, or ignore missing required files. Import the
+workbench Docker archive separately; never unpack it into this tree.
 
 ```text
 <release-dir>/
-├── bin/                         Prebuilt products for one architecture
-├── deploy/
-├── docs/
+├── bin/                         Native products from component archives
+├── guide/                       Selected bilingual user guides
+├── workbench/                   Host launcher and its guide
 └── test/
     ├── QUICKSTART.md
     ├── e2e/
-    │   ├── e2e                  Shared list / prepare / run entry
+    │   ├── e2e                  Public list / prepare / run
     │   ├── cases/               <suite>.<case>.sh
-    │   ├── lib/                 Low-level helpers, namespaced by owner
-    │   └── helpers/<arch>/      Prebuilt executables and source/hash manifest
-    ├── perf/
-    └── demo/
+    │   ├── lib/                 Owner-namespaced runtime helpers
+    │   └── helpers/<arch>/      Prebuilt programs and identity records
+    └── demo/                    Demo scripts, prepared adapter and locked wheels
 ```
 
-The full filename is the case ID. The first segment selects one of nine suites: `basic`, `storage`, `image`, `network`, `sandbox`, `snapshot`, `orchestrator`, `builder`, `telemetry`. There are no owner runners or alternate product execution paths.
+The platform package contains `guide/`, public tests/runtime inputs and the thin
+workbench launcher. Component archives may also add their own `deploy/`, `share/`
+and legal material. Source-only tests, assembly tools and `test/perf/` harnesses
+are not shipped in the new platform package. Historical releases may have a
+`docs/` layout; use their matching guide rather than assuming the new layout.
 
-<a id="2-解压与校验"></a>
-## 2. Verification and extraction
+Full filenames are case IDs; their first segment is one of `basic`, `storage`,
+`image`, `network`, `sandbox`, `snapshot`, `orchestrator`, `builder`, `telemetry`.
+Ownership determines source maintenance, not a separate runner or selector.
 
-Verify downloaded assets against their Release checksums. Extract only the target architecture's six component archives and the matching platform archive into one fresh directory. Do not extract both architectures over the same `bin/`, or mix different aggregate Releases.
+<a id="2-verification-and-extraction"></a>
+<a id="3-prerequisites"></a>
+## 2. Environment and actual coverage
+
+The recommended environment is native workbench system mode. Host prerequisites
+and mode boundaries are in [Workbench](../workbench/README.md). Workbench supplies
+systemd, Docker, Python 3.12, EROFS readers and ordinary tools; each selected case
+still needs real KVM/kernel/network/device capabilities. Generic startup is not
+a product pass. Keep resource headroom; example CPU/memory budgets are starting
+points, not universal full-suite capacity guarantees.
+
+Native x86_64 and aarch64 use the same current ordinary selection:
+`--all --exclude storage.obs.sh`. ARM KVM cases need the appropriate Guest
+PMEM/DAX kernel and native static cgroup probe in the selected release. Missing
+required inputs fail prepare; they are not substituted. Hosted ARM without KVM
+retains its explicitly narrower non-KVM/artifact-only lane. Historical subset
+results cannot be relabelled native-full.
+
+Prepare and execution consume products, exact helper packages and local locked
+Demo wheels without compiling them or discovering sibling checkouts. Prepare
+reads `/sbin/init` from the actual runtime bundle for telemetry identity, not a
+standalone init replacement. Mutable runs/results stay outside sealed inputs.
+
+<a id="4-prepare-and-run"></a>
+## 3. Prepare and run in workbench
+
+On the **host**, keep `RELEASE`, `IMAGE` and `ARCH` from acquisition. Everything
+after `exec --` runs **inside workbench**:
 
 ```bash
-sha256sum --quiet -c SHA256SUMS
-mkdir kuasar-sandbox-release
-# Replace these names with the explicit selected Release assets.
-tar -xzf platform-release-vX.Y.Z.tar.gz -C kuasar-sandbox-release
-# Extract the six selected component archives into this directory too.
+STATE="$PWD/kuasar-validation-state"
+NAME="verify-$(date +%s)"
+WB="$RELEASE/workbench/workbench"
+python3 "$WB" --root "$STATE" --name "$NAME" start \
+  --image "$IMAGE" --mode system --inputs "$RELEASE" \
+  --cpus 8 --memory-gib 16 --network bridge
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /inputs/release/test/e2e/e2e prepare \
+  --release-dir /inputs/release --workdir /work/prepared --arch "$ARCH" \
+  --all --exclude storage.obs.sh --deps-dir /opt/workbench/deps --offline
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/e2e/e2e run --workdir /work/prepared --arch "$ARCH" \
+  --all --exclude storage.obs.sh --run-root /work/run-1 \
+  --out-root /output/cases --result /output/result.json
 ```
 
-Packaging validates archive paths, cross-package collisions, helper architecture, hashes and independent test source pins. Products and tests may have different source revisions; their identities remain separately recorded.
+Offline prepare means no dependency downloads. Full execution includes Demo
+Internet egress and therefore needs bridge networking. Local Guest/Registry/
+Store/Proxy communication remains permitted. The credentialed OBS case requires
+explicit selection plus its documented credentials/network; it is not silently
+skipped or included in ordinary public validation.
 
-<a id="3-前置条件"></a>
-## 3. Prerequisites
+Use a fresh prepared directory; preparation seals only complete inputs. Rerunning
+an immutable prepared set is allowed with a fresh `--run-root` and result/output
+paths. `PASS <filename>` and `result.json` report only cases actually executed.
+Any nonzero exit, missing prerequisite or changed input fails. The runner keeps
+case filenames, durations and exit codes; inspect console output and case files,
+not just the final aggregate status.
 
-Full native x86 execution requires Linux, systemd, cgroup v2, usable `/dev/kvm`, root or noninteractive `sudo`, Docker, iproute2, curl, Python 3.11+ (Python 3.12 for the packaged Demo SDK), openssl, EROFS readers (`fsck.erofs --extract` and `dump.erofs --cat`, supplied by workbench), mkfs.ext4 and the ordinary utilities required by the selected scripts. Preparation uses local image inputs when configured and otherwise downloads the selected external images. The hash-locked Python wheels and registry/gateway/probe binaries come from the package.
+### Native alternative
 
-For raw extracted releases, preparation reads the runtime bundle’s actual `/sbin/init` bytes and records their digest for telemetry assertions; it never substitutes the separately released sandbox-init binary or an ambient digest.
-
-No Go or Rust compiler or component source checkout is needed during preparation or product execution. The runner rejects missing prepared inputs; it does not substitute host helper binaries or pull images while running cases. Prepared inputs must remain unchanged. Mutable case state and result files live outside the prepared directory.
-
-<a id="4-运行完整门禁"></a>
-## 4. Prepare and run
+The same runner can execute directly on a native systemd/cgroup-v2 host with
+root/noninteractive sudo, required devices, Docker, Python 3.12, EROFS readers
+(`fsck.erofs --extract`, `dump.erofs --cat`) and the selected cases' ordinary
+tools/libraries. Set `RELEASE` to a verified extracted tree and `ARCH` to the
+native architecture. There is no workbench dependency for this path:
 
 ```bash
-release_dir="$PWD/kuasar-sandbox-release"
-prepared="/var/tmp/kuasar-prepared"
-python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
-    --workdir "$prepared" --arch x86_64 --all --exclude storage.obs.sh
-sudo python3 "$prepared/test/e2e/e2e" run --workdir "$prepared" \
-    --all --exclude storage.obs.sh --result /var/tmp/kuasar-e2e-result.json
+release_dir="$RELEASE"
+prepared="$PWD/kuasar-prepared"
+python3 -B "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
+  --workdir "$prepared" --arch "$ARCH" --all --exclude storage.obs.sh
+sudo -n python3 -B "$prepared/test/e2e/e2e" run --workdir "$prepared" \
+  --arch "$ARCH" --all --exclude storage.obs.sh --result "$PWD/kuasar-e2e-result.json"
 ```
 
-Use a fresh preparation directory. Preparation acquires immutable image archives and the Demo SDK, records hashes and permissions, and does not compile products or helpers. Execution loads those image archives, invokes each selected Bash case, records its full filename, elapsed time and exit status, and verifies the input tree again. Real tested Build, flatten, snapshot and publication operations remain in the cases.
-
-A nonzero case, missing prerequisite or changed input fails the run. `PASS <filename>` and `result.json` refer only to executed cases. Draft skips and static architecture checks are not product acceptance. `storage.obs.sh` requires explicit selection and its documented external storage credentials; keep it excluded for ordinary public validation.
-
+The following local-input contract applies inside workbench and on native hosts.
+For the native examples, `release_dir` names the extracted input tree; workbench
+already defaults to its validated `/opt/workbench/deps` and `E2E_OFFLINE=1`.
 ### Local and offline preparation
 
 After acquiring and verifying the release and dependency inputs, select a local image directory:
 
 ```bash
 python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
-    --workdir /var/tmp/offline-prepared --arch x86_64 --all --exclude storage.obs.sh \
+    --workdir /var/tmp/offline-prepared --arch "$ARCH" --all --exclude storage.obs.sh \
     --deps-dir /inputs/deps --offline
 ```
 
@@ -85,36 +139,61 @@ Preparation matches the exact requested reference and platform. Valid selected a
 
 Offline controls dependency acquisition. It neither changes case selection nor prohibits local Guest/Registry/Store/Proxy traffic. Helpers still come from their exact package and the Demo SDK still installs exclusively from its local hash-locked wheelhouse. Credentialed OBS is never silently skipped. CI's `prepare-artifacts.py` passes the same options to the public runner and mounts a configured dependency directory read-only for clean preparation, separately from writable output.
 
-<a id="5-运行组件或单项用例"></a>
-## 5. Select suites or individual cases
+
+<a id="5-select-suites-or-individual-cases"></a>
+## 4. Select suites or individual cases
 
 ```bash
-python3 "$release_dir/test/e2e/e2e" list --suite storage
-python3 "$release_dir/test/e2e/e2e" list --suite snapshot --include image.flatten.sh
-python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
-    --workdir /var/tmp/storage-prepared --suite storage --exclude storage.obs.sh
-sudo python3 /var/tmp/storage-prepared/test/e2e/e2e run \
-    --workdir /var/tmp/storage-prepared --suite storage --exclude storage.obs.sh
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /inputs/release/test/e2e/e2e list --suite storage
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /inputs/release/test/e2e/e2e prepare --release-dir /inputs/release \
+  --workdir /work/storage-prepared --arch "$ARCH" \
+  --suite storage --exclude storage.obs.sh --offline
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/storage-prepared/test/e2e/e2e run --workdir /work/storage-prepared \
+  --suite storage --exclude storage.obs.sh --result /output/storage-result.json
 ```
 
-Repeated `--suite` and `--include` selectors form a union, followed by filename exclusions. Unknown suites, unknown filenames and an empty result fail. Running a case that was not prepared also fails. An entire suite can span component owners; source ownership is described in [test organization](README.md).
+Repeated `--suite` and `--include` selections are unioned; `--exclude` removes
+matching filenames. Unknown/empty selections fail, as does running a case that
+was not prepared. A suite may span owners. Do not introduce another owner/tag/
+capability/fixture selector. See [Test organization](README.md).
 
-ARM CI selects accelerator's storage/image cases and guest-runtime's flatten/registry cases, excluding credentialed OBS. Other cases are recorded as excluded from that lane; an ARM build or static lane does not prove those cases work. Source unit/race/vet, helper, UFFD and working-set gates remain separate from the nine product suites.
+<a id="6-performance-and-demo"></a>
+## 5. Demo, source checks and performance
 
-<a id="6-perf-与-demo"></a>
-## 6. Performance and Demo
+`basic.demo.sh` uses prepared products, image, SDK and helpers to exercise the
+full real Demo plus ownership/repeated-preparation assertions. Its short and
+network-diagnostic controls are cleared, so a caller cannot accidentally reduce
+acceptance. [Demo](demo/DEMO.md) separately offers quick/full/interactive user
+runs using the same underlying scripts; those runs do not claim the extra full
+case or complete suite acceptance.
 
-`basic.demo.sh` runs the documented Demo with prepared products, images and SDK. It preserves real COPY/Build, Quick Start, exec/files, fan-out, migration, persistent preparation and cleanup assertions. Standalone user Demo instructions remain in [the Demo guide](demo/DEMO.md).
+Performance harnesses stay in the source tree under `test/perf/`; use the
+[source performance guide](../docs/perf.md), not paths assumed to exist in the
+platform archive. Unit/race/vet, UFFD and working-set source gates remain
+independent. A smoke run is not statistical performance qualification.
 
-Performance harnesses remain under `test/perf/`. Warm-pool characterization is `test/perf/warmpool-dedup.sh`; its name is not a general cross-VM snapshot-deduplication guarantee. UFFD performance and working-set smoke retain independent source gates. A smoke result is not statistical performance acceptance; cite exact revisions, job logs and raw measurements.
+<a id="7-troubleshooting-and-acceptance"></a>
+## 6. Results, cleanup and acceptance
 
-<a id="7-排错"></a>
-## 7. Troubleshooting and acceptance
+Workbench results map to `$STATE/$NAME/output`; mutable case state maps to
+`$STATE/$NAME/work`. Inspect root-owned private diagnostics inside the same
+instance before sharing them. Once inspection is complete:
 
-- Missing product/helper: use a complete matching release input set; execution has no source or host fallback.
-- Changed hash or mode: create a fresh prepared directory from verified release inputs.
-- Missing `/dev/kvm`, systemd or privilege: run on a host satisfying that selected case's prerequisites.
-- Image or SDK acquisition failure: repair preparation access and start with a fresh directory; running cases will not pull or install replacements.
-- Failed case: inspect its output and recorded exit code. Recovery diagnostics retain bounded error vocabulary without raw capabilities.
+```bash
+python3 "$WB" --root "$STATE" --name "$NAME" stop
+python3 "$WB" --root "$STATE" --name "$NAME" cleanup
+```
 
-Acceptance requires exact head/base and test/product/helper provenance, successful required source checks, and real native product results. Clean release acceptance additionally demonstrates execution without component source trees or Go/Rust toolchains, including an entire non-KVM suite, an entire KVM suite and the applicable ARM non-KVM selection. Keep failed and skipped results visible; local fixture tests do not replace public runner acceptance.
+Default cleanup retains work/output and journals. Explicit `--delete-output`
+removes them; do not erase evidence as a default retry step. Missing/corrupt inputs
+require a fresh preparation from verified sources, not remote replacement during
+execution. Conflicting resources must be handled by their actual owner.
+
+Developer candidate results must identify their script/product/helper revisions
+and environment; they are not final published-byte qualification. Formal release
+acceptance additionally requires exact released identities, the declared native
+coverage and the independent compiler/source-free runtime gate. Workbench's
+included toolchains do not prove that gate. Keep failures and exclusions visible.

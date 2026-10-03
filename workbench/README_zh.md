@@ -2,6 +2,11 @@
 
 # Workbench
 
+运行第一个沙箱请先按[快速开始](../docs/quickstart_zh.md)操作；
+[获取发布版](../docs/download_zh.md)提供无需源码检出的制品校验和镜像导入步骤。
+本文维护环境与生命周期合同，不重复首次体验步骤。发布版示例从解包目录执行，
+源码构建示例从主仓目录执行，启动器均使用与输入匹配的版本。
+
 Workbench 为选定的 Kuasar Sandbox 发布版提供原生 Linux 构建工具和系统环境。
 同一个镜像支持普通 UID 构建，以及以 systemd 为 PID 1、包含私有 Docker/containerd
 的环境。镜像包含外部测试镜像归档；产品、测试辅助程序和 Demo wheel 则来自匹配的
@@ -10,12 +15,12 @@ Workbench 为选定的 Kuasar Sandbox 发布版提供原生 Linux 构建工具�
 
 ## 主机与镜像
 
-使用原生 x86_64 或 aarch64 Linux、Docker Engine 和 Python 3。启动器使用本机的
+使用原生 x86_64 或 aarch64 Linux、Docker Engine 和 Python 3.9+。启动器使用本机的
 Unix Docker 端点。Docker Desktop、远程 Docker 端点、架构模拟、Podman 和 runner
 注册不属于 V1 范围。
 
 系统模式是可信系统管理员工具，使用 rootful Docker 的 `--privileged`，并保留
-私有命名空间及独立 daemon 数据。宿主只需原生 Linux、Docker Engine、Python 3、
+私有命名空间及独立 daemon 数据。宿主只需原生 Linux、Docker Engine、Python 3.9+、
 具备所请求 cpu/memory/pids 控制器的 cgroup v2，以及适合镜像内 overlay2 的存储。
 无需宿主 AppArmor 解析工具、策略加载器、自定义 seccomp 策略或另一套 Docker。
 Docker 访问权限本身已具有管理员权限，不应将此环境暴露给不可信代码。
@@ -93,6 +98,10 @@ bridge，准备完成后重新连接。保留全部架构、DAX 和退出码断�
 `exec -- env E2E_OFFLINE=0 python3 ...`，不要加 `--offline`。只传递命令所需的任务
 变量。离线模式控制依赖获取，不选择用例。缺失或损坏的必要输入会失败；辅助程序和
 锁定 wheel 始终来自选定的 platform-release，不回退到 PATH 或全局 Python 包。
+
+完整 Demo 和常规全量测试应新建 bridge 网络实例，不能只把上面 none 网络示例的
+suite 改成 `--all`。按所选负载增加 CPU/内存/磁盘余量；修改预算或挂载需要新实例。
+两个终端访问同一 Demo 时，都应通过同一个 `--root`/`--name` 的 `exec` 进入。
 
 ## 生命周期与隔离
 

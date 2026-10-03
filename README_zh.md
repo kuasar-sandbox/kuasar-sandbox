@@ -15,6 +15,7 @@ Serverless 与强化学习工作负载,提供独立 Guest Kernel 隔离,快照�
 ## 快速导航
 
 - [快速开始](docs/quickstart_zh.md):从同一聚合 Release 下载资产,校验并用 E2B SDK 运行首个真实 MicroVM;
+- [Workbench](workbench/README_zh.md):推荐的首次体验、原生构建和私有系统验证环境；
 - [Architecture](docs/kuasar-sandbox_zh.md):系统能力,组件边界和关键语义;
 - [Deployment](docs/deployment_zh.md):单节点,集群拓扑与进程依赖;
 - [Releases](docs/release_zh.md):组件版本,聚合版本和资产契约;
@@ -165,7 +166,12 @@ prerelease 聚合版本,`Proposed` 表示仍在 Issue 或设计阶段且不能�
 
 ## 快速开始
 
-[快速开始](docs/quickstart_zh.md) 从同一聚合版本下载全部显式资产、校验 `SHA256SUMS`,
+首次体验优先使用匹配发布版与 workbench，宿主无需安装产品依赖或 Demo SDK。
+Demo 结束后会清理节点服务；交互操作应通过 `--pause` 在同一个 workbench 内完成，
+不能把容器内的 localhost 和临时凭据直接用于宿主 SDK。详见
+[快速开始](docs/quickstart_zh.md)和[Demo](test/demo/DEMO_zh.md)。
+
+[快速开始](docs/quickstart_zh.md) 从同一聚合版本下载所选原生资产与匹配 workbench、校验 `SHA256SUMS`,
 准备单节点,并用上游 E2B Python SDK 构建就绪的快照模板。Demo 从精确 Build 的 ready
 状态读取已发布 Template ID;SDK 返回的注册句柄不是这个 ID。保持节点运行并完成文档中的
 SDK 连接配置后,把 `TEMPLATE_ID` 设置为该已发布 ID,再执行以下生命周期:
@@ -225,8 +231,8 @@ releases/         Stable and daily Preview aggregate selections
 make -C kuasar-sandbox build
 make -C kuasar-sandbox test
 make -C kuasar-sandbox test-e2e RELEASE_DIR=/release E2E_WORKDIR=/tmp/kuasar-prepared
-make -C kuasar-sandbox perf
-make -C kuasar-sandbox demo
+make -C kuasar-sandbox perf E2E_WORKDIR=/absolute/path/to/prepared-inputs
+make -C kuasar-sandbox demo PYTHON_BIN=/absolute/path/to/pinned-venv/bin/python
 ```
 
 产品 E2E 通过 `test/e2e/e2e prepare` 和 `run` 消费预构建制品。完整的 `<suite>.<case>.sh` 文件名标识九个 suite 中的用例；组件归属只决定源码维护位置。prepare 获取不可变镜像与固定 Demo SDK；执行使用预备制品、helper 和镜像，不发现源码、不编译、不自动拉取。unit/race/vet、UFFD 和性能门禁保持独立。详见[测试组织](test/README_zh.md)和[发布验证指南](test/QUICKSTART_zh.md)。

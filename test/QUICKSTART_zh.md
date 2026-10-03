@@ -1,79 +1,118 @@
 [English](QUICKSTART.md) | [简体中文](QUICKSTART_zh.md)
 
-# 平台发布验证指南
+# 平台发布验证
 
-本指南覆盖聚合产品 E2E 与发布验收。首次安装请使用[快速开始](../docs/quickstart_zh.md)。
-
-platform 包包含文档、公共 runner、扁平用例、预构建测试 helper、性能脚本和 Demo；六个组件包包含运行制品。使用同一聚合 Release 的 platform 包及目标架构的六个组件包。
+本指南验证预构建产品用例。首次运行沙箱见[快速开始](../docs/quickstart_zh.md)；
+短 Demo 不代表完整发布验收。公共 runner 是唯一产品 E2E 执行路径。Workbench
+提供环境，不是另一套 runner、产品包或用例选择器。
 
 <a id="1-解包布局"></a>
-## 1. 解包布局
+## 1. 发布输入与目录
+
+通过[获取匹配的发布版](../docs/download_zh.md)取得一个具体聚合版本的本机架构产品、
+platform 材料及匹配 workbench 镜像。即使不下载另一架构，该流程也逐一验证所选
+必需文件。不要用要求所有未选文件存在的全量校验命令，也不能忽略缺失的必需文件。
+Workbench 的 Docker 归档应单独导入，不能解包到此树中。
 
 ```text
 <release-dir>/
-├── bin/                         单架构预构建产品
-├── deploy/
-├── docs/
+├── bin/                         Native products from component archives
+├── guide/                       Selected bilingual user guides
+├── workbench/                   Host launcher and its guide
 └── test/
     ├── QUICKSTART.md
     ├── e2e/
-    │   ├── e2e                  公共 list / prepare / run 入口
+    │   ├── e2e                  Public list / prepare / run
     │   ├── cases/               <suite>.<case>.sh
-    │   ├── lib/                 按 owner 命名空间组织的底层 helper
-    │   └── helpers/<arch>/      预构建程序及源码/摘要清单
-    ├── perf/
-    └── demo/
+    │   ├── lib/                 Owner-namespaced runtime helpers
+    │   └── helpers/<arch>/      Prebuilt programs and identity records
+    └── demo/                    Demo scripts, prepared adapter and locked wheels
 ```
 
-完整文件名是用例 ID。第一段属于九个 suite 之一：`basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder`、`telemetry`。没有 owner runner 或第二条产品执行路径。
+Platform 包包含 `guide/`、公共测试/运行输入及轻量 workbench 启动器。组件归档还
+可能增加自身的 `deploy/`、`share/` 和许可材料。新的 platform 包不包含源码单测、
+组装工具或 `test/perf/` harness。历史版本可能使用 `docs/`，应按其配套指南执行，
+不要假定具备新布局。
+
+完整文件名是用例 ID，第一段属于 `basic`、`storage`、`image`、`network`、`sandbox`、
+`snapshot`、`orchestrator`、`builder`、`telemetry` 九个 suite。Owner 决定源码维护
+归属，不产生另一套 runner 或选择方式。
 
 <a id="2-解压与校验"></a>
-## 2. 校验与解压
-
-按 Release 校验和验证下载资产。只将目标架构的六个组件包与匹配 platform 包解压到同一全新目录。不要把两个架构覆盖到同一 `bin/`，不要混用不同聚合 Release。
-
-```bash
-sha256sum --quiet -c SHA256SUMS
-mkdir kuasar-sandbox-release
-# 将名称替换为明确选定的 Release 资产。
-tar -xzf platform-release-vX.Y.Z.tar.gz -C kuasar-sandbox-release
-# 再将选定的六个组件归档解压到同一目录。
-```
-
-打包验证路径、跨包冲突、helper 架构、摘要及独立测试源码 pin。产品与测试可以来自不同 revision，其身份分别记录。
-
 <a id="3-前置条件"></a>
-## 3. 前置条件
+## 2. 环境与实际覆盖范围
 
-完整原生 x86 执行要求 Linux、systemd、cgroup v2、可用 `/dev/kvm`、root 或非交互 `sudo`，以及 Docker、iproute2、curl、Python 3.11+（包内 Demo SDK 要求 Python 3.12）、openssl、EROFS reader（`fsck.erofs --extract` 和 `dump.erofs --cat`，workbench 已提供）、mkfs.ext4 和已选脚本要求的普通工具。配置本地镜像输入时 prepare 优先使用本地输入，否则下载已选外部镜像。hash-locked Python wheel 和 registry/gateway/probe 程序来自包内。
+推荐使用原生 workbench system 模式，宿主前置和模式边界见
+[Workbench](../workbench/README_zh.md)。它提供 systemd、Docker、Python 3.12、EROFS
+reader 和普通工具；所选用例仍需真实 KVM、内核、网络和设备能力。通用启动成功
+不等于产品通过。保留资源余量，示例 CPU/内存预算只是起点，不是通用完整测试容量保证。
 
-对于直接解压的发行输入，prepare 读取 runtime bundle 中实际的 `/sbin/init` 字节并记录摘要，供 telemetry 断言使用；不会替换为独立发布的 sandbox-init 程序或环境变量中的摘要。
+原生 x86_64 和 aarch64 使用同一个当前常规选择：`--all --exclude storage.obs.sh`。
+ARM KVM 用例需要所选发布版中正确的 Guest PMEM/DAX 内核和原生静态 cgroup probe。
+缺少必需输入时 prepare 失败，不进行替换。没有 KVM 的托管 ARM 仍保留明确较小的
+非 KVM/artifact-only 范围，历史子集结果不能改称 native-full。
 
-prepare 和产品执行不需要 Go/Rust 编译器或组件源码 checkout。缺少预备输入时 runner 失败，不使用宿主机 helper，不在执行时拉取镜像。预备输入必须保持不变；可变用例状态和结果文件位于预备目录之外。
+准备和执行消费产品、精确 helper 包及本地锁定 Demo wheel，不现场编译，也不发现
+兄弟源码检出。Prepare 从实际 runtime bundle 读取 `/sbin/init` 来确定 telemetry
+身份，不用独立 init 程序替代。可变运行状态和结果位于封存输入之外。
 
 <a id="4-运行完整门禁"></a>
-## 4. 准备并执行
+## 3. 在 workbench 内准备并执行
+
+在**宿主机**保留获取阶段的 `RELEASE`、`IMAGE` 和 `ARCH`；`exec --` 之后的内容
+在 **workbench 内**执行：
 
 ```bash
-release_dir="$PWD/kuasar-sandbox-release"
-prepared="/var/tmp/kuasar-prepared"
-python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
-    --workdir "$prepared" --arch x86_64 --all --exclude storage.obs.sh
-sudo python3 "$prepared/test/e2e/e2e" run --workdir "$prepared" \
-    --all --exclude storage.obs.sh --result /var/tmp/kuasar-e2e-result.json
+STATE="$PWD/kuasar-validation-state"
+NAME="verify-$(date +%s)"
+WB="$RELEASE/workbench/workbench"
+python3 "$WB" --root "$STATE" --name "$NAME" start \
+  --image "$IMAGE" --mode system --inputs "$RELEASE" \
+  --cpus 8 --memory-gib 16 --network bridge
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /inputs/release/test/e2e/e2e prepare \
+  --release-dir /inputs/release --workdir /work/prepared --arch "$ARCH" \
+  --all --exclude storage.obs.sh --deps-dir /opt/workbench/deps --offline
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/e2e/e2e run --workdir /work/prepared --arch "$ARCH" \
+  --all --exclude storage.obs.sh --run-root /work/run-1 \
+  --out-root /output/cases --result /output/result.json
 ```
 
-使用全新 prepare 目录。prepare 获取不可变镜像归档与 Demo SDK，记录摘要和权限，不编译产品或 helper。执行加载这些镜像归档，逐个调用 Bash 用例，记录完整文件名、耗时、退出状态，再验证输入树。被测 Build、flatten、snapshot 和发布操作仍真实执行。
+Offline prepare 表示不下载依赖；完整执行包含 Demo Internet 出站，因此需要 bridge
+网络。本地 Guest/Registry/Store/Proxy 通信仍允许。需要凭据的 OBS 须显式选择并
+提供其文档要求的凭据和网络，不会静默跳过，也不纳入普通公共验证。
 
-任何非零退出、缺少前置条件或输入变化都会失败。`PASS <filename>` 和 `result.json` 只代表实际执行的用例；Draft 跳过与静态架构检查不算产品验收。`storage.obs.sh` 需要显式选择及其文档声明的外部存储凭据，普通公共验证保持排除。
+使用全新的预备目录，只有完整输入才会封存。复用不可变预备集合时，选择新的
+`--run-root` 和结果/输出路径。`PASS <filename>` 与 `result.json` 只代表实际运行的
+用例。非零退出、缺少前置或输入变化均失败。Runner 记录文件名、耗时和退出码；
+应查看控制台与用例文件，而不只看最终汇总状态。
 
+### 原生替代路径
+
+同一个 runner 可以直接在原生 systemd/cgroup-v2 主机上执行，需要 root/非交互 sudo、
+真实设备、Docker、Python 3.12、EROFS reader（`fsck.erofs --extract`、`dump.erofs --cat`）
+及所选用例的普通工具/库。将 `RELEASE` 设置为已验证的解包目录，`ARCH` 设置为本机
+架构；此路径不依赖 workbench：
+
+```bash
+release_dir="$RELEASE"
+prepared="$PWD/kuasar-prepared"
+python3 -B "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
+  --workdir "$prepared" --arch "$ARCH" --all --exclude storage.obs.sh
+sudo -n python3 -B "$prepared/test/e2e/e2e" run --workdir "$prepared" \
+  --arch "$ARCH" --all --exclude storage.obs.sh --result "$PWD/kuasar-e2e-result.json"
+```
+
+下面的本地输入合同适用于 workbench 和原生主机。原生示例中的 `release_dir`
+指向已解包输入；workbench 已默认使用验证过的 `/opt/workbench/deps` 和 `E2E_OFFLINE=1`。
 ### 本地及离线准备
 
 获取并验证发行制品和依赖输入后，指定本地镜像目录：
 
 ```bash
 python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
-    --workdir /var/tmp/offline-prepared --arch x86_64 --all --exclude storage.obs.sh \
+    --workdir /var/tmp/offline-prepared --arch "$ARCH" --all --exclude storage.obs.sh \
     --deps-dir /inputs/deps --offline
 ```
 
@@ -85,36 +124,54 @@ prepare 精确匹配请求的 reference 与 platform。有效的已选归档直�
 
 offline 控制依赖获取，不改变用例选择，也不禁止本地 Guest/Registry/Store/Proxy 流量。helper 仍来自精确匹配的包，Demo SDK 仍仅从本地 hash-locked wheelhouse 安装。需要凭据的 OBS 不会静默跳过。CI 的 `prepare-artifacts.py` 将相同选项传给公共 runner，并在 clean prepare 中将配置的依赖目录以只读方式挂载，与可写输出分离。
 
+
 <a id="5-运行组件或单项用例"></a>
-## 5. 选择 suite 或单个用例
+## 4. 选择 suite 或单个用例
 
 ```bash
-python3 "$release_dir/test/e2e/e2e" list --suite storage
-python3 "$release_dir/test/e2e/e2e" list --suite snapshot --include image.flatten.sh
-python3 "$release_dir/test/e2e/e2e" prepare --release-dir "$release_dir" \
-    --workdir /var/tmp/storage-prepared --suite storage --exclude storage.obs.sh
-sudo python3 /var/tmp/storage-prepared/test/e2e/e2e run \
-    --workdir /var/tmp/storage-prepared --suite storage --exclude storage.obs.sh
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /inputs/release/test/e2e/e2e list --suite storage
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /inputs/release/test/e2e/e2e prepare --release-dir /inputs/release \
+  --workdir /work/storage-prepared --arch "$ARCH" \
+  --suite storage --exclude storage.obs.sh --offline
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/storage-prepared/test/e2e/e2e run --workdir /work/storage-prepared \
+  --suite storage --exclude storage.obs.sh --result /output/storage-result.json
 ```
 
-重复的 `--suite` 与 `--include` 取并集，再按文件名排除。未知 suite、未知文件名或空结果都会失败；运行未 prepare 的用例也会失败。一个完整 suite 可以跨多个组件 owner，源码归属见[测试组织](README_zh.md)。
-
-ARM CI 选择 accelerator 的 storage/image 及 guest-runtime 的 flatten/registry 用例，排除需要凭据的 OBS。其他用例明确记录为该 lane 的排除项；ARM 构建或 static lane 不证明这些用例可运行。源码 unit/race/vet、helper、UFFD 和 working-set 门禁独立于九个产品 suite。
+重复的 `--suite` 和 `--include` 取并集，`--exclude` 按匹配文件名排除。未知或空选择
+失败，运行尚未 prepare 的用例也失败。Suite 可以跨 owner。不要另加 owner/tag/
+capability/fixture 选择机制。详见[测试组织](README_zh.md)。
 
 <a id="6-perf-与-demo"></a>
-## 6. 性能与 Demo
+## 5. Demo、源码检查与性能
 
-`basic.demo.sh` 用预备产品、镜像和 SDK 运行文档中的 Demo，保留真实 COPY/Build、Quick Start、exec/files、fan-out、迁移、持久准备与清理断言。独立用户 Demo 用法仍见 [Demo 指南](demo/DEMO_zh.md)。
+`basic.demo.sh` 使用预备产品、镜像、SDK 和 helper 执行真实完整 Demo，并验证归属
+和重复准备。它清除短流程和网络诊断控制项，调用者不能意外缩减验收。
+[Demo](demo/DEMO_zh.md)另外提供 quick/full/interactive 用户流程，共用相同底层脚本，
+但不声称覆盖额外的完整用例断言或整个 suite。
 
-性能 harness 留在 `test/perf/`。warm-pool 表征入口为 `test/perf/warmpool-dedup.sh`，名称不代表一般性的跨 VM snapshot 去重保证。UFFD 性能和 working-set smoke 保持独立源码门禁。smoke 结果不是统计性能验收；需引用精确 revision、job 日志和原始测量。
+性能 harness 保留在源码 `test/perf/` 下，应使用[源码性能指南](../docs/perf_zh.md)，
+不要假定 platform 包含这些路径。Unit/race/vet、UFFD 和 working-set 源码门禁保持
+独立，smoke 结果不代表统计性能验收。
 
 <a id="7-排错"></a>
-## 7. 排错与验收
+## 6. 结果、清理与验收
 
-- 缺少产品/helper：使用完整匹配的发行输入；执行没有源码或宿主机回退。
-- 摘要或权限变化：从已验证发行输入创建全新预备目录。
-- 缺少 `/dev/kvm`、systemd 或权限：在满足所选用例前置条件的主机执行。
-- 镜像或 SDK 获取失败：修复 prepare 的访问条件后使用全新目录；执行不会拉取或安装替代项。
-- 用例失败：检查输出与记录的退出码。恢复诊断只保留有界错误词汇，不复制原始 capability。
+Workbench 结果映射到 `$STATE/$NAME/output`，可变用例状态映射到
+`$STATE/$NAME/work`。先在同一个实例内检查 root 所属的私有诊断，再决定分享内容。
+检查完成后：
 
-验收要求精确 head/base 和测试/产品/helper 来源身份、必需源码门禁成功及真实原生产品结果。干净发行验收还需证明无组件源码树和 Go/Rust 工具链，覆盖一个完整非 KVM suite、一个完整 KVM suite 及适用 ARM 非 KVM 选择。保留失败和跳过结果；本地 fixture 测试不能替代公共 runner 验收。
+```bash
+python3 "$WB" --root "$STATE" --name "$NAME" stop
+python3 "$WB" --root "$STATE" --name "$NAME" cleanup
+```
+
+默认 cleanup 保留 work/output 和 journal；`--delete-output` 才显式删除，不应把
+抹除证据作为默认重试步骤。缺失/损坏输入需要从已验证来源重新 prepare，而不是在
+执行时远端替换。冲突资源应由实际 owner 处理。
+
+开发候选结果必须记录脚本、产品、helper revision 和环境，不能冒充最终发布字节
+验收。正式发布还需精确已发布身份、声明的原生覆盖及独立的无编译器/源码运行门禁。
+Workbench 带有工具链，不能证明该独立门禁。失败与排除项必须保留可见。

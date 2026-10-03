@@ -2,6 +2,10 @@
 
 # 测试组织
 
+首次体验使用[快速开始](../docs/quickstart_zh.md)；发布用例的推荐环境和完整命令见
+[发布验证](QUICKSTART_zh.md)。Workbench 只提供环境，仍调用同一个公共 runner。
+下面的直接 runner 命令是原生执行参考，不要求用户另建一套宿主依赖环境。
+
 产品 E2E 遵循唯一契约：**预构建制品 → prepare → `<suite>.<case>.sh` → 公共 runner**。完整文件名就是用例 ID，第一段就是 suite。九个 suite 为 `basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder`、`telemetry`。
 
 组件在自己的 `test/e2e/cases/` 和 `test/e2e/lib/` 维护用例及底层 helper。主仓维护 `test/e2e/platform/cases/basic.demo.sh`。源码组装阶段从精确测试 revision 复制用例到扁平的 `test/e2e/cases/`，helper 放入 `test/e2e/lib/<owner>/`。重复 ID、未知 suite 和 owner runner 都会被拒绝。维护归属不影响公共选择语义。

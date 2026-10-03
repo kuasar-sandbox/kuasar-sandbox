@@ -5,6 +5,8 @@
 ## 开始使用与部署运维
 
 - [快速开始](quickstart_zh.md)：使用同一聚合版本运行第一个沙箱。
+- [Workbench](../workbench/README_zh.md)：宿主前置、原生构建、私有系统环境与生命周期。
+- [获取发布版](download_zh.md)：固定一个聚合版本、校验所选资产并单独导入 workbench。
 - [部署](deployment_zh.md)：选择拓扑、服务、存储与运维依赖。
 - [完整 E2B 演示](../test/demo/DEMO_zh.md)：生命周期、网络、模板扇出与迁移。
 - [聚合发布验证](../test/QUICKSTART_zh.md)：验收交付资产，不是首次体验的源码构建指南。

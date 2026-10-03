@@ -1,368 +1,118 @@
 [English](quickstart.md) | [简体中文](quickstart_zh.md)
 
-# Quick Start
+# 快速开始
 
-本指南下载一个已经发布的聚合 Release,校验其完整资产集合,再通过未修改的 E2B Python SDK 构建 Template,创建真实 MicroVM,执行命令,使用 Files API,暂停,重新连接/恢复并销毁 Sandbox。
+使用匹配的聚合发布版与 workbench，通过未修改的 E2B Python SDK 运行真实 Kuasar
+MicroVM。这是推荐的首次体验路径；原生生产部署不依赖 workbench，见
+[部署指南](deployment_zh.md)。
 
-命令只解析一次 Stable 渠道,随后把全部下载固定到该具体 Tag。如需显式选择版本,在开始前设置 `RELEASE_VERSION=release-vX.Y.Z`(也可使用已发布的 Preview Tag)。源码中的 `releases/release.yaml` 描述协调发布,不是“最新已发布版本”渠道。
+短 Demo 构建快照模板、创建沙箱、执行命令、读写文件、检查网络、暂停恢复并销毁沙箱。
+这是首次体验演示，**不是完整 E2E 或发布验收**。
 
-## 1. 检查主机
+## 1. 获取一个支持该流程的发布版
 
-预构建资产面向 Linux x86_64,需要 glibc 2.38 或更高版本。主机需要 systemd 作为 PID 1、cgroup v2、root 或无交互 `sudo`、可读写 `/dev/kvm`,还要为 Builder 提供至少 2 个可用 vCPU 和 6 GiB 内存,并为 host 与创建后的 Sandbox 保留容量。
+需要原生 Linux x86_64 或 aarch64、本机 rootful Docker Engine、Python 3.9+ 及
+Docker 访问权限。这是可信管理员环境，不支持 Docker Desktop、远端 Docker 端点
+或架构模拟。真正运行 MicroVM 还需要可读写的 KVM 与所需内核功能；workbench
+不会模拟缺失硬件或修改宿主内核策略。
 
-Ubuntu 24.04 可执行:
+镜像提供 systemd、私有 Docker/containerd、产品用户态依赖库、Python 3.12 和普通
+工具。仅启动 workbench 时，宿主**不需要** Demo SDK、产品所需 glibc 版本、Go/Rust，
+也不要求 systemd 为宿主 PID 1。为宿主和其他工作负载保留 CPU、内存及磁盘余量。
+示例为 workbench 分配 4 CPU、12 GiB，不代表通用最小值或完整测试容量保证；
+Demo Builder 本身请求 2 vCPU 和 6 GiB capacity。
 
-```bash
-sudo apt-get update
-sudo apt-get install -y \
-    ca-certificates curl docker.io e2fsprogs iproute2 iptables \
-    libgcc-s1 liblz4-1 libsnappy1v5 libstdc++6 libzstd1 openssl \
-    procps python3 python3-venv sqlite3 tar util-linux zlib1g
-```
+先执行一次[获取匹配的聚合发布版](download_zh.md)：选择具体已发布版本，验证交付合同
+及本机架构资产，解包产品和材料，再单独导入 workbench。完成后得到 `RELEASE`
+（绝对发布目录）、`IMAGE` 和 `ARCH`。下面继续使用同一个**宿主 Bash shell**中的
+这些变量。只使用该版本配套的启动器、Demo、helper、wheelhouse 和产品；缺少预备
+Demo 适配器的旧版本应使用其包内指南，不得从 `main` 补脚本。
 
-运行 fail-fast 前置检查。Demo 不会修改 host-global forwarding 设置;继续之前应由操作者根据主机网络策略启用该设置。
+## 2. 启动私有系统环境
 
-```bash
-(
-set -e
-test "$(uname -s)" = Linux
-test "$(uname -m)" = x86_64
-test "$(ps -p 1 -o comm=)" = systemd
-test -f /sys/fs/cgroup/cgroup.controllers
-test -c /dev/kvm
-sudo -n test -r /dev/kvm
-sudo -n test -w /dev/kvm
-sudo -n true
-test "$(cat /proc/sys/net/ipv4/ip_forward)" = 1
-glibc_version="$(getconf GNU_LIBC_VERSION | awk '{print $2}')"
-test "$(printf '%s\n' 2.38 "$glibc_version" | sort -V | sed -n '1p')" = 2.38
-for tool in tar sha256sum python3 openssl ip curl sqlite3 iptables ss \
-    mkfs.ext4 docker ldd flock setsid timeout; do
-    command -v "$tool" >/dev/null || { echo "missing: $tool" >&2; exit 1; }
-done
-sudo -n docker info >/dev/null
-)
-```
-
-正常公共下载和使用不需要 GitHub 账号、`gh` 登录或组织访问权限。Docker 只用于运行本地 Registry 并 seed 基础镜像,不是所有部署的 Runtime 依赖。
-
-## 2. 解析一个 Release 并下载其精确资产
-
-在同一 shell 中运行以下代码。它只接受聚合版本命名合同,校验 Stable/Preview 元数据,并从一个 Release 对象记录精确资产 URL、GitHub 提供的 digest 与 size。
+以下命令在**宿主机**执行。状态目录应位于发布树之外，并由调用 UID 拥有。
+不要切换调用用户，也不要只为部分启动器命令添加 `sudo`。已 cleanup 的实例应换新名称。
 
 ```bash
-set -euo pipefail
-RELEASE_VERSION="${RELEASE_VERSION:-}"
-RELEASE_METADATA="$(mktemp)"
-ASSETS_TSV="$(mktemp)"
-SELECTION_MANIFEST="$(mktemp)"
-trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST"' EXIT
-
-if [ -n "$RELEASE_VERSION" ]; then
-    [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]]
-    RELEASE_API="https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/tags/$RELEASE_VERSION"
-else
-    RELEASE_API="https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/latest"
-fi
-curl --fail --silent --show-error --location --retry 4 \
-    -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2022-11-28' \
-    "$RELEASE_API" >"$RELEASE_METADATA"
-
-SOURCE_SHA="$(python3 -c 'import json,re,sys; value=json.load(open(sys.argv[1]))["target_commitish"]; assert re.fullmatch(r"[0-9a-f]{40}",value); print(value)' "$RELEASE_METADATA")"
-MANIFEST_PATH="$(python3 -c 'import json,sys; tag=json.load(open(sys.argv[1]))["tag_name"]; print("releases/daily-preview.yaml" if "-preview." in tag else "releases/release.yaml")' "$RELEASE_METADATA")"
-curl --fail --silent --show-error --location --retry 4 \
-    "https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/$SOURCE_SHA/$MANIFEST_PATH" >"$SELECTION_MANIFEST"
-
-RELEASE_VERSION="$(python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$ASSETS_TSV" "$SELECTION_MANIFEST" <<'PY'
-import json, os, re, sys
-metadata, requested, output, manifest = sys.argv[1:]
-release = json.load(open(metadata, encoding="utf-8"))
-tag = release.get("tag_name", "")
-tag_re = re.compile(r"^release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?$")
-assert tag_re.fullmatch(tag), tag
-assert not release.get("draft")
-assert bool(re.search(r"-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?$", tag)) == bool(release.get("prerelease"))
-assert not requested or requested == tag, (requested, tag)
-patterns = {
-    "platform": re.compile(rf"^platform-{re.escape(tag)}\.tar\.gz$"),
-    "accelerator": re.compile(r"^accelerator-v[^/]+-linux-x86_64\.tar\.gz$"),
-    "connector": re.compile(r"^connector-v[^/]+-linux-x86_64\.tar\.gz$"),
-    "orchestrator": re.compile(r"^orchestrator-v[^/]+-linux-x86_64\.tar\.gz$"),
-    "sandboxer": re.compile(r"^sandboxer-v[^/]+-linux-x86_64\.tar\.gz$"),
-    "runtime": re.compile(r"^sandbox-runtime-x86_64-v[^/]+\.tar\.gz$"),
-    "vmlinux": re.compile(r"^vmlinux-x86_64-v[^/]+\.tar\.gz$"),
-}
-assets = release.get("assets", [])
-names = [a.get("name", "") for a in assets]
-assert len(names) == len(set(names))
-assert names.count("SHA256SUMS") == 1
-bindings = re.findall(r"<!-- kuasar-integration-validation (.*?) -->", release.get("body", ""), re.S)
-assert len(bindings) <= 1
-binding = json.loads(bindings[0]) if bindings else {}
-# The exact source declares compatibility, never missing image assets/notes.
-fields = {}
-for line in open(manifest, encoding="utf-8"):
-    if line[:1].isspace() or not line.strip() or line.startswith("#"):
-        continue
-    key, separator, value = line.partition(":")
-    assert separator
-    if key in ("version", "preview_version", "delivery"):
-        assert key not in fields
-        fields[key] = value.strip()
-selected = fields["version"]
-if "-preview." in tag:
-    selected += "-" + fields["preview_version"]
-assert selected == tag
-contract = fields.get("delivery", "historical")
-assert "delivery" not in fields or contract == "workbench-v1"
-if contract == "workbench-v1":
-    assert binding.get("delivery") == contract
-roles = {"SHA256SUMS": "checksum"}
-for label, pattern in patterns.items():
-    matches = [name for name in names if pattern.fullmatch(name)]
-    assert len(matches) == 1, (label, matches)
-    roles[matches[0]] = "platform" if label == "platform" else "product"
-arm_patterns = [re.compile(pattern.pattern.replace("x86_64", "aarch64"))
-                for label, pattern in patterns.items() if label != "platform"]
-arm = [name for name in names if any(pattern.fullmatch(name) for pattern in arm_patterns)]
-if contract == "workbench-v1" or arm:
-    for pattern in arm_patterns:
-        assert sum(bool(pattern.fullmatch(name)) for name in names) == 1
-expected = set(roles) | set(arm)
-if contract == "workbench-v1":
-    expected |= {f"workbench-{arch}-{tag.removeprefix('release-')}.tar.gz" for arch in ("x86_64", "aarch64")}
-    if os.environ.get("DOWNLOAD_WORKBENCH", "0") == "1":
-        roles[f"workbench-x86_64-{tag.removeprefix('release-')}.tar.gz"] = "workbench"
-assert set(names) == expected, (sorted(names), sorted(expected))
-assert os.environ.get("DOWNLOAD_WORKBENCH", "0") in ("0", "1")
-prefix = f"https://github.com/kuasar-sandbox/kuasar-sandbox/releases/download/{tag}/"
-with open(output, "w", encoding="utf-8") as stream:
-    for asset in sorted(assets, key=lambda item: item["name"]):
-        name, url, digest, size = (asset.get(k) for k in ("name", "browser_download_url", "digest", "size"))
-        assert re.fullmatch(r"[A-Za-z0-9._-]+", name), name
-        assert url == prefix + name, url
-        assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest or ""), (name, digest)
-        assert isinstance(size, int) and size > 0, (name, size)
-        if name in roles:
-            stream.write(f"{name}\t{url}\t{digest}\t{size}\t{roles[name]}\n")
-print(tag)
-PY
-)"
-
-DOWNLOAD_DIR="$PWD/kuasar-download-$RELEASE_VERSION"
-INSTALL_DIR="$PWD/kuasar-$RELEASE_VERSION"
-test ! -e "$DOWNLOAD_DIR"
-test ! -e "$INSTALL_DIR"
-mkdir -m 0755 "$DOWNLOAD_DIR"
-install -m 0644 "$RELEASE_METADATA" "$DOWNLOAD_DIR/release.json"
-install -m 0644 "$ASSETS_TSV" "$DOWNLOAD_DIR/assets.tsv"
-
-while IFS=$'\t' read -r name url digest size role; do
-    curl --fail --silent --show-error --location --retry 4 \
-        --output "$DOWNLOAD_DIR/$name.part" "$url"
-    test "$(stat -c %s "$DOWNLOAD_DIR/$name.part")" = "$size"
-    test "sha256:$(sha256sum "$DOWNLOAD_DIR/$name.part" | awk '{print $1}')" = "$digest"
-    mv "$DOWNLOAD_DIR/$name.part" "$DOWNLOAD_DIR/$name"
-done <"$DOWNLOAD_DIR/assets.tsv"
-rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST"
-trap - EXIT
-printf 'Pinned aggregate Release: %s\n' "$RELEASE_VERSION"
+STATE="$PWD/kuasar-workbench-state"
+NAME="demo-$(date +%s)"
+WB="$RELEASE/workbench/workbench"
+python3 "$WB" check --image "$IMAGE" --mode system
+python3 "$WB" --root "$STATE" --name "$NAME" start \
+  --image "$IMAGE" --mode system --inputs "$RELEASE" \
+  --cpus 4 --memory-gib 12 --network bridge
 ```
 
-这里固定同一 Release，读取其精确源码清单并检查声明的完整资产集合；`workbench-v1` 必须包含两种架构的 workbench。实际下载选择 x86_64 产品、platform-release 与 `SHA256SUMS`。执行前设置 `DOWNLOAD_WORKBENCH=1` 可同时获取 x86_64 workbench。使用 `docker load -i "$DOWNLOAD_DIR/workbench-x86_64-${RELEASE_VERSION#release-}.tar.gz"` 单独导入镜像，按 [workbench 使用说明](../workbench/README_zh.md) 进行隔离构建和离线测试。不要把 workbench 解压到产品目录。
+`check` 检查宿主和镜像兼容性；`start` 检查私有 systemd/daemon 并报告硬件能力。
+它们均不能证明 Demo 已通过。实例使用私有网络及服务：宿主 `127.0.0.1` 不等于
+workbench 的 `127.0.0.1`。不要用宿主网络或挂载宿主 Docker socket 来规避此区别。
 
-## 3. 校验并以无路径冲突方式解包
+## 3. 准备本地输入
 
-以下验证先检查 `SHA256SUMS`,再拒绝不支持的 tar entry type、absolute/traversal/noncanonical name、不安全文件 mode,以及 file/directory 或跨 archive collision;全部通过后才解包到新的 staging directory。
+外层命令在**宿主机**运行，`exec --` 之后的命令在 **workbench 内**执行。
+`/inputs/release` 只读；公共 prepare 使用所选镜像归档、helper 和 hash-locked SDK
+wheel 创建全新的不可变 `/work/prepared`。不要在 `/inputs/release` 下创建虚拟环境，
+也不要在线安装另一套 SDK。
 
 ```bash
-set -euo pipefail
-(
-cd "$DOWNLOAD_DIR"
-sha256sum --quiet --check --ignore-missing SHA256SUMS
-)
-
-python3 - "$DOWNLOAD_DIR" <<'PY'
-import json, pathlib, re, sys, tarfile
-root = pathlib.Path(sys.argv[1])
-rows = [line.split("\t") for line in (root / "assets.tsv").read_text().splitlines()]
-archives = [row[0] for row in rows if row[4] in ("platform", "product")]
-checksum_re = re.compile(r"^([0-9a-f]{64}) [ *]([A-Za-z0-9._-]+)$")
-checksums = {}
-for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
-    match = checksum_re.fullmatch(line)
-    assert match, line
-    digest, name = match.groups()
-    assert name not in checksums
-    checksums[name] = digest
-metadata = json.loads((root / "release.json").read_text())
-assert set(checksums) == {a["name"] for a in metadata["assets"] if a["name"] != "SHA256SUMS"}
-for name, _, digest, _, role in rows:
-    if role != "checksum":
-        assert "sha256:" + checksums[name] == digest
-types = {}
-for archive in archives:
-    with tarfile.open(root / archive, "r:gz") as stream:
-        for member in stream.getmembers():
-            raw = member.name
-            while raw.startswith("./"):
-                raw = raw[2:]
-            raw = raw.rstrip("/")
-            if not raw:
-                assert member.isdir(), (archive, member.name)
-                continue
-            assert "\\" not in raw and not any(ord(c) < 32 for c in raw), (archive, raw)
-            path = pathlib.PurePosixPath(raw)
-            assert not path.is_absolute() and ".." not in path.parts and "." not in path.parts
-            assert "/".join(path.parts) == raw, (archive, raw)
-            kind = "dir" if member.isdir() else "file" if member.isfile() else "unsupported"
-            assert kind != "unsupported", (archive, raw, member.type)
-            assert not (member.mode & 0o6000), (archive, raw, oct(member.mode))
-            assert kind == "dir" or not (member.mode & 0o002), (archive, raw, oct(member.mode))
-            prior = types.get(raw)
-            assert prior is None or prior == kind == "dir", (archive, raw, prior, kind)
-            for parent in path.parents:
-                if str(parent) != ".":
-                    assert types.get(str(parent)) != "file", (archive, raw, str(parent))
-            if kind == "file":
-                assert not any(existing.startswith(raw + "/") for existing in types), (archive, raw)
-            types[raw] = kind
-PY
-
-INSTALL_PARENT="$(dirname "$INSTALL_DIR")"
-STAGE_DIR="$(mktemp -d "$INSTALL_PARENT/.kuasar-install.XXXXXX")"
-cleanup_stage() {
-    case "$STAGE_DIR" in "$INSTALL_PARENT"/.kuasar-install.*) rm -rf -- "$STAGE_DIR" ;; esac
-}
-trap cleanup_stage EXIT
-while IFS=$'\t' read -r name url digest size role; do
-    case "$role" in
-        platform|product) tar --extract --gzip --no-same-owner --no-same-permissions \
-            --file "$DOWNLOAD_DIR/$name" --directory "$STAGE_DIR" ;;
-    esac
-done <"$DOWNLOAD_DIR/assets.tsv"
-
-# 此 marker 防止把当前修正后的指南与使用不同配置/清理合同的旧 Demo 混用。
-test -f "$STAGE_DIR/test/demo/demo_common.sh" || {
-    echo "selected Release predates the current safe Demo contract; use its bundled guide for historical reproduction or use source mode" >&2
-    exit 1
-}
-test -f "$STAGE_DIR/test/demo/requirements.txt"
-test -d "$STAGE_DIR/bin" && test -d "$STAGE_DIR/test"
-test -d "$STAGE_DIR/guide" || test -d "$STAGE_DIR/docs"
-for executable in "$STAGE_DIR/bin/cache-ctl" "$STAGE_DIR/bin/cloud-hypervisor"; do
-    output="$(ldd "$executable" 2>&1)" || { printf '%s\n' "$output" >&2; exit 1; }
-    ! grep -q 'not found' <<<"$output" || { printf '%s\n' "$output" >&2; exit 1; }
-done
-mv "$STAGE_DIR" "$INSTALL_DIR"
-STAGE_DIR=""
-trap - EXIT
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /inputs/release/test/e2e/e2e prepare \
+  --release-dir /inputs/release --workdir /work/prepared --arch "$ARCH" \
+  --include basic.demo.sh --deps-dir /opt/workbench/deps --offline
 ```
 
-如果 Stable 渠道仍指向早于修正后 Demo 合同的 Release,marker 检查会安全停止。已有 Release 资产不可变;应使用第 7 节源码模式运行当前实现,不能把新脚本与旧 binary set 混用。
+`--offline` 在获取制品之后禁止依赖下载，不禁止本地 Registry/Store/Proxy 通信，
+也不代表随后的 Demo 不需要网络。**保留 `--network bridge`：短 Demo 同样检查真实
+Internet 出站。** 不得用 `DEMO_NETDIAG` 把断言失败转成成功。缺少输入时准备失败，
+不会静默替换。
 
-## 4. 安装 SDK 并启动运行所属 Registry
-
-使用所选脚本交付的精确 SDK requirement。以下本地 Registry image 固定到 Docker Official Image 的 Linux amd64 manifest;随机 container ID 与 ownership label 避免共享固定名称。
+## 4. 运行第一个沙箱
 
 ```bash
-python3 -m venv "$INSTALL_DIR/.venv"
-PYTHON_BIN="$INSTALL_DIR/.venv/bin/python3"
-"$PYTHON_BIN" -m pip install --requirement "$INSTALL_DIR/test/demo/requirements.txt"
-
-RUN_ID="$(tr -d '-' </proc/sys/kernel/random/uuid | cut -c1-10)"
-DEMO_DATA_DIR="/var/lib/kuasar-demo-quickstart-$RUN_ID"
-BIN="$INSTALL_DIR/bin"
-REGISTRY_IMAGE='docker.io/library/registry@sha256:46faa9a1ae6813194b53921a370f2f4f8c5e1aae228a89bceafef5847a6a3278'
-if [[ -n "$(sudo -n ss -H -ltn 'sport = :5000')" ]]; then
-    echo 'port 5000 is already in use; refusing to alter its owner' >&2
-    exit 1
-fi
-REGISTRY_CID="$(sudo -n docker run -d --network host \
-    --label "io.kuasar-sandbox.demo-run=$RUN_ID" \
-    -e REGISTRY_HTTP_ADDR=127.0.0.1:5000 \
-    "$REGISTRY_IMAGE")"
-test "$(sudo -n docker inspect --format '{{ index .Config.Labels "io.kuasar-sandbox.demo-run" }}' "$REGISTRY_CID")" = "$RUN_ID"
-REGISTRY_READY=0
-for _ in $(seq 1 40); do
-    if curl --fail --silent --noproxy '*' http://127.0.0.1:5000/v2/ >/dev/null; then
-        REGISTRY_READY=1
-        break
-    fi
-    sleep 0.25
-done
-if [[ "$REGISTRY_READY" != 1 ]]; then
-    if [[ "$(sudo -n docker inspect --format '{{ index .Config.Labels "io.kuasar-sandbox.demo-run" }}' "$REGISTRY_CID" 2>/dev/null || true)" == "$RUN_ID" ]]; then
-        sudo -n docker rm -f "$REGISTRY_CID" >/dev/null
-    else
-        echo "Registry ownership changed; preserving $REGISTRY_CID for inspection" >&2
-    fi
-    echo 'run-owned Registry did not become ready' >&2
-    exit 1
-fi
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/demo/prepared.py run \
+  --workdir /work/prepared --data-dir /work/kuasar-demo-first --quick
 ```
 
-如果端口 5000 已占用,应停止并查明实际 owner;不能删除已有 Container 或 Listener。也可以使用操作者提供的 Registry,认证方式见 [Demo](../test/demo/DEMO_zh.md)。
+适配器验证预备输入、加载精确原生镜像，使用本地 SDK/helper 环境调用现有 Demo 脚本。
+沙箱命令在 **Guest 内**执行；可变状态和保留日志位于 `/work/kuasar-demo-first`，
+不写入预备输入树。
 
-## 5. 准备、构建、创建、访问、暂停、恢复与销毁
+成功要求真实模板、MicroVM、命令/文件、网络、暂停恢复及销毁断言全部通过，且退出码
+为零。Demo 会打印阶段，但结束后不保留生产节点服务。重复执行同一命令，可复用持久
+准备层并生成新的运行身份。
 
-跨 `sudo` 的值全部显式传入。`DEMO_DATA_DIR` 由 root 所有且保持私有;`PYTHON_BIN` 始终是用户创建的 virtual environment 中的绝对解释器路径。
+完整 COPY、模板扇出、迁移及交互观察见 [Demo](../test/demo/DEMO_zh.md)；完整常规
+用例选择和结果 JSON 见[发布验证](../test/QUICKSTART_zh.md)。
+
+## 5. 查看结果并清理
+
+适配器将可安全保留的 Demo 日志放在 `/work/kuasar-demo-first/results/`，准备日志
+位于其 `logs/`。私有诊断可能包含敏感状态，分享前应在本机检查。它们映射到宿主
+`$STATE/$NAME/work/kuasar-demo-first`；启动诊断位于 `$STATE/$NAME/output`。
+通过同一个 workbench 实例查看 root 所属的数据。
+
+先停止所属 Demo 准备服务，再停止 workbench，最后移除容器、网络与 daemon 数据：
 
 ```bash
-sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    REGISTRY=127.0.0.1:5000 REGISTRY_INSECURE=1 \
-    bash "$INSTALL_DIR/test/demo/demo_prep.sh"
-
-sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    PYTHON_BIN="$PYTHON_BIN" DEMO_QUICKSTART=1 \
-    bash "$INSTALL_DIR/test/demo/demo_e2b.sh"
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/demo/prepared.py stop \
+  --workdir /work/prepared --data-dir /work/kuasar-demo-first
+python3 "$WB" --root "$STATE" --name "$NAME" stop
+python3 "$WB" --root "$STATE" --name "$NAME" cleanup
 ```
 
-首次准备会拉取按 digest 固定的精简 Docker Official `python:3.12-slim` linux/amd64 manifest,再使用 digest 派生的目标 Tag 推入 Registry。脚本会回读目标内容;如同名内容不同则拒绝覆盖。
+`cleanup` 保留 work/build/home/journal/output；`cleanup --delete-output` 才会显式
+删除它们，执行前应保存所需结果。Demo 的 `reset` 也会删除该 Demo 的日志和数据，
+因此不作为默认故障恢复步骤。停止但未清理的实例可以按原镜像、模式、挂载和预算重启；
+已清理的实例需要新名称。完整生命周期语义见 [Workbench](../workbench/README_zh.md)。
 
-只有完成以下全部操作,Quick Start 才成功:构建并回读 `snp` Template target、创建真实 MicroVM、执行 Guest 命令、通过 Files API 写入/读取、验证直连和认证数据访问及 outbound NAT、确认两类数据跨 pause/resume 保留、调用 `kill()`,并完成运行所属清理。
+## 故障排查
 
-## 6. 清理
+历史合同或缺少适配器的报错表示所选版本尚不提供此流程。应显式选择符合要求的已发布
+版本，或按历史原生指南执行；不要静默切换通道或混用脚本版本。
 
-先停止持久 Demo 服务。`stop` 保留 cache 数据;`reset` 停止服务后只删除带精确 marker 的 Demo 目录。
-
-```bash
-sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" \
-    bash "$INSTALL_DIR/test/demo/demo_prep.sh" stop
-# 或者在检查任何清理不完整报告后执行:
-sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" \
-    bash "$INSTALL_DIR/test/demo/demo_prep.sh" reset
-
-test "$(sudo -n docker inspect --format '{{ index .Config.Labels "io.kuasar-sandbox.demo-run" }}' "$REGISTRY_CID")" = "$RUN_ID"
-sudo -n docker rm -f "$REGISTRY_CID"
-```
-
-删除 Container 前必须回读 label。Demo 不会用通配符停止全部 Sandbox unit,也不会删除预存 vSwitch 或 namespace。如果报告归属不明或清理不完整,本次运行失败,并保留 root-only 诊断供检查。
-
-## 7. 当前源码模式
-
-开发场景,或 Stable 渠道尚早于修正后 Demo 合同时,把六个公共仓库 clone 为兄弟目录,记录其精确 SHA,构建该 source set,再按 [Demo](../test/demo/DEMO_zh.md) 的源码模式命令运行。不要分别使用各组件 GitHub Latest;兼容的 Release 组合由聚合 Release 选择。
-
-项目根目录不是 monorepo:
-
-```text
-<workspace>/
-├── kuasar-sandbox/
-├── accelerator/
-├── connector/
-├── guest-runtime/
-├── sandboxer/
-└── orchestrator/
-```
-
-## 8. 故障排查与后续步骤
-
-- `systemd is not PID1`:使用由 systemd 启动的 Linux 主机,不能使用普通 Container。
-- `/dev/kvm not available (rw)`:启用虚拟化并让 root 可以访问该设备。
-- `net.ipv4.ip_forward must already be 1`:按主机策略配置 forwarding;Demo 有意不修改该设置。
-- `selected Release predates ...`:不能为该组二进制从 `main` 获取脚本。应使用其 bundled historical guide,或构建一套精确的当前 source set。
-- Registry、listener、unit、vSwitch、namespace、link、host mapping 或 iptables 冲突会保持不动。
-- `DEMO_NETDIAG=1` 只用于诊断,不能把失败的网络断言变成验收成功。
-
-完整 Demo 还包括 `COPY`、暂停态 Template 扇出和迁移。另见 [Demo](../test/demo/DEMO_zh.md)、[部署](deployment_zh.md)、[Release](release_zh.md)和[安全策略](../SECURITY_zh.md)。
+缺少 KVM/内核能力时，选择满足要求的原生主机。prepare 失败时修复其明确报告的
+缺失/损坏输入，再使用全新的预备目录。workbench 内监听器、unit 或网络冲突时，
+检查该实例先前的 Demo，不要停止无关宿主服务。Demo 或清理非零退出表示失败，
+不是成功跳过。
