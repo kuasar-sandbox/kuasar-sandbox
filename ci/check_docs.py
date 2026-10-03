@@ -94,14 +94,16 @@ def check_file(root: Path, path: Path) -> list[str]:
         issues.append(f'{rel}: missing English counterpart {peer.name}')
     if peer.is_file():
         for item in (path, peer):
-            header = '\n'.join(item.read_text(encoding='utf-8').splitlines()[:5])
+            item_text = item.read_text(encoding='utf-8')
+            first_nonempty = next((line for line in item_text.splitlines() if line.strip()), '')
             other = peer if item == path else path
-            targets = {urlsplit(dest).path for _, dest in destinations(header)}
+            targets = {urlsplit(dest).path for _, dest in destinations(first_nonempty)}
             if other.name not in targets:
-                issues.append(f'{item.relative_to(root)}: missing reciprocal language link to {other.name} in first five lines')
+                issues.append(f'{item.relative_to(root)}: missing reciprocal language link to {other.name} on first non-empty line')
     if not chinese:
+        first_nonempty_no = next((n for n, line in enumerate(text.splitlines(), 1) if line.strip()), None)
         for n, line in prose(text):
-            if n <= 5 and '[English]' in line and '[简体中文]' in line:
+            if n == first_nonempty_no and '[English]' in line and '[简体中文]' in line:
                 continue
             cleaned = re.sub(r'`+[^`]*`+', '', line)
             cleaned = re.sub(r'<[^>]*>', '', cleaned)
