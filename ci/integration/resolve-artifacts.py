@@ -256,6 +256,27 @@ def product_source_map(products, sources, kernel_sha):
     return result
 
 
+def source_test_revisions(selected, platform_record, platform_sha, base_ref):
+    """Keep fallback products paired with their independently validated test pins."""
+    tests = {owner: dict(record) for owner, record in
+             artifacts.validate_test_revisions(selected["test_revisions"]).items()}
+    selection_sha = platform_record['candidate_sha'] if platform_record else platform_sha
+    tests['platform']['sha'] = selection_sha
+    if platform_record:
+        relative = 'releases/daily-preview.yaml' if base_ref == 'main' else 'releases/release.yaml'
+        def pins(sha):
+            manifest = source_text(PLATFORM, sha, relative)
+            return release.selection.test_revisions(release.selection.read_simple_yaml(manifest, relative), relative)
+        before = pins(platform_record['base_sha'])
+        after = pins(selection_sha)
+        # An explicit PR pin change remains a tested input. Inherited pins from
+        # an unpublished selection must not leak into its predecessor's products.
+        for owner, sha in after.items():
+            if sha != before[owner]:
+                tests[owner]['sha'] = sha
+    return artifacts.validate_test_revisions(tests)
+
+
 def source_plan(framework_sha):
     primary = {"repository": os.environ["CANDIDATE_REPOSITORY"], "candidate_sha": os.environ["CANDIDATE_SHA"],
                "base_sha": os.environ["CANDIDATE_BASE_SHA"], "head_sha": os.environ["CANDIDATE_HEAD_SHA"],
@@ -270,14 +291,7 @@ def source_plan(framework_sha):
     sources = {owner: {"repository": repository, "sha": selected["sha"] if owner == "platform" else
                       selected["units"]["runtime" if owner == "guest-runtime" else owner]["sha"], "role": "baseline"}
                for owner, repository in REPOSITORIES.items()}
-    # Test pins are maintained independently of immutable product releases.
-    # A platform candidate's committed selection can advance migration tests
-    # without rebuilding or substituting any baseline product.
-    selection_sha = platform_record['candidate_sha'] if platform_record else platform_sha
-    relative = 'releases/daily-preview.yaml' if base_ref == 'main' else 'releases/release.yaml'
-    manifest = source_text(PLATFORM, selection_sha, relative)
-    pins = release.selection.test_revisions(release.selection.read_simple_yaml(manifest, relative), relative)
-    tests = artifacts.release_test_revisions(pins, selection_sha)
+    tests = source_test_revisions(selected, platform_record, platform_sha, base_ref)
     changes, owners = {}, []
     kernel_sha = selected["units"]["vmlinux"]["sha"]
     for record in records:
