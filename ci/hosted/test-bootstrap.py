@@ -22,7 +22,7 @@ class BootstrapTests(unittest.TestCase):
         required = {
             "control": {"curl", "git", "jq", "python3", "python3-yaml", "util-linux"},
             "release-control": {"curl", "git", "jq"},
-            "helper-build": {"curl", "git", "jq", "build-essential"},
+            "helper-build": {"curl", "git", "jq", "build-essential", "gcc-aarch64-linux-gnu"},
             "kernel": {"build-essential", "bc", "bison", "flex", "libelf-dev", "libssl-dev", "libncurses-dev", "pkg-config", "time"},
             "runtime": {"autoconf", "automake", "libtool", "patch", "uuid-dev", "libgcrypt20-dev", "libgpg-error-dev", "libssl-dev", "liblz4-dev", "libzstd-dev", "zlib1g-dev", "libfuse3-dev"},
             "runtime-publish": {"autoconf", "automake", "libtool", "patch", "uuid-dev", "libgcrypt20-dev", "libgpg-error-dev", "libssl-dev"},
@@ -42,6 +42,11 @@ class BootstrapTests(unittest.TestCase):
             if profile not in ("control",):
                 self.assertEqual(flags.stdout.split()[0], "true")
         self.assertNotEqual(shell("select_profile typo").returncode, 0)
+
+    def test_helper_cross_compiler_does_not_enable_product_build_profiles(self):
+        result = shell('select_profile helper-build; echo "$with_go $with_native $with_kernel $with_readers $with_vm $with_cross"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "true false false false false false")
 
     def test_cross_crypto_keeps_target_devel_and_host_reader_prerequisites(self):
         def packages(profile):
