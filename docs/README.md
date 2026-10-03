@@ -5,6 +5,8 @@
 ## Start and operate
 
 - [Quick Start](quickstart.md): run the first sandbox from one aggregate release.
+- [Workbench](../workbench/README.md): host requirements, native builds, private systems and lifecycle.
+- [Acquire a release](download.md): pin one aggregate, verify selected assets and import workbench separately.
 - [Deployment](deployment.md): choose a topology, services, storage and operational dependencies.
 - [Complete E2B demonstration](../test/demo/DEMO.md): lifecycle, networking, template fan-out and migration.
 - [Aggregate release validation](../test/QUICKSTART.md): validate delivered assets rather than source-build a first demo.

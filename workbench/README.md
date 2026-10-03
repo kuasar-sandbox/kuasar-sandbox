@@ -2,6 +2,12 @@
 
 # Workbench
 
+For the first sandbox, follow [Quick Start](../docs/quickstart.md).
+[Acquire a release](../docs/download.md) supplies verified inputs and image import
+without a source checkout. This guide owns environment/lifecycle semantics. Run
+release examples from the extracted directory and source-build examples from the
+project checkout, using the matching launcher in each case.
+
 Workbench supplies the native Linux build tools and system environment for a
 selected Kuasar Sandbox release. One image supports ordinary UID builds and a
 systemd PID 1 environment with private Docker/containerd. It contains external
@@ -11,7 +17,7 @@ and the [Demo guide](../test/demo/DEMO.md) for the complete example.
 
 ## Host and image
 
-Use native x86_64 or aarch64 Linux with Docker Engine and Python 3. The launcher
+Use native x86_64 or aarch64 Linux with Docker Engine and Python 3.9+. The launcher
 uses the local Unix Docker endpoint. Docker Desktop, remote Docker endpoints,
 architecture emulation, Podman and runner registration are outside V1.
 
@@ -110,6 +116,11 @@ variables needed by that command. Offline mode controls acquisition, not case
 selection. Missing or corrupt required inputs fail; helpers and locked wheels
 are always consumed from the selected platform-release, without PATH or global
 Python package fallback.
+
+For full Demo or ordinary full-suite runs, create a bridge-network instance;
+replacing the subset with `--all` does not give a running none-network instance
+egress. Budget CPU/memory/disk for the selected workload; changed budgets or mounts
+need a new instance. Two terminals must use the same `--root`/`--name` for `exec`.
 
 ## Lifecycle and isolation
 

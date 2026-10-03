@@ -1,33 +1,62 @@
 [English](DEMO.md) | [简体中文](DEMO_zh.md)
 
-# E2B-compatible sandbox host Demo
+# E2B Demo in workbench
 
-This Demo drives a standalone Kuasar Sandbox node through the unmodified E2B Python SDK. It uses the current separate Conductor and Proxy processes, builds a snapshot template inside a builder MicroVM, creates a real MicroVM, exercises command and Files APIs, verifies data access, pauses and resumes the logical sandbox, and destroys it. The complete mode also covers template fan-out and one-call migration.
+The Demo drives a real standalone Kuasar node through the unmodified E2B Python
+SDK. Workbench provides its system environment; the selected aggregate provides
+products, scripts, native helpers and locked SDK wheels. Workbench is not a
+production deployment requirement or a hostile-root security boundary.
 
-The Demo is an executable product path, not a replacement for the component and aggregate Integration E2E suites. A run without writable KVM, or a run in `DEMO_NETDIAG` mode that tolerates a failed network assertion, is not acceptance evidence.
+## 1. Release/workbench workflow (recommended)
 
-## 1. Execution modes
+Complete [Quick Start](../../docs/quickstart.md) through offline preparation.
+Keep its host variables `WB`, `STATE`, `NAME`, `IMAGE`, `RELEASE` and `ARCH`.
+The selected release must include this `prepared.py` adapter. Do not copy it from
+`main` into an older release. Use that version's own guide instead.
 
-Use one internally consistent source set:
+The host invokes `workbench exec`; everything after `exec --` runs inside the
+same system instance. `/inputs/release` is read-only; `/work/prepared` is sealed
+input, not a place to install packages or create mutable Demo data. Full Demo:
 
-- **Source mode:** build all six sibling repositories with the project `Makefile`, then run the scripts from that same source revision against the resulting `bin/<arch>` directory.
-- **Release mode:** resolve one aggregate Release tag, verify every asset from that Release, extract it, and use both the scripts and binaries from that extraction. Do not combine scripts from `main` with binaries from an older Stable Release.
+```bash
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/demo/prepared.py run \
+  --workdir /work/prepared --data-dir /work/kuasar-demo-first
+```
 
-`demo_prep.sh` owns the persistent Demo layer: Manifest Store, tiered Cache, Registry configuration, immutable base-image seed, and optional VersityGW storage used by `COPY`. `demo_e2b.sh` owns one ephemeral run: TLS, credentials, Conductor, Proxy, systemd units, vSwitch, network namespace, NAT rules, host mappings, sandboxes, and private work files.
+Add `--quick` for only the first-use lifecycle. Add `--pause` for interactive
+observation between stages:
 
-COPY storage stays reachable from the host: Conductor performs HEAD/presigning,
-the SDK uploads directly, and the Builder downloads the context before streaming
-it into the build VM. Registry image import is different: it runs in the guest
-and uses the Demo's management-VIP route to local Zot.
+```bash
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/demo/prepared.py run \
+  --workdir /work/prepared --data-dir /work/kuasar-demo-first --pause
+```
 
-The per-run overlay and builder work disks are new sparse ext4 files formatted
-with `mkfs.ext4 -O ^has_journal`. They omit the filesystem journal, not journald
-or application logs, to avoid journal capacity and metadata writes. This is a
-creation-time default for disposable work disks, not a crash-recovery guarantee
-or a restriction on existing user images. Guest sync and snapshot/resume
-semantics remain unchanged.
+In a second **host terminal**, restore the same `WB`, `STATE` and `NAME` values
+and enter the same instance:
 
-## 2. What is verified
+```bash
+python3 "$WB" --root "$STATE" --name "$NAME" exec
+```
+
+Use the private `cli.env` path printed by the Demo inside that shell. Its TLS CA,
+DNS entries, `127.0.0.1:443` control listener, `127.0.0.2:443` data listener and
+floating IPs belong to workbench's network view, not the host's. No public host
+ports or host Docker socket are required by this demonstration.
+
+The adapter verifies prepared contents/modes, native image and helpers, creates
+an isolated SDK launcher outside inputs and calls the existing scripts. It does
+not implement another E2E runner or install Python packages during execution.
+The scripts are still the common implementation used by `basic.demo.sh`.
+
+Keep bridge networking: offline prepare prohibits dependency acquisition, while
+both short and full Demo retain real Internet egress checks. A successful
+workbench startup or a diagnostic run is not Demo success. The complete product
+case also checks rejection of foreign resources, repeated prep and cleanup;
+run it through the [public E2E runner](../QUICKSTART.md) for those assertions.
+
+## 2. What is demonstrated
 
 | Phase | Operation | Required result |
 | --- | --- | --- |
@@ -51,73 +80,106 @@ target automatic and supplies start/ready commands, then strictly checks the
 snapshot result. The pinned SDK returns its registration handle after waiting;
 the Demo reads the published, creatable template ID from that exact build's status.
 
-## 3. Host and tool prerequisites
 
-The supported prebuilt target is Linux x86_64 with glibc 2.38 or newer. A real run also requires:
+## 3. Repeated runs, logs and cleanup
 
-- systemd as PID 1, cgroup v2, root, and read/write `/dev/kvm`;
-- `net.ipv4.ip_forward=1`, enabled by the operator before the run; the Demo refuses to mutate this host-global setting;
-- free `127.0.0.1:443` and `127.0.0.2:443`, no standard `sandbox-runner@*` or `sandbox-builder@*` instances, and no conflicting Demo vSwitch, namespace, link, unit, host entry, or iptables marker;
-- `openssl`, `ip`, `curl`, `sqlite3`, `iptables`, `flock`, `setsid`, `timeout`, `mkfs.ext4`, and Docker for seeding an OCI Registry;
-- the exact Python dependency in [`requirements.txt`](requirements.txt), installed in a dedicated virtual environment;
-- `node-ctl`, `e2b-key-ctl`, `connector-ctl`, `store-ctl`, `cache-ctl`, `cloud-hypervisor`, `vmlinux`, and `sandbox-runtime.bundle` from one source set.
+`demo_prep.sh` owns persistent Store/Cache/Registry and optional COPY Gateway;
+`demo_e2b.sh` owns the per-run Conductor/Proxy, units, network, credentials and
+sandboxes. The prepared adapter uses `/work/kuasar-demo-first` in these examples,
+passes only its task inputs and retains safe Demo logs by setting `DEMO_KEEP=1`.
+It does not inherit short/diagnostic modes or a foreign Docker endpoint.
 
-The complete mode additionally needs `versitygw`. Source mode obtains pinned Zot and VersityGW tools through `make e2e-tools`. Release mode can use an operator-supplied Registry and VersityGW; the [Quick Start](../../docs/quickstart.md) gives a complete release-first path for the shorter mode.
-
-The build sandbox requests 2 vCPUs and 6 GiB capacity. Leave memory and CPU for the host and the sandbox created from the template.
-
-## 4. Source-mode run
-
-Run from the parent directory that contains the six sibling repositories:
+Run the same command again to reuse preparation with a new run identity.
+Inspect preparation `logs/`, safe retained `results/` and any reported private
+failure directory under the data root. They map to
+`$STATE/$NAME/work/kuasar-demo-first` on the host. Inspect root-only files within
+workbench or with authorized host access; do not publish private configuration.
+Stop preparation while preserving data and logs:
 
 ```bash
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/demo/prepared.py stop \
+  --workdir /work/prepared --data-dir /work/kuasar-demo-first
+```
+
+Only after saving needed diagnostics, reset the exact owned Demo data:
+
+```bash
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/demo/prepared.py reset \
+  --workdir /work/prepared --data-dir /work/kuasar-demo-first
+```
+
+`reset` deletes that Demo's logs as well as its state. It is not a default response
+to failure. Workbench `stop` and `cleanup` are separate outer lifecycle operations;
+ordinary `cleanup` retains `/work` and `/output`, while `--delete-output` deletes
+them explicitly. See [Workbench](../../workbench/README.md). A cleaned instance
+needs a new name; a stopped instance can restart only with its original settings.
+
+## 4. Native source alternative
+
+Use one recorded six-repository source set and the matching built products. This
+path runs directly in the native system environment, not in ordinary-UID
+workbench build mode. It requires systemd PID 1, cgroup v2, root/noninteractive
+sudo, KVM, the product's native libraries, Python 3.12 and the ordinary Demo tools
+(openssl, ip, curl, sqlite3, iptables, flock, setsid, timeout, mkfs.ext4 and Docker).
+Enable forwarding according to the native host policy before execution; the Demo
+does not change it. The two loopback TLS listeners and Demo resources must be
+free. Native production topology is documented in [Deployment](../../docs/deployment.md).
+
+From the parent of the six sibling repositories:
+
+```bash
+ARCH="$(uname -m)"
 make -C kuasar-sandbox build e2e-tools
 python3 -m venv kuasar-sandbox/.demo-venv
 kuasar-sandbox/.demo-venv/bin/python3 -m pip install \
-    --requirement kuasar-sandbox/test/demo/requirements.txt
-
+  --requirement kuasar-sandbox/test/demo/requirements.txt
 DEMO_DATA_DIR=/var/lib/kuasar-demo-source
-BIN="$PWD/kuasar-sandbox/bin/x86_64"
+BIN="$PWD/kuasar-sandbox/bin/$ARCH"
 PYTHON_BIN="$PWD/kuasar-sandbox/.demo-venv/bin/python3"
-ZOT_BIN="$PWD/kuasar-sandbox/build/e2e-tools/x86_64/zot"
-VGW_BIN="$PWD/kuasar-sandbox/build/e2e-tools/x86_64/versitygw"
-
+ZOT_BIN="$PWD/kuasar-sandbox/build/e2e-tools/$ARCH/zot"
+VGW_BIN="$PWD/kuasar-sandbox/build/e2e-tools/$ARCH/versitygw"
 sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    ZOT_BIN="$ZOT_BIN" VGW_BIN="$VGW_BIN" \
-    bash "$PWD/kuasar-sandbox/test/demo/demo_prep.sh"
+  ZOT_BIN="$ZOT_BIN" VGW_BIN="$VGW_BIN" \
+  bash "$PWD/kuasar-sandbox/test/demo/demo_prep.sh"
 sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    PYTHON_BIN="$PYTHON_BIN" \
-    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
+  PYTHON_BIN="$PYTHON_BIN" \
+  bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
 ```
 
-All paths crossing `sudo` are explicit and absolute. The scripts do not rely on the caller and root having the same `HOME` or Python installation.
+`make demo PYTHON_BIN=/absolute/path/to/python` is a **source-only** convenience
+entry: it checks the interpreter before building products/tools. It is not a
+release installer. Workbench ordinary-UID `--mode build` supplies compilers, not
+the privileges/devices needed by `Template.build()` or a MicroVM. Its source
+build instructions are in [Workbench](../../workbench/README.md).
 
-The default base is the compact Docker Official `python:3.12-slim` linux/amd64 manifest pinned by digest. The template build uses `set_user("root")` to create the E2B default `user` account (UID/GID 1000:1000), then `set_user("user")` before COPY and snapshot startup; an existing account must already use those IDs. These are Builder USER steps, not the SDK's optional `run_cmd(user=...)` argument. Its Python runtime is sufficient for readiness, execution, and data-access checks. An overridden image must also provide `useradd` when the account is absent. To use an existing Registry instead of the Demo-owned Zot, pass `REGISTRY=<host[:port]>`. If authentication is required, pass `REGISTRY_USER` and `REGISTRY_PASS`; `demo_prep.sh` sends the password to `docker login` on stdin and stores Docker authentication only below the private Demo data directory. Set `REGISTRY_INSECURE=1` only for an intentionally HTTP Registry. `E2E_IMAGE` accepts a Docker image name, tag, local image ID (including a short ID), or digest reference. Preparation resolves it once to the full local image ID and checks `linux/amd64`, then publishes that exact object to the destination Registry and reads back its actual manifest digest for Builder. A loaded local image needs no source pull or RepoDigest. Artifact E2E requires its prepared image to be present locally; standalone preparation may pull a missing reference.
+Standalone native scripts retain `DEMO_QUICKSTART`, `DEMO_PAUSE`, `DEMO_KEEP` and
+`DEMO_NETDIAG` controls; pass them explicitly across `sudo -n env`. The public
+full product case never uses a short or network-diagnostic mode. Complete Demo
+requires VersityGW for COPY. All paths crossing sudo must be absolute.
 
-## 5. Controls and repeated runs
+The default logical base is `python:3.12-slim`; native platform selection is
+`linux/amd64` on x86_64 and `linux/arm64` on aarch64. Standalone preparation can
+pull a missing name/tag/digest; artifact execution consumes the exact prepared
+local image ID and never selects or pulls a replacement. Wrong-platform images
+are rejected. Preparation publishes the same config identity and reads back the
+destination manifest digest. Source image ID and registry digest are different
+identities. Existing Registry credentials and `REGISTRY_INSECURE=1` remain
+explicit native-script choices; the release adapter uses its prepared local Zot.
 
-```bash
-# Short lifecycle only.
-sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    PYTHON_BIN="$PYTHON_BIN" DEMO_QUICKSTART=1 \
-    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
+The template creates the default `user` (UID/GID 1000:1000) with Builder USER
+steps before COPY/startup. A replacement source image needs `useradd` if that
+account is absent. New sparse overlay/builder disks use `mkfs.ext4 -O ^has_journal`;
+this omits the filesystem journal, not application/journald logs, and does not
+change Guest sync or snapshot/restore semantics.
 
-# Pause between phases; a private root-only cli.env is printed for a second root terminal.
-sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    PYTHON_BIN="$PYTHON_BIN" DEMO_PAUSE=1 \
-    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
+## 5. Ownership and credentials
 
-# Retain only logs that do not contain detected run secrets.
-sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    PYTHON_BIN="$PYTHON_BIN" DEMO_KEEP=1 \
-    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
-```
-
-Preparation is idempotent only when the live services still match their recorded executable, start time, and configuration. A repeated per-run invocation gets a fresh random identity. `DEMO_RUN_ID` may be supplied for reproducibility, but an existing work/result directory or host marker is treated as a conflict, not adopted.
-
-`DEMO_NETDIAG=1` keeps a diagnostic run going after direct-port or egress assertions fail. Do not use such a run as successful Demo or Release validation.
-
-## 6. Ownership, credentials, and cleanup
+The native script contract below also applies **inside workbench**. Here “host”
+means the Demo's execution environment. It does not authorize changes to the
+outer Docker host. The adapter uses the explicit `/work` data directory above;
+the standalone scripts retain their native default.
 
 `DEMO_DATA_DIR` defaults to `/var/lib/kuasar-demo`. It must be a canonical absolute path using safe path characters. The scripts create a root-owned mode-0700 directory and a strict ownership marker. A nonempty unmarked directory, symbolic-link path, unexpected PID record, changed live configuration, or foreign host resource causes a fail-closed refusal.
 An unmarked nonempty directory or invalid ownership marker is rejected before changing the directory's contents or permissions.
@@ -146,7 +208,8 @@ sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" \
 
 `stop` stops only services identified by valid run-owned PID records and preserves data. `reset` first stops those services, then removes only an exactly marked, explicitly Demo-named data directory. Resolve any reported ambiguous external resource before resetting its diagnostics.
 
-## 7. Network and endpoint layout
+
+## 6. Network layout
 
 Conductor listens on `127.0.0.1:443`; the independent Proxy listens on `127.0.0.2:443`. A local Demo CA signs `*.<domain>`, and SDK calls use its CA file plus `NO_PROXY=*`. `/etc/hosts` entries are added individually after each sandbox ID is known and removed by their per-run marker; wildcard DNS is not assumed.
 
@@ -154,11 +217,17 @@ The vSwitch assigns each sandbox a floating IP from `100.100.96.0/20`, while the
 
 The Demo verifies both direct `http://<floating-ip>:8000` access and the authenticated E2B data address `https://8000-<sid>.<domain>`, using the real `X-Access-Token`. Guest egress is an assertion of the existing Demo NAT path, not a new product Egress implementation.
 
-## 8. Troubleshooting and See Also
 
-- A missing or mismatched Python package must be fixed in the dedicated virtual environment; the script requires exactly `e2b==2.25.1`.
-- A listener, unit, vSwitch, namespace, link, host mapping, or iptables conflict is intentionally not auto-removed. Use an unused host or resolve the named owner outside the Demo.
-- On first preparation, pulling and pushing the digest-pinned base image may take substantial time. A failed destination pull is considered “missing” only when the Registry clearly reports an absent manifest.
-- A `cleanup was incomplete` message is a failed run. Inspect the preserved root-only directory and named host object before retrying.
+## 7. Troubleshooting
 
-See [Quick Start](../../docs/quickstart.md), [Standalone node design](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md), [Builder design](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md), and [Integration E2E guide](../QUICKSTART.md).
+A missing/wrong SDK or helper in release mode must be repaired by acquiring the
+matching inputs and preparing a new workspace, not by global pip/PATH fallback.
+Native source mode manages its own explicit virtual environment. Missing KVM or
+kernel features must be resolved in the selected native environment; no emulation
+or skipped assertion counts as success. For occupied resources, inspect the
+instance owner rather than stopping unrelated services. For cleanup failure,
+retain the reported private diagnostics and solve ownership before resetting.
+
+See [Quick Start](../../docs/quickstart.md), [Release validation](../QUICKSTART.md),
+[Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md) and
+[Builder](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md).

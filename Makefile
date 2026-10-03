@@ -143,8 +143,9 @@ verify-prebuilt:
 	done < $(BIN_INPUTS_MANIFEST)
 
 # perf harnesses living in this repo (cross-repo binary use).
-perf-sandbox: build assemble-e2e
-	BIN=$(SBIN) bash $(E2E_SUITE_DIR)/test/perf/sandbox-perf.sh
+perf-sandbox:
+	@[ -n "$(E2E_WORKDIR)" ] || { echo "E2E_WORKDIR must contain prepared lifecycle/manifest-boot inputs" >&2; exit 1; }
+	E2E_WORKDIR="$(E2E_WORKDIR)" bash test/perf/sandbox-perf.sh
 perf-sandbox-manifest: build
 	BIN=$(SBIN) bash test/perf/sandbox-perf-manifest.sh
 perf-sandbox-working-set: build
@@ -170,10 +171,13 @@ dedup-report:
 # e2b end-to-end demo — the "try it" walkthrough driven by the unmodified e2b CLI
 # (build template → boot microVM → exec → pause/resume → kill). DEMO_PAUSE=1 to
 # step through and drive the CLI from another terminal; see test/demo/DEMO.md.
-demo: build e2e-tools
+demo:
 	@test -n "$(PYTHON_BIN)" || { echo "set PYTHON_BIN=/absolute/path/to/pinned-venv/bin/python" >&2; exit 1; }
+	@case "$(PYTHON_BIN)" in /*) ;; *) echo "PYTHON_BIN must be absolute" >&2; exit 1 ;; esac
+	@test -x "$(PYTHON_BIN)" || { echo "PYTHON_BIN must be executable" >&2; exit 1; }
+	$(MAKE) build e2e-tools
 	sudo -n env DEMO_DATA_DIR="$(DEMO_DATA_DIR)" BIN="$(SBIN)" ZOT_BIN="$(E2E_ZOT_BIN)" VGW_BIN="$(E2E_VGW_BIN)" bash test/demo/demo_prep.sh
-	sudo -n env DEMO_DATA_DIR="$(DEMO_DATA_DIR)" BIN="$(SBIN)" PYTHON_BIN="$(PYTHON_BIN)" bash test/demo/demo_e2b.sh
+	sudo -n env DEMO_DATA_DIR="$(DEMO_DATA_DIR)" BIN="$(SBIN)" PYTHON_BIN="$(PYTHON_BIN)" DEMO_QUICKSTART="$(DEMO_QUICKSTART)" DEMO_PAUSE="$(DEMO_PAUSE)" DEMO_KEEP="$(DEMO_KEEP)" DEMO_NETDIAG="$(DEMO_NETDIAG)" bash test/demo/demo_e2b.sh
 
 # ---------------------------------------------------------------------------
 # Sub-repo vet/test/clean aggregates
@@ -204,6 +208,7 @@ test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_network_names.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_files_storage.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_build_selection.py
+	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_prepared_demo.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_documentation_package.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_selection_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_coordinator_test.py
@@ -231,7 +236,7 @@ help:
 	@echo "  release       publish a selected aggregate (RELEASE_VERSION=release-vX.Y.Z)"
 	@echo "  assemble-e2e  assemble component-owned and platform-owned suites"
 	@echo "  test-e2e      prepare and run RELEASE_DIR inputs in a fresh E2E_WORKDIR"
-	@echo "  demo          run the e2b end-to-end demo (test/demo/demo_e2b.sh; DEMO_PAUSE=1 to step through)"
+	@echo "  demo          source-only Demo (requires PYTHON_BIN; release users follow docs/quickstart.md)"
 	@echo "  perf          aggregate: accelerator perf-cache + this repo's perf-sandbox/-manifest/-density"
 	@echo "  bench         Go micro-benchmarks across every Go sub-repo"
 	@echo "  dedup-report  delegate to accelerator"

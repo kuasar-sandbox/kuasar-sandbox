@@ -2,6 +2,11 @@
 
 # deployment — deployment topology and component inventory
 
+For first use and isolated testing, prefer the workbench path in
+[Quick Start](quickstart.md). This guide still describes native product
+deployment: the administrator system container is not a production dependency
+or a substitute for the network, storage, TLS and operational configuration here.
+
 The platform consists of independently deployed processes communicating through gRPC, the cache wire protocol, vsock and Unix domain sockets (UDS). This operations/SRE guide defines process ownership, responsibilities, configuration entry points and startup/shutdown dependencies.
 
 Each component's design document owns its CLI, configuration schema and internal behavior. This guide explains where processes run, how they find one another and their ordering dependencies.

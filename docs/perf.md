@@ -11,8 +11,8 @@ Historical absolute numbers in earlier documentation did not retain exact aggreg
 Project-level aggregate entry points:
 
 ```bash
-make perf
-make perf-sandbox
+make perf E2E_WORKDIR="$PREPARED"
+make perf-sandbox E2E_WORKDIR="$PREPARED"
 make perf-sandbox-manifest
 make perf-sandbox-working-set
 make perf-density
@@ -43,7 +43,19 @@ Any result intended for documentation, release notes or capacity planning must r
 | Timing | Start/end events, whether download/build/import is included, clock source and timeout |
 | Source | Harness command, environment variables, raw logs, machine-readable samples and CI run URL |
 
-The aggregate outputs of the current `sandbox-perf.sh` and `sandbox-perf-manifest.sh` retain only successful iterations and report the successful sample count `N`. Failed iterations appear only in the complete run log. When using these entry points, also retain the requested `ITERS`, complete logs and successful/failed/skipped counts. Aggregate output that cannot recover the total denominator and failure rate is insufficient on its own as performance evidence.
+`sandbox-perf.sh` runs current `sandbox.lifecycle.sh` and `image.manifest-boot.sh`
+through the public runner; `PREPARED` must already contain those prepared cases.
+The source-only harness is not shipped in platform archives. Make calls its
+source path directly without rebuilding prepared products. Case wall time includes
+setup, assertions and cleanup: it is neither `Sandbox.create()`-to-ready time nor
+directly comparable to historical T0-to-exit measurements. Raw stats, runner
+results and failure logs are retained; mutable case state uses a separate short
+`$TMPDIR/kp-*` directory (`/var/tmp` by default, `/build/tmp` inside workbench)
+to keep Unix socket paths bounded, with its location recorded beside the report; the first failure exits nonzero. Other
+`make perf` harnesses still use their source-build inputs; record each identity
+rather than assuming it matches `PREPARED`. `sandbox-perf-manifest.sh` still
+aggregates successful samples only, so retain requested iterations, full logs and
+successful/failed/skipped counts rather than relying on its successful `N` alone.
 
 A result missing a necessary dimension can support local diagnosis, but cannot be presented as a project-wide performance fact. Design thresholds must be labeled as a target or regression gate. Passing a gate only establishes that the candidate meets that test contract; it does not automatically establish a production SLO.
 
@@ -79,7 +91,7 @@ Content-reuse results describe observations for the particular dataset, security
 
 ### 4.1 Basic matrix
 
-`test/perf/sandbox-perf.sh` compares file and Manifest cold-start paths. `test/perf/sandbox-perf-manifest.sh` expands the matrix to Manifest cold/hot cache, snapshot publication and restoration. Reports should include at least:
+`test/perf/sandbox-perf.sh` characterizes current file/Manifest lifecycle cases with the timing scope above. `test/perf/sandbox-perf-manifest.sh` expands the matrix to Manifest cold/hot cache, snapshot publication and restoration. Reports should include at least:
 
 - wall-clock time from the start request to guest-application readiness;
 - sandboxer internal stages, VMM and guest-readiness evidence;
@@ -189,7 +201,7 @@ For sandbox snapshot/restore/on-demand-read changes:
 
 ```bash
 GOWORK=off make -C ../sandboxer test
-make perf-sandbox
+make perf-sandbox E2E_WORKDIR="$PREPARED"
 make perf-sandbox-manifest
 make perf-sandbox-working-set
 make test-uffd-performance-gate

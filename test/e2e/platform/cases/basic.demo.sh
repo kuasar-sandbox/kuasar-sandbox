@@ -16,28 +16,17 @@ done
 [[ -x "$ZOT_BIN" && -x "$VGW_BIN" ]] || e2e_fail 'missing prepared Demo servers'
 DEMO_DIR="$E2E_WORKSPACE/test/demo"
 SDK="$E2E_WORKSPACE/fixtures/demo-sdk"
-for input in demo_common.sh demo_prep.sh demo_e2b.sh requirements.txt; do
+for input in demo_common.sh demo_prep.sh demo_e2b.sh prepared.py requirements.txt; do
     [[ -f "$DEMO_DIR/$input" ]] || e2e_fail "missing prepared Demo input: $input"
 done
 [[ -d "$SDK/e2b" ]] || e2e_fail 'missing prepared Demo SDK'
 docker image inspect "$E2E_IMAGE" >"$OUT/image.json"
 
-# The documented entry points accept a Python executable. This case-owned
-# launcher exposes only the prepared SDK and the host standard library.
+# The user workflow and the full product case use the same isolated SDK adapter.
+# The public case always exercises the full assertions, regardless of the caller.
+unset DEMO_QUICKSTART DEMO_NETDIAG DEMO_PAUSE
 PYTHON_BIN="$WORK/demo-python"
-{
-    printf '#!/usr/bin/env bash\n'
-    printf 'export PYTHONPATH=%q\n' "$SDK"
-    printf 'exec %q -S -B "$@"\n' "$(command -v python3)"
-} >"$PYTHON_BIN"
-chmod 0700 "$PYTHON_BIN"
-"$PYTHON_BIN" - "$DEMO_DIR/requirements.txt" <<'PY'
-from importlib.metadata import version
-from pathlib import Path
-import sys
-import e2b
-assert Path(sys.argv[1]).read_text().strip() == 'e2b==' + version('e2b')
-PY
+python3 -B "$DEMO_DIR/prepared.py" python --workdir "$E2E_WORKSPACE" --output "$PYTHON_BIN"
 
 key=$(tr -d '-' </proc/sys/kernel/random/uuid)
 DEMO_DATA_DIR="/var/lib/kuasar-demo-ci-${key:0:10}"

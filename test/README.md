@@ -2,6 +2,11 @@
 
 # Test organization
 
+For first use, follow [Quick Start](../docs/quickstart.md). The recommended
+environment and complete product commands are in [Release validation](QUICKSTART.md).
+Workbench supplies only the environment and uses the same public runner. The
+direct runner examples below are native references, not a second required host setup.
+
 Product E2E follows one contract: **prebuilt products → prepare → `<suite>.<case>.sh` → shared public runner**. The complete filename is the case ID; its first segment is the suite. The nine suites are `basic`, `storage`, `image`, `network`, `sandbox`, `snapshot`, `orchestrator`, `builder` and `telemetry`.
 
 Components maintain their own `test/e2e/cases/` and low-level `test/e2e/lib/` helpers. Platform owns `test/e2e/platform/cases/basic.demo.sh`. Source-time assembly copies exact selected test revisions into one flat `test/e2e/cases/` directory and namespaces helpers under `test/e2e/lib/<owner>/`. Duplicate IDs, unknown suites and owner runners are rejected. Ownership does not change public selection.

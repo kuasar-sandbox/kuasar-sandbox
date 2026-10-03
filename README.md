@@ -11,6 +11,7 @@ The [Stable channel](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/l
 ## Start here
 
 - [Quick Start](docs/quickstart.md) — download one aggregate release, verify it, and run a real MicroVM through the unmodified E2B SDK;
+- [Workbench](workbench/README.md):recommended environment for first use, native builds and private system validation;
 - [Architecture](docs/kuasar-sandbox.md) — system capabilities, component boundaries, and lifecycle semantics;
 - [Deployment](docs/deployment.md) — standalone and cluster topologies, processes, and dependencies;
 - [Releases](docs/release.md) — component versions, aggregate versions, asset contracts, and release transactions;
@@ -137,6 +138,12 @@ See [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases)
 
 ## Quick Start
 
+For first use, prefer the matching release and workbench; the host needs no product
+libraries or Demo SDK. The Demo tears down its node services at completion.
+Use `--pause` inside the same workbench for interactive exploration; container
+localhost addresses and temporary credentials do not configure a host SDK. See
+[Quick Start](docs/quickstart.md) and [Demo](test/demo/DEMO.md).
+
 The [Quick Start](docs/quickstart.md) downloads every explicit asset from one aggregate release, verifies `SHA256SUMS`, prepares a standalone node, and builds a ready snapshot template with the upstream E2B Python SDK. The Demo reads its published template ID from the exact build's ready status; the SDK's registration handle is not that ID. With the node running and the documented SDK connection settings in place, set `TEMPLATE_ID` to that published ID for the lifecycle below:
 
 ```python
@@ -192,8 +199,8 @@ A complete source build is driven from this project repository and consumes the 
 make -C kuasar-sandbox build
 make -C kuasar-sandbox test
 make -C kuasar-sandbox test-e2e RELEASE_DIR=/release E2E_WORKDIR=/tmp/kuasar-prepared
-make -C kuasar-sandbox perf
-make -C kuasar-sandbox demo
+make -C kuasar-sandbox perf E2E_WORKDIR=/absolute/path/to/prepared-inputs
+make -C kuasar-sandbox demo PYTHON_BIN=/absolute/path/to/pinned-venv/bin/python
 ```
 
 Runtime files are collected into `bin/<arch>/` according to [`release/bin-inputs.manifest`](release/bin-inputs.manifest). Each component also supports its documented standalone build. For example:

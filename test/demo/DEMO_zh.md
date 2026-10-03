@@ -1,30 +1,55 @@
 [English](DEMO.md) | [简体中文](DEMO_zh.md)
 
-# E2B 兼容沙箱主机 Demo
+# Workbench 中的 E2B Demo
 
-本 Demo 通过未修改的 E2B Python SDK 驱动一个 Kuasar Sandbox 单节点。它使用当前独立的 Conductor 和 Proxy 进程,在 Builder MicroVM 内构建 snapshot template,创建真实 MicroVM,执行 Command 与 Files API,验证数据访问,暂停并恢复同一逻辑 Sandbox,最后销毁 Sandbox。完整模式还覆盖 Template 扇出和一步迁移。
+本 Demo 通过未修改的 E2B Python SDK 驱动真实 Kuasar 单节点。Workbench 提供系统
+环境，所选聚合发布版提供产品、脚本、原生 helper 和锁定 SDK wheel。Workbench
+不是生产部署的强制依赖，也不是针对恶意 root 的安全边界。
 
-Demo 是可执行的产品入口,但不能代替组件与聚合 Integration E2E。没有可读写 KVM 的运行,或通过 `DEMO_NETDIAG` 容忍网络断言失败的运行,都不能作为验收证据。
+## 1. 发布版与 workbench 流程（推荐）
 
-## 1. 执行模式
+完成[快速开始](../../docs/quickstart_zh.md)直至离线准备，保留宿主变量 `WB`、`STATE`、
+`NAME`、`IMAGE`、`RELEASE` 和 `ARCH`。所选版本须包含本文的 `prepared.py` 适配器；
+不要从 `main` 将它复制到旧发布版，应使用旧版本自身指南。
 
-一次运行只能使用一套内部一致的 source set:
+宿主调用 `workbench exec`，`exec --` 之后的内容在同一个系统实例内执行。
+`/inputs/release` 只读；`/work/prepared` 是封存输入，不用于安装依赖或存放可变
+Demo 状态。执行完整 Demo：
 
-- **源码模式:** 用项目 `Makefile` 构建六个兄弟仓,再以同一源码 revision 的脚本运行对应 `bin/<arch>` 目录。
-- **Release 模式:** 解析一个聚合 Release Tag,校验该 Release 的全部资产,完成解包后只使用该解包目录中的脚本和二进制。不得把 `main` 上的脚本与较旧 Stable Release 的二进制混用。
+```bash
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/demo/prepared.py run \
+  --workdir /work/prepared --data-dir /work/kuasar-demo-first
+```
 
-`demo_prep.sh` 负责 Demo 持久层:Manifest Store、分层 Cache、Registry 配置、不可变基础镜像 seed,以及 `COPY` 使用的可选 VersityGW。`demo_e2b.sh` 负责一次临时运行:TLS、凭据、Conductor、Proxy、systemd unit、vSwitch、network namespace、NAT 规则、host 映射、Sandbox 和私有工作文件。
+添加 `--quick` 只执行首次体验生命周期；添加 `--pause` 在阶段间暂停观察：
 
-COPY 存储保持主机可达:Conductor 执行 HEAD/预签名,SDK 直接上传,Builder 在主机
-下载上下文后再流式送入构建 VM。Registry 镜像导入不同:它在 guest 中执行,
-通过 Demo 的管理 VIP 路由访问本地 Zot。
+```bash
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/demo/prepared.py run \
+  --workdir /work/prepared --data-dir /work/kuasar-demo-first --pause
+```
 
-每次运行新建的 overlay 和 builder 工作盘均为稀疏 ext4 文件，格式化时使用
-`mkfs.ext4 -O ^has_journal`，避免文件系统 journal 占用及元数据日志写入；这不影响
-journald 或应用日志。这是可丢弃工作盘的创建约定，不提供崩溃恢复保证，也不限制
-已有用户镜像。Guest sync 和快照/恢复语义保持不变。
+在第二个**宿主终端**恢复相同的 `WB`、`STATE` 和 `NAME`，进入同一个实例：
 
-## 2. 验证内容
+```bash
+python3 "$WB" --root "$STATE" --name "$NAME" exec
+```
+
+在该 shell 内使用 Demo 打印的私有 `cli.env` 路径。TLS CA、DNS 条目、控制面
+`127.0.0.1:443`、数据面 `127.0.0.2:443` 及 floating IP 均属于 workbench 的网络视图，
+不属于外层宿主。本演示不需要公开宿主端口或挂载宿主 Docker socket。
+
+适配器验证预备内容/权限、原生镜像和 helper，在输入之外创建隔离 SDK 启动器，再
+调用现有脚本。它不实现第二套 E2E runner，也不会在执行时安装 Python 包。
+这些脚本仍然是 `basic.demo.sh` 使用的共同实现。
+
+保留 bridge 网络：offline prepare 禁止获取依赖，但短/完整 Demo 都保留真实
+Internet 出站检查。Workbench 成功启动或诊断运行不等于 Demo 成功。完整产品用例
+还验证外来资源拒绝、重复准备及清理；通过[公共 E2E runner](../QUICKSTART_zh.md)
+执行这些额外断言。
+
+## 2. 演示内容
 
 | 阶段 | 操作 | 必须得到的结果 |
 | --- | --- | --- |
@@ -47,73 +72,94 @@ SDK 会把 `Template.build(headers=...)` 同时传给注册和触发请求,而 K
 再严格检查最终快照结果。固定版本 SDK 等待结束后仍返回注册 handle;Demo 从该精确
 Build 的状态中读取已发布、可供 create 使用的 Template ID。
 
-## 3. 主机与工具前置
 
-预构建资产支持 Linux x86_64 和 glibc 2.38 或更高版本。真实运行还需要:
+## 3. 重复运行、日志与清理
 
-- systemd 为 PID 1、cgroup v2、root 和可读写的 `/dev/kvm`;
-- 操作者在运行前启用 `net.ipv4.ip_forward=1`;Demo 会拒绝修改这个 host-global 设置;
-- `127.0.0.1:443` 与 `127.0.0.2:443` 空闲,没有标准 `sandbox-runner@*`/`sandbox-builder@*` 实例,也没有冲突的 Demo vSwitch、namespace、link、unit、host entry 或 iptables marker;
-- `openssl`、`ip`、`curl`、`sqlite3`、`iptables`、`flock`、`setsid`、`timeout`、`mkfs.ext4`,以及用于向 OCI Registry seed 镜像的 Docker;
-- 在独立 virtual environment 中安装 [`requirements.txt`](requirements.txt) 固定的 Python 依赖;
-- 同一 source set 中的 `node-ctl`、`e2b-key-ctl`、`connector-ctl`、`store-ctl`、`cache-ctl`、`cloud-hypervisor`、`vmlinux` 与 `sandbox-runtime.bundle`。
+`demo_prep.sh` 管理持久 Store/Cache/Registry 及可选 COPY Gateway；`demo_e2b.sh`
+管理每次运行的 Conductor/Proxy、unit、网络、凭据和沙箱。示例中的预备适配器使用
+`/work/kuasar-demo-first`，只传递任务输入，并设置 `DEMO_KEEP=1` 保留安全日志。
+它不继承短流程、网络诊断模式或外部 Docker 端点。
 
-完整模式还需要 `versitygw`。源码模式通过 `make e2e-tools` 取得固定版本的 Zot 与 VersityGW。Release 模式可以使用操作者提供的 Registry 和 VersityGW;较短 Release-first 流程见 [Quick Start](../../docs/quickstart_zh.md)。
-
-Builder Sandbox 请求 2 vCPU 和 6 GiB capacity。还应为 host 和从 Template 创建的 Sandbox 保留 CPU 与内存。
-
-## 4. 源码模式运行
-
-在包含六个兄弟仓的父目录执行:
+重复运行同一命令会复用准备层，并产生新的运行身份。查看数据根目录下的准备
+`logs/`、安全保留的 `results/` 及错误报告的私有目录；宿主映射为
+`$STATE/$NAME/work/kuasar-demo-first`。通过 workbench 或已授权宿主权限查看
+root-only 文件，不要公开私有配置。停止准备层但保留数据和日志：
 
 ```bash
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/demo/prepared.py stop \
+  --workdir /work/prepared --data-dir /work/kuasar-demo-first
+```
+
+仅在保存必要诊断后，重置精确归属的 Demo 数据：
+
+```bash
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /work/prepared/test/demo/prepared.py reset \
+  --workdir /work/prepared --data-dir /work/kuasar-demo-first
+```
+
+`reset` 同时删除该 Demo 的日志和状态，不是默认故障处理方式。Workbench 的 `stop`
+和 `cleanup` 是独立外层生命周期操作；普通 `cleanup` 保留 `/work` 和 `/output`，
+`--delete-output` 才显式删除。详见 [Workbench](../../workbench/README_zh.md)。已清理
+实例需要新名称，停止但未清理的实例只能按原设置重启。
+
+## 4. 原生源码替代路径
+
+使用记录完整的六仓源码集合及对应构建产物。这条路径直接运行于原生系统环境，
+不在普通 UID 的 workbench build 模式中执行。需要 systemd PID 1、cgroup v2、
+root/非交互 sudo、KVM、产品原生依赖库、Python 3.12 和普通 Demo 工具（openssl、
+ip、curl、sqlite3、iptables、flock、setsid、timeout、mkfs.ext4、Docker）。执行前按
+原生宿主策略启用 forwarding，Demo 不修改该设置；两个 loopback TLS 监听地址
+及 Demo 资源须空闲。原生生产拓扑见[部署](../../docs/deployment_zh.md)。
+
+在六个兄弟仓的父目录执行：
+
+```bash
+ARCH="$(uname -m)"
 make -C kuasar-sandbox build e2e-tools
 python3 -m venv kuasar-sandbox/.demo-venv
 kuasar-sandbox/.demo-venv/bin/python3 -m pip install \
-    --requirement kuasar-sandbox/test/demo/requirements.txt
-
+  --requirement kuasar-sandbox/test/demo/requirements.txt
 DEMO_DATA_DIR=/var/lib/kuasar-demo-source
-BIN="$PWD/kuasar-sandbox/bin/x86_64"
+BIN="$PWD/kuasar-sandbox/bin/$ARCH"
 PYTHON_BIN="$PWD/kuasar-sandbox/.demo-venv/bin/python3"
-ZOT_BIN="$PWD/kuasar-sandbox/build/e2e-tools/x86_64/zot"
-VGW_BIN="$PWD/kuasar-sandbox/build/e2e-tools/x86_64/versitygw"
-
+ZOT_BIN="$PWD/kuasar-sandbox/build/e2e-tools/$ARCH/zot"
+VGW_BIN="$PWD/kuasar-sandbox/build/e2e-tools/$ARCH/versitygw"
 sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    ZOT_BIN="$ZOT_BIN" VGW_BIN="$VGW_BIN" \
-    bash "$PWD/kuasar-sandbox/test/demo/demo_prep.sh"
+  ZOT_BIN="$ZOT_BIN" VGW_BIN="$VGW_BIN" \
+  bash "$PWD/kuasar-sandbox/test/demo/demo_prep.sh"
 sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    PYTHON_BIN="$PYTHON_BIN" \
-    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
+  PYTHON_BIN="$PYTHON_BIN" \
+  bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
 ```
 
-跨越 `sudo` 的路径全部显式使用绝对路径。脚本不依赖调用者与 root 恰好使用相同 `HOME` 或 Python 安装。
+`make demo PYTHON_BIN=/absolute/path/to/python` 是**源码专用**便捷入口，先检查
+解释器，再构建产品和工具，不是发行版安装器。Workbench 普通 UID 的 `--mode build`
+提供编译器，不提供 `Template.build()` 或 MicroVM 所需权限/设备。源码构建说明见
+[Workbench](../../workbench/README_zh.md)。
 
-默认基础镜像是按 digest 固定的 Docker Official `python:3.12-slim` linux/amd64 manifest。模板构建使用 `set_user("root")` 创建 E2B 默认 `user` 账号 (UID/GID 1000:1000),随后在 COPY 和快照启动前调用 `set_user("user")`;已有同名账号必须使用这些 ID。这些调用生成 Builder USER 步骤,不使用 SDK 可选的 `run_cmd(user=...)` 参数。其 Python Runtime 足以完成就绪、执行和数据访问检查。覆盖镜像在该账号不存在时还必须提供 `useradd`。如需使用已有 Registry 而不是 Demo 所属 Zot,传入 `REGISTRY=<host[:port]>`。需要认证时传入 `REGISTRY_USER` 与 `REGISTRY_PASS`;`demo_prep.sh` 通过 stdin 向 `docker login` 传密码,Docker 认证只存放在私有 Demo 数据目录。只有明确使用 HTTP Registry 时才设置 `REGISTRY_INSECURE=1`。`E2E_IMAGE` 接受 Docker 镜像名称、tag、本地 image ID（含短 ID）或 digest 引用。准备阶段解析一次完整本地 image ID 并核对 `linux/amd64`，随后将同一对象发布到目标 Registry，回读实际 manifest digest 供 Builder 使用。已加载的本地镜像不需要源镜像拉取或 RepoDigest。制品 E2E 要求准备好的镜像已在本地存在；独立准备入口可拉取缺失的引用。
+独立原生脚本保留 `DEMO_QUICKSTART`、`DEMO_PAUSE`、`DEMO_KEEP`、`DEMO_NETDIAG`
+控制项，通过 `sudo -n env` 显式传递。公共完整产品用例不使用短流程或网络诊断模式。
+完整 Demo 需要 VersityGW 完成 COPY；所有跨 sudo 的路径均须为绝对路径。
 
-## 5. 控制项与重复运行
+默认逻辑基础镜像为 `python:3.12-slim`，原生平台在 x86_64 上为 `linux/amd64`，在
+ aarch64 上为 `linux/arm64`。独立准备可拉取缺失的名称/tag/digest；制品执行只消费
+精确的预备本地镜像 ID，不选择或拉取替代镜像。错误架构镜像会被拒绝。准备阶段发布
+同一 config 身份，再回读目标 manifest digest；源 image ID 与 registry digest
+不是同一种身份。已有 Registry 凭据和 `REGISTRY_INSECURE=1` 仍是原生脚本的显式
+选项；发布版适配器使用预备的本地 Zot。
 
-```bash
-# 只运行较短生命周期。
-sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    PYTHON_BIN="$PYTHON_BIN" DEMO_QUICKSTART=1 \
-    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
+模板通过 Builder USER 步骤在 COPY/启动前创建默认 `user`（UID/GID 1000:1000）。
+替换源码镜像时，若该账号不存在，须提供 `useradd`。新稀疏 overlay/builder 盘采用
+`mkfs.ext4 -O ^has_journal`，去掉的是文件系统 journal，不是应用或 journald 日志；
+Guest sync 与快照恢复语义保持不变。
 
-# 在阶段间暂停;脚本会打印供另一个 root 终端使用的私有 cli.env。
-sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    PYTHON_BIN="$PYTHON_BIN" DEMO_PAUSE=1 \
-    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
+## 5. 归属与凭据
 
-# 只保留未检测到运行密钥的日志。
-sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" BIN="$BIN" \
-    PYTHON_BIN="$PYTHON_BIN" DEMO_KEEP=1 \
-    bash "$PWD/kuasar-sandbox/test/demo/demo_e2b.sh"
-```
-
-只有当存活服务仍匹配记录的 executable、start time 与配置时,准备步骤才幂等。每次运行默认获得新的随机身份。可以设置 `DEMO_RUN_ID` 以便复现,但已有 work/result 目录或 host marker 会被视为冲突,不会被接管。
-
-`DEMO_NETDIAG=1` 会在直连端口或 egress 断言失败后继续诊断。此模式不能作为 Demo 或 Release 验证成功的证据。
-
-## 6. 归属、凭据与清理
+以下原生脚本合同同样适用于 **workbench 内部**；此处“主机”指 Demo 执行环境，
+不授权操作外层 Docker 宿主。适配器使用上面的显式 `/work` 目录，独立脚本仍保留
+其原生默认目录。
 
 `DEMO_DATA_DIR` 默认是 `/var/lib/kuasar-demo`。它必须是只含安全路径字符的 canonical absolute path。脚本创建 root 所属、mode 0700 的目录和严格 ownership marker。非空且无 marker 的目录、symlink 路径、异常 PID record、存活服务配置变化或陌生 host 资源都会触发 fail-closed 拒绝。
 非空且无 marker 的目录或无效 ownership marker 会在目录内容或权限改变之前被拒绝。
@@ -140,7 +186,8 @@ sudo -n env DEMO_DATA_DIR="$DEMO_DATA_DIR" \
 
 `stop` 只停止由有效运行所属 PID record 标识的服务并保留数据。`reset` 先停止这些服务,再只删除带精确 marker 且明确采用 Demo 名称的数据目录。应先解决报告的归属不明外部资源,再删除其诊断目录。
 
-## 7. 网络与入口布局
+
+## 6. 网络布局
 
 Conductor 监听 `127.0.0.1:443`,独立 Proxy 监听 `127.0.0.2:443`。本地 Demo CA 为 `*.<domain>` 签发证书,SDK 调用使用该 CA 文件和 `NO_PROXY=*`。脚本在取得每个 Sandbox ID 后逐项添加 `/etc/hosts` 记录,并按本次 marker 删除;不假定存在 wildcard DNS。
 
@@ -148,11 +195,14 @@ vSwitch 为每个 Sandbox 从 `100.100.96.0/20` 分配 floating IP,E2B guest pro
 
 Demo 同时验证直连 `http://<floating-ip>:8000` 和经过认证的 E2B 数据入口 `https://8000-<sid>.<domain>`,并使用真实 `X-Access-Token`。Guest egress 只是对 Demo 现有 NAT 路径的断言,不是新增产品 Egress 实现。
 
-## 8. 故障排查与 See Also
 
-- Python package 缺失或版本不匹配时,应在独立 virtual environment 中修复;脚本要求精确的 `e2b==2.25.1`。
-- Listener、unit、vSwitch、namespace、link、host mapping 或 iptables 冲突不会被自动删除。请使用空闲主机,或在 Demo 之外由实际 owner 处理指明的对象。
-- 首次准备可能需要较长时间拉取并推送 digest 固定的基础镜像。目标拉取失败只有在 Registry 明确返回 manifest 不存在时才会被视为“尚未 seed”。
-- `cleanup was incomplete` 表示运行失败。重试前检查保留的 root-only 目录和指明的 host 对象。
+## 7. 故障排查
 
-另见 [Quick Start](../../docs/quickstart_zh.md)、[单节点设计](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node_zh.md)、[Builder 设计](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md)和 [Integration E2E 指南](../QUICKSTART_zh.md)。
+发布版模式缺少/不匹配 SDK 或 helper 时，应取得匹配输入并重新 prepare，而不是
+回退到全局 pip/PATH。原生源码模式自行管理显式虚拟环境。缺少 KVM/内核功能时，
+必须在所选原生环境解决；模拟或跳过断言不算成功。资源冲突时应检查实例内 owner，
+不要停止无关服务。清理失败时保留报告中的私有诊断，先处理归属再 reset。
+
+另见[快速开始](../../docs/quickstart_zh.md)、[发布验证](../QUICKSTART_zh.md)、
+[Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node_zh.md) 和
+[Builder](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md)。
