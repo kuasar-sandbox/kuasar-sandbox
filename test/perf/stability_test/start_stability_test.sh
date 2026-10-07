@@ -16,6 +16,11 @@ echo "Using prompts file: $PROMPTS_FILE"
 # Load user-specific configuration.
 CONFIG_FILE="${CONFIG_FILE:-$SCRIPT_DIR/config.env}"
 
+if [[ ! -r "$CONFIG_FILE" ]]; then
+    echo "ERROR: config file not found or unreadable: $CONFIG_FILE" >&2
+    exit 1
+fi
+
 set -a
 source "$CONFIG_FILE"
 set +a
@@ -40,6 +45,15 @@ STABILITY_DIR="$STABILITY_WORKDIR/docker"
 STABILITY_IMAGE="openclaw-long-term-stability:latest"
 STABILITY_IMG="$STABILITY_WORKDIR/images/openclaw_long_term_stability.img"
 
+if [[ -z "${CONNECTOR_CONFIG:-}" ]]; then
+    echo "ERROR: CONNECTOR_CONFIG is not set in $CONFIG_FILE" >&2
+    exit 1
+fi
+
+if [[ ! -r "$CONNECTOR_CONFIG" ]]; then
+    echo "ERROR: connector config not found or unreadable: $CONNECTOR_CONFIG" >&2
+    exit 1
+fi
 
 source "$CONNECTOR_CONFIG"
 for var in FLOATING_IP_BASE MGMT_NETNS MGMT_ADDRS; do
