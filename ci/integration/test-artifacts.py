@@ -449,8 +449,11 @@ class KernelChecksumArchiveContracts(unittest.TestCase):
             subject.unpack(payload, root / "out", "vmlinux", seen)
             self.assertEqual(seen["bin/vmlinux.sha256"], "vmlinux")
             self.assertEqual((root / "out/bin/vmlinux.sha256").read_bytes(), checksum)
+            # Visit the metadata first: otherwise the existing kernel-owner
+            # rejection could hide a regression in the new sidecar rule.
+            archive(payload, {"bin/vmlinux.sha256": checksum, "bin/vmlinux": raw})
             for unit in ("runtime", "sandboxer", "platform"):
-                with self.subTest(unit=unit), self.assertRaises(ValueError):
+                with self.subTest(unit=unit), self.assertRaisesRegex(ValueError, "invalid kernel checksum metadata entry"):
                     subject.unpack(payload, root / unit, unit, {})
             archive(payload, {"bin/vmlinux.sha256": checksum})
             with self.assertRaisesRegex(ValueError, "same archive"):
