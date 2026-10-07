@@ -46,7 +46,7 @@ def archive(path, files):
     with tarfile.open(path, "w:gz") as output:
         for name, content in files.items():
             entry = tarfile.TarInfo("./" + name)
-            entry.size, entry.mode = len(content), 0o755
+            entry.size, entry.mode = len(content), 0o644 if name == "bin/vmlinux.sha256" else 0o755
             output.addfile(entry, io.BytesIO(content))
     return {"name": path.name, "size": path.stat().st_size, "digest": "sha256:" + subject.digest(path)}
 
@@ -436,6 +436,33 @@ class ArtifactExecutionContracts(unittest.TestCase):
             subject.check_timings([{'case': self.case, 'exit_code': 1, 'wall_seconds': 0.1}], [self.case])
 
 
+class KernelChecksumArchiveContracts(unittest.TestCase):
+    def test_optional_checksum_is_kernel_owned_metadata_not_a_product(self):
+        self.assertNotIn("vmlinux.sha256", subject.PRODUCTS)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            raw = kernel("x86_64")
+            checksum = (hashlib.sha256(raw).hexdigest() + "  vmlinux\n").encode()
+            payload = root / "kernel.tar.gz"
+            archive(payload, {"bin/vmlinux": raw, "bin/vmlinux.sha256": checksum})
+            seen = {}
+            subject.unpack(payload, root / "out", "vmlinux", seen)
+            self.assertEqual(seen["bin/vmlinux.sha256"], "vmlinux")
+            self.assertEqual((root / "out/bin/vmlinux.sha256").read_bytes(), checksum)
+            # Visit the metadata first: otherwise the existing kernel-owner
+            # rejection could hide a regression in the new sidecar rule.
+            archive(payload, {"bin/vmlinux.sha256": checksum, "bin/vmlinux": raw})
+            for unit in ("runtime", "sandboxer", "platform"):
+                with self.subTest(unit=unit), self.assertRaisesRegex(ValueError, "invalid kernel checksum metadata entry"):
+                    subject.unpack(payload, root / unit, unit, {})
+            archive(payload, {"bin/vmlinux.sha256": checksum})
+            with self.assertRaisesRegex(ValueError, "same archive"):
+                subject.unpack(payload, root / "orphan", "vmlinux", {})
+            archive(payload, {"bin/vmlinux": raw, "bin/vmlinux.sha256": checksum + b"extra"})
+            with self.assertRaisesRegex(ValueError, "checksum metadata"):
+                subject.unpack(payload, root / "extra", "vmlinux", {})
+
+
 class ArtifactContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -534,6 +561,55 @@ class ArtifactContracts(unittest.TestCase):
 
     def compose(self, arch="x86_64", delta=None):
         return subject.compose(self.plan, arch, self.assets, delta or self.delta(arch), self.root / "workspaces" / arch)
+
+    def add_kernel_checksum(self, arch, checksum=None):
+        name = subject.archive_name("vmlinux", self.plan["baseline"]["units"]["vmlinux"]["version"], arch)
+        raw = self.files[arch]["vmlinux"]
+        if checksum is None:
+            checksum = (hashlib.sha256(raw).hexdigest() + "  vmlinux\n").encode()
+        record = archive(self.assets / name, {"bin/vmlinux": raw, "bin/vmlinux.sha256": checksum})
+        next(item for item in self.plan["baseline"]["assets"] if item["name"] == name).update(record)
+        return checksum
+
+    def test_kernel_checksum_is_preserved_and_included_in_provenance(self):
+        for arch in subject.ARCHES:
+            expected = self.add_kernel_checksum(arch)
+            provenance = self.compose(arch)
+            workspace = self.root / "workspaces" / arch
+            checksum = workspace / "bin/vmlinux.sha256"
+            self.assertEqual(checksum.read_bytes(), expected)
+            self.assertEqual(provenance["files"]["bin/vmlinux.sha256"], subject.digest(checksum))
+            self.assertNotIn("vmlinux.sha256", provenance["products"])
+            subject.verify_workspace(workspace, self.plan, arch)
+            checksum.write_bytes(b"changed")
+            with self.assertRaisesRegex(ValueError, "changed after composition"):
+                subject.verify_workspace(workspace, self.plan, arch)
+
+    def test_kernel_delta_refreshes_existing_checksum_after_identity_validation(self):
+        self.plan["product_sources"]["vmlinux"] = {"guest-runtime": "e" * 40}
+        for lane in self.plan["lanes"].values():
+            lane["products"] = ["manifest-ctl", "vmlinux"]
+        for arch in subject.ARCHES:
+            old = self.add_kernel_checksum(arch)
+            delta = self.delta(arch)
+            changed = kernel(arch) + b"candidate kernel body"
+            (delta / "bin/vmlinux").write_bytes(changed)
+            self.metadata["products"]["vmlinux"]["sha256"] = hashlib.sha256(changed).hexdigest()
+            (delta / "outputs.json").write_text(json.dumps(self.metadata))
+            provenance = self.compose(arch, delta)
+            workspace = self.root / "workspaces" / arch
+            actual = (workspace / "bin/vmlinux.sha256").read_bytes()
+            self.assertNotEqual(actual, old)
+            self.assertEqual(actual, (hashlib.sha256(changed).hexdigest() + "  vmlinux\n").encode())
+            self.assertEqual(provenance["products"]["vmlinux"]["origin"], "candidate")
+            subject.verify_workspace(workspace, self.plan, arch)
+
+    def test_invalid_baseline_checksum_is_not_hidden_by_kernel_delta(self):
+        self.plan["product_sources"]["vmlinux"] = {"guest-runtime": "e" * 40}
+        self.plan["lanes"]["x86_64"]["products"] = ["manifest-ctl", "vmlinux"]
+        self.add_kernel_checksum("x86_64", b"0" * 64 + b"  vmlinux\n")
+        with self.assertRaisesRegex(ValueError, "baseline kernel checksum differs"):
+            self.compose()
 
     def preparation(self, *, mutate=False):
         spec = importlib.util.spec_from_file_location('ci_prepare', Path(__file__).with_name('prepare-artifacts.py'))

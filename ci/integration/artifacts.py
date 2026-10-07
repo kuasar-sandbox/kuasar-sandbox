@@ -348,13 +348,17 @@ def unpack(archive, destination, unit, seen):
             local.add(name)
             require((member.isfile() or member.isdir()) and member.uid == member.gid == 0
                     and member.mode & 0o7022 == 0, f"unsafe archive entry: {name}")
+            if name == "bin/vmlinux.sha256":
+                require(unit == "vmlinux" and member.isfile() and member.mode == 0o644
+                        and member.size == 74, "invalid kernel checksum metadata entry")
             if member.isdir():
                 continue
             require(name not in seen, f"conflicting archive ownership: {name}")
             if unit == "platform":
                 require(name.startswith(("test/", "docs/", "guide/", "workbench/")), f"platform cannot own {name}")
             elif name.startswith("bin/"):
-                require(PRODUCTS.get(name[4:]) == unit, f"{unit} cannot own {name}")
+                require(PRODUCTS.get(name[4:]) == unit or
+                        (unit == "vmlinux" and name == "bin/vmlinux.sha256"), f"{unit} cannot own {name}")
             elif name.startswith("share/"):
                 require(name.startswith((f"share/licenses/{unit}/", f"share/sources/{unit}/")),
                         f"{unit} cannot own {name}")
@@ -363,6 +367,8 @@ def unpack(archive, destination, unit, seen):
                         or (unit in ("connector", "orchestrator") and name.startswith(("deploy/", "test/"))),
                         f"undeclared {unit} payload: {name}")
             seen[name] = unit
+        if "bin/vmlinux.sha256" in local:
+            require("bin/vmlinux" in local, "kernel checksum requires its kernel in the same archive")
         for member in members:
             name = member.name.removeprefix("./").rstrip("/")
             if not member.isfile():
@@ -497,6 +503,10 @@ def compose(plan, arch, assets, delta, output):
         for name, unit in expected_assets.items():
             unpack(assets / name, stage, unit, ownership)
         originals = {name: digest(stage / "bin" / name) for name in PRODUCTS}
+        kernel_checksum = stage / "bin/vmlinux.sha256"
+        if kernel_checksum.exists():
+            require(kernel_checksum.read_bytes() == (originals["vmlinux"] + "  vmlinux\n").encode(),
+                    "baseline kernel checksum differs from its kernel")
         original_embedded = runtime_payloads(stage, arch)
         for name in lane["products"]:
             shutil.copy2(delta / "bin" / name, stage / "bin" / name)
@@ -528,6 +538,10 @@ def compose(plan, arch, assets, delta, output):
                     f"final product bytes differ from their origin: {name}")
             products[name] = {"sha256": actual, "unit": unit, "origin": "candidate" if candidate else "baseline",
                               "sources": plan["product_sources"][name] if candidate else baseline["units"][unit]}
+        # This is derived metadata, not a build product or a required legacy
+        # input. Never keep the old kernel's identity beside a selected delta.
+        if kernel_checksum.exists() and "vmlinux" in lane["products"]:
+            kernel_checksum.write_bytes((products["vmlinux"]["sha256"] + "  vmlinux\n").encode())
         for case in lane["selection"]["cases"]:
             path = stage / "test/e2e/cases" / case_name(case)
             require(path.is_file(), f"missing selected test entry: {case}")
