@@ -184,6 +184,12 @@ Balloon 不是唯一弹性来源.空闲 CPU 调度,非活跃内存回收,Cgroup 
 
 高密度是资源利用率提高后的结果,不是预先指定的实例数量承诺.
 
+### 5.3 Agent 业务完成基准
+
+原有 `density-perf.sh` 用于资源控制回归，不等同于完整 Agent 业务吞吐基准。`test/perf/agent-density/benchmark.py` 检验 BMS orchestrator E2E 实验生成的匹配证据：固定三并发与动态十六并发的任务 ID、工作量和结果哈希一致；全部提交任务被接纳且正确完成；无业务重试、转发失败、宿主机 OOM Kill 或资源清理失败。准入拒绝不能算业务完成。保留每批 `timeline.jsonl` 与精确版本。校验器不负责启动沙箱，报告的工作时间是各批预热与执行时间之和；外层总耗时还包括环境准备与清理。
+
+2026-10-08 BMS 本地实测采用 8C16G、12GiB 资源池、1C4G 沙箱、allocatable 256MiB、startup 512MiB、无 swap。48 Agent 匹配负载：x86_64 固定三并发 1180 秒、动态十六并发 432 秒；ARM64 分别为 1064 秒和 370 秒（包含测试准备和清理），均 48/48 正确完成、零业务重试、零宿主机 OOM Kill。此数据只适用于记录的负载与版本，不代表与另一套静态内存管理器的比较，也不是生产环境通用容量承诺。详见 `test/perf/agent-density/README.md`。
+
 ## 6. Cluster 控制面
 
 cluster 性能必须区分热路径和冷路径:

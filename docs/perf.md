@@ -158,6 +158,12 @@ Balloon is not the only source of elasticity. Idle-CPU scheduling, inactive-memo
 
 High density is a result of improved resource utilization, not a promise of a predetermined instance count.
 
+### 5.3 Agent business-completion benchmark
+
+The existing `density-perf.sh` validates resource-control behavior; it is not a complete Agent business-throughput benchmark. `test/perf/agent-density/benchmark.py` validates matched evidence from the prepared BMS orchestrator E2E experiment. It requires all offered agents to be admitted, correctly complete their tool work, have identical per-agent work and output hashes across fixed-3 and dynamic-16 runs, zero business retries, no forwarding failures or host OOM kills, successful cleanup and clean process exits. Rejected admission is **not** business completion. Preserve per-wave `timeline.jsonl` and exact versions; the checker does not launch sandboxes. Its timing is the sum of per-wave warmup and execution, whereas outer case wall time also includes setup/cleanup.
+
+On 2026-10-08 a local BMS study used 8C16G, a 12GiB node pool, 1C4G sandbox capacity, 256MiB allocatable, 512MiB startup and no swap. For the matched 48-Agent workload, x86_64 completed 48/48 in 1180s (fixed three-concurrent) versus 432s (dynamic sixteen-concurrent); ARM64 completed 48/48 in 1064s versus 370s, respectively, including case setup and cleanup. All accepted tasks completed, with zero business retries and host OOM kills. These are workload- and version-specific observations, **not** a comparison to a different static memory manager or a production capacity guarantee. See `test/perf/agent-density/README.md` for evidence limits.
+
 ## 6. Cluster control plane
 
 Cluster performance must distinguish hot and cold paths:

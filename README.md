@@ -79,6 +79,8 @@ Kuasar Sandbox treats density as an outcome of safe resource utilization:
 
 The `sandboxer` runtime executes per-sandbox cgroup, balloon, and VMM lifecycle actions. The `node-ctl` reservation controller owns node-wide admission, resource-pool accounting, grants, inventory reconciliation, and recovery. High density therefore means maximizing useful node utilization without using OOM as a scheduling mechanism, not merely maximizing a raw VM count.
 
+For a measured sparse coding-Agent workload, a 2026-10-08 BMS experiment completed all 48 agents on each architecture with no business retries: fixed three-concurrent vs Kuasar sixteen-concurrent took 1180s vs 432s on x86_64, and 1064s vs 370s on ARM64 (case wall-clock including setup and cleanup). This is a **fixed-concurrency Kuasar baseline**, not a separate static memory manager. Hardware was 8C16G with a 12GiB node pool, 1C4G sandbox capacity, 256MiB allocatable and 512MiB startup. Results are workload-specific, not universal capacity guarantees. See [performance methodology](docs/perf.md) and [Agent evidence checker](test/perf/agent-density/README.md).
+
 ## Networking and policy integration
 
 `connector` provides a high-density eBPF/TC data path for MicroVM networking. It creates and releases sandbox network resources quickly, keeps sandbox-to-sandbox forwarding absent by default, validates platform-assigned network identity, and forwards established traffic without requiring a user-space process on every packet.
