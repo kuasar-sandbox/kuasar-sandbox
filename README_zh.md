@@ -100,7 +100,7 @@ Agent 沙箱负载通常非线性:大部分时间等待模型、工具、外部 
 controller 拥有节点级准入、共享池记账、grant、inventory 对账和恢复。高密是在不把 OOM
 当调度机制的前提下提高有效利用率,不是单纯追求 VM 数量。
 
-在 2026-10-08 BMS 稀疏 coding-Agent 实测中，两种架构各有 48/48 个任务正确完成且无业务重试：x86_64 固定三并发与 Kuasar 十六并发分别耗时 1180 秒、432 秒；ARM64 分别为 1064 秒、370 秒（含准备与清理）。这是 **Kuasar 固定并发对照**，不是另一套静态内存管理器。测试为 8C16G、12GiB 节点资源池、1C4G 沙箱、allocatable 256MiB、startup 512MiB；结果仅适用于特定负载与版本，不是通用容量保证。详见[性能方法](docs/perf_zh.md)及 [Agent 证据校验](test/perf/agent-density/README.md)。
+在 2026-10-08 BMS 合成稀疏 coding-Agent **匹配实验**中，两种架构各有 48/48 个任务正确完成：x86_64 固定三并发与 Kuasar 十六并发分别耗时 **851 秒、380 秒**；ARM64 分别为 **802 秒、333 秒**（外层 case 耗时，含准备与清理）。计划禁用业务重试、每个 Agent 观测到一次业务启动；x86 动态组的一次 HTTP 轮询错误没有阻止业务正确完成。这是 **Kuasar 固定并发对照**，不是另一套静态内存管理器。测试为 8C16G、12GiB 节点资源池、1C4G 沙箱、allocatable 256MiB、startup 512MiB；结果仅适用于特定负载与版本，不是通用容量保证。详见[性能方法](docs/perf_zh.md)及 [Agent 证据校验](test/perf/agent-density/README.md)。
 
 ## 网络与策略集成
 
