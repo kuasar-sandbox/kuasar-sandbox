@@ -102,13 +102,15 @@ jobs:
           }
 
           for ref in "${refs[@]}"; do
-            sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$ref" \
-              --jq 'select(.object.type == "commit") | .object.sha')
-            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-            title="Daily preview $ref@$sha for $date"
             converged=false
             failed=false
             for attempt in 1 2 3; do
+              # A previous converger may have committed the selected manifest.
+              # Always resume the current exact branch head, never a stale SHA.
+              sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$ref" \
+                --jq 'select(.object.type == "commit") | .object.sha')
+              [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+              title="Daily preview $ref@$sha for $date"
               wait_for_gc
               run_id=$(matching_run "$title" active)
               if [ -n "$run_id" ]; then
@@ -140,7 +142,31 @@ jobs:
                 conclusion=$(jq -r .conclusion <<< "$state")
                 case "$conclusion" in
                   success)
-                    converged=true
+                    outcome_dir=$(mktemp -d)
+                    if ! gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+                      --name daily-preview-outcome --dir "$outcome_dir" \
+                      || ! outcome=$(jq -er --arg ref "$ref" --arg sha "$sha" --arg date "$date" '
+                        select(.platform_ref == $ref and .selected_sha == $sha and .date == $date)
+                        | .status' "$outcome_dir/preview-result.json"); then
+                      rm -rf -- "$outcome_dir"
+                      failures+=("$title: missing or mismatched convergence outcome")
+                      failed=true
+                      break
+                    fi
+                    rm -rf -- "$outcome_dir"
+                    case "$outcome" in
+                      published|unchanged|closed)
+                        echo "==> $title verified outcome: $outcome"
+                        converged=true
+                        ;;
+                      pending|deferred)
+                        echo "==> $title is $outcome; resume fresh head ($attempt/3)"
+                        ;;
+                      *)
+                        failures+=("$title: invalid branch outcome $outcome")
+                        failed=true
+                        ;;
+                    esac
                     break
                     ;;
                   cancelled|timed_out|stale)
@@ -162,7 +188,8 @@ jobs:
               continue
             fi
             if [ "$converged" = false ]; then
-              echo "==> defer $title after three interrupted attempts; next scan resumes"
+              failures+=("$title: not converged after three attempts")
+              echo "==> $title is still pending; publication has not succeeded"
             fi
           done
           if [ "${#failures[@]}" -ne 0 ]; then

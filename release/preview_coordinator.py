@@ -1223,8 +1223,10 @@ def validate_environment() -> None:
     selection.validate_current_manifests(PLATFORM_ROOT)
 
 
-def main() -> None:
+def main(deadline: float | None = None) -> str:
     global PLATFORM_SHA
+    if deadline is None:
+        deadline = time.monotonic() + WAIT_SECONDS
     validate_environment()
     base, previous, preview, previous_preview, configured = manifest_values()
     if PLATFORM_REF != "main":
@@ -1243,7 +1245,7 @@ def main() -> None:
                 f"{base} has an incomplete Stable Release; its Preview line is closed"
             )
         print(f"==> {base} is closed by its Stable aggregate; no Preview may be published")
-        return
+        return "closed"
 
     current_status = platform_release(current_aggregate)
     requested_order = selection.preview_order(f"preview.{TODAY}")
@@ -1253,7 +1255,7 @@ def main() -> None:
     if current_status.complete:
         if requested_order <= current_order:
             print(f"==> maintained preview is current: {current_aggregate}")
-            return
+            return "published"
         date = TODAY
         next_previous_preview = preview
     elif requested_order > current_order:
@@ -1325,30 +1327,55 @@ def main() -> None:
         changed = changed or plan_test_revisions(plans, recorded) != recorded
         if not changed:
             print(f"==> no source changes since {current_aggregate}; keep maintained preview")
-            return
+            return "unchanged"
 
     aggregate = f"{base}-preview.{date}"
     content = render_manifest(base, previous, date, next_previous_preview, plans, recorded)
     PLATFORM_SHA = persist_manifest(content, aggregate)
-    deadline = time.monotonic() + WAIT_SECONDS
     while True:
         try:
             if converge(plans, aggregate, PLATFORM_SHA):
-                return
+                return "published"
         except Pending as error:
             print(f"==> pending: {error}")
         if time.monotonic() >= deadline:
-            print("==> Daily Preview remains pending; the next scan resumes it")
-            return
+            print("==> Daily Preview remains pending; scanner must continue convergence")
+            return "pending"
         time.sleep(POLL_SECONDS)
+
+
+def run_branch() -> dict[str, str]:
+    """Keep healthy preflight work alive and report its actual terminal state."""
+    selected_sha = PLATFORM_SHA
+    deadline = time.monotonic() + WAIT_SECONDS
+    reason = ""
+    while True:
+        try:
+            outcome = main(deadline=deadline)
+            break
+        except Pending as error:
+            reason = str(error)
+            print(f"==> pending: {reason}")
+            if time.monotonic() >= deadline:
+                outcome = "pending"
+                break
+            time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
+        except Deferred as error:
+            outcome, reason = "deferred", str(error)
+            print(f"==> deferred without mutation: {reason}")
+            break
+    if outcome not in {"published", "unchanged", "closed", "pending", "deferred"}:
+        raise RuntimeError(f"invalid Preview outcome: {outcome!r}")
+    result = dict(status=outcome, reason=reason, platform_ref=PLATFORM_REF,
+                  selected_sha=selected_sha, final_sha=PLATFORM_SHA, date=TODAY)
+    path = os.environ.get("PREVIEW_RESULT_PATH")
+    if path:
+        pathlib.Path(path).write_text(json.dumps(result, sort_keys=True) + "\n")
+    return result
 
 
 if __name__ == "__main__":
     try:
-        main()
-    except Pending as error:
-        print(f"==> pending without failure: {error}")
-    except Deferred as error:
-        print(f"==> deferred without mutation: {error}")
+        run_branch()
     except (RuntimeError, selection.ManifestError, preview_selection.SelectionError) as error:
         fail(str(error))

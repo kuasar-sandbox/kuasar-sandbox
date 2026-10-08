@@ -89,4 +89,13 @@ jobs:
           INITIALIZE_ARM: ${{ inputs.initialize_arm }}
           PREVIEW_POLL_SECONDS: "120"
           PREVIEW_WAIT_SECONDS: "3000"
+          PREVIEW_RESULT_PATH: ${{ github.workspace }}/preview-result.json
         run: python3 control/release/preview_coordinator.py
+
+      - name: Publish branch convergence outcome
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: daily-preview-outcome
+          path: preview-result.json
+          if-no-files-found: error
+          retention-days: 7
