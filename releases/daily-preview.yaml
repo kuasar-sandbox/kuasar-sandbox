@@ -7,7 +7,7 @@ components:
   accelerator: v0.1.6-preview.20261003
   connector: v0.1.5-preview.20261008.1
   sandboxer: v0.1.6-preview.20261008.2
-  orchestrator: v0.1.6-preview.20261008.1
+  orchestrator: v0.1.6-preview.20261008.2
   runtime: runtime-v0.1.6-preview.20261008.2
   vmlinux: vmlinux-v0.1.4-preview.20261003.1
 test_revisions:
@@ -15,4 +15,4 @@ test_revisions:
   connector: d446ca6a338065298bd7a73a54231957f3086c82
   guest-runtime: 2875d0093e0602a07c3ca262e511bf472aea0381
   sandboxer: 71c33acd49f3978f1a774518917ed171b0ef6a96
-  orchestrator: 08d9d305d32ae8cfe3d6ae6daa79c8b373fe20cc
+  orchestrator: 82bc2111e560f020b2af0b5f4f1c83271f1a537b
