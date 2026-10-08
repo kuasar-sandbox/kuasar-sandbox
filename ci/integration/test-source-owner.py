@@ -4,6 +4,8 @@ ROOT=pathlib.Path(__file__).resolve().parents[2]
 INTEGRATION=ROOT/"ci/integration"
 HELPER=INTEGRATION/"source-owner.sh"
 import artifacts
+import build_helpers
+from unittest.mock import patch
 from test_fixtures import CASES, selection
 
 def run(cmd,owner): return subprocess.run(["bash",str(HELPER),cmd,owner],text=True,capture_output=True)
@@ -62,6 +64,55 @@ class PreparedHelperSelectionTest(unittest.TestCase):
     def load_build_artifacts():
         spec=importlib.util.spec_from_file_location("build_artifacts",INTEGRATION/"build-artifacts.py")
         module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); return module
+    def test_runner_test_helper_uses_orchestrator_test_identity(self):
+        for case in ('orchestrator.lifecycle.sh', 'telemetry.guest.sh'):
+            selected = artifacts.planned_helpers({'cases': [case]})
+            self.assertEqual(selected['node-ctl-runner-test'], 'orchestrator')
+        self.assertNotIn('node-ctl-runner-test', artifacts.planned_helpers({'cases': []}))
+        self.assertNotIn('node-ctl-runner-test', artifacts.planned_helpers({'cases': ['storage.cache.sh']}))
+
+    def test_runner_helper_cross_build_retains_the_exact_workspace(self):
+        # The required local module is intentionally unavailable from a proxy.
+        # Losing the pinned workspace must fail instead of resolving elsewhere.
+        # This minimal fixture uses no new language features; do not require an
+        # offline compiler test to download the product module's Go toolchain.
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            sources = root / 'sources'
+            owner, sdk = sources / 'orchestrator', sources / 'sdk'
+            (owner / 'cmd/node-ctl').mkdir(parents=True)
+            sdk.mkdir()
+            (owner / 'go.mod').write_text('module example.test/orchestrator\ngo 1.22\nrequire example.test/sdk v0.0.0\n')
+            (sdk / 'go.mod').write_text('module example.test/sdk\ngo 1.22\n')
+            (sdk / 'identity.go').write_text('package sdk\nconst Identity = "exact-test-pin"\n')
+            (sources / 'go.work').write_text('go 1.22\nuse (\n ./orchestrator\n ./sdk\n)\n')
+            (owner / 'cmd/node-ctl/main.go').write_text('package main\nfunc main() {}\n')
+            (owner / 'cmd/node-ctl/main_test.go').write_text(
+                'package main\nimport ("testing"; "example.test/sdk")\n'
+                'func TestPinnedRunner(t *testing.T) { if sdk.Identity != "exact-test-pin" { t.Fatal(sdk.Identity) } }\n')
+            environment = {key: value for key, value in os.environ.items()
+                           if key not in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
+            environment.update(GOWORK=str(sources / 'go.work'), GOPROXY='off', GOSUMDB='off')
+            for arch in ('x86_64', 'aarch64'):
+                output = root / arch
+                build_helpers.build(sources, arch, output, {'node-ctl-runner-test': 'orchestrator'}, environment)
+                binary = output / 'node-ctl-runner-test'
+                artifacts.check_architecture(binary, arch)
+                self.assertEqual(set(artifacts.tree_files(output)), {'node-ctl-runner-test'})
+                if arch == os.uname().machine:
+                    result = subprocess.run([str(binary), '-test.run=^TestPinnedRunner$', '-test.v'],
+                                            text=True, capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn('--- PASS: TestPinnedRunner', result.stdout)
+
+    def test_runner_helper_compile_failure_is_not_hidden(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            with patch.object(build_helpers.subprocess, 'run', side_effect=subprocess.CalledProcessError(23, ['go'])):
+                with self.assertRaises(subprocess.CalledProcessError) as failure:
+                    build_helpers.build(root, 'x86_64', root / 'output', {'node-ctl-runner-test': 'orchestrator'}, {})
+            self.assertEqual(failure.exception.returncode, 23)
+
     def test_cgroup_probe_is_selected_only_for_its_native_case(self):
         cgroup=selection(["sandboxer"],"x86_64",{"sandboxer":["sandbox.cgroup.sh"]})
         self.assertEqual(artifacts.planned_helpers(cgroup)["cgroup-fork-probe"],"sandboxer")

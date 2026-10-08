@@ -184,6 +184,34 @@ class PreparedRunnerTests(unittest.TestCase):
             metadata['helpers'][name] = {'sha256': runner.workspace.digest(root / name), 'source_sha': 'a' * 40}
         (root / 'helpers.json').write_text(json.dumps(metadata))
 
+    def test_runner_helper_missing_or_wrong_pin_fails_before_preparation(self):
+        case = 'orchestrator.lifecycle.sh'
+        (self.release / 'test/e2e/cases' / case).write_text('exit 0\n')
+        helpers = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe']
+        self.install_test_helpers(helpers)
+        with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
+            with self.assertRaisesRegex(ValueError, 'requires prepared helper.*node-ctl-runner-test'):
+                runner.cmd_prepare(self.args_with(include=[case]))
+        prepare.assert_not_called()
+        self.assertFalse(self.work.exists())
+        self.install_test_helpers(['node-ctl-runner-test'])
+        path = self.release / 'test/e2e/helpers' / platform.machine() / 'helpers.json'
+        metadata = json.loads(path.read_text())
+        metadata['helpers']['node-ctl-runner-test']['source_sha'] = 'b' * 40
+        path.write_text(json.dumps(metadata))
+        with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
+            with self.assertRaisesRegex(ValueError, 'source identity mismatch: node-ctl-runner-test'):
+                runner.cmd_prepare(self.args_with(include=[case]))
+        prepare.assert_not_called()
+        self.assertFalse(self.work.exists())
+
+    def test_runner_helper_environment_is_the_sealed_fixture_path(self):
+        selected = {'arch': platform.machine(), 'helpers': {'node-ctl-runner-test': {}}}
+        env = runner.workspace.case_environment(self.work, selected, 'orchestrator.lifecycle.sh')
+        self.assertEqual(env['NODE_CTL_RUNNER_TEST_BINARY'], str(self.work / 'fixtures/bin/node-ctl-runner-test'))
+        self.assertNotIn('NODE_CTL_RUNNER_TEST_BINARY', runner.workspace.case_environment(
+            self.work, {'arch': platform.machine()}, 'basic.fixture.sh'))
+
     def test_missing_selected_helper_fails_before_fixture_work(self):
         case = 'sandbox.cgroup.sh'
         (self.release / 'test/e2e/cases' / case).write_text('exit 0\n')

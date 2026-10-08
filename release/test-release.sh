@@ -161,7 +161,7 @@ pins = json.loads(pathlib.Path(sys.argv[2]).read_text())
 for arch, machine in (('x86_64', 62), ('aarch64', 183)):
     directory = root / arch
     directory.mkdir(parents=True)
-    names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'usage-probe']
+    names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'node-ctl-runner-test', 'usage-probe']
     names.append('cgroup-fork-probe')
     records = {}
     for name in names:
@@ -171,7 +171,7 @@ for arch, machine in (('x86_64', 62), ('aarch64', 183)):
         data = bytes(header) + name.encode()
         (directory / name).write_bytes(data)
         (directory / name).chmod(0o755)
-        owner = 'orchestrator' if name in {'custom-proxy', 'telemetry-grpc-probe'} else 'sandboxer'
+        owner = 'orchestrator' if name in {'custom-proxy', 'telemetry-grpc-probe', 'node-ctl-runner-test'} else 'sandboxer'
         records[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'source_sha': '1' * 40 if name in {'zot', 'versitygw'} else pins[owner]}
     (directory / 'helpers.json').write_text(json.dumps({'arch': arch, 'framework_sha': '1' * 40, 'test_revisions': pins, 'helpers': records}))
 PY
