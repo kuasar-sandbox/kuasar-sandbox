@@ -19,7 +19,9 @@ args = sys.argv[1:]
 def save(): state_file.write_text(json.dumps(s))
 if args[0] == "api":
     endpoint = next(a for a in args if a.startswith("repos/"))
-    if "/git/ref/heads/" in endpoint:
+    if "/branches?" in endpoint:
+        print("\n".join(s["refs"][1:]))
+    elif "/git/ref/heads/" in endpoint:
         print(("a" if not s["dispatches"] else "b") * 40)
     elif "preview-gc.yml" in endpoint:
         print(json.dumps([{"workflow_runs": []}]))
@@ -46,7 +48,7 @@ else: raise SystemExit("unexpected gh " + repr(args))
 '''
 
 class PreviewScannerTest(unittest.TestCase):
-    def scan(self, outcomes):
+    def scan(self, outcomes, refs=("main",)):
         workflow = (ROOT/".github/workflows/daily-preview.yml").read_text()
         script = textwrap.dedent("          set -euo pipefail\n" + workflow.split("          set -euo pipefail\n", 1)[1])
         with tempfile.TemporaryDirectory() as directory:
@@ -54,10 +56,10 @@ class PreviewScannerTest(unittest.TestCase):
             (root/"gh").write_text(FAKE_GH)
             (root/"gh").chmod(0o755)
             state = root/"state.json"
-            state.write_text(json.dumps(dict(outcomes=outcomes, dispatches=[])))
+            state.write_text(json.dumps(dict(outcomes=outcomes, dispatches=[], refs=refs)))
             env = dict(os.environ, PATH=str(root)+os.pathsep+os.environ["PATH"],
                        FAKE_GH_ROOT=str(root), GITHUB_REPOSITORY="kuasar-sandbox/kuasar-sandbox",
-                       REQUESTED_DATE="20261008", REQUESTED_REF="main")
+                       REQUESTED_DATE="20261008", REQUESTED_REF="main" if len(refs)==1 else "")
             result = subprocess.run(["bash", "-c", script], env=env, text=True,
                                     capture_output=True, timeout=15)
             return result, json.loads(state.read_text())["dispatches"]
@@ -72,6 +74,16 @@ class PreviewScannerTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(len(dispatches), 3)
         self.assertIn("not converged", result.stderr)
+
+    def test_pending_branches_share_the_scanner_wait_budget(self):
+        refs = ("main", "release/v0.1.x", "release/v0.2.x")
+        result, dispatches = self.scan(["pending"], refs)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual([d["platform_ref"] for d in dispatches],
+                         [ref for ref in refs for _ in range(3)])
+        self.assertEqual(len(dispatches), 9)
+        self.assertLessEqual(sum(int(d["wait_seconds"]) for d in dispatches), 300*60)
+        self.assertTrue(all(0 < int(d["wait_seconds"]) <= 3000 for d in dispatches))
 
     def test_wrong_head_receipt_is_rejected(self):
         result, dispatches = self.scan(["wrong-head"])

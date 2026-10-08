@@ -1499,6 +1499,17 @@ class BranchOutcomeTest(unittest.TestCase):
         self.assertEqual(result["status"], "pending")
         sleep.assert_not_called()
 
+    def test_sleep_exhaustion_does_not_start_another_pass(self):
+        with (mock.patch.object(coordinator, "main", side_effect=coordinator.Pending("healthy aggregate")) as main,
+              mock.patch.object(coordinator, "WAIT_SECONDS", 10),
+              mock.patch.object(coordinator.time, "monotonic", side_effect=[0, 9, 9, 10]),
+              mock.patch.object(coordinator.time, "sleep") as sleep,
+              mock.patch.dict(coordinator.os.environ, {}, clear=True)):
+            result = coordinator.run_branch()
+        self.assertEqual(result["status"], "pending")
+        main.assert_called_once()
+        sleep.assert_called_once_with(1)
+
     def test_deferred_selection_is_not_converged(self):
         with (mock.patch.object(coordinator, "main", side_effect=coordinator.Deferred("branch moved")),
               mock.patch.dict(coordinator.os.environ, {}, clear=True)):

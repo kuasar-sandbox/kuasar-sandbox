@@ -1360,6 +1360,9 @@ def run_branch() -> dict[str, str]:
                 outcome = "pending"
                 break
             time.sleep(min(POLL_SECONDS, max(0, deadline - time.monotonic())))
+            if time.monotonic() >= deadline:
+                outcome = "pending"
+                break
         except Deferred as error:
             outcome, reason = "deferred", str(error)
             print(f"==> deferred without mutation: {reason}")

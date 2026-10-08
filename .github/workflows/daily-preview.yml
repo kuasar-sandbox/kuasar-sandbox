@@ -69,6 +69,12 @@ jobs:
             refs+=("${maintenance_refs[@]}")
           fi
 
+          # Share five hours across all three attempts for every maintained ref.
+          # The remaining hour covers job startup, receipts and dispatch overhead.
+          wait_seconds=$((300 * 60 / (3 * ${#refs[@]})))
+          [ "$wait_seconds" -le 3000 ] || wait_seconds=3000
+          [ "$wait_seconds" -gt 0 ] || { echo "too many maintained refs for the scanner budget" >&2; exit 1; }
+
           runs_endpoint="repos/$GITHUB_REPOSITORY/actions/workflows/daily-preview-branch.yml/runs?event=workflow_dispatch&per_page=100"
           failures=()
 
@@ -120,7 +126,8 @@ jobs:
                 gh workflow run daily-preview-branch.yml --ref main \
                   -f "platform_ref=$ref" \
                   -f "platform_sha=$sha" \
-                  -f "date=$date"
+                  -f "date=$date" \
+                  -f "wait_seconds=$wait_seconds"
                 run_id=""
                 for _ in {1..30}; do
                   candidate_id=$(matching_run "$title" any)
