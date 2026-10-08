@@ -1477,5 +1477,85 @@ components:
         persist.assert_not_called()
 
 
+
+class BranchOutcomeTest(unittest.TestCase):
+    def test_inner_convergence_sleep_respects_deadline(self):
+        with (mock.patch.object(coordinator, "converge", side_effect=coordinator.Pending("healthy aggregate")) as converge,
+              mock.patch.object(coordinator.time, "monotonic", side_effect=[9, 9, 10]),
+              mock.patch.object(coordinator.time, "sleep") as sleep):
+            self.assertEqual(coordinator.converge_until_deadline({}, "fixture", 10), "pending")
+        converge.assert_called_once()
+        sleep.assert_called_once_with(1)
+
+    def test_expired_planning_budget_does_not_dispatch(self):
+        with (mock.patch.object(coordinator, "converge") as converge,
+              mock.patch.object(coordinator.time, "monotonic", return_value=10)):
+            self.assertEqual(coordinator.converge_until_deadline({}, "fixture", 10), "pending")
+        converge.assert_not_called()
+
+    def test_pending_is_rechecked_until_actual_completion(self):
+        with (mock.patch.object(coordinator, "main", side_effect=[coordinator.Pending("healthy aggregate"), "published"]) as main,
+              mock.patch.object(coordinator.time, "monotonic", return_value=0),
+              mock.patch.object(coordinator.time, "sleep") as sleep,
+              mock.patch.dict(coordinator.os.environ, {}, clear=True)):
+            result = coordinator.run_branch()
+        self.assertEqual(result["status"], "published")
+        self.assertEqual(main.call_count, 2)
+        sleep.assert_called_once()
+
+    def test_budget_exhaustion_is_pending_not_publication(self):
+        with (mock.patch.object(coordinator, "main", side_effect=coordinator.Pending("healthy aggregate")),
+              mock.patch.object(coordinator, "WAIT_SECONDS", 10),
+              mock.patch.object(coordinator.time, "monotonic", side_effect=[0, 10]),
+              mock.patch.object(coordinator.time, "sleep") as sleep,
+              mock.patch.dict(coordinator.os.environ, {}, clear=True)):
+            result = coordinator.run_branch()
+        self.assertEqual(result["status"], "pending")
+        sleep.assert_not_called()
+
+    def test_sleep_exhaustion_does_not_start_another_pass(self):
+        with (mock.patch.object(coordinator, "main", side_effect=coordinator.Pending("healthy aggregate")) as main,
+              mock.patch.object(coordinator, "WAIT_SECONDS", 10),
+              mock.patch.object(coordinator.time, "monotonic", side_effect=[0, 9, 9, 10]),
+              mock.patch.object(coordinator.time, "sleep") as sleep,
+              mock.patch.dict(coordinator.os.environ, {}, clear=True)):
+            result = coordinator.run_branch()
+        self.assertEqual(result["status"], "pending")
+        main.assert_called_once()
+        sleep.assert_called_once_with(1)
+
+    def test_deferred_selection_is_not_converged(self):
+        with (mock.patch.object(coordinator, "main", side_effect=coordinator.Deferred("branch moved")),
+              mock.patch.dict(coordinator.os.environ, {}, clear=True)):
+            self.assertEqual(coordinator.run_branch()["status"], "deferred")
+
+    def test_receipt_binds_input_head_and_selected_manifest_commit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "result.json"
+            def finish(**kwargs):
+                coordinator.PLATFORM_SHA = "b" * 40
+                return "published"
+            with (mock.patch.object(coordinator, "PLATFORM_SHA", "a" * 40),
+                  mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+                  mock.patch.object(coordinator, "TODAY", "20261008"),
+                  mock.patch.object(coordinator, "main", side_effect=finish),
+                  mock.patch.dict(coordinator.os.environ, {"PREVIEW_RESULT_PATH": str(path)})):
+                coordinator.run_branch()
+            result = json.loads(path.read_text())
+        self.assertEqual(result["selected_sha"], "a" * 40)
+        self.assertEqual(result["final_sha"], "b" * 40)
+        self.assertEqual(result["platform_ref"], "main")
+        self.assertEqual(result["date"], "20261008")
+        self.assertEqual(result["status"], "published")
+
+    def test_failure_never_emits_a_success_receipt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory) / "result.json"
+            with (mock.patch.object(coordinator, "main", side_effect=RuntimeError("aggregate failed")),
+                  mock.patch.dict(coordinator.os.environ, {"PREVIEW_RESULT_PATH": str(path)}),
+                  self.assertRaisesRegex(RuntimeError, "aggregate failed")):
+                coordinator.run_branch()
+            self.assertFalse(path.exists())
+
 if __name__ == "__main__":
     unittest.main()

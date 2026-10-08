@@ -69,6 +69,12 @@ jobs:
             refs+=("${maintenance_refs[@]}")
           fi
 
+          # A wall-clock budget includes GC, reused runs and dispatch overhead.
+          # Reserve the final hour of the job for slow API requests and cleanup.
+          scanner_deadline=$((SECONDS + 300 * 60))
+          remaining_attempts=$((3 * ${#refs[@]}))
+          remaining_wait_budget=$((300 * 60))
+
           runs_endpoint="repos/$GITHUB_REPOSITORY/actions/workflows/daily-preview-branch.yml/runs?event=workflow_dispatch&per_page=100"
           failures=()
 
@@ -88,6 +94,7 @@ jobs:
           wait_for_gc() {
             local run_id status
             while true; do
+              [ "$SECONDS" -lt "$scanner_deadline" ] || return 1
               run_id=$(gh api --paginate --slurp \
                 "repos/$GITHUB_REPOSITORY/actions/workflows/preview-gc.yml/runs?per_page=100" \
                 | jq -r '[.[] | .workflow_runs[]? | select(.status != "completed")]
@@ -102,14 +109,31 @@ jobs:
           }
 
           for ref in "${refs[@]}"; do
-            sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$ref" \
-              --jq 'select(.object.type == "commit") | .object.sha')
-            [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
-            title="Daily preview $ref@$sha for $date"
             converged=false
             failed=false
             for attempt in 1 2 3; do
-              wait_for_gc
+              # A previous converger may have committed the selected manifest.
+              # Always resume the current exact branch head, never a stale SHA.
+              sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$ref" \
+                --jq 'select(.object.type == "commit") | .object.sha')
+              [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+              title="Daily preview $ref@$sha for $date"
+              if ! wait_for_gc; then
+                failures+=("$title: scanner wall-clock budget exhausted while waiting for GC")
+                failed=true
+                break
+              fi
+              remaining_wall_time=$((scanner_deadline - SECONDS))
+              [ "$remaining_wait_budget" -le "$remaining_wall_time" ] || remaining_wait_budget=$remaining_wall_time
+              wait_seconds=$((remaining_wait_budget / remaining_attempts))
+              [ "$wait_seconds" -le 3000 ] || wait_seconds=3000
+              remaining_wait_budget=$((remaining_wait_budget - wait_seconds))
+              remaining_attempts=$((remaining_attempts - 1))
+              if [ "$wait_seconds" -le 0 ]; then
+                failures+=("$title: scanner wall-clock budget exhausted")
+                failed=true
+                break
+              fi
               run_id=$(matching_run "$title" active)
               if [ -n "$run_id" ]; then
                 echo "==> reuse active $title ($run_id)"
@@ -118,7 +142,8 @@ jobs:
                 gh workflow run daily-preview-branch.yml --ref main \
                   -f "platform_ref=$ref" \
                   -f "platform_sha=$sha" \
-                  -f "date=$date"
+                  -f "date=$date" \
+                  -f "wait_seconds=$wait_seconds"
                 run_id=""
                 for _ in {1..30}; do
                   candidate_id=$(matching_run "$title" any)
@@ -134,13 +159,50 @@ jobs:
               fi
 
               while true; do
+                if [ "$SECONDS" -ge "$scanner_deadline" ]; then
+                  failures+=("$title: scanner budget exhausted; run $run_id remains active")
+                  failed=true
+                  break
+                fi
                 state=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id")
                 status=$(jq -r .status <<< "$state")
                 [ "$status" = completed ] || { sleep 30; continue; }
                 conclusion=$(jq -r .conclusion <<< "$state")
                 case "$conclusion" in
                   success)
-                    converged=true
+                    outcome_dir=$(mktemp -d)
+                    if ! gh run download "$run_id" --repo "$GITHUB_REPOSITORY" \
+                      --name daily-preview-outcome --dir "$outcome_dir" \
+                      || ! outcome=$(jq -er --arg ref "$ref" --arg sha "$sha" --arg date "$date" '
+                        select(.platform_ref == $ref and .selected_sha == $sha and .date == $date)
+                        | select(.final_sha | type == "string")
+                        | select(.final_sha | test("^[0-9a-f]{40}$"))
+                        | .status' "$outcome_dir/preview-result.json"); then
+                      rm -rf -- "$outcome_dir"
+                      failures+=("$title: missing or mismatched convergence outcome")
+                      failed=true
+                      break
+                    fi
+                    final_sha=$(jq -r .final_sha "$outcome_dir/preview-result.json")
+                    rm -rf -- "$outcome_dir"
+                    case "$outcome" in
+                      published|unchanged|closed)
+                        echo "==> $title verified outcome: $outcome"
+                        current_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$ref" --jq .object.sha)
+                        if [ "$current_sha" = "$final_sha" ]; then
+                          converged=true
+                        else
+                          echo "==> $ref moved after the receipt; resume its fresh head"
+                        fi
+                        ;;
+                      pending|deferred)
+                        echo "==> $title is $outcome; resume fresh head ($attempt/3)"
+                        ;;
+                      *)
+                        failures+=("$title: invalid branch outcome $outcome")
+                        failed=true
+                        ;;
+                    esac
                     break
                     ;;
                   cancelled|timed_out|stale)
@@ -162,7 +224,8 @@ jobs:
               continue
             fi
             if [ "$converged" = false ]; then
-              echo "==> defer $title after three interrupted attempts; next scan resumes"
+              failures+=("$title: not converged after three attempts")
+              echo "==> $title is still pending; publication has not succeeded"
             fi
           done
           if [ "${#failures[@]}" -ne 0 ]; then
