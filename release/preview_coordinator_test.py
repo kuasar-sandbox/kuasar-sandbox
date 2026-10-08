@@ -1479,6 +1479,20 @@ components:
 
 
 class BranchOutcomeTest(unittest.TestCase):
+    def test_inner_convergence_sleep_respects_deadline(self):
+        with (mock.patch.object(coordinator, "converge", side_effect=coordinator.Pending("healthy aggregate")) as converge,
+              mock.patch.object(coordinator.time, "monotonic", side_effect=[9, 9, 10]),
+              mock.patch.object(coordinator.time, "sleep") as sleep):
+            self.assertEqual(coordinator.converge_until_deadline({}, "fixture", 10), "pending")
+        converge.assert_called_once()
+        sleep.assert_called_once_with(1)
+
+    def test_expired_planning_budget_does_not_dispatch(self):
+        with (mock.patch.object(coordinator, "converge") as converge,
+              mock.patch.object(coordinator.time, "monotonic", return_value=10)):
+            self.assertEqual(coordinator.converge_until_deadline({}, "fixture", 10), "pending")
+        converge.assert_not_called()
+
     def test_pending_is_rechecked_until_actual_completion(self):
         with (mock.patch.object(coordinator, "main", side_effect=[coordinator.Pending("healthy aggregate"), "published"]) as main,
               mock.patch.object(coordinator.time, "monotonic", return_value=0),

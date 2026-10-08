@@ -1329,19 +1329,27 @@ def main(deadline: float | None = None) -> str:
             print(f"==> no source changes since {current_aggregate}; keep maintained preview")
             return "unchanged"
 
+    if time.monotonic() >= deadline:
+        print("==> selection exhausted the branch budget; resume before manifest mutation")
+        return "pending"
     aggregate = f"{base}-preview.{date}"
     content = render_manifest(base, previous, date, next_previous_preview, plans, recorded)
     PLATFORM_SHA = persist_manifest(content, aggregate)
-    while True:
+    return converge_until_deadline(plans, aggregate, deadline)
+
+
+def converge_until_deadline(plans: dict[str, Plan], aggregate: str, deadline: float) -> str:
+    while time.monotonic() < deadline:
         try:
             if converge(plans, aggregate, PLATFORM_SHA):
                 return "published"
         except Pending as error:
             print(f"==> pending: {error}")
-        if time.monotonic() >= deadline:
-            print("==> Daily Preview remains pending; scanner must continue convergence")
-            return "pending"
-        time.sleep(POLL_SECONDS)
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(POLL_SECONDS, remaining))
+    print("==> Daily Preview remains pending; scanner must continue convergence")
+    return "pending"
 
 
 def run_branch() -> dict[str, str]:
