@@ -22,7 +22,8 @@ class PrebuiltPackage(unittest.TestCase):
         self.metadata, self.files = {}, {'test/e2e/cases/basic.fixture.sh': (b'exit 0\n', 0o644)}
         self.directories = []
         for arch, machine in [('x86_64', 62), ('aarch64', 183)]:
-            names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'usage-probe', 'cgroup-fork-probe']
+            names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe',
+                     'node-ctl-runner-test', 'usage-probe', 'cgroup-fork-probe']
             helpers = {}
             for name in names:
                 data = bytearray(64)
@@ -52,6 +53,26 @@ class PrebuiltPackage(unittest.TestCase):
 
     def test_both_architectures_have_complete_exact_helpers(self):
         self.validate()
+
+    def test_runner_helper_is_required_and_bound_to_owner_for_both_architectures(self):
+        for arch in ('x86_64', 'aarch64'):
+            with self.subTest(arch=arch):
+                name = 'node-ctl-runner-test'
+                path = f'test/e2e/helpers/{arch}/{name}'
+                record = self.metadata[arch]['helpers'].pop(name)
+                data, mode = self.files.pop(path)
+                with self.assertRaisesRegex(ValueError, 'missing or unexpected prebuilt E2E helper'):
+                    self.validate()
+                self.metadata[arch]['helpers'][name] = record
+                self.files[path] = (data + b'tamper', mode)
+                with self.assertRaisesRegex(ValueError, 'checksum mismatch: node-ctl-runner-test'):
+                    self.validate()
+                self.files[path] = (data, mode)
+                record['source_sha'] = 'c' * 40
+                with self.assertRaisesRegex(ValueError, 'source identity'):
+                    self.validate()
+                record['source_sha'] = self.pins['orchestrator']
+                self.validate()
 
     def test_arm_cgroup_probe_is_required_in_new_release_packages(self):
         del self.metadata['aarch64']['helpers']['cgroup-fork-probe']

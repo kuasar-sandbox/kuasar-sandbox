@@ -24,6 +24,7 @@ HELPERS = {
     "zot": "ZOT_BIN", "versitygw": "VGW_BIN", "custom-proxy": "CUSTOM_PROXY_BIN",
     "telemetry-grpc-probe": "TELEMETRY_GRPC_PROBE_BIN", "usage-probe": "USAGE_PROBE_BIN",
     "cgroup-fork-probe": "CGROUP_FORK_PROBE_BIN",
+    "node-ctl-runner-test": "NODE_CTL_RUNNER_TEST_BINARY",
 }
 IMAGE_VARIABLES = {
     "prometheus": "TELEMETRY_PROMETHEUS_IMAGE", "clickhouse": "TELEMETRY_CLICKHOUSE_IMAGE",
@@ -205,7 +206,8 @@ def required_helpers(cases):
     if orchestrator or 'basic.demo.sh' in cases:
         helpers['versitygw'] = 'framework'
     if orchestrator:
-        helpers.update({'custom-proxy': 'orchestrator', 'telemetry-grpc-probe': 'orchestrator'})
+        helpers.update({'custom-proxy': 'orchestrator', 'telemetry-grpc-probe': 'orchestrator',
+                        'node-ctl-runner-test': 'orchestrator'})
     if sandboxer:
         helpers['usage-probe'] = 'sandboxer'
     if 'sandbox.cgroup.sh' in cases:

@@ -852,6 +852,13 @@ class ArtifactContracts(unittest.TestCase):
             path.chmod(0o755)
             self.metadata["helpers"][name] = {"sha256": subject.digest(path), "source_sha":
                 self.plan["framework_sha"] if owner == "framework" else self.plan["test_revisions"][owner]["sha"]}
+        self.assertEqual(helpers['node-ctl-runner-test'], 'orchestrator')
+        runner_helper = self.metadata['helpers']['node-ctl-runner-test']
+        runner_helper['source_sha'] = 'c' * 40
+        (delta / 'outputs.json').write_text(json.dumps(self.metadata))
+        with self.assertRaisesRegex(ValueError, 'test helper identity mismatch: node-ctl-runner-test'):
+            self.compose(delta=delta)
+        runner_helper['source_sha'] = 'f' * 40
         helper = self.metadata["helpers"]["custom-proxy"]
         helper["source_sha"] = "c" * 40
         (delta / "outputs.json").write_text(json.dumps(self.metadata))
@@ -862,6 +869,8 @@ class ArtifactContracts(unittest.TestCase):
         provenance = self.compose(delta=delta)
         prepared = self.root / "workspaces/x86_64/fixtures/bin/custom-proxy"
         self.assertEqual(subject.digest(prepared), provenance["helpers"]["custom-proxy"]["sha256"])
+        runner_prepared = self.root / 'workspaces/x86_64/fixtures/bin/node-ctl-runner-test'
+        self.assertEqual(subject.digest(runner_prepared), provenance['helpers']['node-ctl-runner-test']['sha256'])
         prepared.unlink()
         with self.assertRaisesRegex(ValueError, "prepared workspace changed"):
             subject.verify_workspace(self.root / "workspaces/x86_64", self.plan, "x86_64")

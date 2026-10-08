@@ -23,7 +23,8 @@ def build(test_sources, pins, output, wheels_output, platform_source):
     for owner in pins:
         artifacts.require((test_sources / owner / 'go.mod').is_file(), f'missing complete pinned helper source: {owner}')
     helpers = {'zot': 'framework', 'versitygw': 'framework', 'custom-proxy': 'orchestrator',
-               'telemetry-grpc-probe': 'orchestrator', 'usage-probe': 'sandboxer',
+               'telemetry-grpc-probe': 'orchestrator', 'node-ctl-runner-test': 'orchestrator',
+               'usage-probe': 'sandboxer',
                'cgroup-fork-probe': 'sandboxer'}
     with tempfile.TemporaryDirectory(prefix='release-helper-sources-') as directory:
         sources = Path(directory) / 'sources'

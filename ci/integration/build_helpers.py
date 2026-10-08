@@ -22,6 +22,14 @@ def build(sources, arch, output, helpers, environment):
         run(['bash', ROOT / 'ci/integration/ensure-zot.sh'], BINDIR=str(output))
     if 'custom-proxy' in helpers or 'telemetry-grpc-probe' in helpers:
         run(['bash', sources / 'orchestrator/scripts/ci-e2e-build.sh', 'fixtures', arch, output])
+    if 'node-ctl-runner-test' in helpers:
+        # Compile, never execute, the test-only runner at the exact owner pin.
+        # Retain the selected Go workspace: SDK dependencies belong to this
+        # helper source set, not the module versions of an arbitrary checkout.
+        run(['go', '-C', sources / 'orchestrator', 'test', '-c', '-trimpath',
+             '-o', output / 'node-ctl-runner-test', './cmd/node-ctl'],
+            GOOS='linux', GOARCH={'x86_64': 'amd64', 'aarch64': 'arm64'}[arch],
+            CGO_ENABLED='0')
     for name, target in (('usage-probe', 'e2e-usage-probe'), ('cgroup-fork-probe', 'e2e-cgroup-fork-probe')):
         if name in helpers:
             run(['make', '-C', sources / 'sandboxer', f'TARGET_ARCH={arch}', f'E2E_FIXTURE_DIR={output}', target])
