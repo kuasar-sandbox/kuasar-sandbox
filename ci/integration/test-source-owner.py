@@ -74,16 +74,18 @@ class PreparedHelperSelectionTest(unittest.TestCase):
     def test_runner_helper_cross_build_retains_the_exact_workspace(self):
         # The required local module is intentionally unavailable from a proxy.
         # Losing the pinned workspace must fail instead of resolving elsewhere.
+        # This minimal fixture uses no new language features; do not require an
+        # offline compiler test to download the product module's Go toolchain.
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             sources = root / 'sources'
             owner, sdk = sources / 'orchestrator', sources / 'sdk'
             (owner / 'cmd/node-ctl').mkdir(parents=True)
             sdk.mkdir()
-            (owner / 'go.mod').write_text('module example.test/orchestrator\ngo 1.26.1\nrequire example.test/sdk v0.0.0\n')
-            (sdk / 'go.mod').write_text('module example.test/sdk\ngo 1.26.1\n')
+            (owner / 'go.mod').write_text('module example.test/orchestrator\ngo 1.22\nrequire example.test/sdk v0.0.0\n')
+            (sdk / 'go.mod').write_text('module example.test/sdk\ngo 1.22\n')
             (sdk / 'identity.go').write_text('package sdk\nconst Identity = "exact-test-pin"\n')
-            (sources / 'go.work').write_text('go 1.26.1\nuse (\n ./orchestrator\n ./sdk\n)\n')
+            (sources / 'go.work').write_text('go 1.22\nuse (\n ./orchestrator\n ./sdk\n)\n')
             (owner / 'cmd/node-ctl/main.go').write_text('package main\nfunc main() {}\n')
             (owner / 'cmd/node-ctl/main_test.go').write_text(
                 'package main\nimport ("testing"; "example.test/sdk")\n'
