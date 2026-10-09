@@ -359,21 +359,26 @@ def finish(args):
     require(not args.evidence.exists() and not args.evidence.resolve().is_relative_to(root),
             'evidence requires a fresh directory outside instance state')
     args.evidence.mkdir(parents=True)
-    shutil.copy2(root / 'receipt.json', args.evidence / 'receipt.json')
     state = root / 'instances/ci'
-    for name in ('instance.json', 'output'):
-        path = state / name
-        if path.is_file():
-            require(not path.is_symlink(), 'linked instance evidence')
-            shutil.copy2(path, args.evidence / name)
-        elif path.is_dir():
-            copy_evidence(path, args.evidence / name)
+    diagnostic_status = 0
+    try:
+        for name in ('instance.json', 'output'):
+            path = state / name
+            if path.is_file():
+                require(not path.is_symlink(), 'linked instance evidence')
+                shutil.copy2(path, args.evidence / name)
+            elif path.is_dir():
+                copy_evidence(path, args.evidence / name)
+    except (ValueError, OSError) as error:
+        diagnostic_status = 1
+        receipt.update(conclusion='failure', diagnostics_error=str(error))
+    write(args.evidence / 'receipt.json', receipt)
     if code:
         return code  # Failed ownership/graceful-stop checks never authorize deletion.
     if (state / 'instance.json').exists():
         subprocess.run(command(root / 'instances', 'cleanup', '--delete-output'), check=True)
     shutil.rmtree(root)
-    return 0
+    return diagnostic_status
 
 
 def copy_evidence(source, destination):

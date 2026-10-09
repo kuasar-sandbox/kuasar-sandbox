@@ -13,7 +13,7 @@ import artifacts
 @contextmanager
 def scratch_directory():
     # Short task-owned paths preserve Unix socket and direct-I/O contracts.
-    state = Path(tempfile.mkdtemp(prefix="ki-", dir="/var/tmp"))
+    state = Path(tempfile.mkdtemp(prefix="ki-", dir=os.environ.get("TMPDIR", "/var/tmp")))
     try:
         yield state
     finally:
