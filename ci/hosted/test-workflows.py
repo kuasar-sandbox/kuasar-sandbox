@@ -140,7 +140,11 @@ def check():
                                     "helpers-x86": "ubuntu-24.04", "prepare-integration-x86": "ubuntu-24.04",
                                     "e2e-x86": "ubuntu-24.04", "performance-x86": "ubuntu-24.04",
                                     "helpers-arm": "ubuntu-24.04-arm", "prepare-integration-arm": "ubuntu-24.04-arm",
-                                    "e2e-arm": "ubuntu-24.04-arm", "validation-results": "ubuntu-24.04"}[job_name]
+                                    "e2e-arm": "ubuntu-24.04-arm", "validation-results": "ubuntu-24.04",
+                                    "legacy-x86": "ubuntu-latest", "legacy-arm": "ubuntu-latest",
+                                    "prepare-legacy-x86": "ubuntu-24.04", "prepare-legacy-arm": "ubuntu-24.04-arm",
+                                    "e2e-legacy-x86": "ubuntu-24.04", "e2e-legacy-arm": "ubuntu-24.04-arm",
+                                    "performance-legacy-x86": "ubuntu-24.04"}[job_name]
                     assert job["runs-on"] == expected, (name, job["runs-on"])
     check_request_rejection()
     caller = load("ci.yml")
