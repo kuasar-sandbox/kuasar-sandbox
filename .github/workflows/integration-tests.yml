@@ -206,16 +206,31 @@ jobs:
             --selection plan/workbench.json --sources source-checks \
             --root "$RUNNER_TEMP/source-system" --arch x86_64 --cpus 2 --memory-gib 8
           source_script=$(cat <<'WORKBENCH_SOURCE'
-          # Match the system executor owner on this private container copy.
-          chown -hR 0:0 /src
+          # Keep the original ordinary-user source checks and their explicit
+          # sudo paths inside this private system instance, including its daemon.
+          source_uid=$(id -u nobody)
+          source_gid=$(id -g nobody)
+          source_docker_gid=$(stat -c %g /run/docker.sock)
+          chown -hR "$source_uid:$source_gid" /src /work/home /build /output
+          printf '%s\n' 'nobody ALL=(ALL) NOPASSWD: ALL' \
+            'Defaults:nobody secure_path="/build/source-readers/bin:/usr/local/go/bin:/usr/local/rust/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
+            > /etc/sudoers.d/kuasar-source
+          chmod 0440 /etc/sudoers.d/kuasar-source
+          visudo -cf /etc/sudoers.d/kuasar-source
+          exec setpriv --reuid "$source_uid" --regid "$source_gid" --groups "$source_docker_gid" \
+            --inh-caps=-all --ambient-caps=-all env USER=nobody LOGNAME=nobody \
+            bash -euo pipefail <<'SOURCE_USER'
+          [ "$(id -u)" = "$(id -u nobody)" ] && [ "$(id -u)" -ne 0 ]
+          printf 'Source checks UID=%s\n' "$(id -u)"
           sudo -n true
+          docker --host unix:///run/docker.sock info --format '{{.ID}}' >/dev/null
           # These are private instance resources. Old pinned fixtures may skip
           # on unavailable capabilities; this required gate must fail instead.
-          trap 'ip link del dev ks-source-probe 2>/dev/null || true; ip netns del ks-source-probe 2>/dev/null || true' EXIT
-          ip netns add ks-source-probe
-          ip netns del ks-source-probe
-          ip tuntap add dev ks-source-probe mode tap
-          ip link del dev ks-source-probe
+          trap 'sudo -n ip link del dev ks-source-probe 2>/dev/null || true; sudo -n ip netns del ks-source-probe 2>/dev/null || true' EXIT
+          sudo -n ip netns add ks-source-probe
+          sudo -n ip netns del ks-source-probe
+          sudo -n ip tuntap add dev ks-source-probe mode tap
+          sudo -n ip link del dev ks-source-probe
           trap - EXIT
           source /inputs/release/ci/hosted/bootstrap.sh
           export KUASAR_HOSTED_ROOT=/build/source-readers
@@ -226,6 +241,7 @@ jobs:
           export PATH="$KUASAR_HOSTED_ROOT/bin:$PATH" KUASAR_CI_DIR=/output/source-metrics
           python3 -B /inputs/release/ci/integration/run-source-checks.py \
             --plan /src/.source-plan.json --sources /src --output /output/source-result.json --materialized
+          SOURCE_USER
           WORKBENCH_SOURCE
           )
           python3 -B framework/ci/hosted/workbench.py exec --root "$RUNNER_TEMP/source-system" -- \

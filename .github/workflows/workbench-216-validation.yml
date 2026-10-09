@@ -106,16 +106,31 @@ jobs:
             --selection plan/workbench.json --sources source-checks \
             --root "$RUNNER_TEMP/source-system" --arch x86_64 --cpus 2 --memory-gib 8
           source_script=$(cat <<'WORKBENCH_SOURCE'
-          # Match the system executor owner on this private container copy.
-          chown -hR 0:0 /src
+          # Keep the original ordinary-user source checks and their explicit
+          # sudo paths inside this private system instance, including its daemon.
+          source_uid=$(id -u nobody)
+          source_gid=$(id -g nobody)
+          source_docker_gid=$(stat -c %g /run/docker.sock)
+          chown -hR "$source_uid:$source_gid" /src /work/home /build /output
+          printf '%s\n' 'nobody ALL=(ALL) NOPASSWD: ALL' \
+            'Defaults:nobody secure_path="/build/source-readers/bin:/usr/local/go/bin:/usr/local/rust/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
+            > /etc/sudoers.d/kuasar-source
+          chmod 0440 /etc/sudoers.d/kuasar-source
+          visudo -cf /etc/sudoers.d/kuasar-source
+          exec setpriv --reuid "$source_uid" --regid "$source_gid" --groups "$source_docker_gid" \
+            --inh-caps=-all --ambient-caps=-all env USER=nobody LOGNAME=nobody \
+            bash -euo pipefail <<'SOURCE_USER'
+          [ "$(id -u)" = "$(id -u nobody)" ] && [ "$(id -u)" -ne 0 ]
+          printf 'Source checks UID=%s\n' "$(id -u)"
           sudo -n true
+          docker --host unix:///run/docker.sock info --format '{{.ID}}' >/dev/null
           # These are private instance resources. Old pinned fixtures may skip
           # on unavailable capabilities; this required gate must fail instead.
-          trap 'ip link del dev ks-source-probe 2>/dev/null || true; ip netns del ks-source-probe 2>/dev/null || true' EXIT
-          ip netns add ks-source-probe
-          ip netns del ks-source-probe
-          ip tuntap add dev ks-source-probe mode tap
-          ip link del dev ks-source-probe
+          trap 'sudo -n ip link del dev ks-source-probe 2>/dev/null || true; sudo -n ip netns del ks-source-probe 2>/dev/null || true' EXIT
+          sudo -n ip netns add ks-source-probe
+          sudo -n ip netns del ks-source-probe
+          sudo -n ip tuntap add dev ks-source-probe mode tap
+          sudo -n ip link del dev ks-source-probe
           trap - EXIT
           source /inputs/release/ci/hosted/bootstrap.sh
           export KUASAR_HOSTED_ROOT=/build/source-readers
@@ -126,6 +141,7 @@ jobs:
           export PATH="$KUASAR_HOSTED_ROOT/bin:$PATH" KUASAR_CI_DIR=/output/source-metrics
           python3 -B /inputs/release/ci/integration/run-source-checks.py \
             --plan /src/.source-plan.json --sources /src --output /output/source-result.json --materialized
+          SOURCE_USER
           WORKBENCH_SOURCE
           )
           python3 -B framework/ci/hosted/workbench.py exec --root "$RUNNER_TEMP/source-system" -- \
@@ -165,6 +181,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
+      - name: Record consumer disk space before Workbench
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase before-workbench --output task-space/before.json
       - name: Cold ordinary UID full build and six exact packages
         id: verification
         uses: ./framework/.github/actions/workbench
@@ -177,6 +197,19 @@ jobs:
           cpus: '2'
           memory-gib: '8'
           run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase cold --arch x86_64
+      - name: Record consumer disk space after Workbench
+        if: always()
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase after-workbench --output task-space/after.json
+      - name: Retain host consumer disk measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-space-cold-x86-${{ github.run_id }}
+          path: task-space
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain exact non-native products for the fresh warm job
         if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -224,6 +257,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
+      - name: Record consumer disk space before Workbench
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase before-workbench --output task-space/before.json
       - name: Cold ordinary UID full build and six exact packages
         id: verification
         uses: ./framework/.github/actions/workbench
@@ -236,6 +273,19 @@ jobs:
           cpus: '2'
           memory-gib: '8'
           run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase cold --arch aarch64
+      - name: Record consumer disk space after Workbench
+        if: always()
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase after-workbench --output task-space/after.json
+      - name: Retain host consumer disk measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-space-cold-arm-${{ github.run_id }}
+          path: task-space
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain exact non-native products for the fresh warm job
         if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -366,6 +416,10 @@ jobs:
           python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
           cp transport/carried-products.tar sources/
           cp transport/result.json sources/cold-result.json
+      - name: Record consumer disk space before Workbench
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase before-workbench --output task-space/before.json
       - name: Require native cache hits and directly package the six units
         id: verification
         uses: ./framework/.github/actions/workbench
@@ -378,6 +432,19 @@ jobs:
           cpus: '2'
           memory-gib: '8'
           run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase warm --arch x86_64
+      - name: Record consumer disk space after Workbench
+        if: always()
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase after-workbench --output task-space/after.json
+      - name: Retain host consumer disk measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-space-warm-x86-${{ github.run_id }}
+          path: task-space
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain the checked warm result and directly validated packages
         if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -414,6 +481,10 @@ jobs:
           python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
           cp transport/carried-products.tar sources/
           cp transport/result.json sources/cold-result.json
+      - name: Record consumer disk space before Workbench
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase before-workbench --output task-space/before.json
       - name: Require native cache hits and directly package the six units
         id: verification
         uses: ./framework/.github/actions/workbench
@@ -426,6 +497,19 @@ jobs:
           cpus: '2'
           memory-gib: '8'
           run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase warm --arch aarch64
+      - name: Record consumer disk space after Workbench
+        if: always()
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase after-workbench --output task-space/after.json
+      - name: Retain host consumer disk measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-space-warm-arm-${{ github.run_id }}
+          path: task-space
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain the checked warm result and directly validated packages
         if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -455,6 +539,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
+      - name: Record consumer disk space before Workbench
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase before-workbench --output task-space/before.json
       - name: Compile only exact test helpers and prepare the pinned test overlays
         id: verification
         uses: ./framework/.github/actions/workbench
@@ -487,6 +575,19 @@ jobs:
             mkdir -p "$KUASAR_HOSTED_ROOT/bin"
             install_readers
             install_runtime_reader
+      - name: Record consumer disk space after Workbench
+        if: always()
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase after-workbench --output task-space/after.json
+      - name: Retain host consumer disk measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-space-helpers-x86-${{ github.run_id }}
+          path: task-space
+          if-no-files-found: error
+          retention-days: 7
       - name: Transport only checked helpers and readers after both instances stop
         run: |
           tar -cf helper-inputs.tar -C sources/verification integration-helpers
@@ -667,6 +768,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
+      - name: Record consumer disk space before Workbench
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase before-workbench --output task-space/before.json
       - name: Compile only exact test helpers and prepare the pinned test overlays
         id: verification
         uses: ./framework/.github/actions/workbench
@@ -699,6 +804,19 @@ jobs:
             mkdir -p "$KUASAR_HOSTED_ROOT/bin"
             install_readers
             install_runtime_reader
+      - name: Record consumer disk space after Workbench
+        if: always()
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py disk-snapshot \
+            --sources sources --phase after-workbench --output task-space/after.json
+      - name: Retain host consumer disk measurements
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-space-helpers-arm-${{ github.run_id }}
+          path: task-space
+          if-no-files-found: error
+          retention-days: 7
       - name: Transport only checked helpers and readers after both instances stop
         run: |
           tar -cf helper-inputs.tar -C sources/verification integration-helpers

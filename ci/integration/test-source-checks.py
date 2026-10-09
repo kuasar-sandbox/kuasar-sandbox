@@ -93,10 +93,11 @@ class SourceChecksTests(unittest.TestCase):
         commands = self.run_checks()
         result = self.result()
         self.assertEqual([row["name"] for row in result["checks"]],
-                         ["platform-contracts", "connector-unit-race-vet", "sandboxer-unit-race-vet",
+                         ["platform-contracts", "platform-privileged-perf-contracts", "connector-unit-race-vet", "sandboxer-unit-race-vet",
                           "orchestrator-unit-race-vet", "accelerator-fixtures", "uffd-source-benchmark"])
-        self.assertEqual(commands[0][0], ["make", "test-ci-tools", "test-release-tools", "test-perf-tools"])
-        for command, _, _ in commands[1:4]:
+        self.assertEqual(commands[0][0], ["make", "test-ci-tools", "test-release-tools"])
+        self.assertEqual(commands[1][0], ["sudo", "-n", "-E", "make", "test-perf-tools"])
+        for command, _, _ in commands[2:5]:
             self.assertEqual(command, ["bash", "scripts/ci-source-checks.sh"])
         for _, directory, env in commands:
             self.assertEqual(env["TMPDIR"], "/build/t")
@@ -118,8 +119,15 @@ class SourceChecksTests(unittest.TestCase):
         select_plan(self.plan, ["connector"])
         self.run_checks()
         self.assertEqual([row["name"] for row in self.result()["checks"]],
-                         ["platform-contracts", "connector-unit-race-vet"])
+                         ["platform-contracts", "platform-privileged-perf-contracts", "connector-unit-race-vet"])
         self.assertEqual(set(self.result()["sources"]), {"connector", "platform"})
+
+    def test_real_privileged_perf_failure_is_required(self):
+        with self.assertRaisesRegex(ValueError, "required source check failed: platform-privileged-perf-contracts"):
+            self.run_checks(failure=(["sudo", "-n", "-E", "make", "test-perf-tools"], 37))
+        self.assertEqual(self.result()["exit_code"], 37)
+        self.assertEqual([row["name"] for row in self.result()["checks"]],
+                         ["platform-contracts", "platform-privileged-perf-contracts"])
 
     def test_published_and_candidate_entries_execute_unchanged_without_new_arguments(self):
         select_plan(self.plan, ["connector"])

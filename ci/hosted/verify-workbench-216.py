@@ -243,7 +243,7 @@ def freeze(args):
     record = {"task": "kuasar-sandbox/kuasar-sandbox#216", "framework_sha": args.framework_sha,
               "run_id": run_id, "sources": sources, "test_revisions": sources,
               "admission": request, "version": version,
-              "coverage": "full manifest build; six cold/warm packages; exact packaged-product E2E/performance; source gates recorded separately"}
+              "coverage": "full manifest build; six cold/warm packages; exact packaged-product E2E/performance; full source gates use the same frozen test plan"}
     args.output.mkdir(parents=True)
     plan = integration_plan(record)
     write(args.output / "integration-plan.json", plan)
