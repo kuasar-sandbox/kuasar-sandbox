@@ -197,6 +197,24 @@ class VerificationContracts(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "no readable exec"):
                     task.audit_packaging(path)
 
+    def test_real_cargo_metadata_rustc_print_probe_cannot_generate_outputs(self):
+        probe = ["rustc", "-", "--crate-name", "___", "--print=file-names", "--crate-type", "bin",
+                 "--crate-type", "rlib", "--crate-type", "dylib", "--crate-type", "cdylib",
+                 "--crate-type", "staticlib", "--crate-type", "proc-macro", "--print=sysroot",
+                 "--print=split-debuginfo", "--print=crate-name", "--print=cfg", "-Wwarnings"]
+        with tempfile.TemporaryDirectory() as directory:
+            trace = Path(directory) / "metadata.execve"
+            for extra in ([], ["--target", "aarch64-unknown-linux-gnu"], ["--emit=link"], ["--emit", "obj"],
+                          ["-o", "output"], ["-ooutput"], ["--out-dir", "output"], ["--out-dir=output"],
+                          ["input.rs"], ["--print=link-args"]):
+                argv = probe + extra
+                trace.write_text('42 execve("/usr/bin/rustc", ' + json.dumps(argv) + ', 0x0) = 0\n')
+                if not extra or extra[0] == "--target":
+                    task.audit_packaging(trace)
+                else:
+                    with self.assertRaisesRegex(ValueError, "native compilation", msg=repr(argv)):
+                        task.audit_packaging(trace)
+
     def test_carried_products_exclude_all_native_materials(self):
         paths = task.carry_paths(Path("/src"), "aarch64", [
             ("sandboxer", "cloud-hypervisor"), ("guest-runtime/native-deps", "vmlinux"),
