@@ -311,7 +311,8 @@ restore_or_build() {
                 if step.get("uses", "").endswith("/.github/actions/workbench"):
                     self.assertEqual(step["with"]["cache"], "false")
             prepare = json.dumps(jobs["prepare-integration-" + lane])
-            self.assertIn("verify-workbench-216.py packaged-delta", prepare)
+            self.assertEqual(jobs["prepare-integration-" + lane]["env"]["DELTA_COMMAND"], "packaged-delta")
+            self.assertIn('verify-workbench-216.py \\"$DELTA_COMMAND\\"', prepare)
             self.assertIn("prepare-artifacts.py", prepare)
             self.assertIn("--clean-image", prepare)
             self.assertNotIn("build-artifacts.py", prepare)
@@ -323,7 +324,11 @@ restore_or_build() {
                 if "run" in step:
                     subprocess.run(["bash", "-n"], input=step["run"], text=True, check=True)
                 if "actions/upload-artifact@" in step.get("uses", ""):
-                    self.assertNotIn("always", step.get("if", "success()"))
+                    if "always" in step.get("if", ""):
+                        self.assertIn(job, [jobs["legacy-x86"], jobs["legacy-arm"]])
+                        self.assertEqual(step["name"], "Retain host receipts and diagnostics copied after writers stop")
+                        self.assertTrue(all(path.startswith("legacy-output/") and "/validated" not in path
+                                            for path in step["with"]["path"].splitlines()))
 
 
 class PackagedInputContracts(unittest.TestCase):
