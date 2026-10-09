@@ -126,6 +126,7 @@ jobs:
         with:
           selection: plan/workbench.json
           sources: sources
+          cache-coverage: integration-delta
           outputs: |
             .ci/delta
             .ci/build-time.txt

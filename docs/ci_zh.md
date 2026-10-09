@@ -144,7 +144,7 @@ ARM 非 KVM 范围在执行前和 aggregate 验证绑定中声明，不等同完
 - RocksDB headers 与 `librocksdb.a`;
 - patched `cloud-hypervisor`。
 
-缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v3/<arch>/<component>/<input-hash>/`. Workbench action 使用当前仓库的 Actions cache 恢复及保存 native、Go modules/build cache、Cargo registry/Git/material 下载. key 区分架构及 candidate/trusted scope. 访问仍受 GitHub 仓库/ref 规则限制, 同 key 不能跨仓共享. 默认分支 dispatch 的候选输入仍属于 candidate; trusted 写入要求在源码执行前确认干净、精确的公开源码提交属于对应 main 历史, 结论保存在候选挂载之外. publisher 可执行文件不消费这些缓存.
+缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v3/<arch>/<component>/<input-hash>/`. Workbench action 使用当前仓库的 Actions cache 恢复及保存 native、Go modules/build cache、Cargo registry/Git/material 下载. key 区分架构、精确候选来源和声明的构建覆盖范围. candidate namespace 绑定实际 PR、companion、产品、测试/helper 与内核输入. 精确 key 和 restore 前缀都区分 source/helper 子集、已选择的产品集合及完整 manifest, 防止不可变的部分缓存占用完整构建的 key. 访问仍受 GitHub 仓库/ref 规则限制, 同 key 不能跨仓共享. 默认分支 dispatch 的候选输入仍属于 candidate; trusted 写入要求在源码执行前确认干净、精确的公开源码提交属于对应 main 历史, 结论保存在候选挂载之外. publisher 可执行文件不消费这些缓存.
 
 native key 覆盖 recipe、patch/config、上游内容、架构、实际工具链/ABI 和有效编译参数. 完整 Workbench/image/framework 身份保留在 provenance, 每日镜像标签不单独导致 miss. synthetic import/kernel 默认用户、主机和日期在实际构建时规范化, 显式覆盖仍有效. 固定容器路径保留 Cargo 源码和 linker 身份; 随机任务目录不进入 Actions cache path version. 写入沿用校验和与原子 rename; restore 再核验 descriptor/payload. 正常 miss 按原 recipe 构建, 匹配但损坏的条目失败, 不静默重编或原地修补.
 

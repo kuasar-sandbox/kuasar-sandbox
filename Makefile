@@ -196,6 +196,9 @@ test-ci-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 test/e2e/test_offline_inputs.py
 	PYTHONDONTWRITEBYTECODE=1 python3 workbench/test_workbench.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/hosted/test-workbench-security.py
+	PYTHONDONTWRITEBYTECODE=1 python3 ci/hosted/test-cache-scope.py
+	PYTHONDONTWRITEBYTECODE=1 python3 ci/hosted/test-cache-coverage.py
+	PYTHONDONTWRITEBYTECODE=1 python3 ci/hosted/test-workbench-216-validation.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/e2e/platform/lib/test_failure_diagnostics.py
 	KUASAR_RUNTIME_READER="$${KUASAR_RUNTIME_READER:-$(ORG)/guest-runtime/scripts/release-runtime-payloads.py}" \
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py

@@ -220,6 +220,11 @@ def cache_scope(args):
     print(result['namespace'])
 
 
+def cache_coverage(args):
+    coverage = module('ci_workbench_cache_coverage', ROOT / 'ci/hosted/cache-coverage.py')
+    print(coverage.digest(coverage.identity(args.name, args.sources, args.arch)))
+
+
 def execute(args):
     root = args.root.resolve()
     receipt = json.loads((root / 'receipt.json').read_text())
@@ -387,6 +392,10 @@ def main():
     begin.add_argument('--output', type=Path)
     key = sub.add_parser('cache-key')
     key.add_argument('--sources', type=Path, default=Path('/src'))
+    coverage = sub.add_parser('cache-coverage')
+    coverage.add_argument('--name', required=True)
+    coverage.add_argument('--sources', type=Path, default=Path('/src'))
+    coverage.add_argument('--arch', required=True, choices=PLATFORMS)
     scope = sub.add_parser('cache-scope')
     scope.add_argument('--sources', required=True, type=Path)
     scope.add_argument('--receipt', required=True, type=Path)
@@ -404,6 +413,7 @@ def main():
     verify.add_argument('--outputs', help='newline-separated private source paths consumed by the host')
     args = parser.parse_args()
     return {'select': select, 'verify-selection': verify_selection, 'start': start, 'cache-key': cache_key, 'cache-scope': cache_scope,
+            'cache-coverage': cache_coverage,
             'exec': execute, 'cleanup': cleanup, 'finish': finish, 'check-outputs': check_outputs}[args.operation](args) or 0
 
 
