@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,7 +27,7 @@ class VerificationContracts(unittest.TestCase):
             root = Path(directory)
             plan = root / "plan"
             plan.mkdir()
-            for name in ("frozen.json", "workbench.json"):
+            for name in ("frozen.json", "workbench.json", "integration-plan.json"):
                 (plan / name).write_text("frozen task fixture")
             record = {"sources": {owner: {"repository": repository, "sha": "a" * 40}
                                    for owner, repository in task.REPOSITORIES.items()}}
@@ -265,6 +266,7 @@ restore_or_build() {
                         self.assertEqual(step["id"], "verification")
                         self.assertEqual(step["with"]["arch"], arch)
                         self.assertEqual(step["with"]["outputs"], "verification")
+                        self.assertEqual(step["with"]["cache-coverage"], "full-manifest")
                         self.assertEqual(step["with"]["cpus"], "2")
                         self.assertEqual(step["with"]["memory-gib"], "8")
                         self.assertNotIn("env", step)
@@ -275,6 +277,178 @@ restore_or_build() {
                         for path in step["with"]["path"].splitlines():
                             self.assertTrue(path.startswith("sources/verification"))
                 self.assertTrue(seen_workbench)
+
+    def test_packaged_integration_keeps_architectures_independent_and_existing_runners(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/workbench-216-validation.yml").read_text())
+        jobs = workflow["jobs"]
+        for lane, arch in (("x86", "x86_64"), ("arm", "aarch64")):
+            self.assertEqual(jobs["helpers-" + lane]["needs"], "prepare")
+            self.assertEqual(jobs["prepare-integration-" + lane]["needs"], ["prepare", "cold-" + lane, "helpers-" + lane])
+            self.assertEqual(jobs["e2e-" + lane]["needs"], ["prepare", "prepare-integration-" + lane])
+            self.assertEqual(jobs["e2e-" + lane]["strategy"]["matrix"]["shard"],
+                             "${{ fromJSON(needs.prepare.outputs." + arch + "_shards) }}")
+            self.assertEqual(jobs["e2e-" + lane]["env"]["TARGET_ARCH"], arch)
+            self.assertNotIn("warm-" + lane, jobs["prepare-integration-" + lane]["needs"])
+            for step in jobs["helpers-" + lane]["steps"]:
+                if step.get("uses", "").endswith("/.github/actions/workbench"):
+                    self.assertEqual(step["with"]["cache"], "false")
+            prepare = json.dumps(jobs["prepare-integration-" + lane])
+            self.assertIn("verify-workbench-216.py packaged-delta", prepare)
+            self.assertIn("prepare-artifacts.py", prepare)
+            self.assertIn("--clean-image", prepare)
+            self.assertNotIn("build-artifacts.py", prepare)
+            self.assertIn("run-artifact-tests.py", json.dumps(jobs["e2e-" + lane]))
+        self.assertIn("run-artifact-performance.py", json.dumps(jobs["performance-x86"]))
+        self.assertIn("artifacts.py shard-results", json.dumps(jobs["validation-results"]))
+        for job in jobs.values():
+            for step in job.get("steps", []):
+                if "run" in step:
+                    subprocess.run(["bash", "-n"], input=step["run"], text=True, check=True)
+                if "actions/upload-artifact@" in step.get("uses", ""):
+                    self.assertNotIn("always", step.get("if", "success()"))
+
+
+class PackagedInputContracts(unittest.TestCase):
+    """Real tar/ELF/EROFS composition fixtures; no product compilation or execution."""
+
+    ARCH = "x86_64"
+
+    @classmethod
+    def setUpClass(cls):
+        cls.fixtures = task.module("task216_existing_archive_fixtures", ROOT / "ci/integration/test-artifacts.py")
+        cls.fixtures.ArtifactContracts.setUpClass()
+
+    def setUp(self):
+        base = self.fixtures.ArtifactContracts()
+        base.setUp()
+        self.addCleanup(base.doCleanups)
+        base.workbench_stage()
+        base.plan["baseline"].update(repository="kuasar-sandbox/kuasar-sandbox", staged=False)
+        self.base, self.root = base, base.root
+        self.arch, self.image = self.ARCH, "sha256:" + "1" * 64
+        self.record = {"task": "kuasar-sandbox/kuasar-sandbox#216", "framework_sha": "a" * 40,
+                       "run_id": "123", "version": "v0.0.0-preview.20261009.123", "admission": None,
+                       "sources": {owner: {"repository": repository, "sha": "d" * 40}
+                                   for owner, repository in task.REPOSITORIES.items()}}
+        self.record["test_revisions"] = self.record["sources"]
+        resolver = task.module("task216_fixture_resolver", ROOT / "ci/integration/resolve-artifacts.py")
+        cases = self.fixtures.WORKBENCH_CASES | {"guest-runtime": ["image.flatten.sh"]}
+        with patch.object(resolver, "baseline", return_value=base.plan["baseline"]) as baseline, \
+                patch.object(resolver, "case_files", return_value=cases), \
+                patch.object(task, "module", return_value=resolver):
+            self.plan = task.integration_plan(self.record)
+        baseline.assert_called_once_with("a" * 40, "main")
+        self.plan_directory = self.root / "plan"
+        self.plan_directory.mkdir()
+        task.write(self.plan_directory / "integration-plan.json", self.plan)
+        task.write(self.plan_directory / "workbench.json", {"architectures": {self.arch: {"image_id": self.image}}})
+        self.record["workbench_sha256"] = task.artifacts.digest(self.plan_directory / "workbench.json")
+        self.record["integration_plan_sha256"] = task.artifacts.digest(self.plan_directory / "integration-plan.json")
+        task.write(self.plan_directory / "frozen.json", self.record)
+        self.frozen_digest = task.artifacts.digest(self.plan_directory / "frozen.json")
+        # The helper/test data uses the existing fixture's owned overlay layout.
+        base.plan = self.plan
+        helper = base.delta(self.arch)
+        shutil.rmtree(helper / "bin")
+        (helper / "outputs.json").unlink()
+        self.helpers = self.root / "helpers"
+        self.helpers.mkdir()
+        helper.rename(self.helpers / "integration-helpers")
+        helper = self.helpers / "integration-helpers"
+        metadata = base.metadata
+        for name, owner in task.artifacts.planned_helpers(self.plan["lanes"][self.arch]["selection"]).items():
+            binary = helper / "helpers" / name
+            binary.parent.mkdir(exist_ok=True)
+            binary.write_bytes(self.fixtures.elf(self.arch, "pinned helper " + name))
+            binary.chmod(0o755)
+            metadata["helpers"][name] = {"sha256": task.artifacts.digest(binary),
+                                         "source_sha": self.plan["framework_sha"] if owner == "framework"
+                                         else self.plan["test_revisions"][owner]["sha"]}
+        metadata.update(frozen_sha256=self.frozen_digest, image_id=self.image)
+        task.write(helper / "helpers.json", metadata)
+        self.packages = self.root / "cold"
+        files = {name: self.fixtures.elf(self.arch, "task package " + name) for name in task.artifacts.PRODUCTS}
+        files["vmlinux"] = self.fixtures.kernel(self.arch)
+        runtime = self.root / "candidate-runtime"
+        runtime.mkdir()
+        files["sandbox-runtime.bundle"] = self.fixtures.runtime(runtime, self.arch, files)
+        self.cold = {"conclusion": "success", "phase": "cold", "arch": self.arch, "image_id": self.image,
+                     "frozen_sha256": self.frozen_digest,
+                     "products": {name: {"sha256": hashlib.sha256(data).hexdigest()} for name, data in files.items()},
+                     "packages": {}}
+        self.cold["products"]["embedded/envd"] = {"sha256": hashlib.sha256(self.fixtures.elf(self.arch, "envd")).hexdigest()}
+        for unit in task.UNITS:
+            assets = self.packages / "packages" / unit / "assets"
+            assets.mkdir(parents=True)
+            version = (unit + "-" if unit in ("runtime", "vmlinux") else "") + self.record["version"]
+            name = task.artifacts.archive_name(unit, version, self.arch)
+            self.fixtures.archive(assets / name, {"bin/" + product: data for product, data in files.items()
+                                                  if task.artifacts.PRODUCTS[product] == unit})
+            self.cold["packages"][unit] = task.artifacts.tree_files(assets)
+        task.write(self.packages / "result.json", self.cold)
+
+    def delta(self, name="delta"):
+        args = SimpleNamespace(frozen=self.plan_directory / "frozen.json", arch=self.arch,
+                               packages=self.packages, helpers=self.helpers, output=self.root / name)
+        real_run = subprocess.run
+
+        def only_runtime_reader(command, **kwargs):
+            self.assertIn(command[0], ("python3", sys.executable))
+            self.assertEqual(command[1], os.environ["KUASAR_RUNTIME_READER"])
+            return real_run(command, **kwargs)
+
+        with patch.object(task, "check_framework"), patch.object(task.subprocess, "run", side_effect=only_runtime_reader):
+            task.packaged_delta(args)
+        return args.output
+
+    def test_exact_six_packages_feed_existing_compose_without_product_builds(self):
+        self.assertEqual(self.plan["baseline"]["delivery"], "workbench-v1")
+        self.assertEqual(self.plan["baseline"]["version"], "release-v1.2.3")
+        self.assertNotEqual(self.plan["baseline"]["version"], "release-" + self.record["version"])
+        delta = self.delta()
+        metadata = json.loads((delta / "outputs.json").read_text())
+        self.assertEqual(set(metadata["build_context"]["task"]["package_origins"]), set(task.UNITS))
+        provenance = task.artifacts.compose(self.plan, self.arch, self.base.assets, delta, self.root / "prepared" / self.arch)
+        self.assertEqual(set(provenance["products"]), set(task.artifacts.PRODUCTS))
+        for name, product in provenance["products"].items():
+            self.assertEqual(product["origin"], "candidate")
+            self.assertEqual(product["sha256"], self.cold["products"][name]["sha256"])
+        self.assertEqual(provenance["embedded"]["envd"], self.cold["products"]["embedded/envd"]["sha256"])
+        self.assertEqual(self.plan["lanes"]["x86_64"]["performance"], ["working-set-smoke"])
+        self.assertEqual(self.plan["lanes"]["aarch64"]["performance"], [])
+
+    def test_changed_package_or_declared_product_or_envd_is_refused(self):
+        first = next((self.packages / "packages/accelerator/assets").iterdir())
+        original = first.read_bytes()
+        first.write_bytes(original + b"corrupted")
+        with self.assertRaisesRegex(ValueError, "validated package bytes changed"):
+            self.delta("corrupt-archive")
+        first.write_bytes(original)
+        for name, message in (("manifest-ctl", "packaged product differs"), ("embedded/envd", "embedded envd differs")):
+            with self.subTest(name=name):
+                original_digest = self.cold["products"][name]["sha256"]
+                self.cold["products"][name]["sha256"] = "0" * 64
+                task.write(self.packages / "result.json", self.cold)
+                with self.assertRaisesRegex(ValueError, message):
+                    self.delta(name.replace("/", "-"))
+                self.cold["products"][name]["sha256"] = original_digest
+        task.write(self.packages / "result.json", self.cold)
+
+    def test_helper_revision_or_frozen_plan_mismatch_is_refused(self):
+        path = self.helpers / "integration-helpers/helpers.json"
+        helper = json.loads(path.read_text())
+        name = next(iter(helper["helpers"]))
+        helper["helpers"][name]["source_sha"] = "e" * 40
+        task.write(path, helper)
+        with self.assertRaisesRegex(ValueError, "compiled helper identity changed"):
+            self.delta("helper-mismatch")
+        (self.plan_directory / "integration-plan.json").write_text("{}")
+        with self.assertRaisesRegex(ValueError, "frozen full integration plan changed"):
+            self.delta("plan-mismatch")
+
+
+class ArmPackagedInputContracts(PackagedInputContracts):
+    ARCH = "aarch64"
 
 
 if __name__ == "__main__":
