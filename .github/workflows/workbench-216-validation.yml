@@ -79,6 +79,73 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  source-checks:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - name: Fetch the frozen full test sources without a compiler
+        run: |
+          python3 -B framework/ci/integration/run-source-checks.py \
+            --plan plan/integration-plan.json --sources source-checks \
+            --output "$RUNNER_TEMP/source-materialize.json" --materialize-only
+          cp plan/integration-plan.json source-checks/.source-plan.json
+      - name: Run the complete required source gate in Workbench system mode
+        run: |
+          python3 -B framework/ci/hosted/workbench.py start --mode system \
+            --selection plan/workbench.json --sources source-checks \
+            --root "$RUNNER_TEMP/source-system" --arch x86_64 --cpus 2 --memory-gib 8
+          source_script=$(cat <<'WORKBENCH_SOURCE'
+          # Match the system executor owner on this private container copy.
+          chown -hR 0:0 /src
+          sudo -n true
+          # These are private instance resources. Old pinned fixtures may skip
+          # on unavailable capabilities; this required gate must fail instead.
+          trap 'ip link del dev ks-source-probe 2>/dev/null || true; ip netns del ks-source-probe 2>/dev/null || true' EXIT
+          ip netns add ks-source-probe
+          ip netns del ks-source-probe
+          ip tuntap add dev ks-source-probe mode tap
+          ip link del dev ks-source-probe
+          trap - EXIT
+          source /inputs/release/ci/hosted/bootstrap.sh
+          export KUASAR_HOSTED_ROOT=/build/source-readers
+          export GITHUB_ENV=/build/tmp/source-readers-env GITHUB_PATH=/build/tmp/source-readers-path
+          mkdir -p "$KUASAR_HOSTED_ROOT/bin"
+          install_readers
+          install_runtime_reader
+          export PATH="$KUASAR_HOSTED_ROOT/bin:$PATH" KUASAR_CI_DIR=/output/source-metrics
+          python3 -B /inputs/release/ci/integration/run-source-checks.py \
+            --plan /src/.source-plan.json --sources /src --output /output/source-result.json --materialized
+          WORKBENCH_SOURCE
+          )
+          python3 -B framework/ci/hosted/workbench.py exec --root "$RUNNER_TEMP/source-system" -- \
+            bash -euo pipefail -c "$source_script"
+      - name: Stop the owned system instance and retain safe source evidence
+        if: always()
+        run: |
+          python3 -B framework/ci/hosted/workbench.py finish --root "$RUNNER_TEMP/source-system" \
+            --evidence "$RUNNER_TEMP/source-system-evidence"
+      - name: Upload source checks and system diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-source-result-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/source-system-evidence
+            ${{ runner.temp }}/source-materialize.json
+          if-no-files-found: error
+          retention-days: 7
+
   cold-x86:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
     needs: prepare
@@ -902,11 +969,11 @@ jobs:
 
   validation-results:
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
-    needs: [prepare, cold-x86, cold-arm, warm-x86, warm-arm, helpers-x86, helpers-arm, prepare-integration-x86, prepare-integration-arm, e2e-x86, e2e-arm, performance-x86, legacy-x86, legacy-arm, prepare-legacy-x86, prepare-legacy-arm, e2e-legacy-x86, e2e-legacy-arm, performance-legacy-x86]
+    needs: [prepare, source-checks, cold-x86, cold-arm, warm-x86, warm-arm, helpers-x86, helpers-arm, prepare-integration-x86, prepare-integration-arm, e2e-x86, e2e-arm, performance-x86, legacy-x86, legacy-arm, prepare-legacy-x86, prepare-legacy-arm, e2e-legacy-x86, e2e-legacy-arm, performance-legacy-x86]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Require every declared build, cache, package and native integration job
+      - name: Require every declared source, build, cache, package and native integration job
         env:
           TASK_JOB_RESULTS: ${{ toJSON(needs) }}
         run: |
@@ -926,6 +993,64 @@ jobs:
         with:
           name: workbench-216-plan-${{ github.run_id }}
           path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-source-result-${{ github.run_id }}
+          path: source
+      - name: Verify complete source results against the same frozen plan and image
+        run: |
+          python3 -B - <<'PYTHON'
+          import importlib.util, json
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('task216', 'framework/ci/hosted/verify-workbench-216.py')
+          task = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(task)
+          frozen = task.frozen(Path('plan/frozen.json'))
+          plan = json.loads(Path('plan/integration-plan.json').read_text())
+          selection = json.loads(Path('plan/workbench.json').read_text())
+          source = task.module('source_checks', task.ROOT / 'ci/integration/run-source-checks.py')
+          expected = source.source_records(plan)[1]
+          for owner, row in expected.items():
+              key = 'kuasar-sandbox' if owner == 'platform' else owner
+              task.require(all(row[field] == frozen['test_revisions'][key][field] for field in ('repository', 'sha')),
+                           'source plan differs from frozen full task test inputs')
+          framework = frozen['framework_sha']
+          task.require(plan['framework_sha'] == selection['framework_sha'] == framework, 'source framework mismatch')
+          image = selection['architectures']['x86_64']['image_id']
+          materialize = json.loads(Path('source/source-materialize.json').read_text())
+          result = json.loads(Path('source/source-system-evidence/output/source-result.json').read_text())
+          receipt = json.loads(Path('source/source-system-evidence/receipt.json').read_text())
+          for record, phase in ((materialize, 'materialize'), (result, 'all')):
+              task.require(record['plan_id'] == task.artifacts.identity(plan)
+                           and record['framework_sha'] == framework and record['test_revisions'] == plan['test_revisions']
+                           and record['sources'] == expected, 'source result input identity mismatch')
+              task.require(record['conclusion'] == 'success' and record['exit_code'] == 0 and record['phase'] == phase,
+                           'source gate did not complete successfully')
+              task.require(record['actions'] and all(row['exit_code'] == 0 for row in record['actions']),
+                           'source action failed or did not complete')
+          task.require([(row['name'], row['repository'], row['sha']) for row in materialize['actions']]
+                       == [('checkout:' + owner, row['repository'], row['sha']) for owner, row in expected.items()],
+                       'source materialization is incomplete')
+          task.require(result['arch'] == 'x86_64' and result['workbench'] == {'framework_sha': framework, 'image_id': image},
+                       'source result used a different Workbench')
+          task.require([(row['name'], row['command'], row['directory'], row['exit_code']) for row in result['checks']]
+                       == [(name, command, str(directory), 0) for name, command, directory in source.checks_for(plan, Path('/src'))],
+                       'required source checks were omitted, changed or failed')
+          identities = [row for row in result['actions'] if row['name'].startswith('source-identity:')]
+          task.require([(row['name'], row['expected_sha'], row['actual_sha']) for row in identities]
+                       == [('source-identity:' + owner, row['sha'], row['sha']) for owner, row in expected.items()],
+                       'executed test source identities differ from the frozen plan')
+          task.require(receipt['framework_sha'] == framework and receipt['selection'] == selection
+                       and receipt['image']['image_id'] == image and receipt['arch'] == 'x86_64' and receipt['mode'] == 'system',
+                       'source executor receipt identity mismatch')
+          task.require(receipt['conclusion'] == 'success' and receipt.get('cleanup_exit_code') == 0
+                       and receipt.get('delete_output_exit_code') == 0 and not receipt.get('diagnostics_error'),
+                       'source executor or owned resource cleanup failed')
+          task.require(len(receipt['commands']) == 1 and receipt['commands'][0]['exit_code'] == 0
+                       and receipt['commands'][0]['argv'][:4] == ['bash', '-euo', 'pipefail', '-c'],
+                       'source executor command failed or its completion was not recorded')
+          task.write(Path('source-validation.json'), result)
+          PYTHON
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: workbench-216-shard-x86_64-*-${{ github.run_id }}
@@ -968,5 +1093,7 @@ jobs:
             validation.json
             legacy-results
             legacy-validation.json
+            source
+            source-validation.json
           if-no-files-found: error
           retention-days: 7
