@@ -17,11 +17,14 @@ import shutil
 import subprocess
 import sys
 import tarfile
+import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "ci/integration"))
 import artifacts
+import build_demo_wheels
+import build_helpers
 import transport
 
 REPOSITORIES = {owner: "kuasar-sandbox/" + owner for owner in (
@@ -31,6 +34,14 @@ UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vm
 VALIDATORS = ("accelerator", "sandboxer", "orchestrator")
 NATIVE_PRODUCTS = {"vmlinux", "mkfs.erofs", "cloud-hypervisor"}
 require = artifacts.require
+
+
+def module(name, path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    loaded = importlib.util.module_from_spec(spec)
+    sys.modules[name] = loaded
+    spec.loader.exec_module(loaded)
+    return loaded
 
 
 def output(command, **kwargs):
@@ -106,6 +117,37 @@ def admit_candidates(request):
         require(isinstance(branches, list) and branches, "primary/companion needs a branch in its own repository")
 
 
+def integration_plan(record):
+    resolver = module("task216_resolver", ROOT / "ci/integration/resolve-artifacts.py")
+    # This remains a real, validated published baseline. All products will be
+    # replaced by the task's exact package bytes through the existing source
+    # overlay contract; the task version never masquerades as a release.
+    baseline = resolver.baseline(record["framework_sha"], "main")
+    candidates = ([record["admission"]["primary"], *record["admission"]["companions"]]
+                  if record["admission"] else [])
+    companions = {row["repository"] for row in candidates[1:]}
+    sources = {}
+    for owner in artifacts.OWNERS:
+        row = record["sources"]["kuasar-sandbox" if owner == "platform" else owner]
+        sources[owner] = {**row, "role": "companion" if row["repository"] in companions else "candidate"}
+    cases = resolver.case_files(sources)
+    products = sorted(artifacts.PRODUCTS)
+    kernel_sha = sources["guest-runtime"]["sha"]
+    plan = {"schema": 2, "mode": "source", "framework_sha": record["framework_sha"], "baseline": baseline,
+            "candidate_records": candidates, "owners": ["platform"], "changes": {}, "sources": sources,
+            "kernel_sha": kernel_sha, "test_revisions": sources, "test_overlays": sorted(artifacts.OWNERS),
+            "case_files": cases, "product_sources": resolver.product_source_map(products, sources, kernel_sha),
+            "embedded_sources": {"envd": {REPOSITORIES["guest-runtime"]: kernel_sha}},
+            "task": {"issue": record["task"], "run_id": record["run_id"], "package_version": record["version"],
+                     "admission": "main-dispatch exact main heads or existing admitted PR merge records"},
+            "lanes": {arch: {"products": products, "embedded_products": ["envd"],
+                             "performance": ["working-set-smoke"] if arch == "x86_64" else [],
+                             "selection": artifacts.suite_selection(["platform"], arch, cases)}
+                      for arch in artifacts.ARCHES}}
+    artifacts.check_plan(plan)
+    return plan
+
+
 def freeze(args):
     require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORIES["kuasar-sandbox"]
             and os.environ.get("GITHUB_REF") == "refs/heads/main"
@@ -132,12 +174,20 @@ def freeze(args):
     record = {"task": "kuasar-sandbox/kuasar-sandbox#216", "framework_sha": args.framework_sha,
               "run_id": run_id, "sources": sources, "test_revisions": sources,
               "admission": request, "version": version,
-              "coverage": "full manifest build; six cold/warm packages; source/E2E gates recorded separately"}
+              "coverage": "full manifest build; six cold/warm packages; exact packaged-product E2E/performance; source gates recorded separately"}
     args.output.mkdir(parents=True)
+    plan = integration_plan(record)
+    write(args.output / "integration-plan.json", plan)
+    record["integration_plan_sha256"] = artifacts.digest(args.output / "integration-plan.json")
     subprocess.run([sys.executable, "-B", ROOT / "ci/hosted/workbench.py", "select",
-                    "--framework-sha", args.framework_sha, "--output", args.output / "workbench.json"], check=True)
+                    "--framework-sha", args.framework_sha, "--plan", args.output / "integration-plan.json",
+                    "--output", args.output / "workbench.json"], check=True)
     record["workbench_sha256"] = artifacts.digest(args.output / "workbench.json")
     write(args.output / "frozen.json", record)
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+            for arch, lane in plan["lanes"].items():
+                stream.write(arch + "_shards=" + json.dumps(list(artifacts.shards(lane["selection"]))) + "\n")
 
 
 def frozen(path):
@@ -151,6 +201,9 @@ def frozen(path):
         sha(row["sha"])
     require(re.fullmatch(r"v0\.0\.0-preview\.[0-9]{8}\.[1-9][0-9]*", record["version"]), "foreign task version")
     require(artifacts.digest(path.with_name("workbench.json")) == record["workbench_sha256"], "frozen image selection changed")
+    require(artifacts.digest(path.with_name("integration-plan.json")) == record["integration_plan_sha256"],
+            "frozen full integration plan changed")
+    artifacts.check_plan(json.loads(path.with_name("integration-plan.json").read_text()))
     return record
 
 
@@ -172,7 +225,7 @@ def fetch(args):
             "workbench-cache-scope-" + os.environ["GITHUB_RUN_ID"] + "-" + source_hash + ".json")
         subprocess.run([sys.executable, "-B", ROOT / "ci/hosted/workbench.py", "cache-scope",
                         "--sources", args.sources, "--receipt", receipt], check=True)
-    for name in ("frozen.json", "workbench.json"):
+    for name in ("frozen.json", "workbench.json", "integration-plan.json"):
         shutil.copy2(args.frozen.with_name(name), args.sources / name)
 
 
@@ -365,7 +418,7 @@ def carry_paths(sources, arch, rows):
         f"accelerator/build/{arch}/cache-ctl.map", *[f"task-tools/{owner}/release-archive-validator" for owner in VALIDATORS]]
 
 
-def build(args):
+def build_inputs(args):
     sources = args.sources.resolve()
     require(sources == Path("/src") and os.getuid() != 0, "acceptance must run as ordinary UID in Workbench /src")
     arch = args.arch
@@ -376,7 +429,16 @@ def build(args):
             and os.environ.get("KUASAR_WORKBENCH_FRAMEWORK_SHA") == record["framework_sha"], "Workbench execution identity differs")
     for owner, row in record["sources"].items():
         require(output(["git", "-C", sources / owner, "rev-parse", "HEAD"]) == row["sha"], "source changed before build")
+        subprocess.run(["git", "-C", sources / owner, "diff", "--no-ext-diff", "--exit-code", "HEAD", "--"], check=True)
+        require(not output(["git", "-C", sources / owner, "ls-files", "--others", "--exclude-standard"]),
+                "source contains untracked inputs before build: " + owner)
+    return sources, arch, record, image
+
+
+def build(args):
+    sources, arch, record, image = build_inputs(args)
     rows = manifest(sources)
+    require({name for _, name in rows} == set(artifacts.PRODUCTS), "current product manifest differs from the existing integration contract")
     evidence = Evidence(sources / "verification", {"phase": args.phase, "arch": arch, "uid": os.getuid(),
                         "frozen_sha256": artifacts.digest(sources / "frozen.json"), "inputs": record,
                         "image_id": image, "manifest": rows, "started_ns": time.time_ns()},
@@ -463,6 +525,140 @@ def build(args):
             evidence.export_success()
 
 
+def helpers(args):
+    sources, arch, record, image = build_inputs(args)
+    plan = json.loads((sources / "integration-plan.json").read_text())
+    evidence = Evidence(sources / "verification", {"phase": "helpers", "arch": arch, "uid": os.getuid(),
+                        "frozen_sha256": artifacts.digest(sources / "frozen.json"), "image_id": image,
+                        "started_ns": time.time_ns()}, diagnostics=Path("/output/verification"))
+    try:
+        destination = evidence.directory / "integration-helpers"
+        destination.mkdir()
+        environment = {**os.environ, "GOWORK": str(sources / "go.work")}
+        evidence.run("helper-workspace", ["go", "work", "init", *("./" + owner for owner in REPOSITORIES
+                     if owner != "kuasar-sandbox")], cwd=sources, env={**environment, "GOWORK": "off"})
+        for owner in plan["test_overlays"]:
+            pinned = sources / ("kuasar-sandbox" if owner == "platform" else owner)
+            target = destination / artifacts.test_overlay_root(owner)
+            if owner == "platform":
+                source = pinned / "test"
+                for name in artifacts.tree_files(source):
+                    if artifacts.platform_test_path(name):
+                        path = target / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(source / name, path)
+            else:
+                shutil.copytree(pinned / "test/e2e", target)
+        selected = artifacts.planned_helpers(plan["lanes"][arch]["selection"])
+        started = time.monotonic()
+        if "basic.demo.sh" in plan["lanes"][arch]["selection"]["cases"]:
+            demo = destination / artifacts.test_overlay_root("platform") / "demo"
+            build_demo_wheels.build(demo, arch, demo / "wheels" / arch)
+        build_helpers.build(sources, arch, destination / "helpers", selected, environment)
+        evidence.record["helper_build_seconds"] = time.monotonic() - started
+        for relative in artifacts.tree_files(destination):
+            path = destination / relative
+            path.chmod(0o755 if path.stat().st_mode & 0o111 else 0o644)
+        metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "test_revisions": plan["test_revisions"],
+                    "frozen_sha256": evidence.record["frozen_sha256"], "image_id": image,
+                    "tests": {owner: artifacts.tree_files(destination / artifacts.test_overlay_root(owner))
+                              for owner in plan["test_overlays"]},
+                    "helpers": {name: {"sha256": artifacts.digest(destination / "helpers" / name),
+                                       "source_sha": plan["framework_sha"] if owner == "framework"
+                                       else plan["test_revisions"][owner]["sha"]} for name, owner in selected.items()}}
+        write(destination / "helpers.json", metadata)
+        evidence.record["conclusion"] = "success"
+    except BaseException as error:
+        evidence.record.update(conclusion="failure", error=str(error))
+        raise
+    finally:
+        evidence.record["elapsed_seconds"] = (time.time_ns() - evidence.record["started_ns"]) / 1e9
+        evidence.save()
+        if evidence.record["conclusion"] == "success":
+            evidence.export_success()
+
+
+def packaged_delta(args):
+    """Transport validated package bytes to the existing source-mode overlay."""
+    record = frozen(args.frozen)
+    plan = json.loads(args.frozen.with_name("integration-plan.json").read_text())
+    arch = args.arch
+    require(not args.output.exists(), "packaged delta requires a fresh directory")
+    cold = json.loads((args.packages / "result.json").read_text())
+    selection = json.loads(args.frozen.with_name("workbench.json").read_text())
+    image = selection["architectures"][arch]["image_id"]
+    input_digest = artifacts.digest(args.frozen)
+    require(cold["conclusion"] == "success" and cold["phase"] == "cold" and cold["arch"] == arch
+            and cold["image_id"] == image and cold["frozen_sha256"] == input_digest,
+            "packages belong to another frozen input set or did not pass")
+    require(set(cold["products"]) == set(artifacts.PRODUCTS) | {"embedded/envd"}
+            and set(cold["packages"]) == set(UNITS), "incomplete cold products or release units")
+    helper_root = args.helpers / "integration-helpers"
+    helper = json.loads((helper_root / "helpers.json").read_text())
+    require(helper["plan_id"] == artifacts.identity(plan) and helper["arch"] == arch
+            and helper["test_revisions"] == plan["test_revisions"] and helper["frozen_sha256"] == input_digest
+            and helper["image_id"] == image, "helpers belong to another exact test/image set")
+    expected_files = {"helpers.json"}
+    require(set(helper["tests"]) == set(plan["test_overlays"])
+            and set(helper["helpers"]) == set(artifacts.planned_helpers(plan["lanes"][arch]["selection"])),
+            "helper/test ownership differs from the complete plan")
+    for owner, values in helper["tests"].items():
+        directory = artifacts.test_overlay_root(owner)
+        require(artifacts.tree_files(helper_root / directory) == values, "helper test overlay changed")
+        expected_files.update(directory + "/" + name for name in values)
+    for name, owner in artifacts.planned_helpers(plan["lanes"][arch]["selection"]).items():
+        revision = plan["framework_sha"] if owner == "framework" else plan["test_revisions"][owner]["sha"]
+        require(helper["helpers"][name] == {"sha256": artifacts.digest(helper_root / "helpers" / name),
+                                           "source_sha": revision}, "compiled helper identity changed")
+        artifacts.check_architecture(helper_root / "helpers" / name, arch)
+        expected_files.add("helpers/" + name)
+    require(set(artifacts.tree_files(helper_root)) == expected_files, "undeclared helper output")
+    archive_records = {}
+    with tempfile.TemporaryDirectory(prefix="task216-packages-") as temporary:
+        unpacked = Path(temporary) / "unpacked"
+        unpacked.mkdir()
+        ownership = {}
+        for unit in UNITS:
+            assets = args.packages / "packages" / unit / "assets"
+            require(artifacts.tree_files(assets) == cold["packages"][unit], "validated package bytes changed: " + unit)
+            version = (unit + "-" if unit in ("runtime", "vmlinux") else "") + record["version"]
+            name = artifacts.archive_name(unit, version, arch)
+            archive = assets / name
+            archive_records[unit] = {"archive": name, "sha256": artifacts.digest(archive),
+                                     "size": archive.stat().st_size}
+            artifacts.unpack(archive, unpacked, unit, ownership)
+        for name in artifacts.PRODUCTS:
+            path = unpacked / "bin" / name
+            require(artifacts.digest(path) == cold["products"][name]["sha256"], "packaged product differs from cold build: " + name)
+            if name != "sandbox-runtime.bundle":
+                artifacts.check_architecture(path, arch, kernel=name == "vmlinux")
+        payloads = artifacts.runtime_payloads(unpacked, arch, cold["products"]["sandbox-init"]["sha256"],
+                                             cold["products"]["embedded/envd"]["sha256"])
+        embedded = Path(temporary) / "embedded"
+        subprocess.run([sys.executable, os.environ["KUASAR_RUNTIME_READER"], unpacked / "bin/sandbox-runtime.bundle",
+                        shutil.which("fsck.erofs"), shutil.which("dump.erofs"), embedded], check=True)
+        require(artifacts.digest(embedded / "envd") == payloads["envd"], "extracted packaged envd changed")
+        args.output.mkdir(parents=True)
+        for directory in ("test", "helpers"):
+            shutil.copytree(helper_root / directory, args.output / directory)
+        (args.output / "bin").mkdir()
+        for name in artifacts.PRODUCTS:
+            shutil.copy2(unpacked / "bin" / name, args.output / "bin" / name)
+        (args.output / "embedded").mkdir()
+        shutil.copy2(embedded / "envd", args.output / "embedded/envd")
+        (args.output / "embedded/envd").chmod(0o755)
+    metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "test_revisions": plan["test_revisions"],
+                "products": {name: {"sha256": cold["products"][name]["sha256"], "sources": plan["product_sources"][name]}
+                             for name in artifacts.PRODUCTS},
+                "embedded": {"envd": {"sha256": payloads["envd"], "sources": plan["embedded_sources"]["envd"]}},
+                "tests": helper["tests"], "helpers": helper["helpers"],
+                "build_context": {"workbench": {"image_id": image, "framework_sha": plan["framework_sha"]},
+                                  "task": {"cold_result_sha256": artifacts.digest(args.packages / "result.json"),
+                                           "frozen_sha256": input_digest, "package_origins": archive_records,
+                                           "materials": "task package archives retain their original source/license materials; composition baseline materials identify only the published baseline"}}}
+    write(args.output / "outputs.json", metadata)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -476,8 +672,18 @@ def main():
     verify.add_argument("--phase", choices=("cold", "warm"), required=True)
     verify.add_argument("--arch", choices=artifacts.ARCHES, required=True)
     verify.add_argument("--sources", type=Path, default=Path("/src"))
+    helper = commands.add_parser("helpers")
+    helper.add_argument("--arch", choices=artifacts.ARCHES, required=True)
+    helper.add_argument("--sources", type=Path, default=Path("/src"))
+    delta = commands.add_parser("packaged-delta")
+    delta.add_argument("--frozen", type=Path, required=True)
+    delta.add_argument("--arch", choices=artifacts.ARCHES, required=True)
+    delta.add_argument("--packages", type=Path, required=True)
+    delta.add_argument("--helpers", type=Path, required=True)
+    delta.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    {"freeze": freeze, "fetch": fetch, "build": build}[args.command](args)
+    {"freeze": freeze, "fetch": fetch, "build": build, "helpers": helpers,
+     "packaged-delta": packaged_delta}[args.command](args)
 
 
 if __name__ == "__main__":

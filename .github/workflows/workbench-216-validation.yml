@@ -1,5 +1,5 @@
 name: Workbench 216 Full Validation
-run-name: Workbench 216 cold and fresh-job packaging @${{ github.sha }}
+run-name: Workbench 216 build, package, restore and exact-product gates @${{ github.sha }}
 
 # Temporary acceptance entry, removed with the same coordinated delivery.
 # It never creates releases, tags, publisher tokens or production assets.
@@ -48,6 +48,9 @@ jobs:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    outputs:
+      x86_64_shards: ${{ steps.freeze.outputs.x86_64_shards }}
+      aarch64_shards: ${{ steps.freeze.outputs.aarch64_shards }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -55,6 +58,7 @@ jobs:
           path: framework
           persist-credentials: false
       - name: Admit exact sources and select both native images once
+        id: freeze
         env:
           GH_TOKEN: ${{ github.token }}
           TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
@@ -101,6 +105,7 @@ jobs:
           selection: plan/workbench.json
           sources: sources
           outputs: verification
+          cache-coverage: full-manifest
           arch: x86_64
           cpus: '2'
           memory-gib: '8'
@@ -159,6 +164,7 @@ jobs:
           selection: plan/workbench.json
           sources: sources
           outputs: verification
+          cache-coverage: full-manifest
           arch: aarch64
           cpus: '2'
           memory-gib: '8'
@@ -223,6 +229,7 @@ jobs:
           selection: plan/workbench.json
           sources: sources
           outputs: verification
+          cache-coverage: full-manifest
           arch: x86_64
           cpus: '2'
           memory-gib: '8'
@@ -270,6 +277,7 @@ jobs:
           selection: plan/workbench.json
           sources: sources
           outputs: verification
+          cache-coverage: full-manifest
           arch: aarch64
           cpus: '2'
           memory-gib: '8'
@@ -281,5 +289,518 @@ jobs:
           name: workbench-216-warm-aarch64-${{ github.run_id }}
           path: sources/verification
           compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  helpers-x86:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - name: Materialize the independently pinned helper and test sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
+      - name: Compile only exact test helpers and prepare the pinned test overlays
+        id: verification
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: sources
+          outputs: verification
+          arch: x86_64
+          cpus: '2'
+          memory-gib: '8'
+          # A parallel helper job must not occupy the full build's immutable cache key.
+          cache: 'false'
+          run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py helpers --arch x86_64 2>&1 | tee /output/helpers-build.log
+      - name: Build trusted native readers with the existing pinned recipe
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: reader-build
+          outputs: |
+            reader-tools/bin
+            reader-tools/erofs-readers.COPYING
+          arch: x86_64
+          cpus: '2'
+          memory-gib: '8'
+          cache: 'false'
+          run: |
+            source /inputs/release/ci/hosted/bootstrap.sh
+            export KUASAR_HOSTED_ROOT=/src/reader-tools
+            export GITHUB_ENV=/build/tmp/reader-env GITHUB_PATH=/build/tmp/reader-path
+            mkdir -p "$KUASAR_HOSTED_ROOT/bin"
+            install_readers
+            install_runtime_reader
+      - name: Transport only checked helpers and readers after both instances stop
+        run: |
+          tar -cf helper-inputs.tar -C sources/verification integration-helpers
+          mkdir readers
+          cp reader-build/reader-tools/bin/{mkfs.erofs,fsck.erofs,dump.erofs,runtime-payloads.py} readers/
+          cp reader-build/reader-tools/erofs-readers.COPYING readers/
+          (cd readers && sha256sum mkfs.erofs fsck.erofs dump.erofs runtime-payloads.py erofs-readers.COPYING > SHA256SUMS)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-helpers-x86_64-${{ github.run_id }}
+          path: helper-inputs.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-readers-x86_64-${{ github.run_id }}
+          path: readers
+          if-no-files-found: error
+          retention-days: 7
+
+  prepare-integration-x86:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: [prepare, cold-x86, helpers-x86]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-cold-x86_64-${{ github.run_id }}
+          path: cold
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-helpers-x86_64-${{ github.run_id }}
+          path: transport
+      - name: Bootstrap compiler-free archive preparation
+        run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-readers-x86_64-${{ github.run_id }}
+          path: readers
+      - name: Select verified native archive readers
+        run: |
+          (cd readers && sha256sum --check SHA256SUMS)
+          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
+          echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
+      - name: Fetch the frozen published baseline for the existing source composition contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash framework/ci/integration/download-baseline.sh plan/integration-plan.json x86_64 assets
+      - name: Read exact validated packages into a full candidate delta without rebuilding products
+        run: |
+          python3 -B framework/ci/integration/transport.py extract transport/helper-inputs.tar helpers
+          /usr/bin/time -o packaged-delta-time.txt -f 'packaged_delta wall_seconds=%e' \
+            python3 -B framework/ci/hosted/verify-workbench-216.py packaged-delta \
+              --frozen plan/frozen.json --arch x86_64 --packages cold --helpers helpers --output delta
+      - name: Build the existing compiler-free preparation runtime
+        run: |
+          docker build --file framework/ci/hosted/e2e-runtime.Dockerfile \
+            --tag "kuasar-216-prepare:${GITHUB_RUN_ID}-x86_64" framework/ci/hosted
+          image=$(docker image inspect --format '{{.Id}}' "kuasar-216-prepare:${GITHUB_RUN_ID}-x86_64")
+          echo "KUASAR_CLEAN_PREPARE_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Compose and prepare these exact package bytes using the existing public entry
+        run: |
+          /usr/bin/time -o prepare-time.txt -f 'prepare wall_seconds=%e' \
+            python3 -B framework/ci/integration/prepare-artifacts.py \
+              --plan plan/integration-plan.json --arch x86_64 --assets assets --delta delta \
+              --workspace prepared/x86_64 --clean-image "$KUASAR_CLEAN_PREPARE_IMAGE"
+          tar -czf prepared.tar.gz -C prepared x86_64
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-prepared-x86_64-${{ github.run_id }}
+          path: prepared.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-provenance-x86_64-${{ github.run_id }}
+          path: |
+            prepared/x86_64/provenance.json
+            packaged-delta-time.txt
+            prepare-time.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  e2e-x86:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: [prepare, prepare-integration-x86]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.prepare.outputs.x86_64_shards) }}
+    env:
+      TARGET_ARCH: x86_64
+      TEST_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-prepared-x86_64-${{ github.run_id }}
+          path: transport
+      - name: Bootstrap the existing declared native execution profile
+        run: bash framework/ci/hosted/bootstrap.sh --profile artifact-x86
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-readers-x86_64-${{ github.run_id }}
+          path: readers
+      - name: Select verified native archive readers
+        run: |
+          (cd readers && sha256sum --check SHA256SUMS)
+          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
+          echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
+      - name: Prepare the existing compiler-free runtime for the declared shards
+        if: matrix.shard == 'storage' || matrix.shard == 'snapshot' || ('x86_64' == 'aarch64' && matrix.shard == 'image')
+        run: |
+          docker build --file framework/ci/hosted/e2e-runtime.Dockerfile \
+            --tag "kuasar-216-runtime:${GITHUB_RUN_ID}-x86_64-${TEST_SHARD}" framework/ci/hosted
+          image=$(docker image inspect --format '{{.Id}}' "kuasar-216-runtime:${GITHUB_RUN_ID}-x86_64-${TEST_SHARD}")
+          echo "KUASAR_CLEAN_E2E_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Execute the unchanged selected shard against immutable prepared package bytes
+        run: |
+          python3 -B framework/ci/integration/transport.py extract transport/prepared.tar.gz prepared
+          clean=()
+          if [ -n "${KUASAR_CLEAN_E2E_IMAGE:-}" ]; then clean=(--clean-image "$KUASAR_CLEAN_E2E_IMAGE"); fi
+          python3 -B framework/ci/integration/run-artifact-tests.py "${clean[@]}" \
+            --plan plan/integration-plan.json --arch x86_64 --shard "$TEST_SHARD" \
+            --workspace prepared/x86_64 --result "results/$TEST_SHARD.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-shard-x86_64-${{ matrix.shard }}-${{ github.run_id }}
+          path: results/${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  helpers-arm:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - name: Materialize the independently pinned helper and test sources
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
+      - name: Compile only exact test helpers and prepare the pinned test overlays
+        id: verification
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: sources
+          outputs: verification
+          arch: aarch64
+          cpus: '2'
+          memory-gib: '8'
+          # A parallel helper job must not occupy the full build's immutable cache key.
+          cache: 'false'
+          run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py helpers --arch aarch64 2>&1 | tee /output/helpers-build.log
+      - name: Build trusted native readers with the existing pinned recipe
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: reader-build
+          outputs: |
+            reader-tools/bin
+            reader-tools/erofs-readers.COPYING
+          arch: aarch64
+          cpus: '2'
+          memory-gib: '8'
+          cache: 'false'
+          run: |
+            source /inputs/release/ci/hosted/bootstrap.sh
+            export KUASAR_HOSTED_ROOT=/src/reader-tools
+            export GITHUB_ENV=/build/tmp/reader-env GITHUB_PATH=/build/tmp/reader-path
+            mkdir -p "$KUASAR_HOSTED_ROOT/bin"
+            install_readers
+            install_runtime_reader
+      - name: Transport only checked helpers and readers after both instances stop
+        run: |
+          tar -cf helper-inputs.tar -C sources/verification integration-helpers
+          mkdir readers
+          cp reader-build/reader-tools/bin/{mkfs.erofs,fsck.erofs,dump.erofs,runtime-payloads.py} readers/
+          cp reader-build/reader-tools/erofs-readers.COPYING readers/
+          (cd readers && sha256sum mkfs.erofs fsck.erofs dump.erofs runtime-payloads.py erofs-readers.COPYING > SHA256SUMS)
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-helpers-aarch64-${{ github.run_id }}
+          path: helper-inputs.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-readers-aarch64-${{ github.run_id }}
+          path: readers
+          if-no-files-found: error
+          retention-days: 7
+
+  prepare-integration-arm:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: [prepare, cold-arm, helpers-arm]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-cold-aarch64-${{ github.run_id }}
+          path: cold
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-helpers-aarch64-${{ github.run_id }}
+          path: transport
+      - name: Bootstrap compiler-free archive preparation
+        run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-readers-aarch64-${{ github.run_id }}
+          path: readers
+      - name: Select verified native archive readers
+        run: |
+          (cd readers && sha256sum --check SHA256SUMS)
+          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
+          echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
+      - name: Fetch the frozen published baseline for the existing source composition contract
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash framework/ci/integration/download-baseline.sh plan/integration-plan.json aarch64 assets
+      - name: Read exact validated packages into a full candidate delta without rebuilding products
+        run: |
+          python3 -B framework/ci/integration/transport.py extract transport/helper-inputs.tar helpers
+          /usr/bin/time -o packaged-delta-time.txt -f 'packaged_delta wall_seconds=%e' \
+            python3 -B framework/ci/hosted/verify-workbench-216.py packaged-delta \
+              --frozen plan/frozen.json --arch aarch64 --packages cold --helpers helpers --output delta
+      - name: Build the existing compiler-free preparation runtime
+        run: |
+          docker build --file framework/ci/hosted/e2e-runtime.Dockerfile \
+            --tag "kuasar-216-prepare:${GITHUB_RUN_ID}-aarch64" framework/ci/hosted
+          image=$(docker image inspect --format '{{.Id}}' "kuasar-216-prepare:${GITHUB_RUN_ID}-aarch64")
+          echo "KUASAR_CLEAN_PREPARE_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Compose and prepare these exact package bytes using the existing public entry
+        run: |
+          /usr/bin/time -o prepare-time.txt -f 'prepare wall_seconds=%e' \
+            python3 -B framework/ci/integration/prepare-artifacts.py \
+              --plan plan/integration-plan.json --arch aarch64 --assets assets --delta delta \
+              --workspace prepared/aarch64 --clean-image "$KUASAR_CLEAN_PREPARE_IMAGE"
+          tar -czf prepared.tar.gz -C prepared aarch64
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-prepared-aarch64-${{ github.run_id }}
+          path: prepared.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-provenance-aarch64-${{ github.run_id }}
+          path: |
+            prepared/aarch64/provenance.json
+            packaged-delta-time.txt
+            prepare-time.txt
+          if-no-files-found: error
+          retention-days: 7
+
+  e2e-arm:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: [prepare, prepare-integration-arm]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.prepare.outputs.aarch64_shards) }}
+    env:
+      TARGET_ARCH: aarch64
+      TEST_SHARD: ${{ matrix.shard }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-prepared-aarch64-${{ github.run_id }}
+          path: transport
+      - name: Bootstrap the existing declared native execution profile
+        run: bash framework/ci/hosted/bootstrap.sh --profile artifact-arm
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-readers-aarch64-${{ github.run_id }}
+          path: readers
+      - name: Select verified native archive readers
+        run: |
+          (cd readers && sha256sum --check SHA256SUMS)
+          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
+          echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
+      - name: Prepare the existing compiler-free runtime for the declared shards
+        if: matrix.shard == 'storage' || matrix.shard == 'snapshot' || ('aarch64' == 'aarch64' && matrix.shard == 'image')
+        run: |
+          docker build --file framework/ci/hosted/e2e-runtime.Dockerfile \
+            --tag "kuasar-216-runtime:${GITHUB_RUN_ID}-aarch64-${TEST_SHARD}" framework/ci/hosted
+          image=$(docker image inspect --format '{{.Id}}' "kuasar-216-runtime:${GITHUB_RUN_ID}-aarch64-${TEST_SHARD}")
+          echo "KUASAR_CLEAN_E2E_IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Execute the unchanged selected shard against immutable prepared package bytes
+        run: |
+          python3 -B framework/ci/integration/transport.py extract transport/prepared.tar.gz prepared
+          clean=()
+          if [ -n "${KUASAR_CLEAN_E2E_IMAGE:-}" ]; then clean=(--clean-image "$KUASAR_CLEAN_E2E_IMAGE"); fi
+          python3 -B framework/ci/integration/run-artifact-tests.py "${clean[@]}" \
+            --plan plan/integration-plan.json --arch aarch64 --shard "$TEST_SHARD" \
+            --workspace prepared/aarch64 --result "results/$TEST_SHARD.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-shard-aarch64-${{ matrix.shard }}-${{ github.run_id }}
+          path: results/${{ matrix.shard }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  performance-x86:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: [prepare, prepare-integration-x86]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-prepared-x86_64-${{ github.run_id }}
+          path: transport
+      - name: Bootstrap the existing native performance profile
+        run: bash framework/ci/hosted/bootstrap.sh --profile artifact-x86
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-readers-x86_64-${{ github.run_id }}
+          path: readers
+      - name: Select verified native archive readers
+        run: |
+          (cd readers && sha256sum --check SHA256SUMS)
+          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
+          echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
+      - name: Run the unchanged working-set performance gate against the same prepared bytes
+        run: |
+          python3 -B framework/ci/integration/transport.py extract transport/prepared.tar.gz prepared
+          python3 -B framework/ci/integration/run-artifact-performance.py \
+            --plan plan/integration-plan.json --arch x86_64 --workspace prepared/x86_64 \
+            --result results/performance.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-shard-x86_64-performance-${{ github.run_id }}
+          path: results/performance.json
+          if-no-files-found: error
+          retention-days: 7
+
+  validation-results:
+    if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: [prepare, cold-x86, cold-arm, warm-x86, warm-arm, helpers-x86, helpers-arm, prepare-integration-x86, prepare-integration-arm, e2e-x86, e2e-arm, performance-x86]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Require every declared build, cache, package and native integration job
+        env:
+          TASK_JOB_RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 -B - <<'PYTHON'
+          import json, os
+          results = json.loads(os.environ['TASK_JOB_RESULTS'])
+          failed = {job: result['result'] for job, result in results.items() if result['result'] != 'success'}
+          if failed:
+              raise SystemExit('Required task jobs did not pass: ' + json.dumps(failed, sort_keys=True))
+          PYTHON
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: workbench-216-shard-x86_64-*-${{ github.run_id }}
+          path: shards/x86_64
+          merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: workbench-216-shard-aarch64-*-${{ github.run_id }}
+          path: shards/aarch64
+          merge-multiple: true
+      - name: Collect the unchanged exact shard and performance contracts
+        run: |
+          mkdir results
+          for arch in x86_64 aarch64; do
+            python3 -B framework/ci/integration/artifacts.py shard-results \
+              --plan plan/integration-plan.json --arch "$arch" --results "shards/$arch" > "results/$arch.json"
+          done
+          python3 -B framework/ci/integration/artifacts.py results \
+            --plan plan/integration-plan.json --results results > validation.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-integration-validation-${{ github.run_id }}
+          path: |
+            plan
+            results
+            validation.json
           if-no-files-found: error
           retention-days: 7
