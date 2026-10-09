@@ -238,6 +238,13 @@ def execute(args):
            'KUASAR_WORKBENCH_IMAGE_ID=' + receipt['image']['image_id'],
            'KUASAR_WORKBENCH_FRAMEWORK_SHA=' + receipt['framework_sha'],
            'GOPROXY=https://proxy.golang.org,direct', 'GOSUMDB=sum.golang.org']
+    # A runner may kill this process before finally can record the exit. Keep
+    # that command visible without inventing an observed termination status.
+    entry = {'argv': argv, 'exit_code': None, 'wall_seconds': None}
+    receipt['commands'].append(entry)
+    receipt['conclusion'] = 'running'
+    write(root / 'receipt.json', receipt)
+    code = None
     class Interrupted(Exception):
         def __init__(self, signum):
             self.signum = signum
@@ -253,12 +260,14 @@ def execute(args):
         code = 124
     except Interrupted as error:
         code = 128 + error.signum
+    except KeyboardInterrupt:
+        code = 130
+        raise
     finally:
         for signum, handler in handlers.items():
             signal.signal(signum, handler)
-        receipt['commands'].append({'argv': argv, 'exit_code': locals().get('code', 130),
-                                    'wall_seconds': time.monotonic() - started})
-        receipt['conclusion'] = 'success' if locals().get('code') == 0 else 'failure'
+        entry.update(exit_code=code, wall_seconds=time.monotonic() - started)
+        receipt['conclusion'] = 'success' if code == 0 else 'failure'
         write(root / 'receipt.json', receipt)
     if code in (124, 130, 143):
         # Killing the docker-exec client alone does not stop its container-side
@@ -329,6 +338,10 @@ def finish(args):
     require(root.resolve() == root and root.stat().st_uid == os.getuid(), 'foreign or linked task root')
     receipt = json.loads((root / 'receipt.json').read_text())
     require(receipt['owner_uid'] == os.getuid(), 'foreign task receipt')
+    incomplete = any(entry.get('exit_code') is None for entry in receipt['commands'])
+    if incomplete:
+        receipt['conclusion'] = 'failure'
+        receipt.setdefault('diagnostics_error', 'command completion was not recorded')
     require(not args.evidence.exists() and not args.evidence.resolve().is_relative_to(root),
             'evidence requires a fresh directory outside instance state')
     args.evidence.mkdir(parents=True)
@@ -338,7 +351,7 @@ def finish(args):
         # safe to export until the recorded instance has stopped successfully.
         write(args.evidence / 'receipt.json', receipt)
         return code
-    diagnostic_status = code
+    diagnostic_status = code or int(incomplete)
     try:
         for name in ('instance.json', 'output'):
             path = state / name

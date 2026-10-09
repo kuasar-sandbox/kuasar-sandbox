@@ -386,7 +386,7 @@ class ExecutionTests(TemporaryFiles):
         return result, json.loads((root / 'receipt.json').read_text()), run.call_args
 
     def test_exit_code_signal_and_timeout_are_not_changed_to_success(self):
-        for result, expected in [(0, 0), (42, 42), (-15, 143), ('timeout', 124)]:
+        for result, expected in [(0, 0), (17, 17), (42, 42), (-15, 143), ('timeout', 124)]:
             with self.subTest(result=result), tempfile.TemporaryDirectory(dir=self.root) as directory:
                 previous = self.root
                 self.root = Path(directory)
@@ -395,8 +395,96 @@ class ExecutionTests(TemporaryFiles):
                 code, receipt, _ = self.execute(effect)
                 self.root = previous
                 self.assertEqual(code, expected)
+                self.assertEqual(len(receipt['commands']), 1)
                 self.assertEqual(receipt['commands'][-1]['exit_code'], expected)
                 self.assertEqual(receipt['conclusion'], 'success' if expected == 0 else 'failure')
+
+    def test_an_unobserved_launch_failure_does_not_invent_an_exit_code(self):
+        root = self.receipt()
+        args = argparse.Namespace(root=root, timeout=5, arguments=['fixture-command'])
+        with patch.object(ci, 'framework_sha', return_value=FRAMEWORK), patch.object(
+                ci.subprocess, 'run', side_effect=OSError('fixture launch failure')):
+            with self.assertRaisesRegex(OSError, 'fixture launch failure'):
+                ci.execute(args)
+        receipt = json.loads((root / 'receipt.json').read_text())
+        self.assertEqual(receipt['conclusion'], 'failure')
+        self.assertEqual(len(receipt['commands']), 1)
+        self.assertIsNone(receipt['commands'][0]['exit_code'])
+
+    def test_finish_preserves_an_observed_command_failure(self):
+        self.execute(lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 17))
+        root = self.root / 'state'
+        (root / 'instances/ci/instance.json').write_text('{}')
+        evidence = self.root / 'evidence'
+        with patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.assertEqual(ci.finish(argparse.Namespace(root=root, evidence=evidence)), 0)
+        self.assertEqual(run.call_count, 2)
+        receipt = json.loads((evidence / 'receipt.json').read_text())
+        self.assertEqual(receipt['conclusion'], 'failure')
+        self.assertEqual(receipt['commands'][0]['exit_code'], 17)
+        self.assertNotIn('diagnostics_error', receipt)
+        self.assertFalse(root.exists())
+
+    def test_real_sigkill_leaves_the_pending_command_and_finish_rejects_success(self):
+        root = self.receipt()
+        (root / 'instances/ci/instance.json').write_text('{}')
+        value = json.loads((root / 'receipt.json').read_text())
+        previous = {'argv': ['cache-key'], 'exit_code': 0, 'wall_seconds': 0.1}
+        value.update(conclusion='success', commands=[previous])
+        ci.write(root / 'receipt.json', value)
+        ready = self.root / 'ready'
+        script = '''import argparse, importlib.util, pathlib, signal, sys
+spec = importlib.util.spec_from_file_location("sigkill_fixture_subject", sys.argv[1])
+ci = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = ci
+spec.loader.exec_module(ci)
+root, ready = map(pathlib.Path, sys.argv[2:4])
+ci.framework_sha = lambda: sys.argv[4]
+def run(command, **kwargs):
+    ready.write_text("candidate execution reached")
+    signal.pause()
+    raise AssertionError("fixture must be killed before command completion")
+ci.subprocess.run = run
+ci.execute(argparse.Namespace(root=root, timeout=30, arguments=["fixture-command"]))
+'''
+        process = subprocess.Popen([sys.executable, '-B', '-c', script,
+                                    str(ROOT / 'ci/hosted/workbench.py'), str(root), str(ready), FRAMEWORK],
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            deadline = time.monotonic() + 10
+            while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertTrue(ready.exists(), 'SIGKILL fixture did not reach candidate execution')
+            pending = json.loads((root / 'receipt.json').read_text())
+            self.assertEqual(pending['conclusion'], 'running')
+            self.assertEqual(pending['commands'], [previous, {
+                'argv': ['fixture-command'], 'exit_code': None, 'wall_seconds': None}])
+            process.kill()
+            stdout, stderr = process.communicate(timeout=10)
+            self.assertEqual(process.returncode, -signal.SIGKILL, stdout + stderr)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=10)
+
+        self.assertEqual(json.loads((root / 'receipt.json').read_text()), pending)
+        (root / 'instances/ci/output/log').write_text('partial candidate output')
+        evidence = self.root / 'evidence'
+        with patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.assertEqual(ci.finish(argparse.Namespace(root=root, evidence=evidence)), 1)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args[0], ci.command(root / 'instances', 'cleanup'))
+        self.assertEqual(run.call_args_list[1].args[0],
+                         ci.command(root / 'instances', 'cleanup', '--delete-output'))
+        retained = json.loads((evidence / 'receipt.json').read_text())
+        self.assertEqual(retained['conclusion'], 'failure')
+        self.assertEqual(retained['commands'], pending['commands'])
+        self.assertEqual(retained['diagnostics_error'], 'command completion was not recorded')
+        self.assertEqual(retained['cleanup_exit_code'], 0)
+        self.assertEqual(retained['delete_output_exit_code'], 0)
+        self.assertEqual((evidence / 'output/log').read_text(), 'partial candidate output')
+        self.assertFalse(root.exists())
+        self.assertTrue((self.root / 'sources').is_dir())
 
     def test_cancellation_preserves_a_failure_receipt(self):
         root = self.receipt()
