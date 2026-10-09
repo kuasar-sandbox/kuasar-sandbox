@@ -74,6 +74,13 @@ def fixture(arch="x86_64", *, memory="8589934592", quota="200000 100000"):
 
 
 class LegacyControl(unittest.TestCase):
+    def setUp(self):
+        # Resource fixtures must not query the developer's Docker daemon or
+        # add du invocations to the isolation/cleanup command expectations.
+        capture = patch.object(task, "space_snapshot", return_value={"phase": "fixture"})
+        self.space = capture.start()
+        self.addCleanup(capture.stop)
+
     def test_both_targets_keep_the_original_x86_host_and_no_workbench_identity(self):
         for arch in ("x86_64", "aarch64"):
             with self.subTest(arch=arch), fixture(arch) as (args, record, private):
@@ -340,6 +347,93 @@ class LegacyControl(unittest.TestCase):
 
 validation = task.module("legacy_existing_packaged_fixtures", task.ROOT / "ci/hosted/test-workbench-216-validation.py")
 validation.task = task
+
+
+class SpaceSnapshots(unittest.TestCase):
+    def test_task_size_uses_allocated_blocks_and_does_not_follow_source_links(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "sources"
+            source.mkdir()
+            with (source / "sparse").open("wb") as stream:
+                stream.truncate(1024 * 1024)
+            before = task.space_path(source, size=True)
+            (root / "outside").write_bytes(b"x" * 32768)
+            (source / "link").symlink_to(root / "outside")
+            after = task.space_path(source, size=True)
+            self.assertEqual(before["size_exit_code"], 0)
+            self.assertEqual(after["size_exit_code"], 0)
+            self.assertLess(after["allocated_bytes"], 32768)
+            self.assertGreater(after["filesystem"]["total_bytes"], 0)
+
+    def test_missing_state_is_explicit_and_measures_its_existing_filesystem(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row = task.space_path(root / "removed/state", size=True)
+            self.assertIs(row["exists"], False)
+            self.assertEqual(row["filesystem"]["measured_at"], str(root))
+            self.assertNotIn("allocated_bytes", row)
+
+    def test_linked_source_root_is_not_scanned(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "link").symlink_to(root, target_is_directory=True)
+            with patch.object(task.subprocess, "run") as run:
+                row = task.space_path(root / "link", size=True)
+            self.assertIn("linked", row["error"])
+            self.assertNotIn("filesystem", row)
+            run.assert_not_called()
+            (root / "loop").symlink_to("loop")
+            self.assertIn("error", task.space_path(root / "loop", size=True))
+
+    def test_measurement_failure_is_recorded_without_a_fake_size(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(task.subprocess, "run", side_effect=subprocess.TimeoutExpired("du", 30)):
+                row = task.space_path(Path(directory), size=True)
+            self.assertIn("TimeoutExpired", row["error"])
+            self.assertNotIn("allocated_bytes", row)
+            self.assertIn("filesystem", row)
+
+    def test_docker_root_uses_only_filesystem_counters_and_no_global_size_scan(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            completed = SimpleNamespace(returncode=0, stdout=str(root) + "\n")
+            with patch.object(task.subprocess, "run", return_value=completed) as run:
+                row = task.space_snapshot("after", {}, docker=True)
+            run.assert_called_once_with(["docker", "info", "--format", "{{.DockerRootDir}}"], text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            self.assertIn("not peak", row["method"])
+            self.assertEqual(row["docker_storage"]["path"], str(root))
+            self.assertNotIn("allocated_bytes", row["docker_storage"])
+            self.assertGreaterEqual(row["measurement_seconds"], 0)
+
+    def test_missing_docker_is_explicit_and_no_zero_cost_is_invented(self):
+        completed = SimpleNamespace(returncode=1, stdout="")
+        with patch.object(task.subprocess, "run", return_value=completed):
+            row = task.space_snapshot("before", {}, docker=True)
+        self.assertEqual(row["docker_info_exit_code"], 1)
+        self.assertIn("error", row["docker_storage"])
+        self.assertNotIn("filesystem", row["docker_storage"])
+
+    def test_host_receipt_stays_outside_candidate_sources(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sources = root / "sources"
+            sources.mkdir()
+            args = SimpleNamespace(sources=sources, output=sources / "space.json", phase="before")
+            with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "RUNNER_TEMP": str(root)}), \
+                    patch.object(task.os, "getuid", return_value=1001), \
+                    patch.object(task, "space_snapshot", return_value={}) as capture:
+                with self.assertRaisesRegex(ValueError, "outside sources"):
+                    task.disk_snapshot(args)
+                capture.assert_not_called()
+                args.output = root / "evidence/space.json"
+                task.disk_snapshot(args)
+                self.assertTrue(args.output.is_file())
+                self.assertEqual(capture.call_args.args[0], "before")
+                self.assertEqual(capture.call_args.args[1]["sources"], sources)
+                with self.assertRaisesRegex(ValueError, "fresh host path"):
+                    task.disk_snapshot(args)
 
 
 class LegacyPackagedInputs(validation.PackagedInputContracts):
