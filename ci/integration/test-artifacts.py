@@ -313,9 +313,10 @@ class ArtifactExecutionContracts(unittest.TestCase):
     def remove_scratch(self):
         if self.marker.exists():
             state = Path(self.marker.read_text()).parent
-            self.assertEqual(state.parent, Path('/var/tmp'))
+            self.assertEqual(state.parent, Path(os.environ.get('TMPDIR', '/var/tmp')).resolve())
             self.assertTrue(state.name.startswith('ki-'))
-            subprocess.run(['sudo', '-n', 'rm', '-rf', '--', str(state)], check=True)
+            privilege = [] if os.geteuid() == 0 else ['sudo', '-n']
+            subprocess.run([*privilege, 'rm', '-rf', '--', str(state)], check=True)
 
     def execute(self, shard='storage', performance=False):
         self.inputs.seal(self.root, self.provenance)
