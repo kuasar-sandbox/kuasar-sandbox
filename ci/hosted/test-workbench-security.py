@@ -166,22 +166,14 @@ class CacheScopeTests(TemporaryFiles):
         return source
 
     def scope(self, admitted=False):
-        original = ci.output
-
-        def request(argv, **kwargs):
-            if argv[0] == 'gh':
-                sha = argv[-1].rsplit('/', 1)[-1].split('...')[0]
-                return json.dumps({'merge_base_commit': {'sha': sha if admitted else 'f' * 40}})
-            return original(argv, **kwargs)
-
         stream = io.StringIO()
-        with patch.object(ci, 'output', side_effect=request), redirect_stdout(stream):
+        with patch.object(ci.cache_policy, 'public_main', return_value=admitted), redirect_stdout(stream):
             ci.cache_scope(self.args)
         return stream.getvalue().strip()
 
     def test_candidate_dispatch_from_main_is_not_trusted(self):
         self.repository()
-        self.assertEqual(self.scope(), 'candidate')
+        self.assertRegex(self.scope(), r'^candidate-[0-9a-f]{64}$')
         self.assertEqual(json.loads(self.args.receipt.read_text())['scope'], 'candidate')
 
     def test_clean_main_source_has_a_usable_trusted_save_scope(self):
@@ -191,15 +183,15 @@ class CacheScopeTests(TemporaryFiles):
     def test_dirty_and_unversioned_sources_never_acquire_main_trust(self):
         source = self.repository()
         (source / 'source.txt').write_text('candidate change\n')
-        self.assertEqual(self.scope(admitted=True), 'candidate')
+        self.assertRegex(self.scope(admitted=True), r'^candidate-[0-9a-f]{64}$')
         self.args.receipt.unlink()
         (source / 'source.txt').write_text('admitted source\n')
         (self.sources / 'unversioned').mkdir()
-        self.assertEqual(self.scope(admitted=True), 'candidate')
+        self.assertRegex(self.scope(admitted=True), r'^candidate-[0-9a-f]{64}$')
 
     def test_candidate_receipt_prevents_host_git_execution_after_build(self):
         source = self.repository()
-        self.assertEqual(self.scope(), 'candidate')
+        self.assertRegex(self.scope(), r'^candidate-[0-9a-f]{64}$')
         marker = self.root / 'hook-ran'
         hook = self.root / 'fsmonitor'
         hook.write_text('#!/bin/sh\nprintf fixture > "$WORKBENCH_HOOK_MARKER"\n')
@@ -211,11 +203,11 @@ class CacheScopeTests(TemporaryFiles):
                             text=True, capture_output=True)
             self.assertTrue(marker.exists())
             marker.unlink()
-            with patch.object(ci, 'output', side_effect=AssertionError('host Git or GitHub used after receipt')):
+            with patch.object(ci.cache_policy, 'git_read', side_effect=AssertionError('host Git used after receipt')), patch.object(ci.cache_policy, 'public_main', side_effect=AssertionError('GitHub used after receipt')):
                 stream = io.StringIO()
                 with redirect_stdout(stream):
                     ci.cache_scope(self.args)
-        self.assertEqual(stream.getvalue().strip(), 'candidate')
+        self.assertRegex(stream.getvalue().strip(), r'^candidate-[0-9a-f]{64}$')
         self.assertFalse(marker.exists())
 
     def test_scope_receipt_from_another_run_or_source_is_rejected(self):
@@ -227,7 +219,7 @@ class CacheScopeTests(TemporaryFiles):
                 changed = copy.deepcopy(value)
                 changed[field] = 'foreign'
                 self.args.receipt.write_text(json.dumps(changed))
-                with patch.object(ci, 'output', side_effect=AssertionError('host command before rejection')):
+                with patch.object(ci.cache_policy, 'git_read', side_effect=AssertionError('host command before rejection')):
                     with self.assertRaisesRegex(ValueError, 'foreign cache scope receipt'):
                         ci.cache_scope(self.args)
                 self.args.receipt.write_text(json.dumps(value))

@@ -38,6 +38,7 @@ def module(name, path):
 
 
 launcher = module('ci_workbench_launcher', ROOT / 'workbench/workbench')
+cache_policy = module('ci_workbench_cache_scope', ROOT / 'ci/hosted/cache-scope.py')
 
 
 def require(condition, message):
@@ -215,41 +216,8 @@ def cache_key(args):
 
 
 def cache_scope(args):
-    """Candidate dispatch on main remains candidate-scoped, regardless of ref."""
-    context = {'repository': os.environ.get('GITHUB_REPOSITORY'),
-               'ref': os.environ.get('GITHUB_REF'), 'event': os.environ.get('GITHUB_EVENT_NAME'),
-               'run_id': os.environ.get('GITHUB_RUN_ID'), 'source_root': str(args.sources.resolve())}
-    if args.receipt.exists():
-        previous = json.loads(args.receipt.read_text())
-        require(all(previous[field] == value for field, value in context.items()), 'foreign cache scope receipt')
-        # Never run host Git against configuration a prior candidate command
-        # could have modified (including executable clean/fsmonitor filters).
-        print(previous['scope'])
-        return
-    scope = 'candidate'
-    identities = []
-    if os.environ.get('GITHUB_REF') == 'refs/heads/main':
-        for source in sorted(args.sources.iterdir()):
-            if not source.is_dir():
-                continue
-            if not (source / '.git').is_dir() or output(['git', '-C', source, 'status', '--porcelain']):
-                identities.append({'path': source.name, 'on_main': False})
-                continue
-            sha = output(['git', '-C', source, 'rev-parse', 'HEAD'])
-            remote = output(['git', '-C', source, 'remote', 'get-url', 'origin'])
-            match = re.fullmatch(r'https://github.com/(kuasar-sandbox/(?:kuasar-sandbox|accelerator|connector|sandboxer|orchestrator|guest-runtime))(?:\.git)?', remote)
-            require(match, 'foreign repository cannot write a trusted Workbench cache')
-            repository = match.group(1)
-            comparison = json.loads(output(['gh', 'api', f'repos/{repository}/compare/{sha}...main']))
-            admitted = comparison.get('merge_base_commit', {}).get('sha') == sha
-            identities.append({'repository': repository, 'sha': sha, 'on_main': admitted})
-        if identities and all(record['on_main'] for record in identities):
-            scope = 'trusted'
-    result = {**context, 'scope': scope, 'sources': identities}
-    # The receipt lives outside all candidate mounts. A candidate cannot become
-    # trusted by rewriting .git between build and package actions in the same job.
-    write(args.receipt, result)
-    print(scope)
+    result = cache_policy.decide(args.sources, args.receipt)
+    print(result['namespace'])
 
 
 def execute(args):
