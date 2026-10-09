@@ -22,6 +22,9 @@ inputs:
   cache:
     description: Restore and save repository-scoped compiler inputs; disable for publisher executables
     default: 'true'
+  cache-coverage:
+    description: Required when caching; stable declared build coverage, bound to the actual product/helper selection
+    default: ''
   run:
     description: Credential-free build commands, executed at /src
     required: true
@@ -80,12 +83,16 @@ runs:
         WB_ROOT: ${{ steps.task.outputs.root }}
         WB_ARCH: ${{ inputs.arch }}
         WB_NAMESPACE: ${{ steps.trust.outputs.namespace }}
+        WB_COVERAGE: ${{ inputs.cache-coverage }}
       run: |
+        test -n "$WB_COVERAGE"
+        coverage=$(python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" exec --root "$WB_ROOT" -- \
+          python3 -B /inputs/release/ci/hosted/workbench.py cache-coverage --name "$WB_COVERAGE" --arch "$WB_ARCH")
         digest=$(python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" exec --root "$WB_ROOT" -- \
           python3 -B /inputs/release/ci/hosted/workbench.py cache-key)
-        [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-        echo "key=workbench-v1-$WB_ARCH-$WB_NAMESPACE-$digest" >> "$GITHUB_OUTPUT"
-        echo "prefix=workbench-v1-$WB_ARCH-$WB_NAMESPACE-" >> "$GITHUB_OUTPUT"
+        [[ "$coverage" =~ ^[0-9a-f]{64}$ && "$digest" =~ ^[0-9a-f]{64}$ ]]
+        echo "key=workbench-v2-$WB_ARCH-$WB_NAMESPACE-$coverage-$digest" >> "$GITHUB_OUTPUT"
+        echo "prefix=workbench-v2-$WB_ARCH-$WB_NAMESPACE-$coverage-" >> "$GITHUB_OUTPUT"
     - name: Restore repository-local native, Go and Cargo inputs
       id: cache
       if: inputs.cache == 'true'
@@ -135,6 +142,7 @@ runs:
         WB_ROOT: ${{ steps.task.outputs.root }}
         WB_EVIDENCE: ${{ steps.task.outputs.evidence }}
         WB_CACHE: ${{ inputs.cache }}
+        WB_CACHE_COVERAGE: ${{ inputs.cache-coverage }}
         WB_CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
         WB_CACHE_KEY: ${{ steps.key.outputs.key }}
         WB_MATCHED_KEY: ${{ steps.cache.outputs.cache-matched-key }}
@@ -144,7 +152,7 @@ runs:
         path = pathlib.Path(os.environ['WB_ROOT']) / 'receipt.json'
         if path.is_file():
             value = json.loads(path.read_text())
-            value['cache'] = {name: os.environ[name] for name in ('WB_CACHE', 'WB_CACHE_HIT', 'WB_CACHE_KEY', 'WB_MATCHED_KEY')}
+            value['cache'] = {name: os.environ[name] for name in ('WB_CACHE', 'WB_CACHE_COVERAGE', 'WB_CACHE_HIT', 'WB_CACHE_KEY', 'WB_MATCHED_KEY')}
             path.write_text(json.dumps(value, sort_keys=True, indent=2) + '\n')
         PY
         python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" finish --root "$WB_ROOT" --evidence "$WB_EVIDENCE"

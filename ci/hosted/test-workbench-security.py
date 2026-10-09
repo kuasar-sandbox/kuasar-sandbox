@@ -614,6 +614,17 @@ class ActionTests(TemporaryFiles):
         self.assertLess(check, save)
         self.assertTrue(finish['if'].startswith('always()'))
 
+    def test_partial_producers_cannot_restore_or_occupy_full_product_keys(self):
+        key = next(step for step in self.steps if step.get('id') == 'key')
+        self.assertEqual(key['env']['WB_COVERAGE'], '${{ inputs.cache-coverage }}')
+        self.assertEqual(key['env']['WB_NAMESPACE'], '${{ steps.trust.outputs.namespace }}')
+        self.assertIn('test -n "$WB_COVERAGE"', key['run'])
+        self.assertIn('cache-coverage --name "$WB_COVERAGE" --arch "$WB_ARCH"', key['run'])
+        self.assertIn('key=workbench-v2-$WB_ARCH-$WB_NAMESPACE-$coverage-$digest', key['run'])
+        self.assertIn('prefix=workbench-v2-$WB_ARCH-$WB_NAMESPACE-$coverage-', key['run'])
+        restore = next(step for step in self.steps if 'actions/cache/restore@' in step.get('uses', ''))
+        self.assertEqual(restore['with']['restore-keys'], '${{ steps.key.outputs.prefix }}')
+
 
 if __name__ == '__main__':
     unittest.main()
