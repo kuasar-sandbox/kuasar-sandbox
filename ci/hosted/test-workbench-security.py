@@ -770,6 +770,33 @@ class ActionTests(TemporaryFiles):
         self.assertFalse(any('GH_TOKEN' in step.get('env', {}) or 'GITHUB_TOKEN' in step.get('env', {})
                              for step in self.steps if step.get('id') != 'trust'))
 
+    def test_restored_test_results_expire_before_owner_tests(self):
+        restore = next(index for index, step in enumerate(self.steps) if 'actions/cache/restore@' in step.get('uses', ''))
+        expire = next(index for index, step in enumerate(self.steps) if 'go clean -testcache' in step.get('run', ''))
+        owner = next(index for index, step in enumerate(self.steps) if 'WB_SCRIPT' in step.get('env', {}))
+        step = self.steps[expire]
+        self.assertLess(restore, expire)
+        self.assertLess(expire, owner)
+        self.assertEqual(step['if'], "inputs.cache == 'true'")
+        self.assertNotIn('continue-on-error', step)
+        self.assertNotIn('if', self.steps[owner])  # Actions requires prior success.
+        self.assertEqual(step['run'].strip(),
+                         'python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" exec --root "$WB_ROOT" -- go clean -testcache')
+        self.assertEqual(step['env'], {'WB_FRAMEWORK': '${{ steps.task.outputs.framework }}',
+                                      'WB_ROOT': '${{ steps.task.outputs.root }}'})
+        # The existing executor records this exact command and propagates an
+        # expiry failure; it must never run the owner script in the same call.
+        root = self.receipt()
+        args = argparse.Namespace(root=root, timeout=5, arguments=['--', 'go', 'clean', '-testcache'])
+        with patch.object(ci, 'framework_sha', return_value=FRAMEWORK), patch.object(
+                ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 23)):
+            self.assertEqual(ci.execute(args), 23)
+        receipt = json.loads((root / 'receipt.json').read_text())
+        self.assertEqual(receipt['conclusion'], 'failure')
+        self.assertEqual(receipt['commands'][0]['argv'], ['go', 'clean', '-testcache'])
+        self.assertEqual(receipt['commands'][0]['exit_code'], 23)
+        self.assertEqual(len(receipt['commands']), 1)
+
     def test_cache_save_follows_output_check_and_cleanup_always_runs(self):
         check = next(index for index, step in enumerate(self.steps) if ' check-outputs ' in step.get('run', ''))
         save = next(index for index, step in enumerate(self.steps) if 'actions/cache/save@' in step.get('uses', ''))
