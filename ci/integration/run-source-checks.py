@@ -7,7 +7,6 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-import tempfile
 import time
 
 import artifacts
@@ -168,17 +167,14 @@ def checks_for(plan, sources, phase):
 
 def execute(plan, sources, output, *, materialized=False, phase="all"):
     result = new_result(plan, phase)
-    temporary = None
     try:
         artifacts.check_plan(plan)
         artifacts.require(phase in ("all", "ordinary", "privileged"), "unknown source-check phase")
         env = environment()
         if phase == "all":
-            # Default all keeps admitted callers working during the coordinated
-            # switch. Workbench already supplies the stable task-private TMPDIR.
-            if not env.get("TMPDIR"):
-                temporary = tempfile.TemporaryDirectory(prefix="ks-src-", dir="/tmp")
-                env["TMPDIR"] = temporary.name
+            # Each test creates its own private state below this short root.
+            # An extra random parent would exhaust existing Unix socket paths.
+            env["TMPDIR"] = env.get("TMPDIR") or "/tmp"
         else:
             env["TMPDIR"] = "/build/tmp"
         env.update(ORG=str(sources), TARGET_ARCH="x86_64", PYTHONDONTWRITEBYTECODE="1")
@@ -197,8 +193,6 @@ def execute(plan, sources, output, *, materialized=False, phase="all"):
         result["error"] = str(error)
         raise
     finally:
-        if temporary is not None:
-            temporary.cleanup()
         save_result(output, result)
 
 
