@@ -46,7 +46,7 @@ def destination(owner: str, path: Path) -> Path:
     if path.parts[:2] == ('test', 'e2e'):
         return Path('test/e2e') / owner / Path(*path.parts[2:])
     if owner == 'platform':
-        return Path('guide') / (path.name if path.parts[0] == 'docs' else path)
+        return Path('guide') / (path.relative_to('docs') if path.parts[0] == 'docs' else path)
     relative = path.relative_to('docs') if path.parts[0] == 'docs' else path
     return Path('guide') / owner / relative
 

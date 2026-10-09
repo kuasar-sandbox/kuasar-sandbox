@@ -433,3 +433,9 @@ Legal material continues to use the existing LICENSE/NOTICE/COPYING conventions.
 An independently versioned unit uses `docs/<unit>.md` and its optional `_zh.md`
 peer from the unit's exact selected source (including immutable older revisions),
 not a document borrowed from a newer runtime test checkout.
+
+Rollout: merge each owner's declaration first, then make a new normal Daily
+selection with those test revisions. Enable the new reader only after that
+selection has been checked. Old immutable source revisions do not acquire the
+new declaration retroactively; historical selections retain their matching
+framework and must not import current declarations to make an old build pass.

@@ -138,6 +138,18 @@ class DocumentationPackageTest(unittest.TestCase):
                          '# New owner guide\n')
         self.assertFalse((output / 'guide/connector/tapfd.md').exists())
 
+    def test_platform_directory_keeps_equal_basenames_in_distinct_subdirectories(self):
+        source = self.root / 'platform'
+        declaration = source / 'release/guide-inputs.txt'
+        declaration.write_text(declaration.read_text() + 'docs/user/\n')
+        for name in ('a', 'b'):
+            guide = source / 'docs/user' / name / 'README.md'
+            guide.parent.mkdir(parents=True)
+            guide.write_text(f'# {name} guide\n')
+        output, _ = self.assemble()
+        for name in ('a', 'b'):
+            self.assertEqual((output / f'guide/user/{name}/README.md').read_text(), f'# {name} guide\n')
+
     def test_missing_owner_declaration_has_no_cross_repository_fallback(self):
         declaration = self.root / 'connector/release/guide-inputs.txt'
         declaration.write_text('# Empty owner selection\n')
