@@ -359,6 +359,11 @@ def finish(args):
     require(not args.evidence.exists() and not args.evidence.resolve().is_relative_to(root),
             'evidence requires a fresh directory outside instance state')
     args.evidence.mkdir(parents=True)
+    if code:
+        # The candidate may still be writing. Only the host-owned receipt is
+        # safe to export until the recorded instance has stopped successfully.
+        write(args.evidence / 'receipt.json', receipt)
+        return code
     state = root / 'instances/ci'
     diagnostic_status = 0
     try:
@@ -373,8 +378,6 @@ def finish(args):
         diagnostic_status = 1
         receipt.update(conclusion='failure', diagnostics_error=str(error))
     write(args.evidence / 'receipt.json', receipt)
-    if code:
-        return code  # Failed ownership/graceful-stop checks never authorize deletion.
     if (state / 'instance.json').exists():
         subprocess.run(command(root / 'instances', 'cleanup', '--delete-output'), check=True)
     shutil.rmtree(root)

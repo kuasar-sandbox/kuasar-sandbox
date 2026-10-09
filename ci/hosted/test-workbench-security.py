@@ -551,9 +551,13 @@ class CleanupTests(TemporaryFiles):
     def test_launcher_cleanup_failure_preserves_the_owned_state(self):
         root = self.receipt()
         (root / 'instances/ci/instance.json').write_text('{}')
+        (root / 'instances/ci/output/active-writer').write_text('untrusted while running')
         evidence = self.root / 'evidence'
-        with patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 17)) as run:
+        with patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 17)) as run, \
+             patch.object(ci, 'copy_evidence') as copy:
             self.assertEqual(ci.finish(argparse.Namespace(root=root, evidence=evidence)), 17)
+        copy.assert_not_called()
+        self.assertEqual({path.name for path in evidence.iterdir()}, {'receipt.json'})
         self.assertTrue(root.exists())
         self.assertEqual(run.call_count, 1)
         self.assertNotIn('--delete-output', run.call_args.args[0])
