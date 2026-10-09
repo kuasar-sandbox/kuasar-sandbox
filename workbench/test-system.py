@@ -50,6 +50,14 @@ def smoke(image, root):
 set -eu
 test -z "$(docker ps -aq)"
 test -z "$(ip -4 route show default)"
+# Pinned source gates invoke real sudo even when their caller is already root.
+# Keep its identity switching and exit propagation, rather than replacing it.
+[ "$(command -v sudo)" = /usr/bin/sudo ]
+[ "$(sudo -n id -u)" = 0 ]
+[ "$(sudo -n -u nobody id -u)" = "$(id -u nobody)" ]
+sudo_status=0
+sudo -n sh -c 'exit 37' || sudo_status=$?
+[ "$sudo_status" = 37 ]
 # Internal units must not inherit a fraction of the outer task budget.
 [ "$(systemctl show --property DefaultTasksMax --value)" = infinity ]
 [ "$(cat /sys/fs/cgroup/pids.max)" = 4096 ]
@@ -122,6 +130,7 @@ systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
         assert invoke(names[1], 'exec', '--', 'docker', 'inspect', 'same-inner',
                       '--format', '{{.State.Running}}') == 'true'
         result.update(complete=True, checks=['startup fixtures use local image IDs without a builder or pull',
+                      'real sudo preserves root, switches UID and propagates command failure',
                       'temporary binaries execute from /tmp',
                       'outer task budget retained without hidden per-unit limits',
                       'private namespaces and daemons',

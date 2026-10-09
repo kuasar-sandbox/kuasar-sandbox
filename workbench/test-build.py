@@ -59,6 +59,11 @@ def qualify(plan, root):
 set -euo pipefail
 test "$(id -u)" != 0
 test "$(awk '/^CapEff:/ {print $2}' /proc/self/status)" = 0000000000000000
+test "$(awk '/^NoNewPrivs:/ {print $2}' /proc/self/status)" = 1
+if sudo -n true; then
+    echo 'build mode unexpectedly acquired root through sudo' >&2
+    exit 1
+fi
 test ! -e /dev/kvm && test ! -e /dev/net/tun && test ! -S /run/docker.sock
 go version
 rustc --version
