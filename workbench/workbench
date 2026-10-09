@@ -241,9 +241,20 @@ def start(args):
 
 
 def stop_owned(state, data):
+    diagnostic_status = 0
     container = owned_container(data)
     if container and container['State']['Running']:
-        diagnostics(state, data)
+        try:
+            diagnostics(state, data)
+        except (OSError, subprocess.SubprocessError) as error:
+            # Candidate output permissions and failed log collection must not
+            # leave an owned container running. Keep the error outside its
+            # writable mounts, then stop and release the recorded resources.
+            data.setdefault('diagnostics_errors', []).append({
+                'type': type(error).__name__, 'message': str(error)})
+            save(state, data)
+            print('workbench: diagnostics failed: ' + str(error), file=sys.stderr)
+            diagnostic_status = 1
         docker('stop', '--time', '60', container['Id'], timeout=75)
         container = owned_container(data)
         # With CAP_SYS_BOOT, systemd's orderly halt invokes reboot(HALT) in
@@ -256,6 +267,7 @@ def stop_owned(state, data):
                 'instance did not stop gracefully; diagnostics and data retained')
     data['status'] = 'stopped'
     save(state, data)
+    return diagnostic_status
 
 
 def main():
@@ -303,7 +315,7 @@ def main():
         return subprocess.call(['docker', 'exec', *flags, identity, *command])
     with locked(args) as state:
         data = record(state)
-        stop_owned(state, data)
+        diagnostic_status = stop_owned(state, data)
         if args.command == 'cleanup':
             container = owned_container(data)
             if container:
@@ -342,12 +354,12 @@ def main():
                        '--read-only', '--memory=256m', '--cpus=1', '--pids-limit=32',
                        '--label', LABEL + '=' + data['id'], *bind(path, '/owned'),
                        '--entrypoint', 'python3', data['image_id'], '-B', '-c',
-                       'import pathlib,shutil; [(p.unlink() if p.is_symlink() or p.is_file() else shutil.rmtree(p)) '
+                       'import pathlib,shutil,stat; [(shutil.rmtree(p) if stat.S_ISDIR(p.lstat().st_mode) else p.unlink()) '
                        'for p in pathlib.Path("/owned").iterdir()]', timeout=300)
                 path.rmdir()
             data['status'] = 'cleaned'
             save(state, data)
-    return 0
+    return diagnostic_status
 
 
 if __name__ == '__main__':
