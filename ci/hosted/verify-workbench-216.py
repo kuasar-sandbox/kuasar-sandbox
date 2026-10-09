@@ -831,6 +831,7 @@ def stop_legacy_unit(record):
 def legacy_bootstrap_stage(evidence, bootstrap, profile, cpus, task_root):
     """Bound only the exact former build/reader prerequisite profiles."""
     require(profile in ("artifact-build", "artifact-cross", "artifact-arm"), "unapproved legacy bootstrap profile")
+    bootstrap = bootstrap.resolve(strict=True)
     require(artifacts.digest(bootstrap) == LEGACY_BOOTSTRAP_SHA256 and len(cpus) == 2,
             "legacy bootstrap identity or CPU budget changed")
     provision = evidence.directory / "provision"

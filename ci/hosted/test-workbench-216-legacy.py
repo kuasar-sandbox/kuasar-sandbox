@@ -313,6 +313,22 @@ class LegacyControl(unittest.TestCase):
             self.assertEqual(evidence.record["bootstrap_cleanup_exit_code"], 1)
             self.assertIn("foreign owner", evidence.record["bootstrap_cleanup_error"])
 
+    def test_bootstrap_relative_input_is_absolute_in_service_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bootstrap = root / "legacy-framework/ci/hosted/bootstrap.sh"
+            bootstrap.parent.mkdir(parents=True)
+            bootstrap.write_bytes(BOOTSTRAP)
+            relative = Path(os.path.relpath(bootstrap, Path.cwd()))
+            self.assertFalse(relative.is_absolute())
+            evidence = task.Evidence(root / "host", {})
+            with patch.object(task, "LEGACY_BOOTSTRAP_SHA256", hashlib.sha256(BOOTSTRAP).hexdigest()), \
+                    patch.object(task, "legacy_stage", return_value=0) as stage, \
+                    patch.object(task, "stop_legacy_unit", return_value=0):
+                self.assertEqual(task.legacy_bootstrap_stage(evidence, relative, "artifact-build", [0, 1], root), 0)
+            command = stage.call_args.args[2]
+            self.assertEqual(command[-4:], ["bash", bootstrap.resolve(), "--profile", "artifact-build"])
+
     def test_finish_attempts_both_owned_units_and_keeps_state_if_bootstrap_cannot_stop(self):
         for failure in (1, ValueError("foreign bootstrap owner")):
             with self.subTest(failure=str(failure)), tempfile.TemporaryDirectory() as directory:
