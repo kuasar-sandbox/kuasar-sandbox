@@ -56,8 +56,8 @@ runs:
         WB_SOURCE: ${{ steps.task.outputs.source }}
         WB_SCOPE: ${{ runner.temp }}/workbench-cache-scope-${{ github.run_id }}-${{ steps.task.outputs.scope }}.json
       run: |
-        scope=$(python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" cache-scope --sources "$WB_SOURCE" --receipt "$WB_SCOPE")
-        echo "scope=$scope" >> "$GITHUB_OUTPUT"
+        namespace=$(python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" cache-scope --sources "$WB_SOURCE" --receipt "$WB_SCOPE")
+        echo "namespace=$namespace" >> "$GITHUB_OUTPUT"
     - name: Acquire the exact native image and start an ordinary UID build
       shell: bash
       env:
@@ -79,13 +79,13 @@ runs:
         WB_FRAMEWORK: ${{ steps.task.outputs.framework }}
         WB_ROOT: ${{ steps.task.outputs.root }}
         WB_ARCH: ${{ inputs.arch }}
-        WB_SCOPE: ${{ steps.trust.outputs.scope }}
+        WB_NAMESPACE: ${{ steps.trust.outputs.namespace }}
       run: |
         digest=$(python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" exec --root "$WB_ROOT" -- \
           python3 -B /inputs/release/ci/hosted/workbench.py cache-key)
         [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
-        echo "key=workbench-v1-$WB_ARCH-$WB_SCOPE-$digest" >> "$GITHUB_OUTPUT"
-        echo "prefix=workbench-v1-$WB_ARCH-$WB_SCOPE-" >> "$GITHUB_OUTPUT"
+        echo "key=workbench-v1-$WB_ARCH-$WB_NAMESPACE-$digest" >> "$GITHUB_OUTPUT"
+        echo "prefix=workbench-v1-$WB_ARCH-$WB_NAMESPACE-" >> "$GITHUB_OUTPUT"
     - name: Restore repository-local native, Go and Cargo inputs
       id: cache
       if: inputs.cache == 'true'
