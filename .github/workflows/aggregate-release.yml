@@ -36,14 +36,19 @@ jobs:
       source_ref: ${{ steps.request.outputs.source_ref }}
       source_sha: ${{ steps.request.outputs.source_sha }}
       version: ${{ steps.request.outputs.version }}
+      framework_sha: ${{ steps.framework.outputs.sha }}
     steps:
       - name: Check out trusted release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main
+          ref: ${{ job.workflow_sha }}
           path: control
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Record the exact trusted framework
+        id: framework
+        run: echo "sha=$(git -C control rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Check out exact platform source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -119,22 +124,120 @@ jobs:
             "${{ steps.request.outputs.source_sha }}")
           export SOURCE_DATE_EPOCH
           control/release/aggregate-release.sh fetch "$VERSION" fetched
-      - name: Bootstrap bounded test-helper builds
-        run: bash control/ci/hosted/bootstrap.sh --profile helper-build
-
-      - name: Build immutable E2E helper packages without release credentials
+      - name: Select the admitted native Workbench images once
         env:
-          KUASAR_CI_DIR: ${{ github.workspace }}/helper-build-metrics
+          GH_TOKEN: ${{ github.token }}
         run: |
-          taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
-          python3 -B control/release/build-e2e-helpers.py \
-            --sources fetched/test-sources --test-revisions fetched/test-revisions.json \
-            --output fetched/e2e-helpers --wheels-output fetched/e2e-wheels --platform-source platform
+          python3 -B control/ci/hosted/workbench.py select \
+            --framework-sha "${{ steps.framework.outputs.sha }}" --output workbench.json
+      - name: Transport the exact fetched inputs
+        run: tar -cf fetched.tar fetched
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aggregate-sources-${{ github.run_id }}
+          path: |
+            fetched.tar
+            workbench.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
 
+  helper-build:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.framework_sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          path: helper-work/platform
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: aggregate-sources-${{ github.run_id }}
+          path: transport
+      - name: Materialize exact helper inputs without running a compiler
+        run: |
+          python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
+          cp -a inputs/fetched/test-sources/. helper-work/
+          mkdir helper-work/.ci
+          cp inputs/fetched/test-revisions.json helper-work/.ci/
+      - name: Build native immutable E2E helpers in Workbench
+        uses: ./control/.github/actions/workbench
+        with:
+          selection: transport/workbench.json
+          sources: helper-work
+          arch: ${{ matrix.arch }}
+          cpus: '2'
+          memory-gib: '8'
+          run: |
+            python3 -B /inputs/release/release/build-e2e-helpers.py \
+              --sources /src --test-revisions /src/.ci/test-revisions.json --arch "$TARGET_ARCH" \
+              --output /src/.ci/e2e-helpers --wheels-output /src/.ci/e2e-wheels --platform-source /src/platform
+      - name: Transport this native helper package
+        run: tar -cf "helpers-${{ matrix.arch }}.tar" -C helper-work/.ci e2e-helpers e2e-wheels
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: aggregate-helpers-${{ matrix.arch }}-${{ github.run_id }}
+          path: helpers-${{ matrix.arch }}.tar
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
+  collect:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    needs: [prepare, helper-build]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.framework_sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.source_sha }}
+          path: platform
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: aggregate-sources-${{ github.run_id }}
+          path: transport
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: aggregate-helpers-*-${{ github.run_id }}
+          path: helpers
+          merge-multiple: true
+      - name: Combine the two exact native helper packages
+        run: |
+          python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
+          mv inputs/fetched fetched
+          mkdir -p fetched/e2e-helpers fetched/e2e-wheels
+          for arch in x86_64 aarch64; do
+            python3 -B control/ci/integration/transport.py extract "helpers/helpers-$arch.tar" "helpers/$arch"
+            mv "helpers/$arch/e2e-helpers/$arch" fetched/e2e-helpers/
+            mv "helpers/$arch/e2e-wheels/$arch" fetched/e2e-wheels/
+          done
       - name: Collect the shared external inputs once for both native images
         env:
           PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
-          VERSION: ${{ steps.request.outputs.version }}
+          VERSION: ${{ needs.prepare.outputs.version }}
           E2E_HELPER_ROOT: ${{ github.workspace }}/fetched/e2e-helpers
           E2E_WHEEL_ROOT: ${{ github.workspace }}/fetched/e2e-wheels
         run: |
@@ -166,7 +269,7 @@ jobs:
 
   workbench-build:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: prepare
+    needs: [prepare, collect]
     strategy:
       fail-fast: false
       matrix:
@@ -261,6 +364,7 @@ jobs:
       release_version: ${{ needs.prepare.outputs.version }}
       release_bundle_artifact: ${{ needs.prepare.outputs.artifact }}
       platform_source_sha: ${{ needs.prepare.outputs.source_sha }}
+      workbench_selection_artifact: aggregate-sources-${{ github.run_id }}
 
   publish:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
@@ -345,7 +449,7 @@ jobs:
           set -euo pipefail
           artifact_id_lines=$(gh api --paginate \
             "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name | test("^(aggregate-stage-|aggregate-inputs-|workbench-inputs-|workbench-image-|integration-build-|integration-prepared-)")) | .id')
+            --jq '.artifacts[] | select(.name | test("^(aggregate-stage-|aggregate-inputs-|aggregate-sources-|aggregate-helpers-|workbench-inputs-|workbench-image-|integration-build-|integration-readers-|integration-prepared-)")) | .id')
           artifact_ids=()
           if [[ -n "$artifact_id_lines" ]]; then
             mapfile -t artifact_ids <<< "$artifact_id_lines"

@@ -27,7 +27,7 @@ concurrency:
 jobs:
   build:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 180
     outputs:
       shards: ${{ steps.plan.outputs.shards }}
@@ -67,11 +67,36 @@ jobs:
               output.write('performance=' + json.dumps(bool(plan['lanes'][os.environ['TARGET_ARCH']]['performance'])) + '\n')
               output.write('product_cases=' + json.dumps(bool(plan['lanes'][os.environ['TARGET_ARCH']]['selection']['cases'])) + '\n')
           PYTHON
-      - name: Bootstrap existing native or cross recipes
+      - name: Build trusted native archive readers in Workbench
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: reader-build
+          arch: ${{ inputs.arch }}
+          cpus: '2'
+          memory-gib: '8'
+          cache: 'false'
+          run: |
+            source /inputs/release/ci/hosted/bootstrap.sh
+            export KUASAR_HOSTED_ROOT=/src/reader-tools
+            export GITHUB_ENV=/build/tmp/reader-env GITHUB_PATH=/build/tmp/reader-path
+            mkdir -p "$KUASAR_HOSTED_ROOT/bin"
+            install_readers
+            install_runtime_reader
+      - name: Retain trusted readers outside candidate mounts
         run: |
-          profile=artifact-build
-          if [ "$TARGET_ARCH" = aarch64 ]; then profile=artifact-cross; fi
-          bash framework/ci/hosted/bootstrap.sh --profile "$profile"
+          mkdir readers
+          cp reader-build/reader-tools/bin/{mkfs.erofs,fsck.erofs,dump.erofs,runtime-payloads.py} readers/
+          cp reader-build/reader-tools/erofs-readers.COPYING readers/
+          (cd readers && sha256sum mkfs.erofs fsck.erofs dump.erofs runtime-payloads.py erofs-readers.COPYING > SHA256SUMS)
+      - name: Upload immutable native readers
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-readers-${{ inputs.arch }}-${{ github.run_id }}
+          path: readers
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
       - name: Download exact aggregate stage
         if: inputs.stage_artifact != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -86,12 +111,32 @@ jobs:
           options=()
           if [ -n "$STAGE_ARTIFACT" ]; then options+=(aggregate-stage/assets); fi
           bash framework/ci/integration/download-baseline.sh plan/plan.json "$TARGET_ARCH" assets "${options[@]}"
-      - name: Build the affected delta and test helpers once
+      - name: Fetch the exact private source and helper set without a compiler
         run: |
-          taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
-          /usr/bin/time -o build-time.txt -f 'build wall_seconds=%e' \
-            python3 -B framework/ci/integration/build-artifacts.py --plan plan/plan.json \
-            --arch "$TARGET_ARCH" --assets assets --sources sources --output delta
+          python3 -B framework/ci/integration/build-artifacts.py --materialize-only \
+            --plan plan/plan.json --arch "$TARGET_ARCH" --assets assets --sources sources --output delta
+          mkdir sources/.ci
+          cp plan/plan.json plan/workbench.json sources/.ci/
+          cp -a assets readers sources/.ci/
+      - name: Build the affected delta and test helpers once
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: sources
+          arch: ${{ inputs.arch }}
+          cpus: '2'
+          memory-gib: '8'
+          run: |
+            export PATH="/src/.ci/readers:$PATH"
+            export KUASAR_RUNTIME_READER=/src/.ci/readers/runtime-payloads.py
+            /usr/bin/time -o /src/.ci/build-time.txt -f 'build wall_seconds=%e' \
+              python3 -B /inputs/release/ci/integration/build-artifacts.py --materialized \
+              --plan /src/.ci/plan.json --arch "$TARGET_ARCH" --assets /src/.ci/assets \
+              --sources /src --output /src/.ci/delta
+      - name: Transport original baseline bytes and the built delta
+        run: |
+          cp sources/.ci/build-time.txt build-time.txt
+          mv sources/.ci/delta delta
           tar -czf build-inputs.tar.gz assets delta build-time.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -105,7 +150,7 @@ jobs:
   prepare:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 30
     env:
       TARGET_ARCH: ${{ inputs.arch }}
@@ -124,8 +169,19 @@ jobs:
         with:
           name: integration-build-${{ inputs.arch }}-${{ github.run_id }}
           path: transport
-      - name: Bootstrap native archive readers
+      - name: Bootstrap archive execution prerequisites
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
+      - name: Download trusted native archive readers
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: integration-readers-${{ inputs.arch }}-${{ github.run_id }}
+          path: readers
+      - name: Verify and select the prebuilt archive readers
+        run: |
+          (cd readers && sha256sum --check SHA256SUMS)
+          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
+          echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
       - name: Prepare a runtime without Go, Rust or component sources
         if: needs.build.outputs.product_cases == 'true'
         run: |
@@ -165,7 +221,7 @@ jobs:
   e2e:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     needs: [build, prepare]
-    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 120
     strategy:
       fail-fast: false
@@ -201,6 +257,17 @@ jobs:
           profile=artifact-x86
           if [ "$TARGET_ARCH" = aarch64 ]; then profile=artifact-arm; fi
           bash framework/ci/hosted/bootstrap.sh --profile "$profile"
+      - name: Download trusted native archive readers
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: integration-readers-${{ inputs.arch }}-${{ github.run_id }}
+          path: readers
+      - name: Verify and select the prebuilt archive readers
+        run: |
+          (cd readers && sha256sum --check SHA256SUMS)
+          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
+          echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
       - name: Prepare an isolated runtime without Go, Rust or component sources
         if: matrix.shard == 'storage' || matrix.shard == 'snapshot' || (inputs.arch == 'aarch64' && matrix.shard == 'image')
         run: |
@@ -229,7 +296,7 @@ jobs:
   performance:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.build.outputs.performance == 'true'
     needs: [build, prepare]
-    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     timeout-minutes: 120
     env:
       TARGET_ARCH: ${{ inputs.arch }}
@@ -257,6 +324,17 @@ jobs:
           profile=artifact-x86
           if [ "$TARGET_ARCH" = aarch64 ]; then profile=artifact-arm; fi
           bash framework/ci/hosted/bootstrap.sh --profile "$profile"
+      - name: Download trusted native archive readers
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: integration-readers-${{ inputs.arch }}-${{ github.run_id }}
+          path: readers
+      - name: Verify and select the prebuilt archive readers
+        run: |
+          (cd readers && sha256sum --check SHA256SUMS)
+          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
+          echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
       - name: Run the independent working-set performance gate
         run: |
           python3 -B framework/ci/integration/transport.py extract transport/prepared.tar.gz prepared

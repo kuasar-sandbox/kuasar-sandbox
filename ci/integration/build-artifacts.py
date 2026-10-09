@@ -70,46 +70,65 @@ def build_records(plan, arch):
     return records
 
 
-def checkout_records(records, root):
-    root.mkdir(parents=True, exist_ok=False)
-    for owner, record in sorted(records.items()):
-        checkout(record["repository"], record["sha"], root / owner)
-    modules = ["./" + owner for owner in sorted(records) if (root / owner / "go.mod").is_file()]
+def configure_workspace(root):
+    modules = ["./" + owner.name for owner in sorted(root.iterdir())
+               if owner.is_dir() and (owner / "go.mod").is_file()]
     if modules:
-        # A separate test-helper checkout can sit below the product workspace.
-        # Initialize its own file instead of rediscovering the parent's go.work.
+        # Compiler/toolchain selection runs only inside the build environment.
         run(["go", "work", "init", *modules], cwd=root, environment={**os.environ, "GOWORK": "off"})
 
 
-def materialize(plan, arch, root):
+def helper_owners(plan, arch):
+    if plan["mode"] != "source":
+        return set()
+    return dependencies(set(artifacts.planned_helpers(plan["lanes"][arch]["selection"]).values()) - {"framework"})
+
+
+def separate_helpers(plan, arch):
     records = build_records(plan, arch)
-    checkout_records({owner: records[owner] for owner in source_owners(plan, arch)}, root)
+    return any(owner not in source_owners(plan, arch) or records[owner]["sha"] != plan["test_revisions"][owner]["sha"]
+               for owner in helper_owners(plan, arch))
+
+
+def source_layout(plan, arch):
+    records = build_records(plan, arch)
+    layout = {owner: records[owner] for owner in source_owners(plan, arch)}
+    for owner in plan["test_overlays"]:
+        if records[owner]["sha"] != plan["test_revisions"][owner]["sha"]:
+            layout["test-overlays/" + owner] = plan["test_revisions"][owner]
+    if separate_helpers(plan, arch):
+        layout.update({"test-helpers/" + owner: plan["test_revisions"][owner] for owner in helper_owners(plan, arch)})
+    if "vmlinux" in plan["lanes"][arch].get("products", []) and plan["kernel_sha"] != plan["sources"]["guest-runtime"]["sha"]:
+        layout["kernel-unit/guest-runtime"] = {"repository": "kuasar-sandbox/guest-runtime", "sha": plan["kernel_sha"]}
+    return layout
+
+
+def materialize(plan, arch, root):
+    """Fetch exact public inputs on the host without invoking any toolchain."""
+    root.mkdir(parents=True, exist_ok=False)
+    for relative, record in sorted(source_layout(plan, arch).items()):
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        checkout(record["repository"], record["sha"], destination)
+
+
+def verify_materialized(plan, arch, root):
+    for relative, record in sorted(source_layout(plan, arch).items()):
+        actual = subprocess.check_output(["git", "-C", root / relative, "rev-parse", "HEAD"], text=True).strip()
+        artifacts.require(actual == record["sha"], "materialized source identity changed: " + relative)
 
 
 def helper_sources(plan, arch, sources):
-    owners = set(artifacts.planned_helpers(plan["lanes"][arch]["selection"]).values()) - {"framework"}
-    required = dependencies(owners)
-    records = build_records(plan, arch)
-    if all((sources / owner).is_dir() and records[owner]["sha"] == plan["test_revisions"][owner]["sha"]
-           for owner in required):
-        return sources
-    # A linked product can still require the baseline source while its test
-    # helper has an independently newer pin. Keep those compiler inputs apart.
-    root = sources / "test-helpers"
-    checkout_records({owner: plan["test_revisions"][owner] for owner in required}, root)
+    root = sources / "test-helpers" if separate_helpers(plan, arch) else sources
+    artifacts.require(root.is_dir(), "exact helper inputs were not materialized")
     return root
 
 
 def test_source(plan, arch, sources, owner):
     record = plan["test_revisions"][owner]
-    if build_records(plan, arch)[owner]["sha"] == record["sha"]:
-        return sources / owner
-    # Source overlays are independent of the library revisions compiled into
-    # products. Never replace a product checkout just to obtain newer tests.
-    destination = sources / "test-overlays" / owner
-    destination.parent.mkdir(exist_ok=True)
-    checkout(record["repository"], record["sha"], destination)
-    return destination
+    root = sources / owner if build_records(plan, arch)[owner]["sha"] == record["sha"] else sources / "test-overlays" / owner
+    artifacts.require(root.is_dir(), "exact test overlay was not materialized: " + owner)
+    return root
 
 
 def baseline_tree(plan, arch, assets, output):
@@ -122,26 +141,30 @@ def baseline_tree(plan, arch, assets, output):
         artifacts.unpack(assets / name, output, unit, seen)
 
 
-def build(plan, arch, assets, sources, output):
+def build(plan, arch, assets, sources, output, *, materialized=False):
     artifacts.check_plan(plan)
-    artifacts.require(platform.machine() == "x86_64", "both product builds run in independent x86 workspaces")
+    artifacts.require(platform.machine() == arch, "product and helper builds require the selected native architecture")
     artifacts.require(not output.exists(), "delta output already exists")
     environment = os.environ.copy()
     # This stage has no publisher or App credentials. Fail if a caller tries to
     # collapse the credentialed resolver/publisher into candidate execution.
     for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY"):
         artifacts.require(not environment.get(key), f"candidate build must not receive {key}")
-    materialize(plan, arch, sources)
-    (output / "bin").mkdir(parents=True)
     actual_framework = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
     artifacts.require(actual_framework == plan["framework_sha"], "framework checkout differs from admitted revision")
+    if materialized:
+        verify_materialized(plan, arch, sources)
+    else:
+        materialize(plan, arch, sources)
+    configure_workspace(sources)
+    if separate_helpers(plan, arch):
+        configure_workspace(sources / "test-helpers")
+    (output / "bin").mkdir(parents=True)
     environment.update(TARGET_ARCH=arch, KUASAR_WORKSPACE_ROOT=str(sources))
     lane = plan["lanes"][arch]
     kernel_root = sources
     if "vmlinux" in lane["products"] and plan["kernel_sha"] != plan["sources"]["guest-runtime"]["sha"]:
         kernel_root = sources / "kernel-unit"
-        kernel_root.mkdir()
-        checkout("kuasar-sandbox/guest-runtime", plan["kernel_sha"], kernel_root / "guest-runtime")
     native = {NATIVE[name] for name in lane["products"] if name in NATIVE}
     if lane.get("embedded_products"):
         native.add("envd")
@@ -222,6 +245,16 @@ def build(plan, arch, assets, sources, output):
     metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "products": {}, "embedded": {}, "tests": {}, "helpers": {},
                 "test_revisions": plan["test_revisions"],
                 "build_context": {"host": platform.machine(), "target": arch, "tools": {}, "native_inputs": {}}}
+    workbench = {name: environment[key] for name, key in (
+        ("image_id", "KUASAR_WORKBENCH_IMAGE_ID"), ("framework_sha", "KUASAR_WORKBENCH_FRAMEWORK_SHA"))
+        if key in environment}
+    selection = sources / ".ci/workbench.json"
+    if selection.is_file():
+        workbench["selection"] = json.loads(selection.read_text())
+    if workbench:
+        # Diagnostic provenance only. The trusted plan and action receipt remain
+        # the authority for image/source admission, independently of build output.
+        metadata["build_context"]["workbench"] = workbench
     for name in lane["products"]:
         metadata["products"][name] = {"sha256": artifacts.digest(output / "bin" / name), "sources": plan["product_sources"][name]}
     for name in lane.get("embedded_products", []):
@@ -232,7 +265,7 @@ def build(plan, arch, assets, sources, output):
         revision = plan["framework_sha"] if owner == "framework" else plan["test_revisions"][owner]["sha"]
         metadata["helpers"][name] = {"sha256": artifacts.digest(output / "helpers" / name), "source_sha": revision}
     for label, command in {"go": ["go", "version"], "go-context": ["go", "env", "GOHOSTOS", "GOHOSTARCH", "GOVERSION"],
-                           "cc": ["aarch64-linux-gnu-gcc" if arch == "aarch64" else environment.get("CC", "gcc"), "--version"],
+                           "cc": [environment.get("CC", "gcc"), "--version"],
                            "rustc": ["rustc", "-vV"]}.items():
         if shutil.which(command[0]):
             metadata["build_context"]["tools"][label] = subprocess.check_output(command, text=True, env=environment, cwd=sources).strip()
@@ -258,8 +291,17 @@ def main():
     parser.add_argument("--assets", required=True, type=Path)
     parser.add_argument("--sources", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--materialize-only", action="store_true", help="fetch exact inputs without running compilers")
+    mode.add_argument("--materialized", action="store_true", help="verify and compile previously fetched exact inputs")
     args = parser.parse_args()
-    build(json.loads(args.plan.read_text()), args.arch, args.assets.resolve(), args.sources.resolve(), args.output.resolve())
+    plan = json.loads(args.plan.read_text())
+    artifacts.check_plan(plan)
+    if args.materialize_only:
+        materialize(plan, args.arch, args.sources.resolve())
+    else:
+        build(plan, args.arch, args.assets.resolve(), args.sources.resolve(), args.output.resolve(),
+              materialized=args.materialized)
 
 
 if __name__ == "__main__":
