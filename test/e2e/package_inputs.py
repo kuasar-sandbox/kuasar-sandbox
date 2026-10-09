@@ -41,7 +41,9 @@ def guide_inputs(root: Path):
                 discovered.append(relative)
         if not discovered:
             raise ValueError(f'no Markdown documentation inputs: {pattern}')
-        for path in discovered:
+        # Recursive directory globs can reach a file via multiple matching
+        # ancestors. Only overlap between distinct declaration entries is an error.
+        for path in sorted(set(discovered)):
             if path in seen:
                 raise ValueError(f'duplicate documentation input: {path}')
             seen.add(path)

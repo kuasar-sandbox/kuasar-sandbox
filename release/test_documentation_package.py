@@ -150,6 +150,15 @@ class DocumentationPackageTest(unittest.TestCase):
         for name in ('a', 'b'):
             self.assertEqual((output / f'guide/user/{name}/README.md').read_text(), f'# {name} guide\n')
 
+    def test_recursive_directory_glob_discovers_each_file_once(self):
+        source = self.root / 'connector'
+        nested = source / 'docs/user/nested/new.md'
+        nested.parent.mkdir(parents=True)
+        nested.write_text('# Nested guide\n')
+        (source / 'release/guide-inputs.txt').write_text('README.md\ndocs/**\n')
+        output, _ = self.assemble()
+        self.assertEqual((output / 'guide/connector/user/nested/new.md').read_text(), '# Nested guide\n')
+
     def test_missing_owner_declaration_has_no_cross_repository_fallback(self):
         declaration = self.root / 'connector/release/guide-inputs.txt'
         declaration.write_text('# Empty owner selection\n')
