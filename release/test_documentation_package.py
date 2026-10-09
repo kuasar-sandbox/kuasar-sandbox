@@ -6,11 +6,12 @@ import shutil
 import sys
 import subprocess
 import tempfile
+import tarfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'test/e2e'))
-from package_inputs import GUIDES, OWNER_LIBRARIES, PLATFORM_RUNTIME
+from package_inputs import GUIDES, PLATFORM_RUNTIME
 OWNERS = ('platform', 'accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator')
 SPEC = importlib.util.spec_from_file_location('check_docs', ROOT / 'ci/check_docs.py')
 DOCS = importlib.util.module_from_spec(SPEC)
@@ -41,12 +42,11 @@ class DocumentationPackageTest(unittest.TestCase):
             if owner in {'accelerator', 'guest-runtime'}:
                 for suffix in ('', '_zh'):
                     (source / f'test/e2e/README{suffix}.md').write_text('[English](README.md) | [简体中文](README_zh.md)\n# Guide fixture\n')
-            if owner in OWNER_LIBRARIES:
+            if owner in OWNERS:
                 suite = source / ('test/e2e/platform' if owner == 'platform' else 'test/e2e')
-                for name in OWNER_LIBRARIES[owner]:
-                    path = suite / 'lib' / name
-                    path.parent.mkdir(parents=True, exist_ok=True)
-                    path.write_text('# Runtime fixture\n')
+                path = suite / 'lib' / 'runtime_fixture.py'
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text('# Runtime fixture\n')
         platform = self.root / 'platform'
         for name in PLATFORM_RUNTIME:
             path = platform / name
@@ -255,9 +255,75 @@ class DocumentationPackageTest(unittest.TestCase):
         self.assertTrue((self.root / 'platform/test/demo/test_demo_safety.sh').is_file())
 
     def test_missing_runtime_input_is_rejected(self):
-        (self.root / 'connector/test/e2e/lib/notify_helpers.sh').unlink()
+        shutil.rmtree(self.root / 'connector/test/e2e/lib')
+        _, result = self.assemble(success=False)
+        self.assertIn('runtime library directory', result.stderr)
+
+    def test_new_nested_owner_inputs_survive_assembly_and_archive(self):
+        # Regression for sandboxer #305: no aggregator filename list is edited
+        # when an owner adds a runtime dependency beside its canonical cases.
+        suite = self.root / 'sandboxer/test/e2e'
+        helper = suite / 'lib/restore_dio_workload.py'
+        helper.write_text('DIRECT_IO_WORKLOAD = "new owner dependency"\n')
+        helper.chmod(0o640)
+        nested = suite / 'lib/data/nested/payload.json'
+        nested.parent.mkdir(parents=True)
+        nested.write_bytes(b'{"owner":"sandboxer"}\n')
+        other = self.root / 'connector/test/e2e/lib/restore_dio_workload.py'
+        other.write_text('CONNECTOR_PRIVATE = True\n')
+        case = suite / 'cases/snapshot.restore-fixture.sh'
+        case.write_text('#!/bin/sh\ncat "$SANDBOXER_LIB/restore_dio_workload.py"\n')
+        output, _ = self.assemble()
+        delivered = output / 'test/e2e/lib/sandboxer/restore_dio_workload.py'
+        result = subprocess.run(['sh', str(output / 'test/e2e/cases' / case.name)],
+                                env={**os.environ, 'SANDBOXER_LIB': str(delivered.parent)},
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, helper.read_text())
+        self.assertEqual(delivered.stat().st_mode & 0o777, 0o640)
+        archive = self.root / 'platform.tar.gz'
+        with tarfile.open(archive, 'w:gz') as package:
+            package.add(output, arcname='.')
+        with tarfile.open(archive) as package:
+            for source, name in [(helper, 'sandboxer/restore_dio_workload.py'),
+                                 (nested, 'sandboxer/data/nested/payload.json'),
+                                 (other, 'connector/restore_dio_workload.py')]:
+                self.assertEqual(package.extractfile('./test/e2e/lib/' + name).read(),
+                                 source.read_bytes())
+
+    def test_excluded_self_tests_and_caches_are_not_runtime_inputs(self):
+        library = self.root / 'orchestrator/test/e2e/lib'
+        for name in ('test_runtime.py', 'test_fixtures/payload',
+                     '__pycache__/runtime.pyc', '.pytest_cache/state', 'stale.pyc'):
+            path = library / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('SOURCE_ONLY_MARKER\n')
+        output, _ = self.assemble()
+        files = [p.relative_to(output / 'test/e2e/lib/orchestrator').as_posix()
+                 for p in (output / 'test/e2e/lib/orchestrator').rglob('*') if p.is_file()]
+        self.assertEqual(files, ['runtime_fixture.py'])
+
+    def test_nested_and_excluded_library_symlinks_are_rejected(self):
+        for name in ('nested/escape.py', 'test_escape.py', '__pycache__/escape'):
+            with self.subTest(name=name):
+                path = self.root / 'sandboxer/test/e2e/lib' / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.symlink_to(self.root / 'sandboxer/README.md')
+                _, result = self.assemble(success=False)
+                self.assertIn('symbolic link', result.stderr)
+                path.unlink()
+                shutil.rmtree(self.root / 'assembled')
+
+    def test_special_library_input_is_rejected(self):
+        os.mkfifo(self.root / 'sandboxer/test/e2e/lib/pipe')
         _, result = self.assemble(success=False)
         self.assertIn('missing package input', result.stderr)
+
+    def test_duplicate_case_is_still_rejected(self):
+        case = self.root / 'sandboxer/test/e2e/cases/basic.connector-fixture.sh'
+        case.write_text('exit 0\n')
+        _, result = self.assemble(success=False)
+        self.assertIn('duplicate E2E case ID', result.stderr)
 
     def test_source_symlinks_are_rejected(self):
         path = self.root / 'connector/docs/tapfd.md'

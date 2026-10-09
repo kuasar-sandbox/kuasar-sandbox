@@ -99,14 +99,14 @@ done < "$TMP/selection.tsv"
 python3 - "$ROOT" "$TMP/fetched/test-sources" <<'PYINPUTS'
 import pathlib, sys
 sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'test/e2e'))
-from package_inputs import GUIDES, OWNER_LIBRARIES
+from package_inputs import GUIDES
 root = pathlib.Path(sys.argv[2])
 for owner in ('accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator'):
     for stem in GUIDES[owner]:
         path = root / owner / (stem + '.md')
         path.parent.mkdir(parents=True, exist_ok=True)
         if not path.exists(): path.write_text('# User fixture\n')
-    for name in OWNER_LIBRARIES[owner]:
+    for name in ('runtime_fixture.py',):
         path = root / owner / 'test/e2e/lib' / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text('# Runtime fixture\n')

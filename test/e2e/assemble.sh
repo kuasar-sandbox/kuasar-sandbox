@@ -30,7 +30,7 @@ copy_cases() {
 import importlib.machinery, importlib.util, pathlib, shutil, sys
 owner, source, target = sys.argv[1], pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])
 sys.path.insert(0, sys.argv[4])
-from package_inputs import OWNER_LIBRARIES, copy_input
+from package_inputs import library_inputs, copy_input
 loader = importlib.machinery.SourceFileLoader('assembled_runner', str(target / 'e2e'))
 spec = importlib.util.spec_from_loader(loader.name, loader)
 runner = importlib.util.module_from_spec(spec)
@@ -47,8 +47,8 @@ for case in cases:
     if destination.exists():
         raise SystemExit(f'duplicate E2E case ID: {case.name} ({owner})')
     shutil.copy2(case, destination)
-for name in OWNER_LIBRARIES[owner]:
-    copy_input(source, pathlib.Path('lib') / name, target / 'lib' / owner / name)
+for path in library_inputs(source):
+    copy_input(source, path, target / 'lib' / owner / path.relative_to('lib'))
 PY
 }
 
