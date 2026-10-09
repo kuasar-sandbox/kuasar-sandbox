@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -362,7 +363,7 @@ class LauncherTests(unittest.TestCase):
             return original(path)
         with patch.object(launcher.sys, 'argv', ['workbench', '--root', str(self.root), '--name', 'state', 'cleanup']), patch.object(
                 launcher, 'locked', return_value=nullcontext(self.state)), patch.object(
-                launcher, 'record', return_value=self.data), patch.object(launcher, 'stop_owned'), patch.object(
+                launcher, 'record', return_value=self.data), patch.object(launcher, 'stop_owned', return_value=0), patch.object(
                 launcher, 'owned_container', return_value=None), patch.object(
                 Path, 'iterdir', entries), patch.object(launcher, 'docker', return_value='') as docker:
             self.assertEqual(launcher.main(), 0)
@@ -372,6 +373,159 @@ class LauncherTests(unittest.TestCase):
         self.assertIn(f'type=bind,src={directory},dst=/owned', command)
         self.assertFalse(directory.exists())
         self.assertEqual(self.data['status'], 'cleaned')
+
+    def cleanup_fixture(self, *, network_owner=None, stop_error=None):
+        """Use real launcher ownership/lifecycle logic; emulate only Docker."""
+        self.data.update(mode='build', container_id='c' * 64, network_id='d' * 64)
+        launcher.save(self.state, self.data)
+        resources = {'container': True, 'network': True, 'running': True}
+        calls = []
+
+        def inspect(kind, identity):
+            if kind == 'container':
+                self.assertEqual(identity, self.data['container_id'])
+                if not resources['container']:
+                    return None
+                return {'Id': identity, 'Image': self.data['image_id'],
+                        'Config': {'Labels': {launcher.LABEL: self.data['id'],
+                                             'org.kuasar.workbench.uid': str(os.getuid())}},
+                        'State': {'Running': resources['running'], 'ExitCode': 143, 'OOMKilled': False}}
+            self.assertEqual((kind, identity), ('network', self.data['network_id']))
+            if not resources['network']:
+                return None
+            return {'Id': identity, 'Labels': {launcher.LABEL: network_owner or self.data['id']},
+                    'Containers': {}}
+
+        def docker(*arguments, **kwargs):
+            calls.append(arguments)
+            if arguments[0] == 'stop':
+                self.assertEqual(arguments[-1], self.data['container_id'])
+                if stop_error is not None:
+                    raise stop_error
+                resources['running'] = False
+            elif arguments[0] == 'rm':
+                self.assertFalse(resources['running'])
+                self.assertEqual(arguments[1], self.data['container_id'])
+                resources['container'] = False
+            elif arguments[:2] == ('network', 'rm'):
+                self.assertFalse(resources['container'])
+                self.assertEqual(arguments[2], self.data['network_id'])
+                resources['network'] = False
+            else:
+                self.assertEqual(arguments[0], 'run')
+                mount = arguments[arguments.index('--mount') + 1]
+                self.assertTrue(mount.startswith('type=bind,src='))
+                self.assertTrue(mount.endswith(',dst=/owned'))
+                directory = Path(mount[len('type=bind,src='):-len(',dst=/owned')])
+                self.assertEqual(directory.parent, self.state)
+                self.assertIn(directory.name, ('docker', 'containerd', 'output', 'work', 'build', 'home', 'journal'))
+                # Execute the actual helper, translating only its bind mount.
+                program = arguments[-1]
+                self.assertEqual(program.count('"/owned"'), 1)
+                program = program.replace('"/owned"', repr(str(directory)))
+                subprocess.run([sys.executable, '-B', '-c', program], check=True, timeout=10)
+            return ''
+
+        return resources, calls, inspect, docker
+
+    def test_unwritable_diagnostics_still_release_owned_container_and_network(self):
+        if os.getuid() == 0:
+            self.skipTest('permission failure requires the ordinary invoking UID')
+        output = self.state / 'output'
+        output.mkdir()
+        output.chmod(0)
+        self.addCleanup(output.chmod, 0o700)
+        resources, calls, inspect, docker = self.cleanup_fixture()
+        with patch.object(launcher.sys, 'argv', ['workbench', '--root', str(self.root), '--name', 'state', 'cleanup']), \
+                patch.object(launcher, 'inspect', side_effect=inspect), patch.object(launcher, 'docker', side_effect=docker):
+            self.assertEqual(launcher.main(), 1)
+        self.assertEqual(resources, {'container': False, 'network': False, 'running': False})
+        self.assertEqual([call[0] for call in calls], ['stop', 'rm', 'network'])
+        recorded = launcher.record(self.state)
+        self.assertEqual(recorded['status'], 'cleaned')
+        self.assertEqual(recorded['diagnostics_errors'][0]['type'], 'PermissionError')
+        self.assertIn(str(output), recorded['diagnostics_errors'][0]['message'])
+
+    def test_log_timeout_still_releases_resources_and_returns_failure(self):
+        resources, calls, inspect, docker = self.cleanup_fixture()
+        timeout = subprocess.TimeoutExpired(['docker', 'logs'], 30)
+        with patch.object(launcher.sys, 'argv', ['workbench', '--root', str(self.root), '--name', 'state', 'cleanup']), \
+                patch.object(launcher, 'inspect', side_effect=inspect), patch.object(launcher, 'docker', side_effect=docker), \
+                patch.object(launcher.subprocess, 'run', side_effect=timeout):
+            self.assertEqual(launcher.main(), 1)
+        self.assertFalse(resources['container'] or resources['network'])
+        self.assertEqual(launcher.record(self.state)['diagnostics_errors'][0]['type'], 'TimeoutExpired')
+        self.assertEqual([call[0] for call in calls], ['stop', 'rm', 'network'])
+
+    def test_diagnostic_failure_does_not_authorize_a_foreign_network(self):
+        resources, calls, inspect, docker = self.cleanup_fixture(network_owner='another-task')
+        with patch.object(launcher.sys, 'argv', ['workbench', '--root', str(self.root), '--name', 'state', 'cleanup']), \
+                patch.object(launcher, 'inspect', side_effect=inspect), patch.object(launcher, 'docker', side_effect=docker), \
+                patch.object(launcher, 'diagnostics', side_effect=PermissionError('fixture output denied')):
+            with self.assertRaisesRegex(ValueError, 'foreign network'):
+                launcher.main()
+        self.assertFalse(resources['container'])
+        self.assertTrue(resources['network'])
+        self.assertEqual([call[0] for call in calls], ['stop', 'rm'])
+
+    def test_diagnostic_failure_does_not_mask_a_failed_stop(self):
+        error = subprocess.CalledProcessError(1, ['docker', 'stop'])
+        resources, calls, inspect, docker = self.cleanup_fixture(stop_error=error)
+        with patch.object(launcher.sys, 'argv', ['workbench', '--root', str(self.root), '--name', 'state', 'cleanup']), \
+                patch.object(launcher, 'inspect', side_effect=inspect), patch.object(launcher, 'docker', side_effect=docker), \
+                patch.object(launcher, 'diagnostics', side_effect=PermissionError('fixture output denied')):
+            with self.assertRaises(subprocess.CalledProcessError):
+                launcher.main()
+        self.assertEqual(resources, {'container': True, 'network': True, 'running': True})
+        self.assertEqual([call[0] for call in calls], ['stop'])
+        self.assertIn('diagnostics_errors', launcher.record(self.state))
+
+    def test_stop_reports_diagnostic_failure_without_removing_retained_resources(self):
+        resources, calls, inspect, docker = self.cleanup_fixture()
+        with patch.object(launcher.sys, 'argv', ['workbench', '--root', str(self.root), '--name', 'state', 'stop']), \
+                patch.object(launcher, 'inspect', side_effect=inspect), patch.object(launcher, 'docker', side_effect=docker), \
+                patch.object(launcher, 'diagnostics', side_effect=PermissionError('fixture output denied')):
+            self.assertEqual(launcher.main(), 1)
+        self.assertEqual(resources, {'container': True, 'network': True, 'running': False})
+        self.assertEqual([call[0] for call in calls], ['stop'])
+        self.assertEqual(launcher.record(self.state)['status'], 'stopped')
+
+    def test_diagnostic_ownership_error_is_not_treated_as_an_output_failure(self):
+        resources, calls, inspect, docker = self.cleanup_fixture()
+        with patch.object(launcher.sys, 'argv', ['workbench', '--root', str(self.root), '--name', 'state', 'cleanup']), \
+                patch.object(launcher, 'inspect', side_effect=inspect), patch.object(launcher, 'docker', side_effect=docker), \
+                patch.object(launcher, 'diagnostics', side_effect=ValueError('foreign container collision')):
+            with self.assertRaisesRegex(ValueError, 'foreign container'):
+                launcher.main()
+        self.assertEqual(resources, {'container': True, 'network': True, 'running': True})
+        self.assertEqual(calls, [])
+
+    def test_cleanup_helper_removes_special_files_without_following_links(self):
+        resources, calls, inspect, docker = self.cleanup_fixture()
+        resources.update(container=False, running=False)
+        external = self.root / 'unrelated'
+        external.mkdir()
+        (external / 'keep').write_text('another task')
+        for name in ('output', 'build', 'home'):
+            directory = self.state / name
+            directory.mkdir()
+            (directory / 'regular').write_text('owned')
+            (directory / 'nested').mkdir()
+            (directory / 'nested/file').write_text('owned nested file')
+            (directory / 'linked-file').symlink_to(external / 'keep')
+            (directory / 'linked-directory').symlink_to(external, target_is_directory=True)
+            os.mkfifo(directory / 'pipe')
+            stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            self.addCleanup(stream.close)
+            stream.bind(str(directory / 'socket'))
+        with patch.object(launcher.sys, 'argv', ['workbench', '--root', str(self.root), '--name', 'state', 'cleanup', '--delete-output']), \
+                patch.object(launcher, 'inspect', side_effect=inspect), patch.object(launcher, 'docker', side_effect=docker):
+            self.assertEqual(launcher.main(), 0)
+        self.assertFalse(resources['container'] or resources['network'])
+        self.assertEqual((external / 'keep').read_text(), 'another task')
+        self.assertEqual(set(path.name for path in self.state.iterdir()), {'instance.json'})
+        self.assertEqual(launcher.record(self.state)['status'], 'cleaned')
+        self.assertEqual(sum(call[0] == 'run' for call in calls), 3)
 
     def test_build_stop_accepts_term_but_rejects_forced_kill(self):
         self.data['mode'] = 'build'
