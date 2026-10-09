@@ -29,7 +29,7 @@ PYPATH
 mkdir -p "$(dirname "$OUT")"
 RAW_ROOT=$(mktemp -d "${OUT}.samples.XXXXXX")
 # Socket paths are based on run-root. Keep mutable case state independent of
-# arbitrary report names; workbench supplies a short, retained /build/tmp.
+# arbitrary report names; workbench supplies a short, retained /build/t.
 RUN_ROOT=$(mktemp -d "${TMPDIR:-/var/tmp}/kp-XXXXXX")
 printf '%s\n' "$RUN_ROOT" >"$RAW_ROOT/run-root"
 echo "Raw samples and failures: $RAW_ROOT; mutable state: $RUN_ROOT"

@@ -80,7 +80,7 @@ resolve → x86 build → x86 prepare → 原生 x86 shards → x86 result
 
 两个架构分别选择原生 Runner (`ubuntu-24.04` 或 `ubuntu-24.04-arm`), 通过 `.github/actions/workbench` 调用已有 Makefile/native recipe. 受信 resolver 每次运行只选择一次已发布且验证通过的 Workbench, 固定两个架构的 registry digest、image config ID 和 framework SHA. 后续 job 核验同一选择、实际镜像架构及 release/source 标签. 普通 PR 仍只构建准入的产品差异和必要 helper. 每条 lane 独立 prepare 一次, 不等待另一架构构建; 所有 shard 和架构结果保留独立身份并显式汇总.
 
-构建复用 `workbench/workbench` build 模式: ordinary UID、只读根文件系统、移除 capabilities, 不挂载宿主 Docker socket 或 KVM. 私有源码位于 `/src`, 受信框架只读挂载至 `/inputs/release`. `HOME=/work/home`、`TMPDIR=/build/tmp`、Go/Cargo 状态及 `/build/native-cache` 都属于任务. CPU/内存预算明确传给 Go、Cargo、CMake 和 native make recipe, 不把 CPU quota 当作 `nproc`. 发布凭据留在宿主编排侧; publisher 校验器和 archive readers 使用单独禁用缓存的 Workbench 调用.
+构建复用 `workbench/workbench` build 模式: ordinary UID、只读根文件系统、移除 capabilities, 不挂载宿主 Docker socket 或 KVM. 私有源码位于 `/src`, 受信框架只读挂载至 `/inputs/release`. `HOME=/work/home`、磁盘上的短路径 `TMPDIR=/build/t`、Go/Cargo 状态及 `/build/native-cache` 都属于任务. CPU/内存预算明确传给 Go、Cargo、CMake 和 native make recipe, 不把 CPU quota 当作 `nproc`. 发布凭据留在宿主编排侧; publisher 校验器和 archive readers 使用单独禁用缓存的 Workbench 调用.
 
 继续验证目标 ELF/kernel Image、静态链接和包布局. helper 与打包工具均使用目标原生架构. Workbench producer 直接在原生 Runner 构建自身.
 

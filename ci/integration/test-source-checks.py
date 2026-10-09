@@ -97,7 +97,7 @@ class SourceChecksTests(unittest.TestCase):
         for command, directory, env in commands:
             if command[0] == "bash":
                 self.assertEqual(command, ["bash", "scripts/ci-source-checks.sh", "--ordinary"])
-            self.assertEqual(env["TMPDIR"], "/build/tmp")
+            self.assertEqual(env["TMPDIR"], "/build/t")
             self.assertEqual(env["ORG"], str(self.sources))
             self.assertEqual(env["TARGET_ARCH"], "x86_64")
         self.assertEqual(result["test_revisions"], self.plan["test_revisions"])

@@ -55,7 +55,7 @@ Manifest 和 density harness 还会按脚本检查 Docker,网络与文件系统�
 platform 发布，Makefile 直接从源码路径调用，不重新构建预备产品。Case wallclock
 包含用例设置、断言及清理，不是 `Sandbox.create()` 到就绪，也不与历史 T0→exit
 数值直接比较。原始 stats、runner result 和失败日志全部保留；可变用例状态使用独立短目录
-`$TMPDIR/kp-*`（默认 `/var/tmp`，workbench 内为 `/build/tmp`），避免 Unix socket
+`$TMPDIR/kp-*`（默认 `/var/tmp`，workbench 内为 `/build/t`），避免 Unix socket
 路径过长，其位置记录在报告旁；首个失败会非零退出。
 `make perf` 的其他 harness 仍使用其源码构建输入；比较时必须记录各自来源，不能
 假定它们自动与 `PREPARED` 相同。`sandbox-perf-manifest.sh` 仍只聚合成功样本，引用

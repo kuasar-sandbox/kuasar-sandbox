@@ -50,7 +50,7 @@ source path directly without rebuilding prepared products. Case wall time includ
 setup, assertions and cleanup: it is neither `Sandbox.create()`-to-ready time nor
 directly comparable to historical T0-to-exit measurements. Raw stats, runner
 results and failure logs are retained; mutable case state uses a separate short
-`$TMPDIR/kp-*` directory (`/var/tmp` by default, `/build/tmp` inside workbench)
+`$TMPDIR/kp-*` directory (`/var/tmp` by default, `/build/t` inside workbench)
 to keep Unix socket paths bounded, with its location recorded beside the report; the first failure exits nonzero. Other
 `make perf` harnesses still use their source-build inputs; record each identity
 rather than assuming it matches `PREPARED`. `sandbox-perf-manifest.sh` still

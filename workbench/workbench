@@ -126,7 +126,8 @@ def create_command(args, state, data):
     for name in ('work', 'output', 'build', 'home', 'docker', 'containerd', 'journal'):
         require(not (state / name).is_symlink(), 'instance data directory cannot be a symlink')
         (state / name).mkdir(exist_ok=True)
-    (state / 'build/tmp').mkdir(exist_ok=True)
+    # Match /var/tmp's byte budget for existing Go test Unix socket paths.
+    (state / 'build/t').mkdir(exist_ok=True)
     command = ['create', '--name', data['container_name'], '--pull=never', '--cgroupns=private',
                '--label', LABEL + '=' + data['id'], '--label', 'org.kuasar.workbench.uid=' + str(os.getuid()),
                '--cpus', str(args.cpus),
@@ -134,7 +135,7 @@ def create_command(args, state, data):
                '--pids-limit', str(args.pids), '--network', data.get('network_id') or 'none',
                '--tmpfs', '/run', '--tmpfs', '/run/lock', '--tmpfs', '/tmp:exec',
                '--env', 'HOME=/work/home', '--env', 'CARGO_HOME=/work/home/.cargo',
-               '--env', 'TMPDIR=/build/tmp',
+               '--env', 'TMPDIR=/build/t',
                '--env', 'GOPATH=/work/home/go', '--env', 'GOCACHE=/work/home/go-cache',
                '--env', 'GOMAXPROCS=' + str(args.cpus), '--env', 'CARGO_BUILD_JOBS=' + str(args.cpus),
                '--env', 'KUASAR_BUILD_JOBS=' + str(args.cpus),

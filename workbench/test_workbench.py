@@ -298,6 +298,34 @@ class LauncherTests(unittest.TestCase):
                 self.assertIn('/run', mounts)
                 self.assertIn('/run/lock', mounts)
 
+    def test_task_tmpdir_preserves_long_go_test_unix_socket_paths(self):
+        # Keep the unchanged orchestrator test name, ten-digit Go TempDir
+        # suffix and sandbox layout that reach Linux's 107-byte path limit.
+        suffix = ('TestExecH1FullClientCloseTerminatesHandlerAndCtlStream1943955423'
+                  '/001/sandboxes/node-close/ctl.sock')
+        for mode in ('build', 'system'):
+            with self.subTest(mode=mode):
+                command = self.command(mode=mode, source=self.source if mode == 'build' else None)
+                environment = dict(command[i + 1].split('=', 1)
+                                   for i, arg in enumerate(command) if arg == '--env')
+                tmpdir = Path(environment['TMPDIR'])
+                self.assertIn(f'type=bind,src={self.state}/build,dst=/build', command)
+                self.assertTrue((self.state / 'build' / tmpdir.relative_to('/build')).is_dir())
+                path = str(tmpdir / suffix)
+                # A same-length relative path permits a real bind in this
+                # private fixture without creating the host's /build directory.
+                relative = 'x' + path[1:]
+                self.assertEqual(len(os.fsencode(relative)), len(os.fsencode(path)))
+                subprocess.run([sys.executable, '-B', '-c',
+                                'import pathlib,socket,sys\n'
+                                'path=pathlib.Path(sys.argv[1])\n'
+                                'path.parent.mkdir(parents=True,exist_ok=True)\n'
+                                'with socket.socket(socket.AF_UNIX,socket.SOCK_STREAM) as stream:\n'
+                                '    stream.bind(str(path))\n'
+                                'path.unlink()\n', relative], cwd=self.state, check=True, timeout=5)
+                self.assertEqual(str(tmpdir), '/build/t')
+                self.assertEqual(len(os.fsencode(path)), 107)
+
     def test_system_check_needs_no_host_policy_tool_or_kvm(self):
         info = {'OSType': 'linux', 'KernelVersion': 'kernel', 'Architecture': 'aarch64',
                 'OperatingSystem': 'test Linux', 'CgroupVersion': '2', 'SecurityOptions': ['name=apparmor']}

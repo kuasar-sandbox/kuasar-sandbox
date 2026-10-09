@@ -82,7 +82,7 @@ jobs:
           run: |
             source /inputs/release/ci/hosted/bootstrap.sh
             export KUASAR_HOSTED_ROOT=/src/reader-tools
-            export GITHUB_ENV=/build/tmp/reader-env GITHUB_PATH=/build/tmp/reader-path
+            export GITHUB_ENV=/build/t/reader-env GITHUB_PATH=/build/t/reader-path
             mkdir -p "$KUASAR_HOSTED_ROOT/bin"
             install_readers
             install_runtime_reader
