@@ -14,7 +14,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
        libnuma-dev libseccomp-dev libsnappy-dev libssl-dev libtool libtool-bin \
        liburing-dev libzstd-dev lld llvm lz4 make netcat-openbsd nftables ninja-build \
        openssl patch pkg-config procps psmisc python3 python3-pip python3-venv \
-       python3-yaml redis-server rsync shellcheck skopeo socat sqlite3 strace \
+       python3-yaml redis-server rsync shellcheck skopeo socat sqlite3 strace sudo \
        systemd systemd-sysv tar tcpdump time udev unzip util-linux uuid-dev \
        xz-utils zip zlib1g-dev zstd \
     && mkdir -p /usr/share/workbench \
