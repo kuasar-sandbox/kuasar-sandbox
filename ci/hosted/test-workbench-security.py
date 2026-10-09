@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -232,7 +233,97 @@ class CacheScopeTests(TemporaryFiles):
                 self.args.receipt.write_text(json.dumps(value))
 
 
+class CacheKeyTests(TemporaryFiles):
+    def key(self, sources):
+        def output(command, **kwargs):
+            if 'native-cache.sh' in str(command[0]):
+                environment = kwargs.get('env') or os.environ
+                workspace = Path(environment['KUASAR_WORKSPACE_ROOT'])
+                return ci.hashlib.sha256((workspace / 'guest-runtime/Makefile').read_bytes()).hexdigest()
+            return 'fixed compiler version'
+
+        stream = io.StringIO()
+        with patch.dict(os.environ, {'KUASAR_WORKSPACE_ROOT': str(sources)}), patch.object(
+                ci, 'output', side_effect=output), redirect_stdout(stream):
+            ci.cache_key(argparse.Namespace(sources=sources))
+        return stream.getvalue().strip()
+
+    def test_exact_helper_dependency_changes_miss_the_actions_cache(self):
+        for container in ('test-helpers', 'test-overlays'):
+            with self.subTest(container=container):
+                sources = self.root / container
+                helper = sources / container / 'sandboxer'
+                helper.mkdir(parents=True)
+                lock = helper / 'go.sum'
+                lock.write_text('first exact helper dependency\n')
+                before = self.key(sources)
+                lock.write_text('second exact helper dependency\n')
+                self.assertNotEqual(before, self.key(sources))
+
+    def test_separate_kernel_unit_recipe_changes_miss_the_actions_cache(self):
+        sources = self.root / 'sources'
+        for parent in (sources, sources / 'kernel-unit'):
+            owner = parent / 'guest-runtime'
+            owner.mkdir(parents=True)
+            (owner / 'Makefile').write_text('first native recipe\n')
+        before = self.key(sources)
+        (sources / 'kernel-unit/guest-runtime/Makefile').write_text('changed exact kernel recipe\n')
+        self.assertNotEqual(before, self.key(sources))
+
+    def test_task_directory_and_transport_metadata_do_not_discard_reusable_inputs(self):
+        keys = []
+        for name in ('first-job', 'new-job'):
+            sources = self.root / name
+            owner = sources / 'test-helpers/sandboxer'
+            owner.mkdir(parents=True)
+            (owner / 'go.sum').write_text('same exact helper dependency\n')
+            (sources / '.ci').mkdir()
+            (sources / '.ci/plan.json').write_text(json.dumps({'run': name}))
+            keys.append(self.key(sources))
+        self.assertEqual(keys[0], keys[1])
+
+
 class OutputBoundaryTests(TemporaryFiles):
+    def test_declared_outputs_do_not_rewrite_unexported_build_source_links(self):
+        root = self.receipt()
+        sources = self.root / 'sources'
+        (sources / 'sandboxer/release-bundle').mkdir(parents=True)
+        (sources / 'sandboxer/release-bundle/package.tar').write_text('fixture package')
+        (sources / 'sandboxer/build-tool-link').symlink_to(self.root / 'image-tool-fixture')
+        with patch.object(ci, 'cleanup', return_value=0):
+            ci.check_outputs(argparse.Namespace(root=root, outputs='sandboxer/release-bundle'))
+        self.assertTrue((sources / 'sandboxer/build-tool-link').is_symlink())
+
+    def test_an_exported_symlink_directory_cannot_hide_escaping_children(self):
+        root = self.receipt()
+        sources = self.root / 'sources'
+        (sources / 'sandboxer').mkdir()
+        (sources / 'actual-bundle').mkdir()
+        (sources / 'sandboxer/release-bundle').symlink_to('../actual-bundle', target_is_directory=True)
+        outside = self.root / 'outside-fixture'
+        outside.write_text('not an exported file')
+        (sources / 'actual-bundle/escape').symlink_to(outside)
+        with patch.object(ci, 'cleanup', return_value=0):
+            with self.assertRaises(ValueError):
+                ci.check_outputs(argparse.Namespace(root=root, outputs='sandboxer/release-bundle'))
+
+    def test_cache_parent_symlink_cannot_select_a_host_directory(self):
+        root = self.receipt()
+        (self.root / 'sources/result').write_text('fixture result')
+        outside = self.root / 'outside-fixture/git'
+        outside.mkdir(parents=True)
+        (outside / 'fake-host-file').write_text('not a compiler cache')
+        (root / 'instances/ci/home/.cargo').symlink_to(outside.parent, target_is_directory=True)
+        with patch.object(ci, 'cleanup', return_value=0):
+            with self.assertRaises(ValueError):
+                ci.check_outputs(argparse.Namespace(root=root, outputs='result'))
+
+    def test_explicit_output_contract_cannot_be_empty(self):
+        root = self.receipt()
+        with patch.object(ci, 'cleanup', return_value=0):
+            with self.assertRaises(ValueError):
+                ci.check_outputs(argparse.Namespace(root=root, outputs=''))
+
     def test_source_files_and_internal_links_are_allowed(self):
         source = self.root / 'source'
         source.mkdir()
@@ -343,6 +434,56 @@ class ExecutionTests(TemporaryFiles):
             with self.assertRaisesRegex(ValueError, 'framework changed'):
                 ci.execute(args)
             run.assert_not_called()
+
+    def test_real_interrupt_signals_record_failure_and_stop_the_owned_instance(self):
+        script = '''import argparse, importlib.util, pathlib, signal, subprocess, sys
+spec = importlib.util.spec_from_file_location("signal_fixture_subject", sys.argv[1])
+ci = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = ci
+spec.loader.exec_module(ci)
+root, ready, stopped = map(pathlib.Path, sys.argv[2:5])
+ci.framework_sha = lambda: sys.argv[5]
+def run(command, **kwargs):
+    if "exec" in command:
+        ready.write_text("waiting for a real signal")
+        signal.pause()
+        raise AssertionError("signal did not interrupt the command")
+    if "cleanup" in command:
+        stopped.write_text(str(root))
+        return subprocess.CompletedProcess(command, 0)
+    raise AssertionError("unexpected fixture command")
+ci.subprocess.run = run
+raise SystemExit(ci.execute(argparse.Namespace(root=root, timeout=30, arguments=["fixture-command"])))
+'''
+        parent = self.root
+        for signum, expected in ((signal.SIGINT, 130), (signal.SIGTERM, 143)):
+            with self.subTest(signal=signum), tempfile.TemporaryDirectory(dir=parent) as directory:
+                self.root = Path(directory)
+                root = self.receipt()
+                (root / 'instances/ci/instance.json').write_text('{}')
+                ready, stopped = self.root / 'ready', self.root / 'stopped'
+                process = subprocess.Popen([sys.executable, '-B', '-c', script,
+                                            str(ROOT / 'ci/hosted/workbench.py'), str(root),
+                                            str(ready), str(stopped), FRAMEWORK],
+                                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not ready.exists() and process.poll() is None and time.monotonic() < deadline:
+                        time.sleep(0.01)
+                    self.assertTrue(ready.exists(), 'signal fixture did not reach candidate execution')
+                    process.send_signal(signum)
+                    stdout, stderr = process.communicate(timeout=10)
+                    self.assertEqual(process.returncode, expected, stdout + stderr)
+                    self.assertEqual(stopped.read_text(), str(root))
+                    receipt = json.loads((root / 'receipt.json').read_text())
+                    self.assertEqual(receipt['commands'][-1]['exit_code'], expected)
+                    self.assertEqual(receipt['conclusion'], 'failure')
+                    self.assertEqual(receipt['cleanup_exit_code'], 0)
+                finally:
+                    if process.poll() is None:
+                        process.kill()
+                        process.communicate(timeout=10)
+                    self.root = parent
 
 
 class CleanupTests(TemporaryFiles):
