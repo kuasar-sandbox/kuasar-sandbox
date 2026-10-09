@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -32,9 +33,10 @@ def fixture(arch="x86_64", *, memory="8589934592", quota="200000 100000"):
         (legacy / "ci/hosted").mkdir(parents=True)
         bootstrap = BOOTSTRAP
         (legacy / "ci/hosted/bootstrap.sh").write_bytes(bootstrap)
-        (sources / "frozen.json").write_text("frozen input fixture\n")
-        record = {"sources": {owner: {"repository": repository, "sha": "a" * 40}
+        record = {"framework_sha": "a" * 40, "sources": {owner: {"repository": repository, "sha": "a" * 40}
                               for owner, repository in task.REPOSITORIES.items()}}
+        task.write(sources / "frozen.json", record)
+        task.write(sources / "integration-plan.json", {"fixture": True})
         for owner in record["sources"]:
             (sources / owner).mkdir()
         env = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_TEMP": str(root),
@@ -143,7 +145,7 @@ class LegacyControl(unittest.TestCase):
                     task.legacy_inputs(args)
 
     def test_shared_compile_and_package_keep_exit_and_distinct_product_identity(self):
-        for fail in (False, True):
+        for fail in (None, "helper", "package"):
             with self.subTest(fail=fail), fixture("aarch64") as (args, _, private):
                 rows = [("guest-runtime", name) for name in task.artifacts.PRODUCTS]
                 exact_products = {name: {"sha256": "b" * 64} for _, name in rows}
@@ -151,12 +153,30 @@ class LegacyControl(unittest.TestCase):
                 def command(evidence, label, argv, **kwargs):
                     evidence.record["stages"].append({"stage": label, "argv": list(map(str, argv)), "exit_code": 0})
 
+                def helpers(sources, arch, plan, destination, evidence, environment, producer):
+                    self.assertEqual(environment["GOCACHE"], str(private / "home/go-cache"))
+                    self.assertEqual(environment["GOMODCACHE"], str(private / "home/go/pkg/mod"))
+                    self.assertEqual(environment["RUNNER_TEMP"], str(private / "tmp"))
+                    self.assertEqual(environment["GOWORK"], str(args.sources / "go.work"))
+                    self.assertIsNone(producer["image_id"])
+                    self.assertEqual(producer["host_arch"], "x86_64")
+                    self.assertIn("full-manifest", [row["stage"] for row in evidence.record["stages"]])
+                    evidence.record["stages"].append({"stage": "helper-build", "exit_code": 17 if fail == "helper" else 0})
+                    if fail == "helper":
+                        raise subprocess.CalledProcessError(17, ["exact-helper-fixture"])
+                    task.write(destination / "helpers.json", {"fixture": "same private process/cache"})
+
                 with patch.object(task, "manifest", return_value=rows), \
                         patch.object(task, "products", return_value=exact_products), \
                         patch.object(task.Evidence, "run", command), \
-                        patch.object(task, "package_all", side_effect=ValueError("package failure") if fail else None) as package, \
+                        patch.object(task, "helper_payload", side_effect=helpers), \
+                        patch.object(task, "package_all", side_effect=ValueError("package failure") if fail == "package" else None) as package, \
                         patch.object(task, "native_cache", side_effect=AssertionError("legacy must not use Workbench cache")):
-                    if fail:
+                    if fail == "helper":
+                        with self.assertRaises(subprocess.CalledProcessError) as error:
+                            task.legacy_cold(args)
+                        self.assertEqual(error.exception.returncode, 17)
+                    elif fail == "package":
                         with self.assertRaisesRegex(ValueError, "package failure"):
                             task.legacy_cold(args)
                     else:
@@ -172,7 +192,11 @@ class LegacyControl(unittest.TestCase):
                 self.assertEqual(result["go_toolchain_mode"], "auto")
                 self.assertIn("toolchain/go-effective", stages)
                 self.assertTrue(all("validator/" + owner in stages for owner in task.VALIDATORS))
-                package.assert_called_once()
+                if fail == "helper":
+                    package.assert_not_called()
+                else:
+                    package.assert_called_once()
+                    self.assertEqual(result["helpers_sha256"], task.artifacts.digest(private / "legacy-verification/integration-helpers/helpers.json"))
 
     def test_normal_workbench_admission_still_rejects_a_host_task_path(self):
         with fixture() as (args, _, _):
@@ -220,6 +244,12 @@ class LegacyControl(unittest.TestCase):
                 calls.append((label, command))
                 if label == "bootstrap":
                     self.assertEqual(command[-1], "artifact-cross")
+                    separator = command.index("-i")
+                    environment = dict(value.split("=", 1) for value in command[separator + 1:command.index("bash")])
+                    self.assertFalse(any("TOKEN" in key or "SECRET" in key for key in environment))
+                    self.assertEqual(environment["HOME"], str(private / "bootstrap-home"))
+                    self.assertIn("--property=MemoryMax=8G", command)
+                    self.assertIn("--property=CPUQuota=200%", command)
                     provision = Path(environment["RUNNER_TEMP"]) / "kuasar-hosted.fixture"
                     (provision / "bin").mkdir(parents=True)
                     Path(environment["GITHUB_ENV"]).write_text(
@@ -248,6 +278,8 @@ class LegacyControl(unittest.TestCase):
                     patch.object(task, "LEGACY_BOOTSTRAP_SHA256", hashlib.sha256(BOOTSTRAP).hexdigest()), \
                     patch.object(task, "output", side_effect=query), \
                     patch.object(task.shutil, "which", side_effect=lambda name: str(tools / name)), \
+                    patch.object(task, "stop_legacy_unit", return_value=0), \
+                    patch.object(task, "retain_legacy_readers") as retained, \
                     patch.object(task, "legacy_stage", side_effect=stage):
                 self.assertEqual(task.legacy_run(args), 0)
             self.assertEqual([label for label, _ in calls], ["bootstrap", "candidate"])
@@ -255,6 +287,9 @@ class LegacyControl(unittest.TestCase):
             self.assertEqual(receipt["conclusion"], "success")
             self.assertEqual(receipt["candidate_environment"]["GOTOOLCHAIN"], selected_mode)
             self.assertNotIn("GH_TOKEN", receipt["candidate_environment"])
+            self.assertNotIn("GH_TOKEN", receipt["bootstrap_environment"])
+            self.assertEqual(receipt["bootstrap_budget"]["memory_max"], 8 * 1024**3)
+            self.assertEqual(retained.call_args.args[2], "x86_64")
 
     def test_foreign_unit_is_never_stopped(self):
         record = {"unit": "task216-legacy-" + "a" * 24 + ".service", "unit_description": "owned task"}
@@ -264,6 +299,51 @@ class LegacyControl(unittest.TestCase):
                 task.stop_legacy_unit(record)
             self.assertEqual(calls.call_count, 1)
             self.assertEqual(calls.call_args.args[0][:2], ["systemctl", "show"])
+
+    def test_bootstrap_failure_keeps_its_exit_when_owned_cleanup_also_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bootstrap = root / "bootstrap.sh"
+            bootstrap.write_bytes(BOOTSTRAP)
+            evidence = task.Evidence(root / "host", {})
+            with patch.object(task, "LEGACY_BOOTSTRAP_SHA256", hashlib.sha256(BOOTSTRAP).hexdigest()), \
+                    patch.object(task, "legacy_stage", return_value=17), \
+                    patch.object(task, "stop_legacy_unit", side_effect=ValueError("foreign owner")):
+                self.assertEqual(task.legacy_bootstrap_stage(evidence, bootstrap, "artifact-build", [0, 1], root), 17)
+            self.assertEqual(evidence.record["bootstrap_cleanup_exit_code"], 1)
+            self.assertIn("foreign owner", evidence.record["bootstrap_cleanup_error"])
+
+    def test_finish_attempts_both_owned_units_and_keeps_state_if_bootstrap_cannot_stop(self):
+        for failure in (1, ValueError("foreign bootstrap owner")):
+            with self.subTest(failure=str(failure)), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                private = root / "task216-legacy.fixture"
+                private.mkdir()
+                destination = root / "output"
+                task.write(destination / "host/result.json", {"owner_uid": os.getuid(), "framework_sha": "a" * 40,
+                    "task_root": str(private), "conclusion": "running", "unit": "candidate", "unit_description": "owned candidate",
+                    "bootstrap_unit": "bootstrap", "bootstrap_unit_description": "owned bootstrap"})
+                seen = []
+
+                def stop(record):
+                    seen.append(record["unit"])
+                    if record["unit"] == "bootstrap":
+                        if isinstance(failure, Exception):
+                            raise failure
+                        return failure
+                    return 0
+
+                with patch.dict(os.environ, {"RUNNER_TEMP": str(root)}), \
+                        patch.object(task, "output", return_value="a" * 40), \
+                        patch.object(task, "stop_legacy_unit", side_effect=stop), \
+                        patch.object(task.subprocess, "run", side_effect=AssertionError("must not delete active state")):
+                    self.assertEqual(task.legacy_finish(SimpleNamespace(output=destination, task_root=private)), 1)
+                self.assertEqual(seen, ["bootstrap", "candidate"])
+                self.assertTrue(private.is_dir())
+                self.assertFalse((destination / "validated").exists())
+                receipt = json.loads((destination / "host/result.json").read_text())
+                self.assertEqual(receipt["conclusion"], "failure")
+                self.assertEqual(receipt["cleanup_exit_code"], 0)
 
     def test_finish_stops_before_safe_copy_and_refuses_links_or_fifos(self):
         for unsafe in (None, "link", "fifo"):
@@ -324,11 +404,12 @@ class LegacyControl(unittest.TestCase):
             self.assertEqual(control["env"]["TARGET_ARCH"], arch)
             self.assertEqual(control["needs"], "prepare")
             selected = jobs["prepare-legacy-" + lane]
-            self.assertEqual(selected["needs"], ["prepare", "legacy-" + lane, "helpers-" + lane])
+            self.assertEqual(selected["needs"], ["prepare", "legacy-" + lane])
+            self.assertEqual(selected["runs-on"], "ubuntu-24.04")
             self.assertEqual(selected["env"]["DELTA_COMMAND"], "legacy-packaged-delta")
             self.assertIs(selected["steps"], jobs["prepare-integration-" + lane]["steps"])
             e2e = jobs["e2e-legacy-" + lane]
-            self.assertEqual(e2e["needs"], ["prepare", "prepare-legacy-" + lane])
+            self.assertEqual(e2e["needs"], ["prepare", "prepare-legacy-" + lane] + (["legacy-readers-arm"] if lane == "arm" else []))
             self.assertEqual(e2e["strategy"], jobs["e2e-" + lane]["strategy"])
             self.assertIs(e2e["steps"], jobs["e2e-" + lane]["steps"])
             self.assertEqual(e2e["env"]["RESULT_PREFIX"], "workbench-216-legacy")
@@ -343,10 +424,143 @@ class LegacyControl(unittest.TestCase):
                     self.assertIn("--task-root", step["run"])
         self.assertIs(jobs["performance-legacy-x86"]["steps"], jobs["performance-x86"]["steps"])
         self.assertNotIn("performance-legacy-arm", jobs)
+        readers = jobs["legacy-readers-arm"]
+        self.assertEqual(readers["runs-on"], "ubuntu-24.04-arm")
+        self.assertEqual(readers["needs"], "prepare")
+        self.assertIn("legacy-readers-arm", jobs["validation-results"]["needs"])
+        self.assertEqual([step["with"]["ref"] for step in readers["steps"] if step.get("uses", "").startswith("actions/checkout")],
+                         ["${{ job.workflow_sha }}", task.LEGACY_FRAMEWORK])
+        for step in readers["steps"]:
+            if "run" in step:
+                subprocess.run(["bash", "-n"], input=step["run"], text=True, check=True)
+                self.assertNotIn("--profile source", step["run"])
+            self.assertNotIn("GH_TOKEN", step.get("env", {}))
+        for name in ("e2e-x86", "e2e-arm", "performance-x86"):
+            steps = jobs[name]["steps"]
+            self.assertTrue(any("${{ env.RESULT_PREFIX }}-readers-" in step.get("with", {}).get("name", "") for step in steps))
+            self.assertTrue(any("check-legacy-readers" in step.get("run", "") for step in steps))
+        for lane, arch in (("x86", "x86_64"), ("arm", "aarch64")):
+            uploads = [step["with"]["name"] for step in jobs["helpers-" + lane]["steps"]
+                       if step.get("uses", "").startswith("actions/upload-artifact")]
+            self.assertIn("workbench-216-readers-" + arch + "-${{ github.run_id }}", uploads)
 
 
 validation = task.module("legacy_existing_packaged_fixtures", task.ROOT / "ci/hosted/test-workbench-216-validation.py")
 validation.task = task
+
+
+class LegacyReaders(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.source = self.root / "bootstrap-readers"
+        (self.source / "bin").mkdir(parents=True)
+        self.frozen = self.root / "frozen.json"
+        task.write(self.frozen, {"framework_sha": "a" * 40})
+        self.destination = self.root / "retained"
+        self.populate(self.source, "aarch64")
+
+    def populate(self, root, arch):
+        (root / "bin").mkdir(parents=True, exist_ok=True)
+        header = bytearray(64)
+        header[:7] = b"\x7fELF\x02\x01\x01"
+        struct.pack_into("<H", header, 18, {"x86_64": 62, "aarch64": 183}[arch])
+        for name in task.READER_FILES[:3]:
+            (root / "bin" / name).write_bytes(header)
+        reader = Path(os.environ["KUASAR_RUNTIME_READER"])
+        shutil.copy2(reader, root / "bin/runtime-payloads.py")
+        (root / "erofs-readers.COPYING").write_text("reader source license fixture\n")
+
+    def check(self, arch="aarch64"):
+        args = SimpleNamespace(frozen=self.frozen, readers=self.destination, arch=arch)
+        with patch.object(task, "frozen", return_value={"framework_sha": "a" * 40}):
+            task.check_legacy_readers(args)
+
+    def test_native_readers_keep_exact_files_and_reject_corruption_or_wrong_architecture(self):
+        task.retain_legacy_readers(self.source, self.destination, "aarch64", self.frozen)
+        self.check()
+        with self.assertRaisesRegex(ValueError, "another frozen"):
+            self.check("x86_64")
+        target = self.destination / "fsck.erofs"
+        original = target.read_bytes()
+        target.write_bytes(original + b"corrupted")
+        with self.assertRaisesRegex(ValueError, "another frozen"):
+            self.check()
+        target.write_bytes(original)
+        os.mkfifo(self.destination / "unsafe")
+        with self.assertRaisesRegex(ValueError, "unexpected legacy reader files"):
+            self.check()
+
+    def test_a_correct_receipt_cannot_change_the_reader_elf_architecture(self):
+        task.retain_legacy_readers(self.source, self.destination, "aarch64", self.frozen)
+        receipt_path = self.destination / "readers.json"
+        receipt = json.loads(receipt_path.read_text())
+        receipt["arch"] = "x86_64"
+        task.write(receipt_path, receipt)
+        with self.assertRaisesRegex(ValueError, "wrong ELF architecture"):
+            self.check("x86_64")
+
+    def test_linked_trusted_reader_output_is_never_exported(self):
+        target = self.source / "bin/fsck.erofs"
+        target.unlink()
+        target.symlink_to(self.frozen)
+        with self.assertRaisesRegex(ValueError, "missing or linked"):
+            task.retain_legacy_readers(self.source, self.destination, "aarch64", self.frozen)
+        self.assertFalse(self.destination.exists())
+
+    def test_source_profile_is_not_an_allowed_reader_or_product_bootstrap(self):
+        evidence = task.Evidence(self.root / "host", {})
+        with patch.object(task, "legacy_stage") as stage:
+            with self.assertRaisesRegex(ValueError, "unapproved legacy bootstrap profile"):
+                task.legacy_bootstrap_stage(evidence, self.root / "bootstrap.sh", "source", [0, 1], self.root)
+        stage.assert_not_called()
+
+    def test_reader_controller_keeps_arm_profile_failure_and_stops_before_retaining(self):
+        for code in (0, 17):
+            with self.subTest(code=code):
+                private = self.root / ("task216-legacy.readers-" + str(code))
+                private.mkdir()
+                legacy = self.root / ("legacy-" + str(code))
+                (legacy / "ci/hosted").mkdir(parents=True)
+                (legacy / "ci/hosted/bootstrap.sh").write_bytes(BOOTSTRAP)
+                args = SimpleNamespace(task_root=private, frozen=self.frozen, legacy_framework=legacy,
+                                       output=self.root / ("output-" + str(code)))
+                events = []
+
+                def bootstrap(evidence, path, profile, cpus, root):
+                    self.assertEqual(profile, "artifact-arm")
+                    self.assertEqual(cpus, [4, 5])
+                    self.assertEqual(root, private)
+                    readers = evidence.directory / "provision/readers"
+                    self.populate(readers, "aarch64")
+                    (evidence.directory / "bootstrap.env").write_text(
+                        "KUASAR_HOSTED_ROOT=" + str(readers) + "\nKUASAR_BUILD_JOBS=2\n")
+                    events.append("bootstrap")
+                    return code
+
+                original_retain = task.retain_legacy_readers
+                def retain(*arguments):
+                    self.assertEqual(events, ["bootstrap", "stop"])
+                    events.append("retain")
+                    return original_retain(*arguments)
+
+                with patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+                                             "RUNNER_TEMP": str(self.root)}), \
+                        patch.object(task.os, "getuid", return_value=1001), \
+                        patch.object(task.os, "sched_getaffinity", return_value={4, 5, 6, 7}), \
+                        patch.object(task.platform, "machine", return_value="aarch64"), \
+                        patch.object(task, "frozen", return_value={"framework_sha": "a" * 40}), \
+                        patch.object(task, "output", return_value=task.LEGACY_FRAMEWORK), \
+                        patch.object(task, "LEGACY_BOOTSTRAP_SHA256", hashlib.sha256(BOOTSTRAP).hexdigest()), \
+                        patch.object(task, "legacy_bootstrap_stage", side_effect=bootstrap), \
+                        patch.object(task, "stop_legacy_unit", side_effect=lambda record: events.append("stop") or 0), \
+                        patch.object(task, "retain_legacy_readers", side_effect=retain):
+                    self.assertEqual(task.legacy_readers_run(args), code)
+                receipt = json.loads((args.output / "host/result.json").read_text())
+                self.assertEqual(receipt["exit_code"], code)
+                self.assertEqual(receipt["conclusion"], "success" if code == 0 else "failure")
+                self.assertEqual((private / "legacy-verification/readers/readers.json").exists(), code == 0)
 
 
 class SpaceSnapshots(unittest.TestCase):
@@ -439,7 +653,9 @@ class SpaceSnapshots(unittest.TestCase):
 class LegacyPackagedInputs(validation.PackagedInputContracts):
     def setUp(self):
         super().setUp()
-        stages = ["workspace", "full-build", "full-manifest", "toolchain/go", "toolchain/go-effective"]
+        stages = ["workspace", "full-build", "full-manifest", "toolchain/go", "toolchain/go-effective", "helper-build"]
+        if "basic.demo.sh" in self.plan["lanes"][self.arch]["selection"]["cases"]:
+            stages.append("helper-wheels")
         stages += ["validator/" + owner for owner in task.VALIDATORS]
         stages += [operation + "/" + unit for unit in task.UNITS for operation in ("package", "validate")]
         self.cold.update(phase="legacy-cold", image_id=None, legacy_framework_sha=task.LEGACY_FRAMEWORK,
@@ -447,6 +663,12 @@ class LegacyPackagedInputs(validation.PackagedInputContracts):
                          inputs=self.record, memory_max=8 * 1024**3, build_jobs=2, cpus=[0, 1],
                          go_toolchain_mode="auto", source_root="/private/task216-legacy.fixture/sources",
                          stages=[{"stage": stage, "exit_code": 0} for stage in stages])
+        helper_path = self.helpers / "integration-helpers/helpers.json"
+        helper = json.loads(helper_path.read_text())
+        helper.update({key: self.cold[key] for key in (
+            "image_id", "legacy_framework_sha", "legacy_bootstrap_sha256", "host_arch", "source_root")})
+        task.write(helper_path, helper)
+        self.cold["helpers_sha256"] = task.artifacts.digest(helper_path)
         task.write(self.packages / "result.json", self.cold)
 
     def delta(self, name="delta"):
@@ -459,12 +681,44 @@ class LegacyPackagedInputs(validation.PackagedInputContracts):
         with patch.object(task, "packaged_delta", side_effect=legacy):
             return super().delta(name)
 
-    def test_legacy_products_keep_separate_workbench_helper_identity(self):
+    def test_legacy_products_keep_same_job_helper_identity(self):
         delta = self.delta()
         context = json.loads((delta / "outputs.json").read_text())["build_context"]
         self.assertNotIn("workbench", context)
         self.assertEqual(context["legacy_control"]["legacy_framework_sha"], task.LEGACY_FRAMEWORK)
-        self.assertEqual(context["test_helpers"]["workbench"]["image_id"], self.image)
+        self.assertNotIn("workbench", context["test_helpers"])
+        self.assertEqual(context["test_helpers"]["legacy_control"], context["legacy_control"])
+
+    def test_changed_or_workbench_helpers_cannot_replace_legacy_helpers(self):
+        path = self.helpers / "integration-helpers/helpers.json"
+        original = json.loads(path.read_text())
+        for key, value in (("image_id", self.image), ("source_root", "/other/job"),
+                           ("host_arch", "aarch64"), ("legacy_bootstrap_sha256", "0" * 64)):
+            changed = {**original, key: value}
+            task.write(path, changed)
+            self.cold["helpers_sha256"] = task.artifacts.digest(path)
+            task.write(self.packages / "result.json", self.cold)
+            with self.assertRaisesRegex(ValueError, "same-job producer", msg=key):
+                self.delta("helper-producer-" + key)
+        task.write(path, original)
+        with self.assertRaisesRegex(ValueError, "same-job producer"):
+            self.delta("changed-helper-receipt")
+
+    def test_helper_revision_or_frozen_plan_mismatch_is_refused(self):
+        # Keep the same-job receipt matching so the original precise source-pin
+        # assertion is still exercised, not masked by the stronger outer hash.
+        path = self.helpers / "integration-helpers/helpers.json"
+        helper = json.loads(path.read_text())
+        name = next(iter(helper["helpers"]))
+        helper["helpers"][name]["source_sha"] = "e" * 40
+        task.write(path, helper)
+        self.cold["helpers_sha256"] = task.artifacts.digest(path)
+        task.write(self.packages / "result.json", self.cold)
+        with self.assertRaisesRegex(ValueError, "compiled helper identity changed"):
+            self.delta("helper-mismatch")
+        (self.plan_directory / "integration-plan.json").write_text("{}")
+        with self.assertRaisesRegex(ValueError, "frozen full integration plan changed"):
+            self.delta("plan-mismatch")
 
     def test_workbench_entry_rejects_legacy_and_legacy_refuses_wrong_identity(self):
         with self.assertRaisesRegex(ValueError, "another frozen"):

@@ -36,6 +36,7 @@ VALIDATORS = ("accelerator", "sandboxer", "orchestrator")
 NATIVE_PRODUCTS = {"vmlinux", "mkfs.erofs", "cloud-hypervisor"}
 LEGACY_FRAMEWORK = "baae11385c26a55e1c888be4c5334fc0b0b6860d"
 LEGACY_BOOTSTRAP_SHA256 = "4b6a50d20d06a8e9307a87df64f02632a2e183a38dec3630a8e4e1b9d530ccf8"
+READER_FILES = ("mkfs.erofs", "fsck.erofs", "dump.erofs", "runtime-payloads.py", "erofs-readers.COPYING")
 require = artifacts.require
 
 
@@ -728,7 +729,7 @@ def legacy_cold(args):
         "cpus": sorted(os.sched_getaffinity(0)), "build_jobs": 2,
         "frozen_sha256": artifacts.digest(sources / "frozen.json"), "inputs": record,
         "manifest": rows, "started_ns": time.time_ns(),
-        "comparison_limits": "original x86 host for both targets; ARM is cross-built; task-private host paths differ from Workbench /src; no cache restore/save or product rebuild during packaging"})
+        "comparison_limits": "original x86 host for both targets; ARM is cross-built; products then helpers share this job and compiler caches; the temporary Workbench treatment uses separate parallel helper jobs, unlike either normal PR path; task-private host paths differ from Workbench /src; no cache restore/save or product rebuild during packaging"})
     environment = {**os.environ, "GOWORK": str(sources / "go.work"), "TARGET_ARCH": arch,
                    "ORG": str(sources), "KUASAR_WORKSPACE_ROOT": str(sources),
                    "KUASAR_NATIVE_CACHE_ROOT": str(sources.parent / "native-cache-unused"),
@@ -749,6 +750,16 @@ def legacy_cold(args):
         compile_cold_products(sources, arch, evidence, environment)
         evidence.record["products"] = products(sources, arch, rows)
         evidence.save()
+        plan = json.loads((sources / "integration-plan.json").read_text())
+        helper_environment = {**environment, "RUNNER_TEMP": str(sources.parent / "tmp"),
+                              "KUASAR_CI_DIR": str(evidence.diagnostics / "helper-metrics")}
+        destination = evidence.directory / "integration-helpers"
+        helper_payload(sources, arch, plan, destination, evidence, helper_environment,
+                       {"image_id": None, "legacy_framework_sha": LEGACY_FRAMEWORK,
+                        "legacy_bootstrap_sha256": LEGACY_BOOTSTRAP_SHA256,
+                        "host_arch": platform.machine(), "source_root": str(sources)})
+        evidence.record["helpers_sha256"] = artifacts.digest(destination / "helpers.json")
+        require(products(sources, arch, rows) == evidence.record["products"], "helper compilation changed product outputs")
         package_all(sources, arch, record, evidence, environment)
         evidence.record["conclusion"] = "success"
     except BaseException as error:
@@ -817,6 +828,100 @@ def stop_legacy_unit(record):
     return 0
 
 
+def legacy_bootstrap_stage(evidence, bootstrap, profile, cpus, task_root):
+    """Bound only the exact former build/reader prerequisite profiles."""
+    require(profile in ("artifact-build", "artifact-cross", "artifact-arm"), "unapproved legacy bootstrap profile")
+    require(artifacts.digest(bootstrap) == LEGACY_BOOTSTRAP_SHA256 and len(cpus) == 2,
+            "legacy bootstrap identity or CPU budget changed")
+    provision = evidence.directory / "provision"
+    provision.mkdir()
+    for name in ("bootstrap-home", "bootstrap-tmp"):
+        (task_root / name).mkdir()
+    environment = {"PATH": os.environ["PATH"], "HOME": str(task_root / "bootstrap-home"),
+        "TMPDIR": str(task_root / "bootstrap-tmp"), "GOWORK": "off", "RUNNER_TEMP": str(provision),
+        "GITHUB_ENV": str(evidence.directory / "bootstrap.env"), "GITHUB_PATH": str(evidence.directory / "bootstrap.path"),
+        "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_OS": "Linux",
+        "RUNNER_ARCH": "ARM64" if profile == "artifact-arm" else "X64",
+        "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1"}
+    # Retain the provided toolchain selection while using a private HOME and
+    # passing only the allowlisted environment to pinned third-party compilation.
+    for key in ("GOROOT", "GOTOOLCHAIN", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"):
+        if os.environ.get(key):
+            environment[key] = os.environ[key]
+    if "RUSTUP_HOME" not in environment:
+        rustup_home = Path(os.environ["HOME"]) / ".rustup"
+        if rustup_home.is_dir():
+            environment["RUSTUP_HOME"] = str(rustup_home)
+    unit = "task216-legacy-" + hashlib.sha256((str(task_root) + ":bootstrap").encode()).hexdigest()[:24] + ".service"
+    description = "Kuasar #216 legacy bootstrap " + str(task_root)
+    evidence.record.update(bootstrap_unit=unit, bootstrap_unit_description=description,
+                          bootstrap_environment=environment,
+                          bootstrap_profile=profile, legacy_bootstrap_sha256=LEGACY_BOOTSTRAP_SHA256,
+                          bootstrap_budget={"cpus": cpus, "memory_max": 8 * 1024**3, "build_jobs": 2})
+    evidence.save()
+    command = ["sudo", "-n", "systemd-run", "--wait", "--pipe", "--service-type=exec", "--unit=" + unit,
+        "--description=" + description, "--property=CPUQuota=200%", "--property=MemoryMax=8G",
+        "--property=RuntimeMaxSec=3600", "--property=TimeoutStopSec=20", "--property=KillMode=control-group",
+        "/usr/bin/setpriv", "--reuid=" + str(os.getuid()), "--regid=" + str(os.getgid()), "--init-groups",
+        "/usr/bin/taskset", "-c", ",".join(map(str, cpus)), "/usr/bin/env", "-i",
+        *[key + "=" + value for key, value in environment.items()], "bash", bootstrap, "--profile", profile]
+    code = 1
+    try:
+        code = legacy_stage(evidence, "bootstrap-readers" if profile == "artifact-arm" else "bootstrap", command, timeout=3660)
+    finally:
+        cleanup = 1
+        try:
+            cleanup = stop_legacy_unit({"unit": unit, "unit_description": description})
+        except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
+            evidence.record["bootstrap_cleanup_error"] = str(error)
+        evidence.record["bootstrap_cleanup_exit_code"] = cleanup
+        evidence.save()
+    return code or cleanup
+
+
+def retain_legacy_readers(root, destination, arch, frozen_path):
+    """Retain only this trusted bootstrap's native readers, never target tools."""
+    require(root.resolve() == root and not root.is_symlink(), "linked legacy reader source")
+    files = {name: root / ("erofs-readers.COPYING" if name == "erofs-readers.COPYING" else "bin/" + name)
+             for name in READER_FILES}
+    require(all(path.resolve() == path and path.is_file() and not path.is_symlink() for path in files.values()),
+            "legacy reader output is missing or linked")
+    for name in READER_FILES[:3]:
+        artifacts.check_architecture(files[name], arch)
+    require(artifacts.digest(files["runtime-payloads.py"]) == "01d97e1cc7aed550305e13b4dfd1daa95a3740be84512d195aed46a277e661fd",
+            "legacy runtime reader pin changed")
+    destination.mkdir(parents=True)
+    for name, path in files.items():
+        shutil.copy2(path, destination / name)
+    identities = {name: artifacts.digest(destination / name) for name in READER_FILES}
+    (destination / "SHA256SUMS").write_text("".join(identities[name] + "  " + name + "\n" for name in READER_FILES))
+    write(destination / "readers.json", {"phase": "legacy-readers", "arch": arch,
+          "framework_sha": json.loads(frozen_path.read_text())["framework_sha"],
+          "frozen_sha256": artifacts.digest(frozen_path), "legacy_framework_sha": LEGACY_FRAMEWORK,
+          "legacy_bootstrap_sha256": LEGACY_BOOTSTRAP_SHA256, "files": identities})
+
+
+def check_legacy_readers(args):
+    record = frozen(args.frozen)
+    root = args.readers.absolute()
+    require(root.resolve() == root and not root.is_symlink(), "linked legacy reader directory")
+    expected = set(READER_FILES) | {"SHA256SUMS", "readers.json"}
+    require({path.name for path in root.iterdir()} == expected
+            and all(path.is_file() and not path.is_symlink() for path in root.iterdir()), "unexpected legacy reader files")
+    receipt = json.loads((root / "readers.json").read_text())
+    identities = {name: artifacts.digest(root / name) for name in READER_FILES}
+    require(receipt == {"phase": "legacy-readers", "arch": args.arch,
+            "framework_sha": record["framework_sha"], "frozen_sha256": artifacts.digest(args.frozen),
+            "legacy_framework_sha": LEGACY_FRAMEWORK, "legacy_bootstrap_sha256": LEGACY_BOOTSTRAP_SHA256,
+            "files": identities}, "legacy readers belong to another frozen input or producer")
+    for name in READER_FILES[:3]:
+        artifacts.check_architecture(root / name, args.arch)
+    require(identities["runtime-payloads.py"] == "01d97e1cc7aed550305e13b4dfd1daa95a3740be84512d195aed46a277e661fd",
+            "legacy runtime reader pin changed")
+    require((root / "SHA256SUMS").read_text() == "".join(identities[name] + "  " + name + "\n" for name in READER_FILES),
+            "legacy reader checksums changed")
+
+
 def legacy_finish(args):
     destination = args.output.absolute()
     receipt = destination / "host/result.json"
@@ -840,8 +945,16 @@ def legacy_finish(args):
         record.update(conclusion="failure", finish_error="legacy controller did not record completion")
     status = 0
     try:
+        if record.get("bootstrap_unit"):
+            record["bootstrap_cleanup_exit_code"] = 1
+            try:
+                record["bootstrap_cleanup_exit_code"] = stop_legacy_unit({
+                    "unit": record["bootstrap_unit"], "unit_description": record["bootstrap_unit_description"]})
+            except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
+                record["bootstrap_cleanup_error"] = str(error)
         record["cleanup_exit_code"] = stop_legacy_unit(record)
-        require(record["cleanup_exit_code"] == 0, "legacy service cleanup failed")
+        require(record["cleanup_exit_code"] == 0 and record.get("bootstrap_cleanup_exit_code", 0) == 0,
+                "legacy service cleanup failed")
         copier = module("task216_legacy_output", ROOT / "ci/hosted/workbench.py").copy_evidence
         candidate = source_root / "legacy-verification"
         if record.get("finished"):
@@ -850,6 +963,10 @@ def legacy_finish(args):
             # Stop all writers before checking or copying. The shared copier
             # refuses all symlinks/FIFOs/devices without dereferencing them.
             copier(candidate, destination / "validated")
+            readers = destination / "host/readers"
+            if readers.exists():
+                require(not (destination / "validated/readers").exists(), "candidate supplied trusted legacy readers")
+                copier(readers, destination / "validated/readers")
         elif candidate.exists() and not candidate.is_symlink():
             diagnostics = destination / "diagnostics"
             diagnostics.mkdir(exist_ok=True)
@@ -863,7 +980,7 @@ def legacy_finish(args):
         status = 1
     finally:
         try:
-            if record.get("cleanup_exit_code") == 0:
+            if record.get("cleanup_exit_code") == 0 and record.get("bootstrap_cleanup_exit_code", 0) == 0:
                 if source_root.exists():
                     # Go's downloaded modules may be read-only. Only this
                     # verified task directory is removed without following links.
@@ -903,10 +1020,7 @@ def legacy_run(args):
                         "started_ns": time.time_ns()})
     evidence.record["space_snapshots"] = [space_snapshot("before-bootstrap", {"task": task_root}, sizes=True)]
     provision = evidence.directory / "provision"
-    provision.mkdir()
     env_file, path_file = evidence.directory / "bootstrap.env", evidence.directory / "bootstrap.path"
-    bootstrap_env = {**os.environ, "GOWORK": "off", "RUNNER_TEMP": str(provision),
-                     "GITHUB_ENV": str(env_file), "GITHUB_PATH": str(path_file)}
     profile = "artifact-cross" if args.arch == "aarch64" else "artifact-build"
     def interrupted(signum, _frame):
         raise LegacyInterrupted(signum)
@@ -915,8 +1029,7 @@ def legacy_run(args):
     try:
         mode = output(["go", "env", "GOTOOLCHAIN"], env={**os.environ, "GOWORK": "off"})
         evidence.record["go_toolchain_mode"] = mode
-        code = legacy_stage(evidence, "bootstrap", ["taskset", "-c", ",".join(map(str, cpus)), "bash",
-                            args.legacy_framework / "ci/hosted/bootstrap.sh", "--profile", profile], environment=bootstrap_env)
+        code = legacy_bootstrap_stage(evidence, args.legacy_framework / "ci/hosted/bootstrap.sh", profile, cpus, task_root)
         if code:
             return code
         code = 1
@@ -937,6 +1050,7 @@ def legacy_run(args):
             compiler_bins.append(path.parent)
         readers = Path(exported["KUASAR_HOSTED_ROOT"]).resolve()
         require(readers.is_relative_to(provision.resolve()), "bootstrap output escaped this task")
+        retain_legacy_readers(readers, evidence.directory / "readers", "x86_64", sources / "frozen.json")
         candidate = {"PATH": ":".join(map(str, dict.fromkeys([*compiler_bins, readers / "bin", Path("/usr/local/bin"), Path("/usr/bin"), Path("/bin")]))),
                      "HOME": str(task_root / "home"), "TMPDIR": str(task_root / "tmp"),
                      "GOPATH": str(task_root / "home/go"), "GOCACHE": str(task_root / "home/go-cache"),
@@ -969,6 +1083,72 @@ def legacy_run(args):
         evidence.record["candidate_environment"] = candidate
         code = legacy_stage(evidence, "candidate", command, timeout=12700)
         evidence.record["conclusion"] = "success" if code == 0 else "failure"
+        return code
+    except LegacyInterrupted as error:
+        code = 128 + error.signum
+        return code
+    except BaseException as error:
+        evidence.record["error"] = str(error)
+        raise
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+        evidence.record["space_snapshots"].append(space_snapshot("before-cleanup", {"task": task_root}, sizes=True))
+        evidence.record.update(exit_code=code, elapsed_seconds=(time.time_ns() - evidence.record["started_ns"]) / 1e9)
+        if evidence.record["conclusion"] == "running":
+            evidence.record["conclusion"] = "failure"
+        evidence.save()
+
+
+def legacy_readers_run(args):
+    """One native ARM reader producer; no source gate or E2E compilation."""
+    task_root = args.task_root.absolute()
+    require(task_root.resolve() == task_root and task_root.name.startswith("task216-legacy.")
+            and task_root.is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve())
+            and task_root.is_dir() and not any(task_root.iterdir()) and not args.output.exists()
+            and not args.output.resolve().is_relative_to(task_root), "legacy readers require fresh private state")
+    require(os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
+            and platform.machine() == "aarch64" and os.getuid() != 0, "legacy readers require ordinary Hosted ARM")
+    record = frozen(args.frozen)
+    bootstrap = args.legacy_framework / "ci/hosted/bootstrap.sh"
+    require(output(["git", "-C", args.legacy_framework, "rev-parse", "HEAD"]) == LEGACY_FRAMEWORK
+            and artifacts.digest(bootstrap) == LEGACY_BOOTSTRAP_SHA256, "legacy reader bootstrap changed")
+    cpus = sorted(os.sched_getaffinity(0))[:2]
+    require(len(cpus) == 2, "legacy readers require two CPUs")
+    unit = "task216-legacy-" + hashlib.sha256(str(task_root).encode()).hexdigest()[:24] + ".service"
+    evidence = Evidence(args.output / "host", {"phase": "legacy-reader-host", "arch": "aarch64",
+        "framework_sha": record["framework_sha"], "owner_uid": os.getuid(), "task_root": str(task_root),
+        "unit": unit, "unit_description": "Kuasar #216 legacy readers " + str(task_root),
+        "frozen_sha256": artifacts.digest(args.frozen), "started_ns": time.time_ns(),
+        "runner": {name: os.environ.get(name) for name in ("ImageOS", "ImageVersion", "RUNNER_ARCH")},
+        "comparison_limits": "one native ARM reader producer, reused by compiler-free E2E; not the former per-job repeated bootstrap cost"})
+    evidence.record["space_snapshots"] = [space_snapshot("before-bootstrap", {"task": task_root}, sizes=True)]
+    provision = evidence.directory / "provision"
+    env_file = evidence.directory / "bootstrap.env"
+    def interrupted(signum, _frame):
+        raise LegacyInterrupted(signum)
+    handlers = {signum: signal.signal(signum, interrupted) for signum in (signal.SIGINT, signal.SIGTERM)}
+    code = 1
+    try:
+        # Only this pinned trusted profile may install host prerequisites. It
+        # has with_vm=false; no source profile, KVM/sysctl/udev setup is invoked.
+        code = legacy_bootstrap_stage(evidence, bootstrap, "artifact-arm", cpus, task_root)
+        if code:
+            return code
+        code = 1
+        require(stop_legacy_unit(evidence.record) == 0, "legacy reader writers have not stopped")
+        exported = dict(line.split("=", 1) for line in env_file.read_text().splitlines())
+        readers = Path(exported["KUASAR_HOSTED_ROOT"])
+        require(readers.resolve() == readers and readers.is_relative_to(provision.resolve())
+                and exported["KUASAR_BUILD_JOBS"] == "2", "legacy reader output or budget differs")
+        payload = task_root / "legacy-verification"
+        retain_legacy_readers(readers, payload / "readers", "aarch64", args.frozen)
+        write(payload / "result.json", {"conclusion": "success", "phase": "legacy-readers", "arch": "aarch64",
+              "frozen_sha256": evidence.record["frozen_sha256"], "legacy_framework_sha": LEGACY_FRAMEWORK,
+              "legacy_bootstrap_sha256": LEGACY_BOOTSTRAP_SHA256,
+              "readers_sha256": artifacts.digest(payload / "readers/readers.json")})
+        evidence.record["conclusion"] = "success"
+        code = 0
         return code
     except LegacyInterrupted as error:
         code = 128 + error.signum
@@ -1068,6 +1248,53 @@ def build(args):
             evidence.export_success()
 
 
+def helper_payload(sources, arch, plan, destination, evidence, environment, producer):
+    """The same case-selected owner helpers, without another product build."""
+    artifacts.check_plan(plan)
+    for owner, row in plan["test_revisions"].items():
+        pinned = sources / ("kuasar-sandbox" if owner == "platform" else owner)
+        require(output(["git", "-C", pinned, "rev-parse", "HEAD"]) == row["sha"], "helper source revision changed")
+        subprocess.run(["git", "-C", pinned, "diff", "--no-ext-diff", "--no-textconv", "--exit-code", "HEAD", "--"], check=True)
+    destination.mkdir()
+    for owner in plan["test_overlays"]:
+        pinned = sources / ("kuasar-sandbox" if owner == "platform" else owner)
+        target = destination / artifacts.test_overlay_root(owner)
+        if owner == "platform":
+            for name in artifacts.tree_files(pinned / "test"):
+                if artifacts.platform_test_path(name):
+                    path = target / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(pinned / "test" / name, path)
+        else:
+            shutil.copytree(pinned / "test/e2e", target)
+    selected = artifacts.planned_helpers(plan["lanes"][arch]["selection"])
+    # Fixed module calls keep separate command/exit/log evidence while reusing
+    # exactly the existing owner recipes. No new runner or compiler fallback.
+    environment = {**environment, "PYTHONPATH": str(ROOT / "ci/integration")}
+    if "basic.demo.sh" in plan["lanes"][arch]["selection"]["cases"]:
+        demo = destination / artifacts.test_overlay_root("platform") / "demo"
+        evidence.run("helper-wheels", [sys.executable, "-B", "-c",
+                     "import sys; from pathlib import Path; import build_demo_wheels; "
+                     "build_demo_wheels.build(Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]))",
+                     demo, arch, demo / "wheels" / arch], cwd=ROOT, env=environment)
+    evidence.run("helper-build", [sys.executable, "-B", "-c",
+                 "import json, os, sys; from pathlib import Path; import build_helpers; "
+                 "build_helpers.build(Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), "
+                 "json.loads(sys.argv[4]), dict(os.environ))",
+                 sources, arch, destination / "helpers", json.dumps(selected, sort_keys=True)], cwd=ROOT, env=environment)
+    for relative in artifacts.tree_files(destination):
+        path = destination / relative
+        path.chmod(0o755 if path.stat().st_mode & 0o111 else 0o644)
+    metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "test_revisions": plan["test_revisions"],
+                "frozen_sha256": evidence.record["frozen_sha256"], **producer,
+                "tests": {owner: artifacts.tree_files(destination / artifacts.test_overlay_root(owner))
+                          for owner in plan["test_overlays"]},
+                "helpers": {name: {"sha256": artifacts.digest(destination / "helpers" / name),
+                                   "source_sha": plan["framework_sha"] if owner == "framework"
+                                   else plan["test_revisions"][owner]["sha"]} for name, owner in selected.items()}}
+    write(destination / "helpers.json", metadata)
+
+
 def helpers(args):
     sources, arch, record, image = build_inputs(args)
     plan = json.loads((sources / "integration-plan.json").read_text())
@@ -1075,41 +1302,13 @@ def helpers(args):
                         "frozen_sha256": artifacts.digest(sources / "frozen.json"), "image_id": image,
                         "started_ns": time.time_ns()}, diagnostics=Path("/output/verification"))
     try:
-        destination = evidence.directory / "integration-helpers"
-        destination.mkdir()
         environment = {**os.environ, "GOWORK": str(sources / "go.work")}
         evidence.run("helper-workspace", ["go", "work", "init", *("./" + owner for owner in REPOSITORIES
                      if owner != "kuasar-sandbox")], cwd=sources, env={**environment, "GOWORK": "off"})
-        for owner in plan["test_overlays"]:
-            pinned = sources / ("kuasar-sandbox" if owner == "platform" else owner)
-            target = destination / artifacts.test_overlay_root(owner)
-            if owner == "platform":
-                source = pinned / "test"
-                for name in artifacts.tree_files(source):
-                    if artifacts.platform_test_path(name):
-                        path = target / name
-                        path.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(source / name, path)
-            else:
-                shutil.copytree(pinned / "test/e2e", target)
-        selected = artifacts.planned_helpers(plan["lanes"][arch]["selection"])
         started = time.monotonic()
-        if "basic.demo.sh" in plan["lanes"][arch]["selection"]["cases"]:
-            demo = destination / artifacts.test_overlay_root("platform") / "demo"
-            build_demo_wheels.build(demo, arch, demo / "wheels" / arch)
-        build_helpers.build(sources, arch, destination / "helpers", selected, environment)
+        helper_payload(sources, arch, plan, evidence.directory / "integration-helpers", evidence, environment,
+                       {"image_id": image})
         evidence.record["helper_build_seconds"] = time.monotonic() - started
-        for relative in artifacts.tree_files(destination):
-            path = destination / relative
-            path.chmod(0o755 if path.stat().st_mode & 0o111 else 0o644)
-        metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "test_revisions": plan["test_revisions"],
-                    "frozen_sha256": evidence.record["frozen_sha256"], "image_id": image,
-                    "tests": {owner: artifacts.tree_files(destination / artifacts.test_overlay_root(owner))
-                              for owner in plan["test_overlays"]},
-                    "helpers": {name: {"sha256": artifacts.digest(destination / "helpers" / name),
-                                       "source_sha": plan["framework_sha"] if owner == "framework"
-                                       else plan["test_revisions"][owner]["sha"]} for name, owner in selected.items()}}
-        write(destination / "helpers.json", metadata)
         evidence.record["conclusion"] = "success"
     except BaseException as error:
         evidence.record.update(conclusion="failure", error=str(error))
@@ -1143,15 +1342,17 @@ def packaged_delta(args):
                 and cold["build_jobs"] == 2 and len(set(cold["cpus"])) == 2
                 and cold["go_toolchain_mode"], "legacy packages lack their exact host/bootstrap/budget identity")
         stages = {row["stage"]: row["exit_code"] for row in cold["stages"]}
-        expected = {"workspace", "full-build", "full-manifest", "toolchain/go", "toolchain/go-effective"}
+        expected = {"workspace", "full-build", "full-manifest", "toolchain/go", "toolchain/go-effective", "helper-build"}
+        if "basic.demo.sh" in plan["lanes"][arch]["selection"]["cases"]:
+            expected.add("helper-wheels")
         expected.update("validator/" + owner for owner in VALIDATORS)
         expected.update(operation + "/" + unit for unit in UNITS for operation in ("package", "validate"))
         require(len(stages) == len(cold["stages"]) and expected <= stages.keys()
                 and all(value == 0 for value in stages.values()), "legacy package stages did not all pass")
         build_context = {"legacy_control": {key: cold[key] for key in (
             "legacy_framework_sha", "legacy_bootstrap_sha256", "host_arch", "arch", "uid", "cpus",
-            "build_jobs", "memory_max", "go_toolchain_mode", "source_root")},
-                         "test_helpers": {"workbench": {"image_id": image, "framework_sha": plan["framework_sha"]}}}
+            "build_jobs", "memory_max", "go_toolchain_mode", "source_root")}}
+        build_context["test_helpers"] = {"legacy_control": build_context["legacy_control"]}
     else:
         require(cold["phase"] == "cold" and cold["image_id"] == image,
                 "packages belong to another frozen input set or did not pass")
@@ -1161,8 +1362,17 @@ def packaged_delta(args):
     helper_root = args.helpers / "integration-helpers"
     helper = json.loads((helper_root / "helpers.json").read_text())
     require(helper["plan_id"] == artifacts.identity(plan) and helper["arch"] == arch
-            and helper["test_revisions"] == plan["test_revisions"] and helper["frozen_sha256"] == input_digest
-            and helper["image_id"] == image, "helpers belong to another exact test/image set")
+            and helper["test_revisions"] == plan["test_revisions"] and helper["frozen_sha256"] == input_digest,
+            "helpers belong to another exact test/image set")
+    if legacy:
+        require(helper.get("image_id") is None
+                and all(helper.get(key) == cold[key] for key in (
+                    "legacy_framework_sha", "legacy_bootstrap_sha256", "host_arch", "source_root"))
+                and artifacts.digest(helper_root / "helpers.json") == cold["helpers_sha256"],
+                "legacy helpers lack their same-job producer identity")
+    else:
+        require(helper.get("image_id") == image and not helper.get("legacy_framework_sha"),
+                "helpers belong to another exact test/image set")
     expected_files = {"helpers.json"}
     require(set(helper["tests"]) == set(plan["test_overlays"])
             and set(helper["helpers"]) == set(artifacts.planned_helpers(plan["lanes"][arch]["selection"])),
@@ -1250,6 +1460,15 @@ def main():
     host.add_argument("--sources", type=Path, required=True)
     host.add_argument("--legacy-framework", type=Path, required=True)
     host.add_argument("--output", type=Path, required=True)
+    readers = commands.add_parser("legacy-readers-run")
+    readers.add_argument("--frozen", type=Path, required=True)
+    readers.add_argument("--task-root", type=Path, required=True)
+    readers.add_argument("--legacy-framework", type=Path, required=True)
+    readers.add_argument("--output", type=Path, required=True)
+    reader_check = commands.add_parser("check-legacy-readers")
+    reader_check.add_argument("--frozen", type=Path, required=True)
+    reader_check.add_argument("--readers", type=Path, required=True)
+    reader_check.add_argument("--arch", choices=artifacts.ARCHES, required=True)
     finish = commands.add_parser("legacy-finish")
     finish.add_argument("--output", type=Path, required=True)
     finish.add_argument("--task-root", type=Path, required=True)
@@ -1267,6 +1486,7 @@ def main():
     return {"freeze": freeze, "fetch": fetch, "build": build, "helpers": helpers, "legacy-cold": legacy_cold,
             "disk-snapshot": disk_snapshot,
             "legacy-run": legacy_run, "legacy-finish": legacy_finish,
+            "legacy-readers-run": legacy_readers_run, "check-legacy-readers": check_legacy_readers,
             "packaged-delta": packaged_delta, "legacy-packaged-delta": packaged_delta}[args.command](args)
 
 

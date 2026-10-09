@@ -336,6 +336,10 @@ restore_or_build() {
                         elif job is jobs["source-checks"]:
                             self.assertEqual(step["with"]["path"].splitlines(), [
                                 "${{ runner.temp }}/source-system-evidence", "${{ runner.temp }}/source-materialize.json"])
+                        elif job is jobs["legacy-readers-arm"]:
+                            self.assertEqual(step["name"], "Retain native reader receipts and diagnostics")
+                            self.assertTrue(all(path.startswith("legacy-readers-output/") and "/validated" not in path
+                                                for path in step["with"]["path"].splitlines()))
                         else:
                             self.assertIn(job, [jobs["legacy-x86"], jobs["legacy-arm"]])
                             self.assertEqual(step["name"], "Retain host receipts and diagnostics copied after writers stop")
