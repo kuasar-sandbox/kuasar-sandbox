@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Focused guards for the temporary, non-Workbench legacy control."""
 from contextlib import contextmanager, ExitStack
+import copy
 import hashlib
 import importlib.util
 import json
@@ -577,6 +578,353 @@ class LegacyReaders(unittest.TestCase):
                 self.assertEqual(receipt["exit_code"], code)
                 self.assertEqual(receipt["conclusion"], "success" if code == 0 else "failure")
                 self.assertEqual((private / "legacy-verification/readers/readers.json").exists(), code == 0)
+
+
+class SourceControlContracts(unittest.TestCase):
+    """Offline receipts/files and mocked units only; never provision the host."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.documents = validation.FrozenSourceGateContracts().source_documents()
+        self.plan = self.documents["plan"]
+        self.plan["candidate_records"] = []
+        self.record = self.documents["frozen"]
+        self.record["admission"] = None
+        self.frozen = self.root / "plan/frozen.json"
+        self.save_inputs()
+        self.env = {"PATH": os.environ["PATH"], "HOME": str(self.root), "GITHUB_RUN_ID": "21667",
+                    "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
+                    "GITHUB_REPOSITORY": "kuasar-sandbox/kuasar-sandbox", "GITHUB_REF": "refs/heads/main",
+                    "GITHUB_EVENT_NAME": "workflow_dispatch", "RUNNER_TEMP": str(self.root)}
+        self.environment = patch.dict(os.environ, self.env, clear=True)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        self.capture = patch.object(task, "space_snapshot", return_value={"phase": "offline fixture"})
+        self.capture.start()
+        self.addCleanup(self.capture.stop)
+
+    def save_inputs(self):
+        task.write(self.root / "plan/integration-plan.json", self.plan)
+        task.write(self.root / "plan/workbench.json", self.documents["selection"])
+        self.record.update(integration_plan_sha256=task.artifacts.digest(self.root / "plan/integration-plan.json"),
+                           workbench_sha256=task.artifacts.digest(self.root / "plan/workbench.json"))
+        task.write(self.frozen, self.record)
+
+    def short_tmp(self):
+        # Only an ordinary, task-owned eight-byte temporary path is created.
+        # No source controller, bootstrap, systemd or Docker is executed.
+        path = Path(subprocess.check_output(["mktemp", "-d", "/tmp/XXX"], text=True).strip())
+        self.addCleanup(lambda: shutil.rmtree(path) if path.is_dir() and not path.is_symlink() else None)
+        return path
+
+    def test_main_admission_checks_every_exact_public_source_and_framework(self):
+        admitted = self.root / "admission.json"
+        public = Mock(return_value=True)
+        with patch.object(task, "module", return_value=SimpleNamespace(public_main=public)):
+            task.legacy_source_admit(SimpleNamespace(frozen=self.frozen, output=admitted))
+        self.assertEqual(public.call_args_list, [unittest.mock.call(row["repository"], row["sha"])
+            for row in [*[self.plan["test_revisions"][owner] for owner in sorted(self.plan["test_revisions"])],
+                        {"repository": task.REPOSITORIES["kuasar-sandbox"], "sha": self.record["framework_sha"]}]])
+        self.assertEqual(json.loads(admitted.read_text()), task.legacy_source_admission(self.frozen, self.record, self.plan))
+        admitted.unlink()
+        with patch.object(task, "module", return_value=SimpleNamespace(public_main=Mock(return_value=False))), \
+                self.assertRaisesRegex(ValueError, "exact public main"):
+            task.legacy_source_admit(SimpleNamespace(frozen=self.frozen, output=admitted))
+        self.assertFalse(admitted.exists())
+        for key, value in (("GITHUB_REF", "refs/pull/1/merge"), ("GITHUB_EVENT_NAME", "pull_request_target"),
+                           ("GITHUB_REPOSITORY", "fork/kuasar-sandbox")):
+            with self.subTest(key=key), patch.dict(os.environ, {key: value}), \
+                    self.assertRaisesRegex(ValueError, "main-only"):
+                task.legacy_source_admission(self.frozen, self.record, self.plan)
+
+    def test_primary_companion_or_different_test_sources_cannot_reach_privileged_bootstrap(self):
+        for mutation in (lambda record, plan: record.update(admission={"primary": "candidate"}),
+                         lambda record, plan: plan.update(candidate_records=[{"repository": "kuasar-sandbox/sandboxer"}]),
+                         lambda record, plan: plan.update(sources={}),
+                         lambda record, plan: plan.update(owners=["sandboxer"])):
+            with self.subTest(mutation=mutation):
+                record, plan = copy.deepcopy(self.record), copy.deepcopy(self.plan)
+                mutation(record, plan)
+                task.write(self.frozen.with_name("integration-plan.json"), plan)
+                with patch.object(task, "frozen", return_value=record), \
+                        patch.object(task, "legacy_bootstrap_stage") as bootstrap, self.assertRaises(ValueError):
+                    task.legacy_source_plan(self.frozen)
+                bootstrap.assert_not_called()
+
+    def test_source_unit_budget_is_measured_and_rejects_actual_root_caps_or_unbounded_resources(self):
+        private = self.root / "task216-legacy.source"
+        unit = "task216-legacy-" + hashlib.sha256(str(private).encode()).hexdigest()[:24] + ".service"
+        group = "/system.slice/" + unit
+        original = Path.read_text
+        readings = {"/proc/self/cgroup": "0::" + group + "\n",
+                    "/proc/self/status": "CapEff:\t0\nNoNewPrivs:\t0\n",
+                    "/sys/fs/cgroup" + group + "/cpu.max": "200000 100000\n",
+                    "/sys/fs/cgroup" + group + "/memory.max": "8589934592\n"}
+        def read(path, *args, **kwargs):
+            return readings[str(path)] if str(path) in readings else original(path, *args, **kwargs)
+        with patch.object(Path, "read_text", read), patch.object(task.os, "sched_getaffinity", return_value={2, 3}):
+            observed = task.legacy_source_resources(private)
+            self.assertEqual(observed["affinity"], [2, 3])
+            self.assertEqual(observed["uid"], os.getuid())
+            for key, bad in (("/proc/self/status", "CapEff:\t1\nNoNewPrivs:\t0\n"),
+                             ("/proc/self/status", "CapEff:\t0\nNoNewPrivs:\t1\n"),
+                             ("/sys/fs/cgroup" + group + "/cpu.max", "max 100000\n"),
+                             ("/sys/fs/cgroup" + group + "/memory.max", "17179869184\n"),
+                             ("/proc/self/cgroup", "0::/other.service\n")):
+                with self.subTest(key=key, bad=bad), patch.dict(readings, {key: bad}), self.assertRaises(ValueError):
+                    task.legacy_source_resources(private)
+            with patch.object(task.os, "getuid", return_value=0), self.assertRaises(ValueError):
+                task.legacy_source_resources(private)
+
+    def test_controller_passes_no_tokens_preserves_sudo_and_uses_the_current_exact_executor(self):
+        for failed_stage, failure in ((None, 0), ("materialize", 17), ("bootstrap", 17),
+                                      ("bootstrap", RuntimeError("original bootstrap exception")), ("source", 17),
+                                      ("source", task.LegacyInterrupted(15))):
+            with self.subTest(failed_stage=failed_stage, failure=failure):
+                case = self.root / (str(failed_stage) + str(type(failure).__name__))
+                case.mkdir()
+                private = case / "task216-legacy.source"
+                private.mkdir()
+                legacy = case / "legacy"
+                (legacy / "ci/hosted").mkdir(parents=True)
+                (legacy / "ci/hosted/bootstrap.sh").write_bytes(BOOTSTRAP)
+                tools = case / "tools"
+                tools.mkdir()
+                for name in ("go", "cargo", "rustc"):
+                    (tools / name).write_text("offline compiler identity fixture")
+                short = self.short_tmp()
+                admission = case / "admission.json"
+                task.write(admission, task.legacy_source_admission(self.frozen, self.record, self.plan))
+                calls = []
+                def stage(evidence, label, command, *, environment=None, timeout=3600):
+                    calls.append(label)
+                    evidence.record["stages"].append({"stage": label, "exit_code": 17 if label == failed_stage else 0})
+                    if label == "materialize":
+                        self.assertIn(task.ROOT / "ci/integration/run-source-checks.py", command)
+                        self.assertIn("--materialize-only", command)
+                        self.assertFalse(any("TOKEN" in key for key in environment))
+                    if label == "source":
+                        values = command[command.index("-i") + 1:command.index(sys.executable)]
+                        environment = dict(value.split("=", 1) for value in values)
+                        self.assertEqual(environment["TMPDIR"], str(short))
+                        self.assertEqual(environment["HOME"], str(private / "home"))
+                        self.assertEqual(environment["GOTOOLCHAIN"], "go1.24.13+auto")
+                        self.assertFalse(any("TOKEN" in key or "SECRET" in key for key in environment))
+                        self.assertIn("legacy-source-checks", command)
+                        self.assertIn("--property=CPUQuota=200%", command)
+                        self.assertIn("--property=MemoryMax=8G", command)
+                        self.assertIn("--init-groups", command)
+                        self.assertIn("--inh-caps=-all", command)
+                        self.assertFalse(any("NoNewPrivileges" in str(arg) or "PrivateTmp" in str(arg)
+                                             or "PrivateDevices" in str(arg) or "InaccessiblePaths" in str(arg) for arg in command))
+                    if label == failed_stage and isinstance(failure, Exception):
+                        raise failure
+                    return failure if label == failed_stage else 0
+                def bootstrap(evidence, path, profile, cpus, root):
+                    self.assertEqual(profile, "source")
+                    self.assertEqual(root, private)
+                    self.assertEqual(cpus, [2, 3])
+                    readers = evidence.directory / "provision/readers"
+                    readers.mkdir(parents=True)
+                    (evidence.directory / "bootstrap.env").write_text("KUASAR_HOSTED_ROOT=" + str(readers)
+                        + "\nKUASAR_BUILD_JOBS=2\nKUASAR_RUNTIME_READER=" + str(readers / "bin/runtime-payloads.py") + "\n")
+                    return stage(evidence, "bootstrap", [])
+                args = SimpleNamespace(frozen=self.frozen, task_root=private, legacy_framework=legacy,
+                                       main_admission=admission, output=case / "output")
+                with patch.dict(os.environ, {"GOTOOLCHAIN": "go1.24.13+auto", "ACTIONS_RUNTIME_TOKEN": "not-forwarded"}), \
+                        patch.object(task.platform, "machine", return_value="x86_64"), \
+                        patch.object(task.os, "sched_getaffinity", return_value={2, 3, 4, 5}), \
+                        patch.object(task, "LEGACY_BOOTSTRAP_SHA256", hashlib.sha256(BOOTSTRAP).hexdigest()), \
+                        patch.object(task, "output", side_effect=lambda command, **kw: str(short) if command[0] == "mktemp"
+                                     else task.LEGACY_FRAMEWORK if command[2] == legacy else self.record["framework_sha"]), \
+                        patch.object(task.shutil, "which", side_effect=lambda name: str(tools / name)), \
+                        patch.object(task, "legacy_stage", side_effect=stage), \
+                        patch.object(task, "legacy_bootstrap_stage", side_effect=bootstrap), \
+                        patch.object(task, "retain_legacy_readers"), \
+                        patch.object(task.subprocess, "Popen", side_effect=AssertionError("must not execute a unit")):
+                    if isinstance(failure, RuntimeError):
+                        with self.assertRaisesRegex(RuntimeError, "original bootstrap exception"):
+                            task.legacy_source_run(args)
+                    else:
+                        self.assertEqual(task.legacy_source_run(args), 143 if isinstance(failure, Exception) else failure)
+                receipt = json.loads((args.output / "host/result.json").read_text())
+                self.assertEqual(receipt["conclusion"], "success" if failed_stage is None else "failure")
+                self.assertEqual(receipt["exit_code"], 1 if isinstance(failure, RuntimeError) else
+                                 143 if isinstance(failure, task.LegacyInterrupted) else failure)
+                self.assertEqual(receipt["source_tmp"], task.legacy_source_tmp(short))
+                self.assertNotIn("not-forwarded", json.dumps(receipt))
+                self.assertEqual(calls, ["materialize", "bootstrap", "source"][:len(calls)])
+
+    def test_short_tmp_cleanup_checks_inode_and_waits_for_both_owned_units(self):
+        for changed, stop_failed in ((False, False), (True, False), (False, True)):
+            with self.subTest(changed=changed, stop_failed=stop_failed):
+                short = self.short_tmp()
+                info = task.legacy_source_tmp(short)
+                if changed:
+                    info["inode"] += 1
+                private = self.root / ("task216-legacy.cleanup-" + str(changed) + str(stop_failed))
+                task.write(private / "legacy-verification/result.json", {"conclusion": "failure"})
+                destination = self.root / ("cleanup-" + str(changed) + str(stop_failed))
+                task.write(destination / "host/result.json", {"owner_uid": os.getuid(),
+                    "framework_sha": self.record["framework_sha"], "task_root": str(private), "conclusion": "failure",
+                    "unit": "source", "bootstrap_unit": "bootstrap", "bootstrap_unit_description": "owned",
+                    "source_tmp": info})
+                events = []
+                def stop(record):
+                    events.append(record["unit"])
+                    return 1 if stop_failed and record["unit"] == "bootstrap" else 0
+                def remove(command, **kwargs):
+                    self.assertEqual(events[:2], ["bootstrap", "source"])
+                    self.assertIn(command[-1], (short, private))
+                    events.append(str(command[-1]))
+                    shutil.rmtree(command[-1])
+                with patch.object(task, "stop_legacy_unit", side_effect=stop), \
+                        patch.object(task, "output", return_value=self.record["framework_sha"]), \
+                        patch.object(task.subprocess, "run", side_effect=remove):
+                    code = task.legacy_finish(SimpleNamespace(output=destination, task_root=private))
+                self.assertEqual(code, int(changed or stop_failed))
+                self.assertEqual(short.exists(), changed or stop_failed)
+                self.assertEqual(private.exists(), changed or stop_failed)
+                final = json.loads((destination / "host/result.json").read_text())
+                self.assertEqual(final["conclusion"], "failure")
+                if not changed and not stop_failed:
+                    self.assertTrue(final["source_tmp"]["removed"])
+                    self.assertEqual(final["source_tmp_cleanup_exit_code"], 0)
+
+    def test_source_checks_use_the_current_materialized_executor_and_preserve_failure(self):
+        source = task.module("legacy_source_fixture_current_executor", task.ROOT / "ci/integration/run-source-checks.py")
+        for status in (0, 17):
+            with self.subTest(status=status):
+                private = self.root / ("task216-legacy.execute-" + str(status))
+                (private / "sources").mkdir(parents=True)
+                short = self.short_tmp()
+                environment = {"PATH": os.environ["PATH"], "HOME": str(private / "home"), "TMPDIR": str(short),
+                    "RUNNER_TEMP": str(private / "state"), "GOCACHE": str(private / "home/go-cache"),
+                    "GOMODCACHE": str(private / "home/go/pkg/mod"), "CARGO_HOME": str(private / "home/.cargo"),
+                    "KUASAR_NATIVE_CACHE_ROOT": str(private / "state/native-cache")}
+                for name in ("GOCACHE", "GOMODCACHE", "CARGO_HOME", "KUASAR_NATIVE_CACHE_ROOT"):
+                    Path(environment[name]).mkdir(parents=True)
+                def execute(plan, sources, destination, *, materialized=False):
+                    self.assertEqual(plan, self.plan)
+                    self.assertEqual(sources, private / "sources")
+                    self.assertTrue(materialized)
+                    (sources / "go.work").write_text("go 1.26.1\n")
+                    task.write(destination, {"exit_code": status})
+                    if status:
+                        raise ValueError("original source check exited 17")
+                def query(command, **kwargs):
+                    if command[0] == "git":
+                        return self.record["framework_sha"]
+                    self.assertEqual(command[0], "go")
+                    if command[1:] == ["env", "GOTOOLCHAIN"]:
+                        return "auto"
+                    return "go version go1.26.1 linux/amd64" if kwargs["env"]["GOWORK"] != "off" else "go version go1.24.13 linux/amd64"
+                with patch.dict(os.environ, environment, clear=True), patch.object(task, "module", return_value=source), \
+                        patch.object(source, "execute", side_effect=execute) as driver, \
+                        patch.object(task, "legacy_source_resources", return_value={"uid": os.getuid()}), \
+                        patch.object(task, "output", side_effect=query):
+                    self.assertEqual(task.legacy_source_checks(SimpleNamespace(frozen=self.frozen, task_root=private)), status)
+                    driver.assert_called_once()
+                    Path(environment["GOCACHE"], "old-test-result").write_text("must not reuse")
+                    with self.assertRaisesRegex(ValueError, "fresh empty"):
+                        task.legacy_source_checks(SimpleNamespace(frozen=self.frozen, task_root=private))
+                    self.assertEqual(driver.call_count, 1)
+                observed = json.loads((private / "legacy-verification/logs/source-execution.json").read_text())
+                self.assertEqual(observed["exit_code"], status)
+                self.assertEqual(observed["go_toolchain_mode"], "auto")
+                self.assertIn("1.24.13", observed["go_version_before"])
+                self.assertIn("1.26.1", observed["go_version_after"])
+
+    def valid_result(self):
+        result = copy.deepcopy(self.documents["result"])
+        result["plan_id"] = task.artifacts.identity(self.plan)
+        result["workbench"] = {"image_id": None, "framework_sha": None}
+        source_root = self.root / "task216-legacy.finished/sources"
+        source = task.module("source_control_fixture_driver", task.ROOT / "ci/integration/run-source-checks.py")
+        result["checks"] = [{"name": name, "command": command, "directory": str(directory), "exit_code": 0}
+                            for name, command, directory in source.checks_for(self.plan, source_root)]
+        materialize = copy.deepcopy(self.documents["materialize"])
+        materialize["plan_id"] = task.artifacts.identity(self.plan)
+        host = {"phase": "legacy-source-host", "framework_sha": self.record["framework_sha"],
+                "legacy_framework_sha": task.LEGACY_FRAMEWORK, "legacy_bootstrap_sha256": task.LEGACY_BOOTSTRAP_SHA256,
+                "frozen_sha256": task.artifacts.digest(self.frozen), "owner_uid": os.getuid(), "arch": "x86_64",
+                "host_arch": "x86_64", "cpus": 2, "memory_max": 8 * 1024**3, "image_id": None,
+                "main_admission": task.legacy_source_admission(self.frozen, self.record, self.plan),
+                "conclusion": "success", "exit_code": 0, "finished": True, "source_state_removed": True,
+                "cleanup_exit_code": 0, "bootstrap_cleanup_exit_code": 0, "source_tmp_cleanup_exit_code": 0,
+                "task_root": str(source_root.parent), "source_tmp": {"path": "/tmp/Ab1", "uid": os.getuid(), "mode": 0o700,
+                    "device": 1, "inode": 123, "removed": True},
+                "stages": [{"stage": name, "exit_code": 0} for name in ("materialize", "bootstrap", "source")]}
+        execution = {"exit_code": 0, "go_toolchain_mode": "auto", "go_version_before": "go version go1.24.13 linux/amd64",
+                     "go_version_after": "go version go1.26.1 linux/amd64",
+                     "cache_before": {name: [] for name in ("GOCACHE", "GOMODCACHE", "CARGO_HOME", "KUASAR_NATIVE_CACHE_ROOT")},
+                     "resources": {"uid": os.getuid(), "cap_eff": "0", "no_new_privileges": 0, "affinity": [0, 1],
+                                   "cpu_max": "200000 100000", "memory_max": 8 * 1024**3}}
+        host.update(unit="task216-legacy-" + hashlib.sha256(host["task_root"].encode()).hexdigest()[:24] + ".service",
+                    unit_description="Kuasar #216 legacy source " + host["task_root"], bootstrap_profile="source",
+                    bootstrap_budget={"cpus": [0, 1], "memory_max": 8 * 1024**3, "build_jobs": 2})
+        execution["resources"]["cgroup"] = "/system.slice/" + host["unit"]
+        return {"host/result.json": host, "validated/result.json": result,
+                "validated/logs/materialize.json": materialize, "validated/logs/source-execution.json": execution}
+
+    def test_finalizer_requires_all_current_checks_exact_pins_real_budget_and_cleanup(self):
+        documents = self.valid_result()
+        cases = [(None, lambda docs: None),
+                 ("skipped source", lambda docs: docs["host/result.json"].update(conclusion="skipped")),
+                 ("missing exit", lambda docs: docs["host/result.json"].pop("exit_code")),
+                 ("changed admission", lambda docs: docs["host/result.json"]["main_admission"].update(run_id="another")),
+                 ("changed pin", lambda docs: docs["validated/result.json"]["actions"][0].update(actual_sha="0" * 40)),
+                 ("missing perf", lambda docs: docs["validated/result.json"]["checks"].pop()),
+                 ("root", lambda docs: docs["validated/logs/source-execution.json"]["resources"].update(uid=0)),
+                 ("unbounded", lambda docs: docs["validated/logs/source-execution.json"]["resources"].update(cpu_max="max 100000")),
+                 ("different unit", lambda docs: docs["validated/logs/source-execution.json"]["resources"].update(cgroup="/other.service")),
+                 ("warm cache", lambda docs: docs["validated/logs/source-execution.json"]["cache_before"].update(GOCACHE=["old"])),
+                 ("fake image", lambda docs: docs["validated/result.json"]["workbench"].update(image_id="sha256:fake")),
+                 ("cleanup failed", lambda docs: docs["host/result.json"].update(source_tmp_cleanup_exit_code=1)),
+                 ("state remains", lambda docs: docs["host/result.json"].update(source_state_removed=False)),
+                 ("missing costs", lambda docs: docs["host/result.json"]["stages"].pop(0))]
+        for name, mutate in cases:
+            with self.subTest(name=name):
+                changed = copy.deepcopy(documents)
+                mutate(changed)
+                destination = self.root / (name or "accepted")
+                for filename, record in changed.items():
+                    task.write(destination / filename, record)
+                args = SimpleNamespace(frozen=self.frozen, results=destination, output=destination / "accepted.json")
+                if name is None:
+                    task.check_legacy_source(args)
+                    self.assertTrue(args.output.is_file())
+                else:
+                    with self.assertRaises((ValueError, KeyError)):
+                        task.check_legacy_source(args)
+                    self.assertFalse(args.output.exists())
+
+    def test_workflow_cannot_skip_the_source_control_or_replace_the_workbench_gate(self):
+        jobs = yaml.safe_load((task.ROOT / ".github/workflows/workbench-216-validation.yml").read_text())["jobs"]
+        job = jobs["legacy-source-control"]
+        self.assertEqual(job["needs"], "prepare")
+        self.assertEqual(job["runs-on"], "ubuntu-24.04")
+        self.assertNotIn("permissions", job)
+        self.assertNotIn("env", job)
+        steps = job["steps"]
+        self.assertEqual([step["with"]["ref"] for step in steps if step.get("uses", "").startswith("actions/checkout")],
+                         ["${{ job.workflow_sha }}", task.LEGACY_FRAMEWORK])
+        token_steps = [step for step in steps if "GH_TOKEN" in step.get("env", {})]
+        self.assertEqual(len(token_steps), 1)
+        self.assertIn("legacy-source-admit", token_steps[0]["run"])
+        self.assertFalse(any("actions/cache" in step.get("uses", "") for step in steps))
+        finish = next(step for step in steps if "legacy-finish" in step.get("run", ""))
+        self.assertIn("always()", finish["if"])
+        final = jobs["validation-results"]
+        self.assertTrue({"source-checks", "legacy-source-control"}.issubset(final["needs"]))
+        self.assertTrue(any("check-legacy-source" in step.get("run", "") for step in final["steps"]))
+        for state in ("failure", "cancelled", "skipped"):
+            complete = subprocess.run(["bash", "-euo", "pipefail", "-c", final["steps"][0]["run"]],
+                env={**os.environ, "TASK_JOB_RESULTS": json.dumps({"legacy-source-control": {"result": state}})},
+                capture_output=True, text=True)
+            self.assertNotEqual(complete.returncode, 0)
 
 
 class SpaceSnapshots(unittest.TestCase):

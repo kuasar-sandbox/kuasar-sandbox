@@ -316,6 +316,64 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  legacy-source-control:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          repository: kuasar-sandbox/kuasar-sandbox
+          ref: baae11385c26a55e1c888be4c5334fc0b0b6860d
+          path: legacy-framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - name: Admit only the exact same public-main source and test pins
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py legacy-source-admit \
+            --frozen plan/frozen.json --output "$RUNNER_TEMP/task216-source-admission.json"
+      - name: Allocate this source control's private state
+        id: task
+        run: |
+          task_root=$(mktemp -d "$RUNNER_TEMP/task216-legacy.XXXXXXXX")
+          printf 'root=%s\n' "$task_root" >> "$GITHUB_OUTPUT"
+      - name: Run old provisioning with the frozen current source checks
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py legacy-source-run \
+            --frozen "$GITHUB_WORKSPACE/plan/frozen.json" \
+            --main-admission "$RUNNER_TEMP/task216-source-admission.json" \
+            --task-root "${{ steps.task.outputs.root }}" \
+            --legacy-framework "$GITHUB_WORKSPACE/legacy-framework" \
+            --output "$GITHUB_WORKSPACE/legacy-source-output"
+      - name: Stop owned source units and retain checked evidence
+        if: always() && steps.task.outputs.root != ''
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py legacy-finish \
+            --task-root "${{ steps.task.outputs.root }}" --output "$GITHUB_WORKSPACE/legacy-source-output"
+      - name: Preserve source control receipts and diagnostics copied after writers stop
+        if: always() && steps.task.outputs.root != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-legacy-source-${{ github.run_id }}
+          path: |
+            legacy-source-output/host/result.json
+            legacy-source-output/host/logs
+            legacy-source-output/validated
+            legacy-source-output/diagnostics
+          if-no-files-found: error
+          retention-days: 7
+
   legacy-x86:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
     needs: prepare
@@ -1190,7 +1248,7 @@ jobs:
 
   validation-results:
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
-    needs: [prepare, source-checks, cold-x86, cold-arm, warm-x86, warm-arm, helpers-x86, helpers-arm, prepare-integration-x86, prepare-integration-arm, e2e-x86, e2e-arm, performance-x86, legacy-x86, legacy-arm, legacy-readers-arm, prepare-legacy-x86, prepare-legacy-arm, e2e-legacy-x86, e2e-legacy-arm, performance-legacy-x86]
+    needs: [prepare, source-checks, legacy-source-control, cold-x86, cold-arm, warm-x86, warm-arm, helpers-x86, helpers-arm, prepare-integration-x86, prepare-integration-arm, e2e-x86, e2e-arm, performance-x86, legacy-x86, legacy-arm, legacy-readers-arm, prepare-legacy-x86, prepare-legacy-arm, e2e-legacy-x86, e2e-legacy-arm, performance-legacy-x86]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -1218,6 +1276,14 @@ jobs:
         with:
           name: workbench-216-source-result-${{ github.run_id }}
           path: source
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-legacy-source-${{ github.run_id }}
+          path: legacy-source
+      - name: Require the full same-input host source control and its owned cleanup
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py check-legacy-source \
+            --frozen plan/frozen.json --results legacy-source --output legacy-source-validation.json
       - name: Verify complete source results against the same frozen plan and image
         run: |
           python3 -B - <<'PYTHON'
@@ -1316,5 +1382,7 @@ jobs:
             legacy-validation.json
             source
             source-validation.json
+            legacy-source
+            legacy-source-validation.json
           if-no-files-found: error
           retention-days: 7
