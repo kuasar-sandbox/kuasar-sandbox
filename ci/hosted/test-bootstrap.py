@@ -39,8 +39,7 @@ class BootstrapTests(unittest.TestCase):
             self.assertEqual(flags.stdout.split()[-1], "true" if profile in ("source", "exact-assets") else "false")
             if profile in ("runtime", "runtime-publish", "source", "exact-assets"):
                 self.assertEqual(flags.stdout.split()[2], "true")
-            if profile not in ("control",):
-                self.assertEqual(flags.stdout.split()[0], "true")
+            self.assertEqual(flags.stdout.split()[0], "false" if profile in ("control", "release-control") else "true")
         self.assertNotEqual(shell("select_profile typo").returncode, 0)
 
     def test_helper_cross_compiler_does_not_enable_product_build_profiles(self):
