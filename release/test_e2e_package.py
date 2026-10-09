@@ -51,6 +51,12 @@ class PrebuiltPackage(unittest.TestCase):
                     output.addfile(member, io.BytesIO(data))
             package.validate(path, self.pins if expected is None else expected)
 
+    def test_nested_discovered_owner_runtime_files_are_valid(self):
+        self.files['test/e2e/lib/sandboxer/restore_dio_workload.py'] = (b'# owner runtime\n', 0o644)
+        self.files['test/e2e/lib/sandboxer/data/nested/payload.json'] = (b'{}\n', 0o644)
+        self.files['test/e2e/lib/connector/restore_dio_workload.py'] = (b'# other owner\n', 0o644)
+        self.validate()
+
     def test_both_architectures_have_complete_exact_helpers(self):
         self.validate()
 

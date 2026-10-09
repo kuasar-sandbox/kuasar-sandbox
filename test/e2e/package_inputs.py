@@ -1,4 +1,4 @@
-"""Explicit source-time release inputs; never a runtime capability registry."""
+"""Source-time delivery conventions; never a runtime capability registry."""
 from pathlib import Path
 import shutil
 
@@ -26,39 +26,37 @@ PLATFORM_RUNTIME = (
     'test/demo/requirements.txt', 'test/demo/requirements.lock',
     'workbench/workbench',
 )
-OWNER_LIBRARIES = {
-    'platform': ('failure-diagnostics.sh', 'failure_diagnostics.py'),
-    'accelerator': ('manifest_fixture.py', 'port_lease.sh'),
-    'connector': ('notify_helpers.sh', 'stats_management.py'),
-    'guest-runtime': ('assertions.py', 'common.sh', 'fixture.py', 'process.py'),
-    'sandboxer': ('usage_oom_wrapper.py', 'resource_stats.py', 'readiness_helpers.sh',
-                 'read_fault_proxy.py', 'usage_report_relay.py', 'usage_vsock_relay.py',
-                 'usage_ch_relay.py', 'usage.py', 'tarstream.sh',
-                 'usage_ch_wrapper.py', 'usage_vsock_wrapper.py'),
-    'orchestrator': (
-        'runner_lifecycle.py', 'workload.py', 'builder_client.sh',
-        'resource_observation.sh', 'envd_exec.py', 'websocket_probe.py',
-        'native_usage.sh', 'prepare_base_image.sh', 'execute_contract.sh',
-        'builder_network.sh', 'builder_artifact.sh', 'build_fixture_units.sh',
-        'builder_storage.sh', 'execute_template.sh', 'builder_ownership.sh',
-        'mmds_service_guest.sh', 'builder_journal.sh', 'build_client.py',
-        'journal_identity.py', 'telemetry.sh', 'execute_resource.sh', 'proxy.sh',
-        'telemetry_backend_probe.py', 'envd_start.py', 'resource.sh',
-        'execute_artifact.sh', 'placer_readiness.py', 'mmds_secret_guest.sh',
-        'telemetry_probe.py', 'vmm_cgroup.sh', 'case_workspace.sh',
-        'guest_service.sh', 'telemetry_stats.sh', 'proxy_case.sh',
-        'execute_sandbox.sh', 'native_traffic.sh', 'proxy_guest.sh',
-        'execute_state.sh', 'tarstream.sh', 'execute_client.sh',
-        'execute_process.sh', 'execute_network.sh', 'execute_env.sh',
-        'builder_proxy.sh', 'builder_env.sh', 'mmds_static_guest.sh',
-        'builder_process.sh', 'cluster_env.sh', 'execute_instrument.sh',
-        'cluster_process.sh', 'builder_config.sh', 'runtask_privilege.sh',
-        'cluster_http.sh',
-    ),
-}
+
+def library_inputs(root: Path):
+    """Discover an owner's complete runtime tree, preserving nested paths.
+
+    lib/ is the delivery boundary. test_* entries and Python cache directories
+    are source-only by convention; all other regular files are runtime inputs.
+    Validate even excluded entries so exclusions cannot conceal unsafe paths.
+    """
+    library = root / 'lib'
+    if library.is_symlink() or not library.is_dir():
+        raise ValueError(f'missing or symbolic-link runtime library directory: {library}')
+    inputs = []
+    for source in sorted(library.rglob('*')):
+        path = source.relative_to(root)
+        if source.is_symlink():
+            raise ValueError(f'symbolic link in package input: {source}')
+        if source.is_dir():
+            continue
+        regular_input(root, path)
+        if any(part.startswith('test_') or part in {'__pycache__', '.pytest_cache'}
+               for part in path.parts[1:]) or source.suffix in {'.pyc', '.pyo'}:
+            continue
+        inputs.append(path)
+    if not inputs:
+        raise ValueError(f'no runtime library inputs: {library}')
+    return inputs
 
 
 def regular_input(root: Path, path: Path):
+    if path.is_absolute() or '..' in path.parts:
+        raise ValueError(f'unsafe package input: {path}')
     source = root / path
     if any((root / parent).is_symlink() for parent in (path, *path.parents)):
         raise ValueError(f'symbolic link in package input: {source}')
@@ -69,7 +67,7 @@ def regular_input(root: Path, path: Path):
 
 def copy_input(root: Path, path: Path, target: Path):
     source = regular_input(root, path)
-    if target.exists():
+    if target.exists() or target.is_symlink():
         raise ValueError(f'package input collision: {target}')
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source, target)

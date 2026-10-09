@@ -401,3 +401,19 @@ Daily Preview must commit its converged manifest directly to the protected targe
 - [deployment.md](deployment.md): deployment and runtime prerequisites;
 - [../test/QUICKSTART.md](../test/QUICKSTART.md): complete aggregate-release validation;
 - [../release/](../release/): selection, packaging, coordination, recovery and GC implementation.
+
+### Owner runtime input discovery
+
+Each E2E owner maintains its runtime dependencies under `test/e2e/lib/` (the
+platform-owned suite uses `test/e2e/platform/lib/`). Assembly discovers all regular
+files recursively at the selected test revision and preserves their paths under
+`test/e2e/lib/<owner>/`. Adding a library, data fixture or nested dependency needs
+no filename change in another repository. Canonical cases remain discovered from
+`test/e2e/cases/*.sh`.
+
+Names beginning with `test_`, Python cache directories (`__pycache__`,
+`.pytest_cache`) and compiled Python cache files (`*.pyc`, `*.pyo`) are source-only
+by convention and must not be runtime dependencies. Assembly rejects symlinks,
+non-regular inputs, missing/empty runtime libraries and duplicate case IDs; it
+does not recover omitted inputs by downloading them at execution time. Archive
+validation and execution still validate the actual delivered package.

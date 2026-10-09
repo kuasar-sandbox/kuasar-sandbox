@@ -555,3 +555,15 @@ Daily Preview 必须直接把收敛后的清单提交到受保护目标分支,�
 - [deployment_zh.md](deployment_zh.md):部署与运行前置条件;
 - [../test/QUICKSTART_zh.md](../test/QUICKSTART_zh.md):完整聚合 Release 验证;
 - [../release/](../release/):选择、打包、协调、恢复和 GC 实现。
+
+### 组件运行依赖自动发现
+
+每个 E2E 组件在本仓 `test/e2e/lib/` 维护运行依赖（平台自有用例使用
+`test/e2e/platform/lib/`）。组装器从选定的测试提交递归发现全部普通文件，
+保留相对路径放入 `test/e2e/lib/<owner>/`。新增库、数据夹具或嵌套依赖时，
+无需修改其他仓库的文件名清单。规范用例仍从 `test/e2e/cases/*.sh` 自动发现。
+
+以 `test_` 开头的名称、Python 缓存目录（`__pycache__`、`.pytest_cache`）和
+编译缓存文件（`*.pyc`、`*.pyo`）按约定仅用于源码自测，不得作为运行依赖。
+组装器拒绝符号链接、非普通文件、缺失或空的运行库以及重复用例 ID；
+执行时不会通过额外下载补齐缺失输入。归档校验与执行验证仍针对实际交付包。
