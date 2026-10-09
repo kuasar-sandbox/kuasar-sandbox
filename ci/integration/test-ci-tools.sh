@@ -389,6 +389,7 @@ $(VMLINUX_BIN): $(VMLINUX_INPUTS)
 	@mkdir -p "$(dir $@)"
 	@mkdir -p build/src/linux/LICENSES/preferred
 	@printf 'build\n' >>"$(FAKE_BUILD_COUNTER)"
+	@printf '%s\n' "$(KBUILD_BUILD_USER)" "$(KBUILD_BUILD_HOST)" "$(KBUILD_BUILD_TIMESTAMP)" >build/actual-build-environment.txt
 	@printf 'fake-vmlinux\n' >"$@"
 	@chmod +x "$@"
 	@printf 'linux copying fixture\n' >build/src/linux/COPYING
@@ -442,10 +443,15 @@ flock -u 9
 sleep "${FAKE_BUILD_SLEEP:-0}"
 case "$target" in
     envd)
-        mkdir -p "$workdir/bin/$arch" "$workdir/build/src/e2b-infra"
+        mkdir -p "$workdir/bin/$arch" "$workdir/build/src/e2b-infra/packages/envd" \
+            "$workdir/build/src/e2b-infra/packages/shared"
         printf 'fake-envd\n' >"$workdir/bin/$arch/envd"
         chmod +x "$workdir/bin/$arch/envd"
         printf 'envd license fixture\n' >"$workdir/build/src/e2b-infra/LICENSE"
+        printf 'module example.test/envd\nreplace example.test/shared => ../shared\n' \
+            >"$workdir/build/src/e2b-infra/packages/envd/go.mod"
+        printf 'package main\nfunc main() {}\n' >"$workdir/build/src/e2b-infra/packages/envd/main.go"
+        printf 'module example.test/shared\n' >"$workdir/build/src/e2b-infra/packages/shared/go.mod"
         ;;
     erofs)
         mkdir -p "$workdir/bin/$arch" "$workdir/build/$arch/src/erofs-utils"
@@ -459,6 +465,9 @@ case "$target" in
         printf 'erofs map fixture\n' >"$workdir/build/$arch/src/erofs-utils/mkfs/mkfs.erofs.map"
         mkdir -p "$workdir/build/$arch/src/erofs-utils/lib/.libs"
         printf 'erofs object fixture\n' >"$workdir/build/$arch/src/erofs-utils/mkfs/mkfs_erofs-main.o"
+        mkdir -p "$workdir/build/$arch/src/erofs-utils/fsck"
+        printf 'erofs fsck map fixture\n' >"$workdir/build/$arch/src/erofs-utils/fsck/fsck.erofs.map"
+        printf 'erofs fsck object fixture\n' >"$workdir/build/$arch/src/erofs-utils/fsck/fsck_erofs-main.o"
         printf 'erofs archive fixture\n' >"$workdir/build/$arch/src/erofs-utils/lib/.libs/liberofs.a"
         printf 'erofs patch notice fixture\n' >"$workdir/build/$arch/src/erofs-utils/LICENSES/fixture"
         ;;
@@ -473,7 +482,10 @@ case "$target" in
         ;;
     cloud-hypervisor)
         mkdir -p "$workdir/bin/$arch" \
-            "$workdir/build/src/cloud-hypervisor/LICENSES"
+            "$workdir/build/src/cloud-hypervisor/LICENSES" \
+            "$workdir/build/src/cloud-hypervisor/vmm/src" \
+            "$workdir/build/src/cloud-hypervisor/.git" \
+            "$workdir/build/$arch/cloud-hypervisor"
         printf 'fake-cloud-hypervisor\n' >"$workdir/bin/$arch/cloud-hypervisor"
         chmod +x "$workdir/bin/$arch/cloud-hypervisor"
         printf 'cloud credits fixture\n' \
@@ -482,6 +494,15 @@ case "$target" in
             >"$workdir/build/src/cloud-hypervisor/LICENSES/Apache-2.0.txt"
         printf 'cloud lock fixture\n' \
             >"$workdir/build/src/cloud-hypervisor/Cargo.lock"
+        printf '[workspace]\nmembers = ["vmm"]\n' \
+            >"$workdir/build/src/cloud-hypervisor/Cargo.toml"
+        printf '[package]\nname = "vmm"\nversion = "0.1.0"\n' \
+            >"$workdir/build/src/cloud-hypervisor/vmm/Cargo.toml"
+        printf 'fn main() {}\n' >"$workdir/build/src/cloud-hypervisor/vmm/src/main.rs"
+        printf '{"reason":"compiler-artifact","package_id":"path+file://%s/build/src/cloud-hypervisor/vmm#0.1.0","target":{"name":"cloud-hypervisor"},"executable":"%s/bin/%s/cloud-hypervisor"}\n{"reason":"build-finished","success":true}\n' \
+            "$workdir" "$workdir" "$arch" >"$workdir/build/$arch/cloud-hypervisor/build-report.jsonl"
+        printf 'LOAD /toolchain/libc.a\n' >"$workdir/build/$arch/cloud-hypervisor/link.map"
+        printf 'private Git state must never be cached\n' >"$workdir/build/src/cloud-hypervisor/.git/config"
         ;;
     *) exit 2 ;;
 esac
@@ -561,6 +582,13 @@ tagged_key="$(env PATH="$TMP/bin:$PATH" GOFLAGS=-tags=ci KUASAR_WORKSPACE_ROOT="
 microarch_key="$(env PATH="$TMP/bin:$PATH" GOAMD64=v3 KUASAR_WORKSPACE_ROOT="$workspace" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key envd | cut -f2)"
 [ "$plain_key" != "$microarch_key" ] || fail "GOAMD64 did not invalidate the envd key"
+printf 'envd source v1\n' > "$TMP/envd-source.tar.gz"
+local_source_key="$(env PATH="$TMP/bin:$PATH" ENVD_TARBALL="$TMP/envd-source.tar.gz" \
+    KUASAR_WORKSPACE_ROOT="$workspace" "$SCRIPT_DIR/../native-cache/native-cache.sh" key envd | cut -f2)"
+printf 'envd source v2\n' > "$TMP/envd-source.tar.gz"
+changed_source_key="$(env PATH="$TMP/bin:$PATH" ENVD_TARBALL="$TMP/envd-source.tar.gz" \
+    KUASAR_WORKSPACE_ROOT="$workspace" "$SCRIPT_DIR/../native-cache/native-cache.sh" key envd | cut -f2)"
+[ "$local_source_key" != "$changed_source_key" ] || fail "local native source bytes did not invalidate the key"
 
 cross_workspace="$TMP/cross-workspace"
 setup_erofs_workspace "$cross_workspace"
@@ -696,6 +724,17 @@ vmlinux_key_versioned="$(env PATH="$TMP/bin:$PATH" LOCALVERSION=-ci KBUILD_BUILD
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key vmlinux | cut -f2)"
 [ "$vmlinux_key_plain" != "$vmlinux_key_versioned" ] \
     || fail "Kbuild overrides did not invalidate the vmlinux key"
+vmlinux_key_defaulted="$(env PATH="$TMP/bin:$PATH" KBUILD_BUILD_USER=kuasar \
+    KBUILD_BUILD_HOST=workbench KBUILD_BUILD_VERSION=1 KBUILD_BUILD_TIMESTAMP='Thu Jan  1 00:00:00 UTC 1970' \
+    KUASAR_WORKSPACE_ROOT="$vmlinux_workspace" \
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" key vmlinux | cut -f2)"
+[ "$vmlinux_key_plain" = "$vmlinux_key_defaulted" ] \
+    || fail "implicit Kbuild inputs do not match the actual reproducible defaults"
+vmlinux_key_commit_time="$(env PATH="$TMP/bin:$PATH" GIT_COMMITTER_DATE='@1 +0000' \
+    KUASAR_WORKSPACE_ROOT="$vmlinux_workspace" \
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" key vmlinux | cut -f2)"
+[ "$vmlinux_key_plain" != "$vmlinux_key_commit_time" ] \
+    || fail "source commit timestamps did not invalidate kernel SCM inputs"
 
 vmlinux_cache="$TMP/vmlinux-cache"
 vmlinux_counter="$TMP/vmlinux-build-counter"
@@ -705,6 +744,10 @@ env PATH="$SYSTEM_PATH" FAKE_BUILD_COUNTER="$vmlinux_counter" \
     KUASAR_NATIVE_CACHE_METRICS="$vmlinux_metrics" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build vmlinux
 [ "$(wc -l <"$vmlinux_counter")" -eq 1 ] || fail "cold vmlinux cache must build once"
+grep -qx kuasar "$vmlinux_workspace/guest-runtime/native-deps/build/actual-build-environment.txt" \
+    || fail "Kbuild user was normalized only in the cache key"
+grep -qx workbench "$vmlinux_workspace/guest-runtime/native-deps/build/actual-build-environment.txt" \
+    || fail "Kbuild host was normalized only in the cache key"
 [ "$(cat "$vmlinux_workspace/guest-runtime/native-deps/build/src/linux/COPYING")" \
     = 'linux copying fixture' ] || fail "cold vmlinux cache omitted source license material"
 env PATH="$SYSTEM_PATH" FAKE_BUILD_COUNTER="$vmlinux_counter" \
@@ -754,6 +797,12 @@ cloud_key_config="$(env PATH="$TMP/bin:$PATH" CARGO_HOME="$cargo_home" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key cloud-hypervisor | cut -f2)"
 [ "$cloud_key_plain" != "$cloud_key_config" ] \
     || fail "Cargo config did not invalidate the Cloud Hypervisor key"
+setup_cloud_hypervisor_workspace "$TMP/other-cloud-workspace"
+cloud_key_relocated="$(env PATH="$TMP/bin:$PATH" CARGO_HOME="$cargo_home" \
+    KUASAR_WORKSPACE_ROOT="$TMP/other-cloud-workspace" \
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" key cloud-hypervisor | cut -f2)"
+[ "$cloud_key_config" != "$cloud_key_relocated" ] \
+    || fail "path-bearing Cloud Hypervisor records were reused at a different source root"
 
 rocks_workspace="$TMP/rocks-workspace"
 setup_rocksdb_workspace "$rocks_workspace"
@@ -784,6 +833,7 @@ env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build rocksdb
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" CARGO_HOME="$cargo_home" \
     KUASAR_WORKSPACE_ROOT="$cloud_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
+    KUASAR_WORKBENCH_IMAGE_ID=sha256:fixture KUASAR_WORKBENCH_FRAMEWORK_SHA=framework-fixture \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build cloud-hypervisor
 [ "$(wc -l <"$material_counter")" -eq 3 ] \
     || fail "cold native material fixtures did not build exactly once per component"
@@ -793,6 +843,18 @@ env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" CARGO_HOME="$ca
     = 'rocksdb LICENSE.Apache fixture' ] || fail "RocksDB cache omitted source license material"
 [ "$(cat "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md")" \
     = 'cloud credits fixture' ] || fail "Cloud Hypervisor cache omitted source credit material"
+cloud_report="$cloud_workspace/sandboxer/native-deps/build/x86_64/cloud-hypervisor/build-report.jsonl"
+cloud_report_hash="$(sha256sum "$cloud_report" | cut -d ' ' -f1)"
+cloud_entry="$(find "$material_cache/v3/x86_64/cloud-hypervisor" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+grep -q '^workbench_image_id=sha256:fixture$' "$cloud_entry/provenance.txt" \
+    || fail "native provenance omitted the complete Workbench image identity"
+grep -q '^workbench_framework_sha=framework-fixture$' "$cloud_entry/provenance.txt" \
+    || fail "native provenance omitted the framework identity"
+[ ! -e "$cloud_entry/payload" ] || fail "cache retained a duplicate unpacked payload"
+# Model a new job with only admitted repository inputs at the same container
+# /src path. Neither generated sources, Cargo manifests nor build records exist.
+rm -rf "$cloud_workspace"
+setup_cloud_hypervisor_workspace "$cloud_workspace"
 
 rm -f \
     "$cross_workspace/guest-runtime/native-deps/bin/x86_64/mkfs.erofs" \
@@ -829,7 +891,7 @@ for restored in \
         || fail "hot EROFS cache omitted $restored"
 done
 # Cached generated materials never replace the admitted repository patch set.
-if tar -tf "$(find "$material_cache/v2/x86_64/erofs" -name payload.tar -print -quit)" \
+if tar -tf "$(find "$material_cache/v3/x86_64/erofs" -name payload.tar -print -quit)" \
     | grep -q 'native-deps/deps/'; then
     fail "EROFS cache archives repository source inputs"
 fi
@@ -837,6 +899,43 @@ fi
     || fail "hot RocksDB cache did not restore source license material"
 [ -s "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md" ] \
     || fail "hot Cloud Hypervisor cache did not restore source credit material"
+[ "$(sha256sum "$cloud_report" | cut -d ' ' -f1)" = "$cloud_report_hash" ] \
+    || fail "fresh Cloud Hypervisor restore changed the actual build report"
+for material in src/cloud-hypervisor/Cargo.toml src/cloud-hypervisor/Cargo.lock \
+    src/cloud-hypervisor/vmm/Cargo.toml src/cloud-hypervisor/vmm/src/main.rs \
+    x86_64/cloud-hypervisor/link.map; do
+    [ -s "$cloud_workspace/sandboxer/native-deps/build/$material" ] \
+        || fail "fresh Cloud Hypervisor restore omitted $material"
+done
+[ ! -e "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/.git" ] \
+    || fail "native cache restored source Git configuration"
+# Even an internally checksummed archive cannot omit an actual build record.
+# Rejection must happen before replacing valid current outputs or recompiling.
+chmod -R u+w "$cloud_entry"
+python3 - "$cloud_entry/payload.tar" <<'PY'
+from pathlib import Path
+import sys
+import tarfile
+path = Path(sys.argv[1])
+pending = path.with_suffix('.partial')
+with tarfile.open(path, 'r:') as source, tarfile.open(pending, 'w') as target:
+    for member in source:
+        if member.name.endswith('/build-report.jsonl'):
+            continue
+        target.addfile(member, source.extractfile(member) if member.isfile() else None)
+pending.replace(path)
+PY
+(cd "$cloud_entry"; sha256sum payload.tar inputs.tsv provenance.txt > SHA256SUMS)
+if env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" CARGO_HOME="$cargo_home" \
+    KUASAR_WORKSPACE_ROOT="$cloud_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build cloud-hypervisor >"$TMP/partial-material.log" 2>&1; then
+    fail "cache accepted Cloud Hypervisor without its observed build report"
+fi
+grep -q 'native payload omits outputs' "$TMP/partial-material.log" \
+    || fail "incomplete cache did not identify the missing materials"
+[ "$(wc -l <"$material_counter")" -eq 3 ] || fail "damaged cache silently rebuilt a component"
+[ "$(sha256sum "$cloud_report" | cut -d ' ' -f1)" = "$cloud_report_hash" ] \
+    || fail "rejected cache damaged valid existing build materials"
 
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
     KUASAR_WORKSPACE_ROOT="$workspace" KUASAR_NATIVE_CACHE_ROOT="$cache" \
@@ -846,8 +945,8 @@ env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
 [ "$(cat "$workspace/guest-runtime/native-deps/build/src/e2b-infra/LICENSE")" \
     = 'envd license fixture' ] || fail "cold envd cache omitted source license material"
 
-rm -f "$workspace/guest-runtime/native-deps/bin/x86_64/envd" \
-    "$workspace/guest-runtime/native-deps/build/src/e2b-infra/LICENSE"
+rm -rf "$workspace"
+setup_workspace "$workspace"
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
     KUASAR_WORKSPACE_ROOT="$workspace" KUASAR_NATIVE_CACHE_ROOT="$cache" \
     KUASAR_NATIVE_CACHE_METRICS="$metrics" \
@@ -855,6 +954,10 @@ env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
 [ "$(wc -l <"$counter")" -eq 1 ] || fail "hot cache rebuilt the component"
 [ "$(cat "$workspace/guest-runtime/native-deps/build/src/e2b-infra/LICENSE")" \
     = 'envd license fixture' ] || fail "hot envd cache did not restore source license material"
+for material in packages/envd/go.mod packages/envd/main.go packages/shared/go.mod; do
+    [ -s "$workspace/guest-runtime/native-deps/build/src/e2b-infra/$material" ] \
+        || fail "fresh envd restore omitted Go source context $material"
+done
 grep -q $'envd\thit\t' "$metrics" || fail "hot cache metric is missing"
 
 # A different input key is exercised in the same fixture directory. Real
@@ -870,7 +973,7 @@ env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
 
 current_key="$(env PATH="$TMP/bin:$PATH" KUASAR_WORKSPACE_ROOT="$workspace" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key envd | cut -f2)"
-entry="$cache/v2/x86_64/envd/$current_key"
+entry="$cache/v3/x86_64/envd/$current_key"
 chmod u+w "$entry/payload.tar"
 printf 'tampered\n' >>"$entry/payload.tar"
 if env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
@@ -901,8 +1004,8 @@ staging_cache="$TMP/staging-cache"
 staging_workspace="$TMP/staging-workspace"
 staging_counter="$TMP/staging-counter"
 setup_workspace "$staging_workspace"
-orphan_stage="$staging_cache/v2/.tmp/envd.orphan.test"
-orphan_lock="$staging_cache/v2/.locks/staging/${orphan_stage##*/}.lock"
+orphan_stage="$staging_cache/v3/.tmp/envd.orphan.test"
+orphan_lock="$staging_cache/v3/.locks/staging/${orphan_stage##*/}.lock"
 mkdir -p "$orphan_stage/payload" "$(dirname "$orphan_lock")"
 exec 8>"$orphan_lock"
 flock 8
@@ -930,7 +1033,7 @@ for n in 1 2 3 4; do
         KUASAR_NATIVE_CACHE_MAX_ENTRIES=2 KUASAR_NATIVE_CACHE_MIN_AGE_SECONDS=0 \
         "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build envd >/dev/null
 done
-[ "$(find "$retained_cache/v2/x86_64/envd" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ] \
+[ "$(find "$retained_cache/v3/x86_64/envd" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ] \
     || fail "native cache retention limit was not enforced"
 
 source_cache="$TMP/source-cache"
@@ -1004,4 +1107,5 @@ if find "$TMP/source-workspace" -maxdepth 1 \
 fi
 
 python3 "$SCRIPT_DIR/../native-cache/test-erofs-inputs.py"
+python3 -B "$SCRIPT_DIR/../native-cache/test-payload.py"
 echo "test-ci-tools: PASS"

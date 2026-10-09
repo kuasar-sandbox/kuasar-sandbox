@@ -4,8 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_ROOT="${KUASAR_WORKSPACE_ROOT:-$(cd "$SCRIPT_DIR/../../.." && pwd)}"
-CACHE_ROOT="${KUASAR_NATIVE_CACHE_ROOT:-/var/cache/kuasar/native}"
-CACHE_SCHEMA="v2"
+CACHE_ROOT="${KUASAR_NATIVE_CACHE_ROOT:-${XDG_CACHE_HOME:-${HOME:?}/.cache}/kuasar/native}"
+CACHE_SCHEMA="v3"
 METRICS_FILE="${KUASAR_NATIVE_CACHE_METRICS:-}"
 MAX_ENTRIES="${KUASAR_NATIVE_CACHE_MAX_ENTRIES:-4}"
 MIN_ENTRY_AGE_SECONDS="${KUASAR_NATIVE_CACHE_MIN_AGE_SECONDS:-3600}"
@@ -17,6 +17,17 @@ case "$TARGET_ARCH" in
     x86_64|aarch64) ;;
     *) echo "native-cache: unsupported TARGET_ARCH=$TARGET_ARCH" >&2; exit 2 ;;
 esac
+
+# Kbuild otherwise embeds the invoking user, host and wall clock in vmlinux.
+# These are actual build inputs, not cache labels. Apply the same defaults to
+# key calculation and make, while preserving explicitly supplied values.
+export KBUILD_BUILD_USER="${KBUILD_BUILD_USER-kuasar}"
+export KBUILD_BUILD_HOST="${KBUILD_BUILD_HOST-workbench}"
+export KBUILD_BUILD_VERSION="${KBUILD_BUILD_VERSION-1}"
+if [ ! "${KBUILD_BUILD_TIMESTAMP+x}" ]; then
+    KBUILD_BUILD_TIMESTAMP="$(LC_ALL=C date -u -d "@${SOURCE_DATE_EPOCH:-0}" '+%a %b %e %T UTC %Y')"
+    export KBUILD_BUILD_TIMESTAMP
+fi
 
 ACTIVE_STAGE=""
 ACTIVE_STAGE_LOCK=""
@@ -284,6 +295,10 @@ component_environment() {
             )
             ;;
         cloud-hypervisor)
+            # Cargo package IDs in the real build report and manifests use
+            # absolute source paths. Workbench always mounts this at /src;
+            # callers with a different layout must not reuse those records.
+            printf 'workspace-root\t%q\n' "$(realpath "$WORKSPACE_ROOT")"
             names+=(
                 CLOUD_HYPERVISOR_TARBALL CLOUD_HYPERVISOR_TARBALL_SHA256 CH_BASE_TAG
                 CROSS_PREFIX RUST_TARGET RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTDOCFLAGS
@@ -301,6 +316,32 @@ component_environment() {
     for name in "${names[@]}"; do
         print_env_input "$name"
     done
+    case "$component" in vmlinux|cloud-hypervisor)
+        # These are applied only by the recipes' synthetic git commit/git am
+        # commands, never exported into a user's repository-wide environment.
+        printf 'env\tGIT_AUTHOR_DATE\t%q\n' "${GIT_AUTHOR_DATE-@${SOURCE_DATE_EPOCH:-0} +0000}"
+        printf 'env\tGIT_COMMITTER_DATE\t%q\n' "${GIT_COMMITTER_DATE-@${SOURCE_DATE_EPOCH:-0} +0000}"
+        ;;
+    esac
+}
+
+local_archive_identity() {
+    local component=$1 variable directory specifier path
+    case "$component" in
+        vmlinux) variable=LINUX_TARBALL; directory=guest-runtime/native-deps ;;
+        envd) variable=ENVD_TARBALL; directory=guest-runtime/native-deps ;;
+        rocksdb) variable=ROCKSDB_TARBALL; directory=accelerator ;;
+        cloud-hypervisor) variable=CLOUD_HYPERVISOR_TARBALL; directory=sandboxer/native-deps ;;
+        erofs) return ;; # erofs-inputs.py also handles Makefile-local archives.
+    esac
+    specifier=${!variable-}
+    case "$specifier" in
+        ''|http://*|https://*) return ;;
+    esac
+    path=${specifier%%#*}
+    [[ "$path" = /* ]] || path="$WORKSPACE_ROOT/$directory/$path"
+    [ -f "$path" ] || die "missing local $component source archive: $path"
+    printf 'source-archive-content\t%s\n' "$(sha256sum "$path" | awk '{print $1}')"
 }
 
 effective_cross_prefix() {
@@ -402,7 +443,10 @@ component_toolchain() {
 }
 
 compute_key() {
-    local component=$1 descriptor=$2 path relative paths_file
+    local component=$1 descriptor=$2 path relative paths_file archive_output
+    if [ "$component" = erofs ]; then
+        archive_output="$(erofs_archive_output)" || return
+    fi
     paths_file="$(mktemp)"
     component_input_paths "$component" >"$paths_file"
     sort -zu "$paths_file" -o "$paths_file"
@@ -410,7 +454,11 @@ compute_key() {
         printf 'schema\t%s\n' "$CACHE_SCHEMA"
         printf 'component\t%s\n' "$component"
         printf 'target_arch\t%s\n' "$TARGET_ARCH"
+        if [ "$component" = erofs ]; then
+            printf 'source-archive-output\t%s\n' "$archive_output"
+        fi
         component_environment "$component"
+        local_archive_identity "$component"
         component_toolchain "$component" || { rm -f "$paths_file"; return 1; }
         while IFS= read -r -d '' path; do
             relative="${path#"$WORKSPACE_ROOT/"}"
@@ -419,6 +467,29 @@ compute_key() {
     } >"$descriptor"
     rm -f "$paths_file"
     sha256sum "$descriptor" | awk '{print $1}'
+}
+
+erofs_archive_output() {
+    # build-erofs checks the exact source archive before its recipe stamp.
+    # Carry that verified download into the next job as well as the binaries.
+    # Local archives are admitted inputs and remain in their caller-owned path.
+    python3 - "$WORKSPACE_ROOT/guest-runtime/native-deps/Makefile" <<'PY'
+import os
+from pathlib import Path
+import re
+import sys
+from urllib.parse import urlsplit
+
+source = os.environ.get("EROFS_TARBALL")
+if source is None:
+    match = re.search(r"^EROFS_TARBALL\s*\?=\s*(.*)$", Path(sys.argv[1]).read_text(), re.M)
+    source = match[1].strip().replace("\\#", "#") if match else ""
+if source.startswith(("https://", "http://")):
+    filename = source.split("#", 1)[1] if "#" in source else Path(urlsplit(source).path).name
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", filename):
+        raise SystemExit("native-cache: unsafe EROFS archive filename")
+    print("guest-runtime/native-deps/build/tarball/" + filename)
+PY
 }
 
 component_outputs() {
@@ -433,25 +504,15 @@ component_outputs() {
         erofs)
             printf 'guest-runtime/native-deps/bin/%s/mkfs.erofs\n' "$TARGET_ARCH"
             printf 'guest-runtime/native-deps/bin/%s/fsck.erofs\n' "$TARGET_ARCH"
-            printf 'guest-runtime/native-deps/build/%s/src/erofs-utils/AUTHORS\n' "$TARGET_ARCH"
-            printf 'guest-runtime/native-deps/build/%s/src/erofs-utils/COPYING\n' "$TARGET_ARCH"
-            # New recipes carry their reuse stamp and matching link map; old
-            # admitted source sets remain buildable without these additions.
-            local extra
-            for extra in \
-                "guest-runtime/native-deps/bin/$TARGET_ARCH/.erofs-recipe" \
-                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs.erofs.map" \
-                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs_erofs-main.o" \
-                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/fsck/fsck.erofs.map" \
-                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/fsck/fsck_erofs-main.o" \
-                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/lib/.libs/liberofs.a" \
-                "guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/LICENSES"; do
-                [ ! -e "$WORKSPACE_ROOT/$extra" ] || printf '%s\n' "$extra"
-            done
+            printf 'guest-runtime/native-deps/bin/%s/.erofs-recipe\n' "$TARGET_ARCH"
+            printf 'guest-runtime/native-deps/build/%s/src/erofs-utils\n' "$TARGET_ARCH"
+            erofs_archive_output
             ;;
         envd)
             printf 'guest-runtime/native-deps/bin/%s/envd\n' "$TARGET_ARCH"
-            printf '%s\n' guest-runtime/native-deps/build/src/e2b-infra/LICENSE
+            # The runtime packager runs go env in packages/envd and resolves
+            # local module replacements, so licenses alone are insufficient.
+            printf '%s\n' guest-runtime/native-deps/build/src/e2b-infra
             ;;
         rocksdb)
             printf 'accelerator/build/%s/rocksdb/include\n' "$TARGET_ARCH"
@@ -464,12 +525,53 @@ component_outputs() {
             ;;
         cloud-hypervisor)
             printf 'sandboxer/native-deps/bin/%s/cloud-hypervisor\n' "$TARGET_ARCH"
-            printf '%s\n' \
-                sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md \
-                sandboxer/native-deps/build/src/cloud-hypervisor/LICENSES \
-                sandboxer/native-deps/build/src/cloud-hypervisor/Cargo.lock
+            # Preserve the observed build records with the exact patched
+            # workspace Cargo metadata reads. Never regenerate build evidence.
+            printf '%s\n' sandboxer/native-deps/build/src/cloud-hypervisor
+            printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/build-report.jsonl\n' "$TARGET_ARCH"
+            printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/link.map\n' "$TARGET_ARCH"
             ;;
     esac
+}
+
+component_required_files() {
+    case "$1" in
+        erofs)
+            local name
+            for name in AUTHORS COPYING mkfs/mkfs.erofs.map mkfs/mkfs_erofs-main.o \
+                fsck/fsck.erofs.map fsck/fsck_erofs-main.o lib/.libs/liberofs.a; do
+                printf 'guest-runtime/native-deps/build/%s/src/erofs-utils/%s\n' "$TARGET_ARCH" "$name"
+            done
+            ;;
+        envd)
+            printf '%s\n' guest-runtime/native-deps/build/src/e2b-infra/LICENSE \
+                guest-runtime/native-deps/build/src/e2b-infra/packages/envd/go.mod \
+                guest-runtime/native-deps/build/src/e2b-infra/packages/envd/main.go
+            ;;
+        cloud-hypervisor)
+            printf '%s\n' sandboxer/native-deps/build/src/cloud-hypervisor/Cargo.toml \
+                sandboxer/native-deps/build/src/cloud-hypervisor/Cargo.lock \
+                sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md
+            printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/build-report.jsonl\n' "$TARGET_ARCH"
+            printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/link.map\n' "$TARGET_ARCH"
+            ;;
+    esac
+}
+
+component_payload_paths() {
+    local component=$1 relative source
+    source="guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils"
+    while IFS= read -r relative; do
+        if [ "$component" = erofs ] && [ "$relative" = "$source" ]; then
+            # Preserve the real link/relink and source notice inputs. Generated
+            # Autotools helper symlinks are not packaging inputs, and may point
+            # into the producing host's /usr/share directory.
+            component_required_files erofs
+            [ ! -e "$WORKSPACE_ROOT/$source/LICENSES" ] || printf '%s/LICENSES\n' "$source"
+        else
+            printf '%s\n' "$relative"
+        fi
+    done < <(component_outputs "$component")
 }
 
 remove_outputs() {
@@ -483,8 +585,12 @@ remove_outputs() {
 validate_outputs() {
     local component=$1 relative
     while IFS= read -r relative; do
+        [ -n "$relative" ] || continue
         [ -e "$WORKSPACE_ROOT/$relative" ] || die "$component did not produce $relative"
     done < <(component_outputs "$component")
+    while IFS= read -r relative; do
+        [ -s "$WORKSPACE_ROOT/$relative" ] || die "$component lacks required build material $relative"
+    done < <(component_required_files "$component")
 }
 
 assert_clean_source_tree() {
@@ -517,32 +623,39 @@ build_component() {
 }
 
 validate_tar_paths() {
-    local archive=$1 path
-    while IFS= read -r path; do
-        case "$path" in
-            /*|../*|*/../*|..) die "unsafe path in cached payload: $path" ;;
-        esac
-    done < <(tar -tf "$archive")
+    local component=$1 archive=$2
+    python3 "$SCRIPT_DIR/validate-payload.py" "$archive" "$WORKSPACE_ROOT" \
+        < <(component_outputs "$component"; component_required_files "$component")
 }
 
 verify_entry() {
-    local entry=$1 key=$2 actual_key
+    local entry=$1 key=$2 component=$3 actual_key name
     [ -d "$entry" ] || return 1
-    [ -f "$entry/SHA256SUMS" ] || die "cache entry lacks SHA256SUMS: $entry"
-    [ -f "$entry/inputs.tsv" ] || die "cache entry lacks inputs.tsv: $entry"
-    [ -f "$entry/payload.tar" ] || die "cache entry lacks payload.tar: $entry"
+    for name in SHA256SUMS inputs.tsv payload.tar provenance.txt; do
+        [ -f "$entry/$name" ] && [ ! -L "$entry/$name" ] || die "cache entry lacks regular $name: $entry"
+    done
+    python3 - "$entry/SHA256SUMS" <<'PY'
+from pathlib import Path
+import re
+import sys
+lines = Path(sys.argv[1]).read_text().splitlines()
+expected = {"payload.tar", "inputs.tsv", "provenance.txt"}
+if len(lines) != 3 or any(not re.fullmatch(r"[0-9a-f]{64}  [a-z.]+", line) for line in lines) \
+        or {line[66:] for line in lines} != expected:
+    raise SystemExit("native-cache: invalid cache checksum manifest")
+PY
     (
         cd "$entry"
         sha256sum --quiet -c SHA256SUMS
     ) || die "cache entry checksum verification failed: $entry"
     actual_key="$(sha256sum "$entry/inputs.tsv" | awk '{print $1}')"
     [ "$actual_key" = "$key" ] || die "cache input hash mismatch: expected $key, got $actual_key"
-    validate_tar_paths "$entry/payload.tar"
+    validate_tar_paths "$component" "$entry/payload.tar"
 }
 
 restore_entry() {
     local component=$1 entry=$2 key=$3
-    verify_entry "$entry" "$key"
+    verify_entry "$entry" "$key" "$component"
     remove_outputs "$component"
     # Cache payloads use a deterministic 1970 mtime.  A verified restore is
     # authoritative for the current input key, so stamp extracted outputs at
@@ -611,13 +724,18 @@ publish_entry() {
     create_active_stage "$component" "$key"
     mkdir -p "$ACTIVE_STAGE/payload"
     while IFS= read -r relative; do
-        mkdir -p "$ACTIVE_STAGE/payload/$(dirname "$relative")"
-        cp -a "$WORKSPACE_ROOT/$relative" "$ACTIVE_STAGE/payload/$relative"
-    done < <(component_outputs "$component")
+        [ -n "$relative" ] || continue
+        # Dependency recipes create private Git repositories to apply patches.
+        # Their patched files are materials; Git configuration and objects are
+        # not a packaging input and must not cross the cache boundary.
+        tar -C "$WORKSPACE_ROOT" --exclude=.git -cf - "$relative" \
+            | tar -C "$ACTIVE_STAGE/payload" -xf -
+    done < <(component_payload_paths "$component")
     (
         cd "$ACTIVE_STAGE/payload"
         tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -cf ../payload.tar .
     )
+    rm -rf "$ACTIVE_STAGE/payload"
     cp "$descriptor" "$ACTIVE_STAGE/inputs.tsv"
     if [ -n "${KUASAR_REVISION_MANIFEST:-}" ] && [ -f "$KUASAR_REVISION_MANIFEST" ]; then
         revision_hash="$(sha256sum "$KUASAR_REVISION_MANIFEST" | awk '{print $1}')"
@@ -628,13 +746,15 @@ publish_entry() {
         printf 'target_arch=%s\n' "$TARGET_ARCH"
         printf 'input_hash=%s\n' "$key"
         printf 'revision_manifest_sha256=%s\n' "$revision_hash"
+        printf 'workbench_image_id=%s\n' "${KUASAR_WORKBENCH_IMAGE_ID:-unavailable}"
+        printf 'workbench_framework_sha=%s\n' "${KUASAR_WORKBENCH_FRAMEWORK_SHA:-unavailable}"
         printf 'created_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     } >"$ACTIVE_STAGE/provenance.txt"
     (
         cd "$ACTIVE_STAGE"
         sha256sum payload.tar inputs.tsv provenance.txt >SHA256SUMS
     )
-    verify_entry "$ACTIVE_STAGE" "$key"
+    verify_entry "$ACTIVE_STAGE" "$key" "$component"
     mv "$ACTIVE_STAGE" "$entry"
     ACTIVE_STAGE=""
     release_active_stage_lock
