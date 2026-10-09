@@ -13,6 +13,7 @@ fail() {
 # own root check firing first (the root check lives below the SOURCED guard
 # precisely for this).
 if [ "$(id -u)" -ne 0 ]; then
+    [ "${REQUIRE_WORKING_SET_PRIVILEGED:-0}" != 1 ] || fail "required network namespace checks need root"
     echo "working_set_netns_test: skipped (needs root network namespaces)" >&2
     exit 0
 fi
@@ -116,6 +117,7 @@ probe_netns_support() {
     fi
 }
 if ! probe_netns_support; then
+    [ "${REQUIRE_WORKING_SET_PRIVILEGED:-0}" != 1 ] || fail "required network namespaces are unavailable"
     echo "working_set_netns_test: skipped (needs root network namespaces)" >&2
     exit 0
 fi

@@ -21,47 +21,18 @@ download() {
 
 select_profile() {
     profile=$1
-    with_go=false with_native=false with_kernel=false with_readers=false with_vm=false with_cross=false
+    with_vm=false
     # Include packages even when the standard image currently preinstalls them.
     packages=(ca-certificates curl git jq python3 python3-yaml tar gzip xz-utils unzip
         coreutils findutils gawk sed grep diffutils util-linux file time binutils)
     case "$profile" in
         control) ;;
         release-control) ;;
-        helper-build) with_go=true; packages+=(build-essential gcc-aarch64-linux-gnu python3-pip) ;;
-        kernel) with_go=true; with_kernel=true ;;
-        runtime|runtime-publish) with_go=true; with_native=true; with_readers=true ;;
-        source) with_go=true; with_native=true; with_kernel=true; with_readers=true; with_vm=true ;;
-        exact-assets) with_go=true; with_readers=true; with_vm=true ;;
-        artifact-build) with_go=true; with_native=true; with_kernel=true; with_readers=true ;;
-        artifact-cross) with_go=true; with_native=true; with_kernel=true; with_readers=true; with_cross=true ;;
         artifact-arm) ;;
         artifact-prepare) packages+=(python3-pip) ;;
         artifact-x86) with_vm=true ;;
         *) die "unknown profile: $profile" ;;
     esac
-    if $with_native || $with_kernel || $with_readers; then
-        packages+=(build-essential pkg-config)
-    fi
-    if $with_kernel; then
-        packages+=(bc bison flex libelf-dev libssl-dev libncurses-dev)
-    fi
-    if $with_native || $with_readers; then
-        packages+=(autoconf automake libtool uuid-dev python3-pip)
-    fi
-    if $with_native; then
-        packages+=(patch libssl-dev liblz4-dev libzstd-dev zlib1g-dev libfuse3-dev)
-        # Cross recipes use target crypto headers; their development packages
-        # cannot coexist with the host versions. Host readers disable crypto.
-        if ! $with_cross; then packages+=(libgcrypt20-dev libgpg-error-dev); fi
-    fi
-    if [[ "$profile" = source || "$profile" = artifact-build || "$profile" = artifact-cross ]]; then
-        packages+=(cmake clang llvm libclang-dev libsnappy-dev libssl-dev)
-    fi
-    if $with_cross; then
-        packages+=(gcc-aarch64-linux-gnu g++-aarch64-linux-gnu binutils-aarch64-linux-gnu
-            libc6-dev-arm64-cross uuid-dev:arm64 libgcrypt20-dev:arm64 libgpg-error-dev:arm64)
-    fi
     if $with_vm || [ "$profile" = artifact-arm ]; then
         packages+=(python3-venv python3-pip iproute2 iptables nftables kmod acl
             e2fsprogs procps psmisc socat redis-server rsync cpio zstd lz4
@@ -91,19 +62,8 @@ print(jobs, ','.join(map(str, cpus[:jobs])))
 PY
 }
 
-configure_go() {
-    need go
-    # The environment owns compiler selection, including GOROOT/GOTOOLCHAIN.
-    go version
-    emit GOPROXY https://proxy.golang.org,direct
-    emit GOSUMDB sum.golang.org
-    emit GOPATH "$KUASAR_HOSTED_ROOT/gopath"
-    emit GOCACHE "$KUASAR_HOSTED_ROOT/go-cache"
-    emit GOMODCACHE "$KUASAR_HOSTED_ROOT/go-modules"
-}
-
 install_readers() (
-    # Host validation tools only. Guest static build flags and link maps stay
+    # Called explicitly inside Workbench. Guest static build flags and link maps stay
     # owned by guest-runtime/native-deps/deps/build-erofs.sh.
     local archive="$KUASAR_HOSTED_ROOT/erofs-readers.tar.gz"
     local source="$KUASAR_HOSTED_ROOT/erofs-readers"
@@ -141,45 +101,6 @@ install_runtime_reader() {
     emit KUASAR_RUNTIME_READER "$verifier"
 }
 
-configure_cross() {
-    need aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ cargo rustc
-    local target=aarch64-unknown-linux-gnu libdir
-    libdir=$(rustc --print target-libdir --target "$target")
-    if ! compgen -G "$libdir/libstd-*.rlib" >/dev/null; then
-        # Install only the matching standard library into the provided toolchain.
-        # Do not select or upgrade the compiler.
-        need rustup
-        rustup target add "$target"
-    fi
-    compgen -G "$libdir/libstd-*.rlib" >/dev/null || die "provided Rust toolchain lacks $target std"
-    # Recipe-scoped CC/pkg-config selection is owned by the existing Makefiles.
-    # In particular never export target GOARCH or PKG_CONFIG_LIBDIR here.
-}
-
-configure_cross_apt() {
-    # Standard Ubuntu uses separate amd64 and arm64 archive endpoints. Restrict
-    # the existing deb822 sources before adding the target-only ports source.
-    [ "${RUNNER_ENVIRONMENT:-}" = github-hosted ] || die "cross packages require a disposable hosted job"
-    sudo -n python3 - <<'PY'
-from pathlib import Path
-source = Path('/etc/apt/sources.list.d/ubuntu.sources')
-text = source.read_text()
-stanzas = []
-for stanza in text.strip().split('\n\n'):
-    # Comments and empty paragraphs are not APT source entries.
-    if all(not line.strip() or line.lstrip().startswith('#') for line in stanza.splitlines()):
-        stanzas.append(stanza)
-        continue
-    lines = [line for line in stanza.splitlines() if not line.startswith('Architectures:')]
-    stanzas.append('\n'.join(lines + ['Architectures: amd64']))
-source.write_text('\n\n'.join(stanzas) + '\n')
-PY
-    sudo -n dpkg --add-architecture arm64
-    printf 'Types: deb\nURIs: http://ports.ubuntu.com/ubuntu-ports\nSuites: %s %s-updates %s-security\nComponents: main universe restricted multiverse\nArchitectures: arm64\nSigned-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg\n' \
-        "$VERSION_CODENAME" "$VERSION_CODENAME" "$VERSION_CODENAME" \
-        | sudo -n tee /etc/apt/sources.list.d/kuasar-arm64.sources >/dev/null
-}
-
 render_kvm_rule() {
     [ "$#" -eq 2 ] || die "KVM rule requires job uid and primary gid"
     if [ "${GITHUB_ACTIONS:-}" != true ] || [ "${RUNNER_ENVIRONMENT:-}" != github-hosted ] \
@@ -200,15 +121,10 @@ configure_vm() {
     job_uid=$(id -u)
     job_gid=$(id -g)
     kvm_rule=$(render_kvm_rule "$job_uid" "$job_gid")
-    # Use the environment's Docker and Rust tools. Missing capabilities fail
+    # Use the environment's Docker tools. Missing capabilities fail
     # without selecting another installation or requiring a toolchain manager.
     need docker systemctl ip modprobe setfacl mkfs.ext4 udevadm
     docker info >/dev/null
-    if [ "$profile" = source ]; then
-        need cargo rustc
-        cargo --version
-        rustc --version
-    fi
     [ "$(stat -fc %T /sys/fs/cgroup)" = cgroup2fs ] || die "cgroup v2 is required"
     [ -d /run/systemd/system ] || die "systemd is required"
     sudo -n modprobe tun vhost_vsock
@@ -249,25 +165,20 @@ if fd < 0:
     raise OSError(ctypes.get_errno(), 'userfaultfd is required')
 os.close(fd)
 PY
-    emit CARGO_HOME "$KUASAR_HOSTED_ROOT/cargo"
-    emit RUSTUP_DIST_SERVER https://static.rust-lang.org
-    emit RUSTUP_UPDATE_ROOT https://static.rust-lang.org/rustup
-    emit CARGO_REGISTRIES_CRATES_IO_PROTOCOL sparse
-    emit CARGO_NET_GIT_FETCH_WITH_CLI true
     emit PIP_INDEX_URL https://pypi.org/simple
 }
 
 
 main() {
     if [ "$#" -ne 2 ] || [ "$1" != --profile ]; then
-        die "usage: bootstrap.sh --profile control|release-control|helper-build|kernel|runtime|runtime-publish|source|exact-assets|artifact-build|artifact-cross|artifact-prepare|artifact-x86|artifact-arm"
+        die "usage: bootstrap.sh --profile control|release-control|artifact-prepare|artifact-x86|artifact-arm"
     fi
     select_profile "$2"
     case "$profile:$(uname -m)" in
         artifact-arm:aarch64|artifact-prepare:aarch64) ;;
         artifact-arm:*) die "artifact-arm requires a native ARM64 job" ;;
         *:x86_64) ;;
-        *) die "this build/control profile requires x86_64" ;;
+        *) die "this control/execution profile requires x86_64" ;;
     esac
     # shellcheck disable=SC1091
     . /etc/os-release
@@ -275,7 +186,6 @@ main() {
     if $with_vm; then render_kvm_rule "$(id -u)" "$(id -g)" >/dev/null; fi
     : "${RUNNER_TEMP:?}" "${GITHUB_ENV:?}" "${GITHUB_PATH:?}"
     need sudo curl sha256sum tar python3
-    if $with_cross; then configure_cross_apt; fi
     sudo -n apt-get update
     sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
     need git jq python3 flock file /usr/bin/time
@@ -293,9 +203,6 @@ main() {
     emit GOMAXPROCS "$jobs"
     emit CARGO_BUILD_JOBS "$jobs"
     add_path "$KUASAR_HOSTED_ROOT/bin"
-    if $with_go; then configure_go; fi
-    if $with_readers; then install_readers; install_runtime_reader; fi
-    if $with_cross; then configure_cross; fi
     if [ "$profile" = artifact-arm ]; then need docker; docker info >/dev/null; fi
     if $with_vm; then configure_vm; fi
     echo "hosted-bootstrap: profile=$profile jobs=$jobs cpus=$cpus"
