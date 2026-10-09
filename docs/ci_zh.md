@@ -148,6 +148,8 @@ ARM 非 KVM 范围在执行前和 aggregate 验证绑定中声明，不等同完
 
 缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v3/<arch>/<component>/<input-hash>/`. Workbench action 通过 Actions cache 传输 native、Go modules/build cache、Cargo registry/Git/material 下载, 实际操作受调用者的 runtime cache 权限限制. key 区分架构、精确候选来源和声明的构建覆盖范围. candidate namespace 绑定实际 PR、companion、产品、测试/helper 与内核输入. 精确 key 和 restore 前缀都区分 source/helper 子集、已选择的产品集合及完整 manifest, 防止不可变的部分缓存占用完整构建的 key.
 
+启用缓存的 Workbench action 在恢复后、owner 命令前运行 `go clean -testcache`. 它仅使旧 Go 测试结果过期, 保留编译和模块缓存, 避免恢复的成功结果替代当前 Job 的测试执行. Workbench receipt 记录该命令及退出码; 失败会阻止 owner 执行, 原有清理仍会运行.
+
 Actions cache 的存储和访问属于调用者仓库及 ref, 遵守 GitHub 的缓存规则; 同 key 不会跨仓共享. 默认分支 dispatch 的候选输入仍属于 candidate. trusted cache 写入要求在源码执行前确认干净、精确的公开源码提交属于对应 main 历史, 结论保存在候选挂载之外. 现有受信 main/release 入口在 runtime cache scope 可写时提供写入路径, 沿用现有权限. publisher 可执行文件不消费候选或构建缓存.
 
 聚合 helper 按独立选择的测试 revision 获取干净 Git 源码. Runtime 发布在安装已验证的预编译资产前冻结同一宿主 receipt, 避免把生成的二进制和 notice 当成源码改动. 原有资产验证及实际工具链/recipe 缓存 key 继续适用.

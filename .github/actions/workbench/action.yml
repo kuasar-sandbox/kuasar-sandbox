@@ -107,6 +107,14 @@ runs:
           ${{ steps.task.outputs.root }}/instances/ci/home/.cargo/registry
           ${{ steps.task.outputs.root }}/instances/ci/home/.cargo/git
           ${{ steps.task.outputs.root }}/instances/ci/home/.cargo/release-materials
+    - name: Expire restored Go test results while retaining compiler inputs
+      if: inputs.cache == 'true'
+      shell: bash
+      env:
+        WB_FRAMEWORK: ${{ steps.task.outputs.framework }}
+        WB_ROOT: ${{ steps.task.outputs.root }}
+      run: |
+        python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" exec --root "$WB_ROOT" -- go clean -testcache
     - name: Run the unchanged owner build, tests and package checks
       shell: bash
       env:
