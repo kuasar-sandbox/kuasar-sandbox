@@ -147,7 +147,7 @@ ARM 非 KVM 范围在执行前和 aggregate 验证绑定中声明，不等同完
 - RocksDB headers 与 `librocksdb.a`;
 - patched `cloud-hypervisor`。
 
-缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v3/<arch>/<component>/<input-hash>/`. Workbench action 通过 Actions cache 传输 native、Go modules/build cache、Cargo registry/Git/material 下载, 实际操作受调用者的 runtime cache 权限限制. key 区分架构、精确候选来源和声明的构建覆盖范围. candidate namespace 绑定实际 PR、companion、产品、测试/helper 与内核输入. 精确 key 和 restore 前缀都区分 source/helper 子集、已选择的产品集合及完整 manifest, 防止不可变的部分缓存占用完整构建的 key.
+缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v3/<arch>/<component>/<input-hash>/`. Workbench action 通过 Actions cache 传输 native、Go modules/build cache、Cargo registry/Git/material 下载, 实际操作受调用者的 runtime cache 权限限制. key 区分架构、精确候选来源和声明的构建覆盖范围. candidate namespace 绑定实际 PR、companion、产品、测试/helper 与内核输入. 精确 key 和 restore 前缀都区分 helper、已选择的产品集合及各发布单元, 防止不可变的部分缓存占用另一构建范围的 key.
 
 启用缓存的 Workbench action 在恢复后、owner 命令前运行 `go clean -testcache`. 它仅使旧 Go 测试结果过期, 保留编译和模块缓存, 避免恢复的成功结果替代当前 Job 的测试执行. Workbench receipt 记录该命令及退出码; 失败会阻止 owner 执行, 原有清理仍会运行.
 
