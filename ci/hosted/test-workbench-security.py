@@ -487,6 +487,50 @@ raise SystemExit(ci.execute(argparse.Namespace(root=root, timeout=30, arguments=
 
 
 class CleanupTests(TemporaryFiles):
+    def test_unsafe_diagnostics_fail_but_still_remove_only_owned_state(self):
+        parent = self.root
+        for kind in ('symlink', 'fifo'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory(dir=parent) as directory:
+                self.root = Path(directory)
+                try:
+                    root = self.receipt()
+                    receipt = json.loads((root / 'receipt.json').read_text())
+                    receipt['conclusion'] = 'success'
+                    ci.write(root / 'receipt.json', receipt)
+                    state = root / 'instances/ci'
+                    (state / 'instance.json').write_text('{}')
+                    (state / 'build/native-cache').mkdir()
+                    (state / 'build/native-cache/owned').write_text('owned cached input')
+                    unrelated = self.root / 'unrelated-cache'
+                    unrelated.mkdir()
+                    external = unrelated / 'not-a-diagnostic'
+                    external.write_text('outside fixture bytes must not enter the upload')
+                    unsafe = state / 'output/unsafe'
+                    if kind == 'symlink':
+                        unsafe.symlink_to(external)
+                    else:
+                        os.mkfifo(unsafe)
+                    evidence = self.root / 'evidence'
+                    with patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+                        self.assertEqual(ci.finish(argparse.Namespace(root=root, evidence=evidence)), 1)
+                    self.assertEqual(run.call_count, 2)
+                    self.assertEqual(run.call_args.args[0], ci.command(root / 'instances', 'cleanup', '--delete-output'))
+                    self.assertFalse(root.exists(), 'failed diagnostics left this action\'s cache/state behind')
+                    self.assertTrue((self.root / 'sources').is_dir())
+                    self.assertEqual(external.read_text(), 'outside fixture bytes must not enter the upload')
+                    retained = json.loads((evidence / 'receipt.json').read_text())
+                    self.assertEqual(retained['conclusion'], 'failure')
+                    self.assertEqual(retained['cleanup_exit_code'], 0)
+                    self.assertIn('unsafe diagnostic file', retained['diagnostics_error'])
+                    self.assertFalse((evidence / 'output/unsafe').exists())
+                    self.assertFalse((evidence / 'output/unsafe').is_symlink())
+                    for path in evidence.rglob('*'):
+                        self.assertFalse(path.is_symlink())
+                        if path.is_file():
+                            self.assertNotIn(external.read_bytes(), path.read_bytes())
+                finally:
+                    self.root = parent
+
     def test_foreign_receipt_cannot_authorize_deletion(self):
         root = self.receipt()
         value = json.loads((root / 'receipt.json').read_text())
