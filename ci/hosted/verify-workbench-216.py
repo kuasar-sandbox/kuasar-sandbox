@@ -278,10 +278,12 @@ rm "$descriptor"
 def audit_packaging(path):
     require(path.is_file(), "missing actual package execution trace")
     forbidden = {"make", "cmake", "ninja", "compile", "asm", "cgo", "link", "collect2", "cc1", "cc1plus", "ld", "as"}
+    observed = 0
     for line in path.read_text().splitlines():
         match = re.search(r'execve\(("(?:[^"\\]|\\.)*"), (\[.*\]), ', line)
         if not match:
             continue
+        observed += 1
         executable, argv = ast.literal_eval(match[1]), ast.literal_eval(match[2])
         name = Path(executable).name
         require(name not in forbidden, "packaging unexpectedly invoked compiler/build tool: " + name)
@@ -297,6 +299,7 @@ def audit_packaging(path):
             require(all(value.startswith(("-print-file-name=", "-print-libgcc-file-name", "--version", "-vV"))
                         for value in argv[1:]) or argv[1:3] == ["--print", "sysroot"],
                     "packaging unexpectedly invoked native compilation: " + repr(argv))
+    require(observed > 0, "package execution trace contains no readable exec records")
 
 
 def package_all(sources, arch, record, evidence, environment):
