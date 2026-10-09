@@ -148,7 +148,10 @@ def workspace(plan, sources, result, env):
 
 def checks_for(plan, sources):
     selected, _ = source_records(plan)
-    checks = [("platform-contracts", ["make", "test-ci-tools", "test-release-tools", "test-perf-tools"], sources / "platform")]
+    checks = [("platform-contracts", ["make", "test-ci-tools", "test-release-tools"], sources / "platform"),
+              # These existing TAP/netns fixtures require actual root, while
+              # the other contracts include ordinary-UID permission assertions.
+              ("platform-privileged-perf-contracts", ["sudo", "-n", "-E", "make", "test-perf-tools"], sources / "platform")]
     # Each exact owner revision remains authoritative for its mixed source
     # checks. Published pins need no new CLI or reconstructed command list.
     for owner in ("connector", "sandboxer", "orchestrator"):

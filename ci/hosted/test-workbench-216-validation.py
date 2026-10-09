@@ -292,6 +292,10 @@ restore_or_build() {
                         seen_workbench = True
                     if "actions/upload-artifact@" in step.get("uses", ""):
                         self.assertTrue(seen_workbench)
+                        if step["with"]["path"] == "task-space":
+                            self.assertEqual(step["name"], "Retain host consumer disk measurements")
+                            self.assertEqual(step["if"], "always()")
+                            continue
                         self.assertEqual(step["if"], "success() && steps.verification.outcome == 'success'")
                         for path in step["with"]["path"].splitlines():
                             self.assertTrue(path.startswith("sources/verification"))
@@ -326,7 +330,10 @@ restore_or_build() {
                     subprocess.run(["bash", "-n"], input=step["run"], text=True, check=True)
                 if "actions/upload-artifact@" in step.get("uses", ""):
                     if "always" in step.get("if", ""):
-                        if job is jobs["source-checks"]:
+                        if step["with"]["path"] == "task-space":
+                            self.assertEqual(step["name"], "Retain host consumer disk measurements")
+                            self.assertIn(job, [jobs[name] for name in ("cold-x86", "cold-arm", "warm-x86", "warm-arm", "helpers-x86", "helpers-arm")])
+                        elif job is jobs["source-checks"]:
                             self.assertEqual(step["with"]["path"].splitlines(), [
                                 "${{ runner.temp }}/source-system-evidence", "${{ runner.temp }}/source-materialize.json"])
                         else:
@@ -361,7 +368,9 @@ class FrozenSourceGateContracts(unittest.TestCase):
         existing = next(step["run"] for step in permanent["jobs"]["source-checks"]["steps"]
                         if step.get("name") == "Run the complete required source gate in Workbench system mode")
         self.assertEqual(steps[3]["run"], existing)
-        for required in ("chown -hR 0:0 /src", "sudo -n true", "ip netns add ks-source-probe",
+        for required in ('chown -hR "$source_uid:$source_gid" /src /work/home /build /output',
+                         'setpriv --reuid "$source_uid"', '--inh-caps=-all --ambient-caps=-all',
+                         '[ "$(id -u)" -ne 0 ]', "sudo -n true", "ip netns add ks-source-probe",
                          "ip tuntap add dev ks-source-probe mode tap", "--selection plan/workbench.json",
                          "--materialized", "--cpus 2 --memory-gib 8"):
             self.assertIn(required, steps[3]["run"])

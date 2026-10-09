@@ -135,7 +135,7 @@ def check():
                     if (name, job_name) == ("integration-tests.yml", "source-checks"):
                         expected = "ubuntu-24.04"
                     if name == "workbench-216-validation.yml":
-                        expected = {"prepare": "ubuntu-24.04", "cold-x86": "ubuntu-24.04", "warm-x86": "ubuntu-24.04",
+                        expected = {"prepare": "ubuntu-24.04", "source-checks": "ubuntu-24.04", "cold-x86": "ubuntu-24.04", "warm-x86": "ubuntu-24.04",
                                     "cold-arm": "ubuntu-24.04-arm", "warm-arm": "ubuntu-24.04-arm",
                                     "helpers-x86": "ubuntu-24.04", "prepare-integration-x86": "ubuntu-24.04",
                                     "e2e-x86": "ubuntu-24.04", "performance-x86": "ubuntu-24.04",
@@ -268,7 +268,13 @@ def check():
     assert "--profile source" not in json.dumps(source_job) and "taskset" not in json.dumps(source_job)
     system = source_steps["Run the complete required source gate in Workbench system mode"]["run"]
     assert "start --mode system" in system
-    assert system.index("chown -hR 0:0 /src") < system.index("run-source-checks.py")
+    assert system.index('chown -hR "$source_uid:$source_gid" /src /work/home /build /output') < system.index("run-source-checks.py")
+    assert 'setpriv --reuid "$source_uid" --regid "$source_gid" --groups "$source_docker_gid"' in system
+    assert '--inh-caps=-all --ambient-caps=-all' in system
+    assert 'source_docker_gid=$(stat -c %g /run/docker.sock)' in system
+    assert 'docker --host unix:///run/docker.sock info' in system
+    assert '[ "$(id -u)" -ne 0 ]' in system
+    assert 'visudo -cf /etc/sudoers.d/kuasar-source' in system
     assert "--selection plan/workbench.json" in system
     assert "bash -euo pipefail -c \"$source_script\"" in system
     assert "<<'WORKBENCH_SOURCE'" in system

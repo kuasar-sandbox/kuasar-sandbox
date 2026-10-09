@@ -114,7 +114,7 @@ E2E 只 checkout 可信执行器并下载目标 prepared workspace，执行前�
 源码依赖的 connector/sandboxer/orchestrator unit/race/vet、真实 pinned-BPF 统计、ENOSPC、Collector/usage harness 回归和 UFFD benchmark 保留为独立必需源码 job。
 source 模式 x86 sandboxer/platform 还在独立性能 job 中，用同一组制品保留 A/B/C/D `off/auto × cold/warm` working-set smoke。
 
-完整源码门禁在原生 x86 的独立 Workbench system 实例中运行, 包括混合 unit/race/vet 与真实特权检查所需的编译器. 受信宿主只获取准入 `plan.test_revisions`, 实例接收 `/src` 私有副本, 不接收宿主 Docker socket、凭据或 ordinary 构建缓存. 每个精确测试 pin 的原 owner 脚本与 Make target 继续决定实际检查, 包括已发布的旧布局. 真实 `sudo`、systemd、BPF、mount namespace、UFFD 与私有 Docker 保留原参数和断言. 门禁开始前必须成功创建 TAP 与 network namespace. 结果保留 framework/test/image 身份、各命令、退出码及耗时, 失败证据经所属实例清理入口收集. 产品、独立 helper 与发布构建使用 ordinary UID 的 build 模式. 宿主 bootstrap 保留编排及产品执行前提, Workbench producer 继续直接在原生 Runner 构建.
+完整源码门禁在原生 x86 的独立 Workbench system 实例中运行, 包括混合 unit/race/vet 与真实特权检查所需的编译器. 受信宿主只获取准入 `plan.test_revisions`, 实例接收 `/src` 私有副本, 不接收宿主 Docker socket、凭据或 ordinary 构建缓存. 每个精确测试 pin 的原 owner 脚本与 Make target 继续决定实际检查, 包括已发布的旧布局. 它们在实例内以 ordinary UID 执行, 保留不可读文件及拒绝提权的检查. 私有 sudo 配置保留原脚本的显式升权, 仅既有 TAP/netns 性能 fixture 通过 `sudo make test-perf-tools` 执行. 该用户仅访问实例自己的 Docker socket, 不修改宿主账号或策略. 真实 `sudo`、systemd、BPF、mount namespace、UFFD 与私有 Docker 保留原参数和断言. 门禁开始前必须成功创建 TAP 与 network namespace. 结果保留 framework/test/image 身份、各命令、退出码及耗时, 失败证据经所属实例清理入口收集. 产品、独立 helper 与发布构建使用 ordinary UID 的 build 模式. 宿主 bootstrap 保留编排及产品执行前提, Workbench producer 继续直接在原生 Runner 构建.
 
 CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径。跨 `sudo` 只传递显式准备的输入（包括私有状态目录）；执行不读取生成的 owner-runner registry。
 
