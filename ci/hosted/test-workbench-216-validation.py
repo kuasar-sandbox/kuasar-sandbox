@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline fixtures for the temporary #216 full-validation entry."""
 import importlib.util
+import copy
 import hashlib
 import json
 import os
@@ -325,10 +326,147 @@ restore_or_build() {
                     subprocess.run(["bash", "-n"], input=step["run"], text=True, check=True)
                 if "actions/upload-artifact@" in step.get("uses", ""):
                     if "always" in step.get("if", ""):
-                        self.assertIn(job, [jobs["legacy-x86"], jobs["legacy-arm"]])
-                        self.assertEqual(step["name"], "Retain host receipts and diagnostics copied after writers stop")
-                        self.assertTrue(all(path.startswith("legacy-output/") and "/validated" not in path
-                                            for path in step["with"]["path"].splitlines()))
+                        if job is jobs["source-checks"]:
+                            self.assertEqual(step["with"]["path"].splitlines(), [
+                                "${{ runner.temp }}/source-system-evidence", "${{ runner.temp }}/source-materialize.json"])
+                        else:
+                            self.assertIn(job, [jobs["legacy-x86"], jobs["legacy-arm"]])
+                            self.assertEqual(step["name"], "Retain host receipts and diagnostics copied after writers stop")
+                            self.assertTrue(all(path.startswith("legacy-output/") and "/validated" not in path
+                                                for path in step["with"]["path"].splitlines()))
+
+
+class FrozenSourceGateContracts(unittest.TestCase):
+    """Execute the task's final source-evidence check with exact input fixtures."""
+
+    def setUp(self):
+        self.workflow = yaml.safe_load((ROOT / ".github/workflows/workbench-216-validation.yml").read_text())
+        self.jobs = self.workflow["jobs"]
+
+    def test_source_job_preserves_the_complete_existing_system_executor(self):
+        job = self.jobs["source-checks"]
+        self.assertEqual(job["needs"], "prepare")
+        self.assertEqual(job["runs-on"], "ubuntu-24.04")
+        self.assertEqual(job["timeout-minutes"], 60)
+        self.assertEqual(job["if"], self.jobs["prepare"]["if"])
+        self.assertNotIn("permissions", job)
+        self.assertNotIn("env", job)
+        steps = job["steps"]
+        self.assertEqual(steps[0]["with"], {"ref": "${{ job.workflow_sha }}", "path": "framework", "persist-credentials": False})
+        self.assertEqual(steps[1]["with"], {"name": "workbench-216-plan-${{ github.run_id }}", "path": "plan"})
+        self.assertIn("--plan plan/integration-plan.json --sources source-checks", steps[2]["run"])
+        self.assertIn('--output "$RUNNER_TEMP/source-materialize.json" --materialize-only', steps[2]["run"])
+        self.assertIn("cp plan/integration-plan.json source-checks/.source-plan.json", steps[2]["run"])
+        permanent = yaml.safe_load((ROOT / ".github/workflows/integration-tests.yml").read_text())
+        existing = next(step["run"] for step in permanent["jobs"]["source-checks"]["steps"]
+                        if step.get("name") == "Run the complete required source gate in Workbench system mode")
+        self.assertEqual(steps[3]["run"], existing)
+        for required in ("chown -hR 0:0 /src", "sudo -n true", "ip netns add ks-source-probe",
+                         "ip tuntap add dev ks-source-probe mode tap", "--selection plan/workbench.json",
+                         "--materialized", "--cpus 2 --memory-gib 8"):
+            self.assertIn(required, steps[3]["run"])
+        self.assertEqual(steps[4]["if"], "always()")
+        self.assertIn('workbench.py finish --root "$RUNNER_TEMP/source-system"', steps[4]["run"])
+        self.assertEqual(steps[5]["if"], "always()")
+        self.assertEqual(steps[5]["with"]["path"].splitlines(), [
+            "${{ runner.temp }}/source-system-evidence", "${{ runner.temp }}/source-materialize.json"])
+        self.assertFalse(any("env" in step or "actions/cache" in step.get("uses", "") for step in steps))
+        self.assertIn("source-checks", self.jobs["validation-results"]["needs"])
+        final = self.jobs["validation-results"]["steps"]
+        self.assertTrue(any(step.get("with", {}).get("name") == "workbench-216-source-result-${{ github.run_id }}"
+                            and step["with"]["path"] == "source" for step in final))
+        self.assertIn("source-validation.json", final[-1]["with"]["path"].splitlines())
+        for result in ("failure", "cancelled", "skipped"):
+            complete = subprocess.run(["bash", "-euo", "pipefail", "-c", final[0]["run"]],
+                                      env={**os.environ, "TASK_JOB_RESULTS": json.dumps({"source-checks": {"result": result}})},
+                                      capture_output=True, text=True)
+            self.assertNotEqual(complete.returncode, 0)
+            self.assertIn(result, complete.stderr)
+
+    def source_documents(self):
+        fixtures = task.module("task216_source_fixtures", ROOT / "ci/integration/test_fixtures.py")
+        source = task.module("task216_source_results", ROOT / "ci/integration/run-source-checks.py")
+        framework = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
+        pins = task.artifacts.release_test_revisions(
+            {owner: "d" * 40 for owner in task.artifacts.OWNERS if owner != "platform"}, framework)
+        plan = {"schema": 2, "mode": "source", "case_files": fixtures.CASES, "framework_sha": framework,
+                "baseline": {}, "test_overlays": list(task.artifacts.OWNERS), "test_revisions": pins,
+                "sources": pins, "lanes": {arch: {"products": []} for arch in task.artifacts.ARCHES}}
+        fixtures.select_plan(plan, ["platform"])
+        selection = {"framework_sha": framework, "architectures": {"x86_64": {"image_id": "sha256:" + "1" * 64}}}
+        expected = source.source_records(plan)[1]
+        materialize = source.new_result(plan, "materialize")
+        materialize.update(conclusion="success", exit_code=0, sources=expected, actions=[
+            {"name": "checkout:" + owner, "repository": row["repository"], "sha": row["sha"], "exit_code": 0}
+            for owner, row in expected.items()])
+        result = source.new_result(plan, "all")
+        result.update(conclusion="success", exit_code=0, sources=expected, arch="x86_64",
+                      workbench={"framework_sha": framework, "image_id": selection["architectures"]["x86_64"]["image_id"]},
+                      actions=[{"name": "source-identity:" + owner, "expected_sha": row["sha"], "actual_sha": row["sha"],
+                                "exit_code": 0} for owner, row in expected.items()],
+                      checks=[{"name": name, "command": command, "directory": str(directory), "exit_code": 0}
+                              for name, command, directory in source.checks_for(plan, Path("/src"))])
+        receipt = {"framework_sha": framework, "selection": selection, "image": selection["architectures"]["x86_64"],
+                   "arch": "x86_64", "mode": "system", "conclusion": "success", "cleanup_exit_code": 0,
+                   "delete_output_exit_code": 0, "commands": [{"argv": ["bash", "-euo", "pipefail", "-c", "source fixture"],
+                                                              "exit_code": 0}]}
+        records = {("kuasar-sandbox" if owner == "platform" else owner):
+                   {field: row[field] for field in ("repository", "sha")} for owner, row in pins.items()}
+        frozen = {"task": "kuasar-sandbox/kuasar-sandbox#216", "framework_sha": framework, "sources": records,
+                  "test_revisions": records, "version": "v0.0.0-preview.20261009.123"}
+        return {"plan": plan, "selection": selection, "frozen": frozen,
+                "materialize": materialize, "result": result, "receipt": receipt}
+
+    def verify_source(self, documents):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "framework").symlink_to(ROOT, target_is_directory=True)
+            for name, path in (("plan", "plan/integration-plan.json"), ("selection", "plan/workbench.json"),
+                               ("materialize", "source/source-materialize.json"),
+                               ("result", "source/source-system-evidence/output/source-result.json"),
+                               ("receipt", "source/source-system-evidence/receipt.json")):
+                task.write(root / path, documents[name])
+            frozen = documents["frozen"] | {"integration_plan_sha256": task.artifacts.digest(root / "plan/integration-plan.json"),
+                                           "workbench_sha256": task.artifacts.digest(root / "plan/workbench.json")}
+            task.write(root / "plan/frozen.json", frozen)
+            step = next(step for step in self.jobs["validation-results"]["steps"]
+                        if step.get("name") == "Verify complete source results against the same frozen plan and image")
+            complete = subprocess.run(["bash", "-euo", "pipefail", "-c", step["run"]], cwd=root,
+                                      capture_output=True, text=True)
+            if complete.returncode == 0:
+                self.assertEqual(json.loads((root / "source-validation.json").read_text()), documents["result"])
+            else:
+                self.assertFalse((root / "source-validation.json").exists())
+            return complete
+
+    def test_exact_complete_source_evidence_is_accepted(self):
+        complete = self.verify_source(self.source_documents())
+        self.assertEqual(complete.returncode, 0, complete.stderr)
+
+    def test_changed_inputs_missing_checks_and_unfinished_commands_are_rejected(self):
+        original = self.source_documents()
+        changes = (
+            ("different plan", lambda data: data["result"].update(plan_id="0" * 64)),
+            ("different framework", lambda data: data["result"].update(framework_sha="0" * 40)),
+            ("different test pin", lambda data: data["result"].update(test_revisions={})),
+            ("different frozen test", lambda data: data["frozen"].update(sources={}, test_revisions={})),
+            ("different source image", lambda data: data["result"].update(workbench={"image_id": "sha256:other"})),
+            ("different executor image", lambda data: data["receipt"].update(image={"image_id": "sha256:other"})),
+            ("different selection", lambda data: data["receipt"].update(selection={})),
+            ("missing source checkout", lambda data: data["materialize"]["actions"].pop()),
+            ("missing source identity", lambda data: data["result"]["actions"].pop()),
+            ("missing source check", lambda data: data["result"]["checks"].pop()),
+            ("failed source check", lambda data: data["result"]["checks"][0].update(exit_code=17)),
+            ("unknown source exit", lambda data: data["result"].update(exit_code=None)),
+            ("unfinished executor", lambda data: data["receipt"]["commands"][0].update(exit_code=None)),
+            ("failed cleanup", lambda data: data["receipt"].update(cleanup_exit_code=1)),
+        )
+        for name, change in changes:
+            with self.subTest(name=name):
+                documents = copy.deepcopy(original)
+                change(documents)
+                complete = self.verify_source(documents)
+                self.assertNotEqual(complete.returncode, 0, complete.stdout)
 
 
 class WarmCacheNegativeContracts(unittest.TestCase):
