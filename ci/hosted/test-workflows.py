@@ -268,6 +268,7 @@ def check():
     assert "--profile source" not in json.dumps(source_job) and "taskset" not in json.dumps(source_job)
     system = source_steps["Run the complete required source gate in Workbench system mode"]["run"]
     assert "start --mode system" in system
+    assert system.index("chown -hR 0:0 /src") < system.index("run-source-checks.py")
     assert "--selection plan/workbench.json" in system
     assert "bash -euo pipefail -c \"$source_script\"" in system
     assert "<<'WORKBENCH_SOURCE'" in system

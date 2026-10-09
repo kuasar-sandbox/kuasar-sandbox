@@ -206,6 +206,8 @@ jobs:
             --selection plan/workbench.json --sources source-checks \
             --root "$RUNNER_TEMP/source-system" --arch x86_64 --cpus 2 --memory-gib 8
           source_script=$(cat <<'WORKBENCH_SOURCE'
+          # Match the system executor owner on this private container copy.
+          chown -hR 0:0 /src
           sudo -n true
           # These are private instance resources. Old pinned fixtures may skip
           # on unavailable capabilities; this required gate must fail instead.
