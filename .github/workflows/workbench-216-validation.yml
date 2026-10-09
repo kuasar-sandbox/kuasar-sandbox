@@ -137,7 +137,7 @@ jobs:
           trap - EXIT
           source /inputs/release/ci/hosted/bootstrap.sh
           export KUASAR_HOSTED_ROOT=/build/source-readers
-          export GITHUB_ENV=/build/tmp/source-readers-env GITHUB_PATH=/build/tmp/source-readers-path
+          export GITHUB_ENV=/build/t/source-readers-env GITHUB_PATH=/build/t/source-readers-path
           mkdir -p "$KUASAR_HOSTED_ROOT/bin"
           install_readers
           install_runtime_reader
