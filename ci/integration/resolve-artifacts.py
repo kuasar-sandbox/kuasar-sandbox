@@ -202,6 +202,8 @@ def aggregate(version, *, require_dual=True):
     return {"repository": PLATFORM, "version": version, "sha": sha, "release_id": state["id"],
             "units": unit_records, "validation": validation, "test_revisions": tests, "delivery": contract,
             "validation_run": max(runs, key=lambda run: run["id"])["html_url"],
+            "workbench": binding.get("workbench") if contract == release.selection.DELIVERY else None,
+            "registry": binding.get("registry") if contract == release.selection.DELIVERY else None,
             "assets": [{key: asset[key] for key in ("id", "name", "size", "digest")} for asset in state["assets"]]}
 
 

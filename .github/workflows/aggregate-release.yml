@@ -181,6 +181,9 @@ jobs:
         with:
           selection: transport/workbench.json
           sources: helper-work
+          outputs: |
+            .ci/e2e-helpers
+            .ci/e2e-wheels
           arch: ${{ matrix.arch }}
           cpus: '2'
           memory-gib: '8'
