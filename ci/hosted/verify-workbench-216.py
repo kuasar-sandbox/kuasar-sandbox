@@ -356,6 +356,29 @@ rm "$descriptor"
     evidence.save()
 
 
+def rustc_print_query(arguments):
+    """Accept Cargo's metadata probe without admitting rustc output options."""
+    prints = {"file-names", "sysroot", "split-debuginfo", "crate-name", "cfg", "target-libdir"}
+    remaining, queried = iter(arguments), False
+    for value in remaining:
+        if value in ("-", "-Wwarnings"):
+            continue
+        if value == "--print" or value.startswith("--print="):
+            query = next(remaining, "") if value == "--print" else value.partition("=")[2]
+            if query not in prints:
+                return False
+            queried = True
+        elif value in ("--crate-name", "--crate-type", "--target"):
+            parameter = next(remaining, "")
+            if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*", parameter):
+                return False
+            if value == "--crate-type" and parameter not in ("bin", "lib", "rlib", "dylib", "cdylib", "staticlib", "proc-macro"):
+                return False
+        else:
+            return False
+    return queried
+
+
 def audit_packaging(path):
     require(path.is_file(), "missing actual package execution trace")
     forbidden = {"make", "cmake", "ninja", "compile", "asm", "cgo", "link", "collect2", "cc1", "cc1plus", "ld", "as"}
@@ -376,7 +399,10 @@ def audit_packaging(path):
                     "packaging unexpectedly invoked Go compilation: " + repr(argv))
         if name == "cargo":
             require(argv[1:2] == ["metadata"], "packaging unexpectedly invoked Cargo compilation")
-        if re.search(r"(?:^|-)(?:gcc|g\+\+|clang|clang\+\+|cc|c\+\+)(?:-[0-9.]+)?$", name) or name == "rustc":
+        if name == "rustc":
+            require(argv[1:] in (["--version"], ["-vV"]) or rustc_print_query(argv[1:]),
+                    "packaging unexpectedly invoked native compilation: " + repr(argv))
+        if re.search(r"(?:^|-)(?:gcc|g\+\+|clang|clang\+\+|cc|c\+\+)(?:-[0-9.]+)?$", name):
             require(all(value.startswith(("-print-file-name=", "-print-libgcc-file-name", "--version", "-vV"))
                         for value in argv[1:]) or argv[1:3] == ["--print", "sysroot"],
                     "packaging unexpectedly invoked native compilation: " + repr(argv))
