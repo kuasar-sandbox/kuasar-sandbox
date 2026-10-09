@@ -56,6 +56,72 @@ def write(path, value):
     path.write_bytes(artifacts.canonical(value) + b"\n")
 
 
+def space_path(path, *, size=False):
+    """Read a task path's filesystem counters without following source links."""
+    path = path.absolute()
+    row = {"path": str(path)}
+    try:
+        require(path.resolve() == path and not path.is_symlink(), "linked disk measurement path")
+        row["exists"] = path.exists()
+        measured = path
+        while not measured.exists():
+            measured = measured.parent
+        counters = os.statvfs(measured)
+        row["filesystem"] = {"measured_at": str(measured), "device": measured.stat().st_dev,
+            "total_bytes": counters.f_blocks * counters.f_frsize,
+            "free_bytes": counters.f_bfree * counters.f_frsize,
+            "available_bytes": counters.f_bavail * counters.f_frsize,
+            "total_inodes": counters.f_files, "available_inodes": counters.f_favail}
+        if size and row["exists"]:
+            # GNU du defaults to physical traversal: source symlinks and
+            # nested mounts are not followed. Never scan the Docker store.
+            measured_size = subprocess.run(["du", "--summarize", "--one-file-system", "--block-size=1", "--", path],
+                                          text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+            row["size_exit_code"] = measured_size.returncode
+            if measured_size.returncode == 0:
+                row["allocated_bytes"] = int(measured_size.stdout.split("\t", 1)[0])
+            else:
+                row["error"] = "task directory size could not be measured"
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        row["error"] = type(error).__name__ + ": " + str(error)
+    return row
+
+
+def space_snapshot(phase, paths, *, docker=False, sizes=False):
+    started = time.monotonic()
+    record = {"phase": phase, "recorded_ns": time.time_ns(),
+              "method": "stage snapshot, not peak; filesystem counters include other users of that filesystem; nested path sizes must not be added",
+              "paths": {name: space_path(path, size=sizes) for name, path in paths.items()}}
+    if docker:
+        try:
+            query = subprocess.run(["docker", "info", "--format", "{{.DockerRootDir}}"], text=True,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+            record["docker_info_exit_code"] = query.returncode
+            root = Path(query.stdout.strip())
+            require(query.returncode == 0 and root.is_absolute(), "Docker storage directory unavailable")
+            record["docker_storage"] = space_path(root)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            record["docker_storage"] = {"error": type(error).__name__ + ": " + str(error)}
+    record["measurement_seconds"] = time.monotonic() - started
+    return record
+
+
+def disk_snapshot(args):
+    """Temporary host consumer measurements, outside candidate execution."""
+    require(os.environ.get("GITHUB_ACTIONS") == "true" and os.getuid() != 0,
+            "host disk snapshots require an ordinary Actions runner")
+    sources = args.sources.absolute()
+    destination = args.output.absolute()
+    require(not destination.exists() and destination.resolve() == destination
+            and not destination.is_relative_to(sources), "disk evidence requires a fresh host path outside sources")
+    record = space_snapshot(args.phase, {"sources": sources,
+        "workbench_state": Path(os.environ["RUNNER_TEMP"]) / "kuasar-workbench"}, docker=True, sizes=True)
+    record.update(run_id=os.environ.get("GITHUB_RUN_ID"), job=os.environ.get("GITHUB_JOB"),
+                  runner={name: os.environ.get(name) for name in ("ImageOS", "ImageVersion", "RUNNER_ARCH")})
+    write(destination, record)
+    print(json.dumps(record, sort_keys=True), flush=True)
+
+
 def api(endpoint):
     return json.loads(output(["gh", "api", endpoint]))
 
@@ -808,6 +874,8 @@ def legacy_finish(args):
         except (OSError, subprocess.SubprocessError) as error:
             record.update(conclusion="failure", delete_error=str(error))
             status = 1
+        record.setdefault("space_snapshots", []).append(space_snapshot("after-cleanup", {
+            "task": source_root, "output": destination}, sizes=True))
         write(receipt, record)
     return status
 
@@ -833,6 +901,7 @@ def legacy_run(args):
                         "unit": unit, "unit_description": description, "frozen_sha256": artifacts.digest(sources / "frozen.json"),
                         "runner": {name: os.environ.get(name) for name in ("ImageOS", "ImageVersion", "RUNNER_ARCH")},
                         "started_ns": time.time_ns()})
+    evidence.record["space_snapshots"] = [space_snapshot("before-bootstrap", {"task": task_root}, sizes=True)]
     provision = evidence.directory / "provision"
     provision.mkdir()
     env_file, path_file = evidence.directory / "bootstrap.env", evidence.directory / "bootstrap.path"
@@ -851,6 +920,7 @@ def legacy_run(args):
         if code:
             return code
         code = 1
+        evidence.record["space_snapshots"].append(space_snapshot("after-bootstrap", {"task": task_root}, sizes=True))
         exported = dict(line.split("=", 1) for line in env_file.read_text().splitlines())
         require(exported["KUASAR_BUILD_JOBS"] == "2", "legacy bootstrap selected a different compiler budget")
         if not shutil.which("strace"):
@@ -909,6 +979,7 @@ def legacy_run(args):
     finally:
         for signum, handler in handlers.items():
             signal.signal(signum, handler)
+        evidence.record["space_snapshots"].append(space_snapshot("before-cleanup", {"task": task_root}, sizes=True))
         evidence.record.update(exit_code=code, elapsed_seconds=(time.time_ns() - evidence.record["started_ns"]) / 1e9)
         if evidence.record["conclusion"] == "running":
             evidence.record["conclusion"] = "failure"
@@ -923,6 +994,8 @@ def build(args):
                         "frozen_sha256": artifacts.digest(sources / "frozen.json"), "inputs": record,
                         "image_id": image, "manifest": rows, "started_ns": time.time_ns()},
                         diagnostics=Path("/output/verification"))
+    space_paths = {"sources": sources, "build": Path("/build"), "home": Path("/work/home"), "output": Path("/output")}
+    evidence.record["space_snapshots"] = [space_snapshot("before-build", space_paths)]
     environment = {**os.environ, "GOWORK": str(sources / "go.work"),
                    "KUASAR_CI_TIMINGS": str(evidence.diagnostics / "build-timings.tsv"),
                    "KUASAR_NATIVE_CACHE_METRICS": str(evidence.diagnostics / "native-cache.tsv"),
@@ -988,6 +1061,7 @@ def build(args):
         evidence.record.update(conclusion="failure", error=str(error))
         raise
     finally:
+        evidence.record["space_snapshots"].append(space_snapshot("before-export-and-cleanup", space_paths))
         evidence.record["elapsed_seconds"] = (time.time_ns() - evidence.record["started_ns"]) / 1e9
         evidence.save()
         if evidence.record["conclusion"] == "success":
@@ -1159,6 +1233,10 @@ def main():
     materialize = commands.add_parser("fetch")
     materialize.add_argument("--frozen", type=Path, required=True)
     materialize.add_argument("--sources", type=Path, required=True)
+    disk = commands.add_parser("disk-snapshot")
+    disk.add_argument("--sources", type=Path, required=True)
+    disk.add_argument("--phase", required=True)
+    disk.add_argument("--output", type=Path, required=True)
     verify = commands.add_parser("build")
     verify.add_argument("--phase", choices=("cold", "warm"), required=True)
     verify.add_argument("--arch", choices=artifacts.ARCHES, required=True)
@@ -1187,6 +1265,7 @@ def main():
         delta.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     return {"freeze": freeze, "fetch": fetch, "build": build, "helpers": helpers, "legacy-cold": legacy_cold,
+            "disk-snapshot": disk_snapshot,
             "legacy-run": legacy_run, "legacy-finish": legacy_finish,
             "packaged-delta": packaged_delta, "legacy-packaged-delta": packaged_delta}[args.command](args)
 
