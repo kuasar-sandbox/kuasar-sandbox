@@ -132,6 +132,9 @@ def check():
                 assert "self-hosted" not in str(job["runs-on"]), name
                 if not str(job["runs-on"]).startswith("${{"):
                     expected = "ubuntu-24.04" if (name, job_name) == ("aggregate-release.yml", "collect") else "ubuntu-latest"
+                    if name == "workbench-216-validation.yml":
+                        expected = {"prepare": "ubuntu-24.04", "cold-x86": "ubuntu-24.04", "warm-x86": "ubuntu-24.04",
+                                    "cold-arm": "ubuntu-24.04-arm", "warm-arm": "ubuntu-24.04-arm"}[job_name]
                     assert job["runs-on"] == expected, (name, job["runs-on"])
     check_request_rejection()
     caller = load("ci.yml")

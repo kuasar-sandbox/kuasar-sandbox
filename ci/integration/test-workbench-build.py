@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -66,6 +67,31 @@ class WorkbenchBuild(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "materialized source identity changed"):
                 builder.verify_materialized(plan, "x86_64", Path("/private/sources"))
             run.assert_not_called()
+
+    def test_materialized_checkout_rejects_dirty_and_untracked_compiler_inputs(self):
+        for mutation in ("clean", "modified", "staged", "untracked"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                source = root / "connector"
+                subprocess.run(["git", "init", "--quiet", "--template=", str(source)], check=True)
+                for key, value in (("user.name", "Chen Xiaohui"), ("user.email", "graych@gmail.com")):
+                    subprocess.run(["git", "-C", source, "config", "--local", key, value], check=True)
+                (source / "input.go").write_text("package fixture\n")
+                subprocess.run(["git", "-C", source, "add", "input.go"], check=True)
+                subprocess.run(["git", "-C", source, "commit", "--quiet", "-m", "fixture"], check=True)
+                revision = subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD"], text=True).strip()
+                if mutation in ("modified", "staged"):
+                    (source / "input.go").write_text("package changed\n")
+                    if mutation == "staged":
+                        subprocess.run(["git", "-C", source, "add", "input.go"], check=True)
+                elif mutation == "untracked":
+                    (source / "extra.go").write_text("package fixture\n")
+                with patch.object(builder, "source_layout", return_value={"connector": {"sha": revision}}):
+                    if mutation == "clean":
+                        builder.verify_materialized({}, "x86_64", root)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "materialized source has"):
+                            builder.verify_materialized({}, "x86_64", root)
 
     def test_cross_architecture_is_rejected_before_checkout_or_outputs(self):
         with patch.object(builder.artifacts, "check_plan"), patch.object(builder.platform, "machine", return_value="x86_64"), \
