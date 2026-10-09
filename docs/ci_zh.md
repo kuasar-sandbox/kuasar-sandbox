@@ -73,20 +73,16 @@ build 可获取 local Go replacement 所需的精确库源码，但不会因此�
 
 ```text
 resolve → x86 build → x86 prepare → 原生 x86 shards → x86 result
-        → ARM cross build → ARM prepare → 原生 ARM shards → ARM result
+        → native ARM build → ARM prepare → 原生 ARM shards → ARM result
         → 独立源码 unit/race/vet 与 UFFD 检查
                                   全部所选结果显式汇总
 ```
 
-两种产品都在独立 `ubuntu-latest` x86 job/workspace 使用已有 Makefile/native-cache 构建。
-每架构产品构建一次、不变输入 prepare 一次。一条 lane 自己准备完成即可开始 E2E，不等待另一架构构建。
-执行使用 `ubuntu-latest` 或标准 `ubuntu-24.04-arm`；concurrency、artifact、结果均包含架构/shard/run。
-逐个汇总所有 shard 和两种架构，避免 matrix output 覆盖一边。
+两个架构分别选择原生 Runner (`ubuntu-24.04` 或 `ubuntu-24.04-arm`), 通过 `.github/actions/workbench` 调用已有 Makefile/native recipe. 受信 resolver 每次运行只选择一次已发布且验证通过的 Workbench, 固定两个架构的 registry digest、image config ID 和 framework SHA. 后续 job 核验同一选择、实际镜像架构及 release/source 标签. 普通 PR 仍只构建准入的产品差异和必要 helper. 每条 lane 独立 prepare 一次, 不等待另一架构构建; 所有 shard 和架构结果保留独立身份并显式汇总.
 
-RocksDB 与 cache-ctl 共用显式 `CROSS_PREFIX`、目标 CGO CC/CXX；Rust 使用环境编译器及其匹配 target std/linker。
-ARM kernel 校验 `Image` 头；Go/native ELF 必须为目标 Linux ELF64。
-EROFS 使用目标静态依赖与目标 pkg-config；host `BUILD_MKFS_EROFS`、Runtime writer/readers、Go 打包 helper 保持 host-native。
-不使用 `NO_ROCKSDB`，也不建立环境 Go/Rust 二进制字节白名单。
+构建复用 `workbench/workbench` build 模式: ordinary UID、只读根文件系统、移除 capabilities, 不挂载宿主 Docker socket 或 KVM. 私有源码位于 `/src`, 受信框架只读挂载至 `/inputs/release`. `HOME=/work/home`、`TMPDIR=/build/tmp`、Go/Cargo 状态及 `/build/native-cache` 都属于任务. CPU/内存预算明确传给 Go、Cargo、CMake 和 native make recipe, 不把 CPU quota 当作 `nproc`. 发布凭据留在宿主编排侧; publisher 校验器和 archive readers 使用单独禁用缓存的 Workbench 调用.
+
+继续验证目标 ELF/kernel Image、静态链接和包布局. helper 与打包工具均使用目标原生架构. Workbench producer 直接在原生 Runner 构建自身.
 
 prepare 在组装前校验包路径/类型/权限/归属、摘要、必要产品和 runtime 内嵌身份。
 两个架构独立解压。source 模式覆盖六个精确测试 owner 的完整目录，组装为扁平用例目录和按 owner 命名的底层库；
@@ -148,18 +144,15 @@ ARM 非 KVM 范围在执行前和 aggregate 验证绑定中声明，不等同完
 - RocksDB headers 与 `librocksdb.a`;
 - patched `cloud-hypervisor`。
 
-缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v2/<arch>/<component>/<input-hash>/`。hosted
-新版公开 workflow 将根目录设在每个一次性 build job 的临时目录内。
-hosted 只做本地复用,不向 Actions cache 或 artifact 上传缓存。input hash 覆盖
-构建脚本、patch/config、上游摘要、架构、Go/Cargo/C/C++ 工具链和 pkg-config 解析结果。
-条目通过 staging、校验和及原子 rename 发布;命中恢复前重新校验 descriptor、payload 和
-tar 路径。损坏条目失败,不会在原目录修补。
+缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v3/<arch>/<component>/<input-hash>/`. Workbench action 使用当前仓库的 Actions cache 恢复及保存 native、Go modules/build cache、Cargo registry/Git/material 下载. key 区分架构及 candidate/trusted scope. 访问仍受 GitHub 仓库/ref 规则限制, 同 key 不能跨仓共享. 默认分支 dispatch 的候选输入仍属于 candidate; trusted 写入要求在源码执行前确认干净、精确的公开源码提交属于对应 main 历史, 结论保存在候选挂载之外. publisher 可执行文件不消费这些缓存.
+
+native key 覆盖 recipe、patch/config、上游内容、架构、实际工具链/ABI 和有效编译参数. 完整 Workbench/image/framework 身份保留在 provenance, 每日镜像标签不单独导致 miss. synthetic import/kernel 默认用户、主机和日期在实际构建时规范化, 显式覆盖仍有效. 固定容器路径保留 Cargo 源码和 linker 身份; 随机任务目录不进入 Actions cache path version. 写入沿用校验和与原子 rename; restore 再核验 descriptor/payload. 正常 miss 按原 recipe 构建, 匹配但损坏的条目失败, 不静默重编或原地修补.
 
 EROFS key 包含 Libgcrypt/Libgpg-error/uuid 的 pkg-config 元数据、目标编译器/工具字节、实际本地源码归档字节（固定 URL 则使用预期摘要）及有界的编译/静态链接探针。探针跟踪实际包含的头文件（含强制 include）以及通过选项、sysroot 和库搜索路径真正选中的静态库/启动对象。源码 URL 或文件名是定位信息，不是内容身份。工作区文件使用可迁移的逻辑标签；具有语义的编译器和 sysroot 选项值仍然有效。未固定摘要的 URL 不能授权共享缓存；须使用固定 URL 或本地归档。
 
 可选的 `guest-runtime/native-deps/deps/erofs-patches` 材料、有序 `series` 和 `deps/erofs-recipe.sh` 都进入 key。仍支持不含这些文件的旧源码集合，包括旧 OpenSSL 配方的实际目标链接探针。新增、修改或移除输入都会使 key 失效。hosted native profile 安装 `libgcrypt20-dev libgpg-error-dev uuid-dev`，并保留 `libssl-dev` 以支持已经准入的旧源码集合。openEuler 24.03-LTS-SP4 的 `libgcrypt-1.10.2-4` 和 `libgpg-error-1.47-1` 源码 RPM 明确禁用静态库，仅安装 devel 软件包不够。[Runner provider](../ci/runner/README_zh.md#安装) 以最多两个 job 构建这些 pin 且包含发行版补丁的源码,仅安装静态 archive 及经过验证的源码/构建/重新链接/许可目录,并验证热复用和模板到 slot 的复制。Runtime 打包验证相同的 pin 目录;Ubuntu 保留已安装软件包材料路径。
 
-EROFS 保留唯一可选的 `bin/<arch>/.erofs-recipe` v2 stamp（含两个输出摘要和实际外部编译/链接依赖）、两个链接映射及其 EROFS 对象/静态库输入，以及源码 `LICENSES`、`AUTHORS` 和 `COPYING`。恢复相同配方时无需完整解压源码树即可复用。没有 stamp 的旧缓存仍可读取，并在下一次配方检查时重建。仓库补丁文件仍来自准入的 source set，cache restore 不覆盖它们。Runtime 补丁材料验证使用所选提交的本地 Git 对象；独立验证器必须能访问这些对象。真实发布打包仍须配齐实际目标的版权/声明及源码/重新链接输入。
+EROFS 条目必须包含匹配的 `.erofs-recipe` stamp、二进制摘要、源码归档/源码树、外部链接依赖、maps、对象、许可证及 relink 输入. Envd 保留匹配的 Go workspace 源码上下文. Cloud Hypervisor 保留 patched 源树、原始 build report、linker map、Cargo lock/metadata/source manifests 和许可证; Cargo registry/Git 与已验证的 release-material 下载随 native 条目配套恢复. 恢复后的 package 必须使用这些确切材料通过 validate, 不替换旧证据或静默重编. 材料不完整的旧 schema 产生 miss. 仓库补丁仍来自准入 source set, 独立打包验证器保留访问精确 Git 对象的能力.
 
 同 key 构建和恢复持有条目锁。每组件默认保留最近使用的 4 个 key,且只回收超过保护期并能
 非阻塞取得锁的条目。缓存测试入口:
@@ -170,15 +163,9 @@ make -C kuasar-sandbox test-ci-tools
 
 ## 6. Hosted 前置条件与证据
 
-bootstrap 保留环境 Go/Rust 版本，仅在一次性 x86 job 添加目标包和匹配 Rust target，不升级编译器或安装 runner 服务。
-host EROFS readers 与 Runtime reader 复用已有固定 recipe。
-源码、native 和编译器缓存留在各 job，不上传。
+普通组件/helper 编译、构建期测试与发布打包使用固定 Workbench. 宿主负责源码准入、传输及发布. 受信 EROFS/runtime readers 在单独 Workbench 调用中导出给无编译器的 prepare/E2E job, 后者保留原有运行库及架构/能力声明.
 
-`artifact-build`/`artifact-cross` 提供原生/交叉构建条件；`artifact-prepare` 提供 host readers 与 fixture 工具；
-`artifact-x86` 提供 Docker/systemd/cgroup v2/KVM/UFFD/netns/BPF；`artifact-arm` 仅提供所选非 KVM 条件。
-`source` 保留源码 benchmark 条件。x86 VM bootstrap 保留既有窄范围每 job KVM udev/group 修复，
-检查真实非特权 KVM/UFFD 访问，TUN/vhost-vsock ACL 保持原有方式。缺少所选能力必须失败。
-CPU affinity 和 Go/Cargo 并发由可用 CPU/内存限制。
+`artifact-x86` 保留 Docker/systemd/cgroup v2/KVM/UFFD/netns/BPF, `artifact-arm` 只提供既定非 KVM 执行条件. x86 VM bootstrap 保留已有每 job KVM udev/group 配置并检查实际 KVM/UFFD 访问. 缺少必要能力或断言失败都会使 job 失败. Workbench receipt 记录镜像获取、预算、命令、退出码、缓存 scope 与 cleanup, GitHub job/step 时间提供 restore/save 和传输成本. 只清理本任务实例; 上传前拒绝越界 symlink 和特殊文件, 保留诊断后删除实例缓存和输出状态.
 
 证据 artifact 包括 `integration-plan`、每架构 `integration-provenance`、每 shard `integration-shard`、
 `integration-source-result`、两个 `integration-architecture-result` 和最终 `integration-validation`，均带 run ID/attempt。

@@ -27,7 +27,7 @@ select_profile() {
         coreutils findutils gawk sed grep diffutils util-linux file time binutils)
     case "$profile" in
         control) ;;
-        release-control) with_go=true ;;
+        release-control) ;;
         helper-build) with_go=true; packages+=(build-essential gcc-aarch64-linux-gnu python3-pip) ;;
         kernel) with_go=true; with_kernel=true ;;
         runtime|runtime-publish) with_go=true; with_native=true; with_readers=true ;;
@@ -35,9 +35,9 @@ select_profile() {
         exact-assets) with_go=true; with_readers=true; with_vm=true ;;
         artifact-build) with_go=true; with_native=true; with_kernel=true; with_readers=true ;;
         artifact-cross) with_go=true; with_native=true; with_kernel=true; with_readers=true; with_cross=true ;;
-        artifact-arm) with_readers=true ;;
-        artifact-prepare) with_readers=true ;;
-        artifact-x86) with_readers=true; with_vm=true ;;
+        artifact-arm) ;;
+        artifact-prepare) packages+=(python3-pip) ;;
+        artifact-x86) with_vm=true ;;
         *) die "unknown profile: $profile" ;;
     esac
     if $with_native || $with_kernel || $with_readers; then
@@ -264,7 +264,7 @@ main() {
     fi
     select_profile "$2"
     case "$profile:$(uname -m)" in
-        artifact-arm:aarch64) ;;
+        artifact-arm:aarch64|artifact-prepare:aarch64) ;;
         artifact-arm:*) die "artifact-arm requires a native ARM64 job" ;;
         *:x86_64) ;;
         *) die "this build/control profile requires x86_64" ;;

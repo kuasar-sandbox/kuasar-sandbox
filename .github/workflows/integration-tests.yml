@@ -52,6 +52,11 @@ on:
         required: false
         default: ""
         type: string
+      workbench_selection_artifact:
+        description: Already frozen Workbench selection from this aggregate run
+        required: false
+        default: ""
+        type: string
       platform_source_sha:
         description: Exact platform selection source for exact-assets mode
         required: false
@@ -112,17 +117,32 @@ jobs:
         with:
           name: ${{ inputs.release_bundle_artifact }}
           path: aggregate-stage
+      - name: Obtain the run's existing Workbench selection
+        if: inputs.workbench_selection_artifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.workbench_selection_artifact }}
+          path: image-selection
       - name: Resolve exact immutable plan
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
           FRAMEWORK_SHA: ${{ job.workflow_sha }}
+          WORKBENCH_SELECTION_ARTIFACT: ${{ inputs.workbench_selection_artifact }}
         run: |
           set -euo pipefail
           options=()
           if [ "$INTEGRATION_MODE" = exact-assets ]; then options+=(--stage aggregate-stage); fi
           python3 -B framework/ci/integration/resolve-artifacts.py \
             --framework-sha "$FRAMEWORK_SHA" --output plan.json --workbench-output workbench-selected.txt "${options[@]}"
+          if [ -n "$WORKBENCH_SELECTION_ARTIFACT" ]; then
+            python3 -B framework/ci/hosted/workbench.py verify-selection \
+              --selection image-selection/workbench.json --framework-sha "$FRAMEWORK_SHA"
+            cp image-selection/workbench.json workbench.json
+          else
+            python3 -B framework/ci/hosted/workbench.py select --framework-sha "$FRAMEWORK_SHA" \
+              --plan plan.json --output workbench.json
+          fi
           {
             echo "framework_sha=$FRAMEWORK_SHA"
             echo "artifact=integration-plan-${GITHUB_RUN_ID}"
@@ -132,7 +152,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.plan.outputs.artifact }}
-          path: plan.json
+          path: |
+            plan.json
+            workbench.json
           if-no-files-found: error
           retention-days: 7
           overwrite: true

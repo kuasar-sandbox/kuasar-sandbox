@@ -1,0 +1,160 @@
+name: Native Workbench build
+description: Execute ordinary builds with one admitted image and task-owned caches
+inputs:
+  selection:
+    description: Immutable image selection from the run's trusted resolver
+    required: true
+  sources:
+    description: Private writable source directory, separate from the trusted framework
+    required: true
+  outputs:
+    description: Newline-separated paths within sources that host steps will consume
+    required: true
+  arch:
+    description: Native architecture
+    required: true
+  cpus:
+    description: Compiler and container CPU budget
+    default: '2'
+  memory-gib:
+    description: Container memory budget
+    default: '8'
+  cache:
+    description: Restore and save repository-scoped compiler inputs; disable for publisher executables
+    default: 'true'
+  run:
+    description: Credential-free build commands, executed at /src
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Allocate task identity and freeze candidate command
+      id: task
+      shell: bash
+      env:
+        WB_SOURCES: ${{ inputs.sources }}
+      run: |
+        python3 -B - <<'PY'
+        import hashlib, os, pathlib, uuid
+        identity = uuid.uuid4().hex
+        root = pathlib.Path(os.environ['RUNNER_TEMP']) / 'kuasar-workbench'
+        evidence = pathlib.Path(os.environ['RUNNER_TEMP']) / ('workbench-evidence-' + identity)
+        source = pathlib.Path(os.environ['WB_SOURCES']).resolve()
+        source.mkdir(parents=True, exist_ok=True)
+        framework = pathlib.Path(os.environ['GITHUB_ACTION_PATH']).resolve().parents[2]
+        with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
+            for key, value in {'root':root, 'source':source, 'framework':framework, 'identity':identity, 'evidence':evidence, 'scope':hashlib.sha256(str(source).encode()).hexdigest()}.items():
+                stream.write(f'{key}={value}\n')
+        PY
+    - name: Check cache repository and source trust scope
+      id: trust
+      if: inputs.cache == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        WB_FRAMEWORK: ${{ steps.task.outputs.framework }}
+        WB_SOURCE: ${{ steps.task.outputs.source }}
+        WB_SCOPE: ${{ runner.temp }}/workbench-cache-scope-${{ github.run_id }}-${{ steps.task.outputs.scope }}.json
+      run: |
+        scope=$(python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" cache-scope --sources "$WB_SOURCE" --receipt "$WB_SCOPE")
+        echo "scope=$scope" >> "$GITHUB_OUTPUT"
+    - name: Acquire the exact native image and start an ordinary UID build
+      shell: bash
+      env:
+        WB_FRAMEWORK: ${{ steps.task.outputs.framework }}
+        WB_ROOT: ${{ steps.task.outputs.root }}
+        WB_SOURCE: ${{ steps.task.outputs.source }}
+        WB_SELECTION: ${{ inputs.selection }}
+        WB_ARCH: ${{ inputs.arch }}
+        WB_CPUS: ${{ inputs.cpus }}
+        WB_MEMORY: ${{ inputs.memory-gib }}
+      run: |
+        python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" start --selection "$WB_SELECTION" \
+          --root "$WB_ROOT" --sources "$WB_SOURCE" --arch "$WB_ARCH" --cpus "$WB_CPUS" --memory-gib "$WB_MEMORY"
+    - name: Compute cache identity using actual native tools and recipes
+      id: key
+      if: inputs.cache == 'true'
+      shell: bash
+      env:
+        WB_FRAMEWORK: ${{ steps.task.outputs.framework }}
+        WB_ROOT: ${{ steps.task.outputs.root }}
+        WB_ARCH: ${{ inputs.arch }}
+        WB_SCOPE: ${{ steps.trust.outputs.scope }}
+      run: |
+        digest=$(python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" exec --root "$WB_ROOT" -- \
+          python3 -B /inputs/release/ci/hosted/workbench.py cache-key)
+        [[ "$digest" =~ ^[0-9a-f]{64}$ ]]
+        echo "key=workbench-v1-$WB_ARCH-$WB_SCOPE-$digest" >> "$GITHUB_OUTPUT"
+        echo "prefix=workbench-v1-$WB_ARCH-$WB_SCOPE-" >> "$GITHUB_OUTPUT"
+    - name: Restore repository-local native, Go and Cargo inputs
+      id: cache
+      if: inputs.cache == 'true'
+      uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        key: ${{ steps.key.outputs.key }}
+        restore-keys: ${{ steps.key.outputs.prefix }}
+        path: |
+          ${{ steps.task.outputs.root }}/instances/ci/build/native-cache
+          ${{ steps.task.outputs.root }}/instances/ci/home/go/pkg/mod
+          ${{ steps.task.outputs.root }}/instances/ci/home/go-cache
+          ${{ steps.task.outputs.root }}/instances/ci/home/.cargo/registry
+          ${{ steps.task.outputs.root }}/instances/ci/home/.cargo/git
+          ${{ steps.task.outputs.root }}/instances/ci/home/.cargo/release-materials
+    - name: Run the unchanged owner build, tests and package checks
+      shell: bash
+      env:
+        WB_FRAMEWORK: ${{ steps.task.outputs.framework }}
+        WB_ROOT: ${{ steps.task.outputs.root }}
+        WB_SCRIPT: ${{ inputs.run }}
+      run: |
+        python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" exec --root "$WB_ROOT" -- bash -euo pipefail -c "$WB_SCRIPT"
+    - name: Stop candidate execution and check host output boundaries
+      shell: bash
+      env:
+        WB_FRAMEWORK: ${{ steps.task.outputs.framework }}
+        WB_ROOT: ${{ steps.task.outputs.root }}
+        WB_OUTPUTS: ${{ inputs.outputs }}
+      run: python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" check-outputs --root "$WB_ROOT" --outputs "$WB_OUTPUTS"
+    - name: Save only successful inputs within the verified cache scope
+      if: success() && inputs.cache == 'true' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+      with:
+        key: ${{ steps.key.outputs.key }}
+        path: |
+          ${{ steps.task.outputs.root }}/instances/ci/build/native-cache
+          ${{ steps.task.outputs.root }}/instances/ci/home/go/pkg/mod
+          ${{ steps.task.outputs.root }}/instances/ci/home/go-cache
+          ${{ steps.task.outputs.root }}/instances/ci/home/.cargo/registry
+          ${{ steps.task.outputs.root }}/instances/ci/home/.cargo/git
+          ${{ steps.task.outputs.root }}/instances/ci/home/.cargo/release-materials
+    - name: Stop only this task's instance and retain its diagnostics
+      if: always() && steps.task.outputs.root != ''
+      shell: bash
+      env:
+        WB_FRAMEWORK: ${{ steps.task.outputs.framework }}
+        WB_ROOT: ${{ steps.task.outputs.root }}
+        WB_EVIDENCE: ${{ steps.task.outputs.evidence }}
+        WB_CACHE: ${{ inputs.cache }}
+        WB_CACHE_HIT: ${{ steps.cache.outputs.cache-hit }}
+        WB_CACHE_KEY: ${{ steps.key.outputs.key }}
+        WB_MATCHED_KEY: ${{ steps.cache.outputs.cache-matched-key }}
+      run: |
+        python3 -B - <<'PY'
+        import json, os, pathlib
+        path = pathlib.Path(os.environ['WB_ROOT']) / 'receipt.json'
+        if path.is_file():
+            value = json.loads(path.read_text())
+            value['cache'] = {name: os.environ[name] for name in ('WB_CACHE', 'WB_CACHE_HIT', 'WB_CACHE_KEY', 'WB_MATCHED_KEY')}
+            path.write_text(json.dumps(value, sort_keys=True, indent=2) + '\n')
+        PY
+        python3 -B "$WB_FRAMEWORK/ci/hosted/workbench.py" finish --root "$WB_ROOT" --evidence "$WB_EVIDENCE"
+    - name: Preserve image, cache scope, commands, exits and timings
+      if: always() && steps.task.outputs.root != ''
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: workbench-evidence-${{ github.job }}-${{ inputs.arch }}-${{ steps.task.outputs.identity }}
+        path: |
+          ${{ steps.task.outputs.evidence }}/
+          ${{ runner.temp }}/workbench-cache-scope-${{ github.run_id }}-${{ steps.task.outputs.scope }}.json
+        if-no-files-found: error
+        retention-days: 7
