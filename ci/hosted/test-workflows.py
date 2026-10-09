@@ -103,6 +103,108 @@ def check_request_rejection():
         assert result.returncode != 0
 
 
+def check_helper_materialization():
+    """Execute the workflow's exact materializer with real Git and local fetches."""
+    import contextlib
+    import importlib
+    import importlib.util
+    from unittest.mock import patch
+
+    steps = load("aggregate-release.yml")["jobs"]["helper-build"]["steps"]
+    script = next(step["run"] for step in steps
+                  if step.get("name") == "Materialize exact helper inputs without running a compiler")
+    program = script.split("python3 -B - <<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    assert "cp -a inputs/fetched/test-sources" not in script
+    sys.path.insert(0, str(ROOT / "ci/integration"))
+    build = importlib.import_module("build-artifacts")
+    spec = importlib.util.spec_from_file_location("workflow_cache_scope", ROOT / "ci/hosted/cache-scope.py")
+    scope = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scope)
+    with tempfile.TemporaryDirectory(prefix="helper-materialize-") as temporary:
+        directory = Path(temporary)
+        environment = {"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
+                       "GIT_TERMINAL_PROMPT": "0", "GITHUB_REPOSITORY": "kuasar-sandbox/kuasar-sandbox",
+                       "GITHUB_REF": "refs/heads/main", "GITHUB_EVENT_NAME": "workflow_dispatch",
+                       "GITHUB_RUN_ID": "fixture", "GITHUB_EVENT_PATH": str(directory / "event.json")}
+        (directory / "event.json").write_text('{"inputs": {}}')
+
+        def git(path, *arguments):
+            return subprocess.check_output(["git", "-C", str(path), *arguments], text=True).strip()
+
+        def repository(path, owner):
+            path.mkdir(parents=True)
+            git(path, "init", "--quiet", "--template=")
+            for key, value in (("user.name", "Chen Xiaohui"), ("user.email", "graych@gmail.com"),
+                               ("commit.gpgsign", "false")):
+                git(path, "config", "--local", key, value)
+            git(path, "remote", "add", "origin", "https://github.com/" + scope.OWNERS[owner] + ".git")
+            (path / "source.txt").write_text("product input\n")
+            git(path, "add", "source.txt")
+            git(path, "commit", "--quiet", "-m", "fixture product")
+            return git(path, "rev-parse", "HEAD")
+
+        with patch.dict(os.environ, environment):
+            pins, product_pins = {}, {}
+            for owner in sorted(set(build.artifacts.OWNERS) - {"platform"}):
+                upstream = directory / "upstream" / owner
+                product_pins[owner] = repository(upstream, owner)
+                (upstream / "source.txt").write_text("independent helper test input\n")
+                git(upstream, "add", "source.txt")
+                git(upstream, "commit", "--quiet", "-m", "fixture test")
+                pins[owner] = git(upstream, "rev-parse", "HEAD")
+            fetched = []
+            original_run = build.run
+
+            def local_run(command, **kwargs):
+                command = [str(argument) for argument in command]
+                if command[0] == "git" and "fetch" in command:
+                    owner = Path(command[2]).name
+                    assert command[3:7] == ["fetch", "--quiet", "--depth=1", "origin"], command
+                    fetched.append((owner, command[7]))
+                    command[6] = "file://" + str(directory / "upstream" / owner)
+                original_run(command, **kwargs)
+
+            cases = {"valid": pins, "missing-owner": {key: value for key, value in pins.items() if key != "sandboxer"},
+                     "malformed": {**pins, "sandboxer": "not-a-commit"}, "extra-owner": {**pins, "other": "e" * 40},
+                     "missing-file": None}
+            for name, declared in cases.items():
+                case = directory / name
+                sources = case / "helper-work"
+                platform_sha = repository(sources / "platform", "platform")
+                (case / "control").symlink_to(ROOT, target_is_directory=True)
+                inputs = case / "inputs/fetched"
+                inputs.mkdir(parents=True)
+                (inputs / "product-revisions.json").write_text(json.dumps(product_pins))
+                if declared is not None:
+                    (inputs / "test-revisions.json").write_text(json.dumps(declared))
+                fetched.clear()
+                with contextlib.chdir(case), patch.object(build, "run", side_effect=local_run):
+                    if name != "valid":
+                        try:
+                            exec(compile(program, "aggregate-release.yml helper materializer", "exec"), {})
+                        except (ValueError, FileNotFoundError):
+                            pass
+                        else:
+                            raise AssertionError("invalid helper pins accepted: " + name)
+                        assert not fetched and set(path.name for path in sources.iterdir()) == {"platform"}, name
+                        continue
+                    exec(compile(program, "aggregate-release.yml helper materializer", "exec"), {})
+                assert fetched == sorted(pins.items())
+                for owner, sha in pins.items():
+                    assert git(sources / owner, "rev-parse", "HEAD") == sha != product_pins[owner]
+                    assert (sources / owner / "source.txt").read_text() == "independent helper test input\n"
+                (sources / ".ci").mkdir()
+                (sources / ".ci/test-revisions.json").write_text(json.dumps(pins))
+                expected = {**pins, "platform": platform_sha}
+                with patch.object(scope, "public_main", side_effect=lambda repo, sha: expected[
+                        "platform" if repo.endswith("/kuasar-sandbox") else repo.split("/")[-1]] == sha):
+                    receipt = scope.decide(sources, case / "scope.json")
+                assert receipt["scope"] == receipt["namespace"] == "trusted"
+                assert {row["path"]: row["sha"] for row in receipt["sources"]} == expected
+                assert all(row["clean"] and row["on_main"] for row in receipt["sources"])
+    print("helper materialization: independent test pins and 4 invalid-input cases passed")
+
+
 
 def check():
     entry = load("ci-entry.yml")["jobs"]
@@ -218,6 +320,7 @@ def check():
     helper = next(step for step in aggregate["helper-build"]["steps"] if step.get("uses") == "./control/.github/actions/workbench")
     assert '--arch "$TARGET_ARCH"' in helper["with"]["run"]
     assert "GH_TOKEN" not in helper["with"]["run"]
+    check_helper_materialization()
     assert integration["results"]["needs"] == ["resolve", "x86_64", "aarch64", "source-checks", "workbench-native", "workbench-release"]
     native = integration['workbench-native']
     assert native['needs'] == 'resolve'

@@ -173,7 +173,18 @@ jobs:
       - name: Materialize exact helper inputs without running a compiler
         run: |
           python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
-          cp -a inputs/fetched/test-sources/. helper-work/
+          python3 -B - <<'PY'
+          import importlib, json, pathlib, subprocess, sys
+          sys.path.insert(0, str(pathlib.Path('control/ci/integration').resolve()))
+          build = importlib.import_module('build-artifacts')
+          pins = json.loads(pathlib.Path('inputs/fetched/test-revisions.json').read_text())
+          platform_sha = subprocess.check_output(
+              ['git', '-C', 'helper-work/platform', 'rev-parse', 'HEAD'], text=True).strip()
+          records = build.artifacts.release_test_revisions(pins, platform_sha)
+          for owner, record in sorted(records.items()):
+              if owner != 'platform':
+                  build.checkout(record['repository'], record['sha'], pathlib.Path('helper-work') / owner)
+          PY
           mkdir helper-work/.ci
           cp inputs/fetched/test-revisions.json helper-work/.ci/
       - name: Build native immutable E2E helpers in Workbench
