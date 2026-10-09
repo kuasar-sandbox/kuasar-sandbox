@@ -247,11 +247,81 @@ pkg_config_module_identity() {
 }
 
 cargo_config_identities() {
-    local cargo_home=${CARGO_HOME:-${HOME:-}/.cargo}
+    local cargo_home=${CARGO_HOME:-${HOME:-}/.cargo} directory path
     printf 'cargo-home\t%q\n' "$cargo_home"
-    file_identity cargo-config "$cargo_home/config"
-    file_identity cargo-config-toml "$cargo_home/config.toml"
+    local directories=("$cargo_home")
+    directory="$(realpath "$WORKSPACE_ROOT/sandboxer/native-deps")"
+    while :; do
+        directories+=("$directory/.cargo")
+        [ "$directory" != / ] || break
+        directory="$(dirname "$directory")"
+    done
+    for directory in "${directories[@]}"; do
+        for path in "$directory/config" "$directory/config.toml"; do
+            file_identity cargo-config "$path"
+            [ -f "$path" ] || continue
+            # Cargo discovers configs from its invocation directory, not the
+            # --manifest-path directory. Hash every discovered file, but keep
+            # tool selection explicit instead of implementing Cargo's config
+            # merge/path rules in this cache. These existing environment
+            # overrides are fingerprinted below.
+            python3 - "$path" <<'PY' || return
+import sys
+import tomllib
+
+path = sys.argv[1]
+with open(path, "rb") as stream:
+    config = tomllib.load(stream)
+build = config.get("build", {})
+unsupported = {"rustc", "rustc-wrapper", "rustc-workspace-wrapper", "target"} & build.keys()
+if unsupported:
+    raise SystemExit("native-cache: Cargo config tool/target selection is unsupported: " + path
+                     + "; use RUSTC/RUSTC_WRAPPER/RUSTC_WORKSPACE_WRAPPER and the recipe target")
+for options in config.get("target", {}).values():
+    if isinstance(options, dict) and "linker" in options:
+        raise SystemExit("native-cache: Cargo config linker selection is unsupported: " + path
+                         + "; use CARGO_TARGET_<TRIPLE>_LINKER")
+for name in config.get("env", {}):
+    if name in {"RUSTC", "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER"} or name.startswith(
+            ("CARGO_BUILD_RUSTC", "CARGO_BUILD_TARGET", "CARGO_TARGET_")):
+        raise SystemExit("native-cache: Cargo config cannot indirectly select build tools: " + path)
+PY
+        done
+    done
 }
+
+cargo_tool_identities() (
+    # The recipe invokes Cargo here. Relative executable overrides must resolve
+    # from the same directory, including rustup's directory toolchain choice.
+    cd "$WORKSPACE_ROOT/sandboxer/native-deps" || return
+    local rustc=${RUSTC-rustc} name executable path info selected_host recipe_host
+    local wrapper=${RUSTC_WRAPPER-${CARGO_BUILD_RUSTC_WRAPPER-}}
+    local workspace_wrapper=${RUSTC_WORKSPACE_WRAPPER-${CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER-}}
+    local linker_variable="CARGO_TARGET_$(effective_rust_target | tr 'a-z-' 'A-Z_')_LINKER"
+    local linker=${!linker_variable-}
+    [ -n "$rustc" ] || die "empty Cargo Rust compiler selection"
+    for name in rustc wrapper workspace_wrapper linker; do
+        executable=${!name}
+        [ -n "$executable" ] || continue
+        path="$(command -v -- "$executable")" \
+            && [ -f "$path" ] && [ -x "$path" ] \
+            || die "Cargo $name executable is unavailable: $executable"
+        file_identity "cargo-$name" "$path"
+    done
+    info="$("$rustc" -vV)" || die "cannot identify the selected Cargo Rust compiler: $rustc"
+    printf 'tool-version\trustc\t%s\n' "$(printf '%s' "$info" | sha256sum | cut -d ' ' -f1)"
+    if [ "${RUSTC+x}" ]; then
+        # The existing recipe detects cross compilation using PATH rustc,
+        # whereas Cargo and the packager honor RUSTC. Do not cache an override
+        # that would make those two target decisions disagree.
+        selected_host="$(awk '/^host: / {print $2}' <<< "$info")"
+        info="$(rustc -vV)" || die "cannot identify the recipe Rust compiler"
+        recipe_host="$(awk '/^host: / {print $2}' <<< "$info")"
+        [ -n "$selected_host" ] && [ "$selected_host" = "$recipe_host" ] \
+            || die "RUSTC host differs from the recipe Rust compiler: $selected_host != $recipe_host"
+    fi
+    tool_identity cargo cargo -Vv
+)
 
 effective_rust_target() {
     # sandboxer/native-deps/Makefile derives and passes RUST_TARGET from
@@ -302,9 +372,19 @@ component_environment() {
             names+=(
                 CLOUD_HYPERVISOR_TARBALL CLOUD_HYPERVISOR_TARBALL_SHA256 CH_BASE_TAG
                 CROSS_PREFIX RUST_TARGET RUSTFLAGS CARGO_ENCODED_RUSTFLAGS RUSTDOCFLAGS
-                RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER CARGO_HOME CARGO_INCREMENTAL
-                CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_TARGET
+                RUSTC RUSTC_WRAPPER RUSTC_WORKSPACE_WRAPPER RUSTUP_TOOLCHAIN
+                CARGO_HOME CARGO_INCREMENTAL CARGO_BUILD_INCREMENTAL CARGO_BUILD_RUSTFLAGS
+                CARGO_BUILD_RUSTC CARGO_BUILD_RUSTC_WRAPPER CARGO_BUILD_RUSTC_WORKSPACE_WRAPPER
+                CARGO_BUILD_TARGET
             )
+            [ ! "${CARGO_BUILD_RUSTC+x}" ] \
+                || die "CARGO_BUILD_RUSTC is unsupported by the release material collector; use RUSTC"
+            [ -z "${CARGO_BUILD_TARGET:-}" ] \
+                || die "CARGO_BUILD_TARGET is unsupported; the Cloud Hypervisor recipe selects its target/output layout"
+            # Includes build-override profile settings without listing an
+            # incomplete subset of Cargo's release compilation parameters.
+            while IFS= read -r name; do names+=("$name"); done \
+                < <(compgen -e | LC_ALL=C sort | grep '^CARGO_PROFILE_RELEASE_' || true)
             rust_target="$(effective_rust_target)"
             rust_target_prefix="CARGO_TARGET_$(printf '%s' "$rust_target" | tr 'a-z-' 'A-Z_')"
             names+=(
@@ -314,6 +394,11 @@ component_environment() {
             ;;
     esac
     for name in "${names[@]}"; do
+        if [ "$component" = cloud-hypervisor ] && [ "${!name+x}" ]; then
+            # An empty encoded flags value disables the recipe's RUSTFLAGS;
+            # empty wrapper values explicitly disable Cargo config wrappers.
+            printf 'env-present\t%s\n' "$name"
+        fi
         print_env_input "$name"
     done
     case "$component" in vmlinux|cloud-hypervisor)
@@ -431,13 +516,12 @@ component_toolchain() {
             package_identities 'gcc gcc-c++ cmake make glibc-devel' 'gcc g++ cmake make libc6-dev'
             ;;
         cloud-hypervisor)
-            tool_identity rustc rustc -vV
-            tool_identity cargo cargo -Vv
+            cargo_config_identities || return
+            cargo_tool_identities || return
             tool_identity cc "$cc" --version
             tool_identity ld "$ld" --version
             tool_identity glibc ldd --version
             package_identities 'rust cargo gcc binutils glibc-devel' 'rustc cargo gcc binutils libc6-dev'
-            cargo_config_identities
             ;;
     esac
 }
