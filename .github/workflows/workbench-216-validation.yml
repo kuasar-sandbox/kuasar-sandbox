@@ -111,7 +111,10 @@ jobs:
           source_uid=$(id -u nobody)
           source_gid=$(id -g nobody)
           source_docker_gid=$(stat -c %g /run/docker.sock)
-          chown -hR "$source_uid:$source_gid" /src /work/home /build /output
+          chown -hR "$source_uid:$source_gid" /src /work/home /build
+          # The host launcher must retain ownership for final diagnostics.
+          chgrp "$source_gid" /output
+          chmod 2775 /output
           printf '%s\n' 'nobody ALL=(ALL) NOPASSWD: ALL' \
             'Defaults:nobody secure_path="/build/source-readers/bin:/usr/local/go/bin:/usr/local/rust/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
             > /etc/sudoers.d/kuasar-source

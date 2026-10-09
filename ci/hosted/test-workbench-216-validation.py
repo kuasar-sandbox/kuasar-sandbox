@@ -368,7 +368,8 @@ class FrozenSourceGateContracts(unittest.TestCase):
         existing = next(step["run"] for step in permanent["jobs"]["source-checks"]["steps"]
                         if step.get("name") == "Run the complete required source gate in Workbench system mode")
         self.assertEqual(steps[3]["run"], existing)
-        for required in ('chown -hR "$source_uid:$source_gid" /src /work/home /build /output',
+        for required in ('chown -hR "$source_uid:$source_gid" /src /work/home /build\n',
+                         'chgrp "$source_gid" /output\n', 'chmod 2775 /output\n',
                          'setpriv --reuid "$source_uid"', '--inh-caps=-all --ambient-caps=-all',
                          '[ "$(id -u)" -ne 0 ]', "sudo -n true", "ip netns add ks-source-probe",
                          "ip tuntap add dev ks-source-probe mode tap", "--selection plan/workbench.json",

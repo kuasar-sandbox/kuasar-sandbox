@@ -268,7 +268,9 @@ def check():
     assert "--profile source" not in json.dumps(source_job) and "taskset" not in json.dumps(source_job)
     system = source_steps["Run the complete required source gate in Workbench system mode"]["run"]
     assert "start --mode system" in system
-    assert system.index('chown -hR "$source_uid:$source_gid" /src /work/home /build /output') < system.index("run-source-checks.py")
+    assert system.index('chown -hR "$source_uid:$source_gid" /src /work/home /build\n') < system.index("run-source-checks.py")
+    assert 'chgrp "$source_gid" /output\n' in system
+    assert 'chmod 2775 /output\n' in system
     assert 'setpriv --reuid "$source_uid" --regid "$source_gid" --groups "$source_docker_gid"' in system
     assert '--inh-caps=-all --ambient-caps=-all' in system
     assert 'source_docker_gid=$(stat -c %g /run/docker.sock)' in system
