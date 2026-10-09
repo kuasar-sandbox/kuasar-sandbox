@@ -113,7 +113,7 @@ def check():
     count = 0
     for path in sorted((ROOT / ".github/workflows").glob("*.yml")):
         name = path.name
-        for job in load(name)["jobs"].values():
+        for job_name, job in load(name)["jobs"].items():
             # A thin reusable caller allocates no runner itself. Every actual
             # allocation, and guarded nested invocation, is evaluated below.
             if "runs-on" not in job and "if" not in job:
@@ -131,7 +131,8 @@ def check():
             if "runs-on" in job:
                 assert "self-hosted" not in str(job["runs-on"]), name
                 if not str(job["runs-on"]).startswith("${{"):
-                    assert job["runs-on"] == "ubuntu-latest", (name, job["runs-on"])
+                    expected = "ubuntu-24.04" if (name, job_name) == ("aggregate-release.yml", "collect") else "ubuntu-latest"
+                    assert job["runs-on"] == expected, (name, job["runs-on"])
     check_request_rejection()
     caller = load("ci.yml")
     assert caller["permissions"] == {"contents": "read", "pull-requests": "read"}
@@ -177,8 +178,33 @@ def check():
     assert lanes["e2e"]["needs"] == ["build", "prepare"]
     assert "matrix.shard" in lanes["e2e"]["concurrency"]["group"]
     assert "inputs.arch" in lanes["e2e"]["concurrency"]["group"]
-    for arch, runner in (("x86_64", "ubuntu-latest"), ("aarch64", "ubuntu-24.04-arm")):
-        assert expression(lanes["e2e"]["runs-on"], {"inputs": {"arch": arch}}) == runner
+    for arch, runner in (("x86_64", "ubuntu-24.04"), ("aarch64", "ubuntu-24.04-arm")):
+        for name in ("build", "prepare", "e2e", "performance"):
+            assert expression(lanes[name]["runs-on"], {"inputs": {"arch": arch}}) == runner
+    building = {step.get("name"): step for step in lanes["build"]["steps"]}
+    for name in ("Build trusted native archive readers in Workbench", "Build the affected delta and test helpers once"):
+        assert building[name]["uses"] == "./framework/.github/actions/workbench"
+        assert building[name]["with"]["selection"] == "plan/workbench.json"
+        assert "env" not in building[name]
+    assert building["Build trusted native archive readers in Workbench"]["with"]["cache"] == "false"
+    assert "--materialize-only" in building["Fetch the exact private source and helper set without a compiler"]["run"]
+    assert "--materialized" in building["Build the affected delta and test helpers once"]["with"]["run"]
+    assert "artifact-cross" not in json.dumps(lanes["build"])
+    for name in ("prepare", "e2e", "performance"):
+        steps = {step.get("name"): step for step in lanes[name]["steps"]}
+        assert steps["Download trusted native archive readers"]["with"]["name"] == "integration-readers-${{ inputs.arch }}-${{ github.run_id }}"
+        assert "sha256sum --check SHA256SUMS" in steps["Verify and select the prebuilt archive readers"]["run"]
+    aggregate = load("aggregate-release.yml")["jobs"]
+    assert aggregate["helper-build"]["needs"] == "prepare"
+    assert aggregate["collect"]["needs"] == ["prepare", "helper-build"]
+    assert aggregate["workbench-build"]["needs"] == ["prepare", "collect"]
+    assert aggregate["helper-build"]["strategy"]["matrix"]["include"] == [
+        {"arch": "x86_64", "runner": "ubuntu-24.04"}, {"arch": "aarch64", "runner": "ubuntu-24.04-arm"}]
+    assert aggregate["release-asset-validation"]["with"]["workbench_selection_artifact"] == "aggregate-sources-${{ github.run_id }}"
+    assert "helper-build" not in json.dumps(aggregate["prepare"])
+    helper = next(step for step in aggregate["helper-build"]["steps"] if step.get("uses") == "./control/.github/actions/workbench")
+    assert '--arch "$TARGET_ARCH"' in helper["with"]["run"]
+    assert "GH_TOKEN" not in helper["with"]["run"]
     assert integration["results"]["needs"] == ["resolve", "x86_64", "aarch64", "source-checks", "workbench-native", "workbench-release"]
     native = integration['workbench-native']
     assert native['needs'] == 'resolve'

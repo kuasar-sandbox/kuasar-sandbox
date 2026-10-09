@@ -40,12 +40,11 @@ environment_tool() {
 
 main() {
     [ "$#" -eq 0 ] || die "usage: exact-assets-tools.sh (no arguments)"
-    : "${RUNNER_TEMP:?}" "${GITHUB_ENV:?}" "${KUASAR_CI_DIR:?}"
-    : "${KUASAR_BUILD_JOBS:?}" "${KUASAR_BUILD_CPUS:?}"
+    : "${RUNNER_TEMP:=${TMPDIR:-/tmp}}" "${KUASAR_CI_DIR:=${RUNNER_TEMP}/helper-metrics}"
+    : "${KUASAR_BUILD_JOBS:?}"
     [[ "$RUNNER_TEMP" = /* && "$RUNNER_TEMP" != *$'\n'* && -d "$RUNNER_TEMP" ]] \
         || die "RUNNER_TEMP must be an absolute existing directory"
-    [[ "$KUASAR_BUILD_JOBS" =~ ^[1-9][0-9]*$ && "$KUASAR_BUILD_CPUS" =~ ^[0-9]+(,[0-9]+)*$ ]] \
-        || die "invalid host tool build budget"
+    [[ "$KUASAR_BUILD_JOBS" =~ ^[1-9][0-9]*$ ]] || die "invalid helper build budget"
     local tools_root identity target_arch go_arch
     target_arch=${TARGET_ARCH:-$(uname -m)}
     case "$target_arch" in
@@ -77,7 +76,7 @@ main() {
             VERSITYGW_TARBALL_SHA256="$VERSITYGW_SOURCE_SHA256" \
             VERSITYGW_GOFLAGS="-mod=mod -p=$KUASAR_BUILD_JOBS" \
             GOMAXPROCS="$KUASAR_BUILD_JOBS" GO_ARCH="$go_arch" \
-            taskset -c "$KUASAR_BUILD_CPUS" bash "$tools_root/recipes/build-versitygw.sh"
+            bash "$tools_root/recipes/build-versitygw.sh"
         vgw_bin="$tools_root/bin/versitygw"
     fi
     if [ -z "$zot_bin" ]; then
@@ -105,8 +104,10 @@ PY
             install -m 0755 "$path" "$KUASAR_E2E_TOOL_OUTPUT/$tool"
         fi
     done
-    emit E2E_ZOT_BIN "$zot_bin"
-    emit E2E_VGW_BIN "$vgw_bin"
+    if [ -n "${GITHUB_ENV:-}" ]; then
+        emit E2E_ZOT_BIN "$zot_bin"
+        emit E2E_VGW_BIN "$vgw_bin"
+    fi
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then main "$@"; fi

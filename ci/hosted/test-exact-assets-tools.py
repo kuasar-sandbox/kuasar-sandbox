@@ -138,6 +138,21 @@ cp "$FIXTURES/${2##*/}" "$2"
         self.assertIn(COMMIT, identity)
         self.assertIn(hashlib.sha256(ZOT).hexdigest(), identity)
 
+    def test_workbench_helper_needs_no_host_actions_files_or_affinity(self):
+        self.env.pop("GITHUB_ENV")
+        self.env.pop("KUASAR_BUILD_CPUS")
+        self.env.pop("RUNNER_TEMP")
+        self.env.pop("KUASAR_CI_DIR")
+        output = self.root / "helpers"
+        result = self.run_helper(TMPDIR=str(self.runner), KUASAR_E2E_TOOL_OUTPUT=str(output))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual({path.name for path in output.iterdir()}, {"zot", "versitygw"})
+        self.assertEqual(self.envfile.read_text(), "")
+        probe = json.loads((self.root / "probe").read_text())
+        self.assertEqual(probe["GOMAXPROCS"], "1")
+        self.assertEqual(probe["VERSITYGW_GOFLAGS"], "-mod=mod -p=1")
+        self.assertEqual(self.product_snapshot(), self.before)
+
     def test_environment_tools_bypass_no_existing_capabilities(self):
         supplied = self.root / "custom tools"
         supplied.mkdir()
@@ -177,7 +192,7 @@ cp "$FIXTURES/${2##*/}" "$2"
                                 ((), {"RUNNER_TEMP": "relative"}),
                                 ((), {"RUNNER_TEMP": str(self.root / "absent")}),
                                 ((), {"KUASAR_BUILD_JOBS": "0"}),
-                                ((), {"KUASAR_BUILD_CPUS": "0;false"})):
+                                ((), {"KUASAR_BUILD_JOBS": "1;false"})):
             result = self.run_helper(*args, **overrides)
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertFalse((self.root / "downloads").exists())
