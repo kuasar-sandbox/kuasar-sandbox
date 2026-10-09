@@ -182,7 +182,7 @@ jobs:
   source-checks:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -195,19 +195,52 @@ jobs:
         with:
           name: ${{ needs.resolve.outputs.artifact }}
           path: plan
-      - name: Bootstrap required source checks
-        run: bash framework/ci/hosted/bootstrap.sh --profile source
-      - name: Run required source and UFFD checks
+      - name: Fetch exact test sources without a compiler
         run: |
-          taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           python3 -B framework/ci/integration/run-source-checks.py \
-            --plan plan/plan.json --sources source-checks --output source-result.json
-      - name: Upload source check result
+            --plan plan/plan.json --sources source-checks --output source-materialize.json --materialize-only
+          cp plan/plan.json source-checks/.source-plan.json
+      - name: Run the complete required source gate in Workbench system mode
+        run: |
+          python3 -B framework/ci/hosted/workbench.py start --mode system \
+            --selection plan/workbench.json --sources source-checks \
+            --root "$RUNNER_TEMP/source-system" --arch x86_64 --cpus 2 --memory-gib 8
+          source_script=$(cat <<'WORKBENCH_SOURCE'
+          sudo -n true
+          # These are private instance resources. Old pinned fixtures may skip
+          # on unavailable capabilities; this required gate must fail instead.
+          trap 'ip link del dev ks-source-probe 2>/dev/null || true; ip netns del ks-source-probe 2>/dev/null || true' EXIT
+          ip netns add ks-source-probe
+          ip netns del ks-source-probe
+          ip tuntap add dev ks-source-probe mode tap
+          ip link del dev ks-source-probe
+          trap - EXIT
+          source /inputs/release/ci/hosted/bootstrap.sh
+          export KUASAR_HOSTED_ROOT=/build/source-readers
+          export GITHUB_ENV=/build/tmp/source-readers-env GITHUB_PATH=/build/tmp/source-readers-path
+          mkdir -p "$KUASAR_HOSTED_ROOT/bin"
+          install_readers
+          install_runtime_reader
+          export PATH="$KUASAR_HOSTED_ROOT/bin:$PATH" KUASAR_CI_DIR=/output/source-metrics
+          python3 -B /inputs/release/ci/integration/run-source-checks.py \
+            --plan /src/.source-plan.json --sources /src --output /output/source-result.json --materialized
+          WORKBENCH_SOURCE
+          )
+          python3 -B framework/ci/hosted/workbench.py exec --root "$RUNNER_TEMP/source-system" -- \
+            bash -euo pipefail -c "$source_script"
+      - name: Stop the owned system instance and retain safe source evidence
+        if: always()
+        run: |
+          python3 -B framework/ci/hosted/workbench.py finish --root "$RUNNER_TEMP/source-system" \
+            --evidence "$RUNNER_TEMP/source-system-evidence"
+      - name: Upload source checks and system diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-source-result-${{ github.run_id }}
-          path: source-result.json
+          path: |
+            ${{ runner.temp }}/source-system-evidence
+            source-materialize.json
           if-no-files-found: error
           retention-days: 7
           overwrite: true

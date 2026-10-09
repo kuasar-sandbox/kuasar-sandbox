@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Materialize exact test pins, then run source checks in ordinary/system Workbench."""
+"""Materialize exact test pins, then run the complete source gate in Workbench."""
 import argparse
 import importlib.util
 import json
@@ -131,8 +131,8 @@ def workspace(plan, sources, result, env):
     if not modules:
         return
     path = sources / "go.work"
-    # Both phases use the same /src layout. The system-mode copy may already
-    # contain the ordinary phase's workspace; accept only the exact module set.
+    # A repeated check may already have initialized its workspace. Accept only
+    # the exact dependency closure rather than adding arbitrary local modules.
     if not path.exists():
         action(result, "actions", "go-work-init", ["go", "work", "init", *modules], sources,
                {**env, "GOWORK": "off"})
@@ -146,38 +146,31 @@ def workspace(plan, sources, result, env):
     env["GOWORK"] = str(path)
 
 
-def checks_for(plan, sources, phase):
+def checks_for(plan, sources):
     selected, _ = source_records(plan)
-    checks = []
-    if phase != "privileged":
-        checks.append(("platform-contracts", ["make", "test-ci-tools", "test-release-tools", "test-perf-tools"], sources / "platform"))
+    checks = [("platform-contracts", ["make", "test-ci-tools", "test-release-tools", "test-perf-tools"], sources / "platform")]
+    # Each exact owner revision remains authoritative for its mixed source
+    # checks. Published pins need no new CLI or reconstructed command list.
     for owner in ("connector", "sandboxer", "orchestrator"):
         if owner in selected:
-            command = ["bash", "scripts/ci-source-checks.sh"]
-            if phase != "all":
-                command.append("--" + phase)
-            name = owner + ("-privileged" if phase == "privileged" else "-unit-race-vet")
-            checks.append((name, command, sources / owner))
-    if phase != "privileged" and "accelerator" in selected:
+            checks.append((owner + "-unit-race-vet", ["bash", "scripts/ci-source-checks.sh"], sources / owner))
+    if "accelerator" in selected:
         checks.append(("accelerator-fixtures", ["make", "test-e2e-scripts"], sources / "accelerator"))
-    if phase != "ordinary" and selected & {"sandboxer", "platform"}:
+    if selected & {"sandboxer", "platform"}:
         checks.append(("uffd-source-benchmark", ["bash", "test/perf/uffd-performance-gate.sh"], sources / "platform"))
     return checks
 
 
-def execute(plan, sources, output, *, materialized=False, phase="all"):
-    result = new_result(plan, phase)
+def execute(plan, sources, output, *, materialized=False):
+    result = new_result(plan, "all")
     try:
         artifacts.check_plan(plan)
-        artifacts.require(phase in ("all", "ordinary", "privileged"), "unknown source-check phase")
         env = environment()
-        if phase == "all":
-            # Each test creates its own private state below this short root.
-            # An extra random parent would exhaust existing Unix socket paths.
-            env["TMPDIR"] = env.get("TMPDIR") or "/tmp"
-        else:
-            env["TMPDIR"] = "/build/t"
-        env.update(ORG=str(sources), TARGET_ARCH="x86_64", PYTHONDONTWRITEBYTECODE="1")
+        # Workbench supplies /build/t. Tests own their state below this short
+        # root; an extra random parent would exhaust existing Unix socket paths.
+        env["TMPDIR"] = env.get("TMPDIR") or "/tmp"
+        env.update(ORG=str(sources), TARGET_ARCH="x86_64", PYTHONDONTWRITEBYTECODE="1",
+                   REQUIRE_WORKING_SET_PRIVILEGED="1")
         result["arch"] = "x86_64"
         result["workbench"] = {"image_id": env.get("KUASAR_WORKBENCH_IMAGE_ID"),
                                "framework_sha": env.get("KUASAR_WORKBENCH_FRAMEWORK_SHA")}
@@ -186,7 +179,7 @@ def execute(plan, sources, output, *, materialized=False, phase="all"):
         else:
             checkout_sources(plan, sources, result)
         workspace(plan, sources, result, env)
-        for name, command, directory in checks_for(plan, sources, phase):
+        for name, command, directory in checks_for(plan, sources):
             action(result, "checks", name, command, directory, env)
         result.update(conclusion="success", exit_code=0)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
@@ -204,16 +197,13 @@ if __name__ == "__main__":
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--materialize-only", action="store_true", help="fetch exact test sources on the trusted host, without compilers")
     mode.add_argument("--materialized", action="store_true", help="verify and use the task's existing exact test sources")
-    parser.add_argument("--phase", choices=("all", "ordinary", "privileged"), default="all")
     args = parser.parse_args()
-    if args.materialize_only and args.phase != "all":
-        parser.error("--materialize-only does not execute a phase")
     try:
         plan = json.loads(args.plan.read_text())
         if args.materialize_only:
             materialize(plan, args.sources.resolve(), args.output.resolve())
         else:
-            execute(plan, args.sources.resolve(), args.output.resolve(), materialized=args.materialized, phase=args.phase)
+            execute(plan, args.sources.resolve(), args.output.resolve(), materialized=args.materialized)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"source checks: {error}", file=sys.stderr)
         status = 1

@@ -132,6 +132,8 @@ def check():
                 assert "self-hosted" not in str(job["runs-on"]), name
                 if not str(job["runs-on"]).startswith("${{"):
                     expected = "ubuntu-24.04" if (name, job_name) == ("aggregate-release.yml", "collect") else "ubuntu-latest"
+                    if (name, job_name) == ("integration-tests.yml", "source-checks"):
+                        expected = "ubuntu-24.04"
                     if name == "workbench-216-validation.yml":
                         expected = {"prepare": "ubuntu-24.04", "cold-x86": "ubuntu-24.04", "warm-x86": "ubuntu-24.04",
                                     "cold-arm": "ubuntu-24.04-arm", "warm-arm": "ubuntu-24.04-arm",
@@ -253,7 +255,33 @@ def check():
         assert forbidden not in executor, forbidden
     assert "run-artifact-tests.py" in executor
     assert "sparse-checkout" in executor
-    assert "run-source-checks.py" in json.dumps(integration["source-checks"])
+    source_job = integration["source-checks"]
+    assert source_job["needs"] == "resolve"
+    assert "strategy" not in source_job
+    source_steps = {step.get("name"): step for step in source_job["steps"]}
+    source_fetch = source_steps["Fetch exact test sources without a compiler"]["run"]
+    assert "--materialize-only" in source_fetch
+    assert "--profile source" not in json.dumps(source_job) and "taskset" not in json.dumps(source_job)
+    system = source_steps["Run the complete required source gate in Workbench system mode"]["run"]
+    assert "start --mode system" in system
+    assert "--selection plan/workbench.json" in system
+    assert "bash -euo pipefail -c \"$source_script\"" in system
+    assert "<<'WORKBENCH_SOURCE'" in system
+    assert "sudo -n true" in system
+    assert "ip netns add ks-source-probe" in system and "ip netns del ks-source-probe" in system
+    assert "ip tuntap add dev ks-source-probe mode tap" in system
+    assert "ip link del dev ks-source-probe" in system and "trap - EXIT" in system
+    assert "install_readers" in system and "install_runtime_reader" in system
+    assert "--materialized" in system and "--phase" not in system
+    assert "/output/source-result.json" in system
+    assert "cache" not in system
+    cleanup = source_steps["Stop the owned system instance and retain safe source evidence"]
+    assert cleanup["if"] == "always()" and "workbench.py finish" in cleanup["run"]
+    for step in source_job["steps"]:
+        assert "GH_TOKEN" not in json.dumps(step) and "create-github-app-token" not in json.dumps(step)
+        if "actions/upload-artifact@" in step.get("uses", ""):
+            assert "source-checks" not in step["with"]["path"], "candidate sources must not be uploaded directly"
+            assert "source-system-evidence" in step["with"]["path"]
     source = (ROOT / "ci/integration/run-source-checks.py").read_text()
     assert "uffd-performance-gate.sh" in source and "ci-source-checks.sh" in source
     runtime = (ROOT / "ci/integration/run-artifact-tests.py").read_text()
