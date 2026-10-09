@@ -378,12 +378,14 @@ PY
         for owner in ASSEMBLER.OWNERS:
             root = self.platform if owner == 'platform' else self.workspace / owner
             root.mkdir(exist_ok=True)
-            for stem in ASSEMBLER.GUIDES[owner]:
-                path = root / (stem + '.md')
+            declaration = root / 'release/guide-inputs.txt'
+            declaration.parent.mkdir(exist_ok=True)
+            paths = ('README.md', 'docs/quickstart.md')
+            for name in paths:
+                path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('# ' + owner + ' user guide\n')
-                if owner in {'accelerator', 'guest-runtime'} and stem == 'test/e2e/README':
-                    path.with_name(path.stem + '_zh.md').write_text('# ' + owner + ' E2E guide zh\n')
+            declaration.write_text('\n'.join(paths) + '\n')
             roots[owner] = root
         output = self.workspace / 'assembled'
         ASSEMBLER.assemble(output, roots, {})

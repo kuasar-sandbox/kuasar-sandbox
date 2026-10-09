@@ -1,0 +1,24 @@
+# Owner-maintained user documentation inputs, relative to this repository.
+# The platform reads this file from the selected source revision.
+# Entries may be Markdown files, directories, or glob patterns; each must match.
+# Keep source/developer-only documentation outside the selected inputs.
+README.md
+README_zh.md
+docs/quickstart.md
+docs/quickstart_zh.md
+docs/download.md
+docs/download_zh.md
+docs/deployment.md
+docs/deployment_zh.md
+docs/kuasar-sandbox.md
+docs/kuasar-sandbox_zh.md
+docs/terminology.md
+docs/terminology_zh.md
+test/README.md
+test/README_zh.md
+test/QUICKSTART.md
+test/QUICKSTART_zh.md
+test/demo/DEMO.md
+test/demo/DEMO_zh.md
+workbench/README.md
+workbench/README_zh.md
