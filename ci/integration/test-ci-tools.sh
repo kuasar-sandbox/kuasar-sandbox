@@ -1109,4 +1109,5 @@ fi
 
 python3 "$SCRIPT_DIR/../native-cache/test-erofs-inputs.py"
 python3 -B "$SCRIPT_DIR/../native-cache/test-payload.py"
+python3 -B "$SCRIPT_DIR/../native-cache/test-native-key.py"
 echo "test-ci-tools: PASS"
