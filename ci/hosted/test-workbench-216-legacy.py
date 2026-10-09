@@ -795,8 +795,9 @@ class SourceControlContracts(unittest.TestCase):
 
     def test_source_checks_use_the_current_materialized_executor_and_preserve_failure(self):
         source = task.module("legacy_source_fixture_current_executor", task.ROOT / "ci/integration/run-source-checks.py")
-        for status in (0, 17):
+        for status in (0, 17, -9, -15):
             with self.subTest(status=status):
+                expected_exit = status if status >= 0 else 128 - status
                 private = self.root / ("task216-legacy.execute-" + str(status))
                 (private / "sources").mkdir(parents=True)
                 short = self.short_tmp()
@@ -811,9 +812,16 @@ class SourceControlContracts(unittest.TestCase):
                     self.assertEqual(sources, private / "sources")
                     self.assertTrue(materialized)
                     (sources / "go.work").write_text("go 1.26.1\n")
-                    task.write(destination, {"exit_code": status})
+                    actual = status
+                    if status < 0:
+                        # A real child signal produces the raw source driver's
+                        # negative returncode, without running source tools.
+                        actual = subprocess.run([sys.executable, "-c",
+                            "import os; os.kill(os.getpid(), " + str(-status) + ")"]).returncode
+                        self.assertEqual(actual, status)
+                    task.write(destination, {"exit_code": actual})
                     if status:
-                        raise ValueError("original source check exited 17")
+                        raise ValueError("original source check exited " + str(actual))
                 def query(command, **kwargs):
                     if command[0] == "git":
                         return self.record["framework_sha"]
@@ -825,14 +833,15 @@ class SourceControlContracts(unittest.TestCase):
                         patch.object(source, "execute", side_effect=execute) as driver, \
                         patch.object(task, "legacy_source_resources", return_value={"uid": os.getuid()}), \
                         patch.object(task, "output", side_effect=query):
-                    self.assertEqual(task.legacy_source_checks(SimpleNamespace(frozen=self.frozen, task_root=private)), status)
+                    self.assertEqual(task.legacy_source_checks(SimpleNamespace(frozen=self.frozen, task_root=private)), expected_exit)
                     driver.assert_called_once()
                     Path(environment["GOCACHE"], "old-test-result").write_text("must not reuse")
                     with self.assertRaisesRegex(ValueError, "fresh empty"):
                         task.legacy_source_checks(SimpleNamespace(frozen=self.frozen, task_root=private))
                     self.assertEqual(driver.call_count, 1)
                 observed = json.loads((private / "legacy-verification/logs/source-execution.json").read_text())
-                self.assertEqual(observed["exit_code"], status)
+                self.assertEqual(observed["exit_code"], expected_exit)
+                self.assertEqual(json.loads((private / "legacy-verification/result.json").read_text())["exit_code"], status)
                 self.assertEqual(observed["go_toolchain_mode"], "auto")
                 self.assertIn("1.24.13", observed["go_version_before"])
                 self.assertIn("1.26.1", observed["go_version_after"])
