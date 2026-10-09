@@ -359,6 +359,117 @@ rm "$descriptor"
     evidence.save()
 
 
+def warm_cache_negatives(sources, arch, evidence, environment):
+    """Exercise the current envd cache without compiling or changing a good entry."""
+    key = evidence.record["native_cache_keys"]["envd"]
+    good = Path(environment["KUASAR_NATIVE_CACHE_ROOT"]) / "v3" / arch / "envd" / key
+    names = ("inputs.tsv", "provenance.txt", "SHA256SUMS", "payload.tar")
+    original = {name: artifacts.digest(good / name) for name in names}
+    metrics = Path(environment["KUASAR_NATIVE_CACHE_METRICS"])
+    original_metrics = artifacts.digest(metrics)
+    expected_products = evidence.record["products"]
+    diagnostics = evidence.diagnostics / "native-negatives"
+    diagnostics.mkdir()
+    record = {"component": "envd", "original_key": key, "good_entry_before": original,
+              "payload_size": (good / "payload.tar").stat().st_size, "cases": [], "conclusion": "running"}
+    evidence.record["native_cache_negatives"] = record
+    started = time.monotonic()
+    private = None
+    # The child retains errexit. Its expected failure is checked by this outer
+    # shell, so Evidence.run still fails on any unexpected negative result.
+    body = '''source "$1" help >/dev/null
+marker=$2
+build_component() {
+    printf 'TASK216_BUILD_FORBIDDEN\\n' > "$marker"
+    printf 'TASK216_BUILD_FORBIDDEN\\n' >&2
+    exit 73
+}
+compute_key envd "$4"
+set +e
+(set -e; restore_or_build envd)
+status=$?
+set -e
+printf 'negative_restore_exit=%s\\n' "$status"
+[ "$status" -eq "$3" ]
+'''
+    try:
+        with tempfile.TemporaryDirectory(prefix="task216-native-negative-", dir=environment["TMPDIR"]) as directory:
+            private = Path(directory)
+            isolated = private / "cache/v3" / arch / "envd" / key
+            isolated.mkdir(parents=True)
+            for name in names:
+                shutil.copy2(good / name, isolated / name)
+            require({name: artifacts.digest(isolated / name) for name in names} == original,
+                    "negative fixture copy differs from restored envd entry")
+            (private / "tmp").mkdir()
+            negative_metrics = diagnostics / "metrics.tsv"
+            base = {**environment, "KUASAR_NATIVE_CACHE_ROOT": str(private / "cache"),
+                    "KUASAR_NATIVE_CACHE_METRICS": str(negative_metrics), "TMPDIR": str(private / "tmp")}
+            changed = {**base, "ENVD_GOFLAGS": (environment.get("ENVD_GOFLAGS") or "-mod=mod")
+                       + " -tags=kuasar_native_cache_negative216"}
+            for name, selected, expected in (("changed-input-miss", changed, 73),
+                                             ("matching-corrupt-refused", base, 1)):
+                case = {"name": name, "expected_exit_code": expected}
+                record["cases"].append(case)
+                if expected == 1:
+                    payload = isolated / "payload.tar"
+                    payload.chmod(payload.stat().st_mode | 0o200)
+                    offset = payload.stat().st_size // 2
+                    with payload.open("r+b") as stream:
+                        stream.seek(offset)
+                        byte = stream.read(1)
+                        require(len(byte) == 1, "empty envd payload cannot test corruption")
+                        stream.seek(offset)
+                        stream.write(bytes([byte[0] ^ 1]))
+                    case.update(payload_offset=offset, corrupted_payload_sha256=artifacts.digest(payload))
+                    require(case["corrupted_payload_sha256"] != original["payload.tar"], "payload was not corrupted")
+                marker, descriptor, trace = (diagnostics / (name + suffix) for suffix in (".marker", ".inputs.tsv", ".execve"))
+                label = "native-negative/" + name
+                try:
+                    evidence.run(label, ["timeout", "--kill-after=5", "60", "strace", "-f", "--seccomp-bpf", "-qq",
+                                         "-s", "65535", "-e", "trace=execve", "-o", trace,
+                                         "bash", "-euo", "pipefail", "-c", body, "task216", ROOT / "ci/native-cache/native-cache.sh",
+                                         marker, str(expected), descriptor], env=selected)
+                finally:
+                    log = (evidence.diagnostics / "logs" / (label.replace("/", "-") + ".log")).read_text()
+                    statuses = re.findall(r"^negative_restore_exit=([0-9]+)$", log, re.M)
+                    case.update(exit_code=int(statuses[0]) if len(statuses) == 1 else None,
+                                build_hook_invoked=marker.exists())
+                    evidence.save()
+                keys = re.findall(r"^[0-9a-f]{64}$", log, re.M)
+                require(len(keys) == 1 and case["exit_code"] == expected, "negative restore lost its exact key/exit")
+                case["input_hash"] = keys[0]
+                if expected == 73:
+                    require(keys[0] != key and b"ENVD_GOFLAGS" in descriptor.read_bytes()
+                            and descriptor.read_bytes() != (good / "inputs.tsv").read_bytes(), "effective envd flags did not miss")
+                    require(marker.read_text() == "TASK216_BUILD_FORBIDDEN\n" and "envd cache miss (" in log
+                            and not (isolated.parent / keys[0]).exists(), "changed input did not reach the forbidden build hook")
+                    case["changed_environment"] = {"ENVD_GOFLAGS": changed["ENVD_GOFLAGS"]}
+                else:
+                    require(keys[0] == key and descriptor.read_bytes() == (good / "inputs.tsv").read_bytes(),
+                            "corruption test did not use the matching envd identity")
+                    require(not marker.exists() and "cache entry checksum verification failed" in log
+                            and "payload.tar: FAILED" in log and "cache miss" not in log,
+                            "matching corruption did not retain the integrity failure without rebuild")
+                require(not negative_metrics.exists(), "negative restore unexpectedly recorded a cache hit/build")
+                audit_packaging(trace)
+                case["conclusion"] = "success"
+            record["good_entry_after"] = {name: artifacts.digest(good / name) for name in names}
+            require(record["good_entry_after"] == original and artifacts.digest(metrics) == original_metrics,
+                    "negative tests changed the good cache or its five hit records")
+            require(products(sources, arch, manifest(sources)) == expected_products,
+                    "negative tests changed the exact restored products")
+            record.update(conclusion="success", original_cache_unchanged=True, original_hit_metrics_unchanged=True,
+                          original_products_unchanged=True, product_build_executed=False)
+    except BaseException as error:
+        record.update(conclusion="failure", error=str(error))
+        raise
+    finally:
+        record.update(private_copy_removed=private is not None and not private.exists(),
+                      elapsed_seconds=time.monotonic() - started)
+        evidence.save()
+
+
 def rustc_print_query(arguments):
     """Accept Cargo's metadata probe without admitting rustc output options."""
     prints = {"file-names", "sysroot", "split-debuginfo", "crate-name", "cfg", "target-libdir"}
@@ -860,6 +971,7 @@ def build(args):
         evidence.save()
         if args.phase == "warm":
             require(evidence.record["products"] == previous["products"], "restored native/non-native product bytes differ from cold inputs")
+            warm_cache_negatives(sources, arch, evidence, environment)
         package_all(sources, arch, record, evidence, environment)
         if args.phase == "warm":
             evidence.record["package_bytes_equal_to_cold"] = evidence.record["packages"] == previous["packages"]

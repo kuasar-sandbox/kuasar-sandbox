@@ -331,6 +331,144 @@ restore_or_build() {
                                             for path in step["with"]["path"].splitlines()))
 
 
+class WarmCacheNegativeContracts(unittest.TestCase):
+    """Real shell failures, checksums and trace; fixture payloads never compile."""
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.sources = self.root / "sources"
+        self.sources.mkdir()
+        self.product = self.sources / "envd"
+        self.product.write_bytes(b"exact restored product")
+        self.tmp = self.root / "tmp"
+        self.tmp.mkdir()
+        self.metrics = self.root / "native.tsv"
+        self.metrics.write_text("five original cache hits\n")
+        self.recipe = self.root / "ci/native-cache/native-cache.sh"
+        self.recipe.parent.mkdir(parents=True)
+        self.recipe.write_text('''CACHE_ROOT=$KUASAR_NATIVE_CACHE_ROOT
+compute_key() {
+    printf 'schema\\tv3\\ncomponent\\tenvd\\ntarget_arch\\t%s\\nenv\\tENVD_GOFLAGS\\t%s\\n' "$TARGET_ARCH" "${ENVD_GOFLAGS:-}" > "$2"
+    sha256sum "$2" | cut -d ' ' -f1
+}
+restore_or_build() {
+    descriptor=$(mktemp)
+    key=$(compute_key envd "$descriptor")
+    entry="$CACHE_ROOT/v3/$TARGET_ARCH/envd/$key"
+    if [ -d "$entry" ]; then
+        if ! (cd "$entry"; sha256sum --check SHA256SUMS); then
+            if [ "${FIXTURE_CORRUPT_FALLBACK:-0}" = 1 ]; then build_component envd; fi
+            echo 'native-cache: cache entry checksum verification failed' >&2
+            exit 1
+        fi
+        echo 'unexpected matching hit'
+        touch "$KUASAR_NATIVE_CACHE_METRICS"
+    else
+        echo "native-cache: envd cache miss ($key); building" >&2
+        if [ "${FIXTURE_MISS_SUCCEEDS:-0}" = 1 ]; then return 0; fi
+        build_component envd
+    fi
+}
+''')
+
+    def prepare(self, arch="x86_64"):
+        inputs = f"schema\tv3\ncomponent\tenvd\ntarget_arch\t{arch}\nenv\tENVD_GOFLAGS\t\n"
+        key = hashlib.sha256(inputs.encode()).hexdigest()
+        self.good = self.root / "cache/v3" / arch / "envd" / key
+        self.good.mkdir(parents=True)
+        (self.good / "inputs.tsv").write_text(inputs)
+        (self.good / "provenance.txt").write_text("actual fixture provenance\n")
+        (self.good / "payload.tar").write_bytes(b"bounded envd payload fixture" * 1024)
+        (self.good / "SHA256SUMS").write_text("".join(
+            task.artifacts.digest(self.good / name) + "  " + name + "\n"
+            for name in ("inputs.tsv", "provenance.txt", "payload.tar")))
+        for path in self.good.iterdir():
+            path.chmod(0o444)
+        self.evidence = task.Evidence(self.root / ("verification-" + arch), {
+            "native_cache_keys": {"envd": key}, "products": self.products()})
+        self.env = {**os.environ, "TARGET_ARCH": arch, "ENVD_GOFLAGS": "", "TMPDIR": str(self.tmp),
+                    "KUASAR_NATIVE_CACHE_ROOT": str(self.root / "cache"), "KUASAR_NATIVE_CACHE_METRICS": str(self.metrics)}
+
+    def products(self, *_args):
+        return {"embedded/envd": {"sha256": task.artifacts.digest(self.product)}}
+
+    def run_negatives(self, arch="x86_64"):
+        with patch.object(task, "ROOT", self.root), patch.object(task, "manifest", return_value=[]), \
+                patch.object(task, "products", side_effect=self.products):
+            task.warm_cache_negatives(self.sources, arch, self.evidence, self.env)
+
+    def test_effective_miss_and_matching_corruption_keep_exact_products_and_good_cache(self):
+        for arch in ("x86_64", "aarch64"):
+            with self.subTest(arch=arch):
+                self.prepare(arch)
+                before = task.artifacts.tree_files(self.good)
+                self.run_negatives(arch)
+                result = self.evidence.record["native_cache_negatives"]
+                self.assertEqual(result["conclusion"], "success")
+                self.assertEqual([case["exit_code"] for case in result["cases"]], [73, 1])
+                self.assertEqual([case["build_hook_invoked"] for case in result["cases"]], [True, False])
+                self.assertEqual(task.artifacts.tree_files(self.good), before)
+                self.assertTrue(result["original_cache_unchanged"] and result["original_products_unchanged"])
+                self.assertTrue(result["original_hit_metrics_unchanged"] and result["private_copy_removed"])
+                self.assertFalse(result["product_build_executed"])
+                self.assertEqual(list(self.tmp.iterdir()), [])
+
+    def test_unexpected_success_and_corruption_rebuild_propagate_and_remove_only_private_copy(self):
+        for variable, arch in (("FIXTURE_MISS_SUCCEEDS", "x86_64"), ("FIXTURE_CORRUPT_FALLBACK", "aarch64")):
+            with self.subTest(variable=variable):
+                self.prepare(arch)
+                self.env[variable] = "1"
+                before = task.artifacts.tree_files(self.good)
+                with self.assertRaisesRegex(ValueError, "native-negative/.* exited 1"):
+                    self.run_negatives(arch)
+                result = self.evidence.record["native_cache_negatives"]
+                self.assertEqual(result["conclusion"], "failure")
+                self.assertEqual(result["cases"][-1]["exit_code"], 0 if variable == "FIXTURE_MISS_SUCCEEDS" else 73)
+                self.assertTrue(result["private_copy_removed"])
+                self.assertEqual(task.artifacts.tree_files(self.good), before)
+                self.assertEqual(list(self.tmp.iterdir()), [])
+                self.assertEqual(self.product.read_bytes(), b"exact restored product")
+                self.env.pop(variable)
+
+    def test_negative_failure_stops_warm_packaging(self):
+        arch = "x86_64"
+        frozen, carried = self.sources / "frozen.json", self.sources / "carried-products.tar"
+        frozen.write_text("exact frozen inputs")
+        carried.write_text("exact cold non-native bytes")
+        expected = self.products()
+        task.write(self.sources / "cold-result.json", {
+            "conclusion": "success", "arch": arch, "frozen_sha256": task.artifacts.digest(frozen),
+            "image_id": "sha256:fixture", "carried_products_sha256": task.artifacts.digest(carried), "products": expected})
+        ch = self.sources / "sandboxer/native-deps/bin" / arch / "cloud-hypervisor"
+        ch.parent.mkdir(parents=True)
+        ch.write_bytes(b"restored native fixture")
+        real_evidence = task.Evidence
+        evidence = real_evidence(self.root / "warm-evidence", {})
+
+        def initialize(_directory, record, diagnostics):
+            evidence.record.update(record)
+            return evidence
+
+        with patch.object(task, "build_inputs", return_value=(self.sources, arch, {}, "sha256:fixture")), \
+                patch.object(task, "manifest", return_value=[("fixture", name) for name in task.artifacts.PRODUCTS]), \
+                patch.object(task, "Evidence", side_effect=initialize), patch.object(evidence, "run"), \
+                patch.object(task, "native_cache") as restore, patch.object(task, "carry_paths", return_value=[]), \
+                patch.object(task.transport, "extract", side_effect=lambda _archive, path: path.mkdir()), \
+                patch.object(task, "products", return_value=expected), \
+                patch.object(task, "warm_cache_negatives", side_effect=ValueError("negative fixture failed")) as negative, \
+                patch.object(task, "package_all") as package:
+            with self.assertRaisesRegex(ValueError, "negative fixture failed"):
+                task.build(SimpleNamespace(sources=self.sources, arch=arch, phase="warm"))
+        restore.assert_called_once()
+        self.assertEqual(restore.call_args.args[1], "restore")
+        negative.assert_called_once()
+        package.assert_not_called()
+        self.assertEqual(evidence.record["conclusion"], "failure")
+        self.assertEqual(evidence.record["products"], expected)
+
+
 class PackagedInputContracts(unittest.TestCase):
     """Real tar/ELF/EROFS composition fixtures; no product compilation or execution."""
 
