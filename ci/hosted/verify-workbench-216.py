@@ -15,6 +15,7 @@ import platform
 import re
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -829,8 +830,11 @@ def stop_legacy_unit(record):
 
 
 def legacy_bootstrap_stage(evidence, bootstrap, profile, cpus, task_root):
-    """Bound only the exact former build/reader prerequisite profiles."""
-    require(profile in ("artifact-build", "artifact-cross", "artifact-arm"), "unapproved legacy bootstrap profile")
+    """Bound the exact former profiles, with source restricted to its main control."""
+    require(profile in ("artifact-build", "artifact-cross", "artifact-arm") or (
+        profile == "source" and evidence.record.get("phase") == "legacy-source-host"
+        and evidence.record.get("main_admission", {}).get("public_main_checked") is True),
+        "unapproved legacy bootstrap profile")
     bootstrap = bootstrap.resolve(strict=True)
     require(artifacts.digest(bootstrap) == LEGACY_BOOTSTRAP_SHA256 and len(cpus) == 2,
             "legacy bootstrap identity or CPU budget changed")
@@ -982,20 +986,326 @@ def legacy_finish(args):
     finally:
         try:
             if record.get("cleanup_exit_code") == 0 and record.get("bootstrap_cleanup_exit_code", 0) == 0:
+                if record.get("source_tmp"):
+                    record["source_tmp_cleanup_exit_code"] = 1
+                    remove_legacy_source_tmp(record["source_tmp"])
+                    record["source_tmp_cleanup_exit_code"] = 0
                 if source_root.exists():
                     # Go's downloaded modules may be read-only. Only this
                     # verified task directory is removed without following links.
                     subprocess.run(["sudo", "-n", "rm", "-rf", "--", source_root], check=True, timeout=300)
+                if record.get("source_tmp"):
+                    require(not source_root.exists(), "legacy source state was not removed")
+                    record["source_state_removed"] = True
                 provision = destination / "host/provision"
                 if provision.exists():
                     shutil.rmtree(provision)
-        except (OSError, subprocess.SubprocessError) as error:
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
             record.update(conclusion="failure", delete_error=str(error))
             status = 1
         record.setdefault("space_snapshots", []).append(space_snapshot("after-cleanup", {
             "task": source_root, "output": destination}, sizes=True))
         write(receipt, record)
     return status
+
+
+def legacy_source_plan(path):
+    """This privileged control admits only the complete frozen public-main set."""
+    record = frozen(path)
+    plan = json.loads(path.with_name("integration-plan.json").read_text())
+    require(record["admission"] is None and plan["candidate_records"] == [],
+            "legacy source control refuses primary or companion candidates")
+    require(plan["owners"] == ["platform"] and plan["sources"] == plan["test_revisions"]
+            and set(plan["sources"]) == {"platform"} | (set(REPOSITORIES) - {"kuasar-sandbox"}),
+            "legacy source control requires the complete same source/test set")
+    for owner, row in plan["test_revisions"].items():
+        key = "kuasar-sandbox" if owner == "platform" else owner
+        require({name: row[name] for name in ("repository", "sha")} == record["sources"][key],
+                "legacy source plan differs from the frozen source pins")
+    require(plan["framework_sha"] == record["framework_sha"], "legacy source framework differs")
+    return record, plan
+
+
+def legacy_source_admission(path, record, plan):
+    require(os.environ.get("GITHUB_REPOSITORY") == REPOSITORIES["kuasar-sandbox"]
+            and os.environ.get("GITHUB_REF") == "refs/heads/main"
+            and os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch", "legacy source control is main-only")
+    return {"framework_sha": record["framework_sha"], "frozen_sha256": artifacts.digest(path),
+            "plan_id": artifacts.identity(plan), "test_revisions": plan["test_revisions"],
+            "admission": None, "candidate_records": [], "public_main_checked": True,
+            "repository": "kuasar-sandbox/kuasar-sandbox", "ref": "refs/heads/main",
+            "event": "workflow_dispatch", "run_id": os.environ["GITHUB_RUN_ID"]}
+
+
+def legacy_source_admit(args):
+    record, plan = legacy_source_plan(args.frozen)
+    admission = legacy_source_admission(args.frozen, record, plan)
+    require(not args.output.exists() and args.output.absolute().resolve() == args.output.absolute(),
+            "legacy source admission needs a fresh unlinked receipt")
+    scope = module("task216_source_main", ROOT / "ci/hosted/cache-scope.py")
+    for row in [*plan["test_revisions"].values(),
+                {"repository": REPOSITORIES["kuasar-sandbox"], "sha": record["framework_sha"]}]:
+        require(scope.public_main(row["repository"], row["sha"]), "legacy source input is not an exact public main commit")
+    write(args.output, admission)
+
+
+def legacy_source_tmp(path):
+    require(re.fullmatch(r"/tmp/[A-Za-z0-9]{3}", str(path)) and path.resolve() == path,
+            "source temporary directory is not the task's short unlinked path")
+    info = path.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid() and stat.S_IMODE(info.st_mode) == 0o700,
+            "source temporary directory ownership or mode changed")
+    return {"path": str(path), "uid": info.st_uid, "device": info.st_dev, "inode": info.st_ino, "mode": 0o700}
+
+
+def remove_legacy_source_tmp(record):
+    path = Path(record["path"])
+    if record.get("removed") is True:
+        require(not path.exists() and not path.is_symlink(), "removed source temporary path was reused")
+        return
+    require(legacy_source_tmp(path) == record, "source temporary directory inode or owner changed")
+    # Root fixtures can leave root-owned descendants. Only this recorded inode
+    # is removed, after both units have stopped; no /tmp glob or global cleanup.
+    subprocess.run(["sudo", "-n", "rm", "-rf", "--", path], check=True, timeout=120)
+    require(not path.exists(), "source temporary directory was not removed")
+    record["removed"] = True
+
+
+def legacy_source_resources(task_root):
+    group = [line[3:] for line in Path("/proc/self/cgroup").read_text().splitlines() if line.startswith("0::")]
+    unit = "task216-legacy-" + hashlib.sha256(str(task_root).encode()).hexdigest()[:24] + ".service"
+    require(len(group) == 1 and Path(group[0]).name == unit, "source checks are outside their owned cgroup")
+    cgroup = Path("/sys/fs/cgroup") / group[0].lstrip("/")
+    status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
+    row = {"uid": os.getuid(), "gid": os.getgid(), "groups": os.getgroups(),
+           "affinity": sorted(os.sched_getaffinity(0)), "cgroup": group[0],
+           "cpu_max": (cgroup / "cpu.max").read_text().strip(),
+           "memory_max": int((cgroup / "memory.max").read_text()),
+           "cap_eff": status["CapEff"].strip(), "no_new_privileges": int(status["NoNewPrivs"])}
+    quota, period = row["cpu_max"].split()
+    require(row["uid"] != 0 and int(row["cap_eff"], 16) == 0 and row["no_new_privileges"] == 0
+            and len(row["affinity"]) == 2 and quota != "max" and int(quota) == 2 * int(period)
+            and row["memory_max"] == 8 * 1024**3, "source checks lack their actual ordinary UID or 2 CPU / 8 GiB budget")
+    return row
+
+
+def legacy_source_checks(args):
+    """Inside the source unit: observe its limits, then use the current executor."""
+    _, plan = legacy_source_plan(args.frozen)
+    task_root = args.task_root.absolute()
+    source = module("task216_host_source_checks", ROOT / "ci/integration/run-source-checks.py")
+    env = source.environment()
+    require(not any(value for key, value in env.items() if re.search(r"TOKEN|SECRET|PRIVATE_KEY", key))
+            and not env.get("KUASAR_WORKBENCH_IMAGE_ID") and not env.get("KUASAR_WORKBENCH_FRAMEWORK_SHA"),
+            "host source control received credentials or a Workbench identity")
+    require(env["HOME"] == str(task_root / "home") and env["RUNNER_TEMP"] == str(task_root / "state"),
+            "host source state is not private")
+    legacy_source_tmp(Path(env["TMPDIR"]))
+    resources = legacy_source_resources(task_root)
+    paths = {name: task_root / relative for name, relative in (
+        ("GOCACHE", "home/go-cache"), ("GOMODCACHE", "home/go/pkg/mod"), ("CARGO_HOME", "home/.cargo"),
+        ("KUASAR_NATIVE_CACHE_ROOT", "state/native-cache"))}
+    require(all(env[name] == str(path) and path.is_dir() and not any(path.iterdir()) for name, path in paths.items()),
+            "legacy source control requires fresh empty compiler/native caches")
+    payload = task_root / "legacy-verification"
+    observed = {"resources": resources, "cache_before": {name: [] for name in paths},
+                "go_toolchain_mode": output(["go", "env", "GOTOOLCHAIN"], cwd=task_root, env={**env, "GOWORK": "off"}),
+                "go_version_before": output(["go", "version"], cwd=task_root, env={**env, "GOWORK": "off"}),
+                "comparison_limits": "host systemd/Docker daemon-owned services can be outside this cgroup; whole-job occupancy remains part of the control"}
+    write(payload / "logs/source-execution.json", observed)
+    code = 1
+    try:
+        source.execute(plan, task_root / "sources", payload / "result.json", materialized=True)
+        code = 0
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        observed["error"] = str(error)
+        if (payload / "result.json").is_file():
+            code = json.loads((payload / "result.json").read_text()).get("exit_code") or 1
+        print(str(error), file=sys.stderr, flush=True)
+    finally:
+        # Automatic toolchain selection happens against the same initialized
+        # workspace as the actual checks. Its download stays in this stage.
+        workspace = task_root / "sources/go.work"
+        if workspace.is_file():
+            try:
+                observed["go_version_after"] = output(["go", "version"], cwd=workspace.parent,
+                                                       env={**env, "GOWORK": str(workspace)})
+            except (OSError, subprocess.SubprocessError) as error:
+                observed["toolchain_error"] = str(error)
+                code = code or 1
+        observed["exit_code"] = code
+        write(payload / "logs/source-execution.json", observed)
+    return code
+
+
+def legacy_source_run(args):
+    """One temporary all-main host control: old provisioning, current full checks."""
+    task_root, destination = args.task_root.absolute(), args.output.absolute()
+    require(task_root.resolve() == task_root and task_root.name.startswith("task216-legacy.")
+            and task_root.is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve())
+            and task_root.is_dir() and task_root.stat().st_uid == os.getuid() and not any(task_root.iterdir())
+            and not destination.exists() and not destination.resolve().is_relative_to(task_root),
+            "legacy source control requires fresh private state")
+    require(os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
+            and platform.machine() == "x86_64" and os.getuid() != 0, "legacy source control requires ordinary Hosted x86")
+    record, plan = legacy_source_plan(args.frozen)
+    admission = json.loads(args.main_admission.read_text())
+    require(not args.main_admission.is_symlink()
+            and admission == legacy_source_admission(args.frozen, record, plan), "legacy source main admission differs")
+    bootstrap = args.legacy_framework / "ci/hosted/bootstrap.sh"
+    require(output(["git", "-C", args.legacy_framework, "rev-parse", "HEAD"]) == LEGACY_FRAMEWORK
+            and artifacts.digest(bootstrap) == LEGACY_BOOTSTRAP_SHA256, "legacy source bootstrap changed")
+    cpus = sorted(os.sched_getaffinity(0))[:2]
+    require(len(cpus) == 2, "legacy source control requires two CPUs")
+    unit = "task216-legacy-" + hashlib.sha256(str(task_root).encode()).hexdigest()[:24] + ".service"
+    evidence = Evidence(destination / "host", {"phase": "legacy-source-host", "arch": "x86_64", "host_arch": platform.machine(),
+        "framework_sha": record["framework_sha"], "legacy_framework_sha": LEGACY_FRAMEWORK,
+        "owner_uid": os.getuid(), "task_root": str(task_root), "unit": unit,
+        "unit_description": "Kuasar #216 legacy source " + str(task_root), "main_admission": admission,
+        "frozen_sha256": artifacts.digest(args.frozen), "started_ns": time.time_ns(), "cpus": 2,
+        "memory_max": 8 * 1024**3, "image_id": None,
+        "runner": {name: os.environ.get(name) for name in ("ImageOS", "ImageVersion", "RUNNER_ARCH")},
+        "comparison_limits": "fixed old bootstrap plus current frozen checks; not a reproduction of the former weaker source executor"})
+    payload = task_root / "legacy-verification"
+    (payload / "logs").mkdir(parents=True)
+    for name in ("home", "state", "home/go-cache", "home/go/pkg/mod", "home/.cargo", "state/native-cache"):
+        (task_root / name).mkdir(parents=True, exist_ok=True)
+    environment = {"PATH": os.environ["PATH"], "HOME": str(task_root / "home"), "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8",
+                   "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0",
+                   "PYTHONDONTWRITEBYTECODE": "1"}
+    evidence.record["space_snapshots"] = [space_snapshot("before-materialize", {"task": task_root}, sizes=True)]
+    def interrupted(signum, _frame):
+        raise LegacyInterrupted(signum)
+    handlers = {signum: signal.signal(signum, interrupted) for signum in (signal.SIGINT, signal.SIGTERM)}
+    code = 1
+    try:
+        evidence.record["source_tmp"] = legacy_source_tmp(Path(output(["mktemp", "-d", "/tmp/XXX"])))
+        evidence.save()
+        code = legacy_stage(evidence, "materialize", [sys.executable, "-B", ROOT / "ci/integration/run-source-checks.py",
+            "--plan", args.frozen.with_name("integration-plan.json").absolute(), "--sources", task_root / "sources",
+            "--output", payload / "logs/materialize.json", "--materialize-only"], environment=environment)
+        if code:
+            return code
+        code = 1
+        code = legacy_bootstrap_stage(evidence, bootstrap, "source", cpus, task_root)
+        if code:
+            return code
+        code = 1
+        exported = dict(line.split("=", 1) for line in (evidence.directory / "bootstrap.env").read_text().splitlines())
+        readers = Path(exported["KUASAR_HOSTED_ROOT"])
+        require(readers.resolve() == readers and readers.is_relative_to(evidence.directory / "provision")
+                and exported["KUASAR_BUILD_JOBS"] == "2", "legacy source bootstrap state or budget differs")
+        retain_legacy_readers(readers, payload / "readers", "x86_64", args.frozen)
+        compiler_bins = []
+        for name in ("go", "rustc", "cargo"):
+            compiler = Path(shutil.which(name) or "missing").resolve()
+            if compiler.name == "rustup":
+                compiler = Path(output(["rustup", "which", name])).resolve()
+            require(compiler.is_file(), "missing source compiler: " + name)
+            compiler_bins.append(compiler.parent)
+        environment.update(PATH=":".join(map(str, dict.fromkeys([*compiler_bins, readers / "bin", Path("/usr/local/bin"), Path("/usr/bin"), Path("/bin")]))),
+            TMPDIR=evidence.record["source_tmp"]["path"], RUNNER_TEMP=str(task_root / "state"),
+            GOPATH=str(task_root / "home/go"), GOCACHE=str(task_root / "home/go-cache"),
+            GOMODCACHE=str(task_root / "home/go/pkg/mod"), CARGO_HOME=str(task_root / "home/.cargo"),
+            KUASAR_NATIVE_CACHE_ROOT=str(task_root / "state/native-cache"),
+            KUASAR_SOURCE_CACHE_ROOT=str(task_root / "state/native-source"),
+            KUASAR_TARBALL_CACHE=str(task_root / "state/tarballs"), TARBALL_CACHE=str(task_root / "state/tarballs"),
+            KUASAR_BUILD_JOBS="2", GOMAXPROCS="2", GOFLAGS="-p=2", CARGO_BUILD_JOBS="2", CMAKE_BUILD_PARALLEL_LEVEL="2",
+            GOPROXY="https://proxy.golang.org,direct", GOSUMDB="sum.golang.org", CARGO_REGISTRIES_CRATES_IO_PROTOCOL="sparse",
+            CARGO_NET_GIT_FETCH_WITH_CLI="true", PIP_INDEX_URL="https://pypi.org/simple",
+            KUASAR_RUNTIME_READER=exported["KUASAR_RUNTIME_READER"])
+        for key in ("GOROOT", "GOTOOLCHAIN"):
+            if os.environ.get(key):
+                environment[key] = os.environ[key]
+        evidence.record["source_environment"] = environment
+        evidence.save()
+        command = ["sudo", "-n", "systemd-run", "--wait", "--pipe", "--service-type=exec", "--unit=" + unit,
+            "--description=" + evidence.record["unit_description"], "--property=CPUQuota=200%", "--property=MemoryMax=8G",
+            "--property=RuntimeMaxSec=3600", "--property=TimeoutStopSec=20", "--property=KillMode=control-group",
+            "--property=WorkingDirectory=" + str(task_root), "/usr/bin/setpriv", "--reuid=" + str(os.getuid()),
+            "--regid=" + str(os.getgid()), "--init-groups", "--inh-caps=-all", "--ambient-caps=-all",
+            "/usr/bin/taskset", "-c", ",".join(map(str, cpus)), "/usr/bin/env", "-i",
+            *[name + "=" + value for name, value in environment.items()], sys.executable, "-B",
+            ROOT / "ci/hosted/verify-workbench-216.py", "legacy-source-checks",
+            "--frozen", args.frozen.absolute(), "--task-root", task_root]
+        code = legacy_stage(evidence, "source", command, timeout=3660)
+        evidence.record["conclusion"] = "success" if code == 0 else "failure"
+        return code
+    except LegacyInterrupted as error:
+        code = 128 + error.signum
+        return code
+    except BaseException as error:
+        evidence.record["error"] = str(error)
+        raise
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+        evidence.record["space_snapshots"].append(space_snapshot("before-cleanup", {"task": task_root}, sizes=True))
+        evidence.record.update(exit_code=code, elapsed_seconds=(time.time_ns() - evidence.record["started_ns"]) / 1e9)
+        if evidence.record["conclusion"] == "running":
+            evidence.record["conclusion"] = "failure"
+        evidence.save()
+
+
+def check_legacy_source(args):
+    record, plan = legacy_source_plan(args.frozen)
+    host = json.loads((args.results / "host/result.json").read_text())
+    payload = args.results / "validated"
+    materialize, result, execution = [json.loads((payload / name).read_text()) for name in
+                                    ("logs/materialize.json", "result.json", "logs/source-execution.json")]
+    require(host["main_admission"] == legacy_source_admission(args.frozen, record, plan), "source main admission differs")
+    require(host["phase"] == "legacy-source-host" and host["framework_sha"] == record["framework_sha"]
+            and host["frozen_sha256"] == artifacts.digest(args.frozen) and host["legacy_framework_sha"] == LEGACY_FRAMEWORK
+            and host["legacy_bootstrap_sha256"] == LEGACY_BOOTSTRAP_SHA256, "source control identities differ")
+    require(host["conclusion"] == "success" and host["exit_code"] == 0 and host["finished"] is True
+            and host["cleanup_exit_code"] == host["bootstrap_cleanup_exit_code"] == host["source_tmp_cleanup_exit_code"] == 0
+            and host["source_state_removed"] is True and not any(host.get(name) for name in ("finish_error", "delete_error")),
+            "source control or owned cleanup did not complete")
+    require(host["owner_uid"] != 0 and host["arch"] == host["host_arch"] == "x86_64" and host["image_id"] is None
+            and host["cpus"] == 2 and host["memory_max"] == 8 * 1024**3, "source control treatment differs")
+    temporary, resources = host["source_tmp"], execution["resources"]
+    require(re.fullmatch(r"/tmp/[A-Za-z0-9]{3}", temporary["path"]) and temporary["removed"] is True
+            and temporary["uid"] == host["owner_uid"] and temporary["mode"] == 0o700
+            and type(temporary["device"]) is int and type(temporary["inode"]) is int and temporary["inode"] > 0,
+            "source temporary cleanup differs")
+    unit = "task216-legacy-" + hashlib.sha256(host["task_root"].encode()).hexdigest()[:24] + ".service"
+    require(host["unit"] == unit and Path(resources["cgroup"]).name == unit
+            and host["unit_description"] == "Kuasar #216 legacy source " + host["task_root"]
+            and host["bootstrap_profile"] == "source" and host["bootstrap_budget"] == {
+                "cpus": resources["affinity"], "memory_max": 8 * 1024**3, "build_jobs": 2},
+            "source control executed outside its recorded unit or bootstrap budget")
+    quota, period = resources["cpu_max"].split()
+    require(resources["uid"] == host["owner_uid"] and int(resources["cap_eff"], 16) == 0
+            and resources["no_new_privileges"] == 0 and len(resources["affinity"]) == 2
+            and quota != "max" and int(quota) == 2 * int(period) and resources["memory_max"] == 8 * 1024**3,
+            "actual source budget or ordinary UID differs")
+    require(execution["exit_code"] == 0 and execution["go_toolchain_mode"] and execution["go_version_before"]
+            and execution["go_version_after"] and execution["cache_before"] == {
+                name: [] for name in ("GOCACHE", "GOMODCACHE", "CARGO_HOME", "KUASAR_NATIVE_CACHE_ROOT")},
+            "source compiler selection or fresh cache evidence is missing")
+    source = module("task216_source_result", ROOT / "ci/integration/run-source-checks.py")
+    expected = source.source_records(plan)[1]
+    for observed, phase in ((materialize, "materialize"), (result, "all")):
+        require(observed["plan_id"] == artifacts.identity(plan) and observed["framework_sha"] == record["framework_sha"]
+                and observed["test_revisions"] == plan["test_revisions"] and observed["sources"] == expected
+                and observed["phase"] == phase and observed["conclusion"] == "success" and observed["exit_code"] == 0
+                and observed["actions"] and all(row["exit_code"] == 0 for row in observed["actions"]),
+                "source control workload or completion differs")
+    require([(row["name"], row["repository"], row["sha"]) for row in materialize["actions"]]
+            == [("checkout:" + owner, row["repository"], row["sha"]) for owner, row in expected.items()],
+            "source control checkout set differs")
+    require(result["arch"] == "x86_64" and result["workbench"] == {"image_id": None, "framework_sha": None},
+            "host control cannot claim a Workbench identity")
+    require([(row["name"], row["command"], row["directory"], row["exit_code"]) for row in result["checks"]]
+            == [(name, command, str(directory), 0) for name, command, directory in
+                source.checks_for(plan, Path(host["task_root"]) / "sources")], "source checks were omitted, changed or failed")
+    require([(row["name"], row["expected_sha"], row["actual_sha"]) for row in result["actions"]
+             if row["name"].startswith("source-identity:")]
+            == [("source-identity:" + owner, row["sha"], row["sha"]) for owner, row in expected.items()],
+            "source control executed different test pins")
+    require([(row["stage"], row["exit_code"]) for row in host["stages"]]
+            == [(name, 0) for name in ("materialize", "bootstrap", "source")], "source control cost stages are incomplete")
+    write(args.output, {"host": host, "source": result, "execution": execution})
 
 
 def legacy_run(args):
@@ -1470,6 +1780,22 @@ def main():
     reader_check.add_argument("--frozen", type=Path, required=True)
     reader_check.add_argument("--readers", type=Path, required=True)
     reader_check.add_argument("--arch", choices=artifacts.ARCHES, required=True)
+    source_admit = commands.add_parser("legacy-source-admit")
+    source_admit.add_argument("--frozen", type=Path, required=True)
+    source_admit.add_argument("--output", type=Path, required=True)
+    source_host = commands.add_parser("legacy-source-run")
+    source_host.add_argument("--frozen", type=Path, required=True)
+    source_host.add_argument("--main-admission", type=Path, required=True)
+    source_host.add_argument("--task-root", type=Path, required=True)
+    source_host.add_argument("--legacy-framework", type=Path, required=True)
+    source_host.add_argument("--output", type=Path, required=True)
+    source_checks = commands.add_parser("legacy-source-checks")
+    source_checks.add_argument("--frozen", type=Path, required=True)
+    source_checks.add_argument("--task-root", type=Path, required=True)
+    source_result = commands.add_parser("check-legacy-source")
+    source_result.add_argument("--frozen", type=Path, required=True)
+    source_result.add_argument("--results", type=Path, required=True)
+    source_result.add_argument("--output", type=Path, required=True)
     finish = commands.add_parser("legacy-finish")
     finish.add_argument("--output", type=Path, required=True)
     finish.add_argument("--task-root", type=Path, required=True)
@@ -1488,6 +1814,8 @@ def main():
             "disk-snapshot": disk_snapshot,
             "legacy-run": legacy_run, "legacy-finish": legacy_finish,
             "legacy-readers-run": legacy_readers_run, "check-legacy-readers": check_legacy_readers,
+            "legacy-source-admit": legacy_source_admit, "legacy-source-run": legacy_source_run,
+            "legacy-source-checks": legacy_source_checks, "check-legacy-source": check_legacy_source,
             "packaged-delta": packaged_delta, "legacy-packaged-delta": packaged_delta}[args.command](args)
 
 
