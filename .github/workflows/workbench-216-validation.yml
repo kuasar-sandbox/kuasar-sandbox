@@ -372,6 +372,14 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+      - name: Retain the old x86 readers for compiler-free x86 execution
+        if: success() && steps.verification.outcome == 'success' && steps.finish.outcome == 'success' && env.TARGET_ARCH == 'x86_64'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-legacy-readers-x86_64-${{ github.run_id }}
+          path: legacy-output/validated/readers
+          if-no-files-found: error
+          retention-days: 7
       - name: Retain host receipts and diagnostics copied after writers stop
         if: always() && steps.inputs.outputs.task_root != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -392,6 +400,64 @@ jobs:
     env:
       TARGET_ARCH: aarch64
     steps: *legacy_control_steps
+
+  legacy-readers-arm:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: baae11385c26a55e1c888be4c5334fc0b0b6860d
+          path: legacy
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - name: Reserve only this native reader producer's private state
+        id: inputs
+        run: echo "task_root=$(mktemp -d "$RUNNER_TEMP/task216-legacy.XXXXXXXX")" >> "$GITHUB_OUTPUT"
+      - name: Compile native ARM readers with the exact former non-VM profile
+        id: verification
+        env:
+          LEGACY_TASK_ROOT: ${{ steps.inputs.outputs.task_root }}
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py legacy-readers-run \
+            --frozen plan/frozen.json --task-root "$LEGACY_TASK_ROOT" \
+            --legacy-framework "$GITHUB_WORKSPACE/legacy" --output "$GITHUB_WORKSPACE/legacy-readers-output"
+      - name: Stop only the owned reader service and retain checked output
+        if: always() && steps.inputs.outputs.task_root != ''
+        id: finish
+        env:
+          LEGACY_TASK_ROOT: ${{ steps.inputs.outputs.task_root }}
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py legacy-finish \
+            --output "$GITHUB_WORKSPACE/legacy-readers-output" --task-root "$LEGACY_TASK_ROOT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: success() && steps.verification.outcome == 'success' && steps.finish.outcome == 'success'
+        with:
+          name: workbench-216-legacy-readers-aarch64-${{ github.run_id }}
+          path: legacy-readers-output/validated/readers
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain native reader receipts and diagnostics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always() && steps.inputs.outputs.task_root != ''
+        with:
+          name: workbench-216-legacy-readers-host-aarch64-${{ github.run_id }}
+          path: |
+            legacy-readers-output/host/result.json
+            legacy-readers-output/host/logs
+            legacy-readers-output/diagnostics
+          if-no-files-found: warn
+          retention-days: 7
 
   warm-x86:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
@@ -636,17 +702,24 @@ jobs:
           name: ${{ env.PACKAGE_PREFIX }}-x86_64-${{ github.run_id }}
           path: cold
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: env.DELTA_COMMAND == 'packaged-delta'
         with:
           name: workbench-216-helpers-x86_64-${{ github.run_id }}
           path: transport
       - name: Bootstrap compiler-free archive preparation
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: env.DELTA_COMMAND == 'packaged-delta'
         with:
-          name: workbench-216-readers-x86_64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-readers-x86_64-${{ github.run_id }}
           path: readers
       - name: Select verified native archive readers
         run: |
+          if [ "$DELTA_COMMAND" = legacy-packaged-delta ]; then
+            python3 -B framework/ci/hosted/verify-workbench-216.py check-legacy-readers \
+              --frozen plan/frozen.json --arch "$(uname -m)" --readers cold/readers
+            cp -a cold/readers readers
+          fi
           (cd readers && sha256sum --check SHA256SUMS)
           chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
           echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
@@ -657,10 +730,14 @@ jobs:
         run: bash framework/ci/integration/download-baseline.sh plan/integration-plan.json x86_64 assets
       - name: Read exact validated packages into a full candidate delta without rebuilding products
         run: |
-          python3 -B framework/ci/integration/transport.py extract transport/helper-inputs.tar helpers
+          helper_root=cold
+          if [ "$DELTA_COMMAND" = packaged-delta ]; then
+            python3 -B framework/ci/integration/transport.py extract transport/helper-inputs.tar helpers
+            helper_root=helpers
+          fi
           /usr/bin/time -o packaged-delta-time.txt -f 'packaged_delta wall_seconds=%e' \
             python3 -B framework/ci/hosted/verify-workbench-216.py "$DELTA_COMMAND" \
-              --frozen plan/frozen.json --arch x86_64 --packages cold --helpers helpers --output delta
+              --frozen plan/frozen.json --arch x86_64 --packages cold --helpers "$helper_root" --output delta
       - name: Build the existing compiler-free preparation runtime
         run: |
           docker build --file framework/ci/hosted/e2e-runtime.Dockerfile \
@@ -722,10 +799,14 @@ jobs:
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-x86
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-readers-x86_64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-readers-x86_64-${{ github.run_id }}
           path: readers
       - name: Select verified native archive readers
         run: |
+          if [ "$RESULT_PREFIX" = workbench-216-legacy ]; then
+            python3 -B framework/ci/hosted/verify-workbench-216.py check-legacy-readers \
+              --frozen plan/frozen.json --arch "$(uname -m)" --readers readers
+          fi
           (cd readers && sha256sum --check SHA256SUMS)
           chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
           echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
@@ -865,17 +946,24 @@ jobs:
           name: ${{ env.PACKAGE_PREFIX }}-aarch64-${{ github.run_id }}
           path: cold
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: env.DELTA_COMMAND == 'packaged-delta'
         with:
           name: workbench-216-helpers-aarch64-${{ github.run_id }}
           path: transport
       - name: Bootstrap compiler-free archive preparation
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: env.DELTA_COMMAND == 'packaged-delta'
         with:
-          name: workbench-216-readers-aarch64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-readers-aarch64-${{ github.run_id }}
           path: readers
       - name: Select verified native archive readers
         run: |
+          if [ "$DELTA_COMMAND" = legacy-packaged-delta ]; then
+            python3 -B framework/ci/hosted/verify-workbench-216.py check-legacy-readers \
+              --frozen plan/frozen.json --arch "$(uname -m)" --readers cold/readers
+            cp -a cold/readers readers
+          fi
           (cd readers && sha256sum --check SHA256SUMS)
           chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
           echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
@@ -886,10 +974,14 @@ jobs:
         run: bash framework/ci/integration/download-baseline.sh plan/integration-plan.json aarch64 assets
       - name: Read exact validated packages into a full candidate delta without rebuilding products
         run: |
-          python3 -B framework/ci/integration/transport.py extract transport/helper-inputs.tar helpers
+          helper_root=cold
+          if [ "$DELTA_COMMAND" = packaged-delta ]; then
+            python3 -B framework/ci/integration/transport.py extract transport/helper-inputs.tar helpers
+            helper_root=helpers
+          fi
           /usr/bin/time -o packaged-delta-time.txt -f 'packaged_delta wall_seconds=%e' \
             python3 -B framework/ci/hosted/verify-workbench-216.py "$DELTA_COMMAND" \
-              --frozen plan/frozen.json --arch aarch64 --packages cold --helpers helpers --output delta
+              --frozen plan/frozen.json --arch aarch64 --packages cold --helpers "$helper_root" --output delta
       - name: Build the existing compiler-free preparation runtime
         run: |
           docker build --file framework/ci/hosted/e2e-runtime.Dockerfile \
@@ -951,10 +1043,14 @@ jobs:
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-arm
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-readers-aarch64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-readers-aarch64-${{ github.run_id }}
           path: readers
       - name: Select verified native archive readers
         run: |
+          if [ "$RESULT_PREFIX" = workbench-216-legacy ]; then
+            python3 -B framework/ci/hosted/verify-workbench-216.py check-legacy-readers \
+              --frozen plan/frozen.json --arch "$(uname -m)" --readers readers
+          fi
           (cd readers && sha256sum --check SHA256SUMS)
           chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
           echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
@@ -1006,10 +1102,14 @@ jobs:
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-x86
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-readers-x86_64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-readers-x86_64-${{ github.run_id }}
           path: readers
       - name: Select verified native archive readers
         run: |
+          if [ "$RESULT_PREFIX" = workbench-216-legacy ]; then
+            python3 -B framework/ci/hosted/verify-workbench-216.py check-legacy-readers \
+              --frozen plan/frozen.json --arch "$(uname -m)" --readers readers
+          fi
           (cd readers && sha256sum --check SHA256SUMS)
           chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
           echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
@@ -1029,7 +1129,7 @@ jobs:
 
   prepare-legacy-x86:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
-    needs: [prepare, legacy-x86, helpers-x86]
+    needs: [prepare, legacy-x86]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -1055,8 +1155,8 @@ jobs:
 
   prepare-legacy-arm:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
-    needs: [prepare, legacy-arm, helpers-arm]
-    runs-on: ubuntu-24.04-arm
+    needs: [prepare, legacy-arm]
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       PACKAGE_PREFIX: workbench-216-legacy-cold
@@ -1066,7 +1166,7 @@ jobs:
 
   e2e-legacy-arm:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
-    needs: [prepare, prepare-legacy-arm]
+    needs: [prepare, prepare-legacy-arm, legacy-readers-arm]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
     strategy:
@@ -1090,7 +1190,7 @@ jobs:
 
   validation-results:
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
-    needs: [prepare, source-checks, cold-x86, cold-arm, warm-x86, warm-arm, helpers-x86, helpers-arm, prepare-integration-x86, prepare-integration-arm, e2e-x86, e2e-arm, performance-x86, legacy-x86, legacy-arm, prepare-legacy-x86, prepare-legacy-arm, e2e-legacy-x86, e2e-legacy-arm, performance-legacy-x86]
+    needs: [prepare, source-checks, cold-x86, cold-arm, warm-x86, warm-arm, helpers-x86, helpers-arm, prepare-integration-x86, prepare-integration-arm, e2e-x86, e2e-arm, performance-x86, legacy-x86, legacy-arm, legacy-readers-arm, prepare-legacy-x86, prepare-legacy-arm, e2e-legacy-x86, e2e-legacy-arm, performance-legacy-x86]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:

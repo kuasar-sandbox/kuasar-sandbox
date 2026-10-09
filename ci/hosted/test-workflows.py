@@ -244,7 +244,8 @@ def check():
                                     "helpers-arm": "ubuntu-24.04-arm", "prepare-integration-arm": "ubuntu-24.04-arm",
                                     "e2e-arm": "ubuntu-24.04-arm", "validation-results": "ubuntu-24.04",
                                     "legacy-x86": "ubuntu-latest", "legacy-arm": "ubuntu-latest",
-                                    "prepare-legacy-x86": "ubuntu-24.04", "prepare-legacy-arm": "ubuntu-24.04-arm",
+                                    "legacy-readers-arm": "ubuntu-24.04-arm",
+                                    "prepare-legacy-x86": "ubuntu-24.04", "prepare-legacy-arm": "ubuntu-24.04",
                                     "e2e-legacy-x86": "ubuntu-24.04", "e2e-legacy-arm": "ubuntu-24.04-arm",
                                     "performance-legacy-x86": "ubuntu-24.04"}[job_name]
                     assert job["runs-on"] == expected, (name, job["runs-on"])
