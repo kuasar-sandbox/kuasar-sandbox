@@ -6,6 +6,7 @@ import argparse
 import ast
 import csv
 from datetime import datetime, timezone
+import hashlib
 import importlib.util
 import json
 import os
@@ -162,6 +163,15 @@ def fetch(args):
     args.sources.mkdir(parents=True)
     for owner, row in record["sources"].items():
         builder.checkout(row["repository"], row["sha"], args.sources / owner)
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        # Freeze the shared action's host-only receipt while this directory
+        # contains exactly the six clean Git checkouts. Run/version metadata
+        # and the warm product transport are not compiler-cache identities.
+        source_hash = hashlib.sha256(str(args.sources.resolve()).encode()).hexdigest()
+        receipt = Path(os.environ["RUNNER_TEMP"]) / (
+            "workbench-cache-scope-" + os.environ["GITHUB_RUN_ID"] + "-" + source_hash + ".json")
+        subprocess.run([sys.executable, "-B", ROOT / "ci/hosted/workbench.py", "cache-scope",
+                        "--sources", args.sources, "--receipt", receipt], check=True)
     for name in ("frozen.json", "workbench.json"):
         shutil.copy2(args.frozen.with_name(name), args.sources / name)
 
@@ -197,20 +207,37 @@ def products(sources, arch, rows):
 
 
 class Evidence:
-    def __init__(self, directory, record):
+    def __init__(self, directory, record, diagnostics=None):
         self.directory, self.record = directory, record
+        self.diagnostics = diagnostics or directory
         directory.mkdir(parents=True)
+        if self.diagnostics != directory:
+            self.diagnostics.mkdir(parents=True)
         self.record.update(conclusion="running", stages=[])
         self.save()
 
     def save(self):
-        write(self.directory / "result.json", self.record)
+        write(self.diagnostics / "result.json", self.record)
+
+    def export_success(self):
+        require(self.record["conclusion"] == "success", "failed task outputs cannot be exported")
+        if self.diagnostics == self.directory:
+            return
+        # This copy remains inside Workbench. Preserve links rather than
+        # dereference them; the shared action stops the instance and checks the
+        # entire declared verification tree before any host upload can run.
+        try:
+            shutil.copytree(self.diagnostics, self.directory, symlinks=True, dirs_exist_ok=True)
+        except (OSError, shutil.Error) as error:
+            self.record.update(conclusion="failure", error="evidence export: " + str(error))
+            self.save()
+            raise
 
     def run(self, label, command, *, cwd=None, env=None):
-        log = self.directory / "logs" / (label.replace("/", "-") + ".log")
+        log = self.diagnostics / "logs" / (label.replace("/", "-") + ".log")
         log.parent.mkdir(exist_ok=True)
         start = time.monotonic()
-        row = {"stage": label, "argv": list(map(str, command)), "log": str(log.relative_to(self.directory))}
+        row = {"stage": label, "argv": list(map(str, command)), "log": str(log.relative_to(self.diagnostics))}
         self.record["stages"].append(row)
         self.save()
         try:
@@ -220,6 +247,7 @@ class Evidence:
                                       stderr=subprocess.STDOUT, text=True, errors="replace") as process:
                     for line in process.stdout:
                         stream.write(line)
+                        stream.flush()
                         print(line, end="", flush=True)
                     row["exit_code"] = process.wait()
             require(row["exit_code"] == 0, f"{label} exited {row['exit_code']}; see {log}")
@@ -258,9 +286,9 @@ rm "$descriptor"
     for component in NATIVE:
         evidence.run("native-" + operation + "/" + component,
                      ["bash", "-euo", "pipefail", "-c", body, "task216", ROOT / "ci/native-cache/native-cache.sh", component,
-                      evidence.directory / "native-entries" / component],
+                      evidence.diagnostics / "native-entries" / component],
                      env=environment)
-        log = evidence.directory / evidence.record["stages"][-1]["log"]
+        log = evidence.diagnostics / evidence.record["stages"][-1]["log"]
         keys = re.findall(r"^" + re.escape(component) + r"\t([0-9a-f]{64})$", log.read_text(), re.M)
         require(len(keys) == 1, "native cache did not record its exact input key")
         evidence.record.setdefault("native_cache_keys", {})[component] = keys[0]
@@ -317,7 +345,7 @@ def package_all(sources, arch, record, evidence, environment):
         if owner in VALIDATORS:
             selected["RELEASE_ARCHIVE_VALIDATOR"] = str(sources / "task-tools" / owner / "release-archive-validator")
         for operation in ("package", "validate"):
-            trace = evidence.directory / "logs" / f"{operation}-{unit}.execve"
+            trace = evidence.diagnostics / "logs" / f"{operation}-{unit}.execve"
             command = ["bash", sources / owner / "scripts/release.sh", operation]
             if owner == "guest-runtime":
                 command.append(unit)
@@ -351,10 +379,11 @@ def build(args):
     rows = manifest(sources)
     evidence = Evidence(sources / "verification", {"phase": args.phase, "arch": arch, "uid": os.getuid(),
                         "frozen_sha256": artifacts.digest(sources / "frozen.json"), "inputs": record,
-                        "image_id": image, "manifest": rows, "started_ns": time.time_ns()})
+                        "image_id": image, "manifest": rows, "started_ns": time.time_ns()},
+                        diagnostics=Path("/output/verification"))
     environment = {**os.environ, "GOWORK": str(sources / "go.work"),
-                   "KUASAR_CI_TIMINGS": str(evidence.directory / "build-timings.tsv"),
-                   "KUASAR_NATIVE_CACHE_METRICS": str(evidence.directory / "native-cache.tsv"),
+                   "KUASAR_CI_TIMINGS": str(evidence.diagnostics / "build-timings.tsv"),
+                   "KUASAR_NATIVE_CACHE_METRICS": str(evidence.diagnostics / "native-cache.tsv"),
                    "KUASAR_REVISION_MANIFEST": str(sources / "frozen.json")}
     try:
         evidence.run("workspace", ["go", "work", "init", *("./" + owner for owner in REPOSITORIES if owner != "kuasar-sandbox")],
@@ -430,6 +459,8 @@ def build(args):
     finally:
         evidence.record["elapsed_seconds"] = (time.time_ns() - evidence.record["started_ns"]) / 1e9
         evidence.save()
+        if evidence.record["conclusion"] == "success":
+            evidence.export_success()
 
 
 def main():

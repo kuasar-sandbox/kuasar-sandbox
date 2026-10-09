@@ -91,8 +91,11 @@ jobs:
           name: workbench-216-plan-${{ github.run_id }}
           path: plan
       - name: Fetch fresh exact sources without a compiler
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
       - name: Cold ordinary UID full build and six exact packages
+        id: verification
         uses: ./framework/.github/actions/workbench
         with:
           selection: plan/workbench.json
@@ -103,6 +106,7 @@ jobs:
           memory-gib: '8'
           run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase cold --arch x86_64
       - name: Retain exact non-native products for the fresh warm job
+        if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: workbench-216-cold-products-x86_64-${{ github.run_id }}
@@ -112,8 +116,10 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
-      - name: Retain every cold result and original validated package
-        if: always()
+      # Failure/cancellation diagnostics stay under /output and are exported
+      # only by the shared action after stopping the instance and checking them.
+      - name: Retain the checked cold result and original validated packages
+        if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: workbench-216-cold-x86_64-${{ github.run_id }}
@@ -143,8 +149,11 @@ jobs:
           name: workbench-216-plan-${{ github.run_id }}
           path: plan
       - name: Fetch fresh exact sources without a compiler
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
       - name: Cold ordinary UID full build and six exact packages
+        id: verification
         uses: ./framework/.github/actions/workbench
         with:
           selection: plan/workbench.json
@@ -155,6 +164,7 @@ jobs:
           memory-gib: '8'
           run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase cold --arch aarch64
       - name: Retain exact non-native products for the fresh warm job
+        if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: workbench-216-cold-products-aarch64-${{ github.run_id }}
@@ -164,8 +174,9 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
-      - name: Retain every cold result and original validated package
-        if: always()
+      # Failed candidate source paths are never passed to the host uploader.
+      - name: Retain the checked cold result and original validated packages
+        if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: workbench-216-cold-aarch64-${{ github.run_id }}
@@ -199,11 +210,14 @@ jobs:
           name: workbench-216-cold-products-x86_64-${{ github.run_id }}
           path: transport
       - name: Fetch a new source directory and carry only exact non-native products
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
           cp transport/carried-products.tar sources/
           cp transport/result.json sources/cold-result.json
       - name: Require native cache hits and directly package the six units
+        id: verification
         uses: ./framework/.github/actions/workbench
         with:
           selection: plan/workbench.json
@@ -213,8 +227,8 @@ jobs:
           cpus: '2'
           memory-gib: '8'
           run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase warm --arch x86_64
-      - name: Retain every warm result and directly validated package
-        if: always()
+      - name: Retain the checked warm result and directly validated packages
+        if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: workbench-216-warm-x86_64-${{ github.run_id }}
@@ -243,11 +257,14 @@ jobs:
           name: workbench-216-cold-products-aarch64-${{ github.run_id }}
           path: transport
       - name: Fetch a new source directory and carry only exact non-native products
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
           cp transport/carried-products.tar sources/
           cp transport/result.json sources/cold-result.json
       - name: Require native cache hits and directly package the six units
+        id: verification
         uses: ./framework/.github/actions/workbench
         with:
           selection: plan/workbench.json
@@ -257,8 +274,8 @@ jobs:
           cpus: '2'
           memory-gib: '8'
           run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase warm --arch aarch64
-      - name: Retain every warm result and directly validated package
-        if: always()
+      - name: Retain the checked warm result and directly validated packages
+        if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: workbench-216-warm-aarch64-${{ github.run_id }}
