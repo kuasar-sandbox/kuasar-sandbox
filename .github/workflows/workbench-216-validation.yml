@@ -1,0 +1,268 @@
+name: Workbench 216 Full Validation
+run-name: Workbench 216 cold and fresh-job packaging @${{ github.sha }}
+
+# Temporary acceptance entry, removed with the same coordinated delivery.
+# It never creates releases, tags, publisher tokens or production assets.
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_repository:
+        description: Optional exact primary repository; blank freezes all six current main heads
+        default: ''
+        type: string
+      candidate_sha:
+        description: Existing primary candidate two-parent merge SHA
+        default: ''
+        type: string
+      candidate_pr:
+        description: Existing primary open pull request number
+        default: ''
+        type: string
+      candidate_base_sha:
+        description: Existing primary base SHA
+        default: ''
+        type: string
+      candidate_base_ref:
+        description: Existing primary base ref, main
+        default: ''
+        type: string
+      candidate_head_sha:
+        description: Existing primary head SHA
+        default: ''
+        type: string
+      companion_candidates:
+        description: Existing exact companion record array declared by the primary PR
+        default: '[]'
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: workbench-216-${{ github.repository }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - name: Admit exact sources and select both native images once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CANDIDATE_PR: ${{ inputs.candidate_pr }}
+          CANDIDATE_BASE_SHA: ${{ inputs.candidate_base_sha }}
+          CANDIDATE_BASE_REF: ${{ inputs.candidate_base_ref }}
+          CANDIDATE_HEAD_SHA: ${{ inputs.candidate_head_sha }}
+          COMPANION_CANDIDATES: ${{ inputs.companion_candidates }}
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py freeze \
+            --framework-sha "$TRUSTED_WORKFLOW_SHA" --output plan
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+          if-no-files-found: error
+          retention-days: 7
+
+  cold-x86:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - name: Fetch fresh exact sources without a compiler
+        run: python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
+      - name: Cold ordinary UID full build and six exact packages
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: sources
+          outputs: verification
+          arch: x86_64
+          cpus: '2'
+          memory-gib: '8'
+          run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase cold --arch x86_64
+      - name: Retain exact non-native products for the fresh warm job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-cold-products-x86_64-${{ github.run_id }}
+          path: |
+            sources/verification/carried-products.tar
+            sources/verification/result.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain every cold result and original validated package
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-cold-x86_64-${{ github.run_id }}
+          path: |
+            sources/verification/result.json
+            sources/verification/logs
+            sources/verification/native-entries
+            sources/verification/packages
+            sources/verification/*.tsv
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  cold-arm:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - name: Fetch fresh exact sources without a compiler
+        run: python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
+      - name: Cold ordinary UID full build and six exact packages
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: sources
+          outputs: verification
+          arch: aarch64
+          cpus: '2'
+          memory-gib: '8'
+          run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase cold --arch aarch64
+      - name: Retain exact non-native products for the fresh warm job
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-cold-products-aarch64-${{ github.run_id }}
+          path: |
+            sources/verification/carried-products.tar
+            sources/verification/result.json
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain every cold result and original validated package
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-cold-aarch64-${{ github.run_id }}
+          path: |
+            sources/verification/result.json
+            sources/verification/logs
+            sources/verification/native-entries
+            sources/verification/packages
+            sources/verification/*.tsv
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  warm-x86:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: [prepare, cold-x86]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-cold-products-x86_64-${{ github.run_id }}
+          path: transport
+      - name: Fetch a new source directory and carry only exact non-native products
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
+          cp transport/carried-products.tar sources/
+          cp transport/result.json sources/cold-result.json
+      - name: Require native cache hits and directly package the six units
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: sources
+          outputs: verification
+          arch: x86_64
+          cpus: '2'
+          memory-gib: '8'
+          run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase warm --arch x86_64
+      - name: Retain every warm result and directly validated package
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-warm-x86_64-${{ github.run_id }}
+          path: sources/verification
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7
+
+  warm-arm:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: [prepare, cold-arm]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-cold-products-aarch64-${{ github.run_id }}
+          path: transport
+      - name: Fetch a new source directory and carry only exact non-native products
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py fetch --frozen plan/frozen.json --sources sources
+          cp transport/carried-products.tar sources/
+          cp transport/result.json sources/cold-result.json
+      - name: Require native cache hits and directly package the six units
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: sources
+          outputs: verification
+          arch: aarch64
+          cpus: '2'
+          memory-gib: '8'
+          run: python3 -B /inputs/release/ci/hosted/verify-workbench-216.py build --phase warm --arch aarch64
+      - name: Retain every warm result and directly validated package
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: workbench-216-warm-aarch64-${{ github.run_id }}
+          path: sources/verification
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 7

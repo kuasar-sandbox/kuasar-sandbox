@@ -114,8 +114,14 @@ def materialize(plan, arch, root):
 
 def verify_materialized(plan, arch, root):
     for relative, record in sorted(source_layout(plan, arch).items()):
-        actual = subprocess.check_output(["git", "-C", root / relative, "rev-parse", "HEAD"], text=True).strip()
+        source = root / relative
+        actual = subprocess.check_output(["git", "-C", source, "rev-parse", "HEAD"], text=True).strip()
         artifacts.require(actual == record["sha"], "materialized source identity changed: " + relative)
+        clean = subprocess.run(["git", "-C", source, "diff", "--no-ext-diff", "--no-textconv", "--exit-code", "HEAD", "--"],
+                               capture_output=True, text=True)
+        artifacts.require(clean.returncode == 0, "materialized source has modified tracked inputs: " + relative)
+        untracked = subprocess.check_output(["git", "-C", source, "ls-files", "--others", "--exclude-standard"], text=True)
+        artifacts.require(not untracked, "materialized source has untracked inputs: " + relative)
 
 
 def helper_sources(plan, arch, sources):
