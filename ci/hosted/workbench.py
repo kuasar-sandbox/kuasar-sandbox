@@ -332,13 +332,13 @@ def finish(args):
     require(not args.evidence.exists() and not args.evidence.resolve().is_relative_to(root),
             'evidence requires a fresh directory outside instance state')
     args.evidence.mkdir(parents=True)
-    if code:
+    state = root / 'instances/ci'
+    if code and not resources_released(state):
         # The candidate may still be writing. Only the host-owned receipt is
         # safe to export until the recorded instance has stopped successfully.
         write(args.evidence / 'receipt.json', receipt)
         return code
-    state = root / 'instances/ci'
-    diagnostic_status = 0
+    diagnostic_status = code
     try:
         for name in ('instance.json', 'output'):
             path = state / name
@@ -348,13 +348,32 @@ def finish(args):
             elif path.is_dir():
                 copy_evidence(path, args.evidence / name)
     except (ValueError, OSError) as error:
-        diagnostic_status = 1
+        diagnostic_status = diagnostic_status or 1
         receipt.update(conclusion='failure', diagnostics_error=str(error))
     write(args.evidence / 'receipt.json', receipt)
     if (state / 'instance.json').exists():
-        subprocess.run(command(root / 'instances', 'cleanup', '--delete-output'), check=True)
+        result = subprocess.run(command(root / 'instances', 'cleanup', '--delete-output'))
+        receipt['delete_output_exit_code'] = result.returncode
+        if result.returncode:
+            receipt['conclusion'] = 'failure'
+            diagnostic_status = diagnostic_status or result.returncode
+        write(args.evidence / 'receipt.json', receipt)
+        if result.returncode and not resources_released(state):
+            return diagnostic_status
     shutil.rmtree(root)
     return diagnostic_status
+
+
+def resources_released(state):
+    # A diagnostic failure can report failure after successful removal. Only
+    # the host-owned launcher record and current Docker state may establish
+    # that no candidate writer remains. A failed deletion resets this marker.
+    try:
+        data = launcher.record(state)
+        return (data.get('status') == 'cleaned' and launcher.owned_container(data) is None
+                and (not data.get('network_id') or launcher.inspect('network', data['network_id']) is None))
+    except (KeyError, TypeError, ValueError, OSError, subprocess.SubprocessError):
+        return False
 
 
 def copy_evidence(source, destination):

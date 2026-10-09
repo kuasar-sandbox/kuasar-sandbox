@@ -479,6 +479,81 @@ raise SystemExit(ci.execute(argparse.Namespace(root=root, timeout=30, arguments=
 
 
 class CleanupTests(TemporaryFiles):
+    def launcher_record(self, root, status='cleaned'):
+        state = root / 'instances/ci'
+        data = {'id': 'owned-fixture', 'owner_uid': os.getuid(), 'directory': str(state),
+                'status': status, 'container_id': 'owned-container', 'container_name': 'fixture',
+                'image_id': image()['Id'], 'network_id': 'owned-network'}
+        ci.launcher.save(state, data)
+        return data
+
+    def test_diagnostics_failure_after_confirmed_removal_still_releases_state(self):
+        root = self.receipt()
+        self.launcher_record(root)
+        (root / 'instances/ci/output/log').write_text('retained after the writer was removed')
+        evidence = self.root / 'evidence'
+        with patch.object(ci.subprocess, 'run', side_effect=[subprocess.CompletedProcess([], 1),
+                                                           subprocess.CompletedProcess([], 0)]) as run, \
+             patch.object(ci.launcher, 'inspect', return_value=None) as inspect:
+            self.assertEqual(ci.finish(argparse.Namespace(root=root, evidence=evidence)), 1)
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual([call.args for call in inspect.call_args_list],
+                         [('container', 'owned-container'), ('network', 'owned-network')])
+        self.assertFalse(root.exists())
+        self.assertTrue((self.root / 'sources').is_dir())
+        self.assertEqual((evidence / 'output/log').read_text(), 'retained after the writer was removed')
+        retained = json.loads((evidence / 'receipt.json').read_text())
+        self.assertEqual(retained['conclusion'], 'failure')
+        self.assertEqual(retained['cleanup_exit_code'], 1)
+        self.assertEqual(retained['delete_output_exit_code'], 0)
+
+    def test_failed_cleanup_cannot_trust_a_marker_while_any_resource_remains(self):
+        parent = self.root
+        for failure in ('stopped', 'container', 'network', 'foreign-owner'):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory(dir=parent) as directory:
+                self.root = Path(directory)
+                try:
+                    root = self.receipt()
+                    data = self.launcher_record(root, 'stopped' if failure == 'stopped' else 'cleaned')
+                    if failure == 'foreign-owner':
+                        data['owner_uid'] += 1
+                        ci.launcher.save(root / 'instances/ci', data)
+                    container = {'Id': data['container_id'], 'Image': data['image_id'], 'Config': {'Labels': {
+                        ci.launcher.LABEL: data['id'], 'org.kuasar.workbench.uid': str(os.getuid())}}}
+                    def inspect(kind, _identity):
+                        if failure == kind:
+                            return container if kind == 'container' else {'Id': 'owned-network'}
+                        return None
+                    evidence = self.root / 'evidence'
+                    with patch.object(ci.subprocess, 'run', return_value=subprocess.CompletedProcess([], 17)) as run, \
+                         patch.object(ci.launcher, 'inspect', side_effect=inspect), \
+                         patch.object(ci, 'copy_evidence') as copy:
+                        self.assertEqual(ci.finish(argparse.Namespace(root=root, evidence=evidence)), 17)
+                    self.assertEqual(run.call_count, 1)
+                    copy.assert_not_called()
+                    self.assertEqual({path.name for path in evidence.iterdir()}, {'receipt.json'})
+                    self.assertTrue(root.exists())
+                finally:
+                    self.root = parent
+
+    def test_failed_private_directory_deletion_retains_the_record_and_failure(self):
+        root = self.receipt()
+        self.launcher_record(root)
+        (root / 'instances/ci/output/log').write_text('fixture output')
+        evidence = self.root / 'evidence'
+        def run(command, **_kwargs):
+            if '--delete-output' in command:
+                self.launcher_record(root, 'stopped')
+                return subprocess.CompletedProcess(command, 19)
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(ci.subprocess, 'run', side_effect=run), \
+             patch.object(ci.launcher, 'inspect', return_value=None):
+            self.assertEqual(ci.finish(argparse.Namespace(root=root, evidence=evidence)), 19)
+        self.assertTrue(root.exists())
+        retained = json.loads((evidence / 'receipt.json').read_text())
+        self.assertEqual(retained['conclusion'], 'failure')
+        self.assertEqual(retained['delete_output_exit_code'], 19)
+
     def test_unsafe_diagnostics_fail_but_still_remove_only_owned_state(self):
         parent = self.root
         for kind in ('symlink', 'fifo'):
