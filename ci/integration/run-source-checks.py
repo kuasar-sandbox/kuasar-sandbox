@@ -176,7 +176,7 @@ def execute(plan, sources, output, *, materialized=False, phase="all"):
             # An extra random parent would exhaust existing Unix socket paths.
             env["TMPDIR"] = env.get("TMPDIR") or "/tmp"
         else:
-            env["TMPDIR"] = "/build/tmp"
+            env["TMPDIR"] = "/build/t"
         env.update(ORG=str(sources), TARGET_ARCH="x86_64", PYTHONDONTWRITEBYTECODE="1")
         result["arch"] = "x86_64"
         result["workbench"] = {"image_id": env.get("KUASAR_WORKBENCH_IMAGE_ID"),
