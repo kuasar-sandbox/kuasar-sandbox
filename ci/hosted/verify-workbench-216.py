@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,8 @@ NATIVE = ("vmlinux", "erofs", "envd", "rocksdb", "cloud-hypervisor")
 UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vmlinux")
 VALIDATORS = ("accelerator", "sandboxer", "orchestrator")
 NATIVE_PRODUCTS = {"vmlinux", "mkfs.erofs", "cloud-hypervisor"}
+LEGACY_FRAMEWORK = "baae11385c26a55e1c888be4c5334fc0b0b6860d"
+LEGACY_BOOTSTRAP_SHA256 = "4b6a50d20d06a8e9307a87df64f02632a2e183a38dec3630a8e4e1b9d530ccf8"
 require = artifacts.require
 
 
@@ -461,6 +464,346 @@ def build_inputs(args):
     return sources, arch, record, image
 
 
+def compile_cold_products(sources, arch, evidence, environment):
+    # Loading the existing cache recipe supplies the same normalized
+    # KBUILD user/host/version/timestamp that its key and builds use.
+    evidence.run("full-build", ["bash", "-euo", "pipefail", "-c",
+                 'source "$1" help >/dev/null; make -C "$2" build', "task216",
+                 ROOT / "ci/native-cache/native-cache.sh", sources / "kuasar-sandbox"], env=environment)
+    evidence.run("full-manifest", ["make", "-C", sources / "kuasar-sandbox", "verify-prebuilt"], env=environment)
+    for owner in VALIDATORS:
+        destination = sources / "task-tools" / owner / "release-archive-validator"
+        destination.parent.mkdir(parents=True)
+        evidence.run("validator/" + owner,
+                     ["go", "build", "-p", os.environ["KUASAR_BUILD_JOBS"], "-trimpath", "-o", destination,
+                      sources / owner / "scripts/release-archive-validator.go"],
+                     env={**environment, "GOWORK": "off", "GO111MODULE": "off", "CGO_ENABLED": "0"})
+
+
+def legacy_inputs(args):
+    """Admission for this one-time host control; never impersonates Workbench."""
+    require(os.environ.get("GITHUB_ACTIONS") == "true"
+            and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
+            and platform.machine() == "x86_64" and os.getuid() != 0,
+            "legacy control requires an ordinary UID disposable Hosted x86 runner")
+    require(not any("TOKEN" in name or "SECRET" in name or name.endswith("_PASSWORD")
+                    for name in os.environ), "credentials must not enter legacy candidate execution")
+    require(not os.environ.get("KUASAR_WORKBENCH_IMAGE_ID")
+            and not os.environ.get("KUASAR_WORKBENCH_FRAMEWORK_SHA"), "host control must not claim Workbench identity")
+    status = dict(line.split(":", 1) for line in Path("/proc/self/status").read_text().splitlines() if ":" in line)
+    require(os.getpid() == 1 and status["NoNewPrivs"].strip() == "1"
+            and int(status["CapEff"], 16) == 0 and int(status["CapBnd"], 16) == 0
+            and os.statvfs("/").f_flag & os.ST_RDONLY
+            and not any(os.access(path, os.R_OK | os.W_OK) for path in ("/dev/kvm", "/run/docker.sock")),
+            "legacy candidate lacks its private PID/capability/read-only-root boundary")
+    sources = args.sources.resolve()
+    task_root = sources.parent
+    require(sources.name == "sources" and task_root.is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve())
+            and task_root != Path(os.environ["RUNNER_TEMP"]).resolve(), "legacy inputs must be task-private")
+    require(output(["git", "-C", args.legacy_framework, "rev-parse", "HEAD"]) == LEGACY_FRAMEWORK,
+            "legacy bootstrap checkout is not the reviewed baseline")
+    bootstrap = args.legacy_framework / "ci/hosted/bootstrap.sh"
+    require(bootstrap.read_bytes() == subprocess.check_output(
+        ["git", "-C", args.legacy_framework, "show", LEGACY_FRAMEWORK + ":ci/hosted/bootstrap.sh"]),
+        "legacy bootstrap bytes changed")
+    require(artifacts.digest(bootstrap) == LEGACY_BOOTSTRAP_SHA256, "legacy bootstrap pin differs")
+    require(len(os.sched_getaffinity(0)) == 2 and os.environ.get("KUASAR_BUILD_JOBS") == "2"
+            and all(os.environ.get(name) == "2" for name in ("GOMAXPROCS", "CARGO_BUILD_JOBS", "CMAKE_BUILD_PARALLEL_LEVEL"))
+            and os.environ.get("GOFLAGS") == "-p=2", "legacy control requires the same two-job compiler budget")
+    group = next(line.removeprefix("0::") for line in Path("/proc/self/cgroup").read_text().splitlines()
+                 if line.startswith("0::"))
+    limits = Path("/sys/fs/cgroup") / group.lstrip("/")
+    memory = (limits / "memory.max").read_text().strip()
+    quota, period = (limits / "cpu.max").read_text().split()
+    require(memory.isdigit() and int(memory) == 8 * 1024**3 and quota.isdigit()
+            and int(quota) == 2 * int(period), "legacy control requires task-local 2 CPU / 8 GiB limits")
+    private = {"HOME": task_root / "home", "TMPDIR": task_root / "tmp",
+               "GOPATH": task_root / "home/go", "GOCACHE": task_root / "home/go-cache",
+               "GOMODCACHE": task_root / "home/go/pkg/mod", "CARGO_HOME": task_root / "home/.cargo"}
+    for name, path in private.items():
+        require(os.environ.get(name) == str(path) and not path.is_symlink(), "foreign legacy writable path: " + name)
+        require(not path.exists() or not any(path.iterdir()), "legacy cold control received a warm directory: " + name)
+    for path in private.values():
+        path.mkdir(parents=True, exist_ok=True)
+    record = frozen(sources / "frozen.json")
+    for owner, row in record["sources"].items():
+        require(output(["git", "-C", sources / owner, "rev-parse", "HEAD"]) == row["sha"], "legacy product source changed")
+        subprocess.run(["git", "-C", sources / owner, "diff", "--no-ext-diff", "--exit-code", "HEAD", "--"], check=True)
+        require(not output(["git", "-C", sources / owner, "ls-files", "--others", "--exclude-standard"]),
+                "legacy source has untracked inputs: " + owner)
+        require(not output(["git", "-C", sources / owner, "ls-files", "--others", "--ignored", "--exclude-standard"]),
+                "legacy cold source has ignored build inputs: " + owner)
+    return sources, record, int(memory), bootstrap
+
+
+def legacy_cold(args):
+    sources, record, memory, bootstrap = legacy_inputs(args)
+    arch = args.arch
+    rows = manifest(sources)
+    require({name for _, name in rows} == set(artifacts.PRODUCTS), "legacy manifest differs from full candidate products")
+    evidence = Evidence(sources.parent / "legacy-verification", {
+        "phase": "legacy-cold", "arch": arch, "host_arch": platform.machine(), "uid": os.getuid(),
+        "image_id": None, "legacy_framework_sha": LEGACY_FRAMEWORK,
+        "legacy_bootstrap_sha256": artifacts.digest(bootstrap), "memory_max": memory,
+        "source_root": str(sources),
+        "go_toolchain_mode": os.environ["GOTOOLCHAIN"],
+        "isolation": "private PID namespace; read-only root; no capabilities/new privileges; no Docker socket/KVM",
+        "cpus": sorted(os.sched_getaffinity(0)), "build_jobs": 2,
+        "frozen_sha256": artifacts.digest(sources / "frozen.json"), "inputs": record,
+        "manifest": rows, "started_ns": time.time_ns(),
+        "comparison_limits": "original x86 host for both targets; ARM is cross-built; task-private host paths differ from Workbench /src; no cache restore/save or product rebuild during packaging"})
+    environment = {**os.environ, "GOWORK": str(sources / "go.work"), "TARGET_ARCH": arch,
+                   "ORG": str(sources), "KUASAR_WORKSPACE_ROOT": str(sources),
+                   "KUASAR_NATIVE_CACHE_ROOT": str(sources.parent / "native-cache-unused"),
+                   "KUASAR_CI_TIMINGS": str(evidence.diagnostics / "build-timings.tsv"),
+                   "KUASAR_REVISION_MANIFEST": str(sources / "frozen.json")}
+    try:
+        for tool, command in (("go", ["go", "version"]), ("cargo", ["cargo", "--version"]),
+                              ("rustc", ["rustc", "-vV"]),
+                              ("cc", ["aarch64-linux-gnu-gcc" if arch == "aarch64" else "gcc", "--version"])):
+            evidence.run("toolchain/" + tool, command, env={**environment, "GOWORK": "off"})
+        evidence.run("workspace", ["go", "work", "init", *("./" + owner for owner in REPOSITORIES if owner != "kuasar-sandbox")],
+                     cwd=sources, env={**environment, "GOWORK": "off"})
+        # Preserve the old environment's GOTOOLCHAIN selection. The initial
+        # Hosted Go can download a newer compiler required by the current mods;
+        # workspace/full-build logs and elapsed time include that cold cost.
+        evidence.run("toolchain/go-effective", ["go", "env", "GOTOOLCHAIN", "GOVERSION", "GOROOT"],
+                     cwd=sources, env=environment)
+        compile_cold_products(sources, arch, evidence, environment)
+        evidence.record["products"] = products(sources, arch, rows)
+        evidence.save()
+        package_all(sources, arch, record, evidence, environment)
+        evidence.record["conclusion"] = "success"
+    except BaseException as error:
+        evidence.record.update(conclusion="failure", error=str(error))
+        raise
+    finally:
+        evidence.record["elapsed_seconds"] = (time.time_ns() - evidence.record["started_ns"]) / 1e9
+        evidence.save()
+
+
+class LegacyInterrupted(Exception):
+    def __init__(self, signum):
+        self.signum = signum
+
+
+def legacy_stage(evidence, label, command, *, environment=None, timeout=3600):
+    """One-off host control stages; never runs arbitrary candidate commands."""
+    log = evidence.directory / "logs" / (label + ".log")
+    log.parent.mkdir(exist_ok=True)
+    row = {"stage": label, "argv": list(map(str, command)), "log": str(log.relative_to(evidence.directory))}
+    evidence.record["stages"].append(row)
+    started = time.monotonic()
+    print("task216 legacy control: " + label, flush=True)
+    try:
+        with log.open("w") as stream:
+            process = subprocess.Popen(list(map(str, command)), stdout=stream, stderr=subprocess.STDOUT,
+                                       env=environment, start_new_session=True)
+            try:
+                row["exit_code"] = process.wait(timeout=timeout)
+                if row["exit_code"] < 0:
+                    row["exit_code"] = 128 - row["exit_code"]
+            except (subprocess.TimeoutExpired, LegacyInterrupted) as error:
+                row["exit_code"] = 124 if isinstance(error, subprocess.TimeoutExpired) else 128 + error.signum
+                # This process group was created above for this exact stage.
+                # sudo handles only descendants of the trusted apt bootstrap;
+                # a candidate service is stopped separately by its owned unit.
+                subprocess.run(["sudo", "-n", "kill", "-TERM", "--", "-" + str(process.pid)], check=False)
+                try:
+                    process.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    subprocess.run(["sudo", "-n", "kill", "-KILL", "--", "-" + str(process.pid)], check=False)
+                    process.wait(timeout=10)
+    finally:
+        row["wall_seconds"] = time.monotonic() - started
+        evidence.save()
+    return row["exit_code"]
+
+
+def stop_legacy_unit(record):
+    unit = record["unit"]
+    require(re.fullmatch(r"task216-legacy-[0-9a-f]{24}\.service", unit), "foreign legacy unit")
+    inspected = subprocess.run(["systemctl", "show", unit, "--property=LoadState,Description,ActiveState,MainPID"],
+                               text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    state = dict(line.split("=", 1) for line in inspected.stdout.splitlines() if "=" in line)
+    if state.get("LoadState") == "not-found":
+        return 0
+    require(inspected.returncode == 0, "cannot inspect owned legacy unit")
+    require(state.get("Description") == record["unit_description"], "legacy unit ownership changed")
+    completed = subprocess.run(["sudo", "-n", "systemctl", "stop", unit], timeout=60)
+    if completed.returncode:
+        return completed.returncode
+    state = dict(line.split("=", 1) for line in output(
+        ["systemctl", "show", unit, "--property=ActiveState,MainPID"]).splitlines())
+    require(state.get("MainPID") == "0" and state.get("ActiveState") in ("inactive", "failed"),
+            "legacy candidate writers have not stopped")
+    return 0
+
+
+def legacy_finish(args):
+    destination = args.output.absolute()
+    receipt = destination / "host/result.json"
+    supplied_root = args.task_root.absolute()
+    require(supplied_root.resolve() == supplied_root
+            and supplied_root.is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve())
+            and supplied_root.name.startswith("task216-legacy."), "foreign legacy task directory")
+    if not receipt.exists():
+        if supplied_root.exists():
+            require(supplied_root.stat().st_uid == os.getuid(), "foreign legacy source owner")
+            shutil.rmtree(supplied_root)
+        return 0
+    require(destination.resolve() == destination and destination.stat().st_uid == os.getuid()
+            and not receipt.is_symlink(), "foreign legacy receipt")
+    record = json.loads(receipt.read_text())
+    require(record["owner_uid"] == os.getuid() and record["framework_sha"] == output(["git", "-C", ROOT, "rev-parse", "HEAD"]),
+            "legacy receipt owner/framework differs")
+    source_root = Path(record["task_root"])
+    require(source_root == supplied_root, "legacy cleanup source differs from its host receipt")
+    if record["conclusion"] == "running":
+        record.update(conclusion="failure", finish_error="legacy controller did not record completion")
+    status = 0
+    try:
+        record["cleanup_exit_code"] = stop_legacy_unit(record)
+        require(record["cleanup_exit_code"] == 0, "legacy service cleanup failed")
+        copier = module("task216_legacy_output", ROOT / "ci/hosted/workbench.py").copy_evidence
+        candidate = source_root / "legacy-verification"
+        if record.get("finished"):
+            pass
+        elif record["conclusion"] == "success":
+            # Stop all writers before checking or copying. The shared copier
+            # refuses all symlinks/FIFOs/devices without dereferencing them.
+            copier(candidate, destination / "validated")
+        elif candidate.exists() and not candidate.is_symlink():
+            diagnostics = destination / "diagnostics"
+            diagnostics.mkdir(exist_ok=True)
+            for name in ("result.json", "logs", "build-timings.tsv"):
+                path = candidate / name
+                if path.exists() or path.is_symlink():
+                    copier(path, diagnostics / name)
+        record["finished"] = True
+    except (ValueError, OSError, RuntimeError, subprocess.SubprocessError) as error:
+        record.update(conclusion="failure", finish_error=str(error))
+        status = 1
+    finally:
+        try:
+            if record.get("cleanup_exit_code") == 0:
+                if source_root.exists():
+                    # Go's downloaded modules may be read-only. Only this
+                    # verified task directory is removed without following links.
+                    subprocess.run(["sudo", "-n", "rm", "-rf", "--", source_root], check=True, timeout=300)
+                provision = destination / "host/provision"
+                if provision.exists():
+                    shutil.rmtree(provision)
+        except (OSError, subprocess.SubprocessError) as error:
+            record.update(conclusion="failure", delete_error=str(error))
+            status = 1
+        write(receipt, record)
+    return status
+
+
+def legacy_run(args):
+    """Temporary #216 host/cross control using the exact former bootstrap."""
+    sources = args.sources.resolve()
+    task_root = sources.parent
+    require(task_root.name.startswith("task216-legacy.") and task_root.is_relative_to(Path(os.environ["RUNNER_TEMP"]).resolve())
+            and not args.output.exists() and not args.output.resolve().is_relative_to(task_root), "legacy run requires private fresh paths")
+    require(os.environ.get("GITHUB_ACTIONS") == "true" and os.environ.get("RUNNER_ENVIRONMENT") == "github-hosted"
+            and platform.machine() == "x86_64" and os.getuid() != 0, "legacy controller requires an ordinary Hosted x86 job")
+    record = frozen(sources / "frozen.json")
+    require(output(["git", "-C", args.legacy_framework, "rev-parse", "HEAD"]) == LEGACY_FRAMEWORK
+            and artifacts.digest(args.legacy_framework / "ci/hosted/bootstrap.sh") == LEGACY_BOOTSTRAP_SHA256,
+            "legacy bootstrap is not the exact reviewed baseline")
+    cpus = sorted(os.sched_getaffinity(0))[:2]
+    require(len(cpus) == 2, "legacy control needs two actual CPUs")
+    unit = "task216-legacy-" + hashlib.sha256(str(task_root).encode()).hexdigest()[:24] + ".service"
+    description = "Kuasar #216 legacy " + str(task_root)
+    evidence = Evidence(args.output / "host", {"phase": "legacy-host", "arch": args.arch,
+                        "framework_sha": record["framework_sha"], "owner_uid": os.getuid(), "task_root": str(task_root),
+                        "unit": unit, "unit_description": description, "frozen_sha256": artifacts.digest(sources / "frozen.json"),
+                        "runner": {name: os.environ.get(name) for name in ("ImageOS", "ImageVersion", "RUNNER_ARCH")},
+                        "started_ns": time.time_ns()})
+    provision = evidence.directory / "provision"
+    provision.mkdir()
+    env_file, path_file = evidence.directory / "bootstrap.env", evidence.directory / "bootstrap.path"
+    bootstrap_env = {**os.environ, "GOWORK": "off", "RUNNER_TEMP": str(provision),
+                     "GITHUB_ENV": str(env_file), "GITHUB_PATH": str(path_file)}
+    profile = "artifact-cross" if args.arch == "aarch64" else "artifact-build"
+    def interrupted(signum, _frame):
+        raise LegacyInterrupted(signum)
+    handlers = {signum: signal.signal(signum, interrupted) for signum in (signal.SIGINT, signal.SIGTERM)}
+    code = 1
+    try:
+        mode = output(["go", "env", "GOTOOLCHAIN"], env={**os.environ, "GOWORK": "off"})
+        evidence.record["go_toolchain_mode"] = mode
+        code = legacy_stage(evidence, "bootstrap", ["taskset", "-c", ",".join(map(str, cpus)), "bash",
+                            args.legacy_framework / "ci/hosted/bootstrap.sh", "--profile", profile], environment=bootstrap_env)
+        if code:
+            return code
+        code = 1
+        exported = dict(line.split("=", 1) for line in env_file.read_text().splitlines())
+        require(exported["KUASAR_BUILD_JOBS"] == "2", "legacy bootstrap selected a different compiler budget")
+        if not shutil.which("strace"):
+            code = legacy_stage(evidence, "instrumentation", ["sudo", "-n", "apt-get", "install", "-y", "--no-install-recommends", "strace"])
+            if code:
+                return code
+            code = 1
+        compiler_bins = []
+        for name in ("go", "rustc", "cargo"):
+            path = Path(shutil.which(name) or "missing").resolve()
+            if path.name == "rustup":
+                path = Path(output(["rustup", "which", name])).resolve()
+            require(path.is_file(), "missing provided compiler: " + name)
+            compiler_bins.append(path.parent)
+        readers = Path(exported["KUASAR_HOSTED_ROOT"]).resolve()
+        require(readers.is_relative_to(provision.resolve()), "bootstrap output escaped this task")
+        candidate = {"PATH": ":".join(map(str, dict.fromkeys([*compiler_bins, readers / "bin", Path("/usr/local/bin"), Path("/usr/bin"), Path("/bin")]))),
+                     "HOME": str(task_root / "home"), "TMPDIR": str(task_root / "tmp"),
+                     "GOPATH": str(task_root / "home/go"), "GOCACHE": str(task_root / "home/go-cache"),
+                     "GOMODCACHE": str(task_root / "home/go/pkg/mod"), "CARGO_HOME": str(task_root / "home/.cargo"),
+                     "GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "RUNNER_TEMP": os.environ["RUNNER_TEMP"],
+                     "KUASAR_BUILD_JOBS": "2", "GOMAXPROCS": "2", "GOFLAGS": "-p=2", "CARGO_BUILD_JOBS": "2",
+                     "CMAKE_BUILD_PARALLEL_LEVEL": "2", "GOTOOLCHAIN": mode, "GOPROXY": "https://proxy.golang.org,direct",
+                     "GOSUMDB": "sum.golang.org", "CARGO_REGISTRIES_CRATES_IO_PROTOCOL": "sparse",
+                     "CARGO_NET_GIT_FETCH_WITH_CLI": "true", "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null",
+                     "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONDONTWRITEBYTECODE": "1",
+                     "KUASAR_RUNTIME_READER": exported["KUASAR_RUNTIME_READER"]}
+        readonly = list(dict.fromkeys([ROOT, args.legacy_framework.resolve(), readers, *(path.parent for path in compiler_bins)]))
+        require(not any(re.search(r"\s", str(path)) for path in [task_root, *readonly]), "legacy mount paths contain whitespace")
+        command = ["sudo", "-n", "systemd-run", "--wait", "--pipe", "--service-type=exec", "--unit=" + unit,
+                   "--description=" + description, "--property=CPUQuota=200%", "--property=MemoryMax=8G",
+                   "--property=RuntimeMaxSec=12600", "--property=TimeoutStopSec=20", "--property=KillMode=control-group",
+                   "--property=NoNewPrivileges=yes", "--property=PrivateDevices=yes", "--property=PrivateTmp=yes",
+                   "--property=ProtectSystem=strict", "--property=ProtectHome=tmpfs", "--property=ProtectControlGroups=yes",
+                   "--property=CapabilityBoundingSet=CAP_SYS_ADMIN CAP_SETUID CAP_SETGID CAP_SETPCAP",
+                   "--property=BindPaths=" + str(task_root), "--property=BindReadOnlyPaths=" + " ".join(map(str, readonly)),
+                   "--property=InaccessiblePaths=-/run/docker.sock -/run/systemd/private -/run/dbus/system_bus_socket",
+                   "--property=WorkingDirectory=" + str(sources),
+                   "/usr/bin/unshare", "--mount", "--pid", "--fork", "--mount-proc", "--kill-child",
+                   "/usr/bin/setpriv", "--reuid=" + str(os.getuid()), "--regid=" + str(os.getgid()), "--clear-groups",
+                   "--bounding-set=-all", "--inh-caps=-all", "--ambient-caps=-all", "--no-new-privs",
+                   "/usr/bin/taskset", "-c", ",".join(map(str, cpus)), "/usr/bin/env", "-i",
+                   *[name + "=" + value for name, value in candidate.items()],
+                   sys.executable, "-B", ROOT / "ci/hosted/verify-workbench-216.py", "legacy-cold", "--arch", args.arch,
+                   "--sources", sources, "--legacy-framework", args.legacy_framework.resolve()]
+        evidence.record["candidate_environment"] = candidate
+        code = legacy_stage(evidence, "candidate", command, timeout=12700)
+        evidence.record["conclusion"] = "success" if code == 0 else "failure"
+        return code
+    except LegacyInterrupted as error:
+        code = 128 + error.signum
+        return code
+    except BaseException as error:
+        evidence.record["error"] = str(error)
+        raise
+    finally:
+        for signum, handler in handlers.items():
+            signal.signal(signum, handler)
+        evidence.record.update(exit_code=code, elapsed_seconds=(time.time_ns() - evidence.record["started_ns"]) / 1e9)
+        if evidence.record["conclusion"] == "running":
+            evidence.record["conclusion"] = "failure"
+        evidence.save()
+
+
 def build(args):
     sources, arch, record, image = build_inputs(args)
     rows = manifest(sources)
@@ -491,19 +834,7 @@ def build(args):
                 path.mkdir(parents=True)
                 cleared.append(str(path))
             evidence.record["cleared_task_cache_paths"] = cleared
-            # Loading the existing cache recipe supplies the same normalized
-            # KBUILD user/host/version/timestamp that its key and builds use.
-            evidence.run("full-build", ["bash", "-euo", "pipefail", "-c",
-                         'source "$1" help >/dev/null; make -C "$2" build', "task216",
-                         ROOT / "ci/native-cache/native-cache.sh", sources / "kuasar-sandbox"], env=environment)
-            evidence.run("full-manifest", ["make", "-C", sources / "kuasar-sandbox", "verify-prebuilt"], env=environment)
-            for owner in VALIDATORS:
-                destination = sources / "task-tools" / owner / "release-archive-validator"
-                destination.parent.mkdir(parents=True)
-                evidence.run("validator/" + owner,
-                             ["go", "build", "-p", os.environ["KUASAR_BUILD_JOBS"], "-trimpath", "-o", destination,
-                              sources / owner / "scripts/release-archive-validator.go"],
-                             env={**environment, "GOWORK": "off", "GO111MODULE": "off", "CGO_ENABLED": "0"})
+            compile_cold_products(sources, arch, evidence, environment)
             native_cache(evidence, "save", environment)
         else:
             previous = json.loads((sources / "cold-result.json").read_text())
@@ -614,9 +945,31 @@ def packaged_delta(args):
     selection = json.loads(args.frozen.with_name("workbench.json").read_text())
     image = selection["architectures"][arch]["image_id"]
     input_digest = artifacts.digest(args.frozen)
-    require(cold["conclusion"] == "success" and cold["phase"] == "cold" and cold["arch"] == arch
-            and cold["image_id"] == image and cold["frozen_sha256"] == input_digest,
+    legacy = getattr(args, "command", "packaged-delta") == "legacy-packaged-delta"
+    require(cold["conclusion"] == "success" and cold["arch"] == arch and cold["frozen_sha256"] == input_digest,
             "packages belong to another frozen input set or did not pass")
+    if legacy:
+        require(cold["phase"] == "legacy-cold" and cold["image_id"] is None
+                and cold["legacy_framework_sha"] == LEGACY_FRAMEWORK
+                and cold["legacy_bootstrap_sha256"] == LEGACY_BOOTSTRAP_SHA256
+                and cold["host_arch"] == "x86_64" and type(cold["uid"]) is int and cold["uid"] > 0
+                and cold["inputs"] == record and cold["memory_max"] == 8 * 1024**3
+                and cold["build_jobs"] == 2 and len(set(cold["cpus"])) == 2
+                and cold["go_toolchain_mode"], "legacy packages lack their exact host/bootstrap/budget identity")
+        stages = {row["stage"]: row["exit_code"] for row in cold["stages"]}
+        expected = {"workspace", "full-build", "full-manifest", "toolchain/go", "toolchain/go-effective"}
+        expected.update("validator/" + owner for owner in VALIDATORS)
+        expected.update(operation + "/" + unit for unit in UNITS for operation in ("package", "validate"))
+        require(len(stages) == len(cold["stages"]) and expected <= stages.keys()
+                and all(value == 0 for value in stages.values()), "legacy package stages did not all pass")
+        build_context = {"legacy_control": {key: cold[key] for key in (
+            "legacy_framework_sha", "legacy_bootstrap_sha256", "host_arch", "arch", "uid", "cpus",
+            "build_jobs", "memory_max", "go_toolchain_mode", "source_root")},
+                         "test_helpers": {"workbench": {"image_id": image, "framework_sha": plan["framework_sha"]}}}
+    else:
+        require(cold["phase"] == "cold" and cold["image_id"] == image,
+                "packages belong to another frozen input set or did not pass")
+        build_context = {"workbench": {"image_id": image, "framework_sha": plan["framework_sha"]}}
     require(set(cold["products"]) == set(artifacts.PRODUCTS) | {"embedded/envd"}
             and set(cold["packages"]) == set(UNITS), "incomplete cold products or release units")
     helper_root = args.helpers / "integration-helpers"
@@ -678,7 +1031,7 @@ def packaged_delta(args):
                              for name in artifacts.PRODUCTS},
                 "embedded": {"envd": {"sha256": payloads["envd"], "sources": plan["embedded_sources"]["envd"]}},
                 "tests": helper["tests"], "helpers": helper["helpers"],
-                "build_context": {"workbench": {"image_id": image, "framework_sha": plan["framework_sha"]},
+                "build_context": {**build_context,
                                   "task": {"cold_result_sha256": artifacts.digest(args.packages / "result.json"),
                                            "frozen_sha256": input_digest, "package_origins": archive_records,
                                            "materials": "task package archives retain their original source/license materials; composition baseline materials identify only the published baseline"}}}
@@ -698,19 +1051,33 @@ def main():
     verify.add_argument("--phase", choices=("cold", "warm"), required=True)
     verify.add_argument("--arch", choices=artifacts.ARCHES, required=True)
     verify.add_argument("--sources", type=Path, default=Path("/src"))
+    legacy = commands.add_parser("legacy-cold")
+    legacy.add_argument("--arch", choices=artifacts.ARCHES, required=True)
+    legacy.add_argument("--sources", type=Path, required=True)
+    legacy.add_argument("--legacy-framework", type=Path, required=True)
+    host = commands.add_parser("legacy-run")
+    host.add_argument("--arch", choices=artifacts.ARCHES, required=True)
+    host.add_argument("--sources", type=Path, required=True)
+    host.add_argument("--legacy-framework", type=Path, required=True)
+    host.add_argument("--output", type=Path, required=True)
+    finish = commands.add_parser("legacy-finish")
+    finish.add_argument("--output", type=Path, required=True)
+    finish.add_argument("--task-root", type=Path, required=True)
     helper = commands.add_parser("helpers")
     helper.add_argument("--arch", choices=artifacts.ARCHES, required=True)
     helper.add_argument("--sources", type=Path, default=Path("/src"))
-    delta = commands.add_parser("packaged-delta")
-    delta.add_argument("--frozen", type=Path, required=True)
-    delta.add_argument("--arch", choices=artifacts.ARCHES, required=True)
-    delta.add_argument("--packages", type=Path, required=True)
-    delta.add_argument("--helpers", type=Path, required=True)
-    delta.add_argument("--output", type=Path, required=True)
+    for name in ("packaged-delta", "legacy-packaged-delta"):
+        delta = commands.add_parser(name)
+        delta.add_argument("--frozen", type=Path, required=True)
+        delta.add_argument("--arch", choices=artifacts.ARCHES, required=True)
+        delta.add_argument("--packages", type=Path, required=True)
+        delta.add_argument("--helpers", type=Path, required=True)
+        delta.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    {"freeze": freeze, "fetch": fetch, "build": build, "helpers": helpers,
-     "packaged-delta": packaged_delta}[args.command](args)
+    return {"freeze": freeze, "fetch": fetch, "build": build, "helpers": helpers, "legacy-cold": legacy_cold,
+            "legacy-run": legacy_run, "legacy-finish": legacy_finish,
+            "packaged-delta": packaged_delta, "legacy-packaged-delta": packaged_delta}[args.command](args)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main() or 0)
