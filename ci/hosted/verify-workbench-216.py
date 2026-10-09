@@ -1133,6 +1133,9 @@ def legacy_source_checks(args):
             except (OSError, subprocess.SubprocessError) as error:
                 observed["toolchain_error"] = str(error)
                 code = code or 1
+        # Match run-source-checks.py's CLI signal convention. Its original
+        # result.json retains the raw negative subprocess returncode.
+        code = code if code >= 0 else 128 - code
         observed["exit_code"] = code
         write(payload / "logs/source-execution.json", observed)
     return code
