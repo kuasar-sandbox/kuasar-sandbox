@@ -433,7 +433,7 @@ def package_all(sources, arch, record, evidence, environment):
                 command.append(unit)
             command.extend((version, arch, destination))
             evidence.run(operation + "/" + unit,
-                         ["strace", "-f", "-qq", "-s", "65535", "-e", "trace=execve", "-o", trace, *command],
+                         ["strace", "-f", "--seccomp-bpf", "-qq", "-s", "65535", "-e", "trace=execve", "-o", trace, *command],
                          cwd=sources / owner, env=selected)
             audit_packaging(trace)
             require(products(sources, arch, manifest(sources)) == expected, "packaging changed a selected product")
