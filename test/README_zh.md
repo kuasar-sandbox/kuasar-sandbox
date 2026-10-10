@@ -22,6 +22,20 @@ sudo python3 /tmp/kuasar-prepared/test/e2e/e2e run --workdir /tmp/kuasar-prepare
 
 `--suite` 与 `--include` 取并集，`--exclude` 按完整文件名排除。未知选择和空集会失败。`--all` 包含需要凭据的 `storage.obs.sh`，公共 CI 明确排除该用例。没有 owner、tag、capability 或 fixture graph 选择器。Makefile 包装入口要求 `RELEASE_DIR`、全新的 `E2E_WORKDIR`，可选 `E2E_ARGS`。
 
+每次 `run` 调用都为适用的 helper 提供新的私有目录，只在本次调用内复用不可变模板
+准备。即使显式指定 `--run-root`，目录也位于准备输入和用例自有工作目录之外。用例
+收到 `E2E_TEMPLATE_CACHE_DIR` 和完整准备 provenance 摘要
+`E2E_TEMPLATE_CACHE_PROVENANCE`，环境中原有的同名变量会被清除。runner 在
+`result.json` 中记录目录，并随运行状态保留供检查，但后续运行不会选用它。
+`run --no-template-cache` 清除两个变量且不创建缓存，便于与普通准备对比。旧 helper
+可以忽略这些变量，行为不变。
+
+消费端须将内容绑定到准备身份、原生架构、完整镜像 config ID 和版本化转换配方，
+验证条目并持锁原子发布。匹配条目损坏即失败，不静默重建。只允许共享不可变且未加密
+的镜像内容；每个用例仍独立拥有密钥、Store、template/Build 身份、可写磁盘和真实
+Guest 生命周期，不共享活动 VM、快照或可变数据库。专门的 Builder 和 Demo 用例
+保留真实构建。runner 合同检查本身不能验证消费端缓存命中或证明性能收益。
+
 prepare 接受 `--deps-dir` / `E2E_DEPS_DIR` 指定已验证的本地镜像归档，以及 `--offline` / `E2E_OFFLINE=1` 禁止下载依赖。未配置时保持在线行为。本地匹配项验证时不向远端检查新鲜度，无效匹配项也不触发远端修复。外部请求来自单一用例/架构函数，构建期输入收集也可调用该函数。优先级、身份证据与失败行为见[本地及离线准备](QUICKSTART_zh.md#本地及离线准备)。
 
 原生 x86_64 和 aarch64 使用相同的公共 `--all --exclude storage.obs.sh` 选择。
