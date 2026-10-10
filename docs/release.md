@@ -68,18 +68,17 @@ components:
 
 The complete aggregate tag is `version + "-" + preview_version`. Later Previews on the same aggregate line use `previous_preview_version` as their update baseline. The first Preview on that line uses `previous_version`.
 
-For a new aggregate, the same Stable or Daily manifest must also include these five independent test pins (replace the placeholders with full lowercase commit SHAs):
+New Stable and Daily manifests select only the six component **tags**. `test_revisions` and independent test/helper/document source overrides are rejected. For each owner, product source, E2E cases, runtime libraries, helpers and guides come from its selected unit tag; guest-runtime uses the runtime tag, while kernel guides use the independently selected vmlinux tag. The aggregate source provides platform tests and guides. Source checkout identity and helper provenance are recorded automatically and compared, never used as a second version selector or a bare-SHA retrieval key.
 
-```yaml
-test_revisions:
-  accelerator: <accelerator-test-sha>
-  connector: <connector-test-sha>
-  guest-runtime: <guest-runtime-test-sha>
-  sandboxer: <sandboxer-test-sha>
-  orchestrator: <orchestrator-test-sha>
-```
+Aggregate fetching retrieves each named tag once and verifies its automatically resolved commit before and after retrieval. The source checkout and `source-records.json` are run inputs. Packaging checks the selected tag, source identity and clean tree again, and compares helper source facts to these inputs. Source links in component guides use the selected tag. Tests or guides changed only on a newer branch do not enter an aggregate that reuses an older product tag.
 
-Daily records the exact component source heads already resolved by its trusted plan, even when product units are reused. A maintenance selection with no component source branch requires an explicit committed test pin. Commit explicit pins when preparing a new Stable selection. Platform tests use the aggregate source SHA. The platform package assembles flat cases and namespaced libraries from each exact test pin, together with both architectures of prebuilt helpers; component documentation uses those same test pins so invocation fixes ship with the cases. Products keep their selected unit versions, and kernel documentation keeps its independently selected vmlinux source. The earlier helper build also fetches the complete Python 3.12 Demo wheel closure using the committed version/hash lock. Packaging requires both architectures of local wheels and their package/version/digest manifests; public preparation installs only those wheels without an index. Helper builds, prepared inputs, results and the existing publication validation binding carry the same pins, which later baselines verify against the committed manifest. The staged `test-revisions.json` receipt is internal to validation; published asset names and product bytes do not change. New packaging rejects missing or mismatched pins. Historical manifests/releases remain readable under their original contract and are never amended.
+Component preflight admits the aggregate manifest by its trusted branch and records its identity and bytes. Publication consumes that fixed evidence, bound to preflight outputs, so unrelated branch advances do not invalidate a completed build. It still checks live Stable-line closure. Dependency restoration checks the complete preflight owner/tag/commit set; an artifact receipt cannot select replacement dependencies. New aggregate records retain their complete validation plan, including the checksum asset, and fail before submitting an oversized Release body rather than truncating evidence.
+
+Ordinary test/document changes do not widen product input differences or force a product/kernel version. To deliver such changes, explicitly select a normally published new owner tag. The first cutover requires new owner tags containing their own `release/guide-inputs.txt` and required delivery inputs. Missing declarations fail explicitly; neither newer HEAD files nor fabricated declarations can fill the gap. This migration selection is separate from the generic input-diff rules, and does not require a new vmlinux version for unrelated documentation changes.
+
+Historical manifests retain their real `test_revisions` evidence through a separate read-only parser. This does not authorize rebuilding a historical package or retrieving its independent test source. Historical consumers must use the published aggregate package and validated evidence by aggregate tag; missing evidence must fail explicitly rather than guessing ownership or substituting product-tag provenance.
+
+The helper build fetches the complete Python 3.12 Demo wheel closure using the committed version/hash lock. Packaging requires both architectures of local wheels and their package/version/digest manifests; public preparation installs only those wheels without an index.
 
 Advance `previous_preview_version` only after the current aggregate has a complete published Release. When an unpublished selection rolls over to a new date, retain its existing baseline (or keep the field absent for the first Preview). An abandoned selection may contain component tags that were never published and cannot serve as an update baseline.
 
@@ -164,16 +163,16 @@ Component workflows always load trusted tooling from repository `main`, but requ
 gh workflow run release.yml \
   --repo kuasar-sandbox/accelerator --ref main \
   -f version=v0.2.2-preview.20260831 \
-  -f source_ref=release/v0.2.x -f source_sha=<full-sha> \
+  -f source_ref=release/v0.2.x -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
-  -f aggregate_sha=<platform-manifest-commit>
+  -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)"
 
 gh workflow run release.yml \
   --repo kuasar-sandbox/sandboxer --ref main \
   -f version=v0.3.6-preview.20260831 \
-  -f source_ref=release/v0.3.x -f source_sha=<full-sha> \
+  -f source_ref=release/v0.3.x -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
-  -f aggregate_sha=<platform-manifest-commit> \
+  -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)" \
   -f accelerator_version=v0.2.2-preview.20260831 \
   -f connector_version=v0.1.9
 ```
@@ -205,7 +204,7 @@ gh workflow run aggregate-release.yml \
   --repo kuasar-sandbox/kuasar-sandbox --ref main \
   -f version=release-v0.5.7 \
   -f source_ref=release/v0.5.x \
-  -f source_sha=<full-sha>
+  -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)"
 ```
 
 Before formal publication, commit `release.yaml` on the target branch, publish missing Stable component units, then trigger the aggregate from that branch's latest HEAD. A successful mainline Stable becomes Latest. A maintenance Stable remains a discoverable formal release without displacing mainline Latest. Both Stable and Preview must be directly selected by that HEAD's current manifest. Historical manifests are only for resolving existing Releases and GC; manual dispatch cannot backfill them as new aggregate publications.
@@ -223,13 +222,13 @@ make test-ci-tools
 
 Each new component Release contains its x86_64 archive, aarch64 archive and `SHA256SUMS`. Runtime and vmlinux retain independent archive names. Both maintained aggregate selections declare `delivery: workbench-v1`. A new aggregate contains one architecture-neutral platform archive, twelve unchanged component archives, two native workbench Docker image archives and unified `SHA256SUMS`: sixteen explicit assets. Historical AMD64-only and dual-architecture aggregates retain their original eight/fourteen-asset contracts. The reader obtains the contract from the exact tagged source; missing new assets never selects historical compatibility.
 
-Do not publish generated release-metadata JSON or duplicate GitHub's automatically supplied source archives. Selection YAML remains in the repository, not in Release assets or the platform package. Component archives exclude `docs/` and `test/e2e/`; aggregate assembly collects component documentation and E2E inputs from the independent test pins into the platform archive (§8.1). Kernel documentation follows the separately selected vmlinux product source.
+Do not publish generated release-metadata JSON or duplicate GitHub's automatically supplied source archives. Selection YAML remains in the repository, not in Release assets or the platform package. Component archives exclude `docs/` and `test/e2e/`; aggregate assembly collects component documentation and E2E inputs from the selected owner tags into the platform archive (§8.1). Kernel documentation follows the separately selected vmlinux product source.
 
-Component workflows build and test at the selected source SHA. Aggregate prepare downloads the six complete manifest-selected Releases, validates GitHub size/digest, component SHA-256, internal paths and cross-package collisions, then builds the pinned test helpers in a credential-free source step and creates a deterministic platform package. The staged bytes enter the shared public prepare → focused case → public run contract without rebuilding products or helpers. Resolution declares exact case filenames at the committed test pins; execution uses short private state paths and reads cases directly from the staged archive without source overlays. Native x86 runs the selected cases across all nine suites on a real KVM runner; hosted ARM runs the predeclared accelerator/guest-runtime non-KVM subset. Clean-runtime preparation and selected full-suite execution retain evidence that Go, Rust and component sources are absent. Source-dependent checks are separate required jobs. Publish requires both explicit architecture results, binds their selections/source identities/asset digests in `kuasar-integration-validation`, and uploads the original archives unchanged.
+Component workflows build and test at the selected source SHA. Aggregate prepare downloads the six complete manifest-selected Releases, validates GitHub size/digest, component SHA-256, internal paths and cross-package collisions, then builds the selected-tag test helpers in a credential-free source step and creates a deterministic platform package. The staged bytes enter the shared public prepare → focused case → public run contract without rebuilding products or helpers. Resolution declares exact case filenames from the selected owner tags; execution uses short private state paths and reads cases directly from the staged archive without source overlays. Native x86 runs the selected cases across all nine suites on a real KVM runner; hosted ARM runs the predeclared accelerator/guest-runtime non-KVM subset. Clean-runtime preparation and selected full-suite execution retain evidence that Go, Rust and component sources are absent. Source-dependent checks are separate required jobs. Publish requires both explicit architecture results, binds their selections/source identities/asset digests in `kuasar-integration-validation`, and uploads the original archives unchanged.
 
 Workbench preparation uses the same canonical case discovery and external-image request function as public `prepare`. The collector resolves each moving tag once for the staged request and binds raw registry manifest/config evidence to the copied Docker archives. Native builds produce one gzip-compressed Docker image archive per architecture, with the aggregate version and exact source labels. The actual compressed bytes must be **smaller than 2 GiB**; oversized or partial inputs fail before staging/publication. The image contains tools and external inputs, while the six product archives remain separate and byte-identical to upstream.
 
-An additional native workbench gate imports those exact staged bytes and starts with empty private Docker state and no external route. On a native KVM-capable host it executes public offline prepare with the current full ordinary selection for either architecture, then reconnects only the owned bridge for run so the existing Demo guest-Internet-egress assertion remains real. GitHub’s hosted ARM runner has no KVM device: its explicit `artifact-only` workbench result validates the archive, imported image and native release inputs, records planned cases separately, and makes no system/offline execution claim. ARM’s ordinary native build and non-KVM E2E lanes remain required. Full native ARM workbench acceptance uses the published bytes and the same `--all --exclude storage.obs.sh` selection as x86, including orchestrator, builder, telemetry and the static no-libc cgroup probe. The selected Guest kernel must provide actual PMEM/EROFS `dax=always`; architecture and runtime assertions remain intact. The case list follows the exact release files, not a historical count. Older limited workbench acceptance remains valid only for its recorded cases. Private daemon isolation, actual selected KVM/UFFD/TUN/BPF operations, and owned cleanup must pass. Workbench system mode is a trusted administrator environment using Docker privileged access; custom host AppArmor/seccomp policy tools and hardening-only proofs are not deployment or publication prerequisites. Generic system startup reports unavailable hardware without claiming its product tests passed. This toolchain environment does not replace the separate compiler-free runtime gate. New native results declare `native-full`; historical `system` results keep their original selection, and hosted ARM keeps explicit `artifact-only` scope. These records bind the exact framework, test pins, product hashes, archive/config identities, actual compressed size, compression/import time and observed peak disk usage; system results also include start time and executed-case evidence; disk observations are not quotas.
+An additional native workbench gate imports those exact staged bytes and starts with empty private Docker state and no external route. On a native KVM-capable host it executes public offline prepare with the current full ordinary selection for either architecture, then reconnects only the owned bridge for run so the existing Demo guest-Internet-egress assertion remains real. GitHub’s hosted ARM runner has no KVM device: its explicit `artifact-only` workbench result validates the archive, imported image and native release inputs, records planned cases separately, and makes no system/offline execution claim. ARM’s ordinary native build and non-KVM E2E lanes remain required. Full native ARM workbench acceptance uses the published bytes and the same `--all --exclude storage.obs.sh` selection as x86, including orchestrator, builder, telemetry and the static no-libc cgroup probe. The selected Guest kernel must provide actual PMEM/EROFS `dax=always`; architecture and runtime assertions remain intact. The case list follows the exact release files, not a historical count. Older limited workbench acceptance remains valid only for its recorded cases. Private daemon isolation, actual selected KVM/UFFD/TUN/BPF operations, and owned cleanup must pass. Workbench system mode is a trusted administrator environment using Docker privileged access; custom host AppArmor/seccomp policy tools and hardening-only proofs are not deployment or publication prerequisites. Generic system startup reports unavailable hardware without claiming its product tests passed. This toolchain environment does not replace the separate compiler-free runtime gate. New native results declare `native-full`; historical `system` results keep their original selection, and hosted ARM keeps explicit `artifact-only` scope. These records bind the exact framework, test source facts, product hashes, archive/config identities, actual compressed size, compression/import time and observed peak disk usage; system results also include start time and executed-case evidence; disk observations are not quotas.
 
 Publication copies the tested saved images to `ghcr.io/kuasar-sandbox/workbench:<aggregate-version-without-release-prefix>`, verifies both architecture config identities and the multi-architecture index, and anonymously reads back each digest-pinned image into a temporary Docker archive. The archive verifier checks every expanded layer against the config from the tested offline image, including on publication retries. Registry digests, image IDs and offline archive hashes have distinct meanings. Existing same-name tags/assets must match; retries upload missing assets without overwriting tested bytes. Cross-service publication is resumable: the GitHub draft becomes public only after the registry and complete GitHub asset set agree. A conflict fails closed. Original source history and published release bytes are not amended.
 
@@ -240,12 +239,13 @@ Preview, maintenance Stable and mainline Stable use identical asset contracts an
 <a id="documentation-in-the-platform-package"></a>
 ### 8.1 Documentation payload and source mapping
 
-The platform archive uses the explicit source-time lists in
-`test/e2e/package_inputs.py`. Component inputs come from `test_revisions`;
-kernel guidance comes from the separately selected vmlinux source. The assembler
-copies canonical cases and the listed runtime libraries, Demo scripts and locks,
-prebuilt helpers, local wheels, and thin workbench host entrypoints. It does not
-copy the whole test tree or scan repositories for Markdown to include.
+The platform archive uses repository-local input discovery in
+`test/e2e/package_inputs.py`. Component inputs come from the selected owner/unit
+tags; kernel guidance comes from the separately selected vmlinux tag. The
+assembler discovers canonical cases and runtime libraries by directory convention,
+and guides through each repository's `release/guide-inputs.txt`. It also includes
+Demo scripts and locks, prebuilt helpers, local wheels, and thin workbench host
+entrypoints. It does not copy the whole test tree or include undeclared guides.
 `test/e2e/assemble_docs.py` rebases links in whole selected documents without
 editing sections, executable examples, configuration values or product binaries.
 
@@ -294,9 +294,9 @@ Direct file links and directory links with explicit fragments keep their named
 file or default README target, preserving the original anchor contract.
 
 The release packager obtains exact component references from the selected
-manifest's `test_revisions` and uses the aggregate version for project source URLs.
-Documentation and cases therefore refer to the same source snapshot; test-only
-invocation fixes do not require a product release. These documentation references
+manifest's `components` tags and uses the aggregate version for project source URLs.
+Documentation and cases therefore refer to the same selected tag; delivering
+updated invocation guidance requires explicitly selecting a normal new owner tag. These documentation references
 do not change product versions or archive bytes. For direct source assembly, Git
 HEAD is used when available, otherwise source links use `main`. A local acceptance run can provide a tab-separated
 `DOCS_SOURCE_REFS` file containing owner and exact source revision. This is
@@ -306,7 +306,7 @@ The runtime and vmlinux units can select different guest-runtime commits. The
 release packager therefore supplies `DOCS_VMLINUX_SOURCE` independently and takes
 both `vmlinux.md` and `vmlinux_zh.md` from that selected kernel source. If an older
 selected kernel has no Chinese counterpart, assembly does not substitute a
-Chinese document from the independently pinned guest-runtime test source.
+Chinese document from the separately selected runtime source.
 
 Recognized cross-repository `main` links to included documents resolve within the
 assembled set. Absolute GitHub `main` links to other files or directories that
@@ -328,7 +328,7 @@ The focused tests exercise language selectors, native-build links, source URLs,
 unchanged executable content, cross-repository links, collisions, symbolic links
 and independent kernel-language selection. The release tests also unpack the
 actual platform tarball and check that component guidance and source links use
-the exact test pins while both kernel documents come from the selected vmlinux
+the selected owner tags while both kernel documents come from the selected vmlinux
 source, even when those snapshots differ. Final acceptance must additionally run
 assembly on the actual reviewed source set, inspect the extracted archive, and validate all
 relative paths and heading fragments. Translation completeness is a separate
@@ -406,7 +406,7 @@ Daily Preview must commit its converged manifest directly to the protected targe
 
 Each E2E owner maintains its runtime dependencies under `test/e2e/lib/` (the
 platform-owned suite uses `test/e2e/platform/lib/`). Assembly discovers all regular
-files recursively at the selected test revision and preserves their paths under
+files recursively at the selected owner tag and preserves their paths under
 `test/e2e/lib/<owner>/`. Adding a library, data fixture or nested dependency needs
 no filename change in another repository. Canonical cases remain discovered from
 `test/e2e/cases/*.sh`.
@@ -421,7 +421,7 @@ validation and execution still validate the actual delivered package.
 ### Repository-owned documentation selection
 
 Each repository declares its delivered user guides in `release/guide-inputs.txt`
-at the selected source revision. Entries are repository-relative Markdown files,
+at the selected owner tag (the aggregate source for platform). Entries are repository-relative Markdown files,
 directories (recursive Markdown discovery), or glob patterns. Blank lines and
 `#` comments are ignored. Every entry must match; missing/empty declarations,
 path escapes, symlinks, non-Markdown explicit inputs and overlapping entries fail
@@ -431,11 +431,13 @@ The platform maintains only its own declaration. Components maintain their own
 user/developer audience boundary; the aggregator has no per-owner filename list.
 Legal material continues to use the existing LICENSE/NOTICE/COPYING conventions.
 An independently versioned unit uses `docs/<unit>.md` and its optional `_zh.md`
-peer from the unit's exact selected source (including immutable older revisions),
-not a document borrowed from a newer runtime test checkout.
+peer from the unit's exact selected tag, including immutable older tags.
 
-Rollout: merge each owner's declaration first, then make a new normal Daily
-selection with those test revisions. Enable the new reader only after that
-selection has been checked. Old immutable source revisions do not acquire the
-new declaration retroactively; historical selections retain their matching
-framework and must not import current declarations to make an old build pass.
+Rollout: merge each owner's declaration and the source-contract implementation,
+then select normal new owner tags containing their declarations through a separate
+explicit cutover selection. Validate the selected tag inputs before publication.
+Old immutable tags do not acquire declarations retroactively. Historical releases
+retain their original validated packages and provenance; readers must not import
+current declarations or rebuild those packages from different sources.
+
+The SHA fields in controller requests are automatically observed identities, not human version inputs. In CLI examples, `OWNER_REPOSITORY`, `SOURCE_REF` and `PLATFORM_REF` denote the corresponding owner repository, source branch and aggregate branch. See [the explicit first tag-source cutover](tag-source-cutover.md); ordinary documentation changes do not change product version selection.

@@ -10,6 +10,7 @@ import sys
 import time
 
 import artifacts
+import source_inputs
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("artifact_build", Path(__file__).with_name("build-artifacts.py"))
@@ -47,20 +48,17 @@ def save_result(output, result):
 def checkout_sources(plan, sources, result):
     _, records = source_records(plan)
     sources.mkdir(parents=True, exist_ok=False)
-    for owner, record in records.items():
-        start = time.monotonic()
-        action = {"name": "checkout:" + owner, "repository": record["repository"],
-                  "sha": record["sha"], "directory": str(sources / owner), "exit_code": 1}
-        try:
-            build.checkout(record["repository"], record["sha"], sources / owner)
-            action["exit_code"] = 0
-        except subprocess.CalledProcessError as error:
-            action["exit_code"] = error.returncode
-            result["exit_code"] = error.returncode
-            raise
-        finally:
-            action["wall_seconds"] = time.monotonic() - start
-            result["actions"].append(action)
+    start = time.monotonic()
+    action = {'name': 'restore-fixed-inputs', 'exit_code': 1}
+    try:
+        source_inputs.copy_run_inputs(plan, records, sources)
+        action['exit_code'] = 0
+    except subprocess.CalledProcessError as error:
+        action['exit_code'] = result['exit_code'] = error.returncode
+        raise
+    finally:
+        action['wall_seconds'] = time.monotonic() - start
+        result['actions'].append(action)
     result["sources"] = records
     # Materialization only uses Git. No host compiler is invoked to make this
     # receipt or to initialize a Go workspace.
@@ -202,6 +200,7 @@ if __name__ == "__main__":
     mode.add_argument("--materialized", action="store_true", help="verify and use the task's existing exact test sources")
     args = parser.parse_args()
     try:
+        source_inputs.INPUT_ARCHIVE = args.plan.resolve().parent / "source-inputs.tar"
         plan = json.loads(args.plan.read_text())
         if args.materialize_only:
             materialize(plan, args.sources.resolve(), args.output.resolve())

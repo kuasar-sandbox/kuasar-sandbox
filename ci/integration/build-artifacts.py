@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 
 import artifacts
+import source_inputs
 import build_helpers
 import build_demo_wheels
 
@@ -24,19 +25,6 @@ NATIVE = {"cache-ctl": "rocksdb", "mkfs.erofs": "erofs", "cloud-hypervisor": "cl
 def run(command, *, cwd=None, environment=None):
     subprocess.run([str(arg) for arg in command], cwd=cwd, env=environment, check=True)
 
-
-def checkout(repository, sha, destination):
-    artifacts.require(not destination.exists(), "build sources require a fresh isolated directory")
-    artifacts.require(repository.startswith("kuasar-sandbox/") and len(sha) == 40, "invalid exact source")
-    # All admitted callers and companions are public. No App key, installation
-    # credential, checkout token, user hooks or private source cache is needed.
-    run(["git", "init", "--quiet", "--template=", destination])
-    run(["git", "-C", destination, "config", "core.hooksPath", "/dev/null"])
-    run(["git", "-C", destination, "remote", "add", "origin", f"https://github.com/{repository}.git"])
-    run(["git", "-C", destination, "fetch", "--quiet", "--depth=1", "origin", sha])
-    run(["git", "-C", destination, "checkout", "--quiet", "--detach", sha])
-    actual = subprocess.check_output(["git", "-C", destination, "rev-parse", "HEAD"], text=True).strip()
-    artifacts.require(actual == sha, "materialized source differs from the admitted revision")
 
 
 def compiled_owners(plan, arch):
@@ -106,10 +94,7 @@ def source_layout(plan, arch):
 def materialize(plan, arch, root):
     """Fetch exact public inputs on the host without invoking any toolchain."""
     root.mkdir(parents=True, exist_ok=False)
-    for relative, record in sorted(source_layout(plan, arch).items()):
-        destination = root / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        checkout(record["repository"], record["sha"], destination)
+    source_inputs.copy_run_inputs(plan, source_layout(plan, arch), root)
 
 
 def verify_materialized(plan, arch, root):
@@ -301,6 +286,7 @@ def main():
     mode.add_argument("--materialize-only", action="store_true", help="fetch exact inputs without running compilers")
     mode.add_argument("--materialized", action="store_true", help="verify and compile previously fetched exact inputs")
     args = parser.parse_args()
+    source_inputs.INPUT_ARCHIVE = args.plan.resolve().parent / "source-inputs.tar"
     plan = json.loads(args.plan.read_text())
     artifacts.check_plan(plan)
     if args.materialize_only:

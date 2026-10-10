@@ -51,6 +51,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     outputs:
+      version: ${{ steps.freeze.outputs.version }}
       x86_64_shards: ${{ steps.freeze.outputs.x86_64_shards }}
       aarch64_shards: ${{ steps.freeze.outputs.aarch64_shards }}
     steps:
@@ -697,7 +698,7 @@ jobs:
           memory-gib: '8'
           run: |
             python3 -B /inputs/release/release/build-e2e-helpers.py \
-              --sources /src --test-revisions /src/.ci/test-revisions.json --arch "$TARGET_ARCH" \
+              --sources /src --version '${{ needs.prepare.outputs.version }}' --arch "$TARGET_ARCH" \
               --output /src/.ci/e2e-helpers --wheels-output /src/.ci/e2e-wheels --platform-source /src/platform
       - name: Verify actual repository cache, helper identities and owned cleanup
         if: always()

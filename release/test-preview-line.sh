@@ -9,7 +9,17 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "${2:-}" == repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/* ]]; then
+  if [[ -n "${FAKE_READ_MARKER:-}" && -f "$FAKE_READ_MARKER" ]]; then
+    printf '%s\n' "${FAKE_AFTER_READ_SHA:-1111111111111111111111111111111111111111}"
+  else
+    printf '%s\n' "${FAKE_BRANCH_SHA:-1111111111111111111111111111111111111111}"
+  fi
+  exit 0
+fi
 if [[ "${2:-}" == repos/kuasar-sandbox/kuasar-sandbox/contents/* ]]; then
+  [[ "$2" == *'?ref=main' || "$2" == *'?ref=release/v'* ]] || { echo 'raw SHA source lookup rejected' >&2; exit 1; }
+  if [[ -n "${FAKE_READ_MARKER:-}" ]]; then touch "$FAKE_READ_MARKER"; fi
   printf '%s\n' "${FAKE_MANIFEST:?}"
   exit 0
 fi
@@ -64,4 +74,15 @@ if PATH="$TMP/bin:$PATH" FAKE_MANIFEST="$REVISION_MANIFEST" \
   exit 1
 fi
 
+if PATH="$TMP/bin:$PATH" FAKE_MANIFEST="$MANIFEST" FAKE_BRANCH_SHA=2222222222222222222222222222222222222222 \
+  bash "$SCRIPT_DIR/validate-preview-line.sh" "$TAG" "$SOURCE_SHA" > "$TMP/moved-before.log" 2>&1; then
+  echo 'test-preview-line: accepted unmatched aggregate identity' >&2; exit 1
+fi
+grep -Fq 'not an admitted branch HEAD' "$TMP/moved-before.log"
+if PATH="$TMP/bin:$PATH" FAKE_MANIFEST="$MANIFEST" FAKE_READ_MARKER="$TMP/read-marker" \
+  FAKE_AFTER_READ_SHA=2222222222222222222222222222222222222222 \
+  bash "$SCRIPT_DIR/validate-preview-line.sh" "$TAG" "$SOURCE_SHA" > "$TMP/moved-after.log" 2>&1; then
+  echo 'test-preview-line: accepted movement during manifest read' >&2; exit 1
+fi
+grep -Fq 'moved during manifest admission' "$TMP/moved-after.log"
 echo "test-preview-line: PASS"

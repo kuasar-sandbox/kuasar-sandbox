@@ -30,6 +30,7 @@ import artifacts
 import build_demo_wheels
 import build_helpers
 import transport
+import source_inputs
 
 REPOSITORIES = {owner: "kuasar-sandbox/" + owner for owner in (
     "kuasar-sandbox", "accelerator", "connector", "guest-runtime", "sandboxer", "orchestrator")}
@@ -195,7 +196,7 @@ def integration_plan(record):
     # This remains a real, validated published baseline. All products will be
     # replaced by the task's exact package bytes through the existing source
     # overlay contract; the task version never masquerades as a release.
-    baseline = resolver.baseline(record["framework_sha"], "main")
+    baseline = resolver.baseline(ROOT, "main")
     candidates = ([record["admission"]["primary"], *record["admission"]["companions"]]
                   if record["admission"] else [])
     companions = {row["repository"] for row in candidates[1:]}
@@ -203,11 +204,11 @@ def integration_plan(record):
     for owner in artifacts.OWNERS:
         row = record["sources"]["kuasar-sandbox" if owner == "platform" else owner]
         sources[owner] = {**row, "role": "companion" if row["repository"] in companions else "candidate"}
-    cases = resolver.case_files(sources)
+    cases = record["case_files"]
     products = sorted(artifacts.PRODUCTS)
     kernel_sha = sources["guest-runtime"]["sha"]
     plan = {"schema": 2, "mode": "source", "framework_sha": record["framework_sha"], "baseline": baseline,
-            "candidate_records": candidates, "owners": ["platform"], "changes": {}, "sources": sources,
+            "run_inputs": record["run_inputs"], "candidate_records": candidates, "owners": ["platform"], "changes": {}, "sources": sources,
             "kernel_sha": kernel_sha, "test_revisions": sources, "test_overlays": sorted(artifacts.OWNERS),
             "case_files": cases, "product_sources": resolver.product_source_map(products, sources, kernel_sha),
             "embedded_sources": {"envd": {REPOSITORIES["guest-runtime"]: kernel_sha}},
@@ -249,6 +250,38 @@ def freeze(args):
               "admission": request, "version": version,
               "coverage": "full manifest build; six cold/warm packages; exact packaged-product E2E/performance; full source gates use the same frozen test plan"}
     args.output.mkdir(parents=True)
+    with tempfile.TemporaryDirectory(prefix='admit-native-inputs-') as directory:
+        roots, run_inputs = {}, {}
+        for owner, row in sources.items():
+            candidate = next((item for item in ([request['primary'], *request['companions']] if request else [])
+                              if item['repository'] == row['repository']), None)
+            ref = f"refs/pull/{candidate['pull_request_number']}/merge" if candidate else 'refs/heads/main'
+            root = Path(directory) / owner
+            run_inputs[owner] = source_inputs.fetch_named(root, row['repository'], ref, row['sha'])
+            roots['platform' if owner == 'kuasar-sandbox' else owner] = root
+        record['case_files'] = source_inputs.cases(roots)
+        record['run_inputs'] = run_inputs
+        if request is None:
+            selection = source_inputs.tag_sources.selection
+            relative = 'releases/daily-preview.yaml'
+            selected_version, _, units = selection.parse_manifest((ROOT / relative).read_text(), relative, True)
+            resolver = module('task216_tag_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
+            helper_records, helper_runs = {}, {'platform': run_inputs['kuasar-sandbox']}
+            helper_root = Path(directory) / 'aggregate'
+            helper_root.mkdir()
+            shutil.copytree(roots['platform'], helper_root / 'platform')
+            for unit, tag in units.items():
+                repository = source_inputs.tag_sources.repository(unit)
+                facts = source_inputs.tag_sources.fetch_unit(helper_root / unit, unit, tag,
+                                                             resolver.release.tag_sha(repository, tag))
+                helper_records[unit] = facts
+                helper_runs[unit] = facts
+            record['aggregate_helper_inputs'] = {'version': selected_version, 'source_records': helper_records,
+                                                 'run_inputs': helper_runs}
+            with tarfile.open(args.output / 'helper-source-inputs.tar', 'w') as archive:
+                for root in helper_root.iterdir(): archive.add(root, arcname=root.name)
+        with tarfile.open(args.output / 'source-inputs.tar', 'w') as archive:
+            for root in roots.values(): archive.add(root, arcname=root.name)
     plan = integration_plan(record)
     write(args.output / "integration-plan.json", plan)
     record["integration_plan_sha256"] = artifacts.digest(args.output / "integration-plan.json")
@@ -259,6 +292,8 @@ def freeze(args):
     write(args.output / "frozen.json", record)
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a") as stream:
+            if record.get("aggregate_helper_inputs"):
+                stream.write("version=" + record["aggregate_helper_inputs"]["version"] + "\n")
             for arch, lane in plan["lanes"].items():
                 stream.write(arch + "_shards=" + json.dumps(list(artifacts.shards(lane["selection"]))) + "\n")
 
@@ -283,12 +318,9 @@ def frozen(path):
 def fetch(args):
     record = frozen(args.frozen)
     require(not args.sources.exists(), "each job requires a fresh source directory")
-    spec = importlib.util.spec_from_file_location("task216_build_inputs", ROOT / "ci/integration/build-artifacts.py")
-    builder = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(builder)
     args.sources.mkdir(parents=True)
-    for owner, row in record["sources"].items():
-        builder.checkout(row["repository"], row["sha"], args.sources / owner)
+    source_inputs.INPUT_ARCHIVE = args.frozen.resolve().parent / 'source-inputs.tar'
+    source_inputs.copy_run_inputs({'run_inputs': record['run_inputs']}, record['sources'], args.sources)
     if os.environ.get("GITHUB_ACTIONS") == "true":
         # Freeze the shared action's host-only receipt while this directory
         # contains exactly the six clean Git checkouts. Run/version metadata
@@ -303,20 +335,24 @@ def fetch(args):
 
 
 def aggregate_helper_inputs(record):
-    # The release helper producer consumes the committed aggregate test pins,
-    # independently of the full migration experiment's current product pins.
     require(record["admission"] is None, "trusted helper cache requires a main-only task dispatch")
-    selection = module("task216_helper_selection", ROOT / "release/selection.py")
-    relative = "releases/daily-preview.yaml"
-    text = (ROOT / relative).read_text()
-    pins = selection.test_revisions(selection.read_simple_yaml(text, relative), relative)
-    sources = {owner: {"repository": REPOSITORIES[owner], "sha": revision} for owner, revision in pins.items()}
-    sources["platform"] = {"repository": REPOSITORIES["kuasar-sandbox"], "sha": record["framework_sha"]}
-    return {"framework_sha": record["framework_sha"], "run_id": record["run_id"], "sources": sources,
-            "test_revisions": pins, "manifest": relative, "manifest_sha256": artifacts.digest(ROOT / relative),
-            "full_task_test_revisions": record["test_revisions"],
-            "pin_differences": {owner: {"aggregate": revision, "full_task": record["test_revisions"][owner]["sha"]}
-                                for owner, revision in pins.items() if revision != record["test_revisions"][owner]["sha"]}}
+    relative = 'releases/daily-preview.yaml'
+    version, _, units = source_inputs.tag_sources.selection.parse_manifest((ROOT / relative).read_text(), relative, True)
+    admitted = record['aggregate_helper_inputs']
+    facts = admitted['source_records']
+    source_inputs.tag_sources.validate_records(facts)
+    require(admitted['version'] == version and {unit: row['tag'] for unit, row in facts.items()} == units,
+            'frozen aggregate helper tags differ from selected manifest')
+    sources = {str(source_inputs.tag_sources.source_path(Path('.'), unit, owner_layout=True)):
+               {'repository': row['repository'], 'sha': row['sha']} for unit, row in facts.items()}
+    sources['platform'] = {'repository': REPOSITORIES['kuasar-sandbox'], 'sha': record['framework_sha']}
+    pins = source_inputs.tag_sources.owner_revisions(facts)
+    return {'framework_sha': record['framework_sha'], 'run_id': record['run_id'], 'version': version,
+            'sources': sources, 'source_records': facts, 'test_revisions': pins,
+            'manifest': relative, 'manifest_sha256': artifacts.digest(ROOT / relative),
+            'full_task_test_revisions': record['test_revisions'],
+            'pin_differences': {owner: {'aggregate': revision, 'full_task': record['test_revisions'][owner]['sha']}
+                                for owner, revision in pins.items() if revision != record['test_revisions'][owner]['sha']}}
 
 
 def aggregate_helper_prefix(arch):
@@ -351,13 +387,15 @@ def aggregate_helper_fetch(args):
     record = frozen(args.frozen)
     inputs = aggregate_helper_inputs(record)
     require(not args.sources.exists() and not args.output.exists(), "helper cache Job needs fresh inputs")
-    builder = module("task216_aggregate_inputs", ROOT / "ci/integration/build-artifacts.py")
     args.sources.mkdir(parents=True)
-    for owner, row in sorted(inputs["sources"].items()):
-        builder.checkout(row["repository"], row["sha"], args.sources / owner)
-    # Match aggregate-release.yml exactly: no task files or product build outputs
-    # enter the cache source root, and every checkout retains its private .git.
-    write(args.sources / ".ci/test-revisions.json", inputs["test_revisions"])
+    source_inputs.INPUT_ARCHIVE = args.frozen.resolve().parent / 'helper-source-inputs.tar'
+    layout = {str(source_inputs.tag_sources.source_path(Path('.'), unit, owner_layout=True)): row
+              for unit, row in inputs['source_records'].items()}
+    layout['platform'] = inputs['sources']['platform']
+    source_inputs.copy_run_inputs({'run_inputs': record['aggregate_helper_inputs']['run_inputs']}, layout, args.sources)
+    (args.sources / '.ci').mkdir()
+    # Match the real producer's empty transport; source facts remain in the
+    # host receipt and the resulting helper package, not a selectable test map.
     inputs["cache_before"] = aggregate_helper_caches(aggregate_helper_prefix(args.arch))
     write(args.output, inputs)
 
@@ -395,9 +433,7 @@ def aggregate_helper_record(args):
                 and scope["event"] == "workflow_dispatch" and scope["run_id"] == record["run_id"]
                 and scope["scope"] == scope["namespace"] == "trusted" and scope["event_inputs"] == {},
                 "helper cache is not this repository's admitted main scope")
-        require(scope["transport"] == {"test-revisions.json": {
-            owner: {"repository": REPOSITORIES[owner], "sha": revision}
-            for owner, revision in expected["test_revisions"].items()}}, "helper cache transport differs from release")
+        require(scope['transport'] == {}, 'helper cache transport differs from release')
         require(len(scope["sources"]) == len(expected["sources"])
                 and {row["path"] for row in scope["sources"]} == set(expected["sources"]), "unexpected helper cache source")
         for row in scope["sources"]:
@@ -418,7 +454,8 @@ def aggregate_helper_record(args):
         helpers = args.sources / ".ci/e2e-helpers" / args.arch
         metadata = json.loads((helpers / "helpers.json").read_text())
         require(metadata["arch"] == args.arch and metadata["framework_sha"] == expected["framework_sha"]
-                and metadata["test_revisions"] == expected["test_revisions"], "helper package source pins differ")
+                and metadata["test_revisions"] == expected["test_revisions"]
+                and metadata.get("source_records") == expected["source_records"], "helper package source pins differ")
         plan = json.loads(args.frozen.with_name("integration-plan.json").read_text())
         required = artifacts.planned_helpers({"cases": sorted({case for rows in plan["case_files"].values() for case in rows})})
         require(set(metadata["helpers"]) == set(required)

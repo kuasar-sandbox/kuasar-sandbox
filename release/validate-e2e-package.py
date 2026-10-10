@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Validate flat cases and prebuilt helper bytes without executing archive code."""
 import hashlib
+import argparse
 import importlib.util
 import json
 import re
@@ -12,13 +13,19 @@ import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci/integration'))
 import artifacts
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import tag_sources
 
 spec = importlib.util.spec_from_file_location('demo_wheels', Path(__file__).resolve().parents[1] / 'test/e2e/lib/demo_wheels.py')
 demo_wheels = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(demo_wheels)
 
 
-def validate(path, expected_pins=None):
+def validate(path, expected_pins=None, expected_sources=None):
+    if expected_sources is not None:
+        derived = tag_sources.owner_revisions(expected_sources)
+        artifacts.require(expected_pins is None or expected_pins == derived, 'owner SHA facts differ from unit tag facts')
+        expected_pins = derived
     with tarfile.open(path, 'r:gz') as archive:
         members = {}
         for entry in archive.getmembers():
@@ -62,13 +69,20 @@ def validate(path, expected_pins=None):
             metadata = json.load(archive.extractfile(members[metadata_path]))
             artifacts.require(metadata['arch'] == arch, 'helper package architecture mismatch')
             pins = metadata['test_revisions']
+            if expected_sources is not None:
+                artifacts.require(metadata.get('source_records') == expected_sources,
+                                  'helper tag source facts differ from selected unit inputs')
+            if 'source_records' in metadata:
+                artifacts.require(tag_sources.owner_revisions(metadata['source_records']) == pins,
+                                  'helper owner SHA facts differ from unit tag facts')
             framework = metadata['framework_sha']
             artifacts.require(set(pins) == set(artifacts.OWNERS) - {'platform'} and
                               all(re.fullmatch(r'[0-9a-f]{40}', pin) for pin in [framework, *pins.values()]),
                               'invalid helper source pins')
             artifacts.require(expected_pins is None or pins == expected_pins, 'helper pins differ from selected test revisions')
-            artifacts.require(previous is None or previous == (framework, pins), 'architecture helper source sets differ')
-            previous = (framework, pins)
+            facts = (framework, pins, metadata.get('source_records'))
+            artifacts.require(previous is None or previous == facts, 'architecture helper source sets differ')
+            previous = facts
             helpers = metadata['helpers']
             required = {'zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe',
                         'node-ctl-runner-test', 'usage-probe', 'cgroup-fork-probe'}
@@ -93,4 +107,10 @@ def validate(path, expected_pins=None):
 
 
 if __name__ == '__main__':
-    validate(Path(sys.argv[1]), json.loads(Path(sys.argv[2]).read_text()) if len(sys.argv) > 2 else None)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('archive', type=Path)
+    parser.add_argument('owner_revisions', type=Path, nargs='?')
+    parser.add_argument('--source-records', type=Path)
+    args = parser.parse_args()
+    validate(args.archive, json.loads(args.owner_revisions.read_text()) if args.owner_revisions else None,
+             json.loads(args.source_records.read_text()) if args.source_records else None)

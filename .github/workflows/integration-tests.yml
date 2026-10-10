@@ -154,6 +154,7 @@ jobs:
           name: ${{ steps.plan.outputs.artifact }}
           path: |
             plan.json
+            source-inputs.tar
             workbench.json
           if-no-files-found: error
           retention-days: 7

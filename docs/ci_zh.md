@@ -89,12 +89,11 @@ prepare 在组装前校验包路径/类型/权限/归属、摘要、必要产品
 exact-assets 模式直接消费 platform 包中的同一布局。两条路径都拒绝旧 owner runner 和重复用例 ID。
 按 owner 记录 test revision，与可信 framework SHA 分开。
 
-owner 测试 revision 与产品 tag 独立。新聚合在维护清单的 `test_revisions` 中提交五个组件的完整测试 SHA，
-平台测试使用聚合源码提交。打包和依赖源码的 helper 编译都使用这些精确 pin；helper 与所选产品需要不同 revision 时，
-使用独立源码工作区。prepared provenance、shard/架构结果及现有发布验证 binding 均保留 pin，后续 baseline 核验并复用它们。
-缺失或不匹配会失败，不回退到产品 tag 或执行时的分支 HEAD；仅测试变更不会重建复用的产品。
+新聚合清单只选择 owner/unit Tag。用例、运行库、helper 源码和指南均来自所选 Tag；guest-runtime 跟随 runtime Tag，kernel 保持独立的 vmlinux Tag。解析器对实际干净源码核验 repository、tag、commit 和 tree，并写入 `source-records.json`。SHA 仅是自动来源证据，不提供另一套选择入口。
 
-当基线解析使用显式声明的上一份已发布聚合时，未修改 owner 的测试 pin 与产品字节一起保留该聚合已经独立记录的身份，不能混入尚未发布成功的新清单中仅继承的 pin。平台 PR 相对其准入 base 显式修改的测试 pin 仍然生效；候选与 companion owner 仍使用各自精确集成源码的测试。这避免把新功能测试与旧产品混搭，不修改用例断言或发行选择。
+源码 CI 对现有 PR merge ref 和受信任分支 ref 核验自动观察到的身份，然后通过 `source-inputs.tar` 固定并传递 Git 源码树。构建、helper 和必需源码检查恢复同一输入。非候选 owner 使用所选单元 Tag；候选及 companion 测试即使没有产品差异、所有产品字节复用已发布聚合也仍执行。产品相关输入和独立 kernel 差异投影不变。
+
+历史消费者按聚合 Tag 获取清单及发布包，保留原始独立测试来源。新发布 binding 内嵌 canonical validation plan、owner 用例映射和源码记录，与包摘要共同绑定。旧 binding 缺少归属信息时，必须获取其真实保留的 integration-plan artifact，核验 canonical identity 等于 `plan_id`，并交叉验证所有绑定身份与资产。证据缺失或歧义时明确失败，不从文件名猜测历史归属。
 
 产品合同为预构建产品 → `e2e prepare` → `<suite>.<case>.sh` → 共享公开入口 `e2e run`。完整文件名就是用例 ID，
 首段只能是 `basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder` 或 `telemetry`。

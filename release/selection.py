@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-import json
 import pathlib
 import re
 import subprocess
@@ -87,7 +86,8 @@ def read_simple_yaml(text: str, source: str) -> dict[str, object]:
     return result
 
 
-def test_revisions(config: dict[str, object], source: str) -> dict[str, str]:
+def historical_test_revisions(config: dict[str, object], source: str) -> dict[str, str]:
+    """Read immutable legacy evidence, never a new release source selection."""
     pins = config.get("test_revisions")
     if not isinstance(pins, dict) or set(pins) != set(TEST_OWNERS):
         raise ManifestError(f"test_revisions in {source} must pin every component test owner")
@@ -162,9 +162,29 @@ def validate_components(
 def parse_manifest(
     text: str, source: str, preview: bool
 ) -> tuple[str, str | None, dict[str, str]]:
+    """Validate a NEW maintained selection. There is no test source override."""
+    return _parse_manifest(text, source, preview, historical=False)
+
+
+def parse_historical_manifest(
+    text: str, source: str, preview: bool
+) -> tuple[str, str | None, dict[str, str]]:
+    """Read an immutable historical record without rewriting its provenance.
+
+    Publication/packaging must use parse_manifest, even for an old version name.
+    This reader does not authorize retrieving legacy test sources.
+    """
+    return _parse_manifest(text, source, preview, historical=True)
+
+
+def _parse_manifest(text: str, source: str, preview: bool, *, historical: bool):
     config = read_simple_yaml(text, source)
     required = {"version", "components"}
-    optional = {"previous_version", "test_revisions", "delivery"}
+    optional = {"previous_version", "delivery"}
+    if historical:
+        optional.add("test_revisions")
+    elif "test_revisions" in config:
+        raise ManifestError(f"test_revisions is historical evidence only, forbidden in new selection {source}")
     if preview:
         required.add("preview_version")
         optional.add("previous_preview_version")
@@ -173,10 +193,8 @@ def parse_manifest(
         expected = ", ".join(sorted(required | optional))
         raise ManifestError(f"top-level keys in {source} must be: {expected}")
     delivery(config, source)
-    # Historical selections remain readable under their original contract.
-    # New aggregate packaging requires all pins through --test-revisions.
     if "test_revisions" in config:
-        test_revisions(config, source)
+        historical_test_revisions(config, source)
 
     version = require_stable(config.get("version"), "version", source)
     previous_version: str | None = None
@@ -308,7 +326,7 @@ def resolve_record(
     for commit, text in git_snapshots(root, relative, history_ref):
         source = f"{commit}:{relative.as_posix()}"
         try:
-            historical = parse_manifest(text, source, preview)
+            historical = parse_historical_manifest(text, source, preview)
         except ManifestError:
             # Commits before the two-file model are not release-state snapshots.
             continue
@@ -332,8 +350,15 @@ def resolve_config(root: pathlib.Path, version: str) -> dict[str, object]:
     return read_simple_yaml(text, relative)
 
 
-def resolve_test_revisions(root: pathlib.Path, version: str) -> dict[str, str]:
-    return test_revisions(resolve_config(root, version), version)
+def resolve_new_selection(root: pathlib.Path, version: str) -> dict[str, str]:
+    """Only a current tag-only manifest can authorize new source assembly."""
+    validate_current_manifests(root)
+    preview = "-preview." in version
+    path = root / ("releases/daily-preview.yaml" if preview else "releases/release.yaml")
+    selected, _, units = parse_manifest(path.read_text(encoding="utf-8"), str(path), preview)
+    if selected != version:
+        raise ManifestError("new assembly requires the current maintained selection; consume historical packages by tag")
+    return units
 
 
 def main() -> None:
@@ -346,12 +371,12 @@ def main() -> None:
     if len(sys.argv) not in (3, 4):
         fail(
             "usage: selection.py <platform-root> "
-            "<release-version> [--previous|--commit|--test-revisions|--delivery] | --validate-current"
+            "<release-version> [--previous|--commit|--new|--delivery] | --validate-current"
         )
-    if len(sys.argv) == 4 and sys.argv[3] not in ("--previous", "--commit", "--test-revisions", "--delivery"):
+    if len(sys.argv) == 4 and sys.argv[3] not in ("--previous", "--commit", "--new", "--delivery"):
         fail(
             "usage: selection.py <platform-root> "
-            "<release-version> [--previous|--commit|--test-revisions|--delivery]"
+            "<release-version> [--previous|--commit|--new|--delivery]"
         )
     if len(sys.argv) == 4 and sys.argv[3] == '--delivery':
         try:
@@ -359,9 +384,10 @@ def main() -> None:
         except ManifestError as error:
             fail(str(error))
         return
-    if len(sys.argv) == 4 and sys.argv[3] == "--test-revisions":
+    if len(sys.argv) == 4 and sys.argv[3] == "--new":
         try:
-            print(json.dumps(resolve_test_revisions(pathlib.Path(sys.argv[1]), sys.argv[2]), sort_keys=True))
+            for unit, tag in resolve_new_selection(pathlib.Path(sys.argv[1]), sys.argv[2]).items():
+                print(f"{unit}\t{tag}")
         except ManifestError as error:
             fail(str(error))
         return

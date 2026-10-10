@@ -429,6 +429,25 @@ def check_plan(plan):
         expected_perf = ["working-set-smoke"] if plan["mode"] == "source" and arch == "x86_64" and set(plan["owners"]) & {"platform", "sandboxer"} else []
         require(lane["performance"] == expected_perf, "performance checks differ from trusted mode/owner selection")
     validate_test_revisions(plan.get("test_revisions"))
+    if 'source_records' in plan:
+        # Facts are derived from selected inputs, never an alternate selector.
+        from source_inputs import tag_sources
+        records = plan['source_records']
+        tag_sources.validate_records(records)
+        if plan['mode'] == 'exact-assets':
+            for unit, record in records.items():
+                selected = plan['baseline']['units'][unit]
+                require((record['repository'], record['tag'], record['sha']) ==
+                        (selected['repository'], selected['version'], selected['sha']),
+                        'source records differ from selected release units')
+            require(plan['test_revisions'] == release_test_revisions(
+                tag_sources.owner_revisions(records), plan['baseline']['sha']),
+                'test source facts differ from selected owner tags')
+            platform = plan.get('platform_source', {})
+            require(set(platform) == {'repository', 'sha', 'tree'} and
+                    platform['repository'] == 'kuasar-sandbox/kuasar-sandbox' and
+                    platform['sha'] == plan['baseline']['sha'] and
+                    re.fullmatch(r'[0-9a-f]{40}', platform['tree']), 'invalid admitted platform source facts')
     return identity(plan)
 
 

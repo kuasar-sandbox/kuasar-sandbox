@@ -586,22 +586,33 @@ class LauncherTests(unittest.TestCase):
 
 
 class NativeSelectionTests(unittest.TestCase):
+    def test_aggregate_selector_without_plan_passes_checked_out_path(self):
+        hosted = module('hosted_selector_review', ROOT.parent / 'ci/hosted/workbench.py')
+        resolver = unittest.mock.Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(framework_sha='a' * 40, plan=None, output=Path(directory) / 'selection.json')
+            with patch.object(hosted, 'framework_sha', return_value=args.framework_sha), \
+                 patch.object(hosted, 'module', return_value=resolver), \
+                 patch.object(hosted, 'from_aggregate', return_value={'frozen': True}):
+                hosted.select(args)
+            resolver.baseline.assert_called_once_with(hosted.ROOT, 'main')
+            self.assertEqual(json.loads(args.output.read_text()), {'frozen': True})
+
     def test_native_build_uses_admitted_base_and_cannot_skip_on_lookup_failure(self):
         sys.path.insert(0, str(ROOT.parent / 'ci/integration'))
         resolver = module('workbench_resolver_test', ROOT.parent / 'ci/integration/resolve-artifacts.py')
         record = {'repository': resolver.PLATFORM, 'base_sha': 'a' * 40, 'candidate_sha': 'b' * 40}
-        plan = {'mode': 'source', 'candidate_records': [record]}
-        with patch.object(resolver, 'changed_files', return_value=['workbench/Dockerfile']) as changes:
-            self.assertTrue(resolver.workbench_requested(plan))
-            changes.assert_called_once_with(resolver.PLATFORM, record['base_sha'], record['candidate_sha'])
-        with patch.object(resolver, 'changed_files', return_value=['docs/ci.md']):
-            self.assertFalse(resolver.workbench_requested(plan))
-        with patch.object(resolver, 'changed_files', side_effect=ValueError('lookup failed')):
-            with self.assertRaisesRegex(ValueError, 'lookup failed'):
-                resolver.workbench_requested(plan)
-        with patch.object(resolver, 'changed_files') as changes:
-            self.assertFalse(resolver.workbench_requested(plan | {'mode': 'exact-assets'}))
-            changes.assert_not_called()
+        plan = {'mode': 'source', 'candidate_records': [record],
+                'admission_changes': {'platform': ['workbench/Dockerfile']},
+                'changes': {'platform': ['docs/ci.md']}}
+        self.assertTrue(resolver.workbench_requested(plan))
+        plan['admission_changes']['platform'] = ['docs/ci.md']
+        self.assertFalse(resolver.workbench_requested(plan))
+        del plan['admission_changes']
+        with self.assertRaisesRegex(ValueError, 'missing admitted platform comparison'):
+            resolver.workbench_requested(plan)
+        self.assertFalse(resolver.workbench_requested(plan | {'mode': 'exact-assets'}))
+
 
 
 

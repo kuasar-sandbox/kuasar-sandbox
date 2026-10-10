@@ -127,15 +127,18 @@ def run(
     check: bool = True,
     environment: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    result = subprocess.run(
-        command,
-        cwd=cwd,
-        check=False,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        env=environment,
-    )
+    git_operation = command[0] == 'git' or command[:3] == ['gh', 'repo', 'clone']
+    if git_operation:
+        environment = dict(os.environ if environment is None else environment,
+                           GIT_TERMINAL_PROMPT='0', GCM_INTERACTIVE='never')
+    try:
+        result = subprocess.run(
+            command, cwd=cwd, check=False, text=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment,
+            **({'timeout': 120} if git_operation else {}),
+        )
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError('Git source operation timed out') from error
     if check and result.returncode != 0:
         detail = result.stderr.strip() or result.stdout.strip() or "command failed"
         raise RuntimeError(f"{' '.join(command)}: {detail}")
@@ -252,14 +255,22 @@ def platform_asset_names(tag: str, sha: str) -> set[str]:
         if "-preview." in tag
         else "releases/release.yaml"
     )
+    published = tag_sha(PLATFORM_REPOSITORY, tag)
+    source_ref = tag if published is not None else PLATFORM_REF
+    observed = published if published is not None else branch_sha(PLATFORM_REPOSITORY, source_ref)
+    if observed != sha:
+        raise Deferred(f'platform {source_ref} moved before manifest admission')
     state = api_optional(
-        f"repos/{PLATFORM_REPOSITORY}/contents/{relative}?ref={sha}"
+        f"repos/{PLATFORM_REPOSITORY}/contents/{relative}?ref={quote(source_ref, safe='')}"
     )
+    after = tag_sha(PLATFORM_REPOSITORY, tag) if published is not None else branch_sha(PLATFORM_REPOSITORY, source_ref)
+    if after != sha:
+        raise Deferred(f'platform {source_ref} moved during manifest admission')
     if state is None or not isinstance(state.get("content"), str):
         raise Deferred(f"platform {tag} has no release manifest at {sha}")
     try:
         content = base64.b64decode(state["content"].replace("\n", "")).decode()
-        aggregate, _, components = selection.parse_manifest(
+        aggregate, _, components = selection.parse_historical_manifest(
             content, f"{sha}:{relative}", "-preview." in tag
         )
     except (ValueError, UnicodeDecodeError, selection.ManifestError) as error:
@@ -910,25 +921,12 @@ def platform_changed_since(tag: str) -> bool:
     return status.tag_sha != PLATFORM_SHA
 
 
-def plan_test_revisions(
-    plans: dict[str, Plan], fixed_pins: dict[str, str] | None = None
-) -> dict[str, str]:
-    pins = {}
-    for owner in selection.TEST_OWNERS:
-        plan = plans["runtime" if owner == "guest-runtime" else owner]
-        # Without a component source branch, retain an explicitly committed test
-        # pin; a reused product tag cannot supply a missing test selection.
-        pins[owner] = (fixed_pins or {}).get(owner) if plan.source_ref is None else plan.source_head
-    return selection.test_revisions({"test_revisions": pins}, "trusted Preview plan")
-
-
 def render_manifest(
     base: str,
     previous: str | None,
     date: str,
     previous_preview: str | None,
     plans: dict[str, Plan],
-    fixed_pins: dict[str, str] | None = None,
 ) -> str:
     lines = [f"version: {base}", f"delivery: {selection.DELIVERY}"]
     if previous is not None:
@@ -939,10 +937,9 @@ def render_manifest(
     lines.append("components:")
     for name in selection.UNITS:
         lines.append(f"  {name}: {plans[name].selected}")
-    lines.append("test_revisions:")
-    for owner, sha in plan_test_revisions(plans, fixed_pins).items():
-        lines.append(f"  {owner}: {sha}")
-    return "\n".join(lines) + "\n"
+    content = "\n".join(lines) + "\n"
+    selection.parse_manifest(content, "generated Preview selection", True)
+    return content
 
 
 def persist_manifest(content: str, aggregate: str) -> str:
@@ -1318,13 +1315,9 @@ def main(deadline: float | None = None) -> str:
                 f"component cleanup is active; keep its manifest immutable: "
                 f"{active_cleanup.get('html_url')}"
             )
-    recorded = selection.read_simple_yaml(
-        (PLATFORM_ROOT / "releases/daily-preview.yaml").read_text(), "daily-preview.yaml"
-    ).get("test_revisions")
     changed = any(plans[name].selected != configured[name] for name in configured)
     if current_status.complete:
         changed = changed or platform_changed_since(current_aggregate)
-        changed = changed or plan_test_revisions(plans, recorded) != recorded
         if not changed:
             print(f"==> no source changes since {current_aggregate}; keep maintained preview")
             return "unchanged"
@@ -1333,7 +1326,7 @@ def main(deadline: float | None = None) -> str:
         print("==> selection exhausted the branch budget; resume before manifest mutation")
         return "pending"
     aggregate = f"{base}-preview.{date}"
-    content = render_manifest(base, previous, date, next_previous_preview, plans, recorded)
+    content = render_manifest(base, previous, date, next_previous_preview, plans)
     PLATFORM_SHA = persist_manifest(content, aggregate)
     return converge_until_deadline(plans, aggregate, deadline)
 

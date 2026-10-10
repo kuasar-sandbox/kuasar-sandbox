@@ -13,6 +13,7 @@ import unittest
 from unittest.mock import patch
 
 import artifacts
+from test_fixtures import restore_using
 from test_fixtures import CASES, select_plan
 
 
@@ -51,16 +52,17 @@ class SourceChecksTests(unittest.TestCase):
 
     def test_materialize_only_uses_exact_test_pins_and_transitive_closure(self):
         select_plan(self.plan, ["orchestrator"])
-        with patch.object(SUBJECT.build, "checkout", side_effect=self.checkout) as checkout, \
+        with patch.object(SUBJECT.source_inputs, "copy_run_inputs", side_effect=restore_using(self.checkout)) as checkout, \
              patch.object(SUBJECT.subprocess, "run") as run:
             SUBJECT.materialize(self.plan, self.sources, self.output)
         run.assert_not_called()
         expected = {"platform", "orchestrator", "sandboxer", "connector", "accelerator"}
-        self.assertEqual({call.args[2].name for call in checkout.call_args_list}, expected)
-        for call in checkout.call_args_list:
-            pin = self.plan["test_revisions"][call.args[2].name]
-            self.assertEqual(call.args[:2], (pin["repository"], pin["sha"]))
-            self.assertNotEqual(call.args[1], "c" * 40)
+        checkout.assert_called_once()
+        layout = checkout.call_args.args[1]
+        self.assertEqual(set(layout), expected)
+        for owner, record in layout.items():
+            self.assertEqual(record, self.plan['test_revisions'][owner])
+            self.assertNotEqual(record['sha'], 'c' * 40)
         self.assertFalse((self.sources / "go.work").exists())
         result = self.result()
         self.assertEqual(result["phase"], "materialize")
@@ -71,7 +73,7 @@ class SourceChecksTests(unittest.TestCase):
 
     def test_materialize_failure_records_partial_actions_and_real_exit(self):
         select_plan(self.plan, ["connector"])
-        with patch.object(SUBJECT.build, "checkout", side_effect=subprocess.CalledProcessError(17, ["git", "fetch"])):
+        with patch.object(SUBJECT.source_inputs, "copy_run_inputs", side_effect=subprocess.CalledProcessError(17, ["git", "fetch"])):
             with self.assertRaises(subprocess.CalledProcessError):
                 SUBJECT.materialize(self.plan, self.sources, self.output)
         self.assertEqual(self.result()["exit_code"], 17)
@@ -83,7 +85,7 @@ class SourceChecksTests(unittest.TestCase):
         def run(command, *, cwd, env):
             commands.append((command, cwd, dict(env)))
             return subprocess.CompletedProcess(command, failure[1] if failure and command == failure[0] else 0)
-        with patch.object(SUBJECT.build, "checkout", side_effect=self.checkout), \
+        with patch.object(SUBJECT.source_inputs, "copy_run_inputs", side_effect=restore_using(self.checkout)), \
              patch.object(SUBJECT.subprocess, "run", side_effect=run), \
              patch.dict(os.environ, {"TMPDIR": "/build/t"}):
             SUBJECT.execute(self.plan, self.sources, self.output)
@@ -146,7 +148,7 @@ class SourceChecksTests(unittest.TestCase):
                     if command == ["bash", "scripts/ci-source-checks.sh"]:
                         return real_run(command, cwd=cwd, env=env, timeout=10)
                     return subprocess.CompletedProcess(command, 0)
-                with patch.object(SUBJECT.build, "checkout", side_effect=checkout), \
+                with patch.object(SUBJECT.source_inputs, "copy_run_inputs", side_effect=restore_using(checkout)), \
                      patch.object(SUBJECT.subprocess, "run", side_effect=run):
                     SUBJECT.execute(self.plan, self.sources, self.output)
                 self.assertEqual((self.sources / "connector/executed").read_text(), checks + "\n")
@@ -185,7 +187,7 @@ class SourceChecksTests(unittest.TestCase):
         self.assertEqual(self.result()["checks"][-1]["exit_code"], 42)
 
     def test_missing_executor_records_command_failure(self):
-        with patch.object(SUBJECT.build, "checkout", side_effect=self.checkout), \
+        with patch.object(SUBJECT.source_inputs, "copy_run_inputs", side_effect=restore_using(self.checkout)), \
              patch.object(SUBJECT.subprocess, "run", side_effect=FileNotFoundError("make")):
             with self.assertRaises(FileNotFoundError):
                 SUBJECT.execute(self.plan, self.sources, self.output)
@@ -197,7 +199,7 @@ class SourceChecksTests(unittest.TestCase):
     def test_credentials_fail_before_checkout_or_source_execution(self):
         for name in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY"):
             with self.subTest(name=name), patch.dict(os.environ, {name: "credential-fixture"}), \
-                 patch.object(SUBJECT.build, "checkout") as checkout, \
+                 patch.object(SUBJECT.source_inputs, "copy_run_inputs") as checkout, \
                  patch.object(SUBJECT.subprocess, "run") as run:
                 with self.assertRaisesRegex(ValueError, "must not receive " + name):
                     SUBJECT.materialize(self.plan, self.sources, self.output)
@@ -205,7 +207,7 @@ class SourceChecksTests(unittest.TestCase):
                 run.assert_not_called()
 
     def test_materialized_receipt_rejects_changed_plan_before_execution(self):
-        with patch.object(SUBJECT.build, "checkout", side_effect=self.checkout):
+        with patch.object(SUBJECT.source_inputs, "copy_run_inputs", side_effect=restore_using(self.checkout)):
             SUBJECT.materialize(self.plan, self.sources, self.output)
         self.plan["test_revisions"]["connector"]["sha"] = "f" * 40
         with patch.object(SUBJECT.subprocess, "run") as run:
@@ -234,8 +236,8 @@ class SourceChecksTests(unittest.TestCase):
             self.plan["test_revisions"][owner]["sha"] = subprocess.check_output(
                 ["git", "-C", source, "rev-parse", "HEAD"], text=True).strip()
             upstreams[owner] = source
-        with patch.object(SUBJECT.build, "checkout", side_effect=lambda repository, sha, target:
-                          shutil.copytree(upstreams[target.name], target)):
+        with patch.object(SUBJECT.source_inputs, "copy_run_inputs", side_effect=restore_using(lambda repository, sha, target:
+                          shutil.copytree(upstreams[target.name], target))):
             SUBJECT.materialize(self.plan, self.sources, self.output)
 
     def executor(self, seen, *, bad_workspace=False):
@@ -258,7 +260,7 @@ class SourceChecksTests(unittest.TestCase):
         self.real_sources()
         seen = []
         run = self.executor(seen)
-        with patch.object(SUBJECT.build, "checkout") as checkout, \
+        with patch.object(SUBJECT.source_inputs, "copy_run_inputs") as checkout, \
              patch.object(SUBJECT.subprocess, "run", side_effect=run):
             SUBJECT.execute(self.plan, self.sources, self.output, materialized=True)
             SUBJECT.execute(self.plan, self.sources, self.output, materialized=True)

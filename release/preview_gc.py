@@ -191,7 +191,7 @@ def parse_snapshot(commit: str) -> tuple[str, dict[str, str], str] | None:
         )
         if "preview_version" not in raw or "components" not in raw:
             return None
-        aggregate, _, components = coordinator.selection.parse_manifest(
+        aggregate, _, components = coordinator.selection.parse_historical_manifest(
             content, f"{commit}:releases/daily-preview.yaml", True
         )
     except coordinator.selection.ManifestError as error:

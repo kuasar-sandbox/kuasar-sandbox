@@ -35,7 +35,7 @@ class PrebuiltPackage(unittest.TestCase):
             self.metadata[arch] = {'arch': arch, 'framework_sha': 'b' * 40,
                                    'test_revisions': copy.deepcopy(self.pins), 'helpers': helpers}
 
-    def validate(self, expected=None):
+    def validate(self, expected=None, expected_sources=None):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'package.tar.gz'
             files = self.files | {f'test/e2e/helpers/{arch}/helpers.json': (json.dumps(record).encode(), 0o644)
@@ -49,7 +49,28 @@ class PrebuiltPackage(unittest.TestCase):
                     member = tarfile.TarInfo(name)
                     member.size, member.mode = len(data), mode
                     output.addfile(member, io.BytesIO(data))
-            package.validate(path, self.pins if expected is None else expected)
+            package.validate(path, self.pins if expected is None else expected, expected_sources)
+
+    def test_new_helpers_are_bound_to_selected_tag_facts_and_legacy_stays_readable(self):
+        sources = {unit: {'repository': package.tag_sources.repository(unit), 'sha': 'a' * 40, 'tree': 'c' * 40,
+                         'tag': ('runtime-' if unit == 'runtime' else 'vmlinux-' if unit == 'vmlinux' else '') + 'v1.2.3'}
+                   for unit in package.tag_sources.selection.UNITS}
+        # Existing immutable helper metadata remains readable as historical evidence.
+        self.validate()
+        with self.assertRaisesRegex(ValueError, 'helper tag source facts differ'):
+            self.validate(expected_sources=sources)
+        for record in self.metadata.values():
+            record['source_records'] = copy.deepcopy(sources)
+        self.validate(expected_sources=sources)
+        self.metadata['aarch64']['source_records']['orchestrator']['tag'] = 'v1.2.4'
+        with self.assertRaisesRegex(ValueError, 'helper tag source facts differ'):
+            self.validate(expected_sources=sources)
+        with self.assertRaisesRegex(ValueError, 'architecture helper source sets differ'):
+            self.validate()
+        self.metadata['aarch64']['source_records'] = copy.deepcopy(sources)
+        self.metadata['aarch64']['source_records']['orchestrator']['sha'] = 'f' * 40
+        with self.assertRaisesRegex(ValueError, 'helper owner SHA facts differ'):
+            self.validate()
 
     def test_nested_discovered_owner_runtime_files_are_valid(self):
         self.files['test/e2e/lib/sandboxer/restore_dio_workload.py'] = (b'# owner runtime\n', 0o644)
