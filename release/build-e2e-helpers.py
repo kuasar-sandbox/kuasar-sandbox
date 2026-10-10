@@ -32,7 +32,10 @@ def build(test_sources, pins, output, wheels_output, platform_source, arch=None)
         sources = Path(directory) / 'sources'
         # Work in a private copy; source assembly still sees its exact inputs.
         shutil.copytree(test_sources, sources)
-        environment = {**os.environ, 'GOWORK': str(sources / 'go.work')}
+        # Pinned owner recipes may omit -trimpath. Private copy names must not
+        # enter their binaries or defeat reuse of the same compiler inputs.
+        environment = {**os.environ, 'GOWORK': str(sources / 'go.work'),
+                       'GOFLAGS': (os.environ.get('GOFLAGS', '') + ' -trimpath').strip()}
         subprocess.run(['go', 'work', 'init', *('./' + owner for owner in sorted(pins))], cwd=sources,
                        env={**environment, 'GOWORK': 'off'}, check=True)
         for arch in ((arch,) if arch else artifacts.ARCHES):

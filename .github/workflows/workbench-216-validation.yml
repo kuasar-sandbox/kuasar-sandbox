@@ -654,6 +654,10 @@ jobs:
     needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    permissions: &aggregate_helper_cache_permissions
+      contents: read
+      pull-requests: read
+      actions: read
     env:
       TARGET_ARCH: x86_64
       CACHE_PHASE: cold
@@ -673,6 +677,8 @@ jobs:
           name: workbench-216-aggregate-helper-cold-${{ env.TARGET_ARCH }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: cold-helper-cache
       - name: Materialize the real aggregate producer's exact helper input layout
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 -B framework/ci/hosted/verify-workbench-216.py aggregate-helper-fetch \
             --frozen plan/frozen.json --sources helper-work --arch "$TARGET_ARCH" --output helper-inputs.json
@@ -695,6 +701,8 @@ jobs:
               --output /src/.ci/e2e-helpers --wheels-output /src/.ci/e2e-wheels --platform-source /src/platform
       - name: Verify actual repository cache, helper identities and owned cleanup
         if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           cold=()
           if [ "$CACHE_PHASE" = warm ]; then cold=(--cold cold-helper-cache/helper-cache-evidence); fi
@@ -719,6 +727,7 @@ jobs:
     needs: prepare
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
+    permissions: *aggregate_helper_cache_permissions
     env:
       TARGET_ARCH: aarch64
       CACHE_PHASE: cold
@@ -729,6 +738,7 @@ jobs:
     needs: [prepare, aggregate-helper-cold-x86]
     runs-on: ubuntu-24.04
     timeout-minutes: 120
+    permissions: *aggregate_helper_cache_permissions
     env:
       TARGET_ARCH: x86_64
       CACHE_PHASE: warm
@@ -739,6 +749,7 @@ jobs:
     needs: [prepare, aggregate-helper-cold-arm]
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 120
+    permissions: *aggregate_helper_cache_permissions
     env:
       TARGET_ARCH: aarch64
       CACHE_PHASE: warm

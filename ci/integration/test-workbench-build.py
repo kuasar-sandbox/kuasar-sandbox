@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check exact source handoff and native helper packages without real compilers."""
+"""Check exact source handoff, native helpers and reproducible Go helper builds."""
 import copy
 import importlib.util
 import json
@@ -27,6 +27,44 @@ release_helpers = load("workbench_release_helpers", "release/build-e2e-helpers.p
 
 
 class WorkbenchBuild(unittest.TestCase):
+    def test_release_helper_private_copy_paths_do_not_change_go_binary_bytes(self):
+        pins = {owner: "c" * 40 for owner in artifacts.OWNERS if owner != "platform"}
+        arch = os.uname().machine
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sources = root / "sources"
+            for owner in pins:
+                module = sources / owner
+                module.mkdir(parents=True)
+                (module / "go.mod").write_text("module example.test/" + owner + "\ngo 1.22\n")
+            proxy = sources / "orchestrator/examples/custom-proxy"
+            proxy.mkdir(parents=True)
+            (proxy / "main.go").write_text('package main\nimport ("fmt"; "runtime")\n'
+                                         'func main() { _, file, _, _ := runtime.Caller(0); fmt.Println(file) }\n')
+            copied = []
+            def helpers(source, target, destination, selected, environment):
+                copied.append(source)
+                self.assertIn("-p=2", environment["GOFLAGS"].split())
+                destination.mkdir(parents=True)
+                # Same owner command shape which omitted -trimpath in the
+                # pinned custom-proxy recipe; the producer supplies the flag.
+                subprocess.run(["go", "-C", str(source / "orchestrator"), "build",
+                                "-o", str(destination / "custom-proxy"), "./examples/custom-proxy"],
+                               env={**environment, "GOWORK": "off", "CGO_ENABLED": "0"}, check=True)
+                for name in set(selected) - {"custom-proxy"}:
+                    (destination / name).write_bytes(b"unrelated helper fixture")
+            with patch.dict(os.environ, {"GOFLAGS": "-p=2", "GOPROXY": "off", "GOSUMDB": "off"}), \
+                    patch.object(release_helpers.build_demo_wheels, "build"), \
+                    patch.object(release_helpers.build_helpers, "build", side_effect=helpers):
+                for phase in ("cold", "warm"):
+                    release_helpers.build(sources, pins, root / phase, root / (phase + "-wheels"), root, arch)
+            self.assertNotEqual(copied[0], copied[1])
+            self.assertTrue(all(not source.exists() for source in copied))
+            self.assertEqual(artifacts.digest(root / "cold" / arch / "custom-proxy"),
+                             artifacts.digest(root / "warm" / arch / "custom-proxy"))
+            self.assertEqual((root / "cold" / arch / "helpers.json").read_bytes(),
+                             (root / "warm" / arch / "helpers.json").read_bytes())
+
     def plan(self):
         revisions = artifacts.release_test_revisions(
             {owner: "a" * 40 for owner in artifacts.OWNERS if owner != "platform"}, "b" * 40)
