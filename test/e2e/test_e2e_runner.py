@@ -94,12 +94,12 @@ class SelectionTests(unittest.TestCase):
             (work / "bin").mkdir(parents=True)
             (work / "test/e2e/lib").mkdir(parents=True)
             (work / "test/e2e/cases").mkdir()
-            (work / "ARCH").write_text("x86_64\n")
+            (work / "ARCH").write_text(platform.machine() + "\n")
             (runner.CASES / "basic.one.sh").write_text(
                 '#!/bin/sh\nset -eu\n'
                 f'[ "$E2E_WORKSPACE" = "{work}" ]\n'
                 f'[ "$E2E_LIB" = "{work}/test/e2e/lib" ]\n'
-                '[ "$E2E_ARCH" = x86_64 ]\n'
+                f'[ "$E2E_ARCH" = {platform.machine()} ]\n'
                 f'[ "$WORK" = "{run_root}/basic.one.sh" ]\n'
                 f'[ "$OUT" = "{out_root}/basic.one.sh" ]\n'
                 'printf ok > "$OUT/result"\n')
