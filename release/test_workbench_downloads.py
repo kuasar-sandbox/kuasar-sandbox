@@ -14,6 +14,24 @@ import unittest
 ROOT = Path(__file__).resolve().parents[1]
 TAG = 'release-v1.2.3'
 
+# Original release-v0.1.5 manifest; retain its historical test provenance verbatim.
+LEGACY_STABLE_MANIFEST = b'''version: release-v0.1.5
+previous_version: release-v0.1.4
+components:
+  accelerator: v0.1.5
+  connector: v0.1.4
+  sandboxer: v0.1.5
+  orchestrator: v0.1.5
+  runtime: runtime-v0.1.5
+  vmlinux: vmlinux-v0.1.3
+test_revisions:
+  accelerator: 1069c605f2f3d116c1873eb3f2179810e1e8a341
+  connector: f7f11917096f7a40e6ad1601179ff53429052c92
+  guest-runtime: 745ba89c776eed7b9d404a8e3fc19cb60022518b
+  sandboxer: a48c688ece56a4e9d02620f320f8ee98bc60885c
+  orchestrator: 9f7e54f6169f0070ecc864486764023127f55e72
+'''
+
 
 class ManifestRetrievalTests(unittest.TestCase):
     def retrieve(self, guide, *, tag=TAG, requested='', source='a' * 40,
@@ -23,14 +41,22 @@ class ManifestRetrievalTests(unittest.TestCase):
         entrance = block.split('\nRELEASE_VERSION="$(python3 - ', 1)[0]
         content = f'version: {TAG}\ndelivery: workbench-v1\n# original\n'.encode()
         root_sha, releases_sha = 'b' * 40, 'c' * 40
-        if legacy:
+        if legacy == 'stable':
+            tag = 'release-v0.1.5'
+            source = 'bd773ff2f7d69266cad6840ad1ab69f78f00f7e0'
+            root_sha = '947eacd8a6cbe7f6a215a7773aa1956a6ab65a6b'
+            releases_sha = 'f29c1d277cc9fa78c58342934575b23d80ef4433'
+            content = LEGACY_STABLE_MANIFEST
+        elif legacy:
             tag = 'release-v0.1.6-preview.20261010.1'
             source = '210fed3a1f7dd5899e09cda562c0bb66520dee5e'
             root_sha = 'b7dcb7b85147c9d09d21b09cb3ea06605649b7fa'
             releases_sha = '553d65de83b4b9db694a722c5e4deef82573126d'
             content = (ROOT / 'ci/integration/fixtures/pre-cutover-preview.yaml').read_bytes()
         blob_sha = hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
-        if legacy:
+        if legacy == 'stable':
+            self.assertEqual((len(content), blob_sha), (501, 'b1677c6bcdda6c17d980738cf2299162cd144699'))
+        elif legacy:
             self.assertEqual((len(content), blob_sha), (717, 'cc34e1f07745778e36e28f182bd71c012f2c52f7'))
         manifest = 'daily-preview.yaml' if '-preview.' in str(tag) else 'release.yaml'
         api = 'https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox'
@@ -153,13 +179,15 @@ exec(compile(code, '<documented download>', 'exec'))
 
     def test_authentic_legacy_manifest_and_annotated_tags_remain_readable(self):
         for guide in ('download.md', 'download_zh.md'):
-            for change in ({'legacy': True}, {'annotated': True}):
+            for change in ({'legacy': True}, {'legacy': 'stable'}, {'annotated': True}):
                 with self.subTest(guide=guide, change=change):
                     result, urls = self.retrieve(guide, **change)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     if change.get('legacy'):
                         self.assertIn('test_revisions:', result.stdout)
-                        self.assertEqual(result.stdout, (ROOT / 'ci/integration/fixtures/pre-cutover-preview.yaml').read_text())
+                        expected = (LEGACY_STABLE_MANIFEST.decode() if change['legacy'] == 'stable' else
+                                    (ROOT / 'ci/integration/fixtures/pre-cutover-preview.yaml').read_text())
+                        self.assertEqual(result.stdout, expected)
 
     def test_malformed_release_tags_stop_before_manifest_retrieval(self):
         for guide in ('download.md', 'download_zh.md'):
