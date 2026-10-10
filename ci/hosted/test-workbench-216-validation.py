@@ -368,7 +368,7 @@ class FrozenSourceGateContracts(unittest.TestCase):
         self.assertNotIn("env", job)
         steps = job["steps"]
         self.assertEqual(steps[0]["with"], {"ref": "${{ job.workflow_sha }}", "path": "framework", "persist-credentials": False})
-        self.assertEqual(steps[1]["with"], {"name": "workbench-216-plan-${{ github.run_id }}", "path": "plan"})
+        self.assertEqual(steps[1]["with"], {"name": "workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}", "path": "plan"})
         self.assertIn("--plan plan/integration-plan.json --sources source-checks", steps[2]["run"])
         self.assertIn('--output "$RUNNER_TEMP/source-materialize.json" --materialize-only', steps[2]["run"])
         self.assertIn("cp plan/integration-plan.json source-checks/.source-plan.json", steps[2]["run"])
@@ -391,7 +391,7 @@ class FrozenSourceGateContracts(unittest.TestCase):
         self.assertFalse(any("env" in step or "actions/cache" in step.get("uses", "") for step in steps))
         self.assertIn("source-checks", self.jobs["validation-results"]["needs"])
         final = self.jobs["validation-results"]["steps"]
-        self.assertTrue(any(step.get("with", {}).get("name") == "workbench-216-source-result-${{ github.run_id }}"
+        self.assertTrue(any(step.get("with", {}).get("name") == "workbench-216-source-result-${{ github.run_id }}-${{ github.run_attempt }}"
                             and step["with"]["path"] == "source" for step in final))
         self.assertIn("source-validation.json", final[-1]["with"]["path"].splitlines())
         for result in ("failure", "cancelled", "skipped"):

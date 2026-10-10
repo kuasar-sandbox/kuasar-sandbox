@@ -1,5 +1,7 @@
 name: Workbench 216 Full Validation
 run-name: Workbench 216 build, package, restore and exact-product gates @${{ github.sha }}
+# Artifacts are attempt-scoped; re-run all jobs to freeze a new complete input set.
+# Earlier attempts retain their original evidence and are never overwritten.
 
 # Temporary acceptance entry, removed with the same coordinated delivery.
 # It never creates releases, tags, publisher tokens or production assets.
@@ -74,7 +76,7 @@ jobs:
             --framework-sha "$TRUSTED_WORKFLOW_SHA" --output plan
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
           if-no-files-found: error
           retention-days: 7
@@ -92,7 +94,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - name: Fetch the frozen full test sources without a compiler
         run: |
@@ -158,7 +160,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-source-result-${{ github.run_id }}
+          name: workbench-216-source-result-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             ${{ runner.temp }}/source-system-evidence
             ${{ runner.temp }}/source-materialize.json
@@ -178,7 +180,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - name: Fetch fresh exact sources without a compiler
         env:
@@ -209,7 +211,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-space-cold-x86-${{ github.run_id }}
+          name: workbench-216-space-cold-x86-${{ github.run_id }}-${{ github.run_attempt }}
           path: task-space
           if-no-files-found: error
           retention-days: 7
@@ -217,7 +219,7 @@ jobs:
         if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-cold-products-x86_64-${{ github.run_id }}
+          name: workbench-216-cold-products-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             sources/verification/carried-products.tar
             sources/verification/result.json
@@ -230,7 +232,7 @@ jobs:
         if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-cold-x86_64-${{ github.run_id }}
+          name: workbench-216-cold-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             sources/verification/result.json
             sources/verification/logs
@@ -254,7 +256,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - name: Fetch fresh exact sources without a compiler
         env:
@@ -285,7 +287,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-space-cold-arm-${{ github.run_id }}
+          name: workbench-216-space-cold-arm-${{ github.run_id }}-${{ github.run_attempt }}
           path: task-space
           if-no-files-found: error
           retention-days: 7
@@ -293,7 +295,7 @@ jobs:
         if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-cold-products-aarch64-${{ github.run_id }}
+          name: workbench-216-cold-products-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             sources/verification/carried-products.tar
             sources/verification/result.json
@@ -305,7 +307,7 @@ jobs:
         if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-cold-aarch64-${{ github.run_id }}
+          name: workbench-216-cold-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             sources/verification/result.json
             sources/verification/logs
@@ -335,7 +337,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - name: Admit only the exact same public-main source and test pins
         env:
@@ -365,7 +367,7 @@ jobs:
         if: always() && steps.task.outputs.root != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-legacy-source-${{ github.run_id }}
+          name: workbench-216-legacy-source-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             legacy-source-output/host/result.json
             legacy-source-output/host/logs
@@ -394,7 +396,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - name: Fetch the same frozen sources into fresh task-private host state
         id: inputs
@@ -425,7 +427,7 @@ jobs:
         if: success() && steps.verification.outcome == 'success' && steps.finish.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-legacy-cold-${{ env.TARGET_ARCH }}-${{ github.run_id }}
+          name: workbench-216-legacy-cold-${{ env.TARGET_ARCH }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: legacy-output/validated
           compression-level: 0
           if-no-files-found: error
@@ -434,7 +436,7 @@ jobs:
         if: success() && steps.verification.outcome == 'success' && steps.finish.outcome == 'success' && env.TARGET_ARCH == 'x86_64'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-legacy-readers-x86_64-${{ github.run_id }}
+          name: workbench-216-legacy-readers-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: legacy-output/validated/readers
           if-no-files-found: error
           retention-days: 7
@@ -442,7 +444,7 @@ jobs:
         if: always() && steps.inputs.outputs.task_root != ''
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-legacy-host-${{ env.TARGET_ARCH }}-${{ github.run_id }}
+          name: workbench-216-legacy-host-${{ env.TARGET_ARCH }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             legacy-output/host/result.json
             legacy-output/host/logs
@@ -477,7 +479,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - name: Reserve only this native reader producer's private state
         id: inputs
@@ -501,7 +503,7 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: success() && steps.verification.outcome == 'success' && steps.finish.outcome == 'success'
         with:
-          name: workbench-216-legacy-readers-aarch64-${{ github.run_id }}
+          name: workbench-216-legacy-readers-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: legacy-readers-output/validated/readers
           if-no-files-found: error
           retention-days: 7
@@ -509,7 +511,7 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         if: always() && steps.inputs.outputs.task_root != ''
         with:
-          name: workbench-216-legacy-readers-host-aarch64-${{ github.run_id }}
+          name: workbench-216-legacy-readers-host-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             legacy-readers-output/host/result.json
             legacy-readers-output/host/logs
@@ -530,11 +532,11 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-cold-products-x86_64-${{ github.run_id }}
+          name: workbench-216-cold-products-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Fetch a new source directory and carry only exact non-native products
         env:
@@ -568,7 +570,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-space-warm-x86-${{ github.run_id }}
+          name: workbench-216-space-warm-x86-${{ github.run_id }}-${{ github.run_attempt }}
           path: task-space
           if-no-files-found: error
           retention-days: 7
@@ -576,7 +578,7 @@ jobs:
         if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-warm-x86_64-${{ github.run_id }}
+          name: workbench-216-warm-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: sources/verification
           compression-level: 0
           if-no-files-found: error
@@ -595,11 +597,11 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-cold-products-aarch64-${{ github.run_id }}
+          name: workbench-216-cold-products-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Fetch a new source directory and carry only exact non-native products
         env:
@@ -633,7 +635,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-space-warm-arm-${{ github.run_id }}
+          name: workbench-216-space-warm-arm-${{ github.run_id }}-${{ github.run_attempt }}
           path: task-space
           if-no-files-found: error
           retention-days: 7
@@ -641,7 +643,7 @@ jobs:
         if: success() && steps.verification.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-warm-aarch64-${{ github.run_id }}
+          name: workbench-216-warm-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: sources/verification
           compression-level: 0
           if-no-files-found: error
@@ -660,7 +662,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - name: Materialize the independently pinned helper and test sources
         env:
@@ -711,7 +713,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-space-helpers-x86-${{ github.run_id }}
+          name: workbench-216-space-helpers-x86-${{ github.run_id }}-${{ github.run_attempt }}
           path: task-space
           if-no-files-found: error
           retention-days: 7
@@ -724,14 +726,14 @@ jobs:
           (cd readers && sha256sum mkfs.erofs fsck.erofs dump.erofs runtime-payloads.py erofs-readers.COPYING > SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-helpers-x86_64-${{ github.run_id }}
+          name: workbench-216-helpers-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: helper-inputs.tar
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-readers-x86_64-${{ github.run_id }}
+          name: workbench-216-readers-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: readers
           if-no-files-found: error
           retention-days: 7
@@ -753,23 +755,23 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.PACKAGE_PREFIX }}-x86_64-${{ github.run_id }}
+          name: ${{ env.PACKAGE_PREFIX }}-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: cold
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         if: env.DELTA_COMMAND == 'packaged-delta'
         with:
-          name: workbench-216-helpers-x86_64-${{ github.run_id }}
+          name: workbench-216-helpers-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Bootstrap compiler-free archive preparation
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         if: env.DELTA_COMMAND == 'packaged-delta'
         with:
-          name: ${{ env.RESULT_PREFIX }}-readers-x86_64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-readers-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: readers
       - name: Select verified native archive readers
         run: |
@@ -811,14 +813,14 @@ jobs:
           tar -czf prepared.tar.gz -C prepared x86_64
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ${{ env.RESULT_PREFIX }}-prepared-x86_64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-prepared-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: prepared.tar.gz
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ${{ env.RESULT_PREFIX }}-provenance-x86_64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-provenance-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             prepared/x86_64/provenance.json
             packaged-delta-time.txt
@@ -847,17 +849,17 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.RESULT_PREFIX }}-prepared-x86_64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-prepared-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Bootstrap the existing declared native execution profile
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-x86
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.RESULT_PREFIX }}-readers-x86_64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-readers-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: readers
       - name: Select verified native archive readers
         run: |
@@ -886,7 +888,7 @@ jobs:
             --workspace prepared/x86_64 --result "results/$TEST_SHARD.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ${{ env.RESULT_PREFIX }}-shard-x86_64-${{ matrix.shard }}-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-shard-x86_64-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: results/${{ matrix.shard }}.json
           if-no-files-found: error
           retention-days: 7
@@ -904,7 +906,7 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - name: Materialize the independently pinned helper and test sources
         env:
@@ -955,7 +957,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-space-helpers-arm-${{ github.run_id }}
+          name: workbench-216-space-helpers-arm-${{ github.run_id }}-${{ github.run_attempt }}
           path: task-space
           if-no-files-found: error
           retention-days: 7
@@ -968,14 +970,14 @@ jobs:
           (cd readers && sha256sum mkfs.erofs fsck.erofs dump.erofs runtime-payloads.py erofs-readers.COPYING > SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-helpers-aarch64-${{ github.run_id }}
+          name: workbench-216-helpers-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: helper-inputs.tar
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-readers-aarch64-${{ github.run_id }}
+          name: workbench-216-readers-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: readers
           if-no-files-found: error
           retention-days: 7
@@ -997,23 +999,23 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.PACKAGE_PREFIX }}-aarch64-${{ github.run_id }}
+          name: ${{ env.PACKAGE_PREFIX }}-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: cold
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         if: env.DELTA_COMMAND == 'packaged-delta'
         with:
-          name: workbench-216-helpers-aarch64-${{ github.run_id }}
+          name: workbench-216-helpers-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Bootstrap compiler-free archive preparation
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         if: env.DELTA_COMMAND == 'packaged-delta'
         with:
-          name: ${{ env.RESULT_PREFIX }}-readers-aarch64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-readers-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: readers
       - name: Select verified native archive readers
         run: |
@@ -1055,14 +1057,14 @@ jobs:
           tar -czf prepared.tar.gz -C prepared aarch64
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ${{ env.RESULT_PREFIX }}-prepared-aarch64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-prepared-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: prepared.tar.gz
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ${{ env.RESULT_PREFIX }}-provenance-aarch64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-provenance-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             prepared/aarch64/provenance.json
             packaged-delta-time.txt
@@ -1091,17 +1093,17 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.RESULT_PREFIX }}-prepared-aarch64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-prepared-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Bootstrap the existing declared native execution profile
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-arm
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.RESULT_PREFIX }}-readers-aarch64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-readers-aarch64-${{ github.run_id }}-${{ github.run_attempt }}
           path: readers
       - name: Select verified native archive readers
         run: |
@@ -1130,7 +1132,7 @@ jobs:
             --workspace prepared/aarch64 --result "results/$TEST_SHARD.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ${{ env.RESULT_PREFIX }}-shard-aarch64-${{ matrix.shard }}-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-shard-aarch64-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: results/${{ matrix.shard }}.json
           if-no-files-found: error
           retention-days: 7
@@ -1150,17 +1152,17 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.RESULT_PREFIX }}-prepared-x86_64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-prepared-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: transport
       - name: Bootstrap the existing native performance profile
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-x86
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.RESULT_PREFIX }}-readers-x86_64-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-readers-x86_64-${{ github.run_id }}-${{ github.run_attempt }}
           path: readers
       - name: Select verified native archive readers
         run: |
@@ -1180,7 +1182,7 @@ jobs:
             --result results/performance.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ${{ env.RESULT_PREFIX }}-shard-x86_64-performance-${{ github.run_id }}
+          name: ${{ env.RESULT_PREFIX }}-shard-x86_64-performance-${{ github.run_id }}-${{ github.run_attempt }}
           path: results/performance.json
           if-no-files-found: error
           retention-days: 7
@@ -1270,15 +1272,15 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-plan-${{ github.run_id }}
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-source-result-${{ github.run_id }}
+          name: workbench-216-source-result-${{ github.run_id }}-${{ github.run_attempt }}
           path: source
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: workbench-216-legacy-source-${{ github.run_id }}
+          name: workbench-216-legacy-source-${{ github.run_id }}-${{ github.run_attempt }}
           path: legacy-source
       - name: Require the full same-input host source control and its owned cleanup
         run: |
@@ -1340,22 +1342,22 @@ jobs:
           PYTHON
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: workbench-216-shard-x86_64-*-${{ github.run_id }}
+          pattern: workbench-216-shard-x86_64-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: shards/x86_64
           merge-multiple: true
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: workbench-216-shard-aarch64-*-${{ github.run_id }}
+          pattern: workbench-216-shard-aarch64-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: shards/aarch64
           merge-multiple: true
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: workbench-216-legacy-shard-x86_64-*-${{ github.run_id }}
+          pattern: workbench-216-legacy-shard-x86_64-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: legacy-shards/x86_64
           merge-multiple: true
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          pattern: workbench-216-legacy-shard-aarch64-*-${{ github.run_id }}
+          pattern: workbench-216-legacy-shard-aarch64-*-${{ github.run_id }}-${{ github.run_attempt }}
           path: legacy-shards/aarch64
           merge-multiple: true
       - name: Collect the unchanged exact shard and performance contracts
@@ -1373,7 +1375,7 @@ jobs:
             --plan plan/integration-plan.json --results legacy-results > legacy-validation.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: workbench-216-integration-validation-${{ github.run_id }}
+          name: workbench-216-integration-validation-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             plan
             results
