@@ -82,8 +82,8 @@ kernel release、配置差异和产物哈希。不得用 Kuasar Guest defconfig 
 seccomp 和 overlayfs；userfaultfd、memfd 和 shmem；BPF/JIT/BTF、bpffs 和 TC BPF；
 TUN/TAP、veth、bridge、GENEVE、conntrack 和 NAT；以及实际需要的 vsock/vhost/存储
 路径。NFS、FUSE、EROFS 按宿主实际用途核对；安装用户态工具不等于启用内核功能。
-核验模块与 `uname -r` 匹配并可加载。在原生 Linux 宿主可用以下无持久修改的探测
-打开并关闭一个空 KVM VM：
+核验模块与 `uname -r` 匹配并可加载。在原生 Linux 宿主可用以下管理员权限探测
+打开并关闭一个空 KVM VM，不保留状态：
 
 ```sh
 sudo python3 - <<'PY'

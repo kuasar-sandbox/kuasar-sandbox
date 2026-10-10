@@ -99,7 +99,8 @@ userfaultfd, memfd and shmem; BPF/JIT/BTF, bpffs and TC BPF; TUN/TAP, veth,
 bridge, GENEVE, conntrack and NAT; and the required vsock/vhost/storage paths.
 Check NFS, FUSE and EROFS only for their actual host use; installing a userspace
 tool does not enable a kernel feature. Verify module loading against `uname -r`.
-On a native Linux host, this nonpersistent KVM preflight opens and closes an empty VM:
+On a native Linux host, this privileged KVM preflight opens and closes an empty
+VM without persisting state:
 
 ```sh
 sudo python3 - <<'PY'
