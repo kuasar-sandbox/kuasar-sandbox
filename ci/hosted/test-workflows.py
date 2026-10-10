@@ -313,8 +313,46 @@ def check():
     source_steps = {step.get("name"): step for step in source_job["steps"]}
     source_fetch = source_steps["Fetch exact test sources without a compiler"]["run"]
     assert "--materialize-only" in source_fetch
-    assert "--profile source" not in json.dumps(source_job) and "taskset" not in json.dumps(source_job)
-    system = source_steps["Run the complete required source gate in Workbench system mode"]["run"]
+    assert "--profile source" not in json.dumps(source_job)
+    system_name = "Run the complete required source gate in Workbench system mode"
+    system = source_steps[system_name]["run"]
+    source_prefix, source_user = system.split("<<'SOURCE_USER'\n", 1)
+    source_user, source_suffix = source_user.split("\nSOURCE_USER\n", 1)
+    assert "taskset" not in source_prefix + source_suffix
+    for name, step in source_steps.items():
+        if name != system_name:
+            assert "taskset" not in json.dumps(step)
+    affinity = source_user.index("source_cpus=$(python3 - <<'SOURCE_AFFINITY'")
+    bind = source_user.index('taskset -pc "$source_cpus" "$$" >/dev/null')
+    observe = source_user.index('taskset -pc "$$"')
+    assert source_user.index("install_runtime_reader") < affinity < bind < observe < source_user.index("run-source-checks.py")
+    selection = source_user[affinity:bind]
+    assert 'os.environ.get("KUASAR_BUILD_JOBS", "")' in selection
+    assert "jobs = int(budget)" in selection and "os.sched_getaffinity(0)" in selection
+    assert "jobs > len(allowed)" in selection and "allowed[:jobs]" in selection
+    # Execute the exact workflow block in child shells: successful taskset must
+    # affect the actual source process tree, and invalid budgets must stop it.
+    block = source_user[affinity:source_user.index("python3 -B /inputs/release/ci/integration/run-source-checks.py")]
+    marker = "python3 - <<'AFFINITY_CHILD'\nimport json, os\nprint('AFFINITY_CHILD=' + json.dumps(sorted(os.sched_getaffinity(0))))\nAFFINITY_CHILD\n"
+    allowed = sorted(os.sched_getaffinity(0))
+    assert allowed
+    cases = [(str(jobs), allowed[:jobs]) for jobs in sorted({1, min(2, len(allowed))})]
+    cases += [(value, None) for value in (None, "0", "-1", "invalid", str(len(allowed) + 1))]
+    for budget, expected in cases:
+        env = dict(os.environ)
+        env.pop("KUASAR_BUILD_JOBS", None)
+        if budget is not None:
+            env["KUASAR_BUILD_JOBS"] = budget
+        observed = subprocess.run(["bash", "-euo", "pipefail", "-c", block + marker],
+                                  env=env, text=True, capture_output=True, timeout=15)
+        masks = [line.removeprefix("AFFINITY_CHILD=") for line in observed.stdout.splitlines()
+                 if line.startswith("AFFINITY_CHILD=")]
+        if expected is None:
+            assert observed.returncode != 0 and not masks, (budget, observed.stdout, observed.stderr)
+        else:
+            assert observed.returncode == 0 and len(masks) == 1, (budget, observed.stdout, observed.stderr)
+            assert json.loads(masks[0]) == expected
+        assert sorted(os.sched_getaffinity(0)) == allowed, "source test changed parent CPU affinity"
     assert "start --mode system" in system
     assert system.index('chown -hR "$source_uid:$source_gid" /src /work/home /build\n') < system.index("run-source-checks.py")
     assert 'chgrp "$source_gid" /output\n' in system
