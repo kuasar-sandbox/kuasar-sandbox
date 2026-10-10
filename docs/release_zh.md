@@ -564,7 +564,7 @@ Daily Preview 必须直接把收敛后的清单提交到受保护目标分支,�
 
 ### 仓库自行声明交付文档
 
-每个仓库在选定源码提交的 `release/guide-inputs.txt` 声明交付用户文档。
+每个仓库在选定 owner Tag（平台使用聚合源码）的 `release/guide-inputs.txt` 声明交付用户文档。
 条目可以是仓内相对 Markdown 路径、目录（递归发现 Markdown）或 glob 模式；
 忽略空行和 `#` 注释。每个条目必须匹配；声明缺失或为空、越界路径、符号链接、
 显式选择非 Markdown 文件以及重复匹配均使组装失败。目录发现保留 `docs/` 下的嵌套路径。

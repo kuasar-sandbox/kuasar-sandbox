@@ -635,9 +635,9 @@ for workflow in aggregate-release.yml delete-preview.yml; do
     "$ROOT/.github/workflows/$workflow")" -eq 1 ] \
     || release_fail "$workflow does not hold exactly one full-workflow mutation lock"
 done
-grep -Fq 'moved while release asset validation was running' \
+grep -Fq 'admitted platform source identity changed' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
-  || release_fail "aggregate publisher does not recheck source branch HEAD"
+  || release_fail "aggregate publisher does not check its frozen platform identity"
 grep -Fq 'platform_source_sha: ${{ needs.prepare.outputs.source_sha }}' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate validation does not receive the selected platform source"
