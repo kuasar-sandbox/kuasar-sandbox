@@ -18,6 +18,7 @@ from unittest.mock import patch
 import zipfile
 
 import artifacts as subject
+from test_fixtures import restore_using
 import transport
 from test_fixtures import CASES, WORKBENCH_CASES, selection, select_plan, architecture_result, workbench_results, registry_binding
 
@@ -74,55 +75,30 @@ def runtime(root, arch, files):
     return prefix + footer(hashlib.sha256(prefix).hexdigest())
 
 
-class SourceTestPinContracts(unittest.TestCase):
+class SourceTagContracts(unittest.TestCase):
     def setUp(self):
-        spec = importlib.util.spec_from_file_location("source_pin_resolver", Path(__file__).with_name("resolve-artifacts.py"))
-        self.resolver = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.resolver)
-        self.pins = {owner: "b" * 40 for owner in subject.OWNERS if owner != "platform"}
-        self.baseline = {"test_revisions": subject.release_test_revisions(self.pins, "a" * 40)}
-        self.record = {"base_sha": "c" * 40, "candidate_sha": "d" * 40}
+        spec = importlib.util.spec_from_file_location('source_resolver', Path(__file__).with_name('resolve-artifacts.py'))
+        self.resolver = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.resolver)
+        self.baseline = {'units': {unit: {'sha': 'c' * 40} for unit in subject.UNITS},
+                         'test_revisions': test_revisions('b' * 40)}
 
-    def resolve(self, before, after, record=True):
-        def manifest(pins):
-            return "test_revisions:\n" + "".join(f"  {owner}: {sha}\n" for owner, sha in pins.items())
-        with patch.object(self.resolver, "source_text", side_effect=[manifest(before), manifest(after)]) as source:
-            result = self.resolver.source_test_revisions(self.baseline, self.record if record else None, "c" * 40, "main")
-        return result, source.call_count
+    def test_tests_derive_from_owner_units_without_reading_legacy_test_sources(self):
+        with patch.object(self.resolver, 'source_text', side_effect=AssertionError('no independent source retrieval')):
+            result = self.resolver.source_test_revisions(self.baseline, None, 'd' * 40, 'main')
+        for owner in subject.OWNERS:
+            self.assertEqual(result[owner]['sha'], ('d' if owner == 'platform' else 'c') * 40)
+        self.assertEqual(self.baseline['test_revisions']['orchestrator']['sha'], 'b' * 40)
 
-    def test_unpublished_inherited_pins_do_not_mix_with_predecessor_products(self):
-        inherited = {owner: "e" * 40 for owner in self.pins}
-        result, calls = self.resolve(inherited, inherited)
-        self.assertEqual(calls, 2)
-        for owner, sha in self.pins.items():
-            self.assertEqual(result[owner]["sha"], sha)
-        self.assertEqual(result["platform"]["sha"], self.record["candidate_sha"])
+    def test_platform_candidate_retains_admitted_identity_without_mutating_history(self):
+        before = copy.deepcopy(self.baseline)
+        result = self.resolver.source_test_revisions(self.baseline, {'candidate_sha': 'e' * 40}, 'd' * 40, 'main')
+        self.assertEqual(result['platform']['sha'], 'e' * 40)
+        self.assertEqual(self.baseline, before)
 
-    def test_explicit_platform_pin_change_is_preserved(self):
-        inherited = {owner: "e" * 40 for owner in self.pins}
-        result, _ = self.resolve(inherited, inherited | {"sandboxer": "f" * 40})
-        self.assertEqual(result["sandboxer"]["sha"], "f" * 40)
-        self.assertEqual(result["orchestrator"]["sha"], self.pins["orchestrator"])
-
-    def test_component_pr_uses_paired_baseline_before_its_owner_override(self):
-        result, calls = self.resolve({}, {}, record=False)
-        self.assertEqual(calls, 0)
-        self.assertEqual(result["orchestrator"]["sha"], self.pins["orchestrator"])
-        self.assertEqual(result["platform"]["sha"], "c" * 40)
-
-    def test_complete_release_retains_independent_test_pins(self):
-        result, _ = self.resolve(self.pins, self.pins)
-        self.assertEqual(result["orchestrator"], self.baseline["test_revisions"]["orchestrator"])
-
-    def test_missing_baseline_test_identity_is_not_guessed(self):
-        del self.baseline["test_revisions"]["orchestrator"]
-        with self.assertRaisesRegex(ValueError, "owner test pins"):
-            self.resolve(self.pins, self.pins)
-
-    def test_candidate_does_not_mutate_baseline_evidence(self):
-        before = json.dumps(self.baseline, sort_keys=True)
-        self.resolve(self.pins, self.pins | {"sandboxer": "f" * 40})
-        self.assertEqual(json.dumps(self.baseline, sort_keys=True), before)
+    def test_missing_owner_unit_cannot_fall_back_to_legacy_test_pin(self):
+        del self.baseline['units']['orchestrator']
+        with self.assertRaises(KeyError):
+            self.resolver.source_test_revisions(self.baseline, None, 'd' * 40, 'main')
 
 
 class ReleasedCaseLayout(unittest.TestCase):
@@ -220,7 +196,7 @@ class ArtifactBuildContracts(unittest.TestCase):
                         "lanes": {"x86_64": {"selection": selection(["orchestrator"], "x86_64")}}}
                 plan["test_revisions"]["orchestrator"]["sha"] = pin
                 sources = root / str(rebuild)
-                with patch.object(builder, "checkout", side_effect=checkout):
+                with patch.object(builder.source_inputs, "copy_run_inputs", side_effect=restore_using(checkout)):
                     builder.materialize(plan, "x86_64", sources)
                     helper = builder.helper_sources(plan, "x86_64", sources)
                 self.assertEqual(plan["sources"]["orchestrator"]["sha"], product)
@@ -303,8 +279,9 @@ class ArtifactExecutionContracts(unittest.TestCase):
         self.marker = self.root.parent / 'scratch-marker'
         script.write_text('set -eu\nprintf "%s" "$TMPDIR" > "' + str(self.marker) + '"\n'
                           'install -d -m 700 "$TMPDIR/owned"\ntouch "$TMPDIR/owned/state"\n')
-        self.plan = {'lanes': {'x86_64': {'performance': []}}, 'test_revisions': test_revisions()}
-        self.provenance = {'arch': 'x86_64', 'selection': {'cases': [self.case]}, 'helpers': {},
+        self.arch = os.uname().machine
+        self.plan = {'lanes': {arch: {'performance': []} for arch in subject.ARCHES}, 'test_revisions': test_revisions()}
+        self.provenance = {'arch': self.arch, 'selection': {'cases': [self.case]}, 'helpers': {},
                            'embedded': {'init': 'a' * 64}, 'test_revisions': test_revisions(),
                            'prepared_cases': [self.case]}
         self.result = self.root.parent / 'result.json'
@@ -319,20 +296,24 @@ class ArtifactExecutionContracts(unittest.TestCase):
             subprocess.run([*privilege, 'rm', '-rf', '--', str(state)], check=True)
 
     def execute(self, shard='storage', performance=False):
+        arch = 'x86_64' if performance else self.arch
+        self.provenance['arch'] = arch
         self.inputs.seal(self.root, self.provenance)
         credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
         with patch.object(self.executor.artifacts, 'verify_workspace', return_value=self.provenance), \
-             patch.object(self.executor.platform, 'machine', return_value='x86_64'), patch.dict(os.environ, credentials):
+             patch.object(self.executor.platform, 'machine', return_value=arch), patch.dict(os.environ, credentials):
             if performance:
-                return self.performance.execute(self.plan, 'x86_64', self.root, self.result)
-            return self.executor.execute(self.plan, 'x86_64', shard, self.root, self.result)
+                return self.performance.execute(self.plan, arch, self.root, self.result)
+            return self.executor.execute(self.plan, arch, shard, self.root, self.result)
 
-    def image(self, *, identity=None, architecture='amd64'):
+    def image(self, *, identity=None, architecture=None):
+        expected_arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}[self.arch]
+        architecture = architecture or expected_arch
         archive = self.root / 'image.tar'
         archive.write_bytes(b'prepared image')
         expected = 'sha256:' + 'b' * 64
         self.provenance['images'] = {'python': {'archive': archive.name, 'sha256': subject.digest(archive),
-                                               'image_id': expected, 'platform': 'linux/amd64'}}
+                                               'image_id': expected, 'platform': 'linux/' + expected_arch}}
         binary = self.root.parent / 'host-bin'
         binary.mkdir(exist_ok=True)
         record = [{'Id': identity or expected, 'Os': 'linux', 'Architecture': architecture}]
@@ -413,7 +394,7 @@ class ArtifactExecutionContracts(unittest.TestCase):
         self.assertEqual(result['conclusion'], 'failure')
 
     def test_loaded_image_identity_and_platform_are_required_before_case_execution(self):
-        for options in ({'architecture': 'arm64'}, {'identity': 'sha256:' + 'c' * 64}):
+        for options in ({'architecture': 'arm64' if self.arch == 'x86_64' else 'amd64'}, {'identity': 'sha256:' + 'c' * 64}):
             with self.subTest(options=options), patch.dict(os.environ, PATH=self.image(**options)):
                 with self.assertRaisesRegex(ValueError, 'public runner reported failure'):
                     self.execute()
@@ -688,99 +669,73 @@ class ArtifactContracts(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "test pin"):
                 subject.validate_test_revisions(wrong)
 
-    def test_release_and_later_baseline_preserve_independent_test_pins(self):
+    def test_release_and_later_baseline_bind_tag_sources_and_original_plan(self):
+        from test_fixtures import tag_source_plan
         spec = importlib.util.spec_from_file_location("resolver", Path(__file__).with_name("resolve-artifacts.py"))
-        resolver = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(resolver)
+        resolver = importlib.util.module_from_spec(spec); spec.loader.exec_module(resolver)
         binding_spec = importlib.util.spec_from_file_location("binding", Path(__file__).resolve().parents[2] / "release/bind-validation.py")
-        binding = importlib.util.module_from_spec(binding_spec)
-        binding_spec.loader.exec_module(binding)
-        version, sha = self.plan["baseline"]["version"], self.plan["baseline"]["sha"]
-        units = self.plan["baseline"]["units"]
-        pins = {owner: "f" * 40 for owner in subject.OWNERS if owner != "platform"}
-        manifest = "delivery: workbench-v1\nversion: " + version + "\ncomponents:\n" + "".join(
-            f"  {unit}: {record['version']}\n" for unit, record in units.items())
-        manifest += "test_revisions:\n" + "".join(f"  {owner}: {pin}\n" for owner, pin in pins.items())
-        (self.root / "selection.tsv").write_text("".join(f"{unit}\t{units[unit]['version']}\n" for unit in subject.UNITS))
-        pin_file = self.root / "test-revisions.json"
-        pin_file.write_text(json.dumps(pins))
+        binding = importlib.util.module_from_spec(binding_spec); binding_spec.loader.exec_module(binding)
+        version, sha = self.plan['baseline']['version'], self.plan['baseline']['sha']
+        units = self.plan['baseline']['units']
+        records = tag_source_plan(self.plan)
+        manifest = 'delivery: workbench-v1\nversion: ' + version + '\ncomponents:\n' + ''.join(
+            f"  {unit}: {row['version']}\n" for unit, row in units.items())
+        platform = self.root / 'platform-input'; (platform / 'releases').mkdir(parents=True)
+        (platform / 'releases/release.yaml').write_text(manifest)
+        (self.root / 'selection.tsv').write_text(''.join(f"{unit}\t{units[unit]['version']}\n" for unit in subject.UNITS))
+        (self.root / 'source-records.json').write_text(json.dumps(records))
         receipts = self.workbench_stage()
-        with patch.object(resolver, "source_text", return_value=manifest), patch.object(resolver, "public"), patch.object(resolver, "case_files", return_value=WORKBENCH_CASES), \
-             patch.object(resolver.release, "tag_sha", side_effect=lambda repo, tag: sha if repo == resolver.PLATFORM else "c" * 40), \
-             patch.dict(os.environ, {"RELEASE_VERSION": version, "PLATFORM_SOURCE_SHA": sha}):
-            plan = resolver.exact_assets_plan("a" * 40, self.root)
-            self.assertEqual(plan["case_files"], WORKBENCH_CASES)
-            self.assertEqual(plan["test_overlays"], [])
-            self.assertEqual(plan["product_sources"], {})
-            selected = plan["lanes"]["x86_64"]["selection"]["cases"]
-            self.assertIn("sandbox.lifecycle.sh", selected)
-            self.assertFalse(any(name.endswith("run_all.sh") for name in selected))
-            self.assertEqual(plan["test_revisions"]["orchestrator"]["sha"], "f" * 40)
-            self.assertEqual(plan["baseline"]["units"]["orchestrator"]["sha"], "c" * 40)
-            pin_file.write_text(json.dumps({**pins, "orchestrator": "c" * 40}))
-            with self.assertRaisesRegex(ValueError, "staged test pins"):
-                resolver.exact_assets_plan("a" * 40, self.root)
-            pin_file.unlink()
-            with self.assertRaises(FileNotFoundError):
-                resolver.exact_assets_plan("a" * 40, self.root)
-            pin_file.write_text(json.dumps(pins))
+        fixed = (platform, {unit: row['version'] for unit, row in units.items()}, records,
+                 self.plan['platform_source'], WORKBENCH_CASES)
+        with patch.object(resolver.source_inputs, 'staged_inputs', return_value=fixed), patch.object(resolver, 'public'), \
+             patch.object(resolver.release, 'tag_sha', side_effect=lambda repo, tag: sha if repo == resolver.PLATFORM else 'c' * 40), \
+             patch.dict(os.environ, {'RELEASE_VERSION': version, 'PLATFORM_SOURCE_SHA': sha}):
+            plan = resolver.exact_assets_plan('a' * 40, self.root)
+            self.assertEqual(plan['case_files'], WORKBENCH_CASES)
+            self.assertEqual(plan['test_overlays'], [])
+            self.assertEqual(plan['product_sources'], {})
+            self.assertIn('sandbox.lifecycle.sh', plan['lanes']['x86_64']['selection']['cases'])
+            self.assertEqual(plan['test_revisions']['orchestrator']['sha'], 'c' * 40)
+            self.assertEqual(plan['source_records'], records)
+            with patch.object(resolver.release, 'tag_sha', return_value='e' * 40), self.assertRaisesRegex(ValueError, 'tag moved'):
+                resolver.exact_assets_plan('a' * 40, self.root)
             results = {arch: architecture_result(plan, arch) for arch in subject.ARCHES}
-            wrong = copy.deepcopy(results)
-            wrong["aarch64"]["test_revisions"]["orchestrator"]["sha"] = "c" * 40
-            with self.assertRaisesRegex(ValueError, "result test pins"):
+            wrong = copy.deepcopy(results); wrong['aarch64']['test_revisions']['orchestrator']['sha'] = 'f' * 40
+            with self.assertRaisesRegex(ValueError, 'result test pins'):
                 subject.collect_results(plan, wrong)
-            notes = self.root / "release-notes.md"
-            notes.write_text("Exact stage\n")
+            notes = self.root / 'release-notes.md'; notes.write_text('Exact stage\n')
             binding.bind(self.root, plan, subject.collect_results(plan, results), workbench_results(plan, receipts))
             published = json.loads(resolver.PROFILE_BINDING.search(notes.read_text())[1])
+            self.assertEqual(published['validation_plan'], plan)
             published['registry'] = registry_binding(version, published['workbench'])
-            notes.write_text("<!-- kuasar-integration-validation " + json.dumps(published) + " -->")
-            state = {"tag_name": version, "target_commitish": sha, "draft": False, "prerelease": False,
-                "id": 1, "body": notes.read_text(), "assets": [dict(record, id=index, state="uploaded")
-                    for index, record in enumerate(plan["baseline"]["assets"], 1)]}
-            run = {"id": 1, "status": "completed", "conclusion": "success", "html_url": "https://example.invalid/run/1",
-                   "display_title": resolver.release.aggregate_run_title(version, sha)}
-            with patch.object(resolver.release, "api_optional", return_value=state), \
-                 patch.object(resolver.release, "aggregate_runs", return_value=[run]):
+            state = {'tag_name': version, 'target_commitish': sha, 'draft': False, 'prerelease': False,
+                     'id': 1, 'assets': [dict(row, id=i, state='uploaded') for i, row in enumerate(plan['baseline']['assets'], 1)]}
+            def notes_from(record):
+                state['body'] = '<!-- kuasar-integration-validation ' + json.dumps(record) + ' -->'
+            notes_from(published)
+            run = {'id': 1, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://example.invalid/run/1',
+                   'display_title': resolver.release.aggregate_run_title(version, sha)}
+            def fact(endpoint):
+                self.assertIn('/commits/', endpoint)
+                return {'sha': 'c' * 40, 'commit': {'tree': {'sha': '9' * 40}}}
+            with patch.object(resolver.release, 'api_optional', return_value=state), \
+                 patch.object(resolver.release, 'aggregate_runs', return_value=[run]), \
+                 patch.object(resolver.release, 'api', side_effect=fact), \
+                 patch.object(resolver, 'source_text', return_value=manifest) as retrieve:
                 baseline = resolver.aggregate(version)
-                self.assertEqual(baseline["test_revisions"], plan["test_revisions"])
-                original_body, original_assets = state["body"], state["assets"]
-                for old_cases in ({}, {owner: names for owner, names in CASES.items() if owner != "platform"}):
-                    historical = json.loads(resolver.PROFILE_BINDING.search(original_body)[1])
-                    for field in ('delivery', 'workbench', 'registry'):
-                        historical.pop(field)
-                    historical['assets'] = {name: digest for name, digest in historical['assets'].items() if not name.startswith('workbench-')}
-                    state['assets'] = [row for row in original_assets if not row['name'].startswith('workbench-')]
-                    for arch, result in historical["architectures"].items():
-                        result.pop("selection")
-                        result["profile"] = resolver.historical_profile(arch, old_cases)
-                    state["body"] = "<!-- kuasar-integration-validation " + json.dumps(historical) + " -->"
-                    with patch.object(resolver, "historical_case_files", return_value=old_cases), patch.object(
-                            resolver, 'source_text', return_value=manifest.replace('delivery: workbench-v1\n', '')):
-                        self.assertEqual(resolver.aggregate(version)["test_revisions"], plan["test_revisions"])
-                        entries = historical["architectures"]["x86_64"]["profile"]["cases"]
-                        if old_cases:
-                            entries.remove("test/e2e/sandboxer/cases/sandbox.lifecycle.sh")
-                        else:
-                            entries.pop()
-                        state["body"] = "<!-- kuasar-integration-validation " + json.dumps(historical) + " -->"
-                        with self.assertRaisesRegex(ValueError, "predeclared architecture profile"):
-                            resolver.aggregate(version)
-                state["body"], state["assets"] = original_body, original_assets
-                with patch.object(resolver, "baseline", return_value=baseline), \
-                     patch.object(resolver, "changed_files", return_value=["docs/ci.md"]), \
-                     patch.object(resolver, "candidate_case_names", return_value=[]), \
-                     patch.dict(os.environ, {"CANDIDATE_REPOSITORY": resolver.PLATFORM, "CANDIDATE_PR": "1",
-                        "CANDIDATE_SHA": "e" * 40, "CANDIDATE_BASE_SHA": sha, "CANDIDATE_HEAD_SHA": "d" * 40,
-                        "CANDIDATE_BASE_REF": "main", "COMPANION_CANDIDATES": "[]"}):
-                    candidate = resolver.source_plan("a" * 40)
-                self.assertEqual(candidate["test_revisions"]["orchestrator"], plan["test_revisions"]["orchestrator"])
-                self.assertEqual(candidate["sources"]["orchestrator"]["sha"], "c" * 40)
-                self.assertEqual(candidate["lanes"]["x86_64"]["products"], [])
-                recorded = json.loads(resolver.PROFILE_BINDING.search(state["body"])[1])
-                recorded["test_revisions"]["orchestrator"]["sha"] = "c" * 40
-                state["body"] = "<!-- kuasar-integration-validation " + json.dumps(recorded) + " -->"
-                with self.assertRaisesRegex(ValueError, "published test pins"):
+                self.assertEqual(baseline['test_revisions'], plan['test_revisions'])
+                self.assertEqual(baseline['case_files'], WORKBENCH_CASES)
+                retrieve.assert_called_with(resolver.PLATFORM, version, 'releases/release.yaml')
+                for field in ('case_files', 'source_records', 'validation_plan'):
+                    broken = copy.deepcopy(published)
+                    if field == 'case_files': broken[field]['orchestrator'] = ['basic.guessed.sh']
+                    elif field == 'source_records': broken[field]['runtime']['tree'] = '0' * 40
+                    else: broken[field]['framework_sha'] = '0' * 40
+                    notes_from(broken)
+                    with self.subTest(field=field), self.assertRaises(ValueError): resolver.aggregate(version)
+                notes_from(published)
+                with patch.object(resolver.release, 'api', return_value={'sha': 'e' * 40, 'commit': {'tree': {'sha': '9' * 40}}}), \
+                     self.assertRaisesRegex(ValueError, 'source tag identity changed'):
                     resolver.aggregate(version)
 
     def test_baseline_and_candidate_tampering_fail(self):
@@ -998,6 +953,8 @@ class ArtifactContracts(unittest.TestCase):
         binding = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(binding)
         receipts = self.workbench_stage()
+        from test_fixtures import tag_source_plan
+        (self.root / "source-records.json").write_text(json.dumps(tag_source_plan(self.plan)))
         workbench = workbench_results(self.plan, receipts)
         results = {arch: architecture_result(self.plan, arch) for arch in subject.ARCHES}
         validation = subject.collect_results(self.plan, results)
@@ -1031,7 +988,7 @@ class ArtifactContracts(unittest.TestCase):
         for owner in ("connector", "platform"):
             select_plan(self.plan, [owner])
             result = self.root / (owner + "-source-result.json")
-            with patch.object(source_checks.build, "checkout", side_effect=checkout), \
+            with patch.object(source_checks.source_inputs, "copy_run_inputs", side_effect=restore_using(checkout)), \
                  patch.object(source_checks.subprocess, "run", side_effect=execute):
                 with self.assertRaisesRegex(ValueError, "required source check failed: connector-unit-race-vet"):
                     source_checks.execute(self.plan, self.root / (owner + "-sources"), result)

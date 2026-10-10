@@ -23,10 +23,6 @@ write_preview_base_fixture() {
     while IFS=$'\t' read -r unit tag; do
       printf '  %s: %s\n' "$unit" "${tag%%-preview.*}"
     done < "$TMP/current-preview-selection.tsv"
-    printf 'test_revisions:\n'
-    for owner in accelerator connector guest-runtime sandboxer orchestrator; do
-      printf '  %s: %040d\n' "$owner" 1
-    done
   } > "$output"
 }
 
@@ -37,7 +33,7 @@ resolve_selection "$ROOT" "$CURRENT_FORMAL_VERSION" \
 
 FORMAL_ROOT="$TMP/formal-root"
 mkdir -p "$FORMAL_ROOT"
-tar -C "$ROOT" --exclude='./.git' -cf - . | tar -x -C "$FORMAL_ROOT"
+tar -C "$ROOT" --exclude='./.git' --exclude='./components' --exclude='*/__pycache__' -cf - . | tar -x -C "$FORMAL_ROOT"
 write_preview_base_fixture "$FORMAL_ROOT/releases/release.yaml"
 python3 - "$ROOT/ci/integration" "$FORMAL_ROOT/test/demo" "$TMP/demo-wheels" <<'PY'
 import pathlib, sys
@@ -46,6 +42,7 @@ from test_fixtures import make_demo_wheelhouse
 make_demo_wheelhouse(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]))
 PY
 git -C "$FORMAL_ROOT" init -q
+git -C "$FORMAL_ROOT" remote add origin https://github.com/kuasar-sandbox/kuasar-sandbox.git
 git -C "$FORMAL_ROOT" config user.name release-test
 git -C "$FORMAL_ROOT" config user.email release-test@example.invalid
 git -C "$FORMAL_ROOT" add .
@@ -56,9 +53,6 @@ resolve_selection "$FORMAL_ROOT" "$VERSION" "$TMP/selection.tsv"
 [ -z "$(previous_release "$FORMAL_ROOT" "$VERSION")" ] \
   || release_fail "first formal release unexpectedly has a comparison baseline"
 mkdir -p "$TMP/fetched/components" "$TMP/fetched/sources" "$TMP/fetched/updates"
-mkdir -p "$TMP/fetched/test-sources"
-python3 "$ROOT/release/selection.py" "$FORMAL_ROOT" "$VERSION" --test-revisions \
-  > "$TMP/fetched/test-revisions.json"
 install -m 0644 "$TMP/selection.tsv" "$TMP/fetched/selection.tsv"
 : > "$TMP/fetched/previous-selection.tsv"
 
@@ -90,17 +84,12 @@ set -euo pipefail
 echo "$unit fixture E2E"
 EOF
   chmod +x "$source_root/test/e2e/cases/basic.$unit-fixture.sh"
-  if [ "$unit" != vmlinux ]; then
-    owner="$unit"
-    [ "$owner" != runtime ] || owner=guest-runtime
-    cp -a "$source_root" "$TMP/fetched/test-sources/$owner"
-  fi
 done < "$TMP/selection.tsv"
-python3 - "$ROOT" "$TMP/fetched/test-sources" <<'PYINPUTS'
+python3 - "$ROOT" "$TMP/fetched/sources" <<'PYINPUTS'
 import pathlib, sys
 sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'test/e2e'))
 root = pathlib.Path(sys.argv[2])
-for owner in ('accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator'):
+for owner in ('accelerator', 'connector', 'runtime', 'sandboxer', 'orchestrator'):
     source = root / owner
     declaration = source / 'release/guide-inputs.txt'
     declaration.parent.mkdir()
@@ -111,11 +100,11 @@ for owner in ('accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchest
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text('# Runtime fixture\n')
 PYINPUTS
-printf '#!/usr/bin/env bash\necho "pinned orchestrator E2E"\n' \
-  > "$TMP/fetched/test-sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"
+printf '#!/usr/bin/env bash\necho "selected tag orchestrator E2E"\n' \
+  > "$TMP/fetched/sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"
 # Every selected test source is case-only. Owner boundaries do not affect
 # public suite selection, and credentialed OBS remains an explicit exclusion.
-accelerator_suite="$TMP/fetched/test-sources/accelerator/test/e2e"
+accelerator_suite="$TMP/fetched/sources/accelerator/test/e2e"
 mkdir -p "$accelerator_suite/cases"
 cat > "$accelerator_suite/cases/storage.fixture.sh" <<'EOF'
 #!/usr/bin/env bash
@@ -126,35 +115,53 @@ chmod 0644 "$accelerator_suite/cases/storage.fixture.sh"
 # Normal CI selection excludes this opt-in credentialed case.
 printf '#!/usr/bin/env bash\necho "unexpected credentialed OBS selection" >&2\nexit 91\n' \
   > "$accelerator_suite/cases/storage.obs.sh"
-connector_suite="$TMP/fetched/test-sources/connector/test/e2e"
+connector_suite="$TMP/fetched/sources/connector/test/e2e"
 mkdir -p "$connector_suite/cases"
 printf '#!/usr/bin/env bash\necho connector-case\n' \
   > "$connector_suite/cases/storage.connector-fixture.sh"
 chmod 0644 "$connector_suite/cases/storage.connector-fixture.sh"
-# Test-only guidance updates must ship with the independent test pin even
-# while the selected product archive and its older documentation stay fixed.
+# Guidance and tests belong to the selected owner tag; no newer source is substituted.
 for suffix in '' _zh; do
-  cat > "$TMP/fetched/test-sources/connector/README$suffix.md" <<'EOF'
+  cat > "$TMP/fetched/sources/connector/README$suffix.md" <<'EOF'
 [English](README.md) | [简体中文](README_zh.md)
 # Prepared network fixture
 Use the shared prepared runner.
 [Current case](test/e2e/cases/storage.connector-fixture.sh)
 EOF
   printf 'Current prepared network guide\n' \
-    > "$TMP/fetched/test-sources/connector/docs/vswitch-operations$suffix.md"
+    > "$TMP/fetched/sources/connector/docs/vswitch-operations$suffix.md"
 done
 # These maintained owner guides are shipped beside the canonical flat cases.
 # Exercise real tar directory entries as well as both language editions.
-for owner in accelerator guest-runtime; do
+for owner in accelerator runtime; do
   for suffix in '' _zh; do
-    cat > "$TMP/fetched/test-sources/$owner/test/e2e/README$suffix.md" <<'EOF'
+    cat > "$TMP/fetched/sources/$owner/test/e2e/README$suffix.md" <<'EOF'
 [English](README.md) | [简体中文](README_zh.md)
 # Prepared E2E
 Use the shared prepared runner.
 EOF
   done
 done
-python3 - "$TMP/fetched/e2e-helpers" "$TMP/fetched/test-revisions.json" <<'PY'
+# Give every source fixture a real owner tag and record derived provenance.
+printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux.md"
+printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
+printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
+printf 'selected Chinese vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux_zh.md"
+while IFS=$'\t' read -r unit tag; do
+  source_root="$TMP/fetched/sources/$unit"
+  git -C "$source_root" init -q --template=
+  git -C "$source_root" config user.name release-test
+  git -C "$source_root" config user.email release-test@example.invalid
+  git -C "$source_root" remote add origin "https://github.com/$(component_repository "$unit").git"
+  git -C "$source_root" add .
+  git -C "$source_root" commit -qm 'selected owner tag fixture'
+  git -C "$source_root" tag "$tag"
+done < "$TMP/selection.tsv"
+python3 -B "$ROOT/release/tag_sources.py" inspect "$FORMAL_ROOT" "$VERSION" "$TMP/fetched/sources" \
+  > "$TMP/fetched/source-records.json"
+python3 -B "$ROOT/release/tag_sources.py" inspect "$FORMAL_ROOT" "$VERSION" "$TMP/fetched/sources" \
+  --owner-revisions > "$TMP/owner-revisions.json"
+python3 - "$TMP/fetched/e2e-helpers" "$TMP/owner-revisions.json" "$TMP/fetched/source-records.json" <<'PY'
 import hashlib, json, pathlib, struct, sys
 root = pathlib.Path(sys.argv[1])
 pins = json.loads(pathlib.Path(sys.argv[2]).read_text())
@@ -173,15 +180,9 @@ for arch, machine in (('x86_64', 62), ('aarch64', 183)):
         (directory / name).chmod(0o755)
         owner = 'orchestrator' if name in {'custom-proxy', 'telemetry-grpc-probe', 'node-ctl-runner-test'} else 'sandboxer'
         records[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'source_sha': '1' * 40 if name in {'zot', 'versitygw'} else pins[owner]}
-    (directory / 'helpers.json').write_text(json.dumps({'arch': arch, 'framework_sha': '1' * 40, 'test_revisions': pins, 'helpers': records}))
+    (directory / 'helpers.json').write_text(json.dumps({'arch': arch, 'framework_sha': '1' * 40, 'test_revisions': pins, 'source_records': json.loads(pathlib.Path(sys.argv[3]).read_text()), 'helpers': records}))
 PY
 cp -a "$TMP/demo-wheels" "$TMP/fetched/e2e-wheels"
-printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux.md"
-printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
-printf 'selected vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux.md"
-printf 'selected Chinese vmlinux docs\n' > "$TMP/fetched/sources/vmlinux/docs/vmlinux_zh.md"
-printf 'test pin kernel docs must not win\n' > "$TMP/fetched/test-sources/guest-runtime/docs/vmlinux.md"
-printf 'test pin Chinese kernel docs must not win\n' > "$TMP/fetched/test-sources/guest-runtime/docs/vmlinux_zh.md"
 
 # Small real Docker-archive envelopes test packaging/identity only. They have
 # no runtime layers and are never claimed as executable workbench acceptance.
@@ -235,32 +236,58 @@ grep -Fq "$foreign_unit archive contains another release unit's material namespa
 
 SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
+# Exercise exact-assets source verification against real tagged Git trees and
+# the actual assembled package, including the .git data in artifact transport.
+mkdir "$TMP/source-capsule"
+cp -a "$FORMAL_ROOT" "$TMP/source-capsule/platform"
+cp -a "$TMP/fetched/sources" "$TMP/source-capsule/sources"
+tar -cf "$TMP/bundle/source-inputs.tar" -C "$TMP/source-capsule" platform sources
+python3 -B - "$ROOT/ci/integration" "$TMP/bundle" "$VERSION" "$(git -C "$FORMAL_ROOT" rev-parse HEAD)" "$TMP" <<'PYSOURCES'
+import json, pathlib, sys
+sys.path.insert(0, sys.argv[1])
+import source_inputs
+stage, version, sha, root = pathlib.Path(sys.argv[2]), sys.argv[3], sys.argv[4], pathlib.Path(sys.argv[5])
+_, units, records, platform, cases = source_inputs.staged_inputs(stage, version, sha, root / 'verified-inputs')
+assert platform['sha'] == sha
+assert set(records) == set(units)
+assert cases['orchestrator'] == ['basic.orchestrator-fixture.sh']
+original = (stage / 'source-records.json').read_text()
+broken = json.loads(original); broken['connector']['tree'] = '0' * 40
+(stage / 'source-records.json').write_text(json.dumps(broken))
+try:
+    source_inputs.staged_inputs(stage, version, sha, root / 'mismatched-inputs')
+except ValueError as error:
+    assert 'source facts differ' in str(error), error
+else:
+    raise AssertionError('accepted a tree unrelated to selected source')
+finally:
+    (stage / 'source-records.json').write_text(original)
+PYSOURCES
+rm -rf "$TMP/source-capsule" "$TMP/verified-inputs" "$TMP/mismatched-inputs"
 if tar -tzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" | grep -E '/run_all\.sh$|generated-compatibility' >/dev/null; then
   release_fail "platform package retained a superseded owner runner"
 fi
 tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" ./test/e2e/cases/basic.orchestrator-fixture.sh \
   > "$TMP/packaged-orchestrator-test"
-cmp "$TMP/packaged-orchestrator-test" "$TMP/fetched/test-sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"
-if cmp -s "$TMP/packaged-orchestrator-test" "$TMP/fetched/sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"; then
-  release_fail "platform package used the product tag's test instead of the independent pin"
-fi
+cmp "$TMP/packaged-orchestrator-test" "$TMP/fetched/sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"
 for suffix in '' _zh; do
   tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./guide/connector/README$suffix.md" \
     > "$TMP/packaged-connector-doc"
   grep -Fq 'Use the shared prepared runner.' "$TMP/packaged-connector-doc" \
     || release_fail "platform package used stale product-tag invocation guidance"
-  grep -Fq '/connector/blob/0000000000000000000000000000000000000001/test/e2e/cases/storage.connector-fixture.sh' \
+  connector_tag="$(awk -F '\t' '$1 == "connector" {print $2}' "$TMP/selection.tsv")"
+  grep -Fq "/connector/blob/$connector_tag/test/e2e/cases/storage.connector-fixture.sh" \
     "$TMP/packaged-connector-doc" \
-    || release_fail "packaged guidance source link does not use its exact test pin"
+    || release_fail "packaged guidance source link does not use the selected owner tag"
   tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./guide/connector/vswitch-operations$suffix.md" \
     > "$TMP/packaged-connector-guide"
-  cmp "$TMP/packaged-connector-guide" "$TMP/fetched/test-sources/connector/docs/vswitch-operations$suffix.md"
+  cmp "$TMP/packaged-connector-guide" "$TMP/fetched/sources/connector/docs/vswitch-operations$suffix.md"
 done
-for owner in accelerator guest-runtime; do
+for owner in accelerator runtime; do
   for suffix in '' _zh; do
-    tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./test/e2e/$owner/README$suffix.md" \
+    tar -xOf "$TMP/bundle/assets/$(platform_archive "$VERSION")" "./test/e2e/${owner/runtime/guest-runtime}/README$suffix.md" \
       > "$TMP/packaged-owner-guide"
-    cmp "$TMP/packaged-owner-guide" "$TMP/fetched/test-sources/$owner/test/e2e/README$suffix.md"
+    cmp "$TMP/packaged-owner-guide" "$TMP/fetched/sources/$owner/test/e2e/README$suffix.md"
   done
 done
 
@@ -268,13 +295,13 @@ assert_assembly_rejected() {
   local name=$1 expected=$2 tests output
   tests="$TMP/tests-$name"
   output="$TMP/output-$name"
-  cp -a "$TMP/fetched/test-sources" "$tests"
+  cp -a "$TMP/fetched/sources" "$tests"
   shift 2
   "$@" "$tests"
-  if E2E_SOURCE_ROOT="$tests" "$ROOT/test/e2e/assemble.sh" "$output" \
-      "$FORMAL_ROOT" "$TMP/fetched/sources/accelerator" \
-      "$TMP/fetched/sources/connector" "$TMP/fetched/sources/runtime" \
-      "$TMP/fetched/sources/sandboxer" "$TMP/fetched/sources/orchestrator" \
+  if "$ROOT/test/e2e/assemble.sh" "$output" \
+      "$FORMAL_ROOT" "$tests/accelerator" \
+      "$tests/connector" "$tests/runtime" \
+      "$tests/sandboxer" "$tests/orchestrator" \
       > "$TMP/$name.log" 2>&1; then
     release_fail "assembler accepted $name fixture"
   fi
@@ -312,21 +339,21 @@ while IFS=$'\t' read -r unit tag; do
   archive="$(component_archive "$unit" "$tag")"
   cmp "$TMP/fetched/components/$unit/$archive" "$TMP/bundle/assets/$archive"
 done < "$TMP/selection.tsv"
-cp "$TMP/fetched/test-revisions.json" "$TMP/test-pins-saved.json"
-printf '{}\n' > "$TMP/fetched/test-revisions.json"
+cp "$TMP/fetched/source-records.json" "$TMP/source-records-saved.json"
+printf '{}\n' > "$TMP/fetched/source-records.json"
 if SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
-  "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/rejected-pins" \
-  > "$TMP/rejected-pins.log" 2>&1; then
-  release_fail "aggregate accepted mismatched test pins"
+  "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/rejected-sources" \
+  > "$TMP/rejected-sources.log" 2>&1; then
+  release_fail "aggregate accepted mismatched source facts"
 fi
-grep -Fq 'fetched test pins do not match' "$TMP/rejected-pins.log"
-mv "$TMP/test-pins-saved.json" "$TMP/fetched/test-revisions.json"
+grep -Fq 'fetched source facts differ from selected tag inputs' "$TMP/rejected-sources.log"
+mv "$TMP/source-records-saved.json" "$TMP/fetched/source-records.json"
 if PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" "$ROOT/release/package-platform.sh" \
-  package "$VERSION" "$TMP/fetched/sources" "" "$TMP/rejected-test-source" \
+  package "$VERSION" "$TMP/fetched/sources" "independent-test-source" "$TMP/rejected-test-source" \
   > "$TMP/rejected-test-source.log" 2>&1; then
-  release_fail "platform package silently fell back to product test sources"
+  release_fail "platform package accepted an independent test source argument"
 fi
-grep -Fq 'independently pinned test source directory is missing' "$TMP/rejected-test-source.log"
+grep -Fq 'usage: package-platform.sh package' "$TMP/rejected-test-source.log"
 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" validate "$VERSION" "$TMP/bundle"
 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
@@ -608,15 +635,15 @@ for workflow in aggregate-release.yml delete-preview.yml; do
     "$ROOT/.github/workflows/$workflow")" -eq 1 ] \
     || release_fail "$workflow does not hold exactly one full-workflow mutation lock"
 done
-grep -Fq 'moved while release asset validation was running' \
+grep -Fq 'admitted platform source identity changed' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
-  || release_fail "aggregate publisher does not recheck source branch HEAD"
+  || release_fail "aggregate publisher does not check its frozen platform identity"
 grep -Fq 'platform_source_sha: ${{ needs.prepare.outputs.source_sha }}' \
   "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate validation does not receive the selected platform source"
-grep -Fq 'source_text(PLATFORM, sha, relative)' \
+grep -Fq 'source_inputs.staged_inputs(' \
   "$ROOT/ci/integration/resolve-artifacts.py" \
-  || release_fail "exact-asset validation does not validate against selected platform source"
+  || release_fail "exact-asset validation does not verify transported selected platform source"
 grep -Fq 'ref: main' "$ROOT/.github/workflows/preview-gc.yml" \
   || release_fail "Preview GC does not pin trusted main tooling"
 grep -Fq 'Preview GC must run from main' "$ROOT/.github/workflows/preview-gc.yml" \

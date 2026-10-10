@@ -53,7 +53,7 @@ jobs:
       - name: Check out exact platform source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.source_sha }}
+          ref: refs/heads/${{ inputs.source_ref }}
           path: platform
           fetch-depth: 0
           persist-credentials: false
@@ -70,6 +70,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SOURCE_REF: ${{ inputs.source_ref }}
           SOURCE_SHA: ${{ inputs.source_sha }}
+          PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
           VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
@@ -112,7 +113,7 @@ jobs:
           repositories: accelerator,connector,guest-runtime,orchestrator,sandboxer
           permission-contents: read
 
-      - name: Fetch exact release assets and test sources
+      - name: Fetch release assets and unified tag sources
         env:
           GH_TOKEN: ${{ steps.source-token.outputs.token }}
           PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
@@ -124,6 +125,7 @@ jobs:
             "${{ steps.request.outputs.source_sha }}")
           export SOURCE_DATE_EPOCH
           control/release/aggregate-release.sh fetch "$VERSION" fetched
+          cp -a platform fetched/platform
       - name: Select the admitted native Workbench images once
         env:
           GH_TOKEN: ${{ github.token }}
@@ -161,11 +163,6 @@ jobs:
           ref: ${{ needs.prepare.outputs.framework_sha }}
           path: control
           persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.prepare.outputs.source_sha }}
-          path: helper-work/platform
-          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aggregate-sources-${{ github.run_id }}
@@ -173,20 +170,12 @@ jobs:
       - name: Materialize exact helper inputs without running a compiler
         run: |
           python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
-          python3 -B - <<'PY'
-          import importlib, json, pathlib, subprocess, sys
-          sys.path.insert(0, str(pathlib.Path('control/ci/integration').resolve()))
-          build = importlib.import_module('build-artifacts')
-          pins = json.loads(pathlib.Path('inputs/fetched/test-revisions.json').read_text())
-          platform_sha = subprocess.check_output(
-              ['git', '-C', 'helper-work/platform', 'rev-parse', 'HEAD'], text=True).strip()
-          records = build.artifacts.release_test_revisions(pins, platform_sha)
-          for owner, record in sorted(records.items()):
-              if owner != 'platform':
-                  build.checkout(record['repository'], record['sha'], pathlib.Path('helper-work') / owner)
-          PY
-          mkdir helper-work/.ci
-          cp inputs/fetched/test-revisions.json helper-work/.ci/
+          mkdir helper-work
+          cp -a inputs/fetched/platform helper-work/platform
+          cp -a inputs/fetched/sources/. helper-work/
+          mv helper-work/runtime helper-work/guest-runtime
+          mkdir helper-work/kernel-unit helper-work/.ci
+          mv helper-work/vmlinux helper-work/kernel-unit/guest-runtime
       - name: Build native immutable E2E helpers in Workbench
         uses: ./control/.github/actions/workbench
         with:
@@ -201,7 +190,7 @@ jobs:
           memory-gib: '8'
           run: |
             python3 -B /inputs/release/release/build-e2e-helpers.py \
-              --sources /src --test-revisions /src/.ci/test-revisions.json --arch "$TARGET_ARCH" \
+              --sources /src --version '${{ needs.prepare.outputs.version }}' --arch "$TARGET_ARCH" \
               --output /src/.ci/e2e-helpers --wheels-output /src/.ci/e2e-wheels --platform-source /src/platform
       - name: Transport this native helper package
         run: tar -cf "helpers-${{ matrix.arch }}.tar" -C helper-work/.ci e2e-helpers e2e-wheels
@@ -224,12 +213,6 @@ jobs:
           ref: ${{ needs.prepare.outputs.framework_sha }}
           path: control
           persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.prepare.outputs.source_sha }}
-          path: platform
-          fetch-depth: 0
-          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aggregate-sources-${{ github.run_id }}
@@ -243,6 +226,7 @@ jobs:
         run: |
           python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
           mv inputs/fetched fetched
+          cp -a fetched/platform platform
           mkdir -p fetched/e2e-helpers fetched/e2e-wheels
           for arch in x86_64 aarch64; do
             python3 -B control/ci/integration/transport.py extract "helpers/helpers-$arch.tar" "helpers/$arch"
@@ -260,12 +244,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends skopeo
           export SOURCE_DATE_EPOCH=$(git -C platform show -s --format=%ct HEAD)
-          control/release/package-platform.sh package "$VERSION" fetched/sources fetched/test-sources platform-input
+          control/release/package-platform.sh package "$VERSION" fetched/sources platform-input
           mkdir collected-platform
           tar -xzf "platform-input/assets/platform-$VERSION.tar.gz" -C collected-platform
           python3 -B platform/workbench/collect-inputs.py --cases collected-platform/test/e2e/cases \
             --arch x86_64 --arch aarch64 --output collected-inputs
-          tar -cf workbench-inputs.tar collected-inputs collected-platform/test/e2e/cases
+          tar -cf workbench-inputs.tar platform collected-inputs collected-platform/test/e2e/cases
           tar -cf fetched.tar fetched
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -298,8 +282,8 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.prepare.outputs.source_sha }}
-          path: platform
+          ref: ${{ needs.prepare.outputs.framework_sha }}
+          path: control
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -311,7 +295,8 @@ jobs:
           TARGET_ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          python3 -B platform/ci/integration/transport.py extract transport/workbench-inputs.tar inputs
+          python3 -B control/ci/integration/transport.py extract transport/workbench-inputs.tar inputs
+          mv inputs/platform platform
           python3 -B platform/workbench/build.py --version "$VERSION" --arch "$TARGET_ARCH" \
             --cases inputs/collected-platform/test/e2e/cases --deps-dir inputs/collected-inputs \
             --output image --cpus 2 --memory-gib 6
@@ -334,12 +319,6 @@ jobs:
           ref: ${{ job.workflow_sha }}
           path: control
           persist-credentials: false
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.prepare.outputs.source_sha }}
-          path: platform
-          fetch-depth: 0
-          persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: aggregate-inputs-${{ github.run_id }}
@@ -356,9 +335,11 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
+          cp -a inputs/fetched/platform platform
           mv workbench-images inputs/fetched/workbench
           export SOURCE_DATE_EPOCH=$(git -C platform show -s --format=%ct HEAD)
           control/release/aggregate-release.sh assemble "$VERSION" inputs/fetched aggregate-stage
+          tar -cf aggregate-stage/source-inputs.tar platform -C inputs/fetched sources
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ needs.prepare.outputs.artifact }}
@@ -396,13 +377,6 @@ jobs:
           ref: main
           persist-credentials: false
 
-      - name: Check out exact published platform source
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ needs.prepare.outputs.source_sha }}
-          path: platform
-          fetch-depth: 0
-          persist-credentials: false
 
       - name: Check environment GitHub CLI
         run: |
@@ -428,7 +402,10 @@ jobs:
           path: workbench-results
           merge-multiple: true
       - name: Bind publication to the tested bytes
-        run: python3 -B release/bind-validation.py aggregate-stage validated/plan/plan.json validated/validation.json --workbench workbench-results
+        run: |
+          python3 -B ci/integration/transport.py extract aggregate-stage/source-inputs.tar fixed-inputs
+          mv fixed-inputs/platform platform
+          python3 -B release/bind-validation.py aggregate-stage validated/plan/plan.json validated/validation.json --workbench workbench-results
 
       - name: Install registry transfer tooling
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
@@ -442,9 +419,8 @@ jobs:
           PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
         run: |
           set -euo pipefail
-          [ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$SOURCE_REF" \
-            --jq 'select(.object.type == "commit") | .object.sha')" = "$SOURCE_SHA" ] \
-            || { echo "$SOURCE_REF moved while release asset validation was running" >&2; exit 1; }
+          [ "$(git -C "$PLATFORM_SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_SHA" ] \
+            || { echo "admitted platform source identity changed" >&2; exit 1; }
           bash release/validate-preview-line.sh "$VERSION" "$SOURCE_SHA"
           release/publish-release.sh publish \
             "$VERSION" "$SOURCE_SHA" aggregate-stage "$SOURCE_REF"

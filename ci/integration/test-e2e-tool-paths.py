@@ -211,52 +211,33 @@ class CaseBridgeContracts(unittest.TestCase):
                 ARTIFACTS.normalize_e2e_cases(Path(directory), CASES, from_owners=False)
 
     def test_resolver_rejects_legacy_missing_and_malformed_source_cases(self):
-        resolver = load_module('case_bridge_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
-        listing = [
-            {'type': 'file', 'name': 'network.tap.sh'},
-            {'type': 'file', 'name': 'network.geneve-ip.sh'},
-        ]
-        legacy = {'type': 'file', 'name': 'run_all.sh'}
-        with patch.object(resolver.release, 'api_optional', return_value=legacy) as api, \
-             patch.object(resolver.release, 'gh') as gh:
-            with self.assertRaises(ValueError):
-                resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
-        self.assertEqual(api.call_count, 1)
-        self.assertEqual(gh.call_count, 0)
-        self.assertIn('test/e2e/run_all.sh', api.call_args.args[0])
-
-        directory = subprocess.CompletedProcess(['gh'], 0, json.dumps(listing), '')
-        with patch.object(resolver.release, 'api_optional', return_value=None), \
-             patch.object(resolver.release, 'gh', return_value=directory) as gh:
-            self.assertEqual(resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector'),
-                             ['network.geneve-ip.sh', 'network.tap.sh'])
-        self.assertEqual(gh.call_count, 1)
-        self.assertIn('contents/test/e2e/cases?ref=' + 'a' * 40, gh.call_args.args[1])
-
-        missing = subprocess.CompletedProcess(['gh'], 1, '', 'gh: Not Found (HTTP 404)')
-        with patch.object(resolver.release, 'api_optional', return_value=None), \
-             patch.object(resolver.release, 'gh', return_value=missing):
-            with self.assertRaises(ValueError):
-                resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
-
-        not_directory = subprocess.CompletedProcess(['gh'], 0, json.dumps({'type': 'file'}), '')
-        with patch.object(resolver.release, 'api_optional', return_value=None), \
-             patch.object(resolver.release, 'gh', return_value=not_directory):
+        import source_inputs
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            suite = root / 'test/e2e'; suite.mkdir(parents=True)
+            (suite / 'run_all.sh').write_text('retired entry')
+            with self.assertRaisesRegex(ValueError, 'superseded owner runner'):
+                source_inputs.owner_cases(root, 'connector')
+            (suite / 'run_all.sh').unlink()
             with self.assertRaisesRegex(ValueError, 'not a directory'):
-                resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
-
-        nested = subprocess.CompletedProcess(['gh'], 0, json.dumps([{'type': 'dir', 'name': 'nested'}]), '')
-        with patch.object(resolver.release, 'api_optional', return_value=None), \
-             patch.object(resolver.release, 'gh', return_value=nested):
+                source_inputs.owner_cases(root, 'connector')
+            (suite / 'cases').write_text('not a directory')
+            with self.assertRaisesRegex(ValueError, 'not a directory'):
+                source_inputs.owner_cases(root, 'connector')
+            (suite / 'cases').unlink(); (suite / 'cases').mkdir()
+            with self.assertRaisesRegex(ValueError, 'no case files'):
+                source_inputs.owner_cases(root, 'connector')
+            (suite / 'cases/nested').mkdir()
             with self.assertRaisesRegex(ValueError, 'flat files'):
-                resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
-
-        invalid = subprocess.CompletedProcess(
-            ['gh'], 0, json.dumps([{'type': 'file', 'name': 'working-set.smoke.sh'}]), '')
-        with patch.object(resolver.release, 'api_optional', return_value=None), \
-             patch.object(resolver.release, 'gh', return_value=invalid):
+                source_inputs.owner_cases(root, 'connector')
+            (suite / 'cases/nested').rmdir()
+            (suite / 'cases/working-set.smoke.sh').write_text('invalid suite')
             with self.assertRaisesRegex(ValueError, 'unsupported E2E suite'):
-                resolver.candidate_case_names('kuasar-sandbox/connector', 'a' * 40, 'connector')
+                source_inputs.owner_cases(root, 'connector')
+            (suite / 'cases/working-set.smoke.sh').unlink()
+            for name in ('network.tap.sh', 'network.geneve-ip.sh'):
+                (suite / 'cases' / name).write_text('exit 0')
+            self.assertEqual(source_inputs.owner_cases(root, 'connector'), ['network.geneve-ip.sh', 'network.tap.sh'])
 
     def test_privilege_boundary_forwards_only_declared_environment_names(self):
         executor = load_module('execution_boundary', ROOT / 'ci/integration/execution.py')

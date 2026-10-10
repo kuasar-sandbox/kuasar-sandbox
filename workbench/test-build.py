@@ -13,6 +13,7 @@ import time
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'ci/integration'))
 import artifacts
+import source_inputs
 
 
 def module(name, path):
@@ -40,8 +41,7 @@ def qualify(plan, root):
         owner_build = module('workbench_owner_build', ROOT / 'ci/integration/build-artifacts.py')
         sources = root / 'sources'
         sources.mkdir()
-        for owner, record in plan['test_revisions'].items():
-            owner_build.checkout(record['repository'], record['sha'], sources / owner)
+        source_inputs.copy_run_inputs(plan, plan['test_revisions'], sources)
         cases, deps = root / 'empty-cases', root / 'empty-deps'
         cases.mkdir()
         deps.mkdir()
@@ -92,4 +92,5 @@ if __name__ == '__main__':
     parser.add_argument('--plan', required=True, type=Path)
     parser.add_argument('--root', required=True, type=Path, help='new task directory outside the framework checkout')
     args = parser.parse_args()
+    source_inputs.INPUT_ARCHIVE = args.plan.resolve().parent / "source-inputs.tar"
     qualify(json.loads(args.plan.read_text()), args.root.resolve())

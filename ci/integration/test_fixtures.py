@@ -111,3 +111,30 @@ def registry_binding(version, results):
                 arch: {'digest': 'sha256:' + str(index) * 64, 'size': 100,
                        'image_id': row['image_id'], 'archive_sha256': row['sha256']}
                 for index, (arch, row) in enumerate(results.items(), 1)}}
+
+
+def tag_source_plan(plan):
+    """Give new-publication fixtures coherent derived owner provenance."""
+    records = {}
+    for unit, row in plan['baseline']['units'].items():
+        owner = 'guest-runtime' if unit in ('runtime', 'vmlinux') else unit
+        row['repository'] = 'kuasar-sandbox/' + owner
+        records[unit] = {'repository': row['repository'], 'tag': row['version'],
+                         'sha': row['sha'], 'tree': '9' * 40}
+    plan['source_records'] = records
+    plan['platform_source'] = {'repository': 'kuasar-sandbox/kuasar-sandbox',
+                              'sha': plan['baseline']['sha'], 'tree': '8' * 40}
+    plan['test_revisions'] = artifacts.release_test_revisions({
+        owner: records['runtime' if owner == 'guest-runtime' else owner]['sha']
+        for owner in artifacts.OWNERS if owner != 'platform'}, plan['baseline']['sha'])
+    return records
+
+
+def restore_using(callback):
+    """Test a consumer's requested identities independently of tar/Git transport."""
+    def restore(plan, layout, root):
+        for name, record in sorted(layout.items()):
+            destination = root / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            callback(record['repository'], record['sha'], destination)
+    return restore

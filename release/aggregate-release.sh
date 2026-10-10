@@ -11,10 +11,8 @@ fetch_components() {
   [ "$#" -eq 2 ] || release_fail "usage: aggregate-release.sh fetch <release-version> <output-dir>"
   local version="$1" output="$2"
   assert_safe_output "$output"
-  mkdir -p "$output/components" "$output/sources" "$output/test-sources" "$output/updates"
-  resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$output/selection.tsv"
-  python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --test-revisions \
-    > "$output/test-revisions.json"
+  mkdir -p "$output/components" "$output/sources" "$output/updates"
+  python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --new > "$output/selection.tsv"
   local previous
   previous="$(previous_release "$PLATFORM_SOURCE_ROOT" "$version")"
   : > "$output/previous-selection.tsv"
@@ -58,48 +56,12 @@ fetch_components() {
     local source_sha
     source_sha="$(github_api "repos/$repository/git/ref/tags/$tag" \
       | jq -er '.object | select(.type == "commit") | .sha | select(test("^[0-9a-f]{40}$"))')"
-    fetch_component_source "$repository" "$source_sha" "$output/sources/$unit"
-    if [ "$unit" != vmlinux ]; then
-      local owner="$unit" test_sha test_source
-      [ "$owner" != runtime ] || owner=guest-runtime
-      test_sha="$(jq -er --arg owner "$owner" '.[$owner]' "$output/test-revisions.json")"
-      test_source="$output/test-sources/$owner"
-      if [ "$test_sha" = "$source_sha" ]; then
-        cp -a "$output/sources/$unit" "$test_source"
-      else
-        fetch_component_source "$repository" "$test_sha" "$test_source"
-      fi
-    fi
+    python3 -B "$ROOT/release/tag_sources.py" fetch "$unit" "$tag" "$source_sha" "$output/sources/$unit" > /dev/null
     write_component_updates "$unit" "$repository" "$previous_tag" "$tag" \
       "$output/updates/$unit.md"
   done < "$output/selection.tsv"
-}
-
-fetch_component_source() {
-  local repository="$1" tag="$2" output="$3"
-  [ ! -e "$output" ] || release_fail "component source output already exists: $output"
-  local archive listing roots
-  archive="$(mktemp)"
-  listing="$(mktemp)"
-  curl --fail --show-error --silent --location \
-    --retry 4 --retry-all-errors --connect-timeout 10 --max-time 300 \
-    -H "Accept: application/vnd.github+json" \
-    -H "Authorization: Bearer ${GH_TOKEN:?GH_TOKEN is required}" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "${GITHUB_API_URL:-https://api.github.com}/repos/$repository/tarball/$tag" \
-    > "$archive"
-  tar -tzf "$archive" > "$listing"
-  awk '
-    /^\// { exit 1 }
-    { path=$0; if (path ~ /(^|\/)\.\.($|\/)/) exit 1 }
-  ' "$listing" || release_fail "$repository $tag source archive contains an unsafe path"
-  roots="$(awk -F/ 'NF {print $1}' "$listing" | LC_ALL=C sort -u)"
-  if [ -z "$roots" ] || [ "$(wc -l <<< "$roots")" -ne 1 ]; then
-    release_fail "$repository $tag source archive must contain one root directory"
-  fi
-  mkdir -p "$output"
-  tar -xzf "$archive" --strip-components=1 -C "$output"
-  rm -f "$archive" "$listing"
+  python3 -B "$ROOT/release/tag_sources.py" inspect "$PLATFORM_SOURCE_ROOT" "$version" "$output/sources" \
+    > "$output/source-records.json"
 }
 
 write_component_updates() {
@@ -218,7 +180,7 @@ assemble_release() {
   work="$(mktemp -d)"
   expected_selection="$work/selection.tsv"
   expected_previous_selection="$work/previous-selection.tsv"
-  resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$expected_selection"
+  python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --new > "$expected_selection"
   previous="$(previous_release "$PLATFORM_SOURCE_ROOT" "$version")"
   : > "$expected_previous_selection"
   if [ -n "$previous" ]; then
@@ -228,21 +190,19 @@ assemble_release() {
     || release_fail "fetched component selection does not match the selected platform source"
   cmp -s "$expected_previous_selection" "$fetched/previous-selection.tsv" \
     || release_fail "fetched previous selection does not match the selected platform source"
-  python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --test-revisions \
-    > "$work/test-revisions.json"
-  cmp -s "$work/test-revisions.json" "$fetched/test-revisions.json" \
-    || release_fail "fetched test pins do not match the selected platform source"
+  python3 -B "$ROOT/release/tag_sources.py" inspect "$PLATFORM_SOURCE_ROOT" "$version" "$fetched/sources" \
+    --evidence "$fetched/source-records.json" > "$work/source-records.json"
 
   platform_bundle="$work/platform-bundle"
   E2E_HELPER_ROOT="${E2E_HELPER_ROOT:-$fetched/e2e-helpers}" \
     E2E_WHEEL_ROOT="${E2E_WHEEL_ROOT:-$fetched/e2e-wheels}" \
-    "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$fetched/test-sources" "$platform_bundle"
+    "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$platform_bundle"
   platform_name="$(platform_archive "$version")"
-  python3 "$ROOT/release/validate-e2e-package.py" "$platform_bundle/assets/$platform_name" "$fetched/test-revisions.json"
+  python3 "$ROOT/release/validate-e2e-package.py" "$platform_bundle/assets/$platform_name" --source-records "$work/source-records.json"
   mkdir -p "$output/assets"
   install -m 0644 "$platform_bundle/assets/$platform_name" "$output/assets/$platform_name"
   install -m 0644 "$expected_selection" "$output/selection.tsv"
-  install -m 0644 "$work/test-revisions.json" "$output/test-revisions.json"
+  install -m 0644 "$work/source-records.json" "$output/source-records.json"
 
   local unit tag archive arch
   while IFS=$'\t' read -r unit tag; do

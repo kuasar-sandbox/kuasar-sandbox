@@ -107,9 +107,9 @@ def select(args):
         plan = json.loads(args.plan.read_text())
         artifacts.check_plan(plan)
         require(plan['framework_sha'] == args.framework_sha, 'plan framework mismatch')
-        aggregate = plan['baseline'] if plan['mode'] == 'source' else resolver.baseline(args.framework_sha, 'main')
+        aggregate = plan['baseline'] if plan['mode'] == 'source' else resolver.baseline(ROOT, 'main')
     else:
-        aggregate = resolver.baseline(args.framework_sha, 'main')
+        aggregate = resolver.baseline(ROOT, 'main')
     require(not args.output.exists(), 'image selection is immutable; output already exists')
     write(args.output, from_aggregate(aggregate, args.framework_sha))
 

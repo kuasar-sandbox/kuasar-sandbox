@@ -81,24 +81,17 @@ components:
 `previous_preview_version` 为更新基线;该版本线的首个 Preview 以 `previous_version`
 为基线。
 
-新聚合的同一份 Stable 或 Daily 清单还必须固定五个独立测试 revision（将占位符替换为完整小写提交 SHA）：
+新 Stable 与 Daily 清单只选择六个组件 **Tag**，拒绝 `test_revisions` 以及独立的测试、helper 或文档源码覆盖。每个 owner 的产品源码、E2E 用例、运行库、helper 和指南均来自所选单元 Tag；guest-runtime 使用 runtime Tag，kernel 指南使用独立选择的 vmlinux Tag。主仓测试与指南来自聚合源码。SHA 是自动记录和比较的来源事实，不是第二个版本选择器，也不是源码检索键。
 
-```yaml
-test_revisions:
-  accelerator: <accelerator-test-sha>
-  connector: <connector-test-sha>
-  guest-runtime: <guest-runtime-test-sha>
-  sandboxer: <sandboxer-test-sha>
-  orchestrator: <orchestrator-test-sha>
-```
+聚合按具名 Tag 获取源码，并在获取前后核对自动解析的提交身份。源码 checkout 与 `source-records.json` 作为本次运行输入传递；打包再次检查 Tag、源码身份和干净工作树，并核对 helper 来源事实。组件指南的源码链接使用所选 Tag。复用旧产品 Tag 时，不会从更新分支补取测试或指南。
 
-Daily 写入可信计划已经解析的组件源码精确 HEAD，即使产品 unit 被复用。维护选择缺少组件源码分支时，必须已有明确提交的测试 pin。
-准备新 Stable 选择时应提交明确的 pin；
-平台测试使用聚合源码 SHA。platform 包从各精确 test pin 组装扁平用例和按 owner 命名的库，并携带双架构预构建 helper；组件文档使用相同 test pin，确保调用说明修正与用例一起交付。产品保留所选 unit 版本，kernel 文档仍使用独立选择的 vmlinux 源码。
-更早的 helper build 还按提交的版本/摘要 lock 获取 Python 3.12 完整 Demo wheel 依赖闭包。打包要求两种架构的本地 wheel 和包名/版本/摘要 manifest；公开 prepare 仅从这些 wheel 离线安装，不使用 index。
-helper 编译、prepared 输入、结果和现有发布验证 binding 保留相同 pin，后续 baseline 对照提交清单核验。
-暂存的 `test-revisions.json` 仅供内部验证，公开资产名称和产品字节不变。新打包缺失或错配 pin 时失败；
-历史清单和 Release 继续按原契约读取，不补写或修改。
+组件预检通过可信分支准入聚合清单，记录其身份和完整内容。发布使用绑定到预检输出的固定证据，因此无关分支推进不会使已完成构建失效；Stable 版本线关闭状态仍实时检查。依赖恢复核对预检给出的完整所有者、Tag 与提交身份，artifact 回执不能自行选择替代依赖。新聚合记录保留含校验和资产在内的完整验证计划；Release 正文过大时明确失败，不截断证据。
+
+普通测试或文档变化不扩大产品输入差异，也不自动推动产品或 kernel 版本。需要交付这些变化时，显式选择正常发布的新 owner Tag。声明缺失时明确失败，不借用更新 HEAD，也不伪造声明。
+
+历史清单通过单独的只读解析器保留真实 `test_revisions` 证据。这不授权重建历史包或按旧测试 SHA 获取源码。历史消费必须按聚合 Tag 读取已发布包和已验证证据；缺少证据时明确失败，不猜测用例归属，也不把旧测试来源冒充产品 Tag 来源。
+
+helper 构建按已提交的版本与哈希锁获取 Python 3.12 Demo wheel 闭包；打包要求两种架构的本地 wheel 及其包名、版本和摘要清单，公开 prepare 仅从这些 wheel 离线安装。
 
 只有当前聚合已完整发布后,才推进 `previous_preview_version`。未发布的选择跨日滚动时,
 保留其已有基线;若是该版本线的首个 Preview,则继续省略此字段。被放弃的选择可能包含
@@ -196,6 +189,14 @@ run 身份,不会用旧输入重跑或改写运行中清单。
 日期或修订号推进后,使用新选择的后缀发布重建结果。完整 Release 仍须通过原有的源码和
 依赖绑定校验。
 
+### 4.3 首次迁移到 Tag 选择的输入
+
+先提供平台源码契约机制，再提供依赖该机制的组件生产工作流。确认每个 owner 源码分支包含本仓指南声明和全部必需输入，然后**单独评审**选择正常新 owner Tag 与聚合版本的清单变更。
+
+Preview 对已提交的选择使用 §6 的正常组件发行入口，按依赖顺序先 accelerator 和 connector，再 sandboxer，最后 orchestrator 和 runtime。机制合入后，先完成新 Preview 的完整验收，再进行 Stable 切换；Stable 随后使用 formal coordinator 的已提交选择。所选组件 Release 就绪后，使用 §7 的正常聚合入口并执行 §8 的全部验证 gate。若相关 kernel 输入未变化且所选文档完整，独立选择的 vmlinux Tag 可以保持不变。
+
+首次显式迁移与通用 Daily 的仅文档变化复用算法分开；后者不能替代经评审的新 Tag 选择。不得扩大产品变化输入或添加强制构建规则。历史 Tag 与发布包按 §2 的只读契约保持不可变。
+
 <a id="first-arm-initialization"></a>
 ### 首次 ARM 初始化
 
@@ -250,23 +251,31 @@ Release 的 `target_commitish` 是完整且匹配的源码 SHA 时才允许恢�
 
 ## 6. 组件发布 CLI
 
+控制器请求中的 SHA 字段是自动观察的身份，不是人工版本输入。CLI 示例中的 `OWNER_REPOSITORY`、`SOURCE_REF` 和 `PLATFORM_REF` 分别表示 owner 仓库、源码分支和聚合分支。
+
 组件 workflow 始终从仓库 `main` 加载受信任工具,但必须显式传入实际源码分支和精确
-分支 HEAD SHA。下面只展示参数形态;自动 Daily 由控制器填写这些值:
+分支 HEAD SHA。SHA 由控制器或 GitHub API 自动读取，不能手工作为版本填写。以下示例定义匹配的仓库与分支，用于自动身份查询和派发；自动 Daily 提供相同输入：
 
 ```bash
+OWNER_REPOSITORY=kuasar-sandbox/accelerator
+SOURCE_REF=release/v0.2.x
+PLATFORM_REF=release/v0.5.x
 gh workflow run release.yml \
-  --repo kuasar-sandbox/accelerator --ref main \
+  --repo "$OWNER_REPOSITORY" --ref main \
   -f version=v0.2.2-preview.20260831 \
-  -f source_ref=release/v0.2.x -f source_sha=<full-sha> \
+  -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
-  -f aggregate_sha=<platform-manifest-commit>
+  -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)"
 
+OWNER_REPOSITORY=kuasar-sandbox/sandboxer
+SOURCE_REF=release/v0.3.x
+PLATFORM_REF=release/v0.5.x
 gh workflow run release.yml \
-  --repo kuasar-sandbox/sandboxer --ref main \
+  --repo "$OWNER_REPOSITORY" --ref main \
   -f version=v0.3.6-preview.20260831 \
-  -f source_ref=release/v0.3.x -f source_sha=<full-sha> \
+  -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
-  -f aggregate_sha=<platform-manifest-commit> \
+  -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)" \
   -f accelerator_version=v0.2.2-preview.20260831 \
   -f connector_version=v0.1.9
 ```
@@ -274,12 +283,11 @@ gh workflow run release.yml \
 orchestrator 接收 `accelerator_version`、`connector_version` 和 `sandboxer_version`;
 runtime 只接收与镜像实际载荷一致的 `accelerator_version` 和 `sandboxer_version`;
 vmlinux 不接收内部组件版本输入。runtime 与 vmlinux 使用各自工作流。
-预检要求 `source_sha` 仍是 `source_ref` 的 HEAD,构建 checkout 该 SHA,最终 Tag 也指向该
-SHA。依赖参数必须对应已经完整发布的精确 Release。
+预检要求 `source_sha` 仍是 `source_ref` 的 HEAD,构建恢复预检按分支获取并验证的 run artifact,最终 Tag 也指向该
+SHA。依赖参数必须对应已经完整发布的精确 Release；预检按所选 Tag 获取并固定校验后的源码输入。每种架构在独立的原生 job 中构建。
 Preview 还要求 `aggregate_sha` 所指平台提交中的
 `daily-preview.yaml/version + preview_version` 精确等于聚合版本,且
-`components.<unit>` 精确等于待发布 Tag。该绑定和 Stable 封线检查在构建前及取得
-publish concurrency lock 后各执行一次。所有组件 Release notes 都记录源码分支、源码
+`components.<unit>` 精确等于待发布 Tag。预检固定这份清单绑定；取得 publish concurrency lock 后，发布核验固定证据并检查实时 Stable 封线状态，不重新获取更新后的分支清单。所有组件 Release notes 都记录源码分支、源码
 SHA 和发布单元。Preview 还记录原始聚合清单 SHA 和实际依赖版本绑定;已有 Preview 只有
 在源码与依赖绑定都一致时才可复用。
 
@@ -304,11 +312,13 @@ make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
 内容来自所选平台分支的精确 HEAD。目标分支中的旧发布脚本不会作为控制器执行:
 
 ```bash
+PLATFORM_REPOSITORY=kuasar-sandbox/kuasar-sandbox
+SOURCE_REF=release/v0.5.x
 gh workflow run aggregate-release.yml \
-  --repo kuasar-sandbox/kuasar-sandbox --ref main \
+  --repo "$PLATFORM_REPOSITORY" --ref main \
   -f version=release-v0.5.7 \
-  -f source_ref=release/v0.5.x \
-  -f source_sha=<full-sha>
+  -f source_ref="$SOURCE_REF" \
+  -f source_sha="$(gh api "repos/$PLATFORM_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)"
 ```
 
 正式发布前先在目标分支提交 `release.yaml`,发布所缺的 Stable 组件单元,再从目标分支最新
@@ -335,15 +345,14 @@ runtime、vmlinux 保留独立包名。两份维护中的聚合清单声明 `del
 
 不发布项目生成的 release metadata JSON,也不重复上传 GitHub 自动提供的源码归档。
 版本选择 YAML 只在仓库维护,既不是 Release 资产,也不进入 platform 包。
-组件 archive 不携带 `docs/` 或 `test/e2e/`；aggregate assembly 从独立 test pin 收集组件文档
+组件 archive 不携带 `docs/` 或 `test/e2e/`；aggregate assembly 从所选 owner Tag 收集组件文档
 和 E2E 输入，统一写入 platform archive（§8.1）。kernel 文档使用单独选择的 vmlinux 产品源码。
 
-组件原生/ARM 交叉构建在两个独立 x86 job 执行，复用相同精确源码与依赖版本，校验后原样组装双架构包。
-依赖 Release 必须公开、完整并解析为轻量 tag 的精确 commit，build checkout 不保留凭据。
+组件从固定准入源码 artifact 构建和测试，x86_64 与 aarch64 分别运行独立的原生 job，依赖源码按所选 Tag 固定。checkout 不保留凭据。校验后原样组装双架构包。
 聚合 prepare 下载六个所选 Release，校验 API size/digest、SHA-256、路径、归属与跨包覆盖，
 随后在无凭据源码步骤中构建固定测试 helper，并生成确定性的 platform 包。
 暂存字节通过共享的公开 prepare → 聚焦用例 → 公开 run 合同，不重建产品或 helper。
-解析阶段按已提交 test pin 声明精确用例文件名；执行使用短的私有状态路径，直接读取暂存归档中的用例，无需源码 overlay。
+解析阶段从所选 owner Tag 声明精确用例文件名；执行使用短的私有状态路径，直接读取暂存归档中的用例，无需源码 overlay。
 x86 在真实 KVM runner 运行九个 suite 中的所选用例；托管 ARM 运行预先声明的 accelerator/guest-runtime 非 KVM 子集。
 干净运行时中的 prepare 和所选完整 suite 执行保留 Go、Rust、组件源码树缺失的验证证据。源码检查是独立必需 job。
 publish 必须收齐两个架构的成功结果，在 `kuasar-integration-validation` 绑定用例选择、源码身份和资产摘要，原样上传归档。
@@ -354,7 +363,7 @@ Latest 策略。
 <a id="平台包中的文档"></a>
 Workbench 的 prepare 与构建期 collector 共享规范用例发现和外部镜像请求函数。collector 在同一暂存请求中只解析一次移动 Tag，并用原始 registry manifest/config 证据绑定所复制的 Docker archive。原生构建每种架构的单个 gzip Docker 镜像归档，标注相同聚合版本和精确源码。实际压缩字节必须**小于 2 GiB**；超限或残缺输入在暂存/发布前失败。镜像只包含工具和外部输入，六个产品归档保持独立且与上游字节一致。
 
-新增原生 workbench 门禁导入这些精确暂存字节，从空的私有 Docker 状态、无外部路由开始，通过公开入口离线 prepare，再仅重新连接所属 bridge 执行 run，保留 Demo 真实的 Guest Internet 出站断言。具备 KVM 的原生 x86 和 ARM 使用相同的当前完整常规用例选择；GitHub 托管 ARM runner 没有 KVM 设备：其显式 `artifact-only` workbench 结果验证归档、导入镜像及原生发行输入，单独记录计划用例，不声称完成系统或离线执行。ARM 原有原生构建及非 KVM E2E 通道仍为必需。完整原生 ARM workbench 验收使用已发布字节及与 x86 相同的 `--all --exclude storage.obs.sh` 选择，包含 orchestrator、builder、telemetry 和静态无 libc cgroup probe。所选 Guest 内核必须提供实际 PMEM/EROFS `dax=always`，保留架构及运行断言。用例列表由精确发行文件产生，不固定为历史数量。旧的有限 workbench 验收仅对其原有用例范围有效。私有 daemon 隔离、实际所选 KVM/UFFD/TUN/BPF 操作及所有权清理都必须通过。Workbench 系统模式使用 Docker privileged 权限，面向可信系统管理员；自定义宿主 AppArmor/seccomp 策略工具及权限收缩专项证明不再是部署或发布前置条件。通用系统启动报告不可用的硬件能力，不冒充相关产品测试已经通过。工具链环境不能替代单独的无编译器 runtime 门禁。新的原生结果声明 `native-full`，历史 `system` 保留原有选择范围，托管 ARM 继续显式声明 `artifact-only`。这些记录绑定精确 framework、测试 pin、产品摘要、archive/config 身份、实际压缩大小、压缩/导入时间和观测到的磁盘峰值；系统结果另含启动时间及已执行用例证据；磁盘观测不是配额。
+新增原生 workbench 门禁导入这些精确暂存字节，从空的私有 Docker 状态、无外部路由开始，通过公开入口离线 prepare，再仅重新连接所属 bridge 执行 run，保留 Demo 真实的 Guest Internet 出站断言。具备 KVM 的原生 x86 和 ARM 使用相同的当前完整常规用例选择；GitHub 托管 ARM runner 没有 KVM 设备：其显式 `artifact-only` workbench 结果验证归档、导入镜像及原生发行输入，单独记录计划用例，不声称完成系统或离线执行。ARM 原有原生构建及非 KVM E2E 通道仍为必需。完整原生 ARM workbench 验收使用已发布字节及与 x86 相同的 `--all --exclude storage.obs.sh` 选择，包含 orchestrator、builder、telemetry 和静态无 libc cgroup probe。所选 Guest 内核必须提供实际 PMEM/EROFS `dax=always`，保留架构及运行断言。用例列表由精确发行文件产生，不固定为历史数量。旧的有限 workbench 验收仅对其原有用例范围有效。私有 daemon 隔离、实际所选 KVM/UFFD/TUN/BPF 操作及所有权清理都必须通过。Workbench 系统模式使用 Docker privileged 权限，面向可信系统管理员；自定义宿主 AppArmor/seccomp 策略工具及权限收缩专项证明不再是部署或发布前置条件。通用系统启动报告不可用的硬件能力，不冒充相关产品测试已经通过。工具链环境不能替代单独的无编译器 runtime 门禁。新的原生结果声明 `native-full`，历史 `system` 保留原有选择范围，托管 ARM 继续显式声明 `artifact-only`。这些记录绑定精确 framework、测试来源事实、产品摘要、archive/config 身份、实际压缩大小、压缩/导入时间和观测到的磁盘峰值；系统结果另含启动时间及已执行用例证据；磁盘观测不是配额。
 
 发布把已测试的保存镜像复制到 `ghcr.io/kuasar-sandbox/workbench:<去掉-release-前缀的聚合版本>`，验证两种架构的 config 身份和多架构 index，并匿名回读每个按 digest 固定的镜像到临时 Docker archive。归档校验器将每个解压后的镜像层与已测试离线镜像的 config 逐一绑定，发布重试也必须通过。registry digest、镜像 ID、离线 archive hash 含义各自独立。已有同名 Tag/资产必须匹配；重试只补传缺失资产，不覆盖测试字节。跨服务发布可恢复：只有 registry 和完整 GitHub 资产集合一致，GitHub draft 才公开。冲突时失败关闭，不改写历史源码和已发布字节。
 
@@ -362,12 +371,37 @@ Workbench 的 prepare 与构建期 collector 共享规范用例发现和外部�
 
 ### 8.1 文档载荷与源码映射
 
-平台归档使用 `test/e2e/package_inputs.py` 中显式的构建期文件列表。组件输入来自
-`test_revisions`，kernel 指南来自单独选择的 vmlinux 源码。组装器复制规范用例、明确列出的
-运行库、Demo 脚本和锁文件、预构建 helper、本地 wheel，以及轻量 workbench 宿主机入口。
-不会复制整个 test 树，也不会扫描仓库中的 Markdown 来决定打包内容。
+平台归档使用 `test/e2e/package_inputs.py` 中的仓库本地输入发现。组件输入来自
+所选 owner/单元 Tag，kernel 指南来自独立选择的 vmlinux Tag。组装器按目录约定
+发现规范用例和运行库，通过各仓 `release/guide-inputs.txt` 发现指南，同时复制
+Demo 脚本和锁文件、预构建 helper、本地 wheel 与轻量 workbench 宿主机入口。
+不会复制整个 test 树，也不会打包未声明的指南。
 `test/e2e/assemble_docs.py` 对完整的已选文档重写链接，不抽取章节、不改写可执行示例、
 配置值或产品二进制。
+
+#### 组件运行依赖自动发现
+
+每个 E2E 组件在本仓 `test/e2e/lib/` 维护运行依赖（平台自有用例使用
+`test/e2e/platform/lib/`）。组装器从选定 owner Tag 递归发现全部普通文件，
+保留相对路径放入 `test/e2e/lib/<owner>/`。新增库、数据夹具或嵌套依赖时，
+无需修改其他仓库的文件名清单。规范用例仍从 `test/e2e/cases/*.sh` 自动发现。
+
+以 `test_` 开头的名称、Python 缓存目录（`__pycache__`、`.pytest_cache`）和
+编译缓存文件（`*.pyc`、`*.pyo`）按约定仅用于源码自测，不得作为运行依赖。
+组装器拒绝符号链接、非普通文件、缺失或空的运行库以及重复用例 ID；
+执行时不会通过额外下载补齐缺失输入。归档校验与执行验证仍针对实际交付包。
+
+#### 仓库自行声明交付文档
+
+每个仓库在选定 owner Tag（平台使用聚合源码）的 `release/guide-inputs.txt` 声明交付用户文档。
+条目可以是仓内相对 Markdown 路径、目录（递归发现 Markdown）或 glob 模式；
+忽略空行和 `#` 注释。每个条目必须匹配；声明缺失或为空、越界路径、符号链接、
+显式选择非 Markdown 文件以及重复匹配均使组装失败。目录发现保留 `docs/` 下的嵌套路径。
+
+平台仅维护本仓声明，各组件自行维护用户文档与开发文档的边界，聚合器不再保存
+逐组件文件名清单。许可证材料沿用 LICENSE/NOTICE/COPYING 命名约定。
+独立版本单元按 `docs/<unit>.md` 及可选 `_zh.md` 对应文件约定，从该单元的
+精确选定 Tag 读取，包括不可变旧 Tag。
 
 #### 目录布局
 
@@ -403,15 +437,15 @@ node/build/proxy/resource/journal/telemetry 契约。存在两种语言时同时
 README 的组件 `docs/` 链接；没有中文版时回退到英文。直接文件链接和带显式 fragment
 的目录链接保留指定文件或默认 README 目标，以维持原有锚点契约。
 
-发布打包器从所选清单的 `test_revisions` 读取组件精确引用，并使用聚合版本构造主仓源码链接。
-文档与用例因此引用相同源码快照；仅涉及测试调用说明的修正无需重新发布产品。
+发布打包器从所选清单的 `components` 读取组件 Tag，并使用聚合版本构造主仓源码链接。
+文档与用例因此引用同一所选 Tag；交付更新的测试调用说明需要显式选择正常发布的新 owner Tag。
 这些文档引用不改变产品版本或归档字节。直接从源码组装时，有 Git 元数据则使用 HEAD，
 否则源码链接使用 `main`。本地验收可以提供制表符分隔的 `DOCS_SOURCE_REFS` 文件，每行
 包含 owner 和精确源码 revision。这是组装元数据，不是运行时配置项。
 
 runtime 与 vmlinux 单元可以选择 guest-runtime 的不同提交。因此发布打包器单独提供
 `DOCS_VMLINUX_SOURCE`，从所选 kernel 源码同时取得 `vmlinux.md` 和 `vmlinux_zh.md`。
-若所选旧 kernel 没有中文对应文档，不会用独立固定的 guest-runtime 测试源码中的中文文档替代。
+若所选旧 kernel 没有中文对应文档，不会用单独选择的 runtime 源码中的中文文档替代。
 
 可以识别且指向已包含文档的跨仓 `main` 链接在组装集合内解析。绝对 GitHub `main` 链接
 若指向所选源码中存在的其他文件或目录，则与相对源码链接一样固定到该源码的所选引用，
@@ -428,7 +462,7 @@ make test-release-tools
 
 专项测试覆盖语言选择、原生构建链接、源码 URL、可执行内容不变、跨仓链接、路径冲突、
 符号链接和 kernel 语言版本独立选择。发布测试还会解包实际平台 tarball，检查组件调用说明
-和源码链接使用精确 test pin，而两份 kernel 文档均来自所选 vmlinux 源码，即使这些快照不同。
+和源码链接使用所选 owner Tag，而两份 kernel 文档均来自所选 vmlinux 源码，即使这些快照不同。
 最终验收还必须用实际检视的源码集合执行组装、检查解包产物，
 并验证全部相对路径和标题锚点。翻译完整性需要单独进行语义检视；打包检查通过不能证明
 尚未完成的文档已翻译。
@@ -555,31 +589,3 @@ Daily Preview 必须直接把收敛后的清单提交到受保护目标分支,�
 - [deployment_zh.md](deployment_zh.md):部署与运行前置条件;
 - [../test/QUICKSTART_zh.md](../test/QUICKSTART_zh.md):完整聚合 Release 验证;
 - [../release/](../release/):选择、打包、协调、恢复和 GC 实现。
-
-### 组件运行依赖自动发现
-
-每个 E2E 组件在本仓 `test/e2e/lib/` 维护运行依赖（平台自有用例使用
-`test/e2e/platform/lib/`）。组装器从选定的测试提交递归发现全部普通文件，
-保留相对路径放入 `test/e2e/lib/<owner>/`。新增库、数据夹具或嵌套依赖时，
-无需修改其他仓库的文件名清单。规范用例仍从 `test/e2e/cases/*.sh` 自动发现。
-
-以 `test_` 开头的名称、Python 缓存目录（`__pycache__`、`.pytest_cache`）和
-编译缓存文件（`*.pyc`、`*.pyo`）按约定仅用于源码自测，不得作为运行依赖。
-组装器拒绝符号链接、非普通文件、缺失或空的运行库以及重复用例 ID；
-执行时不会通过额外下载补齐缺失输入。归档校验与执行验证仍针对实际交付包。
-
-### 仓库自行声明交付文档
-
-每个仓库在选定源码提交的 `release/guide-inputs.txt` 声明交付用户文档。
-条目可以是仓内相对 Markdown 路径、目录（递归发现 Markdown）或 glob 模式；
-忽略空行和 `#` 注释。每个条目必须匹配；声明缺失或为空、越界路径、符号链接、
-显式选择非 Markdown 文件以及重复匹配均使组装失败。目录发现保留 `docs/` 下的嵌套路径。
-
-平台仅维护本仓声明，各组件自行维护用户文档与开发文档的边界，聚合器不再保存
-逐组件文件名清单。许可证材料沿用 LICENSE/NOTICE/COPYING 命名约定。
-独立版本单元按 `docs/<unit>.md` 及可选 `_zh.md` 对应文件约定，从该单元的
-精确选定源码读取（包括不可变旧提交），不会借用较新 runtime 测试提交的文档。
-
-迁移顺序：先合入各仓声明，再通过正常 Daily 选择流程选入这些测试提交，核对
-新清单后才启用新读取器。旧的不可变源码提交不会自动获得新声明；历史清单保留
-与其匹配的框架，不得借用当前声明让旧构建通过。

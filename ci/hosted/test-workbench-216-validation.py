@@ -93,11 +93,13 @@ class VerificationContracts(unittest.TestCase):
                 self.assertEqual(receipt, root / ("workbench-cache-scope-123-" + expected_hash + ".json"))
                 receipts.append(receipt)
 
+            record['run_inputs'] = record['sources']
+            def restore(plan, layout, root):
+                for owner, row in layout.items(): checkout(row['repository'], row['sha'], root / owner)
             builder = SimpleNamespace(checkout=checkout)
             spec = SimpleNamespace(loader=SimpleNamespace(exec_module=Mock()))
             with patch.object(task, "frozen", return_value=record), \
-                    patch.object(task.importlib.util, "spec_from_file_location", return_value=spec), \
-                    patch.object(task.importlib.util, "module_from_spec", return_value=builder), \
+                    patch.object(task.source_inputs, "copy_run_inputs", side_effect=restore), \
                     patch.object(task.subprocess, "run", side_effect=cache_scope), \
                     patch.dict(os.environ, {"GITHUB_ACTIONS": "true", "GITHUB_RUN_ID": "123", "RUNNER_TEMP": str(root)}):
                 for phase in ("cold", "warm"):
@@ -424,6 +426,12 @@ class AggregateHelperCacheContracts(unittest.TestCase):
         self.record = {"admission": None, "framework_sha": "a" * 40, "run_id": "123",
                        "test_revisions": {owner: {"repository": repository, "sha": "b" * 40}
                                           for owner, repository in task.REPOSITORIES.items()}}
+        tags = task.source_inputs.tag_sources
+        version, _, units = tags.selection.parse_manifest((ROOT / 'releases/daily-preview.yaml').read_text(), 'fixture', True)
+        facts = {unit: {'repository': tags.repository(unit), 'tag': tag, 'sha': 'c' * 40, 'tree': 'd' * 40}
+                 for unit, tag in units.items()}
+        self.record['aggregate_helper_inputs'] = {'version': version, 'source_records': facts,
+                                                   'run_inputs': {'fixture': 'fixed-inputs'}}
         self.expected = task.aggregate_helper_inputs(self.record)
         self.sources = self.root / "helper-work"
         self.inputs = self.root / "helper-inputs.json"
@@ -449,7 +457,7 @@ class AggregateHelperCacheContracts(unittest.TestCase):
                              else self.expected["test_revisions"][owner]}
         self.helpers = helpers
         task.write(helpers / "helpers.json", {"arch": "x86_64", "framework_sha": "a" * 40,
-                                             "test_revisions": self.expected["test_revisions"], "helpers": records})
+                                             "test_revisions": self.expected["test_revisions"], "source_records": self.expected["source_records"], "helpers": records})
         wheels = self.sources / ".ci/e2e-wheels/x86_64"
         wheels.mkdir(parents=True)
         (wheels / "fixture.whl").write_bytes(b"locked binary wheel fixture")
@@ -467,8 +475,7 @@ class AggregateHelperCacheContracts(unittest.TestCase):
         self.scope = {"source_root": str(self.sources), "repository": task.REPOSITORIES["kuasar-sandbox"],
                       "ref": "refs/heads/main", "event": "workflow_dispatch", "run_id": "123",
                       "scope": "trusted", "namespace": "trusted", "event_inputs": {},
-                      "transport": {"test-revisions.json": {owner: {"repository": task.REPOSITORIES[owner], "sha": revision}
-                                    for owner, revision in self.expected["test_revisions"].items()}},
+                      "transport": {},
                       "sources": [{"path": owner, "kind": "git", "clean": True, "on_main": True, **record}
                                   for owner, record in self.expected["sources"].items()]}
         self.temp = self.root / "runner-temp"
@@ -492,20 +499,22 @@ class AggregateHelperCacheContracts(unittest.TestCase):
         self.assertTrue(self.expected["pin_differences"])
         self.assertEqual(self.expected["sources"]["platform"]["sha"], self.record["framework_sha"])
         sources, destination = self.root / "fresh", self.root / "fresh-inputs.json"
-        calls = []
-        def checkout(repository, revision, path):
-            (path / ".git").mkdir(parents=True)
-            calls.append((repository, revision, path.name))
-        original = task.module
-        def module(name, path):
-            return SimpleNamespace(checkout=checkout) if name == "task216_aggregate_inputs" else original(name, path)
-        with patch.object(task, "frozen", return_value=self.record), patch.object(task, "module", side_effect=module), \
+        def restore(plan, layout, output):
+            self.assertEqual(plan['run_inputs'], self.record['aggregate_helper_inputs']['run_inputs'])
+            self.assertEqual(set(layout), set(self.expected['sources']))
+            for unit, row in self.expected['source_records'].items():
+                relative = str(task.source_inputs.tag_sources.source_path(Path('.'), unit, owner_layout=True))
+                self.assertEqual(layout[relative], row)
+            for relative in layout:
+                (output / relative / '.git').mkdir(parents=True)
+        with patch.object(task, "frozen", return_value=self.record), \
+                patch.object(task.source_inputs, "copy_run_inputs", side_effect=restore) as copy_inputs, \
                 patch.object(task, "aggregate_helper_caches", return_value={"requests": [], "entries": []}):
             task.aggregate_helper_fetch(SimpleNamespace(frozen=self.frozen, sources=sources, arch="x86_64", output=destination))
-        self.assertEqual(set(path.name for path in sources.iterdir()), {*self.expected["sources"], ".ci"})
-        self.assertEqual([path.name for path in (sources / ".ci").iterdir()], ["test-revisions.json"])
-        self.assertEqual(json.loads((sources / ".ci/test-revisions.json").read_text()), self.expected["test_revisions"])
-        self.assertEqual(calls, [(row["repository"], row["sha"], owner) for owner, row in sorted(self.expected["sources"].items())])
+        copy_inputs.assert_called_once()
+        self.assertEqual({str(path.parent.relative_to(sources)) for path in sources.rglob('.git')}, set(self.expected['sources']))
+        self.assertEqual(list((sources / '.ci').iterdir()), [])
+        self.assertEqual(task.source_inputs.INPUT_ARCHIVE, self.frozen.parent / 'helper-source-inputs.tar')
         with self.assertRaisesRegex(ValueError, "main-only"):
             task.aggregate_helper_inputs({**self.record, "admission": {"primary": "candidate"}})
 
@@ -957,11 +966,14 @@ class PackagedInputContracts(unittest.TestCase):
         self.record["test_revisions"] = self.record["sources"]
         resolver = task.module("task216_fixture_resolver", ROOT / "ci/integration/resolve-artifacts.py")
         cases = self.fixtures.WORKBENCH_CASES | {"guest-runtime": ["image.flatten.sh"]}
+        self.record["case_files"] = cases
+        self.record["run_inputs"] = {owner: dict(row, tree="e" * 40, ref="refs/heads/main")
+                                     for owner, row in self.record["sources"].items()}
         with patch.object(resolver, "baseline", return_value=base.plan["baseline"]) as baseline, \
-                patch.object(resolver, "case_files", return_value=cases), \
                 patch.object(task, "module", return_value=resolver):
             self.plan = task.integration_plan(self.record)
-        baseline.assert_called_once_with("a" * 40, "main")
+        self.assertEqual(self.plan["run_inputs"], self.record["run_inputs"])
+        baseline.assert_called_once_with(task.ROOT, "main")
         self.plan_directory = self.root / "plan"
         self.plan_directory.mkdir()
         task.write(self.plan_directory / "integration-plan.json", self.plan)

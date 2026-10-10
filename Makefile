@@ -189,6 +189,7 @@ test:
 	@for r in $(GO_REPOS); do echo "== test $$r =="; $(MAKE) -C $(ORG)/$$r test || exit 1; done
 
 test-ci-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-source-inputs.py
 	bash ci/integration/test-ci-tools.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-source-owner.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-source-checks.py
@@ -205,6 +206,7 @@ test-ci-tools:
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
 
 test-release-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_tag_selection.py release/test_tag_sources.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s release -p 'test_workbench_*.py'
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test_e2e_package.py
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test-environment-tools.py
