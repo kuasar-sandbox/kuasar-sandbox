@@ -31,7 +31,7 @@ Admission 失败或 Draft 延迟执行时，可信 finalizer 不得成功结束�
 
 App key 和短期控制 token 只进入受信任的 admission/finalize 与发布控制 job。
 产品/helper 构建、源码检查、prepare、E2E 都不接收 App key，候选代码在新的标准 job 执行。
-公开源码以匿名精确 SHA 获取，checkout 不保留凭据；Actions token 只用于可信 API/下载步骤。
+公开发行源码按所选 Tag 获取；候选分支/PR ref 按自动观测的身份准入，并通过固定运行 artifact 传递。checkout 不保留凭据；Actions token 只用于可信 API/下载步骤。
 publish 使用独立 job 和写权限。
 
 跨仓原子变更沿用双向 companion 标记：
@@ -100,7 +100,7 @@ exact-assets 模式直接消费 platform 包中的同一布局。两条路径都
 内部 CI shard 按 suite 分组精确文件，plan 在执行前记录所选用例和架构排除项。
 
 source/helper build 生成目标架构的 zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe，
-以及静态无 libc 的 x86_64/aarch64 cgroup probe。 orchestrator 辅助程序集合还包含 `node-ctl-runner-test`，使用精确的 orchestrator 测试 pin 及所选依赖工作区，通过 `go test -c ./cmd/node-ctl` 编译。它仅用于测试，不是生产制品。prepare 校验架构、源码 pin 和摘要，并将 `NODE_CTL_RUNNER_TEST_BINARY` 设置为不可变的 `fixtures/bin/node-ctl-runner-test` 路径；prepare 和 E2E 均不编译它。发布包携带两种架构的 helper、精确测试 pin 和摘要。同一更早的 build 阶段按 `test/demo/requirements.lock`
+以及静态无 libc 的 x86_64/aarch64 cgroup probe。 orchestrator 辅助程序集合还包含 `node-ctl-runner-test`，使用已准入的 orchestrator 源码身份及所选依赖工作区，通过 `go test -c ./cmd/node-ctl` 编译。它仅用于测试，不是生产制品。prepare 校验架构、源码 pin 和摘要，并将 `NODE_CTL_RUNNER_TEST_BINARY` 设置为不可变的 `fixtures/bin/node-ctl-runner-test` 路径；prepare 和 E2E 均不编译它。发布包携带两种架构的 helper、精确测试 pin 和摘要。同一更早的 build 阶段按 `test/demo/requirements.lock`
 获取 Python 3.12 的完整 Demo SDK wheel 依赖闭包，固定全部版本及 wheel 摘要；发布包携带两种架构的 wheelhouse。prepare 消费这些二进制，
 准备 manifest archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像，并仅从本地 wheelhouse 通过
 `--no-index --find-links` 和 `--require-hashes` 安装 Demo SDK。wheel 缺失或变化时在安装前失败。provenance 绑定包名、版本、wheel 摘要、lock 身份和安装后的文件树。
@@ -113,7 +113,7 @@ E2E 只 checkout 可信执行器并下载目标 prepared workspace，执行前�
 源码依赖的 connector/sandboxer/orchestrator unit/race/vet、真实 pinned-BPF 统计、ENOSPC、Collector/usage harness 回归和 UFFD benchmark 保留为独立必需源码 job。
 source 模式 x86 sandboxer/platform 还在独立性能 job 中，用同一组制品保留 A/B/C/D `off/auto × cold/warm` working-set smoke。
 
-完整源码门禁在原生 x86 的独立 Workbench system 实例中运行, 包括混合 unit/race/vet 与真实特权检查所需的编译器. 受信宿主只获取准入 `plan.test_revisions`, 实例接收 `/src` 私有副本, 不接收宿主 Docker socket、凭据或 ordinary 构建缓存. 每个精确测试 pin 的原 owner 脚本与 Make target 继续决定实际检查, 包括已发布的旧布局. 它们在实例内以 ordinary UID 执行, 保留不可读文件及拒绝提权的检查. 私有 sudo 配置保留原脚本的显式升权, 仅既有 TAP/netns 性能 fixture 通过 `sudo make test-perf-tools` 执行. 该用户仅访问实例自己的 Docker socket, 不修改宿主账号或策略. 真实 `sudo`、systemd、BPF、mount namespace、UFFD 与私有 Docker 保留原参数和断言. 门禁开始前必须成功创建 TAP 与 network namespace. 结果保留 framework/test/image 身份、各命令、退出码及耗时, 失败证据经所属实例清理入口收集. 产品、独立 helper 与发布构建使用 ordinary UID 的 build 模式. 宿主 bootstrap 保留编排及产品执行前提, Workbench producer 继续直接在原生 Runner 构建.
+完整源码门禁在原生 x86 的独立 Workbench system 实例中运行, 包括混合 unit/race/vet 与真实特权检查所需的编译器. 受信宿主从固定准入 artifact 恢复 `plan.test_revisions` 对应源码, 实例接收 `/src` 私有副本, 不接收宿主 Docker socket、凭据或 ordinary 构建缓存. 每个精确测试 pin 的原 owner 脚本与 Make target 继续决定实际检查, 包括已发布的旧布局. 它们在实例内以 ordinary UID 执行, 保留不可读文件及拒绝提权的检查. 私有 sudo 配置保留原脚本的显式升权, 仅既有 TAP/netns 性能 fixture 通过 `sudo make test-perf-tools` 执行. 该用户仅访问实例自己的 Docker socket, 不修改宿主账号或策略. 真实 `sudo`、systemd、BPF、mount namespace、UFFD 与私有 Docker 保留原参数和断言. 门禁开始前必须成功创建 TAP 与 network namespace. 结果保留 framework/test/image 身份、各命令、退出码及耗时, 失败证据经所属实例清理入口收集. 产品、独立 helper 与发布构建使用 ordinary UID 的 build 模式. 宿主 bootstrap 保留编排及产品执行前提, Workbench producer 继续直接在原生 Runner 构建.
 
 CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径。跨 `sudo` 只传递显式准备的输入（包括私有状态目录）；执行不读取生成的 owner-runner registry。
 
@@ -151,7 +151,7 @@ ARM 非 KVM 范围在执行前和 aggregate 验证绑定中声明，不等同完
 
 Actions cache 的存储和访问属于调用者仓库及 ref, 遵守 GitHub 的缓存规则; 同 key 不会跨仓共享. 默认分支 dispatch 的候选输入仍属于 candidate. trusted cache 写入要求在源码执行前确认干净、精确的公开源码提交属于对应 main 历史, 结论保存在候选挂载之外. 现有受信 main/release 入口在 runtime cache scope 可写时提供写入路径, 沿用现有权限. publisher 可执行文件不消费候选或构建缓存.
 
-聚合 helper 按独立选择的测试 revision 获取干净 Git 源码. Runtime 发布在安装已验证的预编译资产前冻结同一宿主 receipt, 避免把生成的二进制和 notice 当成源码改动. 原有资产验证及实际工具链/recipe 缓存 key 继续适用.
+聚合 helper 从固定源码 artifact 恢复与产品相同的所选单元 Tag 的干净 Git 源码. Runtime 发布在安装已验证的预编译资产前冻结同一宿主 receipt, 避免把生成的二进制和 notice 当成源码改动. 原有资产验证及实际工具链/recipe 缓存 key 继续适用.
 
 组件 `pull_request_target` job 的 cache 权限为只读. save 尝试可能报告 `cache write denied: token has no writable scopes`, 同时 cache action step 本身仍成功; 这不代表缓存保存成功. Workbench receipt 记录请求的缓存身份及 restore 结果, 不证明已写入. 缓存验收必须核对目标仓库/ref 中真实成功的 save, 再由全新 Job 恢复并验证确切产品和打包材料. 其他仓库或事件下的可写缓存不能替代这条路径的证据.
 

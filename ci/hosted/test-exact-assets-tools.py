@@ -13,7 +13,9 @@ import unittest
 
 HELPER = Path(__file__).with_name("exact-assets-tools.sh")
 COMMIT = "494dbceae683d6b20cdbec00fe6b1f554ea2f508"
-ZOT = b"\x7fELF\x02\x01\x01" + bytes(11) + b"\x3e\x00" + bytes(44)
+ARCH = os.uname().machine
+GO_ARCH = {"x86_64": "amd64", "aarch64": "arm64"}[ARCH]
+ZOT = b"\x7fELF\x02\x01\x01" + bytes(11) + {"x86_64": 62, "aarch64": 183}[ARCH].to_bytes(2, "little") + bytes(44)
 
 
 class ExactToolsTests(unittest.TestCase):
@@ -58,10 +60,12 @@ from pathlib import Path
 args = sys.argv[1:]
 url = next(arg for arg in args if arg.startswith('https://'))
 Path(os.environ['CURL_LOG']).open('a').write(url + '\\n')
-zot = bytes.fromhex('7f454c46020101') + bytes(11) + bytes.fromhex('3e00') + bytes(44)
+arch = os.environ['TARGET_ARCH']
+go_arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch]
+zot = bytes.fromhex('7f454c46020101') + bytes(11) + {'x86_64': 62, 'aarch64': 183}[arch].to_bytes(2, 'little') + bytes(44)
 if url.endswith('/checksums.sha256.txt'):
-    data = (hashlib.sha256(zot).hexdigest() + ' *zot-linux-amd64-minimal\\n').encode()
-elif url.endswith('/zot-linux-amd64-minimal'):
+    data = (hashlib.sha256(zot).hexdigest() + ' *zot-linux-' + go_arch + '-minimal\\n').encode()
+elif url.endswith('/zot-linux-' + go_arch + '-minimal'):
     data = zot if os.environ.get('CORRUPT_ZOT') != '1' else b'corrupt'
 else:
     data = b'corrupt recipe'
@@ -70,7 +74,7 @@ Path(args[args.index('-o') + 1]).write_bytes(data)
         curl.chmod(0o755)
         self.envfile = self.root / "github-env"
         self.envfile.touch()
-        self.env = dict(os.environ, PATH=str(self.mockbin),
+        self.env = dict(os.environ, PATH=str(self.mockbin), TARGET_ARCH=ARCH,
                         RUNNER_TEMP=str(self.runner), GITHUB_ENV=str(self.envfile),
                         KUASAR_CI_DIR=str(self.root / "metrics"), KUASAR_BUILD_JOBS="1",
                         KUASAR_BUILD_CPUS=str(min(os.sched_getaffinity(0))),
@@ -125,7 +129,7 @@ cp "$FIXTURES/${2##*/}" "$2"
         self.assertEqual(probe["VERSITYGW_GOFLAGS"], "-mod=mod -p=1")
         self.assertEqual(probe["GOTOOLCHAIN"], self.env.get("GOTOOLCHAIN"))
         self.assertEqual(probe["GOMAXPROCS"], "1")
-        self.assertEqual(probe["GO_ARCH"], "amd64")
+        self.assertEqual(probe["GO_ARCH"], GO_ARCH)
         downloads = [line.split("\t") for line in (self.root / "downloads").read_text().splitlines()]
         self.assertEqual(len(downloads), 3)
         for (url, destination, digest), name in zip(downloads, ("build-versitygw.sh", "common.sh", "versitygw-1.5.0.tar.gz")):
