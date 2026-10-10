@@ -569,6 +569,9 @@ awk -F '\t' '
     }
 ' "$parallel_timings" || fail "parallel timing rows are malformed or incomplete"
 
+# Cache fixtures below use fixed x86_64 directories and synthetic payloads.
+# Keep their target independent of the native host used by earlier tool tests.
+export TARGET_ARCH=x86_64
 workspace="$TMP/workspace"
 cache="$TMP/cache"
 counter="$TMP/build-counter"
