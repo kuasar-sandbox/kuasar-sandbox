@@ -239,6 +239,8 @@ def check():
                     if name == "workbench-216-validation.yml":
                         expected = {"prepare": "ubuntu-24.04", "source-checks": "ubuntu-24.04", "cold-x86": "ubuntu-24.04", "warm-x86": "ubuntu-24.04",
                                     "cold-arm": "ubuntu-24.04-arm", "warm-arm": "ubuntu-24.04-arm",
+                                    "aggregate-helper-cold-x86": "ubuntu-24.04", "aggregate-helper-warm-x86": "ubuntu-24.04",
+                                    "aggregate-helper-cold-arm": "ubuntu-24.04-arm", "aggregate-helper-warm-arm": "ubuntu-24.04-arm",
                                     "helpers-x86": "ubuntu-24.04", "prepare-integration-x86": "ubuntu-24.04",
                                     "e2e-x86": "ubuntu-24.04", "performance-x86": "ubuntu-24.04",
                                     "helpers-arm": "ubuntu-24.04-arm", "prepare-integration-arm": "ubuntu-24.04-arm",
