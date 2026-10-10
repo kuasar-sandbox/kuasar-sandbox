@@ -165,7 +165,9 @@ All selected files must exist and match their recorded size and digest. Missing
 unselected architecture files do not invalidate a native-only download. The
 checksum list must still describe exactly the release's assets. Validate member
 types, paths, permissions and cross-archive collisions before extracting into a
-new staging directory. The workbench archive is deliberately not extracted here.
+new staging directory. Standard relative root directories (`.` or `./`) are
+accepted only as directories without set-ID bits; empty or absolute root names
+are rejected. The workbench archive is deliberately not extracted here.
 
 ```bash
 set -euo pipefail
@@ -205,11 +207,13 @@ for archive in archives:
     with tarfile.open(root / archive, "r:gz") as stream:
         for member in stream.getmembers():
             raw = member.name
+            assert raw and not raw.startswith("/"), (archive, raw)
             while raw.startswith("./"):
                 raw = raw[2:]
             raw = raw.rstrip("/")
-            if not raw:
+            if raw in ("", "."):
                 assert member.isdir(), (archive, member.name)
+                assert not (member.mode & 0o6000), (archive, member.name, oct(member.mode))
                 continue
             assert "\\" not in raw and not any(ord(c) < 32 for c in raw), (archive, raw)
             path = pathlib.PurePosixPath(raw)
