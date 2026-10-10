@@ -193,7 +193,7 @@ run 身份,不会用旧输入重跑或改写运行中清单。
 
 先提供平台源码契约机制，再提供依赖该机制的组件生产工作流。确认每个 owner 源码分支包含本仓指南声明和全部必需输入，然后**单独评审**选择正常新 owner Tag 与聚合版本的清单变更。
 
-Preview 对已提交的选择使用 §6 的正常组件发行入口，按依赖顺序先 accelerator 和 connector，再 sandboxer，最后 orchestrator 和 runtime。Stable 使用 formal coordinator 的已提交选择。所选组件 Release 就绪后，使用 §7 的正常聚合入口并执行 §8 的全部验证 gate。若相关 kernel 输入未变化且所选文档完整，独立选择的 vmlinux Tag 可以保持不变。
+Preview 对已提交的选择使用 §6 的正常组件发行入口，按依赖顺序先 accelerator 和 connector，再 sandboxer，最后 orchestrator 和 runtime。机制合入后，先完成新 Preview 的完整验收，再进行 Stable 切换；Stable 随后使用 formal coordinator 的已提交选择。所选组件 Release 就绪后，使用 §7 的正常聚合入口并执行 §8 的全部验证 gate。若相关 kernel 输入未变化且所选文档完整，独立选择的 vmlinux Tag 可以保持不变。
 
 首次显式迁移与通用 Daily 的仅文档变化复用算法分开；后者不能替代经评审的新 Tag 选择。不得扩大产品变化输入或添加强制构建规则。历史 Tag 与发布包按 §2 的只读契约保持不可变。
 
@@ -348,8 +348,7 @@ runtime、vmlinux 保留独立包名。两份维护中的聚合清单声明 `del
 组件 archive 不携带 `docs/` 或 `test/e2e/`；aggregate assembly 从所选 owner Tag 收集组件文档
 和 E2E 输入，统一写入 platform archive（§8.1）。kernel 文档使用单独选择的 vmlinux 产品源码。
 
-组件原生/ARM 交叉构建在两个独立 x86 job 执行，复用相同精确源码与依赖版本，校验后原样组装双架构包。
-依赖 Release 必须公开、完整并解析为轻量 tag 的精确 commit，build checkout 不保留凭据。
+组件从固定准入源码 artifact 构建和测试，x86_64 与 aarch64 分别运行独立的原生 job，依赖源码按所选 Tag 固定。checkout 不保留凭据。校验后原样组装双架构包。
 聚合 prepare 下载六个所选 Release，校验 API size/digest、SHA-256、路径、归属与跨包覆盖，
 随后在无凭据源码步骤中构建固定测试 helper，并生成确定性的 platform 包。
 暂存字节通过共享的公开 prepare → 聚焦用例 → 公开 run 合同，不重建产品或 helper。

@@ -102,7 +102,7 @@ exact-assets 模式直接消费 platform 包中的同一布局。两条路径都
 内部 CI shard 按 suite 分组精确文件，plan 在执行前记录所选用例和架构排除项。
 
 source/helper build 生成目标架构的 zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe，
-以及静态无 libc 的 x86_64/aarch64 cgroup probe。 orchestrator 辅助程序集合还包含 `node-ctl-runner-test`，使用已准入的 orchestrator 源码身份及所选依赖工作区，通过 `go test -c ./cmd/node-ctl` 编译。它仅用于测试，不是生产制品。prepare 校验架构、源码 pin 和摘要，并将 `NODE_CTL_RUNNER_TEST_BINARY` 设置为不可变的 `fixtures/bin/node-ctl-runner-test` 路径；prepare 和 E2E 均不编译它。发布包携带两种架构的 helper、精确测试 pin 和摘要。同一更早的 build 阶段按 `test/demo/requirements.lock`
+以及静态无 libc 的 x86_64/aarch64 cgroup probe。 orchestrator 辅助程序集合还包含 `node-ctl-runner-test`，使用已准入的 orchestrator 源码身份及所选依赖工作区，通过 `go test -c ./cmd/node-ctl` 编译。它仅用于测试，不是生产制品。prepare 校验架构、源码 pin 和摘要，并将 `NODE_CTL_RUNNER_TEST_BINARY` 设置为不可变的 `fixtures/bin/node-ctl-runner-test` 路径；prepare 和 E2E 均不编译它。发布包携带两种架构的 helper、从所选 owner Tag 派生的源码身份和摘要。同一更早的 build 阶段按 `test/demo/requirements.lock`
 获取 Python 3.12 的完整 Demo SDK wheel 依赖闭包，固定全部版本及 wheel 摘要；发布包携带两种架构的 wheelhouse。prepare 消费这些二进制，
 准备 manifest archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像，并仅从本地 wheelhouse 通过
 `--no-index --find-links` 和 `--require-hashes` 安装 Demo SDK。wheel 缺失或变化时在安装前失败。provenance 绑定包名、版本、wheel 摘要、lock 身份和安装后的文件树。
