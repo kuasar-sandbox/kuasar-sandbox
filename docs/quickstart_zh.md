@@ -184,7 +184,7 @@ finally:
 记录注册 ID 和 build ID，即使后续抛错而不返回 `info`，仍可据此定位。
 保存注册/build 句柄用于诊断，canonical ID 用于
 后续 create；SDK 返回的注册句柄不是发布 ID。显式 Image、冷 Sandbox E 或内存
-Snapshot S 使用[分离注册/触发配方](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md#explicit-target-recipe)。
+Snapshot S 使用[Build 注册与目标契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md)。
 
 构建失败先查该 build 的状态/日志、镜像拉取、阶段容量及 ready 命令，再考虑重试。
 COPY 存储缺失是独立不支持边界，本例不使用 COPY。pause 失败不是快照保留成功。

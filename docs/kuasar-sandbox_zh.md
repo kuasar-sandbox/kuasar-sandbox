@@ -273,7 +273,7 @@ OOM 和有效工作丢失.应用仍可能因为自身资源声明,内存上限�
 | 管理服务路径与外部网关接入基础 | 已交付 | vSwitch 提供可信入口/出口和身份传递基础 |
 | 集中式策略网关 | 支持集成 | 由部署方的外部网关执行公网,私网,DNS,代理和审计策略 |
 | 节点本地轻量 Egress | Proposed | 仅为 [`connector#9`](https://github.com/kuasar-sandbox/connector/issues/9) 设计提案,不是当前 vSwitch 已交付能力 |
-| OpenTelemetry | main 已实现 | orchestrator 独立指标服务及原生 Collector pipeline；[范围与版本核验](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry_zh.md#release-scope)。不代表每个 Stable Release 都已包含。 |
+| OpenTelemetry | main 已实现 | orchestrator 独立指标服务及原生 Collector pipeline；[Telemetry 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry_zh.md)。不代表每个 Stable Release 都已包含。 |
 
 `已交付` 表示代码已合入组件主线并有组件验证,不等同于聚合 Stable Release 已经发布.
 `Proposed` 不因存在 Issue,RFC 或 PR 自动成为已交付能力.

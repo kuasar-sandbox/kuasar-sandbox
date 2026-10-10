@@ -224,7 +224,7 @@ This overview defines those functional goals. Network-locator encoding, encapsul
 | Management-service path and external-gateway integration foundations | Delivered | vSwitch supplies trusted ingress/egress and identity-handoff foundations |
 | Centralized policy gateway | Integration supported | The operator's external gateway implements public/private network, DNS, proxy and audit policy |
 | Lightweight node-local Egress | Proposed | Only a design proposal in [`connector#9`](https://github.com/kuasar-sandbox/connector/issues/9), not a currently delivered vSwitch capability |
-| OpenTelemetry | Implemented in main | standalone metrics service and native Collector pipelines; [scope and release checks](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry.md#release-scope). This is not a claim that every Stable release includes it. |
+| OpenTelemetry | Implemented in main | standalone metrics service and native Collector pipelines; [Telemetry contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry.md). This is not a claim that every Stable release includes it. |
 
 Delivered means merged into component main with component validation. It does not mean an aggregate Stable Release containing that code has already been published. An issue, RFC or PR alone does not turn a Proposed capability into a delivered one.
 
