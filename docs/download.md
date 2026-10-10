@@ -10,7 +10,10 @@ do not install those libraries or the Demo SDK on the host for this path.
 
 Resolve Stable once, or explicitly set `RELEASE_VERSION` to a published
 `release-vX.Y.Z[-preview.YYYYMMDD[.N]]`. Every selected asset comes from that
-aggregate; component and test revisions may legitimately differ within it.
+aggregate. In new releases, each owner's products, tests, helpers and guides
+come from its selected owner tag; kernel guides use the independent vmlinux tag.
+Historical releases retain their actual recorded origins, which may differ,
+and must be used with their own guides.
 Never mix individual component Latest releases or retrieve replacement scripts
 from `main`. An old Stable can lack this workflow: select a suitable published
 version explicitly, or use its historical native guide. This procedure never
@@ -53,10 +56,21 @@ curl --fail --silent --show-error --location --retry 4 \
     -H 'X-GitHub-Api-Version: 2022-11-28' \
     "$RELEASE_API" >"$RELEASE_METADATA"
 
+# Validate automatic source provenance; retrieve released files only by tag.
 SOURCE_SHA="$(python3 -c 'import json,re,sys; value=json.load(open(sys.argv[1]))["target_commitish"]; assert re.fullmatch(r"[0-9a-f]{40}",value); print(value)' "$RELEASE_METADATA")"
-MANIFEST_PATH="$(python3 -c 'import json,sys; tag=json.load(open(sys.argv[1]))["tag_name"]; print("releases/daily-preview.yaml" if "-preview." in tag else "releases/release.yaml")' "$RELEASE_METADATA")"
+RELEASE_TAG="$(python3 -c '
+import json, re, sys
+tag = json.load(open(sys.argv[1], encoding="utf-8"))["tag_name"]
+assert re.fullmatch(r"release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?", tag), tag
+assert not sys.argv[2] or sys.argv[2] == tag, (sys.argv[2], tag)
+print(tag)
+' "$RELEASE_METADATA" "$RELEASE_VERSION")"
+case "$RELEASE_TAG" in
+    *-preview.*) MANIFEST_PATH="releases/daily-preview.yaml" ;;
+    *) MANIFEST_PATH="releases/release.yaml" ;;
+esac
 curl --fail --silent --show-error --location --retry 4 \
-    "https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/$SOURCE_SHA/$MANIFEST_PATH" >"$SELECTION_MANIFEST"
+    "https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/$RELEASE_TAG/$MANIFEST_PATH" >"$SELECTION_MANIFEST"
 
 RELEASE_VERSION="$(python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$ASSETS_TSV" "$SELECTION_MANIFEST" <<'PY'
 import json, os, platform, re, sys
