@@ -386,3 +386,167 @@ For build outputs, architecture selection and component/aggregate releases, see 
 - [orchestrator/node-resource.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md): node resource protocol; archive `docs/node-resource.md`.
 - [orchestrator/node.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md): E2B control and node hosting; [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md): registry/routing/placement.
 - [accelerator/manifest.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/manifest.md): MANIFEST_CONFIG and loader contract; archive `docs/manifest.md`.
+
+<a id="production-start"></a>
+## 8. A production starting point and acceptance path
+
+Assume one small team, a measured finite concurrency limit, one native-architecture
+KVM node, an operator-managed network gateway, and applications that can tolerate
+node unavailability. Start with the existing standalone Conductor/Proxy roles,
+production TLS/API credentials and local immutable artifacts plus an explicitly
+backed-up checkpoint directory. This is a **single failure domain**, not HA or
+automatic disaster recovery. §§2–7 already define processes, ports, paths and
+startup order; use those inventories rather than deploying every optional service.
+For workload onboarding continue with [your first application](quickstart.md#first-application).
+
+| Choice | Use when | Additional operating responsibility |
+|---|---|---|
+| Local files | Artifacts fit locally and node affinity/rebuild time is acceptable | Disk capacity, backups, immutable runtime/kernel retention; node loss may remove the only copy. |
+| Named shared file location | Multiple eligible nodes need the same native artifacts | Consistent location names, mount/access/identity checks, shared filesystem availability/latency and backups. Reachability alone does not prove restore eligibility (§9). |
+| Manifest + durable Store | Remote persistence, large distribution or lazy object access is needed | Customer keys, generations, full parent closure, object integrity and origin availability; introduce local cache only with a memory/disk budget. |
+| Optional L2 | Measured repeated remote misses/working-set distribution justify it | Peer failure domains, membership rollout, shard disk/memory and effective EC geometry. L2 is reconstructible acceleration, not the durable artifact copy. |
+| Registry/Router/Placer cluster | Placement across multiple nodes and a common entry are needed | Provider/credential durability, Registry ownership, private internal listeners, admission and recovery testing. Cluster mode does not turn incompatible nodes into restore targets. |
+
+Before opening admission: pin one aggregate and its checksums; use that release's
+native products and packaged guides, verify effective configurations, then test one
+real build/create/command/file/pause/resume/kill cycle. Run the same checks with the
+actual gateway allow/deny policy and cold artifact reads. Validate exporter/query
+behavior separately if [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry.md#release-scope)
+is included in that version. Current source `TARGET_ARCH` support is not proof of
+cross-build/emulation or historical release assets; follow [download selection](download.md)
+and [native Workbench builds](../workbench/README.md). Open release-selection,
+download-verifier or WSL proposals do not change the selected published contract.
+
+In a staging fault exercise, stop only owned processes and isolate only test
+sources: observe readiness, first failure cause, admission stopping, artifact
+preservation and recovery. Measure the capacity cases in §10. Release admission
+only when all required checks pass; on a failed gate retain the previous qualified
+configuration and stop new placements. End tests by killing test instances through
+the owner, not deleting shared files. Record the exact release, workload, limits,
+failed/skipped probes and rollback inputs as the deployment's acceptance record.
+
+<a id="restore-eligibility"></a>
+## 9. Cross-node restore eligibility and failure boundaries
+
+A portable reference describes content; it does not certify every destination.
+Before allowing a target node, the deployment owner must validate all of:
+
+- **Architecture and CPU:** same native guest architecture and a destination CPU
+  feature set compatible with the captured VM. Qualify the actual source/target
+  CPU pair; neither an architecture label nor a shared store proves compatibility.
+- **VMM and snapshot schema:** compatible selected patched VMM and sandboxer
+  formats. [Artifact compatibility](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md#artifact-compatibility)
+  rejects old schemas rather than silently migrating or cold-booting them.
+- **Kernel/runtime:** deploy the trusted matching kernel and runtime binding.
+  Restore's cheap kernel check does not rehash kernel bytes; runtime basename and
+  footer digest must match captured E. Keep immutable version-specific inputs and
+  follow [runtime selection](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/sandbox-runtime.md#61-node-upgrades).
+- **Complete durable closure:** S, referenced E, memory/disk parents and their
+  immutable objects remain resolvable with the same canonical identities and
+  named locations. Test from the destination without relying on warm cache hits.
+- **Keys and ownership:** retain the customer keys needed by every retained
+  encrypted layer and the node/cluster's required credentials and ownership state.
+  Shared ciphertext without keys is not recoverable state.
+- **Network and admission:** destination provider/topology and the current
+  attachment-generation contract must be compatible; gateway return/policy and
+  Proxy routing must work. Restore keeps captured capacity/device topology;
+  destination allocatable policy and resource admission still apply. A portable
+  artifact is not a reservation or permission to reuse the old host's TAP FD.
+
+[Sandboxer memory restore](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md#7-memory-restore-data-flow)
+and [Node artifact lifecycle](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md#81-artifact-capture-templates-and-migration)
+own the checks and permitted overrides. Qualify with file/process-state assertions,
+new reads outside the warm set, network roundtrip and application reconnect checks.
+Failure at any preflight means stop placement, preserve artifacts and correct the
+binding; do not change captured metadata to force acceptance.
+
+| Incident | What can and cannot be recovered |
+|---|---|
+| Proxy/Router/connector serve process crash | Their documented reconnect/reopen paths can recover if owner state and underlying resources survive. Confirm route sync, identity and traffic before admission. This is not a VM checkpoint operation. |
+| Sandbox/VMM process or whole node loss | Uncaptured memory is lost. Surviving local state is not automatically a complete portable checkpoint. Restore only a successfully committed artifact after eligibility and ownership checks. |
+| Previously paused artifact, original node unavailable | Recovery is possible only when durable closure, keys, bindings, network, admission and the applicable Node/cluster ownership protocol remain available. Shared storage supplies only one of these prerequisites. |
+| Registry execution state lost | Current protocol cannot reconstruct execution ownership from route events or import backup execution rows. [Registry recovery limits](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#13-state-ownership-and-disaster-recovery-boundaries) describe unimplemented recovery/bootstrap work. Provider data or a portable snapshot does not authorize fabricating Registry rows or claiming same-ID recovery. |
+
+<a id="capacity-example"></a>
+## 10. Capacity qualification with an assumed budget
+
+This is an **arithmetic example, not measured performance**. Suppose a 16-vCPU,
+32-GiB node runs an agent that executes Python, reads a repository, writes a small
+workspace and makes external requests. Assume each active sandbox needs 1 GiB
+normally, 2.5 GiB during synchronized work and 2 CPU cores at the acceptance load.
+First measure those quantities with the actual image; OCI image size is not RSS.
+
+An initial budget might reserve 4 GiB for the host, 4 GiB for fleet control/VMM
+and non-workload overhead, 6 GiB for the whole accelerator/cache path, and 3 GiB
+for one additional cold-recovery transient. That leaves
+`32 - 4 - 4 - 6 - 3 = 15 GiB`, or six assumed 2.5-GiB burst workloads.
+If only 12 CPU cores are budgeted for work, `12 / 2 = 6` independently gives the
+same initial admission limit. Six normal workloads use an assumed 6 GiB, but
+that does **not** justify admitting fifteen if all can become active together.
+Guest capacity, allocatable/startup, controller grants and actual charged usage
+are different quantities; apply the [Node resource contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md),
+not this arithmetic as YAML defaults.
+
+The 6-GiB cache allowance must include Go heap, native RocksDB block/blob cache
+and memtables, inflight requests/blobs/decryption buffers, compaction and filesystem
+page-cache pressure. `GOMEMLIMIT` or `disk_bytes * mem_ratio` alone is not a process
+RSS limit. Record cgroup/RSS peaks, cache occupancy, compaction and disk/network
+traffic using the [Cache budget contract](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md).
+Large reference YAML files demonstrate options and are not the recommended first
+production size.
+
+| Measurement | Run and record | Acceptance/adjustment |
+|---|---|---|
+| Normal load | Representative requests at 1, then 3, then 6 concurrent sandboxes; warm steady state | Application latency/error target, charged memory, CPU, storage growth and endpoint throughput meet your declared SLO. |
+| Synchronized burst | Make all six exercise their peak phase together, including writes | No OOM/data loss; admission and controller headroom remain valid. If the assumed 2.5 GiB is exceeded, lower admission or increase budget before retesting. |
+| Cold recovery | Restore the qualified workload from a cold test cache/destination while normal load continues | Measure restore-to-ready and first-use p95/p99, source attempts, bandwidth and total peak memory; include the recovery transient. Do not flush production caches. |
+| Sustained run | Repeat pause/resume and cleanup long enough to include compaction and retention work | No unbounded RSS, disk, FD or inflight growth; all state assertions and cleanup pass. |
+
+Set numerical application/restore SLOs before the run; there is no universal
+latency promise here. Increase one budget/concurrency variable at a time only
+after the complete matrix passes. Stop on integrity/identity failure or OOM,
+retain the failure evidence, kill owned tests and return to the last qualified
+limit. Report cold and warm measurements separately, including unavailable probes.
+
+<a id="retention-runbook"></a>
+## 11. Retention, generation retirement and key incidents
+
+The application/platform owner supplies the retained root inventory: canonical
+published template IDs, paused snapshots, live instances, rollback/backup roots,
+build outputs still needed after Build-row expiry, and intended retention deadlines.
+The runtime/storage operator resolves each root's complete E/S memory/disk parent
+closure and immutable kernel/runtime bindings using the component inspection
+contracts. Store cannot infer this inventory from traffic or the newest generation.
+[Store retirement](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md#6-administrative-commands),
+[Manifest keys](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/manifest.md#31-manifest-configyaml)
+and [Node credential lifecycle](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md#7-credentials-and-ownership-encrypted-apisecretmanifestkey-pairs)
+remain authoritative; this is the decision sequence, not a second GC protocol.
+
+| Proposed deletion | Evidence required before deletion |
+|---|---|
+| Build record | Owner cleanup completed per Build Cancel/DELETE; separately retain needed canonical IDs. Deleting the row does not delete remote artifacts. |
+| Local artifact or parent | Complete retained-root/parent inventory, no live owner dependency, and verified alternate durable source if retention continues. A semantic alias or leaf-only list is insufficient. |
+| Store generation G1 | No retained root/parent depends on objects available only in G1. A G2 rollout merely changes default writes; listed G1 may still accept explicit admissions. Coordinate all writers/readers and drain inflight before physical deletion. |
+| Old runtime/kernel | No retained live VM, template, snapshot, parent or rollback path needs that immutable identity; qualified restore with the retained bindings succeeds. |
+| Old customer key | No retained encrypted artifact needs it, or every intended replacement has been separately created and fully recovery-tested with its own retained closure. A new API key or generation does not re-encrypt existing data. |
+
+Before retirement, freeze the deletion set, reconcile new publications/retention
+changes, verify from a cold reader against the durable source, and test restore of
+representative retained roots. Record refs, identities, generations, key identifiers
+(not secret bytes), owners and results. If the inventory is incomplete, any read/
+restore fails, writes are still racing, or key provenance is uncertain, **stop**
+and retain the data/key. `purge --generation` is destructive list removal plus
+physical deletion, not a reference-aware dry run. Do not use it to discover whether
+anything still depends on G1. After an approved retirement, verify retained roots
+again and retain backups according to the operator's recovery policy.
+
+For suspected key exposure, stop new publication with the affected credentials,
+restrict access through the deployment's existing controls, and preserve incident
+and dependency evidence. Coordinate application, key and storage owners. Existing
+node rows keep their bound credentials; removing an allowlist/provider entry is
+not retroactive revocation. Do not assume in-place Manifest key rotation or remote
+ciphertext revocation. Create and validate replacement artifacts/credentials through
+supported workflows, update consumers deliberately, and retain old keys securely
+while old snapshots remain required. If a key is lost, recover it from the approved
+backup; without it the encrypted artifacts cannot be declared recoverable. Never
+purge old data as a key-incident repair step.

@@ -135,3 +135,83 @@ required features. For a failed prepare, fix its stated missing/corrupt input an
 use a fresh prepared directory. For listener/unit/network conflicts inside a
 workbench, inspect that instance's prior Demo; do not kill unrelated host services.
 A nonzero Demo or cleanup exit is a failure, not a successful skipped check.
+
+<a id="first-application"></a>
+## 6. Your first template and application
+
+After the Demo, use a running Node with the existing [Node connection and API-key
+contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md).
+Reuse its `E2B_API_KEY`, `E2B_API_URL`, `E2B_DOMAIN`, data ingress/DNS and trusted TLS
+CA settings. The Demo stops its services at completion: its temporary credentials
+and container localhost addresses do not configure an independent host client.
+For exploration, keep the documented Demo `--pause` session alive, or provision
+your Node through [Deployment](deployment.md). Never copy Demo credentials into a
+production deployment.
+
+This recipe targets the repository-pinned **e2b==2.25.1** and current
+[Build contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md).
+Use the SDK pin and guide shipped with your selected aggregate if different;
+a current-source example does not certify an older Release. Set `APP_IMAGE` to
+your own digest-pinned, architecture-matching registry image containing Python 3,
+a shell and a writable `/tmp`. Configure registry credentials through Node's
+existing credential mechanism. First check [image and kernel adaptation](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/flatten.md#7-decide-whether-your-workload-needs-adaptation).
+The 2 CPU/6 GiB build budget follows the Demo, not a sizing recommendation.
+
+The build command prepares files; the start command runs the application; the
+readiness command checks its HTTP response before snapshot publication. A fixed
+sleep alone does not prove your application is ready. Nonempty start/ready commands
+select the auto memory target. No register-only configuration headers are passed
+to `Template.build`, because this SDK forwards them to trigger too.
+
+```python
+import json, os, urllib.request
+from e2b import Sandbox, Template
+
+api = os.environ["E2B_API_URL"].rstrip("/")
+key = os.environ["E2B_API_KEY"]
+image = os.environ["APP_IMAGE"]  # registry/repository@sha256:...
+start = "python3 -m http.server 8080 --directory /tmp/my-app"
+ready = "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=2)\""
+tpl = (Template().from_image(image)
+       .run_cmd("mkdir -p /tmp/my-app && printf 'my application\\n' > /tmp/my-app/index.html")
+       .set_start_cmd(start, ready))
+info = Template.build(tpl, name="my-first-app", cpu_count=2, memory_mb=6144)
+request = urllib.request.Request(
+    f"{api}/templates/{info.template_id}/builds/{info.build_id}/status",
+    headers={"X-API-KEY": key})
+with urllib.request.urlopen(request, timeout=30) as response:
+    status = json.load(response)
+assert status["buildID"] == info.build_id and status["status"] == "ready"
+assert status["profile"] == "e2b" and status["kind"] == "snp"
+assert status["target"] is None
+canonical_id = status["templateID"]
+assert canonical_id.startswith("e2b-snp-")
+print("Keep canonical template ID:", canonical_id)
+sandbox = Sandbox.create(canonical_id, timeout=300)
+try:
+    assert sandbox.commands.run("cat /tmp/my-app/index.html").exit_code == 0
+    sandbox.files.write("/tmp/checkpoint-proof", "preserve me")
+    sid = sandbox.sandbox_id
+    sandbox.pause()
+    sandbox = Sandbox.connect(sid)
+    assert sandbox.files.read("/tmp/checkpoint-proof") == "preserve me"
+    assert "my application" in sandbox.commands.run(
+        "python3 -c \"import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8080/').read().decode())\"").stdout
+finally:
+    sandbox.kill()
+```
+
+Expected results: exact-build ready status with `kind=snp`, a canonical
+`e2b-snp-...` ID, successful command/file access, and matching state after resume.
+Retain both registration/build handles for diagnostics and the canonical ID for
+future creates; the SDK's returned registration handle is not the published ID.
+For explicit Image, cold Sandbox E or memory Snapshot S, use the
+[separate registration/trigger recipe](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md#explicit-target-recipe).
+
+For build failure, inspect that build's status/logs and image pull, phase capacity
+and ready-command failure before retrying. Missing COPY storage is a separate
+unsupported boundary; this example uses no COPY. A failed pause is not a retained
+snapshot. `kill` cleans the instance, not the published template's remote data.
+Use [Build cancel/delete](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md#11-cancel-and-delete-a-build-record)
+for the saved registration handle and [retention](deployment.md#retention-runbook)
+for artifacts. Do not delete parent data to tidy up a failed experiment.

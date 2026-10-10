@@ -161,10 +161,16 @@ prerelease 聚合版本,`Proposed` 表示仍在 Issue 或设计阶段且不能�
 | 基础 vSwitch 和沙箱隔离 | Available |
 | 外部集中式策略网关 | Integration supported;已有可信沙箱身份传递和接入基础 |
 | 节点本地轻量 Egress | [Proposed](https://github.com/kuasar-sandbox/connector/issues/9) |
-| OpenTelemetry | [Proposed](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/52) |
+| OpenTelemetry | orchestrator main 已实现独立指标服务及原生 Collector pipeline；[范围与版本核验](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry_zh.md#release-scope)。不代表每个 Stable Release 都已包含。 |
 
 最新可用资产和 prerelease 状态以
 [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 为准.
+
+从 Demo 继续到[自己的应用](docs/quickstart_zh.md#first-application)、
+[最小集群客户端验收](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-router_zh.md#client-onboarding)、
+[生产验收与恢复](docs/deployment_zh.md#production-start)、
+[独立存储往返](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/manifest_zh.md)、
+[网关验收](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations_zh.md)。
 
 ## 快速开始
 
