@@ -8,8 +8,10 @@
 依赖库与 Python 3.12；该路径无需在宿主安装这些库或 Demo SDK。
 
 只解析一次 Stable，或显式设置 `RELEASE_VERSION` 为已发布的
-`release-vX.Y.Z[-preview.YYYYMMDD[.N]]`。所选资产都来自该聚合版本，其声明的产品
-与测试 revision 可以不同。不要混用各组件的 Latest，也不要从 `main` 补取脚本。
+`release-vX.Y.Z[-preview.YYYYMMDD[.N]]`。所选资产都来自该聚合版本。新发布版中，
+每个 owner 的产品、测试、helper 和指南来自所选 owner Tag；kernel 指南使用独立的
+vmlinux Tag。历史发布版保留其真实记录的来源，各来源可能不同，必须使用其配套指南。
+不要混用各组件的 Latest，也不要从 `main` 补取脚本。
 旧 Stable 可能尚不包含此流程：请显式选择符合要求的已发布版本，或使用它自己的
 历史原生指南。此过程不会自动从 Stable 切换到 Preview。源码选择清单不是最新发布通道。
 
@@ -47,10 +49,21 @@ curl --fail --silent --show-error --location --retry 4 \
     -H 'X-GitHub-Api-Version: 2022-11-28' \
     "$RELEASE_API" >"$RELEASE_METADATA"
 
+# Validate automatic source provenance; retrieve released files only by tag.
 SOURCE_SHA="$(python3 -c 'import json,re,sys; value=json.load(open(sys.argv[1]))["target_commitish"]; assert re.fullmatch(r"[0-9a-f]{40}",value); print(value)' "$RELEASE_METADATA")"
-MANIFEST_PATH="$(python3 -c 'import json,sys; tag=json.load(open(sys.argv[1]))["tag_name"]; print("releases/daily-preview.yaml" if "-preview." in tag else "releases/release.yaml")' "$RELEASE_METADATA")"
+RELEASE_TAG="$(python3 -c '
+import json, re, sys
+tag = json.load(open(sys.argv[1], encoding="utf-8"))["tag_name"]
+assert re.fullmatch(r"release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?", tag), tag
+assert not sys.argv[2] or sys.argv[2] == tag, (sys.argv[2], tag)
+print(tag)
+' "$RELEASE_METADATA" "$RELEASE_VERSION")"
+case "$RELEASE_TAG" in
+    *-preview.*) MANIFEST_PATH="releases/daily-preview.yaml" ;;
+    *) MANIFEST_PATH="releases/release.yaml" ;;
+esac
 curl --fail --silent --show-error --location --retry 4 \
-    "https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/$SOURCE_SHA/$MANIFEST_PATH" >"$SELECTION_MANIFEST"
+    "https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/$RELEASE_TAG/$MANIFEST_PATH" >"$SELECTION_MANIFEST"
 
 RELEASE_VERSION="$(python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$ASSETS_TSV" "$SELECTION_MANIFEST" <<'PY'
 import json, os, platform, re, sys
