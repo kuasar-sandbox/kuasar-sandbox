@@ -74,7 +74,7 @@ Aggregate fetching retrieves each named tag once and verifies its automatically 
 
 Component preflight admits the aggregate manifest by its trusted branch and records its identity and bytes. Publication consumes that fixed evidence, bound to preflight outputs, so unrelated branch advances do not invalidate a completed build. It still checks live Stable-line closure. Dependency restoration checks the complete preflight owner/tag/commit set; an artifact receipt cannot select replacement dependencies. New aggregate records retain their complete validation plan, including the checksum asset, and fail before submitting an oversized Release body rather than truncating evidence.
 
-Ordinary test/document changes do not widen product input differences or force a product/kernel version. To deliver such changes, explicitly select a normally published new owner tag. The first cutover requires new owner tags containing their own `release/guide-inputs.txt` and required delivery inputs. Missing declarations fail explicitly; neither newer HEAD files nor fabricated declarations can fill the gap. This migration selection is separate from the generic input-diff rules, and does not require a new vmlinux version for unrelated documentation changes.
+Ordinary test/document changes do not widen product input differences or force a product/kernel version. To deliver such changes, explicitly select a normally published new owner tag. Missing declarations fail explicitly; neither newer HEAD files nor fabricated declarations can fill the gap.
 
 Historical manifests retain their real `test_revisions` evidence through a separate read-only parser. This does not authorize rebuilding a historical package or retrieving its independent test source. Historical consumers must use the published aggregate package and validated evidence by aggregate tag; missing evidence must fail explicitly rather than guessing ownership or substituting product-tag provenance.
 
@@ -131,6 +131,14 @@ A code change on the selected platform branch also creates a new aggregate Previ
 If a dependency rebuild was committed to the Daily manifest before its component Release existed, a later scan resumes that pending Preview even when the selected dependencies already equal the manifest. This applies to both Stable and Preview winners; advancing the date or revision publishes the rebuild under the newly selected suffix. Complete Releases still require the original source and dependency checks.
 
 <a id="first-arm-initialization"></a>
+### 4.3 First migration to tag-selected inputs
+
+Make the platform source-contract mechanism available before the component producer workflows that use it. Verify that each owner source branch contains its local guide declaration and every required input, then review a **separate** aggregate manifest change selecting normal new owner tags and an aggregate version.
+
+For Preview, use the normal component release entry points in §6 against that committed selection, in dependency order: accelerator and connector, then sandboxer, then orchestrator and runtime. Stable uses the formal coordinator's committed selection. Once the selected component releases exist, use the normal aggregate entry point in §7 and all validation gates in §8. The independently selected vmlinux tag may remain unchanged when its relevant kernel inputs are unchanged and its selected documentation is complete.
+
+This explicit first migration is separate from the generic Daily docs-only reuse algorithm; that algorithm cannot substitute for the reviewed new-tag selection. Do not widen product-change inputs or add a forced-build rule. Historical tags and packages remain immutable under the read-only contract in §2.
+
 ### First ARM initialization
 
 Mainline initialization is complete. [release-v0.1.5-preview.20260922.4](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.5-preview.20260922.4) is the first published baseline with successful x86 and declared native ARM non-KVM results, bound to source/framework `69c26d2e9d7a494b3463e42c3b8c20ac1119de4f` by [aggregate run 35751885794](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/35751885794). Its fourteen assets preserve the tested bytes. [PR #129](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/129) then activated ordinary artifact PR resolution in `dea0bc66ae766caf47f3c6684a7f426b79b730ba`. Ordinary PR/Daily use does not require another initialization or rerunning that publication; `initialize_arm` remains false by default. See the [CI coverage ledger](ci.md#7-initial-coverage-and-rollout-evidence) for the declared profiles and retained evidence.
@@ -156,6 +164,8 @@ When an unfinished aggregate selection advances to a new Shanghai date or an exp
 Recovery restores the Daily process; it does not patch or rebuild assets of incomplete Releases. The `incomplete` mode never deletes a complete same-name Release. When a tag is already missing but its draft or prerelease remains, recovery deletion is allowed only if `target_commitish` is a full source SHA matching the expected source. If a same-name incomplete object reappears after successful cleanup, the controller starts a new cleanup run instead of treating historical success as proof of current convergence.
 
 ## 6. Component publication CLI
+
+The SHA fields in controller requests are automatically observed identities, not human version inputs. In CLI examples, `OWNER_REPOSITORY`, `SOURCE_REF` and `PLATFORM_REF` denote the owner repository, source branch and aggregate branch.
 
 Component workflows always load trusted tooling from repository `main`, but require the actual source branch and its exact HEAD SHA as explicit inputs. The following shows parameter shapes only; automatic Daily fills these values:
 
@@ -248,6 +258,37 @@ Demo scripts and locks, prebuilt helpers, local wheels, and thin workbench host
 entrypoints. It does not copy the whole test tree or include undeclared guides.
 `test/e2e/assemble_docs.py` rebases links in whole selected documents without
 editing sections, executable examples, configuration values or product binaries.
+
+#### Owner runtime input discovery
+
+Each E2E owner maintains its runtime dependencies under `test/e2e/lib/` (the
+platform-owned suite uses `test/e2e/platform/lib/`). Assembly discovers all regular
+files recursively at the selected owner tag and preserves their paths under
+`test/e2e/lib/<owner>/`. Adding a library, data fixture or nested dependency needs
+no filename change in another repository. Canonical cases remain discovered from
+`test/e2e/cases/*.sh`.
+
+Names beginning with `test_`, Python cache directories (`__pycache__`,
+`.pytest_cache`) and compiled Python cache files (`*.pyc`, `*.pyo`) are source-only
+by convention and must not be runtime dependencies. Assembly rejects symlinks,
+non-regular inputs, missing/empty runtime libraries and duplicate case IDs; it
+does not recover omitted inputs by downloading them at execution time. Archive
+validation and execution still validate the actual delivered package.
+
+#### Repository-owned documentation selection
+
+Each repository declares its delivered user guides in `release/guide-inputs.txt`
+at the selected owner tag (the aggregate source for platform). Entries are repository-relative Markdown files,
+directories (recursive Markdown discovery), or glob patterns. Blank lines and
+`#` comments are ignored. Every entry must match; missing/empty declarations,
+path escapes, symlinks, non-Markdown explicit inputs and overlapping entries fail
+assembly. Directory discovery preserves nested paths below `docs/`.
+
+The platform maintains only its own declaration. Components maintain their own
+user/developer audience boundary; the aggregator has no per-owner filename list.
+Legal material continues to use the existing LICENSE/NOTICE/COPYING conventions.
+An independently versioned unit uses `docs/<unit>.md` and its optional `_zh.md`
+peer from the unit's exact selected tag, including immutable older tags.
 
 #### Layout
 
@@ -401,43 +442,3 @@ Daily Preview must commit its converged manifest directly to the protected targe
 - [deployment.md](deployment.md): deployment and runtime prerequisites;
 - [../test/QUICKSTART.md](../test/QUICKSTART.md): complete aggregate-release validation;
 - [../release/](../release/): selection, packaging, coordination, recovery and GC implementation.
-
-### Owner runtime input discovery
-
-Each E2E owner maintains its runtime dependencies under `test/e2e/lib/` (the
-platform-owned suite uses `test/e2e/platform/lib/`). Assembly discovers all regular
-files recursively at the selected owner tag and preserves their paths under
-`test/e2e/lib/<owner>/`. Adding a library, data fixture or nested dependency needs
-no filename change in another repository. Canonical cases remain discovered from
-`test/e2e/cases/*.sh`.
-
-Names beginning with `test_`, Python cache directories (`__pycache__`,
-`.pytest_cache`) and compiled Python cache files (`*.pyc`, `*.pyo`) are source-only
-by convention and must not be runtime dependencies. Assembly rejects symlinks,
-non-regular inputs, missing/empty runtime libraries and duplicate case IDs; it
-does not recover omitted inputs by downloading them at execution time. Archive
-validation and execution still validate the actual delivered package.
-
-### Repository-owned documentation selection
-
-Each repository declares its delivered user guides in `release/guide-inputs.txt`
-at the selected owner tag (the aggregate source for platform). Entries are repository-relative Markdown files,
-directories (recursive Markdown discovery), or glob patterns. Blank lines and
-`#` comments are ignored. Every entry must match; missing/empty declarations,
-path escapes, symlinks, non-Markdown explicit inputs and overlapping entries fail
-assembly. Directory discovery preserves nested paths below `docs/`.
-
-The platform maintains only its own declaration. Components maintain their own
-user/developer audience boundary; the aggregator has no per-owner filename list.
-Legal material continues to use the existing LICENSE/NOTICE/COPYING conventions.
-An independently versioned unit uses `docs/<unit>.md` and its optional `_zh.md`
-peer from the unit's exact selected tag, including immutable older tags.
-
-Rollout: merge each owner's declaration and the source-contract implementation,
-then select normal new owner tags containing their declarations through a separate
-explicit cutover selection. Validate the selected tag inputs before publication.
-Old immutable tags do not acquire declarations retroactively. Historical releases
-retain their original validated packages and provenance; readers must not import
-current declarations or rebuild those packages from different sources.
-
-The SHA fields in controller requests are automatically observed identities, not human version inputs. In CLI examples, `OWNER_REPOSITORY`, `SOURCE_REF` and `PLATFORM_REF` denote the corresponding owner repository, source branch and aggregate branch. See [the explicit first tag-source cutover](tag-source-cutover.md); ordinary documentation changes do not change product version selection.

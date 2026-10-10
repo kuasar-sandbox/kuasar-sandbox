@@ -375,5 +375,5 @@ def check():
 
 if __name__ == "__main__":
     check()
-    for name in ("test-bootstrap.py", "test-exact-assets-tools.py"):
+    for name in ("test-bootstrap.py", "test-exact-assets-tools.py", "test-sparse-runtime.py"):
         subprocess.run([sys.executable, str(Path(__file__).with_name(name))], check=True)
