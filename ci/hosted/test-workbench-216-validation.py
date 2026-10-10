@@ -849,6 +849,88 @@ restore_or_build() {
         self.assertEqual(evidence.record["conclusion"], "failure")
         self.assertEqual(evidence.record["products"], expected)
 
+    def test_warm_package_or_material_changes_fail_without_success_export(self):
+        arch, expected = "x86_64", self.products()
+
+        def packages(directory, changed=None):
+            records = {}
+            for unit in task.UNITS:
+                assets = directory / unit / "assets"
+                assets.mkdir(parents=True)
+                for name in ("package.tar.gz", "source-materials.json"):
+                    data = (unit + "/" + name + ": exact cold fixture\n").encode()
+                    if unit == "sandboxer" and name == changed:
+                        data += b"different restored package material\n"
+                    (assets / name).write_bytes(data)
+                records[unit] = task.artifacts.tree_files(assets)
+            return records
+
+        cold_packages = packages(self.root / "cold-packages")
+        for changed in (None, "package.tar.gz", "source-materials.json"):
+            with self.subTest(changed=changed):
+                root = self.root / (changed or "matching")
+                sources = root / "sources"
+                sources.mkdir(parents=True)
+                frozen, carried = sources / "frozen.json", sources / "carried-products.tar"
+                frozen.write_text("exact frozen inputs")
+                carried.write_text("exact cold non-native bytes")
+                task.write(sources / "cold-result.json", {
+                    "conclusion": "success", "arch": arch, "frozen_sha256": task.artifacts.digest(frozen),
+                    "image_id": "sha256:fixture", "carried_products_sha256": task.artifacts.digest(carried),
+                    "products": expected, "packages": cold_packages})
+                ch = sources / "sandboxer/native-deps/bin" / arch / "cloud-hypervisor"
+                ch.parent.mkdir(parents=True)
+                ch.write_bytes(b"restored native fixture")
+                evidence = task.Evidence(sources / "verification", {}, root / "diagnostics")
+
+                def initialize(directory, record, diagnostics):
+                    self.assertEqual(directory, evidence.directory)
+                    evidence.record.update(record)
+                    return evidence
+
+                def package(*_args):
+                    # Product identity is unchanged; only the packaging bytes
+                    # differ. Real release validators have separate fixtures.
+                    self.assertEqual(self.products(), expected)
+                    evidence.record["packages"] = packages(evidence.directory / "packages", changed)
+                    (evidence.diagnostics / "package.log").write_text("packaging completed\n")
+
+                with patch.object(task, "build_inputs", return_value=(sources, arch, {}, "sha256:fixture")), \
+                        patch.object(task, "manifest", return_value=[("fixture", name) for name in task.artifacts.PRODUCTS]), \
+                        patch.object(task, "Evidence", side_effect=initialize), patch.object(evidence, "run"), \
+                        patch.object(task, "native_cache") as restore, patch.object(task, "carry_paths", return_value=[]), \
+                        patch.object(task.transport, "extract", side_effect=lambda _archive, path: path.mkdir()), \
+                        patch.object(task, "products", return_value=expected), \
+                        patch.object(task, "compile_cold_products") as compile_products, \
+                        patch.object(task, "warm_cache_negatives") as negative, \
+                        patch.object(task, "package_all", side_effect=package) as package_call, \
+                        patch.object(evidence, "export_success", wraps=evidence.export_success) as export:
+                    args = SimpleNamespace(sources=sources, arch=arch, phase="warm")
+                    if changed:
+                        with self.assertRaisesRegex(ValueError, "restored package bytes/materials differ from cold inputs"):
+                            task.build(args)
+                        export.assert_not_called()
+                    else:
+                        task.build(args)
+                        export.assert_called_once_with()
+                restore.assert_called_once()
+                self.assertEqual(restore.call_args.args[1], "restore")
+                negative.assert_called_once()
+                package_call.assert_called_once()
+                compile_products.assert_not_called()
+                result = json.loads((evidence.diagnostics / "result.json").read_text())
+                self.assertEqual(result["products"], expected)
+                self.assertEqual(result["package_bytes_equal_to_cold"], changed is None)
+                self.assertEqual(result["conclusion"], "failure" if changed else "success")
+                self.assertIn("elapsed_seconds", result)
+                self.assertEqual((evidence.diagnostics / "package.log").read_text(), "packaging completed\n")
+                self.assertEqual((evidence.directory / "result.json").exists(), changed is None)
+                self.assertEqual((evidence.directory / "package.log").exists(), changed is None)
+                if changed:
+                    self.assertEqual(result["error"], "restored package bytes/materials differ from cold inputs")
+                else:
+                    self.assertEqual(json.loads((evidence.directory / "result.json").read_text()), result)
+
 
 class PackagedInputContracts(unittest.TestCase):
     """Real tar/ELF/EROFS composition fixtures; no product compilation or execution."""

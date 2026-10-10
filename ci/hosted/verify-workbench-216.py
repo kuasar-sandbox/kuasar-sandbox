@@ -1708,6 +1708,8 @@ def build(args):
         package_all(sources, arch, record, evidence, environment)
         if args.phase == "warm":
             evidence.record["package_bytes_equal_to_cold"] = evidence.record["packages"] == previous["packages"]
+            require(evidence.record["package_bytes_equal_to_cold"],
+                    "restored package bytes/materials differ from cold inputs")
         if args.phase == "cold":
             archive = evidence.directory / "carried-products.tar"
             with tarfile.open(archive, "w") as stream:
