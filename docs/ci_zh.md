@@ -93,6 +93,8 @@ exact-assets 模式直接消费 platform 包中的同一布局。两条路径都
 
 源码 CI 对现有 PR merge ref 和受信任分支 ref 核验自动观察到的身份，然后通过 `source-inputs.tar` 固定并传递 Git 源码树。构建、helper 和必需源码检查恢复同一输入。非候选 owner 使用所选单元 Tag；候选及 companion 测试即使没有产品差异、所有产品字节复用已发布聚合也仍执行。产品相关输入和独立 kernel 差异投影不变。
 
+对于没有准入候选的 owner，所选 Tag 必须保留已验证基线中的每个用例 ID。缺少用例时明确失败，需要经评审的新 Tag 选择；源码 CI 不得静默缩减覆盖范围。
+
 历史消费者按聚合 Tag 获取清单及发布包，保留原始独立测试来源。新发布 binding 内嵌 canonical validation plan、owner 用例映射和源码记录，与包摘要共同绑定。旧 binding 缺少归属信息时，必须获取其真实保留的 integration-plan artifact，核验 canonical identity 等于 `plan_id`，并交叉验证所有绑定身份与资产。证据缺失或歧义时明确失败，不从文件名猜测历史归属。
 
 产品合同为预构建产品 → `e2e prepare` → `<suite>.<case>.sh` → 共享公开入口 `e2e run`。完整文件名就是用例 ID，
