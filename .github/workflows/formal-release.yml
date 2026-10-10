@@ -1,0 +1,91 @@
+name: Formal Release
+run-name: Formal ${{ inputs.version }} @${{ inputs.platform_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version selected by releases/release.yaml (release-vMAJOR.MINOR.PATCH)
+        required: true
+        type: string
+      platform_ref:
+        description: Exact main or release/vMAJOR.MINOR.x source branch
+        required: true
+        default: main
+        type: string
+      platform_sha:
+        description: Full current source branch HEAD containing the approved Stable manifest
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: preview-manifest-selection-and-gc
+  cancel-in-progress: false
+
+jobs:
+  converge:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    steps:
+      - name: Require trusted formal release entry
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          PLATFORM_REF: ${{ inputs.platform_ref }}
+          PLATFORM_SHA: ${{ inputs.platform_sha }}
+        run: |
+          set -euo pipefail
+          [ "$GITHUB_REF" = refs/heads/main ] \
+            || { echo "Formal Release must run from main" >&2; exit 1; }
+          [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          [[ "$PLATFORM_REF" = main \
+            || "$PLATFORM_REF" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]]
+          [[ "$PLATFORM_SHA" =~ ^[0-9a-f]{40}$ ]]
+
+      - name: Check out trusted release controller
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: control
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check out exact approved platform source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.platform_sha }}
+          path: platform
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check environment GitHub CLI
+        run: |
+          gh --version
+          gh_help="$(gh api --help)"
+          [[ "$gh_help" == *--slurp* ]] || { echo "environment gh must support api --slurp" >&2; exit 1; }
+
+      - name: Create cross-repository dispatch token
+        id: release-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
+          owner: kuasar-sandbox
+          repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
+          permission-actions: write
+          permission-contents: read
+
+      - name: Converge approved Stable selection
+        env:
+          GH_TOKEN: ${{ steps.release-token.outputs.token }}
+          PLATFORM_ROOT: ${{ github.workspace }}/platform
+          PLATFORM_REF: ${{ inputs.platform_ref }}
+          PLATFORM_SHA: ${{ inputs.platform_sha }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          RELEASE_WAIT_SECONDS: "2700"
+          RELEASE_POLL_SECONDS: "120"
+          PYTHONUNBUFFERED: "1"
+        run: python3 control/release/formal_coordinator.py
