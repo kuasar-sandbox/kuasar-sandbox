@@ -243,6 +243,21 @@ jobs:
           install_readers
           install_runtime_reader
           export PATH="$KUASAR_HOSTED_ROOT/bin:$PATH" KUASAR_CI_DIR=/output/source-metrics
+          # Retain the original source process affinity inside this private instance.
+          source_cpus=$(python3 - <<'SOURCE_AFFINITY'
+          import os
+          budget = os.environ.get("KUASAR_BUILD_JOBS", "")
+          if not budget.isascii() or not budget.isdecimal() or int(budget) < 1:
+              raise SystemExit("source affinity requires a positive KUASAR_BUILD_JOBS")
+          jobs = int(budget)
+          allowed = sorted(os.sched_getaffinity(0))
+          if jobs > len(allowed):
+              raise SystemExit("source affinity budget exceeds allowed CPUs")
+          print(",".join(map(str, allowed[:jobs])))
+          SOURCE_AFFINITY
+          )
+          taskset -pc "$source_cpus" "$$" >/dev/null
+          taskset -pc "$$"
           python3 -B /inputs/release/ci/integration/run-source-checks.py \
             --plan /src/.source-plan.json --sources /src --output /output/source-result.json --materialized
           SOURCE_USER
