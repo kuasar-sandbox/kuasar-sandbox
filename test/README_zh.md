@@ -44,7 +44,7 @@ prepare 要求实际宿主、产品、helper 和镜像架构一致，包括两�
 中的精确源码静态无 libc probe。未选择的 helper 不成为前置条件。
 Demo 消费已准备的本地原生镜像身份，不选择替代镜像，也不维护第二份 ARM 摘要列表。
 
-CI 解析精确测试文件名，并按变更 owner 选择覆盖较广的 suite。源码构建先于 prepare 完成。源码模式 CI 一次性准入候选 ref 与基线 Tag，并固定其已验证输入。按相关产品输入差异可以复用未变更的基线产品，同时仍执行候选测试和 helper；记录的源码身份是来源证据，不是独立测试选择器。新发布版中，每个 owner 的产品、打包测试、helper 和指南来自同一所选 owner Tag；exact-assets 模式消费已交付材料。历史发布版保留其真实记录的来源和证据。CI prepare 在无 Go/Rust 工具链和组件源码树的隔离运行环境中执行。每个 suite shard 调用同一打包 runner；storage、snapshot 及 ARM image 验收也使用隔离运行环境，prepare 和执行镜像 ID 及环境检查绑定到结果；结果必须包含所有已选用例的成功退出及一致的不可变输入身份。托管 ARM CI 选择 accelerator 和 guest-runtime 的非 KVM 用例，排除项明确记录。static lane 执行零个产品用例，不算产品 E2E 验收。
+CI 解析精确测试文件名，并按变更 owner 选择覆盖较广的 suite。源码构建先于 prepare 完成。源码模式 CI 一次性准入候选 ref 与基线 Tag，并固定其已验证输入。相关产品输入未变更时，CI 可以复用基线产品，同时仍执行候选测试和 helper。记录的源码身份是来源证据，不是独立测试选择器。新发布版中，每个 owner 的产品、打包测试、helper 和指南来自同一所选 owner Tag；exact-assets 模式消费已交付材料。历史发布版保留其真实记录的来源和证据。CI prepare 在无 Go/Rust 工具链和组件源码树的隔离运行环境中执行。每个 suite shard 调用同一打包 runner；storage、snapshot 及 ARM image 验收也使用隔离运行环境，prepare 和执行镜像 ID 及环境检查绑定到结果；结果必须包含所有已选用例的成功退出及一致的不可变输入身份。托管 ARM CI 选择 accelerator 和 guest-runtime 的非 KVM 用例，排除项明确记录。static lane 执行零个产品用例，不算产品 E2E 验收。
 
 unit、race、vet、源码 helper、UFFD 性能及 working-set 门禁保持独立。`test/perf/warmpool-dedup.sh` 在 `make perf-warmpool-dedup` 下保留 warm-pool 表征、数据与测量断言，不属于 correctness suite。组件源码门禁仍由各自仓库维护。
 

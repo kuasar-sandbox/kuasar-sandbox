@@ -99,7 +99,7 @@ def inspect_checkout(root, repository, sha):
     artifacts.require(root.is_dir() and not root.is_symlink() and (root / '.git').is_dir()
                       and not (root / '.git').is_symlink(), 'missing fixed run source')
     artifacts.require(Path(git(root, 'rev-parse', '--show-toplevel')).resolve() == root.resolve(), 'invalid run source root')
-    artifacts.require(git(root, 'config', '--get', 'remote.origin.url') == f'https://github.com/{repository}.git',
+    artifacts.require(git(root, 'config', '--get', 'remote.origin.url').removesuffix('.git') == f'https://github.com/{repository}',
                       'run source repository changed')
     artifacts.require(git(root, 'rev-parse', 'HEAD') == sha, 'run source identity changed')
     artifacts.require(not git(root, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', 'HEAD', '--')

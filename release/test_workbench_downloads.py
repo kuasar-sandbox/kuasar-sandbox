@@ -35,7 +35,7 @@ test_revisions:
 
 class ManifestRetrievalTests(unittest.TestCase):
     def retrieve(self, guide, *, tag=TAG, requested='', source='a' * 40,
-                 fail_manifest=False, mutate=None, legacy=False, annotated=False):
+                 fail_manifest=False, mutate=None, legacy=False, annotated=False, metadata_failure=None):
         text = (ROOT / 'docs' / guide).read_text()
         block = re.findall(r'```bash\n(.*?)\n```', text, re.S)[0]
         entrance = block.split('\nRELEASE_VERSION="$(python3 - ', 1)[0]
@@ -70,7 +70,7 @@ class ManifestRetrievalTests(unittest.TestCase):
                 {'path': 'releases', 'type': 'tree', 'mode': '040000', 'sha': releases_sha}]},
             'releases': {'sha': releases_sha, 'truncated': False, 'tree': [
                 {'path': manifest, 'type': 'blob', 'mode': '100644', 'sha': blob_sha, 'size': len(content)}]},
-            'content': content.decode(), 'fail_manifest': fail_manifest,
+            'content': content.decode(), 'fail_manifest': fail_manifest, 'metadata_failure': metadata_failure,
             'api': api, 'tag': tag, 'root_sha': root_sha, 'releases_sha': releases_sha, 'raw_url': raw,
             'annotated': {'sha': 'd' * 40, 'object': {'type': 'commit', 'sha': source}},
         }
@@ -94,6 +94,11 @@ def read_url(url):
     with requests.open('a') as stream:
         stream.write(json.dumps(url) + '\\n')
     api, tag = fixture['api'], str(fixture['tag'])
+    failure = fixture['metadata_failure']
+    if failure and url == api + failure['path'] and prior.count(url) + 1 == failure['occurrence']:
+        if failure['kind'] == 'timeout':
+            raise TimeoutError('metadata timeout fixture')
+        raise HTTPError(url, 503, 'metadata unavailable fixture', {}, None)
     if url.startswith(api + '/releases/'):
         value = fixture['metadata']
     elif url == api + '/git/ref/tags/' + tag:
@@ -153,12 +158,29 @@ exec(compile(code, '<documented download>', 'exec'))
                     self.assertNotIn('/contents/', url)
                     self.assertNotIn('/git/blobs/', url)
             evidence = root / 'evidence.json'
-            if result.returncode == 0 and evidence.exists():
+            if result.returncode == 0:
+                self.assertTrue(evidence.is_file(), 'successful admission must retain its evidence')
+                self.assertEqual(result.stdout, content.decode())
                 proof = json.loads(evidence.read_text())
                 self.assertEqual(proof['source_commit'], source)
                 self.assertEqual(proof['manifest_blob'], blob_sha)
                 self.assertEqual(proof['manifest_size'], len(content))
                 self.assertEqual(proof['tag'], tag)
+                self.assertEqual(proof['manifest_path'], 'releases/' + manifest)
+                # Retain the actual proof chain, including both observations and
+                # annotation objects, in exactly the order it was validated.
+                ref_url = api + '/git/ref/tags/' + tag
+                observations = [{'url': ref_url, 'response': fixture['refs'][0]}]
+                annotation = {'url': api + '/git/tags/' + 'd' * 40, 'response': fixture['annotated']}
+                if annotated: observations.append(annotation)
+                observations.extend([
+                    {'url': api + '/commits/refs/tags/' + tag, 'response': fixture['commit']},
+                    {'url': api + '/git/trees/' + root_sha, 'response': fixture['root']},
+                    {'url': api + '/git/trees/' + releases_sha, 'response': fixture['releases']},
+                    {'url': ref_url, 'response': fixture['refs'][1]},
+                ])
+                if annotated: observations.append(annotation)
+                self.assertEqual(proof['metadata'], observations)
             return result, urls
 
     def test_stable_and_preview_fetch_manifest_by_validated_release_tag(self):
@@ -264,6 +286,34 @@ exec(compile(code, '<documented download>', 'exec'))
                 with self.subTest(guide=guide, change=name):
                     result, urls = self.retrieve(guide, mutate=mutate)
                     self.assertNotEqual(result.returncode, 0, urls)
+
+    def test_metadata_transport_failures_stop_at_the_failed_request(self):
+        api = 'https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox'
+        ref = '/git/ref/tags/' + TAG
+        annotation = '/git/tags/' + 'd' * 40
+        root = '/git/trees/' + 'b' * 40
+        child = '/git/trees/' + 'c' * 40
+        commit = '/commits/refs/tags/' + TAG
+        raw = f'https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/refs/tags/{TAG}/releases/release.yaml'
+        for guide in ('download.md', 'download_zh.md'):
+            for annotated in (False, True):
+                paths = [ref] + ([annotation] if annotated else []) + [commit, root, child]
+                urls = [api + '/releases/latest', *(api + path for path in paths), raw, api + ref]
+                if annotated: urls.append(api + annotation)
+                for index, url in enumerate(urls):
+                    if index == 0 or url == raw:
+                        continue
+                    # Fail both repeated ref/annotation reads, plus a timeout at
+                    # each metadata boundary. Earlier raw bytes are never admitted.
+                    for kind in ('http', 'timeout'):
+                        with self.subTest(guide=guide, annotated=annotated, index=index, kind=kind):
+                            failure = {'path': url.removeprefix(api), 'kind': kind,
+                                       'occurrence': urls[:index + 1].count(url)}
+                            result, requests = self.retrieve(guide, annotated=annotated, metadata_failure=failure)
+                            self.assertNotEqual(result.returncode, 0)
+                            self.assertIn('metadata ' + ('timeout' if kind == 'timeout' else 'unavailable') + ' fixture', result.stderr)
+                            self.assertEqual(requests, urls[:index + 1])
+                            self.assertEqual(result.stdout, '')
 
     def test_failed_tag_download_has_no_sha_or_main_fallback(self):
         for guide in ('download.md', 'download_zh.md'):
