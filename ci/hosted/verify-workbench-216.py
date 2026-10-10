@@ -1866,6 +1866,9 @@ def packaged_delta(args):
         require(helper["helpers"][name] == {"sha256": artifacts.digest(helper_root / "helpers" / name),
                                            "source_sha": revision}, "compiled helper identity changed")
         artifacts.check_architecture(helper_root / "helpers" / name, arch)
+        if legacy:
+            require((helper_root / "helpers" / name).stat().st_mode & 0o7777 in (0o644, 0o755),
+                    "unsafe legacy helper permissions: " + name)
         expected_files.add("helpers/" + name)
     require(set(artifacts.tree_files(helper_root)) == expected_files, "undeclared helper output")
     archive_records = {}
@@ -1896,6 +1899,12 @@ def packaged_delta(args):
         args.output.mkdir(parents=True)
         for directory in ("test", "helpers"):
             shutil.copytree(helper_root / directory, args.output / directory)
+        if legacy:
+            # The diagnostic copier and Actions file artifacts lose execute
+            # bits. Only these hash/source/ELF-checked declared binaries regain
+            # the helper producer's 0755 mode; downloaded inputs stay unchanged.
+            for name in helper["helpers"]:
+                (args.output / "helpers" / name).chmod(0o755)
         (args.output / "bin").mkdir()
         for name in artifacts.PRODUCTS:
             shutil.copy2(unpacked / "bin" / name, args.output / "bin" / name)
