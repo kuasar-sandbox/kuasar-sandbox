@@ -417,3 +417,25 @@ by convention and must not be runtime dependencies. Assembly rejects symlinks,
 non-regular inputs, missing/empty runtime libraries and duplicate case IDs; it
 does not recover omitted inputs by downloading them at execution time. Archive
 validation and execution still validate the actual delivered package.
+
+### Repository-owned documentation selection
+
+Each repository declares its delivered user guides in `release/guide-inputs.txt`
+at the selected source revision. Entries are repository-relative Markdown files,
+directories (recursive Markdown discovery), or glob patterns. Blank lines and
+`#` comments are ignored. Every entry must match; missing/empty declarations,
+path escapes, symlinks, non-Markdown explicit inputs and overlapping entries fail
+assembly. Directory discovery preserves nested paths below `docs/`.
+
+The platform maintains only its own declaration. Components maintain their own
+user/developer audience boundary; the aggregator has no per-owner filename list.
+Legal material continues to use the existing LICENSE/NOTICE/COPYING conventions.
+An independently versioned unit uses `docs/<unit>.md` and its optional `_zh.md`
+peer from the unit's exact selected source (including immutable older revisions),
+not a document borrowed from a newer runtime test checkout.
+
+Rollout: merge each owner's declaration first, then make a new normal Daily
+selection with those test revisions. Enable the new reader only after that
+selection has been checked. Old immutable source revisions do not acquire the
+new declaration retroactively; historical selections retain their matching
+framework and must not import current declarations to make an old build pass.

@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from package_inputs import GUIDES, regular_input
+from package_inputs import guide_inputs, unit_guide_inputs, regular_input
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 OWNERS = ('platform', 'accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator')
@@ -24,11 +24,7 @@ FENCE = re.compile(r'^\s{0,3}(`{3,}|~{3,})')
 
 
 def source_files(root: Path, owner: str):
-    for stem in GUIDES[owner]:
-        yield Path(stem + '.md')
-        translated = Path(stem + '_zh.md')
-        if (root / translated).exists() or (root / translated).is_symlink() or (owner in {'accelerator', 'guest-runtime'} and stem == 'test/e2e/README'):
-            yield translated
+    yield from (guide_inputs(root) if owner in OWNERS else unit_guide_inputs(root, owner))
     # Legal material is not filtered by audience or rewritten as user guidance.
     for path in sorted(root.iterdir()):
         if path.name in {'LICENSE', 'NOTICE', 'COPYING', 'COPYRIGHT'} or path.name.startswith(('LICENSE.', 'LICENSE_')):
@@ -50,8 +46,9 @@ def destination(owner: str, path: Path) -> Path:
     if path.parts[:2] == ('test', 'e2e'):
         return Path('test/e2e') / owner / Path(*path.parts[2:])
     if owner == 'platform':
-        return Path('guide') / (path.name if path.parts[0] == 'docs' else path)
-    return Path('guide') / owner / path.name
+        return Path('guide') / (path.relative_to('docs') if path.parts[0] == 'docs' else path)
+    relative = path.relative_to('docs') if path.parts[0] == 'docs' else path
+    return Path('guide') / owner / relative
 
 
 def source_ref(root: Path) -> str:

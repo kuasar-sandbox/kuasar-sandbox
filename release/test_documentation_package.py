@@ -11,7 +11,40 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'test/e2e'))
-from package_inputs import GUIDES, PLATFORM_RUNTIME
+from package_inputs import PLATFORM_RUNTIME
+FIXTURE_GUIDES = {'platform': ['README',
+              'docs/quickstart',
+              'docs/download',
+              'docs/deployment',
+              'docs/kuasar-sandbox',
+              'docs/terminology',
+              'test/README',
+              'test/QUICKSTART',
+              'test/demo/DEMO',
+              'workbench/README'],
+ 'accelerator': ['README',
+                 'docs/cache',
+                 'docs/cache-redis',
+                 'docs/store',
+                 'docs/manifest',
+                 'docs/file-artifacts',
+                 'test/e2e/README'],
+ 'connector': ['README', 'docs/tapfd', 'docs/vswitch-operations'],
+ 'guest-runtime': ['README',
+                   'docs/flatten',
+                   'docs/sandbox-runtime',
+                   'docs/vmlinux',
+                   'test/e2e/README'],
+ 'sandboxer': ['README', 'docs/sandbox', 'docs/sandbox-init'],
+ 'orchestrator': ['README',
+                  'docs/node',
+                  'docs/node-build',
+                  'docs/node-proxy',
+                  'docs/node-resource',
+                  'docs/node-journald',
+                  'docs/telemetry'],
+ 'vmlinux': ['docs/vmlinux']}
+
 OWNERS = ('platform', 'accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator')
 SPEC = importlib.util.spec_from_file_location('check_docs', ROOT / 'ci/check_docs.py')
 DOCS = importlib.util.module_from_spec(SPEC)
@@ -35,7 +68,7 @@ class DocumentationPackageTest(unittest.TestCase):
             script.chmod(0o755)
         for owner in (*OWNERS, 'vmlinux'):
             source = self.root / owner
-            for stem in GUIDES[owner]:
+            for stem in FIXTURE_GUIDES[owner]:
                 path = source / (stem + '.md')
                 path.parent.mkdir(parents=True, exist_ok=True)
                 if not path.exists(): path.write_text('# User guide\n')
@@ -47,6 +80,16 @@ class DocumentationPackageTest(unittest.TestCase):
                 path = suite / 'lib' / 'runtime_fixture.py'
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('# Runtime fixture\n')
+            if owner in OWNERS:
+                paths = [stem + '.md' for stem in FIXTURE_GUIDES[owner]]
+                if owner in {'accelerator', 'guest-runtime'}:
+                    paths.append('test/e2e/README_zh.md')
+                # Fixtures own their declarations independently of the assembler.
+                # Optional translations use a local pattern, except the explicitly
+                # maintained E2E pair whose missing peer must still fail.
+                declaration = source / 'release/guide-inputs.txt'
+                declaration.parent.mkdir()
+                declaration.write_text('\n'.join(paths) + '\n')
         platform = self.root / 'platform'
         for name in PLATFORM_RUNTIME:
             path = platform / name
@@ -63,6 +106,14 @@ class DocumentationPackageTest(unittest.TestCase):
         (self.root / 'refs.tsv').write_text(''.join(f'{o}\t{o}-revision\n' for o in (*OWNERS, 'vmlinux')))
 
     def assemble(self, *, kernel=False, success=True):
+        for owner in OWNERS:
+            declaration = self.root / owner / 'release/guide-inputs.txt'
+            entries = declaration.read_text().splitlines()
+            for path in tuple(entries):
+                translated = path.removesuffix('.md') + '_zh.md'
+                if path.endswith('.md') and not path.endswith('_zh.md') and (self.root / owner / translated).exists() and translated not in entries:
+                    entries.append(translated)
+            declaration.write_text('\n'.join(entries) + '\n')
         output = self.root / 'assembled'
         env = {**os.environ, 'DOCS_SOURCE_REFS': str(self.root / 'refs.tsv')}
         if kernel:
@@ -75,6 +126,79 @@ class DocumentationPackageTest(unittest.TestCase):
         else:
             self.assertNotEqual(result.returncode, 0)
         return output, result
+
+    def test_owner_declared_directory_discovers_new_guides_and_preserves_paths(self):
+        root = self.root / 'connector'
+        directory = root / 'docs/user/nested'
+        directory.mkdir(parents=True)
+        (directory / 'added.md').write_text('# New owner guide\n')
+        (root / 'release/guide-inputs.txt').write_text('README.md\ndocs/user/\n')
+        output, _ = self.assemble()
+        self.assertEqual((output / 'guide/connector/user/nested/added.md').read_text(),
+                         '# New owner guide\n')
+        self.assertFalse((output / 'guide/connector/tapfd.md').exists())
+
+    def test_platform_directory_keeps_equal_basenames_in_distinct_subdirectories(self):
+        source = self.root / 'platform'
+        declaration = source / 'release/guide-inputs.txt'
+        declaration.write_text(declaration.read_text() + 'docs/user/\n')
+        for name in ('a', 'b'):
+            guide = source / 'docs/user' / name / 'README.md'
+            guide.parent.mkdir(parents=True)
+            guide.write_text(f'# {name} guide\n')
+        output, _ = self.assemble()
+        for name in ('a', 'b'):
+            self.assertEqual((output / f'guide/user/{name}/README.md').read_text(), f'# {name} guide\n')
+
+    def test_recursive_directory_glob_discovers_each_file_once(self):
+        source = self.root / 'connector'
+        nested = source / 'docs/user/nested/new.md'
+        nested.parent.mkdir(parents=True)
+        nested.write_text('# Nested guide\n')
+        (source / 'release/guide-inputs.txt').write_text('README.md\ndocs/**\n')
+        output, _ = self.assemble()
+        self.assertEqual((output / 'guide/connector/user/nested/new.md').read_text(), '# Nested guide\n')
+
+    def test_missing_owner_declaration_has_no_cross_repository_fallback(self):
+        declaration = self.root / 'connector/release/guide-inputs.txt'
+        declaration.write_text('# Empty owner selection\n')
+        _, result = self.assemble(success=False)
+        self.assertIn('empty documentation declaration', result.stderr)
+
+    def test_owner_declaration_rejects_unsafe_duplicate_and_unmatched_patterns(self):
+        declaration = self.root / 'connector/release/guide-inputs.txt'
+        for entries, message in [('README.md\nREADME*.md\n', 'duplicate documentation input'),
+                                 ('../README.md\n', 'unsafe documentation input pattern'),
+                                 ('/etc/passwd\n', 'unsafe documentation input pattern'),
+                                 ('docs/absent*.md\n', 'missing documentation input'),
+                                 ('README.md\ntest/e2e/lib/runtime_fixture.py\n', 'non-Markdown')]:
+            with self.subTest(entries=entries):
+                declaration.write_text(entries)
+                _, result = self.assemble(success=False)
+                self.assertIn(message, result.stderr)
+                shutil.rmtree(self.root / 'assembled')
+
+    def test_owner_declaration_symlink_and_selected_directory_symlink_fail(self):
+        declaration = self.root / 'connector/release/guide-inputs.txt'
+        saved = declaration.read_text()
+        external = self.root / 'selection.txt'
+        external.write_text(saved)
+        declaration.unlink()
+        declaration.symlink_to(external)
+        # Call the reader directly: the fixture author helper intentionally
+        # updates declarations before assembly, so must not follow this symlink.
+        from package_inputs import guide_inputs
+        with self.assertRaisesRegex(ValueError, 'symbolic link'):
+            guide_inputs(self.root / 'connector')
+        declaration.unlink()
+        declaration.write_text('docs/user/\n')
+        (self.root / 'connector/docs/user').symlink_to(self.root / 'sandboxer/docs', target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'symbolic link'):
+            guide_inputs(self.root / 'connector')
+        (self.root / 'connector/docs/user').unlink()
+        declaration.unlink()
+        with self.assertRaisesRegex(ValueError, 'missing package input'):
+            guide_inputs(self.root / 'connector')
 
     def test_bilingual_navigation_and_source_links(self):
         source = self.root / 'connector'
@@ -140,7 +264,7 @@ class DocumentationPackageTest(unittest.TestCase):
     def test_missing_maintained_e2e_translation_is_rejected(self):
         (self.root / 'accelerator/test/e2e/README_zh.md').unlink()
         _, result = self.assemble(success=False)
-        self.assertIn('missing documentation input: accelerator/test/e2e/README_zh.md', result.stderr)
+        self.assertIn('missing documentation input: test/e2e/README_zh.md', result.stderr)
 
     def test_cross_repository_links_and_historical_revisions(self):
         (self.root / 'connector/docs/tapfd.md').write_text('# Wire\n')

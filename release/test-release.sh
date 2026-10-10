@@ -99,17 +99,17 @@ done < "$TMP/selection.tsv"
 python3 - "$ROOT" "$TMP/fetched/test-sources" <<'PYINPUTS'
 import pathlib, sys
 sys.path.insert(0, str(pathlib.Path(sys.argv[1]) / 'test/e2e'))
-from package_inputs import GUIDES
 root = pathlib.Path(sys.argv[2])
 for owner in ('accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator'):
-    for stem in GUIDES[owner]:
-        path = root / owner / (stem + '.md')
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if not path.exists(): path.write_text('# User fixture\n')
-    for name in ('runtime_fixture.py',):
-        path = root / owner / 'test/e2e/lib' / name
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text('# Runtime fixture\n')
+    source = root / owner
+    declaration = source / 'release/guide-inputs.txt'
+    declaration.parent.mkdir()
+    declaration.write_text('README*.md\ndocs/\ntest/e2e/README*.md\n')
+    for suffix in ('', '_zh'):
+        (source / f'test/e2e/README{suffix}.md').write_text('# User fixture\n')
+    path = source / 'test/e2e/lib/runtime_fixture.py'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('# Runtime fixture\n')
 PYINPUTS
 printf '#!/usr/bin/env bash\necho "pinned orchestrator E2E"\n' \
   > "$TMP/fetched/test-sources/orchestrator/test/e2e/cases/basic.orchestrator-fixture.sh"
