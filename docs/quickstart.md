@@ -175,7 +175,10 @@ ready = "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.
 tpl = (Template().from_image(image)
        .run_cmd("mkdir -p /tmp/my-app && printf 'my application\\n' > /tmp/my-app/index.html")
        .set_start_cmd(start, ready))
-info = Template.build(tpl, name="my-first-app", cpu_count=2, memory_mb=6144)
+info = Template.build(
+    tpl, name="my-first-app", cpu_count=2, memory_mb=6144,
+    on_build_logs=lambda entry: print(entry.message, flush=True),
+)
 request = urllib.request.Request(
     f"{api}/templates/{info.template_id}/builds/{info.build_id}/status",
     headers={"X-API-KEY": key})
@@ -203,7 +206,9 @@ finally:
 
 Expected results: exact-build ready status with `kind=snp`, a canonical
 `e2b-snp-...` ID, successful command/file access, and matching state after resume.
-Retain both registration/build handles for diagnostics and the canonical ID for
+Keep the callback output: SDK 2.25.1 logs the registration and build IDs before
+trigger/wait, so they remain available if the build raises instead of returning
+`info`. Retain both registration/build handles for diagnostics and the canonical ID for
 future creates; the SDK's returned registration handle is not the published ID.
 For explicit Image, cold Sandbox E or memory Snapshot S, use the
 [separate registration/trigger recipe](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md#explicit-target-recipe).

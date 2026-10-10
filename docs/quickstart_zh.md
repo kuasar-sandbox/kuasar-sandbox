@@ -150,7 +150,10 @@ ready = "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.
 tpl = (Template().from_image(image)
        .run_cmd("mkdir -p /tmp/my-app && printf 'my application\\n' > /tmp/my-app/index.html")
        .set_start_cmd(start, ready))
-info = Template.build(tpl, name="my-first-app", cpu_count=2, memory_mb=6144)
+info = Template.build(
+    tpl, name="my-first-app", cpu_count=2, memory_mb=6144,
+    on_build_logs=lambda entry: print(entry.message, flush=True),
+)
 request = urllib.request.Request(
     f"{api}/templates/{info.template_id}/builds/{info.build_id}/status",
     headers={"X-API-KEY": key})
@@ -177,7 +180,9 @@ finally:
 ```
 
 预期为精确 build 的 ready 状态、`kind=snp`、canonical `e2b-snp-...` ID、命令与
-文件访问成功及恢复后状态一致。保存注册/build 句柄用于诊断，canonical ID 用于
+文件访问成功及恢复后状态一致。保留 callback 输出：SDK 2.25.1 在 trigger/等待前
+记录注册 ID 和 build ID，即使后续抛错而不返回 `info`，仍可据此定位。
+保存注册/build 句柄用于诊断，canonical ID 用于
 后续 create；SDK 返回的注册句柄不是发布 ID。显式 Image、冷 Sandbox E 或内存
 Snapshot S 使用[分离注册/触发配方](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md#explicit-target-recipe)。
 
