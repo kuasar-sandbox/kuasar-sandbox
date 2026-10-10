@@ -481,7 +481,7 @@ HA 或自动灾备。§§2–7 已给进程/端口/目录/启动顺序，不要�
 
 开放准入前固定 aggregate/checksum，使用配套原生产物和打包文档，检查有效配置，
 执行真实 build/create/命令/文件/pause/resume/kill。使用实际网关 allow/deny
-策略及冷工件读取复验。如所选版本包含 [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry_zh.md)，
+策略及冷工件读取复验。如所选版本包含 [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry_zh.md#release-scope)，
 独立验证 exporter/query。源码支持 `TARGET_ARCH` 不证明交叉构建/仿真或历史
 Release 资产；遵循[下载选择](download_zh.md)和[原生 Workbench 构建](../workbench/README_zh.md)。
 未合入版本选择、下载验证器或 WSL 提案不改变所选发布契约。

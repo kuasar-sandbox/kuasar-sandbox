@@ -411,7 +411,7 @@ Before opening admission: pin one aggregate and its checksums; use that release'
 native products and packaged guides, verify effective configurations, then test one
 real build/create/command/file/pause/resume/kill cycle. Run the same checks with the
 actual gateway allow/deny policy and cold artifact reads. Validate exporter/query
-behavior separately if [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry.md)
+behavior separately if [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry.md#release-scope)
 is included in that version. Current source `TARGET_ARCH` support is not proof of
 cross-build/emulation or historical release assets; follow [download selection](download.md)
 and [native Workbench builds](../workbench/README.md). Open release-selection,

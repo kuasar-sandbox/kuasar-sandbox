@@ -211,7 +211,7 @@ trigger/wait, so they remain available if the build raises instead of returning
 `info`. Retain both registration/build handles for diagnostics and the canonical ID for
 future creates; the SDK's returned registration handle is not the published ID.
 For explicit Image, cold Sandbox E or memory Snapshot S, use the
-[Build registration and target contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md).
+[separate registration/trigger recipe](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md#explicit-target-recipe).
 
 For build failure, inspect that build's status/logs and image pull, phase capacity
 and ready-command failure before retrying. Missing COPY storage is a separate
