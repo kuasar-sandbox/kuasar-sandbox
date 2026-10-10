@@ -1772,6 +1772,10 @@ def helper_payload(sources, arch, plan, destination, evidence, environment, prod
                 "helpers": {name: {"sha256": artifacts.digest(destination / "helpers" / name),
                                    "source_sha": plan["framework_sha"] if owner == "framework"
                                    else plan["test_revisions"][owner]["sha"]} for name, owner in selected.items()}}
+    if producer.get("legacy_framework_sha"):
+        # The old path transports individual diagnostic files through Actions.
+        # Bind the admitted source/helper modes before either copier loses them.
+        metadata["file_modes"] = artifacts.tree_modes(destination)
     write(destination / "helpers.json", metadata)
 
 
@@ -1866,11 +1870,18 @@ def packaged_delta(args):
         require(helper["helpers"][name] == {"sha256": artifacts.digest(helper_root / "helpers" / name),
                                            "source_sha": revision}, "compiled helper identity changed")
         artifacts.check_architecture(helper_root / "helpers" / name, arch)
-        if legacy:
-            require((helper_root / "helpers" / name).stat().st_mode & 0o7777 in (0o644, 0o755),
-                    "unsafe legacy helper permissions: " + name)
         expected_files.add("helpers/" + name)
     require(set(artifacts.tree_files(helper_root)) == expected_files, "undeclared helper output")
+    if legacy:
+        modes = helper.get("file_modes")
+        require(isinstance(modes, dict) and set(modes) == expected_files - {"helpers.json"},
+                "legacy helper/test mode set differs from checked files")
+        for relative, mode in modes.items():
+            require(type(mode) is int and mode in (0o644, 0o755), "unsafe legacy recorded mode: " + relative)
+            require((helper_root / relative).stat().st_mode & 0o7777 in (0o644, mode),
+                    "unsafe legacy helper/test permissions: " + relative)
+        require(all(modes["helpers/" + name] == 0o755 for name in helper["helpers"]),
+                "legacy compiled helper lost its producer executable mode")
     archive_records = {}
     with tempfile.TemporaryDirectory(prefix="task216-packages-") as temporary:
         unpacked = Path(temporary) / "unpacked"
@@ -1900,11 +1911,12 @@ def packaged_delta(args):
         for directory in ("test", "helpers"):
             shutil.copytree(helper_root / directory, args.output / directory)
         if legacy:
-            # The diagnostic copier and Actions file artifacts lose execute
-            # bits. Only these hash/source/ELF-checked declared binaries regain
-            # the helper producer's 0755 mode; downloaded inputs stay unchanged.
-            for name in helper["helpers"]:
-                (args.output / "helpers" / name).chmod(0o755)
+            # Restore only each checked file's bound producer mode, including
+            # executable source wrappers. Data and downloaded inputs stay as-is.
+            for relative, mode in modes.items():
+                path = args.output / relative
+                if path.stat().st_mode & 0o7777 != mode:
+                    path.chmod(mode)
         (args.output / "bin").mkdir()
         for name in artifacts.PRODUCTS:
             shutil.copy2(unpacked / "bin" / name, args.output / "bin" / name)

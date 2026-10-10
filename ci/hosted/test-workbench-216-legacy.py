@@ -1040,6 +1040,8 @@ class LegacyPackagedInputs(validation.PackagedInputContracts):
         helper = json.loads(helper_path.read_text())
         helper.update({key: self.cold[key] for key in (
             "image_id", "legacy_framework_sha", "legacy_bootstrap_sha256", "host_arch", "source_root")})
+        helper["file_modes"] = {name: mode for name, mode in task.artifacts.tree_modes(helper_path.parent).items()
+                                if name != "helpers.json"}
         task.write(helper_path, helper)
         self.cold["helpers_sha256"] = task.artifacts.digest(helper_path)
         task.write(self.packages / "result.json", self.cold)
@@ -1091,12 +1093,142 @@ class LegacyPackagedInputs(validation.PackagedInputContracts):
             self.assertEqual((transported / "integration-helpers/helpers" / name).stat().st_mode & 0o7777, 0o644)
             self.assertEqual((original / "integration-helpers/helpers" / name).stat().st_mode & 0o7777, 0o755)
 
+    def mode_fixtures(self):
+        root = self.helpers / "integration-helpers"
+        shell = b"#!/bin/sh\nexit 0\n"
+        python = b"#!/usr/bin/env python3\nraise SystemExit(0)\n"
+        files = {
+            "test/platform/perf/working-set-netns.sh": (shell, 0o755),
+            "test/platform/e2e/lib/executable-without-suffix": (shell, 0o755),
+            "test/e2e/sandboxer/lib/usage_ch_wrapper.py": (python, 0o755),
+            "test/e2e/sandboxer/lib/usage_oom_wrapper.py": (python, 0o755),
+            "test/e2e/orchestrator/cases/telemetry.guest.sh": (shell, 0o755),
+            "test/e2e/sandboxer/lib/data.sh": (b"data, not an executable\n", 0o644),
+            "test/platform/e2e/lib/data.json": (b'{"fixture": true}\n', 0o644),
+        }
+        for owner in self.plan["test_overlays"]:
+            files[task.artifacts.test_overlay_root(owner) + "/lib/source-mode-fixture"] = (shell, 0o755)
+        for name in ("exec", "lifecycle", "mmds-recovery", "mmds", "pause-wake", "proxy-auth",
+                     "proxy-restart", "proxy-wake", "resource-startup", "snapshot"):
+            files["test/e2e/orchestrator/cases/orchestrator." + name + ".sh"] = (shell, 0o755)
+        for name, (data, mode) in files.items():
+            path = root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            path.chmod(mode)
+        metadata = json.loads((root / "helpers.json").read_text())
+        metadata["tests"] = {owner: task.artifacts.tree_files(root / task.artifacts.test_overlay_root(owner))
+                             for owner in self.plan["test_overlays"]}
+        metadata["file_modes"] = {name: mode for name, mode in task.artifacts.tree_modes(root).items()
+                                  if name != "helpers.json"}
+        self.bind_helper_metadata(metadata)
+        return files
+
+    def bind_helper_metadata(self, metadata):
+        path = self.helpers / "integration-helpers/helpers.json"
+        task.write(path, metadata)
+        self.cold["helpers_sha256"] = task.artifacts.digest(path)
+        task.write(self.packages / "result.json", self.cold)
+
+    def test_legacy_producer_records_admitted_source_and_helper_modes(self):
+        self.mode_fixtures()
+        original = self.helpers / "integration-helpers"
+        expected = json.loads((original / "helpers.json").read_text())["file_modes"]
+        sources = self.root / "producer-sources"
+        for owner in self.plan["test_revisions"]:
+            (sources / ("kuasar-sandbox" if owner == "platform" else owner)).mkdir(parents=True)
+        for owner in self.plan["test_overlays"]:
+            pinned = sources / ("kuasar-sandbox" if owner == "platform" else owner)
+            shutil.copytree(original / task.artifacts.test_overlay_root(owner),
+                            pinned / ("test" if owner == "platform" else "test/e2e"))
+
+        def revision(command):
+            self.assertEqual(command[:2], ["git", "-C"])
+            owner = Path(command[2]).name
+            return self.plan["test_revisions"]["platform" if owner == "kuasar-sandbox" else owner]["sha"]
+
+        for legacy in (False, True):
+            destination = self.root / ("producer-legacy" if legacy else "producer-workbench")
+            evidence = Mock(record={"frozen_sha256": self.frozen_digest})
+
+            def build(label, _command, **_kwargs):
+                if label == "helper-build":
+                    shutil.copytree(original / "helpers", destination / "helpers")
+
+            evidence.run.side_effect = build
+            producer = {"legacy_framework_sha": task.LEGACY_FRAMEWORK} if legacy else {"image_id": self.image}
+            with patch.object(task, "output", side_effect=revision), patch.object(task.subprocess, "run"):
+                task.helper_payload(sources, self.arch, self.plan, destination, evidence, {}, producer)
+            observed = json.loads((destination / "helpers.json").read_text())
+            if legacy:
+                self.assertEqual(observed["file_modes"], expected)
+            else:
+                self.assertNotIn("file_modes", observed)
+
+    def test_legacy_test_scripts_wrappers_and_data_keep_exact_modes_after_transport(self):
+        files = self.mode_fixtures()
+        original = self.helpers
+        original_modes = task.artifacts.tree_modes(original)
+        before = task.artifacts.tree_files(original)
+        transported = self.root / "mode-transport"
+        task.module("legacy_source_mode_copy", task.ROOT / "ci/hosted/workbench.py").copy_evidence(original, transported)
+        # Actions file artifacts also normalize regular files to 0644. Preserve
+        # that real boundary; recovery must not modify these downloaded bytes.
+        for path in transported.rglob("*"):
+            if path.is_file():
+                path.chmod(0o644)
+        self.helpers = transported
+        for name, (_data, mode) in files.items():
+            if mode == 0o755:
+                result = subprocess.run(["env", transported / "integration-helpers" / name], capture_output=True)
+                self.assertEqual(result.returncode, 126, name)
+        delta = self.delta()
+        for name, (_data, mode) in files.items():
+            path = delta / name
+            if mode == 0o755:
+                result = subprocess.run(["env", path], capture_output=True)
+                self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(path.stat().st_mode & 0o7777, mode, name)
+        modes = json.loads((transported / "integration-helpers/helpers.json").read_text())["file_modes"]
+        for name, mode in modes.items():
+            self.assertEqual((delta / name).stat().st_mode & 0o7777, mode, name)
+            self.assertEqual(task.artifacts.digest(delta / name), before["integration-helpers/" + name])
+        self.assertEqual(task.artifacts.tree_files(transported), before)
+        self.assertEqual(task.artifacts.tree_files(original), before)
+        self.assertEqual(task.artifacts.tree_modes(original), original_modes)
+        self.assertEqual(set(task.artifacts.tree_modes(transported).values()), {0o644})
+
+    def test_legacy_mode_receipt_requires_exact_set_safe_modes_and_helper_execution(self):
+        path = self.helpers / "integration-helpers/helpers.json"
+        original = json.loads(path.read_text())
+        name = next(iter(original["file_modes"]))
+        helper = "helpers/" + next(iter(original["helpers"]))
+        invalid = [None, {}, {**original["file_modes"], "../extra": 0o755}]
+        invalid += [{**original["file_modes"], name: mode} for mode in (True, "755", 0o600, 0o777, 0o4755)]
+        invalid.append({**original["file_modes"], helper: 0o644})
+        for index, modes in enumerate(invalid):
+            changed = {**original, "file_modes": modes}
+            self.bind_helper_metadata(changed)
+            with self.assertRaisesRegex(ValueError, "legacy .*mode|unsafe legacy helper/test permissions"):
+                self.delta("invalid-modes-" + str(index))
+        task.write(path, original)
+        with self.assertRaisesRegex(ValueError, "same-job producer identity"):
+            self.delta("unbound-modes")
+
+    def test_legacy_test_transport_rejects_new_execution_or_special_permissions(self):
+        self.mode_fixtures()
+        path = self.helpers / "integration-helpers/test/e2e/sandboxer/lib/data.sh"
+        for mode in (0o755, 0o777, 0o4755):
+            path.chmod(mode)
+            with self.assertRaisesRegex(ValueError, "unsafe legacy helper/test permissions"):
+                self.delta("extra-data-mode-" + str(mode))
+
     def test_legacy_helper_transport_rejects_unsafe_permissions(self):
         name = next(iter(task.artifacts.planned_helpers(self.plan["lanes"][self.arch]["selection"])))
         path = self.helpers / "integration-helpers/helpers" / name
         for mode in (0o777, 0o4755):
             path.chmod(mode)
-            with self.assertRaisesRegex(ValueError, "unsafe legacy helper permissions"):
+            with self.assertRaisesRegex(ValueError, "unsafe legacy helper/test permissions"):
                 self.delta("unsafe-mode-" + str(mode))
 
     def test_changed_or_workbench_helpers_cannot_replace_legacy_helpers(self):
