@@ -171,6 +171,7 @@ class FixedInputs(unittest.TestCase):
         untracked = source / 'untracked'; untracked.write_text('extra')
         with self.assertRaisesRegex(ValueError, 'modified inputs'): consume()
         untracked.unlink()
+        (source / '.git/info').mkdir(exist_ok=True)
         (source / '.git/info/exclude').write_text('ignored\n')
         ignored = source / 'ignored'; ignored.write_text('extra')
         with self.assertRaisesRegex(ValueError, 'modified inputs'): consume()
