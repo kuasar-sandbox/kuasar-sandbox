@@ -23,6 +23,25 @@ sudo python3 /tmp/kuasar-prepared/test/e2e/e2e run --workdir /tmp/kuasar-prepare
 
 `--suite` and `--include` form a union; `--exclude` removes full filenames. Unknown selectors and empty selections fail. `--all` includes credentialed `storage.obs.sh`; normal public CI explicitly excludes it. There are no owner, tag, capability or fixture-graph selectors. The Makefile wrapper requires `RELEASE_DIR`, a fresh `E2E_WORKDIR` and optional `E2E_ARGS`.
 
+Each `run` invocation provides a fresh private directory for eligible helpers
+to reuse immutable template preparation within that invocation. The directory
+is outside prepared inputs and case-owned work, even with an explicit
+`--run-root`. Cases receive `E2E_TEMPLATE_CACHE_DIR` and the complete prepared
+provenance digest in `E2E_TEMPLATE_CACHE_PROVENANCE`; ambient values are cleared.
+The runner records the directory in `result.json` and retains it with run state
+for inspection, but never selects it for a later run. `run --no-template-cache`
+clears both variables and allocates no cache, allowing comparisons with ordinary
+preparation. Older helpers can ignore these variables without changing behavior.
+
+Consumers must bind content to the prepared identity, native architecture, full
+image config ID and versioned conversion recipe; validate entries and publish
+atomically under a lock. A matching damaged entry fails instead of silently
+rebuilding. Only immutable, unencrypted image content may be shared. Each case
+still owns its key, Store, template/Build identities, writable disks and real
+Guest lifecycle; live VMs, snapshots and mutable databases are never shared.
+Focused Builder and Demo cases retain real construction. A runner contract
+check alone does not validate a consumer's cache hits or establish a speedup.
+
 Preparation accepts `--deps-dir` / `E2E_DEPS_DIR` for verified local image archives and `--offline` / `E2E_OFFLINE=1` to prohibit dependency downloads. Unconfigured environments remain online. Local matches are validated without remote freshness checks; invalid matches never trigger remote repair. External requests come from one case/architecture function, which build-time input collection can also call. See [local and offline preparation](QUICKSTART.md#local-and-offline-preparation) for precedence, identity evidence and failure behavior.
 
 Native x86_64 and aarch64 use the same public `--all --exclude storage.obs.sh`
