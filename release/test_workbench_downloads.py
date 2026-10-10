@@ -15,6 +15,88 @@ ROOT = Path(__file__).resolve().parents[1]
 TAG = 'release-v1.2.3'
 
 
+class ManifestRetrievalTests(unittest.TestCase):
+    def retrieve(self, guide, *, tag=TAG, requested='', source='a' * 40, fail_manifest=False):
+        text = (ROOT / 'docs' / guide).read_text()
+        block = re.findall(r'```bash\n(.*?)\n```', text, re.S)[0]
+        # Execute the real metadata/manifest download entrance, before asset selection.
+        entrance = block.split('\nRELEASE_VERSION="$(python3 - ', 1)[0]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / 'metadata.json').write_text(json.dumps({'tag_name': tag, 'target_commitish': source}))
+            transport = root / 'transport.py'
+            transport.write_text('''import json, os, pathlib, sys
+root = pathlib.Path(os.environ['FIXTURE_ROOT'])
+url = sys.argv[-1]
+with (root / 'requests.jsonl').open('a') as stream:
+    stream.write(json.dumps(url) + '\\n')
+if url.startswith('https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/'):
+    sys.stdout.write((root / 'metadata.json').read_text())
+elif url.startswith('https://raw.githubusercontent.com/'):
+    if os.environ['FAIL_MANIFEST'] == '1':
+        raise SystemExit(22)
+    print('manifest fixture')
+else:
+    raise SystemExit('unexpected network request: ' + url)
+''')
+            result = subprocess.run(['bash', '-c',
+                'curl() { python3 -B "$FIXTURE_ROOT/transport.py" "$@"; }\n' +
+                entrance + '\ncat "$SELECTION_MANIFEST"\n'],
+                cwd=root, env=os.environ | {'RELEASE_VERSION': requested,
+                    'FIXTURE_ROOT': str(root), 'FAIL_MANIFEST': str(int(fail_manifest)),
+                    'TMPDIR': str(root), 'PYTHONDONTWRITEBYTECODE': '1'},
+                capture_output=True, text=True, timeout=15)
+            requests = root / 'requests.jsonl'
+            urls = [json.loads(line) for line in requests.read_text().splitlines()] if requests.exists() else []
+            return result, urls
+
+    def test_stable_and_preview_fetch_manifest_by_validated_release_tag(self):
+        preview = TAG + '-preview.20260101.2'
+        for guide in ('download.md', 'download_zh.md'):
+            for tag, requested, manifest in ((TAG, '', 'release.yaml'),
+                                             (TAG, TAG, 'release.yaml'),
+                                             (preview, preview, 'daily-preview.yaml')):
+                with self.subTest(guide=guide, tag=tag, requested=requested):
+                    result, urls = self.retrieve(guide, tag=tag, requested=requested)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, 'manifest fixture\n')
+                    endpoint = 'tags/' + requested if requested else 'latest'
+                    self.assertEqual(urls, [
+                        'https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/' + endpoint,
+                        f'https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/{tag}/releases/{manifest}'])
+
+    def test_malformed_release_tags_stop_before_manifest_retrieval(self):
+        for guide in ('download.md', 'download_zh.md'):
+            for tag in ('main', 'a' * 40, 'release-v01.2.3', TAG + '/../../main',
+                        TAG + '\n', TAG + '-preview.20260101.0', '', None):
+                with self.subTest(guide=guide, tag=tag):
+                    result, urls = self.retrieve(guide, tag=tag)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(urls, ['https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/latest'])
+
+    def test_explicit_version_mismatch_stops_before_manifest_retrieval(self):
+        for guide in ('download.md', 'download_zh.md'):
+            result, urls = self.retrieve(guide, requested='release-v2.0.0')
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(urls, ['https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/tags/release-v2.0.0'])
+
+    def test_source_provenance_is_still_required(self):
+        for guide in ('download.md', 'download_zh.md'):
+            for source in ('main', 'a' * 39, 'A' * 40, '', None):
+                with self.subTest(guide=guide, source=source):
+                    result, urls = self.retrieve(guide, source=source)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(urls, ['https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/latest'])
+
+    def test_failed_tag_download_has_no_sha_or_main_fallback(self):
+        for guide in ('download.md', 'download_zh.md'):
+            result, urls = self.retrieve(guide, fail_manifest=True)
+            self.assertEqual(result.returncode, 22)
+            self.assertEqual(urls, [
+                'https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/latest',
+                f'https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/{TAG}/releases/release.yaml'])
+
+
 class DownloadTests(unittest.TestCase):
     def select(self, *, contract='workbench-v1', omit=(), extra=(), download=False, missing_binding=False, arch='x86_64'):
         names = ['SHA256SUMS', f'platform-{TAG}.tar.gz']
