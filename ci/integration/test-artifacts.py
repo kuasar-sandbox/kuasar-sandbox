@@ -279,8 +279,9 @@ class ArtifactExecutionContracts(unittest.TestCase):
         self.marker = self.root.parent / 'scratch-marker'
         script.write_text('set -eu\nprintf "%s" "$TMPDIR" > "' + str(self.marker) + '"\n'
                           'install -d -m 700 "$TMPDIR/owned"\ntouch "$TMPDIR/owned/state"\n')
-        self.plan = {'lanes': {'x86_64': {'performance': []}}, 'test_revisions': test_revisions()}
-        self.provenance = {'arch': 'x86_64', 'selection': {'cases': [self.case]}, 'helpers': {},
+        self.arch = os.uname().machine
+        self.plan = {'lanes': {arch: {'performance': []} for arch in subject.ARCHES}, 'test_revisions': test_revisions()}
+        self.provenance = {'arch': self.arch, 'selection': {'cases': [self.case]}, 'helpers': {},
                            'embedded': {'init': 'a' * 64}, 'test_revisions': test_revisions(),
                            'prepared_cases': [self.case]}
         self.result = self.root.parent / 'result.json'
@@ -295,20 +296,24 @@ class ArtifactExecutionContracts(unittest.TestCase):
             subprocess.run([*privilege, 'rm', '-rf', '--', str(state)], check=True)
 
     def execute(self, shard='storage', performance=False):
+        arch = 'x86_64' if performance else self.arch
+        self.provenance['arch'] = arch
         self.inputs.seal(self.root, self.provenance)
         credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
         with patch.object(self.executor.artifacts, 'verify_workspace', return_value=self.provenance), \
-             patch.object(self.executor.platform, 'machine', return_value='x86_64'), patch.dict(os.environ, credentials):
+             patch.object(self.executor.platform, 'machine', return_value=arch), patch.dict(os.environ, credentials):
             if performance:
-                return self.performance.execute(self.plan, 'x86_64', self.root, self.result)
-            return self.executor.execute(self.plan, 'x86_64', shard, self.root, self.result)
+                return self.performance.execute(self.plan, arch, self.root, self.result)
+            return self.executor.execute(self.plan, arch, shard, self.root, self.result)
 
-    def image(self, *, identity=None, architecture='amd64'):
+    def image(self, *, identity=None, architecture=None):
+        expected_arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}[self.arch]
+        architecture = architecture or expected_arch
         archive = self.root / 'image.tar'
         archive.write_bytes(b'prepared image')
         expected = 'sha256:' + 'b' * 64
         self.provenance['images'] = {'python': {'archive': archive.name, 'sha256': subject.digest(archive),
-                                               'image_id': expected, 'platform': 'linux/amd64'}}
+                                               'image_id': expected, 'platform': 'linux/' + expected_arch}}
         binary = self.root.parent / 'host-bin'
         binary.mkdir(exist_ok=True)
         record = [{'Id': identity or expected, 'Os': 'linux', 'Architecture': architecture}]
@@ -389,7 +394,7 @@ class ArtifactExecutionContracts(unittest.TestCase):
         self.assertEqual(result['conclusion'], 'failure')
 
     def test_loaded_image_identity_and_platform_are_required_before_case_execution(self):
-        for options in ({'architecture': 'arm64'}, {'identity': 'sha256:' + 'c' * 64}):
+        for options in ({'architecture': 'arm64' if self.arch == 'x86_64' else 'amd64'}, {'identity': 'sha256:' + 'c' * 64}):
             with self.subTest(options=options), patch.dict(os.environ, PATH=self.image(**options)):
                 with self.assertRaisesRegex(ValueError, 'public runner reported failure'):
                     self.execute()
