@@ -3,6 +3,7 @@
 import importlib.util
 import copy
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -24,6 +25,49 @@ SPEC.loader.exec_module(task)
 
 
 class VerificationContracts(unittest.TestCase):
+    def test_zot_only_helper_uses_private_source_cache_with_readonly_framework(self):
+        # Execute the real helper and checksum recipe. The small ELF fixture is
+        # downloaded from a local file URL and validated, never executed.
+        for arch, machine in (("x86_64", 62), ("aarch64", 183)):
+            with self.subTest(arch=arch), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                framework, sources = root / "framework", root / "sources"
+                recipes = framework / "ci/integration"
+                recipes.mkdir(parents=True)
+                sources.mkdir()
+                for name in ("build_helpers.py", "artifacts.py", "ensure-zot.sh"):
+                    shutil.copy2(ROOT / "ci/integration" / name, recipes / name)
+                binary, checksums = root / "zot", root / "checksums.sha256.txt"
+                header = bytearray(64)
+                header[:7] = b"\x7fELF\x02\x01\x01"
+                header[18:20] = machine.to_bytes(2, "little")
+                binary.write_bytes(header)
+                asset = "zot-linux-" + {"x86_64": "amd64", "aarch64": "arm64"}[arch] + "-minimal"
+                checksums.write_text(task.artifacts.digest(binary) + "  " + asset + "\n")
+                environment = {name: value for name, value in os.environ.items() if name not in (
+                    "GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY",
+                    "E2E_ZOT_BIN", "ZOT_BIN", "TARBALL_CACHE")}
+                environment.update(PATH="/usr/bin:/bin", ZOT_URL=binary.as_uri(),
+                                   ZOT_SHA256_URL=checksums.as_uri())
+                plan = {"framework_sha": "a" * 40, "test_revisions": {}, "test_overlays": [],
+                        "lanes": {arch: {"selection": {"cases": ["image.flatten.sh"]}}}}
+                evidence = task.Evidence(sources / "verification", {"frozen_sha256": "b" * 64})
+                destination = evidence.directory / "integration-helpers"
+                framework.chmod(0o555)
+                try:
+                    # Source admission has separate fixtures; this regression
+                    # exercises actual child cwd, download and output behavior.
+                    with patch.object(task, "ROOT", framework), patch.object(task.artifacts, "check_plan"):
+                        task.helper_payload(sources, arch, plan, destination, evidence, environment, {})
+                    self.assertEqual((destination / "helpers/zot").read_bytes(), binary.read_bytes())
+                    self.assertEqual((sources / "build/tarball" / asset).read_bytes(), binary.read_bytes())
+                    self.assertFalse((framework / "build").exists())
+                    self.assertEqual(evidence.record["stages"][0]["exit_code"], 0)
+                    metadata = json.loads((destination / "helpers.json").read_text())
+                    self.assertEqual(metadata["helpers"]["zot"]["source_sha"], plan["framework_sha"])
+                finally:
+                    framework.chmod(0o755)
+
     def test_cold_and_warm_scope_are_frozen_before_task_metadata_or_transport(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -356,6 +400,23 @@ restore_or_build() {
 
 
 class AggregateHelperCacheContracts(unittest.TestCase):
+    def test_cache_inventory_authentication_stays_out_of_saved_evidence(self):
+        response = io.BytesIO(b'{"actions_caches": []}')
+        response.status = 200
+        with patch.dict(os.environ, {"GH_TOKEN": "fixture-read-token"}), \
+                patch.object(task.urllib.request, "urlopen", return_value=response) as request:
+            result = task.aggregate_helper_caches("workbench-v2-aarch64-trusted-fixture-")
+        query = request.call_args.args[0]
+        self.assertEqual(query.get_header("Authorization"), "Bearer fixture-read-token")
+        self.assertTrue(query.full_url.startswith(
+            "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/caches?"))
+        self.assertEqual(request.call_args.kwargs, {"timeout": 30})
+        self.assertNotIn("fixture-read-token", json.dumps(result))
+        with patch.dict(os.environ, {}, clear=True), patch.object(task.urllib.request, "urlopen") as request:
+            with self.assertRaisesRegex(ValueError, "host read token"):
+                task.aggregate_helper_caches("fixture")
+            request.assert_not_called()
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -503,6 +564,10 @@ class AggregateHelperCacheContracts(unittest.TestCase):
                 self.assertEqual(job["needs"], "prepare" if phase == "cold" else ["prepare", "aggregate-helper-cold-" + lane])
                 self.assertEqual(job["runs-on"], runner)
                 self.assertEqual(job["env"], {"TARGET_ARCH": arch, "CACHE_PHASE": phase})
+                self.assertEqual(job["permissions"], {"contents": "read", "pull-requests": "read", "actions": "read"})
+                authenticated = [step["name"] for step in job["steps"] if "GH_TOKEN" in step.get("env", {})]
+                self.assertEqual(authenticated, ["Materialize the real aggregate producer's exact helper input layout",
+                                                "Verify actual repository cache, helper identities and owned cleanup"])
                 self.assertIn(name, jobs["validation-results"]["needs"])
                 action = next(step for step in job["steps"] if step.get("uses", "").endswith("/.github/actions/workbench"))
                 for field in ("sources", "outputs", "cache-coverage", "cpus", "memory-gib", "run"):

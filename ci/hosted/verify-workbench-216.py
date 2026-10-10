@@ -326,13 +326,17 @@ def aggregate_helper_prefix(arch):
 
 
 def aggregate_helper_caches(prefix):
-    # Public read-only inventory needs no extra Actions/publisher permission.
+    # Only the trusted host fetch/record steps receive this read-only token.
+    # Anonymous queries share a Hosted runner egress rate limit.
+    token = os.environ.get("GH_TOKEN")
+    require(token, "aggregate helper cache inventory requires its host read token")
     rows, requests = [], []
     for page in range(1, 101):
         query = urllib.parse.urlencode({"ref": "refs/heads/main", "key": prefix, "per_page": 100, "page": page})
         url = "https://api.github.com/repos/" + REPOSITORIES["kuasar-sandbox"] + "/actions/caches?" + query
         request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
-                                                      "X-GitHub-Api-Version": "2022-11-28"})
+                                                      "X-GitHub-Api-Version": "2022-11-28",
+                                                      "Authorization": "Bearer " + token})
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = json.load(response)
             requests.append({"url": url, "status": response.status, "recorded_ns": time.time_ns(), "response": payload})
@@ -1752,12 +1756,12 @@ def helper_payload(sources, arch, plan, destination, evidence, environment, prod
         evidence.run("helper-wheels", [sys.executable, "-B", "-c",
                      "import sys; from pathlib import Path; import build_demo_wheels; "
                      "build_demo_wheels.build(Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]))",
-                     demo, arch, demo / "wheels" / arch], cwd=ROOT, env=environment)
+                     demo, arch, demo / "wheels" / arch], cwd=sources, env=environment)
     evidence.run("helper-build", [sys.executable, "-B", "-c",
                  "import json, os, sys; from pathlib import Path; import build_helpers; "
                  "build_helpers.build(Path(sys.argv[1]), sys.argv[2], Path(sys.argv[3]), "
                  "json.loads(sys.argv[4]), dict(os.environ))",
-                 sources, arch, destination / "helpers", json.dumps(selected, sort_keys=True)], cwd=ROOT, env=environment)
+                 sources, arch, destination / "helpers", json.dumps(selected, sort_keys=True)], cwd=sources, env=environment)
     for relative in artifacts.tree_files(destination):
         path = destination / relative
         path.chmod(0o755 if path.stat().st_mode & 0o111 else 0o644)
