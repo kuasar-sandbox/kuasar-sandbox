@@ -167,29 +167,35 @@ Recovery restores the Daily process; it does not patch or rebuild assets of inco
 
 The SHA fields in controller requests are automatically observed identities, not human version inputs. In CLI examples, `OWNER_REPOSITORY`, `SOURCE_REF` and `PLATFORM_REF` denote the owner repository, source branch and aggregate branch.
 
-Component workflows always load trusted tooling from repository `main`, but require the actual source branch and its exact HEAD SHA as explicit inputs. The following shows parameter shapes only; automatic Daily fills these values:
+Component workflows always load trusted tooling from repository `main`, but require the actual source branch and its exact HEAD SHA as explicit inputs. The examples define matching repositories and branches for automatic identity lookup and dispatch; automatic Daily supplies the same inputs:
 
 ```bash
+OWNER_REPOSITORY=kuasar-sandbox/accelerator
+SOURCE_REF=release/v0.2.x
+PLATFORM_REF=release/v0.5.x
 gh workflow run release.yml \
-  --repo kuasar-sandbox/accelerator --ref main \
+  --repo "$OWNER_REPOSITORY" --ref main \
   -f version=v0.2.2-preview.20260831 \
-  -f source_ref=release/v0.2.x -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
+  -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
   -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)"
 
+OWNER_REPOSITORY=kuasar-sandbox/sandboxer
+SOURCE_REF=release/v0.3.x
+PLATFORM_REF=release/v0.5.x
 gh workflow run release.yml \
-  --repo kuasar-sandbox/sandboxer --ref main \
+  --repo "$OWNER_REPOSITORY" --ref main \
   -f version=v0.3.6-preview.20260831 \
-  -f source_ref=release/v0.3.x -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
+  -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
   -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)" \
   -f accelerator_version=v0.2.2-preview.20260831 \
   -f connector_version=v0.1.9
 ```
 
-Orchestrator receives `accelerator_version`, `connector_version` and `sandboxer_version`; runtime receives only `accelerator_version` and `sandboxer_version`, matching the code embedded in its image; vmlinux has no internal component-version input. Runtime and vmlinux use their own workflows. Preflight requires `source_sha` still to be the HEAD of `source_ref`. Build checks out that SHA, and the final tag points to it. Dependency inputs must name exact, already-complete public Releases, resolved to lightweight tag commit SHAs before credential-free build checkouts. Native and ARM cross builds run in separate x86 jobs. Publication validates and assembles both original archives without rebuilding products.
+Orchestrator receives `accelerator_version`, `connector_version` and `sandboxer_version`; runtime receives only `accelerator_version` and `sandboxer_version`, matching the code embedded in its image; vmlinux has no internal component-version input. Runtime and vmlinux use their own workflows. Preflight requires `source_sha` still to be the HEAD of `source_ref`. Build restores the fixed run artifact admitted from that branch, and the final tag points to its checked identity. Dependency inputs name exact, already-complete public Releases; preflight retrieves their selected tags and freezes the checked source inputs. Each architecture builds in its own native job. Publication validates and assembles both original archives without rebuilding products.
 
-Preview additionally requires that `daily-preview.yaml/version + preview_version` at the platform commit identified by `aggregate_sha` exactly matches the aggregate version, and that `components.<unit>` exactly matches the tag being published. This binding and the Stable-line-closure check run before build and again after acquiring the publication concurrency lock. Every component's release notes record source branch, source SHA and release unit. Preview notes also record the original aggregate-manifest SHA and actual dependency-version bindings. An existing Preview can be reused only when both source and dependency bindings match.
+Preview additionally requires that `daily-preview.yaml/version + preview_version` at the platform commit identified by `aggregate_sha` exactly matches the aggregate version, and that `components.<unit>` exactly matches the tag being published. Preflight freezes this manifest binding; after acquiring the publication concurrency lock, publication verifies the frozen evidence and checks live Stable-line closure without refetching a newer branch manifest. Every component's release notes record source branch, source SHA and release unit. Preview notes also record the original aggregate-manifest SHA and actual dependency-version bindings. An existing Preview can be reused only when both source and dependency bindings match.
 
 Workflow run names include source SHA and the dependency-version tuple. The controller reruns failed runs only for identical input tuples. Changed branch HEADs or dependency selections create a new dispatch rather than consuming the three recovery attempts with obsolete inputs.
 
@@ -210,11 +216,13 @@ make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
 The aggregate workflow also loads trusted tooling from platform `main`, but version selection, system documentation, platform cases and package content come from the exact HEAD of the selected platform branch. Old release scripts on that target branch are not executed as the controller:
 
 ```bash
+PLATFORM_REPOSITORY=kuasar-sandbox/kuasar-sandbox
+SOURCE_REF=release/v0.5.x
 gh workflow run aggregate-release.yml \
-  --repo kuasar-sandbox/kuasar-sandbox --ref main \
+  --repo "$PLATFORM_REPOSITORY" --ref main \
   -f version=release-v0.5.7 \
-  -f source_ref=release/v0.5.x \
-  -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)"
+  -f source_ref="$SOURCE_REF" \
+  -f source_sha="$(gh api "repos/$PLATFORM_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)"
 ```
 
 Before formal publication, commit `release.yaml` on the target branch, publish missing Stable component units, then trigger the aggregate from that branch's latest HEAD. A successful mainline Stable becomes Latest. A maintenance Stable remains a discoverable formal release without displacing mainline Latest. Both Stable and Preview must be directly selected by that HEAD's current manifest. Historical manifests are only for resolving existing Releases and GC; manual dispatch cannot backfill them as new aggregate publications.

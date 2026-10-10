@@ -254,20 +254,26 @@ Release 的 `target_commitish` 是完整且匹配的源码 SHA 时才允许恢�
 控制器请求中的 SHA 字段是自动观察的身份，不是人工版本输入。CLI 示例中的 `OWNER_REPOSITORY`、`SOURCE_REF` 和 `PLATFORM_REF` 分别表示 owner 仓库、源码分支和聚合分支。
 
 组件 workflow 始终从仓库 `main` 加载受信任工具,但必须显式传入实际源码分支和精确
-分支 HEAD SHA。SHA 由控制器或 GitHub API 自动读取，不能手工作为版本填写。以下示例中 `OWNER_REPOSITORY`、`SOURCE_REF` 与 `PLATFORM_REF` 必须分别对应该命令的 owner 仓库、源码分支和聚合分支:
+分支 HEAD SHA。SHA 由控制器或 GitHub API 自动读取，不能手工作为版本填写。以下示例定义匹配的仓库与分支，用于自动身份查询和派发；自动 Daily 提供相同输入：
 
 ```bash
+OWNER_REPOSITORY=kuasar-sandbox/accelerator
+SOURCE_REF=release/v0.2.x
+PLATFORM_REF=release/v0.5.x
 gh workflow run release.yml \
-  --repo kuasar-sandbox/accelerator --ref main \
+  --repo "$OWNER_REPOSITORY" --ref main \
   -f version=v0.2.2-preview.20260831 \
-  -f source_ref=release/v0.2.x -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
+  -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
   -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)"
 
+OWNER_REPOSITORY=kuasar-sandbox/sandboxer
+SOURCE_REF=release/v0.3.x
+PLATFORM_REF=release/v0.5.x
 gh workflow run release.yml \
-  --repo kuasar-sandbox/sandboxer --ref main \
+  --repo "$OWNER_REPOSITORY" --ref main \
   -f version=v0.3.6-preview.20260831 \
-  -f source_ref=release/v0.3.x -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
+  -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
   -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)" \
   -f accelerator_version=v0.2.2-preview.20260831 \
@@ -278,11 +284,10 @@ orchestrator 接收 `accelerator_version`、`connector_version` 和 `sandboxer_v
 runtime 只接收与镜像实际载荷一致的 `accelerator_version` 和 `sandboxer_version`;
 vmlinux 不接收内部组件版本输入。runtime 与 vmlinux 使用各自工作流。
 预检要求 `source_sha` 仍是 `source_ref` 的 HEAD,构建恢复预检按分支获取并验证的 run artifact,最终 Tag 也指向该
-SHA。依赖参数必须对应已经完整发布的精确 Release。
+SHA。依赖参数必须对应已经完整发布的精确 Release；预检按所选 Tag 获取并固定校验后的源码输入。每种架构在独立的原生 job 中构建。
 Preview 还要求 `aggregate_sha` 所指平台提交中的
 `daily-preview.yaml/version + preview_version` 精确等于聚合版本,且
-`components.<unit>` 精确等于待发布 Tag。该绑定和 Stable 封线检查在构建前及取得
-publish concurrency lock 后各执行一次。所有组件 Release notes 都记录源码分支、源码
+`components.<unit>` 精确等于待发布 Tag。预检固定这份清单绑定；取得 publish concurrency lock 后，发布核验固定证据并检查实时 Stable 封线状态，不重新获取更新后的分支清单。所有组件 Release notes 都记录源码分支、源码
 SHA 和发布单元。Preview 还记录原始聚合清单 SHA 和实际依赖版本绑定;已有 Preview 只有
 在源码与依赖绑定都一致时才可复用。
 
@@ -307,11 +312,13 @@ make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
 内容来自所选平台分支的精确 HEAD。目标分支中的旧发布脚本不会作为控制器执行:
 
 ```bash
+PLATFORM_REPOSITORY=kuasar-sandbox/kuasar-sandbox
+SOURCE_REF=release/v0.5.x
 gh workflow run aggregate-release.yml \
-  --repo kuasar-sandbox/kuasar-sandbox --ref main \
+  --repo "$PLATFORM_REPOSITORY" --ref main \
   -f version=release-v0.5.7 \
-  -f source_ref=release/v0.5.x \
-  -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)"
+  -f source_ref="$SOURCE_REF" \
+  -f source_sha="$(gh api "repos/$PLATFORM_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)"
 ```
 
 正式发布前先在目标分支提交 `release.yaml`,发布所缺的 Stable 组件单元,再从目标分支最新
