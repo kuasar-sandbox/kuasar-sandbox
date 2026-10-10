@@ -157,7 +157,8 @@ printf 'Pinned aggregate Release: %s\n' "$RELEASE_VERSION"
 
 所选文件必须全部存在，且大小和摘要与记录一致；未下载的另一架构文件不影响
 本机架构下载，但校验清单仍须精确描述该发布版资产。先验证成员类型、路径、权限
-及跨包冲突，再解包到新的 staging 目录。此步骤有意不解包 workbench 归档。
+及跨包冲突，再解包到新的 staging 目录。标准相对根目录（`.` 或 `./`）必须是
+不含 set-ID 位的目录；拒绝空名称或绝对根目录名称。此步骤有意不解包 workbench 归档。
 
 ```bash
 set -euo pipefail
@@ -197,11 +198,13 @@ for archive in archives:
     with tarfile.open(root / archive, "r:gz") as stream:
         for member in stream.getmembers():
             raw = member.name
+            assert raw and not raw.startswith("/"), (archive, raw)
             while raw.startswith("./"):
                 raw = raw[2:]
             raw = raw.rstrip("/")
-            if not raw:
+            if raw in ("", "."):
                 assert member.isdir(), (archive, member.name)
+                assert not (member.mode & 0o6000), (archive, member.name, oct(member.mode))
                 continue
             assert "\\" not in raw and not any(ord(c) < 32 for c in raw), (archive, raw)
             path = pathlib.PurePosixPath(raw)

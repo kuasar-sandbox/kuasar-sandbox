@@ -211,11 +211,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     run_root.mkdir(parents=True, exist_ok=True)
     out_root.mkdir(parents=True, exist_ok=True)
     env_base = os.environ.copy()
-    for variable in (*workspace.HELPERS.values(), *workspace.IMAGE_VARIABLES.values(), "E2E_IMAGE", "IMAGE", "E2E_CASES_DIR", "E2E_LIB", "BASH_ENV", "KUASAR_EXPECTED_RUNTIME_INIT_SHA256"):
+    for variable in (*workspace.HELPERS.values(), *workspace.IMAGE_VARIABLES.values(), "E2E_IMAGE", "IMAGE", "E2E_CASES_DIR", "E2E_LIB", "BASH_ENV", "KUASAR_EXPECTED_RUNTIME_INIT_SHA256",
+                     "E2E_TEMPLATE_CACHE_DIR", "E2E_TEMPLATE_CACHE_PROVENANCE"):
         env_base.pop(variable, None)
     env_base["PYTHONDONTWRITEBYTECODE"] = "1"
     report = {"arch": arch, "cases": [case.name for case in cases], "timings": [],
               "provenance_sha256": workspace.digest(work / "provenance.json"), "conclusion": "failure"}
+    # A fresh directory per invocation prevents ambient or previous-run reuse,
+    # even when the caller supplies a persistent run_root. It is never inside
+    # immutable inputs or a case's owned work directory.
+    cache_enabled = not getattr(args, "no_template_cache", False)
+    report["template_cache"] = {"enabled": cache_enabled}
+    if cache_enabled:
+        cache = Path(tempfile.mkdtemp(prefix=".template-cache-", dir=run_root))
+        env_base.update(E2E_TEMPLATE_CACHE_DIR=str(cache),
+                        E2E_TEMPLATE_CACHE_PROVENANCE=report["provenance_sha256"])
+        report["template_cache"]["directory"] = str(cache)
     failed = []
     try:
         workspace.load_images(work, provenance, env_base)
@@ -279,6 +290,8 @@ def main() -> int:
     p.add_argument("--run-root", help="case state root; defaults to a fresh directory beside workdir")
     p.add_argument("--out-root", help="case output root; defaults to <run-root>/out")
     p.add_argument("--result", help="write the case result JSON outside the prepared workspace")
+    p.add_argument("--no-template-cache", action="store_true",
+                   help="disable run-local immutable template preparation reuse")
     p.set_defaults(func=cmd_run)
 
     return args.func(args) if (args := parser.parse_args()) else 2

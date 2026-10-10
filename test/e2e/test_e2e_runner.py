@@ -140,6 +140,74 @@ class SelectionTests(unittest.TestCase):
             self.assertFalse(host_root.exists())
 
 
+class RunTemplateCacheTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='run-template-cache-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.work = self.root / 'prepared'
+        (self.work / 'bin').mkdir(parents=True)
+        self.cases = self.work / 'test/e2e/cases'
+        self.cases.mkdir(parents=True)
+        self.args = dict(all=True, suite=[], include=[], exclude=[], workdir=str(self.work),
+                         arch=platform.machine(), run_root=str(self.root/'run'),
+                         out_root=None, result=None, no_template_cache=False)
+
+    def run_cases(self, bodies, **options):
+        for name, body in bodies.items():
+            (self.cases/name).write_text('set -eu\n'+body)
+        runner.workspace.seal(self.work, {'arch':platform.machine(), 'prepared_cases':list(bodies)})
+        args = type('Args', (), self.args | options)()
+        code = runner.cmd_run(args)
+        return code, json.loads((Path(args.run_root)/'out/result.json').read_text())
+
+    def test_shared_only_within_one_run_and_outside_case_cleanup(self):
+        bodies = {
+            'basic.a.sh': 'printf "%s" "$E2E_TEMPLATE_CACHE_PROVENANCE" > "$E2E_TEMPLATE_CACHE_DIR/marker"\n'
+                          'printf owned > "$WORK/private"\nrm "$WORK/private"\nrmdir "$WORK"\n',
+            'basic.b.sh': '[ "$(cat "$E2E_TEMPLATE_CACHE_DIR/marker")" = "$E2E_TEMPLATE_CACHE_PROVENANCE" ]\n'
+                          'printf "%s" "$E2E_TEMPLATE_CACHE_DIR" > "$OUT/cache"\n',
+        }
+        foreign=self.root/'foreign'
+        foreign.mkdir()
+        (foreign/'marker').write_text('unrelated')
+        with patch.dict(os.environ, {'E2E_TEMPLATE_CACHE_DIR':str(foreign),'E2E_TEMPLATE_CACHE_PROVENANCE':'forged'}):
+            code,report=self.run_cases(bodies)
+        self.assertEqual(code,0)
+        cache=Path(report['template_cache']['directory'])
+        self.assertTrue(cache.is_relative_to(self.root/'run'))
+        self.assertFalse(cache.is_relative_to(self.work))
+        self.assertEqual(cache.stat().st_mode & 0o777,0o700)
+        self.assertEqual((cache/'marker').read_text(),runner.workspace.digest(self.work/'provenance.json'))
+        self.assertEqual((foreign/'marker').read_text(),'unrelated')
+
+    def test_second_invocation_never_reuses_a_previous_cache(self):
+        (self.cases/'basic.a.sh').write_text('set -eu\n[ ! -e "$E2E_TEMPLATE_CACHE_DIR/marker" ]\ntouch "$E2E_TEMPLATE_CACHE_DIR/marker"\n')
+        (self.cases/'basic.b.sh').write_text((self.cases/'basic.a.sh').read_text())
+        runner.workspace.seal(self.work, {'arch':platform.machine(),'prepared_cases':['basic.a.sh','basic.b.sh']})
+        caches=[]
+        for name in ('basic.a.sh','basic.b.sh'):
+            args=type('Args',(),self.args | {'all':False,'include':[name]})()
+            self.assertEqual(runner.cmd_run(args),0)
+            report=json.loads((self.root/'run/out/result.json').read_text())
+            caches.append(report['template_cache']['directory'])
+        self.assertNotEqual(*caches)
+
+    def test_disabled_clears_ambient_inputs_and_allocates_no_cache(self):
+        with patch.dict(os.environ, {'E2E_TEMPLATE_CACHE_DIR':'/foreign','E2E_TEMPLATE_CACHE_PROVENANCE':'forged'}):
+            code,report=self.run_cases({'basic.a.sh':'[ -z "${E2E_TEMPLATE_CACHE_DIR:-}" ]\n[ -z "${E2E_TEMPLATE_CACHE_PROVENANCE:-}" ]\n'}, no_template_cache=True)
+        self.assertEqual(code,0)
+        self.assertEqual(report['template_cache'],{'enabled':False})
+        self.assertEqual(list((self.root/'run').glob('.template-cache-*')),[])
+
+    def test_case_failure_is_retained_with_its_cache_identity(self):
+        code,report=self.run_cases({'basic.a.sh':'exit 23\n'})
+        self.assertEqual(code,1)
+        self.assertEqual(report['conclusion'],'failure')
+        self.assertEqual(report['timings'][0]['exit_code'],23)
+        self.assertTrue(Path(report['template_cache']['directory']).is_dir())
+
+
 class PreparedRunnerTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix='e2e-contract-')

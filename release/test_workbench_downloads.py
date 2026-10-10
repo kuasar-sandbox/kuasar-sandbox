@@ -81,7 +81,8 @@ class DownloadTests(unittest.TestCase):
 
 
 class DownloadBytesTests(unittest.TestCase):
-    def validate(self, *, missing=False, corrupt=False, entry='bin/tool', symlink=False, collision=False):
+    def validate(self, *, missing=False, corrupt=False, entry='bin/tool', symlink=False, collision=False,
+                 root_entry=None, root_type=tarfile.DIRTYPE, root_mode=0o755):
         text = (ROOT / 'docs/download.md').read_text()
         source = text.split("<<'PY'\n")[2].split('\nPY\n', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
@@ -91,6 +92,13 @@ class DownloadBytesTests(unittest.TestCase):
                                          ('product.tar.gz', 'product', 'guide/README.md' if collision else entry)]:
                 target = root / filename
                 with tarfile.open(target, 'w:gz') as archive:
+                    if root_entry is not None:
+                        root_info = tarfile.TarInfo(root_entry)
+                        root_info.type = root_type
+                        root_info.mode = root_mode
+                        if root_type in (tarfile.SYMTYPE, tarfile.LNKTYPE):
+                            root_info.linkname = '/outside'
+                        archive.addfile(root_info)
                     info = tarfile.TarInfo(path)
                     info.mode = 0o644
                     if symlink and role == 'product':
@@ -122,6 +130,22 @@ class DownloadBytesTests(unittest.TestCase):
 
     def test_native_subset_accepts_missing_unselected_assets(self):
         self.assertEqual(self.validate(), 0)
+
+    def test_standard_archive_root_directories_are_accepted(self):
+        for root in ('.', './', '././'):
+            with self.subTest(root=root):
+                self.assertEqual(self.validate(root_entry=root), 0)
+
+    def test_root_exception_rejects_unsafe_names_types_and_modes(self):
+        for root in ('', '/', '//', '../'):
+            with self.subTest(root=root):
+                self.assertNotEqual(self.validate(root_entry=root), 0)
+        for kind in (tarfile.REGTYPE, tarfile.SYMTYPE, tarfile.LNKTYPE, tarfile.FIFOTYPE):
+            with self.subTest(kind=kind):
+                self.assertNotEqual(self.validate(root_entry='.', root_type=kind), 0)
+        for mode in (0o4755, 0o2755):
+            with self.subTest(mode=mode):
+                self.assertNotEqual(self.validate(root_entry='.', root_mode=mode), 0)
 
     def test_missing_selected_asset_is_not_hidden(self):
         self.assertNotEqual(self.validate(missing=True), 0)
