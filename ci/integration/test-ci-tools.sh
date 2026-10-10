@@ -784,13 +784,13 @@ cloud_key_plain="$(env PATH="$TMP/bin:$PATH" CARGO_HOME="$cargo_home" \
     KUASAR_WORKSPACE_ROOT="$cloud_workspace" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key cloud-hypervisor | cut -f2)"
 cloud_key_encoded="$(env PATH="$TMP/bin:$PATH" CARGO_HOME="$cargo_home" \
-    CARGO_ENCODED_RUSTFLAGS=-Ctarget-cpu=x86-64-v3 \
+    CARGO_ENCODED_RUSTFLAGS=-Cdebuginfo=2 \
     KUASAR_WORKSPACE_ROOT="$cloud_workspace" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key cloud-hypervisor | cut -f2)"
 [ "$cloud_key_plain" != "$cloud_key_encoded" ] \
     || fail "CARGO_ENCODED_RUSTFLAGS did not invalidate the Cloud Hypervisor key"
 cloud_key_target_flags="$(env PATH="$TMP/bin:$PATH" CARGO_HOME="$cargo_home" \
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Ctarget-cpu=x86-64-v3 \
+    "CARGO_TARGET_${TARGET_ARCH^^}_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Cdebuginfo=2" \
     KUASAR_WORKSPACE_ROOT="$cloud_workspace" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key cloud-hypervisor | cut -f2)"
 [ "$cloud_key_plain" != "$cloud_key_target_flags" ] \
