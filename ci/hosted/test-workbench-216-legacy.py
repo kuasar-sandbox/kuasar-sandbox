@@ -1062,6 +1062,43 @@ class LegacyPackagedInputs(validation.PackagedInputContracts):
         self.assertNotIn("workbench", context["test_helpers"])
         self.assertEqual(context["test_helpers"]["legacy_control"], context["legacy_control"])
 
+    def test_checked_legacy_helpers_recover_executable_mode_after_diagnostic_transport(self):
+        copier = task.module("legacy_mode_copier", task.ROOT / "ci/hosted/workbench.py").copy_evidence
+        workspace = task.module("legacy_mode_check", task.ROOT / "test/e2e/lib/workspace.py")
+        original = self.helpers
+        transported = self.root / "transported-helpers"
+        copier(original, transported)
+        before = task.artifacts.tree_files(transported)
+        # The diagnostic copier and Actions file artifacts retain bytes but
+        # lose executable modes. Reproduce that actual boundary before compose.
+        for path in transported.rglob("*"):
+            if path.is_file():
+                path.chmod(0o644)
+        self.helpers = transported
+        names = task.artifacts.planned_helpers(self.plan["lanes"][self.arch]["selection"])
+        for name in names:
+            with self.assertRaisesRegex(ValueError, "non-executable helper"):
+                workspace.check_helper(transported / "integration-helpers/helpers" / name, self.arch)
+        delta = self.delta()
+        for name in names:
+            path = delta / "helpers" / name
+            workspace.check_helper(path, self.arch)
+            self.assertEqual(path.stat().st_mode & 0o7777, 0o755)
+            self.assertEqual(task.artifacts.digest(path), before["integration-helpers/helpers/" + name])
+        self.assertEqual(task.artifacts.tree_files(transported), before)
+        self.assertEqual(task.artifacts.tree_files(original), before)
+        for name in names:
+            self.assertEqual((transported / "integration-helpers/helpers" / name).stat().st_mode & 0o7777, 0o644)
+            self.assertEqual((original / "integration-helpers/helpers" / name).stat().st_mode & 0o7777, 0o755)
+
+    def test_legacy_helper_transport_rejects_unsafe_permissions(self):
+        name = next(iter(task.artifacts.planned_helpers(self.plan["lanes"][self.arch]["selection"])))
+        path = self.helpers / "integration-helpers/helpers" / name
+        for mode in (0o777, 0o4755):
+            path.chmod(mode)
+            with self.assertRaisesRegex(ValueError, "unsafe legacy helper permissions"):
+                self.delta("unsafe-mode-" + str(mode))
+
     def test_changed_or_workbench_helpers_cannot_replace_legacy_helpers(self):
         path = self.helpers / "integration-helpers/helpers.json"
         original = json.loads(path.read_text())
