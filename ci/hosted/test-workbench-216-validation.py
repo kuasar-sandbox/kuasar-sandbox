@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
@@ -344,11 +345,170 @@ restore_or_build() {
                             self.assertEqual(step["name"], "Retain native reader receipts and diagnostics")
                             self.assertTrue(all(path.startswith("legacy-readers-output/") and "/validated" not in path
                                                 for path in step["with"]["path"].splitlines()))
+                        elif job in [jobs["aggregate-helper-" + phase + "-" + lane]
+                                     for phase in ("cold", "warm") for lane in ("x86", "arm")]:
+                            self.assertEqual(step["with"]["path"].splitlines(), ["helper-cache-evidence", "helper-inputs.json"])
                         else:
                             self.assertIn(job, [jobs["legacy-x86"], jobs["legacy-arm"]])
                             self.assertEqual(step["name"], "Retain host receipts and diagnostics copied after writers stop")
                             self.assertTrue(all(path.startswith("legacy-output/") and "/validated" not in path
                                                 for path in step["with"]["path"].splitlines()))
+
+
+class AggregateHelperCacheContracts(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.record = {"admission": None, "framework_sha": "a" * 40, "run_id": "123",
+                       "test_revisions": {owner: {"repository": repository, "sha": "b" * 40}
+                                          for owner, repository in task.REPOSITORIES.items()}}
+        self.expected = task.aggregate_helper_inputs(self.record)
+        self.sources = self.root / "helper-work"
+        self.inputs = self.root / "helper-inputs.json"
+        task.write(self.inputs, {**self.expected, "cache_before": {"requests": [], "entries": []}})
+        self.frozen = self.root / "plan/frozen.json"
+        self.frozen.parent.mkdir()
+        self.selection = {"framework_sha": "a" * 40, "architectures": {"x86_64": {"image_id": "sha256:" + "1" * 64}}}
+        task.write(self.frozen.with_name("workbench.json"), self.selection)
+        cases = ["orchestrator.fixture.sh", "sandbox.cgroup.sh"]
+        task.write(self.frozen.with_name("integration-plan.json"), {"case_files": {"fixture": cases}})
+        self.required = task.artifacts.planned_helpers({"cases": cases})
+        helpers = self.sources / ".ci/e2e-helpers/x86_64"
+        helpers.mkdir(parents=True)
+        records = {}
+        for name, owner in self.required.items():
+            header = bytearray(64)
+            header[:7] = b"\x7fELF\x02\x01\x01"
+            header[18:20] = (62).to_bytes(2, "little")
+            path = helpers / name
+            path.write_bytes(bytes(header) + name.encode())
+            path.chmod(0o755)
+            records[name] = {"sha256": task.artifacts.digest(path), "source_sha": "a" * 40 if owner == "framework"
+                             else self.expected["test_revisions"][owner]}
+        self.helpers = helpers
+        task.write(helpers / "helpers.json", {"arch": "x86_64", "framework_sha": "a" * 40,
+                                             "test_revisions": self.expected["test_revisions"], "helpers": records})
+        wheels = self.sources / ".ci/e2e-wheels/x86_64"
+        wheels.mkdir(parents=True)
+        (wheels / "fixture.whl").write_bytes(b"locked binary wheel fixture")
+        self.cache_key = task.aggregate_helper_prefix("x86_64") + "c" * 64
+        self.cache = {"id": 17, "key": self.cache_key, "ref": "refs/heads/main", "size_in_bytes": 99,
+                      "created_at": task.datetime.now(task.timezone.utc).isoformat()}
+        self.receipt = {"conclusion": "success", "cleanup_exit_code": 0, "delete_output_exit_code": 0,
+                        "owner_uid": os.getuid(), "mode": "build", "arch": "x86_64", "cpus": 2, "memory_gib": 8,
+                        "framework_sha": "a" * 40, "selection": self.selection, "image": self.selection["architectures"]["x86_64"],
+                        "sources": str(self.sources), "started_ns": time.time_ns() - 1_000_000_000,
+                        "commands": [{"argv": ["go", "clean", "-testcache"], "exit_code": 0},
+                                     {"argv": ["bash", "-euo", "pipefail", "-c", "exact helper producer"], "exit_code": 0}],
+                        "cache": {"WB_CACHE": "true", "WB_CACHE_COVERAGE": "aggregate-helpers", "WB_CACHE_KEY": self.cache_key,
+                                  "WB_CACHE_HIT": "", "WB_MATCHED_KEY": ""}}
+        self.scope = {"source_root": str(self.sources), "repository": task.REPOSITORIES["kuasar-sandbox"],
+                      "ref": "refs/heads/main", "event": "workflow_dispatch", "run_id": "123",
+                      "scope": "trusted", "namespace": "trusted", "event_inputs": {},
+                      "transport": {"test-revisions.json": {owner: {"repository": task.REPOSITORIES[owner], "sha": revision}
+                                    for owner, revision in self.expected["test_revisions"].items()}},
+                      "sources": [{"path": owner, "kind": "git", "clean": True, "on_main": True, **record}
+                                  for owner, record in self.expected["sources"].items()]}
+        self.temp = self.root / "runner-temp"
+        task.write(self.temp / "workbench-evidence-fixture/instance.json", {"status": "cleaned", "owner_uid": os.getuid()})
+
+    def observe(self, phase="cold", name="result", cold=None):
+        task.write(self.temp / "workbench-evidence-fixture/receipt.json", self.receipt)
+        task.write(self.temp / "workbench-cache-scope-123-fixture.json", self.scope)
+        args = SimpleNamespace(frozen=self.frozen, sources=self.sources, inputs=self.inputs, arch="x86_64",
+                               phase=phase, cold=cold, output=self.root / name)
+        with patch.object(task, "frozen", return_value=self.record), \
+                patch.object(task.platform, "machine", return_value="x86_64"), \
+                patch.object(task, "aggregate_helper_caches", return_value={"requests": [], "entries": [self.cache]}), \
+                patch.object(task.build_demo_wheels.wheels, "validate") as validate_wheels, \
+                patch.dict(os.environ, {"RUNNER_TEMP": str(self.temp), "GITHUB_RUN_ID": "123", "GITHUB_JOB": "fixture"}):
+            task.aggregate_helper_record(args)
+            validate_wheels.assert_called_once()
+        return json.loads((args.output / "result.json").read_text())
+
+    def test_manifest_pins_are_not_full_product_pins_and_source_layout_matches_release(self):
+        self.assertTrue(self.expected["pin_differences"])
+        self.assertEqual(self.expected["sources"]["platform"]["sha"], self.record["framework_sha"])
+        sources, destination = self.root / "fresh", self.root / "fresh-inputs.json"
+        calls = []
+        def checkout(repository, revision, path):
+            (path / ".git").mkdir(parents=True)
+            calls.append((repository, revision, path.name))
+        original = task.module
+        def module(name, path):
+            return SimpleNamespace(checkout=checkout) if name == "task216_aggregate_inputs" else original(name, path)
+        with patch.object(task, "frozen", return_value=self.record), patch.object(task, "module", side_effect=module), \
+                patch.object(task, "aggregate_helper_caches", return_value={"requests": [], "entries": []}):
+            task.aggregate_helper_fetch(SimpleNamespace(frozen=self.frozen, sources=sources, arch="x86_64", output=destination))
+        self.assertEqual(set(path.name for path in sources.iterdir()), {*self.expected["sources"], ".ci"})
+        self.assertEqual([path.name for path in (sources / ".ci").iterdir()], ["test-revisions.json"])
+        self.assertEqual(json.loads((sources / ".ci/test-revisions.json").read_text()), self.expected["test_revisions"])
+        self.assertEqual(calls, [(row["repository"], row["sha"], owner) for owner, row in sorted(self.expected["sources"].items())])
+        with self.assertRaisesRegex(ValueError, "main-only"):
+            task.aggregate_helper_inputs({**self.record, "admission": {"primary": "candidate"}})
+
+    def test_new_save_observation_and_fresh_job_exact_restore_keep_same_materials(self):
+        cold = self.observe(name="cold")
+        self.assertEqual(cold["restore_observation"], "miss before new save")
+        self.assertIn("pending", cold["save_log_audit"])
+        self.receipt["cache"].update(WB_CACHE_HIT="true", WB_MATCHED_KEY=self.cache_key)
+        warm = self.observe("warm", "warm", self.root / "cold")
+        self.assertEqual(cold["outputs"], warm["outputs"])
+        self.assertEqual(warm["cache_entry"]["id"], cold["cache_entry"]["id"])
+
+    def test_existing_cache_is_not_relabelled_a_new_save(self):
+        self.receipt["cache"].update(WB_CACHE_HIT="true", WB_MATCHED_KEY=self.cache_key)
+        with self.assertRaisesRegex(ValueError, "not a new save"):
+            self.observe()
+        result = json.loads((self.root / "result/result.json").read_text())
+        self.assertEqual(result["conclusion"], "failure")
+        self.assertEqual(result["cache_entry"]["id"], 17)
+
+    def test_candidate_scope_wrong_key_and_failed_cleanup_are_rejected(self):
+        receipt, scope = copy.deepcopy(self.receipt), copy.deepcopy(self.scope)
+        for name, change, message in (
+                ("candidate", lambda: self.scope.update(scope="candidate", namespace="candidate-" + "c" * 64), "admitted main"),
+                ("source", lambda: self.scope["sources"][0].update(on_main=False), "clean main"),
+                ("key", lambda: self.receipt["cache"].update(WB_CACHE_KEY=self.cache_key.replace("trusted", "candidate")), "real aggregate"),
+                ("cleanup", lambda: self.receipt.update(delete_output_exit_code=1), "cleanup failed")):
+            with self.subTest(name=name):
+                self.receipt, self.scope = copy.deepcopy(receipt), copy.deepcopy(scope)
+                change()
+                with self.assertRaisesRegex(ValueError, message):
+                    self.observe(name=name)
+
+    def test_cache_restore_cannot_hide_changed_helper_bytes_or_wrong_warm_key(self):
+        self.observe(name="cold")
+        self.receipt["cache"].update(WB_CACHE_HIT="true", WB_MATCHED_KEY=self.cache_key)
+        path = self.helpers / "zot"
+        path.write_bytes(path.read_bytes() + b"corruption")
+        with self.assertRaisesRegex(ValueError, "material identity"):
+            self.observe("warm", "corrupt", self.root / "cold")
+        path.write_bytes(path.read_bytes().removesuffix(b"corruption"))
+        self.receipt["cache"]["WB_MATCHED_KEY"] = self.cache_key[:-1] + "d"
+        with self.assertRaisesRegex(ValueError, "exact saved cache"):
+            self.observe("warm", "wrong-key", self.root / "cold")
+
+    def test_jobs_reuse_original_producer_and_only_same_architecture_dependency(self):
+        workflow = yaml.safe_load((ROOT / ".github/workflows/workbench-216-validation.yml").read_text())
+        release = yaml.safe_load((ROOT / ".github/workflows/aggregate-release.yml").read_text())
+        producer = next(step for step in release["jobs"]["helper-build"]["steps"]
+                        if step.get("uses", "").endswith("/.github/actions/workbench"))
+        jobs = workflow["jobs"]
+        for lane, arch, runner in (("x86", "x86_64", "ubuntu-24.04"), ("arm", "aarch64", "ubuntu-24.04-arm")):
+            for phase in ("cold", "warm"):
+                name = "aggregate-helper-" + phase + "-" + lane
+                job = jobs[name]
+                self.assertEqual(job["needs"], "prepare" if phase == "cold" else ["prepare", "aggregate-helper-cold-" + lane])
+                self.assertEqual(job["runs-on"], runner)
+                self.assertEqual(job["env"], {"TARGET_ARCH": arch, "CACHE_PHASE": phase})
+                self.assertIn(name, jobs["validation-results"]["needs"])
+                action = next(step for step in job["steps"] if step.get("uses", "").endswith("/.github/actions/workbench"))
+                for field in ("sources", "outputs", "cache-coverage", "cpus", "memory-gib", "run"):
+                    self.assertEqual(action["with"][field], producer["with"][field])
+                self.assertNotIn("env", action)
+                self.assertNotIn("cache", action["with"])
 
 
 class FrozenSourceGateContracts(unittest.TestCase):

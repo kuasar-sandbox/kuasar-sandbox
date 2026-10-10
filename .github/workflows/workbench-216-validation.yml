@@ -649,6 +649,101 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  aggregate-helper-cold-x86:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      TARGET_ARCH: x86_64
+      CACHE_PHASE: cold
+    steps: &aggregate_helper_cache_steps
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: framework
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: workbench-216-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: plan
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: env.CACHE_PHASE == 'warm'
+        with:
+          name: workbench-216-aggregate-helper-cold-${{ env.TARGET_ARCH }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: cold-helper-cache
+      - name: Materialize the real aggregate producer's exact helper input layout
+        run: |
+          python3 -B framework/ci/hosted/verify-workbench-216.py aggregate-helper-fetch \
+            --frozen plan/frozen.json --sources helper-work --arch "$TARGET_ARCH" --output helper-inputs.json
+      - name: Build the real aggregate helper and locked wheel packages
+        id: helper
+        uses: ./framework/.github/actions/workbench
+        with:
+          selection: plan/workbench.json
+          sources: helper-work
+          cache-coverage: aggregate-helpers
+          outputs: |
+            .ci/e2e-helpers
+            .ci/e2e-wheels
+          arch: ${{ env.TARGET_ARCH }}
+          cpus: '2'
+          memory-gib: '8'
+          run: |
+            python3 -B /inputs/release/release/build-e2e-helpers.py \
+              --sources /src --test-revisions /src/.ci/test-revisions.json --arch "$TARGET_ARCH" \
+              --output /src/.ci/e2e-helpers --wheels-output /src/.ci/e2e-wheels --platform-source /src/platform
+      - name: Verify actual repository cache, helper identities and owned cleanup
+        if: always()
+        run: |
+          cold=()
+          if [ "$CACHE_PHASE" = warm ]; then cold=(--cold cold-helper-cache/helper-cache-evidence); fi
+          python3 -B framework/ci/hosted/verify-workbench-216.py aggregate-helper-record \
+            --frozen plan/frozen.json --sources helper-work --inputs helper-inputs.json \
+            --arch "$TARGET_ARCH" --phase "$CACHE_PHASE" "${cold[@]}" --output helper-cache-evidence
+      # The shared action retains the original build/cache/cleanup receipt. This
+      # artifact contains host-side checks only, including failure evidence.
+      # Final acceptance also audits the original Actions save-step log.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: workbench-216-aggregate-helper-${{ env.CACHE_PHASE }}-${{ env.TARGET_ARCH }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            helper-cache-evidence
+            helper-inputs.json
+          if-no-files-found: error
+          retention-days: 7
+
+  aggregate-helper-cold-arm:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: prepare
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      TARGET_ARCH: aarch64
+      CACHE_PHASE: cold
+    steps: *aggregate_helper_cache_steps
+
+  aggregate-helper-warm-x86:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: [prepare, aggregate-helper-cold-x86]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      TARGET_ARCH: x86_64
+      CACHE_PHASE: warm
+    steps: *aggregate_helper_cache_steps
+
+  aggregate-helper-warm-arm:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    needs: [prepare, aggregate-helper-cold-arm]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    env:
+      TARGET_ARCH: aarch64
+      CACHE_PHASE: warm
+    steps: *aggregate_helper_cache_steps
+
   helpers-x86:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
     needs: prepare
@@ -1250,7 +1345,7 @@ jobs:
 
   validation-results:
     if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
-    needs: [prepare, source-checks, legacy-source-control, cold-x86, cold-arm, warm-x86, warm-arm, helpers-x86, helpers-arm, prepare-integration-x86, prepare-integration-arm, e2e-x86, e2e-arm, performance-x86, legacy-x86, legacy-arm, legacy-readers-arm, prepare-legacy-x86, prepare-legacy-arm, e2e-legacy-x86, e2e-legacy-arm, performance-legacy-x86]
+    needs: [prepare, source-checks, legacy-source-control, cold-x86, cold-arm, warm-x86, warm-arm, aggregate-helper-cold-x86, aggregate-helper-cold-arm, aggregate-helper-warm-x86, aggregate-helper-warm-arm, helpers-x86, helpers-arm, prepare-integration-x86, prepare-integration-arm, e2e-x86, e2e-arm, performance-x86, legacy-x86, legacy-arm, legacy-readers-arm, prepare-legacy-x86, prepare-legacy-arm, e2e-legacy-x86, e2e-legacy-arm, performance-legacy-x86]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -1373,6 +1468,10 @@ jobs:
             --plan plan/integration-plan.json --results results > validation.json
           python3 -B framework/ci/integration/artifacts.py results \
             --plan plan/integration-plan.json --results legacy-results > legacy-validation.json
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: workbench-216-aggregate-helper-*-${{ github.run_id }}-${{ github.run_attempt }}
+          path: aggregate-helper-cache
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: workbench-216-integration-validation-${{ github.run_id }}-${{ github.run_attempt }}
@@ -1386,5 +1485,6 @@ jobs:
             source-validation.json
             legacy-source
             legacy-source-validation.json
+            aggregate-helper-cache
           if-no-files-found: error
           retention-days: 7

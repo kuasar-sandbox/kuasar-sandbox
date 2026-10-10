@@ -21,6 +21,8 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.parse
+import urllib.request
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "ci/integration"))
@@ -298,6 +300,166 @@ def fetch(args):
                         "--sources", args.sources, "--receipt", receipt], check=True)
     for name in ("frozen.json", "workbench.json", "integration-plan.json"):
         shutil.copy2(args.frozen.with_name(name), args.sources / name)
+
+
+def aggregate_helper_inputs(record):
+    # The release helper producer consumes the committed aggregate test pins,
+    # independently of the full migration experiment's current product pins.
+    require(record["admission"] is None, "trusted helper cache requires a main-only task dispatch")
+    selection = module("task216_helper_selection", ROOT / "release/selection.py")
+    relative = "releases/daily-preview.yaml"
+    text = (ROOT / relative).read_text()
+    pins = selection.test_revisions(selection.read_simple_yaml(text, relative), relative)
+    sources = {owner: {"repository": REPOSITORIES[owner], "sha": revision} for owner, revision in pins.items()}
+    sources["platform"] = {"repository": REPOSITORIES["kuasar-sandbox"], "sha": record["framework_sha"]}
+    return {"framework_sha": record["framework_sha"], "run_id": record["run_id"], "sources": sources,
+            "test_revisions": pins, "manifest": relative, "manifest_sha256": artifacts.digest(ROOT / relative),
+            "full_task_test_revisions": record["test_revisions"],
+            "pin_differences": {owner: {"aggregate": revision, "full_task": record["test_revisions"][owner]["sha"]}
+                                for owner, revision in pins.items() if revision != record["test_revisions"][owner]["sha"]}}
+
+
+def aggregate_helper_prefix(arch):
+    coverage = module("task216_helper_coverage", ROOT / "ci/hosted/cache-coverage.py")
+    value = coverage.digest(coverage.identity("aggregate-helpers", Path("/src"), arch))
+    return "workbench-v2-" + arch + "-trusted-" + value + "-"
+
+
+def aggregate_helper_caches(prefix):
+    # Public read-only inventory needs no extra Actions/publisher permission.
+    rows, requests = [], []
+    for page in range(1, 101):
+        query = urllib.parse.urlencode({"ref": "refs/heads/main", "key": prefix, "per_page": 100, "page": page})
+        url = "https://api.github.com/repos/" + REPOSITORIES["kuasar-sandbox"] + "/actions/caches?" + query
+        request = urllib.request.Request(url, headers={"Accept": "application/vnd.github+json",
+                                                      "X-GitHub-Api-Version": "2022-11-28"})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = json.load(response)
+            requests.append({"url": url, "status": response.status, "recorded_ns": time.time_ns(), "response": payload})
+        part = payload["actions_caches"]
+        rows.extend(row for row in part if row["key"].startswith(prefix))
+        if len(part) < 100:
+            return {"requests": requests, "entries": rows}
+    raise ValueError("aggregate helper cache inventory exceeded bounded pagination")
+
+
+def aggregate_helper_fetch(args):
+    record = frozen(args.frozen)
+    inputs = aggregate_helper_inputs(record)
+    require(not args.sources.exists() and not args.output.exists(), "helper cache Job needs fresh inputs")
+    builder = module("task216_aggregate_inputs", ROOT / "ci/integration/build-artifacts.py")
+    args.sources.mkdir(parents=True)
+    for owner, row in sorted(inputs["sources"].items()):
+        builder.checkout(row["repository"], row["sha"], args.sources / owner)
+    # Match aggregate-release.yml exactly: no task files or product build outputs
+    # enter the cache source root, and every checkout retains its private .git.
+    write(args.sources / ".ci/test-revisions.json", inputs["test_revisions"])
+    inputs["cache_before"] = aggregate_helper_caches(aggregate_helper_prefix(args.arch))
+    write(args.output, inputs)
+
+
+def aggregate_helper_record(args):
+    result = {"phase": args.phase, "arch": args.arch, "conclusion": "failure"}
+    try:
+        record = frozen(args.frozen)
+        expected = aggregate_helper_inputs(record)
+        inputs = json.loads(args.inputs.read_text())
+        require({key: inputs[key] for key in expected} == expected, "aggregate helper source selection changed")
+        result["inputs"] = inputs
+        temporary = Path(os.environ["RUNNER_TEMP"])
+        require(not (temporary / "kuasar-workbench").exists(), "helper Workbench state was not removed")
+        paths = list(temporary.glob("workbench-evidence-*/receipt.json"))
+        scopes = list(temporary.glob("workbench-cache-scope-" + record["run_id"] + "-*.json"))
+        require(len(paths) == len(scopes) == 1, "expected one helper Workbench and cache scope")
+        receipt = json.loads(paths[0].read_text())
+        scope = json.loads(scopes[0].read_text())
+        instance = json.loads((paths[0].parent / "instance.json").read_text())
+        result.update(receipt=receipt, cache_scope=scope, instance=instance)
+        require(receipt["conclusion"] == "success" and receipt.get("cleanup_exit_code") == 0
+                and receipt.get("delete_output_exit_code") == 0 and not receipt.get("diagnostics_error")
+                and instance["status"] == "cleaned" and instance["owner_uid"] == os.getuid(),
+                "helper build or owned resource cleanup failed")
+        require(receipt["owner_uid"] == os.getuid() != 0 and receipt["mode"] == "build"
+                and receipt["arch"] == args.arch == platform.machine()
+                and receipt["cpus"] == 2 and receipt["memory_gib"] == 8, "helper native UID or budget differs")
+        selected = json.loads(args.frozen.with_name("workbench.json").read_text())
+        require(receipt["framework_sha"] == expected["framework_sha"] and receipt["selection"] == selected
+                and all(receipt["image"].get(key) == value for key, value in selected["architectures"][args.arch].items()),
+                "helper framework or published image differs")
+        require(receipt["sources"] == scope["source_root"] == str(args.sources.resolve())
+                and scope["repository"] == REPOSITORIES["kuasar-sandbox"] and scope["ref"] == "refs/heads/main"
+                and scope["event"] == "workflow_dispatch" and scope["run_id"] == record["run_id"]
+                and scope["scope"] == scope["namespace"] == "trusted" and scope["event_inputs"] == {},
+                "helper cache is not this repository's admitted main scope")
+        require(scope["transport"] == {"test-revisions.json": {
+            owner: {"repository": REPOSITORIES[owner], "sha": revision}
+            for owner, revision in expected["test_revisions"].items()}}, "helper cache transport differs from release")
+        require(len(scope["sources"]) == len(expected["sources"])
+                and {row["path"] for row in scope["sources"]} == set(expected["sources"]), "unexpected helper cache source")
+        for row in scope["sources"]:
+            require(row["path"] in expected["sources"] and row["kind"] == "git"
+                    and row["clean"] is True and row["on_main"] is True
+                    and all(row[key] == value for key, value in expected["sources"][row["path"]].items()),
+                    "helper source is not the exact clean main revision")
+        commands = receipt["commands"]
+        require(commands and all(row.get("exit_code") == 0 for row in commands)
+                and commands[-1]["argv"][:4] == ["bash", "-euo", "pipefail", "-c"], "helper command failed")
+        require([row["argv"] for row in commands].count(["go", "clean", "-testcache"]) == 1,
+                "restored Go test results were not expired")
+        cache = receipt["cache"]
+        prefix = aggregate_helper_prefix(args.arch)
+        require(cache["WB_CACHE"] == "true" and cache["WB_CACHE_COVERAGE"] == "aggregate-helpers"
+                and re.fullmatch(re.escape(prefix) + "[0-9a-f]{64}", cache["WB_CACHE_KEY"]),
+                "helper cache key differs from the real aggregate producer")
+        helpers = args.sources / ".ci/e2e-helpers" / args.arch
+        metadata = json.loads((helpers / "helpers.json").read_text())
+        require(metadata["arch"] == args.arch and metadata["framework_sha"] == expected["framework_sha"]
+                and metadata["test_revisions"] == expected["test_revisions"], "helper package source pins differ")
+        plan = json.loads(args.frozen.with_name("integration-plan.json").read_text())
+        required = artifacts.planned_helpers({"cases": sorted({case for rows in plan["case_files"].values() for case in rows})})
+        require(set(metadata["helpers"]) == set(required)
+                and set(artifacts.tree_files(helpers)) == {"helpers.json", *required}, "incomplete aggregate helper package")
+        for name, owner in required.items():
+            item = metadata["helpers"][name]
+            revision = expected["framework_sha"] if owner == "framework" else expected["test_revisions"][owner]
+            require(item == {"source_sha": revision, "sha256": artifacts.digest(helpers / name)}, "helper material identity differs")
+            artifacts.check_architecture(helpers / name, args.arch)
+            mode = (helpers / name).stat().st_mode
+            require(mode & 0o111 and not mode & 0o7022, "unsafe or non-executable helper")
+        wheels = args.sources / ".ci/e2e-wheels" / args.arch
+        build_demo_wheels.wheels.validate(wheels, ROOT / "test/demo/requirements.lock", ROOT / "test/demo/requirements.txt", args.arch)
+        result["outputs"] = {"helpers": artifacts.tree_files(helpers), "wheels": artifacts.tree_files(wheels)}
+        result["cache_after"] = aggregate_helper_caches(cache["WB_CACHE_KEY"])
+        saved = [row for row in result["cache_after"]["entries"] if row["key"] == cache["WB_CACHE_KEY"]]
+        require(len(saved) == 1 and saved[0]["ref"] == "refs/heads/main" and saved[0]["size_in_bytes"] > 0,
+                "missing nonempty exact helper cache in this repository")
+        result["cache_entry"] = saved[0]
+        if args.phase == "cold":
+            result["save_log_audit"] = "pending: retain and inspect the Actions Save only successful inputs step log"
+            require(cache["WB_CACHE_HIT"] != "true" and cache["WB_MATCHED_KEY"] != cache["WB_CACHE_KEY"]
+                    and not any(row["key"] == cache["WB_CACHE_KEY"] for row in inputs["cache_before"]["entries"]),
+                    "existing exact helper cache is availability evidence, not a new save")
+            created = datetime.fromisoformat(saved[0]["created_at"].replace("Z", "+00:00")).timestamp()
+            require(receipt["started_ns"] / 1e9 - 2 <= created <= time.time() + 2, "helper cache was not created by this Job")
+            result["restore_observation"] = "prefix restore before new save" if cache["WB_MATCHED_KEY"] else "miss before new save"
+        else:
+            cold = json.loads((args.cold / "result.json").read_text())
+            require(cold["conclusion"] == "success" and cold["phase"] == "cold" and cold["arch"] == args.arch
+                    and {key: cold["inputs"][key] for key in expected} == expected, "cold helper inputs differ")
+            require(cache["WB_CACHE_HIT"] == "true" and cache["WB_MATCHED_KEY"] == cache["WB_CACHE_KEY"]
+                    == cold["receipt"]["cache"]["WB_CACHE_KEY"] and saved[0]["id"] == cold["cache_entry"]["id"],
+                    "fresh helper Job did not restore the exact saved cache")
+            require(result["outputs"] == cold["outputs"], "fresh-cache helper or wheel material differs")
+        result["conclusion"] = "success"
+    except (KeyError, OSError, ValueError) as error:
+        result["error"] = str(error)
+        raise
+    finally:
+        result["recorded_ns"] = time.time_ns()
+        result["run_url"] = "https://github.com/" + REPOSITORIES["kuasar-sandbox"] + "/actions/runs/" + os.environ.get("GITHUB_RUN_ID", "")
+        result["job"] = os.environ.get("GITHUB_JOB", "")
+        result["run_attempt"] = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+        write(args.output / "result.json", result)
 
 
 def manifest(sources):
@@ -1757,6 +1919,19 @@ def main():
     materialize = commands.add_parser("fetch")
     materialize.add_argument("--frozen", type=Path, required=True)
     materialize.add_argument("--sources", type=Path, required=True)
+    helper_fetch = commands.add_parser("aggregate-helper-fetch")
+    helper_fetch.add_argument("--frozen", type=Path, required=True)
+    helper_fetch.add_argument("--sources", type=Path, required=True)
+    helper_fetch.add_argument("--arch", choices=artifacts.ARCHES, required=True)
+    helper_fetch.add_argument("--output", type=Path, required=True)
+    helper_record = commands.add_parser("aggregate-helper-record")
+    helper_record.add_argument("--frozen", type=Path, required=True)
+    helper_record.add_argument("--sources", type=Path, required=True)
+    helper_record.add_argument("--inputs", type=Path, required=True)
+    helper_record.add_argument("--arch", choices=artifacts.ARCHES, required=True)
+    helper_record.add_argument("--phase", choices=("cold", "warm"), required=True)
+    helper_record.add_argument("--cold", type=Path)
+    helper_record.add_argument("--output", type=Path, required=True)
     disk = commands.add_parser("disk-snapshot")
     disk.add_argument("--sources", type=Path, required=True)
     disk.add_argument("--phase", required=True)
@@ -1814,6 +1989,7 @@ def main():
         delta.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     return {"freeze": freeze, "fetch": fetch, "build": build, "helpers": helpers, "legacy-cold": legacy_cold,
+            "aggregate-helper-fetch": aggregate_helper_fetch, "aggregate-helper-record": aggregate_helper_record,
             "disk-snapshot": disk_snapshot,
             "legacy-run": legacy_run, "legacy-finish": legacy_finish,
             "legacy-readers-run": legacy_readers_run, "check-legacy-readers": check_legacy_readers,
