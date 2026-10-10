@@ -50,6 +50,37 @@ class StartupFixtureTests(unittest.TestCase):
             ['docker', 'rm', '-v', 'owned-container'],
         ])
 
+    def test_smoke_checks_fixture_command_with_optional_empty_cmd(self):
+        entrypoint = ['sh', '-c', 'exit 42']
+        cases = [
+            ({'Entrypoint': entrypoint}, True),
+            ({'Entrypoint': entrypoint, 'Cmd': None}, True),
+            ({'Entrypoint': entrypoint, 'Cmd': []}, True),
+            ({'Entrypoint': entrypoint, 'Cmd': ['unexpected']}, False),
+            ({'Entrypoint': ['wrong'], 'Cmd': []}, False),
+        ]
+        for config, accepted in cases:
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as directory:
+                def run(command, **kwargs):
+                    if command == ['docker', 'image', 'inspect', 'fixture-id']:
+                        return json.dumps([{'Config': config}])
+                    if command[:3] == ['docker', 'image', 'rm']:
+                        return ''
+                    # Reaching instance creation proves the actual smoke check
+                    # accepted the metadata; no daemon is needed for this test.
+                    raise RuntimeError('metadata accepted; stop before instance creation')
+
+                with patch.object(systems, 'startup_fixture', return_value='fixture-id'), \
+                        patch.object(systems, 'run', side_effect=run) as call:
+                    if accepted:
+                        with self.assertRaisesRegex(RuntimeError, 'metadata accepted'):
+                            systems.smoke('source-image', Path(directory) / 'smoke')
+                    else:
+                        with self.assertRaises(AssertionError):
+                            systems.smoke('source-image', Path(directory) / 'smoke')
+                self.assertEqual(call.call_args_list[1].args[0][:4],
+                                 ['docker', 'image', 'rm', '--no-prune'])
+
     def test_failed_commit_still_removes_only_its_never_started_container(self):
         with patch.object(systems, 'run', side_effect=['owned-container', RuntimeError('commit failed'), '']) as call:
             with self.assertRaisesRegex(RuntimeError, 'commit failed'):
