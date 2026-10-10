@@ -135,17 +135,56 @@ start_proxy() {
     local delay="${1:-0.0}"
     if [ -n "$PROXY_PID" ]; then
         kill -TERM "$PROXY_PID" 2>/dev/null || true
+        for _ in {1..10}; do
+            kill -0 "$PROXY_PID" 2>/dev/null || break
+            sleep 0.1
+        done
+        kill -9 "$PROXY_PID" 2>/dev/null || true
         wait "$PROXY_PID" 2>/dev/null || true
+        PROXY_PID=""
+    fi
+    # Refuse a foreign listener: a stale proxy answering /health on this port
+    # must never stand in for the proxy this phase starts (a leftover delay=0
+    # instance would silently degrade LLM-wait semantics). Fail loudly with
+    # the owner process so the operator can clean up.
+    if ss -tlnH "sport = :$PROXY_PORT" 2>/dev/null | grep -q .; then
+        echo "Error: port $PROXY_PORT already held by a foreign listener:" >&2
+        ss -tlnp "sport = :$PROXY_PORT" 2>/dev/null | sed 's/^/    /' >&2
+        exit 1
     fi
     python3 "$REPO_ROOT/test/perf/workloads/agent_llm_proxy.py" \
         --port "$PROXY_PORT" --delay "$delay" > "$WORK/proxy.log" 2>&1 &
     PROXY_PID=$!
-    sleep 0.5
-    curl -sf "http://127.0.0.1:$PROXY_PORT/health" >/dev/null || {
-        echo "Error: Agent LLM Proxy failed to start" >&2
-        cat "$WORK/proxy.log" >&2
-        exit 1
-    }
+    # Bounded spawn+health-check loop: transient bind conditions (half-open
+    # guest TCP conns surviving a hard-forked fleet shutdown keep the port
+    # pair occupied until they age out) require re-spawn attempts, not just
+    # repeated probes. The health OK is only accepted when the port owner
+    # pid is our spawn, never another instance.
+    local attempt=0 respawn=0
+    while [ "$attempt" -lt 15 ]; do
+        if curl -sf "http://127.0.0.1:$PROXY_PORT/health" >/dev/null 2>&1 \
+           && ss -tlnp "sport = :$PROXY_PORT" 2>/dev/null | grep -q "pid=$PROXY_PID,"; then
+            return 0
+        fi
+        if ! kill -0 "$PROXY_PID" 2>/dev/null; then
+            # Our spawn died: transient bind conflict gets a re-spawn, any
+            # other failure is terminal.
+            if [ "$respawn" -lt 10 ] && grep -q "Address already in use" "$WORK/proxy.log" 2>/dev/null; then
+                respawn=$((respawn + 1))
+                sleep 0.5
+                python3 "$REPO_ROOT/test/perf/workloads/agent_llm_proxy.py" \
+                    --port "$PROXY_PORT" --delay "$delay" >> "$WORK/proxy.log" 2>&1 &
+                PROXY_PID=$!
+            else
+                break
+            fi
+        fi
+        attempt=$((attempt + 1))
+        sleep 0.2
+    done
+    echo "Error: Agent LLM Proxy failed to start" >&2
+    cat "$WORK/proxy.log" >&2
+    exit 1
 }
 
 # Prepare openclaw-blk0.img rootfs. The cache is keyed to the exact Docker
@@ -565,6 +604,7 @@ SNAP_SIZE_MIB=""
 RESTORE_WALL_MS=0
 RESTORE_READY_COUNT=0
 RESTORE_EXIT_FAIL=0
+v_restore="n/a"
 RECLAIMED_MIB=0
 SNAP_OK=0
 
@@ -1093,7 +1133,7 @@ generate_report() {
 **Date**: $(date -u +"%Y-%m-%d %H:%M:%S UTC")  
 **Platform**: Kuasar Sandbox Runtime & Hypervisor Platform  
 **Workload**: OpenClaw-style autonomous coding-agent loop (deterministic mock LLM; Node.js 22 + Python 3.12 + Git + Ripgrep; the \`openclaw\` npm package is not used)  
-**Host Specs**: 32 vCPUs (AMD Zen 5), 61.2 GiB RAM, Linux x86_64, NVMe Storage  
+**Host Specs**: $(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc) vCPUs, $(lscpu 2>/dev/null | grep -m1 "^Model name" | cut -d: -f2 | tr -s " "), $(grep MemTotal /proc/meminfo | awk '{printf "%.1f GiB", $2/1024/1024}'), Linux $(uname -m)
 
 > Every value in this report is measured live by \`openclaw-density-bench.sh\` during
 > this run. Verdicts are computed against the stated target, not asserted; execution
