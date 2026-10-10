@@ -34,6 +34,30 @@ class FixedInputs(unittest.TestCase):
         self.env = {'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': f'url.{self.remote}.insteadOf',
                     'GIT_CONFIG_VALUE_0': 'https://github.com/kuasar-sandbox/connector.git'}
 
+    def test_platform_checkout_origin_suffix_and_wrong_repository(self):
+        root = self.root / 'platform'
+        root.mkdir()
+        git = subject.tag_sources.git
+        git(root, 'init', '-q')
+        git(root, 'config', 'user.email', 'test@example.invalid')
+        git(root, 'config', 'user.name', 'Fixture')
+        (root / 'README.md').write_text('platform fixture\n')
+        git(root, 'add', 'README.md')
+        git(root, 'commit', '-qm', 'fixture')
+        sha = git(root, 'rev-parse', 'HEAD')
+        for origin in ('https://github.com/kuasar-sandbox/kuasar-sandbox',
+                       'https://github.com/kuasar-sandbox/kuasar-sandbox.git'):
+            with self.subTest(origin=origin):
+                git(root, 'remote', 'remove', 'origin') if git(root, 'remote') else None
+                git(root, 'remote', 'add', 'origin', origin)
+                self.assertEqual(subject.inspect_platform(root, sha)['sha'], sha)
+        git(root, 'remote', 'set-url', 'origin', 'https://github.com/other/kuasar-sandbox')
+        with self.assertRaisesRegex(ValueError, 'wrong platform source repository'):
+            subject.inspect_platform(root, sha)
+        git(root, 'remote', 'set-url', 'origin', 'https://github.com/kuasar-sandbox/kuasar-sandbox')
+        with self.assertRaisesRegex(ValueError, 'identity changed'):
+            subject.inspect_platform(root, 'f' * 40)
+
     def test_candidate_tests_survive_reuse_and_do_not_refetch_after_admission(self):
         (self.remote / 'test/e2e/cases/basic.fixture.sh').write_text('echo candidate tests\n')
         subject.tag_sources.git(self.remote, 'commit', '-qam', 'tests only')

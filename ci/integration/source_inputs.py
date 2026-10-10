@@ -21,8 +21,8 @@ def inspect_platform(root, expected_sha):
                       'missing admitted platform source')
     artifacts.require(Path(git(root, 'rev-parse', '--show-toplevel')).resolve() == root.resolve(),
                       'platform source is not a repository root')
-    artifacts.require(git(root, 'config', '--get', 'remote.origin.url') ==
-                      'https://github.com/kuasar-sandbox/kuasar-sandbox.git', 'wrong platform source repository')
+    artifacts.require(git(root, 'config', '--get', 'remote.origin.url').removesuffix('.git') ==
+                      'https://github.com/kuasar-sandbox/kuasar-sandbox', 'wrong platform source repository')
     artifacts.require(git(root, 'rev-parse', 'HEAD') == expected_sha, 'admitted platform source identity changed')
     modified = git(root, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', 'HEAD', '--')
     untracked = git(root, 'ls-files', '--others')
