@@ -183,6 +183,9 @@ class FixedInputs(unittest.TestCase):
         # Exercise the checkout link guard itself, without transport rejecting first.
         with self.assertRaisesRegex(ValueError, 'links or submodules'):
             subject.inspect_checkout(source, resolver.PLATFORM, git(source, 'rev-parse', 'HEAD'))
+        path.unlink(); path.write_text('new committed inputs\n')
+        git(source, 'add', 'README.md'); git(source, 'commit', '-qm', 'changed admitted commit')
+        with self.assertRaisesRegex(ValueError, 'identity changed'): consume()
 
     def test_candidate_tests_survive_reuse_and_do_not_refetch_after_admission(self):
         (self.remote / 'test/e2e/cases/basic.fixture.sh').write_text('echo candidate tests\n')
