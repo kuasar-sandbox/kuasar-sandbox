@@ -286,37 +286,42 @@ SHA 和发布单元。Preview 还记录原始聚合清单 SHA 和实际依赖版
 workflow run name 包含源码 SHA 和依赖版本元组。控制器只重跑相同输入元组的失败 run;
 分支 HEAD 或依赖选择已经改变时创建新的 dispatch,不会用旧输入消耗三次恢复机会。
 
-## 7. GitHub Actions 正式发布
+## 7. 聚合发布 CLI
 
-正式发布通过 `Formal Release` GitHub Actions 工作流
-（`.github/workflows/formal-release.yml`）执行。选择已在
-`releases/release.yaml` 提交的 Stable 版本、维护分支及该分支当前 HEAD 的完整
-SHA，从 `main` 使用 GitHub Actions 界面或 workflow-dispatch API 启动。
-不得通过 SSH 运行发布协调器。
+要收敛已在所选分支提交配置的聚合版本,本地发布入口先处理所需组件单元,再执行聚合事务:
 
-工作流分别检出受信任控制器与所选平台源码，使用现有短期跨仓 App token，仅授予
-`Actions: write` 和 `Contents: read`，收敛缺失的组件版本及聚合版本。
-各仓发布工作流继续使用自身仓库范围的写入 token；此入口不依赖 SSH 主机、持久凭据、
-组件写入 token 或直接写清单的权限。
+```bash
+RELEASE_VERSION=$(awk '$1 == "version:" {print $2}' \
+  kuasar-sandbox/releases/release.yaml)
+PLATFORM_REF=$(git -C kuasar-sandbox branch --show-current)
+PLATFORM_SHA=$(git -C kuasar-sandbox rev-parse HEAD)
+make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
+  PLATFORM_REF="$PLATFORM_REF" PLATFORM_SHA="$PLATFORM_SHA"
+```
 
-正式发布、Daily 清单选择和 GC 使用现有串行组。每次控制器执行在 55 分钟 job 中最多
-等待 45 分钟，保持在 App token 有效期内。到期仍未收敛则明确失败；检查结果后通过
-同一工作流续接相同的已批准版本、源码分支及 SHA。协调器复用健康的组件或聚合流程
-以及已核验资产，不取消它们，也不重复发起发布。
 
-正式发布前，按正常 PR 流程合入目标分支的 `release.yaml`。工作流先发布缺失的 Stable
-组件单元，再从目标分支当前 HEAD 触发聚合。主线 Stable 成功后成为 Latest；维护分支
-Stable 保持可发现，但不抢占主线 Latest。Stable 与 Preview 均须由该 HEAD 的当前清单
-直接选择，不能回填历史清单为新的发布。
+聚合工作流同样从平台 `main` 加载受信任工具,但版本选择、系统文档、平台用例和打包
+内容来自所选平台分支的精确 HEAD。目标分支中的旧发布脚本不会作为控制器执行:
 
-聚合工作流仍从平台 `main` 加载受信任工具，版本选择、系统文档、平台用例与打包内容
-来自所选源码的精确 HEAD。prepare artifact 是该次 run 的不可变证据。构建或验证失败
-后，协调器使用相同版本与精确源码重新派发，使新 prepare 下载当前组件 Release。
-新契约的残缺发布失败后，只重跑 publish job，复用其成功前置步骤与保留的 stage；
-不得重跑旧构建来替换已测试镜像字节。现有三次尝试上限及源码、资产验收和发布门禁不变。
+```bash
+gh workflow run aggregate-release.yml \
+  --repo kuasar-sandbox/kuasar-sandbox --ref main \
+  -f version=release-v0.5.7 \
+  -f source_ref=release/v0.5.x \
+  -f source_sha=<full-sha>
+```
 
-SSH 仅用于定位与修复问题，包括本地回归测试和提交经检视的修复。
-发布触发、协调、发布及清理均通过 GitHub 工作流执行。本地发布工具测试入口仍为：
+正式发布前先在目标分支提交 `release.yaml`,发布所缺的 Stable 组件单元,再从目标分支最新
+HEAD 触发聚合。主线 Stable 成功后成为 Latest;维护分支 Stable 保留为可发现的正式版本,
+但不抢占主线 Latest。Stable 与 Preview 都必须由该 HEAD 当前清单直接选择;历史清单只
+用于解析已存在 Release 和 GC,不能通过手工 dispatch 回填成新的聚合发布。
+
+聚合 prepare 生成的短期 artifact 是一次 run 的不可变发布证据。构建/验证失败后重新 dispatch 相同版本、源码分支和源码 SHA，确保新的 prepare 重新下载当前组件 Release。
+新契约的残缺发布失败后，由控制器验证原先的成功前置 job 和保留 stage，只重跑该 publish job；
+不要完整重跑旧 workflow 来替换镜像字节。控制器按精确 run name 汇总新旧 run 的尝试次数,总计
+三次后报告失败。
+
+本地发布工具验证入口为:
 
 ```bash
 make test-release-tools

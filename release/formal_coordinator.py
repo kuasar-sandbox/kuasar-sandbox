@@ -11,12 +11,9 @@ import sys
 import time
 
 
-CONTROL_ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(CONTROL_ROOT / "release"))
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / "release"))
 import preview_coordinator as coordinator  # noqa: E402
-
-# Trusted workflow code and the exact approved source are separate checkouts.
-ROOT = coordinator.PLATFORM_ROOT
 
 
 def main() -> None:

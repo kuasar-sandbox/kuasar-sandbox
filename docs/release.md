@@ -184,49 +184,35 @@ Preview additionally requires that `daily-preview.yaml/version + preview_version
 
 Workflow run names include source SHA and the dependency-version tuple. The controller reruns failed runs only for identical input tuples. Changed branch HEADs or dependency selections create a new dispatch rather than consuming the three recovery attempts with obsolete inputs.
 
-## 7. Hosted formal release
+## 7. Aggregate publication CLI
 
-Formal publication runs through the `Formal Release` GitHub Actions workflow
-(`.github/workflows/formal-release.yml`). Select the Stable version already
-committed in `releases/release.yaml`, its maintained branch, and that branch's
-full current HEAD SHA. Start the workflow from `main` using GitHub's Actions UI
-or workflow-dispatch API. Do not run the release coordinator through SSH.
+To converge an aggregate version already committed in the selected branch, the local release entry first handles the required component units and then the aggregate transaction:
 
-The workflow checks out its trusted controller separately from the selected
-platform source. It uses the existing short-lived cross-repository App token
-with only `Actions: write` and `Contents: read` to converge missing component
-versions and the aggregate. Each owning publication workflow retains its own
-repository-scoped write token; no SSH host, persistent credential, component
-write token or direct manifest writer is part of this entry.
+```bash
+RELEASE_VERSION=$(awk '$1 == "version:" {print $2}' \
+  kuasar-sandbox/releases/release.yaml)
+PLATFORM_REF=$(git -C kuasar-sandbox branch --show-current)
+PLATFORM_SHA=$(git -C kuasar-sandbox rev-parse HEAD)
+make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
+  PLATFORM_REF="$PLATFORM_REF" PLATFORM_SHA="$PLATFORM_SHA"
+```
 
-Formal selection, Daily manifest selection and GC share their existing
-serialization group. A controller attempt waits up to 45 minutes within a
-55-minute job, keeping the App token within its lifetime. Pending at the bound
-fails explicitly; resume the same approved version, source branch and SHA
-through the workflow after inspecting its outcome. The coordinator reuses
-healthy component/aggregate runs and already verified assets; it does not
-cancel them or start duplicate publications.
 
-Before formal publication, normally merge the approved `release.yaml` on the
-target branch. The workflow publishes missing Stable component units and then
-dispatches the aggregate from that branch's current HEAD. A successful mainline
-Stable becomes Latest. A maintenance Stable remains discoverable without
-displacing mainline Latest. Both Stable and Preview must be selected directly
-by that HEAD's current manifest; historical selections cannot be backfilled.
+The aggregate workflow also loads trusted tooling from platform `main`, but version selection, system documentation, platform cases and package content come from the exact HEAD of the selected platform branch. Old release scripts on that target branch are not executed as the controller:
 
-The aggregate workflow also loads trusted tooling from platform `main`, while
-version selection, system documentation, platform cases and package content come
-from the exact selected source HEAD. Its prepare artifact is immutable evidence
-for that run. After a build/validation failure, the coordinator redispatches the
-same version and exact source so a new prepare downloads the current component
-Releases. After a partial new-contract publication failure, it reruns only the
-publish job with its successful prerequisites and retained stage. It never
-reruns an old build to replace tested image bytes. The existing three-attempt
-limit and exact-source, asset-validation and publication gates still apply.
+```bash
+gh workflow run aggregate-release.yml \
+  --repo kuasar-sandbox/kuasar-sandbox --ref main \
+  -f version=release-v0.5.7 \
+  -f source_ref=release/v0.5.x \
+  -f source_sha=<full-sha>
+```
 
-SSH is reserved for diagnosing and fixing problems, including local regression
-tests and submitting reviewed fixes. Release dispatch, convergence, publication
-and cleanup run through GitHub workflows. Local release-tool tests remain:
+Before formal publication, commit `release.yaml` on the target branch, publish missing Stable component units, then trigger the aggregate from that branch's latest HEAD. A successful mainline Stable becomes Latest. A maintenance Stable remains a discoverable formal release without displacing mainline Latest. Both Stable and Preview must be directly selected by that HEAD's current manifest. Historical manifests are only for resolving existing Releases and GC; manual dispatch cannot backfill them as new aggregate publications.
+
+The short-lived artifact produced by aggregate prepare is immutable publication evidence for that run. After a build/validation failure, redispatch the same version, source branch and source SHA so a new prepare downloads current component Releases. After a partial new-contract publication failure, let the coordinator rerun only that publish job with its successful original prerequisites and retained stage. Never rerun the full old workflow to replace its image bytes. The controller totals attempts across old and new runs with the exact run name, reporting failure after three attempts.
+
+Local release-tool validation:
 
 ```bash
 make test-release-tools

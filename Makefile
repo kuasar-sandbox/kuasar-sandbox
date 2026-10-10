@@ -217,7 +217,6 @@ test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_documentation_package.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_selection_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_coordinator_test.py
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/formal_workflow_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_scanner_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_gc_test.py
 	bash release/test-release.sh
