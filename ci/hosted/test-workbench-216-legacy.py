@@ -459,7 +459,7 @@ class LegacyControl(unittest.TestCase):
         for lane, arch in (("x86", "x86_64"), ("arm", "aarch64")):
             uploads = [step["with"]["name"] for step in jobs["helpers-" + lane]["steps"]
                        if step.get("uses", "").startswith("actions/upload-artifact")]
-            self.assertIn("workbench-216-readers-" + arch + "-${{ github.run_id }}", uploads)
+            self.assertIn("workbench-216-readers-" + arch + "-${{ github.run_id }}-${{ github.run_attempt }}", uploads)
 
 
 validation = task.module("legacy_existing_packaged_fixtures", task.ROOT / "ci/hosted/test-workbench-216-validation.py")
