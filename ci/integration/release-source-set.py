@@ -144,6 +144,7 @@ def execute(plan_path, sources, output, env):
             row['state'] = 'completed'
             row['log_sha256'] = artifacts.digest(output / row['log'])
             if completed.returncode:
+                result['exit_code'] = completed.returncode
                 raise subprocess.CalledProcessError(completed.returncode, command)
         finally:
             row['seconds'] = time.monotonic() - start

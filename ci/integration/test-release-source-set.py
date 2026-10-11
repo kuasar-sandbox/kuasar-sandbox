@@ -140,6 +140,17 @@ class FrozenReleaseGates(unittest.TestCase):
         self.assertIn('Error 23',(self.output/'00.log').read_text())
         self.assertFalse((self.root/'executed').exists())
 
+    def test_failed_command_keeps_exit_when_it_also_dirties_sources(self):
+        root=self.sources/'connector'
+        (root/'Makefile').write_text('test-release:\n\t@touch unexpected-source; exit 23\n')
+        git(root,'add','.');git(root,'commit','-qm','Fail and mutate input')
+        self.plan(['connector'])
+        status,result=self.run_gate()
+        self.assertEqual(status,2,result)
+        self.assertEqual(result['commands'][0]['exit_code'],2)
+        self.assertIn('modified inputs',result['error'])
+        self.assertTrue((root/'unexpected-source').exists())
+
     def test_missing_current_declaration_is_not_history(self):
         root=self.sources/'connector'; (root/'release/helper-inputs.json').unlink()
         git(root,'add','-A');git(root,'commit','-qm','Remove declaration')
