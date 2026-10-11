@@ -204,6 +204,8 @@ test-ci-tools:
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
 
 test-release-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/release-source-set.py --sources "$(ORG)" --auto
+	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/test-release-source-set.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_tag_selection.py release/test_tag_sources.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s release -p 'test_workbench_*.py'
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test_e2e_package.py
@@ -255,3 +257,7 @@ help:
 	@echo "  test-uffd-performance-gate enforce source UFFD A/B/C performance bounds"
 	@echo "  clean         clean every sub-repo + this repo's bin/ build/"
 	@echo "  TARGET_ARCH   x86_64 (default) | aarch64  (exported to sub-makes)"
+
+.PHONY: test-release-source-set
+test-release-source-set:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/release-source-set.py --sources "$(ORG)" --plan "$(ORG)/.source-plan.json" --output "$(RELEASE_CHECK_OUTPUT)"

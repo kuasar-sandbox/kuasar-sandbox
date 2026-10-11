@@ -456,6 +456,18 @@ class HistoricalTransport(unittest.TestCase):
         with mock.patch.object(helper_history.subprocess, 'run', side_effect=dispatched):
             contract = helper_history.admit(dict(original['baseline'], validation_plan=original),
                 dict(self.roots, vmlinux=self.roots['guest-runtime']), self.sources, old_platform, 1, api, download, admission)
+        gate_spec = importlib.util.spec_from_file_location('frozen_release_gate', ROOT / 'ci/integration/release-source-set.py')
+        gate = importlib.util.module_from_spec(gate_spec); gate_spec.loader.exec_module(gate)
+        facts = {owner: row['source'] for owner, row in contract['owners'].items()}
+        pins = {owner: dict(repository=row['repository'], sha=row['sha'],
+                           role='candidate' if owner == 'platform' else 'baseline') for owner, row in facts.items()}
+        frozen = dict(helper_contract=contract, owners=['platform'])
+        original_contract = copy.deepcopy(contract)
+        retained = gate.recipes(frozen, set(c.OWNERS), facts, pins, self.root / 'sources')
+        self.assertTrue(all(retained[o]['historical'] for o in c.OWNERS if o != 'platform'))
+        self.assertEqual(contract, original_contract)
+        with self.assertRaises((ValueError, FileNotFoundError)):
+            gate.recipes(dict(owners=['platform']), set(c.OWNERS), facts, pins, self.root / 'sources')
         # Even an unchanged helper owner cannot reuse an old linked binary when
         # another component dependency changes. Reject before any download.
         for field, value in [('sha', '0' * 40), ('tag', 'v9.9.9')]:

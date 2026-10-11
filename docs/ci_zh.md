@@ -125,6 +125,10 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 `snapshot.read-recovery.sh` 失败时，在 cleanup 前将用例、阶段、失败行及有界固定词表错误证据保留在 job 日志中。诊断保留测试的原始退出状态。
 
+现有 `make test-release-tools` 入口在源码 CI 上下文或任一物化文档存在时，还执行固定源码集的发布验证；此时 `.source-plan.json` 和 `.source-checks.json` 均为必需。入口先绑定未修改的 plan ID、具名源码身份、干净源码树和现有 Go workspace，再串行执行所选组件原有的 `make test-release`；platform 候选会选择全部五个组件。入口同时执行所选 owner 声明的原生 helper 配方，校验完整输出，并在 `KUASAR_CI_DIR` 下记录命令、退出码、声明、依赖身份和二进制摘要。执行后源码及 workspace 输入必须保持不变。已认证的历史 helper 证据保留为历史事实，不宣称重新执行过其配方。该原生源码回归不替代各架构构建、prepare 或 E2E 验证。
+
+独立运行 `make test-release-tools` 仍保持平台工具验证范围，未请求固定源码集验证时会明确说明。对已物化的本地源码集，可在保留现有 Go workspace 和工具链环境的情况下执行 `make test-release-source-set ORG=<fixed-source-root> RELEASE_CHECK_OUTPUT=<fresh-evidence-directory>`。该显式入口始终要求两份准入文档，不重新获取源码。
+
 ## 4. Daily 与 Stable
 
 `exact-assets` 仅接受实际公开的平台 aggregate workflow。

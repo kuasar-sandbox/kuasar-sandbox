@@ -12,6 +12,25 @@ sys.path.insert(0, str(ROOT / 'release'))
 import helper_inputs
 
 
+def build_owner(root, arch, output, environment, row, run=None):
+    """Execute one verified declaration using the same ABI in builds and source gates."""
+    artifacts.require(helper_inputs.owner(root, row['source']) == row,
+                      'helper owner changed before recipe')
+    declared = helper_inputs.contract.declaration(row['declaration'])
+    artifacts.require(output.is_dir() and not output.is_symlink() and not list(output.iterdir()),
+                      'helper recipe requires a fresh output directory')
+    if declared['recipe'] is not None:
+        command = ['bash', str(root / declared['recipe']), arch, str(output)]
+        if run is None:
+            subprocess.run(command, cwd=root, env=environment, check=True)
+        else:
+            run(command, root, environment)
+    artifacts.require({p.name for p in output.iterdir()} == {r['name'] for r in declared['helpers']},
+                      'unexpected or missing built helper')
+    return {r['name']: helper_inputs.contract.check_binary(output / r['name'], arch)
+            for r in declared['helpers']}
+
+
 def build(sources, arch, output, helpers, environment, contract, historical_archive=None):
     for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY'):
         artifacts.require(not environment.get(key), f'helper build must not receive {key}')
@@ -42,8 +61,7 @@ def build(sources, arch, output, helpers, environment, contract, historical_arch
         declared = helper_inputs.contract.declaration(contract['owners'][owner]['declaration'])
         with tempfile.TemporaryDirectory(prefix='owner-helpers-') as directory:
             built = Path(directory) / 'bin'; built.mkdir()
-            subprocess.run(['bash', str(roots[owner] / declared['recipe']), arch, str(built)],
-                           cwd=roots[owner], env=selected, check=True)
+            build_owner(roots[owner], arch, built, selected, contract['owners'][owner])
             # Full declaration, not producer metadata, defines all admissible outputs.
             names = {item['name'] for item in declared['helpers']}
             helper_inputs.contract.receipt(built, arch, contract, names)
