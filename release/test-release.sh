@@ -385,6 +385,19 @@ for heading in \
   grep -Fqx "$heading" "$TMP/bundle/release-notes.md" \
     || release_fail "aggregate release notes omit $heading"
 done
+# Notes precede validation: declared profiles must not claim planned ARM cases ran.
+for coverage in \
+  'The declared native x86_64 profile uses the current full ordinary case selection.' \
+  'The hosted ARM profile requires native non-KVM image/storage E2E and `artifact-only` Workbench qualification' \
+  'planned Workbench cases do not establish network, KVM lifecycle or snapshot/restore execution.' \
+  'Consult the per-architecture validation records for executed cases and `qualification_scope`, including any `native-full` acceptance.'; do
+  grep -Fq "$coverage" "$TMP/bundle/release-notes.md" \
+    || release_fail "aggregate release notes misrepresent declared or executed architecture coverage"
+done
+if grep -Fq 'ARM retains native image/storage coverage and adds workbench network' \
+  "$TMP/bundle/release-notes.md"; then
+  release_fail "aggregate release notes claim unexecuted hosted ARM Workbench cases"
+fi
 grep -Fq 'This aggregate is a Stable, non-prerelease release.' \
   "$TMP/bundle/release-notes.md" \
   || release_fail "formal release notes do not identify the Stable channel"
