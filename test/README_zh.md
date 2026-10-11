@@ -8,7 +8,7 @@
 
 产品 E2E 遵循唯一契约：**预构建制品 → prepare → `<suite>.<case>.sh` → 公共 runner**。完整文件名就是用例 ID，第一段就是 suite。九个 suite 为 `basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder`、`telemetry`。
 
-组件在自己的 `test/e2e/cases/` 和 `test/e2e/lib/` 维护用例及底层 helper。主仓维护 `test/e2e/platform/cases/basic.demo.sh`。源码组装阶段从精确测试 revision 复制用例到扁平的 `test/e2e/cases/`，helper 放入 `test/e2e/lib/<owner>/`。重复 ID、未知 suite 和 owner runner 都会被拒绝。维护归属不影响公共选择语义。
+组件在自己的 `test/e2e/cases/` 和 `test/e2e/lib/` 维护用例及底层 helper。主仓维护 `test/e2e/platform/cases/basic.demo.sh`。源码模式组装从已准入并固定的候选与基线 Tag 输入复制用例到扁平的 `test/e2e/cases/`，helper 放入 `test/e2e/lib/<owner>/`。重复 ID、未知 suite 和 owner runner 都会被拒绝。维护归属不影响公共选择语义。
 
 platform 包携带公共 `test/e2e/e2e` runner 和两个架构的预构建 helper。更早的 source/release build 按 `test/demo/requirements.lock` 获取完整 Demo SDK wheel 依赖闭包，并打包两种架构的 wheelhouse。prepare 解析镜像，仅从本地 hash-locked wheel 安装 SDK（`--no-index --find-links`、`--require-hashes`），记录包名/版本/wheel 身份、安装文件摘要、权限和镜像内容 ID。wheel 缺失或变化时失败。执行只消费不可变工作区，不构建产品或 helper、不发现兄弟源码树、不拉取替代镜像、不使用宿主机 helper。被测 Build、flatten、snapshot 和发布操作仍真实执行。
 
@@ -44,7 +44,7 @@ prepare 要求实际宿主、产品、helper 和镜像架构一致，包括两�
 中的精确源码静态无 libc probe。未选择的 helper 不成为前置条件。
 Demo 消费已准备的本地原生镜像身份，不选择替代镜像，也不维护第二份 ARM 摘要列表。
 
-CI 解析精确测试文件名，并按变更 owner 选择覆盖较广的 suite。源码构建先于 prepare 完成。产品保留自己的源码依赖闭包，测试脚本和 helper 使用独立测试 pin。CI prepare 在无 Go/Rust 工具链和组件源码树的隔离运行环境中执行。每个 suite shard 调用同一打包 runner；storage、snapshot 及 ARM image 验收也使用隔离运行环境，prepare 和执行镜像 ID 及环境检查绑定到结果；结果必须包含所有已选用例的成功退出及一致的不可变输入身份。托管 ARM CI 选择 accelerator 和 guest-runtime 的非 KVM 用例，排除项明确记录。static lane 执行零个产品用例，不算产品 E2E 验收。
+CI 解析精确测试文件名，并按变更 owner 选择覆盖较广的 suite。源码构建先于 prepare 完成。源码模式 CI 一次性准入候选 ref 与基线 Tag，并固定其已验证输入。相关产品输入未变更时，CI 可以复用基线产品，同时仍执行候选测试和 helper。记录的源码身份是来源证据，不是独立测试选择器。新发布版中，每个 owner 的产品、打包测试、helper 和指南来自同一所选 owner Tag；exact-assets 模式消费已交付材料。历史发布版保留其真实记录的来源和证据。CI prepare 在无 Go/Rust 工具链和组件源码树的隔离运行环境中执行。每个 suite shard 调用同一打包 runner；storage、snapshot 及 ARM image 验收也使用隔离运行环境，prepare 和执行镜像 ID 及环境检查绑定到结果；结果必须包含所有已选用例的成功退出及一致的不可变输入身份。托管 ARM CI 选择 accelerator 和 guest-runtime 的非 KVM 用例，排除项明确记录。static lane 执行零个产品用例，不算产品 E2E 验收。
 
 unit、race、vet、源码 helper、UFFD 性能及 working-set 门禁保持独立。`test/perf/warmpool-dedup.sh` 在 `make perf-warmpool-dedup` 下保留 warm-pool 表征、数据与测量断言，不属于 correctness suite。组件源码门禁仍由各自仓库维护。
 

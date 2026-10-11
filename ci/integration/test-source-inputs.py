@@ -34,6 +34,159 @@ class FixedInputs(unittest.TestCase):
         self.env = {'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': f'url.{self.remote}.insteadOf',
                     'GIT_CONFIG_VALUE_0': 'https://github.com/kuasar-sandbox/connector.git'}
 
+    def test_platform_checkout_origin_suffix_and_wrong_repository(self):
+        root = self.root / 'platform'
+        root.mkdir()
+        git = subject.tag_sources.git
+        git(root, 'init', '-q')
+        git(root, 'config', 'user.email', 'test@example.invalid')
+        git(root, 'config', 'user.name', 'Fixture')
+        (root / 'README.md').write_text('platform fixture\n')
+        git(root, 'add', 'README.md')
+        git(root, 'commit', '-qm', 'fixture')
+        sha = git(root, 'rev-parse', 'HEAD')
+        for origin in ('https://github.com/kuasar-sandbox/kuasar-sandbox',
+                       'https://github.com/kuasar-sandbox/kuasar-sandbox.git'):
+            with self.subTest(origin=origin):
+                git(root, 'remote', 'remove', 'origin') if git(root, 'remote') else None
+                git(root, 'remote', 'add', 'origin', origin)
+                self.assertEqual(subject.inspect_platform(root, sha)['sha'], sha)
+        git(root, 'remote', 'set-url', 'origin', 'https://github.com/other/kuasar-sandbox')
+        with self.assertRaisesRegex(ValueError, 'wrong platform source repository'):
+            subject.inspect_platform(root, sha)
+        git(root, 'remote', 'set-url', 'origin', 'https://github.com/kuasar-sandbox/kuasar-sandbox')
+        with self.assertRaisesRegex(ValueError, 'identity changed'):
+            subject.inspect_platform(root, 'f' * 40)
+
+    def test_staged_platform_origin_survives_both_fixed_input_consumers(self):
+        spec = importlib.util.spec_from_file_location('fixed_source_checks',
+                                                     Path(__file__).with_name('run-source-checks.py'))
+        checks = importlib.util.module_from_spec(spec); spec.loader.exec_module(checks)
+        git = subject.tag_sources.git
+        for suffix in ('', '.git'):
+            with self.subTest(suffix=suffix):
+                root = self.root / ('canonical' if not suffix else 'suffixed')
+                inputs = root / 'inputs'
+                platform = inputs / 'platform'
+                fixture(platform, 'connector', 'v0.0.1')
+                origin = 'https://github.com/' + resolver.PLATFORM + suffix
+                git(platform, 'remote', 'set-url', 'origin', origin)
+                shutil.rmtree(platform / 'test/e2e/cases')
+                cases = platform / 'test/e2e/platform/cases'; cases.mkdir(parents=True)
+                for name in CASES['platform']: (cases / name).write_text('echo platform\n')
+                records, units = {}, {}
+                for unit in resolver.release.selection.UNITS:
+                    owner = 'guest-runtime' if unit in ('runtime', 'vmlinux') else unit
+                    tag = (unit + '-' if unit in ('runtime', 'vmlinux') else '') + 'v1.2.3'
+                    source = inputs / 'sources' / unit
+                    fixture(source, unit, 'v0.0.1')
+                    shutil.rmtree(source / 'test/e2e/cases')
+                    (source / 'test/e2e/cases').mkdir()
+                    for name in CASES[owner]: (source / 'test/e2e/cases' / name).write_text('echo owner\n')
+                    git(source, 'add', '.'); git(source, 'commit', '-qm', 'owner inputs')
+                    git(source, 'tag', tag)
+                    records[unit] = subject.tag_sources.inspect_unit(source, unit, tag)
+                    units[unit] = tag
+                manifest = 'version: release-v1.2.3\ndelivery: workbench-v1\ncomponents:\n' + ''.join(
+                    f'  {unit}: {tag}\n' for unit, tag in units.items())
+                (platform / 'releases').mkdir()
+                (platform / 'releases/release.yaml').write_text(manifest)
+                (platform / 'releases/daily-preview.yaml').write_text(manifest + 'preview_version: preview.20260101\n')
+                git(platform, 'add', '.'); git(platform, 'commit', '-qm', 'admitted selection')
+                sha = git(platform, 'rev-parse', 'HEAD')
+                stage = root / 'stage'; (stage / 'assets').mkdir(parents=True)
+                capsule = stage / 'source-inputs.tar'
+                with tarfile.open(capsule, 'w') as archive:
+                    for entry in inputs.iterdir(): archive.add(entry, arcname=entry.name)
+                (stage / 'source-records.json').write_text(json.dumps(records))
+                (stage / 'selection.tsv').write_text(''.join(f'{unit}\t{tag}\n' for unit, tag in units.items()))
+                names = {'SHA256SUMS', 'platform-release-v1.2.3.tar.gz'}
+                for arch in artifacts.ARCHES:
+                    names.add(resolver.release.selection.workbench_archive('release-v1.2.3', arch))
+                    names.update(artifacts.archive_name(unit, tag, arch) for unit, tag in units.items())
+                for name in names: (stage / 'assets' / name).write_bytes(b'package boundary fixture')
+                # Package payload validation has its own complete suite. Keep real staged
+                # source extraction/admission, plan validation and both consumers here.
+                with patch.object(subject, 'verify_package') as package, patch.object(resolver, 'public'), \
+                     patch.object(resolver.release, 'tag_sha', side_effect=lambda repo, tag:
+                                  next(row['sha'] for row in records.values() if row['tag'] == tag and row['repository'] == repo)), \
+                     patch.dict(os.environ, RELEASE_VERSION='release-v1.2.3', PLATFORM_SOURCE_SHA=sha):
+                    plan = resolver.exact_assets_plan('a' * 40, stage)
+                package.assert_called_once()
+                self.assertEqual(plan['run_inputs']['platform'], subject.inspect_platform(platform, sha))
+                shutil.rmtree(inputs)  # Consumers have only the frozen archive.
+                with patch.object(subject, 'INPUT_ARCHIVE', capsule):
+                    checks.materialize(plan, root / 'checked', root / 'result.json')
+                    for arch in artifacts.ARCHES:
+                        checks.build.materialize(plan, arch, root / arch)
+                self.assertEqual(json.loads((root / 'result.json').read_text())['conclusion'], 'success')
+                restored = root / 'checked/platform'
+                self.assertEqual(git(restored, 'config', '--get', 'remote.origin.url'), origin)
+                self.assertEqual(subject.inspect_checkout(restored, resolver.PLATFORM, sha), plan['platform_source'])
+                self.assertEqual((restored / 'releases/release.yaml').read_text(), manifest)
+
+    def test_fixed_tagged_unit_transport_preserves_both_origin_forms(self):
+        git = subject.tag_sources.git
+        for suffix in ('', '.git'):
+            with self.subTest(suffix=suffix):
+                origin = 'https://github.com/kuasar-sandbox/connector' + suffix
+                git(self.remote, 'remote', 'set-url', 'origin', origin)
+                row = subject.tag_sources.inspect_unit(self.remote, 'connector', 'v1.2.3')
+                capsule = self.root / 'unit.tar'
+                with tarfile.open(capsule, 'w') as archive: archive.add(self.remote, arcname='sources/connector')
+                output = self.root / ('unit-canonical' if not suffix else 'unit-suffixed')
+                with patch.object(subject, 'INPUT_ARCHIVE', capsule):
+                    subject.copy_run_inputs({'run_inputs': {'sources/connector': row}}, {'connector': row}, output)
+                self.assertEqual(git(output / 'connector', 'config', '--get', 'remote.origin.url'), origin)
+                self.assertEqual(subject.tag_sources.inspect_unit(output / 'connector', 'connector', 'v1.2.3'), row)
+
+    def test_fixed_platform_transport_rejects_origin_and_input_tampering(self):
+        git = subject.tag_sources.git
+        source = self.root / 'platform'
+        fixture(source, 'connector', 'v1.2.3')
+        origin = 'https://github.com/' + resolver.PLATFORM
+        git(source, 'remote', 'set-url', 'origin', origin)
+        sha = git(source, 'rev-parse', 'HEAD')
+        row = subject.inspect_platform(source, sha)
+        def consume(record=row):
+            capsule = self.root / 'platform.tar'
+            with tarfile.open(capsule, 'w') as archive: archive.add(source, arcname='platform')
+            with patch.object(subject, 'INPUT_ARCHIVE', capsule):
+                subject.copy_run_inputs({'run_inputs': {'platform': record}}, {'platform': row}, self.root / 'rejected')
+        for wrong in (origin + '.git.git', origin + '-other', origin + '/extra',
+                      origin.replace('github.com', 'github.com.evil.invalid'),
+                      origin.replace('https:', 'http:'), origin.replace('kuasar-sandbox/kuasar-sandbox', 'other/kuasar-sandbox')):
+            with self.subTest(origin=wrong):
+                git(source, 'remote', 'set-url', 'origin', wrong)
+                with self.assertRaisesRegex(ValueError, 'repository changed'): consume()
+        git(source, 'remote', 'set-url', 'origin', origin)
+        with self.assertRaisesRegex(ValueError, 'identity changed'): consume(dict(row, sha='f' * 40))
+        with self.assertRaisesRegex(ValueError, 'tree changed'): consume(dict(row, tree='f' * 40))
+        path = source / 'README.md'; original = path.read_bytes()
+        path.write_text('modified\n')
+        with self.assertRaisesRegex(ValueError, 'modified inputs'): consume()
+        git(source, 'add', 'README.md')
+        with self.assertRaisesRegex(ValueError, 'modified inputs'): consume()
+        path.write_bytes(original); git(source, 'add', 'README.md')
+        untracked = source / 'untracked'; untracked.write_text('extra')
+        with self.assertRaisesRegex(ValueError, 'modified inputs'): consume()
+        untracked.unlink()
+        (source / '.git/info').mkdir(exist_ok=True)
+        (source / '.git/info/exclude').write_text('ignored\n')
+        ignored = source / 'ignored'; ignored.write_text('extra')
+        with self.assertRaisesRegex(ValueError, 'modified inputs'): consume()
+        ignored.unlink()
+        path.unlink(); path.symlink_to('product.go')
+        with self.assertRaisesRegex(ValueError, 'transport cannot contain links'): consume()
+        git(source, 'add', 'README.md')
+        git(source, 'commit', '-qm', 'tracked link')
+        # Exercise the checkout link guard itself, without transport rejecting first.
+        with self.assertRaisesRegex(ValueError, 'links or submodules'):
+            subject.inspect_checkout(source, resolver.PLATFORM, git(source, 'rev-parse', 'HEAD'))
+        path.unlink(); path.write_text('new committed inputs\n')
+        git(source, 'add', 'README.md'); git(source, 'commit', '-qm', 'changed admitted commit')
+        with self.assertRaisesRegex(ValueError, 'identity changed'): consume()
+
     def test_candidate_tests_survive_reuse_and_do_not_refetch_after_admission(self):
         (self.remote / 'test/e2e/cases/basic.fixture.sh').write_text('echo candidate tests\n')
         subject.tag_sources.git(self.remote, 'commit', '-qam', 'tests only')
