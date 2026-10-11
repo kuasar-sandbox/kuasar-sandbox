@@ -142,6 +142,23 @@ Use the shared prepared runner.
 EOF
   done
 done
+# Declare the fixture inventory in each selected source before tagging it.
+python3 - "$ROOT/ci/integration" "$TMP/fetched/sources" <<'PYHELPERS'
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from test_fixtures import helper_contract
+sources = pathlib.Path(sys.argv[2])
+for owner, row in helper_contract('a' * 40, '1' * 40)['owners'].items():
+    if owner == 'platform': continue
+    source = sources / ('runtime' if owner == 'guest-runtime' else owner)
+    (source / 'release').mkdir(exist_ok=True)
+    (source / 'release/helper-inputs.json').write_text(row['declaration'])
+    import json
+    recipe = json.loads(row['declaration'])['recipe']
+    if recipe:
+        path = source / recipe; path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b'fixture recipe')
+PYHELPERS
 # Give every source fixture a real owner tag and record derived provenance.
 printf 'runtime copy of vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux.md"
 printf 'runtime copy of Chinese vmlinux docs\n' > "$TMP/fetched/sources/runtime/docs/vmlinux_zh.md"
@@ -161,10 +178,23 @@ python3 -B "$ROOT/release/tag_sources.py" inspect "$FORMAL_ROOT" "$VERSION" "$TM
   > "$TMP/fetched/source-records.json"
 python3 -B "$ROOT/release/tag_sources.py" inspect "$FORMAL_ROOT" "$VERSION" "$TMP/fetched/sources" \
   --owner-revisions > "$TMP/owner-revisions.json"
-python3 - "$TMP/fetched/e2e-helpers" "$TMP/owner-revisions.json" "$TMP/fetched/source-records.json" <<'PY'
+python3 - "$TMP/fetched/e2e-helpers" "$TMP/owner-revisions.json" "$TMP/fetched/source-records.json" "$ROOT/ci/integration" "$FORMAL_ROOT" <<'PY'
 import hashlib, json, pathlib, struct, sys
 root = pathlib.Path(sys.argv[1])
 pins = json.loads(pathlib.Path(sys.argv[2]).read_text())
+sys.path.insert(0, sys.argv[4])
+from test_fixtures import helper_contract
+import artifacts
+sources = json.loads(pathlib.Path(sys.argv[3]).read_text())
+sys.path.insert(0, str(pathlib.Path(sys.argv[4]).parents[1] / 'release'))
+import helper_inputs, source_inputs
+roots = {owner: root.parent / 'sources' / unit for owner, unit in source_inputs.tag_sources.OWNER_UNITS.items()}
+roots['platform'] = pathlib.Path(sys.argv[5])
+identities = {owner: sources[unit] for owner, unit in source_inputs.tag_sources.OWNER_UNITS.items()}
+identities['platform'] = source_inputs.inspect_platform(roots['platform'], source_inputs.tag_sources.git(roots['platform'], 'rev-parse', 'HEAD'))
+contract = helper_inputs.discover(roots, identities)
+root.mkdir(parents=True)
+(root / 'contract.json').write_text(json.dumps(contract))
 for arch, machine in (('x86_64', 62), ('aarch64', 183)):
     directory = root / arch
     directory.mkdir(parents=True)
@@ -179,8 +209,8 @@ for arch, machine in (('x86_64', 62), ('aarch64', 183)):
         (directory / name).write_bytes(data)
         (directory / name).chmod(0o755)
         owner = 'orchestrator' if name in {'custom-proxy', 'telemetry-grpc-probe', 'node-ctl-runner-test'} else 'sandboxer'
-        records[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'source_sha': '1' * 40 if name in {'zot', 'versitygw'} else pins[owner]}
-    (directory / 'helpers.json').write_text(json.dumps({'arch': arch, 'framework_sha': '1' * 40, 'test_revisions': pins, 'source_records': json.loads(pathlib.Path(sys.argv[3]).read_text()), 'helpers': records}))
+        records[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'source_sha': identities['platform']['sha'] if name in {'zot', 'versitygw'} else pins[owner], 'owner': 'platform' if name in {'zot', 'versitygw'} else owner, 'size': len(data), 'mode': 0o755}
+    (directory / 'helpers.json').write_text(json.dumps({'schema': 1, 'contract_sha256': artifacts.identity(contract), 'arch': arch, 'framework_sha': '1' * 40, 'test_revisions': pins, 'source_records': json.loads(pathlib.Path(sys.argv[3]).read_text()), 'helpers': records}))
 PY
 cp -a "$TMP/demo-wheels" "$TMP/fetched/e2e-wheels"
 
@@ -385,6 +415,19 @@ for heading in \
   grep -Fqx "$heading" "$TMP/bundle/release-notes.md" \
     || release_fail "aggregate release notes omit $heading"
 done
+# Notes precede validation: declared profiles must not claim planned ARM cases ran.
+for coverage in \
+  'The declared native x86_64 profile uses the current full ordinary case selection.' \
+  'The hosted ARM profile requires native non-KVM image/storage E2E and `artifact-only` Workbench qualification' \
+  'planned Workbench cases do not establish network, KVM lifecycle or snapshot/restore execution.' \
+  'Consult the per-architecture validation records for executed cases and `qualification_scope`, including any `native-full` acceptance.'; do
+  grep -Fq "$coverage" "$TMP/bundle/release-notes.md" \
+    || release_fail "aggregate release notes misrepresent declared or executed architecture coverage"
+done
+if grep -Fq 'ARM retains native image/storage coverage and adds workbench network' \
+  "$TMP/bundle/release-notes.md"; then
+  release_fail "aggregate release notes claim unexecuted hosted ARM Workbench cases"
+fi
 grep -Fq 'This aggregate is a Stable, non-prerelease release.' \
   "$TMP/bundle/release-notes.md" \
   || release_fail "formal release notes do not identify the Stable channel"

@@ -135,6 +135,8 @@ If a dependency rebuild was committed to the Daily manifest before its component
 
 Make the platform source-contract mechanism available before the component producer workflows that use it. Verify that each owner source branch contains its local guide declaration and every required input, then review a **separate** aggregate manifest change selecting normal new owner tags and an aggregate version.
 
+When introducing helper declarations, land the component declarations and recipes under the existing CI framework before enabling declaration discovery in the platform. The platform change can then validate against the original published baseline using the read-only evidence boundary in §8.1. Newly merged declarations do not replace missing declarations in old tags; the separate first tag selection makes them available to new publication.
+
 For Preview, use the normal component release entry points in §6 against that committed selection, in dependency order: accelerator and connector, then sandboxer, then orchestrator and runtime. After the mechanism lands, complete acceptance of a new Preview before the Stable cutover; Stable then uses the formal coordinator's committed selection. Once the selected component releases exist, use the normal aggregate entry point in §7 and all validation gates in §8. The independently selected vmlinux tag may remain unchanged when its relevant kernel inputs are unchanged and its selected documentation is complete.
 
 This explicit first migration is separate from the generic Daily docs-only reuse algorithm; that algorithm cannot substitute for the reviewed new-tag selection. Do not widen product-change inputs or add a forced-build rule. Historical tags and packages remain immutable under the read-only contract in §2.
@@ -266,6 +268,12 @@ Demo scripts and locks, prebuilt helpers, local wheels, and thin workbench host
 entrypoints. It does not copy the whole test tree or include undeclared guides.
 `test/e2e/assemble_docs.py` rebases links in whole selected documents without
 editing sections, executable examples, configuration values or product binaries.
+
+Compiled helpers use each selected owner's `release/helper-inputs.json`. Schema `1` declares the complete `helpers` inventory (`name`, optional `env`, and case filename patterns in `cases`), the repository-relative `recipe`, and dependency owners in `dependencies`. An owner with no helpers declares an empty list and a null recipe. The generic builder invokes `bash <recipe> <architecture> <output-directory>` in the owner's root with the fixed dependency workspace; internal commands remain in that repository. Every declared output must be a regular, safe executable with the requested ELF architecture. Undeclared, missing or duplicate outputs fail.
+
+The input plan binds repository, selected tag or admitted candidate ref, commit/tree, declaration bytes and recipe blobs. Producer receipts and the packaged `helpers/contract.json` retain that expected inventory; validators compare actual bytes, modes, architecture and source identity to it. Public prepare/run do not build helpers or accept an output receipt as its own inventory authority. Necessary case capabilities remain checked separately from the complete allowed inventory.
+
+For source CI against a pre-declaration aggregate, only the authenticated original plan and complete asset set can authorize read-only helper reuse. All five original component tag/source identities and the original producer dependency scope must match; changed candidate dependencies reject reuse. The adapter retains original metadata and producer context, while platform-owned tools build from the current declaration. Missing declarations never authorize a fallback for new publication.
 
 #### Owner runtime input discovery
 

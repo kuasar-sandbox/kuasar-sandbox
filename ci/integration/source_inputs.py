@@ -21,8 +21,8 @@ def inspect_platform(root, expected_sha):
                       'missing admitted platform source')
     artifacts.require(Path(git(root, 'rev-parse', '--show-toplevel')).resolve() == root.resolve(),
                       'platform source is not a repository root')
-    artifacts.require(git(root, 'config', '--get', 'remote.origin.url') ==
-                      'https://github.com/kuasar-sandbox/kuasar-sandbox.git', 'wrong platform source repository')
+    artifacts.require(git(root, 'config', '--get', 'remote.origin.url').removesuffix('.git') ==
+                      'https://github.com/kuasar-sandbox/kuasar-sandbox', 'wrong platform source repository')
     artifacts.require(git(root, 'rev-parse', 'HEAD') == expected_sha, 'admitted platform source identity changed')
     modified = git(root, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', 'HEAD', '--')
     untracked = git(root, 'ls-files', '--others')
@@ -61,7 +61,11 @@ def verify_package(archive, roots, case_files, records):
     spec = importlib.util.spec_from_file_location('input_package_validator', ROOT / 'release/validate-e2e-package.py')
     validator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(validator)
-    validator.validate(archive, expected_sources=records)
+    import helper_inputs
+    identities = {owner: records[unit] for owner, unit in tag_sources.OWNER_UNITS.items()}
+    identities['platform'] = inspect_platform(roots['platform'], tag_sources.git(roots['platform'], 'rev-parse', 'HEAD'))
+    expected_contract = helper_inputs.discover(roots, identities)
+    validator.validate(archive, expected_sources=records, expected_contract=expected_contract)
     with tempfile.TemporaryDirectory(prefix='source-package-') as directory:
         output = Path(directory)
         artifacts.unpack(archive, output, 'platform', {})
@@ -99,7 +103,7 @@ def inspect_checkout(root, repository, sha):
     artifacts.require(root.is_dir() and not root.is_symlink() and (root / '.git').is_dir()
                       and not (root / '.git').is_symlink(), 'missing fixed run source')
     artifacts.require(Path(git(root, 'rev-parse', '--show-toplevel')).resolve() == root.resolve(), 'invalid run source root')
-    artifacts.require(git(root, 'config', '--get', 'remote.origin.url') == f'https://github.com/{repository}.git',
+    artifacts.require(git(root, 'config', '--get', 'remote.origin.url').removesuffix('.git') == f'https://github.com/{repository}',
                       'run source repository changed')
     artifacts.require(git(root, 'rev-parse', 'HEAD') == sha, 'run source identity changed')
     artifacts.require(not git(root, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', 'HEAD', '--')

@@ -239,7 +239,7 @@ write_release_notes() {
   local version="$1" previous="$2" selection="$3" updates="$4" output="$5" unit tag
   {
     printf '# Kuasar Sandbox %s\n\n' "$version"
-    printf 'Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains selected user guides, Demo and canonical tests, the original component archives, and both native workbench images under one aggregate version. AMD64 uses the current full ordinary case selection; ARM retains native image/storage coverage and adds workbench network, KVM lifecycle and snapshot/restore. Historical releases retain their original coverage.\n\n'
+    printf 'Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains selected user guides, Demo and canonical tests, the original component archives, and both native workbench images under one aggregate version. The declared native x86_64 profile uses the current full ordinary case selection. The hosted ARM profile requires native non-KVM image/storage E2E and `artifact-only` Workbench qualification; planned Workbench cases do not establish network, KVM lifecycle or snapshot/restore execution. Consult the per-architecture validation records for executed cases and `qualification_scope`, including any `native-full` acceptance. Historical releases retain their original coverage.\n\n'
     printf '## Highlights\n\n'
     printf '%s\n' \
       '- Independent Guest Kernel isolation for each MicroVM sandbox.' \

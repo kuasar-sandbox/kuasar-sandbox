@@ -201,7 +201,7 @@ def parse_snapshot(commit: str) -> tuple[str, dict[str, str], str] | None:
 
 def canonical_snapshots(
     stable_sha: str, version: str
-) -> dict[str, CanonicalSnapshot]:
+) -> dict[str, list[CanonicalSnapshot]]:
     commits = git(
         "log",
         "--first-parent",
@@ -210,16 +210,18 @@ def canonical_snapshots(
         "--",
         "releases/daily-preview.yaml",
     ).splitlines()
-    snapshots: dict[str, CanonicalSnapshot] = {}
+    snapshots: dict[str, list[CanonicalSnapshot]] = {}
     for commit in commits:
         snapshot = parse_snapshot(commit)
         if snapshot is None:
             continue
         aggregate, components, delivery = snapshot
         if aggregate.startswith(f"{version}-preview."):
-            # git log is newest first; keep the final canonical selection when
-            # one Preview date was committed more than once.
-            snapshots.setdefault(aggregate, CanonicalSnapshot(commit, components, delivery))
+            # Keep newest-first history: an existing tag can predate a later
+            # edit of the same version, including historical metadata cleanup.
+            snapshots.setdefault(aggregate, []).append(
+                CanonicalSnapshot(commit, components, delivery)
+            )
     return snapshots
 
 
@@ -249,11 +251,37 @@ def validate_platform_ownership(
         raise GCError(f"platform Preview Tag is outside its canonical history: {tag}")
 
 
+def resolve_canonical_snapshot(
+    tag: str,
+    release: dict[str, Any] | None,
+    source_sha: str | None,
+    snapshots: list[CanonicalSnapshot],
+) -> CanonicalSnapshot:
+    if not snapshots:
+        raise GCError(f"platform Preview has no canonical snapshot: {tag}")
+    # Without a tag, retain the newest selection and incomplete-candidate rules.
+    canonical = snapshots[0]
+    if source_sha is not None:
+        if parse_snapshot(source_sha) is not None:
+            reachable = next(
+                (snapshot for snapshot in snapshots
+                 if first_parent_contains(snapshot.commit, source_sha)),
+                None,
+            )
+            if reachable is None:
+                raise GCError(f"platform Preview Tag is outside its canonical history: {tag}")
+            canonical = reachable
+        # Pre-manifest tags retain the narrowly checked reverse-ancestry rule; they
+        # must not gain a general fallback through older selections.
+        validate_platform_ownership(tag, release, source_sha, canonical)
+    return canonical
+
+
 def retained_snapshot(
     tag: str,
     release: dict[str, Any],
     platform_tags: dict[str, str],
-    history_cache: dict[str, dict[str, CanonicalSnapshot]],
+    history_cache: dict[str, dict[str, list[CanonicalSnapshot]]],
 ) -> CanonicalSnapshot:
     source_sha = platform_tags.get(tag)
     if source_sha is None:
@@ -264,16 +292,15 @@ def retained_snapshot(
         snapshots = history_cache.setdefault(
             stable, canonical_snapshots(stable_sha, stable)
         )
-        canonical = snapshots.get(tag)
-        if canonical is None:
+        choices = snapshots.get(tag)
+        if not choices:
             raise GCError(f"retained aggregate Preview has no canonical manifest: {tag}")
     else:
         snapshot = parse_snapshot(source_sha)
         if snapshot is None or snapshot[0] != tag:
             raise GCError(f"retained pre-contract Preview has no Stable history: {tag}")
-        canonical = CanonicalSnapshot(source_sha, snapshot[1], snapshot[2])
-    validate_platform_ownership(tag, release, source_sha, canonical)
-    return canonical
+        choices = [CanonicalSnapshot(source_sha, snapshot[1], snapshot[2])]
+    return resolve_canonical_snapshot(tag, release, source_sha, choices)
 
 
 def all_platform_previews(
@@ -295,7 +322,7 @@ def protected_component_tags(
     candidates: set[str],
 ) -> set[tuple[str, str]]:
     protected: set[tuple[str, str]] = set()
-    history_cache: dict[str, dict[str, CanonicalSnapshot]] = {}
+    history_cache: dict[str, dict[str, list[CanonicalSnapshot]]] = {}
     for tag in platform_previews:
         if tag in candidates:
             continue
@@ -447,7 +474,13 @@ def plan(version: str) -> tuple[list[Candidate], dict[str, Any]]:
     stable = stable_release(version, platform_releases, platform_tags)
     stable_sha = platform_tags.get(version)
     assert stable_sha is not None
-    snapshots = canonical_snapshots(stable_sha, version)
+    history = canonical_snapshots(stable_sha, version)
+    snapshots = {
+        tag: resolve_canonical_snapshot(
+            tag, platform_releases.get(tag), platform_tags.get(tag), choices
+        )
+        for tag, choices in history.items()
+    }
     platform_previews = all_platform_previews(platform_releases)
     canonical_aggregates = set(snapshots)
     protected = protected_component_tags(

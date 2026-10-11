@@ -101,8 +101,7 @@ exact-assets 模式直接消费 platform 包中的同一布局。两条路径都
 首段只能是 `basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder` 或 `telemetry`。
 内部 CI shard 按 suite 分组精确文件，plan 在执行前记录所选用例和架构排除项。
 
-source/helper build 生成目标架构的 zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe，
-以及静态无 libc 的 x86_64/aarch64 cgroup probe。 orchestrator 辅助程序集合还包含 `node-ctl-runner-test`，使用已准入的 orchestrator 源码身份及所选依赖工作区，通过 `go test -c ./cmd/node-ctl` 编译。它仅用于测试，不是生产制品。prepare 校验架构、源码 pin 和摘要，并将 `NODE_CTL_RUNNER_TEST_BINARY` 设置为不可变的 `fixtures/bin/node-ctl-runner-test` 路径；prepare 和 E2E 均不编译它。发布包携带两种架构的 helper、从所选 owner Tag 派生的源码身份和摘要。同一更早的 build 阶段按 `test/demo/requirements.lock`
+source/helper build 从已准入的 owner 声明派生完整 helper 清单和配方，并将契约绑定到输入计划。通用构建器使用固定依赖工作区执行各 owner 配方，拒绝缺失或额外输出。内部二进制名称、包路径和构建目标由组件维护。prepare 校验预期契约、架构、源码身份、字节和安全权限，提供声明的环境变量别名与 `E2E_HELPERS_DIR`，不执行编译。包含静态无 libc cgroup probe 在内的用例必要能力仍单独检查，不作为完整允许清单。发布包携带两种架构的 helper 和相同 owner Tag 的证据。同一更早的 build 阶段按 `test/demo/requirements.lock`
 获取 Python 3.12 的完整 Demo SDK wheel 依赖闭包，固定全部版本及 wheel 摘要；发布包携带两种架构的 wheelhouse。prepare 消费这些二进制，
 准备 manifest archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像，并仅从本地 wheelhouse 通过
 `--no-index --find-links` 和 `--require-hashes` 安装 Demo SDK。wheel 缺失或变化时在安装前失败。provenance 绑定包名、版本、wheel 摘要、lock 身份和安装后的文件树。
@@ -125,6 +124,10 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 容器输入只读，可变用例目录和输出目录独立。
 
 `snapshot.read-recovery.sh` 失败时，在 cleanup 前将用例、阶段、失败行及有界固定词表错误证据保留在 job 日志中。诊断保留测试的原始退出状态。
+
+现有 `make test-release-tools` 入口在源码 CI 上下文或任一物化文档存在时，还执行固定源码集的发布验证；此时 `.source-plan.json` 和 `.source-checks.json` 均为必需。入口接受原始 `source` 和 `exact-assets` plan，绑定未修改的 plan ID、干净源码树和现有 Go workspace。组件保留所选 tag 身份，候选保留已准入的 ref。对于 `exact-assets`，尚未发布的 platform 源码通过原始仓库、commit 和 tree 绑定暂存选择、固定运行输入、物化回执和 helper 声明。入口先验证这些输入，再串行执行所选组件原有的 `make test-release`；platform 候选会选择全部五个组件。入口同时执行所选 owner 声明的原生 helper 配方，校验完整输出，并在 `KUASAR_CI_DIR` 下记录命令、退出码、声明、依赖身份和二进制摘要。执行后源码及 workspace 输入必须保持不变。已认证的历史 helper 证据保留为历史事实，不宣称重新执行过其配方。该原生源码回归不替代各架构构建、prepare 或 E2E 验证。
+
+独立运行 `make test-release-tools` 仍保持平台工具验证范围，未请求固定源码集验证时会明确说明。对已物化的本地源码集，可在保留现有 Go workspace 和工具链环境的情况下执行 `make test-release-source-set ORG=<fixed-source-root> RELEASE_CHECK_OUTPUT=<fresh-evidence-directory>`。该显式入口始终要求两份准入文档，不重新获取源码。
 
 ## 4. Daily 与 Stable
 

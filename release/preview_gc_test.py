@@ -9,8 +9,10 @@ import importlib.util
 import io
 import pathlib
 import sys
+import subprocess
+import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import contextmanager, redirect_stdout
 from unittest import mock
 
 
@@ -128,7 +130,7 @@ class PreviewGCTest(unittest.TestCase):
         self.assertFalse(elapsed)
         self.assertGreater(eligible, dt.datetime.now(dt.timezone.utc))
 
-    def test_canonical_history_keeps_newest_selection_for_same_preview(self) -> None:
+    def test_canonical_history_keeps_all_selections_newest_first(self) -> None:
         aggregate = "release-v1.2.3-preview.20260831"
         with (
             mock.patch.object(preview_gc, "git", return_value="newer\nolder"),
@@ -142,9 +144,10 @@ class PreviewGCTest(unittest.TestCase):
             ),
         ):
             snapshots = preview_gc.canonical_snapshots("f" * 40, "release-v1.2.3")
+        self.assertEqual([snapshot.commit for snapshot in snapshots[aggregate]], ["newer", "older"])
         self.assertEqual(
-            snapshots[aggregate].components["connector"],
-            "v1.0.2-preview.20260831",
+            [snapshot.components["connector"] for snapshot in snapshots[aggregate]],
+            ["v1.0.2-preview.20260831", "v1.0.1-preview.20260831"],
         )
 
     def test_numbered_previews_remain_distinct_canonical_gc_candidates(self) -> None:
@@ -268,7 +271,7 @@ class PreviewGCTest(unittest.TestCase):
             mock.patch.object(
                 preview_gc,
                 "canonical_snapshots",
-                return_value={tag: snapshot},
+                return_value={tag: [snapshot]},
             ),
             mock.patch.object(preview_gc, "first_parent_contains", return_value=True),
         ):
@@ -626,6 +629,210 @@ class PreviewGCConvergenceTest(unittest.TestCase):
         apply.assert_called_once_with([self.first])
         self.assertEqual(self.output.getvalue().count("Preview GC converged"), 1)
 
+
+
+class CanonicalSourceHistoryTest(unittest.TestCase):
+    """Real manifest/first-parent histories; only public transport is simulated."""
+
+    version = "release-v1.2.3"
+    preview = version + "-preview.20260831"
+    old_component = "v1.0.1-preview.20260831"
+    new_component = "v1.0.2-preview.20260831"
+
+    def setUp(self) -> None:
+        temporary = tempfile.TemporaryDirectory(prefix="gc-history-")
+        self.addCleanup(temporary.cleanup)
+        self.root = pathlib.Path(temporary.name)
+        self.run_git("init", "-q")
+        self.run_git("config", "user.name", "GC fixture")
+        self.run_git("config", "user.email", "gc@example.invalid")
+        self.run_git("config", "commit.gpgsign", "false")
+        root_patch = mock.patch.object(preview_gc, "ROOT", self.root)
+        root_patch.start()
+        self.addCleanup(root_patch.stop)
+        (self.root / "README").write_text("Initial history\n")
+        self.initial = self.commit("Before maintained selections")
+
+    def run_git(self, *args: str) -> str:
+        return subprocess.check_output(
+            ["git", "-C", str(self.root), *args], text=True, stderr=subprocess.PIPE
+        ).strip()
+
+    def commit(self, message: str) -> str:
+        self.run_git("add", ".")
+        self.run_git("commit", "-qm", message)
+        return self.run_git("rev-parse", "HEAD")
+
+    def selection(self, component: str, *, legacy: bool = False,
+                  tag: str | None = None) -> str:
+        tag = tag or self.preview
+        version, suffix = tag.split("-preview.")
+        units = preview_gc.coordinator.selection.UNITS
+        components = {unit: (unit + "-" if unit in ("runtime", "vmlinux") else "") + "v1.0.0"
+                      for unit in units}
+        components["connector"] = component
+        text = f"version: {version}\npreview_version: preview.{suffix}\ncomponents:\n"
+        text += "".join(f"  {unit}: {value}\n" for unit, value in components.items())
+        if legacy:
+            text += "test_revisions:\n" + "".join(
+                f"  {owner}: {index:040x}\n" for index, owner in
+                enumerate(preview_gc.coordinator.selection.TEST_OWNERS, 1))
+        path = self.root / "releases/daily-preview.yaml"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(text)
+        return self.commit("Maintained Preview selection")
+
+    def stable(self) -> str:
+        (self.root / "README").write_text("Stable publication\n")
+        sha = self.commit("Stable")
+        self.run_git("tag", self.version)
+        return sha
+
+    def release(self, tag: str, sha: str, identity: int = 42) -> dict:
+        return dict(id=identity, tag_name=tag, target_commitish=sha, draft=False,
+                    prerelease="-preview." in tag, published_at="2026-09-01T00:00:00Z",
+                    assets=[dict(name="archive", state="uploaded", size=1, digest="sha256:" + "1" * 64)])
+
+    @contextmanager
+    def public_state(self, stable_sha: str, source: str, retained: tuple | None = None):
+        tags = {self.version: stable_sha, self.preview: source}
+        releases = [self.release(self.version, stable_sha), self.release(self.preview, source)]
+        if retained:
+            tag, sha = retained
+            tags[tag] = sha
+            releases.append(self.release(tag, sha, 44))
+        state = mock.Mock()
+        state.status.side_effect = lambda tag: preview_gc.coordinator.ReleaseStatus(
+            self.release(tag, "a" * 40, 43), "a" * 40, True)
+        with (
+            mock.patch.object(preview_gc, "tag_index", return_value=tags),
+            mock.patch.object(preview_gc.coordinator, "paginated", return_value=releases),
+            mock.patch.object(preview_gc.coordinator, "platform_asset_names", return_value={"archive"}),
+            mock.patch.object(preview_gc.coordinator, "RepositoryState", return_value=state),
+            mock.patch.object(preview_gc, "current_manifest_protection", return_value=set()),
+            mock.patch.object(preview_gc, "active_release_titles", return_value=set()),
+        ):
+            yield
+
+    def test_metadata_cleanup_after_tag_plans_original_history_in_dry_run(self) -> None:
+        source = self.selection(self.old_component, legacy=True)
+        self.run_git("tag", self.preview, source)
+        original = self.run_git("show", source + ":releases/daily-preview.yaml")
+        cleanup = self.selection(self.old_component)
+        stable = self.stable()
+        history = preview_gc.canonical_snapshots(stable, self.version)
+        self.assertEqual([row.commit for row in history[self.preview]], [cleanup, source])
+        release = self.release(self.preview, source)
+        selected = preview_gc.resolve_canonical_snapshot(self.preview, release, source, history[self.preview])
+        self.assertEqual(selected.commit, source)
+        self.assertEqual(self.run_git("show", selected.commit + ":releases/daily-preview.yaml"), original)
+        self.assertIn("test_revisions:", original)
+        with self.public_state(stable, source):
+            candidates, _ = preview_gc.plan(self.version)
+            self.assertEqual({row.tag for row in candidates}, {self.old_component, self.preview})
+            output = io.StringIO()
+            with (
+                mock.patch.dict(preview_gc.os.environ, {"DRY_RUN": "true", "STABLE_VERSION": self.version}),
+                mock.patch.object(preview_gc, "apply") as apply,
+                mock.patch.object(preview_gc.coordinator, "gh") as mutation,
+                mock.patch.object(preview_gc.time, "sleep") as sleep,
+                redirect_stdout(output),
+            ):
+                preview_gc.main()
+            self.assertIn("eligible_at", output.getvalue())
+            self.assertIn(self.preview, output.getvalue())
+            apply.assert_not_called()
+            mutation.assert_not_called()
+            sleep.assert_not_called()
+
+    def test_latest_reachable_product_selection_wins_before_tag(self) -> None:
+        older = self.selection(self.old_component)
+        selected = self.selection(self.new_component)
+        (self.root / "README").write_text("Release source after selection\n")
+        source = self.commit("Publish source")
+        self.run_git("tag", self.preview, source)
+        stable = self.stable()
+        history = preview_gc.canonical_snapshots(stable, self.version)[self.preview]
+        self.assertEqual([row.commit for row in history], [selected, older])
+        result = preview_gc.resolve_canonical_snapshot(self.preview, self.release(self.preview, source), source, history)
+        self.assertEqual(result.commit, selected)
+        self.assertEqual(result.components["connector"], self.new_component)
+
+    def test_post_tag_product_change_is_not_old_release_or_retained_dependency(self) -> None:
+        source = self.selection(self.old_component, legacy=True)
+        self.run_git("tag", self.preview, source)
+        self.selection(self.new_component)
+        stable = self.stable()
+        release = self.release(self.preview, source)
+        tags = {self.version: stable, self.preview: source}
+        history = preview_gc.canonical_snapshots(stable, self.version)[self.preview]
+        candidate = preview_gc.resolve_canonical_snapshot(self.preview, release, source, history)
+        retained = preview_gc.retained_snapshot(self.preview, release, tags, {})
+        self.assertEqual(candidate, retained)
+        self.assertEqual(retained.commit, source)
+        protected = preview_gc.protected_component_tags({self.preview: release}, tags, set())
+        self.assertEqual(protected, {("connector", self.old_component)})
+        with self.public_state(stable, source):
+            candidates, _ = preview_gc.plan(self.version)
+            self.assertEqual({row.tag for row in candidates}, {self.old_component, self.preview})
+        # A retained later release still protects the older shared component.
+        later = "release-v1.2.4-preview.20260901"
+        later_sha = self.selection(self.old_component, tag=later)
+        with self.public_state(stable, source, (later, later_sha)):
+            candidates, metadata = preview_gc.plan(self.version)
+            self.assertEqual({row.tag for row in candidates}, {self.preview})
+            self.assertEqual(metadata["protected_component_count"], 1)
+
+    def test_source_ownership_and_no_match_still_fail(self) -> None:
+        source = self.selection(self.old_component)
+        cleanup = self.selection(self.old_component, legacy=True)
+        stable = self.stable()
+        history = preview_gc.canonical_snapshots(stable, self.version)[self.preview]
+        release = self.release(self.preview, source)
+        outside = self.run_git("commit-tree", self.run_git("rev-parse", source + "^{tree}"), "-m", "Unrelated root")
+        wrong_version = self.selection(self.old_component, tag="release-v1.2.3-preview.20260901")
+        for label, row, sha, choices, error in [
+            ("off-canonical", self.release(self.preview, outside), outside, history, "canonical history"),
+            ("moved tag", release, cleanup, history, "Release and Tag disagree"),
+            ("wrong Release target", self.release(self.preview, outside), source, history, "Release and Tag disagree"),
+            ("wrong version", self.release(self.preview, wrong_version), wrong_version, history, "another manifest"),
+            ("no reachable snapshot", release, source, [history[0]], "canonical history"),
+            ("missing history", release, source, [], "no canonical snapshot"),
+        ]:
+            with self.subTest(label=label), self.assertRaisesRegex(preview_gc.GCError, error):
+                preview_gc.resolve_canonical_snapshot(self.preview, row, sha, choices)
+
+    def test_absent_release_only_and_tag_only_preserve_their_boundaries(self) -> None:
+        source = self.selection(self.old_component)
+        newest = self.selection(self.new_component)
+        history = preview_gc.canonical_snapshots(self.stable(), self.version)[self.preview]
+        release = self.release(self.preview, source)
+        for row in (None, release):
+            selected = preview_gc.resolve_canonical_snapshot(self.preview, row, None, history)
+            self.assertEqual(selected.commit, newest)
+            candidate = preview_gc.release_candidate(preview_gc.coordinator.PLATFORM_REPOSITORY, "platform",
+                self.preview, platform_release=row, platform_snapshot=selected)
+            if row is None:
+                self.assertIsNone(candidate)
+            else:
+                self.assertEqual(candidate.source_sha, source)
+        selected = preview_gc.resolve_canonical_snapshot(self.preview, None, source, history)
+        self.assertEqual(selected.commit, source)
+        candidate = preview_gc.release_candidate(preview_gc.coordinator.PLATFORM_REPOSITORY, "platform",
+            self.preview, platform_sha=source, platform_snapshot=selected)
+        self.assertEqual(candidate.source_sha, source)
+        self.assertIsNone(candidate.release_id)
+
+    def test_pre_manifest_resolution_keeps_existing_narrow_rule(self) -> None:
+        self.selection(self.old_component)
+        newest = self.selection(self.new_component)
+        history = preview_gc.canonical_snapshots(self.stable(), self.version)[self.preview]
+        release = self.release(self.preview, self.initial)
+        selected = preview_gc.resolve_canonical_snapshot(self.preview, release, self.initial, history)
+        self.assertEqual(selected.commit, newest)
+        outside = self.run_git("commit-tree", self.run_git("rev-parse", self.initial + "^{tree}"), "-m", "Unrelated pre-manifest root")
+        with self.assertRaisesRegex(preview_gc.GCError, "canonical history"):
+            preview_gc.resolve_canonical_snapshot(self.preview, self.release(self.preview, outside), outside, history)
 
 if __name__ == "__main__":
     unittest.main()

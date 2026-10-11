@@ -127,6 +127,10 @@ def tag_source_plan(plan):
     plan['test_revisions'] = artifacts.release_test_revisions({
         owner: records['runtime' if owner == 'guest-runtime' else owner]['sha']
         for owner in artifacts.OWNERS if owner != 'platform'}, plan['baseline']['sha'])
+    plan['helper_contract'] = helper_contract()
+    for owner, row in plan['helper_contract']['owners'].items():
+        row['source'] = plan['platform_source'] if owner == 'platform' else records['runtime' if owner == 'guest-runtime' else owner]
+    plan['run_inputs'] = {owner: row['source'] for owner, row in plan['helper_contract']['owners'].items()}
     return records
 
 
@@ -138,3 +142,34 @@ def restore_using(callback):
             destination.parent.mkdir(parents=True, exist_ok=True)
             callback(record['repository'], record['sha'], destination)
     return restore
+
+
+def helper_contract(sha='a' * 40, framework='b' * 40, names=None):
+    """An explicit test declaration, separate from any produced receipt."""
+    c = artifacts.helper_contract_module()
+    by_owner = {'platform': ['zot', 'versitygw'],
+                'orchestrator': ['custom-proxy', 'telemetry-grpc-probe', 'node-ctl-runner-test'],
+                'sandboxer': ['usage-probe', 'cgroup-fork-probe']}
+    env = {'zot': 'ZOT_BIN', 'versitygw': 'VGW_BIN', 'custom-proxy': 'CUSTOM_PROXY_BIN',
+           'telemetry-grpc-probe': 'TELEMETRY_GRPC_PROBE_BIN', 'node-ctl-runner-test': 'NODE_CTL_RUNNER_TEST_BINARY',
+           'usage-probe': 'USAGE_PROBE_BIN', 'cgroup-fork-probe': 'CGROUP_FORK_PROBE_BIN'}
+    orchestration = ['orchestrator.*.sh', 'builder.*.sh', 'telemetry.backends.sh', 'telemetry.guest.sh', 'telemetry.proxy.sh']
+    sandbox = ['sandbox.*.sh', 'snapshot.*.sh', 'network.tapfd.sh', 'image.manifest-boot.sh',
+               'image.sandbox-assembly.sh', 'telemetry.usage.sh', 'telemetry.usage-faults.sh', 'telemetry.source-faults.sh']
+    patterns = {'zot': orchestration + sandbox + ['basic.demo.sh', 'image.flatten.sh', 'image.registry.sh'],
+                'versitygw': orchestration + ['basic.demo.sh'], 'usage-probe': sandbox,
+                'cgroup-fork-probe': ['sandbox.cgroup.sh']}
+    rows = {}
+    allowed_names = names
+    for owner in c.OWNERS:
+        names = [name for name in by_owner.get(owner, []) if allowed_names is None or name in allowed_names]
+        source = {'repository': 'kuasar-sandbox/' + ('kuasar-sandbox' if owner == 'platform' else owner),
+                  'sha': framework if owner == 'platform' else sha, 'tree': 'c' * 40}
+        if owner != 'platform': source['tag'] = ('runtime-' if owner == 'guest-runtime' else '') + 'v1.2.3'
+        declared = c.canonical({'schema': 1, 'recipe': 'scripts/build-helpers.sh' if names else None,
+                               'dependencies': [], 'helpers': [{'name': name, 'env': env[name], 'cases': patterns.get(name, orchestration)}
+                                                              for name in names]})
+        rows[owner] = {'source': source, 'declaration': declared.decode(), 'declaration_sha256': c.digest(declared),
+                       'declaration_blob': c.blob(declared), 'recipe_sha256': 'd' * 64 if names else None,
+                       'recipe_blob': 'd' * 40 if names else None}
+    return {'schema': 1, 'owners': rows}

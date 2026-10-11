@@ -71,7 +71,7 @@ def unit_guide_inputs(root: Path, unit: str):
 
 
 PLATFORM_RUNTIME = (
-    'test/e2e/e2e', 'test/e2e/lib/common.sh', 'test/e2e/lib/workspace.py',
+    'test/e2e/e2e', 'test/e2e/lib/common.sh', 'test/e2e/lib/workspace.py', 'test/e2e/lib/helper_contract.py',
     'test/e2e/lib/demo_wheels.py', 'test/demo/demo_common.sh',
     'test/demo/demo_e2b.sh', 'test/demo/demo_prep.sh', 'test/demo/prepared.py',
     'test/demo/requirements.txt', 'test/demo/requirements.lock',

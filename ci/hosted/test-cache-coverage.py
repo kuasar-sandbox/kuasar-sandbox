@@ -5,10 +5,14 @@ import copy
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'integration'))
+from test_fixtures import helper_contract
 
 SPEC = importlib.util.spec_from_file_location("cache_coverage", Path(__file__).with_name("cache-coverage.py"))
 SUBJECT = importlib.util.module_from_spec(SPEC)
@@ -21,7 +25,7 @@ class Coverage(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.sources = Path(temporary.name)
         (self.sources / ".ci").mkdir()
-        self.plan = {"owners": ["sandboxer"], "plan_id": "first", "run_id": "100",
+        self.plan = {"helper_contract": helper_contract("a" * 40, "b" * 40), "owners": ["sandboxer"], "plan_id": "first", "run_id": "100",
                      "lanes": {arch: {"products": ["sandbox-ctl"], "embedded_products": [],
                                        "selection": {"cases": ["sandbox.pause.sh"]}}
                                for arch in SUBJECT.artifacts.ARCHES}}
@@ -72,7 +76,7 @@ class Coverage(unittest.TestCase):
         after = SUBJECT.identity("integration-delta", self.sources, "x86_64")
         self.assertEqual(before, after)
         self.assertEqual(after["products"], ["sandbox-ctl"])
-        self.assertEqual(after["helpers"], {"zot": "framework", "usage-probe": "sandboxer"})
+        self.assertEqual(after["helpers"], {"zot": "platform", "usage-probe": "sandboxer"})
 
     def test_delta_ignores_other_architecture_and_volatile_plan_fields(self):
         before = self.coverage("integration-delta")

@@ -224,6 +224,7 @@ def aggregate(version, *, require_dual=True):
         check_published_units(unit_records, evidence)
     return {"repository": PLATFORM, "version": version, "sha": sha, "release_id": state["id"],
             "units": unit_records, "validation": validation, "test_revisions": tests, "delivery": contract,
+            "validation_plan": evidence if tests else None,
             "case_files": selected_files if tests else None,
             "source_records": binding.get("source_records") if tests else None,
             "validation_run": max(runs, key=lambda run: run["id"])["html_url"],
@@ -376,7 +377,7 @@ def source_plan(framework_sha, input_root):
     embedded = ["envd"] if any(path in ("native-deps/deps/build-envd.sh", "native-deps/deps/common.sh", "native-deps/Makefile") for path in guest_changes) else []
     selected_files = source_inputs.cases(roots)
     preserve_baseline_cases(selected.get('case_files'), selected_files, owners)
-    plan = {"schema": 2, "mode": "source", "run_inputs": run_inputs,
+    plan = {"schema": 3, "mode": "source", "run_inputs": run_inputs,
             "source_records": tag_records, "admission_changes": admission_changes, "framework_sha": exact_sha(framework_sha), "baseline": selected,
             "candidate_records": records, "owners": sorted(owners), "changes": changes,
             "sources": sources, "kernel_sha": kernel_sha,
@@ -386,6 +387,28 @@ def source_plan(framework_sha, input_root):
             "lanes": {arch: {"products": products, "embedded_products": embedded,
                              "performance": ["working-set-smoke"] if arch == "x86_64" and set(owners) & {"platform", "sandboxer"} else [],
                              "selection": artifacts.suite_selection(owners, arch, selected_files)} for arch in artifacts.ARCHES}}
+    import helper_inputs
+    identities = {}
+    for owner, root in roots.items():
+        row = run_inputs[str(root.relative_to(input_root))]
+        identities[owner] = {key: row[key] for key in ('repository', 'sha', 'tree', 'tag', 'ref') if key in row}
+        if 'tag' in identities[owner]: identities[owner].pop('ref', None)
+    original = selected.get('validation_plan')
+    historical = (isinstance(original, dict) and original.get('schema') == 2 and
+                  'helper_contract' not in original)
+    # The authenticated original plan selects compatibility, never an absent
+    # declaration or a producer-controlled schema. Candidates use declarations.
+    if historical and not (set(owners) - {'platform'}):
+        import helper_history
+        historical_platform = input_root / 'historical-platform'
+        run_inputs['historical-platform'] = source_inputs.fetch_named(historical_platform, PLATFORM,
+            'refs/tags/' + selected['version'], original['framework_sha'])
+        run_id = int(selected['validation_run'].rsplit('/', 1)[1])
+        with tempfile.TemporaryDirectory(prefix='historical-helper-admission-') as temporary:
+            plan['helper_contract'] = helper_history.admit(selected, dict(roots, vmlinux=released / 'vmlinux'),
+                identities, historical_platform, run_id, helper_history.api, helper_history.gh, Path(temporary))
+    else:
+        plan['helper_contract'] = helper_inputs.discover(roots, identities)
     artifacts.check_plan(plan)
     return plan
 
@@ -399,6 +422,12 @@ def exact_assets_plan(framework_sha, stage):
         platform, units, source_records, platform_record, selected_files = source_inputs.staged_inputs(
             stage, version, sha, Path(directory) / 'inputs')
         manifest = (platform / relative).read_text()
+        import helper_inputs
+        roots = {owner: Path(directory) / 'inputs/sources' / unit for owner, unit in source_inputs.tag_sources.OWNER_UNITS.items()}
+        roots['platform'] = platform
+        identities = {owner: source_records[unit] for owner, unit in source_inputs.tag_sources.OWNER_UNITS.items()}
+        identities['platform'] = platform_record
+        helper_contract = helper_inputs.discover(roots, identities)
     selected, _, units = release.selection.parse_manifest(manifest, relative, "-preview." in version)
     tests = artifacts.release_test_revisions(source_inputs.tag_sources.owner_revisions(source_records), sha)
     artifacts.require(selected == version, "staged aggregate is not selected by its exact platform source")
@@ -425,7 +454,7 @@ def exact_assets_plan(framework_sha, stage):
     sources = {owner: {"repository": repository, "sha": sha if owner == "platform" else
                       unit_records["runtime" if owner == "guest-runtime" else owner]["sha"], "role": "release"}
                for owner, repository in REPOSITORIES.items()}
-    plan = {"schema": 2, "mode": "exact-assets", "source_records": source_records,
+    plan = {"schema": 3, "mode": "exact-assets", "helper_contract": helper_contract, "source_records": source_records,
             "platform_source": platform_record,
             "run_inputs": {'platform': platform_record, **{'sources/' + unit: record for unit, record in source_records.items()}}, "framework_sha": exact_sha(framework_sha), "baseline": baseline,
             "candidate_records": [], "owners": ["platform"], "sources": sources, "kernel_sha": unit_records["vmlinux"]["sha"],

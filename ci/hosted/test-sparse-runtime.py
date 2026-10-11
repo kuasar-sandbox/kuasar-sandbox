@@ -10,12 +10,12 @@ import unittest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
-MODULES = ('release/tag_sources.py', 'release/selection.py', 'test/e2e/package_inputs.py')
+MODULES = ('release/tag_sources.py', 'release/selection.py', 'test/e2e/package_inputs.py', 'test/e2e/lib/helper_contract.py')
 SMOKE = r'''
 import copy, json
 from pathlib import Path
 import artifacts
-from test_fixtures import CASES, selection
+from test_fixtures import CASES, selection, helper_contract
 
 records = {unit: dict(repository='kuasar-sandbox/' + ('guest-runtime' if unit in ('runtime', 'vmlinux') else unit),
     tag=(unit + '-' if unit in ('runtime', 'vmlinux') else '') + 'v1.2.3', sha='c' * 40, tree='d' * 40)
@@ -28,12 +28,17 @@ for mode in ('source', 'exact-assets'):
                for arch in artifacts.ARCHES}, test_overlays=list(artifacts.OWNERS) if mode == 'source' else [],
         test_revisions=artifacts.release_test_revisions({o: 'c' * 40 for o in artifacts.OWNERS if o != 'platform'}, 'b' * 40),
         source_records=records, platform_source=dict(repository='kuasar-sandbox/kuasar-sandbox', sha='b'*40, tree='e'*40))
+    contract = helper_contract(sha='c'*40, framework='b'*40, names=())
+    for owner, row in contract['owners'].items():
+        row['source'] = plan['platform_source'] if owner == 'platform' else records['runtime' if owner == 'guest-runtime' else owner]
+    plan['helper_contract'] = contract
+    plan['run_inputs'] = {owner: row['source'] for owner, row in contract['owners'].items()}
     identity = artifacts.check_plan(plan)
     workspace = Path('prepared-' + mode); workspace.mkdir()
     payload = workspace / 'input'; payload.write_text('prepared bytes\n')
     provenance = dict(plan_id=identity, arch='x86_64', files=artifacts.tree_files(workspace),
         modes=artifacts.tree_modes(workspace), selection=plan['lanes']['x86_64']['selection'],
-        test_revisions=plan['test_revisions'])
+        test_revisions=plan['test_revisions'], helper_contract=contract, helpers={})
     (workspace / 'provenance.json').write_text(json.dumps(provenance))
     artifacts.verify_workspace(workspace, plan, 'x86_64')
     def rejected(call, message):
@@ -87,7 +92,7 @@ class SparseRuntime(unittest.TestCase):
                     try:
                         result = run()
                         self.assertNotEqual(result.returncode, 0)
-                        self.assertIn('ModuleNotFoundError', result.stderr)
+                        self.assertIn('FileNotFoundError' if module.endswith('helper_contract.py') else 'ModuleNotFoundError', result.stderr)
                     finally:
                         target.write_bytes(saved)
 

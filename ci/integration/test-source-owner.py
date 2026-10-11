@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import importlib.util, os, pathlib, shutil, subprocess, tempfile, unittest
+import importlib.util, json, os, pathlib, shutil, subprocess, tempfile, unittest
 ROOT=pathlib.Path(__file__).resolve().parents[2]
 INTEGRATION=ROOT/"ci/integration"
 HELPER=INTEGRATION/"source-owner.sh"
@@ -9,6 +9,29 @@ from unittest.mock import patch
 from test_fixtures import CASES, selection
 
 def run(cmd,owner): return subprocess.run(["bash",str(HELPER),cmd,owner],text=True,capture_output=True)
+
+def helper_fixture(sources):
+    c = build_helpers.helper_inputs.contract
+    roots, records = {}, {}
+    for owner in c.OWNERS:
+        root = sources / owner
+        root.mkdir(parents=True, exist_ok=True)
+        (root / 'release').mkdir(exist_ok=True)
+        recipe = 'release/build.sh' if owner == 'orchestrator' else None
+        declared = {'schema': 1, 'recipe': recipe, 'dependencies': ['accelerator'] if recipe else [],
+                    'helpers': [{'name': 'node-ctl-runner-test', 'env': 'NODE_CTL_RUNNER_TEST_BINARY',
+                                 'cases': ['orchestrator.*.sh']}] if recipe else []}
+        (root / c.DECLARATION).write_text(json.dumps(declared))
+        if recipe:
+            (root / recipe).write_text('set -euo pipefail\ncase "$1" in x86_64) export GOARCH=amd64;; aarch64) export GOARCH=arm64;; *) exit 2;; esac\nexport GOOS=linux CGO_ENABLED=0\ngo test -c -trimpath -o "$2/node-ctl-runner-test" ./cmd/node-ctl\n')
+        repository = 'kuasar-sandbox/' + ('kuasar-sandbox' if owner == 'platform' else owner)
+        git = build_helpers.helper_inputs.tag_sources.git
+        git(root, 'init', '-q'); git(root, 'config', 'user.name', 'Fixture'); git(root, 'config', 'user.email', 'test@example.invalid')
+        git(root, 'remote', 'add', 'origin', 'https://github.com/' + repository)
+        git(root, 'add', '.'); git(root, 'commit', '-qm', 'admitted helper source')
+        roots[owner] = root
+        records[owner] = {'repository': repository, 'sha': git(root, 'rev-parse', 'HEAD'), 'tree': git(root, 'rev-parse', 'HEAD^{tree}')}
+    return build_helpers.helper_inputs.discover(roots, records)
 
 class SourceOwnerClosureTest(unittest.TestCase):
     def words(self,c,o):
@@ -79,23 +102,24 @@ class PreparedHelperSelectionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
             sources = root / 'sources'
-            owner, sdk = sources / 'orchestrator', sources / 'sdk'
+            owner, sdk = sources / 'orchestrator', sources / 'accelerator'
             (owner / 'cmd/node-ctl').mkdir(parents=True)
             sdk.mkdir()
             (owner / 'go.mod').write_text('module example.test/orchestrator\ngo 1.22\nrequire example.test/sdk v0.0.0\n')
             (sdk / 'go.mod').write_text('module example.test/sdk\ngo 1.22\n')
             (sdk / 'identity.go').write_text('package sdk\nconst Identity = "exact-test-pin"\n')
-            (sources / 'go.work').write_text('go 1.22\nuse (\n ./orchestrator\n ./sdk\n)\n')
+            (sources / 'go.work').write_text('go 1.22\nuse (\n ./orchestrator\n ./accelerator\n)\n')
             (owner / 'cmd/node-ctl/main.go').write_text('package main\nfunc main() {}\n')
             (owner / 'cmd/node-ctl/main_test.go').write_text(
                 'package main\nimport ("testing"; "example.test/sdk")\n'
                 'func TestPinnedRunner(t *testing.T) { if sdk.Identity != "exact-test-pin" { t.Fatal(sdk.Identity) } }\n')
+            contract = helper_fixture(sources)
             environment = {key: value for key, value in os.environ.items()
                            if key not in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
             environment.update(GOWORK=str(sources / 'go.work'), GOPROXY='off', GOSUMDB='off')
             for arch in ('x86_64', 'aarch64'):
                 output = root / arch
-                build_helpers.build(sources, arch, output, {'node-ctl-runner-test': 'orchestrator'}, environment)
+                build_helpers.build(sources, arch, output, {'node-ctl-runner-test': 'orchestrator'}, environment, contract)
                 binary = output / 'node-ctl-runner-test'
                 artifacts.check_architecture(binary, arch)
                 self.assertEqual(set(artifacts.tree_files(output)), {'node-ctl-runner-test'})
@@ -108,10 +132,16 @@ class PreparedHelperSelectionTest(unittest.TestCase):
     def test_runner_helper_compile_failure_is_not_hidden(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
-            with patch.object(build_helpers.subprocess, 'run', side_effect=subprocess.CalledProcessError(23, ['go'])):
+            contract = helper_fixture(root)
+            real = subprocess.run
+            def fail_recipe(command, **kwargs):
+                if command[0] == 'bash': raise subprocess.CalledProcessError(23, command)
+                return real(command, **kwargs)
+            with patch.object(build_helpers.subprocess, 'run', side_effect=fail_recipe):
                 with self.assertRaises(subprocess.CalledProcessError) as failure:
-                    build_helpers.build(root, 'x86_64', root / 'output', {'node-ctl-runner-test': 'orchestrator'}, {})
+                    build_helpers.build(root, 'x86_64', root / 'output', {'node-ctl-runner-test': 'orchestrator'}, {}, contract)
             self.assertEqual(failure.exception.returncode, 23)
+            self.assertEqual(failure.exception.cmd[0], 'bash')
 
     def test_cgroup_probe_is_selected_only_for_its_native_case(self):
         cgroup=selection(["sandboxer"],"x86_64",{"sandboxer":["sandbox.cgroup.sh"]})
@@ -139,12 +169,11 @@ class PreparedHelperSelectionTest(unittest.TestCase):
         profile=selection(["sandboxer"],"x86_64",{"sandboxer":["sandbox.cgroup.sh"]})
         plan={"lanes":{"x86_64":{"selection":profile,"embedded_products":[]}},"test_overlays":["sandboxer"],"product_sources":{}}
         self.assertEqual(self.load_build_artifacts().source_owners(plan,"x86_64"),{"sandboxer"})
-    def test_builder_and_runner_keep_probe_in_prepared_helper_pipeline(self):
-        builder=(INTEGRATION/"build_helpers.py").read_text()
-        runner=(ROOT/"test/e2e/lib/workspace.py").read_text()
-        self.assertIn("('cgroup-fork-probe', 'e2e-cgroup-fork-probe')",builder)
-        self.assertIn("if name in helpers:",builder)
-        self.assertIn('"cgroup-fork-probe": "CGROUP_FORK_PROBE_BIN"',runner)
-        self.assertNotIn('e2e-cgroup-fork-probe',runner)
+    def test_builder_rejects_a_helper_claimed_by_another_owner(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            contract = helper_fixture(root)
+            with self.assertRaisesRegex(ValueError, 'unplanned helper build request'):
+                build_helpers.build(root, 'x86_64', root / 'output', {'node-ctl-runner-test': 'sandboxer'}, {}, contract)
 
 if __name__=="__main__": unittest.main()

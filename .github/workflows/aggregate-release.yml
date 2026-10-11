@@ -230,6 +230,11 @@ jobs:
           mkdir -p fetched/e2e-helpers fetched/e2e-wheels
           for arch in x86_64 aarch64; do
             python3 -B control/ci/integration/transport.py extract "helpers/helpers-$arch.tar" "helpers/$arch"
+            if test -f fetched/e2e-helpers/contract.json; then
+              cmp fetched/e2e-helpers/contract.json "helpers/$arch/e2e-helpers/contract.json"
+            else
+              cp "helpers/$arch/e2e-helpers/contract.json" fetched/e2e-helpers/contract.json
+            fi
             mv "helpers/$arch/e2e-helpers/$arch" fetched/e2e-helpers/
             mv "helpers/$arch/e2e-wheels/$arch" fetched/e2e-wheels/
           done

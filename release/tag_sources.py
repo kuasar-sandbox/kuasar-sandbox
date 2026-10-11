@@ -55,7 +55,7 @@ def inspect_unit(root, unit, tag):
             f'{unit} requires its materialized tag checkout')
     require(Path(git(root, 'rev-parse', '--show-toplevel')).resolve() == root.resolve(),
             f'{unit} source is not a repository root')
-    require(git(root, 'config', '--get', 'remote.origin.url') == f'https://github.com/{repository(unit)}.git',
+    require(git(root, 'config', '--get', 'remote.origin.url').removesuffix('.git') == f'https://github.com/{repository(unit)}',
             f'{unit} source repository differs from its owner')
     ref = 'refs/tags/' + tag
     require(git(root, 'cat-file', '-t', ref) == 'commit', 'release tag must directly identify a commit')

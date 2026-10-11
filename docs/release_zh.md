@@ -193,6 +193,8 @@ run 身份,不会用旧输入重跑或改写运行中清单。
 
 先提供平台源码契约机制，再提供依赖该机制的组件生产工作流。确认每个 owner 源码分支包含本仓指南声明和全部必需输入，然后**单独评审**选择正常新 owner Tag 与聚合版本的清单变更。
 
+引入 helper 声明时，先在既有 CI 框架下合入组件声明及配方，再启用平台的声明发现。平台变更随后可按 §8.1 的只读证据边界使用原已发布基线进行验证。新合入的声明不能替代旧 Tag 中缺失的声明；单独评审的首次 Tag 选择使这些声明进入新发布。
+
 Preview 对已提交的选择使用 §6 的正常组件发行入口，按依赖顺序先 accelerator 和 connector，再 sandboxer，最后 orchestrator 和 runtime。机制合入后，先完成新 Preview 的完整验收，再进行 Stable 切换；Stable 随后使用 formal coordinator 的已提交选择。所选组件 Release 就绪后，使用 §7 的正常聚合入口并执行 §8 的全部验证 gate。若相关 kernel 输入未变化且所选文档完整，独立选择的 vmlinux Tag 可以保持不变。
 
 首次显式迁移与通用 Daily 的仅文档变化复用算法分开；后者不能替代经评审的新 Tag 选择。不得扩大产品变化输入或添加强制构建规则。历史 Tag 与发布包按 §2 的只读契约保持不可变。
@@ -378,6 +380,12 @@ Demo 脚本和锁文件、预构建 helper、本地 wheel 与轻量 workbench �
 不会复制整个 test 树，也不会打包未声明的指南。
 `test/e2e/assemble_docs.py` 对完整的已选文档重写链接，不抽取章节、不改写可执行示例、
 配置值或产品二进制。
+
+编译型 helper 使用各所选 owner 的 `release/helper-inputs.json`。Schema `1` 声明完整的 `helpers` 清单（`name`、可选 `env` 和 `cases` 中的用例文件名模式）、仓内相对路径 `recipe`，以及 `dependencies` 中的依赖 owner。没有 helper 的 owner 显式声明空清单和 null 配方。通用构建器在 owner 根目录中使用固定依赖工作区调用 `bash <recipe> <architecture> <output-directory>`；内部构建命令由该仓库维护。每个声明输出必须是权限安全且符合目标 ELF 架构的普通可执行文件。未声明、缺失或重复的输出均失败。
+
+输入计划绑定仓库、所选 Tag 或已准入候选 ref、commit/tree、声明原始内容和配方 blob。producer 收据和打包的 `helpers/contract.json` 保留该预期清单；校验器将实际字节、权限、架构及源码身份与之比较。公共 prepare/run 不构建 helper，也不允许输出收据自定其允许清单。用例必要能力独立于完整允许清单进行检查。
+
+针对声明协议引入前聚合版本的源码 CI，只有经验证的原始计划和完整资产集合才能授权只读复用 helper。五个原始组件的 Tag/源码身份及原 producer 的依赖范围必须全部匹配；候选依赖发生变化时拒绝复用。适配器保留原始元数据及 producer 上下文，平台自有工具则使用当前声明构建。新发布不能因缺少声明而回退。
 
 #### 组件运行依赖自动发现
 

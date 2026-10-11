@@ -18,7 +18,7 @@ from unittest.mock import patch
 import zipfile
 
 import artifacts as subject
-from test_fixtures import restore_using
+from test_fixtures import restore_using, helper_contract
 import transport
 from test_fixtures import CASES, WORKBENCH_CASES, selection, select_plan, architecture_result, workbench_results, registry_binding
 
@@ -76,6 +76,27 @@ def runtime(root, arch, files):
 
 
 class SourceTagContracts(unittest.TestCase):
+    def test_new_plan_requires_contract_and_exact_admitted_helper_tag(self):
+        import copy
+        contract = helper_contract(sha='d' * 40, framework='d' * 40)
+        plan = {'schema': 3, 'mode': 'source', 'framework_sha': 'a' * 40,
+                'baseline': {}, 'case_files': CASES, 'owners': ['accelerator'],
+                'test_overlays': list(subject.OWNERS), 'test_revisions': test_revisions(),
+                'helper_contract': contract,
+                'run_inputs': {owner: copy.deepcopy(row['source']) for owner, row in contract['owners'].items()},
+                'lanes': {arch: {'products': [], 'performance': [],
+                                'selection': selection(['accelerator'], arch)} for arch in subject.ARCHES}}
+        subject.check_plan(plan)
+        missing = copy.deepcopy(plan)
+        del missing['helper_contract']
+        with self.assertRaisesRegex(ValueError, 'lacks its helper contract'):
+            subject.check_plan(missing)
+        for field, value in [('tag', 'v9.9.9'), ('tree', 'e' * 40)]:
+            changed = copy.deepcopy(plan)
+            changed['helper_contract']['owners']['connector']['source'][field] = value
+            with self.assertRaisesRegex(ValueError, 'not admitted in fixed inputs'):
+                subject.check_plan(changed)
+
     def setUp(self):
         spec = importlib.util.spec_from_file_location('source_resolver', Path(__file__).with_name('resolve-artifacts.py'))
         self.resolver = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.resolver)
@@ -194,6 +215,8 @@ class ArtifactBuildContracts(unittest.TestCase):
                         "mode": "source", "test_overlays": list(subject.OWNERS), "product_sources":
                         {"node-ctl": {"kuasar-sandbox/orchestrator": product}} if rebuild else {},
                         "lanes": {"x86_64": {"selection": selection(["orchestrator"], "x86_64")}}}
+                plan['helper_contract'] = helper_contract(sha=product, framework=product)
+                plan['helper_contract']['owners']['orchestrator']['source']['sha'] = pin
                 plan["test_revisions"]["orchestrator"]["sha"] = pin
                 sources = root / str(rebuild)
                 with patch.object(builder.source_inputs, "copy_run_inputs", side_effect=restore_using(checkout)):
@@ -201,7 +224,7 @@ class ArtifactBuildContracts(unittest.TestCase):
                     helper = builder.helper_sources(plan, "x86_64", sources)
                 self.assertEqual(plan["sources"]["orchestrator"]["sha"], product)
                 self.assertEqual((sources / "orchestrator/cmd/product").read_bytes(), b"unchanged product input")
-                self.assertEqual(helper == sources, not rebuild)
+                self.assertEqual(helper, sources / 'test-helpers')
                 output = root / ("helper-" + str(rebuild))
                 output.mkdir()
                 subprocess.run(["bash", str(helper / "orchestrator/scripts/ci-e2e-build.sh"),
@@ -221,6 +244,8 @@ class ArtifactBuildContracts(unittest.TestCase):
                 "sources": test_revisions(),
                 "lanes": {arch: {"products": [], "performance": ["working-set-smoke"] if arch == "x86_64" else [], "selection": selection(["platform"], arch)}
                           for arch in subject.ARCHES}}
+        plan['helper_contract'] = helper_contract(sha='d'*40, framework='d'*40)
+        plan['run_inputs'] = {owner: row['source'] for owner, row in plan['helper_contract']['owners'].items()}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             helper = root / "ci/hosted/exact-assets-tools.sh"
@@ -240,8 +265,15 @@ class ArtifactBuildContracts(unittest.TestCase):
                     case.write_text("exit 0\n")
             output = root / "build-output"
             credentials = {key: "" for key in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}
+            def owner_build(sources, arch, destination, helpers, environment, contract):
+                self.assertEqual(contract, plan['helper_contract'])
+                self.assertEqual(helpers, subject.planned_helpers(plan['lanes'][arch]['selection'], contract))
+                destination.mkdir()
+                subprocess.run(['bash', str(helper)], check=True,
+                               env=dict(environment, TARGET_ARCH=arch, KUASAR_E2E_TOOL_OUTPUT=str(destination)))
             with patch.object(builder, "ROOT", root), patch.object(builder.build_helpers, "ROOT", root), \
                  patch.object(builder.build_demo_wheels, "build"), \
+                 patch.object(builder.build_helpers, "build", side_effect=owner_build), \
                  patch.object(builder, "materialize"), patch.object(builder, "configure_workspace"), \
                  patch.object(builder, "test_source", return_value=root), patch.object(builder, "helper_sources", return_value=root), \
                  patch.object(builder.platform, "machine", return_value="x86_64"), \
@@ -281,7 +313,7 @@ class ArtifactExecutionContracts(unittest.TestCase):
                           'install -d -m 700 "$TMPDIR/owned"\ntouch "$TMPDIR/owned/state"\n')
         self.arch = os.uname().machine
         self.plan = {'lanes': {arch: {'performance': []} for arch in subject.ARCHES}, 'test_revisions': test_revisions()}
-        self.provenance = {'arch': self.arch, 'selection': {'cases': [self.case]}, 'helpers': {},
+        self.provenance = {'helper_contract': helper_contract(sha='d'*40, framework='d'*40, names=()), 'arch': self.arch, 'selection': {'cases': [self.case]}, 'helpers': {},
                            'embedded': {'init': 'a' * 64}, 'test_revisions': test_revisions(),
                            'prepared_cases': [self.case]}
         self.result = self.root.parent / 'result.json'
@@ -329,6 +361,7 @@ class ArtifactExecutionContracts(unittest.TestCase):
             'set -eu\n[ "$CUSTOM_PROXY_BIN" = "$(dirname "$BIN")/fixtures/bin/custom-proxy" ]\n')
         self.provenance['selection']['cases'] = self.provenance['prepared_cases'] = [case]
         self.provenance['helpers'] = {'custom-proxy': {}}
+        self.provenance['helper_contract'] = helper_contract(names=['custom-proxy'])
         self.assertEqual(self.execute('orchestrator')['conclusion'], 'success')
 
     def test_staged_case_socket_path_uses_direct_public_runner(self):
@@ -472,6 +505,8 @@ class ArtifactContracts(unittest.TestCase):
             "test_revisions": test_revisions(),
             "product_sources": {"manifest-ctl": {"accelerator": "e" * 40}},
         }
+        self.plan['helper_contract'] = helper_contract(sha='d'*40, framework='d'*40)
+        self.plan['run_inputs'] = {owner: row['source'] for owner, row in self.plan['helper_contract']['owners'].items()}
         self.files = {}
         for arch in subject.ARCHES:
             files = {name: elf(arch, name) for name in subject.PRODUCTS}
@@ -511,6 +546,8 @@ class ArtifactContracts(unittest.TestCase):
         return receipts
 
     def delta(self, arch="x86_64"):
+        for owner, row in self.plan['helper_contract']['owners'].items():
+            row['source']['sha'] = self.plan['test_revisions'][owner]['sha']
         root = self.root / f"delta-{arch}"
         (root / "bin").mkdir(parents=True)
         records = {}
@@ -534,10 +571,12 @@ class ArtifactContracts(unittest.TestCase):
                 shutil.copy2(runner / "e2e", source / "e2e/e2e")
                 shutil.copy2(runner / "lib/workspace.py", lib / "workspace.py")
                 shutil.copy2(runner / "lib/demo_wheels.py", lib / "demo_wheels.py")
+                shutil.copy2(runner / "lib/helper_contract.py", lib / "helper_contract.py")
                 shutil.copy2(runner / "lib/common.sh", lib / "common.sh")
             test_records[owner] = subject.tree_files(source)
         self.metadata = {"plan_id": subject.identity(self.plan), "arch": arch, "products": records,
                          "test_revisions": self.plan["test_revisions"],
+                         "helper_contract_sha256": subject.identity(self.plan["helper_contract"]),
                          "tests": test_records, "helpers": {}, "build_context": {"host": "x86_64"}}
         (root / "outputs.json").write_text(json.dumps(self.metadata))
         return root
@@ -553,6 +592,154 @@ class ArtifactContracts(unittest.TestCase):
         record = archive(self.assets / name, {"bin/vmlinux": raw, "bin/vmlinux.sha256": checksum})
         next(item for item in self.plan["baseline"]["assets"] if item["name"] == name).update(record)
         return checksum
+
+    def test_owner_addition_through_release_transport_package_and_ci_prepare(self):
+        """Real native helper through production stages under restrictive umask.
+
+        Product archives are the existing EROFS fixtures. Only the unrelated
+        wheel download is isolated. The other ELF architecture is a deliberately
+        non-executed owner fixture, not a native ARM execution claim.
+        """
+        import sys
+        sys.path.insert(0, str(subject.ROOT / 'release'))
+        import helper_inputs, source_inputs
+        import test_helper_discovery as discovery
+        def load(name, relative):
+            spec = importlib.util.spec_from_file_location(name, subject.ROOT / relative)
+            module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+            return module
+        producer = load('production_helper_fixture', 'release/build-e2e-helpers.py')
+        prepare = load('production_prepare_fixture', 'ci/integration/prepare-artifacts.py')
+        owner = discovery.OwnerDiscovery(); owner.setUp(); self.addCleanup(owner.doCleanups)
+        roots, git = owner.roots, discovery.git
+        selected = {unit: (unit + '-' if unit in ('runtime', 'vmlinux') else '') + 'v1.2.3'
+                    for unit in producer.selection.UNITS}
+        cases = {}
+        for name, root in roots.items():
+            (root / 'go.mod').write_text('module example.test/' + name + '\ngo 1.22\n')
+            (root / 'docs').mkdir(exist_ok=True)
+            (root / 'README.md').write_text('Fixture owner guide\n')
+            (root / 'README_zh.md').write_text('Fixture owner guide\n')
+            (root / 'release/guide-inputs.txt').write_text('README.md\nREADME_zh.md\ndocs/\n')
+            (root / 'docs/unit.md').write_text('Fixture guide\n')
+            suite = root / ('test/e2e/platform' if name == 'platform' else 'test/e2e')
+            (suite / 'cases').mkdir(parents=True); (suite / 'lib').mkdir()
+            case = 'basic.' + name + '.sh'; cases[name] = [case]
+            text = 'exit 0\n'
+            if name == 'connector':
+                text = 'set -euo pipefail\n"$COMPONENT_PROBE_BIN"\n"$E2E_HELPERS_DIR/component-probe"\n'
+                decl = json.loads((root / discovery.c.DECLARATION).read_text())
+                decl['helpers'][0].update(env='COMPONENT_PROBE_BIN', cases=[case])
+                (root / discovery.c.DECLARATION).write_text(json.dumps(decl))
+                # Native cc output is never chmod-normalized by this fixture.
+                # The second architecture tests archive validation only.
+                with (root / 'release/build-helpers.sh').open('a') as stream:
+                    stream.write('python3 -B - "$1" "$2/component-probe" <<\'PYARCH\'\n'
+                        'import pathlib,platform,struct,sys\n'
+                        'if sys.argv[1] != platform.machine():\n'
+                        ' p=pathlib.Path(sys.argv[2]);b=bytearray(p.read_bytes());struct.pack_into("<H",b,18,{"x86_64":62,"aarch64":183}[sys.argv[1]]);p.write_bytes(b)\nPYARCH\n')
+            (suite / 'cases' / case).write_text(text)
+            (suite / 'lib/common.sh').write_text('true\n')
+        platform_root = roots['platform']
+        sys.path.insert(0, str(subject.ROOT / "test/e2e"))
+        import package_inputs
+        for name in package_inputs.PLATFORM_RUNTIME:
+            target = platform_root / name; target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(subject.ROOT / name, target)
+            # Model a clean Git checkout's tracked mode, not the editor's
+            # group-writable worktree mode. Built helper modes stay untouched.
+            mode = subprocess.check_output(['git', '-C', str(subject.ROOT), 'ls-files', '-s', '--', name], text=True).split()[0]
+            target.chmod(int(mode, 8) & 0o777)
+        (platform_root / 'docs/kuasar-sandbox.md').write_text('Fixture platform guide\n')
+        (platform_root / 'docs/kuasar-sandbox_zh.md').write_text('Fixture platform guide\n')
+        (roots['guest-runtime'] / 'docs/vmlinux.md').write_text('Independent kernel guide\n')
+        (platform_root / 'releases').mkdir()
+        manifest = 'version: release-v1.2.3\ndelivery: workbench-v1\ncomponents:\n' + ''.join(
+            f'  {unit}: {tag}\n' for unit, tag in selected.items())
+        (platform_root / 'releases/release.yaml').write_text(manifest)
+        (platform_root / 'releases/daily-preview.yaml').write_text(manifest + 'preview_version: preview.20260101\n')
+        for name, root in roots.items():
+            git(root, 'add', '.'); git(root, 'commit', '-qm', 'Complete selected owner fixture')
+            if name != 'platform': git(root, 'tag', selected['runtime' if name == 'guest-runtime' else name])
+        git(roots['guest-runtime'], 'tag', selected['vmlinux'])
+        sources = owner.root / 'sources'
+        shutil.copytree(roots['guest-runtime'], sources / 'kernel-unit/guest-runtime')
+        arch = os.uname().machine
+        old_umask = os.umask(0o077)
+        self.addCleanup(os.umask, old_umask)
+        def wheels(_demo, target, output): output.mkdir(parents=True)
+        with patch.object(producer.build_demo_wheels, 'build', side_effect=wheels):
+            producer.build(sources, selected, owner.root / 'produced/e2e-helpers',
+                           owner.root / 'produced/e2e-wheels', platform_root)
+        produced = owner.root / 'produced/e2e-helpers'
+        contract = json.loads((produced / 'contract.json').read_text())
+        original = json.loads((produced / arch / 'helpers.json').read_text())['helpers']['component-probe']
+        self.assertEqual(original['mode'], 0o700)
+        self.assertEqual(original['owner'], 'connector')
+        self.assertEqual(contract['owners']['connector']['source']['tag'], selected['connector'])
+        # Actual workflow transport and collect operations, with preserved modes.
+        collected = owner.root / 'collected'; collected.mkdir()
+        for target in subject.ARCHES:
+            archive_path = owner.root / (target + '.tar')
+            subprocess.run(['tar', '-cf', str(archive_path), '-C', str(owner.root / 'produced'),
+                            'e2e-helpers/' + target, 'e2e-helpers/contract.json', 'e2e-wheels/' + target], check=True)
+            extracted = owner.root / ('transport-' + target)
+            transport.extract(archive_path, extracted)
+            incoming = extracted / 'e2e-helpers'
+            if (collected / 'contract.json').exists():
+                subprocess.run(['cmp', str(collected / 'contract.json'), str(incoming / 'contract.json')], check=True)
+            else: shutil.copy2(incoming / 'contract.json', collected / 'contract.json')
+            shutil.move(incoming / target, collected / target)
+        units = owner.root / 'units'; units.mkdir()
+        for unit in selected:
+            source = producer.tag_sources.source_path(sources, unit, owner_layout=True)
+            shutil.copytree(source, units / unit)
+        output = owner.root / 'packaged'
+        subprocess.run(['bash', str(subject.ROOT / 'release/package-platform.sh'), 'package',
+                        'release-v1.2.3', str(units), str(output)], check=True,
+                       env={**os.environ, 'PLATFORM_SOURCE_ROOT': str(platform_root),
+                            'E2E_HELPER_ROOT': str(collected), 'E2E_WHEEL_ROOT': '', 'PYTHONDONTWRITEBYTECODE':'1'})
+        archive_path = output / 'assets/platform-release-v1.2.3.tar.gz'
+        raw = owner.root / 'downloaded'; raw.mkdir()
+        subprocess.run(['tar', '--no-same-owner', '--no-same-permissions', '-xzf', str(archive_path), '-C', str(raw)], check=True)
+        for unit, record in self.plan['baseline']['units'].items():
+            product_archive = self.assets / subject.archive_name(unit, record['version'], arch)
+            subprocess.run(['tar', '--no-same-owner', '--no-same-permissions', '-xzf', str(product_archive), '-C', str(raw)], check=True)
+        result = owner.prepare(raw, case=cases['connector'][0])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        def execute(work):
+            result = subprocess.run([sys.executable, '-B', str(work / 'test/e2e/e2e'), 'run',
+                '--workdir', str(work), '--include', cases['connector'][0]], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        execute(owner.root / 'prepared')
+        shutil.copy2(archive_path, self.assets / archive_path.name)
+        plan = self.plan
+        plan.update(schema=3, mode='exact-assets', owners=['platform'], case_files=cases, test_overlays=[], product_sources={},
+                    helper_contract=contract, test_revisions=subject.release_test_revisions(
+                        {o: row['source']['sha'] for o,row in contract['owners'].items() if o != 'platform'},
+                        contract['owners']['platform']['source']['sha']),
+                    run_inputs={o: row['source'] for o,row in contract['owners'].items()})
+        plan['baseline']['sha'] = contract['owners']['platform']['source']['sha']
+        records = producer.tag_sources.inspect_sources(units, selected)
+        plan['source_records'] = records
+        plan['platform_source'] = contract['owners']['platform']['source']
+        plan['baseline']['units'] = {unit: dict(repository=row['repository'], version=row['tag'], sha=row['sha'])
+                                     for unit, row in records.items()}
+        source_inputs.verify_package(archive_path, roots, cases, records)
+        plan['baseline']['assets'] = [row for row in plan['baseline']['assets'] if row['name'] != archive_path.name]
+        plan['baseline']['assets'].append(dict(name=archive_path.name,size=archive_path.stat().st_size,digest='sha256:'+subject.digest(archive_path)))
+        for target in subject.ARCHES:
+            plan['lanes'][target] = dict(products=[], performance=[], selection=subject.suite_selection(['platform'], target, cases))
+        delta = owner.root / 'delta'; delta.mkdir()
+        (delta / 'outputs.json').write_bytes(subject.canonical(dict(plan_id=subject.check_plan(plan), arch=arch,
+            products={}, embedded={}, tests={}, helpers={}, test_revisions=plan['test_revisions'], build_context={},
+            helper_contract_sha256=subject.identity(contract))))
+        workspace = owner.root / 'ci-prepared'
+        observed = prepare.prepare(plan, arch, self.assets, delta, workspace, offline=True)
+        self.assertEqual(observed['helper_contract'], contract)
+        self.assertEqual(observed['helpers']['component-probe'], original)
+        self.assertEqual(subject.digest(workspace / 'fixtures/bin/component-probe'), original['sha256'])
+        execute(workspace)
 
     def test_kernel_checksum_is_preserved_and_included_in_provenance(self):
         for arch in subject.ARCHES:
@@ -688,6 +875,7 @@ class ArtifactContracts(unittest.TestCase):
         fixed = (platform, {unit: row['version'] for unit, row in units.items()}, records,
                  self.plan['platform_source'], WORKBENCH_CASES)
         with patch.object(resolver.source_inputs, 'staged_inputs', return_value=fixed), patch.object(resolver, 'public'), \
+             patch('helper_inputs.discover', return_value=self.plan['helper_contract']), \
              patch.object(resolver.release, 'tag_sha', side_effect=lambda repo, tag: sha if repo == resolver.PLATFORM else 'c' * 40), \
              patch.dict(os.environ, {'RELEASE_VERSION': version, 'PLATFORM_SOURCE_SHA': sha}):
             plan = resolver.exact_assets_plan('a' * 40, self.root)
@@ -772,7 +960,7 @@ class ArtifactContracts(unittest.TestCase):
     def test_usage_probe_is_a_required_target_helper(self):
         select_plan(self.plan, ["sandboxer"])
         delta = self.delta()
-        with self.assertRaisesRegex(ValueError, "helper selection differs"):
+        with self.assertRaisesRegex(ValueError, "helper receipt differs from trusted inventory"):
             self.compose(delta=delta)
         helpers = subject.planned_helpers(self.plan["lanes"]["x86_64"]["selection"])
         self.assertEqual(helpers["usage-probe"], "sandboxer")
@@ -782,8 +970,8 @@ class ArtifactContracts(unittest.TestCase):
             path = delta / "helpers" / name
             path.write_bytes(elf("x86_64", name))
             path.chmod(0o755)
-            self.metadata["helpers"][name] = {"sha256": subject.digest(path), "source_sha":
-                self.plan["framework_sha"] if owner == "framework" else self.plan["test_revisions"][owner]["sha"]}
+            self.metadata["helpers"][name] = {"owner": "platform" if owner == "framework" else owner, "size": path.stat().st_size, "mode": 0o755, "sha256": subject.digest(path), "source_sha":
+                self.plan["test_revisions"]["platform"]["sha"] if owner == "framework" else self.plan["test_revisions"][owner]["sha"]}
         (delta / "outputs.json").write_text(json.dumps(self.metadata))
         provenance = self.compose(delta=delta)
         probe = self.root / "workspaces/x86_64/fixtures/bin/usage-probe"
@@ -799,7 +987,7 @@ class ArtifactContracts(unittest.TestCase):
         helpers = subject.planned_helpers(self.plan["lanes"]["x86_64"]["selection"])
         self.assertEqual(helpers["custom-proxy"], "orchestrator")
         self.assertNotIn("custom-proxy", subject.planned_helpers(self.plan["lanes"]["aarch64"]["selection"]))
-        with self.assertRaisesRegex(ValueError, "helper selection differs"):
+        with self.assertRaisesRegex(ValueError, "helper receipt differs from trusted inventory"):
             self.compose(delta=delta)
         (delta / "helpers").mkdir()
         self.metadata["helpers"] = {}
@@ -807,19 +995,19 @@ class ArtifactContracts(unittest.TestCase):
             path = delta / "helpers" / name
             path.write_bytes(elf("x86_64", name))
             path.chmod(0o755)
-            self.metadata["helpers"][name] = {"sha256": subject.digest(path), "source_sha":
-                self.plan["framework_sha"] if owner == "framework" else self.plan["test_revisions"][owner]["sha"]}
+            self.metadata["helpers"][name] = {"owner": "platform" if owner == "framework" else owner, "size": path.stat().st_size, "mode": 0o755, "sha256": subject.digest(path), "source_sha":
+                self.plan["test_revisions"]["platform"]["sha"] if owner == "framework" else self.plan["test_revisions"][owner]["sha"]}
         self.assertEqual(helpers['node-ctl-runner-test'], 'orchestrator')
         runner_helper = self.metadata['helpers']['node-ctl-runner-test']
         runner_helper['source_sha'] = 'c' * 40
         (delta / 'outputs.json').write_text(json.dumps(self.metadata))
-        with self.assertRaisesRegex(ValueError, 'test helper identity mismatch: node-ctl-runner-test'):
+        with self.assertRaisesRegex(ValueError, 'helper output identity differs from trusted source/bytes: node-ctl-runner-test'):
             self.compose(delta=delta)
         runner_helper['source_sha'] = 'f' * 40
         helper = self.metadata["helpers"]["custom-proxy"]
         helper["source_sha"] = "c" * 40
         (delta / "outputs.json").write_text(json.dumps(self.metadata))
-        with self.assertRaisesRegex(ValueError, "test helper identity mismatch: custom-proxy"):
+        with self.assertRaisesRegex(ValueError, "helper output identity differs from trusted source/bytes: custom-proxy"):
             self.compose(delta=delta)
         helper["source_sha"] = "f" * 40
         (delta / "outputs.json").write_text(json.dumps(self.metadata))

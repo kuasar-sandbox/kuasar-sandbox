@@ -31,7 +31,9 @@ selected version's own guide; do not continue with the workbench steps below.
 The default downloads native products, the platform materials, matching
 workbench archive and checksums, while validating the complete declared asset
 set. It keeps GitHub metadata, selected URLs, digests and sizes under
-`DOWNLOAD_DIR`. Use new download/install directories for a new attempt.
+`DOWNLOAD_DIR`. The tag-downloaded manifest must match the original Release
+commit and Git blob; `source-evidence.json` retains the verified tag/commit/tree
+metadata. Use new download/install directories for a new attempt.
 
 ```bash
 set -euo pipefail
@@ -43,7 +45,8 @@ export ARCH DOWNLOAD_WORKBENCH
 RELEASE_METADATA="$(mktemp)"
 ASSETS_TSV="$(mktemp)"
 SELECTION_MANIFEST="$(mktemp)"
-trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST"' EXIT
+SOURCE_EVIDENCE="$(mktemp)"
+trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST" "$SOURCE_EVIDENCE"' EXIT
 
 if [ -n "$RELEASE_VERSION" ]; then
     [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]]
@@ -56,21 +59,90 @@ curl --fail --silent --show-error --location --retry 4 \
     -H 'X-GitHub-Api-Version: 2022-11-28' \
     "$RELEASE_API" >"$RELEASE_METADATA"
 
-# Validate automatic source provenance; retrieve released files only by tag.
-SOURCE_SHA="$(python3 -c 'import json,re,sys; value=json.load(open(sys.argv[1]))["target_commitish"]; assert re.fullmatch(r"[0-9a-f]{40}",value); print(value)' "$RELEASE_METADATA")"
-RELEASE_TAG="$(python3 -c '
-import json, re, sys
-tag = json.load(open(sys.argv[1], encoding="utf-8"))["tag_name"]
+python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$SELECTION_MANIFEST" "$SOURCE_EVIDENCE" <<'PY'
+import hashlib, json, pathlib, re, sys
+from urllib.request import Request, urlopen
+
+metadata, requested, manifest_output, evidence_output = sys.argv[1:]
+release = json.loads(pathlib.Path(metadata).read_text(encoding="utf-8"))
+tag = release["tag_name"]
 assert re.fullmatch(r"release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?", tag), tag
-assert not sys.argv[2] or sys.argv[2] == tag, (sys.argv[2], tag)
-print(tag)
-' "$RELEASE_METADATA" "$RELEASE_VERSION")"
-case "$RELEASE_TAG" in
-    *-preview.*) MANIFEST_PATH="releases/daily-preview.yaml" ;;
-    *) MANIFEST_PATH="releases/release.yaml" ;;
-esac
-curl --fail --silent --show-error --location --retry 4 \
-    "https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/$RELEASE_TAG/$MANIFEST_PATH" >"$SELECTION_MANIFEST"
+assert not requested or requested == tag, (requested, tag)
+source_sha = release["target_commitish"]
+assert re.fullmatch(r"[0-9a-f]{40}", source_sha), source_sha
+api = "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox"
+evidence = []
+
+def read_url(url):
+    request = Request(url, headers={"Accept": "application/vnd.github+json",
+                                   "X-GitHub-Api-Version": "2022-11-28"})
+    with urlopen(request, timeout=30) as response:
+        return response.read()
+
+def read_metadata(path):
+    value = json.loads(read_url(api + path))
+    assert isinstance(value, dict), path
+    evidence.append({"url": api + path, "response": value})
+    return value
+
+def object_sha(value):
+    assert isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value), value
+    return value
+
+def check_tag():
+    ref = read_metadata("/git/ref/tags/" + tag)
+    assert ref["ref"] == "refs/tags/" + tag, ref
+    obj, seen = ref["object"], set()
+    while obj["type"] == "tag":
+        sha = object_sha(obj["sha"])
+        assert sha not in seen and len(seen) < 16, "cyclic or excessive annotated tags"
+        seen.add(sha)
+        annotated = read_metadata("/git/tags/" + sha)
+        assert annotated["sha"] == sha, annotated
+        obj = annotated["object"]
+    assert obj["type"] == "commit" and object_sha(obj["sha"]) == source_sha, "release tag moved"
+
+check_tag()
+commit = read_metadata("/commits/refs/tags/" + tag)
+assert commit["sha"] == source_sha, "named tag commit differs from Release source"
+root_tree = object_sha(commit["commit"]["tree"]["sha"])
+
+def tree_entry(tree_sha, name, kind, modes):
+    tree = read_metadata("/git/trees/" + tree_sha)
+    assert tree["sha"] == tree_sha and tree["truncated"] is False, "incomplete or wrong tree"
+    entries = tree["tree"]
+    assert isinstance(entries, list)
+    names = set()
+    valid_modes = {"tree": {"040000"}, "blob": {"100644", "100755", "120000"}, "commit": {"160000"}}
+    for entry in entries:
+        path = entry["path"]
+        assert isinstance(path, str) and path not in ("", ".", "..") and "/" not in path
+        assert path not in names, "ambiguous tree entry"
+        names.add(path)
+        object_sha(entry["sha"])
+        assert entry["mode"] in valid_modes.get(entry["type"], set()), "invalid tree entry type/mode"
+    matches = [entry for entry in entries if entry["path"] == name]
+    assert len(matches) == 1, (name, "missing or ambiguous tree entry")
+    entry = matches[0]
+    assert entry["type"] == kind and entry["mode"] in modes, (name, "wrong entry type/mode")
+    return entry
+
+releases = tree_entry(root_tree, "releases", "tree", {"040000"})
+filename = "daily-preview.yaml" if "-preview." in tag else "release.yaml"
+blob = tree_entry(releases["sha"], filename, "blob", {"100644", "100755"})
+assert type(blob["size"]) is int and blob["size"] >= 0
+manifest_path = "releases/" + filename
+# Content is retrieved only through the explicit tag, never by a SHA or branch.
+content = read_url("https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/refs/tags/" + tag + "/" + manifest_path)
+check_tag()
+actual_blob = hashlib.sha1(b"blob " + str(len(content)).encode("ascii") + b"\0" + content).hexdigest()
+assert len(content) == blob["size"] and actual_blob == blob["sha"], "manifest blob differs from Release source"
+pathlib.Path(manifest_output).write_bytes(content)
+pathlib.Path(evidence_output).write_text(json.dumps({
+    "tag": tag, "source_commit": source_sha, "manifest_path": manifest_path,
+    "manifest_blob": actual_blob, "manifest_size": len(content), "metadata": evidence
+}, indent=2) + "\n", encoding="utf-8")
+PY
 
 RELEASE_VERSION="$(python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$ASSETS_TSV" "$SELECTION_MANIFEST" <<'PY'
 import json, os, platform, re, sys
@@ -159,6 +231,7 @@ test ! -e "$DOWNLOAD_DIR"
 test ! -e "$INSTALL_DIR"
 mkdir -m 0755 "$DOWNLOAD_DIR"
 install -m 0644 "$RELEASE_METADATA" "$DOWNLOAD_DIR/release.json"
+install -m 0644 "$SOURCE_EVIDENCE" "$DOWNLOAD_DIR/source-evidence.json"
 install -m 0644 "$ASSETS_TSV" "$DOWNLOAD_DIR/assets.tsv"
 
 while IFS=$'\t' read -r name url digest size role; do
@@ -168,7 +241,7 @@ while IFS=$'\t' read -r name url digest size role; do
     test "sha256:$(sha256sum "$DOWNLOAD_DIR/$name.part" | awk '{print $1}')" = "$digest"
     mv "$DOWNLOAD_DIR/$name.part" "$DOWNLOAD_DIR/$name"
 done <"$DOWNLOAD_DIR/assets.tsv"
-rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST"
+rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST" "$SOURCE_EVIDENCE"
 trap - EXIT
 printf 'Pinned aggregate Release: %s\n' "$RELEASE_VERSION"
 ```
