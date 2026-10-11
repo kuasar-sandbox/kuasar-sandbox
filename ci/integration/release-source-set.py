@@ -124,6 +124,7 @@ def recipes(plan, selected, facts, records, sources):
 
 def execute(plan_path, sources, output, env):
     result = {'conclusion': 'failure', 'exit_code': 1, 'commands': []}
+    scratch = None
     artifacts.require(not any(output.resolve().is_relative_to(sources / owner) for owner in artifacts.OWNERS),
                       'release evidence must be outside owner sources')
     artifacts.require(not output.exists() and not output.is_symlink(), 'release gate evidence already exists')
@@ -182,7 +183,11 @@ def execute(plan_path, sources, output, env):
             artifacts.require(not work.is_symlink() and not work_sum.is_symlink() and
                               (work_sum.read_bytes() if work_sum.exists() else None) == before_sum,
                               'fixed Go workspace checksum inputs changed during release gates')
-        selected_env = dict(env, KUASAR_WORKSPACE_ROOT=str(sources), KUASAR_PLATFORM_ROOT=str(sources / 'platform'),
+        scratch = tempfile.TemporaryDirectory(prefix='release-python-')
+        artifacts.require(not Path(scratch.name).resolve().is_relative_to(sources), 'Python cache is inside frozen sources')
+        # Explicit py_compile writes even with -B. Its disposable cache must not
+        # modify admitted sources; cleanliness assertions remain unconditional.
+        selected_env = dict(env, PYTHONPYCACHEPREFIX=str(Path(scratch.name) / 'bytecode'), KUASAR_WORKSPACE_ROOT=str(sources), KUASAR_PLATFORM_ROOT=str(sources / 'platform'),
                             TARGET_ARCH=arch, PYTHONDONTWRITEBYTECODE='1')
         for owner in sorted(selected - {'platform'}):
             try:
@@ -214,6 +219,8 @@ def execute(plan_path, sources, output, env):
         elif isinstance(error, FileNotFoundError): result['exit_code'] = 127
     finally:
         save()
+        if scratch is not None:
+            scratch.cleanup()
     status = result['exit_code']
     return status if status >= 0 else 128 - status
 

@@ -192,6 +192,17 @@ class FrozenReleaseGates(unittest.TestCase):
                 self.assertEqual((self.sources/target).read_text(),'changed\n')
                 if target=='go.work': (self.sources/target).unlink()
 
+    def test_explicit_python_syntax_check_keeps_source_clean(self):
+        root=self.sources/'connector'
+        (root/'syntax.py').write_text('value = 1\n')
+        (root/'Makefile').write_text('test-release:\n\t@python3 -m py_compile syntax.py\n')
+        git(root,'add','.');git(root,'commit','-qm','Original syntax gate')
+        self.plan(['connector'])
+        status,result=self.run_gate()
+        self.assertEqual(status,0,result)
+        self.assertFalse((root/'__pycache__').exists())
+        self.assertEqual(git(root,'ls-files','--others'),'')
+
     def test_required_case_capability_cannot_be_omitted(self):
         self.document['case_files']['orchestrator']=['orchestrator.exec.sh']
         for arch,lane in self.document['lanes'].items():
