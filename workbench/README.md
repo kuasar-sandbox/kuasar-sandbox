@@ -44,6 +44,130 @@ into the product release tree. The registry tag is
 aggregate version without the `release-` prefix. New `workbench-v1` releases
 require both native image archives; historical releases keep their original assets.
 
+### Windows and WSL 2 development hosts
+
+WSL is usable only when its Linux environment meets the selected release's
+native requirements. A running distribution or `/dev/kvm` alone is insufficient;
+Windows, CPU, firmware and any outer hypervisor must expose usable nested
+virtualization. This procedure does not qualify every WSL combination or ARM
+KVM execution. Workbench cannot supply a missing host capability.
+
+First identify the Windows machine and the exact distribution from local
+PowerShell; do not configure an unrelated remote Linux shell:
+
+```powershell
+hostname
+whoami
+Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,HypervisorPresent,TotalPhysicalMemory
+Get-CimInstance Win32_Processor | Select-Object Name,NumberOfLogicalProcessors,VirtualizationFirmwareEnabled,SecondLevelAddressTranslationExtensions
+wsl --version
+wsl --list --verbose
+```
+
+Record the Windows build, available disk space, existing WSL/Docker workloads
+and configuration before changes. Correlate firmware/SLAT fields with the
+running hypervisor and actual Linux KVM probes: an active hypervisor can hide
+hardware fields. If Windows is itself a VM, nested exposure must be enabled by
+its outer owner. VM processor configuration applies to that VM, not to an
+ordinary physical Windows host.
+
+Use a WSL 2 distribution with a local rootful Linux Docker Engine and its Unix
+socket. Check the active Docker context/endpoint, daemon kernel/architecture,
+storage driver, data directory and real container networking. Preserve existing
+Docker data while choosing the endpoint. Inside the distribution, record
+`uname -r`, `uname -m`, `getconf PAGESIZE`, `nproc`, `free -h`, `df -h`, PID 1,
+`/sys/fs/cgroup/cgroup.controllers` and the effective cgroup budgets. For a
+systemd-managed distro daemon, enable systemd through
+[Microsoft's distribution configuration](https://learn.microsoft.com/en-us/windows/wsl/systemd)
+and verify PID 1 and `systemctl status docker`; Workbench's inner systemd is a
+separate instance. A systemd service does not itself keep WSL alive. Retain logs,
+process exit status and a resumable stage record for long builds/tests.
+
+If the installed kernel lacks required features, build the **WSL host kernel**
+from a recorded Microsoft tag/commit compatible with the installed WSL release.
+Start from that version's Microsoft WSL configuration and retain Hyper-V,
+storage, networking and interoperability support. Follow that checkout's
+[official build and VHDX instructions](https://github.com/microsoft/WSL2-Linux-Kernel#build-instructions):
+the packaging script/layout varies by kernel version. Build matching modules
+and the modules/artifacts VHDX, recording the kernel release, config diff and
+output hashes. Do not substitute Kuasar's Guest defconfig, alter the Guest ABI,
+or change the project's minimum kernel baseline to configure this host.
+
+Audit host features against the selected tests: KVM and the CPU vendor module;
+namespaces, cgroup v2 controllers/delegation, seccomp and overlayfs;
+userfaultfd, memfd and shmem; BPF/JIT/BTF, bpffs and TC BPF; TUN/TAP, veth,
+bridge, GENEVE, conntrack and NAT; and the required vsock/vhost/storage paths.
+Check NFS, FUSE and EROFS only for their actual host use; installing a userspace
+tool does not enable a kernel feature. Verify module loading against `uname -r`.
+On a native Linux host, this privileged KVM preflight opens and closes an empty
+VM without persisting state:
+
+```sh
+sudo python3 - <<'PY'
+import fcntl, os
+with open('/dev/kvm', 'rb+', buffering=0) as kvm:
+    assert fcntl.ioctl(kvm, 0xAE00, 0) == 12, 'unexpected KVM API version'
+    vm = fcntl.ioctl(kvm, 0xAE01, 0)
+    os.close(vm)
+PY
+```
+
+Passing the probe still requires a real Kuasar Guest run. Likewise, verify
+userfaultfd operations, BPF loading, delegated cgroups and TAP/NAT communication
+through the selected source/product checks; a config symbol or device listing
+is not functional acceptance.
+
+Keep the original `%UserProfile%\.wslconfig` and kernel/module artifacts in a
+Windows-accessible recovery location. Merge the selected `kernel`,
+`kernelModules`, `nestedVirtualization`, `processors`, `memory` and `swap`
+settings according to [Microsoft's configuration reference](https://learn.microsoft.com/en-us/windows/wsl/wsl-config),
+preserving unrelated settings. These options affect the user's WSL 2 VM;
+coordinate an interruption window for all running distributions before
+`wsl --shutdown`. After restart, verify the actual kernel/modules and budgets.
+If boot fails, restore the backed-up configuration from PowerShell and restart
+WSL; if there was no prior configuration, remove only the newly introduced
+overrides. Recovery must not require a working Linux shell.
+
+### Resource budgets and acceptance
+
+Budget Windows, the WSL kernel/services and outer Docker separately from the
+Workbench limit. Leave CPU and memory headroom at each layer; swap does not
+replace RAM required by active VMs. A Workbench example is not a WSL total or a
+minimum for the full suite. Keep source/build trees, caches and container data on
+the distribution's native Linux filesystem. Account for kernel build outputs,
+image archives/layers, prepared inputs, repeated cases and large-image tests.
+Check both Linux filesystem free space and free space on the Windows volume
+backing its VHDX; the virtual disk's maximum capacity is not available storage.
+
+Inside Workbench, use an explicit node assignment when sharing the environment.
+The [node reservation model](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md#41-pool)
+defines `physical_memory: auto` from host `MemTotal`, not the container's memory
+limit. Its startup pool is an admission budget, not preallocated RAM:
+
+```text
+AllocatablePool = (Physical - HostReserved) * (1 - operational_margin_factor)
+StartupPool     = AllocatablePool * startup_factor
+```
+
+The implementation uses saturating subtraction and byte rounding. For example,
+an assigned 10 GiB, a 1 GiB reserve, a 0.10 margin and a 0.50 startup factor give
+about 8.1 GiB allocatable and 4.05 GiB startup admission. Requesting a 6 GiB startup
+reservation requires an adequate pool and valid policy; increasing a factor
+does not create physical capacity. Retain the node's documented bounds and
+measure actual peak memory/OOM events before increasing concurrency. Guest
+capacity, current allocation and startup reservation are separate quantities.
+
+Run the matching [Demo](../docs/quickstart.md) to verify actual creation, exec,
+file operations, DNS/Internet access, snapshot/resume and cleanup, then the
+[ordinary full selection](../test/QUICKSTART.md) on the same native architecture.
+Retain versions, case selection, exit codes, logs and peak resource observations.
+Missing capabilities fail acceptance; do not reduce workload assertions to
+claim a smaller supported machine. OBS needs separate credentials and remains
+outside ordinary full selection. For DNS/egress failures, locate the failing
+boundary among Windows, WSL, outer container and Guest; inspect that instance's
+DNS, proxy, route and MTU before changing it. Do not prescribe a universal DNS
+address/MSS, switch firewall backends without evidence or disable host firewalls.
+
 ## Build with an ordinary UID
 
 Prepare your own six-repository checkout using the existing
