@@ -19,6 +19,10 @@ remote Docker endpoints and architecture emulation are not supported. Actual
 MicroVM execution needs readable/writable KVM and the required kernel features;
 workbench does not emulate missing hardware or change host kernel policy.
 
+For Windows development, first establish the [WSL host prerequisites and resource
+boundaries](../workbench/README.md#windows-and-wsl-2-development-hosts). Run the
+commands below inside that qualified Linux distribution, with its local Engine.
+
 The image supplies systemd, private Docker/containerd, product user-space
 libraries, Python 3.12 and ordinary tools. The host does **not** need the Demo SDK,
 product glibc version, Go/Rust, or systemd as PID 1 just to launch workbench.

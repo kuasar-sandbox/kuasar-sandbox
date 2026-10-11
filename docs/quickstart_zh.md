@@ -16,6 +16,9 @@ Docker 访问权限。这是可信管理员环境，不支持 Docker Desktop、�
 或架构模拟。真正运行 MicroVM 还需要可读写的 KVM 与所需内核功能；workbench
 不会模拟缺失硬件或修改宿主内核策略。
 
+Windows 开发请先核验 [WSL 宿主前提和资源边界](../workbench/README_zh.md#windows-与-wsl-2-开发宿主)。
+以下命令在符合条件的 Linux 发行版内执行，使用该发行版的本机 Engine。
+
 镜像提供 systemd、私有 Docker/containerd、产品用户态依赖库、Python 3.12 和普通
 工具。仅启动 workbench 时，宿主**不需要** Demo SDK、产品所需 glibc 版本、Go/Rust，
 也不要求 systemd 为宿主 PID 1。为宿主和其他工作负载保留 CPU、内存及磁盘余量。
