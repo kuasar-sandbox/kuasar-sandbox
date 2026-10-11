@@ -212,6 +212,39 @@ class FrozenReleaseGates(unittest.TestCase):
         self.assertNotEqual(status,0);self.assertIn('required helper',result['error'])
         self.assertEqual(result['commands'],[])
 
+    def test_six_candidate_schema2_is_not_rewritten(self):
+        self.plan(list(artifacts.OWNERS))
+        before=self.plan_path.read_bytes()
+        status,result=self.run_gate()
+        self.assertEqual(status,0,result)
+        self.assertEqual(self.plan_path.read_bytes(),before)
+        self.assertNotIn('helper_contract',json.loads(before))
+        self.assertEqual(result['plan_id'],artifacts.identity(json.loads(before)))
+
+    def test_schema3_contract_and_incomplete_schemas(self):
+        self.document['schema']=3
+        facts=gate.identities(self.document,self.document['test_revisions'])
+        self.document['helper_contract']=gate.helpers.discover(self.fixture.roots,facts)
+        self.save()
+        gate.validate(self.plan_path,self.sources,self.env)
+        del self.document['helper_contract'];self.save()
+        with self.assertRaisesRegex(ValueError,'helper contract'):gate.validate(self.plan_path,self.sources,self.env)
+        self.document['schema']=99;self.save()
+        with self.assertRaisesRegex(ValueError,'unsupported'):gate.validate(self.plan_path,self.sources,self.env)
+
+    def test_linked_receipt_and_changed_closure_rejected(self):
+        marker=self.sources/'.source-checks.json'
+        original=marker.read_bytes();other=self.root/'receipt-copy';other.write_bytes(original)
+        marker.unlink();marker.symlink_to(other)
+        with self.assertRaisesRegex(ValueError,'regular frozen input'):gate.validate(self.plan_path,self.sources,self.env)
+        marker.unlink();row=json.loads(original);del row['sources']['connector'];marker.write_text(json.dumps(row))
+        with self.assertRaisesRegex(ValueError,'receipt'):gate.validate(self.plan_path,self.sources,self.env)
+
+    def test_existing_evidence_is_not_overwritten(self):
+        self.output.mkdir(); marker=self.output/'source-result.json';marker.write_text('original')
+        with self.assertRaisesRegex(ValueError,'already exists'):self.run_gate()
+        self.assertEqual(marker.read_text(),'original')
+
     def test_framework_is_separate_from_candidate_and_must_match(self):
         self.env['KUASAR_WORKBENCH_FRAMEWORK_SHA']='a'*40
         gate.validate(self.plan_path,self.sources,self.env)
