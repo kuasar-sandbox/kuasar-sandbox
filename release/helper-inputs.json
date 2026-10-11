@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "recipe": "release/build-platform-helpers.sh",
+  "dependencies": [],
+  "helpers": [
+    {
+      "name": "zot",
+      "env": "ZOT_BIN",
+      "cases": [
+        "orchestrator.*.sh",
+        "builder.*.sh",
+        "telemetry.backends.sh",
+        "telemetry.guest.sh",
+        "telemetry.proxy.sh",
+        "sandbox.*.sh",
+        "snapshot.*.sh",
+        "network.tapfd.sh",
+        "image.manifest-boot.sh",
+        "image.sandbox-assembly.sh",
+        "telemetry.usage.sh",
+        "telemetry.usage-faults.sh",
+        "telemetry.source-faults.sh",
+        "basic.demo.sh",
+        "image.flatten.sh",
+        "image.registry.sh"
+      ]
+    },
+    {
+      "name": "versitygw",
+      "env": "VGW_BIN",
+      "cases": [
+        "orchestrator.*.sh",
+        "builder.*.sh",
+        "telemetry.backends.sh",
+        "telemetry.guest.sh",
+        "telemetry.proxy.sh",
+        "basic.demo.sh"
+      ]
+    }
+  ]
+}

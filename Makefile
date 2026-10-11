@@ -207,6 +207,7 @@ test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_tag_selection.py release/test_tag_sources.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s release -p 'test_workbench_*.py'
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test_e2e_package.py
+	PYTHONDONTWRITEBYTECODE=1 python3 release/test_helper_discovery.py
 	PYTHONDONTWRITEBYTECODE=1 python3 release/test-environment-tools.py
 	bash test/demo/test_demo_safety.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_state_assertions.py

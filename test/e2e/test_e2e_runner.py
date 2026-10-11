@@ -21,6 +21,8 @@ loader.exec_module(runner)
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "ci/integration"))
+from test_fixtures import helper_contract
+
 prepare_spec = importlib.util.spec_from_file_location(
     "prepare_artifacts", ROOT / "ci/integration/prepare-artifacts.py")
 prepare = importlib.util.module_from_spec(prepare_spec)
@@ -104,7 +106,7 @@ class SelectionTests(unittest.TestCase):
                 f'[ "$OUT" = "{out_root}/basic.one.sh" ]\n'
                 'printf ok > "$OUT/result"\n')
             shutil.copyfile(runner.CASES / 'basic.one.sh', work / 'test/e2e/cases/basic.one.sh')
-            runner.workspace.seal(work, {'arch': platform.machine(), 'prepared_cases': ['basic.one.sh']})
+            runner.workspace.seal(work, {'helper_contract': helper_contract(names=()), 'helpers': {}, 'arch': platform.machine(), 'prepared_cases': ['basic.one.sh']})
             args = self.args(include=["basic.one.sh"], workdir=str(work), arch=platform.machine(),
                              run_root=str(run_root), out_root=str(out_root), result=None)
             self.assertEqual(runner.cmd_run(args), 0)
@@ -128,7 +130,7 @@ class SelectionTests(unittest.TestCase):
                     'mkdir -p "$SANDBOX_BASE_ROOT"\n'
                     'printf private > "$SANDBOX_BASE_ROOT/marker"\n'
                     'printf "%s" "$SANDBOX_BASE_ROOT" > "$OUT/base-root"\n')
-            runner.workspace.seal(work, {'arch': platform.machine(), 'prepared_cases': names})
+            runner.workspace.seal(work, {'helper_contract': helper_contract(names=()), 'helpers': {}, 'arch': platform.machine(), 'prepared_cases': names})
             args = self.args(all=True, workdir=str(work), arch=platform.machine(),
                              run_root=str(root / 'state'), out_root=str(root / 'output'), result=None)
             host_root = root / 'host-default'
@@ -156,7 +158,7 @@ class RunTemplateCacheTests(unittest.TestCase):
     def run_cases(self, bodies, **options):
         for name, body in bodies.items():
             (self.cases/name).write_text('set -eu\n'+body)
-        runner.workspace.seal(self.work, {'arch':platform.machine(), 'prepared_cases':list(bodies)})
+        runner.workspace.seal(self.work, {'helper_contract': helper_contract(names=()), 'helpers': {}, 'arch':platform.machine(), 'prepared_cases':list(bodies)})
         args = type('Args', (), self.args | options)()
         code = runner.cmd_run(args)
         return code, json.loads((Path(args.run_root)/'out/result.json').read_text())
@@ -184,7 +186,7 @@ class RunTemplateCacheTests(unittest.TestCase):
     def test_second_invocation_never_reuses_a_previous_cache(self):
         (self.cases/'basic.a.sh').write_text('set -eu\n[ ! -e "$E2E_TEMPLATE_CACHE_DIR/marker" ]\ntouch "$E2E_TEMPLATE_CACHE_DIR/marker"\n')
         (self.cases/'basic.b.sh').write_text((self.cases/'basic.a.sh').read_text())
-        runner.workspace.seal(self.work, {'arch':platform.machine(),'prepared_cases':['basic.a.sh','basic.b.sh']})
+        runner.workspace.seal(self.work, {'helper_contract': helper_contract(names=()), 'helpers': {}, 'arch':platform.machine(),'prepared_cases':['basic.a.sh','basic.b.sh']})
         caches=[]
         for name in ('basic.a.sh','basic.b.sh'):
             args=type('Args',(),self.args | {'all':False,'include':[name]})()
@@ -221,9 +223,13 @@ class PreparedRunnerTests(unittest.TestCase):
         shutil.copyfile(MODULE.parent / 'lib/common.sh', self.release / 'test/e2e/lib/common.sh')
         shutil.copyfile(MODULE.parent / 'lib/workspace.py', self.release / 'test/e2e/lib/workspace.py')
         shutil.copyfile(MODULE.parent / 'lib/demo_wheels.py', self.release / 'test/e2e/lib/demo_wheels.py')
+        shutil.copyfile(MODULE.parent / 'lib/helper_contract.py', self.release / 'test/e2e/lib/helper_contract.py')
         helpers = self.release / 'test/e2e/helpers' / platform.machine()
         helpers.mkdir(parents=True)
-        (helpers / 'helpers.json').write_text(json.dumps({'arch': platform.machine(), 'helpers': {}}))
+        self.contract = helper_contract(sha='a' * 40, framework='a' * 40, names=())
+        (helpers.parent / 'contract.json').write_text(json.dumps(self.contract))
+        (helpers / 'helpers.json').write_text(json.dumps({'schema': 1, 'contract_sha256': prepare.artifacts.identity(self.contract),
+                                                        'arch': platform.machine(), 'helpers': {}}))
         (self.release / 'test/e2e/cases/basic.fixture.sh').write_text('exit 0\n')
         (self.release / 'guide').mkdir()
         (self.release / 'guide/quickstart.md').write_text('# User guide\n')
@@ -241,6 +247,14 @@ class PreparedRunnerTests(unittest.TestCase):
         import struct
         root = self.release / 'test/e2e/helpers' / platform.machine()
         metadata = json.loads((root / 'helpers.json').read_text())
+        all_names = set(names) | set(metadata['helpers'])
+        if all_names & {'usage-probe', 'cgroup-fork-probe'}: all_names.update({'zot', 'usage-probe', 'cgroup-fork-probe'})
+        if all_names & {'custom-proxy', 'telemetry-grpc-probe', 'node-ctl-runner-test'}:
+            all_names.update({'zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'node-ctl-runner-test'})
+        self.contract = helper_contract(sha='a' * 40, framework='a' * 40, names=all_names)
+        (root.parent / 'contract.json').write_text(json.dumps(self.contract))
+        metadata.update(schema=1, contract_sha256=prepare.artifacts.identity(self.contract))
+        inventory = runner.workspace.helper_contract.validate(self.contract)
         for name in names:
             header = bytearray(64)
             header[:7] = b'\x7fELF\x02\x01\x01'
@@ -249,7 +263,8 @@ class PreparedRunnerTests(unittest.TestCase):
             (root / name).chmod(0o755)
             metadata['framework_sha'] = 'a' * 40
             metadata['test_revisions'] = {'sandboxer': 'a' * 40, 'orchestrator': 'a' * 40}
-            metadata['helpers'][name] = {'sha256': runner.workspace.digest(root / name), 'source_sha': 'a' * 40}
+            metadata['helpers'][name] = {'sha256': runner.workspace.digest(root / name), 'source_sha': 'a' * 40,
+                                         'owner': inventory[name]['owner'], 'mode': 0o755, 'size': 64}
         (root / 'helpers.json').write_text(json.dumps(metadata))
 
     def test_runner_helper_missing_or_wrong_pin_fails_before_preparation(self):
@@ -258,7 +273,7 @@ class PreparedRunnerTests(unittest.TestCase):
         helpers = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe']
         self.install_test_helpers(helpers)
         with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
-            with self.assertRaisesRegex(ValueError, 'requires prepared helper.*node-ctl-runner-test'):
+            with self.assertRaisesRegex(ValueError, 'helper receipt differs from trusted inventory'):
                 runner.cmd_prepare(self.args_with(include=[case]))
         prepare.assert_not_called()
         self.assertFalse(self.work.exists())
@@ -268,24 +283,24 @@ class PreparedRunnerTests(unittest.TestCase):
         metadata['helpers']['node-ctl-runner-test']['source_sha'] = 'b' * 40
         path.write_text(json.dumps(metadata))
         with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
-            with self.assertRaisesRegex(ValueError, 'source identity mismatch: node-ctl-runner-test'):
+            with self.assertRaisesRegex(ValueError, 'helper output identity differs from trusted source/bytes'):
                 runner.cmd_prepare(self.args_with(include=[case]))
         prepare.assert_not_called()
         self.assertFalse(self.work.exists())
 
     def test_runner_helper_environment_is_the_sealed_fixture_path(self):
-        selected = {'arch': platform.machine(), 'helpers': {'node-ctl-runner-test': {}}}
+        selected = {'helper_contract': helper_contract(), 'arch': platform.machine(), 'helpers': {'node-ctl-runner-test': {}}}
         env = runner.workspace.case_environment(self.work, selected, 'orchestrator.lifecycle.sh')
         self.assertEqual(env['NODE_CTL_RUNNER_TEST_BINARY'], str(self.work / 'fixtures/bin/node-ctl-runner-test'))
         self.assertNotIn('NODE_CTL_RUNNER_TEST_BINARY', runner.workspace.case_environment(
-            self.work, {'arch': platform.machine()}, 'basic.fixture.sh'))
+            self.work, {'helper_contract': helper_contract(names=()), 'arch': platform.machine()}, 'basic.fixture.sh'))
 
     def test_missing_selected_helper_fails_before_fixture_work(self):
         case = 'sandbox.cgroup.sh'
         (self.release / 'test/e2e/cases' / case).write_text('exit 0\n')
         self.install_test_helpers(['zot', 'usage-probe'])
         with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
-            with self.assertRaisesRegex(ValueError, 'sandbox.cgroup.sh requires prepared helper.*cgroup-fork-probe'):
+            with self.assertRaisesRegex(ValueError, 'helper receipt differs from trusted inventory'):
                 runner.cmd_prepare(self.args_with(include=[case]))
         prepare.assert_not_called()
         self.assertFalse(self.work.exists())
@@ -299,7 +314,7 @@ class PreparedRunnerTests(unittest.TestCase):
         metadata['helpers']['cgroup-fork-probe']['source_sha'] = 'b' * 40
         path.write_text(json.dumps(metadata))
         with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
-            with self.assertRaisesRegex(ValueError, 'helper source identity mismatch: cgroup-fork-probe'):
+            with self.assertRaisesRegex(ValueError, 'helper output identity differs from trusted source/bytes'):
                 runner.cmd_prepare(self.args_with(include=[case]))
         prepare.assert_not_called()
         self.assertFalse(self.work.exists())
@@ -381,17 +396,16 @@ class PreparedRunnerTests(unittest.TestCase):
             runner.cmd_run(self.args_with(run_root=str(self.work / 'run')))
 
     def test_preparation_rejects_wrong_helper_architecture_before_fixtures(self):
-        import struct
+        self.install_test_helpers(['zot'])
         helpers = self.release / 'test/e2e/helpers' / platform.machine()
-        header = bytearray(64)
-        header[:7] = b'\x7fELF\x02\x01\x01'
+        header = bytearray((helpers / 'zot').read_bytes())
         struct.pack_into('<H', header, 18, 183 if platform.machine() == 'x86_64' else 62)
         (helpers / 'zot').write_bytes(header)
-        (helpers / 'zot').chmod(0o755)
-        (helpers / 'helpers.json').write_text(json.dumps({'arch': platform.machine(),
-            'helpers': {'zot': {'sha256': runner.workspace.digest(helpers / 'zot')}}}))
+        metadata = json.loads((helpers / 'helpers.json').read_text())
+        metadata['helpers']['zot']['sha256'] = runner.workspace.digest(helpers / 'zot')
+        (helpers / 'helpers.json').write_text(json.dumps(metadata))
         with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
-            with self.assertRaisesRegex(ValueError, 'wrong architecture'):
+            with self.assertRaisesRegex(ValueError, 'ELF architecture mismatch'):
                 runner.cmd_prepare(self.args_with())
         prepare.assert_not_called()
 
@@ -420,7 +434,7 @@ class PreparedRunnerTests(unittest.TestCase):
         runner.workspace.verify(self.work)
 
     def test_public_environment_alias_fails_offline_before_creating_workspace(self):
-        self.install_test_helpers(['zot', 'usage-probe'])
+        self.install_test_helpers(['zot', 'usage-probe', 'cgroup-fork-probe'])
         (self.release / 'test/e2e/cases/sandbox.fixture.sh').write_text('exit 0\n')
         deps = self.root / 'deps'
         deps.mkdir()

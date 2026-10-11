@@ -15,12 +15,24 @@ from unittest.mock import patch
 
 import artifacts
 import source_inputs as subject
-from test_fixtures import CASES, architecture_result
+from test_fixtures import CASES, architecture_result, helper_contract
 sys.path.insert(0, str(subject.ROOT / 'release'))
 from test_tag_sources import fixture
 
 spec = importlib.util.spec_from_file_location('evidence_resolver', Path(__file__).with_name('resolve-artifacts.py'))
 resolver = importlib.util.module_from_spec(spec); spec.loader.exec_module(resolver)
+
+
+def declare_fixture(root, owner=None):
+    path = root / 'release/helper-inputs.json'
+    path.parent.mkdir(exist_ok=True)
+    value = (json.loads(helper_contract('a' * 40, 'b' * 40)['owners'][owner]['declaration']) if owner else
+             {'schema': 1, 'recipe': None, 'dependencies': [], 'helpers': []})
+    path.write_text(json.dumps(value))
+    if value['recipe']:
+        recipe = root / value['recipe']; recipe.parent.mkdir(parents=True, exist_ok=True)
+        recipe.write_text('fixture recipe')
+
 
 
 class FixedInputs(unittest.TestCase):
@@ -83,6 +95,7 @@ class FixedInputs(unittest.TestCase):
                     shutil.rmtree(source / 'test/e2e/cases')
                     (source / 'test/e2e/cases').mkdir()
                     for name in CASES[owner]: (source / 'test/e2e/cases' / name).write_text('echo owner\n')
+                    declare_fixture(source, owner)
                     git(source, 'add', '.'); git(source, 'commit', '-qm', 'owner inputs')
                     git(source, 'tag', tag)
                     records[unit] = subject.tag_sources.inspect_unit(source, unit, tag)
@@ -92,6 +105,7 @@ class FixedInputs(unittest.TestCase):
                 (platform / 'releases').mkdir()
                 (platform / 'releases/release.yaml').write_text(manifest)
                 (platform / 'releases/daily-preview.yaml').write_text(manifest + 'preview_version: preview.20260101\n')
+                declare_fixture(platform, "platform")
                 git(platform, 'add', '.'); git(platform, 'commit', '-qm', 'admitted selection')
                 sha = git(platform, 'rev-parse', 'HEAD')
                 stage = root / 'stage'; (stage / 'assets').mkdir(parents=True)
@@ -369,6 +383,7 @@ class SourcePlan(unittest.TestCase):
                 cases = repo / ('test/e2e/platform/cases' if owner == 'platform' else 'test/e2e/cases')
                 cases.mkdir(parents=True)
                 for name in CASES[owner]: (cases / name).write_text('echo original\n')
+                declare_fixture(repo, owner)
                 subject.tag_sources.git(repo, 'add', '.')
                 subject.tag_sources.git(repo, 'commit', '-qm', 'owner cases')
                 sha = subject.tag_sources.git(repo, 'rev-parse', 'HEAD')

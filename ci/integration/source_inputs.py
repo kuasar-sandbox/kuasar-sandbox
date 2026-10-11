@@ -61,7 +61,11 @@ def verify_package(archive, roots, case_files, records):
     spec = importlib.util.spec_from_file_location('input_package_validator', ROOT / 'release/validate-e2e-package.py')
     validator = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(validator)
-    validator.validate(archive, expected_sources=records)
+    import helper_inputs
+    identities = {owner: records[unit] for owner, unit in tag_sources.OWNER_UNITS.items()}
+    identities['platform'] = inspect_platform(roots['platform'], tag_sources.git(roots['platform'], 'rev-parse', 'HEAD'))
+    expected_contract = helper_inputs.discover(roots, identities)
+    validator.validate(archive, expected_sources=records, expected_contract=expected_contract)
     with tempfile.TemporaryDirectory(prefix='source-package-') as directory:
         output = Path(directory)
         artifacts.unpack(archive, output, 'platform', {})

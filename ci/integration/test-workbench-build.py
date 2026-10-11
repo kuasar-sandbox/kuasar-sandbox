@@ -6,12 +6,13 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import artifacts
-from test_fixtures import restore_using
+from test_fixtures import restore_using, helper_contract
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release"))
 from test_tag_sources import fixture
@@ -28,6 +29,23 @@ def load(name, relative):
 
 builder = load("workbench_delta", "ci/integration/build-artifacts.py")
 release_helpers = load("workbench_release_helpers", "release/build-e2e-helpers.py")
+
+
+def declare(root, owner):
+    recipe = 'release/helper.sh' if owner == 'orchestrator' else None
+    declaration = {'schema': 1, 'recipe': recipe, 'dependencies': [], 'helpers':
+                   [{'name': 'custom-proxy', 'env': 'CUSTOM_PROXY_BIN', 'cases': ['orchestrator.*.sh']}] if recipe else []}
+    (root / 'release/helper-inputs.json').write_text(json.dumps(declaration))
+    if recipe: (root / recipe).write_text('go build -o "$2/custom-proxy" ./examples/custom-proxy\n')
+
+
+def platform_fixture(root):
+    fixture(root, 'connector', 'v0.0.1')
+    git = release_helpers.tag_sources.git
+    git(root, 'remote', 'set-url', 'origin', 'https://github.com/kuasar-sandbox/kuasar-sandbox')
+    declare(root, 'platform')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'platform helper declaration')
+
 
 
 class WorkbenchBuild(unittest.TestCase):
@@ -48,11 +66,13 @@ class WorkbenchBuild(unittest.TestCase):
                                          'func main() { _, file, _, _ := runtime.Caller(0); fmt.Println(file) }\n')
             for unit, tag in selected.items():
                 module = release_helpers.tag_sources.source_path(sources, unit, owner_layout=True)
+                declare(module, unit)
                 release_helpers.tag_sources.git(module, 'add', '.')
                 release_helpers.tag_sources.git(module, 'commit', '-qm', 'helper input')
                 release_helpers.tag_sources.git(module, 'tag', '-f', tag)
+            platform_fixture(root / "platform")
             copied = []
-            def helpers(source, target, destination, selected, environment):
+            def helpers(source, target, destination, selected, environment, contract):
                 copied.append(source)
                 self.assertIn("-p=2", environment["GOFLAGS"].split())
                 destination.mkdir(parents=True)
@@ -67,7 +87,7 @@ class WorkbenchBuild(unittest.TestCase):
                     patch.object(release_helpers.build_demo_wheels, "build"), \
                     patch.object(release_helpers.build_helpers, "build", side_effect=helpers):
                 for phase in ("cold", "warm"):
-                    release_helpers.build(sources, selected, root / phase, root / (phase + "-wheels"), root, arch)
+                    release_helpers.build(sources, selected, root / phase, root / (phase + "-wheels"), root / "platform", arch)
             self.assertNotEqual(copied[0], copied[1])
             self.assertTrue(all(not source.exists() for source in copied))
             self.assertEqual(artifacts.digest(root / "cold" / arch / "custom-proxy"),
@@ -80,7 +100,9 @@ class WorkbenchBuild(unittest.TestCase):
             {owner: "a" * 40 for owner in artifacts.OWNERS if owner != "platform"}, "b" * 40)
         tests = copy.deepcopy(revisions)
         tests["orchestrator"]["sha"] = "c" * 40
-        return {"mode": "source", "sources": revisions, "test_revisions": tests,
+        contract = helper_contract(sha='a' * 40, framework='b' * 40)
+        contract['owners']['orchestrator']['source']['sha'] = 'c' * 40
+        return {"mode": "source", "helper_contract": contract, "sources": revisions, "test_revisions": tests,
                 "test_overlays": list(artifacts.OWNERS),
                 "product_sources": {"node-ctl": {"kuasar-sandbox/orchestrator": "a" * 40}},
                 "lanes": {"x86_64": {"products": [], "selection": {"cases": []}}}}
@@ -169,19 +191,26 @@ class WorkbenchBuild(unittest.TestCase):
                 work = Path(temporary)
                 sources = work / "sources"
                 for unit, tag in selected.items():
-                    fixture(release_helpers.tag_sources.source_path(sources, unit, owner_layout=True), unit, tag)
+                    source = release_helpers.tag_sources.source_path(sources, unit, owner_layout=True)
+                    fixture(source, unit, tag)
+                    declare(source, unit)
+                    git = release_helpers.tag_sources.git
+                    git(source, 'add', '.'); git(source, 'commit', '-qm', 'declared helpers'); git(source, 'tag', '-f', tag)
+                platform_fixture(work / 'platform')
                 facts = release_helpers.tag_sources.inspect_sources(sources, selected, owner_layout=True)
                 pins = release_helpers.tag_sources.owner_revisions(facts)
                 calls = []
-                def helpers(source, target, destination, chosen, environment):
+                def helpers(source, target, destination, chosen, environment, contract):
                     calls.append(target)
-                    self.assertEqual(set(p.name for p in source.iterdir()), set(pins))
+                    self.assertEqual(set(p.name for p in source.iterdir()), set(pins) | {'platform'})
                     for owner, unit in release_helpers.tag_sources.OWNER_UNITS.items():
                         expected = release_helpers.tag_sources.source_path(sources, unit, owner_layout=True)
                         self.assertEqual((source / owner / 'README.md').read_bytes(), (expected / 'README.md').read_bytes())
                     destination.mkdir(parents=True)
                     for name in chosen:
-                        (destination / name).write_bytes(b"fixture")
+                        data = bytearray(64); data[:7] = b'\x7fELF\x02\x01\x01'
+                        struct.pack_into('<H', data, 18, 62 if arch == 'x86_64' else 183)
+                        (destination / name).write_bytes(data); (destination / name).chmod(0o755)
                 real_run = subprocess.run
                 def run(command, **kwargs):
                     if command[:3] == ['go', 'work', 'init']:
@@ -194,7 +223,7 @@ class WorkbenchBuild(unittest.TestCase):
                     release_helpers.build(sources, selected, work / "helpers", work / "wheels", work / "platform", arch)
                 self.assertEqual(calls, [arch])
                 self.assertEqual(wheels.call_args.args[1], arch)
-                self.assertEqual([path.name for path in (work / "helpers").iterdir()], [arch])
+                self.assertEqual({path.name for path in (work / "helpers").iterdir()}, {arch, "contract.json"})
                 record = json.loads((work / "helpers" / arch / "helpers.json").read_text())
                 self.assertEqual(record["test_revisions"], pins)
                 self.assertEqual(record["source_records"], facts)

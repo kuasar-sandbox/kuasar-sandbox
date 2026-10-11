@@ -9,7 +9,7 @@ sys.path.insert(0, str(ROOT / 'release'))
 sys.path.insert(0, str(ROOT / 'ci/integration'))
 import artifacts
 import publication_body
-from test_fixtures import tag_source_plan
+from test_fixtures import tag_source_plan, helper_contract
 
 
 class PublicationSize(unittest.TestCase):
@@ -37,6 +37,28 @@ class PublicationSize(unittest.TestCase):
         self.assertEqual(restored['registry'], binding['registry'])
         self.assertEqual(restored['workbench'], binding['workbench'])
         print(f'Release body: original={len(old)}, with full evidence={len(text)}, API limit={publication_body.MAX_CHARACTERS}, JSON bytes={len(payload.encode())}')
+
+    def test_full_owner_contract_is_retained_in_publication_payload(self):
+        fixtures = ROOT / 'ci/integration/fixtures'
+        old = (fixtures / 'pre-cutover-release-body.txt').read_text()
+        marker = '<!-- kuasar-integration-validation '
+        prefix, tail = old.split(marker)
+        encoded, suffix = tail.split(' -->', 1)
+        binding = json.loads(encoded)
+        plan = json.loads((fixtures / 'pre-cutover-plan.json').read_text())
+        plan['schema'] = 3
+        plan['helper_contract'] = helper_contract('a' * 40, 'b' * 40)
+        binding.update(validation_plan=plan, plan_id=artifacts.identity(plan),
+                       case_files=plan['case_files'])
+        binding['source_records'] = {unit: dict(repository=row['repository'], tag=row['version'],
+            sha=row['sha'], tree='9' * 40) for unit, row in plan['baseline']['units'].items()}
+        text = prefix + marker + artifacts.canonical(binding).decode() + ' -->' + suffix
+        payload = json.dumps({'body': publication_body.checked(text)}, ensure_ascii=True)
+        restored = json.loads(json.loads(payload)['body'].split(marker)[1].split(' -->')[0])
+        self.assertEqual(restored, binding)
+        self.assertEqual(artifacts.identity(restored['validation_plan']), restored['plan_id'])
+        self.assertEqual(restored['validation_plan']['helper_contract'], plan['helper_contract'])
+        print(f'Release body with owner contract={len(text)}, JSON bytes={len(payload.encode())}')
 
     def test_limit_fails_without_truncating_evidence(self):
         text = 'x' * publication_body.MAX_CHARACTERS

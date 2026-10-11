@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'release'))
 import selection
 import tag_sources
+import helper_inputs
 sys.path.insert(0, str(ROOT / 'ci/integration'))
 import artifacts
 import build_helpers
@@ -29,15 +30,21 @@ def build(unit_sources, selected, output, wheels_output, platform_source, arch=N
     for owner, unit in tag_sources.OWNER_UNITS.items():
         artifacts.require((tag_sources.source_path(unit_sources, unit, owner_layout=True) / 'go.mod').is_file(),
                           f'missing complete tag helper source: {owner}')
-    helpers = {'zot': 'framework', 'versitygw': 'framework', 'custom-proxy': 'orchestrator',
-               'telemetry-grpc-probe': 'orchestrator', 'node-ctl-runner-test': 'orchestrator',
-               'usage-probe': 'sandboxer',
-               'cgroup-fork-probe': 'sandboxer'}
+    roots = {owner: tag_sources.source_path(unit_sources, unit, owner_layout=True)
+             for owner, unit in tag_sources.OWNER_UNITS.items()}
+    roots['platform'] = platform_source
+    import source_inputs
+    identities = {owner: source_records[unit] for owner, unit in tag_sources.OWNER_UNITS.items()}
+    identities['platform'] = source_inputs.inspect_platform(platform_source,
+        tag_sources.git(platform_source, 'rev-parse', 'HEAD'))
+    contract = helper_inputs.discover(roots, identities)
+    helpers = {name: row['owner'] for name, row in helper_inputs.contract.validate(contract).items()}
     with tempfile.TemporaryDirectory(prefix='release-helper-sources-') as directory:
         sources = Path(directory) / 'sources'
         # Work in a private copy; source assembly still sees its exact inputs.
         for owner, unit in tag_sources.OWNER_UNITS.items():
             shutil.copytree(tag_sources.source_path(unit_sources, unit, owner_layout=True), sources / owner)
+        shutil.copytree(platform_source, sources / 'platform')
         # Keep private source copy paths out of binaries and cache identities.
         environment = {**os.environ, 'GOWORK': str(sources / 'go.work'),
                        'GOFLAGS': (os.environ.get('GOFLAGS', '') + ' -trimpath').strip()}
@@ -47,13 +54,14 @@ def build(unit_sources, selected, output, wheels_output, platform_source, arch=N
             build_demo_wheels.build(platform_source / 'test/demo', arch, wheels_output / arch)
             selected = dict(helpers)
             destination = output / arch
-            build_helpers.build(sources, arch, destination, selected, environment)
-            records = {name: {'sha256': artifacts.digest(destination / name),
-                             'source_sha': framework_sha if owner == 'framework' else pins[owner]}
-                       for name, owner in selected.items()}
+            build_helpers.build(sources, arch, destination, selected, environment, contract)
+            records = helper_inputs.contract.receipt(destination, arch, contract)
             (destination / 'helpers.json').write_bytes(artifacts.canonical(
-                {'arch': arch, 'framework_sha': framework_sha, 'test_revisions': pins,
+                {'schema': 1, 'arch': arch, 'contract_sha256': artifacts.identity(contract),
+                 'framework_sha': framework_sha, 'test_revisions': pins,
                  'source_records': source_records, 'helpers': records}) + b'\n')
+        (output / 'contract.json').write_bytes(artifacts.canonical(contract) + b'\n')
+
 
 
 if __name__ == '__main__':

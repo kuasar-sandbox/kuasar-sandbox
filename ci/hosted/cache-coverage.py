@@ -50,7 +50,7 @@ def identity(name: str, sources: Path, arch: str) -> dict:
         lane = plan["lanes"][arch]
         result.update(products=names(lane["products"], artifacts.PRODUCTS, "products"),
                       embedded_products=names(lane.get("embedded_products", []), {"envd"}, "embedded products"),
-                      helpers=artifacts.planned_helpers(lane["selection"]))
+                      helpers=artifacts.planned_helpers(lane["selection"], plan["helper_contract"]))
     elif name == "aggregate-helpers":
         # The existing producer owns its helper list and demo wheel selection;
         # do not create a second helper manifest in the cache wrapper.

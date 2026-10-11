@@ -13,13 +13,16 @@ import unittest
 spec = importlib.util.spec_from_file_location('e2e_package', Path(__file__).with_name('validate-e2e-package.py'))
 package = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(package)
-from test_fixtures import make_demo_wheelhouse
+from test_fixtures import make_demo_wheelhouse, helper_contract
 
 
 class PrebuiltPackage(unittest.TestCase):
     def setUp(self):
         self.pins = {owner: 'a' * 40 for owner in package.artifacts.OWNERS if owner != 'platform'}
         self.metadata, self.files = {}, {'test/e2e/cases/basic.fixture.sh': (b'exit 0\n', 0o644)}
+        self.contract = helper_contract()
+        self.files['test/e2e/helpers/contract.json'] = (package.artifacts.canonical(self.contract), 0o644)
+        inventory = package.helper_inputs.contract.validate(self.contract)
         self.directories = []
         for arch, machine in [('x86_64', 62), ('aarch64', 183)]:
             names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe',
@@ -30,9 +33,10 @@ class PrebuiltPackage(unittest.TestCase):
                 data[:7] = b'\x7fELF\x02\x01\x01'
                 struct.pack_into('<H', data, 18, machine)
                 self.files[f'test/e2e/helpers/{arch}/{name}'] = (bytes(data), 0o755)
-                helpers[name] = {'sha256': hashlib.sha256(data).hexdigest(),
+                helpers[name] = {'owner': inventory[name]['owner'], 'size': len(data), 'mode': 0o755, 'sha256': hashlib.sha256(data).hexdigest(),
                                  'source_sha': ('b' if name in {'zot', 'versitygw'} else 'a') * 40}
-            self.metadata[arch] = {'arch': arch, 'framework_sha': 'b' * 40,
+            self.metadata[arch] = {'schema': 1, 'contract_sha256': package.artifacts.identity(self.contract),
+                                   'arch': arch, 'framework_sha': 'b' * 40,
                                    'test_revisions': copy.deepcopy(self.pins), 'helpers': helpers}
 
     def validate(self, expected=None, expected_sources=None):
@@ -51,11 +55,11 @@ class PrebuiltPackage(unittest.TestCase):
                     output.addfile(member, io.BytesIO(data))
             package.validate(path, self.pins if expected is None else expected, expected_sources)
 
-    def test_new_helpers_are_bound_to_selected_tag_facts_and_legacy_stays_readable(self):
+    def test_helpers_are_bound_to_selected_tag_facts(self):
         sources = {unit: {'repository': package.tag_sources.repository(unit), 'sha': 'a' * 40, 'tree': 'c' * 40,
                          'tag': ('runtime-' if unit == 'runtime' else 'vmlinux-' if unit == 'vmlinux' else '') + 'v1.2.3'}
                    for unit in package.tag_sources.selection.UNITS}
-        # Existing immutable helper metadata remains readable as historical evidence.
+        # New receipts are checked against their declared source contract.
         self.validate()
         with self.assertRaisesRegex(ValueError, 'helper tag source facts differ'):
             self.validate(expected_sources=sources)
@@ -65,7 +69,7 @@ class PrebuiltPackage(unittest.TestCase):
         self.metadata['aarch64']['source_records']['orchestrator']['tag'] = 'v1.2.4'
         with self.assertRaisesRegex(ValueError, 'helper tag source facts differ'):
             self.validate(expected_sources=sources)
-        with self.assertRaisesRegex(ValueError, 'architecture helper source sets differ'):
+        with self.assertRaisesRegex(ValueError, 'helper declaration tag differs from receipt'):
             self.validate()
         self.metadata['aarch64']['source_records'] = copy.deepcopy(sources)
         self.metadata['aarch64']['source_records']['orchestrator']['sha'] = 'f' * 40
@@ -88,15 +92,15 @@ class PrebuiltPackage(unittest.TestCase):
                 path = f'test/e2e/helpers/{arch}/{name}'
                 record = self.metadata[arch]['helpers'].pop(name)
                 data, mode = self.files.pop(path)
-                with self.assertRaisesRegex(ValueError, 'missing or unexpected prebuilt E2E helper'):
+                with self.assertRaisesRegex(ValueError, 'helper inventory differs'):
                     self.validate()
                 self.metadata[arch]['helpers'][name] = record
                 self.files[path] = (data + b'tamper', mode)
-                with self.assertRaisesRegex(ValueError, 'checksum mismatch: node-ctl-runner-test'):
+                with self.assertRaisesRegex(ValueError, 'helper checksum mismatch: node-ctl-runner-test'):
                     self.validate()
                 self.files[path] = (data, mode)
                 record['source_sha'] = 'c' * 40
-                with self.assertRaisesRegex(ValueError, 'source identity'):
+                with self.assertRaisesRegex(ValueError, 'helper bytes/source/mode differ'):
                     self.validate()
                 record['source_sha'] = self.pins['orchestrator']
                 self.validate()
@@ -104,7 +108,7 @@ class PrebuiltPackage(unittest.TestCase):
     def test_arm_cgroup_probe_is_required_in_new_release_packages(self):
         del self.metadata['aarch64']['helpers']['cgroup-fork-probe']
         del self.files['test/e2e/helpers/aarch64/cgroup-fork-probe']
-        with self.assertRaisesRegex(ValueError, 'missing or unexpected prebuilt E2E helper'):
+        with self.assertRaisesRegex(ValueError, 'helper inventory differs'):
             self.validate()
 
     def test_arm_probe_architecture_hash_and_source_are_checked(self):
@@ -118,7 +122,7 @@ class PrebuiltPackage(unittest.TestCase):
             self.validate()
         self.files[name] = (data, mode)
         self.metadata['aarch64']['helpers']['cgroup-fork-probe']['source_sha'] = 'c' * 40
-        with self.assertRaisesRegex(ValueError, 'source identity'):
+        with self.assertRaisesRegex(ValueError, 'helper bytes/source/mode differ'):
             self.validate()
 
     def test_owner_guides_and_their_directories_are_packaged(self):
@@ -205,7 +209,7 @@ class PrebuiltPackage(unittest.TestCase):
 
     def test_helper_source_identity_is_bound(self):
         self.metadata['x86_64']['helpers']['usage-probe']['source_sha'] = 'c' * 40
-        with self.assertRaisesRegex(ValueError, 'source identity'):
+        with self.assertRaisesRegex(ValueError, 'helper bytes/source/mode differ'):
             self.validate()
 
     def test_unknown_architecture_and_owner_runner_are_rejected(self):
