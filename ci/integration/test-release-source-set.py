@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import subprocess
 import sys
 import unittest
@@ -74,6 +75,203 @@ class FrozenReleaseGates(unittest.TestCase):
         status = gate.execute(self.plan_path, self.sources, self.output, self.env)
         result = json.loads((self.output / 'result.json').read_text())
         return status, result
+
+    def cli_framework(self):
+        # Execute the real CLI from its own clean, self-contained admitted root.
+        # Only fixture declarations/Makefiles differ; imports cannot fall back to
+        # the test driver's checkout or PYTHONPATH.
+        framework = Path(__file__).resolve().parents[2]
+        root = self.fixture.roots['platform']
+        for directory in ('ci/integration', 'release', 'test/e2e'):
+            for source in (framework / directory).rglob('*.py'):
+                target = root / source.relative_to(framework)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(source, target)
+        git(root, 'add', '.'); git(root, 'commit', '-qm', 'Frozen CLI framework')
+        self.plan(['platform'])
+
+    def exact_assets(self, preview=False):
+        root = self.fixture.roots['platform']
+        (root / 'releases').mkdir(exist_ok=True)
+        units = {unit: row['tag'] for unit, row in self.document['source_records'].items()}
+        version='release-v1.2.3'+('-preview.20990101' if preview else '')
+        relative='releases/daily-preview.yaml' if preview else 'releases/release.yaml'
+        (root / relative).write_text(
+            'version: release-v1.2.3\ndelivery: workbench-v1\n' +
+            ('preview_version: preview.20990101\n' if preview else '') + 'components:\n' +
+            ''.join('  '+unit+': '+tag+'\n' for unit, tag in units.items()))
+        git(root, 'add', '.'); git(root, 'commit', '-qm', 'Staged selection')
+        self.plan(['platform'])
+        plan = self.document
+        platform_source = {key: plan['run_inputs']['platform'][key] for key in ('repository','sha','tree')}
+        plan.update(schema=3, mode='exact-assets', platform_source=platform_source,
+                    run_inputs={'platform': copy.deepcopy(platform_source), **{
+                        'sources/'+unit: copy.deepcopy(row) for unit,row in plan['source_records'].items()}},
+                    candidate_records=[], test_overlays=[], kernel_sha=plan['source_records']['vmlinux']['sha'])
+        for row in plan['test_revisions'].values(): row['role']='release'
+        plan['sources']=copy.deepcopy(plan['test_revisions'])
+        plan['baseline']=dict(repository=platform_source['repository'], sha=platform_source['sha'],
+            version=version, staged=True, delivery='workbench-v1', units={
+                unit:dict(repository=row['repository'],sha=row['sha'],version=row['tag'])
+                for unit,row in plan['source_records'].items()})
+        names={'SHA256SUMS','platform-'+version+'.tar.gz'}
+        names.update(artifacts.archive_name(unit,tag,arch) for unit,tag in units.items() for arch in artifacts.ARCHES)
+        names.update('workbench-'+arch+'-'+version.removeprefix('release-')+'.tar.gz' for arch in artifacts.ARCHES)
+        plan['baseline']['assets']=[dict(name=name,size=1,digest='sha256:'+'a'*64) for name in sorted(names)]
+        for lane in plan['lanes'].values(): lane['performance']=[]
+        facts={owner:platform_source if owner=='platform' else plan['source_records'][
+            'runtime' if owner=='guest-runtime' else owner] for owner in artifacts.OWNERS}
+        plan['helper_contract']=gate.helpers.discover(self.fixture.roots,facts)
+        self.save()
+        artifacts.check_plan(plan)
+
+    def cli(self, auto=True, context=True):
+        env = dict(self.env)
+        for key in ('PYTHONPATH','GITHUB_ACTIONS','REQUIRE_WORKING_SET_PRIVILEGED','KUASAR_WORKSPACE_ROOT',
+                    'KUASAR_WORKBENCH_IMAGE_ID','KUASAR_WORKBENCH_FRAMEWORK_SHA','KUASAR_CI_DIR'):
+            env.pop(key,None)
+        if context:
+            env.update(REQUIRE_WORKING_SET_PRIVILEGED='1', KUASAR_WORKSPACE_ROOT=str(self.sources),
+                       KUASAR_WORKBENCH_IMAGE_ID='fixture-image', KUASAR_WORKBENCH_FRAMEWORK_SHA='a'*40,
+                       KUASAR_CI_DIR=str(self.root/'metrics'))
+        command=[sys.executable,'-B',str(self.sources/'platform/ci/integration/release-source-set.py'),
+                 '--sources',str(self.sources)]
+        command += ['--auto'] if auto else ['--plan',str(self.plan_path),'--output',str(self.output)]
+        completed=subprocess.run(command,env=env,cwd=self.sources/'platform',text=True,
+                                 stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=60)
+        paths=sorted((self.root/'metrics').glob('release-gates-*/result.json')) if auto else [self.output/'result.json']
+        result=json.loads(paths[-1].read_text()) if paths else None
+        return completed,result
+
+    def test_exact_assets_auto_and_explicit_cli_execute_native_recipe(self):
+        self.cli_framework(); self.exact_assets()
+        before=self.plan_path.read_bytes()
+        for auto in (True,False):
+            with self.subTest(auto=auto):
+                completed,result=self.cli(auto)
+                self.assertEqual(completed.returncode,0,(completed.stdout,completed.stderr,result))
+                self.assertEqual(result['plan_id'],artifacts.identity(self.document))
+                self.assertEqual(set(result['helpers']),set(artifacts.OWNERS))
+                self.assertEqual(result['helpers']['connector']['status'],'validated-native-recipe')
+                self.assertGreater(result['helpers']['connector']['outputs']['component-probe']['size'],64)
+                self.assertEqual(len([row for row in result['commands'] if row['command']==['make','test-release']]),5)
+                self.assertTrue(all(row['exit_code']==0 for row in result['commands']))
+                self.assertEqual(self.plan_path.read_bytes(),before)
+                self.assertNotIn('tag',self.document['platform_source'])
+                self.assertNotEqual(self.document['platform_source']['sha'],self.document['framework_sha'])
+        self.assertEqual(len((self.root/'executed').read_text().splitlines()),10)
+
+    def test_exact_assets_preview_auto_cli(self):
+        self.cli_framework();self.exact_assets(preview=True)
+        completed,result=self.cli()
+        self.assertEqual(completed.returncode,0,(completed.stdout,completed.stderr,result))
+        self.assertEqual(result['plan_id'],artifacts.identity(self.document))
+        self.assertEqual(result['helpers']['connector']['status'],'validated-native-recipe')
+
+    def test_source_auto_cli_and_missing_context_documents(self):
+        self.cli_framework()
+        completed,result=self.cli()
+        self.assertEqual(completed.returncode,0,(completed.stdout,completed.stderr,result))
+        for missing in (['.source-plan.json'],['.source-checks.json'],['.source-plan.json','.source-checks.json']):
+            with self.subTest(missing=missing):
+                self.save()
+                for name in missing: (self.sources/name).unlink()
+                before=(self.root/'executed').read_bytes()
+                completed,result=self.cli()
+                self.assertNotEqual(completed.returncode,0)
+                self.assertEqual(result['commands'],[])
+                self.assertIn('missing regular frozen input',result['error'])
+                self.assertEqual((self.root/'executed').read_bytes(),before)
+        count=len(list((self.root/'metrics').glob('*')))
+        completed,result=self.cli(context=False)
+        self.assertEqual(completed.returncode,0,completed.stderr)
+        self.assertIn('was not requested',completed.stdout)
+        self.assertEqual(len(list((self.root/'metrics').glob('*'))),count)
+
+    def test_exact_assets_platform_evidence_mismatch_before_commands(self):
+        self.exact_assets(); original=copy.deepcopy(self.document)
+        changes=[('platform_source','sha','b'*40),('platform_source','tree','b'*40),
+                 ('platform_source','repository','kuasar-sandbox/other'),
+                 ('baseline','sha','b'*40),('baseline','repository','kuasar-sandbox/other'),
+                 ('baseline','version','release-v1.2.4'),('baseline','staged',False)]
+        for group,key,value in changes:
+            with self.subTest(group=group,key=key):
+                self.document=copy.deepcopy(original);self.document[group][key]=value;self.save()
+                self.output=self.root/(group+'-'+key)
+                status,result=self.run_gate()
+                self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
+        for key,value in [('sha','b'*40),('tree','b'*40),('repository','kuasar-sandbox/other'),('ref','refs/heads/main')]:
+            with self.subTest(run_input=key):
+                self.document=copy.deepcopy(original);self.document['run_inputs']['platform'][key]=value;self.save()
+                self.output=self.root/('run-input-'+key)
+                status,result=self.run_gate()
+                self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
+        self.document=copy.deepcopy(original);self.document['test_revisions']['platform']['role']='baseline';self.save()
+        self.output=self.root/'wrong-role';status,result=self.run_gate()
+        self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
+        self.document=original;self.save()
+        receipt=json.loads((self.sources/'.source-checks.json').read_text())
+        receipt['sources']['platform']['sha']='b'*40
+        (self.sources/'.source-checks.json').write_text(json.dumps(receipt))
+        self.output=self.root/'wrong-receipt';status,result=self.run_gate()
+        self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
+        self.assertFalse((self.root/'executed').exists())
+
+    def test_exact_assets_consistent_false_tree_and_helper_source_rejected(self):
+        self.exact_assets();original=copy.deepcopy(self.document)
+        self.document['platform_source']['tree']='b'*40
+        self.document['run_inputs']['platform']['tree']='b'*40
+        self.document['helper_contract']['owners']['platform']['source']['tree']='b'*40
+        self.save();status,result=self.run_gate()
+        self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
+        self.assertIn('tree changed',result['error'])
+        self.document=original
+        self.document['helper_contract']['owners']['platform']['source']['ref']='refs/heads/main'
+        self.save();self.output=self.root/'helper-source'
+        status,result=self.run_gate()
+        self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
+
+    def test_exact_assets_wrong_component_tag_at_same_commit(self):
+        self.exact_assets()
+        git(self.fixture.roots['connector'],'tag','v1.2.4')
+        self.document['run_inputs']['sources/connector']['tag']='v1.2.4'
+        self.document['helper_contract']['owners']['connector']['source']['tag']='v1.2.4'
+        self.save();status,result=self.run_gate()
+        self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
+        self.assertFalse((self.root/'executed').exists())
+
+    def test_exact_assets_manifest_binds_version_and_selected_tags(self):
+        self.exact_assets();original=copy.deepcopy(self.document)
+        self.document['baseline']['version']='release-v1.2.4'
+        for row in self.document['baseline']['assets']:
+            if row['name'].startswith(('platform-', 'workbench-')):
+                row['name']=row['name'].replace('v1.2.3','v1.2.4')
+        self.save();status,result=self.run_gate()
+        self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
+        self.assertIn('frozen platform manifest',result['error'])
+        self.document=original
+        git(self.fixture.roots['connector'],'tag','v1.2.4')
+        self.document['baseline']['units']['connector']['version']='v1.2.4'
+        for row in self.document['baseline']['assets']:
+            if row['name'].startswith('connector-'):row['name']=row['name'].replace('v1.2.3','v1.2.4')
+        for row in (self.document['source_records']['connector'],self.document['run_inputs']['sources/connector'],
+                    self.document['helper_contract']['owners']['connector']['source']):row['tag']='v1.2.4'
+        self.save();self.output=self.root/'wrong-manifest-tag'
+        status,result=self.run_gate()
+        self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
+        self.assertIn('frozen platform manifest',result['error'])
+
+    def test_unknown_mode_and_incomplete_exact_assets_fail_closed(self):
+        self.exact_assets();original=copy.deepcopy(self.document)
+        self.document['mode']='other';self.save()
+        status,result=self.run_gate()
+        self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
+        for key in ('platform_source','run_inputs','helper_contract','source_records'):
+            with self.subTest(key=key):
+                self.document=copy.deepcopy(original);del self.document[key];self.save()
+                self.output=self.root/('missing-'+key)
+                status,result=self.run_gate()
+                self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
 
     def test_all_owners_original_entries_and_real_native_recipe(self):
         before = self.plan_path.read_bytes()

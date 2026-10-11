@@ -35,9 +35,23 @@ def requested(sources, env):
 
 
 def identities(plan, records):
-    """Keep the admitted named ref/tag, including two tags at the same commit."""
+    """Bind named inputs and the unpublished aggregate platform transport."""
     result = {}
     for owner, pin in records.items():
+        if plan['mode'] == 'exact-assets' and owner == 'platform':
+            source = plan.get('platform_source', {})
+            baseline = plan['baseline']
+            artifacts.require(set(source) == {'repository', 'sha', 'tree'} and
+                              source.get('repository') == 'kuasar-sandbox/kuasar-sandbox' and
+                              pin == dict(repository=source['repository'], sha=source['sha'], role='release') and
+                              plan.get('run_inputs', {}).get('platform') == source and
+                              baseline.get('repository') == source['repository'] and
+                              baseline.get('sha') == source['sha'] and baseline.get('staged') is True and
+                              isinstance(baseline.get('version'), str) and
+                              helpers.tag_sources.selection.AGGREGATE_RE.fullmatch(baseline['version']),
+                              'unpublished platform admission differs from original plan')
+            result[owner] = dict(source)
+            continue
         candidates = [row for row in plan.get('run_inputs', {}).values()
                       if row.get('repository') == pin['repository'] and row.get('sha') == pin['sha']]
         if pin['role'] in ('candidate', 'companion'):
@@ -70,7 +84,7 @@ def identities(plan, records):
 def validate(plan_path, sources, env):
     plan = read(plan_path)
     plan_id = artifacts.check_plan(plan)
-    artifacts.require(plan['mode'] == 'source', 'release source gates require a source plan')
+    artifacts.require(plan['mode'] in ('source', 'exact-assets'), 'unsupported release source gate mode')
     selected, records = source_checks.source_records(plan)
     artifacts.require(read(sources / '.source-checks.json') == {'plan_id': plan_id, 'sources': records},
                       'source materialization receipt differs from original plan')
@@ -83,6 +97,17 @@ def validate(plan_path, sources, env):
         observed = source_inputs.inspect_checkout(sources / owner, row['repository'], row['sha'])
         artifacts.require(observed['tree'] == row['tree'], 'fixed source tree changed: ' + owner)
         helpers.inspect(sources / owner, row)
+    if plan['mode'] == 'exact-assets':
+        # This is the admitted pre-publication tree, not a future aggregate tag.
+        selection = helpers.tag_sources.selection
+        version = plan['baseline']['version']
+        preview = '-preview.' in version
+        relative = 'releases/daily-preview.yaml' if preview else 'releases/release.yaml'
+        manifest = helpers.contract.regular(sources / 'platform', relative).read_text()
+        actual, _, units = selection.parse_manifest(manifest, relative, preview)
+        artifacts.require(actual == version and units == {
+            unit: row['version'] for unit, row in plan['baseline']['units'].items()},
+            'staged selection differs from frozen platform manifest')
     for owner in sorted(selected - {'platform'}):
         makefile = helpers.contract.regular(sources / owner, 'Makefile').read_text()
         artifacts.require(re.search(r'^test-release\s*:(?!=)', makefile, re.M), 'missing original release entry: ' + owner)
