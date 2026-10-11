@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "recipe": "release/build-platform-helpers.sh",
-  "dependencies": [],
+  "dependencies": ["guest-runtime"],
   "helpers": [
     {
       "name": "zot",

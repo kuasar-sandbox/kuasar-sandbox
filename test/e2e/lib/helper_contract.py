@@ -10,6 +10,13 @@ import struct
 OWNERS = ('platform', 'accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator')
 ARCHES = ('x86_64', 'aarch64')
 DECLARATION = 'release/helper-inputs.json'
+# Existing historical case interface only; never an allowed output inventory.
+LEGACY_ALIASES = {
+    'zot': 'ZOT_BIN', 'versitygw': 'VGW_BIN', 'custom-proxy': 'CUSTOM_PROXY_BIN',
+    'telemetry-grpc-probe': 'TELEMETRY_GRPC_PROBE_BIN', 'usage-probe': 'USAGE_PROBE_BIN',
+    'cgroup-fork-probe': 'CGROUP_FORK_PROBE_BIN', 'node-ctl-runner-test': 'NODE_CTL_RUNNER_TEST_BINARY',
+}
+
 
 
 def require(condition, message):
@@ -159,6 +166,11 @@ def validate(contract):
             'missing or invalid trusted helper contract')
     inventory, aliases = {}, set()
     historical = historical_inventory(contract) if contract['schema'] == 2 else {}
+    for name in historical:
+        alias = LEGACY_ALIASES.get(name)
+        if alias is not None:
+            require(alias not in aliases, 'duplicate historical helper environment')
+            aliases.add(alias)
     for owner, row in contract['owners'].items():
         require(isinstance(row, dict) and set(row) == ({'source', 'historical'} if row.get('historical') is True else
                 {'source', 'declaration', 'declaration_sha256', 'declaration_blob', 'recipe_sha256', 'recipe_blob'}),

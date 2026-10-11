@@ -102,6 +102,59 @@ class OwnerDiscovery(unittest.TestCase):
             '--release-dir', str(release), '--workdir', str(self.root / target), '--arch', platform.machine(),
             '--include', case, '--offline'], text=True, capture_output=True, timeout=30)
 
+    def test_platform_recipe_uses_fixed_owner_and_ignores_host_helpers(self):
+        # Isolate upstream transport only. Execute the unchanged platform entry
+        # and an owner fixture with the normal versitygw build ABI.
+        root = self.root / 'platform-production'; root.mkdir()
+        platform_root = root / 'platform'; platform_root.mkdir()
+        for name in ('release/build-platform-helpers.sh', 'ci/integration/materialize-source.sh'):
+            target = platform_root / name; target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / name, target)
+        upstream = root / 'upstream'; upstream.mkdir()
+        (upstream / 'helper.c').write_text('int main(void) { return 0; }\n')
+        subprocess.run(['cc', '-o', str(root / 'zot'), str(upstream / 'helper.c')], check=True)
+        tarball = root / 'upstream.tar.gz'
+        with tarfile.open(tarball, 'w:gz') as tar: tar.add(upstream, arcname='versitygw')
+        bootstrap = platform_root / 'ci/hosted/bootstrap.sh'; bootstrap.parent.mkdir()
+        bootstrap.write_text('download() {\n'
+            'case "$1" in\n'
+            'https://codeload.github.com/versity/versitygw/tar.gz/refs/tags/v1.5.0)\n'
+            ' [ "$3" = 6a667e38d78a08effdf0b7c3c3e4b9929233b333c8a53c16b62eded7d43eeedc ]; cp "$FIXTURE_TARBALL" "$2" ;;\n'
+            'https://github.com/project-zot/zot/releases/download/v2.1.17/zot-linux-*-minimal)\n'
+            ' cp "$FIXTURE_ZOT" "$2"; echo "$3  $2" | sha256sum -c - ;;\n'
+            '*) echo "unexpected upstream URL" >&2; exit 1 ;; esac\n}\n')
+        guest = root / 'guest-runtime/native-deps/deps'; guest.mkdir(parents=True)
+        (guest / 'build-versitygw.sh').write_text('set -euo pipefail\n'
+            '[ "$VERSITYGW_GOFLAGS" = "-mod=mod -p=2" ]\n'
+            '[ "$GO_ARCH" = amd64 ] || [ "$GO_ARCH" = arm64 ]\n'
+            '[ -f "$VERSITYGW_SRC/.extracted" ]\n'
+            '[ -f "$VERSITYGW_TARBALL" ]\n'
+            'cc -o "$BINDIR/versitygw" "$VERSITYGW_SRC/helper.c"\n'
+            'echo fixed-owner > "$FIXTURE_OWNER_USED"\n')
+        commands = root / 'commands'; commands.mkdir()
+        poison = commands / 'zot'; poison.write_text('#!/bin/sh\necho bypass > "$FIXTURE_POISON"\nexit 91\n'); poison.chmod(0o755)
+        shutil.copy2(poison, commands / 'versitygw')
+        curl = commands / 'curl'; curl.write_text('#!/bin/sh\nset -eu\n'
+            'case "$*" in *https://github.com/project-zot/zot/releases/download/v2.1.17/checksums.sha256.txt*) ;; *) exit 92 ;; esac\n'
+            'while [ "$1" != -o ]; do shift; done\n'
+            'printf "%s  zot-linux-amd64-minimal\\n%s  zot-linux-arm64-minimal\\n" "$FIXTURE_ZOT_SHA" "$FIXTURE_ZOT_SHA" > "$2"\n'); curl.chmod(0o755)
+        env = dict(os.environ, PATH=str(commands)+':'+os.environ['PATH'], KUASAR_WORKSPACE_ROOT=str(root),
+                   KUASAR_BUILD_JOBS='2', FIXTURE_TARBALL=str(tarball), FIXTURE_ZOT=str(root/'zot'),
+                   FIXTURE_ZOT_SHA=c.digest((root/'zot').read_bytes()), FIXTURE_OWNER_USED=str(root/'used'),
+                   FIXTURE_POISON=str(root/'poison'), E2E_ZOT_BIN=str(poison), ZOT_BIN=str(poison),
+                   E2E_VGW_BIN=str(poison), VGW_BIN=str(poison))
+        output = root / 'output'; output.mkdir()
+        command = ['bash', str(platform_root/'release/build-platform-helpers.sh'), platform.machine(), str(output)]
+        subprocess.run(command, env=env, check=True, capture_output=True)
+        self.assertEqual(set(p.name for p in output.iterdir()), {'zot','versitygw'})
+        for name in ('zot','versitygw'): c.check_binary(output/name, platform.machine())
+        self.assertEqual((root/'used').read_text(), 'fixed-owner\n')
+        self.assertFalse((root/'poison').exists())
+        (guest/'build-versitygw.sh').unlink()
+        result = subprocess.run(command, env=env, capture_output=True, text=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('missing admitted guest-runtime', result.stderr)
+
     def test_component_only_addition_builds_packages_prepares_and_runs(self):
         release = self.packaged(self.build())
         result = self.prepare(release)
@@ -322,10 +375,10 @@ class HistoricalTransport(unittest.TestCase):
         for arch, machine in [('x86_64', 62), ('aarch64', 183)]:
             path = old / 'test/e2e/helpers' / arch; path.mkdir(parents=True)
             data = bytearray((built / 'component-probe').read_bytes()); struct.pack_into('<H', data, 18, machine)
-            (path / 'component-probe').write_bytes(data); (path / 'component-probe').chmod(0o755)
+            (path / 'custom-proxy').write_bytes(data); (path / 'custom-proxy').chmod(0o755)
             (path / 'helpers.json').write_text(json.dumps({'arch': arch, 'framework_sha': original['framework_sha'],
                 'test_revisions': {o: s['sha'] for o, s in self.sources.items() if o != 'platform'}, 'source_records': records,
-                'helpers': {'component-probe': {'source_sha': self.sources['connector']['sha'], 'sha256': c.digest(data)}}}))
+                'helpers': {'custom-proxy': {'source_sha': self.sources['connector']['sha'], 'sha256': c.digest(data)}}}))
         archive = self.root / 'platform-release-v1.2.3.tar.gz'
         def owned(member):
             member.uid = member.gid = 0; member.uname = member.gname = ''; return member
@@ -416,20 +469,41 @@ class HistoricalTransport(unittest.TestCase):
                 no_download.assert_not_called()
         available, metadata = helper_history.inventory(archive, original, {o:s for o,s in self.sources.items() if o != 'platform'})
         c.validate(contract)
+        # Historical interface aliases participate in the same uniqueness check
+        # as new declarations, without changing any original helper metadata.
+        mixed = copy.deepcopy(contract)
+        row = mixed['owners']['platform']
+        declaration = {'schema': 1, 'recipe': 'release/platform-probe.sh', 'dependencies': [],
+                       'helpers': [{'name': 'platform-probe', 'env': 'CUSTOM_PROXY_BIN', 'cases': ['basic.component.sh']}]}
+        def update_alias(alias):
+            declaration['helpers'][0]['env'] = alias
+            data = json.dumps(declaration).encode()
+            row.update(declaration=data.decode(), declaration_sha256=c.digest(data), declaration_blob=c.blob(data),
+                       recipe_sha256=c.digest(b'fixture'), recipe_blob=c.blob(b'fixture'))
+        update_alias('CUSTOM_PROXY_BIN')
+        with self.assertRaisesRegex(ValueError, 'duplicate helper environment'):
+            c.validate(mixed)
+        update_alias('PLATFORM_PROBE_BIN')
+        self.assertEqual(c.validate(mixed)['platform-probe']['env'], 'PLATFORM_PROBE_BIN')
+        self.assertEqual(c.validate(mixed)['custom-proxy']['env'], None)
         output = self.root / 'restored'
         environment = {k:v for k,v in os.environ.items() if k not in ('GH_TOKEN','GITHUB_TOKEN','CALLER_TOKEN','KUASAR_CI_APP_PRIVATE_KEY')}
-        build_helpers.build(self.root / 'sources', platform.machine(), output, {'component-probe':'connector'}, environment, contract, archive)
-        self.assertEqual((output / 'component-probe').read_bytes(), (built / 'component-probe').read_bytes())
+        build_helpers.build(self.root / 'sources', platform.machine(), output, {'custom-proxy':'connector'}, environment, contract, archive)
+        self.assertEqual((output / 'custom-proxy').read_bytes(), (built / 'component-probe').read_bytes())
         # A composed workspace carries the trusted plan contract and exact
         # historical receipt. Public preparation consumes it without rebuilding.
         release = self.root / 'historical-prepared'; (release / 'bin').mkdir(parents=True)
         shutil.copytree(ROOT / 'test/e2e/lib', release / 'test/e2e/lib', ignore=shutil.ignore_patterns('__pycache__'))
         shutil.copy2(ROOT / 'test/e2e/e2e', release / 'test/e2e/e2e')
         (release / 'test/e2e/cases').mkdir()
-        (release / 'test/e2e/cases/basic.component.sh').write_text('set -euo pipefail\n"$E2E_HELPERS_DIR/component-probe"\n')
+        (release / 'test/e2e/cases/basic.component.sh').write_text('set -euo pipefail\n"$E2E_HELPERS_DIR/custom-proxy"\n')
         shutil.copytree(output, release / 'fixtures/bin')
         workspace_spec = importlib.util.spec_from_file_location('historical_workspace', ROOT / 'test/e2e/lib/workspace.py')
         workspace = importlib.util.module_from_spec(workspace_spec); workspace_spec.loader.exec_module(workspace)
+        aliases = workspace.helper_variables({'helper_contract': mixed})
+        self.assertEqual(aliases['custom-proxy'], 'CUSTOM_PROXY_BIN')
+        self.assertEqual(aliases['platform-probe'], 'PLATFORM_PROBE_BIN')
+        self.assertEqual(mixed['history'], contract['history'])
         workspace.seal(release, {'arch': platform.machine(), 'prepared_cases':['basic.component.sh'], 'helper_contract':contract,
                                 'helpers': c.receipt(output, platform.machine(), contract)})
         result = self.prepare(release); self.assertEqual(result.returncode, 0, result.stderr)
@@ -439,7 +513,7 @@ class HistoricalTransport(unittest.TestCase):
             '--workdir', str(self.root / 'prepared'), '--include', 'basic.component.sh'],
             text=True, capture_output=True, timeout=30)
         self.assertEqual(ran.returncode, 0, ran.stderr)
-        self.assertEqual(actual['helpers']['component-probe']['source_sha'], self.sources['connector']['sha'])
+        self.assertEqual(actual['helpers']['custom-proxy']['source_sha'], self.sources['connector']['sha'])
         for owner in ('accelerator','connector','guest-runtime','sandboxer','orchestrator'):
             bad = json.loads(json.dumps(contract)); bad['owners'][owner]['source']['tag'] += '-preview.20260101'
             with self.assertRaisesRegex(ValueError, 'dependency tag/source'): c.validate(bad)

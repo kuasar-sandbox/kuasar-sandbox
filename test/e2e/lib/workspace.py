@@ -24,12 +24,7 @@ _spec = importlib.util.spec_from_file_location('helper_contract', Path(__file__)
 helper_contract = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(helper_contract)
 
-HELPERS = {
-    "zot": "ZOT_BIN", "versitygw": "VGW_BIN", "custom-proxy": "CUSTOM_PROXY_BIN",
-    "telemetry-grpc-probe": "TELEMETRY_GRPC_PROBE_BIN", "usage-probe": "USAGE_PROBE_BIN",
-    "cgroup-fork-probe": "CGROUP_FORK_PROBE_BIN",
-    "node-ctl-runner-test": "NODE_CTL_RUNNER_TEST_BINARY",
-}
+HELPERS = helper_contract.LEGACY_ALIASES
 IMAGE_VARIABLES = {
     "prometheus": "TELEMETRY_PROMETHEUS_IMAGE", "clickhouse": "TELEMETRY_CLICKHOUSE_IMAGE",
     "orchestrator-base": "ORCHESTRATOR_BASE_IMAGE", "orchestrator-execute": "ORCHESTRATOR_EXECUTE_IMAGE",

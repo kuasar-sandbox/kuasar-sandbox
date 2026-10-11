@@ -593,6 +593,154 @@ class ArtifactContracts(unittest.TestCase):
         next(item for item in self.plan["baseline"]["assets"] if item["name"] == name).update(record)
         return checksum
 
+    def test_owner_addition_through_release_transport_package_and_ci_prepare(self):
+        """Real native helper through production stages under restrictive umask.
+
+        Product archives are the existing EROFS fixtures. Only the unrelated
+        wheel download is isolated. The other ELF architecture is a deliberately
+        non-executed owner fixture, not a native ARM execution claim.
+        """
+        import sys
+        sys.path.insert(0, str(subject.ROOT / 'release'))
+        import helper_inputs, source_inputs
+        import test_helper_discovery as discovery
+        def load(name, relative):
+            spec = importlib.util.spec_from_file_location(name, subject.ROOT / relative)
+            module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+            return module
+        producer = load('production_helper_fixture', 'release/build-e2e-helpers.py')
+        prepare = load('production_prepare_fixture', 'ci/integration/prepare-artifacts.py')
+        owner = discovery.OwnerDiscovery(); owner.setUp(); self.addCleanup(owner.doCleanups)
+        roots, git = owner.roots, discovery.git
+        selected = {unit: (unit + '-' if unit in ('runtime', 'vmlinux') else '') + 'v1.2.3'
+                    for unit in producer.selection.UNITS}
+        cases = {}
+        for name, root in roots.items():
+            (root / 'go.mod').write_text('module example.test/' + name + '\ngo 1.22\n')
+            (root / 'docs').mkdir(exist_ok=True)
+            (root / 'README.md').write_text('Fixture owner guide\n')
+            (root / 'README_zh.md').write_text('Fixture owner guide\n')
+            (root / 'release/guide-inputs.txt').write_text('README.md\nREADME_zh.md\ndocs/\n')
+            (root / 'docs/unit.md').write_text('Fixture guide\n')
+            suite = root / ('test/e2e/platform' if name == 'platform' else 'test/e2e')
+            (suite / 'cases').mkdir(parents=True); (suite / 'lib').mkdir()
+            case = 'basic.' + name + '.sh'; cases[name] = [case]
+            text = 'exit 0\n'
+            if name == 'connector':
+                text = 'set -euo pipefail\n"$COMPONENT_PROBE_BIN"\n"$E2E_HELPERS_DIR/component-probe"\n'
+                decl = json.loads((root / discovery.c.DECLARATION).read_text())
+                decl['helpers'][0].update(env='COMPONENT_PROBE_BIN', cases=[case])
+                (root / discovery.c.DECLARATION).write_text(json.dumps(decl))
+                # Native cc output is never chmod-normalized by this fixture.
+                # The second architecture tests archive validation only.
+                with (root / 'release/build-helpers.sh').open('a') as stream:
+                    stream.write('python3 -B - "$1" "$2/component-probe" <<\'PYARCH\'\n'
+                        'import pathlib,platform,struct,sys\n'
+                        'if sys.argv[1] != platform.machine():\n'
+                        ' p=pathlib.Path(sys.argv[2]);b=bytearray(p.read_bytes());struct.pack_into("<H",b,18,{"x86_64":62,"aarch64":183}[sys.argv[1]]);p.write_bytes(b)\nPYARCH\n')
+            (suite / 'cases' / case).write_text(text)
+            (suite / 'lib/common.sh').write_text('true\n')
+        platform_root = roots['platform']
+        sys.path.insert(0, str(subject.ROOT / "test/e2e"))
+        import package_inputs
+        for name in package_inputs.PLATFORM_RUNTIME:
+            target = platform_root / name; target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(subject.ROOT / name, target)
+            # Model a clean Git checkout's tracked mode, not the editor's
+            # group-writable worktree mode. Built helper modes stay untouched.
+            mode = subprocess.check_output(['git', '-C', str(subject.ROOT), 'ls-files', '-s', '--', name], text=True).split()[0]
+            target.chmod(int(mode, 8) & 0o777)
+        (platform_root / 'docs/kuasar-sandbox.md').write_text('Fixture platform guide\n')
+        (platform_root / 'docs/kuasar-sandbox_zh.md').write_text('Fixture platform guide\n')
+        (roots['guest-runtime'] / 'docs/vmlinux.md').write_text('Independent kernel guide\n')
+        (platform_root / 'releases').mkdir()
+        manifest = 'version: release-v1.2.3\ndelivery: workbench-v1\ncomponents:\n' + ''.join(
+            f'  {unit}: {tag}\n' for unit, tag in selected.items())
+        (platform_root / 'releases/release.yaml').write_text(manifest)
+        (platform_root / 'releases/daily-preview.yaml').write_text(manifest + 'preview_version: preview.20260101\n')
+        for name, root in roots.items():
+            git(root, 'add', '.'); git(root, 'commit', '-qm', 'Complete selected owner fixture')
+            if name != 'platform': git(root, 'tag', selected['runtime' if name == 'guest-runtime' else name])
+        git(roots['guest-runtime'], 'tag', selected['vmlinux'])
+        sources = owner.root / 'sources'
+        shutil.copytree(roots['guest-runtime'], sources / 'kernel-unit/guest-runtime')
+        arch = os.uname().machine
+        old_umask = os.umask(0o077)
+        self.addCleanup(os.umask, old_umask)
+        def wheels(_demo, target, output): output.mkdir(parents=True)
+        with patch.object(producer.build_demo_wheels, 'build', side_effect=wheels):
+            producer.build(sources, selected, owner.root / 'produced/e2e-helpers',
+                           owner.root / 'produced/e2e-wheels', platform_root)
+        produced = owner.root / 'produced/e2e-helpers'
+        contract = json.loads((produced / 'contract.json').read_text())
+        original = json.loads((produced / arch / 'helpers.json').read_text())['helpers']['component-probe']
+        self.assertEqual(original['mode'], 0o700)
+        self.assertEqual(original['owner'], 'connector')
+        self.assertEqual(contract['owners']['connector']['source']['tag'], selected['connector'])
+        # Actual workflow transport and collect operations, with preserved modes.
+        collected = owner.root / 'collected'; collected.mkdir()
+        for target in subject.ARCHES:
+            archive_path = owner.root / (target + '.tar')
+            subprocess.run(['tar', '-cf', str(archive_path), '-C', str(owner.root / 'produced'),
+                            'e2e-helpers/' + target, 'e2e-helpers/contract.json', 'e2e-wheels/' + target], check=True)
+            extracted = owner.root / ('transport-' + target)
+            transport.extract(archive_path, extracted)
+            incoming = extracted / 'e2e-helpers'
+            if (collected / 'contract.json').exists():
+                subprocess.run(['cmp', str(collected / 'contract.json'), str(incoming / 'contract.json')], check=True)
+            else: shutil.copy2(incoming / 'contract.json', collected / 'contract.json')
+            shutil.move(incoming / target, collected / target)
+        units = owner.root / 'units'; units.mkdir()
+        for unit in selected:
+            source = producer.tag_sources.source_path(sources, unit, owner_layout=True)
+            shutil.copytree(source, units / unit)
+        output = owner.root / 'packaged'
+        subprocess.run(['bash', str(subject.ROOT / 'release/package-platform.sh'), 'package',
+                        'release-v1.2.3', str(units), str(output)], check=True,
+                       env={**os.environ, 'PLATFORM_SOURCE_ROOT': str(platform_root),
+                            'E2E_HELPER_ROOT': str(collected), 'E2E_WHEEL_ROOT': '', 'PYTHONDONTWRITEBYTECODE':'1'})
+        archive_path = output / 'assets/platform-release-v1.2.3.tar.gz'
+        raw = owner.root / 'downloaded'; raw.mkdir()
+        subprocess.run(['tar', '--no-same-owner', '--no-same-permissions', '-xzf', str(archive_path), '-C', str(raw)], check=True)
+        for unit, record in self.plan['baseline']['units'].items():
+            product_archive = self.assets / subject.archive_name(unit, record['version'], arch)
+            subprocess.run(['tar', '--no-same-owner', '--no-same-permissions', '-xzf', str(product_archive), '-C', str(raw)], check=True)
+        result = owner.prepare(raw, case=cases['connector'][0])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        def execute(work):
+            result = subprocess.run([sys.executable, '-B', str(work / 'test/e2e/e2e'), 'run',
+                '--workdir', str(work), '--include', cases['connector'][0]], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+        execute(owner.root / 'prepared')
+        shutil.copy2(archive_path, self.assets / archive_path.name)
+        plan = self.plan
+        plan.update(schema=3, mode='exact-assets', owners=['platform'], case_files=cases, test_overlays=[], product_sources={},
+                    helper_contract=contract, test_revisions=subject.release_test_revisions(
+                        {o: row['source']['sha'] for o,row in contract['owners'].items() if o != 'platform'},
+                        contract['owners']['platform']['source']['sha']),
+                    run_inputs={o: row['source'] for o,row in contract['owners'].items()})
+        plan['baseline']['sha'] = contract['owners']['platform']['source']['sha']
+        records = producer.tag_sources.inspect_sources(units, selected)
+        plan['source_records'] = records
+        plan['platform_source'] = contract['owners']['platform']['source']
+        plan['baseline']['units'] = {unit: dict(repository=row['repository'], version=row['tag'], sha=row['sha'])
+                                     for unit, row in records.items()}
+        source_inputs.verify_package(archive_path, roots, cases, records)
+        plan['baseline']['assets'] = [row for row in plan['baseline']['assets'] if row['name'] != archive_path.name]
+        plan['baseline']['assets'].append(dict(name=archive_path.name,size=archive_path.stat().st_size,digest='sha256:'+subject.digest(archive_path)))
+        for target in subject.ARCHES:
+            plan['lanes'][target] = dict(products=[], performance=[], selection=subject.suite_selection(['platform'], target, cases))
+        delta = owner.root / 'delta'; delta.mkdir()
+        (delta / 'outputs.json').write_bytes(subject.canonical(dict(plan_id=subject.check_plan(plan), arch=arch,
+            products={}, embedded={}, tests={}, helpers={}, test_revisions=plan['test_revisions'], build_context={},
+            helper_contract_sha256=subject.identity(contract))))
+        workspace = owner.root / 'ci-prepared'
+        observed = prepare.prepare(plan, arch, self.assets, delta, workspace, offline=True)
+        self.assertEqual(observed['helper_contract'], contract)
+        self.assertEqual(observed['helpers']['component-probe'], original)
+        self.assertEqual(subject.digest(workspace / 'fixtures/bin/component-probe'), original['sha256'])
+        execute(workspace)
+
     def test_kernel_checksum_is_preserved_and_included_in_provenance(self):
         for arch in subject.ARCHES:
             expected = self.add_kernel_checksum(arch)
