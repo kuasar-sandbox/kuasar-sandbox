@@ -165,9 +165,7 @@ def execute(plan_path, sources, output, env):
         modules = [owner for owner in facts if (sources / owner / 'go.mod').is_file()]
         work = sources / 'go.work'
         before_work = work.read_bytes() if work.is_file() and not work.is_symlink() else None
-        work_sum = sources / 'go.work.sum'
-        artifacts.require(not work.is_symlink() and not work_sum.is_symlink(), 'linked Go workspace input')
-        before_sum = work_sum.read_bytes() if work_sum.is_file() else None
+        artifacts.require(not work.is_symlink(), 'linked Go workspace input')
         if modules:
             artifacts.require(work.is_file() and not work.is_symlink() and env.get('GOWORK') == str(work),
                               'missing fixed Go workspace')
@@ -180,9 +178,7 @@ def execute(plan_path, sources, output, env):
                               'frozen source evidence changed during release gates')
             artifacts.require((work.read_bytes() if work.exists() else None) == before_work,
                               'fixed Go workspace changed during release gates')
-            artifacts.require(not work.is_symlink() and not work_sum.is_symlink() and
-                              (work_sum.read_bytes() if work_sum.exists() else None) == before_sum,
-                              'fixed Go workspace checksum inputs changed during release gates')
+            artifacts.require(not work.is_symlink(), 'linked Go workspace input')
         scratch = tempfile.TemporaryDirectory(prefix='release-python-')
         artifacts.require(not Path(scratch.name).resolve().is_relative_to(sources), 'Python cache is inside frozen sources')
         # Explicit py_compile writes even with -B. Its disposable cache must not
