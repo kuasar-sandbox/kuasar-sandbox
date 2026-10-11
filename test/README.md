@@ -9,11 +9,13 @@ direct runner examples below are native references, not a second required host s
 
 Product E2E follows one contract: **prebuilt products → prepare → `<suite>.<case>.sh` → shared public runner**. The complete filename is the case ID; its first segment is the suite. The nine suites are `basic`, `storage`, `image`, `network`, `sandbox`, `snapshot`, `orchestrator`, `builder` and `telemetry`.
 
-Components maintain their own `test/e2e/cases/` and low-level `test/e2e/lib/` helpers. Platform owns `test/e2e/platform/cases/basic.demo.sh`. Source-time assembly copies exact selected test revisions into one flat `test/e2e/cases/` directory and namespaces helpers under `test/e2e/lib/<owner>/`. Duplicate IDs, unknown suites and owner runners are rejected. Ownership does not change public selection.
+Components maintain their own `test/e2e/cases/` and low-level `test/e2e/lib/` helpers. Platform owns `test/e2e/platform/cases/basic.demo.sh`. Source-mode assembly copies cases from the frozen admitted candidate and baseline tag inputs into one flat `test/e2e/cases/` directory and namespaces helpers under `test/e2e/lib/<owner>/`. Duplicate IDs, unknown suites and owner runners are rejected. Ownership does not change public selection.
 
 The platform archive carries the shared `test/e2e/e2e` runner and prebuilt helpers for both architectures. The earlier source/release build fetches the complete Demo SDK wheel closure using `test/demo/requirements.lock` and packages both architecture wheelhouses. Preparation resolves images and installs the SDK only from those hash-locked local wheels (`--no-index --find-links`, `--require-hashes`), then records package/version/wheel identities, installed file hashes, modes and image content IDs. Missing or changed wheels fail closed. Execution consumes that immutable workspace. It does not build products/helpers, discover sibling source trees, pull replacement images or use host helper binaries. Tested Build, flatten, snapshot and publication operations remain real.
 
-The release package includes the canonical cases, explicitly listed runtime libraries and actual Demo inputs. Source unit tests and performance tools remain in the source tree. Selected bilingual user guides are under `guide/`; the accelerator and guest-runtime E2E README pairs remain under `test/e2e/<owner>/`. The thin host launcher and instructions are under `workbench/`. Helpers and wheelhouses keep their existing contracts.
+Compiled helper inventory and build recipes belong to each owner’s `release/helper-inputs.json`. The build validates declarations from the fixed source set, invokes each owner recipe, and rejects missing or extra outputs. Public preparation consumes the packaged contract and binaries; cases use the declared environment aliases or `E2E_HELPERS_DIR/<name>`. Adding an owner helper does not require a platform filename entry. Original archive permissions remain evidence; a safe private extraction may restrict permissions, and preparation records the resulting copy’s actual mode.
+
+The release package includes the canonical cases, recursively discovered owner runtime libraries and actual Demo inputs. Source unit tests and performance tools remain in the source tree. Selected bilingual user guides are under `guide/`; the accelerator and guest-runtime E2E README pairs remain under `test/e2e/<owner>/`. The thin host launcher and instructions are under `workbench/`. Helpers and wheelhouses keep their existing contracts.
 
 ```bash
 python3 /release/test/e2e/e2e list --suite storage
@@ -22,6 +24,25 @@ sudo python3 /tmp/kuasar-prepared/test/e2e/e2e run --workdir /tmp/kuasar-prepare
 ```
 
 `--suite` and `--include` form a union; `--exclude` removes full filenames. Unknown selectors and empty selections fail. `--all` includes credentialed `storage.obs.sh`; normal public CI explicitly excludes it. There are no owner, tag, capability or fixture-graph selectors. The Makefile wrapper requires `RELEASE_DIR`, a fresh `E2E_WORKDIR` and optional `E2E_ARGS`.
+
+Each `run` invocation provides a fresh private directory for eligible helpers
+to reuse immutable template preparation within that invocation. The directory
+is outside prepared inputs and case-owned work, even with an explicit
+`--run-root`. Cases receive `E2E_TEMPLATE_CACHE_DIR` and the complete prepared
+provenance digest in `E2E_TEMPLATE_CACHE_PROVENANCE`; ambient values are cleared.
+The runner records the directory in `result.json` and retains it with run state
+for inspection, but never selects it for a later run. `run --no-template-cache`
+clears both variables and allocates no cache, allowing comparisons with ordinary
+preparation. Older helpers can ignore these variables without changing behavior.
+
+Consumers must bind content to the prepared identity, native architecture, full
+image config ID and versioned conversion recipe; validate entries and publish
+atomically under a lock. A matching damaged entry fails instead of silently
+rebuilding. Only immutable, unencrypted image content may be shared. Each case
+still owns its key, Store, template/Build identities, writable disks and real
+Guest lifecycle; live VMs, snapshots and mutable databases are never shared.
+Focused Builder and Demo cases retain real construction. A runner contract
+check alone does not validate a consumer's cache hits or establish a speedup.
 
 Preparation accepts `--deps-dir` / `E2E_DEPS_DIR` for verified local image archives and `--offline` / `E2E_OFFLINE=1` to prohibit dependency downloads. Unconfigured environments remain online. Local matches are validated without remote freshness checks; invalid matches never trigger remote repair. External requests come from one case/architecture function, which build-time input collection can also call. See [local and offline preparation](QUICKSTART.md#local-and-offline-preparation) for precedence, identity evidence and failure behavior.
 
@@ -33,7 +54,7 @@ the exact-source static no-libc probe in that architecture's `helpers.json`.
 Unselected helpers are not prerequisites. Demo consumes the prepared local
 native image identity, never a replacement or a second ARM digest list.
 
-CI resolves exact test filenames and selects broad suites for changed owners. Source builds finish before preparation. Products retain their own source closure while test scripts and helper binaries use independent test pins. CI preparation runs in an isolated runtime with no Go/Rust toolchains or component source trees. Every suite shard invokes the same packaged runner; storage, snapshot and ARM image acceptance also use an isolated runtime. Preparation and execution image IDs and environment checks are bound to their results. Results require every selected case's successful exit and one unchanged prepared input identity. Hosted ARM CI selects accelerator and guest-runtime non-KVM cases; exclusions are explicit. A static lane has zero product cases and is never product E2E acceptance.
+CI resolves exact test filenames and selects broad suites for changed owners. Source builds finish before preparation. Source-mode CI admits candidate refs and baseline tags once and freezes their verified inputs. When relevant product inputs are unchanged, CI can reuse baseline products while still running candidate tests and helpers. Recorded source identities are provenance, not independent test selectors. For new published releases, each owner's products, packaged tests, helpers and guides come from the same selected owner tag; exact-assets mode consumes the shipped materials. Historical releases retain their actual recorded origins and evidence. CI preparation runs in an isolated runtime with no Go/Rust toolchains or component source trees. Every suite shard invokes the same packaged runner; storage, snapshot and ARM image acceptance also use an isolated runtime. Preparation and execution image IDs and environment checks are bound to their results. Results require every selected case's successful exit and one unchanged prepared input identity. Hosted ARM CI selects accelerator and guest-runtime non-KVM cases; exclusions are explicit. A static lane has zero product cases and is never product E2E acceptance.
 
 Unit, race, vet, source helper, UFFD performance and working-set gates remain independent. `test/perf/warmpool-dedup.sh` retains the warm-pool characterization and its data/measurement assertions under `make perf-warmpool-dedup`; it is not a correctness suite. Component source checks stay in their owning repositories.
 

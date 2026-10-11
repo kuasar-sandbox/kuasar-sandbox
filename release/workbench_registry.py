@@ -1,5 +1,6 @@
 """Publish verified workbench archives without rebuilding or replacing image tags."""
 import argparse
+import publication_body
 import base64
 import gzip
 import hashlib
@@ -147,7 +148,7 @@ def publish(bundle, version, revision):
         proof = {'reference': reference, 'digest': identity, 'architectures': children}
     require('registry' not in binding or binding['registry'] == proof, 'existing validation names different registry bytes')
     binding['registry'] = proof
-    notes.write_text(prefix + MARKER + json.dumps(binding, sort_keys=True, separators=(',', ':')) + ' -->' + suffix)
+    notes.write_text(publication_body.checked(prefix + MARKER + json.dumps(binding, sort_keys=True, separators=(',', ':')) + ' -->' + suffix))
     return proof
 
 

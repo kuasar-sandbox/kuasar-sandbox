@@ -37,6 +37,109 @@ systemd 与私有 daemon 就绪，并报告实际能力。所选产品测试仍�
 `ghcr.io/kuasar-sandbox/workbench:vX.Y.Z[-preview.YYYYMMDD[.N]]`，即聚合版本去掉
 `release-` 前缀。新 `workbench-v1` 发布必须包含两个原生镜像归档；历史发布保留原有资产。
 
+### Windows 与 WSL 2 开发宿主
+
+只有 Linux 环境满足所选发布版的原生要求时，WSL 才可用于开发。发行版能启动或存在
+`/dev/kvm` 均不足以证明可用；Windows、CPU、固件和可能存在的外层 hypervisor 必须
+实际暴露嵌套虚拟化能力。本流程不为所有 WSL 组合或 ARM KVM 执行提供统一认证。
+Workbench 无法补齐缺失的宿主能力。
+
+先在本机 PowerShell 确认 Windows 机器和目标发行版，不要配置无关的远程 Linux shell：
+
+```powershell
+hostname
+whoami
+Get-CimInstance Win32_ComputerSystem | Select-Object Manufacturer,Model,HypervisorPresent,TotalPhysicalMemory
+Get-CimInstance Win32_Processor | Select-Object Name,NumberOfLogicalProcessors,VirtualizationFirmwareEnabled,SecondLevelAddressTranslationExtensions
+wsl --version
+wsl --list --verbose
+```
+
+变更前记录 Windows build、磁盘剩余空间、已有 WSL/Docker 工作负载及配置。结合正在
+运行的 hypervisor 和 Linux 内实际 KVM 探测判断固件/SLAT 字段；hypervisor 已运行时
+可能屏蔽硬件字段。若 Windows 本身是 VM，须由外层宿主的管理者开放嵌套能力。VM
+处理器配置适用于该 VM，不适用于普通物理 Windows 宿主。
+
+使用 WSL 2 发行版内的本机 rootful Linux Docker Engine 及其 Unix socket。检查当前
+Docker context/endpoint、daemon 内核/架构、存储驱动、数据目录和真实容器网络；选择
+端点时保留已有 Docker 数据。发行版内记录 `uname -r`、`uname -m`、`getconf PAGESIZE`、
+`nproc`、`free -h`、`df -h`、PID 1、`/sys/fs/cgroup/cgroup.controllers` 和实际 cgroup
+预算。若发行版 daemon 由 systemd 管理，按
+[Microsoft 发行版配置](https://learn.microsoft.com/en-us/windows/wsl/systemd)启用 systemd，
+验证 PID 1 和 `systemctl status docker`；Workbench 内的 systemd 是另一个实例。
+systemd 服务本身不会保持 WSL 存活。长时间构建和测试应保留日志、进程退出状态及
+可恢复的阶段记录。
+
+若已安装内核缺少所需功能，应从与本机 WSL 版本兼容的 Microsoft tag/commit 构建
+**WSL 宿主内核**并记录版本。以该版本的 Microsoft WSL 配置为基础，保留 Hyper-V、
+存储、网络和互操作支持。遵循该检出的
+[官方构建与 VHDX 说明](https://github.com/microsoft/WSL2-Linux-Kernel#build-instructions)：
+不同内核版本的打包脚本和布局可能不同。构建匹配模块及模块/artifacts VHDX，记录
+kernel release、配置差异和产物哈希。不得用 Kuasar Guest defconfig 替代，也不应为
+配置开发宿主而修改 Guest ABI 或项目最低内核基线。
+
+按所选测试核对宿主功能：KVM 及 CPU 厂商模块；namespaces、cgroup v2 控制器/委托、
+seccomp 和 overlayfs；userfaultfd、memfd 和 shmem；BPF/JIT/BTF、bpffs 和 TC BPF；
+TUN/TAP、veth、bridge、GENEVE、conntrack 和 NAT；以及实际需要的 vsock/vhost/存储
+路径。NFS、FUSE、EROFS 按宿主实际用途核对；安装用户态工具不等于启用内核功能。
+核验模块与 `uname -r` 匹配并可加载。在原生 Linux 宿主可用以下管理员权限探测
+打开并关闭一个空 KVM VM，不保留状态：
+
+```sh
+sudo python3 - <<'PY'
+import fcntl, os
+with open('/dev/kvm', 'rb+', buffering=0) as kvm:
+    assert fcntl.ioctl(kvm, 0xAE00, 0) == 12, 'unexpected KVM API version'
+    vm = fcntl.ioctl(kvm, 0xAE01, 0)
+    os.close(vm)
+PY
+```
+
+探测通过后仍须运行真实 Kuasar Guest。同样，应通过所选源码/产品检查验证实际
+userfaultfd 操作、BPF 加载、cgroup 委托及 TAP/NAT 通信；配置符号或设备列表不能
+替代功能验收。
+
+将原 `%UserProfile%\.wslconfig` 和内核/模块产物保存在 Windows 可访问的恢复位置。
+按 [Microsoft 配置参考](https://learn.microsoft.com/en-us/windows/wsl/wsl-config)合并
+选定的 `kernel`、`kernelModules`、`nestedVirtualization`、`processors`、`memory`、
+`swap`，保留无关设置。这些选项影响该用户的 WSL 2 VM；执行 `wsl --shutdown` 前，
+应为所有正在运行的发行版协调中断窗口。重启后核验实际内核、模块及预算。若无法
+启动，从 PowerShell 恢复配置备份并重启 WSL；若之前没有配置，仅移除本次新增的
+覆盖项。回退不能依赖可用的 Linux shell。
+
+### 资源预算与验收
+
+Windows、WSL 内核/服务及外层 Docker 的预算与 Workbench 限额分开计算，每层均保留
+CPU 和内存余量；swap 不能替代活动 VM 所需 RAM。Workbench 示例既不是 WSL 总预算，
+也不是完整测试的最低配置。源码/构建树、缓存及容器数据优先放在发行版原生 Linux
+文件系统中。估算内核产物、镜像归档/层、准备输入、重复用例及大镜像测试空间，并
+同时检查 Linux 文件系统和承载 VHDX 的 Windows 卷剩余空间；虚拟磁盘最大容量不等于
+可用存储。
+
+共享 Workbench 环境时，为 node 显式分配预算。
+[节点预留模型](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource_zh.md)
+规定 `physical_memory: auto` 读取宿主 `MemTotal`，并非容器内存限额。启动池是准入预算，
+不是预先分配的 RAM：
+
+```text
+AllocatablePool = (Physical - HostReserved) * (1 - operational_margin_factor)
+StartupPool     = AllocatablePool * startup_factor
+```
+
+实现使用饱和减法及字节取整。例如分配 10 GiB、保留 1 GiB、margin 为 0.10、startup
+factor 为 0.50，得到约 8.1 GiB 可分配池和 4.05 GiB 启动准入池。6 GiB 启动预留请求
+需要足够的池及有效策略；增大因子不会创造物理容量。保留节点文档中的参数边界，
+提高并发前测量真实内存峰值和 OOM 事件。Guest capacity、当前 allocation 和 startup
+reservation 是不同数量。
+
+运行匹配版本的 [Demo](../docs/quickstart_zh.md)，验证真实创建、exec、文件操作、
+DNS/出网、快照/恢复及清理，再在相同原生架构执行
+[普通全量选择](../test/QUICKSTART_zh.md)。保留版本、用例选择、退出码、日志及资源
+峰值。缺少必需能力即验收失败，不能缩减工作负载断言以宣称支持更小机器。OBS 需要
+额外凭证，不属于普通全量。DNS/出网失败时，先定位 Windows、WSL、外层容器或 Guest
+中的故障边界，再检查该实例的 DNS、代理、路由和 MTU。不要规定通用 DNS 地址/MSS、
+无依据切换防火墙后端或关闭宿主防火墙。
+
 ## 使用普通 UID 构建
 
 按现有[构建入口](../Makefile)准备自己的六仓库检出。将实例状态放在检出目录之外。

@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Offline bootstrap tests: no installs, downloads, VM changes or native builds."""
 import os
-import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -22,69 +21,31 @@ class BootstrapTests(unittest.TestCase):
         required = {
             "control": {"curl", "git", "jq", "python3", "python3-yaml", "util-linux"},
             "release-control": {"curl", "git", "jq"},
-            "helper-build": {"curl", "git", "jq", "build-essential", "gcc-aarch64-linux-gnu"},
-            "kernel": {"build-essential", "bc", "bison", "flex", "libelf-dev", "libssl-dev", "libncurses-dev", "pkg-config", "time"},
-            "runtime": {"autoconf", "automake", "libtool", "patch", "uuid-dev", "libgcrypt20-dev", "libgpg-error-dev", "libssl-dev", "liblz4-dev", "libzstd-dev", "zlib1g-dev", "libfuse3-dev"},
-            "runtime-publish": {"autoconf", "automake", "libtool", "patch", "uuid-dev", "libgcrypt20-dev", "libgpg-error-dev", "libssl-dev"},
-            "source": {"cmake", "clang", "libclang-dev", "libsnappy-dev", "iproute2", "kmod", "acl", "e2fsprogs", "redis-server"},
-            "exact-assets": {"build-essential", "autoconf", "automake", "libtool", "uuid-dev", "iproute2", "kmod", "acl", "e2fsprogs", "redis-server"},
+            "artifact-prepare": {"python3-pip"},
+            "artifact-arm": {"iproute2", "python3-venv", "redis-server", "systemd", "strace"},
+            "artifact-x86": {"iproute2", "kmod", "acl", "e2fsprogs", "redis-server", "systemd", "strace"},
         }
+        compilers = {"build-essential", "gcc", "g++", "clang", "rustc", "cargo", "golang", "libclang-dev"}
         for profile, expected in required.items():
             result = shell('select_profile "$PROFILE"; printf "%s\\n" "${packages[@]}"', PROFILE=profile)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertLessEqual(expected, set(result.stdout.splitlines()))
+            self.assertFalse(compilers & set(result.stdout.splitlines()))
             self.assertNotIn("systemd-container", result.stdout)
-            flags = shell('select_profile "$PROFILE"; echo "$with_go $with_kernel $with_readers $with_vm"', PROFILE=profile)
+            flags = shell('select_profile "$PROFILE"; echo "$with_vm"', PROFILE=profile)
             self.assertEqual(flags.returncode, 0, flags.stderr)
-            self.assertEqual(flags.stdout.split()[-1], "true" if profile in ("source", "exact-assets") else "false")
-            if profile in ("runtime", "runtime-publish", "source", "exact-assets"):
-                self.assertEqual(flags.stdout.split()[2], "true")
-            self.assertEqual(flags.stdout.split()[0], "false" if profile in ("control", "release-control") else "true")
-        self.assertNotEqual(shell("select_profile typo").returncode, 0)
+            self.assertEqual(flags.stdout.strip(), "true" if profile == "artifact-x86" else "false")
+        for obsolete in ("helper-build", "kernel", "runtime", "runtime-publish", "source", "exact-assets",
+                         "artifact-build", "artifact-cross", "typo"):
+            result = shell('select_profile "$PROFILE"', PROFILE=obsolete)
+            self.assertNotEqual(result.returncode, 0, obsolete)
+            self.assertIn("unknown profile", result.stderr)
 
-    def test_helper_cross_compiler_does_not_enable_product_build_profiles(self):
-        result = shell('select_profile helper-build; echo "$with_go $with_native $with_kernel $with_readers $with_vm $with_cross"')
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(result.stdout.strip(), "true false false false false false")
-
-    def test_cross_crypto_keeps_target_devel_and_host_reader_prerequisites(self):
-        def packages(profile):
-            result = shell('select_profile "$PROFILE"; printf "%s\\n" "${packages[@]}"', PROFILE=profile)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            return set(result.stdout.splitlines())
-
-        crypto = {"libgcrypt20-dev", "libgpg-error-dev"}
-        target = {name + ":arm64" for name in crypto}
-        cross = packages("artifact-cross")
-        self.assertLessEqual(target | {"uuid-dev:arm64"}, cross)
-        # Ubuntu's crypto development packages cannot coexist across these
-        # architectures. Host archive readers use the non-crypto recipe.
-        self.assertFalse(crypto & cross)
-        self.assertLessEqual(packages("artifact-prepare"), cross)
-        for profile in ("runtime", "runtime-publish", "source", "artifact-build"):
-            with self.subTest(profile=profile):
-                native = packages(profile)
-                self.assertLessEqual(crypto, native)
-                self.assertFalse(target & native)
-
-    def test_prepare_has_wheel_installer_without_enabling_go(self):
-        result = shell('select_profile artifact-prepare; printf "%s\\n" "${packages[@]}"; echo "go=$with_go"')
+    def test_prepare_has_wheel_installer_without_a_compiler(self):
+        result = shell('select_profile artifact-prepare; printf "%s\\n" "${packages[@]}"')
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("python3-pip", result.stdout.splitlines())
-        self.assertIn("go=false", result.stdout.splitlines())
-
-    def test_full_suite_utilities_and_exact_assets_build_scope(self):
-        for profile in ("source", "exact-assets"):
-            result = shell('select_profile "$PROFILE"; printf "%s\\n" "${packages[@]}"', PROFILE=profile)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            packages = set(result.stdout.splitlines())
-            self.assertLessEqual({"systemd", "dbus", "iputils-ping", "netcat-openbsd", "openssl",
-                                  "sqlite3", "zip", "socat", "strace", "udev"}, packages)
-            if profile == "exact-assets":
-                self.assertFalse(packages & {"cmake", "clang", "libclang-dev", "libsnappy-dev",
-                                             "bison", "flex", "libncurses-dev", "libelf-dev"})
-        result = shell('select_profile exact-assets; echo "$with_go $with_native $with_kernel $with_readers"')
-        self.assertEqual(result.stdout.strip(), "true false false true")
+        self.assertNotIn("build-essential", result.stdout.splitlines())
 
     def test_kvm_rule_is_exact_and_rejects_unsafe_ids(self):
         for gid in ("1", "1001", "4294967294"):
@@ -124,7 +85,7 @@ class BootstrapTests(unittest.TestCase):
                    "GITHUB_ENV": str(root / "env"), "GITHUB_PATH": str(root / "path")}
             body = '. "$1"; need() { :; }; id() { echo 1001; }; '
             body += 'uname() { case "$1" in -m) echo x86_64;; -s) echo Linux;; esac; }; '
-            body += 'sudo() { echo INSTALL_BOUNDARY; exit 79; }; main --profile source'
+            body += 'sudo() { echo INSTALL_BOUNDARY; exit 79; }; main --profile artifact-x86'
             for distro, version in (("ubuntu", "24.04"), ("ubuntu", "26.04"),
                                     ("ubuntu", "99.99"), ("debian", "13")):
                 release.write_text(f'ID={distro}\nVERSION_ID={version}\n')
@@ -143,61 +104,6 @@ class BootstrapTests(unittest.TestCase):
                        'sudo() { echo UNEXPECTED_DEVICE_CHANGE; }; configure_vm', **HOSTED_VM)
         self.assertEqual(result.returncode, 23, result.stderr)
         self.assertNotIn("UNEXPECTED_DEVICE_CHANGE", result.stdout)
-
-    def test_cross_apt_preserves_comment_and_empty_paragraphs(self):
-        archive = ("Types: deb\nURIs: http://archive.example.invalid/ubuntu\n"
-                   "Suites: noble noble-updates\nComponents: main universe\n"
-                   "Architectures: amd64 arm64\n")
-        security = ("Types: deb\nURIs: http://security.example.invalid/ubuntu\n"
-                    "Suites: noble-security\nComponents: main universe\n")
-        for comments in (False, True):
-            with self.subTest(comments=comments), tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                sources = root / "sources"
-                sources.mkdir()
-                native = sources / "ubuntu.sources"
-                arm = sources / "kuasar-arm64.sources"
-                native.write_text(
-                    "# Ubuntu archive configuration\n# Comments are not sources.\n\n"
-                    + archive + "\n\n\n# Security archive\n\n" + security
-                    + "\n# End of configuration\n" if comments else archive + "\n" + security)
-                script = root / "bootstrap.sh"
-                script.write_text(BOOTSTRAP.read_text()
-                    .replace("/etc/apt/sources.list.d/ubuntu.sources", str(native))
-                    .replace("/etc/apt/sources.list.d/kuasar-arm64.sources", str(arm)))
-                # Execute the real setup with every privileged write redirected
-                # to this fixture. Registering a foreign architecture is mocked.
-                body = '''. "$1"
-sudo() {
-    [ "$1" = -n ] || return 91
-    shift
-    case "$1" in
-        python3|tee) "$@" ;;
-        dpkg) [ "$*" = 'dpkg --add-architecture arm64' ] ;;
-        *) return 92 ;;
-    esac
-}
-configure_cross_apt
-'''
-                result = subprocess.run(["bash", "-c", body, "test-cross", str(script)],
-                    env={**os.environ, **HOSTED_VM, "VERSION_CODENAME": "noble"},
-                    text=True, capture_output=True, timeout=10)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                # indextargets parses configured sources without downloading or
-                # installing anything; state/cache/source paths are isolated.
-                parsed = subprocess.run(["apt-get", "indextargets",
-                    "-o", "Dir::Etc::sourcelist=/dev/null",
-                    "-o", f"Dir::Etc::sourceparts={sources}",
-                    "-o", f"Dir::State={root / 'state'}",
-                    "-o", f"Dir::Cache={root / 'cache'}"],
-                    text=True, capture_output=True, timeout=10)
-                self.assertEqual(parsed.returncode, 0, parsed.stderr)
-                self.assertEqual(native.read_text().count("Architectures: amd64"), 2)
-                self.assertNotIn("Architectures: amd64 arm64", native.read_text())
-                self.assertIn("Architectures: arm64\n", arm.read_text())
-                self.assertIn("URIs: http://ports.ubuntu.com/ubuntu-ports\n", arm.read_text())
-                if comments:
-                    self.assertIn("# Comments are not sources.\n\nTypes: deb", native.read_text())
 
     def test_kvm_configuration_is_scoped_and_replays_acl_loss(self):
         source = BOOTSTRAP.read_text()
@@ -236,47 +142,6 @@ configure_cross_apt
         self.assertNotEqual(shell("need kuasar_nonexistent_required_tool").returncode, 0)
         self.assertNotEqual(shell("main").returncode, 0)
 
-    def test_environment_go_preserves_selection_without_download(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            tools = root / "environment tools"
-            tools.mkdir()
-            go = tools / "go"
-            go.write_text("#!/bin/sh\nprintf 'environment Go %s\\n' \"$GOTOOLCHAIN\"\n")
-            go.chmod(0o755)
-            for policy in (None, "local", "auto", "go1.99.1+path"):
-                env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
-                           GITHUB_ENV=str(root / "github-env"), KUASAR_HOSTED_ROOT=str(root),
-                           GOROOT=str(root / "selected root"))
-                if policy is None:
-                    env.pop("GOTOOLCHAIN", None)
-                else:
-                    env["GOTOOLCHAIN"] = policy
-                before = go.read_bytes()
-                command = ('. "$1"; download() { exit 91; }; tar() { exit 92; }; '
-                           'before_root=$GOROOT; before_policy=${GOTOOLCHAIN-unset}; '
-                           'configure_go; [ "$GOROOT" = "$before_root" ]; '
-                           '[ "${GOTOOLCHAIN-unset}" = "$before_policy" ]')
-                result = subprocess.run(["bash", "-c", command, "test", str(BOOTSTRAP)],
-                                        env=env, capture_output=True, text=True, timeout=10)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("environment Go", result.stdout)
-                self.assertEqual(go.read_bytes(), before)
-                entries = (root / "github-env").read_text()
-                self.assertNotIn("GOROOT=", entries)
-                self.assertNotIn("GOTOOLCHAIN=", entries)
-
-    def test_missing_environment_go_fails_without_installing(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            (root / "dirname").symlink_to(shutil.which("dirname"))
-            result = subprocess.run([shutil.which("bash"), "-c", '. "$1"; configure_go',
-                                     "test", str(BOOTSTRAP)],
-                                    env=dict(os.environ, PATH=directory),
-                                    capture_output=True, text=True, timeout=10)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("missing required tool: go", result.stderr)
-
     def test_download_integrity_is_still_enforced(self):
         with tempfile.TemporaryDirectory() as directory:
             env = dict(KUASAR_HOSTED_ROOT=directory)
@@ -290,21 +155,6 @@ configure_cross_apt
                            'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', **env)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("checksum mismatch", result.stderr)
-
-    def test_rust_tools_do_not_require_a_matching_rustup(self):
-        # Stop at the existing cgroup check, before any privileged operations.
-        result = shell('profile=source; id() { echo 1001; }; '
-                       'docker() { :; }; systemctl() { :; }; ip() { :; }; '
-                       'modprobe() { :; }; setfacl() { :; }; mkfs.ext4() { :; }; '
-                       'udevadm() { :; }; cargo() { echo environment-cargo; }; '
-                       'rustc() { echo environment-rustc; }; '
-                       'rustup() { echo UNRELATED_RUSTUP; return 89; }; '
-                       'stat() { echo stop-before-device-changes; }; configure_vm', **HOSTED_VM)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("environment-cargo", result.stdout)
-        self.assertIn("environment-rustc", result.stdout)
-        self.assertNotIn("UNRELATED_RUSTUP", result.stdout)
-        self.assertIn("cgroup v2 is required", result.stderr)
 
     def test_resource_budget(self):
         result = shell("resource_budget")
@@ -332,7 +182,7 @@ configure_cross_apt
         source = BOOTSTRAP.read_text()
         self.assertNotIn("/var/cache/kuasar", source)
         self.assertNotIn("/var/lib/kuasar", source)
-        for name in ("KUASAR_SOURCE_CACHE_ROOT", "KUASAR_NATIVE_CACHE_ROOT", "KUASAR_TARBALL_CACHE", "GOCACHE", "GOMODCACHE", "CARGO_HOME"):
+        for name in ("KUASAR_SOURCE_CACHE_ROOT", "KUASAR_NATIVE_CACHE_ROOT", "KUASAR_TARBALL_CACHE"):
             self.assertIn(f'emit {name} "$KUASAR_HOSTED_ROOT/', source)
         self.assertIn('mktemp -d "$RUNNER_TEMP/kuasar-hosted.XXXXXX"', source)
         self.assertIn("sudo -n modprobe tun vhost_vsock", source)

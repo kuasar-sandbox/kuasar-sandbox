@@ -84,6 +84,7 @@ publish_bundle() {
   [[ "$source_ref" = main || "$source_ref" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]] \
     || release_fail "source-ref must be main or release/vMAJOR.MINOR.x"
   "$ROOT/release/aggregate-release.sh" validate "$version" "$bundle"
+  python3 -B "$ROOT/release/publication_body.py" "$bundle/release-notes.md"
 
   local tag_state="$TMP/tag"
   if api_optional "repos/$REPOSITORY/git/ref/tags/$version" "$tag_state"; then
@@ -136,6 +137,7 @@ publish_bundle() {
   # Ownership and all existing asset bytes are checked before registry writes.
   # The registry publisher also refuses conflicting existing image tags.
   python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit"
+  python3 -B "$ROOT/release/publication_body.py" "$bundle/release-notes.md"
   if [ "$(jq 'length' "$drafts")" -eq 1 ]; then
     [ "${#files[@]}" -eq 0 ] || gh release upload "$version" "${files[@]}" --repo "$REPOSITORY"
     jq -n --rawfile body "$bundle/release-notes.md" '{body: $body}' \
@@ -152,6 +154,7 @@ publish_bundle() {
   is_preview "$version" && prerelease=true
   [ "$prerelease" = true ] || [ "$source_ref" != main ] || make_latest=true
   if [ "$prerelease" = true ]; then
+    : "${PLATFORM_SOURCE_ROOT:?Preview publication requires the admitted platform source artifact}"
     "$ROOT/release/validate-preview-line.sh" "$version" "$commit"
   fi
   jq -n --argjson prerelease "$prerelease" --argjson make_latest "$make_latest" '

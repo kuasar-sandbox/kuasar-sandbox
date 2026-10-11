@@ -69,12 +69,10 @@ validate_archive() {
 }
 
 package_archive() {
-  [ "$#" -eq 4 ] \
-    || release_fail "usage: package-platform.sh package <release-version> <component-source-dir> <test-source-dir> <output-dir>"
-  local version="$1" sources="$2" test_sources="$3" output="$4"
+  [ "$#" -eq 3 ] \
+    || release_fail "usage: package-platform.sh package <release-version> <component-source-dir> <output-dir>"
+  local version="$1" sources="$2" output="$3"
   validate_aggregate_version "$version"
-  [ -n "$test_sources" ] && [ -d "$test_sources" ] \
-    || release_fail "independently pinned test source directory is missing"
   local unit
   for unit in accelerator connector runtime vmlinux sandboxer orchestrator; do
     [ -d "$sources/$unit" ] || release_fail "component source is missing: $sources/$unit"
@@ -89,29 +87,20 @@ package_archive() {
   mkdir -p "$output/assets"
   [ -f "$sources/vmlinux/docs/vmlinux.md" ] \
     || release_fail "vmlinux source is missing docs/vmlinux.md"
-  resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$work/docs-refs.tsv"
-  python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --test-revisions \
-    > "$work/test-revisions.json"
-  python3 - "$work/docs-refs.tsv" "$work/test-revisions.json" <<'PY'
-import json, pathlib, sys
-path = pathlib.Path(sys.argv[1])
-pins = json.loads(pathlib.Path(sys.argv[2]).read_text())
-refs = dict(line.split('\t') for line in path.read_text().splitlines())
-for unit in refs:
-    if unit != 'vmlinux':
-        refs[unit] = pins['guest-runtime' if unit == 'runtime' else unit]
-path.write_text(''.join(f'{unit}\t{ref}\n' for unit, ref in refs.items()))
-PY
+  python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --new > "$work/docs-refs.tsv"
+  python3 -B "$ROOT/release/tag_sources.py" inspect "$PLATFORM_SOURCE_ROOT" "$version" "$sources" \
+    > "$work/source-records.json"
   printf 'platform\t%s\n' "$version" >> "$work/docs-refs.tsv"
-  E2E_SOURCE_ROOT="$test_sources" DOCS_SOURCE_REFS="$work/docs-refs.tsv" DOCS_VMLINUX_SOURCE="$sources/vmlinux" \
+  E2E_SOURCE_ROOT= DOCS_SOURCE_REFS="$work/docs-refs.tsv" DOCS_VMLINUX_SOURCE="$sources/vmlinux" \
     E2E_HELPER_ROOT="${E2E_HELPER_ROOT:?provide the prebuilt E2E helper packages}" \
     "$ROOT/test/e2e/assemble.sh" "$stage" "$PLATFORM_SOURCE_ROOT" \
-    "$test_sources/accelerator" "$test_sources/connector" "$test_sources/guest-runtime" \
-    "$test_sources/sandboxer" "$test_sources/orchestrator"
+    "$sources/accelerator" "$sources/connector" "$sources/runtime" \
+    "$sources/sandboxer" "$sources/orchestrator"
   archive="$(platform_archive "$version")"
   tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
     --pax-option=delete=atime,delete=ctime -czf "$output/assets/$archive" -C "$stage" .
   validate_archive "$version" "$output/assets/$archive"
+  python3 -B "$ROOT/release/validate-e2e-package.py" "$output/assets/$archive" --source-records "$work/source-records.json"
   cat > "$output/release-notes.md" <<EOF
 Kuasar Sandbox platform integration package for $version.
 
@@ -132,6 +121,6 @@ case "${1:-}" in
     validate_archive "$1" "$2" "${3:-workbench-v1}"
     ;;
   *)
-    release_fail "usage: package-platform.sh <package <release-version> <component-source-dir> <test-source-dir> <output-dir>|validate <release-version> <archive>>"
+    release_fail "usage: package-platform.sh <package <release-version> <component-source-dir> <output-dir>|validate <release-version> <archive>>"
     ;;
 esac

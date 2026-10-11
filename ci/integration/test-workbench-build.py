@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Check exact source handoff and native helper packages without real compilers."""
+"""Check exact source handoff, native helpers and reproducible Go helper builds."""
 import copy
 import importlib.util
 import json
 import os
 from pathlib import Path
 import subprocess
+import struct
 import tempfile
 import unittest
 from unittest.mock import patch
 
 import artifacts
+from test_fixtures import restore_using, helper_contract
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release"))
+from test_tag_sources import fixture
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -26,13 +31,78 @@ builder = load("workbench_delta", "ci/integration/build-artifacts.py")
 release_helpers = load("workbench_release_helpers", "release/build-e2e-helpers.py")
 
 
+def declare(root, owner):
+    recipe = 'release/helper.sh' if owner == 'orchestrator' else None
+    declaration = {'schema': 1, 'recipe': recipe, 'dependencies': [], 'helpers':
+                   [{'name': 'custom-proxy', 'env': 'CUSTOM_PROXY_BIN', 'cases': ['orchestrator.*.sh']}] if recipe else []}
+    (root / 'release/helper-inputs.json').write_text(json.dumps(declaration))
+    if recipe: (root / recipe).write_text('go build -o "$2/custom-proxy" ./examples/custom-proxy\n')
+
+
+def platform_fixture(root):
+    fixture(root, 'connector', 'v0.0.1')
+    git = release_helpers.tag_sources.git
+    git(root, 'remote', 'set-url', 'origin', 'https://github.com/kuasar-sandbox/kuasar-sandbox')
+    declare(root, 'platform')
+    git(root, 'add', '.'); git(root, 'commit', '-qm', 'platform helper declaration')
+
+
+
 class WorkbenchBuild(unittest.TestCase):
+    def test_release_helper_private_copy_paths_do_not_change_go_binary_bytes(self):
+        selected = {unit: ('runtime-v1.2.3' if unit == 'runtime' else 'vmlinux-v1.2.3' if unit == 'vmlinux' else 'v1.2.3')
+                    for unit in release_helpers.selection.UNITS}
+        arch = os.uname().machine
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            sources = root / "sources"
+            for unit, tag in selected.items():
+                module = release_helpers.tag_sources.source_path(sources, unit, owner_layout=True)
+                fixture(module, unit, tag)
+                (module / "go.mod").write_text("module example.test/" + unit + "\ngo 1.22\n")
+            proxy = sources / "orchestrator/examples/custom-proxy"
+            proxy.mkdir(parents=True)
+            (proxy / "main.go").write_text('package main\nimport ("fmt"; "runtime")\n'
+                                         'func main() { _, file, _, _ := runtime.Caller(0); fmt.Println(file) }\n')
+            for unit, tag in selected.items():
+                module = release_helpers.tag_sources.source_path(sources, unit, owner_layout=True)
+                declare(module, unit)
+                release_helpers.tag_sources.git(module, 'add', '.')
+                release_helpers.tag_sources.git(module, 'commit', '-qm', 'helper input')
+                release_helpers.tag_sources.git(module, 'tag', '-f', tag)
+            platform_fixture(root / "platform")
+            copied = []
+            def helpers(source, target, destination, selected, environment, contract):
+                copied.append(source)
+                self.assertIn("-p=2", environment["GOFLAGS"].split())
+                destination.mkdir(parents=True)
+                # Same owner command shape which omitted -trimpath in the
+                # pinned custom-proxy recipe; the producer supplies the flag.
+                subprocess.run(["go", "-C", str(source / "orchestrator"), "build",
+                                "-o", str(destination / "custom-proxy"), "./examples/custom-proxy"],
+                               env={**environment, "GOWORK": "off", "CGO_ENABLED": "0"}, check=True)
+                for name in set(selected) - {"custom-proxy"}:
+                    (destination / name).write_bytes(b"unrelated helper fixture")
+            with patch.dict(os.environ, {"GOFLAGS": "-p=2", "GOPROXY": "off", "GOSUMDB": "off"}), \
+                    patch.object(release_helpers.build_demo_wheels, "build"), \
+                    patch.object(release_helpers.build_helpers, "build", side_effect=helpers):
+                for phase in ("cold", "warm"):
+                    release_helpers.build(sources, selected, root / phase, root / (phase + "-wheels"), root / "platform", arch)
+            self.assertNotEqual(copied[0], copied[1])
+            self.assertTrue(all(not source.exists() for source in copied))
+            self.assertEqual(artifacts.digest(root / "cold" / arch / "custom-proxy"),
+                             artifacts.digest(root / "warm" / arch / "custom-proxy"))
+            self.assertEqual((root / "cold" / arch / "helpers.json").read_bytes(),
+                             (root / "warm" / arch / "helpers.json").read_bytes())
+
     def plan(self):
         revisions = artifacts.release_test_revisions(
             {owner: "a" * 40 for owner in artifacts.OWNERS if owner != "platform"}, "b" * 40)
         tests = copy.deepcopy(revisions)
         tests["orchestrator"]["sha"] = "c" * 40
-        return {"mode": "source", "sources": revisions, "test_revisions": tests,
+        contract = helper_contract(sha='a' * 40, framework='b' * 40)
+        contract['owners']['orchestrator']['source']['sha'] = 'c' * 40
+        return {"mode": "source", "helper_contract": contract, "sources": revisions, "test_revisions": tests,
                 "test_overlays": list(artifacts.OWNERS),
                 "product_sources": {"node-ctl": {"kuasar-sandbox/orchestrator": "a" * 40}},
                 "lanes": {"x86_64": {"products": [], "selection": {"cases": []}}}}
@@ -47,7 +117,7 @@ class WorkbenchBuild(unittest.TestCase):
                 (destination / "go.mod").write_text("module fixture\n\ngo 1.26.1\n")
                 fetched[str(destination.relative_to(sources))] = sha
             with patch.object(builder.artifacts, "planned_helpers", return_value={"custom-proxy": "orchestrator"}), \
-                 patch.object(builder, "checkout", side_effect=checkout), patch.object(builder, "run") as run:
+                 patch.object(builder.source_inputs, "copy_run_inputs", side_effect=restore_using(checkout)), patch.object(builder, "run") as run:
                 builder.materialize(plan, "x86_64", sources)
                 run.assert_not_called()
                 self.assertEqual(fetched["orchestrator"], "a" * 40)
@@ -111,35 +181,54 @@ class WorkbenchBuild(unittest.TestCase):
             materialize.assert_not_called()
             configure.assert_not_called()
 
-    def test_release_helper_job_builds_only_its_native_architecture_and_exact_pins(self):
-        pins = {owner: "c" * 40 for owner in artifacts.OWNERS if owner != "platform"}
+    def test_release_helper_job_builds_only_native_helpers_from_selected_tags(self):
+        from test_tag_sources import fixture
+        selected = {unit: ('runtime-' if unit == 'runtime' else 'vmlinux-' if unit == 'vmlinux' else '') + 'v1.2.3'
+                    for unit in release_helpers.selection.UNITS}
+        framework = subprocess.check_output(['git', '-C', ROOT, 'rev-parse', 'HEAD'], text=True).strip()
         for arch in artifacts.ARCHES:
             with self.subTest(arch=arch), tempfile.TemporaryDirectory() as temporary:
                 work = Path(temporary)
                 sources = work / "sources"
-                for owner in pins:
-                    path = sources / owner
-                    path.mkdir(parents=True)
-                    (path / "go.mod").write_text("module fixture\n")
+                for unit, tag in selected.items():
+                    source = release_helpers.tag_sources.source_path(sources, unit, owner_layout=True)
+                    fixture(source, unit, tag)
+                    declare(source, unit)
+                    git = release_helpers.tag_sources.git
+                    git(source, 'add', '.'); git(source, 'commit', '-qm', 'declared helpers'); git(source, 'tag', '-f', tag)
+                platform_fixture(work / 'platform')
+                facts = release_helpers.tag_sources.inspect_sources(sources, selected, owner_layout=True)
+                pins = release_helpers.tag_sources.owner_revisions(facts)
                 calls = []
-                def helpers(source, target, destination, selected, environment):
+                def helpers(source, target, destination, chosen, environment, contract):
                     calls.append(target)
+                    self.assertEqual(set(p.name for p in source.iterdir()), set(pins) | {'platform'})
+                    for owner, unit in release_helpers.tag_sources.OWNER_UNITS.items():
+                        expected = release_helpers.tag_sources.source_path(sources, unit, owner_layout=True)
+                        self.assertEqual((source / owner / 'README.md').read_bytes(), (expected / 'README.md').read_bytes())
                     destination.mkdir(parents=True)
-                    for name in selected:
-                        (destination / name).write_bytes(b"fixture")
+                    for name in chosen:
+                        data = bytearray(64); data[:7] = b'\x7fELF\x02\x01\x01'
+                        struct.pack_into('<H', data, 18, 62 if arch == 'x86_64' else 183)
+                        (destination / name).write_bytes(data); (destination / name).chmod(0o755)
+                real_run = subprocess.run
+                def run(command, **kwargs):
+                    if command[:3] == ['go', 'work', 'init']:
+                        return subprocess.CompletedProcess(command, 0)
+                    return real_run(command, **kwargs)
                 with patch.object(release_helpers.platform, "machine", return_value=arch), \
-                     patch.object(release_helpers.subprocess, "check_output", return_value="b" * 40 + "\n"), \
-                     patch.object(release_helpers.subprocess, "run"), \
+                     patch.object(release_helpers.subprocess, "run", side_effect=run), \
                      patch.object(release_helpers.build_demo_wheels, "build") as wheels, \
                      patch.object(release_helpers.build_helpers, "build", side_effect=helpers):
-                    release_helpers.build(sources, pins, work / "helpers", work / "wheels", work / "platform", arch)
+                    release_helpers.build(sources, selected, work / "helpers", work / "wheels", work / "platform", arch)
                 self.assertEqual(calls, [arch])
                 self.assertEqual(wheels.call_args.args[1], arch)
-                self.assertEqual([path.name for path in (work / "helpers").iterdir()], [arch])
+                self.assertEqual({path.name for path in (work / "helpers").iterdir()}, {arch, "contract.json"})
                 record = json.loads((work / "helpers" / arch / "helpers.json").read_text())
                 self.assertEqual(record["test_revisions"], pins)
-                self.assertEqual(record["framework_sha"], "b" * 40)
-                self.assertEqual(record["helpers"]["custom-proxy"]["source_sha"], "c" * 40)
+                self.assertEqual(record["source_records"], facts)
+                self.assertEqual(record["framework_sha"], framework)
+                self.assertEqual(record["helpers"]["custom-proxy"]["source_sha"], facts['orchestrator']['sha'])
 
 
 if __name__ == "__main__":

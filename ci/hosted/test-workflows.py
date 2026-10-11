@@ -103,6 +103,64 @@ def check_request_rejection():
         assert result.returncode != 0
 
 
+def check_helper_materialization():
+    """Execute the real artifact transport/layout and validate exact tag inputs."""
+    import importlib.util
+    import shutil
+    import tarfile
+    from unittest.mock import patch
+    sys.path.insert(0, str(ROOT / 'release'))
+    import tag_sources
+    from test_tag_sources import fixture
+    steps = load('aggregate-release.yml')['jobs']['helper-build']['steps']
+    script = next(step['run'] for step in steps
+                  if step.get('name') == 'Materialize exact helper inputs without running a compiler')
+    assert 'fetch' not in script.replace('fetched', '') and 'test-revisions' not in script
+    spec = importlib.util.spec_from_file_location('workflow_cache_scope', ROOT / 'ci/hosted/cache-scope.py')
+    scope = importlib.util.module_from_spec(spec); spec.loader.exec_module(scope)
+    selected = {unit: ('runtime-v1.2.3' if unit == 'runtime' else 'vmlinux-v1.2.3' if unit == 'vmlinux' else 'v1.2.3')
+                for unit in tag_sources.selection.UNITS}
+    with tempfile.TemporaryDirectory(prefix='helper-materialize-') as temporary:
+        directory = Path(temporary)
+        for name in ('valid', 'missing-owner', 'moved-tag', 'dirty-source', 'wrong-owner'):
+            case = directory / name
+            fetched = case / 'original/fetched'
+            records = {unit: fixture(fetched / 'sources' / unit, unit, tag) for unit, tag in selected.items()}
+            platform_sha = fixture(fetched / 'platform', 'connector', 'v1.2.3')
+            tag_sources.git(fetched / 'platform', 'remote', 'set-url', 'origin',
+                            'https://github.com/kuasar-sandbox/kuasar-sandbox.git')
+            owner = fetched / 'sources/sandboxer'
+            if name == 'missing-owner': shutil.rmtree(owner)
+            if name == 'dirty-source': (owner / 'product.go').write_text('changed input')
+            if name == 'moved-tag': tag_sources.git(owner, 'tag', '-d', selected['sandboxer'])
+            if name == 'wrong-owner': tag_sources.git(owner, 'remote', 'set-url', 'origin', 'https://example.invalid/wrong.git')
+            (case / 'transport').mkdir()
+            with tarfile.open(case / 'transport/fetched.tar', 'w') as archive:
+                archive.add(fetched, arcname='fetched')
+            shutil.rmtree(case / 'original')
+            (case / 'control').symlink_to(ROOT, target_is_directory=True)
+            subprocess.run(['bash', '-euo', 'pipefail', '-c', script], cwd=case, check=True)
+            sources = case / 'helper-work'
+            if name != 'valid':
+                try: tag_sources.inspect_sources(sources, selected, owner_layout=True)
+                except (ValueError, subprocess.CalledProcessError): pass
+                else: raise AssertionError('invalid helper source accepted: ' + name)
+                continue
+            facts = tag_sources.inspect_sources(sources, selected, owner_layout=True)
+            assert {unit: row['sha'] for unit, row in facts.items()} == records
+            expected = {str(tag_sources.source_path(Path('.'), unit, owner_layout=True)): sha for unit, sha in records.items()}
+            expected['platform'] = platform_sha
+            event = case / 'event.json'; event.write_text('{"inputs": {}}')
+            environment = {'GITHUB_REPOSITORY': 'kuasar-sandbox/kuasar-sandbox', 'GITHUB_REF': 'refs/heads/main',
+                           'GITHUB_EVENT_NAME': 'workflow_dispatch', 'GITHUB_RUN_ID': 'fixture', 'GITHUB_EVENT_PATH': str(event)}
+            with patch.dict(os.environ, environment), patch.object(scope, 'public_main', return_value=True):
+                receipt = scope.decide(sources, case / 'scope.json')
+            assert receipt['scope'] == receipt['namespace'] == 'trusted'
+            assert {row['path']: row['sha'] for row in receipt['sources']} == expected
+            assert all(row['clean'] and row['on_main'] for row in receipt['sources'])
+    print('helper materialization: exact transported tag trees and four invalid inputs passed')
+
+
 
 def check():
     entry = load("ci-entry.yml")["jobs"]
@@ -132,13 +190,8 @@ def check():
                 assert "self-hosted" not in str(job["runs-on"]), name
                 if not str(job["runs-on"]).startswith("${{"):
                     expected = "ubuntu-24.04" if (name, job_name) == ("aggregate-release.yml", "collect") else "ubuntu-latest"
-                    if name == "workbench-216-validation.yml":
-                        expected = {"prepare": "ubuntu-24.04", "cold-x86": "ubuntu-24.04", "warm-x86": "ubuntu-24.04",
-                                    "cold-arm": "ubuntu-24.04-arm", "warm-arm": "ubuntu-24.04-arm",
-                                    "helpers-x86": "ubuntu-24.04", "prepare-integration-x86": "ubuntu-24.04",
-                                    "e2e-x86": "ubuntu-24.04", "performance-x86": "ubuntu-24.04",
-                                    "helpers-arm": "ubuntu-24.04-arm", "prepare-integration-arm": "ubuntu-24.04-arm",
-                                    "e2e-arm": "ubuntu-24.04-arm", "validation-results": "ubuntu-24.04"}[job_name]
+                    if (name, job_name) == ("integration-tests.yml", "source-checks"):
+                        expected = "ubuntu-24.04"
                     assert job["runs-on"] == expected, (name, job["runs-on"])
     check_request_rejection()
     caller = load("ci.yml")
@@ -212,6 +265,7 @@ def check():
     helper = next(step for step in aggregate["helper-build"]["steps"] if step.get("uses") == "./control/.github/actions/workbench")
     assert '--arch "$TARGET_ARCH"' in helper["with"]["run"]
     assert "GH_TOKEN" not in helper["with"]["run"]
+    check_helper_materialization()
     assert integration["results"]["needs"] == ["resolve", "x86_64", "aarch64", "source-checks", "workbench-native", "workbench-release"]
     native = integration['workbench-native']
     assert native['needs'] == 'resolve'
@@ -253,7 +307,80 @@ def check():
         assert forbidden not in executor, forbidden
     assert "run-artifact-tests.py" in executor
     assert "sparse-checkout" in executor
-    assert "run-source-checks.py" in json.dumps(integration["source-checks"])
+    source_job = integration["source-checks"]
+    assert source_job["needs"] == "resolve"
+    assert "strategy" not in source_job
+    source_steps = {step.get("name"): step for step in source_job["steps"]}
+    source_fetch = source_steps["Fetch exact test sources without a compiler"]["run"]
+    assert "--materialize-only" in source_fetch
+    assert "--profile source" not in json.dumps(source_job)
+    system_name = "Run the complete required source gate in Workbench system mode"
+    system = source_steps[system_name]["run"]
+    source_prefix, source_user = system.split("<<'SOURCE_USER'\n", 1)
+    source_user, source_suffix = source_user.split("\nSOURCE_USER\n", 1)
+    assert "taskset" not in source_prefix + source_suffix
+    for name, step in source_steps.items():
+        if name != system_name:
+            assert "taskset" not in json.dumps(step)
+    affinity = source_user.index("source_cpus=$(python3 - <<'SOURCE_AFFINITY'")
+    bind = source_user.index('taskset -pc "$source_cpus" "$$" >/dev/null')
+    observe = source_user.index('taskset -pc "$$"')
+    assert source_user.index("install_runtime_reader") < affinity < bind < observe < source_user.index("run-source-checks.py")
+    selection = source_user[affinity:bind]
+    assert 'os.environ.get("KUASAR_BUILD_JOBS", "")' in selection
+    assert "jobs = int(budget)" in selection and "os.sched_getaffinity(0)" in selection
+    assert "jobs > len(allowed)" in selection and "allowed[:jobs]" in selection
+    # Execute the exact workflow block in child shells: successful taskset must
+    # affect the actual source process tree, and invalid budgets must stop it.
+    block = source_user[affinity:source_user.index("python3 -B /inputs/release/ci/integration/run-source-checks.py")]
+    marker = "python3 - <<'AFFINITY_CHILD'\nimport json, os\nprint('AFFINITY_CHILD=' + json.dumps(sorted(os.sched_getaffinity(0))))\nAFFINITY_CHILD\n"
+    allowed = sorted(os.sched_getaffinity(0))
+    assert allowed
+    cases = [(str(jobs), allowed[:jobs]) for jobs in sorted({1, min(2, len(allowed))})]
+    cases += [(value, None) for value in (None, "0", "-1", "invalid", str(len(allowed) + 1))]
+    for budget, expected in cases:
+        env = dict(os.environ)
+        env.pop("KUASAR_BUILD_JOBS", None)
+        if budget is not None:
+            env["KUASAR_BUILD_JOBS"] = budget
+        observed = subprocess.run(["bash", "-euo", "pipefail", "-c", block + marker],
+                                  env=env, text=True, capture_output=True, timeout=15)
+        masks = [line.removeprefix("AFFINITY_CHILD=") for line in observed.stdout.splitlines()
+                 if line.startswith("AFFINITY_CHILD=")]
+        if expected is None:
+            assert observed.returncode != 0 and not masks, (budget, observed.stdout, observed.stderr)
+        else:
+            assert observed.returncode == 0 and len(masks) == 1, (budget, observed.stdout, observed.stderr)
+            assert json.loads(masks[0]) == expected
+        assert sorted(os.sched_getaffinity(0)) == allowed, "source test changed parent CPU affinity"
+    assert "start --mode system" in system
+    assert system.index('chown -hR "$source_uid:$source_gid" /src /work/home /build\n') < system.index("run-source-checks.py")
+    assert 'chgrp "$source_gid" /output\n' in system
+    assert 'chmod 2775 /output\n' in system
+    assert 'setpriv --reuid "$source_uid" --regid "$source_gid" --groups "$source_docker_gid"' in system
+    assert '--inh-caps=-all --ambient-caps=-all' in system
+    assert 'source_docker_gid=$(stat -c %g /run/docker.sock)' in system
+    assert 'docker --host unix:///run/docker.sock info' in system
+    assert '[ "$(id -u)" -ne 0 ]' in system
+    assert 'visudo -cf /etc/sudoers.d/kuasar-source' in system
+    assert "--selection plan/workbench.json" in system
+    assert "bash -euo pipefail -c \"$source_script\"" in system
+    assert "<<'WORKBENCH_SOURCE'" in system
+    assert "sudo -n true" in system
+    assert "ip netns add ks-source-probe" in system and "ip netns del ks-source-probe" in system
+    assert "ip tuntap add dev ks-source-probe mode tap" in system
+    assert "ip link del dev ks-source-probe" in system and "trap - EXIT" in system
+    assert "install_readers" in system and "install_runtime_reader" in system
+    assert "--materialized" in system and "--phase" not in system
+    assert "/output/source-result.json" in system
+    assert "cache" not in system
+    cleanup = source_steps["Stop the owned system instance and retain safe source evidence"]
+    assert cleanup["if"] == "always()" and "workbench.py finish" in cleanup["run"]
+    for step in source_job["steps"]:
+        assert "GH_TOKEN" not in json.dumps(step) and "create-github-app-token" not in json.dumps(step)
+        if "actions/upload-artifact@" in step.get("uses", ""):
+            assert "source-checks" not in step["with"]["path"], "candidate sources must not be uploaded directly"
+            assert "source-system-evidence" in step["with"]["path"]
     source = (ROOT / "ci/integration/run-source-checks.py").read_text()
     assert "uffd-performance-gate.sh" in source and "ci-source-checks.sh" in source
     runtime = (ROOT / "ci/integration/run-artifact-tests.py").read_text()
@@ -272,5 +399,5 @@ def check():
 
 if __name__ == "__main__":
     check()
-    for name in ("test-bootstrap.py", "test-exact-assets-tools.py"):
+    for name in ("test-bootstrap.py", "test-exact-assets-tools.py", "test-sparse-runtime.py"):
         subprocess.run([sys.executable, str(Path(__file__).with_name(name))], check=True)

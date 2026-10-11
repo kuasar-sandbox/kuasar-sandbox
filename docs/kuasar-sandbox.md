@@ -224,7 +224,7 @@ This overview defines those functional goals. Network-locator encoding, encapsul
 | Management-service path and external-gateway integration foundations | Delivered | vSwitch supplies trusted ingress/egress and identity-handoff foundations |
 | Centralized policy gateway | Integration supported | The operator's external gateway implements public/private network, DNS, proxy and audit policy |
 | Lightweight node-local Egress | Proposed | Only a design proposal in [`connector#9`](https://github.com/kuasar-sandbox/connector/issues/9), not a currently delivered vSwitch capability |
-| OpenTelemetry | Proposed | Still tracked by [`kuasar-sandbox#52`](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/52) and implementation work in progress; not a deployment prerequisite |
+| OpenTelemetry | Implemented in main | standalone metrics service and native Collector pipelines; [scope and release checks](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry.md#release-scope). This is not a claim that every Stable release includes it. |
 
 Delivered means merged into component main with component validation. It does not mean an aggregate Stable Release containing that code has already been published. An issue, RFC or PR alone does not turn a Proposed capability into a delivered one.
 
@@ -301,3 +301,5 @@ The [Stable channel](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/l
 - [`accelerator`](https://github.com/kuasar-sandbox/accelerator/blob/main/README.md#documentation) - Manifest, store and cache
 - [`connector`](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch.md) - vSwitch implementation and networking details
 - [`guest-runtime`](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README.md#documentation) - runtime, vmlinux and flattening
+
+For placement and operations, use the system-level [restore eligibility checklist](deployment.md#restore-eligibility), [capacity example](deployment.md#capacity-example) and [retention responsibilities](deployment.md#retention-runbook). Shared storage alone does not establish recoverability.

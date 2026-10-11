@@ -377,7 +377,7 @@ setup_vmlinux_workspace() {
     mkdir -p "$root/guest-runtime/native-deps/deps/vmlinux" \
         "$root/guest-runtime/native-deps/deps/linux-patches"
     cat >"$root/guest-runtime/native-deps/Makefile" <<'EOF'
-TARGET_ARCH ?= x86_64
+TARGET_ARCH ?= $(shell uname -m)
 VMLINUX_BIN := $(abspath bin/$(TARGET_ARCH)/vmlinux)
 VMLINUX_INPUTS := deps/build-vmlinux.sh deps/common.sh \
     deps/vmlinux/test.config \
@@ -426,7 +426,7 @@ cat >"$TMP/bin/make" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 workdir=""
-arch=x86_64
+arch=${TARGET_ARCH:-$(uname -m)}
 target=""
 while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -569,6 +569,9 @@ awk -F '\t' '
     }
 ' "$parallel_timings" || fail "parallel timing rows are malformed or incomplete"
 
+# Cache fixtures use the native toolchain and synthetic payloads. Keep every
+# build, restore and inventory assertion on that same explicit architecture.
+export TARGET_ARCH="$(uname -m)"
 workspace="$TMP/workspace"
 cache="$TMP/cache"
 counter="$TMP/build-counter"
@@ -753,11 +756,11 @@ grep -qx workbench "$vmlinux_workspace/guest-runtime/native-deps/build/actual-bu
     = 'linux copying fixture' ] || fail "cold vmlinux cache omitted source license material"
 env PATH="$SYSTEM_PATH" FAKE_BUILD_COUNTER="$vmlinux_counter" \
     make -C "$vmlinux_workspace/guest-runtime/native-deps" \
-    TARGET_ARCH=x86_64 vmlinux >/dev/null
+    TARGET_ARCH="$TARGET_ARCH" vmlinux >/dev/null
 [ "$(wc -l <"$vmlinux_counter")" -eq 1 ] \
     || fail "cold vmlinux cache restore left the Make target stale"
 
-rm -f "$vmlinux_workspace/guest-runtime/native-deps/bin/x86_64/vmlinux" \
+rm -f "$vmlinux_workspace/guest-runtime/native-deps/bin/$TARGET_ARCH/vmlinux" \
     "$vmlinux_workspace/guest-runtime/native-deps/build/src/linux/COPYING"
 env PATH="$SYSTEM_PATH" FAKE_BUILD_COUNTER="$vmlinux_counter" \
     KUASAR_WORKSPACE_ROOT="$vmlinux_workspace" KUASAR_NATIVE_CACHE_ROOT="$vmlinux_cache" \
@@ -765,7 +768,7 @@ env PATH="$SYSTEM_PATH" FAKE_BUILD_COUNTER="$vmlinux_counter" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build vmlinux
 env PATH="$SYSTEM_PATH" FAKE_BUILD_COUNTER="$vmlinux_counter" \
     make -C "$vmlinux_workspace/guest-runtime/native-deps" \
-    TARGET_ARCH=x86_64 vmlinux >/dev/null
+    TARGET_ARCH="$TARGET_ARCH" vmlinux >/dev/null
 [ "$(wc -l <"$vmlinux_counter")" -eq 1 ] \
     || fail "hot vmlinux cache restore left the Make target stale"
 [ "$(cat "$vmlinux_workspace/guest-runtime/native-deps/build/src/linux/COPYING")" \
@@ -781,13 +784,13 @@ cloud_key_plain="$(env PATH="$TMP/bin:$PATH" CARGO_HOME="$cargo_home" \
     KUASAR_WORKSPACE_ROOT="$cloud_workspace" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key cloud-hypervisor | cut -f2)"
 cloud_key_encoded="$(env PATH="$TMP/bin:$PATH" CARGO_HOME="$cargo_home" \
-    CARGO_ENCODED_RUSTFLAGS=-Ctarget-cpu=x86-64-v3 \
+    CARGO_ENCODED_RUSTFLAGS=-Cdebuginfo=2 \
     KUASAR_WORKSPACE_ROOT="$cloud_workspace" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key cloud-hypervisor | cut -f2)"
 [ "$cloud_key_plain" != "$cloud_key_encoded" ] \
     || fail "CARGO_ENCODED_RUSTFLAGS did not invalidate the Cloud Hypervisor key"
 cloud_key_target_flags="$(env PATH="$TMP/bin:$PATH" CARGO_HOME="$cargo_home" \
-    CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Ctarget-cpu=x86-64-v3 \
+    "CARGO_TARGET_${TARGET_ARCH^^}_UNKNOWN_LINUX_GNU_RUSTFLAGS=-Cdebuginfo=2" \
     KUASAR_WORKSPACE_ROOT="$cloud_workspace" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key cloud-hypervisor | cut -f2)"
 [ "$cloud_key_plain" != "$cloud_key_target_flags" ] \
@@ -838,15 +841,15 @@ env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" CARGO_HOME="$ca
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build cloud-hypervisor
 [ "$(wc -l <"$material_counter")" -eq 3 ] \
     || fail "cold native material fixtures did not build exactly once per component"
-[ "$(cat "$cross_workspace/guest-runtime/native-deps/build/x86_64/src/erofs-utils/COPYING")" \
+[ "$(cat "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/COPYING")" \
     = 'erofs copying fixture' ] || fail "erofs cache omitted source license material"
 [ "$(cat "$rocks_workspace/accelerator/build/src/rocksdb/LICENSE.Apache")" \
     = 'rocksdb LICENSE.Apache fixture' ] || fail "RocksDB cache omitted source license material"
 [ "$(cat "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md")" \
     = 'cloud credits fixture' ] || fail "Cloud Hypervisor cache omitted source credit material"
-cloud_report="$cloud_workspace/sandboxer/native-deps/build/x86_64/cloud-hypervisor/build-report.jsonl"
+cloud_report="$cloud_workspace/sandboxer/native-deps/build/$TARGET_ARCH/cloud-hypervisor/build-report.jsonl"
 cloud_report_hash="$(sha256sum "$cloud_report" | cut -d ' ' -f1)"
-cloud_entry="$(find "$material_cache/v3/x86_64/cloud-hypervisor" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+cloud_entry="$(find "$material_cache/v3/$TARGET_ARCH/cloud-hypervisor" -mindepth 1 -maxdepth 1 -type d -print -quit)"
 grep -q '^workbench_image_id=sha256:fixture$' "$cloud_entry/provenance.txt" \
     || fail "native provenance omitted the complete Workbench image identity"
 grep -q '^workbench_framework_sha=framework-fixture$' "$cloud_entry/provenance.txt" \
@@ -858,16 +861,16 @@ rm -rf "$cloud_workspace"
 setup_cloud_hypervisor_workspace "$cloud_workspace"
 
 rm -f \
-    "$cross_workspace/guest-runtime/native-deps/bin/x86_64/mkfs.erofs" \
-    "$cross_workspace/guest-runtime/native-deps/build/x86_64/src/erofs-utils/COPYING" \
-    "$cross_workspace/guest-runtime/native-deps/bin/x86_64/.erofs-recipe" \
-    "$cross_workspace/guest-runtime/native-deps/build/x86_64/src/erofs-utils/mkfs/mkfs.erofs.map" \
-    "$cross_workspace/guest-runtime/native-deps/build/x86_64/src/erofs-utils/LICENSES/fixture" \
-    "$cross_workspace/guest-runtime/native-deps/build/x86_64/src/erofs-utils/mkfs/mkfs_erofs-main.o" \
-    "$cross_workspace/guest-runtime/native-deps/build/x86_64/src/erofs-utils/lib/.libs/liberofs.a" \
-    "$rocks_workspace/accelerator/build/x86_64/rocksdb/lib/librocksdb.a" \
+    "$cross_workspace/guest-runtime/native-deps/bin/$TARGET_ARCH/mkfs.erofs" \
+    "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/COPYING" \
+    "$cross_workspace/guest-runtime/native-deps/bin/$TARGET_ARCH/.erofs-recipe" \
+    "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs.erofs.map" \
+    "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/LICENSES/fixture" \
+    "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs_erofs-main.o" \
+    "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/lib/.libs/liberofs.a" \
+    "$rocks_workspace/accelerator/build/$TARGET_ARCH/rocksdb/lib/librocksdb.a" \
     "$rocks_workspace/accelerator/build/src/rocksdb/LICENSE.Apache" \
-    "$cloud_workspace/sandboxer/native-deps/bin/x86_64/cloud-hypervisor" \
+    "$cloud_workspace/sandboxer/native-deps/bin/$TARGET_ARCH/cloud-hypervisor" \
     "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md"
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" \
     KUASAR_WORKSPACE_ROOT="$cross_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
@@ -880,19 +883,19 @@ env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" CARGO_HOME="$ca
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build cloud-hypervisor
 [ "$(wc -l <"$material_counter")" -eq 3 ] \
     || fail "hot native material fixtures rebuilt a component"
-[ -s "$cross_workspace/guest-runtime/native-deps/build/x86_64/src/erofs-utils/COPYING" ] \
+[ -s "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/COPYING" ] \
     || fail "hot erofs cache did not restore source license material"
 for restored in \
-    bin/x86_64/.erofs-recipe \
-    build/x86_64/src/erofs-utils/mkfs/mkfs.erofs.map \
-    build/x86_64/src/erofs-utils/LICENSES/fixture \
-    build/x86_64/src/erofs-utils/mkfs/mkfs_erofs-main.o \
-    build/x86_64/src/erofs-utils/lib/.libs/liberofs.a; do
+    bin/$TARGET_ARCH/.erofs-recipe \
+    build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs.erofs.map \
+    build/$TARGET_ARCH/src/erofs-utils/LICENSES/fixture \
+    build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs_erofs-main.o \
+    build/$TARGET_ARCH/src/erofs-utils/lib/.libs/liberofs.a; do
     [ -s "$cross_workspace/guest-runtime/native-deps/$restored" ] \
         || fail "hot EROFS cache omitted $restored"
 done
 # Cached generated materials never replace the admitted repository patch set.
-if tar -tf "$(find "$material_cache/v3/x86_64/erofs" -name payload.tar -print -quit)" \
+if tar -tf "$(find "$material_cache/v3/$TARGET_ARCH/erofs" -name payload.tar -print -quit)" \
     | grep -q 'native-deps/deps/'; then
     fail "EROFS cache archives repository source inputs"
 fi
@@ -904,7 +907,7 @@ fi
     || fail "fresh Cloud Hypervisor restore changed the actual build report"
 for material in src/cloud-hypervisor/Cargo.toml src/cloud-hypervisor/Cargo.lock \
     src/cloud-hypervisor/vmm/Cargo.toml src/cloud-hypervisor/vmm/src/main.rs \
-    x86_64/cloud-hypervisor/link.map; do
+    "$TARGET_ARCH"/cloud-hypervisor/link.map; do
     [ -s "$cloud_workspace/sandboxer/native-deps/build/$material" ] \
         || fail "fresh Cloud Hypervisor restore omitted $material"
 done
@@ -974,7 +977,7 @@ env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
 
 current_key="$(env PATH="$TMP/bin:$PATH" KUASAR_WORKSPACE_ROOT="$workspace" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" key envd | cut -f2)"
-entry="$cache/v3/x86_64/envd/$current_key"
+entry="$cache/v3/$TARGET_ARCH/envd/$current_key"
 chmod u+w "$entry/payload.tar"
 printf 'tampered\n' >>"$entry/payload.tar"
 if env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$counter" \
@@ -1034,7 +1037,7 @@ for n in 1 2 3 4; do
         KUASAR_NATIVE_CACHE_MAX_ENTRIES=2 KUASAR_NATIVE_CACHE_MIN_AGE_SECONDS=0 \
         "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build envd >/dev/null
 done
-[ "$(find "$retained_cache/v3/x86_64/envd" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ] \
+[ "$(find "$retained_cache/v3/$TARGET_ARCH/envd" -mindepth 1 -maxdepth 1 -type d | wc -l)" -eq 2 ] \
     || fail "native cache retention limit was not enforced"
 
 source_cache="$TMP/source-cache"

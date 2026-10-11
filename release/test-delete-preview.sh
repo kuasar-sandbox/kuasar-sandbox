@@ -9,7 +9,11 @@ mkdir -p "$TMP/bin"
 cat > "$TMP/bin/gh" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+if [[ "$*" == *"/git/ref/heads/"* ]]; then
+  printf '%s\n' '1111111111111111111111111111111111111111'; exit 0
+fi
 if [[ "$*" == *"contents/releases/daily-preview.yaml"* ]]; then
+  [[ "$2" != *'?ref=1111111111111111111111111111111111111111' ]] || exit 1
   printf '%s\n' "${FAKE_MANIFEST:?}"
   exit 0
 fi

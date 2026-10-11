@@ -12,6 +12,9 @@ import tempfile
 import unittest
 from unittest import mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'ci/integration'))
+from test_fixtures import helper_contract
+
 SPEC = importlib.util.spec_from_file_location('prepared_demo', Path(__file__).with_name('prepared.py'))
 demo = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(demo)
@@ -48,6 +51,7 @@ class PreparedDemoTests(unittest.TestCase):
             records[name] = {'sha256': demo.workspace.digest(path), 'source_sha': 'a' * 40}
         self.provenance = {
             'schema': 1, 'arch': self.arch, 'prepared_cases': [demo.CASE], 'helpers': records,
+            'helper_contract': helper_contract('a' * 40, 'a' * 40),
             'python': {'demo': {'directory': 'fixtures/demo-sdk',
                                  'python': f'{sys.version_info.major}.{sys.version_info.minor}'}},
             'images': {'python': {'image_id': 'sha256:' + 'a' * 64,

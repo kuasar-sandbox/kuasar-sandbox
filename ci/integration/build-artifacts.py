@@ -12,6 +12,7 @@ import subprocess
 import tempfile
 
 import artifacts
+import source_inputs
 import build_helpers
 import build_demo_wheels
 
@@ -24,19 +25,6 @@ NATIVE = {"cache-ctl": "rocksdb", "mkfs.erofs": "erofs", "cloud-hypervisor": "cl
 def run(command, *, cwd=None, environment=None):
     subprocess.run([str(arg) for arg in command], cwd=cwd, env=environment, check=True)
 
-
-def checkout(repository, sha, destination):
-    artifacts.require(not destination.exists(), "build sources require a fresh isolated directory")
-    artifacts.require(repository.startswith("kuasar-sandbox/") and len(sha) == 40, "invalid exact source")
-    # All admitted callers and companions are public. No App key, installation
-    # credential, checkout token, user hooks or private source cache is needed.
-    run(["git", "init", "--quiet", "--template=", destination])
-    run(["git", "-C", destination, "config", "core.hooksPath", "/dev/null"])
-    run(["git", "-C", destination, "remote", "add", "origin", f"https://github.com/{repository}.git"])
-    run(["git", "-C", destination, "fetch", "--quiet", "--depth=1", "origin", sha])
-    run(["git", "-C", destination, "checkout", "--quiet", "--detach", sha])
-    actual = subprocess.check_output(["git", "-C", destination, "rev-parse", "HEAD"], text=True).strip()
-    artifacts.require(actual == sha, "materialized source differs from the admitted revision")
 
 
 def compiled_owners(plan, arch):
@@ -81,13 +69,8 @@ def configure_workspace(root):
 def helper_owners(plan, arch):
     if plan["mode"] != "source":
         return set()
-    return dependencies(set(artifacts.planned_helpers(plan["lanes"][arch]["selection"]).values()) - {"framework"})
-
-
-def separate_helpers(plan, arch):
-    records = build_records(plan, arch)
-    return any(owner not in source_owners(plan, arch) or records[owner]["sha"] != plan["test_revisions"][owner]["sha"]
-               for owner in helper_owners(plan, arch))
+    # Every owner declaration and dependency remains available for validation.
+    return set(plan['helper_contract']['owners'])
 
 
 def source_layout(plan, arch):
@@ -96,8 +79,9 @@ def source_layout(plan, arch):
     for owner in plan["test_overlays"]:
         if records[owner]["sha"] != plan["test_revisions"][owner]["sha"]:
             layout["test-overlays/" + owner] = plan["test_revisions"][owner]
-    if separate_helpers(plan, arch):
-        layout.update({"test-helpers/" + owner: plan["test_revisions"][owner] for owner in helper_owners(plan, arch)})
+    if plan['mode'] == 'source':
+        layout.update({'test-helpers/' + owner: row['source']
+                       for owner, row in plan['helper_contract']['owners'].items()})
     if "vmlinux" in plan["lanes"][arch].get("products", []) and plan["kernel_sha"] != plan["sources"]["guest-runtime"]["sha"]:
         layout["kernel-unit/guest-runtime"] = {"repository": "kuasar-sandbox/guest-runtime", "sha": plan["kernel_sha"]}
     return layout
@@ -106,10 +90,7 @@ def source_layout(plan, arch):
 def materialize(plan, arch, root):
     """Fetch exact public inputs on the host without invoking any toolchain."""
     root.mkdir(parents=True, exist_ok=False)
-    for relative, record in sorted(source_layout(plan, arch).items()):
-        destination = root / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        checkout(record["repository"], record["sha"], destination)
+    source_inputs.copy_run_inputs(plan, source_layout(plan, arch), root)
 
 
 def verify_materialized(plan, arch, root):
@@ -125,7 +106,7 @@ def verify_materialized(plan, arch, root):
 
 
 def helper_sources(plan, arch, sources):
-    root = sources / "test-helpers" if separate_helpers(plan, arch) else sources
+    root = sources / "test-helpers"
     artifacts.require(root.is_dir(), "exact helper inputs were not materialized")
     return root
 
@@ -163,8 +144,6 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
     else:
         materialize(plan, arch, sources)
     configure_workspace(sources)
-    if separate_helpers(plan, arch):
-        configure_workspace(sources / "test-helpers")
     (output / "bin").mkdir(parents=True)
     environment.update(TARGET_ARCH=arch, KUASAR_WORKSPACE_ROOT=str(sources))
     lane = plan["lanes"][arch]
@@ -235,17 +214,25 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
                     shutil.copy2(source / name, target)
         else:
             shutil.copytree(pinned / "test/e2e", destination)
-    helpers = artifacts.planned_helpers(lane["selection"]) if plan["mode"] == "source" else {}
+    helpers = artifacts.planned_helpers(lane["selection"], plan["helper_contract"]) if plan["mode"] == "source" else {}
     if plan['mode'] == 'source' and 'basic.demo.sh' in lane['selection']['cases']:
         demo = output / artifacts.test_overlay_root('platform') / 'demo'
         build_demo_wheels.build(demo, arch, demo / 'wheels' / arch)
     if helpers:
         helper_source = helper_sources(plan, arch, sources)
-        build_helpers.build(helper_source, arch, output / "helpers", helpers, environment)
+        configure_workspace(helper_source)
+        helper_environment = dict(environment, GOWORK=str(helper_source / 'go.work'))
+        extra = {}
+        if plan['helper_contract']['schema'] == 2:
+            extra['historical_archive'] = assets / ('platform-' + plan['baseline']['version'] + '.tar.gz')
+        build_helpers.build(helper_source, arch, output / "helpers", helpers, helper_environment, plan['helper_contract'], **extra)
     # Match the existing release packagers' executable/data modes independently
     # of the caller's umask. Tar transport preserves these through Actions.
     for name in artifacts.tree_files(output):
         file = output / name
+        if name.startswith('helpers/') and plan['helper_contract']['schema'] == 2 and \
+                name.removeprefix('helpers/') in plan['helper_contract']['history']['helpers'][arch]:
+            continue  # Retain the original safe mode of authenticated historical bytes.
         executable = file.stat().st_mode & 0o111
         file.chmod(0o755 if executable else 0o644)
     metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "products": {}, "embedded": {}, "tests": {}, "helpers": {},
@@ -267,9 +254,10 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
         metadata["embedded"][name] = {"sha256": artifacts.digest(output / "embedded" / name), "sources": plan["embedded_sources"][name]}
     for owner in plan["test_overlays"]:
         metadata["tests"][owner] = artifacts.tree_files(output / artifacts.test_overlay_root(owner))
-    for name, owner in helpers.items():
-        revision = plan["framework_sha"] if owner == "framework" else plan["test_revisions"][owner]["sha"]
-        metadata["helpers"][name] = {"sha256": artifacts.digest(output / "helpers" / name), "source_sha": revision}
+    metadata['helper_contract_sha256'] = artifacts.identity(plan['helper_contract'])
+    if helpers:
+        metadata['helpers'] = build_helpers.helper_inputs.contract.receipt(
+            output / 'helpers', arch, plan['helper_contract'], helpers)
     for label, command in {"go": ["go", "version"], "go-context": ["go", "env", "GOHOSTOS", "GOHOSTARCH", "GOVERSION"],
                            "cc": [environment.get("CC", "gcc"), "--version"],
                            "rustc": ["rustc", "-vV"]}.items():
@@ -301,6 +289,7 @@ def main():
     mode.add_argument("--materialize-only", action="store_true", help="fetch exact inputs without running compilers")
     mode.add_argument("--materialized", action="store_true", help="verify and compile previously fetched exact inputs")
     args = parser.parse_args()
+    source_inputs.INPUT_ARCHIVE = args.plan.resolve().parent / "source-inputs.tar"
     plan = json.loads(args.plan.read_text())
     artifacts.check_plan(plan)
     if args.materialize_only:

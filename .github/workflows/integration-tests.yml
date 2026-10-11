@@ -154,6 +154,7 @@ jobs:
           name: ${{ steps.plan.outputs.artifact }}
           path: |
             plan.json
+            source-inputs.tar
             workbench.json
           if-no-files-found: error
           retention-days: 7
@@ -182,7 +183,7 @@ jobs:
   source-checks:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     needs: resolve
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -195,19 +196,88 @@ jobs:
         with:
           name: ${{ needs.resolve.outputs.artifact }}
           path: plan
-      - name: Bootstrap required source checks
-        run: bash framework/ci/hosted/bootstrap.sh --profile source
-      - name: Run required source and UFFD checks
+      - name: Fetch exact test sources without a compiler
         run: |
-          taskset -pc "$KUASAR_BUILD_CPUS" "$$" >/dev/null
           python3 -B framework/ci/integration/run-source-checks.py \
-            --plan plan/plan.json --sources source-checks --output source-result.json
-      - name: Upload source check result
+            --plan plan/plan.json --sources source-checks --output source-materialize.json --materialize-only
+          cp plan/plan.json source-checks/.source-plan.json
+      - name: Run the complete required source gate in Workbench system mode
+        run: |
+          python3 -B framework/ci/hosted/workbench.py start --mode system \
+            --selection plan/workbench.json --sources source-checks \
+            --root "$RUNNER_TEMP/source-system" --arch x86_64 --cpus 2 --memory-gib 8
+          source_script=$(cat <<'WORKBENCH_SOURCE'
+          # Keep the original ordinary-user source checks and their explicit
+          # sudo paths inside this private system instance, including its daemon.
+          source_uid=$(id -u nobody)
+          source_gid=$(id -g nobody)
+          source_docker_gid=$(stat -c %g /run/docker.sock)
+          chown -hR "$source_uid:$source_gid" /src /work/home /build
+          # The host launcher must retain ownership for final diagnostics.
+          chgrp "$source_gid" /output
+          chmod 2775 /output
+          printf '%s\n' 'nobody ALL=(ALL) NOPASSWD: ALL' \
+            'Defaults:nobody secure_path="/build/source-readers/bin:/usr/local/go/bin:/usr/local/rust/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"' \
+            > /etc/sudoers.d/kuasar-source
+          chmod 0440 /etc/sudoers.d/kuasar-source
+          visudo -cf /etc/sudoers.d/kuasar-source
+          exec setpriv --reuid "$source_uid" --regid "$source_gid" --groups "$source_docker_gid" \
+            --inh-caps=-all --ambient-caps=-all env USER=nobody LOGNAME=nobody \
+            bash -euo pipefail <<'SOURCE_USER'
+          [ "$(id -u)" = "$(id -u nobody)" ] && [ "$(id -u)" -ne 0 ]
+          printf 'Source checks UID=%s\n' "$(id -u)"
+          sudo -n true
+          docker --host unix:///run/docker.sock info --format '{{.ID}}' >/dev/null
+          # These are private instance resources. Old pinned fixtures may skip
+          # on unavailable capabilities; this required gate must fail instead.
+          trap 'sudo -n ip link del dev ks-source-probe 2>/dev/null || true; sudo -n ip netns del ks-source-probe 2>/dev/null || true' EXIT
+          sudo -n ip netns add ks-source-probe
+          sudo -n ip netns del ks-source-probe
+          sudo -n ip tuntap add dev ks-source-probe mode tap
+          sudo -n ip link del dev ks-source-probe
+          trap - EXIT
+          source /inputs/release/ci/hosted/bootstrap.sh
+          export KUASAR_HOSTED_ROOT=/build/source-readers
+          export GITHUB_ENV=/build/t/source-readers-env GITHUB_PATH=/build/t/source-readers-path
+          mkdir -p "$KUASAR_HOSTED_ROOT/bin"
+          install_readers
+          install_runtime_reader
+          export PATH="$KUASAR_HOSTED_ROOT/bin:$PATH" KUASAR_CI_DIR=/output/source-metrics
+          # Retain the original source process affinity inside this private instance.
+          source_cpus=$(python3 - <<'SOURCE_AFFINITY'
+          import os
+          budget = os.environ.get("KUASAR_BUILD_JOBS", "")
+          if not budget.isascii() or not budget.isdecimal() or int(budget) < 1:
+              raise SystemExit("source affinity requires a positive KUASAR_BUILD_JOBS")
+          jobs = int(budget)
+          allowed = sorted(os.sched_getaffinity(0))
+          if jobs > len(allowed):
+              raise SystemExit("source affinity budget exceeds allowed CPUs")
+          print(",".join(map(str, allowed[:jobs])))
+          SOURCE_AFFINITY
+          )
+          taskset -pc "$source_cpus" "$$" >/dev/null
+          taskset -pc "$$"
+          python3 -B /inputs/release/ci/integration/run-source-checks.py \
+            --plan /src/.source-plan.json --sources /src --output /output/source-result.json --materialized
+          SOURCE_USER
+          WORKBENCH_SOURCE
+          )
+          python3 -B framework/ci/hosted/workbench.py exec --root "$RUNNER_TEMP/source-system" -- \
+            bash -euo pipefail -c "$source_script"
+      - name: Stop the owned system instance and retain safe source evidence
+        if: always()
+        run: |
+          python3 -B framework/ci/hosted/workbench.py finish --root "$RUNNER_TEMP/source-system" \
+            --evidence "$RUNNER_TEMP/source-system-evidence"
+      - name: Upload source checks and system diagnostics
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-source-result-${{ github.run_id }}
-          path: source-result.json
+          path: |
+            ${{ runner.temp }}/source-system-evidence
+            source-materialize.json
           if-no-files-found: error
           retention-days: 7
           overwrite: true

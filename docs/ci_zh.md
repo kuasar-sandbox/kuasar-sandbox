@@ -31,7 +31,7 @@ Admission 失败或 Draft 延迟执行时，可信 finalizer 不得成功结束�
 
 App key 和短期控制 token 只进入受信任的 admission/finalize 与发布控制 job。
 产品/helper 构建、源码检查、prepare、E2E 都不接收 App key，候选代码在新的标准 job 执行。
-公开源码以匿名精确 SHA 获取，checkout 不保留凭据；Actions token 只用于可信 API/下载步骤。
+公开发行源码按所选 Tag 获取；候选分支/PR ref 按自动观测的身份准入，并通过固定运行 artifact 传递。checkout 不保留凭据；Actions token 只用于可信 API/下载步骤。
 publish 使用独立 job 和写权限。
 
 跨仓原子变更沿用双向 companion 标记：
@@ -89,19 +89,19 @@ prepare 在组装前校验包路径/类型/权限/归属、摘要、必要产品
 exact-assets 模式直接消费 platform 包中的同一布局。两条路径都拒绝旧 owner runner 和重复用例 ID。
 按 owner 记录 test revision，与可信 framework SHA 分开。
 
-owner 测试 revision 与产品 tag 独立。新聚合在维护清单的 `test_revisions` 中提交五个组件的完整测试 SHA，
-平台测试使用聚合源码提交。打包和依赖源码的 helper 编译都使用这些精确 pin；helper 与所选产品需要不同 revision 时，
-使用独立源码工作区。prepared provenance、shard/架构结果及现有发布验证 binding 均保留 pin，后续 baseline 核验并复用它们。
-缺失或不匹配会失败，不回退到产品 tag 或执行时的分支 HEAD；仅测试变更不会重建复用的产品。
+新聚合清单只选择 owner/unit Tag。用例、运行库、helper 源码和指南均来自所选 Tag；guest-runtime 跟随 runtime Tag，kernel 保持独立的 vmlinux Tag。解析器对实际干净源码核验 repository、tag、commit 和 tree，并写入 `source-records.json`。SHA 仅是自动来源证据，不提供另一套选择入口。
 
-当基线解析使用显式声明的上一份已发布聚合时，未修改 owner 的测试 pin 与产品字节一起保留该聚合已经独立记录的身份，不能混入尚未发布成功的新清单中仅继承的 pin。平台 PR 相对其准入 base 显式修改的测试 pin 仍然生效；候选与 companion owner 仍使用各自精确集成源码的测试。这避免把新功能测试与旧产品混搭，不修改用例断言或发行选择。
+源码 CI 对现有 PR merge ref 和受信任分支 ref 核验自动观察到的身份，然后通过 `source-inputs.tar` 固定并传递 Git 源码树。构建、helper 和必需源码检查恢复同一输入。非候选 owner 使用所选单元 Tag；候选及 companion 测试即使没有产品差异、所有产品字节复用已发布聚合也仍执行。产品相关输入和独立 kernel 差异投影不变。
+
+对于没有准入候选的 owner，所选 Tag 必须保留已验证基线中的每个用例 ID。缺少用例时明确失败，需要经评审的新 Tag 选择；源码 CI 不得静默缩减覆盖范围。
+
+历史消费者按聚合 Tag 获取清单及发布包，保留原始独立测试来源。新发布 binding 内嵌 canonical validation plan、owner 用例映射和源码记录，与包摘要共同绑定。旧 binding 缺少归属信息时，必须获取其真实保留的 integration-plan artifact，核验 canonical identity 等于 `plan_id`，并交叉验证所有绑定身份与资产。证据缺失或歧义时明确失败，不从文件名猜测历史归属。
 
 产品合同为预构建产品 → `e2e prepare` → `<suite>.<case>.sh` → 共享公开入口 `e2e run`。完整文件名就是用例 ID，
 首段只能是 `basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder` 或 `telemetry`。
 内部 CI shard 按 suite 分组精确文件，plan 在执行前记录所选用例和架构排除项。
 
-source/helper build 生成目标架构的 zot、versitygw、custom Proxy、telemetry probe、sandboxer usage probe，
-以及静态无 libc 的 x86_64/aarch64 cgroup probe。 orchestrator 辅助程序集合还包含 `node-ctl-runner-test`，使用精确的 orchestrator 测试 pin 及所选依赖工作区，通过 `go test -c ./cmd/node-ctl` 编译。它仅用于测试，不是生产制品。prepare 校验架构、源码 pin 和摘要，并将 `NODE_CTL_RUNNER_TEST_BINARY` 设置为不可变的 `fixtures/bin/node-ctl-runner-test` 路径；prepare 和 E2E 均不编译它。发布包携带两种架构的 helper、精确测试 pin 和摘要。同一更早的 build 阶段按 `test/demo/requirements.lock`
+source/helper build 从已准入的 owner 声明派生完整 helper 清单和配方，并将契约绑定到输入计划。通用构建器使用固定依赖工作区执行各 owner 配方，拒绝缺失或额外输出。内部二进制名称、包路径和构建目标由组件维护。prepare 校验预期契约、架构、源码身份、字节和安全权限，提供声明的环境变量别名与 `E2E_HELPERS_DIR`，不执行编译。包含静态无 libc cgroup probe 在内的用例必要能力仍单独检查，不作为完整允许清单。发布包携带两种架构的 helper 和相同 owner Tag 的证据。同一更早的 build 阶段按 `test/demo/requirements.lock`
 获取 Python 3.12 的完整 Demo SDK wheel 依赖闭包，固定全部版本及 wheel 摘要；发布包携带两种架构的 wheelhouse。prepare 消费这些二进制，
 准备 manifest archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像，并仅从本地 wheelhouse 通过
 `--no-index --find-links` 和 `--require-hashes` 安装 Demo SDK。wheel 缺失或变化时在安装前失败。provenance 绑定包名、版本、wheel 摘要、lock 身份和安装后的文件树。
@@ -114,6 +114,8 @@ E2E 只 checkout 可信执行器并下载目标 prepared workspace，执行前�
 源码依赖的 connector/sandboxer/orchestrator unit/race/vet、真实 pinned-BPF 统计、ENOSPC、Collector/usage harness 回归和 UFFD benchmark 保留为独立必需源码 job。
 source 模式 x86 sandboxer/platform 还在独立性能 job 中，用同一组制品保留 A/B/C/D `off/auto × cold/warm` working-set smoke。
 
+完整源码门禁在原生 x86 的独立 Workbench system 实例中运行, 包括混合 unit/race/vet 与真实特权检查所需的编译器. 受信宿主从固定准入 artifact 恢复 `plan.test_revisions` 对应源码, 实例接收 `/src` 私有副本, 不接收宿主 Docker socket、凭据或 ordinary 构建缓存. 每个精确测试 pin 的原 owner 脚本与 Make target 继续决定实际检查, 包括已发布的旧布局. 它们在实例内以 ordinary UID 执行, 保留不可读文件及拒绝提权的检查. 源码进程及子进程保留原 Hosted affinity 策略: 按已声明的 `KUASAR_BUILD_JOBS` 预算选择实际允许的 CPU, 同时受实例 CPU quota 限制. 私有 sudo 配置保留原脚本的显式升权, 仅既有 TAP/netns 性能 fixture 通过 `sudo make test-perf-tools` 执行. 该用户仅访问实例自己的 Docker socket, 不修改宿主账号或策略. 真实 `sudo`、systemd、BPF、mount namespace、UFFD 与私有 Docker 保留原参数和断言. 门禁开始前必须成功创建 TAP 与 network namespace. 结果保留 framework/test/image 身份、各命令、退出码及耗时, 失败证据经所属实例清理入口收集. 产品、独立 helper 与发布构建使用 ordinary UID 的 build 模式. 宿主 bootstrap 保留编排及产品执行前提, Workbench producer 继续直接在原生 Runner 构建.
+
 CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径。跨 `sudo` 只传递显式准备的输入（包括私有状态目录）；执行不读取生成的 owner-runner registry。
 
 所有非空 lane 都在没有 Go、Rust、C/C++ 编译器及组件源码树的运行时容器中 prepare。完整 storage 和 snapshot 套件也在该容器中执行，
@@ -122,6 +124,10 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 容器输入只读，可变用例目录和输出目录独立。
 
 `snapshot.read-recovery.sh` 失败时，在 cleanup 前将用例、阶段、失败行及有界固定词表错误证据保留在 job 日志中。诊断保留测试的原始退出状态。
+
+现有 `make test-release-tools` 入口在源码 CI 上下文或任一物化文档存在时，还执行固定源码集的发布验证；此时 `.source-plan.json` 和 `.source-checks.json` 均为必需。入口接受原始 `source` 和 `exact-assets` plan，绑定未修改的 plan ID、干净源码树和现有 Go workspace。组件保留所选 tag 身份，候选保留已准入的 ref。对于 `exact-assets`，尚未发布的 platform 源码通过原始仓库、commit 和 tree 绑定暂存选择、固定运行输入、物化回执和 helper 声明。入口先验证这些输入，再串行执行所选组件原有的 `make test-release`；platform 候选会选择全部五个组件。入口同时执行所选 owner 声明的原生 helper 配方，校验完整输出，并在 `KUASAR_CI_DIR` 下记录命令、退出码、声明、依赖身份和二进制摘要。执行后源码及 workspace 输入必须保持不变。已认证的历史 helper 证据保留为历史事实，不宣称重新执行过其配方。该原生源码回归不替代各架构构建、prepare 或 E2E 验证。
+
+独立运行 `make test-release-tools` 仍保持平台工具验证范围，未请求固定源码集验证时会明确说明。对已物化的本地源码集，可在保留现有 Go workspace 和工具链环境的情况下执行 `make test-release-source-set ORG=<fixed-source-root> RELEASE_CHECK_OUTPUT=<fresh-evidence-directory>`。该显式入口始终要求两份准入文档，不重新获取源码。
 
 ## 4. Daily 与 Stable
 
@@ -144,13 +150,21 @@ ARM 非 KVM 范围在执行前和 aggregate 验证绑定中声明，不等同完
 - RocksDB headers 与 `librocksdb.a`;
 - patched `cloud-hypervisor`。
 
-缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v3/<arch>/<component>/<input-hash>/`. Workbench action 使用当前仓库的 Actions cache 恢复及保存 native、Go modules/build cache、Cargo registry/Git/material 下载. key 区分架构、精确候选来源和声明的构建覆盖范围. candidate namespace 绑定实际 PR、companion、产品、测试/helper 与内核输入. 精确 key 和 restore 前缀都区分 source/helper 子集、已选择的产品集合及完整 manifest, 防止不可变的部分缓存占用完整构建的 key. 访问仍受 GitHub 仓库/ref 规则限制, 同 key 不能跨仓共享. 默认分支 dispatch 的候选输入仍属于 candidate; trusted 写入要求在源码执行前确认干净、精确的公开源码提交属于对应 main 历史, 结论保存在候选挂载之外. publisher 可执行文件不消费这些缓存.
+缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v3/<arch>/<component>/<input-hash>/`. Workbench action 通过 Actions cache 传输 native、Go modules/build cache、Cargo registry/Git/material 下载, 实际操作受调用者的 runtime cache 权限限制. key 区分架构、精确候选来源和声明的构建覆盖范围. candidate namespace 绑定实际 PR、companion、产品、测试/helper 与内核输入. 精确 key 和 restore 前缀都区分 helper、已选择的产品集合及各发布单元, 防止不可变的部分缓存占用另一构建范围的 key.
+
+启用缓存的 Workbench action 在恢复后、owner 命令前运行 `go clean -testcache`. 它仅使旧 Go 测试结果过期, 保留编译和模块缓存, 避免恢复的成功结果替代当前 Job 的测试执行. Workbench receipt 记录该命令及退出码; 失败会阻止 owner 执行, 原有清理仍会运行.
+
+Actions cache 的存储和访问属于调用者仓库及 ref, 遵守 GitHub 的缓存规则; 同 key 不会跨仓共享. 默认分支 dispatch 的候选输入仍属于 candidate. trusted cache 写入要求在源码执行前确认干净、精确的公开源码提交属于对应 main 历史, 结论保存在候选挂载之外. 现有受信 main/release 入口在 runtime cache scope 可写时提供写入路径, 沿用现有权限. publisher 可执行文件不消费候选或构建缓存.
+
+聚合 helper 从固定源码 artifact 恢复与产品相同的所选单元 Tag 的干净 Git 源码. Runtime 发布在安装已验证的预编译资产前冻结同一宿主 receipt, 避免把生成的二进制和 notice 当成源码改动. 原有资产验证及实际工具链/recipe 缓存 key 继续适用.
+
+组件 `pull_request_target` job 的 cache 权限为只读. save 尝试可能报告 `cache write denied: token has no writable scopes`, 同时 cache action step 本身仍成功; 这不代表缓存保存成功. Workbench receipt 记录请求的缓存身份及 restore 结果, 不证明已写入. 缓存验收必须核对目标仓库/ref 中真实成功的 save, 再由全新 Job 恢复并验证确切产品和打包材料. 其他仓库或事件下的可写缓存不能替代这条路径的证据.
 
 native key 覆盖 recipe、patch/config、上游内容、架构、实际工具链/ABI 和有效编译参数. 完整 Workbench/image/framework 身份保留在 provenance, 每日镜像标签不单独导致 miss. synthetic import/kernel 默认用户、主机和日期在实际构建时规范化, 显式覆盖仍有效. 固定容器路径保留 Cargo 源码和 linker 身份; 随机任务目录不进入 Actions cache path version. 写入沿用校验和与原子 rename; restore 再核验 descriptor/payload. 正常 miss 按原 recipe 构建, 匹配但损坏的条目失败, 不静默重编或原地修补.
 
 EROFS key 包含 Libgcrypt/Libgpg-error/uuid 的 pkg-config 元数据、目标编译器/工具字节、实际本地源码归档字节（固定 URL 则使用预期摘要）及有界的编译/静态链接探针。探针跟踪实际包含的头文件（含强制 include）以及通过选项、sysroot 和库搜索路径真正选中的静态库/启动对象。源码 URL 或文件名是定位信息，不是内容身份。工作区文件使用可迁移的逻辑标签；具有语义的编译器和 sysroot 选项值仍然有效。未固定摘要的 URL 不能授权共享缓存；须使用固定 URL 或本地归档。
 
-可选的 `guest-runtime/native-deps/deps/erofs-patches` 材料、有序 `series` 和 `deps/erofs-recipe.sh` 都进入 key。仍支持不含这些文件的旧源码集合，包括旧 OpenSSL 配方的实际目标链接探针。新增、修改或移除输入都会使 key 失效。hosted native profile 安装 `libgcrypt20-dev libgpg-error-dev uuid-dev`，并保留 `libssl-dev` 以支持已经准入的旧源码集合。openEuler 24.03-LTS-SP4 的 `libgcrypt-1.10.2-4` 和 `libgpg-error-1.47-1` 源码 RPM 明确禁用静态库，仅安装 devel 软件包不够。[Runner provider](../ci/runner/README_zh.md#安装) 以最多两个 job 构建这些 pin 且包含发行版补丁的源码,仅安装静态 archive 及经过验证的源码/构建/重新链接/许可目录,并验证热复用和模板到 slot 的复制。Runtime 打包验证相同的 pin 目录;Ubuntu 保留已安装软件包材料路径。
+可选的 `guest-runtime/native-deps/deps/erofs-patches` 材料、有序 `series` 和 `deps/erofs-recipe.sh` 都进入 key。仍支持不含这些文件的旧源码集合，包括旧 OpenSSL 配方的实际目标链接探针。新增、修改或移除输入都会使 key 失效。Workbench 镜像安装 `libgcrypt20-dev libgpg-error-dev uuid-dev`，并保留 `libssl-dev` 以支持已经准入的旧源码集合。openEuler 24.03-LTS-SP4 的 `libgcrypt-1.10.2-4` 和 `libgpg-error-1.47-1` 源码 RPM 明确禁用静态库，仅安装 devel 软件包不够。[Runner provider](../ci/runner/README_zh.md#安装) 以最多两个 job 构建这些 pin 且包含发行版补丁的源码,仅安装静态 archive 及经过验证的源码/构建/重新链接/许可目录,并验证热复用和模板到 slot 的复制。Runtime 打包验证相同的 pin 目录;Ubuntu 保留已安装软件包材料路径。
 
 EROFS 条目必须包含匹配的 `.erofs-recipe` stamp、二进制摘要、源码归档/源码树、外部链接依赖、maps、对象、许可证及 relink 输入. Envd 保留匹配的 Go workspace 源码上下文. Cloud Hypervisor 保留 patched 源树、原始 build report、linker map、Cargo lock/metadata/source manifests 和许可证; Cargo registry/Git 与已验证的 release-material 下载随 native 条目配套恢复. 恢复后的 package 必须使用这些确切材料通过 validate, 不替换旧证据或静默重编. 材料不完整的旧 schema 产生 miss. 仓库补丁仍来自准入 source set, 独立打包验证器保留访问精确 Git 对象的能力.
 

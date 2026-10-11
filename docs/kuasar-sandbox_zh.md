@@ -273,7 +273,7 @@ OOM 和有效工作丢失.应用仍可能因为自身资源声明,内存上限�
 | 管理服务路径与外部网关接入基础 | 已交付 | vSwitch 提供可信入口/出口和身份传递基础 |
 | 集中式策略网关 | 支持集成 | 由部署方的外部网关执行公网,私网,DNS,代理和审计策略 |
 | 节点本地轻量 Egress | Proposed | 仅为 [`connector#9`](https://github.com/kuasar-sandbox/connector/issues/9) 设计提案,不是当前 vSwitch 已交付能力 |
-| OpenTelemetry | Proposed | 仍处于 [`kuasar-sandbox#52`](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/52) 和在途实现阶段,不是当前部署前提 |
+| OpenTelemetry | main 已实现 | orchestrator 独立指标服务及原生 Collector pipeline；[范围与版本核验](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry_zh.md#release-scope)。不代表每个 Stable Release 都已包含。 |
 
 `已交付` 表示代码已合入组件主线并有组件验证,不等同于聚合 Stable Release 已经发布.
 `Proposed` 不因存在 Issue,RFC 或 PR 自动成为已交付能力.
@@ -371,3 +371,5 @@ Tag.Preview 继续用于开发和评估.当前 GitHub Release 提供 Linux x86_6
 - [`accelerator`](https://github.com/kuasar-sandbox/accelerator/blob/main/README_zh.md#文档) - Manifest,store 和 cache
 - [`connector`](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch_zh.md) - vSwitch 实现与网络细节
 - [`guest-runtime`](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README_zh.md#文档) - runtime,vmlinux 和 flatten
+
+放置和运维参照系统级[恢复资格](deployment_zh.md#restore-eligibility)、[容量算例](deployment_zh.md#capacity-example)及[保留责任](deployment_zh.md#retention-runbook)。共享存储可达本身不能证明可恢复。

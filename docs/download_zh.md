@@ -8,8 +8,10 @@
 依赖库与 Python 3.12；该路径无需在宿主安装这些库或 Demo SDK。
 
 只解析一次 Stable，或显式设置 `RELEASE_VERSION` 为已发布的
-`release-vX.Y.Z[-preview.YYYYMMDD[.N]]`。所选资产都来自该聚合版本，其声明的产品
-与测试 revision 可以不同。不要混用各组件的 Latest，也不要从 `main` 补取脚本。
+`release-vX.Y.Z[-preview.YYYYMMDD[.N]]`。所选资产都来自该聚合版本。新发布版中，
+每个 owner 的产品、测试、helper 和指南来自所选 owner Tag；kernel 指南使用独立的
+vmlinux Tag。历史发布版保留其真实记录的来源，各来源可能不同，必须使用其配套指南。
+不要混用各组件的 Latest，也不要从 `main` 补取脚本。
 旧 Stable 可能尚不包含此流程：请显式选择符合要求的已发布版本，或使用它自己的
 历史原生指南。此过程不会自动从 Stable 切换到 Preview。源码选择清单不是最新发布通道。
 
@@ -22,7 +24,8 @@ Workbench 优先路径要求 `workbench-v1` 交付合同及包内 `test/demo/pre
 
 默认下载本机架构产品、platform 材料、匹配的 workbench 归档和校验和，同时验证
 声明的完整资产集合。`DOWNLOAD_DIR` 保留 GitHub 元数据、所选 URL、摘要和大小。
-新一次尝试使用新的下载和安装目录。
+按 Tag 下载的清单必须匹配原始 Release 的提交和 Git blob；`source-evidence.json`
+保留已验证的 Tag、提交和树元数据。新一次尝试使用新的下载和安装目录。
 
 ```bash
 set -euo pipefail
@@ -34,7 +37,8 @@ export ARCH DOWNLOAD_WORKBENCH
 RELEASE_METADATA="$(mktemp)"
 ASSETS_TSV="$(mktemp)"
 SELECTION_MANIFEST="$(mktemp)"
-trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST"' EXIT
+SOURCE_EVIDENCE="$(mktemp)"
+trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST" "$SOURCE_EVIDENCE"' EXIT
 
 if [ -n "$RELEASE_VERSION" ]; then
     [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]]
@@ -47,10 +51,90 @@ curl --fail --silent --show-error --location --retry 4 \
     -H 'X-GitHub-Api-Version: 2022-11-28' \
     "$RELEASE_API" >"$RELEASE_METADATA"
 
-SOURCE_SHA="$(python3 -c 'import json,re,sys; value=json.load(open(sys.argv[1]))["target_commitish"]; assert re.fullmatch(r"[0-9a-f]{40}",value); print(value)' "$RELEASE_METADATA")"
-MANIFEST_PATH="$(python3 -c 'import json,sys; tag=json.load(open(sys.argv[1]))["tag_name"]; print("releases/daily-preview.yaml" if "-preview." in tag else "releases/release.yaml")' "$RELEASE_METADATA")"
-curl --fail --silent --show-error --location --retry 4 \
-    "https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/$SOURCE_SHA/$MANIFEST_PATH" >"$SELECTION_MANIFEST"
+python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$SELECTION_MANIFEST" "$SOURCE_EVIDENCE" <<'PY'
+import hashlib, json, pathlib, re, sys
+from urllib.request import Request, urlopen
+
+metadata, requested, manifest_output, evidence_output = sys.argv[1:]
+release = json.loads(pathlib.Path(metadata).read_text(encoding="utf-8"))
+tag = release["tag_name"]
+assert re.fullmatch(r"release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?", tag), tag
+assert not requested or requested == tag, (requested, tag)
+source_sha = release["target_commitish"]
+assert re.fullmatch(r"[0-9a-f]{40}", source_sha), source_sha
+api = "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox"
+evidence = []
+
+def read_url(url):
+    request = Request(url, headers={"Accept": "application/vnd.github+json",
+                                   "X-GitHub-Api-Version": "2022-11-28"})
+    with urlopen(request, timeout=30) as response:
+        return response.read()
+
+def read_metadata(path):
+    value = json.loads(read_url(api + path))
+    assert isinstance(value, dict), path
+    evidence.append({"url": api + path, "response": value})
+    return value
+
+def object_sha(value):
+    assert isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value), value
+    return value
+
+def check_tag():
+    ref = read_metadata("/git/ref/tags/" + tag)
+    assert ref["ref"] == "refs/tags/" + tag, ref
+    obj, seen = ref["object"], set()
+    while obj["type"] == "tag":
+        sha = object_sha(obj["sha"])
+        assert sha not in seen and len(seen) < 16, "cyclic or excessive annotated tags"
+        seen.add(sha)
+        annotated = read_metadata("/git/tags/" + sha)
+        assert annotated["sha"] == sha, annotated
+        obj = annotated["object"]
+    assert obj["type"] == "commit" and object_sha(obj["sha"]) == source_sha, "release tag moved"
+
+check_tag()
+commit = read_metadata("/commits/refs/tags/" + tag)
+assert commit["sha"] == source_sha, "named tag commit differs from Release source"
+root_tree = object_sha(commit["commit"]["tree"]["sha"])
+
+def tree_entry(tree_sha, name, kind, modes):
+    tree = read_metadata("/git/trees/" + tree_sha)
+    assert tree["sha"] == tree_sha and tree["truncated"] is False, "incomplete or wrong tree"
+    entries = tree["tree"]
+    assert isinstance(entries, list)
+    names = set()
+    valid_modes = {"tree": {"040000"}, "blob": {"100644", "100755", "120000"}, "commit": {"160000"}}
+    for entry in entries:
+        path = entry["path"]
+        assert isinstance(path, str) and path not in ("", ".", "..") and "/" not in path
+        assert path not in names, "ambiguous tree entry"
+        names.add(path)
+        object_sha(entry["sha"])
+        assert entry["mode"] in valid_modes.get(entry["type"], set()), "invalid tree entry type/mode"
+    matches = [entry for entry in entries if entry["path"] == name]
+    assert len(matches) == 1, (name, "missing or ambiguous tree entry")
+    entry = matches[0]
+    assert entry["type"] == kind and entry["mode"] in modes, (name, "wrong entry type/mode")
+    return entry
+
+releases = tree_entry(root_tree, "releases", "tree", {"040000"})
+filename = "daily-preview.yaml" if "-preview." in tag else "release.yaml"
+blob = tree_entry(releases["sha"], filename, "blob", {"100644", "100755"})
+assert type(blob["size"]) is int and blob["size"] >= 0
+manifest_path = "releases/" + filename
+# Content is retrieved only through the explicit tag, never by a SHA or branch.
+content = read_url("https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/refs/tags/" + tag + "/" + manifest_path)
+check_tag()
+actual_blob = hashlib.sha1(b"blob " + str(len(content)).encode("ascii") + b"\0" + content).hexdigest()
+assert len(content) == blob["size"] and actual_blob == blob["sha"], "manifest blob differs from Release source"
+pathlib.Path(manifest_output).write_bytes(content)
+pathlib.Path(evidence_output).write_text(json.dumps({
+    "tag": tag, "source_commit": source_sha, "manifest_path": manifest_path,
+    "manifest_blob": actual_blob, "manifest_size": len(content), "metadata": evidence
+}, indent=2) + "\n", encoding="utf-8")
+PY
 
 RELEASE_VERSION="$(python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$ASSETS_TSV" "$SELECTION_MANIFEST" <<'PY'
 import json, os, platform, re, sys
@@ -139,6 +223,7 @@ test ! -e "$DOWNLOAD_DIR"
 test ! -e "$INSTALL_DIR"
 mkdir -m 0755 "$DOWNLOAD_DIR"
 install -m 0644 "$RELEASE_METADATA" "$DOWNLOAD_DIR/release.json"
+install -m 0644 "$SOURCE_EVIDENCE" "$DOWNLOAD_DIR/source-evidence.json"
 install -m 0644 "$ASSETS_TSV" "$DOWNLOAD_DIR/assets.tsv"
 
 while IFS=$'\t' read -r name url digest size role; do
@@ -148,7 +233,7 @@ while IFS=$'\t' read -r name url digest size role; do
     test "sha256:$(sha256sum "$DOWNLOAD_DIR/$name.part" | awk '{print $1}')" = "$digest"
     mv "$DOWNLOAD_DIR/$name.part" "$DOWNLOAD_DIR/$name"
 done <"$DOWNLOAD_DIR/assets.tsv"
-rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST"
+rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST" "$SOURCE_EVIDENCE"
 trap - EXIT
 printf 'Pinned aggregate Release: %s\n' "$RELEASE_VERSION"
 ```
@@ -157,7 +242,8 @@ printf 'Pinned aggregate Release: %s\n' "$RELEASE_VERSION"
 
 所选文件必须全部存在，且大小和摘要与记录一致；未下载的另一架构文件不影响
 本机架构下载，但校验清单仍须精确描述该发布版资产。先验证成员类型、路径、权限
-及跨包冲突，再解包到新的 staging 目录。此步骤有意不解包 workbench 归档。
+及跨包冲突，再解包到新的 staging 目录。标准相对根目录（`.` 或 `./`）必须是
+不含 set-ID 位的目录；拒绝空名称或绝对根目录名称。此步骤有意不解包 workbench 归档。
 
 ```bash
 set -euo pipefail
@@ -197,11 +283,13 @@ for archive in archives:
     with tarfile.open(root / archive, "r:gz") as stream:
         for member in stream.getmembers():
             raw = member.name
+            assert raw and not raw.startswith("/"), (archive, raw)
             while raw.startswith("./"):
                 raw = raw[2:]
             raw = raw.rstrip("/")
-            if not raw:
+            if raw in ("", "."):
                 assert member.isdir(), (archive, member.name)
+                assert not (member.mode & 0o6000), (archive, member.name, oct(member.mode))
                 continue
             assert "\\" not in raw and not any(ord(c) < 32 for c in raw), (archive, raw)
             path = pathlib.PurePosixPath(raw)

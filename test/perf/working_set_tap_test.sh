@@ -96,6 +96,7 @@ real_ip() { command ip "$@"; }
 FLAP_TAP="kws-flap-$(printf '%s' "${RUNNER_NAME:-$(hostname)}" | sha256sum | cut -c1-6)"
 FLAP_LOCK="/tmp/wstt-$(printf '%s' "${RUNNER_NAME:-$(hostname)}" | sha256sum | cut -c1-8).lock"
 if [ "$(id -u)" -ne 0 ]; then
+    [ "${REQUIRE_WORKING_SET_PRIVILEGED:-0}" != 1 ] || fail "required reset_tap check needs root TAP"
     echo "working_set_tap_test: reset_tap check skipped (needs root TAP)" >&2
 else
     # deterministic names are shared state: serialize same-owner runs
@@ -106,6 +107,7 @@ else
         real_ip link del "$FLAP_TAP" || fail "cannot delete leftover flap TAP $FLAP_TAP"
     fi
     if ! real_ip tuntap add dev "$FLAP_TAP" mode tap >/dev/null 2>&1; then
+        [ "${REQUIRE_WORKING_SET_PRIVILEGED:-0}" != 1 ] || fail "required reset_tap check cannot create TAP"
         echo "working_set_tap_test: reset_tap check skipped (cannot create TAP)" >&2
     else
         # TAP now exists: every later failure is a real test failure, and the

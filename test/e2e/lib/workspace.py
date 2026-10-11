@@ -20,12 +20,11 @@ _spec = importlib.util.spec_from_file_location('demo_wheels', Path(__file__).wit
 demo_wheels = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(demo_wheels)
 
-HELPERS = {
-    "zot": "ZOT_BIN", "versitygw": "VGW_BIN", "custom-proxy": "CUSTOM_PROXY_BIN",
-    "telemetry-grpc-probe": "TELEMETRY_GRPC_PROBE_BIN", "usage-probe": "USAGE_PROBE_BIN",
-    "cgroup-fork-probe": "CGROUP_FORK_PROBE_BIN",
-    "node-ctl-runner-test": "NODE_CTL_RUNNER_TEST_BINARY",
-}
+_spec = importlib.util.spec_from_file_location('helper_contract', Path(__file__).with_name('helper_contract.py'))
+helper_contract = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(helper_contract)
+
+HELPERS = helper_contract.LEGACY_ALIASES
 IMAGE_VARIABLES = {
     "prometheus": "TELEMETRY_PROMETHEUS_IMAGE", "clickhouse": "TELEMETRY_CLICKHOUSE_IMAGE",
     "orchestrator-base": "ORCHESTRATOR_BASE_IMAGE", "orchestrator-execute": "ORCHESTRATOR_EXECUTE_IMAGE",
@@ -87,6 +86,16 @@ def verify(root):
     require({name: (root / name).stat().st_mode & 0o7777 for name in actual} == provenance['modes'],
             'prepared workspace permissions changed')
     return provenance
+
+
+def declared_helpers(contract, cases):
+    return helper_contract.selected(contract, cases)
+
+
+def helper_variables(provenance):
+    return {name: row['env'] or HELPERS.get(name)
+            for name, row in helper_contract.validate(provenance['helper_contract']).items()
+            if row['env'] is not None or (row.get('historical') and name in HELPERS)}
 
 
 def runtime_init_identity(root, arch):
@@ -193,27 +202,8 @@ def needs_orchestrator_images(names):
 
 
 def required_helpers(cases):
-    """Return the existing case-selected helper owners for build and prepare."""
-    cases = set(cases)
-    orchestrator = any(name.startswith(('orchestrator.', 'builder.')) for name in cases)
-    orchestrator |= bool(cases & {'telemetry.backends.sh', 'telemetry.guest.sh', 'telemetry.proxy.sh'})
-    sandboxer = any(name.startswith(('sandbox.', 'snapshot.')) for name in cases)
-    sandboxer |= bool(cases & {'network.tapfd.sh', 'image.manifest-boot.sh', 'image.sandbox-assembly.sh',
-                               'telemetry.usage.sh', 'telemetry.usage-faults.sh', 'telemetry.source-faults.sh'})
-    helpers = {}
-    if orchestrator or sandboxer or cases & {'basic.demo.sh', 'image.flatten.sh', 'image.registry.sh'}:
-        helpers['zot'] = 'framework'
-    if orchestrator or 'basic.demo.sh' in cases:
-        helpers['versitygw'] = 'framework'
-    if orchestrator:
-        helpers.update({'custom-proxy': 'orchestrator', 'telemetry-grpc-probe': 'orchestrator',
-                        'node-ctl-runner-test': 'orchestrator'})
-    if sandboxer:
-        helpers['usage-probe'] = 'sandboxer'
-    if 'sandbox.cgroup.sh' in cases:
-        helpers['cgroup-fork-probe'] = 'sandboxer'
-    return helpers
-
+    return {name: 'framework' if owner == 'platform' else owner
+            for name, owner in helper_contract.required_capabilities(cases).items()}
 
 
 def relative_input(name):
@@ -489,9 +479,9 @@ def load_images(root, provenance, environment):
 
 def case_environment(root, provenance, case):
     environment = dict(BIN=str(root / 'bin'), E2E_WORKSPACE=str(root), E2E_ARCH=provenance['arch'],
-                       E2E_LIB=str(root / 'test/e2e/lib'), PYTHONDONTWRITEBYTECODE='1', KUASAR_ARTIFACT_E2E='1',
+                       E2E_LIB=str(root / 'test/e2e/lib'), E2E_HELPERS_DIR=str(root / 'fixtures/bin'), PYTHONDONTWRITEBYTECODE='1', KUASAR_ARTIFACT_E2E='1',
                        TARGET_ARCH=provenance['arch'], MANIFEST_FIXTURE_DIR=str(root / 'fixtures/manifest'))
-    for name, variable in HELPERS.items():
+    for name, variable in helper_variables(provenance).items():
         if name in provenance.get('helpers', {}):
             environment[variable] = str(root / 'fixtures/bin' / name)
     if provenance.get('embedded', {}).get('init'):

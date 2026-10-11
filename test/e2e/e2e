@@ -140,40 +140,40 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             if source.exists():
                 workspace.files(source)
                 shutil.copytree(source, work / name)
-        selected_helpers = workspace.required_helpers([case.name for case in cases])
-        helper_identity = provenance
-        if "helpers" not in provenance:
-            helper_root = work / "test/e2e/helpers" / arch
-            metadata = json.loads((helper_root / "helpers.json").read_text())
-            workspace.require(metadata["arch"] == arch, "helper package has the wrong architecture")
-            helpers = metadata["helpers"]
-            helper_identity = metadata
-            workspace.require(set(workspace.files(helper_root)) == {"helpers.json", *helpers}, "undeclared helper package files")
-            (work / "fixtures/bin").mkdir(parents=True, exist_ok=True)
-            for name, record in helpers.items():
-                workspace.require(name in workspace.HELPERS and workspace.digest(helper_root / name) == record["sha256"],
-                                  f"helper package identity mismatch: {name}")
-                workspace.check_helper(helper_root / name, arch)
-                shutil.copy2(helper_root / name, work / "fixtures/bin" / name)
-            provenance["helpers"] = helpers
-        # Reject incomplete selected helper packages before generating images.
-        for case in cases:
-            missing = sorted(set(workspace.required_helpers([case.name])) - set(provenance['helpers']))
-            workspace.require(not missing,
-                              f"{case.name} requires prepared helper(s) {', '.join(missing)} for {arch}")
-        for name, owner in selected_helpers.items():
-            source = (helper_identity.get('framework_sha') if owner == 'framework' else
-                      helper_identity.get('test_revisions', {}).get(owner))
-            if isinstance(source, dict):
-                source = source.get('sha')
-            workspace.require(isinstance(source, str) and re.fullmatch(r'[0-9a-f]{40}', source) and
-                              provenance['helpers'][name].get('source_sha') == source,
-                              f"prepared helper source identity mismatch: {name} for {arch}")
-            path = work / 'fixtures/bin' / name
-            workspace.require(path.is_file() and not path.is_symlink() and
-                              workspace.digest(path) == provenance['helpers'][name]['sha256'],
-                              f"prepared helper identity mismatch: {name} for {arch}")
-            workspace.check_helper(path, arch)
+        if 'helper_contract' in provenance:
+            contract = provenance['helper_contract']
+            workspace.helper_contract.validate(contract)
+        else:
+            contract = workspace.helper_contract.loads((work / 'test/e2e/helpers/contract.json').read_text())
+            workspace.helper_contract.validate(contract)
+        selected_helpers = workspace.declared_helpers(contract, [case.name for case in cases])
+        if 'helpers' not in provenance:
+            helper_root = work / 'test/e2e/helpers' / arch
+            metadata = workspace.helper_contract.loads((helper_root / 'helpers.json').read_text())
+            workspace.require(metadata.get('schema') == 1 and metadata['arch'] == arch and
+                              metadata.get('contract_sha256') == workspace.helper_contract.digest(
+                                  workspace.helper_contract.canonical(contract)), 'helper package contract changed')
+            workspace.helper_contract.verify(helper_root, arch, contract, metadata['helpers'], metadata=True, private_extraction=True)
+            (work / 'fixtures/bin').mkdir(parents=True, exist_ok=True)
+            for name in selected_helpers:
+                shutil.copy2(helper_root / name, work / 'fixtures/bin' / name)
+            provenance['helpers'] = workspace.helper_contract.receipt(
+                work / 'fixtures/bin', arch, contract, selected_helpers)
+            admitted_helpers = selected_helpers
+        else:
+            admitted_cases = provenance.get('prepared_cases', provenance.get('selection', {}).get('cases'))
+            workspace.require(isinstance(admitted_cases, list), 'missing prepared helper case inventory')
+            admitted_helpers = workspace.declared_helpers(contract, admitted_cases)
+            workspace.require(set(provenance['helpers']) == set(admitted_helpers) and
+                              set(selected_helpers) <= set(admitted_helpers), 'prepared helper inventory changed')
+        provenance['helper_contract'] = contract
+        workspace.helper_contract.verify(work / 'fixtures/bin', arch, contract, provenance['helpers'],
+                                         admitted_helpers)
+        # Re-preparing a subset retains only that subset's declared inputs,
+        # after verifying every input copied from the previously sealed tree.
+        for name in set(admitted_helpers) - set(selected_helpers):
+            (work / 'fixtures/bin' / name).unlink()
+        provenance['helpers'] = {name: provenance['helpers'][name] for name in selected_helpers}
         (work / "ARCH").write_text(arch + "\n", encoding="utf-8")
         if 'embedded' not in provenance and (work / 'bin/sandbox-runtime.bundle').is_file():
             provenance['embedded'] = {'init': workspace.runtime_init_identity(work, arch)}
@@ -211,11 +211,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     run_root.mkdir(parents=True, exist_ok=True)
     out_root.mkdir(parents=True, exist_ok=True)
     env_base = os.environ.copy()
-    for variable in (*workspace.HELPERS.values(), *workspace.IMAGE_VARIABLES.values(), "E2E_IMAGE", "IMAGE", "E2E_CASES_DIR", "E2E_LIB", "BASH_ENV", "KUASAR_EXPECTED_RUNTIME_INIT_SHA256"):
+    for variable in (*workspace.HELPERS.values(), *workspace.helper_variables(provenance).values(), *workspace.IMAGE_VARIABLES.values(), "E2E_HELPERS_DIR", "E2E_IMAGE", "IMAGE", "E2E_CASES_DIR", "E2E_LIB", "BASH_ENV", "KUASAR_EXPECTED_RUNTIME_INIT_SHA256",
+                     "E2E_TEMPLATE_CACHE_DIR", "E2E_TEMPLATE_CACHE_PROVENANCE"):
         env_base.pop(variable, None)
     env_base["PYTHONDONTWRITEBYTECODE"] = "1"
     report = {"arch": arch, "cases": [case.name for case in cases], "timings": [],
               "provenance_sha256": workspace.digest(work / "provenance.json"), "conclusion": "failure"}
+    # A fresh directory per invocation prevents ambient or previous-run reuse,
+    # even when the caller supplies a persistent run_root. It is never inside
+    # immutable inputs or a case's owned work directory.
+    cache_enabled = not getattr(args, "no_template_cache", False)
+    report["template_cache"] = {"enabled": cache_enabled}
+    if cache_enabled:
+        cache = Path(tempfile.mkdtemp(prefix=".template-cache-", dir=run_root))
+        env_base.update(E2E_TEMPLATE_CACHE_DIR=str(cache),
+                        E2E_TEMPLATE_CACHE_PROVENANCE=report["provenance_sha256"])
+        report["template_cache"]["directory"] = str(cache)
     failed = []
     try:
         workspace.load_images(work, provenance, env_base)
@@ -279,6 +290,8 @@ def main() -> int:
     p.add_argument("--run-root", help="case state root; defaults to a fresh directory beside workdir")
     p.add_argument("--out-root", help="case output root; defaults to <run-root>/out")
     p.add_argument("--result", help="write the case result JSON outside the prepared workspace")
+    p.add_argument("--no-template-cache", action="store_true",
+                   help="disable run-local immutable template preparation reuse")
     p.set_defaults(func=cmd_run)
 
     return args.func(args) if (args := parser.parse_args()) else 2

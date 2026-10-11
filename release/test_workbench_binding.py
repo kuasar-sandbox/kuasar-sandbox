@@ -11,7 +11,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'ci/integration'))
 import artifacts
-from test_fixtures import WORKBENCH_CASES, architecture_result, workbench_results, registry_binding
+from test_fixtures import WORKBENCH_CASES, architecture_result, workbench_results, registry_binding, tag_source_plan
 spec = importlib.util.spec_from_file_location('workbench_bind_validation', ROOT / 'release/bind-validation.py')
 binder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(binder)
@@ -41,6 +41,7 @@ class BindingTests(unittest.TestCase):
                          'units': units, 'assets': records}, 'test_revisions': artifacts.release_test_revisions(pins, self.sha),
             'test_overlays': [], 'case_files': WORKBENCH_CASES, 'lanes': {arch: {'products': [], 'performance': [],
                 'selection': artifacts.suite_selection(['platform'], arch, WORKBENCH_CASES)} for arch in artifacts.ARCHES}}
+        source_records = tag_source_plan(self.plan)
         self.receipts = {}
         for index, arch in enumerate(artifacts.ARCHES, 1):
             name = 'workbench-' + arch + '-v1.2.3.tar.gz'
@@ -48,7 +49,7 @@ class BindingTests(unittest.TestCase):
             self.receipts[arch] = {'arch': arch, 'aggregate_version': self.version, 'source_revision': self.sha,
                 'archive': name, 'sha256': artifacts.digest(path), 'image_id': 'sha256:' + str(index) * 64, 'size': path.stat().st_size}
             (self.root / 'workbench' / ('workbench-' + arch + '.json')).write_text(json.dumps(self.receipts[arch]))
-        (self.root / 'test-revisions.json').write_text(json.dumps(pins))
+        (self.root / 'source-records.json').write_text(json.dumps(source_records))
         (self.root / 'release-notes.md').write_text('Original notes\n')
         self.results = workbench_results(self.plan, self.receipts)
         self.validation = artifacts.collect_results(self.plan, {arch: architecture_result(self.plan, arch) for arch in artifacts.ARCHES})
@@ -63,11 +64,20 @@ class BindingTests(unittest.TestCase):
         self.assertEqual(binding['workbench'], self.results)
         with self.assertRaisesRegex(ValueError, 'registry identity'):
             artifacts.check_registry_binding(self.version, binding)
+
         binding['registry'] = registry_binding(self.version, self.results)
         artifacts.check_registry_binding(self.version, binding)
         binding['registry']['architectures']['x86_64']['image_id'] = 'sha256:' + '0' * 64
         with self.assertRaisesRegex(ValueError, 'identity differs'):
             artifacts.check_registry_binding(self.version, binding)
+
+    def test_oversized_publication_preserves_original_notes_and_fails(self):
+        notes = self.root / 'release-notes.md'
+        original = 'x' * binder.publication_body.MAX_CHARACTERS
+        notes.write_text(original)
+        with self.assertRaisesRegex(ValueError, 'must not be truncated'):
+            binder.bind(self.root, self.plan, self.validation, self.results)
+        self.assertEqual(notes.read_text(), original)
 
     def native_full(self):
         results = copy.deepcopy(self.results)
@@ -182,7 +192,7 @@ class BindingTests(unittest.TestCase):
         run = {'id': 1, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://example.invalid/run',
                'display_title': reader.release.aggregate_run_title(self.version, self.sha)}
         with patch.object(reader.release, 'api_optional', return_value=state), patch.object(reader, 'source_text', return_value=manifest), patch.object(
-                reader.release, 'aggregate_runs', return_value=[run]), patch.object(reader, 'case_files', return_value=WORKBENCH_CASES), patch.object(
+                reader.release, 'aggregate_runs', return_value=[run]), patch.object(
                 reader.release, 'tag_sha', side_effect=lambda repository, tag: self.sha if repository == reader.PLATFORM else 'c' * 40):
             notes(original)
             self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
@@ -203,7 +213,7 @@ class BindingTests(unittest.TestCase):
             for arch, record in broken['architectures'].items():
                 record.pop('selection'); record['profile'] = reader.historical_profile(arch)
             notes(broken)
-            with self.assertRaisesRegex(ValueError, 'current explicit case selection'):
+            with self.assertRaisesRegex(ValueError, 'published case selection differs'):
                 reader.aggregate(self.version)
             for field in ('workbench', 'registry', 'delivery'):
                 broken = copy.deepcopy(original); broken.pop(field); notes(broken)

@@ -27,9 +27,35 @@ fail() {
 [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]] || fail "source-sha must be a full lowercase SHA"
 [ "$MODE" = incomplete ] || [ "$MODE" = gc ] || fail "mode must be incomplete or gc"
 
+# Released records are read by tag. An interrupted tagless publication may
+# recover only while its recorded identity is still on a trusted branch.
+manifest_ref=$TAG
+if observed=$(gh api "repos/$REPOSITORY/git/ref/tags/$TAG" \
+    --jq 'select(.object.type == "commit") | .object.sha' 2> "$TMP/ref.error"); then
+  [ "$observed" = "$SOURCE_SHA" ] || fail 'tag source identity changed'
+  identity_path="git/ref/tags/$TAG"
+else
+  grep -q '(HTTP 404)' "$TMP/ref.error" || { cat "$TMP/ref.error" >&2; exit 1; }
+  line="${TAG#release-v}"; line="${line%%-preview.*}"; line="${line%.*}"
+  manifest_ref=
+  for branch in main "release/v$line.x"; do
+    if observed=$(gh api "repos/$REPOSITORY/git/ref/heads/$branch" \
+        --jq 'select(.object.type == "commit") | .object.sha' 2> "$TMP/ref.error"); then
+      if [ "$observed" = "$SOURCE_SHA" ]; then manifest_ref=$branch; break; fi
+    elif ! grep -q '(HTTP 404)' "$TMP/ref.error"; then
+      cat "$TMP/ref.error" >&2; exit 1
+    fi
+  done
+  [ -n "$manifest_ref" ] || fail 'tagless publication source is no longer an admitted branch HEAD'
+  identity_path="git/ref/heads/$manifest_ref"
+fi
 gh api \
-  "repos/$REPOSITORY/contents/releases/daily-preview.yaml?ref=$SOURCE_SHA" \
+  "repos/$REPOSITORY/contents/releases/daily-preview.yaml?ref=$manifest_ref" \
   --jq .content | tr -d '\n' | base64 -d > "$TMP/daily-preview.yaml"
+[ "$(gh api "repos/$REPOSITORY/$identity_path" \
+    --jq 'select(.object.type == "commit") | .object.sha')" = "$SOURCE_SHA" ] \
+  || fail 'manifest source moved during admission'
+
 BASE="$(awk '/^version:[[:space:]]+/ {print $2}' "$TMP/daily-preview.yaml")"
 PREVIEW="$(awk '/^preview_version:[[:space:]]+/ {print $2}' \
   "$TMP/daily-preview.yaml")"

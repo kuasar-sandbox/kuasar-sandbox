@@ -184,11 +184,19 @@ def shards(selection):
     return result or {'static': []}
 
 
-def planned_helpers(selection):
-    # Only build/compose needs the public preparation helper contract. Sparse
-    # execution/finalization checkouts must still import the metadata readers.
-    spec = importlib.util.spec_from_file_location(
-        'public_e2e_workspace', ROOT / 'test/e2e/lib/workspace.py')
+def helper_contract_module():
+    spec = importlib.util.spec_from_file_location('helper_contract', ROOT / 'test/e2e/lib/helper_contract.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def planned_helpers(selection, contract=None):
+    if contract is not None:
+        return {name: row['owner'] for name, row in helper_contract_module().selected(contract, selection['cases']).items()}
+    # Historical plan interpretation only. New producers and consumers always
+    # pass the expected source-derived contract.
+    spec = importlib.util.spec_from_file_location('public_e2e_workspace', ROOT / 'test/e2e/lib/workspace.py')
     workspace = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(workspace)
     return workspace.required_helpers(selection['cases'])
@@ -400,7 +408,8 @@ def release_test_revisions(pins, platform_sha):
 
 
 def check_plan(plan):
-    require(plan["schema"] == 2, "unsupported integration plan")
+    require(plan["schema"] in (2, 3), "unsupported integration plan")
+    require(plan["schema"] != 3 or "helper_contract" in plan, "new plan lacks its helper contract")
     require(re.fullmatch(r"[0-9a-f]{40}", plan["framework_sha"]), "missing exact framework revision")
     require(set(plan["lanes"]) == set(ARCHES), "plan must contain both architectures")
     contract = plan['baseline'].get('delivery', 'historical')
@@ -429,6 +438,45 @@ def check_plan(plan):
         expected_perf = ["working-set-smoke"] if plan["mode"] == "source" and arch == "x86_64" and set(plan["owners"]) & {"platform", "sandboxer"} else []
         require(lane["performance"] == expected_perf, "performance checks differ from trusted mode/owner selection")
     validate_test_revisions(plan.get("test_revisions"))
+    if 'source_records' in plan:
+        # Facts are derived from selected inputs, never an alternate selector.
+        from source_inputs import tag_sources
+        records = plan['source_records']
+        tag_sources.validate_records(records)
+        if plan['mode'] == 'exact-assets':
+            for unit, record in records.items():
+                selected = plan['baseline']['units'][unit]
+                require((record['repository'], record['tag'], record['sha']) ==
+                        (selected['repository'], selected['version'], selected['sha']),
+                        'source records differ from selected release units')
+            require(plan['test_revisions'] == release_test_revisions(
+                tag_sources.owner_revisions(records), plan['baseline']['sha']),
+                'test source facts differ from selected owner tags')
+            platform = plan.get('platform_source', {})
+            require(set(platform) == {'repository', 'sha', 'tree'} and
+                    platform['repository'] == 'kuasar-sandbox/kuasar-sandbox' and
+                    platform['sha'] == plan['baseline']['sha'] and
+                    re.fullmatch(r'[0-9a-f]{40}', platform['tree']), 'invalid admitted platform source facts')
+    if 'helper_contract' in plan:
+        helper_contract_module().validate(plan['helper_contract'])
+        if plan['helper_contract']['schema'] == 2:
+            historical = plan['helper_contract']['history']['plan']['baseline']
+            require(plan['mode'] == 'source' and historical['version'] == plan['baseline']['version'] and
+                    historical['sha'] == plan['baseline']['sha'] and historical['units'] == plan['baseline']['units'],
+                    'historical helper baseline admission changed')
+            require({row['name']: (row['size'], row['digest']) for row in historical['assets']} ==
+                    {row['name']: (row['size'], row['digest']) for row in plan['baseline']['assets']},
+                    'historical helper complete asset set changed')
+        for owner, row in plan['helper_contract']['owners'].items():
+            source = row['source']
+            require((source['repository'], source['sha']) ==
+                    (plan['test_revisions'][owner]['repository'], plan['test_revisions'][owner]['sha']),
+                    'helper source differs from selected test owner')
+            require(any(all(record.get(key) == value for key, value in source.items())
+                        for record in plan.get('run_inputs', {}).values()),
+                    'helper source/tag/tree not admitted in fixed inputs')
+        for lane in plan['lanes'].values():
+            planned_helpers(lane['selection'], plan['helper_contract'])
     return identity(plan)
 
 
@@ -459,7 +507,12 @@ def compose(plan, arch, assets, delta, output):
     require(set(metadata["tests"]) == set(plan["test_overlays"]), "candidate test ownership differs from plan")
     require(set(metadata.get("embedded", {})) == set(lane.get("embedded_products", [])),
             "candidate embedded ownership differs from plan")
-    helpers = planned_helpers(lane["selection"]) if plan["mode"] == "source" else {}
+    verify_helpers = helper_contract_module().verify
+    require(metadata.get('helper_contract_sha256') == identity(plan['helper_contract']),
+            'build helper contract differs from plan')
+    helpers = planned_helpers(lane["selection"], plan["helper_contract"]) if plan["mode"] == "source" else {}
+    if helpers:
+        verify_helpers(delta / 'helpers', arch, plan['helper_contract'], metadata['helpers'], helpers)
     require(set(metadata.get("helpers", {})) == set(helpers), "test helper selection differs from plan")
     expected_delta = {"outputs.json"}
     for name, record in metadata["products"].items():
@@ -478,7 +531,7 @@ def compose(plan, arch, assets, delta, output):
     for name, owner in helpers.items():
         file = delta / "helpers" / name
         record = metadata["helpers"][name]
-        revision = plan["framework_sha"] if owner == "framework" else plan["test_revisions"][owner]["sha"]
+        revision = plan["helper_contract"]["owners"][owner]["source"]["sha"]
         require(file.is_file() and not file.is_symlink() and digest(file) == record["sha256"]
                 and record["source_sha"] == revision, f"test helper identity mismatch: {name}")
         check_architecture(file, arch)
@@ -554,16 +607,16 @@ def compose(plan, arch, assets, delta, output):
             require(declared["arch"] == arch and declared["test_revisions"] ==
                     {owner: record["sha"] for owner, record in plan["test_revisions"].items() if owner != "platform"},
                     "packaged helper test pins differ from the release plan")
+            verify_helpers = helper_contract_module().verify
+            packaged_contract = helper_contract_module().loads((package.parent / 'contract.json').read_text())
+            require(packaged_contract == plan['helper_contract'] and
+                    declared.get('contract_sha256') == identity(packaged_contract), 'packaged helper contract differs from plan')
+            verify_helpers(package, arch, packaged_contract, declared['helpers'], metadata=True)
             helper_records = {}
-            for name, owner in planned_helpers(lane["selection"]).items():
-                record = declared["helpers"][name]
-                revision = declared["framework_sha"] if owner == "framework" else plan["test_revisions"][owner]["sha"]
-                require(record["sha256"] == digest(package / name) and record["source_sha"] == revision,
-                        f"packaged helper identity mismatch: {name}")
-                check_architecture(package / name, arch)
-                (stage / "fixtures/bin").mkdir(exist_ok=True)
-                shutil.copy2(package / name, stage / "fixtures/bin" / name)
-                helper_records[name] = record
+            for name in planned_helpers(lane['selection'], packaged_contract):
+                (stage / 'fixtures/bin').mkdir(exist_ok=True)
+                shutil.copy2(package / name, stage / 'fixtures/bin' / name)
+                helper_records[name] = declared['helpers'][name]
         elif helpers:
             shutil.copytree(delta / "helpers", stage / "fixtures/bin")
         expected_init = products["sandbox-init"]["sha256"] if "sandbox-init" in lane["products"] else original_embedded["init"]
@@ -579,7 +632,7 @@ def compose(plan, arch, assets, delta, output):
         provenance = {"schema": 2, "plan_id": plan_id, "arch": arch, "framework_sha": plan["framework_sha"],
                       "baseline": baseline, "products": products, "test_revisions": plan["test_revisions"],
                       "build_context": metadata["build_context"], "selection": lane["selection"],
-                      "embedded": embedded, "helpers": helper_records,
+                      "embedded": embedded, "helpers": helper_records, "helper_contract": plan["helper_contract"],
                       "files": tree_files(stage), "modes": tree_modes(stage)}
         (stage / "provenance.json").write_bytes(canonical(provenance) + b"\n")
         stage.rename(output)
@@ -598,6 +651,11 @@ def verify_workspace(workspace, plan, arch):
     require(modes == provenance["modes"], "prepared workspace permissions changed")
     require(provenance["selection"] == plan["lanes"][arch]["selection"], "selected cases changed after preparation")
     require(provenance.get("test_revisions") == plan["test_revisions"], "prepared test pins differ from plan")
+    if 'helper_contract' in plan:
+        require(provenance.get('helper_contract') == plan['helper_contract'], 'prepared helper contract changed')
+        names = planned_helpers(plan['lanes'][arch]['selection'], plan['helper_contract'])
+        helper_contract_module().verify(workspace / 'fixtures/bin', arch, plan['helper_contract'],
+                                        provenance.get('helpers'), names)
     return provenance
 
 

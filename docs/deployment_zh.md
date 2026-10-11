@@ -461,3 +461,132 @@ S3-compatible store.使用 tiered cache 时,compute 节点通常优先连接本 
 - [orchestrator/docs/node-resource_zh.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource_zh.md)(发布包:[docs/node-resource_zh.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource_zh.md)) — 节点资源控制协议
 - [orchestrator/docs/node_zh.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node_zh.md) — e2b 兼容控制面与节点主机;`cluster.md` — 集群级注册表 / 路由 / 放置
 - [accelerator/docs/manifest_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/manifest_zh.md)(发布包:[docs/manifest_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/manifest_zh.md)) — `MANIFEST_CONFIG` 格式与 loader 契约
+
+<a id="production-start"></a>
+## 8. 生产参考起点与上线验证
+
+假设服务一个小团队、有测量后的有限并发、一台原生架构 KVM 节点、部署方管理的
+网络网关，且应用允许节点不可用。先使用现有独立 Conductor/Proxy、生产 TLS/API
+凭据、本地不可变工件和明确备份的 checkpoint 目录。这是**单一故障域**，不是
+HA 或自动灾备。§§2–7 已给进程/端口/目录/启动顺序，不要因此部署所有可选服务。
+工作负载接入见[自己的首个应用](quickstart_zh.md#first-application)。
+
+| 选择 | 何时使用 | 新增运维责任 |
+|---|---|---|
+| 本地文件 | 工件放得下，允许节点亲和与重建时间 | 磁盘容量、备份、不可变 runtime/kernel 保留；节点损失可能丢唯一副本。 |
+| 命名共享文件位置 | 多个合格节点需读取相同原生工件 | 一致 location 名、挂载/访问/身份检查、共享文件系统可用性/延迟和备份。可达不等于可恢复（§9）。 |
+| Manifest + 持久 Store | 需要远端持久化、大规模分发或对象按需读取 | 客户密钥、generation、完整父链、完整性和源站可用性；引入本地 cache 需内存/磁盘预算。 |
+| 可选 L2 | 实测重复远端 miss/工作集分布值得增加缓存层 | peer 故障域、成员变更、shard 资源及有效 EC 几何。L2 是可重建加速层，不是持久工件副本。 |
+| Registry/Router/Placer 集群 | 需要跨节点放置和公共入口 | provider/凭据持久化、Registry 所有权、内部私有 listener、准入与恢复验证；不会令不兼容节点可恢复。 |
+
+开放准入前固定 aggregate/checksum，使用配套原生产物和打包文档，检查有效配置，
+执行真实 build/create/命令/文件/pause/resume/kill。使用实际网关 allow/deny
+策略及冷工件读取复验。如所选版本包含 [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry_zh.md#release-scope)，
+独立验证 exporter/query。源码支持 `TARGET_ARCH` 不证明交叉构建/仿真或历史
+Release 资产；遵循[下载选择](download_zh.md)和[原生 Workbench 构建](../workbench/README_zh.md)。
+未合入版本选择、下载验证器或 WSL 提案不改变所选发布契约。
+
+在预发布故障演练中只停止自有进程、隔离测试源，观察 readiness、首因、停止准入、
+工件保留与恢复，测量 §10 容量场景。全部必需检查通过才开放准入；失败则保留上次
+合格配置并停止新放置。测试结束通过 owner kill，不删共享文件。验收记录包括
+准确 Release、负载、限制、失败/跳过探针及回滚输入。
+
+<a id="restore-eligibility"></a>
+## 9. 跨节点恢复资格与故障边界
+
+portable ref 描述内容，不认证任意目标。部署方放置前必须验证：
+
+- **架构/CPU**：相同原生 Guest 架构，目标特征兼容捕获 VM。验证实际源/目标
+  CPU 组合，架构标签和共享 Store 均不构成兼容证据。
+- **VMM/快照格式**：配套 patched VMM 与 sandboxer 格式兼容。
+  [工件兼容性](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox_zh.md#artifact-compatibility)
+  拒绝旧 schema，不会静默迁移或冷启动。
+- **kernel/runtime**：部署可信匹配 kernel 及 runtime 绑定。restore 的廉价
+  kernel 检查不重算字节 hash；runtime basename/footer digest 必须匹配 E。
+  保留不可变版本输入，遵循[runtime 选择](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/sandbox-runtime_zh.md)。
+- **完整持久闭包**：S、E、memory/disk 父链及不可变对象能按原 canonical identity/
+  命名 location 解析。须从目标节点验证，不依赖热 cache。
+- **密钥/所有权**：保留每个加密层的客户密钥及 Node/集群要求的凭据/所有权状态。
+  共享密文而无密钥不可恢复。
+- **网络/资源准入**：provider/topology、当前 attachment generation 契约兼容，
+  网关回程/策略及 Proxy 路由有效。恢复保留捕获 capacity/device topology；
+  目标 allocatable 策略和准入仍生效。portable 工件不是 reservation，也不允许
+  复用旧主机 TAP FD。
+
+[Sandboxer 恢复](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox_zh.md)
+及 [Node 工件生命周期](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node_zh.md)
+拥有检查和可覆盖字段。以文件/进程状态、热集外读取、网络往返及外部连接重建验证。
+任何 preflight 失败都停止放置、保留工件并修复绑定，不改捕获元数据强行通过。
+
+| 事故 | 可恢复与不可恢复内容 |
+|---|---|
+| Proxy/Router/connector serve 进程崩溃 | 所有权与底层资源存活时可按契约重连/重开；准入前验证同步、身份、流量，不是 VM checkpoint 操作。 |
+| Sandbox/VMM 进程或整机丢失 | 未捕获内存丢失；残存本地状态不自动成为完整 portable checkpoint。仅恢复成功提交且资格/所有权合格的工件。 |
+| 原节点不可用，但此前已暂停 | 仍需完整持久闭包、密钥、绑定、网络、准入及对应 Node/集群所有权协议；共享存储仅满足一项。 |
+| Registry 执行状态丢失 | 当前协议不能从 route events 重建 ownership 或导入备份执行行。[Registry 恢复限制](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md)描述未实现 bootstrap；provider 或 portable 快照不授权伪造 Registry 行或承诺同 ID 恢复。 |
+
+<a id="capacity-example"></a>
+## 10. 带假设预算的容量验收
+
+这是**假设算例，不是实测性能**。假设 16-vCPU/32-GiB 节点运行执行 Python、读取
+代码仓、写小型工作区并请求外部服务的 agent，每个活跃实例常态 1 GiB、同步突发
+2.5 GiB、验收负载下 2 CPU。先用实际镜像测量，OCI 镜像大小不是 RSS。
+
+初始预留可为 host 4 GiB、全体 control/VMM/非工作负载开销 4 GiB、完整 accelerator/
+cache 路径 6 GiB、额外一次冷恢复瞬时开销 3 GiB。余量
+`32 - 4 - 4 - 6 - 3 = 15 GiB`，可容纳六个假设 2.5-GiB 突发实例。若工作负载
+CPU 预算为 12，`12 / 2 = 6` 也得到六个初始准入。常态六实例仅 6 GiB，不代表
+所有实例可同时活跃时可以准入十五个。Guest capacity、allocatable/startup、
+controller grant 和实际计费使用量不同；按 [Node 资源契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource_zh.md)
+配置，不把算术当 YAML 默认值。
+
+6-GiB cache 预算必须覆盖 Go heap、native RocksDB block/blob cache/memtable、
+inflight 请求/blob/解密 buffer、compaction 和文件 page-cache 压力。
+`GOMEMLIMIT` 或 `disk_bytes * mem_ratio` 均不是进程 RSS 上限。按
+[Cache 预算契约](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md)
+记录 cgroup/RSS 峰值、占用、compaction、磁盘/网络。大型参考 YAML 展示选项，
+不是首个生产部署的推荐规模。
+
+| 测量 | 执行和记录 | 验收/调整 |
+|---|---|---|
+| 常态 | 代表性请求按 1、3、6 并发，热稳态 | 应用延迟/错误、内存、CPU、存储增长和吞吐符合预先声明 SLO。 |
+| 同步突发 | 六实例同时进入峰值阶段，包括写入 | 无 OOM/数据丢失，准入及余量有效；超过假设 2.5 GiB 则降低准入或加预算再测。 |
+| 冷恢复 | 常态业务继续时从冷测试 cache/目标节点恢复已合格负载 | 测 restore-to-ready、首次使用 p95/p99、源尝试、带宽、总内存峰值，包含恢复瞬时量；不得清生产 cache。 |
+| 持续运行 | 重复 pause/resume/清理，覆盖 compaction/保留作业 | RSS、磁盘、FD、inflight 不无限增长，状态断言与清理均成功。 |
+
+测试前设定数值化应用/恢复 SLO，这里不作通用延迟承诺。完整矩阵通过后每次只改
+一个预算/并发变量。完整性/身份失败或 OOM 时停止，保留证据，kill 自有测试并回到
+上次合格限制。冷/热结果分开报告，包含未运行探针。
+
+<a id="retention-runbook"></a>
+## 11. 保留、generation 退役与密钥事故
+
+应用/平台 owner 提供保留根清单：canonical 模板 ID、暂停快照、活跃实例、回滚/
+备份根、Build 行过期后仍需保留的输出及保留期限。runtime/storage 运营方按组件
+检查契约解析各根完整 E/S 内存/磁盘父链及不可变 kernel/runtime 绑定。Store 不能
+从流量或最新 generation 推断该清单。[Store 退役](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store_zh.md)、
+[Manifest 密钥](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/manifest_zh.md)
+和 [Node 凭据生命周期](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node_zh.md)
+是权威契约；这里是决策顺序，不新增 GC 协议。
+
+| 删除项 | 删除前必须提供的证据 |
+|---|---|
+| Build 行 | 按 Cancel/DELETE 完成 owner 清理；另存所需 canonical ID。删行不删远端工件。 |
+| 本地工件/父链 | 完整保留根/父链清单、无 live owner 依赖；若仍需保留则验证替代持久源。语义 alias 或仅叶节点清单不足。 |
+| Store G1 | 无保留根/父链只依赖 G1 对象。G2 rollout 只改默认写入；列表内 G1 仍可显式准入。物理删除前协调所有读写方并排空 inflight。 |
+| 旧 runtime/kernel | 所有活跃 VM、模板、快照、父链及回滚路径均不再依赖该身份，保留绑定可成功恢复。 |
+| 旧客户密钥 | 无保留加密工件依赖，或所有目标替代物已另行生成且完整恢复验证，保留其闭包。新 API key/generation 不会重新加密旧数据。 |
+
+退役前冻结删除集、协调新增发布/保留变化，从冷 reader 检查持久源并测试代表性
+保留根恢复。记录 refs、identity、generation、密钥标识（不含 secret bytes）、
+owner 和结果。清单不全、任何读取/恢复失败、写入仍竞争或密钥来源不明时，
+**停止并保留数据/密钥**。`purge --generation` 同时移除列表和物理删除，不是
+引用感知 dry run，不能用来试探 G1 是否还有依赖。批准退役后再次验证保留根，
+按运营方恢复策略保留备份。
+
+怀疑密钥泄露时，停止用相关凭据新发布，通过部署现有控制限制访问并保存事故与
+依赖证据，协调应用/密钥/存储 owner。已有 Node 行保留绑定凭据，移除 allowlist/
+provider 不会追溯撤销。不要假设 Manifest 原地轮换或远端密文撤销能力。按支持
+流程生成并验证替代工件/凭据，有计划更新消费者；只要旧快照仍需保留，就安全
+保存旧密钥。密钥丢失时从批准备份恢复，否则不能声称加密工件可恢复。不要用
+purge 旧数据修复密钥事故。

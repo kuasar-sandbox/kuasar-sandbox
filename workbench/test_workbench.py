@@ -50,6 +50,37 @@ class StartupFixtureTests(unittest.TestCase):
             ['docker', 'rm', '-v', 'owned-container'],
         ])
 
+    def test_smoke_checks_fixture_command_with_optional_empty_cmd(self):
+        entrypoint = ['sh', '-c', 'exit 42']
+        cases = [
+            ({'Entrypoint': entrypoint}, True),
+            ({'Entrypoint': entrypoint, 'Cmd': None}, True),
+            ({'Entrypoint': entrypoint, 'Cmd': []}, True),
+            ({'Entrypoint': entrypoint, 'Cmd': ['unexpected']}, False),
+            ({'Entrypoint': ['wrong'], 'Cmd': []}, False),
+        ]
+        for config, accepted in cases:
+            with self.subTest(config=config), tempfile.TemporaryDirectory() as directory:
+                def run(command, **kwargs):
+                    if command == ['docker', 'image', 'inspect', 'fixture-id']:
+                        return json.dumps([{'Config': config}])
+                    if command[:3] == ['docker', 'image', 'rm']:
+                        return ''
+                    # Reaching instance creation proves the actual smoke check
+                    # accepted the metadata; no daemon is needed for this test.
+                    raise RuntimeError('metadata accepted; stop before instance creation')
+
+                with patch.object(systems, 'startup_fixture', return_value='fixture-id'), \
+                        patch.object(systems, 'run', side_effect=run) as call:
+                    if accepted:
+                        with self.assertRaisesRegex(RuntimeError, 'metadata accepted'):
+                            systems.smoke('source-image', Path(directory) / 'smoke')
+                    else:
+                        with self.assertRaises(AssertionError):
+                            systems.smoke('source-image', Path(directory) / 'smoke')
+                self.assertEqual(call.call_args_list[1].args[0][:4],
+                                 ['docker', 'image', 'rm', '--no-prune'])
+
     def test_failed_commit_still_removes_only_its_never_started_container(self):
         with patch.object(systems, 'run', side_effect=['owned-container', RuntimeError('commit failed'), '']) as call:
             with self.assertRaisesRegex(RuntimeError, 'commit failed'):
@@ -586,22 +617,33 @@ class LauncherTests(unittest.TestCase):
 
 
 class NativeSelectionTests(unittest.TestCase):
+    def test_aggregate_selector_without_plan_passes_checked_out_path(self):
+        hosted = module('hosted_selector_review', ROOT.parent / 'ci/hosted/workbench.py')
+        resolver = unittest.mock.Mock()
+        with tempfile.TemporaryDirectory() as directory:
+            args = argparse.Namespace(framework_sha='a' * 40, plan=None, output=Path(directory) / 'selection.json')
+            with patch.object(hosted, 'framework_sha', return_value=args.framework_sha), \
+                 patch.object(hosted, 'module', return_value=resolver), \
+                 patch.object(hosted, 'from_aggregate', return_value={'frozen': True}):
+                hosted.select(args)
+            resolver.baseline.assert_called_once_with(hosted.ROOT, 'main')
+            self.assertEqual(json.loads(args.output.read_text()), {'frozen': True})
+
     def test_native_build_uses_admitted_base_and_cannot_skip_on_lookup_failure(self):
         sys.path.insert(0, str(ROOT.parent / 'ci/integration'))
         resolver = module('workbench_resolver_test', ROOT.parent / 'ci/integration/resolve-artifacts.py')
         record = {'repository': resolver.PLATFORM, 'base_sha': 'a' * 40, 'candidate_sha': 'b' * 40}
-        plan = {'mode': 'source', 'candidate_records': [record]}
-        with patch.object(resolver, 'changed_files', return_value=['workbench/Dockerfile']) as changes:
-            self.assertTrue(resolver.workbench_requested(plan))
-            changes.assert_called_once_with(resolver.PLATFORM, record['base_sha'], record['candidate_sha'])
-        with patch.object(resolver, 'changed_files', return_value=['docs/ci.md']):
-            self.assertFalse(resolver.workbench_requested(plan))
-        with patch.object(resolver, 'changed_files', side_effect=ValueError('lookup failed')):
-            with self.assertRaisesRegex(ValueError, 'lookup failed'):
-                resolver.workbench_requested(plan)
-        with patch.object(resolver, 'changed_files') as changes:
-            self.assertFalse(resolver.workbench_requested(plan | {'mode': 'exact-assets'}))
-            changes.assert_not_called()
+        plan = {'mode': 'source', 'candidate_records': [record],
+                'admission_changes': {'platform': ['workbench/Dockerfile']},
+                'changes': {'platform': ['docs/ci.md']}}
+        self.assertTrue(resolver.workbench_requested(plan))
+        plan['admission_changes']['platform'] = ['docs/ci.md']
+        self.assertFalse(resolver.workbench_requested(plan))
+        del plan['admission_changes']
+        with self.assertRaisesRegex(ValueError, 'missing admitted platform comparison'):
+            resolver.workbench_requested(plan)
+        self.assertFalse(resolver.workbench_requested(plan | {'mode': 'exact-assets'}))
+
 
 
 

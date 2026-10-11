@@ -7,14 +7,16 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ci/integration"))
 import artifacts
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import publication_body
 
 
 def bind(bundle, plan, validation, workbench=None):
     artifacts.require(plan["mode"] == "exact-assets" and plan["baseline"].get("staged"), "release needs a staged exact-assets plan")
     artifacts.require(validation == artifacts.collect_results(plan, validation["architectures"]), "validation identity differs from staged plan")
-    pins = {owner: record["sha"] for owner, record in plan["test_revisions"].items() if owner != "platform"}
-    artifacts.require(json.loads((bundle / "test-revisions.json").read_text()) == pins,
-                      "publisher test pins differ from validated stage")
+    artifacts.require(plan.get('source_records') is not None, 'new publication requires selected tag source records')
+    artifacts.require(json.loads((bundle / 'source-records.json').read_text()) == plan['source_records'],
+                      'publisher source records differ from validated stage')
     expected = {record["name"]: record["digest"] for record in plan["baseline"]["assets"]}
     actual = {name: "sha256:" + value for name, value in artifacts.tree_files(bundle / "assets").items()}
     artifacts.require(actual == expected, "publisher bytes differ from validated stage")
@@ -23,6 +25,8 @@ def bind(bundle, plan, validation, workbench=None):
     artifacts.require("<!-- kuasar-integration-validation " not in text, "reserved validation marker already present")
     binding = {"aggregate_sha": plan["baseline"]["sha"], "plan_id": artifacts.identity(plan),
                "framework_sha": plan["framework_sha"], "test_revisions": plan["test_revisions"],
+               "source_records": plan['source_records'], "case_files": plan['case_files'],
+               "validation_plan": plan,
                "assets": {name: value for name, value in actual.items() if name != "SHA256SUMS"},
                "architectures": validation["architectures"]}
     artifacts.require(plan['baseline'].get('delivery') == 'workbench-v1', 'new publication requires the declared workbench delivery contract')
@@ -35,7 +39,7 @@ def bind(bundle, plan, validation, workbench=None):
         receipt = json.loads((bundle / 'workbench' / f'workbench-{arch}.json').read_text())
         artifacts.require(result['image_id'] == receipt['image_id'] and result['sha256'] == receipt['sha256'] and result['size'] == receipt['size'],
                           'workbench result differs from staged image receipt')
-    notes.write_text(text + "\n<!-- kuasar-integration-validation " + artifacts.canonical(binding).decode() + " -->\n")
+    notes.write_text(publication_body.checked(text + "\n<!-- kuasar-integration-validation " + artifacts.canonical(binding).decode() + " -->\n"))
 
 
 if __name__ == "__main__":

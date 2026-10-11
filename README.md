@@ -134,9 +134,15 @@ The five components form the complete platform together, but each component can 
 | Base vSwitch and sandbox isolation | Available |
 | Centralized external policy-gateway integration | Supported integration foundation |
 | Node-local lightweight Egress plane | [Proposed](https://github.com/kuasar-sandbox/connector/issues/9) |
-| OpenTelemetry integration | [Proposed](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/52) |
+| OpenTelemetry | Implemented in orchestrator main: standalone metrics service and native Collector pipelines; [scope and release checks](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/telemetry.md#release-scope). This is not a claim that every Stable release includes it. |
 
 See [GitHub Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) for the authoritative asset list and prerelease state.
+
+Continue from the Demo to [your own application](docs/quickstart.md#first-application),
+[minimal cluster client acceptance](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-router.md#client-onboarding),
+[production qualification and recovery](docs/deployment.md#production-start),
+[independent storage roundtrip](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/manifest.md#7-independent-store-roundtrip),
+and [gateway acceptance](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations.md#4-gateway-interoperability-acceptance-and-recovery).
 
 ## Quick Start
 

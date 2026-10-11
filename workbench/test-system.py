@@ -97,7 +97,7 @@ systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
         fixture = startup_fixture(image, tag, entrypoint, names[0])
         try:
             config = json.loads(run(['docker', 'image', 'inspect', fixture]))[0]['Config']
-            assert config['Entrypoint'] == entrypoint and not config['Cmd']
+            assert config['Entrypoint'] == entrypoint and not config.get('Cmd')
         finally:
             run(['docker', 'image', 'rm', '--no-prune', tag])
         states = []
