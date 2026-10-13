@@ -5,6 +5,25 @@
 `kuasar_deploy.py` prepares and verifies an aggregate Kuasar Sandbox Release on a
 single supported test host.
 
+## Workflow boundary
+
+This tool provides the explicit native-host deployment alternative to the
+workbench-first Quick Start. It does not import or manage a workbench image.
+When the two workflows are used together, the verified native release tree and
+the separately imported workbench image must come from the same aggregate
+Release.
+
+The workbench-first path consumes its imported release inputs as read-only. This
+native tool instead uses a separate extracted working copy and creates `.venv`
+and `.kuasar-quickstart` inside it. Do not reuse that mutable native working copy
+as the workbench input. Host and workbench loopback addresses refer to different
+network namespaces. Offline preparation does not imply that the real Demo can
+run without its documented registry and egress access.
+
+Do not mix current source-tree helpers with historical Release products.
+Releases without `workbench-v1` must follow their release-specific native
+guidance.
+
 ## Supported host
 
 - Linux on x86_64
