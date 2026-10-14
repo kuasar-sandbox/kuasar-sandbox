@@ -28,6 +28,7 @@ jobs:
     uses: ./.github/workflows/integration-tests.yml
     with:
       mode: source
+      source_check_groups: true
       candidate_repository: ${{ github.repository }}
       pull_request_number: ${{ format('{0}', github.event.pull_request.number) }}
       candidate_sha: ${{ github.sha }}

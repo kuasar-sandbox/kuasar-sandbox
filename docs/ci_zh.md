@@ -141,7 +141,16 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 `run-source-checks.py --group all` 仍是默认完整入口。A 组保留平台工具契约（完整的 `make test-ci-tools test-release-tools` 调用）、特权性能工具契约、按原条件选择的 connector/sandboxer 脚本、accelerator fixture 和原有 UFFD 检查。B 组执行所选 orchestrator 脚本。选择条件、命令参数、工作目录与依赖闭包均与 `all` 相同；未选择 orchestrator 时不调度 B。每组使用独立 Hosted 机器和新的 Workbench system 实例，保持原 2 CPU/8 GiB 预算，独占源码、Go workspace、临时目录、构建和模块缓存。组间不恢复或共享源码缓存。
 
-可复用工作流的 `source_check_groups` 输入默认为 false。在调用方启用前，须用当前源码在真实 Actions 中多次比较分组与 `all`，涵盖冷运行和常规运行，记录排队、源码准备/执行、最终反馈及总任务分钟。仅阶段提速或历史命令耗时不能作为验收。最终收益或计算成本未证实时保持 `all`。
+可复用工作流仍以 `source_check_groups: false` 作为兼容默认值。PR 调用入口 `ci.yml` 和 `ci-entry.yml` 在 rollout 验收后选择 A/B；聚合调用方在独立证明整条工作流收益与成本前继续使用 `all`。将任一 PR 入口恢复为 false 即可回退 `all`，不改变检查目标、资源预算或必需检查。
+
+两轮真实 Actions 对照在每轮内使用相同的已选组件源码、用例清单、完整命令和不可变 Workbench 镜像，候选文件树仅调用入口的分组开关不同。两轮都是没有恢复可写源码缓存的全新冷构建，重复运行也不宣称暖缓存。这些首次执行轮次的观测记录最终工作流反馈和总任务分钟，不使用历史命令模型或后续故障/重跑成本。
+
+| 对照（all / A+B） | 最终反馈 | 总任务分钟 | 反馈 / 成本变化 |
+| --- | --- | --- | --- |
+| [38543260895](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38543260895/attempts/1) / [38543242866](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38543242866/attempts/1) | 37:43 / 25:28 | 99.467 / 104.550 | -32.48% / +5.11% |
+| [38549209231](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549209231/attempts/1) / [38549216882](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882/attempts/1) | 44:09 / 27:06 | 108.983 / 110.450 | -38.62% / +1.35% |
+
+第二轮分组运行后来的取消属于单独的负向测试，不能用该 run 当前结论覆盖首次轮次的成功测量。完成 rollout 前须重新验证当前源码正确性和全部六仓入口，包括失败与局部重跑。这些 SOURCE 数据不证明聚合流程或 Workbench 分组收益。
 
 两种调度均将结果绑定精确 plan、原始命令覆盖、Workbench 镜像、成功清理，以及当前 Actions 生产任务和产物 ID。产物名包含 run、attempt 和 group，不覆盖其他轮次。生产任务失败、取消、缺失或重复均阻止最终通过。较早轮次的成功结果仅在仍为该组最新生产任务且匹配当前 plan 时可复用；重跑生产任务后，其旧产物失效。A/B 不得共享实例或机器。回退选择 `all`，保留这些检查，不改变发布选择和必需检查规则。
 

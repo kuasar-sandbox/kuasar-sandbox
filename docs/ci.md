@@ -130,12 +130,29 @@ machine and fresh Workbench system instance with the original 2 CPU/8 GiB
 budget, private sources, Go workspace, temporary directories and build/module
 caches. No source cache is restored or shared between groups.
 
-The reusable workflow's `source_check_groups` input defaults to false. Before
-enabling it in a caller, compare repeated current-source Actions runs with
-`all`, including cold and normal runs: queue, source preparation/execution,
-final feedback and total job minutes. A stage-only speedup or historical
-command timing is not acceptance. Leave `all` selected if final benefit or
-compute cost is unproven.
+The reusable workflow keeps `source_check_groups: false` as its compatibility
+default. The PR callers in `ci.yml` and `ci-entry.yml` select A/B after rollout
+acceptance; the aggregate caller retains `all` until its own final-workflow
+benefit and cost are measured. Set either PR caller back to false to restore
+`all`; no target, resource budget or required check changes.
+
+Two paired real Actions measurements used identical selected component sources,
+case inventories, complete commands and immutable Workbench image within each
+pair; the candidate trees differed only in the caller's group flag. Both pairs
+were fresh cold builds without a restored writable source cache, including the
+repeat. These first-attempt samples measure final workflow feedback and total
+job minutes, not the historical command model or later fault/retry costs.
+
+| Pair (all / A+B) | Final feedback | Total job minutes | Feedback / cost change |
+| --- | --- | --- | --- |
+| [38543260895](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38543260895/attempts/1) / [38543242866](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38543242866/attempts/1) | 37:43 / 25:28 | 99.467 / 104.550 | -32.48% / +5.11% |
+| [38549209231](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549209231/attempts/1) / [38549216882](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882/attempts/1) | 44:09 / 27:06 | 108.983 / 110.450 | -38.62% / +1.35% |
+
+The later cancellation of pair 2's grouped run is a separate negative test;
+its current run conclusion must not replace the successful first-attempt
+measurement. Revalidate current-source correctness and all six caller paths,
+including failure and partial reruns, before completing rollout. These SOURCE
+measurements do not establish aggregate or Workbench-group savings.
 
 Both schedules bind results to the exact plan, original command coverage,
 Workbench image, successful cleanup, and current Actions producer job and

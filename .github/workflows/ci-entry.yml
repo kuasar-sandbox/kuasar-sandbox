@@ -478,6 +478,7 @@ jobs:
     uses: ./.github/workflows/integration-tests.yml
     with:
       mode: source
+      source_check_groups: true
       candidate_repository: ${{ github.repository }}
       pull_request_number: ${{ needs.admission.outputs.pull_request_number }}
       candidate_sha: ${{ needs.admission.outputs.candidate_sha }}
