@@ -207,6 +207,9 @@ class GroupTests(unittest.TestCase):
         carried = [dict(job, id=job['id'] + 10000, run_attempt=3,
                         created_at='2026-10-14T03:00:00Z', runner_group_id=None) for job in self.jobs]
         jobs = self.jobs + carried
+        real = json.loads((ROOT / 'ci/integration/fixtures/actions-carried-success.json').read_text())
+        jobs += [dict(job, run_id=self.run['id'], head_sha=self.run['head_sha'])
+                 for job in real['non_producer_views']]
         groups.verify_current(record, dict(self.run, run_attempt=3), jobs)
         groups.recovery_order(jobs)
         carried[0]['run_attempt'] = 4
