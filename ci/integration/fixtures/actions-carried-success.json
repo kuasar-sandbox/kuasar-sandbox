@@ -1,0 +1,398 @@
+{
+  "source": "https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882/attempts/2",
+  "description": "Public GitHub job responses observed 2026-10-14 after rerunning only B: A gets a carried success view, B is a real new running producer.",
+  "jobs": [
+    {
+      "id": 115802982689,
+      "run_id": 38549216882,
+      "workflow_name": "CI",
+      "head_branch": "rfc246-actions-grouped-trial",
+      "run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOTxVLCs8AAAAa9mVJIQ",
+      "head_sha": "4f5b7e1b754ee91f9cc3e0b07b402b44234489fa",
+      "url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/jobs/115802982689",
+      "html_url": "https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882/job/115802982689",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-14T10:23:53Z",
+      "started_at": "2026-10-14T10:23:56Z",
+      "completed_at": "2026-10-14T10:40:52Z",
+      "name": "ci / source-checks (A)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-14T10:23:57Z",
+          "completed_at": "2026-10-14T10:23:58Z"
+        },
+        {
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-14T10:23:58Z",
+          "completed_at": "2026-10-14T10:23:59Z"
+        },
+        {
+          "name": "Run actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-14T10:23:59Z",
+          "completed_at": "2026-10-14T10:24:00Z"
+        },
+        {
+          "name": "Fetch exact test sources without a compiler",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-14T10:24:00Z",
+          "completed_at": "2026-10-14T10:24:01Z"
+        },
+        {
+          "name": "Run the complete required source gate in Workbench system mode",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-14T10:24:01Z",
+          "completed_at": "2026-10-14T10:40:35Z"
+        },
+        {
+          "name": "Stop the owned system instance and retain safe source evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-14T10:40:35Z",
+          "completed_at": "2026-10-14T10:40:49Z"
+        },
+        {
+          "name": "Upload source checks and system diagnostics",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-14T10:40:49Z",
+          "completed_at": "2026-10-14T10:40:50Z"
+        },
+        {
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-10-14T10:40:50Z",
+          "completed_at": "2026-10-14T10:40:50Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-14T10:40:50Z",
+          "completed_at": "2026-10-14T10:40:50Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/check-runs/115802982689",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000017522,
+      "runner_name": "GitHub Actions 1000017522",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 115802982437,
+      "run_id": 38549216882,
+      "workflow_name": "CI",
+      "head_branch": "rfc246-actions-grouped-trial",
+      "run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOTxVLCs8AAAAa9mVIJQ",
+      "head_sha": "4f5b7e1b754ee91f9cc3e0b07b402b44234489fa",
+      "url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/jobs/115802982437",
+      "html_url": "https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882/job/115802982437",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-14T10:23:53Z",
+      "started_at": "2026-10-14T10:23:56Z",
+      "completed_at": "2026-10-14T10:50:09Z",
+      "name": "ci / source-checks (B)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-14T10:23:57Z",
+          "completed_at": "2026-10-14T10:23:58Z"
+        },
+        {
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-14T10:23:58Z",
+          "completed_at": "2026-10-14T10:23:59Z"
+        },
+        {
+          "name": "Run actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-14T10:23:59Z",
+          "completed_at": "2026-10-14T10:24:02Z"
+        },
+        {
+          "name": "Fetch exact test sources without a compiler",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-14T10:24:02Z",
+          "completed_at": "2026-10-14T10:24:03Z"
+        },
+        {
+          "name": "Run the complete required source gate in Workbench system mode",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-14T10:24:03Z",
+          "completed_at": "2026-10-14T10:49:54Z"
+        },
+        {
+          "name": "Stop the owned system instance and retain safe source evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-14T10:49:54Z",
+          "completed_at": "2026-10-14T10:50:05Z"
+        },
+        {
+          "name": "Upload source checks and system diagnostics",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-14T10:50:05Z",
+          "completed_at": "2026-10-14T10:50:06Z"
+        },
+        {
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-10-14T10:50:06Z",
+          "completed_at": "2026-10-14T10:50:06Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-14T10:50:06Z",
+          "completed_at": "2026-10-14T10:50:06Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/check-runs/115802982437",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000017519,
+      "runner_name": "GitHub Actions 1000017519",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 115813528703,
+      "run_id": 38549216882,
+      "workflow_name": "CI",
+      "head_branch": "rfc246-actions-grouped-trial",
+      "run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOTxVLCs8AAAAa9wY0fw",
+      "head_sha": "4f5b7e1b754ee91f9cc3e0b07b402b44234489fa",
+      "url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/jobs/115813528703",
+      "html_url": "https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882/job/115813528703",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-10-14T10:51:28Z",
+      "started_at": "2026-10-14T10:23:56Z",
+      "completed_at": "2026-10-14T10:40:52Z",
+      "name": "ci / source-checks (A)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-14T10:23:57Z",
+          "completed_at": "2026-10-14T10:23:58Z"
+        },
+        {
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-14T10:23:58Z",
+          "completed_at": "2026-10-14T10:23:59Z"
+        },
+        {
+          "name": "Run actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-14T10:23:59Z",
+          "completed_at": "2026-10-14T10:24:00Z"
+        },
+        {
+          "name": "Fetch exact test sources without a compiler",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-14T10:24:00Z",
+          "completed_at": "2026-10-14T10:24:01Z"
+        },
+        {
+          "name": "Run the complete required source gate in Workbench system mode",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 5,
+          "started_at": "2026-10-14T10:24:01Z",
+          "completed_at": "2026-10-14T10:40:35Z"
+        },
+        {
+          "name": "Stop the owned system instance and retain safe source evidence",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 6,
+          "started_at": "2026-10-14T10:40:35Z",
+          "completed_at": "2026-10-14T10:40:49Z"
+        },
+        {
+          "name": "Upload source checks and system diagnostics",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 7,
+          "started_at": "2026-10-14T10:40:49Z",
+          "completed_at": "2026-10-14T10:40:50Z"
+        },
+        {
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 14,
+          "started_at": "2026-10-14T10:40:50Z",
+          "completed_at": "2026-10-14T10:40:50Z"
+        },
+        {
+          "name": "Complete job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 15,
+          "started_at": "2026-10-14T10:40:50Z",
+          "completed_at": "2026-10-14T10:40:50Z"
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/check-runs/115813528703",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000017522,
+      "runner_name": "GitHub Actions 1000017522",
+      "runner_group_id": null,
+      "runner_group_name": "GitHub Actions"
+    },
+    {
+      "id": 115813527356,
+      "run_id": 38549216882,
+      "workflow_name": "CI",
+      "head_branch": "rfc246-actions-grouped-trial",
+      "run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOTxVLCs8AAAAa9wYvPA",
+      "head_sha": "4f5b7e1b754ee91f9cc3e0b07b402b44234489fa",
+      "url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/jobs/115813527356",
+      "html_url": "https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882/job/115813527356",
+      "status": "in_progress",
+      "conclusion": null,
+      "created_at": "2026-10-14T10:51:27Z",
+      "started_at": "2026-10-14T10:51:30Z",
+      "completed_at": null,
+      "name": "ci / source-checks (B)",
+      "steps": [
+        {
+          "name": "Set up job",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 1,
+          "started_at": "2026-10-14T10:51:31Z",
+          "completed_at": "2026-10-14T10:51:32Z"
+        },
+        {
+          "name": "Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 2,
+          "started_at": "2026-10-14T10:51:32Z",
+          "completed_at": "2026-10-14T10:51:33Z"
+        },
+        {
+          "name": "Run actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 3,
+          "started_at": "2026-10-14T10:51:33Z",
+          "completed_at": "2026-10-14T10:51:34Z"
+        },
+        {
+          "name": "Fetch exact test sources without a compiler",
+          "status": "completed",
+          "conclusion": "success",
+          "number": 4,
+          "started_at": "2026-10-14T10:51:34Z",
+          "completed_at": "2026-10-14T10:51:35Z"
+        },
+        {
+          "name": "Run the complete required source gate in Workbench system mode",
+          "status": "in_progress",
+          "conclusion": null,
+          "number": 5,
+          "started_at": "2026-10-14T10:51:35Z",
+          "completed_at": null
+        },
+        {
+          "name": "Stop the owned system instance and retain safe source evidence",
+          "status": "pending",
+          "conclusion": null,
+          "number": 6,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Upload source checks and system diagnostics",
+          "status": "pending",
+          "conclusion": null,
+          "number": 7,
+          "started_at": null,
+          "completed_at": null
+        },
+        {
+          "name": "Post Run actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+          "status": "pending",
+          "conclusion": null,
+          "number": 14,
+          "started_at": null,
+          "completed_at": null
+        }
+      ],
+      "check_run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/check-runs/115813527356",
+      "labels": [
+        "ubuntu-24.04"
+      ],
+      "runner_id": 1000017639,
+      "runner_name": "GitHub Actions 1000017639",
+      "runner_group_id": 0,
+      "runner_group_name": "GitHub Actions"
+    }
+  ]
+}
