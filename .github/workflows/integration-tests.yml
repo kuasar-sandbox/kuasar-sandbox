@@ -88,10 +88,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
-      framework_sha: ${{ steps.plan.outputs.framework_sha }}
-      artifact: ${{ steps.plan.outputs.artifact }}
-      workbench: ${{ steps.plan.outputs.workbench }}
-      source_groups: ${{ steps.plan.outputs.source_groups }}
+      framework_sha: ${{ steps.plan.outputs.framework_sha || job.workflow_sha }}
+      lane: ${{ steps.docs.outputs.lane || 'full' }}
+      policy_sha: ${{ steps.docs-policy.outputs.sha }}
+      artifact: ${{ steps.plan.outputs.artifact || steps.docs.outputs.artifact }}
+      workbench: ${{ steps.plan.outputs.workbench || 'false' }}
+      source_groups: ${{ steps.plan.outputs.source_groups || '["all"]' }}
     env:
       INTEGRATION_MODE: ${{ inputs.mode }}
       CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
@@ -123,6 +125,58 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           CALLER_TOKEN: ${{ github.token }}
         run: bash framework/ci/integration/validate-source-set.sh
+      - name: Select trusted documentation policy revision
+        if: inputs.mode == 'source'
+        id: docs-policy
+        env:
+          FRAMEWORK_SHA: ${{ job.workflow_sha }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os
+          policy = os.environ['FRAMEWORK_SHA']
+          if os.environ['CANDIDATE_REPOSITORY'] == 'kuasar-sandbox/kuasar-sandbox':
+              policy = os.environ['CANDIDATE_BASE_SHA']
+          else:
+              for row in json.loads(os.environ['COMPANION_CANDIDATES']):
+                  if row['repository'] == 'kuasar-sandbox/kuasar-sandbox':
+                      policy = row['base_sha']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('sha=' + policy + '\n')
+          PYTHON
+      - name: Check out documentation executor from trusted baseline
+        if: inputs.mode == 'source'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kuasar-sandbox/kuasar-sandbox
+          ref: ${{ steps.docs-policy.outputs.sha }}
+          path: docs-policy
+          sparse-checkout: |
+            ci/check_docs.py
+            ci/integration/docs_lane.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Classify exact trees and check documentation before large downloads
+        if: inputs.mode == 'source'
+        id: docs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DOCS_POLICY_SHA: ${{ steps.docs-policy.outputs.sha }}
+        run: |
+          set -euo pipefail
+          if [ -f docs-policy/ci/integration/docs_lane.py ]; then
+            python3 -B docs-policy/ci/integration/docs_lane.py --policy-sha "$DOCS_POLICY_SHA" --output docs-result.json
+          else
+            # Bootstrap: a baseline without the trusted checker retains full CI.
+            echo 'lane=full' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Retain exact successful docs evidence
+        if: steps.docs.outputs.lane == 'docs'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.docs.outputs.artifact }}
+          path: docs-result.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Download staged aggregate
         if: inputs.mode == 'exact-assets'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -130,12 +184,13 @@ jobs:
           name: ${{ inputs.release_bundle_artifact }}
           path: aggregate-stage
       - name: Obtain the run's existing Workbench selection
-        if: inputs.workbench_selection_artifact != ''
+        if: steps.docs.outputs.lane != 'docs' && inputs.workbench_selection_artifact != ''
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.workbench_selection_artifact }}
           path: image-selection
       - name: Resolve exact immutable plan
+        if: steps.docs.outputs.lane != 'docs'
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -166,6 +221,7 @@ jobs:
             echo "workbench=$(cat workbench-selected.txt)"
           } >> "$GITHUB_OUTPUT"
       - name: Upload resolved plan
+        if: steps.docs.outputs.lane != 'docs'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.plan.outputs.artifact }}
@@ -178,7 +234,7 @@ jobs:
           overwrite: true
 
   x86_64:
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.resolve.outputs.lane == 'full'
     needs: resolve
     uses: ./.github/workflows/integration-architecture.yml
     with:
@@ -188,7 +244,7 @@ jobs:
       stage_artifact: ${{ inputs.release_bundle_artifact }}
 
   aarch64:
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.resolve.outputs.lane == 'full'
     needs: resolve
     uses: ./.github/workflows/integration-architecture.yml
     with:
@@ -203,7 +259,7 @@ jobs:
       fail-fast: false
       matrix:
         group: ${{ fromJSON(needs.resolve.outputs.source_groups) }}
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.resolve.outputs.lane == 'full'
     needs: resolve
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -308,7 +364,7 @@ jobs:
     if: >-
       github.event.repository.visibility == 'public' &&
       github.event.repository.full_name == github.repository &&
-      needs.resolve.outputs.workbench == 'true'
+      needs.resolve.outputs.lane == 'full' && needs.resolve.outputs.workbench == 'true'
     needs: resolve
     strategy:
       fail-fast: false
@@ -427,6 +483,7 @@ jobs:
     steps:
       - name: Require every selected stage
         env:
+          DOCS_LANE: ${{ needs.resolve.outputs.lane }}
           RESOLVE_RESULT: ${{ needs.resolve.result }}
           X86_RESULT: ${{ needs.x86_64.result }}
           ARM_RESULT: ${{ needs.aarch64.result }}
@@ -437,6 +494,14 @@ jobs:
           WORKBENCH_RELEASE_RESULT: ${{ needs.workbench-release.result }}
         run: |
           set -euo pipefail
+          if [ "$DOCS_LANE" = docs ]; then
+            [ "$INTEGRATION_MODE" = source ] && [ "$RESOLVE_RESULT" = success ] \
+              && [ "$X86_RESULT" = skipped ] && [ "$ARM_RESULT" = skipped ] \
+              && [ "$SOURCE_RESULT" = skipped ] && [ "$WORKBENCH_RESULT" = skipped ] \
+              && [ "$WORKBENCH_RELEASE_RESULT" = skipped ] && [ "$WORKBENCH_SELECTED" = false ] || exit 1
+            exit 0
+          fi
+          [ "$DOCS_LANE" = full ] || exit 1
           [ "$RESOLVE_RESULT" = success ] && [ "$X86_RESULT" = success ] \
             && [ "$ARM_RESULT" = success ] && [ "$SOURCE_RESULT" = success ] || exit 1
           case "$WORKBENCH_SELECTED:$WORKBENCH_RESULT" in
@@ -458,17 +523,20 @@ jobs:
           name: ${{ needs.resolve.outputs.artifact }}
           path: plan
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.resolve.outputs.lane == 'full'
         with:
           pattern: integration-architecture-result-*-${{ github.run_id }}
           path: results
           merge-multiple: true
       - name: Download source evidence in separate artifact directories
+        if: needs.resolve.outputs.lane == 'full'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: integration-source-result-${{ github.run_id }}-*
           path: source-results
           merge-multiple: false
       - name: Bind every source result to its current successful producer
+        if: needs.resolve.outputs.lane == 'full'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_GROUPS: ${{ needs.resolve.outputs.source_groups }}
@@ -491,9 +559,36 @@ jobs:
           python3 -B framework/ci/integration/workbench_groups.py --plan plan/plan.json \
             --results runtime-results --output workbench
       - name: Bind both architecture results to the exact plan
+        if: needs.resolve.outputs.lane == 'full'
         run: |
           python3 -B framework/ci/integration/artifacts.py results \
             --plan plan/plan.json --results results > validation.json
+      - name: Check out the same trusted docs verifier
+        if: needs.resolve.outputs.lane == 'docs'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: kuasar-sandbox/kuasar-sandbox
+          ref: ${{ needs.resolve.outputs.policy_sha }}
+          path: docs-policy
+          sparse-checkout: |
+            ci/check_docs.py
+            ci/integration/docs_lane.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+      - name: Bind docs success to this exact source set and attempt
+        if: needs.resolve.outputs.lane == 'docs'
+        env:
+          DOCS_POLICY_SHA: ${{ needs.resolve.outputs.policy_sha }}
+          CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
+          CANDIDATE_PR: ${{ inputs.pull_request_number }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CANDIDATE_BASE_SHA: ${{ inputs.base_sha }}
+          CANDIDATE_BASE_REF: ${{ inputs.base_ref }}
+          CANDIDATE_HEAD_SHA: ${{ inputs.head_sha }}
+          COMPANION_CANDIDATES: ${{ inputs.companion_candidates }}
+        run: |
+          python3 -B docs-policy/ci/integration/docs_lane.py --policy-sha "$DOCS_POLICY_SHA" --verify plan/docs-result.json
+          cp plan/docs-result.json validation.json
       - name: Recheck the current exact source candidate before acceptance
         if: inputs.mode == 'source'
         env:
@@ -515,6 +610,7 @@ jobs:
             source-validation.json
             plan/plan.json
             workbench/
+            plan/docs-result.json
           if-no-files-found: error
           retention-days: 7
           overwrite: true

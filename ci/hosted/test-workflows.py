@@ -340,7 +340,7 @@ def check():
     for mode, value, success in [('exact-assets', 'success', True), ('exact-assets', 'skipped', False),
                                  ('exact-assets', 'failure', False), ('source', 'skipped', True),
                                  ('source', 'success', False), ('', 'skipped', False)]:
-        environment = dict(os.environ, RESOLVE_RESULT='success', X86_RESULT='success', ARM_RESULT='success',
+        environment = dict(os.environ, DOCS_LANE='full', RESOLVE_RESULT='success', X86_RESULT='success', ARM_RESULT='success',
                            SOURCE_RESULT='success', WORKBENCH_SELECTED='false', WORKBENCH_RESULT='skipped',
                            INTEGRATION_MODE=mode, WORKBENCH_RELEASE_RESULT=value)
         outcome = subprocess.run(['bash', '-c', script], env=environment, capture_output=True)
@@ -362,6 +362,16 @@ def check():
     assert source_job["needs"] == "resolve"
     assert source_job["strategy"]["fail-fast"] is False
     assert source_job["strategy"]["matrix"]["group"] == "${{ fromJSON(needs.resolve.outputs.source_groups) }}"
+    # Docs success has no source result archive: neither transport nor binding
+    # may run on that lane after integrating the source-group result collector.
+    result_steps = {step.get('name'): step for step in integration['results']['steps']}
+    for lane in ('docs', 'full'):
+        lane_context = {'needs': {'resolve': {'outputs': {'lane': lane}}}}
+        for name in ('Download source evidence in separate artifact directories',
+                     'Bind every source result to its current successful producer'):
+            assert expression(result_steps[name]['if'], lane_context) == (lane == 'full')
+    assert expression(integration['resolve']['outputs']['source_groups'],
+                      {'steps': {'plan': {'outputs': {'source_groups': ''}}}}) == '["all"]'
     source_steps = {step.get("name"): step for step in source_job["steps"]}
     source_fetch = source_steps["Fetch exact test sources without a compiler"]["run"]
     assert "--materialize-only" in source_fetch
