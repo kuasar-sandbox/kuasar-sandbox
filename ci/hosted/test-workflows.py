@@ -289,7 +289,7 @@ def check():
     for mode, value, success in [('exact-assets', 'success', True), ('exact-assets', 'skipped', False),
                                  ('exact-assets', 'failure', False), ('source', 'skipped', True),
                                  ('source', 'success', False), ('', 'skipped', False)]:
-        environment = dict(os.environ, RESOLVE_RESULT='success', X86_RESULT='success', ARM_RESULT='success',
+        environment = dict(os.environ, DOCS_LANE='full', RESOLVE_RESULT='success', X86_RESULT='success', ARM_RESULT='success',
                            SOURCE_RESULT='success', WORKBENCH_SELECTED='false', WORKBENCH_RESULT='skipped',
                            INTEGRATION_MODE=mode, WORKBENCH_RELEASE_RESULT=value)
         outcome = subprocess.run(['bash', '-c', script], env=environment, capture_output=True)

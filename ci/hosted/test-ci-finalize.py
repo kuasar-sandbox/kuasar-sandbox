@@ -230,7 +230,7 @@ else:
         data = yaml.safe_load((ROOT / '.github/workflows/integration-tests.yml').read_text())
         stage = next(step['run'] for step in data['jobs']['results']['steps']
                      if step.get('name') == 'Require every selected stage')
-        good = {'RESOLVE_RESULT': 'success', 'X86_RESULT': 'success',
+        good = {'DOCS_LANE': 'full', 'RESOLVE_RESULT': 'success', 'X86_RESULT': 'success',
                 'ARM_RESULT': 'success', 'SOURCE_RESULT': 'success',
                 'WORKBENCH_SELECTED': 'true', 'WORKBENCH_RESULT': 'success',
                 'INTEGRATION_MODE': 'exact-assets', 'WORKBENCH_RELEASE_RESULT': 'success'}
