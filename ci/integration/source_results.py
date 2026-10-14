@@ -9,6 +9,7 @@ import re
 import subprocess
 
 import artifacts
+import actions_jobs
 
 spec = importlib.util.spec_from_file_location('source_checks', Path(__file__).with_name('run-source-checks.py'))
 checks = importlib.util.module_from_spec(spec)
@@ -34,7 +35,7 @@ def validate(plan, groups, run, jobs, available, read):
     require(type(run.get('id')) is int and run['id'] > 0 and
             type(run.get('run_attempt')) is int and run['run_attempt'] > 0 and
             re.fullmatch('[0-9a-f]{40}', run.get('head_sha', '')), 'missing Actions run identity')
-    selected, seen = {}, set()
+    source_jobs, seen = [], set()
     for job in jobs:
         match = re.search(r'(?:^| / )source-checks \((all|A|B)\)$', job.get('name', ''))
         if not match:
@@ -46,9 +47,13 @@ def validate(plan, groups, run, jobs, available, read):
         identity = (group, job['run_attempt'])
         require(identity not in seen, 'duplicate source producer')
         seen.add(identity)
-        old = selected.get(group)
-        if old is None or old['run_attempt'] < job['run_attempt']:
-            selected[group] = job
+        source_jobs.append(job)
+    selected = {}
+    for job in actions_jobs.latest_producers(source_jobs, run_id=run['id'],
+                                            run_attempt=run['run_attempt']).values():
+        group = re.search(r'source-checks \((all|A|B)\)$', job['name'])[1]
+        require(group not in selected, 'ambiguous source producer name')
+        selected[group] = job
     require(set(selected) == set(groups), 'missing source producer')
     results, instances, containers, runners = [], set(), set(), set()
     for group in groups:
