@@ -94,10 +94,10 @@ install_readers() (
 install_runtime_reader() {
     # Reuse the existing release verifier at a reviewed immutable source, not a
     # candidate script or an executable from the runtime image.
-    local revision=4c3999beb54f67cf0990b98c1709cf1a199ff08b
+    local revision=c41a8bb2d0c6f827b5457d33eec17ff253333bfa
     local verifier="$KUASAR_HOSTED_ROOT/bin/runtime-payloads.py"
     download "https://raw.githubusercontent.com/kuasar-sandbox/guest-runtime/$revision/scripts/release-runtime-payloads.py" \
-        "$verifier" 01d97e1cc7aed550305e13b4dfd1daa95a3740be84512d195aed46a277e661fd
+        "$verifier" b4e0d648dcbb8e62eaa53f86632b40b6af1b76fc41b7ef44191a24fcccb4cc83
     emit KUASAR_RUNTIME_READER "$verifier"
 }
 

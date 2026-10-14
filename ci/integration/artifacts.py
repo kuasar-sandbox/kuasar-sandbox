@@ -315,18 +315,41 @@ def normalize_e2e_cases(stage, case_files, *, from_owners):
     return seen
 
 
+def runtime_uses_go_erofs(flatten):
+    # Read ELF build metadata with the existing host inspector. Preparing a
+    # runtime must not require a Go compiler or execute the selected payload.
+    info = subprocess.run(["readelf", "-p", ".go.buildinfo", str(flatten)],
+                          capture_output=True, check=False,
+                          env=dict(os.environ, LC_ALL="C"))
+    # readelf renders tabs and newlines in the section as ^I and literal backslash-n. The
+    # section's binary header is outside the records being selected.
+    records = info.stdout.decode("utf-8", errors="replace").replace("^I", "\t").split(r"\n")
+    return info.returncode == 0 and any(
+        len(fields) == 4 and fields[:2] == ["dep", "github.com/kuasar-sandbox/go-erofs"]
+        and fields[2].startswith("v") and fields[3].startswith("h1:")
+        for fields in (line.split() for line in records))
+
+
+def runtime_reader_command(workspace, destination):
+    command = ["python3", os.environ["KUASAR_RUNTIME_READER"]]
+    if runtime_uses_go_erofs(workspace / "bin/flatten-ctl"):
+        command.append("--without-mkfs")
+    command.extend([str(workspace / "bin/sandbox-runtime.bundle"),
+                    os.environ.get("FSCK_EROFS", "fsck.erofs"),
+                    os.environ.get("DUMP_EROFS", "dump.erofs"), str(destination)])
+    return command
+
+
 def runtime_payloads(workspace, arch, expected_init=None, expected_envd=None):
-    reader = Path(os.environ["KUASAR_RUNTIME_READER"])
-    require(digest(reader) == "01d97e1cc7aed550305e13b4dfd1daa95a3740be84512d195aed46a277e661fd",
-            "untrusted Runtime reader")
-    fsck, dump = shutil.which("fsck.erofs"), shutil.which("dump.erofs")
-    require(fsck and dump, "trusted host EROFS readers are required")
-    with tempfile.TemporaryDirectory(prefix="runtime-identity-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="runtime-payloads-") as temporary:
         payloads = Path(temporary) / "payloads"
-        subprocess.run(["python3", str(reader), str(workspace / "bin/sandbox-runtime.bundle"),
-                        fsck, dump, str(payloads)], check=True)
+        command = runtime_reader_command(workspace, payloads)
+        subprocess.run(command, check=True)
         result = {}
-        for name in ("init", "envd", "flatten-ctl", "mkfs.erofs"):
+        names = ("init", "envd", "flatten-ctl")
+        if "--without-mkfs" not in command:
+            names += ("mkfs.erofs",)
+        for name in names:
             path = payloads / name
             check_architecture(path, arch)
             result[name] = digest(path)
@@ -628,7 +651,8 @@ def compose(plan, arch, assets, delta, output):
             require(embedded["init"] == expected_init and embedded["envd"] == expected_envd,
                     "embedded init differs from the selected product")
             for name in ("flatten-ctl", "mkfs.erofs"):
-                require(embedded[name] == products[name]["sha256"], f"embedded {name} differs from the selected product")
+                if name in embedded:
+                    require(embedded[name] == products[name]["sha256"], f"embedded {name} differs from the selected product")
         provenance = {"schema": 2, "plan_id": plan_id, "arch": arch, "framework_sha": plan["framework_sha"],
                       "baseline": baseline, "products": products, "test_revisions": plan["test_revisions"],
                       "build_context": metadata["build_context"], "selection": lane["selection"],

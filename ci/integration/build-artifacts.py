@@ -186,8 +186,7 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
             work = Path(temporary)
             baseline_tree(plan, arch, assets, work / "baseline")
             payloads = work / "embedded"
-            run(["python3", os.environ["KUASAR_RUNTIME_READER"], work / "baseline/bin/sandbox-runtime.bundle",
-                 shutil.which("fsck.erofs"), shutil.which("dump.erofs"), payloads])
+            run(artifacts.runtime_reader_command(work / "baseline", payloads))
             for file in payloads.iterdir():
                 if not file.name.endswith(".metadata"):
                     file.chmod(0o755)

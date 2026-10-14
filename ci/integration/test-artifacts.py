@@ -52,10 +52,12 @@ def archive(path, files):
     return {"name": path.name, "size": path.stat().st_size, "digest": "sha256:" + subject.digest(path)}
 
 
-def runtime(root, arch, files):
+def runtime(root, arch, files, *, without_mkfs=False):
     tree = root / f"runtime-{arch}"
     for name, source in (("sbin/init", "sandbox-init"), ("opt/sandbox-runtime/bin/flatten-ctl", "flatten-ctl"),
                          ("opt/sandbox-runtime/bin/mkfs.erofs", "mkfs.erofs"), ("opt/sandbox-runtime/bin/envd", None)):
+        if source == "mkfs.erofs" and without_mkfs:
+            continue
         path = tree / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(files[source] if source else elf(arch, "envd"))
@@ -73,6 +75,36 @@ def runtime(root, arch, files):
     content = image.read_bytes()
     prefix = content + bytes((2 << 20) - len(footer("0" * 64)) - len(content))
     return prefix + footer(hashlib.sha256(prefix).hexdigest())
+
+
+class RuntimeGeneratorContract(unittest.TestCase):
+    def test_only_a_linked_external_module_selects_the_go_contract(self):
+        module = "github.com/kuasar-sandbox/go-erofs"
+        for text, status, expected in [
+                ("\tdep\t" + module + "\tv0.0.0-20261014160540-827da6f90114\th1:fixture\n", 0, True),
+                ("\tdep\t" + module + "/other\tv1.0.0\th1:fixture\n", 0, False),
+                ("\tdep\t" + module + "\tv1.0.0\n", 0, False),
+                ("\tdep\t" + module + "\tv1.0.0\th1:fixture\n", 1, False),
+                ("not a Go executable", 0, False)]:
+            with self.subTest(text=text, status=status), patch.object(subject.subprocess, 'run',
+                    return_value=subprocess.CompletedProcess([], status, stdout=text.replace("\t", "^I").replace("\n", r"\n").encode())) as inspect:
+                self.assertEqual(subject.runtime_uses_go_erofs(Path('/selected/flatten-ctl')), expected)
+                self.assertEqual(inspect.call_args.args[0], ['readelf', '-p', '.go.buildinfo', '/selected/flatten-ctl'])
+
+    def test_real_bundle_without_mkfs_requires_explicit_go_contract(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            files = {name: elf('x86_64', name) for name in ('sandbox-init', 'flatten-ctl')}
+            (root / 'bin').mkdir()
+            (root / 'bin/flatten-ctl').write_bytes(files['flatten-ctl'])
+            (root / 'bin/sandbox-runtime.bundle').write_bytes(runtime(root, 'x86_64', files, without_mkfs=True))
+            with patch.object(subject, 'runtime_uses_go_erofs', return_value=False):
+                with self.assertRaises(subprocess.SubprocessError):
+                    subject.runtime_payloads(root, 'x86_64')
+            with patch.object(subject, 'runtime_uses_go_erofs', return_value=True):
+                actual = subject.runtime_payloads(root, 'x86_64')
+            self.assertEqual(set(actual), {'init', 'envd', 'flatten-ctl'})
+            self.assertEqual(actual['flatten-ctl'], hashlib.sha256(files['flatten-ctl']).hexdigest())
 
 
 class SourceTagContracts(unittest.TestCase):
