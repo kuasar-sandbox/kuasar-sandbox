@@ -7,6 +7,11 @@ on:
         description: source or exact-assets
         required: true
         type: string
+      source_check_groups:
+        description: Experimental two-group source schedule; enable only after measured acceptance
+        required: false
+        default: false
+        type: boolean
       candidate_repository:
         description: Repository whose source candidate is under test
         required: false
@@ -82,6 +87,7 @@ jobs:
       policy_sha: ${{ steps.docs-policy.outputs.sha }}
       artifact: ${{ steps.plan.outputs.artifact || steps.docs.outputs.artifact }}
       workbench: ${{ steps.plan.outputs.workbench || 'false' }}
+      source_groups: ${{ steps.plan.outputs.source_groups || '["all"]' }}
     env:
       INTEGRATION_MODE: ${{ inputs.mode }}
       CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
@@ -184,6 +190,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           FRAMEWORK_SHA: ${{ job.workflow_sha }}
           WORKBENCH_SELECTION_ARTIFACT: ${{ inputs.workbench_selection_artifact }}
+          SOURCE_CHECK_GROUPS: ${{ inputs.source_check_groups }}
         run: |
           set -euo pipefail
           options=()
@@ -198,7 +205,11 @@ jobs:
             python3 -B framework/ci/hosted/workbench.py select --framework-sha "$FRAMEWORK_SHA" \
               --plan plan.json --output workbench.json
           fi
+          source_schedule=all
+          if [ "$SOURCE_CHECK_GROUPS" = true ]; then source_schedule=grouped; fi
+          source_groups=$(python3 -B framework/ci/integration/source_results.py --plan plan.json --schedule "$source_schedule")
           {
+            echo "source_groups=$source_groups"
             echo "framework_sha=$FRAMEWORK_SHA"
             echo "artifact=integration-plan-${GITHUB_RUN_ID}"
             echo "workbench=$(cat workbench-selected.txt)"
@@ -237,6 +248,11 @@ jobs:
       stage_artifact: ${{ inputs.release_bundle_artifact }}
 
   source-checks:
+    name: source-checks (${{ matrix.group }})
+    strategy:
+      fail-fast: false
+      matrix:
+        group: ${{ fromJSON(needs.resolve.outputs.source_groups) }}
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.resolve.outputs.lane == 'full'
     needs: resolve
     runs-on: ubuntu-24.04
@@ -257,6 +273,7 @@ jobs:
           python3 -B framework/ci/integration/run-source-checks.py \
             --plan plan/plan.json --sources source-checks --output source-materialize.json --materialize-only
           cp plan/plan.json source-checks/.source-plan.json
+          printf '%s\n' '${{ matrix.group }}' > source-checks/.source-group
       - name: Run the complete required source gate in Workbench system mode
         run: |
           python3 -B framework/ci/hosted/workbench.py start --mode system \
@@ -315,7 +332,7 @@ jobs:
           taskset -pc "$source_cpus" "$$" >/dev/null
           taskset -pc "$$"
           python3 -B /inputs/release/ci/integration/run-source-checks.py \
-            --plan /src/.source-plan.json --sources /src --output /output/source-result.json --materialized
+            --plan /src/.source-plan.json --sources /src --output /output/source-result.json --materialized --group "$(cat /src/.source-group)"
           SOURCE_USER
           WORKBENCH_SOURCE
           )
@@ -330,13 +347,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: integration-source-result-${{ github.run_id }}
+          name: integration-source-result-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.group }}
           path: |
             ${{ runner.temp }}/source-system-evidence
             source-materialize.json
           if-no-files-found: error
           retention-days: 7
-          overwrite: true
 
   workbench-native:
     if: >-
@@ -496,6 +512,21 @@ jobs:
           pattern: integration-architecture-result-*-${{ github.run_id }}
           path: results
           merge-multiple: true
+      - name: Download source evidence in separate artifact directories
+        if: needs.resolve.outputs.lane == 'full'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: integration-source-result-${{ github.run_id }}-*
+          path: source-results
+          merge-multiple: false
+      - name: Bind every source result to its current successful producer
+        if: needs.resolve.outputs.lane == 'full'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_GROUPS: ${{ needs.resolve.outputs.source_groups }}
+        run: |
+          python3 -B framework/ci/integration/source_results.py --plan plan/plan.json \
+            --groups "$SOURCE_GROUPS" --results source-results > source-validation.json
       - name: Bind both architecture results to the exact plan
         if: needs.resolve.outputs.lane == 'full'
         run: |
@@ -545,6 +576,7 @@ jobs:
           name: integration-validation-${{ github.run_id }}
           path: |
             validation.json
+            source-validation.json
             plan/plan.json
             plan/docs-result.json
           if-no-files-found: error

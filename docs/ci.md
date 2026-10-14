@@ -117,6 +117,36 @@ The existing `make test-release-tools` entry also runs frozen source-set release
 
 Standalone `make test-release-tools` keeps its platform tooling scope and explicitly reports when no frozen source-set run was requested. For a local, already materialized source set, use `make test-release-source-set ORG=<fixed-source-root> RELEASE_CHECK_OUTPUT=<fresh-evidence-directory>` with the existing Go workspace and toolchain environment. This explicit entry always requires both admission documents and never retrieves new sources.
 
+### Source check groups
+
+`run-source-checks.py --group all` remains the default complete entry. Group `A`
+retains platform contracts (the full `make test-ci-tools test-release-tools`
+invocation), privileged performance contracts, selected connector/sandboxer
+scripts, accelerator fixtures and the existing UFFD check. Group `B` contains
+the selected orchestrator script. Selection, command arguments, working
+directories and dependency closure are identical to `all`; B is not scheduled
+when orchestrator is unselected. Each scheduled group uses a separate hosted
+machine and fresh Workbench system instance with the original 2 CPU/8 GiB
+budget, private sources, Go workspace, temporary directories and build/module
+caches. No source cache is restored or shared between groups.
+
+The reusable workflow's `source_check_groups` input defaults to false. Before
+enabling it in a caller, compare repeated current-source Actions runs with
+`all`, including cold and normal runs: queue, source preparation/execution,
+final feedback and total job minutes. A stage-only speedup or historical
+command timing is not acceptance. Leave `all` selected if final benefit or
+compute cost is unproven.
+
+Both schedules bind results to the exact plan, original command coverage,
+Workbench image, successful cleanup, and current Actions producer job and
+artifact IDs. Artifact names include run, attempt and group; they never
+overwrite another attempt. A failed, cancelled, missing or duplicate producer
+blocks finalization. A successful earlier attempt is reusable only while it
+is the latest producer for that group and still matches the current plan;
+rerunning that producer invalidates its older artifact. A/B cannot share an
+instance or machine. Rollback selects `all` without removing these checks or
+altering release selection and required-check rules.
+
 ## 4. Daily and Stable
 
 `exact-assets` is callable only by the actual public platform aggregate workflow. Its plan binds the exact committed manifest and staged fourteen-file asset set (platform + twelve component archives + SHA256SUMS). It selects no product or helper rebuilds. Each target uses the same download/compose/public-prepare/public-run/result primitives as PR mode and consumes the prebuilt helper packages from the exact staged platform archive. The separate required source checks remain outside artifact E2E.

@@ -137,6 +137,14 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 独立运行 `make test-release-tools` 仍保持平台工具验证范围，未请求固定源码集验证时会明确说明。对已物化的本地源码集，可在保留现有 Go workspace 和工具链环境的情况下执行 `make test-release-source-set ORG=<fixed-source-root> RELEASE_CHECK_OUTPUT=<fresh-evidence-directory>`。该显式入口始终要求两份准入文档，不重新获取源码。
 
+### 源码检查分组
+
+`run-source-checks.py --group all` 仍是默认完整入口。A 组保留平台工具契约（完整的 `make test-ci-tools test-release-tools` 调用）、特权性能工具契约、按原条件选择的 connector/sandboxer 脚本、accelerator fixture 和原有 UFFD 检查。B 组执行所选 orchestrator 脚本。选择条件、命令参数、工作目录与依赖闭包均与 `all` 相同；未选择 orchestrator 时不调度 B。每组使用独立 Hosted 机器和新的 Workbench system 实例，保持原 2 CPU/8 GiB 预算，独占源码、Go workspace、临时目录、构建和模块缓存。组间不恢复或共享源码缓存。
+
+可复用工作流的 `source_check_groups` 输入默认为 false。在调用方启用前，须用当前源码在真实 Actions 中多次比较分组与 `all`，涵盖冷运行和常规运行，记录排队、源码准备/执行、最终反馈及总任务分钟。仅阶段提速或历史命令耗时不能作为验收。最终收益或计算成本未证实时保持 `all`。
+
+两种调度均将结果绑定精确 plan、原始命令覆盖、Workbench 镜像、成功清理，以及当前 Actions 生产任务和产物 ID。产物名包含 run、attempt 和 group，不覆盖其他轮次。生产任务失败、取消、缺失或重复均阻止最终通过。较早轮次的成功结果仅在仍为该组最新生产任务且匹配当前 plan 时可复用；重跑生产任务后，其旧产物失效。A/B 不得共享实例或机器。回退选择 `all`，保留这些检查，不改变发布选择和必需检查规则。
+
 ## 4. Daily 与 Stable
 
 `exact-assets` 仅接受实际公开的平台 aggregate workflow。

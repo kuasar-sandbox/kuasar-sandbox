@@ -144,7 +144,8 @@ def workspace(plan, sources, result, env):
     env["GOWORK"] = str(path)
 
 
-def checks_for(plan, sources):
+def checks_for(plan, sources, group="all"):
+    artifacts.require(group in ("all", "A", "B"), "unknown source check group")
     selected, _ = source_records(plan)
     checks = [("platform-contracts", ["make", "test-ci-tools", "test-release-tools"], sources / "platform"),
               # These existing TAP/netns fixtures require actual root, while
@@ -159,11 +160,15 @@ def checks_for(plan, sources):
         checks.append(("accelerator-fixtures", ["make", "test-e2e-scripts"], sources / "accelerator"))
     if selected & {"sandboxer", "platform"}:
         checks.append(("uffd-source-benchmark", ["bash", "test/perf/uffd-performance-gate.sh"], sources / "platform"))
-    return checks
+    if group == "all":
+        return checks
+    return [check for check in checks
+            if (check[0] == "orchestrator-unit-race-vet") == (group == "B")]
 
 
-def execute(plan, sources, output, *, materialized=False):
+def execute(plan, sources, output, *, materialized=False, group="all"):
     result = new_result(plan, "all")
+    result["group"] = group
     try:
         artifacts.check_plan(plan)
         env = environment()
@@ -180,7 +185,7 @@ def execute(plan, sources, output, *, materialized=False):
         else:
             checkout_sources(plan, sources, result)
         workspace(plan, sources, result, env)
-        for name, command, directory in checks_for(plan, sources):
+        for name, command, directory in checks_for(plan, sources, group):
             action(result, "checks", name, command, directory, env)
         result.update(conclusion="success", exit_code=0)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
@@ -195,6 +200,7 @@ if __name__ == "__main__":
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--sources", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--group", choices=("all", "A", "B"), default="all")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--materialize-only", action="store_true", help="fetch exact test sources on the trusted host, without compilers")
     mode.add_argument("--materialized", action="store_true", help="verify and use the task's existing exact test sources")
@@ -205,7 +211,7 @@ if __name__ == "__main__":
         if args.materialize_only:
             materialize(plan, args.sources.resolve(), args.output.resolve())
         else:
-            execute(plan, args.sources.resolve(), args.output.resolve(), materialized=args.materialized)
+            execute(plan, args.sources.resolve(), args.output.resolve(), materialized=args.materialized, group=args.group)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         print(f"source checks: {error}", file=sys.stderr)
         status = 1

@@ -309,7 +309,18 @@ def check():
     assert "sparse-checkout" in executor
     source_job = integration["source-checks"]
     assert source_job["needs"] == "resolve"
-    assert "strategy" not in source_job
+    assert source_job["strategy"]["fail-fast"] is False
+    assert source_job["strategy"]["matrix"]["group"] == "${{ fromJSON(needs.resolve.outputs.source_groups) }}"
+    # Docs success has no source result archive: neither transport nor binding
+    # may run on that lane after integrating the source-group result collector.
+    result_steps = {step.get('name'): step for step in integration['results']['steps']}
+    for lane in ('docs', 'full'):
+        lane_context = {'needs': {'resolve': {'outputs': {'lane': lane}}}}
+        for name in ('Download source evidence in separate artifact directories',
+                     'Bind every source result to its current successful producer'):
+            assert expression(result_steps[name]['if'], lane_context) == (lane == 'full')
+    assert expression(integration['resolve']['outputs']['source_groups'],
+                      {'steps': {'plan': {'outputs': {'source_groups': ''}}}}) == '["all"]'
     source_steps = {step.get("name"): step for step in source_job["steps"]}
     source_fetch = source_steps["Fetch exact test sources without a compiler"]["run"]
     assert "--materialize-only" in source_fetch
