@@ -179,6 +179,22 @@ def suite_selection(owners, arch, case_files, *, native_full=False):
             'exclusions': exclusions}
 
 
+def compatible_suite_selection(observed, owners, arch, case_files):
+    """Keep immutable native-generator evidence valid without changing it.
+
+    Only the retired native prerequisite may differ. Cases, exclusions and all
+    other products remain exact; runtime_payloads independently requires and
+    matches mkfs for every selected legacy flatten binary.
+    """
+    current = suite_selection(owners, arch, case_files)
+    if observed == current:
+        return True
+    if "flatten-ctl" not in current["required_products"]:
+        return False
+    legacy = dict(current, required_products=sorted(current["required_products"] + ["mkfs.erofs"]))
+    return observed == legacy
+
+
 def shards(selection):
     result = {}
     for case in selection['cases']:
@@ -460,7 +476,7 @@ def check_plan(plan):
         require(lane["products"] == sorted(set(lane["products"])) and set(lane["products"]) <= set(PRODUCTS),
                 "invalid affected product set")
         require(lane.get("embedded_products", []) in ([], ["envd"]), "unknown embedded product")
-        require(lane["selection"] == suite_selection(plan["owners"], arch, case_files), "suite selection differs from trusted source filenames")
+        require(compatible_suite_selection(lane["selection"], plan["owners"], arch, case_files), "suite selection differs from trusted source filenames")
         expected_perf = ["working-set-smoke"] if plan["mode"] == "source" and arch == "x86_64" and set(plan["owners"]) & {"platform", "sandboxer"} else []
         require(lane["performance"] == expected_perf, "performance checks differ from trusted mode/owner selection")
     validate_test_revisions(plan.get("test_revisions"))
