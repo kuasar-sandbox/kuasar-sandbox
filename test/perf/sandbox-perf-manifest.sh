@@ -64,7 +64,7 @@ sleep 0.5
 
 # Fast-path binaries to /tmp to skip WSL2 drvfs exec overhead.
 echo "==> caching binaries to $BIN_CACHE" >&2
-for b in cloud-hypervisor sandbox-ctl sandbox-init sandbox-runtime.bundle flatten-ctl manifest-ctl store-ctl cache-ctl mkfs.erofs vmlinux; do
+for b in cloud-hypervisor sandbox-ctl sandbox-init sandbox-runtime.bundle flatten-ctl manifest-ctl store-ctl cache-ctl vmlinux; do
     if [ -e "$SRC_BIN/$b" ]; then
         cp -u "$SRC_BIN/$b" "$BIN_CACHE/$b" \
           || { echo "FATAL: cp $b → $BIN_CACHE failed (still busy?)" >&2; exit 1; }

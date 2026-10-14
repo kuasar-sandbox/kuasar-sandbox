@@ -195,11 +195,15 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
                 return candidate if candidate.is_file() else fallback
             init = selected("sandbox-init", payloads / "init")
             flatten = selected("flatten-ctl", work / "baseline/bin/flatten-ctl")
-            mkfs = selected("mkfs.erofs", work / "baseline/bin/mkfs.erofs")
             envd = output / "embedded/envd" if "envd" in lane.get("embedded_products", []) else payloads / "envd"
-            run(["make", "-C", sources / "guest-runtime", f"TARGET_ARCH={arch}", "sandbox-runtime",
-                 f"SANDBOX_INIT={init}", f"ENVD={envd}", f"FLATTEN_CTL={flatten}", f"GUEST_MKFS_EROFS={mkfs}",
-                 f"BUILD_MKFS_EROFS={shutil.which('mkfs.erofs')}"], environment=environment)
+            command = ["make", "-C", sources / "guest-runtime", f"TARGET_ARCH={arch}", "sandbox-runtime",
+                       f"SANDBOX_INIT={init}", f"ENVD={envd}", f"FLATTEN_CTL={flatten}",
+                       f"BUILD_MKFS_EROFS={shutil.which('mkfs.erofs')}"]
+            if not artifacts.runtime_uses_go_erofs(flatten):
+                mkfs = selected("mkfs.erofs", work / "baseline/bin/mkfs.erofs")
+                artifacts.require(mkfs.is_file(), "legacy runtime requires its selected native generator")
+                command.append(f"GUEST_MKFS_EROFS={mkfs}")
+            run(command, environment=environment)
             shutil.copy2(sources / "guest-runtime/bin" / arch / "sandbox-runtime.bundle", output / "bin/sandbox-runtime.bundle")
     for owner in plan["test_overlays"]:
         destination = output / artifacts.test_overlay_root(owner)

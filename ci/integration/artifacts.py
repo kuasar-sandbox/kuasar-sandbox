@@ -35,13 +35,16 @@ PRODUCTS = {
     "flatten-ctl": "runtime", "mkfs.erofs": "runtime", "sandbox-runtime.bundle": "runtime",
     "vmlinux": "vmlinux",
 }
+# Legacy archives may carry this tool; it is not required by the Go generator.
+OPTIONAL_LEGACY_PRODUCTS = {"mkfs.erofs"}
 GO_PRODUCTS = set(PRODUCTS) - {"cloud-hypervisor", "mkfs.erofs", "sandbox-runtime.bundle", "vmlinux"}
 REQUIRED = {
     "connector": {"connector-ctl"},
-    "guest-runtime": {"mkfs.erofs", "store-ctl", "flatten-ctl"},
-    "accelerator": {"mkfs.erofs", "manifest-ctl", "store-ctl", "cache-ctl", "flatten-ctl"},
-    "sandboxer": set(PRODUCTS) - {"node-ctl", "cluster-ctl", "node-stub-ctl", "e2b-key-ctl"},
-    "orchestrator": set(PRODUCTS), "platform": set(PRODUCTS),
+    "guest-runtime": {"store-ctl", "flatten-ctl"},
+    "accelerator": {"manifest-ctl", "store-ctl", "cache-ctl", "flatten-ctl"},
+    "sandboxer": set(PRODUCTS) - OPTIONAL_LEGACY_PRODUCTS - {"node-ctl", "cluster-ctl", "node-stub-ctl", "e2b-key-ctl"},
+    "orchestrator": set(PRODUCTS) - OPTIONAL_LEGACY_PRODUCTS,
+    "platform": set(PRODUCTS) - OPTIONAL_LEGACY_PRODUCTS,
 }
 
 
@@ -578,7 +581,8 @@ def compose(plan, arch, assets, delta, output):
         ownership = {}
         for name, unit in expected_assets.items():
             unpack(assets / name, stage, unit, ownership)
-        originals = {name: digest(stage / "bin" / name) for name in PRODUCTS}
+        originals = {name: digest(stage / "bin" / name) for name in PRODUCTS
+                     if name not in OPTIONAL_LEGACY_PRODUCTS or (stage / "bin" / name).exists()}
         kernel_checksum = stage / "bin/vmlinux.sha256"
         if kernel_checksum.exists():
             require(kernel_checksum.read_bytes() == (originals["vmlinux"] + "  vmlinux\n").encode(),
@@ -602,6 +606,8 @@ def compose(plan, arch, assets, delta, output):
         products = {}
         for name, unit in PRODUCTS.items():
             path = stage / "bin" / name
+            if name in OPTIONAL_LEGACY_PRODUCTS and name not in originals and name not in lane["products"]:
+                continue
             require(path.is_file(), f"missing final product: {name}")
             if name not in ("vmlinux", "sandbox-runtime.bundle"):
                 require(path.stat().st_mode & 0o111 and path.stat().st_mode & 0o7022 == 0,

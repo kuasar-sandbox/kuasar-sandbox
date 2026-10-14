@@ -9,9 +9,9 @@ case "$HOST_ARCH" in amd64) HOST_ARCH=x86_64 ;; arm64) HOST_ARCH=aarch64 ;; esac
 die() { echo "source-owner: $*" >&2; exit 2; }
 required_bins() { case "$1" in
 connector) echo "connector-ctl" ;;
-guest-runtime) echo "mkfs.erofs store-ctl flatten-ctl" ;;
-accelerator) echo "mkfs.erofs manifest-ctl store-ctl cache-ctl flatten-ctl" ;;
-sandboxer) echo "mkfs.erofs vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ctl sandbox-init cloud-hypervisor sandbox-runtime.bundle connector-ctl" ;;
+guest-runtime) echo "store-ctl flatten-ctl" ;;
+accelerator) echo "manifest-ctl store-ctl cache-ctl flatten-ctl" ;;
+sandboxer) echo "vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ctl sandbox-init cloud-hypervisor sandbox-runtime.bundle connector-ctl" ;;
 orchestrator|kuasar-sandbox) awk '!/^($|#)/ {print $2}' "$ROOT/release/bin-inputs.manifest" | xargs ;;
 *) die "unknown owner $1" ;;
 esac; }

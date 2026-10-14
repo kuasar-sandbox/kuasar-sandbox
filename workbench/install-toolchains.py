@@ -40,7 +40,7 @@ def install():
                                cwd=source, check=True)
                 for target in ('lib', 'fsck', 'dump'):
                     subprocess.run(['make', '-C', target, '-j2'], cwd=source, check=True)
-                # Readers only; the selected product still owns patched mkfs.erofs.
+                # Readers only; selected native recipes remain independent build/test inputs.
                 for target in ('fsck', 'dump'):
                     shutil.copy2(source / target / (target + '.erofs'), '/usr/local/bin/' + target + '.erofs')
                 shutil.copy2(source / 'COPYING', '/usr/share/workbench/erofs-readers.COPYING')

@@ -19,7 +19,7 @@ class WorkingSetEnvironmentTest(unittest.TestCase):
         self.root = Path(temporary.name) / "prepared/x86_64"
         self.bindir = self.root / "bin"
         self.bindir.mkdir(parents=True)
-        for name in ("cache-ctl", "cloud-hypervisor", "flatten-ctl", "manifest-ctl", "mkfs.erofs",
+        for name in ("cache-ctl", "cloud-hypervisor", "flatten-ctl", "manifest-ctl",
                      "sandbox-ctl", "sandbox-init", "sandbox-runtime.bundle", "store-ctl", "vmlinux"):
             (self.bindir / name).write_bytes(name.encode())
         hypervisor = self.bindir / "cloud-hypervisor"
