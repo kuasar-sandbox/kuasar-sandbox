@@ -8,6 +8,7 @@ import re
 import subprocess
 
 import artifacts
+import actions_jobs
 
 SUITES = {'A': {'basic', 'image', 'orchestrator', 'sandbox', 'snapshot'},
           'B': {'builder', 'network', 'storage', 'telemetry'}}
@@ -31,21 +32,15 @@ def artifact_name(run_id, attempt, group):
     return f'integration-workbench-result-x86_64-{group}-{run_id}-{attempt}'
 
 
-def latest_jobs(jobs):
-    selected, seen = {}, set()
-    for job in jobs:
-        name, attempt = job.get('name'), job.get('run_attempt')
-        require(isinstance(name, str) and type(attempt) is int and attempt > 0, 'missing Actions job identity')
-        require((name, attempt) not in seen, 'duplicate Actions job attempt')
-        seen.add((name, attempt))
-        if name not in selected or selected[name]['run_attempt'] < attempt:
-            selected[name] = job
-    return selected
+def latest_jobs(jobs, run=None):
+    return actions_jobs.latest_producers(jobs,
+        run_id=run['id'] if run is not None else None,
+        run_attempt=run['run_attempt'] if run is not None else None)
 
 
-def group_jobs(jobs):
+def group_jobs(jobs, run=None):
     result = {}
-    for name, job in latest_jobs(jobs).items():
+    for name, job in latest_jobs(jobs, run).items():
         match = re.search(r'(?:^| / )workbench-release \(x86_64, (A|B)\)$', name)
         if match:
             require(match[1] not in result, 'duplicate runtime group producer')
@@ -59,7 +54,7 @@ def producer_proofs(run, jobs, available):
             'missing runtime Actions run identity')
     require(re.fullmatch('[0-9a-f]{40}', run.get('head_sha', '')), 'missing runtime Actions head')
     proofs = {}
-    for group, job in group_jobs(jobs).items():
+    for group, job in group_jobs(jobs, run).items():
         require(job.get('run_id') == run['id'] and job['run_attempt'] <= run['run_attempt'] and
                 job.get('status') == 'completed' and job.get('conclusion') == 'success',
                 'runtime group producer did not succeed for this run')
@@ -76,7 +71,7 @@ def producer_proofs(run, jobs, available):
 
 
 def arm_proof(run, jobs, available):
-    rows = [job for name, job in latest_jobs(jobs).items()
+    rows = [job for name, job in latest_jobs(jobs, run).items()
             if name.endswith(' / workbench-release (aarch64, all)')]
     require(len(rows) == 1, 'missing ARM runtime artifact producer')
     job = rows[0]
@@ -93,7 +88,7 @@ def arm_proof(run, jobs, available):
 
 
 def input_proofs(plan, run, jobs, available):
-    latest = latest_jobs(jobs)
+    latest = latest_jobs(jobs, run)
     proofs = []
     for name, artifact in [('stage', f"aggregate-stage-{plan['baseline']['version']}-{run['id']}"),
                            ('release-asset-validation / resolve', f"integration-plan-{run['id']}")]:
@@ -197,8 +192,8 @@ def verify_current(record, run, jobs):
             run.get('run_attempt', 0) >= auth['run_attempt'] and
             run.get('event') == 'workflow_dispatch' and run.get('path') == '.github/workflows/aggregate-release.yml',
             'grouped evidence has another current run/source/authorization')
-    current = group_jobs(jobs)
-    latest = latest_jobs(jobs)
+    current = group_jobs(jobs, run)
+    latest = latest_jobs(jobs, run)
     for proof in [*auth['inputs'], auth['arm']]:
         job = latest.get(proof['name'], {})
         require(all(job.get(key) == proof[key] for key in ('id', 'name', 'run_attempt')) and
@@ -209,7 +204,7 @@ def verify_current(record, run, jobs):
         require(all(job.get(key) == proof.get(key) for key in ('id', 'name', 'run_attempt', 'runner_name')) and
                 job.get('status') == 'completed' and job.get('conclusion') == 'success',
                 'runtime producer rerun invalidated prior validation')
-    validators = [job for job in latest_jobs(jobs).values() if job.get('id') == auth['validator_job_id']]
+    validators = [job for job in latest_jobs(jobs, run).values() if job.get('id') == auth['validator_job_id']]
     require(len(validators) == 1 and validators[0].get('status') == 'completed' and
             validators[0].get('conclusion') == 'success' and
             validators[0].get('name', '').endswith(' / results'), 'runtime validation job is stale or unsuccessful')
@@ -277,7 +272,7 @@ def main():
         paths = list(directory.rglob('x86_64-' + group + '.json'))
         require(len(paths) == 1 and not paths[0].is_symlink(), 'missing or duplicate runtime group result file')
         results.append(json.loads(paths[0].read_text()))
-    validator = [job for name, job in latest_jobs(jobs).items() if name == 'release-asset-validation / results'
+    validator = [job for name, job in latest_jobs(jobs, run).items() if name == 'release-asset-validation / results'
                  and job.get('run_attempt') == run['run_attempt'] and job.get('status') == 'in_progress']
     require(len(validator) == 1, 'missing current runtime validator identity')
     arm = arm_proof(run, jobs, available)

@@ -147,6 +147,8 @@ rerunning that producer invalidates its older artifact. A/B cannot share an
 instance or machine. Rollback selects `all` without removing these checks or
 altering release selection and required-check rules.
 
+Actions may give a carried successful job a new ID in a partial rerun while retaining its original execution timestamps, runner and steps. The shared reader traces such a view back only to the matching latest preceding successful execution; a genuinely newer running, failed or cancelled producer still invalidates old evidence. The same rule covers source groups and Workbench runtime groups, ARM, staged inputs and the validation job.
+
 ### Workbench runtime groups
 
 The reusable workflow and aggregate dispatch expose `workbench_runtime_groups`,

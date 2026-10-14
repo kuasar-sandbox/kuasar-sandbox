@@ -189,6 +189,51 @@ class GroupTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             groups.recovery_order(self.jobs)
 
+    def execution_fields(self):
+        # Preserve the real API shape: later views have new IDs and creation
+        # times, but retain exact execution timestamps, runner identity/steps.
+        for job in self.jobs:
+            job.setdefault('completed_at', '2026-10-14T02:00:02Z')
+            job.update(created_at=job['started_at'], head_sha=self.run['head_sha'],
+                       runner_id=1000 + job['id'], runner_group_id=0,
+                       runner_group_name='GitHub Actions', labels=['fixture'])
+            job.setdefault('runner_name', 'host-' + str(job['id']))
+            job['steps'] = [dict(name='fixture execution', status='completed', conclusion='success',
+                                started_at=job['started_at'], completed_at=job['completed_at'])]
+
+    def test_carried_group_arm_input_and_validator_views_preserve_published_binding(self):
+        self.execution_fields()
+        record = self.aggregate()
+        carried = [dict(job, id=job['id'] + 10000, run_attempt=3,
+                        created_at='2026-10-14T03:00:00Z', runner_group_id=None) for job in self.jobs]
+        jobs = self.jobs + carried
+        groups.verify_current(record, dict(self.run, run_attempt=3), jobs)
+        groups.recovery_order(jobs)
+        carried[0]['run_attempt'] = 4
+        with self.assertRaises(ValueError):
+            groups.verify_current(record, dict(self.run, run_attempt=3), jobs)
+
+    def test_real_new_B_and_validator_can_keep_carried_A_and_exact_inputs(self):
+        self.execution_fields()
+        self.run['run_attempt'] = 3
+        self.jobs += [dict(job, id=job['id'] + 10000, run_attempt=3,
+                          created_at='2026-10-14T03:00:00Z', runner_group_id=None)
+                      for job in self.jobs if job['id'] not in (2, 21)]
+        self.jobs.append(dict(self.jobs[1], id=32, run_attempt=3, runner_id=1032, runner_name='new-host-B',
+                         created_at='2026-10-14T03:00:00Z', started_at='2026-10-14T03:00:01Z',
+                         completed_at='2026-10-14T04:00:00Z'))
+        self.available.append(dict(self.available[1], id=32, name=groups.artifact_name(123, 3, 'B'),
+                                   created_at='2026-10-14T03:59:00Z'))
+        self.results[1].update(instance_id='new-instance-B', container_id='new-container-B')
+        validator = next(job for job in self.jobs if job['id'] == 21)
+        self.jobs.append(dict(validator, id=221, run_attempt=3, created_at='2026-10-14T04:00:01Z',
+                             started_at='2026-10-14T04:00:01Z', completed_at='2026-10-14T04:00:02Z'))
+        record = groups.aggregate(self.plan, self.results, self.run, self.jobs, self.available, 221, self.arm)
+        self.assertEqual([row['producer']['run_attempt'] for row in record['runtime_groups']], [1, 3])
+        self.assertEqual([row['producer']['id'] for row in record['runtime_groups']], [1, 32])
+        groups.verify_current(record, self.run, self.jobs)
+        groups.recovery_order(self.jobs)
+
     def test_publication_cannot_use_stale_or_foreign_run(self):
         record = self.aggregate()
         for key, value in [('id', 456), ('head_sha', 'f' * 40), ('event', 'pull_request'), ('path', '.github/workflows/other.yml')]:

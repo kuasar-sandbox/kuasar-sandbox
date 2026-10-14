@@ -145,6 +145,8 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 两种调度均将结果绑定精确 plan、原始命令覆盖、Workbench 镜像、成功清理，以及当前 Actions 生产任务和产物 ID。产物名包含 run、attempt 和 group，不覆盖其他轮次。生产任务失败、取消、缺失或重复均阻止最终通过。较早轮次的成功结果仅在仍为该组最新生产任务且匹配当前 plan 时可复用；重跑生产任务后，其旧产物失效。A/B 不得共享实例或机器。回退选择 `all`，保留这些检查，不改变发布选择和必需检查规则。
 
+部分重跑时，Actions 可能为沿用的成功任务分配新 ID，但保留原执行时间、runner 和步骤。共享读取器仅在完整执行身份匹配时追溯到最近的前序成功生产者；真正较新的运行中、失败或取消任务仍使旧证据失效。此规则同时覆盖源码组、Workbench 运行组、ARM、暂存输入和验证任务。
+
 ### Workbench 运行分组
 
 可复用工作流和聚合 dispatch 提供 `workbench_runtime_groups`，默认 false，保留 x86 完整运行任务及 Hosted ARM 产物级验收。实验性 x86 分组为 A（`basic`、`image`、`orchestrator`、`sandbox`、`snapshot`）和 B（`builder`、`network`、`storage`、`telemetry`）。成员由本轮 plan 的精确普通用例清单派生，未知套件失败，覆盖必须完整且不相交，`storage.obs.sh` 的既有排除不变。套件顺序与状态保留在同一组内。每个独立 Hosted 机器和空的私有 Workbench 实例均准备**全部**普通离线输入，再以原 2 CPU/8 GiB 预算执行分配用例，保留 preflight、外网、隔离、耗时、磁盘和清理检查。
