@@ -12,6 +12,7 @@ class ActionsProducerTests(unittest.TestCase):
     def setUp(self):
         data = json.loads(Path(__file__).with_name('fixtures').joinpath('actions-carried-success.json').read_text())
         self.a, self.b, self.carried_a, self.new_b = data['jobs']
+        self.non_producers = data['non_producer_views']
         self.run_id = self.a['run_id']
 
     def latest(self, rows, attempt=2):
@@ -39,8 +40,7 @@ class ActionsProducerTests(unittest.TestCase):
     def test_carried_execution_must_match_every_remaining_field(self):
         changes = [('head_sha', 'a' * 40), ('runner_id', 123), ('runner_name', 'other'),
                    ('runner_group_name', 'other'), ('labels', ['other']),
-                   ('completed_at', '2026-10-14T10:40:51Z'), ('conclusion', 'failure'),
-                   ('status', 'in_progress'), ('steps', []), ('unknown_field', 'new')]
+                   ('completed_at', '2026-10-14T10:40:51Z'), ('steps', []), ('unknown_field', 'new')]
         for key, value in changes:
             with self.subTest(key=key), self.assertRaises(ValueError):
                 self.latest([self.a, dict(self.carried_a, **{key: value})])
@@ -48,6 +48,20 @@ class ActionsProducerTests(unittest.TestCase):
         changed['steps'][0]['name'] += ' changed'
         with self.assertRaises(ValueError):
             self.latest([self.a, changed])
+
+    def test_real_skipped_views_are_current_without_becoming_successful_producers(self):
+        selected = self.latest([self.a, self.carried_a, *self.non_producers])
+        current = max(self.non_producers, key=lambda j: j['run_attempt'])
+        self.assertEqual(selected[current['name']], current)
+        self.assertEqual(selected[current['name']]['conclusion'], 'skipped')
+        self.assertEqual(selected[self.a['name']], self.a)
+
+    def test_non_success_view_cannot_revive_the_previous_success(self):
+        for status, conclusion in [('in_progress', None), ('completed', 'failure'),
+                                   ('completed', 'cancelled'), ('completed', 'skipped')]:
+            with self.subTest(conclusion=conclusion):
+                current = dict(self.carried_a, status=status, conclusion=conclusion)
+                self.assertEqual(self.latest([self.a, current])[self.a['name']], current)
 
     def test_original_runner_group_cannot_be_replaced_by_a_sentinel(self):
         with self.assertRaises(ValueError):

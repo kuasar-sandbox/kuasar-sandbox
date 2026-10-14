@@ -63,7 +63,11 @@ def latest_producers(jobs, *, run_id=None, run_attempt=None):
     for job in sorted(views, key=lambda item: (item['run_attempt'], item['name'])):
         name = job['name']
         created, ended = job.get('created_at'), job.get('completed_at')
-        carried = created is not None and ended is not None and timestamp(created) > timestamp(ended)
+        # GitHub also creates views of skipped/failed jobs. They are not
+        # successful producers: keep their current status so consumers reject
+        # them if required, without treating unrelated skipped jobs as errors.
+        carried = (job.get('status') == 'completed' and job.get('conclusion') == 'success' and
+                   created is not None and ended is not None and timestamp(created) > timestamp(ended))
         if carried:
             previous = selected.get(name)
             require(previous is not None and previous['run_attempt'] < job['run_attempt'] and

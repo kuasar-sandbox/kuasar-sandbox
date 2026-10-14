@@ -394,5 +394,61 @@
       "runner_group_id": 0,
       "runner_group_name": "GitHub Actions"
     }
+  ],
+  "non_producer_views": [
+    {
+      "id": 115804649262,
+      "run_id": 38549216882,
+      "workflow_name": "CI",
+      "head_branch": "rfc246-actions-grouped-trial",
+      "run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882",
+      "run_attempt": 1,
+      "node_id": "CR_kwDOTxVLCs8AAAAa9n63Lg",
+      "head_sha": "4f5b7e1b754ee91f9cc3e0b07b402b44234489fa",
+      "url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/jobs/115804649262",
+      "html_url": "https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882/job/115804649262",
+      "status": "completed",
+      "conclusion": "skipped",
+      "created_at": "2026-10-14T10:28:14Z",
+      "started_at": "2026-10-14T10:28:14Z",
+      "completed_at": "2026-10-14T10:28:13Z",
+      "name": "ci / aarch64 / performance",
+      "steps": [],
+      "check_run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/check-runs/115804649262",
+      "labels": [
+        "ubuntu-24.04-arm"
+      ],
+      "runner_id": null,
+      "runner_name": null,
+      "runner_group_id": null,
+      "runner_group_name": null
+    },
+    {
+      "id": 115813531273,
+      "run_id": 38549216882,
+      "workflow_name": "CI",
+      "head_branch": "rfc246-actions-grouped-trial",
+      "run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882",
+      "run_attempt": 2,
+      "node_id": "CR_kwDOTxVLCs8AAAAa9wY-iQ",
+      "head_sha": "4f5b7e1b754ee91f9cc3e0b07b402b44234489fa",
+      "url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/actions/jobs/115813531273",
+      "html_url": "https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38549216882/job/115813531273",
+      "status": "completed",
+      "conclusion": "skipped",
+      "created_at": "2026-10-14T10:51:28Z",
+      "started_at": "2026-10-14T10:51:28Z",
+      "completed_at": "2026-10-14T10:28:13Z",
+      "name": "ci / aarch64 / performance",
+      "steps": [],
+      "check_run_url": "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/check-runs/115813531273",
+      "labels": [
+        "ubuntu-24.04-arm"
+      ],
+      "runner_id": null,
+      "runner_name": null,
+      "runner_group_id": null,
+      "runner_group_name": null
+    }
   ]
 }
