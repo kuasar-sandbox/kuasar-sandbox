@@ -100,6 +100,25 @@ class DocsLaneTests(unittest.TestCase):
         self.assertEqual(self.check({'README.md': '[guide](docs/new.md#after)\n', 'docs/new.md': '# After\n'},
                                     ['docs/old.md', 'docs/new.md'])['findings'], [])
 
+    def test_disappeared_ancestors_check_directory_reverse_references(self):
+        for renamed in (False, True):
+            for target in ('docs/old/', 'docs/old/nested/', 'docs/old'):
+                with self.subTest(renamed=renamed, target=target):
+                    files = {'README.md': '[directory](' + target + ')\n'}
+                    changed = ['docs/old/nested/last.md']
+                    if renamed:
+                        files['docs/new/last.md'] = '# Guide\n'
+                        changed.append('docs/new/last.md')
+                    result = self.check(files, changed)
+                    self.assertIn('README.md', result['checked_files'])
+                    self.assertTrue(any('README.md:' in f for f in result['findings']))
+        # A surviving sibling preserves the directory. Do not broaden checking
+        # to unrelated debt in an unchanged document referencing that directory.
+        result = self.check({'README.md': '[directory](docs/old/) [debt](missing.md)\n',
+                             'docs/old/kept.md': '# Kept\n'}, ['docs/old/nested/last.md'])
+        self.assertNotIn('README.md', result['checked_files'])
+        self.assertEqual(result['findings'], [])
+
     def test_local_files_anchors_utf8_and_unrelated_debt(self):
         self.assertEqual(self.check({'docs/a.md': '[source](../src/tool.py)\n# One\n[anchor](#one)\n',
                                     'src/tool.py': 'code'}, ['docs/a.md'])['findings'], [])

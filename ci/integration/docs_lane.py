@@ -137,6 +137,17 @@ def check_tree(repository, head, changed):
                 # Escaping links remain absent; the shared checker rejects any
                 # reference without reading files outside this temporary tree.
         affected = {root / name for name in changed}
+        # Removing the last descendant also removes its Git directories. Links
+        # to those ancestors need checking even though policy classifies leaves.
+        # Use the complete candidate tree so surviving directories stay outside
+        # this reverse-reference expansion.
+        for name in changed:
+            for parent in PurePosixPath(name).parents:
+                if parent == PurePosixPath('.'):
+                    continue
+                prefix = parent.as_posix() + '/'
+                if not any(p == parent.as_posix() or p.startswith(prefix) for p in head['entries']):
+                    affected.add(root / parent)
         selected = set(path for path in docs if path in affected)
         for path in docs:
             text = path.read_text(encoding='utf-8')
