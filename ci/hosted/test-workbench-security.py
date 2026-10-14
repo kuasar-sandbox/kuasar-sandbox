@@ -73,6 +73,14 @@ class TemporaryFiles(unittest.TestCase):
 
 
 class SelectionTests(unittest.TestCase):
+    def test_grouped_native_selection_keeps_hosted_arm_scope(self):
+        selected = selection()
+        selected['architectures']['x86_64']['qualification_scope'] = 'native-grouped'
+        ci.check_selection(selected)
+        selected['architectures']['aarch64']['qualification_scope'] = 'native-grouped'
+        with self.assertRaises(ValueError):
+            ci.check_selection(selected)
+
     def test_selection_binds_the_checked_out_framework(self):
         ci.check_selection(selection(), FRAMEWORK)
         with self.assertRaisesRegex(ValueError, 'different trusted framework'):

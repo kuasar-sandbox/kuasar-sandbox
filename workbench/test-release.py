@@ -19,6 +19,7 @@ sys.path[:0] = [str(ROOT / 'ci/integration'), str(ROOT / 'release')]
 import artifacts
 import selection
 import workbench_assets
+import workbench_groups
 
 
 def module(name, path):
@@ -39,7 +40,7 @@ def host_output(command):
     return subprocess.check_output([*prefix, *map(str, command)], text=True, timeout=30)
 
 
-def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
+def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False, group="all"):
     artifacts.check_plan(plan)
     artifacts.require(plan['mode'] == 'exact-assets' and plan['baseline'].get('delivery') == selection.DELIVERY,
                       'workbench qualification requires the exact new-contract stage')
@@ -48,6 +49,9 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
     for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY'):
         artifacts.require(not os.environ.get(key), f'workbench qualification must not receive {key}')
     arch = platform.machine()
+    artifacts.require(group in ('all', 'A', 'B') and (group == 'all' or (arch == 'x86_64' and not artifact_only)),
+                      'runtime grouping is restricted to native x86 system qualification')
+    artifacts.require(group == 'all' or (cpus == 2 and memory_gib == 8), 'runtime groups retain 2 CPU/8 GiB')
     artifacts.require(not artifact_only or arch == 'aarch64', 'artifact-only qualification is restricted to hosted ARM')
     version, revision = plan['baseline']['version'], plan['baseline']['sha']
     root.mkdir(parents=True, exist_ok=False)
@@ -92,6 +96,11 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
             artifacts.unpack(path, release, owner, seen)
         result['release_inputs_verified'] = True
         cases = artifacts.workbench_cases(plan['case_files'], arch, native_full=not artifact_only)
+        prepared_cases = cases
+        if group != 'all':
+            cases = workbench_groups.group_cases(plan['case_files'])[group]
+            result.update(group=group, prepared_cases_sha256=artifacts.identity(prepared_cases),
+                          cpus=cpus, memory_gib=memory_gib)
         result['cases'] = cases
         if artifact_only:
             # Hosted ARM runners do not expose KVM. Still qualify the exact
@@ -109,6 +118,8 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
         result['start_seconds'] = time.monotonic() - start
         instance = json.loads((state / 'instance.json').read_text())
         result['preflight'] = instance['preflight']
+        if group != 'all':
+            result.update(instance_id=instance['id'], container_id=instance['container_id'])
         network = launcher.inspect('network', instance['network_id'])
         artifacts.require(network and network['Labels'].get(launcher.LABEL) == instance['id'], 'network is not owned by this instance')
         launcher.docker('network', 'disconnect', network['Id'], instance['container_id'])
@@ -127,8 +138,9 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
         # The selected official input image archives are already inside the
         # staged image. No host daemon/socket or registry transport is available.
         arguments = [item for case in cases for item in ('--include', case)]
+        preparation_arguments = [item for case in prepared_cases for item in ('--include', case)]
         execute('python3', '-B', '/inputs/release/test/e2e/e2e', 'prepare', '--release-dir', '/inputs/release',
-                '--workdir', '/work/prepared', '--arch', arch, '--deps-dir', '/opt/workbench/deps', '--offline', *arguments,
+                '--workdir', '/work/prepared', '--arch', arch, '--deps-dir', '/opt/workbench/deps', '--offline', *preparation_arguments,
                 log='public-prepare.log')
         result['offline'] = True
         # Offline is a preparation contract. The existing Demo later asserts
@@ -167,6 +179,8 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False):
                     result.setdefault('diagnostic_errors', []).append(f'{name}: {error}')
             try:
                 subprocess.run([*command, 'cleanup'], check=True, timeout=420)
+                if group != 'all':
+                    result['cleanup_exit_code'] = 0
             except Exception as error:
                 result.update(conclusion='failure', cleanup_error=str(error))
         stopped.set()
@@ -189,6 +203,7 @@ if __name__ == '__main__':
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--cpus', type=int, default=2)
     parser.add_argument('--memory-gib', type=int, default=8)
+    parser.add_argument('--group', choices=('all', 'A', 'B'), default='all')
     parser.add_argument('--artifact-only', action='store_true', help='validate staged archive/image/release bytes without starting a KVM system container')
     args = parser.parse_args()
-    qualify(json.loads(args.plan.read_text()), args.stage.resolve(), args.root.resolve(), args.cpus, args.memory_gib, args.artifact_only)
+    qualify(json.loads(args.plan.read_text()), args.stage.resolve(), args.root.resolve(), args.cpus, args.memory_gib, args.artifact_only, args.group)

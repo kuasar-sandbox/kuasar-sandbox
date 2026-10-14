@@ -1120,6 +1120,10 @@ def resume_workbench_publish(version: str, source_sha: str) -> bool:
         previous = latest.get(job['name'])
         if previous is None or job['id'] > previous['id']:
             latest[job['name']] = job
+    import sys
+    sys.path.insert(0, str(CONTROL_ROOT / 'ci/integration'))
+    import workbench_groups
+    workbench_groups.recovery_order(attempts)
     jobs = list(latest.values())
     publishers = [job for job in jobs if job.get('name') == 'publish']
     required = ('prepare', 'stage', 'release-asset-validation / results')

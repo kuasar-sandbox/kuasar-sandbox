@@ -12,6 +12,12 @@ on:
         required: false
         default: false
         type: boolean
+
+      workbench_runtime_groups:
+        description: Experimental x86 runtime groups; readers must be merged and measured before activation
+        type: boolean
+        required: false
+        default: false
       candidate_repository:
         description: Repository whose source candidate is under test
         required: false
@@ -402,16 +408,13 @@ jobs:
           retention-days: 7
 
   workbench-release:
+    name: workbench-release (${{ matrix.arch }}, ${{ matrix.group }})
     if: inputs.mode == 'exact-assets' && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     needs: resolve
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: x86_64
-            runner: ubuntu-24.04
-          - arch: aarch64
-            runner: ubuntu-24.04-arm
+        include: ${{ fromJSON(inputs.workbench_runtime_groups && '[{"arch":"x86_64","runner":"ubuntu-24.04","group":"A"},{"arch":"x86_64","runner":"ubuntu-24.04","group":"B"},{"arch":"aarch64","runner":"ubuntu-24.04-arm","group":"all"}]' || '[{"arch":"x86_64","runner":"ubuntu-24.04","group":"all"},{"arch":"aarch64","runner":"ubuntu-24.04-arm","group":"all"}]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 180
     steps:
@@ -433,12 +436,25 @@ jobs:
           extra=()
           if [ '${{ matrix.arch }}' = aarch64 ]; then extra+=(--artifact-only); fi
           python3 -B framework/workbench/test-release.py --plan plan/plan.json --stage aggregate-stage \
-            --root "$RUNNER_TEMP/workbench-release" --cpus 2 --memory-gib 8 "${extra[@]}"
-          cp "$RUNNER_TEMP/workbench-release/result.json" '${{ matrix.arch }}.json'
+            --root "$RUNNER_TEMP/workbench-release" --cpus 2 --memory-gib 8 --group '${{ matrix.group }}' "${extra[@]}"
+          if [ '${{ inputs.workbench_runtime_groups }}' != true ]; then
+            cp "$RUNNER_TEMP/workbench-release/result.json" '${{ matrix.arch }}.json'
+          else
+            cp "$RUNNER_TEMP/workbench-release/result.json" '${{ matrix.arch }}-${{ matrix.group }}.json'
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ matrix.group == 'all' && !inputs.workbench_runtime_groups }}
         with:
           name: integration-workbench-result-${{ matrix.arch }}-${{ github.run_id }}
           path: ${{ matrix.arch }}.json
+          if-no-files-found: error
+          retention-days: 7
+      - name: Retain immutable runtime group result
+        if: inputs.workbench_runtime_groups
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-workbench-result-${{ matrix.arch }}-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ matrix.arch }}-${{ matrix.group }}.json
           if-no-files-found: error
           retention-days: 7
       - name: Collect bounded owned workbench diagnostics
@@ -451,7 +467,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: integration-workbench-diagnostics-${{ matrix.arch }}-${{ github.run_id }}
+          name: integration-workbench-diagnostics-${{ matrix.arch }}-${{ matrix.group }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: workbench-diagnostics.tar.gz
           if-no-files-found: error
           retention-days: 7
@@ -527,6 +543,21 @@ jobs:
         run: |
           python3 -B framework/ci/integration/source_results.py --plan plan/plan.json \
             --groups "$SOURCE_GROUPS" --results source-results > source-validation.json
+
+      - name: Download Workbench evidence without merging group directories
+        if: inputs.mode == 'exact-assets' && inputs.workbench_runtime_groups
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: integration-workbench-result-*
+          path: runtime-results
+          merge-multiple: false
+      - name: Bind disjoint runtime groups to their current Actions producers
+        if: inputs.mode == 'exact-assets' && inputs.workbench_runtime_groups
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B framework/ci/integration/workbench_groups.py --plan plan/plan.json \
+            --results runtime-results --output workbench
       - name: Bind both architecture results to the exact plan
         if: needs.resolve.outputs.lane == 'full'
         run: |
@@ -578,6 +609,7 @@ jobs:
             validation.json
             source-validation.json
             plan/plan.json
+            workbench/
             plan/docs-result.json
           if-no-files-found: error
           retention-days: 7

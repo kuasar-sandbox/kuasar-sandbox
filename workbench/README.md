@@ -246,6 +246,16 @@ replacing the subset with `--all` does not give a running none-network instance
 egress. Budget CPU/memory/disk for the selected workload; changed budgets or mounts
 need a new instance. Two terminals must use the same `--root`/`--name` for `exec`.
 
+CI may partition native x86 release qualification into two independent runtime
+groups after measured rollout acceptance. Each instance still prepares the
+complete ordinary offline inventory and retains the original budgets and all
+preflight/isolation/cleanup checks; only execution selection differs. The
+[CI contract](../docs/ci.md#workbench-runtime-groups) owns the exact grouping and
+current-attempt evidence. `test-release.py --group all` remains the default;
+`--group A` and `--group B` require native x86 and 2 CPU/8 GiB. Hosted ARM remains
+artifact-only. Published `native-grouped` evidence represents the complete union
+of independently validated groups, not an individual partial execution.
+
 ## Lifecycle and isolation
 
 `exec` without a command opens a shell. `stop` asks systemd to stop private

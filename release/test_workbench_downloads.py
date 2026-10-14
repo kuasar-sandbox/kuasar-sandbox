@@ -324,7 +324,7 @@ exec(compile(code, '<documented download>', 'exec'))
 
 
 class DownloadTests(unittest.TestCase):
-    def select(self, *, contract='workbench-v1', omit=(), extra=(), download=False, missing_binding=False, arch='x86_64'):
+    def select(self, *, contract='workbench-v1', omit=(), extra=(), download=False, missing_binding=False, arch='x86_64', workbench=None):
         names = ['SHA256SUMS', f'platform-{TAG}.tar.gz']
         for asset_arch in ('x86_64', 'aarch64'):
             names += [f'{unit}-v1.2.3-linux-{asset_arch}.tar.gz' for unit in ('accelerator', 'connector', 'orchestrator', 'sandboxer')]
@@ -336,6 +336,9 @@ class DownloadTests(unittest.TestCase):
                     'body': '<!-- kuasar-integration-validation ' + json.dumps({'delivery': contract}) + ' -->' if contract != 'historical' else '',
                     'assets': [{'name': name, 'size': 100, 'digest': 'sha256:' + 'a'*64,
                         'browser_download_url': f'https://github.com/kuasar-sandbox/kuasar-sandbox/releases/download/{TAG}/{name}'} for name in names]}
+        if workbench is not None:
+            metadata['body'] = '<!-- kuasar-integration-validation ' + json.dumps(
+                {'delivery': contract, 'workbench': workbench}) + ' -->'
         if missing_binding:
             metadata['body'] = ''
         sources = [(ROOT / 'docs' / name).read_text().split('RELEASE_VERSION="$(python3 - ', 1)[1].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]

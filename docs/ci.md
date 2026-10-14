@@ -164,6 +164,52 @@ rerunning that producer invalidates its older artifact. A/B cannot share an
 instance or machine. Rollback selects `all` without removing these checks or
 altering release selection and required-check rules.
 
+Actions may give a carried successful job a new ID in a partial rerun while retaining its original execution timestamps, runner and steps. The shared reader traces such a view back only to the matching latest preceding successful execution; a genuinely newer running, failed or cancelled producer still invalidates old evidence. The same rule covers source groups and Workbench runtime groups, ARM, staged inputs and the validation job.
+
+### Workbench runtime groups
+
+The reusable workflow and aggregate dispatch expose `workbench_runtime_groups`,
+defaulting to false. The default retains the full x86 runtime job and Hosted ARM
+artifact-only qualification. Experimental x86 groups are A (`basic`, `image`,
+`orchestrator`, `sandbox`, `snapshot`) and B (`builder`, `network`, `storage`,
+`telemetry`). Membership derives from this plan's exact ordinary case inventory;
+unknown suites fail, coverage must be complete and disjoint, and the existing
+`storage.obs.sh` exclusion remains. Suite order and state stay within one group.
+Each independent hosted machine and private empty Workbench instance prepares
+**all** ordinary offline inputs, then runs its assigned cases with the unchanged
+2 CPU/8 GiB budget, preflight, egress, isolation, timing, disk and cleanup checks.
+
+Grouped results use explicit `workbench-groups-v1` / `native-grouped` evidence.
+They retain both executions, common exact source/assets/image identities,
+complete coverage and immutable run/attempt/group artifacts. Current successful
+producer jobs, ARM evidence, stage/plan inputs and the final validation job must
+agree. An unchanged earlier successful attempt may be reused; rerunning any
+bound producer invalidates the old validation. Missing, duplicate, failed,
+cancelled or shared-instance evidence cannot authorize publication.
+
+Reader compatibility must be merged before grouped production: the publisher
+loads `bind-validation.py` from **main**. Registry publication, release notes,
+baseline/artifact resolution, Hosted selection and Preview recovery retain
+legacy full and ARM results alongside grouped evidence. Public downloads keep
+the same assets and per-architecture selection. Release-body and complete
+registry-reservation limits are unchanged. Repeated comparable real Actions
+runs, including failure/rerun injections, queue/preparation/execution/final
+feedback and total job minutes, must justify activation. Local or simulated
+metadata is not Actions acceptance. Without stable final benefit at acceptable
+cost, keep `all`. Rollback disables production while retaining readers for any
+published grouped evidence.
+
+For repeated same-source qualification, aggregate dispatch also accepts
+`validation_only=true` (default false). It still requires main, the exact current
+selection and an unpublished version, and runs all original build/runtime/source
+checks, publication binding, body limits and registry-input verification. It
+stops before registry/Release writes and retains this run's artifacts under their
+existing expiry for failure/rerun tests. Compare `all` and grouped inputs on the
+same frozen selection; do not substitute these pre-publication timings for real
+publication end-to-end benefit. Finish the selected release through the normal
+publication mode, and never rerun producers behind already published grouped
+evidence merely to obtain a benchmark.
+
 ## 4. Daily and Stable
 
 `exact-assets` is callable only by the actual public platform aggregate workflow. Its plan binds the exact committed manifest and staged fourteen-file asset set (platform + twelve component archives + SHA256SUMS). It selects no product or helper rebuilds. Each target uses the same download/compose/public-prepare/public-run/result primitives as PR mode and consumes the prebuilt helper packages from the exact staged platform archive. The separate required source checks remain outside artifact E2E.

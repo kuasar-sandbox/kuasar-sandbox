@@ -154,6 +154,18 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 两种调度均将结果绑定精确 plan、原始命令覆盖、Workbench 镜像、成功清理，以及当前 Actions 生产任务和产物 ID。产物名包含 run、attempt 和 group，不覆盖其他轮次。生产任务失败、取消、缺失或重复均阻止最终通过。较早轮次的成功结果仅在仍为该组最新生产任务且匹配当前 plan 时可复用；重跑生产任务后，其旧产物失效。A/B 不得共享实例或机器。回退选择 `all`，保留这些检查，不改变发布选择和必需检查规则。
 
+部分重跑时，Actions 可能为沿用的成功任务分配新 ID，但保留原执行时间、runner 和步骤。共享读取器仅在完整执行身份匹配时追溯到最近的前序成功生产者；真正较新的运行中、失败或取消任务仍使旧证据失效。此规则同时覆盖源码组、Workbench 运行组、ARM、暂存输入和验证任务。
+
+### Workbench 运行分组
+
+可复用工作流和聚合 dispatch 提供 `workbench_runtime_groups`，默认 false，保留 x86 完整运行任务及 Hosted ARM 产物级验收。实验性 x86 分组为 A（`basic`、`image`、`orchestrator`、`sandbox`、`snapshot`）和 B（`builder`、`network`、`storage`、`telemetry`）。成员由本轮 plan 的精确普通用例清单派生，未知套件失败，覆盖必须完整且不相交，`storage.obs.sh` 的既有排除不变。套件顺序与状态保留在同一组内。每个独立 Hosted 机器和空的私有 Workbench 实例均准备**全部**普通离线输入，再以原 2 CPU/8 GiB 预算执行分配用例，保留 preflight、外网、隔离、耗时、磁盘和清理检查。
+
+分组证据显式声明 `workbench-groups-v1` / `native-grouped`，保留两次独立执行、共同的精确源码/资产/镜像身份、完整覆盖及不可覆盖的 run/attempt/group 产物。当前成功生产任务、ARM 证据、stage/plan 输入与最终验收任务必须一致。未变化的较早成功轮次可复用；任何已绑定生产任务重跑均使旧验收失效。缺失、重复、失败、取消或共享实例的证据不得授权发布。
+
+必须先合并兼容读取器，再生产分组结果：发布器从 **main** 加载 `bind-validation.py`。Registry 发布、Release 正文、基线/产物解析、Hosted 选择和 Preview 恢复同时支持历史 full、ARM 与分组证据。公开下载仍使用相同资产和按架构选择，正文上限及完整 registry 预留不变。启用前须用可比较的多次真实 Actions，覆盖失败/重跑注入、排队/准备/执行/最终反馈及总任务分钟，证明最终收益和成本合理。本地或模拟元数据不算 Actions 验收。缺少稳定最终收益或成本过高时保持 `all`；回退停用生产，但保留已发布分组证据的读取能力。
+
+需要在相同源码上重复验收时，聚合 dispatch 还接受 `validation_only=true`（默认 false）。它仍要求 main、精确当前选择及尚未发布的版本，并执行原有全部构建、运行、源码检查，以及发布绑定、正文上限和 registry 输入验证；仅在 registry/Release 写入前结束，并按原到期时间保留本轮产物供失败/重跑测试。对照必须使用同一固定选择，发布前计时不能代替真实发布的端到端收益。最终通过正常发布模式完成所选版本；不得仅为取得基准数据而重跑已发布分组证据背后的生产任务。
+
 ## 4. Daily 与 Stable
 
 `exact-assets` 仅接受实际公开的平台 aggregate workflow。

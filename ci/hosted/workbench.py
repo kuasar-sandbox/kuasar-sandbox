@@ -95,7 +95,7 @@ def check_selection(selected, framework=None):
                 and re.fullmatch('[0-9a-f]{64}', row.get('archive_sha256', ''))
                 and type(row.get('archive_size')) is int and row['archive_size'] > 0,
                 'incomplete immutable Workbench identity: ' + arch)
-        require(row.get('qualification_scope') in ({'native-full'} if arch == 'x86_64' else {'artifact-only', 'native-full'}),
+        require(row.get('qualification_scope') in ({'native-full', 'native-grouped'} if arch == 'x86_64' else {'artifact-only', 'native-full'}),
                 'Workbench lacks its declared architecture qualification')
     return selected
 

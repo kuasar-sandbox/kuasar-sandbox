@@ -37,6 +37,8 @@ systemd 与私有 daemon 就绪，并报告实际能力。所选产品测试仍�
 `ghcr.io/kuasar-sandbox/workbench:vX.Y.Z[-preview.YYYYMMDD[.N]]`，即聚合版本去掉
 `release-` 前缀。新 `workbench-v1` 发布必须包含两个原生镜像归档；历史发布保留原有资产。
 
+CI 可在测量验收后将原生 x86 发布运行验收分成两个独立组。每个实例仍准备完整普通离线清单，保留原预算和全部 preflight、隔离、清理检查；仅执行选择不同。[CI 契约](../docs/ci_zh.md#workbench-运行分组)规定精确分组与当前轮次证据。`test-release.py --group all` 保持默认；`--group A` 和 `--group B` 要求原生 x86 及 2 CPU/8 GiB。Hosted ARM 仍为产物级验收。发布的 `native-grouped` 证据代表独立验收组的完整并集，不代表单个部分执行。
+
 ### Windows 与 WSL 2 开发宿主
 
 只有 Linux 环境满足所选发布版的原生要求时，WSL 才可用于开发。发行版能启动或存在
