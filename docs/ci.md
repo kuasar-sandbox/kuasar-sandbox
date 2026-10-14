@@ -147,6 +147,17 @@ metadata is not Actions acceptance. Without stable final benefit at acceptable
 cost, keep `all`. Rollback disables production while retaining readers for any
 published grouped evidence.
 
+For repeated same-source qualification, aggregate dispatch also accepts
+`validation_only=true` (default false). It still requires main, the exact current
+selection and an unpublished version, and runs all original build/runtime/source
+checks, publication binding, body limits and registry-input verification. It
+stops before registry/Release writes and retains this run's artifacts under their
+existing expiry for failure/rerun tests. Compare `all` and grouped inputs on the
+same frozen selection; do not substitute these pre-publication timings for real
+publication end-to-end benefit. Finish the selected release through the normal
+publication mode, and never rerun producers behind already published grouped
+evidence merely to obtain a benchmark.
+
 ## 4. Daily and Stable
 
 `exact-assets` is callable only by the actual public platform aggregate workflow. Its plan binds the exact committed manifest and staged fourteen-file asset set (platform + twelve component archives + SHA256SUMS). It selects no product or helper rebuilds. Each target uses the same download/compose/public-prepare/public-run/result primitives as PR mode and consumes the prebuilt helper packages from the exact staged platform archive. The separate required source checks remain outside artifact E2E.

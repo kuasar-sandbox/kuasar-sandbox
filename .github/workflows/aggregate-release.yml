@@ -1,9 +1,14 @@
 name: Aggregate Release
-run-name: Aggregate ${{ inputs.version }} @${{ inputs.source_sha }}
+run-name: Aggregate ${{ inputs.version }} @${{ inputs.source_sha }}${{ inputs.validation_only && ' [validation only]' || '' }}
 
 on:
   workflow_dispatch:
     inputs:
+      validation_only:
+        description: Run all validation and pre-publication consumers for an unpublished selection; do not publish
+        required: false
+        type: boolean
+        default: false
       workbench_runtime_groups:
         description: Experimental runtime groups; enable only after merged readers and repeated measured acceptance
         required: false
@@ -433,16 +438,29 @@ jobs:
           SOURCE_REF: ${{ needs.prepare.outputs.source_ref }}
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
+          VALIDATION_ONLY: ${{ inputs.validation_only }}
         run: |
           set -euo pipefail
           [ "$(git -C "$PLATFORM_SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_SHA" ] \
             || { echo "admitted platform source identity changed" >&2; exit 1; }
           bash release/validate-preview-line.sh "$VERSION" "$SOURCE_SHA"
-          release/publish-release.sh publish \
-            "$VERSION" "$SOURCE_SHA" aggregate-stage "$SOURCE_REF"
+          case "$VALIDATION_ONLY" in
+            false)
+              release/publish-release.sh publish \
+                "$VERSION" "$SOURCE_SHA" aggregate-stage "$SOURCE_REF"
+              ;;
+            true)
+              release/publish-release.sh check "$VERSION"
+              bash release/aggregate-release.sh validate "$VERSION" aggregate-stage
+              python3 -B release/publication_body.py aggregate-stage/release-notes.md
+              python3 -B release/workbench_registry.py aggregate-stage "$VERSION" "$SOURCE_SHA" --validate-only
+              echo 'Validation-only acceptance completed; no release or registry publication was requested.'
+              ;;
+            *) echo 'invalid validation_only input' >&2; exit 1 ;;
+          esac
 
   cleanup:
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && inputs.validation_only != true
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 5

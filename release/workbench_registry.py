@@ -85,7 +85,7 @@ def check_index(raw, children):
     return digest(raw)
 
 
-def publish(bundle, version, revision):
+def validate_binding(bundle, version, revision):
     require(selection.AGGREGATE_RE.fullmatch(version), "invalid aggregate version")
     receipts = {arch: workbench_assets.validate(bundle / 'assets', version, arch, revision,
                                                receipt_directory=bundle / 'workbench') for arch in PLATFORMS}
@@ -105,6 +105,13 @@ def publish(bundle, version, revision):
         workbench_groups.verify_live(result)
         require(result.get('conclusion') == 'success' and result.get('image_id') == receipt['image_id']
                 and result.get('sha256') == receipt['sha256'], 'registry image has not passed staged workbench validation')
+    publication_body.checked(text)
+    return receipts, prefix, binding, suffix
+
+
+def publish(bundle, version, revision):
+    receipts, prefix, binding, suffix = validate_binding(bundle, version, revision)
+    notes = bundle / 'release-notes.md'
     token = os.environ.get('GH_TOKEN', '')
     actor = os.environ.get('GITHUB_ACTOR', '')
     require(token and actor, 'registry publication needs the job package-write identity')
@@ -161,5 +168,11 @@ if __name__ == '__main__':
     parser.add_argument('bundle', type=Path)
     parser.add_argument('version')
     parser.add_argument('revision')
+    parser.add_argument('--validate-only', action='store_true',
+                        help='Verify archives, binding and current producers without registry transport or writes')
     args = parser.parse_args()
-    print(json.dumps(publish(args.bundle, args.version, args.revision), sort_keys=True))
+    if args.validate_only:
+        receipts, _, _, _ = validate_binding(args.bundle, args.version, args.revision)
+        print(json.dumps({'mode': 'validation-only', 'conclusion': 'success', 'architectures': sorted(receipts)}))
+    else:
+        print(json.dumps(publish(args.bundle, args.version, args.revision), sort_keys=True))

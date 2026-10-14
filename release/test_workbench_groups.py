@@ -126,6 +126,26 @@ class GroupTests(unittest.TestCase):
                         workbench_registry.publish(self.fixture.root, self.fixture.version, self.fixture.sha)
                     transport.assert_called_once()
 
+    def test_registry_validation_only_consumes_groups_without_transport_or_writes(self):
+        import workbench_registry
+        grouped = self.fixture.artifact_only()
+        grouped['x86_64'] = self.aggregate()
+        with patch.object(groups, 'api', return_value=self.run), patch.object(groups, 'pages', return_value=self.jobs):
+            fixtures.binder.bind(self.fixture.root, self.plan, self.fixture.validation, grouped)
+            notes = self.fixture.root / 'release-notes.md'
+            before = notes.read_bytes()
+            with patch.object(workbench_registry.workbench_assets, 'validate',
+                    side_effect=lambda assets, version, arch, revision, **kwargs: self.fixture.receipts[arch]), \
+                 patch.object(workbench_registry, 'inspect_raw') as transport, \
+                 patch.object(workbench_registry.subprocess, 'run') as command:
+                receipts, _, binding, _ = workbench_registry.validate_binding(
+                    self.fixture.root, self.fixture.version, self.fixture.sha)
+                self.assertEqual(set(receipts), {'x86_64', 'aarch64'})
+                self.assertEqual(binding['workbench'], grouped)
+                transport.assert_not_called()
+                command.assert_not_called()
+            self.assertEqual(notes.read_bytes(), before)
+
     def test_missing_duplicate_cancelled_and_mismatched_group_results(self):
         mutations = [lambda: self.results.pop(), lambda: self.results.append(copy.deepcopy(self.results[0])),
                      lambda: self.results[0].update(conclusion='cancelled'),

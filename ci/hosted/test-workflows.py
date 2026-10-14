@@ -162,6 +162,50 @@ def check_helper_materialization():
 
 
 
+def check_validation_only_publication():
+    definition = load('aggregate-release.yml')
+    events = definition.get('on', definition.get(True))
+    assert events['workflow_dispatch']['inputs']['validation_only']['default'] is False
+    jobs = definition['jobs']
+    script = next(step['run'] for step in jobs['publish']['steps']
+                  if step.get('name') == 'Publish aggregate release')
+    # Execute the real routing shell with inert transports: all verification
+    # consumers run in validation mode, while the publish command cannot run.
+    with tempfile.TemporaryDirectory(prefix='validation-only-routing-') as temporary:
+        root = Path(temporary)
+        (root / 'bin').mkdir(); (root / 'release').mkdir(); (root / 'platform').mkdir()
+        for name in ('publish-release.sh', 'aggregate-release.sh', 'validate-preview-line.sh'):
+            path = root / 'release' / name
+            path.write_text('#!/bin/sh\nprintf \'%s:%s\\n\' \'%s\' "$*" >> "$CALL_LOG"\n' % ('%s', '%s', name))
+            path.chmod(0o755)
+        git = root / 'bin/git'
+        git.write_text('#!/bin/sh\nprintf \'%s\\n\' "$OBSERVED_SHA"\n'); git.chmod(0o755)
+        python = root / 'bin/python3'
+        python.write_text('#!/bin/sh\nprintf \'python:%s\\n\' "$*" >> "$CALL_LOG"\n'); python.chmod(0o755)
+        for mode, identity, success in [('true', 'a' * 40, True), ('false', 'a' * 40, True),
+                                        ('invalid', 'a' * 40, False), ('true', 'b' * 40, False)]:
+            log = root / 'calls'; log.write_text('')
+            env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
+                       CALL_LOG=str(log), OBSERVED_SHA=identity, VALIDATION_ONLY=mode,
+                       SOURCE_SHA='a' * 40, VERSION='release-v1.2.3', SOURCE_REF='main',
+                       PLATFORM_SOURCE_ROOT=str(root / 'platform'))
+            result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True)
+            assert (result.returncode == 0) == success, (mode, identity, result.stderr)
+            calls = log.read_text().splitlines()
+            writes = [line for line in calls if line.startswith('publish-release.sh:publish ')]
+            assert bool(writes) == (mode == 'false' and success), (mode, calls)
+            if mode == 'true' and success:
+                assert len(calls) == 5 and any(line.startswith('publish-release.sh:check ') for line in calls)
+                assert any(line.startswith('aggregate-release.sh:validate ') for line in calls)
+                assert any('release/publication_body.py' in line for line in calls)
+                assert any('release/workbench_registry.py' in line and '--validate-only' in line for line in calls)
+        context = {'github': {'repository': 'kuasar-sandbox/kuasar-sandbox', 'event': {'repository': {
+            'visibility': 'public', 'full_name': 'kuasar-sandbox/kuasar-sandbox'}}}, 'true': True}
+        for mode in (False, True):
+            context['inputs'] = {'validation_only': mode}
+            assert expression(jobs['cleanup']['if'], context) == (not mode)
+
+
 def check():
     entry = load("ci-entry.yml")["jobs"]
     integration = load("integration-tests.yml")["jobs"]
@@ -194,6 +238,7 @@ def check():
                         expected = "ubuntu-24.04"
                     assert job["runs-on"] == expected, (name, job["runs-on"])
     check_request_rejection()
+    check_validation_only_publication()
     caller = load("ci.yml")
     assert caller["permissions"] == {"contents": "read", "pull-requests": "read"}
     platform = caller["jobs"]["ci"]
