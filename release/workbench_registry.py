@@ -99,6 +99,10 @@ def publish(bundle, version, revision):
             'registry publication validation has another contract or source')
     for arch, receipt in receipts.items():
         result = binding.get('workbench', {}).get(arch, {})
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci/integration'))
+        import workbench_groups
+        workbench_groups.verify_live(result)
         require(result.get('conclusion') == 'success' and result.get('image_id') == receipt['image_id']
                 and result.get('sha256') == receipt['sha256'], 'registry image has not passed staged workbench validation')
     token = os.environ.get('GH_TOKEN', '')

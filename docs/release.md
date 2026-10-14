@@ -392,6 +392,21 @@ relative paths and heading fragments. Translation completeness is a separate
 semantic review; a passing package check is not evidence that pending documents
 have been translated.
 
+Grouped Workbench evidence is explicitly versioned as `workbench-groups-v1`
+with `qualification_scope=native-grouped`; historical `system`, `native-full`
+and ARM `artifact-only` records remain readable. It binds both x86 groups and
+ARM evidence to exact source/assets, input producers, Actions jobs, artifacts
+and attempts. Publication and baseline selection reject validation superseded
+by a producer rerun; Preview recovery cannot reuse a result that predates its
+latest producers. The public asset set and download selectors do not change.
+
+The compatible readers must reach main before `workbench_runtime_groups` can
+be enabled, because bind-validation uses main tooling. Default scheduling stays
+full until repeated real end-to-end measurements and failure/rerun acceptance
+justify grouping; see [CI](ci.md#workbench-runtime-groups). Both group receipts
+are retained under the existing Release-body limit and complete registry
+reservation. Disabling scheduling never removes readers for published records.
+
 ## 9. Preview GC
 
 After a Stable aggregate is published, its version line enters a seven-day rollback window. `Preview GC` generates an exact allowlist from first-parent `daily-preview.yaml` history reachable from the Stable tag, not from broad version globs. It also protects:

@@ -84,6 +84,39 @@ The existing `make test-release-tools` entry also runs frozen source-set release
 
 Standalone `make test-release-tools` keeps its platform tooling scope and explicitly reports when no frozen source-set run was requested. For a local, already materialized source set, use `make test-release-source-set ORG=<fixed-source-root> RELEASE_CHECK_OUTPUT=<fresh-evidence-directory>` with the existing Go workspace and toolchain environment. This explicit entry always requires both admission documents and never retrieves new sources.
 
+### Workbench runtime groups
+
+The reusable workflow and aggregate dispatch expose `workbench_runtime_groups`,
+defaulting to false. The default retains the full x86 runtime job and Hosted ARM
+artifact-only qualification. Experimental x86 groups are A (`basic`, `image`,
+`orchestrator`, `sandbox`, `snapshot`) and B (`builder`, `network`, `storage`,
+`telemetry`). Membership derives from this plan's exact ordinary case inventory;
+unknown suites fail, coverage must be complete and disjoint, and the existing
+`storage.obs.sh` exclusion remains. Suite order and state stay within one group.
+Each independent hosted machine and private empty Workbench instance prepares
+**all** ordinary offline inputs, then runs its assigned cases with the unchanged
+2 CPU/8 GiB budget, preflight, egress, isolation, timing, disk and cleanup checks.
+
+Grouped results use explicit `workbench-groups-v1` / `native-grouped` evidence.
+They retain both executions, common exact source/assets/image identities,
+complete coverage and immutable run/attempt/group artifacts. Current successful
+producer jobs, ARM evidence, stage/plan inputs and the final validation job must
+agree. An unchanged earlier successful attempt may be reused; rerunning any
+bound producer invalidates the old validation. Missing, duplicate, failed,
+cancelled or shared-instance evidence cannot authorize publication.
+
+Reader compatibility must be merged before grouped production: the publisher
+loads `bind-validation.py` from **main**. Registry publication, release notes,
+baseline/artifact resolution, Hosted selection and Preview recovery retain
+legacy full and ARM results alongside grouped evidence. Public downloads keep
+the same assets and per-architecture selection. Release-body and complete
+registry-reservation limits are unchanged. Repeated comparable real Actions
+runs, including failure/rerun injections, queue/preparation/execution/final
+feedback and total job minutes, must justify activation. Local or simulated
+metadata is not Actions acceptance. Without stable final benefit at acceptable
+cost, keep `all`. Rollback disables production while retaining readers for any
+published grouped evidence.
+
 ## 4. Daily and Stable
 
 `exact-assets` is callable only by the actual public platform aggregate workflow. Its plan binds the exact committed manifest and staged fourteen-file asset set (platform + twelve component archives + SHA256SUMS). It selects no product or helper rebuilds. Each target uses the same download/compose/public-prepare/public-run/result primitives as PR mode and consumes the prebuilt helper packages from the exact staged platform archive. The separate required source checks remain outside artifact E2E.

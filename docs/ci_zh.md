@@ -129,6 +129,14 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 独立运行 `make test-release-tools` 仍保持平台工具验证范围，未请求固定源码集验证时会明确说明。对已物化的本地源码集，可在保留现有 Go workspace 和工具链环境的情况下执行 `make test-release-source-set ORG=<fixed-source-root> RELEASE_CHECK_OUTPUT=<fresh-evidence-directory>`。该显式入口始终要求两份准入文档，不重新获取源码。
 
+### Workbench 运行分组
+
+可复用工作流和聚合 dispatch 提供 `workbench_runtime_groups`，默认 false，保留 x86 完整运行任务及 Hosted ARM 产物级验收。实验性 x86 分组为 A（`basic`、`image`、`orchestrator`、`sandbox`、`snapshot`）和 B（`builder`、`network`、`storage`、`telemetry`）。成员由本轮 plan 的精确普通用例清单派生，未知套件失败，覆盖必须完整且不相交，`storage.obs.sh` 的既有排除不变。套件顺序与状态保留在同一组内。每个独立 Hosted 机器和空的私有 Workbench 实例均准备**全部**普通离线输入，再以原 2 CPU/8 GiB 预算执行分配用例，保留 preflight、外网、隔离、耗时、磁盘和清理检查。
+
+分组证据显式声明 `workbench-groups-v1` / `native-grouped`，保留两次独立执行、共同的精确源码/资产/镜像身份、完整覆盖及不可覆盖的 run/attempt/group 产物。当前成功生产任务、ARM 证据、stage/plan 输入与最终验收任务必须一致。未变化的较早成功轮次可复用；任何已绑定生产任务重跑均使旧验收失效。缺失、重复、失败、取消或共享实例的证据不得授权发布。
+
+必须先合并兼容读取器，再生产分组结果：发布器从 **main** 加载 `bind-validation.py`。Registry 发布、Release 正文、基线/产物解析、Hosted 选择和 Preview 恢复同时支持历史 full、ARM 与分组证据。公开下载仍使用相同资产和按架构选择，正文上限及完整 registry 预留不变。启用前须用可比较的多次真实 Actions，覆盖失败/重跑注入、排队/准备/执行/最终反馈及总任务分钟，证明最终收益和成本合理。本地或模拟元数据不算 Actions 验收。缺少稳定最终收益或成本过高时保持 `all`；回退停用生产，但保留已发布分组证据的读取能力。
+
 ## 4. Daily 与 Stable
 
 `exact-assets` 仅接受实际公开的平台 aggregate workflow。

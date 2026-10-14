@@ -475,6 +475,10 @@ make test-release-tools
 并验证全部相对路径和标题锚点。翻译完整性需要单独进行语义检视；打包检查通过不能证明
 尚未完成的文档已翻译。
 
+Workbench 分组证据显式使用 `workbench-groups-v1` 和 `qualification_scope=native-grouped`；历史 `system`、`native-full` 及 ARM `artifact-only` 记录仍可读取。它将两个 x86 组及 ARM 证据绑定到精确源码/资产、输入生产任务、Actions job、artifact 和 attempt。发布及基线选择拒绝已被生产任务重跑替代的验收；Preview 恢复不能复用早于最新生产任务的结果。公开资产集合和下载选择器不变。
+
+兼容读取器必须先合入 main，才能启用 `workbench_runtime_groups`，因为 bind-validation 使用 main 工具。默认仍为完整调度，直到多次真实端到端测量及失败/重跑验收证明分组合理，详见 [CI](ci_zh.md#workbench-运行分组)。两组回执均保留，正文上限及完整 registry 预留不变。停用调度不能删除已发布证据的读取能力。
+
 ## 9. Preview GC
 
 Stable 聚合发布后,该版本线进入 7 天回退窗口。`Preview GC` 从 Stable Tag 可达的

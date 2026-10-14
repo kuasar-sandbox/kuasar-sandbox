@@ -15,6 +15,7 @@ import tempfile
 from urllib.parse import quote
 
 import artifacts
+import workbench_groups
 import source_inputs
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -213,6 +214,8 @@ def aggregate(version, *, require_dual=True):
         if contract == release.selection.DELIVERY:
             artifacts.require(binding.get('delivery') == contract, 'missing declared workbench validation binding')
             artifacts.check_workbench_results(version, sha, binding.get('workbench'), expected_assets=binding['assets'], case_files=selected_files)
+            for record in binding['workbench'].values():
+                workbench_groups.verify_live(record)
             artifacts.check_registry_binding(version, binding)
     elif require_dual:
         raise ValueError(f"{version} is a valid historical x86-only baseline; explicit ARM initialization and new unit versions are required")

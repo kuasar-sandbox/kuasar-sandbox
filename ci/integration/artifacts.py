@@ -672,61 +672,76 @@ def check_workbench_results(version, source_sha, results, *, expected_assets, ca
     """Bind system/offline evidence to each tested image and outer archive."""
     require(isinstance(results, dict) and set(results) == set(ARCHES), 'both workbench architecture results are required')
     for arch, record in results.items():
-        name = f'workbench-{arch}-{version.removeprefix("release-")}.tar.gz'
-        require(record.get('conclusion') == 'success' and record.get('arch') == arch
-                and record.get('aggregate_version') == version and record.get('source_revision') == source_sha,
-                'workbench validation has another source/version/architecture or did not pass')
-        require(record.get('archive') == name and 'sha256:' + record.get('sha256', '') == expected_assets.get(name)
-                and re.fullmatch(r'sha256:[0-9a-f]{64}', record.get('image_id', '')),
-                'workbench validation differs from staged archive/image identity')
-        require(type(record.get('size')) is int and 0 < record['size'] < 2 * 1024**3,
-                'workbench compressed archive must be smaller than 2 GiB')
-        scope = record.get('qualification_scope')
-        require(scope in ('system', 'native-full') or (arch == 'aarch64' and scope == 'artifact-only'),
-                'workbench requires an explicit supported qualification scope')
-        require(record.get('imported_image_id') == record['image_id']
-                and record.get('release_inputs_verified') is True,
-                'workbench archive import and release input verification are required')
-        require(record.get('input_assets') == expected_assets, 'workbench input assets differ from the aggregate')
-        for key in ('compression_seconds', 'import_seconds', 'wall_seconds',
-                    *(('start_seconds',) if scope != 'artifact-only' else ())):
-            value = record.get(key)
-            require(type(value) in (int, float) and math.isfinite(value) and value >= 0,
-                    'missing or invalid workbench measurement: ' + key)
-        disk = record.get('disk', {})
-        require(type(record.get('retained_task_bytes')) is int and record['retained_task_bytes'] >= 0
-                and all(type(disk.get(key)) is int and disk[key] >= 0 for key in ('used_before', 'peak_used', 'peak_increase'))
-                and disk['peak_used'] >= disk['used_before']
-                and disk['peak_increase'] == disk['peak_used'] - disk['used_before'],
-                'missing or inconsistent workbench disk measurements')
-        if scope == 'artifact-only':
-            require(record.get('cases') == [] and record.get('planned_cases') == workbench_cases(case_files, arch),
-                    'artifact-only qualification must distinguish planned cases from execution')
-            require(not any(key in record for key in ('offline', 'empty_private_daemon', 'isolation', 'preflight',
-                        'apparmor', 'timings', 'provenance_sha256', 'start_seconds', 'preparation_network', 'execution_network')),
-                    'artifact-only qualification cannot claim system or offline execution')
-            continue
-        require(record.get('offline') is True and record.get('empty_private_daemon') is True,
-                'workbench requires offline preparation from empty private Docker state')
-        require(record.get('preparation_network') == 'none' and record.get('execution_network') == 'owned-bridge',
-                'workbench must block preparation fetches and retain the real guest-egress execution gate')
-        require(record.get('isolation', {}).get('complete') is True
-                and record['isolation'].get('image') == record['image_id'], 'workbench isolation did not pass on the tested image')
-        preflight = record.get('preflight', {})
-        require(all(preflight.get(key) == value for key, value in {
-            'arch': arch, 'page_size': 4096, 'kvm': 'api-12', 'tun': 'create-close',
-            'uffd': 'api-ioctl', 'bpf': 'create-pin-remove'}.items()), 'workbench native system preflight did not pass')
-        require(preflight.get('docker', {}).get('driver') == 'overlay2'
-                and preflight['docker'].get('root') == '/var/lib/docker'
-                and preflight.get('containerd') == {'root': '/var/lib/containerd', 'state': '/run/containerd'},
-                'workbench daemons do not use their private storage')
-        require(record.get('cases') == workbench_cases(case_files, arch, native_full=scope == 'native-full') and record.get('timings'),
-                'workbench cases differ from the complete declared selection')
-        check_timings(record['timings'], record['cases'])
-        require(re.fullmatch(r'[0-9a-f]{64}', record.get('provenance_sha256', '')),
-                'missing workbench prepared-workspace provenance digest')
+        if record.get('qualification_scope') == 'native-grouped':
+            import workbench_groups
+            workbench_groups.check_record(version, source_sha, record, arch=arch,
+                                          expected_assets=expected_assets, case_files=case_files)
+        else:
+            require('runtime_groups' not in record, 'group evidence requires its explicit format and scope')
+            check_workbench_record(version, source_sha, record, arch=arch,
+                                   expected_assets=expected_assets, case_files=case_files)
+
+    if results['x86_64'].get('qualification_scope') == 'native-grouped':
+        require(results['x86_64']['authorization']['arm_result_sha256'] == identity(results['aarch64']),
+                'ARM runtime result differs from authenticated producer evidence')
     return results
 
+
+def check_workbench_record(version, source_sha, record, *, arch, expected_assets, case_files, selected_cases=None):
+    """Original native/ARM checks, also used on each independently prepared group."""
+    name = f'workbench-{arch}-{version.removeprefix("release-")}.tar.gz'
+    require(record.get('conclusion') == 'success' and record.get('arch') == arch
+            and record.get('aggregate_version') == version and record.get('source_revision') == source_sha,
+            'workbench validation has another source/version/architecture or did not pass')
+    require(record.get('archive') == name and 'sha256:' + record.get('sha256', '') == expected_assets.get(name)
+            and re.fullmatch(r'sha256:[0-9a-f]{64}', record.get('image_id', '')),
+            'workbench validation differs from staged archive/image identity')
+    require(type(record.get('size')) is int and 0 < record['size'] < 2 * 1024**3,
+            'workbench compressed archive must be smaller than 2 GiB')
+    scope = record.get('qualification_scope')
+    require(scope in ('system', 'native-full') or (arch == 'aarch64' and scope == 'artifact-only'),
+            'workbench requires an explicit supported qualification scope')
+    require(record.get('imported_image_id') == record['image_id']
+            and record.get('release_inputs_verified') is True,
+            'workbench archive import and release input verification are required')
+    require(record.get('input_assets') == expected_assets, 'workbench input assets differ from the aggregate')
+    for key in ('compression_seconds', 'import_seconds', 'wall_seconds',
+                *(('start_seconds',) if scope != 'artifact-only' else ())):
+        value = record.get(key)
+        require(type(value) in (int, float) and math.isfinite(value) and value >= 0,
+                'missing or invalid workbench measurement: ' + key)
+    disk = record.get('disk', {})
+    require(type(record.get('retained_task_bytes')) is int and record['retained_task_bytes'] >= 0
+            and all(type(disk.get(key)) is int and disk[key] >= 0 for key in ('used_before', 'peak_used', 'peak_increase'))
+            and disk['peak_used'] >= disk['used_before']
+            and disk['peak_increase'] == disk['peak_used'] - disk['used_before'],
+            'missing or inconsistent workbench disk measurements')
+    if scope == 'artifact-only':
+        require(record.get('cases') == [] and record.get('planned_cases') == workbench_cases(case_files, arch),
+                'artifact-only qualification must distinguish planned cases from execution')
+        require(not any(key in record for key in ('offline', 'empty_private_daemon', 'isolation', 'preflight',
+                    'apparmor', 'timings', 'provenance_sha256', 'start_seconds', 'preparation_network', 'execution_network')),
+                'artifact-only qualification cannot claim system or offline execution')
+        return
+    require(record.get('offline') is True and record.get('empty_private_daemon') is True,
+            'workbench requires offline preparation from empty private Docker state')
+    require(record.get('preparation_network') == 'none' and record.get('execution_network') == 'owned-bridge',
+            'workbench must block preparation fetches and retain the real guest-egress execution gate')
+    require(record.get('isolation', {}).get('complete') is True
+            and record['isolation'].get('image') == record['image_id'], 'workbench isolation did not pass on the tested image')
+    preflight = record.get('preflight', {})
+    require(all(preflight.get(key) == value for key, value in {
+        'arch': arch, 'page_size': 4096, 'kvm': 'api-12', 'tun': 'create-close',
+        'uffd': 'api-ioctl', 'bpf': 'create-pin-remove'}.items()), 'workbench native system preflight did not pass')
+    require(preflight.get('docker', {}).get('driver') == 'overlay2'
+            and preflight['docker'].get('root') == '/var/lib/docker'
+            and preflight.get('containerd') == {'root': '/var/lib/containerd', 'state': '/run/containerd'},
+            'workbench daemons do not use their private storage')
+    require(record.get('cases') == (selected_cases if selected_cases is not None else workbench_cases(case_files, arch, native_full=scope == 'native-full')) and record.get('timings'),
+            'workbench cases differ from the complete declared selection')
+    check_timings(record['timings'], record['cases'])
+    require(re.fullmatch(r'[0-9a-f]{64}', record.get('provenance_sha256', '')),
+            'missing workbench prepared-workspace provenance digest')
 
 def check_registry_binding(version, binding):
     registry = binding.get('registry', {})

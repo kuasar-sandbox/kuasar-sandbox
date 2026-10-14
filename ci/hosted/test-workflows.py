@@ -274,7 +274,13 @@ def check():
     assert 'continue-on-error' not in json.dumps(native)
     released = integration['workbench-release']
     assert released['needs'] == 'resolve'
-    assert released['strategy']['matrix'] == native['strategy']['matrix']
+    include = released['strategy']['matrix']['include']
+    for grouped in (False, True):
+        rows = expression(include, {'inputs': {'workbench_runtime_groups': grouped}})
+        expected = [('x86_64', 'A'), ('x86_64', 'B'), ('aarch64', 'all')] if grouped else [('x86_64', 'all'), ('aarch64', 'all')]
+        assert [(row['arch'], row['group']) for row in rows] == expected
+        assert {(row['arch'], row['runner']) for row in rows} == {(row['arch'], row['runner']) for row in native['strategy']['matrix']['include']}
+    assert released['strategy']['fail-fast'] is False
     release_script = next(step['run'] for step in released['steps'] if step.get('name', '').startswith('Qualify staged'))
     assert "matrix.arch" in release_script and '--artifact-only' in release_script
     assert 'continue-on-error' not in json.dumps(released)

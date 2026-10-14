@@ -7,6 +7,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ci/integration"))
 import artifacts
+import workbench_groups
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import publication_body
 
@@ -34,6 +35,7 @@ def bind(bundle, plan, validation, workbench=None):
     binding['workbench'] = artifacts.check_workbench_results(plan['baseline']['version'], plan['baseline']['sha'], workbench,
                                                            expected_assets=binding['assets'], case_files=plan['case_files'])
     for arch, result in binding['workbench'].items():
+        workbench_groups.verify_live(result)
         artifacts.require(result['plan_id'] == artifacts.identity(plan) and result['framework_sha'] == plan['framework_sha']
                           and result['test_revisions'] == plan['test_revisions'], 'workbench executor provenance differs from plan')
         receipt = json.loads((bundle / 'workbench' / f'workbench-{arch}.json').read_text())
