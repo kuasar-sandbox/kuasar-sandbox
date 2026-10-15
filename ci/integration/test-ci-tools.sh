@@ -364,14 +364,6 @@ setup_workspace() {
     printf 'build envd fixture\n' >"$root/guest-runtime/native-deps/deps/build-envd.sh"
 }
 
-setup_erofs_workspace() {
-    local root=$1
-    mkdir -p "$root/guest-runtime/native-deps/deps"
-    printf 'erofs target fixture\n' >"$root/guest-runtime/native-deps/Makefile"
-    printf 'common fixture\n' >"$root/guest-runtime/native-deps/deps/common.sh"
-    printf 'build erofs fixture\n' >"$root/guest-runtime/native-deps/deps/build-erofs.sh"
-}
-
 setup_vmlinux_workspace() {
     local root=$1
     mkdir -p "$root/guest-runtime/native-deps/deps/vmlinux" \
@@ -453,24 +445,6 @@ case "$target" in
             >"$workdir/build/src/e2b-infra/packages/envd/go.mod"
         printf 'package main\nfunc main() {}\n' >"$workdir/build/src/e2b-infra/packages/envd/main.go"
         printf 'module example.test/shared\n' >"$workdir/build/src/e2b-infra/packages/shared/go.mod"
-        ;;
-    erofs)
-        mkdir -p "$workdir/bin/$arch" "$workdir/build/$arch/src/erofs-utils"
-        printf 'fake-mkfs.erofs\n' >"$workdir/bin/$arch/mkfs.erofs"
-        printf 'fake-fsck.erofs\n' >"$workdir/bin/$arch/fsck.erofs"
-        chmod +x "$workdir/bin/$arch/mkfs.erofs" "$workdir/bin/$arch/fsck.erofs"
-        printf 'erofs authors fixture\n' >"$workdir/build/$arch/src/erofs-utils/AUTHORS"
-        printf 'erofs copying fixture\n' >"$workdir/build/$arch/src/erofs-utils/COPYING"
-        printf 'erofs build stamp fixture\n' >"$workdir/bin/$arch/.erofs-recipe"
-        mkdir -p "$workdir/build/$arch/src/erofs-utils/mkfs" "$workdir/build/$arch/src/erofs-utils/LICENSES"
-        printf 'erofs map fixture\n' >"$workdir/build/$arch/src/erofs-utils/mkfs/mkfs.erofs.map"
-        mkdir -p "$workdir/build/$arch/src/erofs-utils/lib/.libs"
-        printf 'erofs object fixture\n' >"$workdir/build/$arch/src/erofs-utils/mkfs/mkfs_erofs-main.o"
-        mkdir -p "$workdir/build/$arch/src/erofs-utils/fsck"
-        printf 'erofs fsck map fixture\n' >"$workdir/build/$arch/src/erofs-utils/fsck/fsck.erofs.map"
-        printf 'erofs fsck object fixture\n' >"$workdir/build/$arch/src/erofs-utils/fsck/fsck_erofs-main.o"
-        printf 'erofs archive fixture\n' >"$workdir/build/$arch/src/erofs-utils/lib/.libs/liberofs.a"
-        printf 'erofs patch notice fixture\n' >"$workdir/build/$arch/src/erofs-utils/LICENSES/fixture"
         ;;
     deps-rocksdb)
         mkdir -p "$workdir/build/$arch/rocksdb/include/rocksdb" \
@@ -595,7 +569,7 @@ changed_source_key="$(env PATH="$TMP/bin:$PATH" ENVD_TARBALL="$TMP/envd-source.t
 [ "$local_source_key" != "$changed_source_key" ] || fail "local native source bytes did not invalidate the key"
 
 cross_workspace="$TMP/cross-workspace"
-setup_erofs_workspace "$cross_workspace"
+setup_rocksdb_workspace "$cross_workspace"
 for tool in gcc g++ ar ld; do
     cat >"$TMP/bin/custom-$tool" <<EOF
 #!/usr/bin/env bash
@@ -605,119 +579,12 @@ EOF
 done
 cross_key_v1="$(env PATH="$TMP/bin:$PATH" CROSS_PREFIX="$TMP/bin/custom-" \
     KUASAR_WORKSPACE_ROOT="$cross_workspace" \
-    "$SCRIPT_DIR/../native-cache/native-cache.sh" key erofs | cut -f2)"
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" key rocksdb | cut -f2)"
 printf '# toolchain update\n' >>"$TMP/bin/custom-gcc"
 cross_key_v2="$(env PATH="$TMP/bin:$PATH" CROSS_PREFIX="$TMP/bin/custom-" \
     KUASAR_WORKSPACE_ROOT="$cross_workspace" \
-    "$SCRIPT_DIR/../native-cache/native-cache.sh" key erofs | cut -f2)"
+    "$SCRIPT_DIR/../native-cache/native-cache.sh" key rocksdb | cut -f2)"
 [ "$cross_key_v1" != "$cross_key_v2" ] || fail "custom cross compiler did not invalidate the key"
-
-pkg_workspace="$TMP/pkg-workspace"
-pkg_fixture="$TMP/pkg-fixture"
-pkg_bin="$TMP/pkg-bin"
-setup_erofs_workspace "$pkg_workspace"
-mkdir -p "$pkg_fixture/lib" "$pkg_bin"
-printf 'Name: uuid fixture\nVersion: 1\n' >"$pkg_fixture/uuid.pc"
-for module in uuid libgcrypt gpg-error; do
-    printf 'Name: %s fixture\nVersion: 1\n' "$module" >"$pkg_fixture/$module.pc"
-done
-for library in uuid gcrypt gpg-error; do
-    printf 'static %s v1\n' "$library" >"$pkg_fixture/lib/lib$library.a"
-done
-cat >"$pkg_bin/pkg-config" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-: "${PKG_CONFIG_FIXTURE:?}"
-case "${1:-}" in
-    --version) printf 'pkg-config fixture 1\n' ;;
-    --exists) exit 0 ;;
-    --path) printf '%s/%s.pc\n' "$PKG_CONFIG_FIXTURE" "${@: -1}" ;;
-    --modversion) printf '1\n' ;;
-    --cflags) printf '%s\n' "-I$PKG_CONFIG_FIXTURE/include" ;;
-    --libs)
-        case "${@: -1}" in
-            uuid) libs=-luuid ;;
-            libgcrypt) libs='-lgcrypt -lgpg-error' ;;
-            gpg-error) libs=-lgpg-error ;;
-        esac
-        printf '%s\n' "-L$PKG_CONFIG_FIXTURE/lib $libs"
-        ;;
-    --variable=libdir) printf '%s/lib\n' "$PKG_CONFIG_FIXTURE" ;;
-    *) exit 2 ;;
-esac
-EOF
-chmod +x "$pkg_bin/pkg-config"
-pkg_key_v1="$(env PATH="$TMP/bin:$PATH" PKG_CONFIG="$pkg_bin/pkg-config" \
-    PKG_CONFIG_FIXTURE="$pkg_fixture" KUASAR_WORKSPACE_ROOT="$pkg_workspace" \
-    "$SCRIPT_DIR/../native-cache/native-cache.sh" key erofs | cut -f2)"
-printf 'static uuid v2\n' >"$pkg_fixture/lib/libuuid.a"
-pkg_key_v2="$(env PATH="$TMP/bin:$PATH" PKG_CONFIG="$pkg_bin/pkg-config" \
-    PKG_CONFIG_FIXTURE="$pkg_fixture" KUASAR_WORKSPACE_ROOT="$pkg_workspace" \
-    "$SCRIPT_DIR/../native-cache/native-cache.sh" key erofs | cut -f2)"
-[ "$pkg_key_v1" != "$pkg_key_v2" ] \
-    || fail "pkg-config selected library did not invalidate the erofs key"
-
-# Independently vary Libgcrypt metadata and both selected static libraries.
-previous_key="$pkg_key_v2"
-for input in libgcrypt.pc gpg-error.pc lib/libgcrypt.a lib/libgpg-error.a; do
-    printf 'updated\n' >> "$pkg_fixture/$input"
-    next_key="$(env PATH="$TMP/bin:$PATH" PKG_CONFIG="$pkg_bin/pkg-config" \
-        PKG_CONFIG_FIXTURE="$pkg_fixture" KUASAR_WORKSPACE_ROOT="$pkg_workspace" \
-        "$SCRIPT_DIR/../native-cache/native-cache.sh" key erofs | cut -f2)"
-    [ "$previous_key" != "$next_key" ] || fail "Libgcrypt $input did not invalidate EROFS"
-    previous_key="$next_key"
-done
-
-patch_dir="$pkg_workspace/guest-runtime/native-deps/deps/erofs-patches"
-mkdir "$patch_dir"
-empty_patch_key="$(env PATH="$TMP/bin:$PATH" PKG_CONFIG="$pkg_bin/pkg-config" \
-    PKG_CONFIG_FIXTURE="$pkg_fixture" KUASAR_WORKSPACE_ROOT="$pkg_workspace" \
-    "$SCRIPT_DIR/../native-cache/native-cache.sh" key erofs | cut -f2)"
-[ "$previous_key" = "$empty_patch_key" ] || fail "empty optional EROFS patch directory changed key"
-for mutation in add edit license remove; do
-    case "$mutation" in
-        add) printf 'patch v1\n' > "$patch_dir/test.patch" ;;
-        edit) printf 'patch v2\n' > "$patch_dir/test.patch" ;;
-        license) printf 'SPDX-License-Identifier: Apache-2.0\n' > "$patch_dir/test.patch.license" ;;
-        remove) rm "$patch_dir/test.patch" "$patch_dir/test.patch.license" ;;
-    esac
-    next_key="$(env PATH="$TMP/bin:$PATH" PKG_CONFIG="$pkg_bin/pkg-config" \
-        PKG_CONFIG_FIXTURE="$pkg_fixture" KUASAR_WORKSPACE_ROOT="$pkg_workspace" \
-        "$SCRIPT_DIR/../native-cache/native-cache.sh" key erofs | cut -f2)"
-    [ "$previous_key" != "$next_key" ] || fail "EROFS patch $mutation did not invalidate key"
-    previous_key="$next_key"
-done
-[ "$empty_patch_key" = "$previous_key" ] || fail "removed patches left a different input key"
-
-# Patch order and the helper that applies it are independent recipe inputs.
-# Older source sets without either file retain the same key after removal.
-erofs_fixture_key() {
-    env PATH="$TMP/bin:$PATH" PKG_CONFIG="$pkg_bin/pkg-config" \
-        PKG_CONFIG_FIXTURE="$pkg_fixture" KUASAR_WORKSPACE_ROOT="$pkg_workspace" \
-        "$SCRIPT_DIR/../native-cache/native-cache.sh" key erofs | cut -f2
-}
-printf 'first patch\n' > "$patch_dir/first.patch"
-printf 'second patch\n' > "$patch_dir/second.patch"
-legacy_recipe_key="$(erofs_fixture_key)"
-printf 'first.patch\nsecond.patch\n' > "$patch_dir/series"
-ordered_key="$(erofs_fixture_key)"
-[ "$ordered_key" != "$legacy_recipe_key" ] || fail "adding EROFS series did not invalidate key"
-printf 'second.patch\nfirst.patch\n' > "$patch_dir/series"
-reordered_key="$(erofs_fixture_key)"
-[ "$reordered_key" != "$ordered_key" ] || fail "reordering EROFS series did not invalidate key"
-rm "$patch_dir/series"
-[ "$(erofs_fixture_key)" = "$legacy_recipe_key" ] || fail "removed EROFS series did not restore legacy key"
-
-recipe_helper="$pkg_workspace/guest-runtime/native-deps/deps/erofs-recipe.sh"
-printf 'apply_erofs_patches() { patch -p1 < "$1"; }\n' > "$recipe_helper"
-helper_key="$(erofs_fixture_key)"
-[ "$helper_key" != "$legacy_recipe_key" ] || fail "adding EROFS recipe helper did not invalidate key"
-printf 'apply_erofs_patches() { patch --fuzz=0 -p1 < "$1"; }\n' > "$recipe_helper"
-changed_helper_key="$(erofs_fixture_key)"
-[ "$changed_helper_key" != "$helper_key" ] || fail "changing EROFS recipe helper did not invalidate key"
-rm "$recipe_helper"
-[ "$(erofs_fixture_key)" = "$legacy_recipe_key" ] || fail "removed EROFS recipe helper did not restore legacy key"
-printf 'test-ci-tools: EROFS series order and recipe helper mutations PASS\n'
 
 vmlinux_workspace="$TMP/vmlinux-workspace"
 setup_vmlinux_workspace "$vmlinux_workspace"
@@ -830,19 +697,14 @@ rocks_key_v2="$(env PATH="$TMP/bin:$PATH" CC=clang CXX=clang++ \
 material_cache="$TMP/material-cache"
 material_counter="$TMP/material-build-counter"
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" \
-    KUASAR_WORKSPACE_ROOT="$cross_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
-    "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build erofs
-env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" \
     KUASAR_WORKSPACE_ROOT="$rocks_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build rocksdb
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" CARGO_HOME="$cargo_home" \
     KUASAR_WORKSPACE_ROOT="$cloud_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
     KUASAR_WORKBENCH_IMAGE_ID=sha256:fixture KUASAR_WORKBENCH_FRAMEWORK_SHA=framework-fixture \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build cloud-hypervisor
-[ "$(wc -l <"$material_counter")" -eq 3 ] \
+[ "$(wc -l <"$material_counter")" -eq 2 ] \
     || fail "cold native material fixtures did not build exactly once per component"
-[ "$(cat "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/COPYING")" \
-    = 'erofs copying fixture' ] || fail "erofs cache omitted source license material"
 [ "$(cat "$rocks_workspace/accelerator/build/src/rocksdb/LICENSE.Apache")" \
     = 'rocksdb LICENSE.Apache fixture' ] || fail "RocksDB cache omitted source license material"
 [ "$(cat "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md")" \
@@ -861,44 +723,18 @@ rm -rf "$cloud_workspace"
 setup_cloud_hypervisor_workspace "$cloud_workspace"
 
 rm -f \
-    "$cross_workspace/guest-runtime/native-deps/bin/$TARGET_ARCH/mkfs.erofs" \
-    "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/COPYING" \
-    "$cross_workspace/guest-runtime/native-deps/bin/$TARGET_ARCH/.erofs-recipe" \
-    "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs.erofs.map" \
-    "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/LICENSES/fixture" \
-    "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs_erofs-main.o" \
-    "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/lib/.libs/liberofs.a" \
     "$rocks_workspace/accelerator/build/$TARGET_ARCH/rocksdb/lib/librocksdb.a" \
     "$rocks_workspace/accelerator/build/src/rocksdb/LICENSE.Apache" \
     "$cloud_workspace/sandboxer/native-deps/bin/$TARGET_ARCH/cloud-hypervisor" \
     "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md"
-env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" \
-    KUASAR_WORKSPACE_ROOT="$cross_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
-    "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build erofs
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" \
     KUASAR_WORKSPACE_ROOT="$rocks_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build rocksdb
 env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" CARGO_HOME="$cargo_home" \
     KUASAR_WORKSPACE_ROOT="$cloud_workspace" KUASAR_NATIVE_CACHE_ROOT="$material_cache" \
     "$SCRIPT_DIR/../native-cache/native-cache.sh" restore-or-build cloud-hypervisor
-[ "$(wc -l <"$material_counter")" -eq 3 ] \
+[ "$(wc -l <"$material_counter")" -eq 2 ] \
     || fail "hot native material fixtures rebuilt a component"
-[ -s "$cross_workspace/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils/COPYING" ] \
-    || fail "hot erofs cache did not restore source license material"
-for restored in \
-    bin/$TARGET_ARCH/.erofs-recipe \
-    build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs.erofs.map \
-    build/$TARGET_ARCH/src/erofs-utils/LICENSES/fixture \
-    build/$TARGET_ARCH/src/erofs-utils/mkfs/mkfs_erofs-main.o \
-    build/$TARGET_ARCH/src/erofs-utils/lib/.libs/liberofs.a; do
-    [ -s "$cross_workspace/guest-runtime/native-deps/$restored" ] \
-        || fail "hot EROFS cache omitted $restored"
-done
-# Cached generated materials never replace the admitted repository patch set.
-if tar -tf "$(find "$material_cache/v3/$TARGET_ARCH/erofs" -name payload.tar -print -quit)" \
-    | grep -q 'native-deps/deps/'; then
-    fail "EROFS cache archives repository source inputs"
-fi
 [ -s "$rocks_workspace/accelerator/build/src/rocksdb/LICENSE.Apache" ] \
     || fail "hot RocksDB cache did not restore source license material"
 [ -s "$cloud_workspace/sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md" ] \
@@ -937,7 +773,7 @@ if env PATH="$TMP/bin:$PATH" FAKE_BUILD_COUNTER="$material_counter" CARGO_HOME="
 fi
 grep -q 'native payload omits outputs' "$TMP/partial-material.log" \
     || fail "incomplete cache did not identify the missing materials"
-[ "$(wc -l <"$material_counter")" -eq 3 ] || fail "damaged cache silently rebuilt a component"
+[ "$(wc -l <"$material_counter")" -eq 2 ] || fail "damaged cache silently rebuilt a component"
 [ "$(sha256sum "$cloud_report" | cut -d ' ' -f1)" = "$cloud_report_hash" ] \
     || fail "rejected cache damaged valid existing build materials"
 
@@ -1110,7 +946,6 @@ if find "$TMP/source-workspace" -maxdepth 1 \
     fail "source materializer left a staging directory behind"
 fi
 
-python3 "$SCRIPT_DIR/../native-cache/test-erofs-inputs.py"
 python3 -B "$SCRIPT_DIR/../native-cache/test-payload.py"
 python3 -B "$SCRIPT_DIR/../native-cache/test-native-key.py"
 echo "test-ci-tools: PASS"

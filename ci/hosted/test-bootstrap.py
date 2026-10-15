@@ -172,11 +172,20 @@ class BootstrapTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), f"1 {cpu}")
 
-    def test_host_erofs_writer_and_readers_are_installed(self):
+    def test_only_erofs_readers_are_built(self):
         source = BOOTSTRAP.read_text()
-        for tool in ("mkfs", "fsck", "dump"):
+        for tool in ("fsck", "dump"):
             self.assertIn(f'make -C {tool} -j"$KUASAR_BUILD_JOBS"', source)
             self.assertIn(f"{tool}/{tool}.erofs", source)
+
+        self.assertNotIn("make -C mkfs", source)
+        self.assertNotIn("mkfs/mkfs.erofs", source)
+
+    def test_transported_readers_do_not_include_mkfs(self):
+        workflow = (BOOTSTRAP.parents[2] / ".github/workflows/integration-architecture.yml").read_text()
+        self.assertNotIn("readers/mkfs.erofs", workflow)
+        self.assertNotIn("{mkfs.erofs,", workflow)
+        self.assertNotIn("sha256sum mkfs.erofs", workflow)
 
     def test_ephemeral_paths(self):
         source = BOOTSTRAP.read_text()

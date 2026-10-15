@@ -61,6 +61,10 @@ TUN、vhost 设备、全部 capability、Docker keyring syscall 及 Connector �
 
 ## 安装
 
+下述静态 uuid/crypto 配置仍为历史源码环境保留。当前 runtime 发布使用 Go
+生成器，不再编译或分发 mkfs；runtime bundle 打包使用宿主预安装的
+erofs-utils。这些历史依赖供应流程不是当前 guest 的依赖要求。
+
 在集成主机上以 root 从本目录执行:
 
 ```bash

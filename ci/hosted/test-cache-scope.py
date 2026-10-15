@@ -204,7 +204,7 @@ class CacheScopes(unittest.TestCase):
         (self.sources / ".ci/plan.json").write_text(json.dumps(plan))
         readers = self.sources / ".ci/readers"
         readers.mkdir()
-        for name in ("mkfs.erofs", "fsck.erofs", "dump.erofs", "runtime-payloads.py", "erofs-readers.COPYING", "SHA256SUMS"):
+        for name in ("fsck.erofs", "dump.erofs", "runtime-payloads.py", "erofs-readers.COPYING", "SHA256SUMS"):
             (readers / name).write_text("reader bytes for " + name)
         self.dispatch()
         self.assertEqual(self.decide()["namespace"], "trusted")

@@ -76,6 +76,11 @@ set first, then loads the required modules and validates all device nodes.
 
 ## Install
 
+The static uuid/crypto provisioning described below remains for historical
+source environments. Current runtime releases use the Go generator and do not
+compile or ship mkfs. Runtime bundle packing uses host-installed erofs-utils;
+these legacy dependency providers are not a current guest requirement.
+
 Run from this directory on the integration host as root:
 
 ```bash

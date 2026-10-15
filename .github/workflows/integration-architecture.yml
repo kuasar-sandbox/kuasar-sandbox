@@ -89,9 +89,9 @@ jobs:
       - name: Retain trusted readers outside candidate mounts
         run: |
           mkdir readers
-          cp reader-build/reader-tools/bin/{mkfs.erofs,fsck.erofs,dump.erofs,runtime-payloads.py} readers/
+          cp reader-build/reader-tools/bin/{fsck.erofs,dump.erofs,runtime-payloads.py} readers/
           cp reader-build/reader-tools/erofs-readers.COPYING readers/
-          (cd readers && sha256sum mkfs.erofs fsck.erofs dump.erofs runtime-payloads.py erofs-readers.COPYING > SHA256SUMS)
+          (cd readers && sha256sum fsck.erofs dump.erofs runtime-payloads.py erofs-readers.COPYING > SHA256SUMS)
       - name: Upload immutable native readers
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -186,7 +186,7 @@ jobs:
       - name: Verify and select the prebuilt archive readers
         run: |
           (cd readers && sha256sum --check SHA256SUMS)
-          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          chmod 0755 readers/fsck.erofs readers/dump.erofs
           echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
           echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
       - name: Prepare a runtime without Go, Rust or component sources
@@ -277,7 +277,7 @@ jobs:
       - name: Verify and select the prebuilt archive readers
         run: |
           (cd readers && sha256sum --check SHA256SUMS)
-          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          chmod 0755 readers/fsck.erofs readers/dump.erofs
           echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
           echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
       - name: Prepare an isolated runtime without Go, Rust or component sources
@@ -349,7 +349,7 @@ jobs:
       - name: Verify and select the prebuilt archive readers
         run: |
           (cd readers && sha256sum --check SHA256SUMS)
-          chmod 0755 readers/mkfs.erofs readers/fsck.erofs readers/dump.erofs
+          chmod 0755 readers/fsck.erofs readers/dump.erofs
           echo "$GITHUB_WORKSPACE/readers" >> "$GITHUB_PATH"
           echo "KUASAR_RUNTIME_READER=$GITHUB_WORKSPACE/readers/runtime-payloads.py" >> "$GITHUB_ENV"
       - name: Run the independent working-set performance gate

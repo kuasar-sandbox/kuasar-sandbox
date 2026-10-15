@@ -177,7 +177,7 @@ def transport_identity(path):
                                               for name, row in entries.items() if name != "SHA256SUMS"), key=canonical)
                                       if known else content)
             else:
-                known = regular and set(entries) == {"mkfs.erofs", "fsck.erofs", "dump.erofs",
+                known = regular and set(entries) == {"fsck.erofs", "dump.erofs",
                     "runtime-payloads.py", "erofs-readers.COPYING", "SHA256SUMS"}
                 # Reader names select different executables; keep that binding.
                 stable[child.name] = {name: {key: row[key] for key in ("mode", "sha256")}

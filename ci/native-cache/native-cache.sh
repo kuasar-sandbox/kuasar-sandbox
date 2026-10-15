@@ -102,23 +102,6 @@ component_input_paths() {
             find "$WORKSPACE_ROOT/guest-runtime/native-deps/deps/vmlinux" -type f -name '*.config' -print0
             find "$WORKSPACE_ROOT/guest-runtime/native-deps/deps/linux-patches" -type f -name '*.patch' -print0
             ;;
-        erofs)
-            required_file guest-runtime/native-deps/Makefile
-            required_file guest-runtime/native-deps/deps/common.sh
-            required_file guest-runtime/native-deps/deps/build-erofs.sh
-            if [ -f "$WORKSPACE_ROOT/guest-runtime/Makefile" ]; then
-                required_file guest-runtime/Makefile
-            fi
-            if [ -f "$WORKSPACE_ROOT/guest-runtime/native-deps/deps/erofs-recipe.sh" ]; then
-                required_file guest-runtime/native-deps/deps/erofs-recipe.sh
-            fi
-            # Separate EROFS patch PRs may add this directory; older source
-            # sets have none. Never restore repository inputs from a cache.
-            if [ -d "$WORKSPACE_ROOT/guest-runtime/native-deps/deps/erofs-patches" ]; then
-                find "$WORKSPACE_ROOT/guest-runtime/native-deps/deps/erofs-patches" \
-                    -maxdepth 1 -type f -print0
-            fi
-            ;;
         envd)
             required_file guest-runtime/native-deps/Makefile
             required_file guest-runtime/native-deps/deps/common.sh
@@ -346,12 +329,6 @@ component_environment() {
                 PKG_CONFIG PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
             )
             ;;
-        erofs)
-            names+=(
-                EROFS_TARBALL_SHA256 CROSS_PREFIX CFLAGS CPPFLAGS CXXFLAGS LDFLAGS LIBS
-                PKG_CONFIG PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
-            )
-            ;;
         envd)
             names+=(
                 ENVD_TARBALL ENVD_TARBALL_SHA256 ENVD_GOFLAGS GOFLAGS GOTOOLCHAIN
@@ -417,7 +394,6 @@ local_archive_identity() {
         envd) variable=ENVD_TARBALL; directory=guest-runtime/native-deps ;;
         rocksdb) variable=ROCKSDB_TARBALL; directory=accelerator ;;
         cloud-hypervisor) variable=CLOUD_HYPERVISOR_TARBALL; directory=sandboxer/native-deps ;;
-        erofs) return ;; # erofs-inputs.py also handles Makefile-local archives.
     esac
     specifier=${!variable-}
     case "$specifier" in
@@ -465,39 +441,6 @@ component_toolchain() {
             pkg_config_module_identity libssl
             pkg_config_module_identity openssl
             ;;
-        erofs)
-            tool_identity cc "$cc" --version
-            tool_identity cxx "$cxx" --version
-            tool_identity ar "$ar" --version
-            tool_identity make make --version
-            tool_identity autoconf autoconf --version
-            tool_identity automake automake --version
-            tool_identity libtoolize libtoolize --version
-            tool_identity pkg-config "$pkg_config" --version
-            package_identities \
-                'gcc gcc-c++ make autoconf automake libtool libuuid-devel glibc-static libgcrypt-devel libgpg-error-devel' \
-                'gcc g++ make autoconf automake libtool uuid-dev libc6-dev libgcrypt20-dev libgpg-error-dev'
-            # Match build-erofs.sh's target-only default pkg-config search.
-            # Keep caller-supplied sysroot/libdir overrides in the descriptor.
-            if [ -n "$cross_prefix" ]; then
-                local multiarch sysroot
-                multiarch="$("$cc" -print-multiarch 2>/dev/null || true)"
-                sysroot="$("$cc" -print-sysroot 2>/dev/null || true)"
-                export PKG_CONFIG_LIBDIR="${PKG_CONFIG_LIBDIR-${sysroot%/}/usr/lib/$multiarch/pkgconfig:${sysroot%/}/lib/$multiarch/pkgconfig:${sysroot%/}/usr/share/pkgconfig}"
-                export PKG_CONFIG_PATH="${PKG_CONFIG_PATH:-}"
-                export PKG_CONFIG_SYSROOT_DIR="${PKG_CONFIG_SYSROOT_DIR:-$sysroot}"
-            fi
-            pkg_config_module_identity uuid
-            # Optional modules keep legacy source sets supported. The probe
-            # below resolves only the backend actually selected by the recipe.
-            pkg_config_module_identity libgcrypt
-            pkg_config_module_identity gpg-error
-            if grep -q -- '--with-openssl' "$WORKSPACE_ROOT/guest-runtime/native-deps/deps/build-erofs.sh"; then
-                pkg_config_module_identity openssl
-            fi
-            printf 'erofs-tracker\t%s\n' "$(sha256sum "$SCRIPT_DIR/erofs-inputs.py" | cut -d ' ' -f1)"
-            python3 "$SCRIPT_DIR/erofs-inputs.py" "$WORKSPACE_ROOT" "$cross_prefix" || return
-            ;;
         envd)
             tool_identity go go version
             tool_identity go-env go env GOOS GOARCH GOVERSION GOEXPERIMENT GOFLAGS GOAMD64 GOARM64 CGO_ENABLED
@@ -527,10 +470,7 @@ component_toolchain() {
 }
 
 compute_key() {
-    local component=$1 descriptor=$2 path relative paths_file archive_output
-    if [ "$component" = erofs ]; then
-        archive_output="$(erofs_archive_output)" || return
-    fi
+    local component=$1 descriptor=$2 path relative paths_file
     paths_file="$(mktemp)"
     component_input_paths "$component" >"$paths_file"
     sort -zu "$paths_file" -o "$paths_file"
@@ -538,9 +478,6 @@ compute_key() {
         printf 'schema\t%s\n' "$CACHE_SCHEMA"
         printf 'component\t%s\n' "$component"
         printf 'target_arch\t%s\n' "$TARGET_ARCH"
-        if [ "$component" = erofs ]; then
-            printf 'source-archive-output\t%s\n' "$archive_output"
-        fi
         component_environment "$component"
         local_archive_identity "$component"
         component_toolchain "$component" || { rm -f "$paths_file"; return 1; }
@@ -553,29 +490,6 @@ compute_key() {
     sha256sum "$descriptor" | awk '{print $1}'
 }
 
-erofs_archive_output() {
-    # build-erofs checks the exact source archive before its recipe stamp.
-    # Carry that verified download into the next job as well as the binaries.
-    # Local archives are admitted inputs and remain in their caller-owned path.
-    python3 - "$WORKSPACE_ROOT/guest-runtime/native-deps/Makefile" <<'PY'
-import os
-from pathlib import Path
-import re
-import sys
-from urllib.parse import urlsplit
-
-source = os.environ.get("EROFS_TARBALL")
-if source is None:
-    match = re.search(r"^EROFS_TARBALL\s*\?=\s*(.*)$", Path(sys.argv[1]).read_text(), re.M)
-    source = match[1].strip().replace("\\#", "#") if match else ""
-if source.startswith(("https://", "http://")):
-    filename = source.split("#", 1)[1] if "#" in source else Path(urlsplit(source).path).name
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", filename):
-        raise SystemExit("native-cache: unsafe EROFS archive filename")
-    print("guest-runtime/native-deps/build/tarball/" + filename)
-PY
-}
-
 component_outputs() {
     case "$1" in
         vmlinux)
@@ -584,13 +498,6 @@ component_outputs() {
                 guest-runtime/native-deps/build/src/linux/COPYING \
                 guest-runtime/native-deps/build/src/linux/CREDITS \
                 guest-runtime/native-deps/build/src/linux/LICENSES
-            ;;
-        erofs)
-            printf 'guest-runtime/native-deps/bin/%s/mkfs.erofs\n' "$TARGET_ARCH"
-            printf 'guest-runtime/native-deps/bin/%s/fsck.erofs\n' "$TARGET_ARCH"
-            printf 'guest-runtime/native-deps/bin/%s/.erofs-recipe\n' "$TARGET_ARCH"
-            printf 'guest-runtime/native-deps/build/%s/src/erofs-utils\n' "$TARGET_ARCH"
-            erofs_archive_output
             ;;
         envd)
             printf 'guest-runtime/native-deps/bin/%s/envd\n' "$TARGET_ARCH"
@@ -620,13 +527,6 @@ component_outputs() {
 
 component_required_files() {
     case "$1" in
-        erofs)
-            local name
-            for name in AUTHORS COPYING mkfs/mkfs.erofs.map mkfs/mkfs_erofs-main.o \
-                fsck/fsck.erofs.map fsck/fsck_erofs-main.o lib/.libs/liberofs.a; do
-                printf 'guest-runtime/native-deps/build/%s/src/erofs-utils/%s\n' "$TARGET_ARCH" "$name"
-            done
-            ;;
         envd)
             printf '%s\n' guest-runtime/native-deps/build/src/e2b-infra/LICENSE \
                 guest-runtime/native-deps/build/src/e2b-infra/packages/envd/go.mod \
@@ -643,19 +543,7 @@ component_required_files() {
 }
 
 component_payload_paths() {
-    local component=$1 relative source
-    source="guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils"
-    while IFS= read -r relative; do
-        if [ "$component" = erofs ] && [ "$relative" = "$source" ]; then
-            # Preserve the real link/relink and source notice inputs. Generated
-            # Autotools helper symlinks are not packaging inputs, and may point
-            # into the producing host's /usr/share directory.
-            component_required_files erofs
-            [ ! -e "$WORKSPACE_ROOT/$source/LICENSES" ] || printf '%s/LICENSES\n' "$source"
-        else
-            printf '%s\n' "$relative"
-        fi
-    done < <(component_outputs "$component")
+    component_outputs "$1"
 }
 
 remove_outputs() {
@@ -681,7 +569,6 @@ assert_clean_source_tree() {
     local component=$1 source_dir=""
     case "$component" in
         vmlinux) source_dir="$WORKSPACE_ROOT/guest-runtime/native-deps/build/src/linux" ;;
-        erofs) source_dir="$WORKSPACE_ROOT/guest-runtime/native-deps/build/$TARGET_ARCH/src/erofs-utils" ;;
         envd) source_dir="$WORKSPACE_ROOT/guest-runtime/native-deps/build/src/e2b-infra" ;;
         rocksdb) source_dir="$WORKSPACE_ROOT/accelerator/build/src/rocksdb" ;;
         cloud-hypervisor) source_dir="$WORKSPACE_ROOT/sandboxer/native-deps/build/src/cloud-hypervisor" ;;
@@ -698,7 +585,6 @@ build_component() {
     remove_outputs "$component"
     case "$component" in
         vmlinux) make -C "$WORKSPACE_ROOT/guest-runtime/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" vmlinux ;;
-        erofs) make -C "$WORKSPACE_ROOT/guest-runtime/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" erofs ;;
         envd) make -C "$WORKSPACE_ROOT/guest-runtime/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" envd ;;
         rocksdb) make -C "$WORKSPACE_ROOT/accelerator" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" deps-rocksdb ;;
         cloud-hypervisor) make -C "$WORKSPACE_ROOT/sandboxer/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" cloud-hypervisor ;;
@@ -938,7 +824,7 @@ usage() {
 usage: native-cache.sh restore-or-build [component ...]
        native-cache.sh key [component ...]
 
-components: vmlinux erofs envd rocksdb cloud-hypervisor
+components: vmlinux envd rocksdb cloud-hypervisor
 EOF
 }
 
@@ -948,7 +834,7 @@ main() {
     shift
     local components=("$@") component
     if [ "${#components[@]}" -eq 0 ]; then
-        components=(vmlinux erofs envd rocksdb cloud-hypervisor)
+        components=(vmlinux envd rocksdb cloud-hypervisor)
     fi
     case "$command" in
         restore-or-build)

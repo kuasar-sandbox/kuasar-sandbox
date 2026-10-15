@@ -19,7 +19,7 @@ import build_demo_wheels
 ROOT = Path(__file__).resolve().parents[2]
 LIBRARIES = {"sandboxer": ("accelerator", "connector"), "guest-runtime": ("accelerator",),
              "orchestrator": ("accelerator", "connector", "sandboxer")}
-NATIVE = {"cache-ctl": "rocksdb", "mkfs.erofs": "erofs", "cloud-hypervisor": "cloud-hypervisor", "vmlinux": "vmlinux"}
+NATIVE = {"cache-ctl": "rocksdb", "cloud-hypervisor": "cloud-hypervisor", "vmlinux": "vmlinux"}
 
 
 def run(command, *, cwd=None, environment=None):
@@ -139,6 +139,8 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
         artifacts.require(not environment.get(key), f"candidate build must not receive {key}")
     actual_framework = subprocess.check_output(["git", "-C", ROOT, "rev-parse", "HEAD"], text=True).strip()
     artifacts.require(actual_framework == plan["framework_sha"], "framework checkout differs from admitted revision")
+    artifacts.require("mkfs.erofs" not in plan["lanes"][arch]["products"],
+                      "native mkfs builds are retired; select a Go runtime source or reuse a legacy artifact")
     if materialized:
         verify_materialized(plan, arch, sources)
     else:
@@ -159,7 +161,7 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
             selected["KUASAR_WORKSPACE_ROOT"] = str(kernel_root)
         run([ROOT / "ci/native-cache/native-cache.sh", "restore-or-build", component], environment=selected)
     for name in lane["products"]:
-        if name in ("mkfs.erofs", "cloud-hypervisor", "vmlinux", "sandbox-runtime.bundle"):
+        if name in ("cloud-hypervisor", "vmlinux", "sandbox-runtime.bundle"):
             continue
         owner = "guest-runtime" if artifacts.PRODUCTS[name] == "runtime" else artifacts.PRODUCTS[name]
         run(["make", "-C", sources / owner, f"TARGET_ARCH={arch}", name], environment=environment)
@@ -169,8 +171,6 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
         unit = artifacts.PRODUCTS[name]
         if name == "vmlinux":
             path = kernel_root / "guest-runtime/native-deps/bin" / arch / name
-        elif name == "mkfs.erofs":
-            path = sources / "guest-runtime/native-deps/bin" / arch / name
         elif name == "cloud-hypervisor":
             path = sources / "sandboxer/native-deps/bin" / arch / name
         else:

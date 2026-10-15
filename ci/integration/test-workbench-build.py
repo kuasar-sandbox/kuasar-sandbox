@@ -107,6 +107,22 @@ class WorkbenchBuild(unittest.TestCase):
                 "product_sources": {"node-ctl": {"kuasar-sandbox/orchestrator": "a" * 40}},
                 "lanes": {"x86_64": {"products": [], "selection": {"cases": []}}}}
 
+    def test_retired_mkfs_build_fails_before_sources_or_compilers_run(self):
+        plan = self.plan()
+        plan["framework_sha"] = "a" * 40
+        plan["lanes"]["x86_64"]["products"] = ["mkfs.erofs"]
+        with tempfile.TemporaryDirectory() as temporary, patch.object(builder.artifacts, "check_plan"), \
+             patch.object(builder.platform, "machine", return_value="x86_64"), \
+             patch.object(builder.subprocess, "check_output", return_value="a" * 40 + "\n"), \
+             patch.object(builder, "materialize") as materialize, \
+             patch.object(builder, "run") as run, \
+             patch.dict(os.environ, {name: "" for name in ("GH_TOKEN", "GITHUB_TOKEN", "CALLER_TOKEN", "KUASAR_CI_APP_PRIVATE_KEY")}):
+            with self.assertRaisesRegex(ValueError, "native mkfs builds are retired"):
+                builder.build(plan, "x86_64", Path("assets"),
+                              Path("sources"), Path(temporary) / "output")
+            materialize.assert_not_called()
+            run.assert_not_called()
+
     def test_host_fetches_exact_product_test_and_helper_sources_without_go(self):
         plan = self.plan()
         with tempfile.TemporaryDirectory() as temporary:

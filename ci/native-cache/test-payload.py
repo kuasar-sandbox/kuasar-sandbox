@@ -87,43 +87,6 @@ class PayloadTests(unittest.TestCase):
             self.check()
         self.assertEqual(list(outside.iterdir()), [])
 
-    def test_erofs_preserves_only_its_exact_archive_and_packaging_materials(self):
-        native = self.workspace / "guest-runtime/native-deps"
-        native.mkdir(parents=True)
-        (native / "Makefile").write_text("EROFS_TARBALL ?= https://example.test/erofs.tar.gz\\#erofs.tar.gz\n")
-        source = native / "build/x86_64/src/erofs-utils"
-        files = {"bin/x86_64/mkfs.erofs": b"mkfs", "bin/x86_64/fsck.erofs": b"fsck",
-                 "bin/x86_64/.erofs-recipe": b"stamp", "build/tarball/erofs.tar.gz": b"exact-archive",
-                 "build/tarball/unrelated.tar.gz": b"not-this-component"}
-        for name in ("AUTHORS", "COPYING", "mkfs/mkfs.erofs.map", "mkfs/mkfs_erofs-main.o",
-                     "fsck/fsck.erofs.map", "fsck/fsck_erofs-main.o", "lib/.libs/liberofs.a"):
-            files["build/x86_64/src/erofs-utils/" + name] = name.encode()
-        for name, content in files.items():
-            path = native / name
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(content)
-        # Autoreconf may install absolute links which package/reuse never read.
-        # Such unrelated generated helpers must not make a valid payload unsafe.
-        (source / "config.sub").symlink_to("/usr/share/automake/config.sub")
-        descriptor = self.root / "inputs.tsv"
-        descriptor.write_text("fixture-input-identity\n")
-        key = hashlib.sha256(descriptor.read_bytes()).hexdigest()
-        entry = self.root / "entry"
-        cache = Path(__file__).with_name("native-cache.sh")
-        env = dict(os.environ, KUASAR_WORKSPACE_ROOT=str(self.workspace),
-                   KUASAR_NATIVE_CACHE_ROOT=str(self.root / "cache"), TARGET_ARCH="x86_64")
-        env.pop("EROFS_TARBALL", None)
-        result = subprocess.run(["bash", "-c", 'source "$1" help >/dev/null; publish_entry erofs "$2" "$3" "$4"; restore_entry erofs "$4" "$2"',
-                                 "bash", str(cache), key, str(descriptor), str(entry)],
-                                env=env, capture_output=True, text=True)
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        with tarfile.open(entry / "payload.tar", "r:") as archive:
-            names = archive.getnames()
-            exact = archive.extractfile("./guest-runtime/native-deps/build/tarball/erofs.tar.gz").read()
-        self.assertEqual(exact, b"exact-archive")
-        self.assertFalse(any(name.endswith(("config.sub", "unrelated.tar.gz")) for name in names))
-        self.assertFalse((source / "config.sub").is_symlink())
-        self.assertEqual((native / "build/tarball/erofs.tar.gz").read_bytes(), b"exact-archive")
 
 
 if __name__ == "__main__":
