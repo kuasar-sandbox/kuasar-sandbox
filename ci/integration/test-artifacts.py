@@ -1119,6 +1119,14 @@ class ArtifactContracts(unittest.TestCase):
         for path in ("docs/orchestrator.md", "test/e2e/run_all.sh", "app/proxy/proxy_test.go"):
             self.assertEqual(subject.changed_products({"orchestrator": [path]}), [])
 
+    def test_current_guest_changes_do_not_rebuild_retired_mkfs(self):
+        products = subject.changed_products({"guest-runtime": [
+            "Makefile", "native-deps/Makefile", "native-deps/deps/common.sh",
+            "native-deps/deps/build-erofs.sh", "native-deps/deps/erofs-patches/series"]})
+        self.assertEqual(set(products), {"flatten-ctl", "sandbox-runtime.bundle", "vmlinux"})
+        self.assertEqual(subject.changed_products({"guest-runtime": [
+            "native-deps/deps/erofs-patches/series"]}), [])
+
     def test_linked_product_closure_and_platform_test_only_change(self):
         self.assertEqual(subject.changed_products({"platform": ["test/e2e/run_all.sh"]}), [])
         self.assertEqual(subject.changed_products({"accelerator": ["docs/accelerator.md"]}), [])

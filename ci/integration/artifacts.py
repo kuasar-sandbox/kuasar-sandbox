@@ -127,14 +127,10 @@ def changed_products(changes):
                        "native-deps/deps/common.sh", "native-deps/deps/build-envd.sh"):
                 products.add("sandbox-runtime.bundle")
             if touches("native-deps/Makefile", "native-deps/deps/common.sh",
-                       "native-deps/deps/build-erofs.sh", "native-deps/deps/erofs-recipe.sh",
-                       "native-deps/deps/erofs-patches"):
-                products.add("mkfs.erofs")
-            if touches("native-deps/Makefile", "native-deps/deps/common.sh",
                        "native-deps/deps/build-vmlinux.sh", "native-deps/deps/vmlinux",
                        "native-deps/deps/linux-patches"):
                 products.add("vmlinux")
-    if products & {"sandbox-init", "flatten-ctl", "mkfs.erofs"}:
+    if products & {"sandbox-init", "flatten-ctl"}:
         products.add("sandbox-runtime.bundle")
     return sorted(products)
 
