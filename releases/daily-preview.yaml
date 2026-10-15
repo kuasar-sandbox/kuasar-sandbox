@@ -1,7 +1,7 @@
 version: release-v0.1.7
 delivery: workbench-v1
 previous_version: release-v0.1.6
-preview_version: preview.20261015
+preview_version: preview.20261015.1
 previous_preview_version: preview.20261014.4
 components:
   accelerator: v0.1.7-preview.20261015
