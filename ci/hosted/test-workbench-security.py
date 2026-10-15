@@ -248,6 +248,23 @@ class CacheKeyTests(TemporaryFiles):
             ci.cache_key(argparse.Namespace(sources=sources))
         return stream.getvalue().strip()
 
+    def test_cache_key_accepts_guest_sources_without_the_retired_erofs_recipe(self):
+        sources = self.root / 'sources'
+        guest = sources / 'guest-runtime'
+        guest.mkdir(parents=True)
+        (guest / 'Makefile').write_text('build: flatten-ctl sandbox-runtime\n')
+        calls = []
+        def output(argv, **kwargs):
+            if str(argv[0]).endswith('native-cache.sh'):
+                calls.append(argv[-1])
+                if argv[-1] == 'erofs':
+                    raise RuntimeError('retired recipe is absent')
+            return 'selected input identity'
+        with patch.object(ci, 'output', side_effect=output), redirect_stdout(io.StringIO()) as stream:
+            ci.cache_key(argparse.Namespace(sources=sources))
+        self.assertEqual(calls, ['vmlinux', 'envd'])
+        self.assertRegex(stream.getvalue().strip(), r'^[0-9a-f]{64}$')
+
     def test_exact_helper_dependency_changes_miss_the_actions_cache(self):
         for container in ('test-helpers', 'test-overlays'):
             with self.subTest(container=container):

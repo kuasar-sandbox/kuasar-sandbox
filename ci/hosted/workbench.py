@@ -191,7 +191,7 @@ def cache_key(args):
     # These are actual native input keys, computed by the matching compiler
     # image at the same fixed paths as the build. Daily labels/task IDs are not
     # compiler inputs. Restored entries still undergo native-cache verification.
-    components = {'vmlinux': 'guest-runtime', 'erofs': 'guest-runtime', 'envd': 'guest-runtime',
+    components = {'vmlinux': 'guest-runtime', 'envd': 'guest-runtime',
                   'rocksdb': 'accelerator', 'cloud-hypervisor': 'sandboxer'}
     records = {}
     workspaces = [args.sources] + [args.sources / name for name in ('kernel-unit', 'test-helpers', 'test-overlays')
