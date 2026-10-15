@@ -51,6 +51,10 @@ class Coverage(unittest.TestCase):
         self.assertEqual(restored, [{"go", "cargo", "cloud-hypervisor"}])
         self.assertEqual(len(cache), 3)
 
+    def test_runtime_release_covers_only_its_remaining_native_dependency(self):
+        record = SUBJECT.identity("release-runtime-build", self.sources, "x86_64")
+        self.assertEqual(record["native"], ["envd"])
+
     def test_every_concrete_producer_has_a_distinct_coverage(self):
         values = [self.coverage(name) for name in SUBJECT.KINDS]
         self.assertEqual(len(set(values)), len(SUBJECT.KINDS))

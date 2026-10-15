@@ -6,7 +6,7 @@ import subprocess
 import tempfile
 import unittest
 
-BOOTSTRAP = Path(__file__).with_name("bootstrap.sh")
+BOOTSTRAP = Path(__file__).resolve().with_name("bootstrap.sh")
 HOSTED_VM = {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted",
              "RUNNER_OS": "Linux", "RUNNER_ARCH": "X64"}
 

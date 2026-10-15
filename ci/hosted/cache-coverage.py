@@ -14,7 +14,7 @@ SPEC.loader.exec_module(artifacts)
 
 RELEASES = {
     "release-accelerator-build": ["rocksdb"],
-    "release-runtime-build": ["envd", "erofs"],
+    "release-runtime-build": ["envd"],
     "release-connector": [],
     "release-sandboxer": ["cloud-hypervisor"],
     "release-orchestrator": [],

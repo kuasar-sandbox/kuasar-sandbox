@@ -15,7 +15,7 @@ sandboxer) echo "vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ct
 orchestrator|kuasar-sandbox) awk '!/^($|#)/ {print $2}' "$ROOT/release/bin-inputs.manifest" | xargs ;;
 *) die "unknown owner $1" ;;
 esac; }
-native_components() { case "$1" in connector) ;; guest-runtime) echo erofs ;; accelerator) echo "erofs rocksdb" ;; sandboxer|orchestrator|kuasar-sandbox) echo "vmlinux erofs envd rocksdb cloud-hypervisor" ;; *) die "unknown owner $1" ;; esac; }
+native_components() { case "$1" in connector) ;; guest-runtime) ;; accelerator) echo "rocksdb" ;; sandboxer|orchestrator|kuasar-sandbox) echo "vmlinux envd rocksdb cloud-hypervisor" ;; *) die "unknown owner $1" ;; esac; }
 images() { case "$1" in connector|guest-runtime) ;; accelerator) echo "python:3.12-slim python:3.12-alpine" ;; sandboxer) echo "python:3.12-slim busybox:latest" ;; orchestrator|kuasar-sandbox) echo "python:3.12-slim" ;; *) die "unknown owner $1" ;; esac; }
 needs_uffd() { case "$1" in sandboxer|kuasar-sandbox) return 0 ;; *) return 1 ;; esac; }
 needs_working_set() { case "$1" in sandboxer|kuasar-sandbox) return 0 ;; *) return 1 ;; esac; }

@@ -69,9 +69,9 @@ class SourceOwnerClosureTest(unittest.TestCase):
             self.assertNotIn("orchestrator build",log.read_text().splitlines())
     def test_native(self):
         self.assertEqual(self.words("native-components","connector"),[])
-        self.assertEqual(self.words("native-components","guest-runtime"),["erofs"])
-        self.assertEqual(set(self.words("native-components","accelerator")),{"erofs","rocksdb"})
-        self.assertEqual(set(self.words("native-components","sandboxer")),{"vmlinux","erofs","envd","rocksdb","cloud-hypervisor"})
+        self.assertEqual(self.words("native-components","guest-runtime"),[])
+        self.assertEqual(set(self.words("native-components","accelerator")),{"rocksdb"})
+        self.assertEqual(set(self.words("native-components","sandboxer")),{"vmlinux","envd","rocksdb","cloud-hypervisor"})
     def test_images(self):
         self.assertEqual(self.words("images","connector"),[]); self.assertEqual(self.words("images","guest-runtime"),[])
         self.assertEqual(set(self.words("images","accelerator")),{"python:3.12-slim","python:3.12-alpine"})
