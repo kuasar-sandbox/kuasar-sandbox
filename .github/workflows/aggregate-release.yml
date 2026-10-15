@@ -454,6 +454,7 @@ jobs:
               bash release/aggregate-release.sh validate "$VERSION" aggregate-stage
               python3 -B release/publication_body.py aggregate-stage/release-notes.md
               python3 -B release/workbench_registry.py aggregate-stage "$VERSION" "$SOURCE_SHA" --validate-only
+              release/publish-release.sh check "$VERSION"
               echo 'Validation-only acceptance completed; no release or registry publication was requested.'
               ;;
             *) echo 'invalid validation_only input' >&2; exit 1 ;;

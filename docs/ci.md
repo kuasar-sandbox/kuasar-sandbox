@@ -210,8 +210,11 @@ and grouped validations coexist with ordinary publication. Validation runs,
 including the former `[validation only]` suffix titles, never count as active
 publications, publication retries, recovery candidates or successful publication
 baselines. Ordinary publication and delete-preview retain their shared
-`aggregate-mutation` lock. If publication wins the race, validation's final
-unpublished-version check fails. Compare `all` and grouped inputs on the
+`aggregate-mutation` lock. Validation checks that the version is unpublished both
+before and after the archive, publication-body and registry-input consumers.
+The second check runs immediately before success reporting and fails if the API
+then reports a published release. This is a final API observation, not atomic
+exclusion of publication after that observation. Compare `all` and grouped inputs on the
 same selection while it remains the exact current branch HEAD; do not substitute
 these pre-publication timings for real publication end-to-end benefit. Finish the selected release through the normal
 publication mode, and never rerun producers behind already published grouped

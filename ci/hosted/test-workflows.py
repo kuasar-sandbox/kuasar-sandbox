@@ -222,32 +222,48 @@ def check_validation_only_publication():
             path.write_text('#!/bin/sh\nprintf \'%s:%s\\n\' \'%s\' "$*" >> "$CALL_LOG"\n' % ('%s', '%s', name))
             if name == 'publish-release.sh':
                 with path.open('a') as stream:
-                    stream.write('if [ "$1" = check ] && [ "$OBSERVED_PUBLISHED" = true ]; then exit 1; fi\n')
+                    stream.write('if [ "$1" = check ] && [ "$(cat "$PUBLICATION_STATE")" = true ]; then exit 1; fi\n')
             path.chmod(0o755)
         git = root / 'bin/git'
         git.write_text('#!/bin/sh\nprintf \'%s\\n\' "$OBSERVED_SHA"\n'); git.chmod(0o755)
         python = root / 'bin/python3'
-        python.write_text('#!/bin/sh\nprintf \'python:%s\\n\' "$*" >> "$CALL_LOG"\n'); python.chmod(0o755)
-        for mode, identity, published, success in [('true', 'a' * 40, 'false', True),
+        python.write_text('#!/bin/sh\nprintf \'python:%s\\n\' "$*" >> "$CALL_LOG"\n'
+                          'case "$*" in *release/workbench_registry.py*)\n'
+                          '  if [ "$PUBLISH_DURING_REGISTRY" = true ]; then printf "true\\n" > "$PUBLICATION_STATE"; fi ;;\n'
+                          'esac\n')
+        python.chmod(0o755)
+        for mode, identity, published, success in [('true', 'a' * 40, 'during-registry', False),
+                ('true', 'a' * 40, 'false', True),
                 ('false', 'a' * 40, 'false', True), ('invalid', 'a' * 40, 'false', False),
                 ('true', 'b' * 40, 'false', False), ('true', 'a' * 40, 'true', False)]:
             log = root / 'calls'; log.write_text('')
+            state = root / 'publication-state'
+            state.write_text('true' if published == 'true' else 'false')
             env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
-                       CALL_LOG=str(log), OBSERVED_SHA=identity, VALIDATION_ONLY=mode, OBSERVED_PUBLISHED=published,
+                       CALL_LOG=str(log), OBSERVED_SHA=identity, VALIDATION_ONLY=mode, PUBLICATION_STATE=str(state),
+                       PUBLISH_DURING_REGISTRY='true' if published == 'during-registry' else 'false',
                        SOURCE_SHA='a' * 40, VERSION='release-v1.2.3', SOURCE_REF='main',
                        PLATFORM_SOURCE_ROOT=str(root / 'platform'))
             result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True)
-            assert (result.returncode == 0) == success, (mode, identity, result.stderr)
+            assert (result.returncode == 0) == success, (mode, identity, published, result.stderr)
+            assert (b'Validation-only acceptance completed;' in result.stdout) == (mode == 'true' and success)
             calls = log.read_text().splitlines()
             writes = [line for line in calls if line.startswith('publish-release.sh:publish ')]
             assert bool(writes) == (mode == 'false' and success), (mode, calls)
             if published == 'true':
                 assert len(calls) == 2 and calls[-1].startswith('publish-release.sh:check '), calls
-            if mode == 'true' and success:
-                assert len(calls) == 5 and any(line.startswith('publish-release.sh:check ') for line in calls)
-                assert any(line.startswith('aggregate-release.sh:validate ') for line in calls)
-                assert any('release/publication_body.py' in line for line in calls)
-                assert any('release/workbench_registry.py' in line and '--validate-only' in line for line in calls)
+            if mode == 'true' and (success or published == 'during-registry'):
+                # Both checks and all consumers run in order, with no mutation
+                # entry point. The race starts unpublished and changes during
+                # the last consumer, so only the final observation can reject it.
+                assert calls == [
+                    'validate-preview-line.sh:release-v1.2.3 ' + 'a' * 40,
+                    'publish-release.sh:check release-v1.2.3',
+                    'aggregate-release.sh:validate release-v1.2.3 aggregate-stage',
+                    'python:-B release/publication_body.py aggregate-stage/release-notes.md',
+                    'python:-B release/workbench_registry.py aggregate-stage release-v1.2.3 ' + 'a' * 40 + ' --validate-only',
+                    'publish-release.sh:check release-v1.2.3'], calls
+                assert state.read_text().strip() == ('true' if published == 'during-registry' else 'false')
         context = {'github': {'repository': 'kuasar-sandbox/kuasar-sandbox', 'event': {'repository': {
             'visibility': 'public', 'full_name': 'kuasar-sandbox/kuasar-sandbox'}}}, 'true': True}
         for mode in (False, True):
