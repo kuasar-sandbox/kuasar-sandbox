@@ -127,6 +127,9 @@ class GroupTests(unittest.TestCase):
                     transport.assert_called_once()
 
     def test_registry_validation_only_consumes_groups_without_transport_or_writes(self):
+        # Read-only grouped evidence consumers remain valid for the new identity;
+        # publication discovery, not evidence reading, excludes validation runs.
+        self.run['display_title'] = f"Validate aggregate {self.fixture.version} @{self.fixture.sha}"
         import workbench_registry
         grouped = self.fixture.artifact_only()
         grouped['x86_64'] = self.aggregate()

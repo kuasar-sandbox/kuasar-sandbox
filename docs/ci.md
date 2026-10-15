@@ -204,9 +204,16 @@ For repeated same-source qualification, aggregate dispatch also accepts
 selection and an unpublished version, and runs all original build/runtime/source
 checks, publication binding, body limits and registry-input verification. It
 stops before registry/Release writes and retains this run's artifacts under their
-existing expiry for failure/rerun tests. Compare `all` and grouped inputs on the
-same frozen selection; do not substitute these pre-publication timings for real
-publication end-to-end benefit. Finish the selected release through the normal
+existing expiry for failure/rerun tests. Its `Validate aggregate <version> @<sha>`
+identity and per-run `aggregate-validation` concurrency key let independent `all`
+and grouped validations coexist with ordinary publication. Validation runs,
+including the former `[validation only]` suffix titles, never count as active
+publications, publication retries, recovery candidates or successful publication
+baselines. Ordinary publication and delete-preview retain their shared
+`aggregate-mutation` lock. If publication wins the race, validation's final
+unpublished-version check fails. Compare `all` and grouped inputs on the
+same selection while it remains the exact current branch HEAD; do not substitute
+these pre-publication timings for real publication end-to-end benefit. Finish the selected release through the normal
 publication mode, and never rerun producers behind already published grouped
 evidence merely to obtain a benchmark.
 

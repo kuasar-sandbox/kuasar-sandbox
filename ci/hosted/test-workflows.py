@@ -3,6 +3,7 @@
 import ast
 import json
 import os
+import re
 import tempfile
 from pathlib import Path
 import subprocess
@@ -43,6 +44,8 @@ def expression(value, context):
             return True
         if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "fromJSON":
             return json.loads(visit(node.args[0]))
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "format":
+            return visit(node.args[0]).format(*(visit(arg) for arg in node.args[1:]))
         raise AssertionError(f"unsupported expression: {ast.dump(node)}")
 
     return visit(tree)
@@ -162,6 +165,46 @@ def check_helper_materialization():
 
 
 
+def check_validation_only_identity():
+    definition = load('aggregate-release.yml')
+    deletion = load('delete-preview.yml')
+    assert definition['concurrency']['cancel-in-progress'] is False
+    assert deletion['concurrency']['cancel-in-progress'] is False
+
+    def render(value, context):
+        return re.sub(r'\$\{\{(.*?)\}\}', lambda match: str(expression(match[0], context)), value)
+
+    locks = set()
+    for repository in ('kuasar-sandbox/kuasar-sandbox', 'other/repo'):
+        for version in ('release-v1.2.3', 'release-v1.2.3-preview.20261015'):
+            context = {'github': {'repository': repository, 'run_id': 100, 'run_attempt': 1},
+                       'inputs': {'version': version, 'source_sha': 'a' * 40, 'validation_only': False}}
+            ordinary = render(definition['concurrency']['group'], context)
+            assert ordinary == render(deletion['concurrency']['group'], context)
+            assert ordinary == f'aggregate-mutation-{repository}-{version}'
+            assert ordinary not in locks
+            locks.add(ordinary)
+            assert render(definition['run-name'], context) == f'Aggregate {version} @' + 'a' * 40
+            # Separate actual dispatches for all and A+B, including repeated all
+            # and group runs, must not queue/replace each other or publication.
+            for grouped in (False, True, False, True):
+                context['inputs'].update(validation_only=True, workbench_runtime_groups=grouped)
+                context['github']['run_id'] = len(locks) + 100
+                validation = render(definition['concurrency']['group'], context)
+                assert validation not in locks and validation != ordinary
+                locks.add(validation)
+                assert render(definition['run-name'], context) == f'Validate aggregate {version} @' + 'a' * 40
+                context['github']['run_attempt'] = 2
+                assert render(definition['concurrency']['group'], context) == validation
+                # Nested exact-assets locks continue to isolate these runs.
+                context['inputs'].update(mode='exact-assets', candidate_repository='', candidate_sha='',
+                                         release_version=version, arch='x86_64')
+                context['github']['event_name'] = 'workflow_dispatch'
+                for workflow in ('integration-tests.yml', 'integration-architecture.yml'):
+                    nested = render(load(workflow)['concurrency']['group'], context)
+                    assert str(context['github']['run_id']) in nested
+
+
 def check_validation_only_publication():
     definition = load('aggregate-release.yml')
     events = definition.get('on', definition.get(True))
@@ -177,16 +220,20 @@ def check_validation_only_publication():
         for name in ('publish-release.sh', 'aggregate-release.sh', 'validate-preview-line.sh'):
             path = root / 'release' / name
             path.write_text('#!/bin/sh\nprintf \'%s:%s\\n\' \'%s\' "$*" >> "$CALL_LOG"\n' % ('%s', '%s', name))
+            if name == 'publish-release.sh':
+                with path.open('a') as stream:
+                    stream.write('if [ "$1" = check ] && [ "$OBSERVED_PUBLISHED" = true ]; then exit 1; fi\n')
             path.chmod(0o755)
         git = root / 'bin/git'
         git.write_text('#!/bin/sh\nprintf \'%s\\n\' "$OBSERVED_SHA"\n'); git.chmod(0o755)
         python = root / 'bin/python3'
         python.write_text('#!/bin/sh\nprintf \'python:%s\\n\' "$*" >> "$CALL_LOG"\n'); python.chmod(0o755)
-        for mode, identity, success in [('true', 'a' * 40, True), ('false', 'a' * 40, True),
-                                        ('invalid', 'a' * 40, False), ('true', 'b' * 40, False)]:
+        for mode, identity, published, success in [('true', 'a' * 40, 'false', True),
+                ('false', 'a' * 40, 'false', True), ('invalid', 'a' * 40, 'false', False),
+                ('true', 'b' * 40, 'false', False), ('true', 'a' * 40, 'true', False)]:
             log = root / 'calls'; log.write_text('')
             env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
-                       CALL_LOG=str(log), OBSERVED_SHA=identity, VALIDATION_ONLY=mode,
+                       CALL_LOG=str(log), OBSERVED_SHA=identity, VALIDATION_ONLY=mode, OBSERVED_PUBLISHED=published,
                        SOURCE_SHA='a' * 40, VERSION='release-v1.2.3', SOURCE_REF='main',
                        PLATFORM_SOURCE_ROOT=str(root / 'platform'))
             result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True)
@@ -194,6 +241,8 @@ def check_validation_only_publication():
             calls = log.read_text().splitlines()
             writes = [line for line in calls if line.startswith('publish-release.sh:publish ')]
             assert bool(writes) == (mode == 'false' and success), (mode, calls)
+            if published == 'true':
+                assert len(calls) == 2 and calls[-1].startswith('publish-release.sh:check '), calls
             if mode == 'true' and success:
                 assert len(calls) == 5 and any(line.startswith('publish-release.sh:check ') for line in calls)
                 assert any(line.startswith('aggregate-release.sh:validate ') for line in calls)
@@ -238,6 +287,7 @@ def check():
                         expected = "ubuntu-24.04"
                     assert job["runs-on"] == expected, (name, job["runs-on"])
     check_request_rejection()
+    check_validation_only_identity()
     check_validation_only_publication()
     caller = load("ci.yml")
     assert caller["permissions"] == {"contents": "read", "pull-requests": "read"}

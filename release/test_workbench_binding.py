@@ -191,11 +191,30 @@ class BindingTests(unittest.TestCase):
             state['body'] = '<!-- kuasar-integration-validation ' + json.dumps(binding) + ' -->'
         run = {'id': 1, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://example.invalid/run',
                'display_title': reader.release.aggregate_run_title(self.version, self.sha)}
+        actual_aggregate_runs = reader.release.aggregate_runs
         with patch.object(reader.release, 'api_optional', return_value=state), patch.object(reader, 'source_text', return_value=manifest), patch.object(
                 reader.release, 'aggregate_runs', return_value=[run]), patch.object(
                 reader.release, 'tag_sha', side_effect=lambda repository, tag: self.sha if repository == reader.PLATFORM else 'c' * 40):
             notes(original)
             self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
+            # Use the real title filter and baseline reader together. Validation
+            # success cannot establish publication, even with matching assets.
+            for title in (run['display_title'] + ' [validation only]',
+                          run['display_title'].replace('Aggregate ', 'Validate aggregate ', 1)):
+                validation_run = dict(run, id=99, display_title=title, run_attempt=9)
+                with patch.object(reader.release, 'aggregate_runs', side_effect=actual_aggregate_runs), \
+                     patch.object(reader.release, 'paginated', return_value=[validation_run]) as history:
+                    self.assertIsNone(reader.aggregate(self.version))
+                    history.return_value = [validation_run, run]
+                    self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
+                    for status, conclusion, ordinary_title in (
+                            ('queued', 'success', run['display_title']),
+                            ('completed', 'failure', run['display_title']),
+                            ('completed', 'success', reader.release.aggregate_run_title(self.version, 'f' * 40)),
+                            ('completed', 'success', 'Aggregate ' + self.version)):
+                        history.return_value = [validation_run, dict(run, status=status, conclusion=conclusion,
+                                                                    display_title=ordinary_title)]
+                        self.assertIsNone(reader.aggregate(self.version))
             artifact_binding = copy.deepcopy(original)
             artifact_binding['workbench'] = self.artifact_only()
             notes(artifact_binding)

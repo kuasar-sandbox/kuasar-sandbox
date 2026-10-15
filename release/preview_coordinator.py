@@ -508,8 +508,12 @@ def aggregate_run_title(version: str, source_sha: str) -> str:
 
 
 def aggregate_title_matches(title: object, version: str) -> bool:
+    # Validation runs do not own publication, retries, recovery or GC locks.
+    # Exclude the earlier suffix identity as well as the distinct new prefix.
+    if not isinstance(title, str) or title.endswith(" [validation only]"):
+        return False
     legacy = f"Aggregate {version}"
-    return title == legacy or str(title).startswith(f"{legacy} @")
+    return title == legacy or re.fullmatch(re.escape(legacy) + r" @[0-9a-f]{40}", title) is not None
 
 
 def aggregate_runs(version: str) -> list[dict[str, Any]]:

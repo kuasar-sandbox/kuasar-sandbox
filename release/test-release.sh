@@ -635,9 +635,9 @@ grep -Fq 'source_sha:' "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate workflow does not pin its source commit"
 grep -Fq '"$VERSION" --commit' "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate workflow accepts a historical Stable selection"
-grep -Fq 'run-name: Aggregate ${{ inputs.version }} @${{ inputs.source_sha }}' \
+grep -Fq "run-name: \${{ inputs.validation_only && 'Validate aggregate' || 'Aggregate' }} \${{ inputs.version }} @\${{ inputs.source_sha }}" \
   "$ROOT/.github/workflows/aggregate-release.yml" \
-  || release_fail "aggregate workflow run identity does not pin its source commit"
+  || release_fail "aggregate workflow does not separate validation identity while pinning its source commit"
 grep -Fq 'path: control' "$ROOT/.github/workflows/aggregate-release.yml" \
   || release_fail "aggregate prepare does not isolate trusted main tooling"
 grep -Fq 'PLATFORM_SOURCE_ROOT:' "$ROOT/.github/workflows/aggregate-release.yml" \
@@ -673,10 +673,15 @@ grep -Fq 'title="Daily preview $ref@$sha for $date"' \
   || release_fail "Daily scanner run identity does not include the requested date"
 grep -Fq 'wait_for_gc()' "$ROOT/.github/workflows/daily-preview.yml" \
   || release_fail "Daily scanner does not preserve a pending GC operation"
+[ "$(grep -Fc "group: \${{ inputs.validation_only && format('aggregate-validation-{0}-{1}', github.repository, github.run_id) || format('aggregate-mutation-{0}-{1}', github.repository, inputs.version) }}" \
+  "$ROOT/.github/workflows/aggregate-release.yml")" -eq 1 ] \
+  || release_fail "aggregate workflow does not isolate each validation run from the publication mutation lock"
+[ "$(grep -Fc 'group: aggregate-mutation-${{ github.repository }}-${{ inputs.version }}' \
+  "$ROOT/.github/workflows/delete-preview.yml")" -eq 1 ] \
+  || release_fail "delete-preview does not hold the publication mutation lock"
 for workflow in aggregate-release.yml delete-preview.yml; do
-  [ "$(grep -Fc 'group: aggregate-mutation-${{ github.repository }}-${{ inputs.version }}' \
-    "$ROOT/.github/workflows/$workflow")" -eq 1 ] \
-    || release_fail "$workflow does not hold exactly one full-workflow mutation lock"
+  grep -Fq 'cancel-in-progress: false' "$ROOT/.github/workflows/$workflow" \
+    || release_fail "$workflow can cancel an active mutation"
 done
 grep -Fq 'admitted platform source identity changed' \
   "$ROOT/.github/workflows/aggregate-release.yml" \

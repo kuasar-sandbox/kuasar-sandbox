@@ -350,6 +350,64 @@ class PreviewCoordinatorTest(unittest.TestCase):
             )
         )
 
+    def test_validation_titles_are_excluded_without_losing_ordinary_identity(self) -> None:
+        version, sha = 'release-v1.2.3-preview.20261015', 'a' * 40
+        title = coordinator.aggregate_run_title(version, sha)
+        for accepted in (f'Aggregate {version}', title):
+            self.assertTrue(coordinator.aggregate_title_matches(accepted, version))
+        for rejected in (None, title + ' [validation only]', f'Aggregate {version} [validation only]',
+                         title.replace('Aggregate ', 'Validate aggregate ', 1),
+                         title.replace(version, version + '.2'), title + 'garbage', title[:-1]):
+            with self.subTest(title=rejected):
+                self.assertFalse(coordinator.aggregate_title_matches(rejected, version))
+
+    def test_validation_runs_do_not_block_dispatch_or_consume_publication_retries(self) -> None:
+        version, sha = 'release-v1.2.3-preview.20261015', 'a' * 40
+        title = coordinator.aggregate_run_title(version, sha)
+        empty = coordinator.ReleaseStatus(None, None, False)
+        for validation_title in (title + ' [validation only]', title.replace('Aggregate ', 'Validate aggregate ', 1)):
+            for status in ('queued', 'pending', 'in_progress', 'requested', 'waiting', 'completed'):
+                for conclusion in ('success', 'failure', 'cancelled'):
+                    validation = dict(id=2, display_title=validation_title, status=status, conclusion=conclusion,
+                                      run_attempt=99, created_at='2026-10-15T02:00:00Z')
+                    ordinary = dict(id=1, display_title=title, status='completed', conclusion='failure',
+                                    run_attempt=2, created_at='2026-10-15T01:00:00Z')
+                    for history in ([validation], [validation, ordinary]):
+                        with self.subTest(title=validation_title, status=status, conclusion=conclusion, retry=len(history)), \
+                             mock.patch.object(coordinator, 'paginated', return_value=history), \
+                             mock.patch.object(coordinator, 'platform_release', return_value=empty), \
+                             mock.patch.object(coordinator, 'dispatch_aggregate_run') as dispatch:
+                            self.assertIsNone(coordinator.active_aggregate_run(version))
+                            self.assertFalse(coordinator.ensure_aggregate(version, sha))
+                            dispatch.assert_called_once_with(version, sha)
+                    ordinary['run_attempt'] = 3
+                    with mock.patch.object(coordinator, 'paginated', return_value=[validation, ordinary]), \
+                         mock.patch.object(coordinator, 'platform_release', return_value=empty), \
+                         mock.patch.object(coordinator, 'dispatch_aggregate_run') as dispatch:
+                        with self.assertRaisesRegex(RuntimeError, 'aggregate publication failed'):
+                            coordinator.ensure_aggregate(version, sha)
+                        dispatch.assert_not_called()
+
+    def test_newer_validation_does_not_hide_active_ordinary_publication(self) -> None:
+        version, sha = 'release-v1.2.3-preview.20261015', 'a' * 40
+        title = coordinator.aggregate_run_title(version, sha)
+        empty = coordinator.ReleaseStatus(None, None, False)
+        for status in ('queued', 'pending', 'in_progress'):
+            ordinary = dict(id=1, display_title=title, status=status, created_at='2026-10-15T01:00:00Z')
+            history = [dict(id=3, display_title=title.replace('Aggregate ', 'Validate aggregate ', 1),
+                            status='in_progress', created_at='2026-10-15T03:00:00Z'),
+                       dict(id=2, display_title=title + ' [validation only]', status='pending',
+                            created_at='2026-10-15T02:00:00Z'), ordinary]
+            with self.subTest(status=status), mock.patch.object(coordinator, 'paginated', return_value=history), \
+                 mock.patch.object(coordinator, 'platform_release', return_value=empty), \
+                 mock.patch.object(coordinator, 'dispatch_aggregate_run') as dispatch:
+                self.assertIs(coordinator.active_aggregate_run(version), ordinary)
+                self.assertFalse(coordinator.ensure_aggregate(version, sha))
+                dispatch.assert_not_called()
+                self.assertIsNone(coordinator.active_aggregate_run(version + '.2'))
+                self.assertFalse(coordinator.ensure_aggregate(version + '.2', sha))
+                dispatch.assert_called_once_with(version + '.2', sha)
+
     def test_active_aggregate_keeps_current_manifest_immutable(self) -> None:
         empty = coordinator.ReleaseStatus(None, None, False)
         active = {

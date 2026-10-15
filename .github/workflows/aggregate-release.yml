@@ -1,5 +1,5 @@
 name: Aggregate Release
-run-name: Aggregate ${{ inputs.version }} @${{ inputs.source_sha }}${{ inputs.validation_only && ' [validation only]' || '' }}
+run-name: ${{ inputs.validation_only && 'Validate aggregate' || 'Aggregate' }} ${{ inputs.version }} @${{ inputs.source_sha }}
 
 on:
   workflow_dispatch:
@@ -32,7 +32,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: aggregate-mutation-${{ github.repository }}-${{ inputs.version }}
+  group: ${{ inputs.validation_only && format('aggregate-validation-{0}-{1}', github.repository, github.run_id) || format('aggregate-mutation-{0}-{1}', github.repository, inputs.version) }}
   cancel-in-progress: false
 
 jobs:

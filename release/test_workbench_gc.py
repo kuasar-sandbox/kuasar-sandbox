@@ -53,6 +53,26 @@ class WorkbenchGCTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'manifest identity differs'):
                 subject.verify_source('sha256:' + 'c' * 64, VERSION, 'a' * 40, None)
 
+    def test_validation_runs_do_not_own_registry_gc_but_ordinary_runs_do(self):
+        title = subject.coordinator.aggregate_run_title(VERSION, 'a' * 40)
+        for status in ('queued', 'pending', 'in_progress'):
+            validation = [dict(display_title=title + ' [validation only]', status=status),
+                          dict(display_title=title.replace('Aggregate ', 'Validate aggregate ', 1), status=status)]
+            for ordinary in (False, True):
+                rows = validation + ([dict(display_title=title, status=status)] if ordinary else [])
+                with self.subTest(status=status, ordinary=ordinary), \
+                     patch.object(subject.coordinator, 'paginated', return_value=rows), \
+                     patch.object(subject.coordinator, 'api_optional', return_value=None) as api, \
+                     patch.object(subject.coordinator, 'gh') as mutation:
+                    if ordinary:
+                        with self.assertRaisesRegex(ValueError, 'still active'):
+                            subject.collect(VERSION, 'a' * 40)
+                        api.assert_not_called()
+                    else:
+                        self.assertEqual(subject.collect(VERSION, 'a' * 40), {'deleted': [], 'retained_shared': []})
+                        api.assert_called_once()
+                    mutation.assert_not_called()
+
     def test_active_publication_prevents_any_registry_mutation(self):
         with patch.object(subject.coordinator, 'aggregate_runs', return_value=[{'status': 'in_progress'}]), patch.object(
                 subject.coordinator, 'api_optional') as api:

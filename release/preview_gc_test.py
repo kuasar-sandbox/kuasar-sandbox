@@ -714,6 +714,32 @@ class CanonicalSourceHistoryTest(unittest.TestCase):
         ):
             yield
 
+    def test_validation_titles_do_not_reserve_preview_gc_candidates(self) -> None:
+        source = self.selection(self.old_component)
+        self.run_git('tag', self.preview, source)
+        stable = self.stable()
+        title = preview_gc.coordinator.aggregate_run_title(self.preview, source)
+        for status in ('queued', 'pending', 'in_progress'):
+            rows = [dict(display_title=title + ' [validation only]', status=status),
+                    dict(display_title=title.replace('Aggregate ', 'Validate aggregate ', 1), status=status)]
+            with mock.patch.object(preview_gc.coordinator, 'paginated', return_value=rows):
+                validation_titles = preview_gc.active_release_titles(
+                    preview_gc.coordinator.PLATFORM_REPOSITORY, 'aggregate-release.yml')
+            self.assertEqual(len(validation_titles), 2)
+            for ordinary in (False, True):
+                titles = validation_titles | ({title} if ordinary else set())
+                with self.subTest(status=status, ordinary=ordinary), self.public_state(stable, source), \
+                     mock.patch.object(preview_gc, 'active_release_titles', side_effect=lambda repo, workflow:
+                                       titles if workflow == 'aggregate-release.yml' else set()), \
+                     mock.patch.object(preview_gc.coordinator, 'gh') as mutation:
+                    if ordinary:
+                        with self.assertRaisesRegex(preview_gc.GCError, 'aggregate release workflow is active'):
+                            preview_gc.plan(self.version)
+                    else:
+                        candidates, _ = preview_gc.plan(self.version)
+                        self.assertIn(self.preview, {row.tag for row in candidates})
+                    mutation.assert_not_called()
+
     def test_metadata_cleanup_after_tag_plans_original_history_in_dry_run(self) -> None:
         source = self.selection(self.old_component, legacy=True)
         self.run_git("tag", self.preview, source)

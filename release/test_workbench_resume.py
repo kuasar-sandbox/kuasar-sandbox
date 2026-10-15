@@ -32,6 +32,27 @@ class ResumeTests(unittest.TestCase):
         self.assertEqual(calls[0].args, ('api', '--method', 'POST',
             f'repos/{subject.PLATFORM_REPOSITORY}/actions/jobs/20/rerun', '--silent'))
 
+    def test_validation_history_is_not_a_recovery_object_or_retry_budget(self):
+        for title in (self.run['display_title'] + ' [validation only]',
+                      self.run['display_title'].replace('Aggregate ', 'Validate aggregate ', 1)):
+            for status in ('queued', 'pending', 'in_progress', 'completed'):
+                validation = dict(self.run, id=99, display_title=title, status=status, run_attempt=99,
+                                  created_at='2026-09-29T02:00:00Z')
+                for ordinary in (False, True):
+                    history = [validation] + ([self.run] if ordinary else [])
+                    def pages(endpoint, field):
+                        return history if field == 'workflow_runs' else self.jobs if field == 'jobs' else self.artifacts
+                    with self.subTest(title=title, status=status, ordinary=ordinary), \
+                         patch.object(subject, 'paginated', side_effect=pages), patch.object(subject, 'gh') as gh:
+                        if ordinary:
+                            self.assertFalse(subject.resume_workbench_publish(VERSION, SHA))
+                            self.assertIn('/actions/jobs/20/rerun', gh.call_args.args[-2])
+                            gh.assert_called_once()
+                        else:
+                            with self.assertRaisesRegex(RuntimeError, 'no exact original workflow'):
+                                subject.resume_workbench_publish(VERSION, SHA)
+                            gh.assert_not_called()
+
     def test_second_publish_retry_keeps_prior_successful_prerequisites(self):
         self.run['run_attempt'] = 2
         self.jobs.insert(0, dict(self.jobs[-1], id=25))
