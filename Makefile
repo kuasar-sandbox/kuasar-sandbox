@@ -51,7 +51,7 @@ PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf
 all: build
 
 # Full platform build. Sub-repo order matters: guest-runtime/native-deps leads
-# (mkfs.erofs is needed by guest-runtime), sandboxer builds sandbox-init and
+# (host mkfs.erofs packs the runtime bundle), sandboxer builds sandbox-init and
 # cloud-hypervisor, then guest-runtime packs the guest erofs and builds
 # flatten-ctl. Each sub-repo's `build` builds every binary it ships. After all
 # sub-builds, `collect` assembles sub-repo artifacts under bin/$(TARGET_ARCH)/.

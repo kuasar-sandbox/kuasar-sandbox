@@ -92,9 +92,9 @@ def bound_plan(binding, version, sha, assets, runs):
     # This validates duplicate IDs, filenames and architecture coverage without
     # reading historical independent test sources.
     for arch, result in binding['architectures'].items():
-        expected_selection = artifacts.suite_selection(['platform'], arch, selected_cases)
-        artifacts.require(plan['lanes'][arch].get('selection') == expected_selection
-                          and result.get('selection') == expected_selection
+        original_selection = plan['lanes'][arch].get('selection')
+        artifacts.require(artifacts.compatible_suite_selection(original_selection, ['platform'], arch, selected_cases)
+                          and result.get('selection') == original_selection
                           and result.get('plan_id') == binding['plan_id'], 'published case selection differs from original plan')
     for result in binding.get('workbench', {}).values():
         artifacts.require(result.get('plan_id') == binding['plan_id']
@@ -134,7 +134,7 @@ def historical_profile(arch, cases=None):
         else:
             entries.append(f'test/e2e/{owner}/run_all.sh')
     return {'cases': entries,
-            'required_products': sorted(set().union(*(artifacts.REQUIRED[owner] for owner in owners))),
+            'required_products': sorted(set().union(*(artifacts.REQUIRED[owner] for owner in owners)) | {'mkfs.erofs'}),
             'exclusions': exclusions, 'name': 'x86-owner-kvm' if arch == 'x86_64' else 'arm-native-non-kvm'}
 
 
@@ -201,8 +201,10 @@ def aggregate(version, *, require_dual=True):
         bootstrap_cases = selected_files
         for arch, result in binding["architectures"].items():
             if 'selection' in result:
-                expected = artifacts.suite_selection(['platform'], arch, selected_files)
                 actual = result['selection']
+                artifacts.require(artifacts.compatible_suite_selection(actual, ['platform'], arch, selected_files),
+                                  'published case selection changed')
+                expected = evidence['lanes'][arch]['selection']
             else:
                 artifacts.require(contract != release.selection.DELIVERY, 'new aggregate requires the current explicit case selection')
                 expected, actual = historical_profile(arch, bootstrap_cases), result.get('profile')

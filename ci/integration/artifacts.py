@@ -35,13 +35,16 @@ PRODUCTS = {
     "flatten-ctl": "runtime", "mkfs.erofs": "runtime", "sandbox-runtime.bundle": "runtime",
     "vmlinux": "vmlinux",
 }
+# Legacy archives may carry this tool; it is not required by the Go generator.
+OPTIONAL_LEGACY_PRODUCTS = {"mkfs.erofs"}
 GO_PRODUCTS = set(PRODUCTS) - {"cloud-hypervisor", "mkfs.erofs", "sandbox-runtime.bundle", "vmlinux"}
 REQUIRED = {
     "connector": {"connector-ctl"},
-    "guest-runtime": {"mkfs.erofs", "store-ctl", "flatten-ctl"},
-    "accelerator": {"mkfs.erofs", "manifest-ctl", "store-ctl", "cache-ctl", "flatten-ctl"},
-    "sandboxer": set(PRODUCTS) - {"node-ctl", "cluster-ctl", "node-stub-ctl", "e2b-key-ctl"},
-    "orchestrator": set(PRODUCTS), "platform": set(PRODUCTS),
+    "guest-runtime": {"store-ctl", "flatten-ctl"},
+    "accelerator": {"manifest-ctl", "store-ctl", "cache-ctl", "flatten-ctl"},
+    "sandboxer": set(PRODUCTS) - OPTIONAL_LEGACY_PRODUCTS - {"node-ctl", "cluster-ctl", "node-stub-ctl", "e2b-key-ctl"},
+    "orchestrator": set(PRODUCTS) - OPTIONAL_LEGACY_PRODUCTS,
+    "platform": set(PRODUCTS) - OPTIONAL_LEGACY_PRODUCTS,
 }
 
 
@@ -174,6 +177,22 @@ def suite_selection(owners, arch, case_files, *, native_full=False):
     required = set().union(*(REQUIRED[all_cases[name]] for name in chosen))
     return {'suites': sorted(suites), 'cases': sorted(chosen), 'required_products': sorted(required),
             'exclusions': exclusions}
+
+
+def compatible_suite_selection(observed, owners, arch, case_files):
+    """Keep immutable native-generator evidence valid without changing it.
+
+    Only the retired native prerequisite may differ. Cases, exclusions and all
+    other products remain exact; runtime_payloads independently requires and
+    matches mkfs for every selected legacy flatten binary.
+    """
+    current = suite_selection(owners, arch, case_files)
+    if observed == current:
+        return True
+    if "flatten-ctl" not in current["required_products"]:
+        return False
+    legacy = dict(current, required_products=sorted(current["required_products"] + ["mkfs.erofs"]))
+    return observed == legacy
 
 
 def shards(selection):
@@ -457,7 +476,7 @@ def check_plan(plan):
         require(lane["products"] == sorted(set(lane["products"])) and set(lane["products"]) <= set(PRODUCTS),
                 "invalid affected product set")
         require(lane.get("embedded_products", []) in ([], ["envd"]), "unknown embedded product")
-        require(lane["selection"] == suite_selection(plan["owners"], arch, case_files), "suite selection differs from trusted source filenames")
+        require(compatible_suite_selection(lane["selection"], plan["owners"], arch, case_files), "suite selection differs from trusted source filenames")
         expected_perf = ["working-set-smoke"] if plan["mode"] == "source" and arch == "x86_64" and set(plan["owners"]) & {"platform", "sandboxer"} else []
         require(lane["performance"] == expected_perf, "performance checks differ from trusted mode/owner selection")
     validate_test_revisions(plan.get("test_revisions"))
@@ -578,7 +597,8 @@ def compose(plan, arch, assets, delta, output):
         ownership = {}
         for name, unit in expected_assets.items():
             unpack(assets / name, stage, unit, ownership)
-        originals = {name: digest(stage / "bin" / name) for name in PRODUCTS}
+        originals = {name: digest(stage / "bin" / name) for name in PRODUCTS
+                     if name not in OPTIONAL_LEGACY_PRODUCTS or (stage / "bin" / name).exists()}
         kernel_checksum = stage / "bin/vmlinux.sha256"
         if kernel_checksum.exists():
             require(kernel_checksum.read_bytes() == (originals["vmlinux"] + "  vmlinux\n").encode(),
@@ -602,6 +622,8 @@ def compose(plan, arch, assets, delta, output):
         products = {}
         for name, unit in PRODUCTS.items():
             path = stage / "bin" / name
+            if name in OPTIONAL_LEGACY_PRODUCTS and name not in originals and name not in lane["products"]:
+                continue
             require(path.is_file(), f"missing final product: {name}")
             if name not in ("vmlinux", "sandbox-runtime.bundle"):
                 require(path.stat().st_mode & 0o111 and path.stat().st_mode & 0o7022 == 0,

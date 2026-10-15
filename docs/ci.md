@@ -75,6 +75,14 @@ full path because it changes executable policy/workflows. Rollback removes the
 docs branch from resolution and restores full scheduling; it does not relax
 source admission, required checks or the existing language-selector policy.
 
+
+The Go EROFS runtime requires only init, envd and flatten-ctl inside its bundle.
+New aggregate binaries omit mkfs.erofs. Historical archives may retain that
+tool, and legacy runtimes still require its embedded bytes to match the selected
+outer binary. The trusted reader selects this contract from flatten-ctl's linked
+external go-erofs module record without executing the binary or requiring Go.
+Host runtime packing, independent fsck and native control tests retain their tools.
+
 ## 3. Independent architecture lifecycles
 
 ```text

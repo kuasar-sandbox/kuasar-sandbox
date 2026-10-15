@@ -38,8 +38,8 @@ class SourceOwnerClosureTest(unittest.TestCase):
         r=run(c,o); self.assertEqual(r.returncode,0,r.stderr); return r.stdout.split()
     def test_bins(self):
         self.assertEqual(self.words("required-bins","connector"),["connector-ctl"])
-        self.assertEqual(set(self.words("required-bins","guest-runtime")),{"mkfs.erofs","store-ctl","flatten-ctl"})
-        self.assertEqual(set(self.words("required-bins","accelerator")),{"mkfs.erofs","manifest-ctl","store-ctl","cache-ctl","flatten-ctl"})
+        self.assertEqual(set(self.words("required-bins","guest-runtime")),{"store-ctl","flatten-ctl"})
+        self.assertEqual(set(self.words("required-bins","accelerator")),{"manifest-ctl","store-ctl","cache-ctl","flatten-ctl"})
         self.assertTrue({"vmlinux","sandbox-ctl","cloud-hypervisor","sandbox-runtime.bundle","cache-ctl","connector-ctl"} <= set(self.words("required-bins","sandboxer")))
         full=self.words("required-bins","orchestrator"); self.assertEqual(full,self.words("required-bins","kuasar-sandbox")); self.assertIn("connector-ctl",full); self.assertIn("node-ctl",full)
     def test_sandboxer_builds_and_assembles_connector(self):

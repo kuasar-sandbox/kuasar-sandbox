@@ -475,6 +475,20 @@ class HistoricalEvidence(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'complete asset inventory'):
             resolver.bound_plan(binding, 'release-v1.2.3', 'b' * 40, complete, [])
 
+    def test_retired_native_prerequisite_is_the_only_accepted_selection_difference(self):
+        for arch in artifacts.ARCHES:
+            current = artifacts.suite_selection(['platform'], arch, CASES)
+            legacy = dict(current, required_products=sorted(current['required_products'] + ['mkfs.erofs']))
+            for selection in (current, legacy):
+                self.assertTrue(artifacts.compatible_suite_selection(selection, ['platform'], arch, CASES))
+                for name in ('flatten-ctl', 'store-ctl'):
+                    changed = copy.deepcopy(selection)
+                    changed['required_products'].remove(name)
+                    self.assertFalse(artifacts.compatible_suite_selection(changed, ['platform'], arch, CASES))
+                changed = copy.deepcopy(selection)
+                changed['cases'] = changed['cases'][1:]
+                self.assertFalse(artifacts.compatible_suite_selection(changed, ['platform'], arch, CASES))
+
     def test_actual_legacy_plan_preserves_independent_test_provenance_and_tag_identity(self):
         plan = json.loads((Path(__file__).parent / 'fixtures/pre-cutover-plan.json').read_text())
         self.assertEqual(artifacts.identity(plan), '35addc8b111a87289f5691f3928febc85e624cdcc1112d69889f8282e56f9560')

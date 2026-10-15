@@ -54,7 +54,7 @@ for group in "${MATRIX_GROUPS[@]}"; do
 done
 
 [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ] || fatal "/dev/kvm must be readable and writable"
-for binary in cloud-hypervisor sandbox-ctl sandbox-init sandbox-runtime.bundle flatten-ctl manifest-ctl store-ctl cache-ctl mkfs.erofs; do
+for binary in cloud-hypervisor sandbox-ctl sandbox-init sandbox-runtime.bundle flatten-ctl manifest-ctl store-ctl cache-ctl; do
     [ -e "$BIN/$binary" ] || fatal "missing $BIN/$binary"
 done
 [ -f "$VMLINUX" ] || fatal "missing kernel $VMLINUX"
@@ -440,7 +440,7 @@ ROOT_KEY=$("$BIN/manifest-ctl" store --manifest-config "$WORK/manifest.yaml" --n
 mkdir -p "$WORK/dataset-source"
 echo DATASET-OK >"$WORK/dataset-source/DATASET-OK"
 DATASET_IMAGE="$WORK/dataset.img"
-MKFS_EROFS_PATH="$BIN/mkfs.erofs" "$BIN/flatten-ctl" export --tmpdir "$WORK/flatten-tmp" \
+"$BIN/flatten-ctl" export --tmpdir "$WORK/flatten-tmp" \
     --output "$DATASET_IMAGE" --no-progress "$WORK/dataset-source"
 DATASET_KEY=$("$BIN/manifest-ctl" store --manifest-config "$WORK/manifest.yaml" --no-progress "$DATASET_IMAGE")
 [[ "$DATASET_KEY" =~ ^[0-9a-f]{64}$ ]] || fatal "invalid dataset manifest key: $DATASET_KEY"
@@ -882,7 +882,6 @@ binary_names = (
     "cloud-hypervisor",
     "flatten-ctl",
     "manifest-ctl",
-    "mkfs.erofs",
     "sandbox-ctl",
     "sandbox-init",
     "sandbox-runtime.bundle",

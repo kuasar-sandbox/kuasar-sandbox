@@ -616,6 +616,35 @@ class ArtifactContracts(unittest.TestCase):
     def compose(self, arch="x86_64", delta=None):
         return subject.compose(self.plan, arch, self.assets, delta or self.delta(arch), self.root / "workspaces" / arch)
 
+    def runtime_archive_without_outer_mkfs(self, arch, *, go_generator):
+        files = dict(self.files[arch])
+        del files["mkfs.erofs"]
+        if go_generator:
+            source = self.root / ("go-runtime-" + arch)
+            source.mkdir()
+            files["sandbox-runtime.bundle"] = runtime(source, arch, files, without_mkfs=True)
+        name = subject.archive_name("runtime", self.plan["baseline"]["units"]["runtime"]["version"], arch)
+        record = archive(self.assets / name, {"bin/" + key: data for key, data in files.items()
+                                             if subject.PRODUCTS[key] == "runtime"})
+        next(item for item in self.plan["baseline"]["assets"] if item["name"] == name).update(record)
+
+    def test_go_runtime_composes_without_a_native_product(self):
+        for arch in subject.ARCHES:
+            with self.subTest(arch=arch):
+                self.runtime_archive_without_outer_mkfs(arch, go_generator=True)
+                with patch.object(subject, 'runtime_uses_go_erofs', return_value=True):
+                    result = self.compose(arch)
+                self.assertNotIn('mkfs.erofs', result['products'])
+                self.assertNotIn('mkfs.erofs', result['selection']['required_products'])
+                self.assertEqual(set(result['embedded']), {'init', 'envd', 'flatten-ctl'})
+                self.assertFalse((self.root / 'workspaces' / arch / 'bin/mkfs.erofs').exists())
+                subject.verify_workspace(self.root / 'workspaces' / arch, self.plan, arch)
+
+    def test_legacy_runtime_still_requires_its_outer_native_product(self):
+        self.runtime_archive_without_outer_mkfs('x86_64', go_generator=False)
+        with self.assertRaises(FileNotFoundError):
+            self.compose('x86_64')
+
     def add_kernel_checksum(self, arch, checksum=None):
         name = subject.archive_name("vmlinux", self.plan["baseline"]["units"]["vmlinux"]["version"], arch)
         raw = self.files[arch]["vmlinux"]
