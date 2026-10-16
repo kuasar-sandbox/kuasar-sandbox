@@ -137,6 +137,18 @@ Make the platform source-contract mechanism available before the component produ
 
 When introducing helper declarations, land the component declarations and recipes under the existing CI framework before enabling declaration discovery in the platform. The platform change can then validate against the original published baseline using the read-only evidence boundary in §8.1. Newly merged declarations do not replace missing declarations in old tags; the separate first tag selection makes them available to new publication.
 
+The first capability-requirement generation must move all six test owners together.
+Land its separate new-tag Preview selection under the existing framework while
+retaining a complete published predecessor. Validate the platform framework PR
+with all five owner declaration PRs as live companions, each with its own current
+successful integration check. Merge the framework first, then those owner PRs,
+and publish the selected component tags from their merged branches. Complete
+capability-aware aggregate exact-assets validation before considering the cutover
+finished. Until that aggregate is published, ordinary source requests that combine
+new declarations with old selected tags fail explicitly. Neither that temporary
+failure nor source CI success authorizes bypassing publication checks, borrowing
+branch files for a released tag, or publishing a mixed-generation aggregate.
+
 For Preview, use the normal component release entry points in §6 against that committed selection, in dependency order: accelerator and connector, then sandboxer, then orchestrator and runtime. After the mechanism lands, complete acceptance of a new Preview before the Stable cutover; Stable then uses the formal coordinator's committed selection. Once the selected component releases exist, use the normal aggregate entry point in §7 and all validation gates in §8. The independently selected vmlinux tag may remain unchanged when its relevant kernel inputs are unchanged and its selected documentation is complete.
 
 This explicit first migration is separate from the generic Daily docs-only reuse algorithm; that algorithm cannot substitute for the reviewed new-tag selection. Do not widen product-change inputs or add a forced-build rule. Historical tags and packages remain immutable under the read-only contract in §2.
