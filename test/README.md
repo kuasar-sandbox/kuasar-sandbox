@@ -74,6 +74,14 @@ actual product path. Ordinary Linux utilities, root access and prepared inputs
 remain part of the executor contract. Do not declare devices or services that a
 case only mentions in comments or deliberately tests as absent.
 
+The supported executors provide the common E2E user-space dependencies, including
+Redis, and privileged mount/PID namespace operations. These are baseline executor
+prerequisites, not optional placement capabilities. A restricted container that
+cannot meet them is not an eligible executor merely because its labels match.
+Credentialed OBS remains an explicit suite opt-in; a capability declaration does
+not select that suite or supply its credentials. Declare the default prepared
+fixture path, rather than optional developer overrides such as `IMAGE_A`/`IMAGE_B`.
+
 | Capability | Required operation |
 | --- | --- |
 | `kvm` | Open KVM API 12 and create a VM |

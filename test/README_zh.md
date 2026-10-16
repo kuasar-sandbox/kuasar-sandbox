@@ -63,6 +63,12 @@ platform 使用 `test/e2e/platform/lib/requirements.json`。每个用例在 sheb
 及实际产品路径引入的需求。普通 Linux 工具、root 权限和 prepared 输入仍属于执行器契约。
 不要把注释中提及的设备，或用例故意验证缺失的服务，写成前置需求。
 
+受支持的执行器提供包括 Redis 在内的公共 E2E 用户态依赖，以及具有权限的 mount/PID
+命名空间操作。这些属于执行器基础前提，不是可选的调度能力。无法满足这些前提的受限
+容器，不会仅因标签匹配就成为合格执行器。带凭据的 OBS 仍需显式选择 suite；能力声明
+不会选择该 suite，也不会提供凭据。声明应描述默认 prepared fixture 路径，而不是
+`IMAGE_A`/`IMAGE_B` 等可选开发覆盖参数。
+
 | 能力 | 必需操作 |
 | --- | --- |
 | `kvm` | 打开 KVM API 12 并创建 VM |
