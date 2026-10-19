@@ -257,6 +257,10 @@ jobs:
           echo "E2E_WORKSPACE=$task" >> "$GITHUB_ENV"
       - name: Check out only the trusted executor
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        timeout-minutes: 15
+        env:
+          GIT_HTTP_LOW_SPEED_LIMIT: '1024'
+          GIT_HTTP_LOW_SPEED_TIME: '180'
         with:
           repository: kuasar-sandbox/kuasar-sandbox
           ref: ${{ inputs.framework_sha }}

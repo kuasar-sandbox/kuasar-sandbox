@@ -208,6 +208,7 @@ test-ci-tools:
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
 
 test-release-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 release/test-download-asset.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/release-source-set.py --sources "$(ORG)" --auto
 	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/test-release-source-set.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_tag_selection.py release/test_tag_sources.py

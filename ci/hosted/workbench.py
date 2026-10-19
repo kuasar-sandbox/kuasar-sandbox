@@ -21,6 +21,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'ci/integration'))
 import artifacts
+import image_pull
 
 REGISTRY = 'ghcr.io/kuasar-sandbox/workbench'
 PLATFORMS = {'x86_64': 'amd64', 'aarch64': 'arm64'}
@@ -136,7 +137,7 @@ def acquire(selected, arch):
     started = time.monotonic()
     existing = launcher.inspect('image', row['image_id'])
     if existing is None:
-        subprocess.run(['docker', 'pull', row['reference']], check=True, timeout=1800)
+        image_pull.pull_image(row['reference'])
     imported = launcher.inspect('image', row['image_id'])
     image_check(selected, arch, imported)
     return {'image_present_before': existing is not None, 'acquire_seconds': time.monotonic() - started,
