@@ -255,13 +255,12 @@ class PreviewSelectionTest(unittest.TestCase):
 
     def test_vmlinux_publishes_for_kernel_tree_input_changes(self) -> None:
         for path in (
-            "native-deps/deps/build-vmlinux.sh",
-            "native-deps/deps/common.sh",
             "native-deps/deps/vmlinux/sandbox-common.config",
             "native-deps/deps/vmlinux/sandbox-x86_64.config",
             "native-deps/deps/vmlinux/sandbox-arm64.config",
             "native-deps/deps/linux-patches/0001.patch",
             "native-deps/deps/linux-patches/0002.patch",
+            "native-deps/deps/linux-patches/README.md",
         ):
             with self.subTest(path=path):
                 self.repository.close()
@@ -274,7 +273,7 @@ class PreviewSelectionTest(unittest.TestCase):
                     result.selected, "vmlinux-v1.2.4-preview.20260921.2"
                 )
 
-    def test_vmlinux_publishes_when_linux_source_pin_changes(self) -> None:
+    def test_vmlinux_reuses_when_linux_source_pin_changes_without_config(self) -> None:
         for old, new in (
             ("https://kernel.invalid/linux.tar.gz", "https://kernel.invalid/linux-new.tar.gz"),
             ("a" * 64, "b" * 64),
@@ -287,9 +286,9 @@ class PreviewSelectionTest(unittest.TestCase):
                 self.repository.commit_files(
                     "linux pin", {"native-deps/Makefile": makefile.read_text().replace(old, new)}
                 )
-                self.assertEqual(self.resolve_vmlinux().action, "publish")
+                self.assertEqual(self.resolve_vmlinux().action, "reuse")
 
-    def test_vmlinux_publishes_when_makefile_kernel_recipe_changes(self) -> None:
+    def test_vmlinux_reuses_when_makefile_kernel_recipe_changes_without_config(self) -> None:
         for old, new in (
             ("STAGE=build $(LINUX_INVOKE)", 'STAGE=build KCFLAGS="-fno-inline" $(LINUX_INVOKE)'),
             ("deps/linux-patches)", "deps/linux-patches-new)"),
@@ -304,7 +303,7 @@ class PreviewSelectionTest(unittest.TestCase):
                 self.repository.commit_files(
                     "kernel recipe", {"native-deps/Makefile": makefile.read_text().replace(old, new)}
                 )
-                self.assertEqual(self.resolve_vmlinux().action, "publish")
+                self.assertEqual(self.resolve_vmlinux().action, "reuse")
 
     def test_vmlinux_reuses_release_after_unrelated_makefile_changes(self) -> None:
         tagged = self.seed_vmlinux()
@@ -333,7 +332,59 @@ class PreviewSelectionTest(unittest.TestCase):
             "shared flags changed",
             {"native-deps/Makefile": makefile.replace("-g", "-fno-inline")},
         )
+        self.assertEqual(self.resolve_vmlinux().action, "reuse")
+        self.assertNotEqual(
+            preview_selection.vmlinux_make_inputs(makefile),
+            preview_selection.vmlinux_make_inputs(makefile.replace("-g", "-fno-inline")),
+        )
+
+    def test_vmlinux_ignores_scripts_and_non_config_files(self) -> None:
+        for path in ("native-deps/deps/common.sh", "native-deps/deps/build-vmlinux.sh",
+                     "native-deps/deps/vmlinux/README.md",
+                     "native-deps/deps/vmlinux/nested/ignored.config"):
+            with self.subTest(path=path):
+                self.repository.close()
+                self.repository = Repository()
+                self.seed_vmlinux()
+                self.repository.commit_files("non-release input", {path: "changed\n"})
+                self.assertEqual(self.resolve_vmlinux().action, "reuse")
+
+    def test_config_comment_requests_release_for_script_change(self) -> None:
+        self.seed_vmlinux()
+        self.repository.commit_files("new kernel compiler", {
+            "native-deps/deps/build-vmlinux.sh": "new build flags\n",
+            "native-deps/deps/vmlinux/sandbox-common.config":
+                "# Rebuild with the new compiler flags.\nCONFIG_A=y\n",
+        })
         self.assertEqual(self.resolve_vmlinux().action, "publish")
+
+    def test_common_header_regression_from_guest_runtime_101(self) -> None:
+        old = "# Shared helpers for dependency build scripts. Sourced by build-erofs.sh and\n"
+        self.repository.commit_files("stable kernel", {
+            "native-deps/deps/common.sh": old + "# build-envd.sh; not executable on its own.\n",
+            "native-deps/deps/vmlinux/sandbox-common.config": "CONFIG_A=y\n",
+        })
+        self.repository.git("tag", "vmlinux-v1.2.3")
+        self.repository.commit_files("shared helper comment (#101)", {
+            "native-deps/deps/common.sh":
+                old.replace("build-erofs.sh", "build-vmlinux.sh")
+                + "# build-envd.sh; not executable on its own.\n",
+            "runtime/packaging.go": "runtime-only change\n",
+        })
+        self.assertEqual(self.resolve_vmlinux().action, "reuse")
+
+    def test_kernel_input_deletion_triggers_release(self) -> None:
+        self.seed_vmlinux()
+        self.repository.git("rm", "native-deps/deps/linux-patches/0001.patch")
+        self.repository.git("commit", "-qm", "drop kernel patch")
+        self.assertEqual(self.resolve_vmlinux().action, "publish")
+
+    def test_reverted_config_change_reuses_release(self) -> None:
+        self.seed_vmlinux()
+        path = "native-deps/deps/vmlinux/sandbox-common.config"
+        self.repository.commit_files("config change", {path: "CONFIG_A=n\n"})
+        self.repository.commit_files("revert config", {path: "CONFIG_A=y\n"})
+        self.assertEqual(self.resolve_vmlinux().action, "reuse")
 
     def test_vmlinux_reuses_only_newest_usable_preview(self) -> None:
         self.seed_vmlinux()

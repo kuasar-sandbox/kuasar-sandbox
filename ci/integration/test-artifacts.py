@@ -512,6 +512,14 @@ class KernelChecksumArchiveContracts(unittest.TestCase):
                 subject.unpack(payload, root / "extra", "vmlinux", {})
 
 
+class KernelReleaseInputContracts(unittest.TestCase):
+    def test_kernel_script_only_changes_remain_candidate_build_inputs(self):
+        for path in ("native-deps/deps/common.sh", "native-deps/deps/build-vmlinux.sh",
+                     "native-deps/Makefile"):
+            with self.subTest(path=path):
+                self.assertIn("vmlinux", subject.changed_products({"guest-runtime": [path]}))
+
+
 class ArtifactContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

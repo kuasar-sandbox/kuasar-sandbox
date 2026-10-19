@@ -15,14 +15,11 @@ from typing import Iterable, NoReturn
 COMPONENT_UNITS = {"accelerator", "connector", "sandboxer", "orchestrator"}
 ALL_UNITS = COMPONENT_UNITS | {"runtime", "vmlinux"}
 
-# vmlinux is an independent release unit in guest-runtime. Its version follows
-# the guest kernel artifact, not every commit in the containing repository.
-# Keep this closure aligned with guest-runtime/native-deps' VMLINUX_INPUTS and
-# the kernel and shared Makefile logic consumed by that target.
-VMLINUX_TREE_INPUTS = (
-    "native-deps/deps/build-vmlinux.sh",
-    "native-deps/deps/common.sh",
-    "native-deps/deps/vmlinux",
+# Release intent is explicit in config/patch changes, including config comments.
+# Build inputs that alter the kernel must accompany a config change; CI retains
+# its complete build-input closure independently of this release rule.
+VMLINUX_RELEASE_INPUTS = (
+    ":(glob)native-deps/deps/vmlinux/*.config",
     "native-deps/deps/linux-patches",
 )
 # These targets are not prerequisites of vmlinux in guest-runtime/native-deps.
@@ -149,6 +146,7 @@ def git_file(root: pathlib.Path, commit: str, path: str) -> str:
 
 
 def vmlinux_make_inputs(text: str) -> list[str]:
+    # Retained for CI candidate build selection, not automatic release intent.
     # Read source text without evaluating Makefile code. Retain shared/unknown
     # statements, including conditionals, variable overrides and kernel recipes;
     # ignoring everything except the Linux pins can reuse an obsolete kernel.
@@ -194,15 +192,9 @@ def vmlinux_make_inputs(text: str) -> list[str]:
 def vmlinux_inputs_changed(root: pathlib.Path, base: str, head: str) -> bool:
     if base == head:
         return False
-    changed = run_git(
-        root, "diff", "--name-only", f"{base}..{head}", "--", *VMLINUX_TREE_INPUTS
-    )
-    if changed:
-        return True
-    makefile = "native-deps/Makefile"
-    return vmlinux_make_inputs(git_file(root, base, makefile)) != vmlinux_make_inputs(
-        git_file(root, head, makefile)
-    )
+    return bool(run_git(
+        root, "diff", "--name-only", f"{base}..{head}", "--", *VMLINUX_RELEASE_INPUTS
+    ))
 
 
 def unit_inputs_changed(root: pathlib.Path, base: str, head: str, unit: str) -> bool:

@@ -58,7 +58,7 @@ fetch_components() {
       | jq -er '.object | select(.type == "commit") | .sha | select(test("^[0-9a-f]{40}$"))')"
     python3 -B "$ROOT/release/tag_sources.py" fetch "$unit" "$tag" "$source_sha" "$output/sources/$unit" > /dev/null
     write_component_updates "$unit" "$repository" "$previous_tag" "$tag" \
-      "$output/updates/$unit.md"
+      "$output/updates/$unit.md" "$output/sources/$unit"
   done < "$output/selection.tsv"
   python3 -B "$ROOT/release/tag_sources.py" inspect "$PLATFORM_SOURCE_ROOT" "$version" "$output/sources" \
     > "$output/source-records.json"
@@ -72,6 +72,12 @@ write_component_updates() {
   fi
   if [ "$previous_tag" = "$current_tag" ]; then
     printf "Selected version unchanged: \`%s\`.\n" "$current_tag" > "$output"
+    return
+  fi
+
+  if [ "$unit" = vmlinux ]; then
+    python3 -B "$ROOT/release/vmlinux_updates.py" "$6" \
+      "$previous_tag" "$current_tag" > "$output"
     return
   fi
 

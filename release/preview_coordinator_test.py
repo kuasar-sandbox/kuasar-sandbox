@@ -788,6 +788,7 @@ components:
                     files = {"scripts/prepare-sandbox-init.py": "runtime change\n"}
                     if kernel_changed:
                         files["native-deps/Makefile"] = makefile.replace("a" * 64, "b" * 64)
+                        files["native-deps/deps/vmlinux/sandbox-common.config"] = "# Rebuild for the new source checksum.\n"
                     head_sha = repository.commit_files("guest-runtime change", files)
                     released = coordinator.ReleaseStatus(
                         {

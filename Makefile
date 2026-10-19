@@ -223,7 +223,7 @@ test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_build_selection.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_prepared_demo.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_documentation_package.py
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_selection_test.py
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_selection_test.py release/test_vmlinux_updates.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_coordinator_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_scanner_test.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_gc_test.py
