@@ -14,6 +14,7 @@ The [Stable channel](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/l
 - [Workbench](workbench/README.md):recommended environment for first use, native builds and private system validation;
 - [Architecture](docs/kuasar-sandbox.md) — system capabilities, component boundaries, and lifecycle semantics;
 - [Deployment](docs/deployment.md) — standalone and cluster topologies, processes, and dependencies;
+- [Release quick-start deployment](release/README-deployment.md) — validate one supported host, download a public Release, and run its E2E demo;
 - [Releases](docs/release.md) — component versions, aggregate versions, asset contracts, and release transactions;
 - [Demo](test/demo/DEMO.md) — the complete local demonstration environment;
 - [Full validation](test/QUICKSTART.md) — aggregate-release validation and all owner E2E suites;
