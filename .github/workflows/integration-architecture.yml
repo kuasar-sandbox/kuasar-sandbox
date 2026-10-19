@@ -44,7 +44,8 @@ jobs:
           ref: ${{ inputs.framework_sha }}
           path: framework
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: ${{ inputs.plan_artifact }}
           path: plan
@@ -104,7 +105,8 @@ jobs:
           overwrite: true
       - name: Download exact aggregate stage
         if: inputs.stage_artifact != ''
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: ${{ inputs.stage_artifact }}
           path: aggregate-stage
@@ -170,18 +172,21 @@ jobs:
           ref: ${{ inputs.framework_sha }}
           path: framework
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: ${{ inputs.plan_artifact }}
           path: plan
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: integration-build-${{ inputs.arch }}-${{ github.run_id }}
           path: transport
       - name: Bootstrap archive execution prerequisites
         run: bash framework/ci/hosted/bootstrap.sh --profile artifact-prepare
       - name: Download trusted native archive readers
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: integration-readers-${{ inputs.arch }}-${{ github.run_id }}
           path: readers
@@ -268,6 +273,7 @@ jobs:
           persist-credentials: false
           sparse-checkout-cone-mode: false
           sparse-checkout: |
+            /.github/actions/download-artifact/
             /ci/hosted/
             /ci/integration/
             /release/tag_sources.py
@@ -275,11 +281,13 @@ jobs:
             /test/e2e/package_inputs.py
             /test/e2e/lib/
             /workbench/
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: ${{ inputs.plan_artifact }}
           path: ${{ env.E2E_WORKSPACE }}/plan
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}
           path: ${{ env.E2E_WORKSPACE }}/transport
@@ -290,7 +298,8 @@ jobs:
           if [ "$TARGET_ARCH" = aarch64 ]; then profile=artifact-arm; fi
           bash framework/ci/hosted/bootstrap.sh --profile "$profile"
       - name: Download trusted native archive readers
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: integration-readers-${{ inputs.arch }}-${{ github.run_id }}
           path: ${{ env.E2E_WORKSPACE }}/readers
@@ -360,17 +369,20 @@ jobs:
           persist-credentials: false
           sparse-checkout-cone-mode: false
           sparse-checkout: |
+            /.github/actions/download-artifact/
             /ci/hosted/
             /ci/integration/
             /release/tag_sources.py
             /release/selection.py
             /test/e2e/package_inputs.py
             /test/e2e/lib/
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: ${{ inputs.plan_artifact }}
           path: plan
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}
           path: transport
@@ -380,7 +392,8 @@ jobs:
           if [ "$TARGET_ARCH" = aarch64 ]; then profile=artifact-arm; fi
           bash framework/ci/hosted/bootstrap.sh --profile "$profile"
       - name: Download trusted native archive readers
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: integration-readers-${{ inputs.arch }}-${{ github.run_id }}
           path: readers
@@ -441,16 +454,17 @@ jobs:
           ref: ${{ inputs.framework_sha }}
           path: framework
           persist-credentials: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: ${{ inputs.plan_artifact }}
           path: plan
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
         if: needs.build.outputs.has_groups == 'true' || needs.build.outputs.performance == 'true'
         with:
           pattern: integration-shard-${{ inputs.arch }}-*-${{ github.run_id }}
           path: shards
-          merge-multiple: true
       - name: Explicitly collect this architecture's shards
         run: |
           mkdir -p results shards
