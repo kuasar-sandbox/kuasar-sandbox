@@ -136,7 +136,7 @@ class SelectionTests(unittest.TestCase):
                 ci.subprocess, 'run') as run:
             result = ci.acquire(selection(), 'x86_64')
         run.assert_called_once_with(['docker', 'pull', selection()['architectures']['x86_64']['reference']],
-                                    check=True, timeout=1800)
+                                    check=True, timeout=900, stderr=subprocess.PIPE, text=True)
         self.assertFalse(result['image_present_before'])
 
     def test_warm_exact_image_does_not_resolve_or_pull_latest(self):
@@ -144,6 +144,180 @@ class SelectionTests(unittest.TestCase):
                 ci.launcher, 'inspect', return_value=image()), patch.object(ci.subprocess, 'run') as run:
             self.assertTrue(ci.acquire(selection(), 'x86_64')['image_present_before'])
             run.assert_not_called()
+
+
+class PullRetryTests(unittest.TestCase):
+    def failure(self, message='connection reset by peer'):
+        return subprocess.CalledProcessError(1, ['docker', 'pull', 'immutable'], stderr=message)
+
+    def test_transient_failure_then_success(self):
+        with patch.object(ci.subprocess, 'run', side_effect=[self.failure(), None]) as run, \
+                patch.object(ci.time, 'monotonic', return_value=0), \
+                patch.object(ci.time, 'sleep') as sleep, \
+                patch.object(ci.image_pull.random, 'uniform', return_value=1):
+            ci.image_pull.pull_image('immutable')
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args.kwargs['timeout'], 900)
+        self.assertEqual(run.call_args.args[0], ['docker', 'pull', 'immutable'])
+        sleep.assert_called_once_with(30)
+
+    def test_three_attempt_limit_and_backoff(self):
+        with patch.object(ci.subprocess, 'run', side_effect=self.failure()) as run, \
+                patch.object(ci.time, 'monotonic', return_value=0), \
+                patch.object(ci.time, 'sleep') as sleep, \
+                patch.object(ci.image_pull.random, 'uniform', return_value=1):
+            with self.assertRaises(subprocess.CalledProcessError):
+                ci.image_pull.pull_image('immutable')
+        self.assertEqual(run.call_count, 3)
+        self.assertEqual([call.args[0] for call in sleep.call_args_list], [30, 60])
+
+    def test_permanent_and_unknown_errors_never_retry(self):
+        for message in ('unauthorized', 'manifest unknown', 'not found', 'x509 certificate',
+                        'digest mismatch', 'no matching manifest', 'unsupported platform',
+                        'unknown failure', 'permission denied',
+                        'connection reset: unauthorized', 'invalid checksum',
+                        'authentication required: TLS handshake timeout',
+                        'failed to fetch anonymous token: access denied: i/o timeout'):
+            with self.subTest(message=message), \
+                    patch.object(ci.subprocess, 'run', side_effect=self.failure(message)) as run, \
+                    patch.object(ci.time, 'sleep') as sleep:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    ci.image_pull.pull_image('immutable')
+                self.assertEqual(run.call_count, 1)
+                sleep.assert_not_called()
+
+    def test_timeout_retry_and_remaining_budget_cap(self):
+        now = [0]
+        timeouts = []
+        def run(*args, **kwargs):
+            timeouts.append(kwargs['timeout'])
+            now[0] += kwargs['timeout']
+            raise subprocess.TimeoutExpired(args[0], kwargs['timeout'], stderr=b'i/o timeout')
+        def sleep(delay):
+            now[0] += delay
+        with patch.object(ci.subprocess, 'run', side_effect=run), \
+                patch.object(ci.time, 'monotonic', side_effect=lambda: now[0]), \
+                patch.object(ci.time, 'sleep', side_effect=sleep), \
+                patch.object(ci.image_pull.random, 'uniform', return_value=1):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                ci.image_pull.pull_image('immutable')
+        self.assertEqual(timeouts, [900, 870])
+        self.assertEqual(now[0], 1800)
+
+    def test_no_sleep_when_budget_cannot_fit_backoff(self):
+        with patch.object(ci.subprocess, 'run', side_effect=self.failure()) as run, \
+                patch.object(ci.time, 'monotonic', side_effect=[0, 0, 1790]), \
+                patch.object(ci.time, 'sleep') as sleep, \
+                patch.object(ci.image_pull.random, 'uniform', return_value=1):
+            with self.assertRaises(subprocess.CalledProcessError):
+                ci.image_pull.pull_image('immutable')
+        self.assertEqual(run.call_count, 1)
+        sleep.assert_not_called()
+
+    def test_successful_retry_still_rejects_wrong_image(self):
+        wrong = image()
+        wrong['Id'] = 'sha256:' + '9' * 64
+        with patch.object(ci.platform, 'machine', return_value='x86_64'), \
+                patch.object(ci.launcher, 'inspect', side_effect=[None, wrong]), \
+                patch.object(ci.subprocess, 'run', side_effect=[self.failure(), None]) as run, \
+                patch.object(ci.time, 'sleep'), patch.object(ci.image_pull.random, 'uniform', return_value=1):
+            with self.assertRaisesRegex(ValueError, 'image/config/architecture mismatch'):
+                ci.acquire(selection(), 'x86_64')
+        self.assertEqual(run.call_count, 2)
+
+    def test_classification_includes_http_failures_and_timeout_denials(self):
+        for diagnostic in ('received unexpected HTTP status: 503', 'HTTP 429',
+                           'TLS handshake timeout', 'unexpected EOF', 'i/o timeout',
+                           'connection reset by peer',
+                           'failed to authorize: failed to fetch anonymous token: TLS handshake timeout',
+                           'authentication endpoint: connection reset by peer'):
+            with self.subTest(diagnostic=diagnostic):
+                self.assertTrue(ci.image_pull.pull_retryable(self.failure(diagnostic)))
+        self.assertFalse(ci.image_pull.pull_retryable(subprocess.TimeoutExpired(
+            ['docker', 'pull'], 900, stderr=b'x509 certificate has expired')))
+
+    def test_plain_docker_eof_retries_without_matching_url_substrings(self):
+        for diagnostic in ('EOF', 'Get "https://ghcr.io/v2/example/blobs/sha256:abc": EOF'):
+            with self.subTest(diagnostic=diagnostic), \
+                    patch.object(ci.subprocess, 'run', side_effect=[self.failure(diagnostic), None]) as run, \
+                    patch.object(ci.time, 'sleep') as sleep, \
+                    patch.object(ci.image_pull.random, 'uniform', return_value=1):
+                ci.image_pull.pull_image('immutable')
+                self.assertEqual(run.call_count, 2)
+                sleep.assert_called_once()
+                self.assertEqual(ci.image_pull.pull_failure(self.failure(diagnostic)), (True, 'eof'))
+        self.assertFalse(ci.image_pull.pull_retryable(self.failure('Get "https://registry.invalid/eof"')))
+        self.assertFalse(ci.image_pull.pull_retryable(self.failure('unauthorized: EOF')))
+
+    def test_safe_failure_reason_codes_do_not_echo_registry_secrets(self):
+        for diagnostic, reason in (
+                ('unauthorized: EOF', 'auth'), ('x509 certificate expired: EOF', 'cert'),
+                ('manifest unknown', 'notfound'), ('digest mismatch', 'digest'),
+                ('no matching manifest', 'platform'), ('invalid reference format', 'invalid-reference'),
+                ('unrecognized error', 'unknown')):
+            stream = io.StringIO()
+            error = self.failure(diagnostic + ' https://registry.invalid/blob?signature=secret')
+            with self.subTest(reason=reason), patch.object(ci.subprocess, 'run', side_effect=error), \
+                    patch.object(ci.time, 'sleep') as sleep, patch.object(ci.sys, 'stderr', stream):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    ci.image_pull.pull_image('immutable')
+                sleep.assert_not_called()
+            self.assertIn('exit 1; reason=' + reason, stream.getvalue())
+            self.assertNotIn('secret', stream.getvalue())
+            self.assertNotIn('https://', stream.getvalue())
+        self.assertEqual(ci.image_pull.pull_failure(subprocess.TimeoutExpired(
+            ['docker', 'pull'], 900, stderr=b'')), (True, 'timeout'))
+
+    def test_raw_registry_diagnostics_are_not_logged(self):
+        diagnostic = 'connection reset https://registry.invalid/blob?signature=secret'
+        stream = io.StringIO()
+        with patch.object(ci.subprocess, 'run', side_effect=[self.failure(diagnostic), None]), \
+                patch.object(ci.time, 'sleep'), patch.object(ci.sys, 'stderr', stream):
+            ci.image_pull.pull_image('immutable')
+        self.assertNotIn('signature', stream.getvalue())
+        self.assertNotIn('secret', stream.getvalue())
+        self.assertIn('retry 2/3', stream.getvalue())
+        self.assertIn('exit 1; reason=transport', stream.getvalue())
+
+    def test_capability_group_uses_shared_pull_then_checks_exact_image(self):
+        driver = ci.module('retry_group_driver', ROOT / 'ci/integration/run-capability-group.py')
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            selected = {'image_id': 'sha256:' + '8' * 64,
+                        'reference': ci.REGISTRY + '@sha256:' + '9' * 64}
+            profile = {'executor': 'workbench-system'}
+            config = {'profiles': {'supplemental-arm': profile}}
+            plan = {'schema': 4, 'lanes': {'aarch64': {'groups': {
+                'basic': {'profile': 'supplemental-arm', 'runtime': 'system'}}}},
+                'runner_configuration': {'value': config},
+                'execution_images': {'aarch64': selected}}
+            args = argparse.Namespace(plan=root / 'plan.json', arch='aarch64', group='basic',
+                                      workspace=root / 'workspace', root=root / 'state',
+                                      inputs=root / 'inputs')
+            args.plan.write_text(json.dumps(plan))
+            with patch.object(driver.artifacts, 'check_plan'), \
+                    patch.object(driver.artifacts, 'verify_workspace', return_value={}), \
+                    patch.object(driver.platform, 'machine', return_value='aarch64'), \
+                    patch.object(driver.routing, 'read_config', return_value=config), \
+                    patch.object(driver.routing, 'runner_identity', return_value={}), \
+                    patch.object(driver.image_pull, 'pull_image') as pull, \
+                    patch.object(driver.subprocess, 'run', side_effect=[
+                        subprocess.CompletedProcess([], 1), ValueError('launcher rejected image')]) as run:
+                with self.assertRaisesRegex(ValueError, 'launcher rejected image'):
+                    driver.execute(args)
+            self.assertIs(driver.image_pull, ci.image_pull)
+            pull.assert_called_once_with(selected['reference'])
+            self.assertIn('check', run.call_args.args[0])
+            self.assertIn(selected['image_id'], run.call_args.args[0])
+
+    def test_checkout_tolerance_is_local_to_group_executor(self):
+        workflow = yaml.safe_load((ROOT / '.github/workflows/integration-architecture.yml').read_text())
+        steps = [step for job in workflow['jobs'].values() for step in job.get('steps', [])
+                 if 'GIT_HTTP_LOW_SPEED_TIME' in step.get('env', {})]
+        self.assertEqual(len(steps), 1)
+        self.assertEqual(steps[0]['env'], {'GIT_HTTP_LOW_SPEED_LIMIT': '1024',
+                                        'GIT_HTTP_LOW_SPEED_TIME': '180'})
+        self.assertEqual(steps[0]['timeout-minutes'], 15)
 
 
 class CacheScopeTests(TemporaryFiles):

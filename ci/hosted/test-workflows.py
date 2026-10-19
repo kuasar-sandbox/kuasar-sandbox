@@ -395,7 +395,7 @@ def check():
     assert e2e_steps["Release only this group's Workbench resources"]['if'] == "always() && matrix.group.executor == 'workbench-system' && env.E2E_WORKSPACE != ''"
     assert 'mktemp -d' in e2e_steps['Create a fresh execution workspace']['run']
     for step in lanes['e2e']['steps']:
-        if 'download-artifact@' in step.get('uses', ''):
+        if step.get('uses', '').endswith('/.github/actions/download-artifact'):
             assert step['with']['path'].startswith('${{ env.E2E_WORKSPACE }}/')
     assert e2e_steps['Upload exact shard result']['with']['path'].startswith('${{ env.E2E_WORKSPACE }}/results/')
     assert "--delete-output" in e2e_steps["Remove only this task's retained files"]['run']

@@ -20,6 +20,7 @@ import subprocess
 import sys
 
 import artifacts
+import image_pull
 import capability_routing as routing
 import runtime_archive
 
@@ -107,7 +108,7 @@ def execute(args):
     selected = plan['execution_images'][args.arch]
     existing = subprocess.run(['docker', 'image', 'inspect', selected['image_id']], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     if existing.returncode:
-        subprocess.run(['docker', 'pull', selected['reference']], check=True, timeout=1800)
+        image_pull.pull_image(selected['reference'])
     # The launcher verifies native architecture, rootful Engine, image origin
     # and private namespaces. The exact config ID is fixed by the plan.
     subprocess.run([sys.executable, '-B', str(ROOT / 'workbench/workbench'), 'check',

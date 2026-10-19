@@ -1,0 +1,15 @@
+name: Bounded same-run artifact download
+description: Freeze artifact identities and verify archives before exposing their contents
+inputs:
+  name:
+    description: Exact artifact name in this workflow run
+    default: ''
+  pattern:
+    description: Simple wildcard pattern; matching artifacts must have disjoint file paths
+    default: ''
+  path:
+    description: New destination directory
+    required: true
+runs:
+  using: node24
+  main: index.js

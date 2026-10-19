@@ -119,16 +119,24 @@ github_api() {
     "${GITHUB_API_URL:-https://api.github.com}/$endpoint"
 }
 
-github_download_asset() {
-  local repository="$1" asset_id="$2" output="$3"
+github_download_asset() (
+  local repository="$1" asset_id="$2" output="$3" temporary
+  # curl can rewind --output between retries; redirected stdout cannot be rewound.
+  # Keep the temporary file beside the destination so rename is atomic.
+  temporary="$(mktemp "${output}.tmp.XXXXXX")" || return
+  trap 'rm -f -- "$temporary"' EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
   curl --fail --show-error --silent --location \
     --retry 4 --retry-all-errors --connect-timeout 10 --max-time 900 \
     -H "Accept: application/octet-stream" \
     -H "Authorization: Bearer ${GH_TOKEN:?GH_TOKEN is required}" \
     -H "X-GitHub-Api-Version: 2022-11-28" \
+    --output "$temporary" \
     "${GITHUB_API_URL:-https://api.github.com}/repos/$repository/releases/assets/$asset_id" \
-    > "$output"
-}
+    || return
+  mv -f -- "$temporary" "$output"
+)
 
 verify_github_asset() {
   local file="$1" asset="$2"
