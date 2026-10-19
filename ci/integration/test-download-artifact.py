@@ -317,7 +317,23 @@ class DownloadTests(unittest.TestCase):
     def test_workflow_timeout_sparse_checkout_and_runtime_boundary(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/integration-architecture.yml').read_text()
-        self.assertNotIn('uses: actions/download-artifact@', workflow)
+        # Only the small, hash-bound executor bootstrap uses the pinned official
+        # downloader before the local bounded action is available.
+        self.assertEqual(workflow.count('uses: actions/download-artifact@'), 1)
+        e2e = workflow.split('\n  e2e:\n', 1)[1].split('\n  performance:\n', 1)[0]
+        bootstrap = e2e.split('      - name: Download the exact executor capsule\n', 1)[1]
+        bootstrap = bootstrap.split('\n      - ', 1)[0]
+        self.assertIn("if: runner.environment == 'self-hosted'", bootstrap)
+        self.assertIn('uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c', bootstrap)
+        self.assertIn('timeout-minutes: 5', bootstrap)
+        self.assertIn('name: ${{ inputs.executor_artifact }}', bootstrap)
+        self.assertIn('path: ${{ env.E2E_WORKSPACE }}/executor', bootstrap)
+        restore = e2e.split('      - name: Verify and restore exact executor Git objects\n', 1)[1]
+        restore = restore.split('\n      - ', 1)[0]
+        self.assertIn('EXECUTOR_DIGEST: ${{ inputs.executor_digest }}', restore)
+        self.assertIn('[ "$FRAMEWORK_SHA" = "$TRUSTED_WORKFLOW_SHA" ]', restore)
+        self.assertLess(restore.index('hashlib.sha256'), restore.index('tarfile.open'))
+        self.assertEqual(workflow.count('uses: ./framework/.github/actions/download-artifact'), 13)
         self.assertEqual(workflow.count('uses: ./framework/.github/actions/download-artifact'),
                          workflow.count('timeout-minutes: 35'))
         self.assertEqual(workflow.count('sparse-checkout: |'),
