@@ -424,6 +424,7 @@ class SourcePlan(unittest.TestCase):
             platform_sha = subject.tag_sources.git(roots['platform'], 'rev-parse', 'HEAD')
             with patch.dict(os.environ, environment), patch.object(resolver, 'public'), \
                  patch.object(resolver, 'baseline', return_value=selected), \
+                 patch.object(resolver, 'maintained_units', return_value={unit: row['version'] for unit, row in selected['units'].items()}), \
                  patch.object(resolver.release, 'branch_sha', return_value=platform_sha), \
                  patch.object(resolver, 'source_text', side_effect=AssertionError('no SHA source lookup')):
                 plan = resolver.source_plan('a' * 40, root / 'admitted')
@@ -439,6 +440,188 @@ class SourcePlan(unittest.TestCase):
             self.assertEqual((root / 'admitted/candidates/accelerator/test/e2e/cases/image.manifest.sh').read_text(),
                              'echo candidate assertion\n')
 
+
+
+class MaintainedSelection(unittest.TestCase):
+    def release_state(self, unit, tag, sha):
+        return {'tag_name': tag, 'draft': False, 'prerelease': '-preview.' in tag,
+                'target_commitish': sha, 'assets': [
+                    {'name': name, 'state': 'uploaded', 'size': 1, 'digest': 'sha256:' + 'e' * 64}
+                    for name in ['SHA256SUMS', *(artifacts.archive_name(unit, tag, arch) for arch in artifacts.ARCHES)]]}
+
+    def test_missing_aggregate_uses_only_explicit_validated_predecessor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); (root / 'releases').mkdir()
+            manifest = 'version: release-v1.2.3\npreview_version: preview.20261019.1\nprevious_preview_version: preview.20261015.1\ncomponents:\n'
+            manifest += ''.join(f"  {unit}: {unit + '-' if unit in ('runtime', 'vmlinux') else ''}v1.2.4\n" for unit in artifacts.UNITS)
+            (root / 'releases/daily-preview.yaml').write_text(manifest)
+            original = {'historical': 'unchanged'}
+            with patch.object(resolver, 'aggregate', side_effect=[None, original]) as lookup:
+                self.assertIs(resolver.baseline(root, 'main'), original)
+                self.assertEqual([call.args[0] for call in lookup.call_args_list],
+                                 ['release-v1.2.3-preview.20261019.1', 'release-v1.2.3-preview.20261015.1'])
+            with patch.object(resolver, 'aggregate', return_value=None), self.assertRaisesRegex(ValueError, 'published validated baseline'):
+                resolver.baseline(root, 'main')
+
+    def test_incomplete_or_unverified_selected_publications_fail_closed(self):
+        good = self.release_state('connector', 'v1.2.4', 'a' * 40)
+        bad = [None, dict(good, draft=True), dict(good, target_commitish='b' * 40),
+               dict(good, tag_name='v1.2.5'), dict(good, prerelease=True),
+               dict(good, assets=good['assets'][:-1]), dict(good, assets=good['assets'] + good['assets'][:1])]
+        for field, value in [('state', 'new'), ('size', 0), ('digest', None)]:
+            row = copy.deepcopy(good); row['assets'][0][field] = value; bad.append(row)
+        with patch.object(resolver, 'public'), patch.object(resolver.release, 'tag_sha', return_value='a' * 40):
+            for state in bad:
+                with self.subTest(state=state), patch.object(resolver.release, 'api_optional', return_value=state), self.assertRaises(ValueError):
+                    resolver.published_unit('connector', 'v1.2.4')
+            with patch.object(resolver.release, 'api_optional', return_value=good):
+                self.assertEqual(resolver.published_unit('connector', 'v1.2.4'), 'a' * 40)
+
+    def test_cutover_product_closure_and_independent_kernel(self):
+        products = resolver.maintained_products({'connector': {}})
+        self.assertTrue({'connector-ctl', 'sandbox-ctl', 'sandbox-init', 'sandbox-runtime.bundle',
+                         'node-ctl', 'cluster-ctl', 'node-stub-ctl', 'e2b-key-ctl'} <= products)
+        self.assertNotIn('vmlinux', products)
+        self.assertEqual(resolver.maintained_products({'vmlinux': {}}), {'vmlinux'})
+        self.assertNotIn('mkfs.erofs', resolver.maintained_products(dict.fromkeys(artifacts.UNITS)))
+
+    def test_modern_manifest_tags_overlay_legacy_aggregate_and_admitted_companion(self):
+        self.run_cutover()
+
+    def test_partial_requirement_migration_still_fails_closed(self):
+        with self.assertRaisesRegex(ValueError, 'mixed E2E requirement generations'):
+            self.run_cutover(legacy_owner='connector')
+
+    def test_runtime_tag_cannot_select_kernel_from_its_makefile(self):
+        self.run_cutover(kernel_delta=False)
+
+    def test_release_line_uses_maintained_component_minor(self):
+        self.run_cutover(base_ref='release/v1.2.x')
+
+    def run_cutover(self, legacy_owner=None, kernel_delta=True, base_ref='main'):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            git = subject.tag_sources.git
+            env = {'GIT_CONFIG_COUNT': '6'}
+            baseline = {'repository': resolver.PLATFORM, 'version': 'release-v1.2.3', 'sha': 'b' * 40,
+                        'units': {}, 'assets': [], 'case_files': copy.deepcopy(CASES),
+                        'test_revisions': artifacts.release_test_revisions(
+                            {owner: 'd' * 40 for owner in artifacts.OWNERS if owner != 'platform'}, 'b' * 40)}
+            repos, maintained, shas = {}, {}, {}
+            for index, owner in enumerate(artifacts.OWNERS):
+                repo = root / owner; repos[owner] = repo
+                fixture(repo, 'connector', 'v0.0.1')
+                repository = resolver.REPOSITORIES[owner]
+                git(repo, 'remote', 'set-url', 'origin', 'https://github.com/' + repository + '.git')
+                git(repo, 'branch', '-M', 'main')
+                shutil.rmtree(repo / 'test/e2e/cases')
+                e2e = repo / ('test/e2e/platform' if owner == 'platform' else 'test/e2e')
+                (e2e / 'cases').mkdir(parents=True)
+                for name in CASES[owner]: (e2e / 'cases' / name).write_text('echo historical\n')
+                declare_fixture(repo, owner)
+                if owner == 'guest-runtime':
+                    (repo / 'native-deps').mkdir(exist_ok=True)
+                    (repo / 'native-deps/Makefile').write_text('vmlinux: old-kernel-input\n')
+                git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'historical cases')
+                old_sha = git(repo, 'rev-parse', 'HEAD')
+                units = () if owner == 'platform' else ('runtime', 'vmlinux') if owner == 'guest-runtime' else (owner,)
+                for unit in units:
+                    prefix = unit + '-' if unit in ('runtime', 'vmlinux') else ''
+                    old_tag, tag = prefix + 'v1.1.3', prefix + 'v1.2.4'
+                    git(repo, 'tag', old_tag)
+                    baseline['units'][unit] = {'repository': repository, 'version': old_tag, 'sha': old_sha}
+                    maintained[unit] = tag
+                if owner != legacy_owner:
+                    (e2e / 'lib').mkdir(exist_ok=True)
+                    (e2e / 'lib/requirements.json').write_text('{"schema": 1}')
+                    for name in CASES[owner]: (e2e / 'cases' / name).write_text('# e2e-requires: []\necho modern\n')
+                (repo / 'source-change.txt').write_text('explicit tag source delta')
+                if owner == 'guest-runtime':
+                    (repo / 'native-deps').mkdir(exist_ok=True)
+                    (repo / 'native-deps/Makefile').write_text('vmlinux: new-kernel-input\n')
+                git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'modern tag')
+                sha = git(repo, 'rev-parse', 'HEAD')
+                for unit in units:
+                    if unit == 'vmlinux':
+                        (repo / 'kernel-source.txt').write_text('independent kernel revision')
+                        git(repo, 'add', '.'); git(repo, 'commit', '-qm', 'kernel tag')
+                        sha = git(repo, 'rev-parse', 'HEAD')
+                    git(repo, 'tag', maintained[unit]); shas[unit] = sha
+                env['GIT_CONFIG_KEY_' + str(index)] = f'url.{repo}.insteadOf'
+                env['GIT_CONFIG_VALUE_' + str(index)] = 'https://github.com/' + repository + '.git'
+            if not kernel_delta:
+                maintained['vmlinux'] = baseline['units']['vmlinux']['version']
+                shas['vmlinux'] = baseline['units']['vmlinux']['sha']
+            platform = repos['platform']
+            (platform / 'releases').mkdir()
+            stable = 'version: release-v1.2.3\ncomponents:\n' + ''.join(f'  {unit}: {tag}\n' for unit, tag in maintained.items())
+            (platform / 'releases/release.yaml').write_text(stable)
+            (platform / 'releases/daily-preview.yaml').write_text(stable + 'preview_version: preview.20261019.1\n')
+            git(platform, 'add', '.'); git(platform, 'commit', '-qm', 'trusted manifest')
+            platform_base = git(platform, 'rev-parse', 'HEAD')
+            # A valid but untrusted candidate manifest must not choose sources.
+            (platform / 'releases/daily-preview.yaml').write_text((stable + 'preview_version: preview.20261019.1\n').replace('v1.2.4', 'v1.2.5'))
+            git(platform, 'commit', '-qam', 'candidate manifest cannot redirect')
+            candidate = git(platform, 'rev-parse', 'HEAD')
+            git(platform, 'update-ref', 'refs/pull/23/merge', candidate)
+            git(platform, 'update-ref', 'refs/heads/' + base_ref, platform_base)
+            companion = repos['orchestrator']
+            (companion / 'test/e2e/cases' / CASES['orchestrator'][0]).write_text('# e2e-requires: []\necho companion\n')
+            git(companion, 'commit', '-qam', 'companion test')
+            companion_sha = git(companion, 'rev-parse', 'HEAD')
+            git(companion, 'update-ref', 'refs/pull/24/merge', companion_sha)
+            env.update(CANDIDATE_REPOSITORY=resolver.PLATFORM, CANDIDATE_PR='23', CANDIDATE_SHA=candidate,
+                       CANDIDATE_BASE_SHA=platform_base, CANDIDATE_HEAD_SHA=candidate, CANDIDATE_BASE_REF=base_ref,
+                       COMPANION_CANDIDATES=json.dumps([{'repository': resolver.REPOSITORIES['orchestrator'],
+                           'pull_request_number': 24, 'base_ref': base_ref, 'base_sha': shas['orchestrator'],
+                           'head_sha': companion_sha, 'candidate_sha': companion_sha}]))
+            original = copy.deepcopy(baseline)
+            def state(path):
+                unit = next(unit for unit, tag in maintained.items() if path.endswith('/' + tag)
+                            and path.split('/')[2] == resolver.REPOSITORIES[resolver.unit_owner(unit)].split('/')[1])
+                return self.release_state(unit, maintained[unit], shas[unit])
+            with patch.dict(os.environ, env), patch.object(resolver, 'public'), \
+                 patch.object(resolver, 'baseline', return_value=baseline), \
+                 patch.object(resolver.release, 'api_optional', side_effect=state), \
+                 patch.object(resolver.release, 'tag_sha', side_effect=lambda repo, tag: shas[next(unit for unit in maintained if maintained[unit] == tag and resolver.REPOSITORIES[resolver.unit_owner(unit)] == repo)]):
+                plan = resolver.source_plan('a' * 40, root / 'admitted')
+            self.assertEqual(baseline, original)
+            self.assertEqual(plan['schema'], 4)
+            self.assertEqual(plan['baseline'], original)
+            self.assertEqual(plan['kernel_sha'], shas['vmlinux'])
+            self.assertNotEqual(plan['kernel_sha'], plan['sources']['guest-runtime']['sha'])
+            self.assertEqual(plan['test_revisions']['orchestrator']['sha'], companion_sha)
+            self.assertIn('source-change.txt', plan['changes']['orchestrator'])
+            self.assertEqual(set(plan['maintained_deltas']), set(artifacts.UNITS) - (set() if kernel_delta else {'vmlinux'}))
+            for unit, row in plan['source_records'].items():
+                self.assertEqual((row['tag'], row['sha']), (maintained[unit], shas[unit]))
+                self.assertEqual(row, {key: plan['run_inputs'][('maintained/' if unit in plan['maintained_deltas'] else 'released/') + unit][key] for key in row})
+            for arch in artifacts.ARCHES:
+                self.assertEqual(set(plan['lanes'][arch]['products']), set(artifacts.PRODUCTS) - {'mkfs.erofs'} - (set() if kernel_delta else {'vmlinux'}))
+                self.assertEqual(plan['lanes'][arch]['embedded_products'], ['envd'])
+            if kernel_delta:
+                self.assertEqual(plan['product_sources']['vmlinux'], {'kuasar-sandbox/guest-runtime': shas['vmlinux']})
+            else:
+                self.assertNotIn('vmlinux', plan['product_sources'])
+            self.assertEqual(plan['product_sources']['node-ctl']['kuasar-sandbox/orchestrator'], companion_sha)
+            self.assertEqual(plan['product_sources']['node-ctl']['kuasar-sandbox/connector'], shas['connector'])
+            artifacts.check_plan(plan)
+            spec = importlib.util.spec_from_file_location('cutover_build', Path(__file__).with_name('build-artifacts.py'))
+            build = importlib.util.module_from_spec(spec); spec.loader.exec_module(build)
+            capsule = root / 'inputs.tar'
+            with tarfile.open(capsule, 'w') as archive:
+                for entry in sorted((root / 'admitted').iterdir()): archive.add(entry, arcname=entry.name)
+            for arch in artifacts.ARCHES:
+                output = root / arch
+                layout = build.source_layout(plan, arch)
+                if kernel_delta:
+                    self.assertEqual(layout['kernel-unit/guest-runtime']['sha'], shas['vmlinux'])
+                with patch.object(subject, 'INPUT_ARCHIVE', capsule):
+                    subject.copy_run_inputs(plan, layout, output)
+                self.assertEqual(git(output / 'orchestrator', 'rev-parse', 'HEAD'), companion_sha)
+                self.assertEqual(git(output / 'guest-runtime', 'rev-parse', 'HEAD'), shas['runtime'])
+                if kernel_delta:
+                    self.assertEqual(git(output / 'kernel-unit/guest-runtime', 'rev-parse', 'HEAD'), shas['vmlinux'])
 
 class HistoricalEvidence(unittest.TestCase):
     def setUp(self):

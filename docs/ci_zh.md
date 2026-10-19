@@ -56,6 +56,8 @@ finalize 才能成功；skip/cancel/failure 不能成为合并依据。
 plan 固定 aggregate tag commit、六个独立 unit 的版本/SHA、Release/asset ID、大小、摘要和成功的聚合 run。
 新双架构 aggregate 的发布说明还绑定验证 profile 与真实制品摘要。
 
+当前维护的 aggregate 尚未发布时，显式前驱仍是经过验证的二进制基线。可信准入 base 的清单也可以选择更新的组件 tag；每个差异 tag 必须已有完整双架构发布，并具备精确 tag/commit、大小和摘要元数据。CI 运输这些固定 tag 的源码，重建其产品及链接或内嵌消费者，使用对应测试 owner 的文件树，然后叠加已准入候选与 companion 源码。候选清单不能选择这些 tag；不完整发布和混合需求代际仍然失败。runtime 与 kernel tag 保持独立，仅改变 runtime tag 不会选择内核重建。
+
 基线或 ARM 资产缺失时明确失败并要求初始化。不会拼接组件 Latest，也不会回退全源码构建。
 历史 AMD64-only 发布仍是合法历史发布，只是不满足双架构基线。
 见 [首次 ARM 初始化](release_zh.md#first-arm-initialization)。

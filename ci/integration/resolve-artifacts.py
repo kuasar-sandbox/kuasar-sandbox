@@ -259,6 +259,54 @@ def baseline(platform_source, base_ref):
     raise ValueError("neither the maintained aggregate nor its explicit predecessor is a published validated baseline")
 
 
+def maintained_units(platform_source, base_ref):
+    """Only the trusted admission base selects component updates, never a PR."""
+    relative = "releases/daily-preview.yaml" if base_ref == "main" else "releases/release.yaml"
+    return release.selection.parse_historical_manifest(
+        (platform_source / relative).read_text(), relative, base_ref == "main")[2]
+
+
+def published_unit(unit, tag):
+    """A selected source delta must already be a complete exact publication."""
+    source_inputs.tag_sources.validate_tag(unit, tag)
+    repository = REPOSITORIES[unit_owner(unit)]
+    public(repository)
+    state = release.api_optional(f"repos/{repository}/releases/tags/{quote(tag, safe='')}")
+    sha = exact_sha(release.tag_sha(repository, tag))
+    artifacts.require(isinstance(state, dict) and state.get('tag_name') == tag
+                      and state.get('draft') is False
+                      and state.get('prerelease') == ('-preview.' in tag)
+                      and state.get('target_commitish') == sha,
+                      'maintained component tag lacks a published release: ' + unit + ' ' + tag)
+    assets = state.get('assets', [])
+    names = [row['name'] for row in assets]
+    expected = {'SHA256SUMS'} | {artifacts.archive_name(unit, tag, arch) for arch in artifacts.ARCHES}
+    artifacts.require(len(names) == len(set(names)) and set(names) == expected
+                      and all(row.get('state') == 'uploaded' and type(row.get('size')) is int
+                              and row['size'] > 0 and re.fullmatch(r'sha256:[0-9a-f]{64}', row.get('digest') or '')
+                              for row in assets),
+                      'maintained component release is incomplete or unverified: ' + unit + ' ' + tag)
+    return sha
+
+
+def maintained_products(units):
+    """Rebuild changed tag products and every consumer of their source libraries.
+
+    This deliberately conservative cutover closure avoids testing new owner
+    sources against an old sibling binary. Kernel remains an independent unit;
+    the removed optional erofs tool is never introduced as a build target.
+    """
+    owners = {unit_owner(unit) for unit in units if unit != 'vmlinux'}
+    products = {name for name, unit in artifacts.PRODUCTS.items() if unit in units}
+    for name, unit in artifacts.PRODUCTS.items():
+        owner = unit_owner(unit)
+        if owners.intersection(LIBRARIES.get(owner, ())):
+            products.add(name)
+    if products & {'sandbox-init', 'flatten-ctl'}:
+        products.add('sandbox-runtime.bundle')
+    return products - artifacts.OPTIONAL_LEGACY_PRODUCTS - ({'vmlinux'} if 'vmlinux' not in units else set())
+
+
 def tree_changes(before, after):
     def files(root):
         rows = source_inputs.tag_sources.git(root, 'ls-tree', '-rz', 'HEAD').split('\0')
@@ -332,6 +380,20 @@ def source_plan(framework_sha, input_root):
     roots['platform'] = admission_platform
     run_inputs['admission-platform'] = dict(source_inputs.inspect_platform(admission_platform, platform_sha), ref='refs/heads/' + base_ref)
     admission_changes = {}
+    maintained = maintained_units(admission_platform, base_ref)
+    tag_deltas = {}
+    baseline_roots = dict(roots)
+    for unit, tag in maintained.items():
+        if tag == selected['units'][unit]['version']:
+            continue
+        sha = published_unit(unit, tag)
+        path = 'maintained/' + unit
+        root = input_root / path
+        tag_records[unit] = source_inputs.tag_sources.fetch_unit(root, unit, tag, sha)
+        run_inputs[path] = dict(tag_records[unit], ref='refs/tags/' + tag)
+        tag_deltas[unit] = tag_records[unit]
+        if unit != 'vmlinux':
+            roots[unit_owner(unit)] = root
 
     sources = {owner: {"repository": repository, "sha": selected["sha"] if owner == "platform" else
                       selected["units"]["runtime" if owner == "guest-runtime" else owner]["sha"], "role": "baseline"}
@@ -339,12 +401,21 @@ def source_plan(framework_sha, input_root):
     sources['platform'] = {'repository': PLATFORM, 'sha': platform_sha, 'role': 'baseline'}
     tests = source_test_revisions(selected, platform_record, platform_sha, base_ref)
     changes, owners = {}, []
-    kernel_sha = selected["units"]["vmlinux"]["sha"]
+    for unit, row in tag_deltas.items():
+        owner = unit_owner(unit)
+        if owner not in owners:
+            owners.append(owner)
+        if unit != 'vmlinux':
+            sources[owner] = {'repository': row['repository'], 'sha': row['sha'], 'role': 'baseline'}
+            tests[owner] = dict(sources[owner])
+            changes[owner] = tree_changes(baseline_roots[owner], roots[owner])
+    kernel_root = input_root / 'maintained/vmlinux' if 'vmlinux' in tag_deltas else released / 'vmlinux'
+    kernel_sha = tag_records['vmlinux']['sha']
     for record in records:
         owner = "platform" if record["repository"] == PLATFORM else record["repository"].split("/")[1]
         if base_ref != "main" and owner != "platform":
             unit = "runtime" if owner == "guest-runtime" else owner
-            expected_ref = release.preview_selection.component_source_ref(base_ref, unit, selected["units"][unit]["version"])
+            expected_ref = release.preview_selection.component_source_ref(base_ref, unit, maintained[unit])
             artifacts.require(record["base_ref"] == expected_ref, "candidate targets a different release line")
         path = 'candidates/' + owner
         root = input_root / path
@@ -354,40 +425,44 @@ def source_plan(framework_sha, input_root):
         if owner == 'platform':
             for relative, preview in (('releases/release.yaml', False), ('releases/daily-preview.yaml', True)):
                 release.selection.parse_manifest((root / relative).read_text(), relative, preview)
-        changes[owner] = tree_changes(roots[owner], root)
+        changes[owner] = tree_changes(baseline_roots[owner], root)
         if owner == 'platform':
             admission_changes[owner] = changes[owner]
         roots[owner] = root
         sources[owner] = {"repository": record["repository"], "sha": exact_sha(record["candidate_sha"]),
                           "role": "candidate" if record is primary else "companion"}
         tests[owner] = dict(sources[owner])
-        owners.append(owner)
+        if owner not in owners:
+            owners.append(owner)
         if owner == "guest-runtime":
             kernel_sha = record["candidate_sha"]
+            kernel_root = root
     products = artifacts.changed_products(changes)
     # Reuse #150/#151's Makefile input projection instead of treating a change
     # to an unrelated native target as a kernel change.
     guest_changes = changes.get("guest-runtime", [])
     # Kernel is an independent release unit: its baseline source can differ
     # from runtime's source even though both live in guest-runtime.
-    if "guest-runtime" in owners:
-        kernel_changes = tree_changes(released / "vmlinux", roots["guest-runtime"])
+    if kernel_root != released / "vmlinux":
+        kernel_changes = tree_changes(released / "vmlinux", kernel_root)
         kernel_products = artifacts.changed_products({"guest-runtime": kernel_changes})
         products = sorted((set(products) - {"vmlinux"}) | ({"vmlinux"} if "vmlinux" in kernel_products else set()))
     else:
         kernel_changes = []
+        products = [name for name in products if name != "vmlinux"]
     if "vmlinux" in products and "native-deps/Makefile" in kernel_changes:
         kernel_paths = {"native-deps/deps/common.sh", "native-deps/deps/build-vmlinux.sh"}
         other_kernel = any(path in kernel_paths or path.startswith(("native-deps/deps/vmlinux/", "native-deps/deps/linux-patches/")) for path in kernel_changes)
         old = (released / "vmlinux/native-deps/Makefile").read_text()
-        new = (roots["guest-runtime"] / "native-deps/Makefile").read_text()
+        new = (kernel_root / "native-deps/Makefile").read_text()
         if not other_kernel and release.preview_selection.vmlinux_make_inputs(old) == release.preview_selection.vmlinux_make_inputs(new):
             products.remove("vmlinux")
-    embedded = ["envd"] if any(path in ("native-deps/deps/build-envd.sh", "native-deps/deps/common.sh", "native-deps/Makefile") for path in guest_changes) else []
+    products = sorted(set(products) | maintained_products(tag_deltas))
+    embedded = ["envd"] if "runtime" in tag_deltas or any(path in ("native-deps/deps/build-envd.sh", "native-deps/deps/common.sh", "native-deps/Makefile") for path in guest_changes) else []
     selected_files = source_inputs.cases(roots)
     preserve_baseline_cases(selected.get('case_files'), selected_files, owners)
     plan = {"schema": 3, "mode": "source", "run_inputs": run_inputs,
-            "source_records": tag_records, "admission_changes": admission_changes, "framework_sha": exact_sha(framework_sha), "baseline": selected,
+            "source_records": tag_records, "maintained_deltas": tag_deltas, "admission_changes": admission_changes, "framework_sha": exact_sha(framework_sha), "baseline": selected,
             "candidate_records": records, "owners": sorted(owners), "changes": changes,
             "sources": sources, "kernel_sha": kernel_sha,
             "test_revisions": tests, "test_overlays": sorted(artifacts.OWNERS), "case_files": selected_files,
