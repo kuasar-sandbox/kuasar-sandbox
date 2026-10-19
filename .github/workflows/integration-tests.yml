@@ -95,6 +95,9 @@ jobs:
       workbench: ${{ steps.plan.outputs.workbench || 'false' }}
       source_groups: ${{ steps.plan.outputs.source_groups || '["all"]' }}
       companions: ${{ steps.companions.outputs.value || inputs.companion_candidates }}
+      executor_artifact: ${{ steps.executor.outputs.artifact }}
+      executor_digest: ${{ steps.executor.outputs.digest }}
+      executor_tree: ${{ steps.executor.outputs.tree }}
     env:
       INTEGRATION_MODE: ${{ inputs.mode }}
       CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
@@ -185,6 +188,33 @@ jobs:
           path: docs-result.json
           if-no-files-found: error
           retention-days: 7
+      - name: Package exact trusted executor objects
+        if: steps.docs.outputs.lane != 'docs'
+        id: executor
+        timeout-minutes: 3
+        env:
+          FRAMEWORK_SHA: ${{ job.workflow_sha }}
+        run: |
+          set -euo pipefail
+          python3 -B framework/ci/integration/executor_transport.py package \
+            --source framework --sha "$FRAMEWORK_SHA" --output executor.tar.gz > executor-receipt.json
+          python3 - <<'PYTHON'
+          import json, os
+          receipt = json.load(open('executor-receipt.json'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write(f"artifact=integration-executor-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}\n")
+              output.write(f"digest={receipt['archive_sha256']}\n")
+              output.write(f"tree={receipt['framework_tree']}\n")
+          PYTHON
+      - name: Upload exact trusted executor
+        if: steps.docs.outputs.lane != 'docs'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ steps.executor.outputs.artifact }}
+          path: executor.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+          compression-level: 0
       - name: Download staged aggregate
         if: inputs.mode == 'exact-assets'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -249,6 +279,9 @@ jobs:
     with:
       arch: x86_64
       framework_sha: ${{ needs.resolve.outputs.framework_sha }}
+      executor_artifact: ${{ needs.resolve.outputs.executor_artifact }}
+      executor_digest: ${{ needs.resolve.outputs.executor_digest }}
+      executor_tree: ${{ needs.resolve.outputs.executor_tree }}
       plan_artifact: ${{ needs.resolve.outputs.artifact }}
       stage_artifact: ${{ inputs.release_bundle_artifact }}
 
@@ -259,6 +292,9 @@ jobs:
     with:
       arch: aarch64
       framework_sha: ${{ needs.resolve.outputs.framework_sha }}
+      executor_artifact: ${{ needs.resolve.outputs.executor_artifact }}
+      executor_digest: ${{ needs.resolve.outputs.executor_digest }}
+      executor_tree: ${{ needs.resolve.outputs.executor_tree }}
       plan_artifact: ${{ needs.resolve.outputs.artifact }}
       stage_artifact: ${{ inputs.release_bundle_artifact }}
 

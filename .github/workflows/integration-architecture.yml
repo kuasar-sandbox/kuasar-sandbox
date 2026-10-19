@@ -9,6 +9,15 @@ on:
       framework_sha:
         required: true
         type: string
+      executor_artifact:
+        required: true
+        type: string
+      executor_digest:
+        required: true
+        type: string
+      executor_tree:
+        required: true
+        type: string
       plan_artifact:
         required: true
         type: string
@@ -261,6 +270,7 @@ jobs:
           task=$(mktemp -d "$RUNNER_TEMP/kuasar-e2e-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_ARCH}-${TEST_SHARD}-XXXXXX")
           echo "E2E_WORKSPACE=$task" >> "$GITHUB_ENV"
       - name: Check out only the trusted executor
+        if: runner.environment == 'github-hosted'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         timeout-minutes: 15
         env:
@@ -281,6 +291,51 @@ jobs:
             /test/e2e/package_inputs.py
             /test/e2e/lib/
             /workbench/
+      - name: Download the exact executor capsule
+        if: runner.environment == 'self-hosted'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        timeout-minutes: 5
+        with:
+          name: ${{ inputs.executor_artifact }}
+          path: ${{ env.E2E_WORKSPACE }}/executor
+      - name: Verify and restore exact executor Git objects
+        if: runner.environment == 'self-hosted'
+        timeout-minutes: 3
+        env:
+          FRAMEWORK_SHA: ${{ inputs.framework_sha }}
+          TRUSTED_WORKFLOW_SHA: ${{ job.workflow_sha }}
+          EXECUTOR_DIGEST: ${{ inputs.executor_digest }}
+          EXECUTOR_TREE: ${{ inputs.executor_tree }}
+        run: |
+          set -euo pipefail
+          [ "$FRAMEWORK_SHA" = "$TRUSTED_WORKFLOW_SHA" ]
+          python3 -I - <<'PYTHON'
+          import hashlib, os, pathlib, re, tarfile
+          root = pathlib.Path(os.environ['E2E_WORKSPACE']) / 'executor'
+          archive = root / 'executor.tar.gz'
+          digest = os.environ['EXECUTOR_DIGEST']
+          assert re.fullmatch('[0-9a-f]{64}', digest)
+          assert archive.is_file() and not archive.is_symlink()
+          assert 0 < archive.stat().st_size <= 16 * 1024 * 1024
+          assert hashlib.sha256(archive.read_bytes()).hexdigest() == digest
+          # Execute only the helper from the hash-bound trusted resolve artifact.
+          with tarfile.open(archive, 'r:gz') as source:
+              found = []
+              count = total = 0
+              for member in source:
+                  count += 1
+                  total += member.size
+                  assert count <= 10000 and 0 <= total <= 64 * 1024 * 1024
+                  if member.name == 'framework/ci/integration/executor_transport.py':
+                      assert member.isfile() and 0 < member.size <= 64 * 1024
+                      found.append(source.extractfile(member).read(64 * 1024 + 1))
+              assert len(found) == 1
+          with (root / 'restore.py').open('xb') as output:
+              output.write(found[0])
+          PYTHON
+          python3 -I "$E2E_WORKSPACE/executor/restore.py" restore \
+            --archive "$E2E_WORKSPACE/executor/executor.tar.gz" --sha "$FRAMEWORK_SHA" \
+            --tree "$EXECUTOR_TREE" --digest "$EXECUTOR_DIGEST" --destination "$GITHUB_WORKSPACE/framework"
       - uses: ./framework/.github/actions/download-artifact
         timeout-minutes: 35
         with:

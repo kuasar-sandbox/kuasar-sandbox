@@ -391,6 +391,25 @@ def check():
         assert actual == profile['runs_on']
     e2e_steps = {step.get('name'): step for step in lanes['e2e']['steps']}
     assert e2e_steps["Run the selected capability group from immutable inputs"]["env"]["EXECUTION_RUNNER_ENVIRONMENT"] == "${{ runner.environment }}"
+    executor_upload = {step.get('name'): step for step in integration['resolve']['steps']}['Upload exact trusted executor']
+    assert executor_upload['with']['name'] == '${{ steps.executor.outputs.artifact }}'
+    assert executor_upload['with']['path'] == 'executor.tar.gz'
+    for arch in ('x86_64', 'aarch64'):
+        for key in ('executor_artifact', 'executor_digest', 'executor_tree'):
+            assert integration[arch]['with'][key] == '${{ needs.resolve.outputs.' + key + ' }}'
+    assert e2e_steps['Check out only the trusted executor']['if'] == "runner.environment == 'github-hosted'"
+    download_executor = e2e_steps['Download the exact executor capsule']
+    assert download_executor['if'] == "runner.environment == 'self-hosted'"
+    assert download_executor['with']['name'] == '${{ inputs.executor_artifact }}'
+    assert download_executor['with']['path'] == '${{ env.E2E_WORKSPACE }}/executor'
+    assert download_executor['timeout-minutes'] == 5
+    restore_executor = e2e_steps['Verify and restore exact executor Git objects']
+    assert restore_executor['if'] == download_executor['if']
+    assert restore_executor['timeout-minutes'] == 3
+    assert restore_executor['env']['EXECUTOR_DIGEST'] == '${{ inputs.executor_digest }}'
+    assert restore_executor['env']['TRUSTED_WORKFLOW_SHA'] == '${{ job.workflow_sha }}'
+    assert restore_executor['run'].index('hashlib.sha256') < restore_executor['run'].index("tarfile.open")
+    assert restore_executor['run'].index("tarfile.open") < restore_executor['run'].index('restore.py" restore')
     assert e2e_steps['Bootstrap declared native execution profile']['if'] == "matrix.group.executor == 'native'"
     assert e2e_steps["Release only this group's Workbench resources"]['if'] == "always() && matrix.group.executor == 'workbench-system' && env.E2E_WORKSPACE != ''"
     assert 'mktemp -d' in e2e_steps['Create a fresh execution workspace']['run']
