@@ -164,11 +164,18 @@ def select_artifacts(response, spec):
     selected = [normalize(row) for row in rows
                 if (field(row, 'name') == spec['name'] if spec['name'] else
                     fnmatch.fnmatchcase(field(row, 'name') or '', spec['pattern']))]
-    require(selected and len(selected) <= 100, 'artifact_selection_empty_or_large')
-    names = [row['name'] for row in selected]
     ids = [row['database_id'] for row in selected]
-    require(len(set(names)) == len(names) and len(set(ids)) == len(ids), 'ambiguous_artifact_identity')
-    return sorted(selected, key=lambda row: int(row['database_id']))
+    require(len(set(ids)) == len(ids), 'ambiguous_artifact_identity')
+    # Match @actions/artifact 6.2.1 getArtifact/filterLatest: reruns can leave
+    # multiple artifacts with one name, and the greatest numeric artifact ID
+    # is authoritative. Never depend on response order, timestamps or the
+    # caller's backend plan ID. attempt() freezes these winners before I/O;
+    # a replacement or rollback on retry must fail, not pick another version.
+    latest = {}
+    for row in sorted(selected, key=lambda row: int(row['database_id']), reverse=True):
+        latest.setdefault(row['name'], row)
+    require(latest and len(latest) <= 100, 'artifact_selection_empty_or_large')
+    return sorted(latest.values(), key=lambda row: int(row['database_id']))
 
 
 def extract_archive(archive, destination):
