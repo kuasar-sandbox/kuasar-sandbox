@@ -35,6 +35,7 @@ MAX_ARCHIVE_BYTES = 20 * 1024**3
 MAX_EXPANDED_BYTES = 40 * 1024**3
 MAX_MEMBERS = 200000
 SERVICE = 'github.actions.results.api.v1.ArtifactService'
+BACKEND_ID = r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
 
 
 class Failure(Exception):
@@ -107,7 +108,7 @@ def runtime_identity():
                   if s.startswith('Actions.Results:')]
         require(len(scopes) == 1 and len(scopes[0]) == 3, 'invalid_runtime_identity')
         _, run, job = scopes[0]
-        require(all(re.fullmatch(r'[0-9a-fA-F-]{36}', x) for x in (run, job)),
+        require(all(re.fullmatch(BACKEND_ID, x) for x in (run, job)),
                 'invalid_runtime_identity')
         secure_url(service)
     except (ValueError, KeyError, IndexError, TypeError):
@@ -128,7 +129,7 @@ def field(row, snake):
     return row.get(snake, row.get(camel))
 
 
-def normalize(row, run):
+def normalize(row):
     digest = field(row, 'digest')
     if isinstance(digest, dict):
         digest = digest.get('value')
@@ -137,10 +138,17 @@ def normalize(row, run):
     require(re.fullmatch(r'[0-9a-f]{64}', digest), 'invalid_digest')
     result = {key: field(row, key) for key in
               ('workflow_run_backend_id', 'workflow_job_run_backend_id', 'database_id', 'name', 'size')}
-    require(result['workflow_run_backend_id'] == run, 'artifact_run_mismatch')
+    # ListArtifacts is authorized with the current runtime token's backend IDs.
+    # A failed-job rerun may receive artifacts from an earlier attempt of this
+    # same logical GitHub run, with different producer backend IDs. Preserve
+    # those IDs for signing and freeze them with the artifact; do not compare
+    # them to the caller's backend plan identity or to numeric GITHUB_RUN_ID.
+    require(isinstance(result['workflow_run_backend_id'], str)
+            and re.fullmatch(BACKEND_ID, result['workflow_run_backend_id']),
+            'invalid_artifact_run')
     require(isinstance(result['name'], str) and 0 < len(result['name']) <= 256, 'invalid_artifact_name')
     require(isinstance(result['workflow_job_run_backend_id'], str)
-            and re.fullmatch(r'[0-9a-fA-F-]{36}', result['workflow_job_run_backend_id']),
+            and re.fullmatch(BACKEND_ID, result['workflow_job_run_backend_id']),
             'invalid_artifact_job')
     result['database_id'] = str(result['database_id'])
     require(re.fullmatch(r'[1-9][0-9]*', result['database_id']), 'invalid_artifact_id')
@@ -150,10 +158,10 @@ def normalize(row, run):
     return result
 
 
-def select_artifacts(response, spec, run):
+def select_artifacts(response, spec):
     rows = response.get('artifacts')
     require(isinstance(rows, list), 'invalid_metadata')
-    selected = [normalize(row, run) for row in rows
+    selected = [normalize(row) for row in rows
                 if (field(row, 'name') == spec['name'] if spec['name'] else
                     fnmatch.fnmatchcase(field(row, 'name') or '', spec['pattern']))]
     require(selected and len(selected) <= 100, 'artifact_selection_empty_or_large')
@@ -221,8 +229,7 @@ def transfer(row, url, archive, phase=lambda value: None):
 def attempt(spec, frozen, directory, send):
     token, service, identity = runtime_identity()
     send({'phase': 'metadata'})
-    selected = select_artifacts(rpc(service, token, 'ListArtifacts', identity),
-                                spec, identity['workflow_run_backend_id'])
+    selected = select_artifacts(rpc(service, token, 'ListArtifacts', identity), spec)
     if frozen is not None:
         require(selected == frozen, 'artifact_identity_changed')
     else:
