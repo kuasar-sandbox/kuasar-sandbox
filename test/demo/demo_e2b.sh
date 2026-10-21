@@ -899,9 +899,62 @@ pause
 # ===========================================================================
 banner "One-call migration (export move -> connect with X-Kuasar-Migration-Token = import+resume)"
 # ---------------------------------------------------------------------------
-say "export (move) mints a one-line token and relinquishes the source row; connect with the token re-imports + resumes in ONE SDK call."
+# This Demo imports back onto the same node; export only accepts deletion.
+migration_source() {
+    py "$WORK/node-ctl.socket" "$SID" "$1" <<'PY'
+import json, os, subprocess, sys, time
+from urllib.parse import quote
+
+socket_path, sid, phase = sys.argv[1:]
+if phase not in ("paused", "absent"):
+    raise SystemExit("invalid migration source observation phase")
+deadline = time.monotonic() + 15.0
+while True:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise SystemExit("migration source cleanup deadline exceeded")
+    request_timeout = min(2.0, remaining)
+    try:
+        response = subprocess.run(
+            ["curl", "--disable", "--silent", "--show-error", "--noproxy", "*",
+             "--unix-socket", socket_path, "--max-time", str(request_timeout),
+             "--header", "@-", "--write-out", "\n%{http_code}",
+             "http://localhost/sandboxes/" + quote(sid, safe="")],
+            input=("X-API-KEY: " + os.environ["E2B_API_KEY"] + "\n").encode(),
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=request_timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        raise SystemExit("migration source transport failed") from None
+    if response.returncode != 0:
+        raise SystemExit("migration source transport failed")
+    if time.monotonic() >= deadline:
+        raise SystemExit("migration source cleanup deadline exceeded")
+    body, separator, status = response.stdout.rpartition(b"\n")
+    if not separator:
+        raise SystemExit("migration source response framing invalid")
+    if phase == "absent" and status == b"404":
+        break
+    if status != b"200":
+        raise SystemExit("migration source returned unexpected HTTP status")
+    try:
+        detail = json.loads(body)
+    except (ValueError, UnicodeError):
+        raise SystemExit("migration source returned invalid JSON") from None
+    expected_state = "paused" if phase == "paused" else "deleting"
+    if not isinstance(detail, dict) or detail.get("sandboxID") != sid:
+        raise SystemExit("migration source identity mismatch")
+    if detail.get("state") != expected_state:
+        raise SystemExit("migration source returned unexpected state")
+    if phase == "paused":
+        break
+    time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))
+PY
+}
+migration_source paused
+say "export (move) mints a one-line token and starts source cleanup; connect with the token re-imports + resumes in ONE SDK call."
 echo "${c_cmd}  \$ TOKEN=\$(node-ctl export-sandbox $SID)${c_off}"
 MIG_TOKEN="$(E2B_API_KEY="$AK" "$BIN/node-ctl" export-sandbox "$SID" --socket "$WORK/node-ctl.socket")" || die "export-sandbox (move) failed"
+migration_source absent
 say "source row now gone; resume on (logically) another node with the migration header:"
 py <<PY || die "connect-with-migration-token failed"
 from e2b import Sandbox
