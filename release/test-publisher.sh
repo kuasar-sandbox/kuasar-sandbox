@@ -27,6 +27,18 @@ mkdir -p "$TMP/bin" "$TMP/state"
 # Unit-only registry call double. Real registry identity checks are covered by
 # test_workbench_registry.py and require separate actual Preview acceptance.
 real_python=$(command -v python3)
+# The transport double below does not validate image receipts. Give this
+# publisher-only fixture the body shape produced by bind-validation.py.
+cp -a "$BUNDLE" "$TMP/bundle"
+BUNDLE="$TMP/bundle"
+"$real_python" - "$BUNDLE/release-notes.md" <<'PY'
+import json, pathlib, sys
+notes = pathlib.Path(sys.argv[1])
+binding = {'delivery': 'workbench-v1', 'workbench': {
+    arch: {'image_id': 'sha256:' + '1' * 64, 'sha256': '2' * 64}
+    for arch in ('x86_64', 'aarch64')}}
+notes.write_text(notes.read_text() + '\n<!-- kuasar-integration-validation ' + json.dumps(binding) + ' -->\n')
+PY
 cat > "$TMP/bin/python3" <<'PYTHON'
 #!/bin/bash
 set -euo pipefail
@@ -214,6 +226,24 @@ common_env=(
 )
 
 env "${common_env[@]}" "$PUBLISHER" check "$TAG"
+cp "$BUNDLE/release-notes.md" "$TMP/notes"
+"$real_python" - "$BUNDLE/release-notes.md" <<'PY'
+import pathlib, sys
+notes = pathlib.Path(sys.argv[1])
+text = notes.read_text()
+assert len(text) < 125000
+notes.write_text('x' * (125000 - len(text) - 1) + '\n' + text)
+PY
+if env "${common_env[@]}" "$PUBLISHER" publish \
+  "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF" > "$TMP/oversize.log" 2>&1; then
+  echo 'test-publisher: accepted body without capacity for registry proof' >&2; exit 1
+fi
+grep -Fq 'evidence must not be truncated' "$TMP/oversize.log"
+for state in tag registry-calls release-draft; do
+  [ ! -e "$TMP/state/$state" ] \
+    || { echo "test-publisher: oversized body caused $state mutation" >&2; exit 1; }
+done
+mv "$TMP/notes" "$BUNDLE/release-notes.md"
 if env "${common_env[@]}" FAKE_GH_FAIL_CREATE_ONCE=1 \
   "$PUBLISHER" publish "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF" >/dev/null 2>&1; then
   echo "test-publisher: interrupted draft creation unexpectedly succeeded" >&2

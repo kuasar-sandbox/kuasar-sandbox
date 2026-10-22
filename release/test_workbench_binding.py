@@ -62,6 +62,9 @@ class BindingTests(unittest.TestCase):
         self.assertTrue(text.startswith('Original notes\n'))
         binding = json.loads(text.split('<!-- kuasar-integration-validation ')[1].split(' -->')[0])
         self.assertEqual(binding['workbench'], self.results)
+        self.assertEqual(binding['case_files'], self.plan['case_files'])
+        self.assertEqual(binding['validation_plan'], self.plan)
+        self.assertEqual(artifacts.identity(binding['validation_plan']), binding['plan_id'])
         with self.assertRaisesRegex(ValueError, 'registry identity'):
             artifacts.check_registry_binding(self.version, binding)
 
@@ -78,6 +81,38 @@ class BindingTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'must not be truncated'):
             binder.bind(self.root, self.plan, self.validation, self.results)
         self.assertEqual(notes.read_text(), original)
+
+    def test_existing_download_guides_accept_complete_binding_without_duplicate_cases(self):
+        import test_workbench_downloads
+        binder.bind(self.root, self.plan, self.validation, self.results)
+        text = (self.root / 'release-notes.md').read_text()
+        binding = json.loads(text.split(binder.publication_body.MARKER)[1].split(' -->')[0])
+        del binding['case_files']
+        binding['registry'] = registry_binding(self.version, self.results)
+        reader = test_workbench_downloads.DownloadTests()
+        for arch in artifacts.ARCHES:
+            for download in (False, True):
+                with self.subTest(arch=arch, download=download):
+                    expected = reader.select(arch=arch, download=download, workbench=self.results)
+                    actual = reader.select(arch=arch, download=download, binding=binding)
+                    self.assertEqual(actual[0], 0)
+                    self.assertEqual(actual, expected)
+
+    def test_existing_plan_reader_restores_cases_and_rejects_conflicting_legacy_copy(self):
+        spec = importlib.util.spec_from_file_location('publication_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
+        resolver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(resolver)
+        binder.bind(self.root, self.plan, self.validation, self.results)
+        text = (self.root / 'release-notes.md').read_text()
+        binding = json.loads(text.split(binder.publication_body.MARKER)[1].split(' -->')[0])
+        del binding['case_files']
+        assets = {row['name']: row['digest'] for row in self.plan['baseline']['assets']}
+        self.assertEqual(resolver.bound_plan(binding, self.version, self.sha, assets, []), self.plan)
+        binding['case_files'] = copy.deepcopy(self.plan['case_files'])
+        self.assertEqual(resolver.bound_plan(binding, self.version, self.sha, assets, []), self.plan)
+        binding['case_files']['platform'].append('basic.guessed.sh')
+        with self.assertRaisesRegex(ValueError, 'case_files differs'):
+            resolver.bound_plan(binding, self.version, self.sha, assets, [])
 
     def native_full(self):
         results = copy.deepcopy(self.results)

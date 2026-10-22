@@ -324,7 +324,7 @@ exec(compile(code, '<documented download>', 'exec'))
 
 
 class DownloadTests(unittest.TestCase):
-    def select(self, *, contract='workbench-v1', omit=(), extra=(), download=False, missing_binding=False, arch='x86_64', workbench=None):
+    def select(self, *, contract='workbench-v1', omit=(), extra=(), download=False, missing_binding=False, arch='x86_64', workbench=None, binding=None):
         names = ['SHA256SUMS', f'platform-{TAG}.tar.gz']
         for asset_arch in ('x86_64', 'aarch64'):
             names += [f'{unit}-v1.2.3-linux-{asset_arch}.tar.gz' for unit in ('accelerator', 'connector', 'orchestrator', 'sandboxer')]
@@ -339,6 +339,8 @@ class DownloadTests(unittest.TestCase):
         if workbench is not None:
             metadata['body'] = '<!-- kuasar-integration-validation ' + json.dumps(
                 {'delivery': contract, 'workbench': workbench}) + ' -->'
+        if binding is not None:
+            metadata['body'] = '<!-- kuasar-integration-validation ' + json.dumps(binding) + ' -->'
         if missing_binding:
             metadata['body'] = ''
         sources = [(ROOT / 'docs' / name).read_text().split('RELEASE_VERSION="$(python3 - ', 1)[1].split("<<'PY'\n", 1)[1].split('\nPY\n', 1)[0]

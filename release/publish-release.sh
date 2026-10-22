@@ -84,7 +84,8 @@ publish_bundle() {
   [[ "$source_ref" = main || "$source_ref" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]] \
     || release_fail "source-ref must be main or release/vMAJOR.MINOR.x"
   "$ROOT/release/aggregate-release.sh" validate "$version" "$bundle"
-  python3 -B "$ROOT/release/publication_body.py" "$bundle/release-notes.md"
+  python3 -B "$ROOT/release/publication_body.py" "$bundle/release-notes.md" \
+    --reserve-registry-version "$version"
 
   local tag_state="$TMP/tag"
   if api_optional "repos/$REPOSITORY/git/ref/tags/$version" "$tag_state"; then

@@ -41,7 +41,8 @@ def bind(bundle, plan, validation, workbench=None):
         receipt = json.loads((bundle / 'workbench' / f'workbench-{arch}.json').read_text())
         artifacts.require(result['image_id'] == receipt['image_id'] and result['sha256'] == receipt['sha256'] and result['size'] == receipt['size'],
                           'workbench result differs from staged image receipt')
-    notes.write_text(publication_body.checked(text + "\n<!-- kuasar-integration-validation " + artifacts.canonical(binding).decode() + " -->\n"))
+    notes.write_text(publication_body.binding_text(text + '\n', binding, '\n',
+                     reserve_registry_version=plan['baseline']['version']))
 
 
 if __name__ == "__main__":

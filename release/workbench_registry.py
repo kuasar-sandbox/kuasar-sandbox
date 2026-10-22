@@ -14,9 +14,9 @@ import tempfile
 import selection
 import workbench_assets
 
-REPOSITORY = 'ghcr.io/kuasar-sandbox/workbench'
+REPOSITORY = publication_body.WORKBENCH_REPOSITORY
 PLATFORMS = {'x86_64': 'amd64', 'aarch64': 'arm64'}
-MARKER = '<!-- kuasar-integration-validation '
+MARKER = publication_body.MARKER
 
 
 def require(condition, message):
@@ -105,7 +105,7 @@ def validate_binding(bundle, version, revision):
         workbench_groups.verify_live(result)
         require(result.get('conclusion') == 'success' and result.get('image_id') == receipt['image_id']
                 and result.get('sha256') == receipt['sha256'], 'registry image has not passed staged workbench validation')
-    publication_body.checked(text)
+    publication_body.binding_text(prefix, binding, suffix, reserve_registry_version=version)
     return receipts, prefix, binding, suffix
 
 
@@ -159,7 +159,7 @@ def publish(bundle, version, revision):
         proof = {'reference': reference, 'digest': identity, 'architectures': children}
     require('registry' not in binding or binding['registry'] == proof, 'existing validation names different registry bytes')
     binding['registry'] = proof
-    notes.write_text(publication_body.checked(prefix + MARKER + json.dumps(binding, sort_keys=True, separators=(',', ':')) + ' -->' + suffix))
+    notes.write_text(publication_body.binding_text(prefix, binding, suffix))
     return proof
 
 

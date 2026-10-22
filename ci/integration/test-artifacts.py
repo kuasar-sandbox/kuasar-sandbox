@@ -974,6 +974,7 @@ class ArtifactContracts(unittest.TestCase):
             binding.bind(self.root, plan, subject.collect_results(plan, results), workbench_results(plan, receipts))
             published = json.loads(resolver.PROFILE_BINDING.search(notes.read_text())[1])
             self.assertEqual(published['validation_plan'], plan)
+            self.assertEqual(published.pop('case_files'), plan['case_files'])
             published['registry'] = registry_binding(version, published['workbench'])
             state = {'tag_name': version, 'target_commitish': sha, 'draft': False, 'prerelease': False,
                      'id': 1, 'assets': [dict(row, id=i, state='uploaded') for i, row in enumerate(plan['baseline']['assets'], 1)]}
@@ -993,8 +994,11 @@ class ArtifactContracts(unittest.TestCase):
                 self.assertEqual(baseline['test_revisions'], plan['test_revisions'])
                 self.assertEqual(baseline['case_files'], WORKBENCH_CASES)
                 retrieve.assert_called_with(resolver.PLATFORM, version, 'releases/release.yaml')
+                legacy = dict(published, case_files=copy.deepcopy(plan['case_files']))
+                notes_from(legacy)
+                self.assertEqual(resolver.aggregate(version)['case_files'], WORKBENCH_CASES)
                 for field in ('case_files', 'source_records', 'validation_plan'):
-                    broken = copy.deepcopy(published)
+                    broken = copy.deepcopy(legacy)
                     if field == 'case_files': broken[field]['orchestrator'] = ['basic.guessed.sh']
                     elif field == 'source_records': broken[field]['runtime']['tree'] = '0' * 40
                     else: broken[field]['framework_sha'] = '0' * 40

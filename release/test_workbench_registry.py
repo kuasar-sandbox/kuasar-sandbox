@@ -138,6 +138,71 @@ class RegistryTests(unittest.TestCase):
                 command.assert_not_called()
             self.assertNotIn('registry', json.loads((root / 'release-notes.md').read_text().split(subject.MARKER)[1].split(' -->')[0]))
 
+    def test_full_body_limit_stops_before_registry_transport(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            receipts = {arch: image(arch)[2] for arch in subject.PLATFORMS}
+            binding = {'delivery': 'workbench-v1', 'aggregate_sha': REVISION, 'workbench': {
+                arch: dict(conclusion='success', image_id=row['image_id'], sha256=row['sha256'])
+                for arch, row in receipts.items()}}
+            body = subject.publication_body.binding_text('', binding, '')
+            body = 'x' * (subject.publication_body.MAX_CHARACTERS - len(body)) + body
+            notes = root / 'release-notes.md'
+            notes.write_text(body)
+            with patch.object(subject.workbench_assets, 'validate',
+                    side_effect=lambda assets, version, arch, *args, **kwargs: receipts[arch]), patch.object(
+                    subject, 'inspect_raw') as inspect, patch.object(subject.subprocess, 'run') as command:
+                with self.assertRaisesRegex(ValueError, 'must not be truncated'):
+                    subject.publish(root, VERSION, REVISION)
+                inspect.assert_not_called()
+                command.assert_not_called()
+            self.assertEqual(notes.read_text(), body)
+
+    def test_resume_reuses_matching_images_and_index_and_reads_public_layers(self):
+        images = {arch: image(arch) for arch in subject.PLATFORMS}
+        children = {arch: subject.check_manifest(raw, config, receipt)
+                    for arch, (config, raw, receipt) in images.items()}
+        index = json.dumps({'schemaVersion': 2, 'manifests': [
+            {'digest': row['digest'], 'size': row['size'],
+             'platform': {'os': 'linux', 'architecture': subject.PLATFORMS[arch]}}
+            for arch, row in children.items()]}).encode()
+        reference = subject.REPOSITORY + ':' + VERSION.removeprefix('release-')
+
+        def inspect(ref, auth, *, config=False, missing=False):
+            if ref == reference:
+                self.assertFalse(config)
+                return index
+            for arch, (image_config, raw, _) in images.items():
+                if ref in (reference + '-' + arch, subject.REPOSITORY + '@' + subject.digest(raw)):
+                    return image_config if config else raw
+            self.fail('unexpected registry lookup: ' + ref)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            binding = {'delivery': 'workbench-v1', 'aggregate_sha': REVISION, 'workbench': {
+                arch: dict(conclusion='success', image_id=receipt['image_id'], sha256=receipt['sha256'])
+                for arch, (_, _, receipt) in images.items()}}
+            notes = root / 'release-notes.md'
+            notes.write_text(subject.publication_body.binding_text('Original notes\n', binding, '\n'))
+            with patch.object(subject.workbench_assets, 'validate',
+                    side_effect=lambda assets, version, arch, *args, **kwargs: images[arch][2]), patch.dict(
+                    os.environ, {'GH_TOKEN': 'unit-test-only', 'GITHUB_ACTOR': 'unit-test'}), patch.object(
+                    subject, 'inspect_raw', side_effect=inspect), patch.object(
+                    subject, 'verify_public_layers') as read_layers, patch.object(subject.subprocess, 'run') as command:
+                first = subject.publish(root, VERSION, REVISION)
+                first_body = notes.read_text()
+                self.assertEqual(subject.publish(root, VERSION, REVISION), first)
+                self.assertEqual(notes.read_text(), first_body)
+                command.assert_not_called()
+                self.assertEqual(read_layers.call_count, 4)
+                for call in read_layers.call_args_list:
+                    ref, receipt, auth, destination = call.args
+                    self.assertEqual(ref, subject.REPOSITORY + '@' + children[receipt['arch']]['digest'])
+                    self.assertEqual(auth.name, 'anonymous.json')
+            actual = json.loads(first_body.split(subject.MARKER)[1].split(' -->')[0])
+            self.assertEqual(actual, dict(binding, registry=first))
+            self.assertEqual(first, {'reference': reference, 'digest': subject.digest(index), 'architectures': children})
+
 
 if __name__ == '__main__':
     unittest.main()
