@@ -4,6 +4,8 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import socket
+import ssl
 import subprocess
 import tarfile
 import tempfile
@@ -17,6 +19,37 @@ NONCE = '1' * 32
 
 
 class ImageStoreProbeTests(unittest.TestCase):
+    def test_loopback_registry_identifies_plain_http_before_parsing_a_tls_hello(self):
+        responses = []
+
+        def command(*args):
+            if args[:2] == ('image', 'inspect'):
+                return {'exit_code': 1, 'stdout': '[]', 'stderr': 'No such image'}
+            self.assertEqual(args[:2], ('image', 'pull'))
+            endpoint = args[2].split('/')[0]
+            host, port = endpoint.split(':')
+            self.assertEqual(host, '127.0.0.1')
+            outgoing = ssl.MemoryBIO()
+            tls = ssl.create_default_context().wrap_bio(ssl.MemoryBIO(), outgoing, server_hostname='localhost')
+            with self.assertRaises(ssl.SSLWantReadError):
+                tls.do_handshake()
+            # Exercise both a header without a newline and a real ClientHello.
+            for hello in (b'\x16\x03\x01\x00\x00', outgoing.read()):
+                with socket.create_connection((host, int(port)), timeout=5) as client:
+                    client.sendall(hello)
+                    responses.append(client.recv(1024))
+            return {'exit_code': 1, 'stdout': '', 'stderr': 'intentional test stop'}
+
+        report = {}
+        with patch.object(probe, 'command', side_effect=command), \
+                self.assertRaisesRegex(ValueError, 'intentional test stop'):
+            probe.pull_fixture('x86_64', report)
+        self.assertEqual(len(responses), 2)
+        for response in responses:
+            self.assertTrue(response.startswith(b'HTTP/1.1 400 '))
+            self.assertIn(b'\r\nContent-Length: 0\r\n', response)
+        self.assertEqual(report['cleanup'], {'exit_code': 0, 'absent': True})
+
     def test_both_archive_layouts_bind_the_same_layer_free_config(self):
         for arch in probe.workbench.PLATFORMS:
             raw, selection, facts = probe.fixture(arch, NONCE)

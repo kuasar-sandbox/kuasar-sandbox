@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import socket
 import subprocess
 import sys
 import tarfile
@@ -126,6 +127,20 @@ def pull_fixture(arch, report):
                  prefix + 'blobs/' + facts['config_digest']: (config, CONFIG)}
 
     class Registry(BaseHTTPRequestHandler):
+        def handle(self):
+            # Docker's localhost resolver tries HTTPS first and recognizes a
+            # plaintext HTTP status line before using its existing HTTP fallback.
+            # BaseHTTPRequestHandler otherwise emits an HTTP/0.9 error body for
+            # a ClientHello, which the containerd resolver cannot recognize.
+            self.connection.settimeout(5)
+            if self.connection.recv(1, socket.MSG_PEEK) == b'\x16':
+                header = self.rfile.read(5)
+                if len(header) == 5:
+                    self.rfile.read(int.from_bytes(header[3:5], 'big'))
+                self.connection.sendall(b'HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n')
+                return
+            super().handle()
+
         def do_GET(self):
             path = self.path.split('?')[0]
             if path not in resources:
