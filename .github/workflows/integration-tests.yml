@@ -188,6 +188,21 @@ jobs:
           path: docs-result.json
           if-no-files-found: error
           retention-days: 7
+      - name: Check native Docker image-store identity without running a container
+        if: >-
+          inputs.mode == 'source' && github.event_name == 'pull_request' &&
+          inputs.candidate_repository == github.repository && steps.docs.outputs.lane != 'docs'
+        id: image-store-probe
+        timeout-minutes: 3
+        run: python3 -B framework/ci/hosted/image-store-probe.py --output image-store-probe.json
+      - name: Retain native image-store identity evidence
+        if: always() && contains(fromJSON('["success", "failure"]'), steps.image-store-probe.outcome)
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-image-store-${{ github.run_id }}-${{ github.run_attempt }}
+          path: image-store-probe.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Package exact trusted executor objects
         if: steps.docs.outputs.lane != 'docs'
         id: executor
