@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import importlib.util
 import io
 import json
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import uuid
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -64,7 +66,8 @@ def fixture(arch, nonce):
             info.size, info.mode = len(raw), 0o644
             archive.addfile(info, io.BytesIO(raw))
     selection = {'aggregate_version': version, 'source_revision': revision,
-                 'architectures': {arch: {'image_id': digest(config)}}}
+                 'architectures': {arch: {'image_id': digest(config),
+                     'reference': workbench.REGISTRY + '@' + digest(manifest)}}}
     facts = {'tag': tag, 'nonce': nonce, 'config_digest': digest(config),
              'manifest_digest': digest(manifest), 'config_raw': config.decode(),
              'manifest_raw': manifest.decode(), 'archive_size': len(stream.getvalue())}
@@ -98,6 +101,81 @@ def cleanup_fixture(facts):
     if len(images) != 1 or images[0]['Config'].get('Labels', {}).get(OWNER_LABEL) != facts['nonce']:
         return {'exit_code': 1, 'error': 'refusing to remove a foreign fixture image'}
     return command('image', 'rm', facts['tag'])
+
+
+def check_fixture(selection, arch, facts, inspections):
+    # A config-addressed store and a manifest-addressed store must each prove
+    # their own exact identity. Neither a matching tag nor either-ID equality
+    # alone is sufficient for a manifest-addressed image.
+    chosen = inspections['config'] if inspections['config']['exit_code'] == 0 else inspections['manifest']
+    images = json.loads(successful(chosen, 'inspect immutable fixture identity'))
+    if len(images) != 1:
+        raise ValueError('ambiguous fixture identity')
+    return workbench.image_check(selection, arch, images[0], metadata=(
+        facts['manifest_raw'].encode(), facts['config_raw'].encode()))
+
+
+def pull_fixture(arch, report):
+    """Serve only a second, private zero-layer fixture on loopback; no containers."""
+    _, selection, facts = fixture(arch, uuid.uuid4().hex)
+    report.update(fixture=facts, inspections={})
+    manifest, config = facts['manifest_raw'].encode(), facts['config_raw'].encode()
+    prefix = '/v2/kuasar-image-store-probe/'
+    resources = {'/v2/': (b'{}', 'application/json'),
+                 prefix + 'manifests/' + facts['manifest_digest']: (manifest, MANIFEST),
+                 prefix + 'blobs/' + facts['config_digest']: (config, CONFIG)}
+
+    class Registry(BaseHTTPRequestHandler):
+        def do_GET(self):
+            path = self.path.split('?')[0]
+            if path not in resources:
+                self.send_error(404)
+                return
+            raw, media_type = resources[path]
+            self.send_response(200)
+            self.send_header('Content-Type', media_type)
+            self.send_header('Content-Length', str(len(raw)))
+            self.send_header('Docker-Distribution-API-Version', 'registry/2.0')
+            self.send_header('Docker-Content-Digest', digest(raw))
+            self.end_headers()
+            if self.command != 'HEAD':
+                self.wfile.write(raw)
+
+        do_HEAD = do_GET
+
+        def log_message(self, *_args):
+            pass
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), Registry)
+    reference = '127.0.0.1:' + str(server.server_port) + '/kuasar-image-store-probe@' + facts['manifest_digest']
+    facts['tag'] = reference  # Owned cleanup is restricted to this private digest reference.
+    selection['architectures'][arch]['reference'] = reference
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    owned = False
+    try:
+        existing = inspect(reference)
+        if existing['exit_code'] == 0 or not any(
+                text in existing['stderr'] for text in ('No such', 'not found')):
+            raise ValueError('private pull fixture name is not confirmed absent')
+        owned = True
+        report['acquire'] = command('image', 'pull', reference)
+        successful(report['acquire'], 'pull private fixture')
+        for name, identity in [('tag', reference), ('config', facts['config_digest']),
+                               ('manifest', facts['manifest_digest'])]:
+            report['inspections'][name] = inspect(identity)
+        report['docker_image_id'] = check_fixture(selection, arch, facts, report['inspections'])
+    finally:
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=5)
+        if owned:
+            try:
+                report['cleanup'] = cleanup_fixture(facts)
+            except Exception as error:
+                report['cleanup'] = {'error': str(error), 'exit_code': None}
+            if report['cleanup']['exit_code'] != 0:
+                raise ValueError('private pull fixture cleanup failed')
 
 
 def run_probe(output):
@@ -135,16 +213,9 @@ def run_probe(output):
         tagged = json.loads(successful(report['inspections']['tag'], 'inspect private fixture'))
         if len(tagged) != 1 or tagged[0]['Config'].get('Labels', {}).get(OWNER_LABEL) != nonce:
             raise ValueError('loaded image does not belong to this probe')
-        # Keep the production config lookup and guard unchanged. Capture every
-        # identity first, so a rejection remains useful after owned cleanup.
-        by_config = report['inspections']['config']
-        imported = None
-        if by_config['exit_code'] == 0:
-            records = json.loads(by_config['stdout'])
-            if len(records) != 1:
-                raise ValueError('ambiguous fixture config lookup')
-            imported = records[0]
-        workbench.image_check(selection, arch, imported)
+        report['docker_image_id'] = check_fixture(selection, arch, facts, report['inspections'])
+        report['pull'] = {}
+        pull_fixture(arch, report['pull'])
         report['conclusion'] = 'success'
     except Exception as error:
         report['error'] = {'type': type(error).__name__, 'message': str(error)}

@@ -41,7 +41,11 @@ class ImageStoreProbeTests(unittest.TestCase):
         _, selection, facts = probe.fixture('x86_64', NONCE)
         image = {'Id': facts['config_digest'] if config_lookup else facts['manifest_digest'],
                  'Os': 'linux', 'Architecture': 'amd64',
-                 'Config': json.loads(facts['config_raw'])['config']}
+                 'Config': json.loads(facts['config_raw'])['config'],
+                 'RootFS': {'Type': 'layers'}}
+        if not config_lookup:
+            image['Descriptor'] = {'digest': facts['manifest_digest'], 'size': len(facts['manifest_raw']),
+                                   'mediaType': probe.MANIFEST}
         if image_change:
             image_change(image)
         loaded, calls = False, []
@@ -74,6 +78,7 @@ class ImageStoreProbeTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory, patch.object(probe, 'command', side_effect=command), \
                 patch.object(probe.platform, 'machine', return_value='x86_64'), \
+                patch.object(probe, 'pull_fixture'), \
                 patch.object(probe.uuid, 'uuid4') as identity:
             identity.return_value.hex = NONCE
             output = Path(directory) / 'evidence.json'
@@ -87,10 +92,10 @@ class ImageStoreProbeTests(unittest.TestCase):
         self.assertEqual(set(report['inspections']), {'tag', 'config', 'manifest'})
         self.assertEqual(sum(call[:2] == ('image', 'rm') for call in calls), 1)
 
-    def test_missing_config_lookup_preserves_all_identity_evidence_and_fails_guard(self):
+    def test_containerd_config_absence_requires_the_bound_manifest_and_keeps_evidence(self):
         status, report, _ = self.run_probe(config_lookup=False)
-        self.assertEqual(status, 1)
-        self.assertIn('image/config/architecture mismatch', report['error']['message'])
+        self.assertEqual(status, 0)
+        self.assertEqual(report['docker_image_id'], report['fixture']['manifest_digest'])
         self.assertEqual(report['inspections']['config']['exit_code'], 1)
         self.assertEqual(report['inspections']['tag']['exit_code'], 0)
         self.assertEqual(report['inspections']['manifest']['exit_code'], 0)

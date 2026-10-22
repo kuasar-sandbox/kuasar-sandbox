@@ -132,7 +132,7 @@ class SelectionTests(unittest.TestCase):
 
     def test_cold_pull_uses_the_frozen_digest_and_verifies_the_config(self):
         with patch.object(ci.platform, 'machine', return_value='x86_64'), patch.object(
-                ci.launcher, 'inspect', side_effect=[None, image()]), patch.object(
+                ci.launcher, 'inspect', side_effect=[None, None, image()]), patch.object(
                 ci.subprocess, 'run') as run:
             result = ci.acquire(selection(), 'x86_64')
         run.assert_called_once_with(['docker', 'pull', selection()['architectures']['x86_64']['reference']],
@@ -218,7 +218,7 @@ class PullRetryTests(unittest.TestCase):
         wrong = image()
         wrong['Id'] = 'sha256:' + '9' * 64
         with patch.object(ci.platform, 'machine', return_value='x86_64'), \
-                patch.object(ci.launcher, 'inspect', side_effect=[None, wrong]), \
+                patch.object(ci.launcher, 'inspect', side_effect=[None, None, wrong]), \
                 patch.object(ci.subprocess, 'run', side_effect=[self.failure(), None]) as run, \
                 patch.object(ci.time, 'sleep'), patch.object(ci.image_pull.random, 'uniform', return_value=1):
             with self.assertRaisesRegex(ValueError, 'image/config/architecture mismatch'):

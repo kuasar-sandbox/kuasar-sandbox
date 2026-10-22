@@ -40,6 +40,7 @@ def module(name, path):
 
 launcher = module('ci_workbench_launcher', ROOT / 'workbench/workbench')
 cache_policy = module('ci_workbench_cache_scope', ROOT / 'ci/hosted/cache-scope.py')
+image_identity = module('ci_workbench_image_identity', ROOT / 'ci/hosted/image_identity.py')
 
 
 def require(condition, message):
@@ -120,28 +121,43 @@ def verify_selection(args):
     check_selection(json.loads(args.selection.read_text()), args.framework_sha)
 
 
-def image_check(selected, arch, image):
+def image_check(selected, arch, image, *, metadata=None):
     row = selected['architectures'][arch]
-    require(image and image['Id'] == row['image_id'] and image['Os'] == 'linux'
+    require(image and image['Os'] == 'linux'
             and image['Architecture'] == PLATFORMS[arch], 'Workbench image/config/architecture mismatch')
     labels = image['Config'].get('Labels') or {}
     require(labels.get('org.opencontainers.image.version') == selected['aggregate_version']
             and labels.get('org.opencontainers.image.revision') == selected['source_revision']
             and labels.get('org.opencontainers.image.source') == 'https://github.com/kuasar-sandbox/kuasar-sandbox',
             'Workbench image release/source mismatch')
+    if image['Id'] == row['image_id'] and not image.get('Descriptor'):
+        return image['Id']  # Classic store: the local ID is the config digest.
+    require(image['Id'] == row['reference'].split('@')[1] and image.get('Descriptor'),
+            'Workbench image/config/architecture mismatch')
+    raw, config = metadata if metadata is not None else image_identity.registry_metadata(row)
+    return image_identity.check_manifest_config(row, image, raw, config)
 
 
-def acquire(selected, arch):
+def acquire(selected, arch, *, evidence=None):
     require(platform.machine() == arch, 'Workbench builds require the selected native runner')
     row = selected['architectures'][arch]
     started = time.monotonic()
     existing = launcher.inspect('image', row['image_id'])
     if existing is None:
+        existing = launcher.inspect('image', row['reference'])
+    if existing is None:
         image_pull.pull_image(row['reference'])
-    imported = launcher.inspect('image', row['image_id'])
-    image_check(selected, arch, imported)
+        imported = launcher.inspect('image', row['reference'])
+    else:
+        imported = existing
+    if evidence is not None:
+        evidence.update(reference=row['reference'], expected_config_id=row['image_id'],
+                        observed=None if imported is None else {
+                            key: imported.get(key) for key in
+                            ('Id', 'Os', 'Architecture', 'Descriptor', 'RootFS', 'RepoDigests')})
+    docker_image_id = image_check(selected, arch, imported)
     return {'image_present_before': existing is not None, 'acquire_seconds': time.monotonic() - started,
-            'local_image_size': imported['Size'], **row}
+            'local_image_size': imported['Size'], **row, 'docker_image_id': docker_image_id}
 
 
 def command(root, *args):
@@ -162,8 +178,9 @@ def start(args):
                'started_ns': time.time_ns(), 'commands': []}
     write(root / 'receipt.json', receipt)
     try:
-        receipt['image'] = acquire(selected, args.arch)
-        options = ['start', '--image', receipt['image']['image_id'], '--mode', args.mode,
+        receipt['image_acquisition'] = {}
+        receipt['image'] = acquire(selected, args.arch, evidence=receipt['image_acquisition'])
+        options = ['start', '--image', receipt['image']['docker_image_id'], '--mode', args.mode,
                    '--cpus', args.cpus, '--memory-gib', args.memory_gib, '--network', args.network,
                    '--inputs', ROOT]
         if args.mode == 'build':
