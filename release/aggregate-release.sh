@@ -300,6 +300,7 @@ write_release_notes() {
     done < "$selection"
     printf "\nVerify every explicit asset with \`SHA256SUMS\`. GitHub provides source archives automatically for this tag.\n"
   } > "$output"
+  python3 -B "$ROOT/release/publication_body.py" "$output"
 }
 
 # Existing x86-only releases retain their original contract. A dual aggregate

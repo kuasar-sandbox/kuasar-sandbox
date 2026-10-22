@@ -382,6 +382,19 @@ if SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
 fi
 grep -Fq 'fetched source facts differ from selected tag inputs' "$TMP/rejected-sources.log"
 mv "$TMP/source-records-saved.json" "$TMP/fetched/source-records.json"
+cp "$TMP/fetched/updates/orchestrator.md" "$TMP/orchestrator-notes"
+python3 - "$TMP/fetched/updates/orchestrator.md" <<'PY'
+import pathlib, sys
+pathlib.Path(sys.argv[1]).write_text('x' * 125001)
+PY
+if SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
+  "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/rejected-notes" \
+  > "$TMP/rejected-notes.log" 2>&1; then
+  release_fail "aggregate accepted oversized generated release notes"
+fi
+grep -Fq 'budget=125000' "$TMP/rejected-notes.log"
+grep -Fq 'evidence must not be truncated' "$TMP/rejected-notes.log"
+mv "$TMP/orchestrator-notes" "$TMP/fetched/updates/orchestrator.md"
 if PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" "$ROOT/release/package-platform.sh" \
   package "$VERSION" "$TMP/fetched/sources" "independent-test-source" "$TMP/rejected-test-source" \
   > "$TMP/rejected-test-source.log" 2>&1; then
