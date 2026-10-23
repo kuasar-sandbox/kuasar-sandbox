@@ -276,6 +276,50 @@ def transfer(row, url, archive, phase=lambda value: None):
     require(digest.hexdigest() == row['digest'], 'digest_mismatch')
 
 
+def shared_archive(row, url, send):
+    """Optional host cache, reached only after same-run authorization/identity checks."""
+    endpoint = os.environ.get('KUASAR_ARTIFACT_CACHE_SOCKET')
+    if not endpoint:
+        return None
+    request = {'repository': os.environ.get('GITHUB_REPOSITORY', ''),
+               'artifact': {k: row[k] for k in ('database_id', 'size', 'digest')}, 'url': url}
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+            connection.settimeout(3)
+            connection.connect(endpoint)
+            connection.settimeout(30)
+            connection.sendall(json.dumps(request).encode() + b'\n')
+            with connection.makefile('rb') as stream:
+                while True:
+                    line = stream.readline(16385)
+                    if not line:
+                        raise ConnectionError('cache disconnected')
+                    require(len(line) <= 16384, 'invalid_cache_response')
+                    response = json.loads(line)
+                    status = response.get('status')
+                    if status == 'waiting':
+                        continue
+                    if status == 'unavailable':
+                        send({'phase': 'cache_unavailable', 'artifact_id': row['database_id']})
+                        return None
+                    if status == 'error':
+                        raise Failure('cache_' + response.get('reason', 'failed'),
+                                      response.get('retryable', False), response.get('retry_after', 0))
+                    require(status == 'ready' and response.get('cache') in ('hit', 'miss', 'shared'),
+                            'invalid_cache_response')
+                    path = Path(response['path'])
+                    require(path.is_absolute() and stat.S_ISREG(path.lstat().st_mode)
+                            and path.stat().st_size == row['size'], 'invalid_cache_archive')
+                    # Verify against the fresh, authorized digest on every client,
+                    # including hits. Cache contents never replace artifact identity.
+                    transfer(row, None, path)
+                    send({'phase': 'cache_' + response['cache'], 'artifact_id': row['database_id']})
+                    return path
+    except (OSError, ConnectionError):
+        send({'phase': 'cache_unavailable', 'artifact_id': row['database_id']})
+        return None
+
+
 def attempt(spec, frozen, directory, send):
     token, service, identity = runtime_identity()
     send({'phase': 'metadata'})
@@ -297,9 +341,13 @@ def attempt(spec, frozen, directory, send):
                          {key: row[key] for key in ('workflow_run_backend_id', 'workflow_job_run_backend_id', 'name')})
             url = field(signed, 'signed_url')
             require(isinstance(url, str), 'invalid_signed_url')
-        send({'phase': 'download', 'artifact_id': row['database_id'],
-              'resume_bytes': archive.stat().st_size if archive.exists() else 0})
-        transfer(row, url, archive, lambda value: send({'phase': value, 'artifact_id': row['database_id']}))
+        cached = shared_archive(row, url, send) if url else None
+        if cached is not None:
+            archive = cached
+        else:
+            send({'phase': 'download', 'artifact_id': row['database_id'],
+                  'resume_bytes': archive.stat().st_size if archive.exists() else 0})
+            transfer(row, url, archive, lambda value: send({'phase': value, 'artifact_id': row['database_id']}))
         send({'phase': 'extract', 'artifact_id': row['database_id']})
         extract_archive(archive, payload)
 

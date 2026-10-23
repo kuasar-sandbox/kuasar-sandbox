@@ -1,6 +1,6 @@
 'use strict';
 // Node actions receive the runner's same-run artifact identity. A shell or
-// composite action does not. Never read the runner cache or install packages.
+// composite action does not. Never discover credentials in runner files or install packages.
 const {spawn} = require('node:child_process');
 const path = require('node:path');
 const child = spawn('python3', ['-B', path.resolve(__dirname,

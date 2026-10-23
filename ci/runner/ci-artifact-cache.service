@@ -1,0 +1,38 @@
+[Unit]
+Description=Verified shared GitHub Actions artifact cache
+Requires=ci-intl-network.service
+Wants=ci-intl-paths.service
+After=ci-intl-network.service ci-intl-paths.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=ci-artifact-cache
+Group=ci-artifact-cache-clients
+ExecStart=/usr/bin/python3 -B /usr/local/lib/ci-artifact-cache/artifact_cache_server.py
+NetworkNamespacePath=/run/netns/intl
+BindReadOnlyPaths=/etc/netns/intl/resolv.conf:/etc/resolv.conf
+RuntimeDirectory=ci-artifact-cache
+RuntimeDirectoryMode=0750
+CacheDirectory=ci-artifacts
+CacheDirectoryMode=0750
+UMask=0027
+Restart=always
+RestartSec=2
+TimeoutStopSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=
+MemoryMax=512M
+TasksMax=128
+LimitNOFILE=1024
+
+[Install]
+WantedBy=multi-user.target

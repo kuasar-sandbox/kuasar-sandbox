@@ -208,6 +208,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 class DownloadTests(unittest.TestCase):
     def setUp(self):
+        environment = mock.patch.dict(os.environ, {'KUASAR_ARTIFACT_CACHE_SOCKET': ''})
+        environment.start()
+        self.addCleanup(environment.stop)
         global BASE, DIRECTORY_RECORD
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
