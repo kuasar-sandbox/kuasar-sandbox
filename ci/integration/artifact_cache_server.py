@@ -94,7 +94,15 @@ class Cache:
                     path.unlink()
             files = [(p.stat().st_mtime, p.stat().st_size, p) for p in self.root.glob('*.zip')
                      if p.is_file() and not p.is_symlink()]
-            used = sum(size for _, size, _ in files)
+            # Failed/resumable prefixes also consume the budget. Reserve a full
+            # archive conservatively, even when a prefix already exists.
+            partial_bytes = 0
+            for path in self.partial.glob('*.part'):
+                try:
+                    partial_bytes += path.stat().st_size
+                except FileNotFoundError:
+                    pass  # A verified producer may have just published it.
+            used = sum(size for _, size, _ in files) + partial_bytes
             for accessed, size, path in sorted(files):
                 free = d.shutil.disk_usage(self.root).free
                 if used + self.reserved + required <= self.capacity and free >= self.reserved + required + self.reserve:
@@ -158,6 +166,15 @@ class Cache:
                         except Exception as exc:
                             failure = d.classify(exc)
                             self.count(download_failures=1)
+                            print(json.dumps({'event': 'download_attempt_failed',
+                                              'artifact_id': row['database_id'], 'attempt': attempt + 1,
+                                              'reason': failure.reason}), flush=True)
+                            if failure.reason in ('http_401', 'http_403'):
+                                # Blob URLs can expire between a long transfer and
+                                # its resume request. Preserve the prefix and ask
+                                # clients to repeat their authorized metadata/signing
+                                # flow; never retry the rejected URL or weaken RPC auth.
+                                raise d.Failure('signed_url_rejected', True) from None
                             if not failure.retryable or attempt == len(self.delays):
                                 if not failure.retryable:
                                     partial.unlink(missing_ok=True)

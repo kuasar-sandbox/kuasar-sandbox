@@ -128,6 +128,27 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(self.origin.requests, [None, f'bytes={len(self.body)//2}-'])
         self.assertFalse(list((self.root/'cache/.partial').iterdir()))
 
+    def test_expired_blob_url_preserves_prefix_for_fresh_authorized_attempt(self):
+        def expired(row, url, partial):
+            partial.write_bytes(self.body[:len(self.body)//2])
+            raise d.Failure('http_403')
+        self.backend.fetch = expired
+        with self.assertRaisesRegex(d.Failure, 'cache_signed_url_rejected') as result:
+            self.attempt(1)
+        self.assertTrue(result.exception.retryable)
+        parts = list((self.root/'cache/.partial').glob('*.part'))
+        self.assertEqual(len(parts), 1)
+        self.assertEqual(parts[0].stat().st_size, len(self.body)//2)
+        # Metadata denial remains terminal even while a cache prefix exists.
+        with self.assertRaisesRegex(d.Failure, 'http_403') as denied:
+            self.attempt(2, denied=True)
+        self.assertFalse(denied.exception.retryable)
+        self.backend.fetch = d.transfer
+        path, calls = self.attempt(3)
+        self.assertEqual(path.read_bytes(), b'verified artifact\n'*1000)
+        self.assertEqual([call.args[2] for call in calls.call_args_list], ['ListArtifacts','GetSignedArtifactURL'])
+        self.assertEqual(self.origin.requests, [f'bytes={len(self.body)//2}-'])
+
     def test_corrupt_cached_archive_is_replaced(self):
         path, _ = self.get()
         path.chmod(0o640)
@@ -185,6 +206,21 @@ class CacheTests(unittest.TestCase):
         self.backend.capacity=1
         path, _ = self.attempt(1)
         self.assertEqual(path.read_bytes(), b'verified artifact\n'*1000)
+        self.assertFalse(list((self.root/'cache').glob('*.zip')))
+
+    def test_retained_failed_downloads_consume_the_storage_budget(self):
+        def expired(row, url, partial):
+            partial.write_bytes(self.body)
+            raise d.Failure('http_403')
+        self.backend.fetch = expired
+        for artifact_id in ('456', '789'):
+            with self.assertRaisesRegex(d.Failure, 'cache_signed_url_rejected'):
+                self.get(dict(self.row, database_id=artifact_id))
+        self.backend.capacity = 2 * len(self.body)
+        self.backend.fetch = d.transfer
+        path, _ = self.attempt(1)
+        self.assertEqual(path.read_bytes(), b'verified artifact\n'*1000)
+        self.assertEqual(len(list((self.root/'cache/.partial').glob('*.part'))), 2)
         self.assertFalse(list((self.root/'cache').glob('*.zip')))
 
     def test_cache_never_exposes_a_digest_mismatch_to_extraction(self):
