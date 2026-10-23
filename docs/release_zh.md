@@ -377,6 +377,10 @@ Workbench 的 prepare 与构建期 collector 共享规范用例发现和外部�
 
 发布把已测试的保存镜像复制到 `ghcr.io/kuasar-sandbox/workbench:<去掉-release-前缀的聚合版本>`，验证两种架构的 config 身份和多架构 index，并匿名回读每个按 digest 固定的镜像到临时 Docker archive。归档校验器将每个解压后的镜像层与已测试离线镜像的 config 逐一绑定，发布重试也必须通过。registry digest、镜像 ID、离线 archive hash 含义各自独立。已有同名 Tag/资产必须匹配；重试只补传缺失资产，不覆盖测试字节。跨服务发布可恢复：只有 registry 和完整 GitHub 资产集合一致，GitHub draft 才公开。冲突时失败关闭，不改写历史源码和已发布字节。
 
+Release 说明应总结实际选中版本的变化和兼容性限制，自动 commit 列表仅作辅助。发布工具 checkout 中经过审阅的 `release/notes/<aggregate-version>.md` 会在绑定阶段替换自动生成的人类说明。首行格式为 `<!-- kuasar-release-notes {"version":"release-v…","aggregate_sha":"<已测试源码的 40 位 SHA>","components":{…}} -->`，组件表必须与六个已测试单元的版本完全一致。其余 Markdown 保留标准标题、版本表和六个组件更新段。`bind-validation.py --notes <file>` 也可显式指定同格式文件。源码或选择不匹配即报错。替换只涉及 Release 说明：notes 不在不可变资产清单中，产品、源码记录和验证结果仍逐项校验，保持不变。
+
+正文的 125,000 字符预算包含完整验证绑定，以及最终 registry proof 的保守预留。正常长度的自动说明保持原样；超限时仅去掉完全相同的可选 `case_files` 副本，再把自动 commit 行收起到保留的完整比较链接。若审阅正文仍超过剩余预算，发布正文保留交付及资格范围说明，并链接到发布工具精确提交中的完整说明。该回退要求文件与已提交字节一致，不链接浮动分支，也不静默截断作者的限制说明。未知格式的超长正文，或连最小正文都容纳不下的机器证据，会在任何 tag/registry 写入前失败并报告实际大小、预算和各块大小；不会提高上限或裁剪证据。聚合组装阶段也会在大小检查前收起超长的自动 commit 清单。因此，已验收 stage 可在正常审阅并合入说明或发布工具修复后，仅重试 publish，无需重建或替换已测试资产。
+
 用户只解压所选产品架构与 `platform-release`；`workbench-<arch>-v*.tar.gz` 使用 `docker load` 导入，不能解压到产品目录。[快速开始](quickstart_zh.md) 检查声明集合并按显式资产类别下载。用户可以不下载 workbench，但新聚合发布必须包含两种架构镜像。
 
 ### 8.1 文档载荷与源码映射
