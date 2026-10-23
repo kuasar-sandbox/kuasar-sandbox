@@ -70,6 +70,15 @@ def cancel_supervisor(spec, destination):
         return
 
 
+def cancel_http_supervisor(destination):
+    signal.signal(signal.SIGTERM, lambda *args: (_ for _ in ()).throw(KeyboardInterrupt()))
+    try:
+        d.download({'name': 'wanted', 'pattern': ''}, destination,
+                   seconds=5, delays=(0, 0), operation=local_operation)
+    except KeyboardInterrupt:
+        return
+
+
 class Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
     def handle_error(self, request, address):
@@ -105,12 +114,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                    'database_id': artifact_id, 'name': 'wanted', 'size': str(len(body)),
                    'digest': 'sha256:' + digest}
             row.update(state.get('artifact_overrides', {}))
-            if state['mode'] == 'metadata_change' and state['lists'] > 1:
+            if state['mode'] in ('metadata_change', 'metadata_partial') and state['lists'] > 1:
                 row.update(state['replacement_fields'])
             rows = [dict(row, **values) for values in state.get('extra_artifacts', [])] + [row]
+            for item in rows:
+                if item['name'] in state.get('archives', {}):
+                    archive = state['archives'][item['name']]
+                    item.update(size=str(len(archive)), digest=hashlib.sha256(archive).hexdigest())
             self.send_body(json.dumps({'artifacts': rows}).encode())
         elif self.path.endswith('/GetSignedArtifactURL'):
             state['urls'] += 1
+            state['signed_names'][state['urls']] = data['name']
             self.send_body(json.dumps({'signed_url': BASE + '/blob/' + str(state['urls']) +
                                       '?sig=never-log-this'}).encode())
         else:
@@ -120,7 +134,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         state = self.server.state
         state['requests'].append(self.path)
         state['blob_authorizations'].append(self.headers.get('Authorization'))
+        state['ranges'].append(self.headers.get('Range'))
         mode, number = state['mode'], len(state['requests'])
+        if (mode == 'throttle' and number == 1) or (mode == 'resume_429' and number == 2):
+            self.send_response(429)
+            self.send_header('Retry-After', state.get('retry_after', '41'))
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
         if mode == 'auth':
             self.send_body(b'not authorized: timeout is only text', 403)
             return
@@ -132,9 +153,44 @@ class Handler(http.server.BaseHTTPRequestHandler):
             time.sleep(.6)
         if mode == 'headers_always':
             time.sleep(.6)
-        body = self.server.archive
-        self.send_response(200)
-        self.send_header('Content-Length', str(len(body)))
+        name = state['signed_names'][int(self.path.split('/blob/')[1].split('?')[0])]
+        body = state.get('archives', {}).get(name, self.server.archive)
+        state.setdefault('download_names', []).append(name)
+        range_modes = ('resume', 'resume_deadline', 'ignore_range', 'range_wrong_start',
+                       'range_wrong_end', 'range_wrong_total', 'range_missing', 'length_wrong',
+                       'range_416', 'resume_auth', 'resume_digest', 'resume_429', 'multi_resume',
+                       'metadata_partial')
+        first_partial = (mode in range_modes and number == 1 and mode != 'multi_resume' or
+                         mode == 'multi_resume' and number == 2)
+        if first_partial:
+            self.send_response(200)
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            prefix = body[:len(body) // 2]
+            if mode == 'resume_digest':
+                prefix = bytes([prefix[0] ^ 1]) + prefix[1:]
+            self.wfile.write(prefix)
+            self.wfile.flush()
+            if mode == 'resume_deadline':
+                time.sleep(.6)
+            self.connection.shutdown(socket.SHUT_RDWR)
+            self.connection.close()
+            return
+        offset = int(self.headers['Range'].removeprefix('bytes=').removesuffix('-')) if self.headers.get('Range') else 0
+        if mode in ('range_416', 'resume_auth') and offset:
+            self.send_body(b'unusable signed URL', 416 if mode == 'range_416' else 403)
+            return
+        ranged = offset and mode in range_modes and mode != 'ignore_range'
+        self.send_response(206 if ranged else 200)
+        if ranged and mode != 'range_missing':
+            start, end, total = offset, len(body) - 1, len(body)
+            start += mode == 'range_wrong_start'
+            end -= mode == 'range_wrong_end'
+            total += mode == 'range_wrong_total'
+            self.send_header('Content-Range', f'bytes {start}-{end}/{total}')
+        if ranged:
+            body = body[offset:]
+        self.send_header('Content-Length', str(len(body) + (mode == 'length_wrong')))
         self.end_headers()
         if mode == 'truncate' and number == 1:
             self.wfile.write(body[:len(body) // 2])
@@ -159,7 +215,8 @@ class DownloadTests(unittest.TestCase):
         self.server = Server(('127.0.0.1', 0), Handler)
         self.server.archive = zip_bytes()
         self.server.state = {'mode': 'ok', 'lists': 0, 'urls': 0, 'requests': [],
-                             'blob_authorizations': [], 'rpc_requests': []}
+                             'blob_authorizations': [], 'rpc_requests': [],
+                             'ranges': [], 'signed_names': {}}
         BASE = 'http://127.0.0.1:' + str(self.server.server_port)
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
@@ -186,6 +243,178 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual((self.root / 'out/payload.txt').read_bytes(), b'complete verified content')
         self.assertEqual(self.server.state['blob_authorizations'], [None])
         self.assertEqual(self.delays, [])
+
+    def test_partial_network_body_and_killed_worker_resume_exact_prefix(self):
+        for mode in ('resume', 'resume_deadline', 'ignore_range'):
+            with self.subTest(mode=mode):
+                if (self.root / 'out').exists():
+                    import shutil
+                    shutil.rmtree(self.root / 'out')
+                self.server.state.update(lists=0, urls=0, requests=[], ranges=[])
+                self.delays.clear()
+                self.run_download(mode)
+                half = len(self.server.archive) // 2
+                self.assertEqual(self.server.state['ranges'], [None, f'bytes={half}-'])
+                self.assertEqual(self.server.state['urls'], 2)
+                self.assertEqual(len(set(self.server.state['requests'])), 2)
+                self.assertEqual((self.root / 'out/payload.txt').read_bytes(), b'complete verified content')
+                self.assertEqual(self.delays, [15])
+
+    def test_bad_resume_responses_and_changed_bytes_fail_closed(self):
+        for mode, reason in [('range_wrong_start', 'archive_range_mismatch'),
+                             ('range_wrong_end', 'archive_range_mismatch'),
+                             ('range_wrong_total', 'archive_range_mismatch'),
+                             ('range_missing', 'archive_range_mismatch'),
+                             ('length_wrong', 'archive_length_mismatch'),
+                             ('range_416', 'http_416'), ('resume_auth', 'http_403'),
+                             ('resume_digest', 'digest_mismatch')]:
+            with self.subTest(mode=mode):
+                self.server.state.update(lists=0, urls=0, requests=[], ranges=[])
+                self.delays.clear()
+                with self.assertRaisesRegex(d.Failure, reason):
+                    self.run_download(mode)
+                self.assertEqual(self.server.state['urls'], 2)
+                self.assertEqual(self.delays, [15])
+                self.assertFalse((self.root / 'out').exists())
+                self.assertFalse(list(self.root.glob('.kuasar-artifact-*')))
+
+    def test_partial_cannot_survive_any_frozen_identity_change(self):
+        for fields in ({'workflow_run_backend_id': PRIOR_RUN},
+                       {'workflow_job_run_backend_id': PRIOR_JOB}, {'database_id': '2'},
+                       {'size': str(len(self.server.archive) + 1)}, {'digest': '0' * 64},
+                       {'name': 'wanted-replaced'}):
+            with self.subTest(fields=fields):
+                self.server.state.update(lists=0, urls=0, requests=[], ranges=[], replacement_fields=fields)
+                self.delays.clear()
+                with self.assertRaisesRegex(d.Failure, 'artifact_identity_changed|artifact_selection_empty'):
+                    self.run_download('metadata_partial')
+                self.assertEqual(self.server.state['urls'], 1)
+                self.assertFalse((self.root / 'out').exists())
+                self.assertFalse(list(self.root.glob('.kuasar-artifact-*')))
+
+    def test_unfrozen_partial_is_rejected_without_signing_or_downloading(self):
+        staging = self.root / 'private'
+        archives = staging / 'archives'
+        archives.mkdir(parents=True)
+        (archives / '1.zip').write_bytes(self.server.archive[:10])
+        attempt = staging / 'attempt'
+        attempt.mkdir()
+        with self.assertRaisesRegex(d.Failure, 'missing_frozen_identity'):
+            local_operation({'name': 'wanted', 'pattern': ''}, None, attempt, lambda message: None)
+        self.assertEqual(self.server.state['urls'], 0)
+
+    def test_multi_artifact_retry_reverifies_completed_zip_and_rebuilds_payload(self):
+        self.server.state['archives'] = {'wanted': zip_bytes('first', b'one'),
+                                         'wanted-2': zip_bytes('second', b'two')}
+        self.server.state['extra_artifacts'] = [{'database_id': '2', 'name': 'wanted-2'}]
+        self.server.state['mode'] = 'multi_resume'
+        with contextlib.redirect_stdout(io.StringIO()):
+            d.download({'name': '', 'pattern': 'wanted*'}, self.root / 'out',
+                       seconds=.2, operation=local_operation, sleep=self.delays.append)
+        self.assertEqual(self.server.state['download_names'], ['wanted', 'wanted-2', 'wanted-2'])
+        self.assertEqual(self.server.state['ranges'],
+                         [None, None, f"bytes={len(self.server.state['archives']['wanted-2']) // 2}-"])
+        self.assertEqual((self.root / 'out/first').read_bytes(), b'one')
+        self.assertEqual((self.root / 'out/second').read_bytes(), b'two')
+        self.assertFalse(list(self.root.glob('.kuasar-artifact-*')))
+
+    def test_retry_after_is_respected_without_extending_total_budget(self):
+        self.run_download('throttle')
+        self.assertEqual(self.delays, [41])
+        import shutil
+        shutil.rmtree(self.root / 'out')
+        self.server.state.update(lists=0, urls=0, requests=[], retry_after='86400')
+        self.delays.clear()
+        with self.assertRaisesRegex(d.Failure, 'total_deadline'):
+            self.run_download('throttle')
+        self.assertEqual(self.server.state['urls'], 1)
+        self.assertEqual(self.delays, [])
+        self.assertFalse(list(self.root.glob('.kuasar-artifact-*')))
+
+    def test_throttle_keeps_prefix_and_uses_new_signed_url(self):
+        self.server.state['retry_after'] = '20'
+        self.run_download('resume_429')
+        half = len(self.server.archive) // 2
+        self.assertEqual(self.server.state['ranges'], [None, f'bytes={half}-', f'bytes={half}-'])
+        self.assertEqual(self.delays, [15, 30])
+        self.assertEqual(self.server.state['urls'], 3)
+
+    def test_retry_after_date_and_invalid_value(self):
+        headers = {'Retry-After': 'Wed, 21 Oct 2015 07:28:00 GMT'}
+        exc = urllib.error.HTTPError('https://invalid', 429, '', headers, None)
+        with mock.patch.object(d.time, 'time', return_value=1445412470):
+            self.assertEqual(d.classify(exc).retry_after, 10)
+        for value in ('-1', '1.5', 'not a date'):
+            exc = urllib.error.HTTPError('https://invalid', 429, '', {'Retry-After': value}, None)
+            self.assertFalse(d.classify(exc).retryable)
+
+    def test_cancel_removes_real_download_prefix_without_retry(self):
+        self.server.state['mode'] = 'resume_deadline'
+        proc = multiprocessing.get_context('fork').Process(
+            target=cancel_http_supervisor, args=(self.root / 'out',))
+        proc.start()
+        try:
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                partials = list(self.root.glob('.kuasar-artifact-*/archives/1.zip'))
+                if partials and partials[0].stat().st_size:
+                    break
+                time.sleep(.01)
+            self.assertTrue(partials and partials[0].stat().st_size)
+            os.kill(proc.pid, signal.SIGTERM)
+            proc.join(3)
+            self.assertFalse(proc.is_alive())
+            self.assertEqual(len(self.server.state['requests']), 1)
+            self.assertFalse((self.root / 'out').exists())
+            self.assertFalse(list(self.root.glob('.kuasar-artifact-*')))
+        finally:
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
+
+    def test_completed_archive_is_rehashed_before_reuse(self):
+        self.server.state.update(mode='multi_resume',
+            archives={'wanted': zip_bytes('first', b'one'), 'wanted-2': zip_bytes('second', b'two')},
+            extra_artifacts=[{'database_id': '2', 'name': 'wanted-2'}])
+        def corrupt_verified_archive(delay):
+            archive, = self.root.glob('.kuasar-artifact-*/archives/1.zip')
+            body = archive.read_bytes()
+            archive.write_bytes(bytes([body[0] ^ 1]) + body[1:])
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(d.Failure, 'digest_mismatch'):
+                d.download({'name': '', 'pattern': 'wanted*'}, self.root / 'out',
+                           seconds=.2, operation=local_operation, sleep=corrupt_verified_archive)
+        self.assertEqual(self.server.state['urls'], 2)
+        self.assertFalse((self.root / 'out').exists())
+        self.assertFalse(list(self.root.glob('.kuasar-artifact-*')))
+
+    def test_killed_extraction_rebuilds_payload_from_verified_archive(self):
+        marker = self.root / 'first-extraction'
+        extract = d.extract_archive
+        def interrupted_extract(archive, destination):
+            extract(archive, destination)
+            if not marker.exists():
+                marker.touch()
+                time.sleep(.6)
+        with mock.patch.object(d, 'extract_archive', side_effect=interrupted_extract):
+            self.run_download('ok')
+        self.assertEqual(self.server.state['urls'], 1)
+        self.assertEqual(self.server.state['lists'], 2)
+        self.assertEqual((self.root / 'out/payload.txt').read_bytes(), b'complete verified content')
+
+    def test_total_budget_includes_backoff_and_does_not_leave_workers(self):
+        marker = self.root / 'writes'
+        started = time.monotonic()
+        with contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(d.Failure, 'attempt_deadline|total_deadline'):
+                d.download({'name': 'wanted', 'pattern': '', 'marker': str(marker)},
+                           self.root / 'out', seconds=.1, delays=(.05, .05),
+                           operation=write_until_stopped)
+        self.assertLess(time.monotonic() - started, .8)
+        with self.assertRaises(ProcessLookupError):
+            os.kill(int(marker.with_suffix('.pid').read_text()), 0)
+        self.assertFalse((self.root / 'out').exists())
+        self.assertFalse(list(self.root.glob('.kuasar-artifact-*')))
 
     def test_prior_attempt_artifact_uses_current_scope_and_producer_signing_ids(self):
         self.server.state['artifact_overrides'] = {

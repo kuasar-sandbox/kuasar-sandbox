@@ -8,6 +8,7 @@ under the three supervised attempts. Runtime credentials and signed URLs are
 never written to files or logs.
 """
 import base64
+import email.utils
 import errno
 import fnmatch
 import hashlib
@@ -39,9 +40,10 @@ BACKEND_ID = r'[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}'
 
 
 class Failure(Exception):
-    def __init__(self, reason, retryable=False):
+    def __init__(self, reason, retryable=False, retry_after=0):
         super().__init__(reason)
         self.reason, self.retryable = reason, retryable
+        self.retry_after = retry_after
 
 
 def require(condition, reason):
@@ -54,7 +56,15 @@ def classify(exc):
     if isinstance(exc, Failure):
         return exc
     if isinstance(exc, urllib.error.HTTPError):
-        return Failure('http_' + str(exc.code), exc.code in (408, 429, 500, 502, 503, 504))
+        delay = 0
+        if exc.code in (429, 503) and exc.headers and exc.headers.get('Retry-After') is not None:
+            value = exc.headers['Retry-After'].strip()
+            try:
+                delay = (int(value) if re.fullmatch(r'[0-9]+', value) else
+                         max(0, email.utils.parsedate_to_datetime(value).timestamp() - time.time()))
+            except (ValueError, TypeError, OverflowError):
+                return Failure('invalid_retry_after')
+        return Failure('http_' + str(exc.code), exc.code in (408, 429, 500, 502, 503, 504), delay)
     if isinstance(exc, urllib.error.URLError):
         return classify(exc.reason)
     if isinstance(exc, ssl.SSLError):
@@ -85,9 +95,12 @@ def secure_url(value):
     return value
 
 
-def open_url(url, *, token=None, data=None):
+def open_url(url, *, token=None, data=None, offset=0):
     # A new opener/request for every call; Authorization never reaches blob URLs.
-    headers = {'User-Agent': 'kuasar-bounded-artifact/1', 'Connection': 'close'}
+    headers = {'User-Agent': 'kuasar-bounded-artifact/1', 'Connection': 'close',
+               'Accept-Encoding': 'identity'}
+    if offset:
+        headers['Range'] = f'bytes={offset}-'
     if token:
         headers['Authorization'] = 'Bearer ' + token
     if data is not None:
@@ -212,24 +225,54 @@ def extract_archive(archive, destination):
 
 
 def transfer(row, url, archive, phase=lambda value: None):
-    require(shutil.disk_usage(archive.parent).free > row['size'] + 32 * 1024**2,
+    offset = 0
+    if os.path.lexists(archive):
+        info = archive.lstat()
+        require(stat.S_ISREG(info.st_mode), 'invalid_partial_archive')
+        offset = info.st_size
+    require(offset <= row['size'], 'archive_size_mismatch')
+    require(shutil.disk_usage(archive.parent).free > row['size'] - offset + 32 * 1024**2,
             'insufficient_disk_space')
-    total, digest = 0, hashlib.sha256()
-    with open_url(url) as response, archive.open('xb') as output:
-        length = response.headers.get('Content-Length')
-        if length is not None:
-            require(int(length) == row['size'], 'archive_length_mismatch')
-        while True:
-            chunk = response.read(1024**2)
-            if not chunk:
-                break
-            total += len(chunk)
-            require(total <= row['size'], 'archive_size_mismatch')
-            digest.update(chunk)
-            output.write(chunk)
+    if offset < row['size']:
+        with open_url(url, offset=offset) as response:
+            require(response.headers.get('Content-Encoding') in (None, 'identity'),
+                    'unexpected_content_encoding')
+            if response.status == 206:
+                match = re.fullmatch(r'bytes ([0-9]+)-([0-9]+)/([0-9]+)',
+                                     response.headers.get('Content-Range', ''))
+                require(offset > 0 and match is not None and
+                        tuple(map(int, match.groups())) == (offset, row['size'] - 1, row['size']),
+                        'archive_range_mismatch')
+            else:
+                require(response.status == 200 and not response.headers.get('Content-Range'),
+                        'unexpected_archive_response')
+                # A server may ignore Range. Replace the prefix, never append a full body.
+                offset = 0
+                require(shutil.disk_usage(archive.parent).free > row['size'] + 32 * 1024**2,
+                        'insufficient_disk_space')
+            length = response.headers.get('Content-Length')
+            require(length is None or (re.fullmatch(r'[0-9]+', length) and
+                    int(length) == row['size'] - offset), 'archive_length_mismatch')
+            # FileIO writes have no userspace buffer. After the old worker is reaped,
+            # st_size is the only resume offset; no separately persisted cursor can race it.
+            with archive.open('ab' if offset else 'wb', buffering=0) as output:
+                total = offset
+                while True:
+                    chunk = response.read1(1024**2)
+                    if not chunk:
+                        break
+                    total += len(chunk)
+                    require(total <= row['size'], 'archive_size_mismatch')
+                    require(output.write(chunk) == len(chunk), 'partial_file_write')
     phase('verify')
-    if total < row['size']:
+    size = archive.stat().st_size
+    if size < row['size']:
         raise Failure('truncated_archive', True)
+    require(size == row['size'], 'archive_size_mismatch')
+    digest = hashlib.sha256()
+    with archive.open('rb') as source:
+        for chunk in iter(lambda: source.read(1024**2), b''):
+            digest.update(chunk)
     require(digest.hexdigest() == row['digest'], 'digest_mismatch')
 
 
@@ -240,21 +283,25 @@ def attempt(spec, frozen, directory, send):
     if frozen is not None:
         require(selected == frozen, 'artifact_identity_changed')
     else:
+        # If a supervisor lost the initial identity message, it must not reuse bytes.
+        require(not any((directory.parent / 'archives').iterdir()), 'missing_frozen_identity')
         send({'identity': selected})
     payload = directory / 'payload'
     payload.mkdir()
     for row in selected:
-        send({'phase': 'url', 'artifact_id': row['database_id']})
-        signed = rpc(service, token, 'GetSignedArtifactURL',
-                     {key: row[key] for key in ('workflow_run_backend_id', 'workflow_job_run_backend_id', 'name')})
-        url = field(signed, 'signed_url')
-        require(isinstance(url, str), 'invalid_signed_url')
-        send({'phase': 'download', 'artifact_id': row['database_id']})
-        archive = directory / (row['database_id'] + '.zip')
+        archive = directory.parent / 'archives' / (row['database_id'] + '.zip')
+        url = None
+        if not archive.exists() or archive.stat().st_size < row['size']:
+            send({'phase': 'url', 'artifact_id': row['database_id']})
+            signed = rpc(service, token, 'GetSignedArtifactURL',
+                         {key: row[key] for key in ('workflow_run_backend_id', 'workflow_job_run_backend_id', 'name')})
+            url = field(signed, 'signed_url')
+            require(isinstance(url, str), 'invalid_signed_url')
+        send({'phase': 'download', 'artifact_id': row['database_id'],
+              'resume_bytes': archive.stat().st_size if archive.exists() else 0})
         transfer(row, url, archive, lambda value: send({'phase': value, 'artifact_id': row['database_id']}))
         send({'phase': 'extract', 'artifact_id': row['database_id']})
         extract_archive(archive, payload)
-        archive.unlink()
 
 
 def worker(spec, frozen, directory, channel, operation):
@@ -267,7 +314,8 @@ def worker(spec, frozen, directory, channel, operation):
         channel.send({'done': True})
     except Exception as exc:
         failure = classify(exc)
-        channel.send({'done': False, 'reason': failure.reason, 'retryable': failure.retryable})
+        channel.send({'done': False, 'reason': failure.reason, 'retryable': failure.retryable,
+                      'retry_after': failure.retry_after})
     finally:
         channel.close()
 
@@ -275,7 +323,7 @@ def worker(spec, frozen, directory, channel, operation):
 def stop_worker(process):
     if process.pid is None:
         return
-    # Reap before removing staging or starting another request. No writes survive.
+    # Reap before inspecting partial sizes, removing staging or starting another request.
     if process.is_alive():
         try:
             os.killpg(process.pid, signal.SIGTERM)
@@ -309,7 +357,10 @@ def download(spec, destination, *, seconds=ATTEMPT_SECONDS, delays=BACKOFF_SECON
     root = tempfile.mkdtemp(prefix='.kuasar-artifact-', dir=destination.parent)
     stopped = True
     try:
+        (Path(root) / 'archives').mkdir()
+        overall_deadline = time.monotonic() + seconds * (len(delays) + 1) + sum(delays)
         for number in range(1, len(delays) + 2):
+            require(time.monotonic() < overall_deadline, 'total_deadline')
             directory = Path(tempfile.mkdtemp(prefix='attempt-', dir=root))
             receiver, sender = context.Pipe(duplex=False)
             process = context.Process(target=worker,
@@ -320,7 +371,7 @@ def download(spec, destination, *, seconds=ATTEMPT_SECONDS, delays=BACKOFF_SECON
                 stopped = False
                 process.start()
                 sender.close()
-                deadline = started + seconds
+                deadline = min(started + seconds, overall_deadline)
                 while time.monotonic() < deadline:
                     if receiver.poll(min(0.1, max(0, deadline - time.monotonic()))):
                         try:
@@ -365,8 +416,10 @@ def download(spec, destination, *, seconds=ATTEMPT_SECONDS, delays=BACKOFF_SECON
             shutil.rmtree(directory)
             if not result['retryable'] or number > len(delays):
                 raise Failure(result['reason'])
-            log_event(number, started, phase='backoff', seconds=delays[number - 1])
-            sleep(delays[number - 1])
+            delay = max(delays[number - 1], result.get('retry_after', 0))
+            require(delay < overall_deadline - time.monotonic(), 'total_deadline')
+            log_event(number, started, phase='backoff', seconds=delay)
+            sleep(delay)
     finally:
         if stopped:
             shutil.rmtree(root)
