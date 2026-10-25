@@ -112,6 +112,29 @@ class Requirements(unittest.TestCase):
 
 
 class Allocation(unittest.TestCase):
+    def test_dependency_coverage_survives_routing_and_cannot_be_dropped(self):
+        for owner, path, case in (
+                ('accelerator', 'pkg/tarstream/write.go', 'telemetry.usage.sh'),
+                ('sandboxer', 'pkg/diffstore/single_format.go', 'orchestrator.resource-control.sh')):
+            with self.subTest(owner=owner):
+                plan = fixture()
+                plan['owners'] = [owner]
+                plan['changes'] = {owner: [path]}
+                test_owner = 'sandboxer' if case.startswith('telemetry.') else 'orchestrator'
+                plan['case_files'][test_owner] = sorted(plan['case_files'][test_owner] + [case])
+                contract = copy.deepcopy(plan['case_requirements'])
+                contract['cases'][case] = {'sha256': 'c' * 64, 'requires': ['kvm']}
+                routing.apply(plan, contract)
+                routing.validate(plan)
+                for arch in artifacts.ARCHES:
+                    self.assertIn(case, plan['lanes'][arch]['selection']['cases'])
+                    groups = plan['lanes'][arch]['groups'].values()
+                    self.assertEqual(sum(case in group['cases'] for group in groups), 1)
+                forged = copy.deepcopy(plan)
+                forged['lanes']['aarch64']['selection']['cases'].remove(case)
+                with self.assertRaisesRegex(ValueError, 'required coverage'):
+                    routing.validate(forged)
+
     def test_public_first_with_exact_disjoint_union(self):
         plan = fixture()
         artifacts.check_plan(plan)

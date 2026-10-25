@@ -107,7 +107,8 @@ def apply(plan, contract):
     plan.update(schema=4, case_requirements=contract,
                 runner_configuration={'sha256': artifacts.identity(config), 'value': config})
     for arch, lane in plan['lanes'].items():
-        lane['selection'] = artifacts.suite_selection(plan['owners'], arch, plan['case_files'], native_full=True)
+        lane['selection'] = artifacts.suite_selection(plan['owners'], arch, plan['case_files'],
+                                                    native_full=True, changes=plan.get('changes'))
         lane['groups'] = allocate(arch, lane['selection'], contract, config)
     return plan
 
@@ -121,7 +122,8 @@ def validate(plan):
     if 'execution_run' in plan or 'execution_images' in plan:
         check_execution_inputs(plan)
     for arch, lane in plan['lanes'].items():
-        expected = artifacts.suite_selection(plan['owners'], arch, plan['case_files'], native_full=True)
+        expected = artifacts.suite_selection(plan['owners'], arch, plan['case_files'],
+                                            native_full=True, changes=plan.get('changes'))
         artifacts.require(lane['selection'] == expected, 'required coverage differs from selected suites')
         artifacts.require(lane['groups'] == allocate(arch, expected, contract, config),
                           'execution groups differ from deterministic capability allocation')

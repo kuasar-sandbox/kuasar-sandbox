@@ -591,6 +591,17 @@ class MaintainedSelection(unittest.TestCase):
             self.assertEqual(plan['kernel_sha'], shas['vmlinux'])
             self.assertNotEqual(plan['kernel_sha'], plan['sources']['guest-runtime']['sha'])
             self.assertEqual(plan['test_revisions']['orchestrator']['sha'], companion_sha)
+            # Joint qualification must retain the admitted consumer test source
+            # and the selected dependency tuple; a rebuilt consumer is not an
+            # authorization to substitute another owner main or test revision.
+            self.assertEqual(plan['sources']['orchestrator']['sha'], companion_sha)
+            for owner, unit in (('accelerator', 'accelerator'), ('sandboxer', 'sandboxer'),
+                                ('guest-runtime', 'runtime')):
+                self.assertEqual(plan['sources'][owner]['sha'], shas[unit])
+                self.assertEqual(plan['test_revisions'][owner]['sha'], shas[unit])
+                self.assertEqual(plan['product_sources']['sandbox-runtime.bundle'][resolver.REPOSITORIES[owner]], shas[unit])
+            for owner in ('accelerator', 'sandboxer'):
+                self.assertEqual(plan['product_sources']['node-ctl'][resolver.REPOSITORIES[owner]], shas[owner])
             self.assertIn('source-change.txt', plan['changes']['orchestrator'])
             self.assertEqual(set(plan['maintained_deltas']), set(artifacts.UNITS) - (set() if kernel_delta else {'vmlinux'}))
             for unit, row in plan['source_records'].items():

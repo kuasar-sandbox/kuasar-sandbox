@@ -51,6 +51,8 @@ finalize 才能成功；skip/cancel/failure 不能成为合并依据。
 
 ## 2. 精确基线与受影响产品
 
+产品影响选测也包含消费者：accelerator/runtime 改动若重建 `flatten-ctl`，增加 telemetry 用例；sandboxer 库改动若重建 `node-ctl`，增加 `orchestrator.resource-*`。这些用例使用 plan 固定的测试 owner revision 和匹配能力的 lane，不另选 main。需要原子验证的测试脚本/依赖修复使用上文双向 companion 声明，明确联合候选源码集合。
+
 `source` 模式从主线维护的 `releases/daily-preview.yaml`、或维护线的 `releases/release.yaml`
 选择一个已发布且通过声明验证范围的 aggregate。仅允许当前选择或显式前驱恢复中断发布。
 plan 固定 aggregate tag commit、六个独立 unit 的版本/SHA、Release/asset ID、大小、摘要和成功的聚合 run。

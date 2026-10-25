@@ -164,6 +164,35 @@ class DemoSDKFixtures(unittest.TestCase):
 
 
 class CaseBridgeContracts(unittest.TestCase):
+    def test_dependency_consumers_follow_rebuilt_products_without_changing_owners(self):
+        cases = CASES | {
+            'orchestrator': ['orchestrator.exec.sh', 'orchestrator.resource-control.sh'],
+            'sandboxer': ['sandbox.lifecycle.sh', 'telemetry.usage.sh'],
+        }
+        for owner, path, required, absent in (
+                ('sandboxer', 'pkg/diffstore/single_format.go', 'orchestrator.resource-control.sh', 'orchestrator.exec.sh'),
+                ('sandboxer', 'go.mod', 'orchestrator.resource-control.sh', 'orchestrator.exec.sh'),
+                ('accelerator', 'pkg/tarstream/write.go', 'telemetry.usage.sh', 'orchestrator.exec.sh'),
+                ('guest-runtime', 'cmd/flatten-ctl/main.go', 'telemetry.usage.sh', 'orchestrator.exec.sh')):
+            owners = [owner]
+            for arch in ARTIFACTS.ARCHES:
+                with self.subTest(owner=owner, path=path, arch=arch):
+                    selected = ARTIFACTS.suite_selection(owners, arch, cases, native_full=True,
+                                                        changes={owner: [path]})
+                    self.assertIn(required, selected['cases'])
+                    self.assertNotIn(absent, selected['cases'])
+                    self.assertEqual(owners, [owner])
+
+    def test_unrelated_changes_and_historical_selection_stay_unchanged(self):
+        cases = CASES | {'sandboxer': ['sandbox.lifecycle.sh', 'telemetry.usage.sh']}
+        baseline = ARTIFACTS.suite_selection(['accelerator'], 'x86_64', cases)
+        for path in ('docs/file-artifacts.md', 'pkg/tarstream/write_test.go'):
+            self.assertEqual(ARTIFACTS.suite_selection(['accelerator'], 'x86_64', cases,
+                             changes={'accelerator': [path]}), baseline)
+        with self.assertRaisesRegex(ValueError, 'candidate owners'):
+            ARTIFACTS.suite_selection(['accelerator'], 'x86_64', cases,
+                                     changes={'sandboxer': ['pkg/diffstore/single_format.go']})
+
     def test_case_filename_is_the_only_suite_contract(self):
         for name in ('basic.cli.sh', 'storage.cache-membership.sh', 'image.flatten.sh',
                      'network.tap.sh', 'sandbox.lifecycle.sh', 'snapshot.restore.sh',

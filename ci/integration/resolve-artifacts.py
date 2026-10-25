@@ -470,7 +470,7 @@ def source_plan(framework_sha, input_root):
             "embedded_sources": {"envd": {REPOSITORIES["guest-runtime"]: sources["guest-runtime"]["sha"]}},
             "lanes": {arch: {"products": products, "embedded_products": embedded,
                              "performance": ["working-set-smoke"] if arch == "x86_64" and set(owners) & {"platform", "sandboxer"} else [],
-                             "selection": artifacts.suite_selection(owners, arch, selected_files)} for arch in artifacts.ARCHES}}
+                             "selection": artifacts.suite_selection(owners, arch, selected_files, changes=changes)} for arch in artifacts.ARCHES}}
     import helper_inputs
     identities = {}
     for owner, root in roots.items():

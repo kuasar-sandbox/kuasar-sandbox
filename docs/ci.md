@@ -48,6 +48,8 @@ Tarstream carrier changes also rebuild `sandbox-ctl` and `node-ctl` with the sel
 
 Sandboxer library changes likewise rebuild `node-ctl`, whose management and publication paths read checkpoint metadata. The orchestrator source selection remains unchanged. Working-set fixtures provide raw ext4 images through `diff_template` and leave active `diff` outputs absent; restore creates those outputs from the captured disk graph. Fresh active files follow the selected encryption policy, so local `off`/`auto` timing comparisons include active-file and carrier costs.
 
+Product-impact selection also adds consumer tests: accelerator/runtime changes that rebuild `flatten-ctl` select telemetry cases, and sandboxer library changes that rebuild `node-ctl` select `orchestrator.resource-*`. These cases use the plan's exact test-owner revisions and capability-matched lanes; they do not select another main revision. Atomic harness/dependency fixes use the reciprocal companion declaration above to qualify their explicit joint source tuple.
+
 ### Documentation qualification before downloads
 
 Source PR resolution first compares the complete exact base, head and integration

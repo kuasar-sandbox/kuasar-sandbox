@@ -158,7 +158,7 @@ DEFAULT_SUITES = {
 }
 
 
-def suite_selection(owners, arch, case_files, *, native_full=False):
+def suite_selection(owners, arch, case_files, *, native_full=False, changes=None):
     """Select broad suites from exact source filenames, then apply lane limits."""
     require(arch in ARCHES and set(owners) <= set(OWNERS), "invalid suite selection request")
     require(isinstance(case_files, dict) and set(case_files) == set(OWNERS), "incomplete test case source set")
@@ -175,6 +175,18 @@ def suite_selection(owners, arch, case_files, *, native_full=False):
     # e.g. sandboxer's image and network cases must retain their CI coverage.
     suites.update(name.split('.')[0] for owner in owners for name in case_files[owner])
     chosen = {name for name in all_cases if name.split('.')[0] in suites}
+    # Rebuilding a linked consumer does not change its source owner. Select its
+    # affected E2E consumers separately, using the same frozen change set as the
+    # product rebuild closure. Documentation/test-only changes add no coverage.
+    if changes is not None:
+        require(isinstance(changes, dict) and set(changes) <= set(owners),
+                'consumer changes differ from candidate owners')
+        affected = {owner: changed_products({owner: paths}) for owner, paths in changes.items()}
+        if any('flatten-ctl' in affected.get(owner, []) for owner in ('accelerator', 'guest-runtime')):
+            chosen.update(name for name in all_cases if name.startswith('telemetry.'))
+        if 'node-ctl' in affected.get('sandboxer', []):
+            chosen.update(name for name in all_cases if name.startswith('orchestrator.resource-'))
+        suites.update(name.split('.')[0] for name in chosen)
     exclusions = []
     if 'storage.obs.sh' in chosen:
         chosen.remove('storage.obs.sh')
@@ -189,14 +201,14 @@ def suite_selection(owners, arch, case_files, *, native_full=False):
             'exclusions': exclusions}
 
 
-def compatible_suite_selection(observed, owners, arch, case_files):
+def compatible_suite_selection(observed, owners, arch, case_files, *, changes=None):
     """Keep immutable native-generator evidence valid without changing it.
 
     Only the retired native prerequisite may differ. Cases, exclusions and all
     other products remain exact; runtime_payloads independently requires and
     matches mkfs for every selected legacy flatten binary.
     """
-    current = suite_selection(owners, arch, case_files)
+    current = suite_selection(owners, arch, case_files, changes=changes)
     if observed == current:
         return True
     if "flatten-ctl" not in current["required_products"]:
@@ -503,7 +515,8 @@ def check_plan(plan):
                 "invalid affected product set")
         require(lane.get("embedded_products", []) in ([], ["envd"]), "unknown embedded product")
         if plan['schema'] < 4:
-            require(compatible_suite_selection(lane["selection"], plan["owners"], arch, case_files), "suite selection differs from trusted source filenames")
+            require(compatible_suite_selection(lane["selection"], plan["owners"], arch, case_files,
+                                              changes=plan.get('changes')), "suite selection differs from trusted source filenames")
         expected_perf = ["working-set-smoke"] if plan["mode"] == "source" and arch == "x86_64" and set(plan["owners"]) & {"platform", "sandboxer"} else []
         require(lane["performance"] == expected_perf, "performance checks differ from trusted mode/owner selection")
     validate_test_revisions(plan.get("test_revisions"))
