@@ -498,7 +498,23 @@ class MaintainedSelection(unittest.TestCase):
     def test_release_line_uses_maintained_component_minor(self):
         self.run_cutover(base_ref='release/v1.2.x')
 
-    def run_cutover(self, legacy_owner=None, kernel_delta=True, base_ref='main'):
+    def test_complete_modern_baseline_keeps_non_candidate_owners(self):
+        self.run_cutover(complete_baseline=True)
+
+    def test_complete_modern_baseline_keeps_maintenance_admission(self):
+        self.run_cutover(complete_baseline=True, base_ref='release/v1.2.x')
+
+    def test_complete_modern_baseline_preserves_each_candidate_and_companion(self):
+        for owner in artifacts.OWNERS:
+            with self.subTest(owner=owner):
+                self.run_cutover(complete_baseline=True, candidate_owner=owner)
+
+    def test_complete_modern_baseline_rejects_candidate_requirement_downgrade(self):
+        with self.assertRaisesRegex(ValueError, 'mixed E2E requirement generations'):
+            self.run_cutover(complete_baseline=True, candidate_owner='connector', downgrade_candidate=True)
+
+    def run_cutover(self, legacy_owner=None, kernel_delta=True, base_ref='main', complete_baseline=False,
+                    candidate_owner='platform', downgrade_candidate=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             git = subject.tag_sources.git
@@ -519,6 +535,10 @@ class MaintainedSelection(unittest.TestCase):
                 (e2e / 'cases').mkdir(parents=True)
                 for name in CASES[owner]: (e2e / 'cases' / name).write_text('echo historical\n')
                 declare_fixture(repo, owner)
+                if complete_baseline:
+                    (e2e / 'lib').mkdir(exist_ok=True)
+                    (e2e / 'lib/requirements.json').write_text('{"schema":1}\n')
+                    for name in CASES[owner]: (e2e / 'cases' / name).write_text('# e2e-requires: []\necho baseline\n')
                 if owner == 'guest-runtime':
                     (repo / 'native-deps').mkdir(exist_ok=True)
                     (repo / 'native-deps/Makefile').write_text('vmlinux: old-kernel-input\n')
@@ -565,29 +585,75 @@ class MaintainedSelection(unittest.TestCase):
             candidate = git(platform, 'rev-parse', 'HEAD')
             git(platform, 'update-ref', 'refs/pull/23/merge', candidate)
             git(platform, 'update-ref', 'refs/heads/' + base_ref, platform_base)
-            companion = repos['orchestrator']
-            (companion / 'test/e2e/cases' / CASES['orchestrator'][0]).write_text('# e2e-requires: []\necho companion\n')
+            candidate_base = platform_base
+            if candidate_owner != 'platform':
+                primary = repos[candidate_owner]
+                candidate_base = git(primary, 'rev-parse', 'HEAD')
+                e2e = primary / 'test/e2e'
+                (e2e / 'cases' / CASES[candidate_owner][0]).write_text('# e2e-requires: []\necho candidate\n')
+                if downgrade_candidate:
+                    (e2e / 'lib/requirements.json').unlink()
+                    for name in CASES[candidate_owner]:
+                        (e2e / 'cases' / name).write_text('echo legacy candidate\n')
+                git(primary, 'add', '.'); git(primary, 'commit', '-qm', 'candidate test')
+                candidate = git(primary, 'rev-parse', 'HEAD')
+                git(primary, 'update-ref', 'refs/pull/23/merge', candidate)
+            companion_owner = 'sandboxer' if candidate_owner == 'orchestrator' else 'orchestrator'
+            companion = repos[companion_owner]
+            companion_base = git(companion, 'rev-parse', 'HEAD')
+            (companion / 'test/e2e/cases' / CASES[companion_owner][0]).write_text('# e2e-requires: []\necho companion\n')
             git(companion, 'commit', '-qam', 'companion test')
             companion_sha = git(companion, 'rev-parse', 'HEAD')
             git(companion, 'update-ref', 'refs/pull/24/merge', companion_sha)
-            env.update(CANDIDATE_REPOSITORY=resolver.PLATFORM, CANDIDATE_PR='23', CANDIDATE_SHA=candidate,
-                       CANDIDATE_BASE_SHA=platform_base, CANDIDATE_HEAD_SHA=candidate, CANDIDATE_BASE_REF=base_ref,
-                       COMPANION_CANDIDATES=json.dumps([{'repository': resolver.REPOSITORIES['orchestrator'],
-                           'pull_request_number': 24, 'base_ref': base_ref, 'base_sha': shas['orchestrator'],
+            env.update(CANDIDATE_REPOSITORY=resolver.REPOSITORIES[candidate_owner], CANDIDATE_PR='23', CANDIDATE_SHA=candidate,
+                       CANDIDATE_BASE_SHA=candidate_base, CANDIDATE_HEAD_SHA=candidate, CANDIDATE_BASE_REF=base_ref,
+                       COMPANION_CANDIDATES=json.dumps([{'repository': resolver.REPOSITORIES[companion_owner],
+                           'pull_request_number': 24, 'base_ref': base_ref, 'base_sha': companion_base,
                            'head_sha': companion_sha, 'candidate_sha': companion_sha}]))
             original = copy.deepcopy(baseline)
+            if complete_baseline:
+                baseline['validation_plan'] = {'schema': 4}
+                original = copy.deepcopy(baseline)
             def state(path):
                 unit = next(unit for unit, tag in maintained.items() if path.endswith('/' + tag)
                             and path.split('/')[2] == resolver.REPOSITORIES[resolver.unit_owner(unit)].split('/')[1])
                 return self.release_state(unit, maintained[unit], shas[unit])
             with patch.dict(os.environ, env), patch.object(resolver, 'public'), \
                  patch.object(resolver, 'baseline', return_value=baseline), \
+                 patch.object(resolver.release, 'branch_sha', return_value=platform_base), \
                  patch.object(resolver.release, 'api_optional', side_effect=state), \
                  patch.object(resolver.release, 'tag_sha', side_effect=lambda repo, tag: shas[next(unit for unit in maintained if maintained[unit] == tag and resolver.REPOSITORIES[resolver.unit_owner(unit)] == repo)]):
                 plan = resolver.source_plan('a' * 40, root / 'admitted')
             self.assertEqual(baseline, original)
             self.assertEqual(plan['schema'], 4)
             self.assertEqual(plan['baseline'], original)
+            if complete_baseline:
+                self.assertEqual(plan['maintained_deltas'], {})
+                if candidate_owner != 'guest-runtime':
+                    self.assertEqual(plan['kernel_sha'], baseline['units']['vmlinux']['sha'])
+                admitted = {candidate_owner: (candidate, 'candidate'), companion_owner: (companion_sha, 'companion')}
+                for owner in artifacts.OWNERS:
+                    if owner in admitted:
+                        sha, role = admitted[owner]
+                        self.assertEqual(plan['sources'][owner]['sha'], sha)
+                        self.assertEqual(plan['sources'][owner]['role'], role)
+                        self.assertEqual(plan['test_revisions'][owner], plan['sources'][owner])
+                        self.assertEqual(plan['run_inputs']['candidates/' + owner]['sha'], sha)
+                        continue
+                    unit = 'runtime' if owner == 'guest-runtime' else owner
+                    expected = platform_base if owner == 'platform' else baseline['units'][unit]['sha']
+                    self.assertEqual(plan['sources'][owner]['sha'], expected)
+                    self.assertEqual(plan['test_revisions'][owner]['sha'], expected)
+                self.assertEqual(set(plan['owners']), set(admitted))
+                for product, dependencies in plan['product_sources'].items():
+                    for repository, sha in dependencies.items():
+                        owner = next(owner for owner in artifacts.OWNERS if resolver.REPOSITORIES[owner] == repository)
+                        self.assertEqual(sha, plan['kernel_sha'] if product == 'vmlinux' else plan['sources'][owner]['sha'])
+                for unit, row in plan['source_records'].items():
+                    self.assertEqual(row['tag'], baseline['units'][unit]['version'])
+                    self.assertEqual(row['sha'], baseline['units'][unit]['sha'])
+                artifacts.check_plan(plan)
+                return
             self.assertEqual(plan['kernel_sha'], shas['vmlinux'])
             self.assertNotEqual(plan['kernel_sha'], plan['sources']['guest-runtime']['sha'])
             self.assertEqual(plan['test_revisions']['orchestrator']['sha'], companion_sha)

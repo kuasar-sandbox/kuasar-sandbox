@@ -266,6 +266,19 @@ def maintained_units(platform_source, base_ref):
         (platform_source / relative).read_text(), relative, base_ref == "main")[2]
 
 
+def qualification_units(selected, maintained):
+    """Keep modern ordinary PR inputs on the fully validated aggregate tuple.
+
+    aggregate() authenticates the original plan before this function runs.
+    Legacy capability cutovers retain their existing published-tag admission;
+    candidate manifests and missing declarations cannot select compatibility.
+    """
+    original = selected.get('validation_plan')
+    if isinstance(original, dict) and original.get('schema') == 4:
+        return {unit: row['version'] for unit, row in selected['units'].items()}
+    return maintained
+
+
 def published_unit(unit, tag):
     """A selected source delta must already be a complete exact publication."""
     source_inputs.tag_sources.validate_tag(unit, tag)
@@ -383,7 +396,7 @@ def source_plan(framework_sha, input_root):
     maintained = maintained_units(admission_platform, base_ref)
     tag_deltas = {}
     baseline_roots = dict(roots)
-    for unit, tag in maintained.items():
+    for unit, tag in qualification_units(selected, maintained).items():
         if tag == selected['units'][unit]['version']:
             continue
         sha = published_unit(unit, tag)
