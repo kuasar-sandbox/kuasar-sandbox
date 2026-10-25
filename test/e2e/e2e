@@ -191,7 +191,9 @@ def cmd_prepare(args: argparse.Namespace) -> int:
 
 
 def case_diagnostics(work, case, output):
-    if case not in {'snapshot.read-recovery.sh', 'orchestrator.cluster-recovery.sh'}:
+    if case not in {'snapshot.read-recovery.sh', 'orchestrator.cluster-recovery.sh',
+                    'sandbox.cgroup.sh', 'orchestrator.resource-startup.sh',
+                    'orchestrator.proxy-inplace-restart.sh'}:
         return {}
     helper = workspace.fixture_helper(work, 'platform', 'failure-diagnostics.sh')
     return {'BASH_ENV': str(helper), 'KUASAR_CI_DIR': str(output)}

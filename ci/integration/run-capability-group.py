@@ -8,16 +8,20 @@ runner credentials inside the supplemental execution environment.
 import argparse
 import errno
 import hashlib
+import importlib.machinery
 import importlib.util
 import json
 import os
 from pathlib import Path
 import platform
+import re
 import shutil
 import signal
 import stat
 import subprocess
 import sys
+import tempfile
+import time
 
 import artifacts
 import image_pull
@@ -70,6 +74,96 @@ def read_owned(path, limit=2 * 1024 * 1024):
         content = stream.read(limit + 1)
         artifacts.require(len(content) <= limit, 'execution evidence grew beyond its limit')
         return content
+
+
+def startup_daemons(container_id):
+    """Read only this owned container's private units after startup has failed."""
+    properties = ('Id', 'ActiveState', 'SubState', 'MainPID', 'Result', 'ExecMainCode', 'ExecMainStatus')
+    signals = ('context deadline exceeded', 'context canceled', 'connection refused', 'connection reset',
+               'broken pipe', 'unexpected EOF', 'i/o timeout', 'no space left on device', 'permission denied',
+               'failed to start daemon', 'failed to dial', 'failed to mount', 'failed to initialize',
+               'failed to connect', 'timeout', 'timed out', 'fatal', 'panic:', 'SIGKILL',
+               'Starting', 'Started', 'Stopping', 'Stopped', 'API listen', 'initialization has completed')
+    commands = {
+        'units': ['systemctl', 'show', 'docker.service', 'containerd.service',
+                  *['--property=' + key for key in properties]],
+        'journal': ['journalctl', '--no-pager', '--quiet', '--output=json',
+                    '--output-fields=MESSAGE,PRIORITY,_PID,__REALTIME_TIMESTAMP,_SYSTEMD_UNIT',
+                    '--lines=200', '--unit=docker.service', '--unit=containerd.service'],
+    }
+    evidence = {'observed_ns': time.time_ns(), 'scope': 'owned container private Docker/containerd',
+                'redaction': 'fixed error vocabulary and selected unit fields only'}
+    for name, command in commands.items():
+        item = {}
+        # Temporary output bounds memory; at most 200 journal rows, no --all,
+        # environment, command line, registry settings or client credentials.
+        with tempfile.TemporaryFile() as stream:
+            try:
+                result = subprocess.run(['docker', 'exec', container_id, *command],
+                    stdout=stream, stderr=subprocess.DEVNULL, timeout=5)
+                size = stream.tell()
+                stream.seek(max(0, size - 65536))
+                text = stream.read(65536).decode('utf-8', 'replace')
+                item.update(exit_code=result.returncode, tail_truncated=size > 65536)
+            except (OSError, subprocess.TimeoutExpired) as error:
+                evidence[name] = {'error': type(error).__name__}
+                continue
+        rows = []
+        for line in text.splitlines():
+            if name == 'units':
+                key, _, value = line.partition('=')
+                if key in properties and re.fullmatch(r'[A-Za-z0-9_.-]{1,64}', value):
+                    rows.append({key: value})
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if not isinstance(event, dict) or not isinstance(event.get('MESSAGE'), str):
+                continue
+            terms = [term for term in signals if re.search(r'(?<!\w)' + re.escape(term) + r'(?!\w)', event['MESSAGE'], re.I)]
+            if not terms:
+                continue
+            row = {'terms': terms}
+            for key in ('__REALTIME_TIMESTAMP', '_PID', 'PRIORITY'):
+                value = event.get(key)
+                if isinstance(value, str) and re.fullmatch(r'[0-9]{1,24}', value):
+                    row[key] = value
+            if event.get('_SYSTEMD_UNIT') in ('docker.service', 'containerd.service'):
+                row['unit'] = event['_SYSTEMD_UNIT']
+            rows.append(row)
+        item['rows'] = rows
+        evidence[name] = item
+    return evidence
+
+
+def workbench_launcher():
+    loader = importlib.machinery.SourceFileLoader('workbench_failure_reader', str(ROOT / 'workbench/workbench'))
+    spec = importlib.util.spec_from_loader(loader.name, loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+    return module
+
+
+def capture_startup_daemons(root):
+    state = instance(root)
+    if not (state / 'instance.json').exists():
+        return
+    # Reuse the launcher's exact UID/directory/container label and image checks.
+    # No separate diagnostic adoption or host-daemon fallback is permitted.
+    launcher = workbench_launcher()
+    data = launcher.record(state)
+    if data.get('status') != 'failed-start' or data.get('mode') != 'system':
+        return
+    container = launcher.owned_container(data)
+    if not container or not container['State'].get('Running'):
+        return
+    evidence = startup_daemons(container['Id'])
+    output = state / 'output'
+    artifacts.require(output.resolve() == output, 'escaping diagnostic directory')
+    output.mkdir(exist_ok=True)
+    with (output / ('startup-daemons-' + str(time.time_ns()) + '.log')).open('x') as stream:
+        stream.write(json.dumps(evidence) + '\n')
 
 
 def diagnostics(root, destination):
@@ -153,6 +247,12 @@ def execute(args):
         return result
     except BaseException as error:
         failed = True
+        if not isinstance(error, (KeyboardInterrupt, InterruptedError)):
+            try:
+                capture_startup_daemons(args.root)
+            except (OSError, ValueError, subprocess.SubprocessError) as diagnostic_error:
+                # Keep the original start/case failure and always run owned cleanup.
+                result['startup_diagnostic_error'] = type(diagnostic_error).__name__
         report = instance(args.root) / 'output/result.json'
         if report.exists() or report.is_symlink():
             try:

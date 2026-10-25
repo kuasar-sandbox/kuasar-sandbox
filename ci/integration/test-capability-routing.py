@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 import unittest
 import subprocess
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import artifacts
 import capability_routing as routing
@@ -306,13 +306,107 @@ class RuntimeTransport(unittest.TestCase):
                      patch.object(driver.platform, 'machine', return_value='aarch64'), \
                      patch.object(driver.routing, 'runner_identity', return_value={}), \
                      patch.object(driver.shutil, 'copytree'), patch.object(driver.shutil, 'copy2'), \
-                     patch.object(driver.subprocess, 'run', side_effect=invoke), patch.object(driver, 'cleanup') as clean:
+                     patch.object(driver.subprocess, 'run', side_effect=invoke), patch.object(driver, 'cleanup') as clean, \
+                     patch.object(driver, 'capture_startup_daemons', side_effect=OSError('private diagnostic error')) as diagnostic:
                     with self.assertRaises(type(error)):
                         driver.execute(args)
                     clean.assert_called_once_with(args.root)
                 result = json.loads(args.result.read_text())
                 self.assertEqual(result['conclusion'], conclusion)
                 self.assertEqual(result['plan_id'], artifacts.identity(plan))
+                if conclusion == 'cancelled':
+                    diagnostic.assert_not_called()
+                else:
+                    diagnostic.assert_called_once_with(args.root)
+                    self.assertEqual(result['startup_diagnostic_error'], 'OSError')
+                    self.assertNotIn('private diagnostic error', json.dumps(result))
+
+
+class StartupDiagnostics(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('group_diagnostics', Path(__file__).with_name('run-capability-group.py'))
+        self.driver = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.driver)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.state = self.driver.instance(self.root)
+        self.state.mkdir()
+        (self.state / 'instance.json').write_text('{}')
+        self.launcher = Mock()
+        self.launcher.record.return_value = {'status': 'failed-start', 'mode': 'system'}
+        self.launcher.owned_container.return_value = {'Id': 'owned-id', 'State': {'Running': True}}
+
+    def test_failed_start_queries_only_owned_private_daemons_and_redacts_output(self):
+        def run(command, **kwargs):
+            self.assertEqual(command[:3], ['docker', 'exec', 'owned-id'])
+            self.assertEqual(kwargs['timeout'], 5)
+            self.assertEqual(kwargs['stderr'], subprocess.DEVNULL)
+            if command[3] == 'systemctl':
+                self.assertEqual(command[4:7], ['show', 'docker.service', 'containerd.service'])
+                self.assertNotIn('--property=Environment', command)
+                text = 'Id=docker.service\nMainPID=23\nActiveState=active\nEnvironment=private-secret\n'
+            else:
+                self.assertEqual(command[3], 'journalctl')
+                self.assertIn('--unit=docker.service', command)
+                self.assertIn('--unit=containerd.service', command)
+                self.assertIn('--lines=200', command)
+                self.assertNotIn('--all', command)
+                text = json.dumps({'MESSAGE': 'failed to dial private-secret context deadline exceeded',
+                    '_SYSTEMD_UNIT': 'docker.service', '_PID': '23', '__REALTIME_TIMESTAMP': '12345'}) + '\n'
+            kwargs['stdout'].write(text.encode())
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(self.driver, 'workbench_launcher', return_value=self.launcher), \
+                patch.object(self.driver.subprocess, 'run', side_effect=run) as calls:
+            self.driver.capture_startup_daemons(self.root)
+        self.assertEqual(calls.call_count, 2)
+        self.launcher.record.assert_called_once_with(self.state)
+        self.launcher.owned_container.assert_called_once_with(self.launcher.record.return_value)
+        path, = (self.state / 'output').glob('startup-daemons-*.log')
+        evidence = json.loads(path.read_text())
+        self.assertEqual(evidence['units']['rows'], [{'Id': 'docker.service'}, {'MainPID': '23'}, {'ActiveState': 'active'}])
+        self.assertEqual(evidence['journal']['rows'][0]['terms'], ['context deadline exceeded', 'failed to dial'])
+        self.assertEqual(evidence['journal']['rows'][0]['unit'], 'docker.service')
+        self.assertNotIn('private-secret', path.read_text())
+        destination = self.root / 'retained'
+        self.driver.diagnostics(self.root, destination)
+        self.assertEqual((destination / path.name).read_bytes(), path.read_bytes())
+
+    def test_timeout_is_recorded_without_retry_or_secret_error_contents(self):
+        with patch.object(self.driver.subprocess, 'run', side_effect=subprocess.TimeoutExpired('private-secret', 5)) as run:
+            evidence = self.driver.startup_daemons('owned-id')
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(evidence['units'], {'error': 'TimeoutExpired'})
+        self.assertEqual(evidence['journal'], {'error': 'TimeoutExpired'})
+        self.assertNotIn('private-secret', json.dumps(evidence))
+
+    def test_success_build_stopped_and_foreign_containers_cannot_be_queried(self):
+        for data in ({'mode': 'system', 'status': 'running'}, {'mode': 'build', 'status': 'failed-start'}):
+            self.launcher.record.return_value = data
+            with patch.object(self.driver, 'workbench_launcher', return_value=self.launcher), \
+                    patch.object(self.driver, 'startup_daemons') as query:
+                self.driver.capture_startup_daemons(self.root)
+            query.assert_not_called()
+        self.launcher.record.return_value = {'status': 'failed-start', 'mode': 'system'}
+        self.launcher.owned_container.return_value = {'Id': 'owned-id', 'State': {'Running': False}}
+        with patch.object(self.driver, 'workbench_launcher', return_value=self.launcher), \
+                patch.object(self.driver, 'startup_daemons') as query:
+            self.driver.capture_startup_daemons(self.root)
+        query.assert_not_called()
+        self.launcher.owned_container.side_effect = ValueError('foreign container')
+        with patch.object(self.driver, 'workbench_launcher', return_value=self.launcher), \
+                patch.object(self.driver, 'startup_daemons') as query:
+            with self.assertRaisesRegex(ValueError, 'foreign'):
+                self.driver.capture_startup_daemons(self.root)
+        query.assert_not_called()
+
+    def test_diagnostic_output_cannot_escape_instance(self):
+        outside = self.root / 'unrelated'; outside.mkdir()
+        (self.state / 'output').symlink_to(outside, target_is_directory=True)
+        with patch.object(self.driver, 'workbench_launcher', return_value=self.launcher), \
+                patch.object(self.driver, 'startup_daemons', return_value={}):
+            with self.assertRaisesRegex(ValueError, 'escaping'):
+                self.driver.capture_startup_daemons(self.root)
+        self.assertEqual(list(outside.iterdir()), [])
 
 
 if __name__ == '__main__':
