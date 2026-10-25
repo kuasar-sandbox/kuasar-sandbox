@@ -333,6 +333,11 @@ class ArtifactExecutionContracts(unittest.TestCase):
         (self.root / 'bin').mkdir(parents=True)
         source = Path(__file__).resolve().parents[2] / 'test/e2e'
         shutil.copytree(source / 'lib', self.root / 'test/e2e/lib')
+        # Selected cases load the same sealed platform helpers as real workspaces.
+        platform_helpers = self.root / 'test/e2e/lib/platform'
+        platform_helpers.mkdir()
+        for name in ('failure-diagnostics.sh', 'failure_diagnostics.py'):
+            shutil.copy2(source / 'platform/lib' / name, platform_helpers / name)
         shutil.copy2(source / 'e2e', self.root / 'test/e2e/e2e')
         spec = importlib.util.spec_from_file_location('prepared_inputs', source / 'lib/workspace.py')
         self.inputs = importlib.util.module_from_spec(spec)
