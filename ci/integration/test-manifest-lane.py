@@ -39,13 +39,13 @@ def manifest(preview=False):
 class FakeReferences:
     def __init__(self):
         self.published = {}
-        self.aggregates = {'release-v1.2.2': dict(sha='b' * 40)}
+        self.aggregates = {'release-v1.2.2': dict(sha='b' * 40, validation={'x86_64': {}, 'aarch64': {}})}
         self.trees = {}
 
     def unit(self, name, tag):
         return self.published.get((name, tag), dict(state='pending-publication', sha=None, release=None))
 
-    def aggregate(self, version):
+    def aggregate(self, version, *, predecessor=False):
         return self.aggregates.get(version)
 
     def tree(self, repo, sha):
@@ -228,6 +228,47 @@ class ReferenceTests(unittest.TestCase):
         refs.trees[repo, SHA]['entries']['pkg/flatten/a.go'] = entry('different')
         with self.assertRaisesRegex(ValueError, 'linked dependency inputs'):
             subject.check_plan('release-v1.2.3-preview.20261026', previous, components, 'main', refs)
+
+    def test_historical_predecessor_keeps_x86_scope_without_relaxing_current_selection(self):
+        version, previous, components = subject.selection.parse_manifest(manifest(), 'fixture', False)
+        legacy = 'version: ' + previous + '\ncomponents:\n' + ''.join(
+            f'  {name}: {tag}\n' for name, tag in components.items())
+        names = ['SHA256SUMS', 'platform-' + previous + '.tar.gz'] + [
+            subject.release.archive_name(name, tag, 'x86_64') for name, tag in components.items()]
+        state = dict(id=1, tag_name=previous, target_commitish=SHA, draft=False, prerelease=False,
+                     assets=[dict(id=index, name=name, state='uploaded', size=10, digest='sha256:' + 'd' * 64)
+                             for index, name in enumerate(names, 1)])
+        run = dict(id=2, status='completed', conclusion='success', html_url='https://example.test/run',
+                   display_title=subject.release.aggregate_run_title(previous, SHA))
+        def publication(endpoint):
+            return state if endpoint.endswith('/releases/tags/' + previous) else None
+        with patch.object(subject.release, 'api_optional', side_effect=publication), \
+             patch.object(subject.release, 'tag_sha', return_value=SHA), \
+             patch.object(subject.release, 'aggregate_runs', return_value=[run]), \
+             patch.object(subject.resolver, 'source_text', return_value=legacy) as source:
+            refs = subject.References()
+            with patch.object(refs, 'unit', return_value=dict(state='pending-publication', sha=None, release=None)):
+                plan = subject.check_plan(version, previous, components, 'main', refs)
+            self.assertEqual(plan['predecessor_sha'], SHA)
+            self.assertEqual(plan['predecessor_architectures'], ['x86_64'])
+            self.assertEqual(len(plan['pending']), 6)
+            # An explicit historical read is not cached as a usable current
+            # dual baseline, even when its tag is identical.
+            with self.assertRaisesRegex(ValueError, 'explicit ARM initialization'):
+                refs.aggregate(previous)
+            # The existing reader still rejects damaged identity/digests and
+            # missing declared workbench assets even in predecessor mode.
+            state['target_commitish'] = 'b' * 40
+            with self.assertRaisesRegex(ValueError, 'identity mismatch'):
+                subject.References().aggregate(previous, predecessor=True)
+            state['target_commitish'] = SHA
+            state['assets'][0]['digest'] = None
+            with self.assertRaisesRegex(ValueError, 'unverified asset'):
+                subject.References().aggregate(previous, predecessor=True)
+            state['assets'][0]['digest'] = 'sha256:' + 'd' * 64
+            source.return_value = 'delivery: workbench-v1\n' + legacy
+            with self.assertRaisesRegex(ValueError, 'complete workbench asset set'):
+                subject.References().aggregate(previous, predecessor=True)
 
     def test_already_published_aggregate_cannot_select_other_units(self):
         refs = FakeReferences()

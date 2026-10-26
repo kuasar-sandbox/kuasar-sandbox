@@ -85,7 +85,11 @@ Manifest qualification parses both maintained files at the exact head and merge
 with the existing release parser: fields, unit tags, Stable/Preview versions,
 predecessor ordering, pair consistency and maintenance-line ownership must be
 valid. The existing aggregate reader authenticates declared published predecessors
-and any already published selection. Published components use the existing
+and any already published selection. A historical AMD64-only predecessor keeps
+its original x86 validation scope; this comparison reference is not promoted to
+a usable dual baseline. Already published current selections and new declared
+Workbench releases retain their complete architecture/asset requirements.
+Published components use the existing
 exact tag/Release/dual-architecture asset checks. Preview source and dependency
 bindings remain required; a changed published dependency may reuse a consumer
 only when the existing linked-input projection is identical in complete source

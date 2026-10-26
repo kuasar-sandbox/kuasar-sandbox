@@ -41,8 +41,11 @@ class References:
         return dict(state='pending-publication', sha=sha, release=state)
 
     @lru_cache(maxsize=None)
-    def aggregate(self, version):
-        return resolver.aggregate(version)
+    def aggregate(self, version, *, predecessor=False):
+        # A predecessor is historical comparison evidence, not the binary
+        # baseline for a new dual-architecture execution. Keep its original
+        # declared scope; current selections retain the default dual contract.
+        return resolver.aggregate(version, require_dual=not predecessor)
 
     @lru_cache(maxsize=None)
     def tree(self, repository, sha):
@@ -63,7 +66,7 @@ def check_plan(version, previous, components, base_ref, references):
         line = re.fullmatch(r'release/v([0-9]+)\.([0-9]+)\.x', base_ref)
         require(line is not None and version.startswith(f'release-v{line[1]}.{line[2]}.'),
                 'aggregate version does not belong to the source maintenance line')
-    predecessor = references.aggregate(previous) if previous else None
+    predecessor = references.aggregate(previous, predecessor=True) if previous else None
     require(previous is None or predecessor is not None, 'declared predecessor lacks published validation evidence')
     published = references.aggregate(version)
     if published:
@@ -120,6 +123,7 @@ def check_plan(version, previous, components, base_ref, references):
         units[unit.name] = row
     return dict(version=version, previous=previous,
                 predecessor_sha=predecessor['sha'] if predecessor else None,
+                predecessor_architectures=sorted(predecessor['validation']) if predecessor else [],
                 published_aggregate_sha=published['sha'] if published else None,
                 units=units, pending=pending,
                 acceptance='release exact-assets E2E and Workbench remain required')
