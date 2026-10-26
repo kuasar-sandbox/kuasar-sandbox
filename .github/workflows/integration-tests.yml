@@ -166,6 +166,9 @@ jobs:
             ci/integration/
             release/
             test/e2e/*.py
+            test/e2e/lib/capabilities.py
+            test/e2e/lib/capability_probe.py
+            test/e2e/lib/helper_contract.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Classify exact trees and check documentation before large downloads
@@ -637,6 +640,9 @@ jobs:
             ci/integration/
             release/
             test/e2e/*.py
+            test/e2e/lib/capabilities.py
+            test/e2e/lib/capability_probe.py
+            test/e2e/lib/helper_contract.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Bind docs success to this exact source set and attempt

@@ -64,6 +64,66 @@ print('source and exact-assets plan/workspace validation PASS')
 
 
 class SparseRuntime(unittest.TestCase):
+    def test_manifest_policy_reads_complete_capability_evidence(self):
+        jobs = yaml.safe_load((ROOT / '.github/workflows/integration-tests.yml').read_text())['jobs']
+        modules = ('capabilities.py', 'capability_probe.py', 'helper_contract.py')
+        smoke = r'''
+import copy, importlib.util
+from pathlib import Path
+import artifacts
+spec = importlib.util.spec_from_file_location('routing_fixture', Path(__file__).with_name('test-capability-routing.py'))
+fixture = importlib.util.module_from_spec(spec); spec.loader.exec_module(fixture)
+plan = fixture.fixture()
+records = {}
+for arch in artifacts.ARCHES:
+    shards = fixture.result_set(plan, arch)
+    if plan['lanes'][arch]['performance']:
+        shards['performance'] = dict(arch=arch, plan_id=artifacts.identity(plan),
+            test_revisions=plan['test_revisions'], conclusion='success',
+            checks=['working-set-smoke'], provenance_sha256='d' * 64,
+            timings=[dict(case='working-set-smoke', exit_code=0, wall_seconds=1)])
+    records[arch] = artifacts.collect_shard_results(plan, arch, shards)
+assert artifacts.collect_results(plan, records)['plan_id'] == artifacts.check_plan(plan)
+broken = copy.deepcopy(records)
+broken['aarch64']['shards']['supplemental-arm--basic']['timings'][0]['exit_code'] = 1
+try:
+    artifacts.collect_results(plan, broken)
+except ValueError:
+    pass
+else:
+    raise AssertionError('failed execution evidence accepted')
+print('complete capability plan and execution evidence PASS')
+'''
+        environment = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', GIT_TERMINAL_PROMPT='0', GCM_INTERACTIVE='never')
+        environment.pop('PYTHONPATH', None)
+        for job in ('resolve', 'results'):
+            with self.subTest(job=job), tempfile.TemporaryDirectory(prefix='sparse-policy-') as directory:
+                checkout = next(s['with'] for s in jobs[job]['steps']
+                                if s.get('with', {}).get('path') == 'docs-policy')
+                self.assertIs(checkout['sparse-checkout-cone-mode'], False)
+                root = Path(directory) / 'policy'
+                subprocess.run(['git', 'clone', '--quiet', '--no-checkout', '--depth=1', ROOT.as_uri(), str(root)],
+                               env=environment, check=True, timeout=120)
+                subprocess.run(['git', '-C', str(root), 'sparse-checkout', 'set', '--no-cone', '--stdin'],
+                               input=checkout['sparse-checkout'], text=True, env=environment, check=True, timeout=30)
+                subprocess.run(['git', '-C', str(root), 'checkout', '--quiet'], env=environment, check=True, timeout=30)
+                for absent in ('test/e2e/cases', 'test/e2e/platform', 'go.mod'):
+                    self.assertFalse((root / absent).exists(), absent)
+                script = root / 'ci/integration/policy-smoke.py'; script.write_text(smoke)
+                def run():
+                    return subprocess.run([sys.executable, '-B', str(script)], cwd=directory,
+                                          env=environment, text=True, capture_output=True, timeout=30)
+                result = run(); self.assertEqual(result.returncode, 0, result.stderr)
+                for name in modules:
+                    target = root / 'test/e2e/lib' / name
+                    saved = target.read_bytes(); target.unlink()
+                    try:
+                        result = run()
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn(name.removesuffix('.py'), result.stderr)
+                    finally:
+                        target.write_bytes(saved)
+
     def test_actual_runtime_checkout_patterns(self):
         jobs = yaml.safe_load((ROOT / '.github/workflows/integration-architecture.yml').read_text())['jobs']
         environment = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', GIT_TERMINAL_PROMPT='0', GCM_INTERACTIVE='never')
