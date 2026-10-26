@@ -261,10 +261,9 @@ Release 的 `target_commitish` 是完整且匹配的源码 SHA 时才允许恢�
 
 ## 6. 组件发布 CLI
 
-控制器请求中的 SHA 字段是自动观察的身份，不是人工版本输入。CLI 示例中的 `OWNER_REPOSITORY`、`SOURCE_REF` 和 `PLATFORM_REF` 分别表示 owner 仓库、源码分支和聚合分支。
+Daily 自动观察源码 SHA。手动组件发布可选择精确的历史源码 SHA；版本与依赖选择仍使用 Tag，不使用 SHA 作为版本。CLI 示例中的 `OWNER_REPOSITORY`、`SOURCE_REF` 和 `PLATFORM_REF` 分别表示 owner 仓库、源码分支和聚合分支。
 
-组件 workflow 始终从仓库 `main` 加载受信任工具,但必须显式传入实际源码分支和精确
-分支 HEAD SHA。SHA 由控制器或 GitHub API 自动读取，不能手工作为版本填写。以下示例定义匹配的仓库与分支，用于自动身份查询和派发；自动 Daily 提供相同输入：
+组件 workflow 始终从仓库 `main` 加载受信任工具，但必须显式传入允许的源码分支及该分支 first-parent 历史中的精确提交 SHA。以下示例定义匹配的仓库与分支，用于自动身份查询和派发；自动 Daily 提供相同输入：
 
 ```bash
 OWNER_REPOSITORY=kuasar-sandbox/accelerator
@@ -293,8 +292,7 @@ gh workflow run release.yml \
 orchestrator 接收 `accelerator_version`、`connector_version` 和 `sandboxer_version`;
 runtime 只接收与镜像实际载荷一致的 `accelerator_version` 和 `sandboxer_version`;
 vmlinux 不接收内部组件版本输入。runtime 与 vmlinux 使用各自工作流。
-预检要求 `source_sha` 仍是 `source_ref` 的 HEAD,构建恢复预检按分支获取并验证的 run artifact,最终 Tag 也指向该
-SHA。依赖参数必须对应已经完整发布的精确 Release；预检按所选 Tag 获取并固定校验后的源码输入。每种架构在独立的原生 job 中构建。
+预检获取允许的 `main` 或匹配版本线的 `release/vMAJOR.MINOR.x` 分支，要求 `source_sha` 属于其 first-parent 历史。Daily 默认仍选择分支 HEAD；手动指定历史提交时，产品、测试、helper 声明、配方与文档全部来自该提交，不从新版补齐缺失契约。预检保存准入时的分支 tip、所选 SHA/tree、分支、单元与版本，并单独记录可信框架及 workflow 修订。freeze 复用这份不可变准入输入，不再次抓取推进中的分支；双架构构建恢复同一份源码，最终 Tag 指向所选提交。从 main 准入的历史提交仍按主线处理 Latest，维护线语义不变。Preview 不是所有组件发布的强制前置条件；晋级已验收 Preview 时，操作者仍须核对每个组件源码与依赖元组对应公开绑定。PR merge-ref 与聚合 branch-HEAD 的严格准入不变。依赖参数必须对应已经完整发布的精确 Release；预检按所选 Tag 获取并固定校验后的源码输入。每种架构在独立的原生 job 中构建。
 Preview 还要求 `aggregate_sha` 所指平台提交中的
 `daily-preview.yaml/version + preview_version` 精确等于聚合版本,且
 `components.<unit>` 精确等于待发布 Tag。预检固定这份清单绑定；取得 publish concurrency lock 后，发布核验固定证据并检查实时 Stable 封线状态，不重新获取更新后的分支清单。所有组件 Release notes 都记录源码分支、源码

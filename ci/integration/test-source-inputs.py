@@ -46,6 +46,179 @@ class FixedInputs(unittest.TestCase):
         self.env = {'GIT_CONFIG_COUNT': '1', 'GIT_CONFIG_KEY_0': f'url.{self.remote}.insteadOf',
                     'GIT_CONFIG_VALUE_0': 'https://github.com/kuasar-sandbox/connector.git'}
 
+    def producer(self):
+        spec = importlib.util.spec_from_file_location('tested_producer', subject.ROOT / 'release/producer-inputs.py')
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        subject.tag_sources.git(self.remote, 'branch', '-M', 'main')
+        return module
+
+    def admit_producer(self, producer, sha=None, source_ref='main', version='v1.2.3', name='admission.tar'):
+        archive = self.root / name
+        with patch.dict(os.environ, self.env):
+            producer.admit('connector', source_ref, sha or self.sha, version,
+                           'kuasar-sandbox/connector', archive)
+        return archive
+
+    def test_producer_historical_commit_survives_branch_advance_and_remote_removal(self):
+        producer = self.producer(); git = subject.tag_sources.git
+        before = git(self.remote, 'ls-tree', '-r', self.sha)
+        (self.remote / 'newer-helper.py').write_text('must not fill an old contract\n')
+        (self.remote / 'README.md').write_text('new docs must not replace selected docs\n')
+        git(self.remote, 'add', '.'); git(self.remote, 'commit', '-qm', 'new main')
+        admitted_tip = git(self.remote, 'rev-parse', 'HEAD')
+        admission = self.admit_producer(producer)
+        git(self.remote, 'commit', '--allow-empty', '-qm', 'advance after admission')
+        shutil.rmtree(self.remote)
+        capsule = self.root / 'producer.tar'
+        with patch.object(subject, 'fetch_named', side_effect=AssertionError('must not refetch')):
+            producer.freeze('connector', 'main', self.sha, [], capsule, admission, 'v1.2.3')
+        transport = self.root / 'inspect'; subject.transport.extract(capsule, transport)
+        receipt = json.loads((transport / 'producer-records.json').read_text())
+        self.assertEqual(receipt['admission']['source']['admitted_tip'], admitted_tip)
+        self.assertEqual(receipt['admission']['source']['mode'], 'first-parent')
+        self.assertEqual(receipt['admission']['control'], producer.producer_sources.control_identity())
+        for arch in artifacts.ARCHES:
+            target = self.root / arch
+            producer.restore(capsule, 'connector', self.sha, target)
+            self.assertEqual(git(target / 'connector', 'ls-tree', '-r', 'HEAD'), before)
+            self.assertFalse((target / 'connector/newer-helper.py').exists())
+            self.assertEqual(git(target / 'connector', 'branch', '--show-current'), '')
+
+    def test_producer_accepts_head_and_matching_maintenance_history(self):
+        producer = self.producer(); git = subject.tag_sources.git
+        git(self.remote, 'branch', 'release/v1.2.x')
+        for ref in ('main', 'release/v1.2.x'):
+            with self.subTest(ref=ref):
+                archive = self.admit_producer(producer, source_ref=ref, name=ref.replace('/', '-') + '.tar')
+                output = self.root / ref.replace('/', '-')
+                subject.transport.extract(archive, output)
+                record = json.loads((output / 'admission.json').read_text())['source']
+                self.assertEqual(record['source_ref'], ref)
+                self.assertEqual(record['admitted_tip'], self.sha)
+
+    def test_producer_cli_admits_all_six_unit_names(self):
+        producer = self.producer()
+        for unit in artifacts.UNITS:
+            with self.subTest(unit=unit):
+                repository = subject.tag_sources.repository(unit)
+                version = (unit + '-' if unit in ('runtime', 'vmlinux') else '') + 'v1.2.3'
+                archive = self.root / (unit + '.tar')
+                environment = {**os.environ, **self.env,
+                               'GIT_CONFIG_VALUE_0': 'https://github.com/' + repository + '.git'}
+                subprocess.run([sys.executable, '-B', producer.__file__, 'admit', unit, 'main',
+                                self.sha, version, repository, str(archive)], env=environment, check=True)
+                target = self.root / unit
+                subject.transport.extract(archive, target)
+                record = json.loads((target / 'admission.json').read_text())['source']
+                self.assertEqual(record['unit'], unit)
+                self.assertEqual(record['repository'], repository)
+                self.assertEqual(record['version'], version)
+
+    def test_historical_producer_keeps_exact_dependency_tags(self):
+        producer = self.producer(); admission = self.admit_producer(producer)
+        dependency = self.root / 'dependency'
+        sha = fixture(dependency, 'accelerator', 'v1.2.3')
+        subject.tag_sources.git(dependency, 'tag', 'v1.2.4')
+        env = {**self.env, 'GIT_CONFIG_COUNT': '2', 'GIT_CONFIG_KEY_1': f'url.{dependency}.insteadOf',
+               'GIT_CONFIG_VALUE_1': 'https://github.com/kuasar-sandbox/accelerator.git'}
+        capsule = self.root / 'producer.tar'
+        with patch.dict(os.environ, env):
+            producer.freeze('connector', 'main', self.sha, [('accelerator', 'v1.2.3', sha)],
+                            capsule, admission, 'v1.2.3')
+        shutil.rmtree(self.remote); shutil.rmtree(dependency)
+        producer.restore(capsule, 'connector', self.sha, self.root / 'exact', [('accelerator', 'v1.2.3', sha)])
+        for dependencies in ([], [('accelerator', 'v1.2.4', sha)], [('accelerator', 'v1.2.3', 'f' * 40)]):
+            with self.subTest(dependencies=dependencies), self.assertRaisesRegex(ValueError, 'differs from preflight'):
+                producer.restore(capsule, 'connector', self.sha, self.root / 'bad', dependencies)
+
+    def test_producer_rejects_side_parent_even_when_reachable_from_merge(self):
+        producer = self.producer(); git = subject.tag_sources.git
+        git(self.remote, 'checkout', '-qb', 'side')
+        (self.remote / 'side').write_text('side')
+        git(self.remote, 'add', '.'); git(self.remote, 'commit', '-qm', 'side')
+        side = git(self.remote, 'rev-parse', 'HEAD')
+        git(self.remote, 'checkout', '-q', 'main')
+        git(self.remote, 'merge', '--no-ff', '-qm', 'merge side', 'side')
+        with self.assertRaisesRegex(ValueError, 'first-parent'):
+            self.admit_producer(producer, sha=side)
+        self.assertFalse((self.root / 'admission.tar').exists())
+
+    def test_producer_rejects_unrelated_or_missing_commit(self):
+        producer = self.producer(); git = subject.tag_sources.git
+        git(self.remote, 'checkout', '--orphan', 'unrelated')
+        git(self.remote, 'commit', '-qm', 'unrelated root')
+        unrelated = git(self.remote, 'rev-parse', 'HEAD')
+        for sha in (unrelated, 'f' * 40):
+            with self.subTest(sha=sha), self.assertRaisesRegex(ValueError, 'first-parent'):
+                self.admit_producer(producer, sha=sha)
+
+    def test_producer_request_validation_all_units_and_negative_cases(self):
+        producer = self.producer(); validate = producer.producer_sources.validate_request
+        for unit in artifacts.UNITS:
+            prefix = unit + '-' if unit in ('runtime', 'vmlinux') else ''
+            repo = subject.tag_sources.repository(unit)
+            for suffix in ('', '-preview.20261026', '-preview.20261026.2'):
+                validate(unit, 'main', self.sha, prefix + 'v1.2.3' + suffix, repo)
+                validate(unit, 'release/v1.2.x', self.sha, prefix + 'v1.2.3' + suffix, repo)
+        invalid = [
+            ('connector', 'main', self.sha, 'v1.2.3', 'kuasar-sandbox/sandboxer'),
+            ('platform', 'main', self.sha, 'v1.2.3', 'kuasar-sandbox/kuasar-sandbox'),
+            ('connector', 'refs/heads/main', self.sha, 'v1.2.3', 'kuasar-sandbox/connector'),
+            ('connector', 'refs/pull/1/merge', self.sha, 'v1.2.3', 'kuasar-sandbox/connector'),
+            ('connector', 'release/v01.2.x', self.sha, 'v1.2.3', 'kuasar-sandbox/connector'),
+            ('connector', 'release/v1.2.x', self.sha, 'v1.3.0', 'kuasar-sandbox/connector'),
+            ('connector', 'main', 'HEAD', 'v1.2.3', 'kuasar-sandbox/connector'),
+            ('connector', 'main', 'A' * 40, 'v1.2.3', 'kuasar-sandbox/connector'),
+            ('connector', 'main', self.sha, 'runtime-v1.2.3', 'kuasar-sandbox/connector'),
+        ]
+        for request in invalid:
+            with self.subTest(request=request), self.assertRaises(ValueError): validate(*request)
+
+    def test_producer_missing_branch_does_not_fetch_raw_sha(self):
+        producer = self.producer()
+        with self.assertRaisesRegex(ValueError, 'git fetch failed'):
+            self.admit_producer(producer, source_ref='release/v1.2.x')
+        self.assertFalse((self.root / 'admission.tar').exists())
+
+    def test_producer_archive_rejects_conflicting_request_and_control(self):
+        producer = self.producer(); admission = self.admit_producer(producer)
+        for ref, sha, version in [('main', 'f' * 40, 'v1.2.3'), ('release/v1.2.x', self.sha, 'v1.2.3'),
+                                  ('main', self.sha, 'v1.2.4'), ('main', self.sha, None)]:
+            with self.subTest(ref=ref, sha=sha, version=version), self.assertRaisesRegex(ValueError, 'differs from release request'):
+                producer.freeze('connector', ref, sha, [], self.root / 'bad.tar', admission, version)
+        with patch.object(producer.producer_sources, 'control_identity', return_value={'framework_sha': 'f' * 40}), \
+             self.assertRaisesRegex(ValueError, 'control identity changed'):
+            producer.freeze('connector', 'main', self.sha, [], self.root / 'bad.tar', admission, 'v1.2.3')
+
+    def test_producer_archive_detects_source_or_evidence_tampering(self):
+        producer = self.producer(); admission = self.admit_producer(producer)
+        for field, value in [('tree', 'f' * 40), ('admitted_tip', 'f' * 40), ('mode', 'arbitrary-sha')]:
+            with self.subTest(field=field):
+                root = self.root / field
+                subject.transport.extract(admission, root)
+                receipt = json.loads((root / 'admission.json').read_text())
+                receipt['source'][field] = value
+                (root / 'admission.json').write_text(json.dumps(receipt))
+                bad = self.root / (field + '.tar')
+                with tarfile.open(bad, 'w') as archive:
+                    for path in root.iterdir(): archive.add(path, arcname=path.name)
+                with self.assertRaises(ValueError):
+                    producer.freeze('connector', 'main', self.sha, [], self.root / 'bad.tar', bad, 'v1.2.3')
+        root = self.root / 'dirty'; subject.transport.extract(admission, root)
+        (root / 'source/README.md').write_text('tampered')
+        with tarfile.open(self.root / 'dirty.tar', 'w') as archive:
+            for path in root.iterdir(): archive.add(path, arcname=path.name)
+        with self.assertRaisesRegex(ValueError, 'modified inputs'):
+            producer.freeze('connector', 'main', self.sha, [], self.root / 'bad.tar', self.root / 'dirty.tar', 'v1.2.3')
+
+    def test_historical_producer_does_not_relax_named_ref_admission(self):
+        self.producer(); git = subject.tag_sources.git
+        git(self.remote, 'commit', '--allow-empty', '-qm', 'advance')
+        for ref in ('refs/heads/main', 'refs/pull/23/merge'):
+            git(self.remote, 'update-ref', ref, git(self.remote, 'rev-parse', 'HEAD'))
+            with patch.dict(os.environ, self.env), self.assertRaisesRegex(ValueError, 'identity changed'):
+                subject.fetch_named(self.root / ref.replace('/', '-'), 'kuasar-sandbox/connector', ref, self.sha)
+
     def test_platform_checkout_origin_suffix_and_wrong_repository(self):
         root = self.root / 'platform'
         root.mkdir()
