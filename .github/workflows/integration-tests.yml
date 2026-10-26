@@ -163,7 +163,9 @@ jobs:
           path: docs-policy
           sparse-checkout: |
             ci/check_docs.py
-            ci/integration/docs_lane.py
+            ci/integration/
+            release/
+            test/e2e/*.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Classify exact trees and check documentation before large downloads
@@ -181,7 +183,7 @@ jobs:
             echo 'lane=full' >> "$GITHUB_OUTPUT"
           fi
       - name: Retain exact successful docs evidence
-        if: steps.docs.outputs.lane == 'docs'
+        if: contains(fromJSON('["docs", "manifest"]'), steps.docs.outputs.lane)
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.docs.outputs.artifact }}
@@ -191,7 +193,7 @@ jobs:
       - name: Check native Docker image-store identity without running a container
         if: >-
           inputs.mode == 'source' && github.event_name == 'pull_request' &&
-          inputs.candidate_repository == github.repository && steps.docs.outputs.lane != 'docs'
+          inputs.candidate_repository == github.repository && !contains(fromJSON('["docs", "manifest"]'), steps.docs.outputs.lane)
         id: image-store-probe
         timeout-minutes: 3
         run: python3 -B framework/ci/hosted/image-store-probe.py --output image-store-probe.json
@@ -204,7 +206,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: Package exact trusted executor objects
-        if: steps.docs.outputs.lane != 'docs'
+        if: ${{ !contains(fromJSON('["docs", "manifest"]'), steps.docs.outputs.lane) }}
         id: executor
         timeout-minutes: 3
         env:
@@ -222,7 +224,7 @@ jobs:
               output.write(f"tree={receipt['framework_tree']}\n")
           PYTHON
       - name: Upload exact trusted executor
-        if: steps.docs.outputs.lane != 'docs'
+        if: ${{ !contains(fromJSON('["docs", "manifest"]'), steps.docs.outputs.lane) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.executor.outputs.artifact }}
@@ -237,13 +239,13 @@ jobs:
           name: ${{ inputs.release_bundle_artifact }}
           path: aggregate-stage
       - name: Obtain the run's existing Workbench selection
-        if: steps.docs.outputs.lane != 'docs' && inputs.workbench_selection_artifact != ''
+        if: ${{ !contains(fromJSON('["docs", "manifest"]'), steps.docs.outputs.lane) && inputs.workbench_selection_artifact != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.workbench_selection_artifact }}
           path: image-selection
       - name: Resolve exact immutable plan
-        if: steps.docs.outputs.lane != 'docs'
+        if: ${{ !contains(fromJSON('["docs", "manifest"]'), steps.docs.outputs.lane) }}
         id: plan
         env:
           GH_TOKEN: ${{ github.token }}
@@ -275,7 +277,7 @@ jobs:
             echo "workbench=$(cat workbench-selected.txt)"
           } >> "$GITHUB_OUTPUT"
       - name: Upload resolved plan
-        if: steps.docs.outputs.lane != 'docs'
+        if: ${{ !contains(fromJSON('["docs", "manifest"]'), steps.docs.outputs.lane) }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ steps.plan.outputs.artifact }}
@@ -554,7 +556,7 @@ jobs:
           WORKBENCH_RELEASE_RESULT: ${{ needs.workbench-release.result }}
         run: |
           set -euo pipefail
-          if [ "$DOCS_LANE" = docs ]; then
+          if [ "$DOCS_LANE" = docs ] || [ "$DOCS_LANE" = manifest ]; then
             [ "$INTEGRATION_MODE" = source ] && [ "$RESOLVE_RESULT" = success ] \
               && [ "$X86_RESULT" = skipped ] && [ "$ARM_RESULT" = skipped ] \
               && [ "$SOURCE_RESULT" = skipped ] && [ "$WORKBENCH_RESULT" = skipped ] \
@@ -624,7 +626,7 @@ jobs:
           python3 -B framework/ci/integration/artifacts.py results \
             --plan plan/plan.json --results results > validation.json
       - name: Check out the same trusted docs verifier
-        if: needs.resolve.outputs.lane == 'docs'
+        if: contains(fromJSON('["docs", "manifest"]'), needs.resolve.outputs.lane)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kuasar-sandbox/kuasar-sandbox
@@ -632,11 +634,13 @@ jobs:
           path: docs-policy
           sparse-checkout: |
             ci/check_docs.py
-            ci/integration/docs_lane.py
+            ci/integration/
+            release/
+            test/e2e/*.py
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Bind docs success to this exact source set and attempt
-        if: needs.resolve.outputs.lane == 'docs'
+        if: contains(fromJSON('["docs", "manifest"]'), needs.resolve.outputs.lane)
         env:
           DOCS_POLICY_SHA: ${{ needs.resolve.outputs.policy_sha }}
           CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}

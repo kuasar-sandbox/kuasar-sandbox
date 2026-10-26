@@ -196,6 +196,7 @@ test-ci-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-executor-transport.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-actions-jobs.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-docs-lane.py
+	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-manifest-lane.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-source-inputs.py
 	bash ci/integration/test-ci-tools.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-source-owner.py
