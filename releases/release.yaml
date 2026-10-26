@@ -1,10 +1,10 @@
 delivery: workbench-v1
-version: release-v0.1.8
-previous_version: release-v0.1.7
+version: release-v0.1.9
+previous_version: release-v0.1.8
 components:
   accelerator: v0.1.8
   connector: v0.1.6
-  sandboxer: v0.1.8
-  orchestrator: v0.1.8
-  runtime: runtime-v0.1.8
-  vmlinux: vmlinux-v0.1.4
+  sandboxer: v0.1.9
+  orchestrator: v0.1.9
+  runtime: runtime-v0.1.9
+  vmlinux: vmlinux-v0.1.5
