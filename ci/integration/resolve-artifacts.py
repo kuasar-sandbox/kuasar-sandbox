@@ -286,6 +286,11 @@ def published_unit(unit, tag):
     public(repository)
     state = release.api_optional(f"repos/{repository}/releases/tags/{quote(tag, safe='')}")
     sha = exact_sha(release.tag_sha(repository, tag))
+    return check_published_unit(unit, tag, state, sha)
+
+
+def check_published_unit(unit, tag, state, sha):
+    """Validate one observed publication; shared with read-only manifest CI."""
     artifacts.require(isinstance(state, dict) and state.get('tag_name') == tag
                       and state.get('draft') is False
                       and state.get('prerelease') == ('-preview.' in tag)

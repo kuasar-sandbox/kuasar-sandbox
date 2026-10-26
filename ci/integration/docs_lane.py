@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Trusted, metadata-first documentation qualification; never execute candidates."""
+"""Trusted, metadata-first documentation and release-plan qualification; never execute candidates."""
 import argparse
 import base64
 import hashlib
@@ -18,6 +18,7 @@ import check_docs
 REPOSITORIES = {'kuasar-sandbox/' + name for name in
                 ('accelerator', 'connector', 'guest-runtime', 'kuasar-sandbox', 'orchestrator', 'sandboxer')}
 COMMON = {'README.md', 'README_zh.md', 'test/e2e/README.md', 'test/e2e/README_zh.md'}
+MANIFESTS = {'releases/release.yaml', 'releases/daily-preview.yaml'}
 PLATFORM = {f'{base}{suffix}.md' for base in ('workbench/README', 'ci/runner/README', 'test/demo/DEMO')
             for suffix in ('', '_zh')}
 
@@ -61,6 +62,14 @@ def allowed(repository, path):
         path.endswith('.md') and (path.startswith('docs/') or path.startswith('test/e2e/guides/')))
 
 
+def manifest(repository, path):
+    return repository == 'kuasar-sandbox/kuasar-sandbox' and path in MANIFESTS
+
+
+def light_allowed(repository, path):
+    return allowed(repository, path) or manifest(repository, path)
+
+
 def tree(repository, commit):
     doc = api(f'repos/{repository}/git/commits/{sha(commit)}')
     require(doc.get('sha') == commit, 'commit identity mismatch')
@@ -92,7 +101,7 @@ def classify(repository, before, after):
         # New/deleted directories are accounted for by all their leaf entries.
         if (old is None and new['type'] == 'tree') or (new is None and old['type'] == 'tree'):
             continue
-        if not allowed(repository, path) or any(row and (row['type'] != 'blob' or row['mode'] != '100644')
+        if not light_allowed(repository, path) or any(row and (row['type'] != 'blob' or row['mode'] != '100644')
                                                for row in (old, new)):
             return None
         changed.append(path)
@@ -178,36 +187,66 @@ def qualify(records, policy_sha):
         after = tree(repository, row['candidate_sha'])
         head = tree(repository, row['head_sha'])
         changed = classify(repository, before, after)
-        if head['truncated'] or classify(repository, before, head) is None:
+        head_changed = classify(repository, before, head)
+        if head['truncated'] or head_changed is None:
             changed = None
         light = light and changed is not None
         result['repositories'].append({'repository': repository, 'base_tree': before['sha'],
-                                       'candidate_tree': after['sha'], 'head_tree': head['sha'], 'changed': changed})
-        trees.append(after)
+                                       'candidate_tree': after['sha'], 'head_tree': head['sha'], 'changed': changed,
+                                       'head_changed': head_changed})
+        trees.append((head, after))
     if not light or not any(row['changed'] for row in result['repositories']):
         result['conclusion'] = 'success'
         return result
-    result['lane'] = 'docs'
-    for row, head in zip(result['repositories'], trees):
-        row.update(check_tree(row['repository'], head, row['changed']))
+    has_manifests = any(manifest(row['repository'], path) for row in result['repositories']
+                        for path in row['changed'] + row['head_changed'])
+    result['lane'] = 'manifest' if has_manifests else 'docs'
+    references = None
+    if has_manifests:
+        import manifest_lane
+        references = manifest_lane.References()
+    for record, row, (head, candidate) in zip(records, result['repositories'], trees):
+        row.update(check_tree(row['repository'], candidate, row['changed']))
+        if has_manifests and row['repository'] == 'kuasar-sandbox/kuasar-sandbox':
+            # Both proposed head and actual merge must satisfy the maintained
+            # pair. This also rejects deletion or an unchanged symlink sibling.
+            row['manifests'] = {name: manifest_lane.check_tree(value, record['base_ref'], references)
+                                for name, value in (('head', head), ('candidate', candidate))}
     result['conclusion'] = 'failure' if any(row['findings'] for row in result['repositories']) else 'success'
     return result
 
 
 def verify(result, records, policy_sha):
-    require(result.get('schema') == 1 and result.get('lane') == 'docs' and result.get('conclusion') == 'success',
-            'missing successful docs evidence')
+    require(result.get('schema') == 1 and result.get('lane') in ('docs', 'manifest') and result.get('conclusion') == 'success',
+            'missing successful light qualification evidence')
     require(result.get('sources') == records and result.get('policy_sha') == sha(policy_sha) and
             result.get('run_id') == os.environ['GITHUB_RUN_ID'] and
-            result.get('run_attempt') == os.environ['GITHUB_RUN_ATTEMPT'], 'stale docs evidence identity')
+            result.get('run_attempt') == os.environ['GITHUB_RUN_ATTEMPT'], 'stale light qualification identity')
     rows = result.get('repositories', [])
     require([row.get('repository') for row in rows] == [row['repository'] for row in records], 'incomplete docs evidence')
     require(any(row.get('changed') for row in rows), 'empty docs classification')
     for row in rows:
         for name in ('base_tree', 'candidate_tree', 'head_tree'):
             sha(row.get(name))
-        require(isinstance(row.get('changed'), list) and all(allowed(row['repository'], p) for p in row['changed'])
+        require(isinstance(row.get('changed'), list) and all(light_allowed(row['repository'], p) for p in row['changed'])
                 and row.get('findings') == [] and isinstance(row.get('checked_files'), list), 'invalid docs result')
+    has_manifests = any(manifest(row['repository'], path) for row in rows
+                        for path in row['changed'] + row.get('head_changed', []))
+    require((result['lane'] == 'manifest') == has_manifests, 'light lane does not match changed paths')
+    if has_manifests:
+        row = next(row for row in rows if row['repository'] == 'kuasar-sandbox/kuasar-sandbox')
+        require(isinstance(row.get('head_changed'), list) and
+                all(light_allowed(row['repository'], p) for p in row['head_changed']), 'invalid manifest head changes')
+        evidence = row.get('manifests', {})
+        require(set(evidence) == {'head', 'candidate'}, 'missing manifest checks')
+        for checked in evidence.values():
+            require(isinstance(checked, dict) and set(checked) == MANIFESTS, 'incomplete manifest pair')
+            for plan in checked.values():
+                require(isinstance(plan, dict) and isinstance(plan.get('units'), dict) and
+                        set(plan['units']) == {'accelerator', 'connector', 'sandboxer', 'orchestrator', 'runtime', 'vmlinux'} and
+                        isinstance(plan.get('pending'), list) and
+                        plan.get('acceptance') == 'release exact-assets E2E and Workbench remain required',
+                        'missing release-plan evidence')
 
 
 def main():
@@ -223,7 +262,7 @@ def main():
     result = qualify(records, args.policy_sha)
     args.output.write_text(json.dumps(result, sort_keys=True) + '\n')
     if result['conclusion'] != 'success':
-        raise ValueError('documentation checks failed: ' + json.dumps(result['repositories']))
+        raise ValueError('light qualification failed: ' + json.dumps(result['repositories']))
     with open(os.environ['GITHUB_OUTPUT'], 'a') as stream:
         stream.write('lane=' + result['lane'] + '\n')
         stream.write('artifact=integration-docs-' + os.environ['GITHUB_RUN_ID'] + '-' + os.environ['GITHUB_RUN_ATTEMPT'] + '\n')

@@ -80,13 +80,17 @@ sandboxer 库变更同样会重建 `node-ctl`，因为其管理和发布路径�
 未修改产品的 hash 必须等于下载基线；候选产品 hash 必须等于本轮真实 build 输出。
 不要求任意旧编排源码重建与基线天然字节相同。 Guest init 身份按已校验 Runtime 内嵌载荷核对；候选 init 必须进入该载荷，未变基线 Runtime 则保留原内嵌字节。
 
-### 大型下载之前的文档验收
+### 大型下载之前的文档与发布清单验收
 
-源码 PR 解析首先比较主仓和每个已准入关联仓库精确 base、head 与 integration 提交的完整 Git 文件树。只有 `README{,_zh}.md`、`test/e2e/README{,_zh}.md`、`docs/` 和 `test/e2e/guides/` 内普通 `100644` Markdown 修改可走文档路径；platform 另允许 `workbench/README{,_zh}.md`、`ci/runner/README{,_zh}.md` 和 `test/demo/DEMO{,_zh}.md`。混合代码、未知仓库/路径、模式变化、符号链接、截断的树响应和空差异保留完整 CI。缺失精确 commit/tree 身份会使准入失败，不能据此跳过检查。
+源码 PR 解析比较主仓和每个已准入 companion 精确 base、head 与 integration 提交的完整 Git 树。`docs` 档仅允许 `README{,_zh}.md`、`test/e2e/README{,_zh}.md`、`docs/` 和 `test/e2e/guides/` 内普通 `100644` Markdown；platform 另允许 `workbench/README{,_zh}.md`、`ci/runner/README{,_zh}.md` 和 `test/demo/DEMO{,_zh}.md`。`manifest` 档仅增加 platform 的 `releases/release.yaml` 与 `releases/daily-preview.yaml`；可组合上述白名单文档，并执行两类检查。任何候选混入源码、CI/workflow、发布工具、测试、运行配置、未知路径/仓库或非普通文件都保留 full。截断树与空差异也保留 full；缺失精确身份则失败。删除维护清单会使双文件检查失败，未变的 symlink 也不能作为另一份清单输入。
 
-分类政策和检查执行器来自 platform 的可信基线；存在 platform 关联候选时使用其 base。候选不能将自身加入白名单。上线期间，尚不含该执行器的基线仍执行完整 CI。分类在基线资产、源码归档和构建环境下载前进行，只读取树元数据和 Markdown/引用上下文，不执行候选代码。共享 `ci/check_docs.py` 规则检查 UTF-8、本地链接和锚点、双语互链与英文默认，已有英文单语文档仍合法。检查修改文档及引用已重命名、删除或修改目标的未变文档，不将无关文档债务暗中扩入本次检查。外部访问和翻译完整性仍需人工验收。
+分类政策和检查代码来自 platform 可信基线；存在 platform companion 时使用其 base。候选不能将自身加入白名单。基线尚无新清单规则时，清单变更仍走 full；候选工作流通过完整 source gate 测试自身契约，因此实现可在启用前得到验证。分类先于基线资产、源码归档与构建环境下载；两类轻量档均不执行候选代码。
 
-原最终判定仅在成功文档证据匹配当前精确源码集、可信政策、run 和 attempt，且重新核对当前 PR/base/head/关联候选准入后，接受有意跳过的重任务。缺失、取消、空或过期证据不能通过。聚合发布验收始终走完整路径。宣称收益前，须记录真实文档/完整 PR 的 Actions 排队、准备和最终反馈时间。实施 PR 修改可执行政策/工作流，因此自身走完整路径。回退从解析入口移除文档分支、恢复完整调度，不放宽源码准入、必需检查或现有语言选择器政策。
+共享 `ci/check_docs.py` 检查 UTF-8、本地链接和锚点、双语互链与英文默认，已有英文单语文档仍合法。检查修改文档及引用已重命名、删除或修改目标的未变文档，不将无关文档债务扩入本次检查。外部访问和翻译完整性仍需人工验收。
+
+清单检查在精确 head 与 merge 上使用现有发布解析器读取两份维护清单，检查字段、unit tag、Stable/Preview 版本、前驱顺序、双文件一致性和维护线归属。复用现有 aggregate reader 验证声明的已发布前驱及已经发布的当前选择；已发布组件使用现有精确 tag/Release/双架构资产检查。Preview 的源码和依赖绑定仍为必需；已发布依赖改变时，仅当完整源码树中既有链接输入投影一致才可复用消费者。新组件 tag、等待发布的 tag 或 draft 明确记录为待满足发布前提，并保留发布源分支与所选依赖。复用尚未发布的依赖时，记录待执行的链接输入核验。后续发布 coordinator 仍负责冻结未来源码提交并满足这些前提。这是发布计划验证，不表示未来组合已经通过 E2E，也不会在此触发组件发布。
+
+原 finalizer 仅在成功轻量证据匹配当前精确源码集、可信政策、run 和 attempt，且重新核对当前 PR/base/head/companion 准入后，接受有意跳过的重任务。缺失、取消、失败、空或过期证据不能通过。证据保留清单计划、已发布身份与待满足前提。aggregate 的 `exact-assets` 始终保留完整 E2E 和 Workbench 验收。宣称收益前须记录真实 `docs`/`manifest`/`full` Actions 时间。实现 PR 修改可执行政策/工作流，因此自身走 full。回退恢复完整调度，不放宽准入或必需检查。
 
 
 Go EROFS runtime 的 bundle 只需包含 init、envd 和 flatten-ctl，新的聚合制品

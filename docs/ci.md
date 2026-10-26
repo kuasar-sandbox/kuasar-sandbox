@@ -52,38 +52,59 @@ Sandboxer library changes likewise rebuild `node-ctl`, whose management and publ
 
 Product-impact selection also adds consumer tests: accelerator/runtime changes that rebuild `flatten-ctl` select telemetry cases, and sandboxer library changes that rebuild `node-ctl` select `orchestrator.resource-*`. These cases use the plan's exact test-owner revisions and capability-matched lanes; they do not select another main revision. Atomic harness/dependency fixes use the reciprocal companion declaration above to qualify their explicit joint source tuple.
 
-### Documentation qualification before downloads
+### Documentation and manifest qualification before downloads
 
-Source PR resolution first compares the complete exact base, head and integration
-Git trees for the primary and every admitted companion repository. Only ordinary
-`100644` Markdown changes in `README{,_zh}.md`, `test/e2e/README{,_zh}.md`,
-`docs/` and `test/e2e/guides/` may use the docs path. Platform also allows
+Source PR resolution compares the complete exact base, head and integration Git
+trees for the primary and every admitted companion. The `docs` lane permits only
+ordinary `100644` Markdown in `README{,_zh}.md`, `test/e2e/README{,_zh}.md`,
+`docs/` and `test/e2e/guides/`. Platform also allows
 `workbench/README{,_zh}.md`, `ci/runner/README{,_zh}.md` and
-`test/demo/DEMO{,_zh}.md`. Mixed code, unknown repositories/paths, mode changes,
-symlinks, truncated tree responses and an empty diff retain full CI. Missing
-exact commit/tree identities fail admission; they never authorize a skip.
+`test/demo/DEMO{,_zh}.md`. The `manifest` lane adds only platform's
+`releases/release.yaml` and `releases/daily-preview.yaml`; it may include the same
+allowed documentation and runs both checks. Any source, CI/workflow, release
+tooling, test, runtime configuration, unknown path/repository or nonordinary file
+in any candidate retains full CI. Truncated trees and empty changes also retain
+full CI. Missing exact identities fail. Deleting a maintained manifest fails its
+pair validation; a symlink sibling cannot supply a manifest.
 
 Policy and checking code come from the platform's trusted baseline, including
 the platform companion's base when present. A candidate cannot add itself to the
-allowlist. A baseline without this executor uses full CI during rollout. The
-classifier runs before baseline assets, source archives and build environments
-are downloaded. It retrieves tree metadata and Markdown/reference context only,
-and executes no candidate code. The shared `ci/check_docs.py` rules check UTF-8,
-local links and anchors, reciprocal pairs and English defaults. English-only
-documents remain valid. Changed documents and unchanged documents referring to
-renamed/deleted/changed targets are checked; unrelated documentation debt is not
-silently expanded into the focused check. External access and translation
-completeness still require review.
+allowlist. A baseline without the new manifest policy keeps manifest changes on
+full CI. The candidate workflow still tests its own contracts through the full
+source gate, so the implementation can be tested before activation. Classification
+precedes baseline assets, source archives and build environments. No candidate
+code executes in either light lane.
+
+The shared `ci/check_docs.py` rules check UTF-8, local links and anchors,
+reciprocal pairs and English defaults. English-only documents remain valid.
+Changed documents and unchanged documents referring to renamed/deleted/changed
+targets are checked; unrelated documentation debt is not expanded into this
+focused check. External access and translation completeness still require review.
+
+Manifest qualification parses both maintained files at the exact head and merge
+with the existing release parser: fields, unit tags, Stable/Preview versions,
+predecessor ordering, pair consistency and maintenance-line ownership must be
+valid. The existing aggregate reader authenticates declared published predecessors
+and any already published selection. Published components use the existing
+exact tag/Release/dual-architecture asset checks. Preview source and dependency
+bindings remain required; a changed published dependency may reuse a consumer
+only when the existing linked-input projection is identical in complete source
+trees. A new component tag, tag awaiting publication or draft is recorded as a
+pending publication prerequisite, with its release source branch and selected
+dependencies. Reuse against a pending dependency records the outstanding linked-
+input verification. The release coordinator still freezes future source commits
+and satisfies these prerequisites. This is release-plan validation, never a claim
+that a future tuple has passed E2E; no component publication is dispatched here.
 
 The existing finalizer accepts deliberate heavy-job skips only after successful
-docs evidence matches this exact source set, trusted policy, run and attempt,
+light evidence matches this exact source set, trusted policy, run and attempt,
 and current PR/base/head/companion admission is rechecked. Missing, cancelled,
-empty or stale evidence cannot pass. Aggregate release validation always uses
-the full path. Record actual docs/full PR queue, preparation and final feedback
-from Actions before claiming savings. The implementation PR itself follows the
-full path because it changes executable policy/workflows. Rollback removes the
-docs branch from resolution and restores full scheduling; it does not relax
-source admission, required checks or the existing language-selector policy.
+failed, empty or stale evidence cannot pass. Evidence retains the manifest plans,
+published identities and pending prerequisites. Aggregate release `exact-assets`
+always retains its complete E2E and Workbench acceptance. Record actual
+`docs`/`manifest`/`full` Actions timings before claiming savings. The implementation
+PR itself follows full CI because it changes executable policy/workflows.
+Rollback restores full scheduling without relaxing admission or required checks.
 
 
 The Go EROFS runtime requires only init, envd and flatten-ctl inside its bundle.
