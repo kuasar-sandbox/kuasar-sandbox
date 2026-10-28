@@ -189,6 +189,7 @@ test:
 	@for r in $(GO_REPOS); do echo "== test $$r =="; $(MAKE) -C $(ORG)/$$r test || exit 1; done
 
 test-ci-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-dependency-cutover.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-framework-companions.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-capability-routing.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-download-artifact.py

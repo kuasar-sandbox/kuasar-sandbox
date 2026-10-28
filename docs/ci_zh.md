@@ -142,6 +142,12 @@ prepare 导出已经构建的运行时镜像并绑定压缩归档摘要；执行
 参见 [Runner 接入](../ci/runner/README_zh.md#capability-e2e-runners)
 和[用例声明](../test/README_zh.md#静态执行需求)。
 
+### 受审的依赖切换
+
+`ci/integration/dependency-cutovers.json` 默认请求列表为空。仅现有受信 admission **base** 可以启用；候选清单、PR 正文或候选树中的同名文件不能自行授权。每条请求绑定唯一主 PR 的仓库、编号、目标分支及 base/head/integration SHA，以及已经公开完整发布的组件 tag、源码 SHA、Release ID 和完整排序的资产名称/ID/大小/SHA-256 digest。未知字段、重复请求、额外 companion、过期候选、不完整或非公开发布、覆盖候选自身组件均失败关闭。
+
+命中的组件来源通过既有 maintained-delta 路径进入候选组合，重建链接/嵌入的消费者并运行完整 owner source gates 与现有架构能力和凭据排除规则下的 E2E。原聚合仍是已验证的二进制基线，新组合不是已验收聚合；独立 `dependency_cutover` 证据记录受信平台 SHA、配置摘要和精确请求，依赖测试来源使用既有 `release` 角色。最终验收除既有实时候选检查外，还复核当前受信分支仍包含同一请求，tag、Release 和资产身份均未变化；无关请求增补不影响它。实现必须先以空配置通过正常 CI 并合入，再单独审查配置启用。新聚合成为正常基线后删除请求；PR head 改动必须重新审查 pin，不能自动改选。
+
 ## 3. 两条独立架构生命周期
 
 ```text

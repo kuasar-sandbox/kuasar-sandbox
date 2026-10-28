@@ -279,6 +279,113 @@ def qualification_units(selected, maintained):
     return maintained
 
 
+CUTOVER_PATH = "ci/integration/dependency-cutovers.json"
+
+
+def cutover_request(text, records):
+    """Only a reviewed trusted-base record admits a new dependency tuple."""
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            artifacts.require(key not in result, 'duplicate cutover JSON key')
+            result[key] = value
+        return result
+    document = json.loads(text, object_pairs_hook=unique_pairs)
+    artifacts.require(isinstance(document, dict) and set(document) == {'schema', 'requests'}
+                      and type(document['schema']) is int and document['schema'] == 1
+                      and isinstance(document['requests'], list), 'invalid dependency cutover configuration')
+    seen, matched = set(), None
+    candidate_keys = {'repository', 'pull_request_number', 'base_ref', 'base_sha', 'head_sha', 'candidate_sha'}
+    for request in document['requests']:
+        artifacts.require(isinstance(request, dict) and set(request) == {'candidate', 'units'}, 'invalid cutover request')
+        candidate, units = request['candidate'], request['units']
+        artifacts.require(isinstance(candidate, dict) and set(candidate) == candidate_keys
+                          and candidate['repository'] in REPOSITORIES.values()
+                          and type(candidate['pull_request_number']) is int and candidate['pull_request_number'] > 0
+                          and isinstance(candidate['base_ref'], str)
+                          and re.fullmatch(r'main|release/v[0-9]+\.[0-9]+\.x', candidate['base_ref']),
+                          'invalid cutover candidate')
+        for key in ('base_sha', 'head_sha', 'candidate_sha'):
+            exact_sha(candidate[key])
+        identity = (candidate['repository'], candidate['pull_request_number'])
+        artifacts.require(identity not in seen, 'duplicate cutover candidate')
+        seen.add(identity)
+        artifacts.require(isinstance(units, dict) and units and set(units) <= set(artifacts.UNITS), 'invalid cutover units')
+        for unit, pin in units.items():
+            artifacts.require(REPOSITORIES[unit_owner(unit)] != candidate['repository'], 'cutover cannot replace candidate owner')
+            artifacts.require(isinstance(pin, dict) and set(pin) == {'tag', 'sha', 'release_id', 'assets'}, 'invalid cutover pin')
+            source_inputs.tag_sources.validate_tag(unit, pin['tag'])
+            exact_sha(pin['sha'])
+            artifacts.require(type(pin['release_id']) is int and pin['release_id'] > 0, 'invalid cutover release ID')
+            expected = {'SHA256SUMS'} | {artifacts.archive_name(unit, pin['tag'], arch) for arch in artifacts.ARCHES}
+            assets = pin['assets']
+            artifacts.require(isinstance(assets, list) and len(assets) == len(expected), 'invalid cutover asset set')
+            names, ids = [], []
+            for asset in assets:
+                artifacts.require(isinstance(asset, dict) and set(asset) == {'name', 'id', 'size', 'digest'}
+                                  and isinstance(asset['name'], str)
+                                  and type(asset['id']) is int and asset['id'] > 0
+                                  and type(asset['size']) is int and asset['size'] > 0
+                                  and isinstance(asset['digest'], str)
+                                  and re.fullmatch(r'sha256:[0-9a-f]{64}', asset['digest']), 'invalid cutover asset pin')
+                names.append(asset['name']); ids.append(asset['id'])
+            artifacts.require(names == sorted(expected) and len(ids) == len(set(ids)), 'cutover assets must be exact and unique')
+        primary = records[0]
+        if identity == (primary['repository'], primary['pull_request_number']):
+            artifacts.require(len(records) == 1 and candidate == primary, 'cutover candidate identity changed')
+            matched = request
+    return matched
+
+
+def verify_cutover_publication(unit, pin):
+    repository = REPOSITORIES[unit_owner(unit)]
+    public(repository)
+    state = release.api(f"repos/{repository}/releases/tags/{quote(pin['tag'], safe='')}")
+    sha = exact_sha(release.tag_sha(repository, pin['tag']))
+    check_published_unit(unit, pin['tag'], state, sha)
+    assets = sorted(({key: row.get(key) for key in ('name', 'id', 'size', 'digest')}
+                     for row in state['assets']), key=lambda row: row['name'])
+    artifacts.require(sha == pin['sha'] and state.get('id') == pin['release_id'] and assets == pin['assets'],
+                      'cutover publication identity changed: ' + unit)
+
+
+def dependency_cutover(platform_source, base_ref, platform_sha, records):
+    path = platform_source / CUTOVER_PATH
+    if not path.exists() and not path.is_symlink():
+        return None
+    artifacts.require(path.is_file() and not path.is_symlink(), 'cutover configuration must be regular')
+    request = cutover_request(path.read_text(), records)
+    if request is None:
+        return None
+    for unit, pin in request['units'].items():
+        verify_cutover_publication(unit, pin)
+    return {'platform_sha': platform_sha, 'base_ref': base_ref,
+            'configuration_sha256': artifacts.digest(path), 'request': request}
+
+
+def verify_dependency_cutover(plan):
+    """Recheck live trusted configuration and immutable publications at acceptance."""
+    evidence = plan.get('dependency_cutover')
+    if evidence is None:
+        return
+    artifacts.check_plan(plan)
+    artifacts.require(plan['mode'] == 'source' and evidence['platform_sha'] ==
+                      plan['run_inputs']['admission-platform']['sha'], 'cutover admission platform changed')
+    request = evidence['request']
+    artifacts.require(evidence['base_ref'] == plan['candidate_records'][0]['base_ref'], 'cutover branch changed')
+    # Never read a candidate tree. A missing/revoked entry fails closed; unrelated
+    # reviewed entries may change without invalidating this exact request.
+    value = release.api(f"repos/{PLATFORM}/contents/{CUTOVER_PATH}?ref={quote(evidence['base_ref'], safe='')}")
+    artifacts.require(value.get('type') == 'file' and value.get('encoding') == 'base64', 'missing trusted cutover configuration')
+    current = cutover_request(base64.b64decode(value['content'], validate=False).decode(), plan['candidate_records'])
+    artifacts.require(current == request, 'dependency cutover was changed or revoked')
+    for unit, pin in request['units'].items():
+        record = plan['source_records'][unit]
+        artifacts.require(record['tag'] == pin['tag'] and record['sha'] == pin['sha']
+                          and plan['maintained_deltas'].get(unit) == record, 'cutover source differs from reviewed pin')
+        verify_cutover_publication(unit, pin)
+
+
 def published_unit(unit, tag):
     """A selected source delta must already be a complete exact publication."""
     source_inputs.tag_sources.validate_tag(unit, tag)
@@ -401,10 +508,18 @@ def source_plan(framework_sha, input_root):
     maintained = maintained_units(admission_platform, base_ref)
     tag_deltas = {}
     baseline_roots = dict(roots)
-    for unit, tag in qualification_units(selected, maintained).items():
+    cutover = dependency_cutover(admission_platform, base_ref, platform_sha, records)
+    qualified = qualification_units(selected, maintained)
+    if cutover:
+        qualified = dict(qualified, **{unit: pin['tag'] for unit, pin in cutover['request']['units'].items()})
+        artifacts.require(all(tag != selected['units'][unit]['version'] for unit, tag in qualified.items()
+                              if unit in cutover['request']['units']), 'cutover must select a new dependency')
+    for unit, tag in qualified.items():
         if tag == selected['units'][unit]['version']:
             continue
         sha = published_unit(unit, tag)
+        if cutover and unit in cutover['request']['units']:
+            artifacts.require(sha == cutover['request']['units'][unit]['sha'], 'cutover tag moved during resolution')
         path = 'maintained/' + unit
         root = input_root / path
         tag_records[unit] = source_inputs.tag_sources.fetch_unit(root, unit, tag, sha)
@@ -424,7 +539,8 @@ def source_plan(framework_sha, input_root):
         if owner not in owners:
             owners.append(owner)
         if unit != 'vmlinux':
-            sources[owner] = {'repository': row['repository'], 'sha': row['sha'], 'role': 'baseline'}
+            role = 'release' if cutover and unit in cutover['request']['units'] else 'baseline'
+            sources[owner] = {'repository': row['repository'], 'sha': row['sha'], 'role': role}
             tests[owner] = dict(sources[owner])
             changes[owner] = tree_changes(baseline_roots[owner], roots[owner])
     kernel_root = input_root / 'maintained/vmlinux' if 'vmlinux' in tag_deltas else released / 'vmlinux'
@@ -479,6 +595,10 @@ def source_plan(framework_sha, input_root):
     embedded = ["envd"] if "runtime" in tag_deltas or any(path in ("native-deps/deps/build-envd.sh", "native-deps/deps/common.sh", "native-deps/Makefile") for path in guest_changes) else []
     selected_files = source_inputs.cases(roots)
     preserve_baseline_cases(selected.get('case_files'), selected_files, owners)
+    if cutover:
+        # Qualify the entire new source tuple, retaining ordinary architecture
+        # capabilities and credentialed exclusions, not a new aggregate baseline.
+        owners = list(artifacts.OWNERS)
     plan = {"schema": 3, "mode": "source", "run_inputs": run_inputs,
             "source_records": tag_records, "maintained_deltas": tag_deltas, "admission_changes": admission_changes, "framework_sha": exact_sha(framework_sha), "baseline": selected,
             "candidate_records": records, "owners": sorted(owners), "changes": changes,
@@ -489,6 +609,8 @@ def source_plan(framework_sha, input_root):
             "lanes": {arch: {"products": products, "embedded_products": embedded,
                              "performance": ["working-set-smoke"] if arch == "x86_64" and set(owners) & {"platform", "sandboxer"} else [],
                              "selection": artifacts.suite_selection(owners, arch, selected_files, changes=changes)} for arch in artifacts.ARCHES}}
+    if cutover:
+        plan['dependency_cutover'] = cutover
     import helper_inputs
     identities = {}
     for owner, root in roots.items():
@@ -592,10 +714,15 @@ def workbench_requested(plan):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--framework-sha", required=True)
-    parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--verify-cutover", type=Path)
     parser.add_argument("--stage", type=Path)
     parser.add_argument("--workbench-output", type=Path)
     args = parser.parse_args()
+    if args.verify_cutover:
+        verify_dependency_cutover(json.loads(args.verify_cutover.read_text()))
+        return
+    artifacts.require(args.output is not None, "resolution requires --output")
     # The existing event, exact-merge-parent and companion checks remain the
     # admission authority. This command is run only after those checks succeed.
     import shutil

@@ -672,6 +672,13 @@ jobs:
           CANDIDATE_HEAD_SHA: ${{ inputs.head_sha }}
           COMPANION_CANDIDATES: ${{ needs.resolve.outputs.companions }}
         run: bash framework/ci/integration/validate-source-set.sh
+      - name: Recheck reviewed dependency cutover before acceptance
+        if: inputs.mode == 'source' && needs.resolve.outputs.lane == 'full'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -B framework/ci/integration/resolve-artifacts.py \
+            --framework-sha '${{ needs.resolve.outputs.framework_sha }}' --verify-cutover plan/plan.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-validation-${{ github.run_id }}
