@@ -148,6 +148,82 @@ class NarrativeTests(unittest.TestCase):
                 body.binding_text(narrative.text, binding, '\n', reserve_registry_version=self.version, fit_notes=narrative.fit)
         self.assertEqual(binding, original)
 
+    def release_notice(self):
+        path = notes.NOTES / 'release-v0.1.10.md'
+        identity = json.loads(path.read_text().splitlines()[0][len(notes.HEADER):-4])
+        return notes.Narrative('generated', identity['version'], identity['aggregate_sha'], identity['components'])
+
+    def test_release_378_notice_is_prominent_and_keeps_coordinated_upgrade(self):
+        narrative = self.release_notice()
+        self.assertTrue(narrative.text.startswith('# Kuasar Sandbox release-v0.1.10\n\n' + narrative.notice))
+        for required in ('affects all previously released versions',
+                'All older deployments should upgrade to `release-v0.1.10` as soon as possible',
+                '影响此前所有已发布版本', '建议所有旧版部署尽快升级',
+                'Upgrade Sandboxer and Cloud Hypervisor together',
+                '升级时必须一并替换包含修复的 Sandboxer 和 Cloud Hypervisor'):
+            self.assertIn(required, narrative.notice)
+
+    def test_notice_stays_inline_before_link_when_reviewed_body_falls_back(self):
+        narrative = self.release_notice()
+        url = 'https://example.invalid/exact-notes'
+        expected = notes.linked_notes(narrative.version, narrative.units, url, narrative.notice) + '\n'
+        with patch.object(notes, 'immutable_notes_url', return_value=url):
+            actual = narrative.fit(narrative.text + 'Additional reviewed context.\n' * 1000, len(expected))
+        self.assertEqual(actual, expected)
+        self.assertEqual(notes.inline_notice(actual), narrative.notice)
+        self.assertLess(actual.index(narrative.notice), actual.index('[Full release summary'))
+        notes.validate(actual, narrative.version, narrative.units)
+
+    def test_generated_commit_compaction_cannot_change_any_marked_notice_bytes(self):
+        section = ('### sandboxer\nSelected version: `v1` → `v2`.\n'
+            '- `aaaaaaaaaaaa` title ([commit](https://github.com/kuasar-sandbox/sandboxer/commit/' + 'a' * 40 + '))\n'
+            '[Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v1...v2)\n')
+        notice = notes.NOTICE_START + '\n## Important upgrade notice\n' + section + notes.NOTICE_END
+        original = '# Kuasar Sandbox release-v0.1.10\n\n' + notice + '\n' + section
+        compact = notes.compact_commits(original)
+        self.assertEqual(notes.inline_notice(compact), notice)
+        self.assertLess(len(compact), len(original))
+
+    def test_notice_cannot_be_dropped_to_make_room_for_complete_evidence(self):
+        narrative = self.release_notice()
+        url = 'https://example.invalid/exact-notes'
+        bare = notes.linked_notes(narrative.version, narrative.units, url) + '\n'
+        binding = self.binding()
+        before = copy.deepcopy(binding)
+        limit = len(body.binding_text(bare, binding, '\n'))
+        with patch.object(notes, 'immutable_notes_url', return_value=url), patch.object(body, 'MAX_CHARACTERS', limit):
+            with self.assertRaisesRegex(ValueError, 'evidence must not be truncated'):
+                body.binding_text(narrative.text + 'Additional reviewed context.\n' * 1000, binding, '\n', fit_notes=narrative.fit)
+        self.assertEqual(binding, before)
+
+    def test_notice_fallback_preserves_binding_and_registry_reservation(self):
+        narrative = self.release_notice()
+        url = 'https://example.invalid/exact-notes'
+        minimum = notes.linked_notes(narrative.version, narrative.units, url, narrative.notice) + '\n'
+        binding = self.binding()
+        before = copy.deepcopy(binding)
+        # Reserve capacity drives fallback even when the actual binding fits.
+        limit = len(body.binding_text(minimum, binding, '\n')) + 1000
+        with patch.object(notes, 'immutable_notes_url', return_value=url), patch.object(body, 'MAX_CHARACTERS', limit):
+            result = body.binding_text(narrative.text + 'Additional reviewed context.\n' * 1000, binding, '\n',
+                reserve_registry_version=narrative.version, fit_notes=narrative.fit)
+        self.assertIn(narrative.notice, result)
+        self.assertEqual(json.loads(result.split(body.MARKER)[1].split(' -->')[0]), before)
+        self.assertNotIn('registry', binding)
+        self.assertEqual(binding, before)
+
+    def test_notice_markers_must_be_unique_complete_and_immediately_after_title(self):
+        narrative = self.release_notice()
+        for invalid in (
+                narrative.text.replace(notes.NOTICE_END, ''),
+                narrative.text.replace(notes.NOTICE_START, ''),
+                narrative.text.replace(notes.NOTICE_START, notes.NOTICE_START * 2),
+                narrative.text.replace(notes.NOTICE_START, 'Intro prose\n' + notes.NOTICE_START),
+                narrative.text.replace('\n\n' + notes.NOTICE_END, notes.NOTICE_END),
+                narrative.text.replace(notes.NOTICE_START, 'SWAP').replace(notes.NOTICE_END, notes.NOTICE_START).replace('SWAP', notes.NOTICE_END)):
+            with self.subTest(text=invalid[:100]), self.assertRaisesRegex(ValueError, 'release notice'):
+                notes.inline_notice(invalid)
+
     def test_generator_cli_keeps_normal_text_and_adapts_large_commit_inventory(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'notes.md'

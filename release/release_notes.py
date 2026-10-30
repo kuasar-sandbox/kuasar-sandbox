@@ -15,6 +15,8 @@ import publication_body
 ROOT = Path(__file__).resolve().parents[1]
 NOTES = ROOT / 'release/notes'
 HEADER = '<!-- kuasar-release-notes '
+NOTICE_START = '<!-- kuasar-release-notice -->'
+NOTICE_END = '<!-- /kuasar-release-notice -->'
 UNITS = ('accelerator', 'connector', 'sandboxer', 'orchestrator', 'runtime', 'vmlinux')
 HEADINGS = ('Highlights', 'Component versions', 'Supported environment', 'Quick Start',
             'Production deployment', 'Known limitations', 'Security',
@@ -24,6 +26,21 @@ SELECTED = re.compile(r'^Selected version: `([^`\s]+)` → `([^`\s]+)`\.$', re.M
 COMPARISON = re.compile(r'^\[Full comparison\]\((https://github.com/kuasar-sandbox/[^/]+/compare/[^\s)]+)\)$', re.M)
 
 
+def inline_notice(text):
+    """A marked top-level upgrade notice must survive every narrative fallback."""
+    if NOTICE_START not in text and NOTICE_END not in text:
+        return ''
+    if text.count(NOTICE_START) != 1 or text.count(NOTICE_END) != 1:
+        raise ValueError('release notice requires exactly one matching marker pair')
+    before, _, tail = text.partition(NOTICE_START)
+    notice, _, after = tail.partition(NOTICE_END)
+    if (before.strip() != text.splitlines()[0] or not before.startswith('# Kuasar Sandbox ')
+            or not notice.startswith('\n## ') or not notice.endswith('\n')
+            or NOTICE_END in before or (after and not after.startswith('\n'))):
+        raise ValueError('release notice must be a complete block immediately after the title')
+    return NOTICE_START + notice + NOTICE_END
+
+
 def validate(text, version, units):
     lines = text.splitlines()
     required = [f'# Kuasar Sandbox {version}', *('## ' + h for h in HEADINGS)]
@@ -31,10 +48,15 @@ def validate(text, version, units):
     required += ['### ' + unit for unit in UNITS]
     if publication_body.MARKER in text or any(lines.count(line) != 1 for line in required):
         raise ValueError('release notes must retain the exact version, headings, component table and update sections')
+    inline_notice(text)
 
 
 def compact_commits(text):
     """Replace only generated commit rows that retain their full comparison."""
+    notice = inline_notice(text)
+    if notice:
+        before, _, after = text.partition(notice)
+        return before + notice + compact_commits(after)
     parts = re.split(r'(?m)(^### [^\n]+\n)', text)
     for index in range(2, len(parts), 2):
         unit = parts[index - 1].removeprefix('### ').strip()
@@ -68,10 +90,13 @@ def immutable_notes_url(path):
     return f'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/{revision}/{relative}'
 
 
-def linked_notes(version, units, url):
+def linked_notes(version, units, url, notice=''):
     """Keep the delivery contract inline; retain all prose at an immutable URL."""
     docs = f'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/{version}/docs'
-    lines = [f'# Kuasar Sandbox {version}', '',
+    lines = [f'# Kuasar Sandbox {version}', '']
+    if notice:
+        lines += [notice, '']
+    lines += [
         f'[Full release summary and compatibility notes]({url}).', '',
         '## Highlights', '', f'See the [reviewed changes]({url}#highlights).', '',
         '## Component versions', '', '| Release unit | Version |', '|---|---|']
@@ -114,6 +139,7 @@ class Narrative:
                 raise ValueError('reviewed notes source/version/component selection differs from validated stage')
             validate(text, version, units)
         self.text = text
+        self.notice = inline_notice(text) if self.reviewed else ''
 
     def fit(self, prefix, available):
         compact = compact_commits(prefix)
@@ -122,7 +148,7 @@ class Narrative:
                   f'original={len(prefix)}, adjusted={len(compact)}, budget={available}', file=sys.stderr)
             return compact
         if self.reviewed:
-            compact = linked_notes(self.version, self.units, immutable_notes_url(self.path)) + '\n'
+            compact = linked_notes(self.version, self.units, immutable_notes_url(self.path), self.notice) + '\n'
             validate(compact, self.version, self.units)
             if len(compact) <= available:
                 print(f'Release notes: full reviewed prose retained at its publisher commit; '
