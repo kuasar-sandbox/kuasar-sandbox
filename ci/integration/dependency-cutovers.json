@@ -44,8 +44,8 @@
         "pull_request_number": 493,
         "base_ref": "main",
         "base_sha": "4d6d09a047fca8aff898756ba80f8396ebdcddc6",
-        "head_sha": "9cdb4f66f0235125ebbc00bc49d0222a1f402374",
-        "candidate_sha": "ae69d9892f166a434e3453b13652b79411fd7efd"
+        "head_sha": "8d0b71892879b34ca4d8d45de051d9d0df60eead",
+        "candidate_sha": "11d124c93faee553778c7a37b52823cb106d7e04"
       },
       "units": {
         "sandboxer": {
