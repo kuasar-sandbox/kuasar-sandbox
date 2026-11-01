@@ -11,7 +11,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'test/e2e'))
-from package_inputs import PLATFORM_RUNTIME
+from package_inputs import PLATFORM_RUNTIME, guide_inputs
 FIXTURE_GUIDES = {'platform': ['README',
               'docs/quickstart',
               'docs/download',
@@ -137,6 +137,16 @@ class DocumentationPackageTest(unittest.TestCase):
         self.assertEqual((output / 'guide/connector/user/nested/added.md').read_text(),
                          '# New owner guide\n')
         self.assertFalse((output / 'guide/connector/tapfd.md').exists())
+
+    def test_platform_yaml_guide_list_with_legacy_components(self):
+        source = self.root / 'platform'
+        (source / 'releases').mkdir()
+        declaration = source / 'releases/guide-inputs.yaml'
+        declaration.write_text('["README.md"]')
+        self.assertEqual(guide_inputs(source), [Path('README.md')])
+        declaration.write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'invalid guide input list'):
+            guide_inputs(source)
 
     def test_platform_directory_keeps_equal_basenames_in_distinct_subdirectories(self):
         source = self.root / 'platform'

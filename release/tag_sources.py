@@ -124,8 +124,8 @@ def require_owner_guides(sources, *, owner_layout=False):
     from package_inputs import guide_inputs
     for owner, unit in OWNER_UNITS.items():
         source = source_path(sources, unit, owner_layout=owner_layout)
-        declaration = source / 'release/guide-inputs.txt'
-        require(declaration.is_file(), f'{owner} selected tag lacks release/guide-inputs.txt; '
+        require(any((source / path).is_file() for path in ('releases/guide-inputs.yaml', 'release/guide-inputs.txt')),
+                f'{owner} selected tag lacks its guide declaration; '
                 'first cutover requires a normal new component tag, not newer HEAD inputs')
         guide_inputs(source)
 
