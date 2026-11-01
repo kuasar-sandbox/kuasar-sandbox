@@ -29,11 +29,14 @@ def inspect(root, source):
 def owner(root, source):
     inspect(root, source)
     git = tag_sources.git
-    data = contract.regular(root, contract.DECLARATION).read_bytes()
+    path = 'releases/helper-inputs.yaml'
+    if not (root / path).exists() and not (root / path).is_symlink():
+        path = contract.DECLARATION
+    data = contract.regular(root, path).read_bytes()
     declaration = contract.declaration(data.decode())
     result = {'source': source, 'declaration': data.decode(), 'declaration_sha256': contract.digest(data),
               'declaration_blob': contract.blob(data), 'recipe_sha256': None, 'recipe_blob': None}
-    contract.require(git(root, 'rev-parse', 'HEAD:' + contract.DECLARATION) == result['declaration_blob'],
+    contract.require(git(root, 'rev-parse', 'HEAD:' + path) == result['declaration_blob'],
                      'uncommitted helper declaration')
     if declaration['recipe'] is not None:
         recipe = contract.regular(root, declaration['recipe']).read_bytes()

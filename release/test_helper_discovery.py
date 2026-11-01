@@ -229,6 +229,19 @@ class OwnerDiscovery(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((self.root / 'rejected').exists())
 
+    def test_yaml_helper_binds_original_blob_with_legacy_component_tags(self):
+        root = self.roots['platform']
+        path = 'releases/helper-inputs.yaml'
+        (root / 'releases').mkdir()
+        git(root, 'mv', c.DECLARATION, path)
+        git(root, 'commit', '-qm', 'Move platform declaration')
+        self.sources['platform'].update(sha=git(root, 'rev-parse', 'HEAD'), tree=git(root, 'rev-parse', 'HEAD^{tree}'))
+        contract = helper_inputs.discover(self.roots, self.sources)
+        row = contract['owners']['platform']
+        self.assertEqual(row['declaration_blob'], git(root, 'rev-parse', 'HEAD:' + path))
+        self.assertEqual(row['declaration_sha256'], self.contract['owners']['platform']['declaration_sha256'])
+        self.assertEqual(contract['owners']['connector'], self.contract['owners']['connector'])
+
     def test_source_declaration_and_tag_are_independently_bound(self):
         root = self.roots['connector']
         for tag in ('v1.2.3', 'v1.2.4'): git(root, 'tag', tag)
