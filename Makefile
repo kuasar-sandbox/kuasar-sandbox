@@ -37,7 +37,7 @@ E2E_VGW_BIN    ?= $(abspath $(E2E_TOOL_DIR)/versitygw)
 E2E_SUITE_DIR  := $(abspath build/e2e-suite)
 DEMO_DATA_DIR  ?= /var/lib/kuasar-demo
 PYTHON_BIN     ?=
-BIN_INPUTS_MANIFEST := release/bin-inputs.manifest
+BIN_INPUTS_MANIFEST := releases/bin-inputs.yaml
 CI_TIMED       := ci/integration/ci-timed.sh
 GO_REPOS       := accelerator sandboxer guest-runtime connector orchestrator
 ZOT_VERSION    ?= v2.1.17
@@ -86,8 +86,8 @@ e2e-fixtures:
 # binary. Idempotent; missing inputs only warn.
 collect:
 	@rm -rf $(BINDIR); mkdir -p $(BINDIR)
-	@while read repo name; do \
-	  case "$$repo" in ''|\#*) continue ;; esac; \
+	@while read name repo; do \
+	  name=$${name%:}; case "$$name" in ''|\#*) continue ;; esac; \
 	  [ -n "$$repo" ] || continue; \
 	  src="$(ORG)/$$repo/bin/$(TARGET_ARCH)/$$name"; \
 	  if [ -e "$$src" ]; then \
@@ -98,8 +98,8 @@ collect:
 	done < $(BIN_INPUTS_MANIFEST)
 	@if [ "$(HOST_ARCH)" = "$(TARGET_ARCH)" ]; then \
 	   find bin -maxdepth 1 -type l -delete 2>/dev/null || true; \
-	   while read repo name; do \
-	     case "$$repo" in ''|\#*) continue ;; esac; \
+	   while read name repo; do \
+	     name=$${name%:}; case "$$name" in ''|\#*) continue ;; esac; \
 	     [ -n "$$repo" ] || continue; \
 	     [ -e $(BINDIR)/$$name ] && ln -sfn $(TARGET_ARCH)/$$name bin/$$name; \
 	   done < $(BIN_INPUTS_MANIFEST); \
@@ -137,8 +137,8 @@ test-e2e:
 # Aggregate releases validate the already-published archives. This target never
 # invokes a component build; bin/<arch>/ must be populated by the release fetcher.
 verify-prebuilt:
-	@while read repo name; do \
-		case "$$repo" in ''|\#*) continue ;; esac; \
+	@while read name repo; do \
+		name=$${name%:}; case "$$name" in ''|\#*) continue ;; esac; \
 		[ -f "$(SBIN)/$$name" ] || { echo "missing prebuilt release input: $$name" >&2; exit 1; }; \
 	done < $(BIN_INPUTS_MANIFEST)
 
@@ -215,14 +215,14 @@ test-ci-tools:
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
 
 test-release-tools:
-	PYTHONDONTWRITEBYTECODE=1 python3 release/test-download-asset.py
+	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test-download-asset.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/release-source-set.py --sources "$(ORG)" --auto
 	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/test-release-source-set.py
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_tag_selection.py release/test_tag_sources.py
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s release -p 'test_workbench_*.py'
-	PYTHONDONTWRITEBYTECODE=1 python3 release/test_e2e_package.py
-	PYTHONDONTWRITEBYTECODE=1 python3 release/test_helper_discovery.py
-	PYTHONDONTWRITEBYTECODE=1 python3 release/test-environment-tools.py
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/release -p 'test_tag_*.py'
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/release -p 'test_workbench_*.py'
+	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_e2e_package.py
+	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_helper_discovery.py
+	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test-environment-tools.py
 	bash test/demo/test_demo_safety.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_state_assertions.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_process_startup.py
@@ -230,12 +230,10 @@ test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_files_storage.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_build_selection.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_prepared_demo.py
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/test_documentation_package.py
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_selection_test.py release/test_vmlinux_updates.py
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_coordinator_test.py
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_scanner_test.py
-	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest release/preview_gc_test.py
-	bash release/test-release.sh
+	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_documentation_package.py
+	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_vmlinux_updates.py
+	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/release -p '*_test.py'
+	bash test/release/test-release.sh
 
 test-perf-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/perf -p '*_test.py'

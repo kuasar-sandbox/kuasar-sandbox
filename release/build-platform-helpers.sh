@@ -16,9 +16,13 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work"/{bin,tarballs,tmp}
 source "$ROOT/ci/hosted/bootstrap.sh"
-digest=6a667e38d78a08effdf0b7c3c3e4b9929233b333c8a53c16b62eded7d43eeedc
-archive="$work/tarballs/versitygw-1.5.0.tar.gz"
-download https://codeload.github.com/versity/versitygw/tar.gz/refs/tags/v1.5.0 "$archive" "$digest"
+pins="$ROOT/releases/helper-tools.yaml"
+versity_version=$(jq -er .versitygw_version "$pins")
+zot_version=$(jq -er .zot_version "$pins")
+digest=$(jq -er .versitygw_sha256 "$pins")
+[[ "$versity_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$zot_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ && "$digest" =~ ^[0-9a-f]{64}$ ]]
+archive="$work/tarballs/versitygw-$versity_version.tar.gz"
+download "https://codeload.github.com/versity/versitygw/tar.gz/refs/tags/v$versity_version" "$archive" "$digest"
 bash "$ROOT/ci/integration/materialize-source.sh" "$archive" "$work/versitygw"
 touch "$work/versitygw/.extracted"
 BINDIR="$work/bin" BUILD_DIR="$work/build" TARBALL_CACHE="$work/tarballs" TMPDIR="$work/tmp" \
@@ -27,7 +31,7 @@ BINDIR="$work/bin" BUILD_DIR="$work/build" TARBALL_CACHE="$work/tarballs" TMPDIR
     bash "$owner/native-deps/deps/build-versitygw.sh"
 # The upstream owner recipe disables GOWORK for its independent Go module.
 asset="zot-linux-$go_arch-minimal"
-url=https://github.com/project-zot/zot/releases/download/v2.1.17
+url=https://github.com/project-zot/zot/releases/download/v$zot_version
 curl --fail --location --silent --show-error --connect-timeout 20 --max-time 600 \
     "$url/checksums.sha256.txt" -o "$work/checksums"
 expected="$(awk -v name="$asset" '{entry=$2; sub(/^\*/, "", entry); if (entry == name) print $1}' "$work/checksums")"

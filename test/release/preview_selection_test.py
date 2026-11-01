@@ -13,7 +13,7 @@ import textwrap
 import unittest
 
 
-MODULE_PATH = pathlib.Path(__file__).with_name("preview-selection.py")
+MODULE_PATH = pathlib.Path(__file__).resolve().parents[2] / "release/preview-selection.py"
 SPEC = importlib.util.spec_from_file_location("preview_selection", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 preview_selection = importlib.util.module_from_spec(SPEC)

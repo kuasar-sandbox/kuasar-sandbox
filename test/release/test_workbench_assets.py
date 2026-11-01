@@ -9,7 +9,7 @@ import tarfile
 import tempfile
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'release'))
 import selection
 import workbench_assets as subject
 

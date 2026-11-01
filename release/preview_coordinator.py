@@ -946,6 +946,20 @@ def render_manifest(
     return content
 
 
+def retain_preview_notes(current: str, generated: str, relative: str) -> str:
+    """A retry of the same selection retains its reviewed Markdown and formatting."""
+    without_notes, notes = selection.split_notes(current, relative)
+    if not notes:
+        return generated
+    before = selection.read_simple_yaml(without_notes, relative)
+    after = selection.read_simple_yaml(generated, relative)
+    if before == after:
+        return current
+    if all(before[key] == after[key] for key in ("version", "preview_version", "components")):
+        return generated + notes
+    return generated
+
+
 def persist_manifest(content: str, aggregate: str) -> str:
     relative = "releases/daily-preview.yaml"
     local_path = PLATFORM_ROOT / relative
@@ -959,6 +973,7 @@ def persist_manifest(content: str, aggregate: str) -> str:
     decoded = base64.b64decode(str(remote["content"]).replace("\n", "")).decode()
     if decoded != current:
         raise Pending("daily-preview.yaml changed concurrently; rescan")
+    content = retain_preview_notes(current, content, relative)
     if current == content:
         return PLATFORM_SHA
     request = {

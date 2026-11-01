@@ -23,7 +23,7 @@ Kuasar Sandbox 将组件发布与平台聚合发布分开。组件版本描述�
 
 ## 2. 配置规约
 
-每个受维护的平台分支恰好使用两个清单:
+每个受维护的平台分支使用两份版本选择清单：
 
 - `releases/release.yaml`:该分支计划发布的下一个 Stable 聚合版本;
 - `releases/daily-preview.yaml`:该分支当前维护的 Daily Preview 版本。
@@ -375,11 +375,19 @@ Workbench 的 prepare 与构建期 collector 共享规范用例发现和外部�
 
 发布把已测试的保存镜像复制到 `ghcr.io/kuasar-sandbox/workbench:<去掉-release-前缀的聚合版本>`，验证两种架构的 config 身份和多架构 index，并匿名回读每个按 digest 固定的镜像到临时 Docker archive。归档校验器将每个解压后的镜像层与已测试离线镜像的 config 逐一绑定，发布重试也必须通过。registry digest、镜像 ID、离线 archive hash 含义各自独立。已有同名 Tag/资产必须匹配；重试只补传缺失资产，不覆盖测试字节。跨服务发布可恢复：只有 registry 和完整 GitHub 资产集合一致，GitHub draft 才公开。冲突时失败关闭，不改写历史源码和已发布字节。
 
-Release 说明应总结实际选中版本的变化和兼容性限制，自动 commit 列表仅作辅助。发布工具 checkout 中经过审阅的 `release/notes/<aggregate-version>.md` 会在绑定阶段替换自动生成的人类说明。首行格式为 `<!-- kuasar-release-notes {"version":"release-v…","aggregate_sha":"<已测试源码的 40 位 SHA>","components":{…}} -->`，组件表必须与六个已测试单元的版本完全一致。其余 Markdown 保留标准标题、版本表和六个组件更新段。`bind-validation.py --notes <file>` 也可显式指定同格式文件。源码或选择不匹配即报错。替换只涉及 Release 说明：notes 不在不可变资产清单中，产品、源码记录和验证结果仍逐项校验，保持不变。
+`release/` 只存放发布脚本。发布声明放在 `releases/*.yaml`，发布工具测试放在 `test/release/`。正式版读取 `releases/release.yaml`，Preview 读取 `releases/daily-preview.yaml`。可以为当前选择填写以下一个或两个可选 Markdown 字段：
 
-正文的 125,000 字符预算包含完整验证绑定，以及最终 registry proof 的保守预留。正常长度的自动说明保持原样；超限时仅去掉完全相同的可选 `case_files` 副本，再把自动 commit 行收起到保留的完整比较链接。若审阅正文仍超过剩余预算，发布正文保留交付及资格范围说明，并链接到发布工具精确提交中的完整说明。该回退要求文件与已提交字节一致，不链接浮动分支，也不静默截断作者的限制说明。未知格式的超长正文，或连最小正文都容纳不下的机器证据，会在任何 tag/registry 写入前失败并报告实际大小、预算和各块大小；不会提高上限或裁剪证据。聚合组装阶段也会在大小检查前收起超长的自动 commit 清单。因此，已验收 stage 可在正常审阅并合入说明或发布工具修复后，仅重试 publish，无需重建或替换已测试资产。
+```yaml
+notes:
+  body: |
+    说明本次变化及兼容性限制。
+  upgrade_notice: |
+    说明用户在升级前必须采取的操作。
+```
 
-关键升级提醒可放在标题之后的一组 `<!-- kuasar-release-notice -->` / `<!-- /kuasar-release-notice -->` 标记内。即使回退为链接形式，整个标记块仍在摘要链接之前内联保留。标记不完整，或者提醒和完整证据无法同时容纳时，发布会明确失败；不会截断提醒或机器证据。
+正文缩进四个空格，保留 Markdown 标题、空行和 Unicode 字符。省略 `notes` 时使用自动生成的说明。`body` 放在 Highlights 下，`upgrade_notice` 紧跟标题。组件版本、制品清单和验收证据来自实际测试的选择。Daily 重试同一聚合版本和六个组件 tag 时保留说明，任一发生变化时清空旧说明。已发布的说明由 GitHub Release 和固定 Git 提交保存。
+
+发布器读取已接纳源码提交中的渠道清单。如需在接纳后只修正文案，通过正常 PR 将可选的 `notes.aggregate_sha` 指向已验收的完整提交 SHA。除 `notes` 外，清单所有字段必须与已接纳清单一致；不匹配时发布失败。125000 字符预算包含完整验收证据和 registry 证明的预留空间。超限时允许收起自动生成的 commit 清单，并链接到固定提交中的 YAML 说明段。升级提醒始终内联；提醒、交付要求和完整证据无法同时容纳时发布失败。
 
 用户只解压所选产品架构与 `platform-release`；`workbench-<arch>-v*.tar.gz` 使用 `docker load` 导入，不能解压到产品目录。[快速开始](quickstart_zh.md) 检查声明集合并按显式资产类别下载。用户可以不下载 workbench，但新聚合发布必须包含两种架构镜像。
 
@@ -387,13 +395,13 @@ Release 说明应总结实际选中版本的变化和兼容性限制，自动 co
 
 平台归档使用 `test/e2e/package_inputs.py` 中的仓库本地输入发现。组件输入来自
 所选 owner/单元 Tag，kernel 指南来自独立选择的 vmlinux Tag。组装器按目录约定
-发现规范用例和运行库，通过各仓 `release/guide-inputs.txt` 发现指南，同时复制
+发现规范用例和运行库，通过所选仓库的指南输入清单发现指南，同时复制
 Demo 脚本和锁文件、预构建 helper、本地 wheel 与轻量 workbench 宿主机入口。
 不会复制整个 test 树，也不会打包未声明的指南。
 `test/e2e/assemble_docs.py` 对完整的已选文档重写链接，不抽取章节、不改写可执行示例、
 配置值或产品二进制。
 
-编译型 helper 使用各所选 owner 的 `release/helper-inputs.json`。Schema `1` 声明完整的 `helpers` 清单（`name`、可选 `env` 和 `cases` 中的用例文件名模式）、仓内相对路径 `recipe`，以及 `dependencies` 中的依赖 owner。没有 helper 的 owner 显式声明空清单和 null 配方。通用构建器在 owner 根目录中使用固定依赖工作区调用 `bash <recipe> <architecture> <output-directory>`；内部构建命令由该仓库维护。每个声明输出必须是权限安全且符合目标 ELF 架构的普通可执行文件。未声明、缺失或重复的输出均失败。
+平台 helper 使用 `releases/helper-inputs.yaml` 和固定的 `releases/helper-tools.yaml`。组件和旧 tag 可以继续使用 `release/helper-inputs.json`。平台的 helper 及指南清单均使用兼容 JSON 的 YAML 格式。Schema `1` 声明完整的 `helpers` 清单（`name`、可选 `env` 和 `cases` 中的用例文件名模式）、仓内相对路径 `recipe`，以及 `dependencies` 中的依赖 owner。没有 helper 的 owner 显式声明空清单和 null 配方。通用构建器在 owner 根目录中使用固定依赖工作区调用 `bash <recipe> <architecture> <output-directory>`；内部构建命令由该仓库维护。每个声明输出必须是权限安全且符合目标 ELF 架构的普通可执行文件。未声明、缺失或重复的输出均失败。
 
 输入计划绑定仓库、所选 Tag 或已准入候选 ref、commit/tree、声明原始内容和配方 blob。producer 收据和打包的 `helpers/contract.json` 保留该预期清单；校验器将实际字节、权限、架构及源码身份与之比较。公共 prepare/run 不构建 helper，也不允许输出收据自定其允许清单。用例必要能力独立于完整允许清单进行检查。
 
@@ -413,9 +421,9 @@ Demo 脚本和锁文件、预构建 helper、本地 wheel 与轻量 workbench �
 
 #### 仓库自行声明交付文档
 
-每个仓库在选定 owner Tag（平台使用聚合源码）的 `release/guide-inputs.txt` 声明交付用户文档。
+平台从已接纳源码的 `releases/guide-inputs.yaml` 读取字符串数组。组件和旧 tag 的 `release/guide-inputs.txt` 继续按行读取。
 条目可以是仓内相对 Markdown 路径、目录（递归发现 Markdown）或 glob 模式；
-忽略空行和 `#` 注释。每个条目必须匹配；声明缺失或为空、越界路径、符号链接、
+旧文本清单忽略空行和 `#` 注释。每个条目必须匹配；声明缺失或为空、越界路径、符号链接、
 显式选择非 Markdown 文件以及重复匹配均使组装失败。目录发现保留 `docs/` 下的嵌套路径。
 
 平台仅维护本仓声明，各组件自行维护用户文档与开发文档的边界，聚合器不再保存
@@ -476,7 +484,7 @@ runtime 与 vmlinux 单元可以选择 guest-runtime 的不同提交。因此发
 #### 验证
 
 ```sh
-python3 -m unittest release/test_documentation_package.py
+python3 test/release/test_documentation_package.py
 make test-release-tools
 ```
 

@@ -53,8 +53,62 @@ def fail(message: str) -> NoReturn:
     raise SystemExit(f"selection: {message}")
 
 
+def split_notes(text: str, source: str) -> tuple[str, str]:
+    """Keep literal Markdown separate from the selection's scalar reader."""
+    lines = text.splitlines(keepends=True)
+    starts = [i for i, line in enumerate(lines)
+              if re.fullmatch(r"notes:[ ]*(?:#.*)?", line.rstrip("\r\n"))]
+    if not starts:
+        return text, ""
+    if len(starts) != 1:
+        raise ManifestError(f"duplicate notes section in {source}")
+    start = starts[0]
+    end = start + 1
+    while end < len(lines) and (not lines[end].strip() or lines[end].startswith((" ", "#"))):
+        end += 1
+    return "".join(lines[:start] + lines[end:]), "".join(lines[start:end])
+
+
+def parse_notes(block: str, source: str) -> dict[str, str]:
+    fields = {}
+    lines = block.splitlines()
+    i = 1
+    while i < len(lines):
+        line = lines[i]
+        i += 1
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = re.fullmatch(r"  (body|upgrade_notice|aggregate_sha): +([^ #]+)(?: +#.*)? *", line)
+        if not match:
+            raise ManifestError(f"invalid notes field in {source}")
+        key, value = match.groups()
+        if key in fields:
+            raise ManifestError(f"duplicate notes.{key} in {source}")
+        if key == "aggregate_sha":
+            if not re.fullmatch(r"[0-9a-f]{40}", value):
+                raise ManifestError(f"notes.aggregate_sha in {source} requires an exact commit")
+        else:
+            if value not in ("|", "|-"):
+                raise ManifestError(f"notes.{key} in {source} requires a literal Markdown block")
+            body = []
+            while i < len(lines) and (not lines[i].strip() or lines[i].startswith("    ")):
+                body.append(lines[i][4:])
+                i += 1
+            value = "\n".join(body).rstrip("\n") + ("\n" if value == "|" else "")
+            if not value.strip() or any(marker in value for marker in (
+                    "<!-- kuasar-integration-validation", "<!-- kuasar-release-notice", "<!-- /kuasar-release-notice")):
+                raise ManifestError(f"empty or reserved marker in notes.{key} in {source}")
+        fields[key] = value
+    if not ({"body", "upgrade_notice"} & fields.keys()):
+        raise ManifestError(f"notes in {source} requires body or upgrade_notice")
+    return fields
+
+
 def read_simple_yaml(text: str, source: str) -> dict[str, object]:
     result: dict[str, object] = {}
+    text, block = split_notes(text, source)
+    if block:
+        result["notes"] = parse_notes(block, source)
     section = ""
     for number, raw in enumerate(text.splitlines(), 1):
         line = raw.split("#", 1)[0].rstrip()
@@ -70,6 +124,8 @@ def read_simple_yaml(text: str, source: str) -> dict[str, object]:
         if match is None:
             raise ManifestError(f"unsupported syntax in {source}:{number}")
         key, value = match.groups()
+        if key == "notes":
+            raise ManifestError(f"notes must be a mapping in {source}")
         if raw.startswith("  ") and section:
             entries = result[section]
             if key in entries:
@@ -180,7 +236,7 @@ def parse_historical_manifest(
 def _parse_manifest(text: str, source: str, preview: bool, *, historical: bool):
     config = read_simple_yaml(text, source)
     required = {"version", "components"}
-    optional = {"previous_version", "delivery"}
+    optional = {"previous_version", "delivery", "notes"}
     if historical:
         optional.add("test_revisions")
     elif "test_revisions" in config:

@@ -17,6 +17,7 @@ import artifacts
 import source_inputs as subject
 from test_fixtures import CASES, architecture_result, helper_contract
 sys.path.insert(0, str(subject.ROOT / 'release'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'test/release'))
 from test_tag_sources import fixture
 
 spec = importlib.util.spec_from_file_location('evidence_resolver', Path(__file__).with_name('resolve-artifacts.py'))

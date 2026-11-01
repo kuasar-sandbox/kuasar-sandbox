@@ -10,7 +10,7 @@ import tarfile
 import tempfile
 import unittest
 
-spec = importlib.util.spec_from_file_location('e2e_package', Path(__file__).with_name('validate-e2e-package.py'))
+spec = importlib.util.spec_from_file_location('e2e_package', Path(__file__).resolve().parents[2] / "release/validate-e2e-package.py")
 package = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(package)
 from test_fixtures import make_demo_wheelhouse, helper_contract

@@ -1,0 +1,15 @@
+# Binary name and owning source directory under the workspace.
+vmlinux: guest-runtime/native-deps
+manifest-ctl: accelerator
+store-ctl: accelerator
+cache-ctl: accelerator
+flatten-ctl: guest-runtime
+sandbox-ctl: sandboxer
+sandbox-init: sandboxer
+cloud-hypervisor: sandboxer
+sandbox-runtime.bundle: guest-runtime
+node-ctl: orchestrator
+cluster-ctl: orchestrator
+node-stub-ctl: orchestrator
+connector-ctl: connector
+e2b-key-ctl: orchestrator

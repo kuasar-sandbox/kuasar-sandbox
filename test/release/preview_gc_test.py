@@ -16,7 +16,7 @@ from contextlib import contextmanager, redirect_stdout
 from unittest import mock
 
 
-MODULE_PATH = pathlib.Path(__file__).with_name("preview_gc.py")
+MODULE_PATH = pathlib.Path(__file__).resolve().parents[2] / "release/preview_gc.py"
 SPEC = importlib.util.spec_from_file_location("preview_gc", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 preview_gc = importlib.util.module_from_spec(SPEC)

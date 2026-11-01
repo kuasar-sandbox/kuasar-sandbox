@@ -15,6 +15,7 @@ import artifacts
 from test_fixtures import restore_using, helper_contract
 import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'test/release'))
 from test_tag_sources import fixture
 
 ROOT = Path(__file__).resolve().parents[2]

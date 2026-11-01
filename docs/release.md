@@ -17,7 +17,7 @@ The release units are:
 
 ## 2. Configuration contract
 
-Each maintained platform branch uses exactly two manifests:
+Each maintained platform branch uses two version-selection manifests:
 
 - `releases/release.yaml`: the next planned Stable aggregate version on that branch;
 - `releases/daily-preview.yaml`: the branch's currently maintained Daily Preview version.
@@ -264,11 +264,19 @@ An additional native workbench gate imports those exact staged bytes and starts 
 
 Publication copies the tested saved images to `ghcr.io/kuasar-sandbox/workbench:<aggregate-version-without-release-prefix>`, verifies both architecture config identities and the multi-architecture index, and anonymously reads back each digest-pinned image into a temporary Docker archive. The archive verifier checks every expanded layer against the config from the tested offline image, including on publication retries. Registry digests, image IDs and offline archive hashes have distinct meanings. Existing same-name tags/assets must match; retries upload missing assets without overwriting tested bytes. Cross-service publication is resumable: the GitHub draft becomes public only after the registry and complete GitHub asset set agree. A conflict fails closed. Original source history and published release bytes are not amended.
 
-Release descriptions should summarize the actual selected changes and compatibility limits; generated commit lists are supporting material. A reviewed `release/notes/<aggregate-version>.md` in the publisher checkout replaces the generated human-readable notes during binding. Its first line is `<!-- kuasar-release-notes {"version":"release-v…","aggregate_sha":"<40-character tested source SHA>","components":{…}} -->`; the component map must exactly match the six tested unit versions. The remaining Markdown keeps the standard headings, version table and six component update sections. `bind-validation.py --notes <file>` accepts the same format explicitly. A mismatched source or selection is an error. This changes only the Release description: notes are outside the immutable asset inventory, and every product, source record and validation result is still checked unchanged.
+The `release/` directory contains publishing scripts. Put release declarations in `releases/*.yaml` and release-tool tests in `test/release/`. Stable reads `releases/release.yaml`; Preview reads `releases/daily-preview.yaml`. To describe the current selection, add either or both optional Markdown fields:
 
-The 125,000-character body budget includes the complete validation binding and a conservative reservation for the final registry proof. Normal generated notes are retained when they fit. On overflow, only the identical optional `case_files` projection is deduplicated; generated commit rows can then be replaced by their retained full-comparison links. If reviewed prose still exceeds the remaining narrative budget, publication keeps the delivery/qualification contract inline and links to the complete notes at the exact publisher commit. This fallback requires the notes file to match its committed bytes; it never links to a moving branch or silently clips authored warnings. Unknown oversized prose, or evidence that cannot fit even with the minimum narrative, fails before tag/registry writes with the actual size, budget and block sizes. The limit is not raised and machine evidence is never truncated. Aggregate assembly also compacts oversized generated commit inventories before its size check. An already validated stage can therefore use a normally reviewed publisher notes/tooling correction when retrying its publish job, without rebuilding or replacing tested assets.
+```yaml
+notes:
+  body: |
+    Describe the change and its compatibility limits here.
+  upgrade_notice: |
+    Describe the action operators must take before upgrading.
+```
 
-Critical upgrade notices can be enclosed in one `<!-- kuasar-release-notice -->` / `<!-- /kuasar-release-notice -->` block immediately after the title. The complete marked block remains inline, before the summary link, even in the linked-notes fallback. An invalid marker pair or a notice that cannot fit with the full evidence fails closed; notices and machine evidence are never truncated.
+Indent prose by four spaces. Literal blocks preserve headings, blank lines and Unicode. With no notes, publication uses the generated description. The publisher inserts `body` under Highlights and `upgrade_notice` immediately after the title. Component versions, asset inventory and validation evidence come from the tested selection. Daily keeps the current notes when retrying the same aggregate and six component tags, and drops them when either changes. GitHub Releases and fixed Git commits retain published descriptions.
+
+Publication reads the channel manifest at the admitted aggregate commit. To correct only the prose after admission, set the optional `notes.aggregate_sha` in a normally reviewed publisher revision to the full tested commit. All other manifest fields must match the admitted selection. A mismatched correction fails before publication writes. The 125,000-character budget reserves the complete validation and registry evidence. On overflow, the publisher can compact generated commit inventories and link the full authored body to the notes section at the exact Git commit. The upgrade notice stays inline. If the notice, required delivery information and evidence cannot fit, publication fails.
 
 Consumers extract only the selected product architecture plus `platform-release`; `workbench-<arch>-v*.tar.gz` is imported with `docker load`, never unpacked into that directory. The [Quick Start](quickstart.md) checks the declared set and selects explicit asset categories. Workbench is optional for users downloading products, but both image assets are mandatory for a new aggregate publication.
 
@@ -281,13 +289,13 @@ The platform archive uses repository-local input discovery in
 `test/e2e/package_inputs.py`. Component inputs come from the selected owner/unit
 tags; kernel guidance comes from the separately selected vmlinux tag. The
 assembler discovers canonical cases and runtime libraries by directory convention,
-and guides through each repository's `release/guide-inputs.txt`. It also includes
+and guides through each selected repository's guide declaration. It also includes
 Demo scripts and locks, prebuilt helpers, local wheels, and thin workbench host
 entrypoints. It does not copy the whole test tree or include undeclared guides.
 `test/e2e/assemble_docs.py` rebases links in whole selected documents without
 editing sections, executable examples, configuration values or product binaries.
 
-Compiled helpers use each selected owner's `release/helper-inputs.json`. Schema `1` declares the complete `helpers` inventory (`name`, optional `env`, and case filename patterns in `cases`), the repository-relative `recipe`, and dependency owners in `dependencies`. An owner with no helpers declares an empty list and a null recipe. The generic builder invokes `bash <recipe> <architecture> <output-directory>` in the owner's root with the fixed dependency workspace; internal commands remain in that repository. Every declared output must be a regular, safe executable with the requested ELF architecture. Undeclared, missing or duplicate outputs fail.
+Platform helpers use `releases/helper-inputs.yaml` and tool pins in `releases/helper-tools.yaml`. Components and older tags can use `release/helper-inputs.json`. Platform helper and guide declarations use JSON-compatible YAML. Schema `1` declares the complete `helpers` inventory (`name`, optional `env`, and case filename patterns in `cases`), the repository-relative `recipe`, and dependency owners in `dependencies`. An owner with no helpers declares an empty list and a null recipe. The generic builder invokes `bash <recipe> <architecture> <output-directory>` in the owner's root with the fixed dependency workspace; internal commands remain in that repository. Every declared output must be a regular, safe executable with the requested ELF architecture. Undeclared, missing or duplicate outputs fail.
 
 The input plan binds repository, selected tag or admitted candidate ref, commit/tree, declaration bytes and recipe blobs. Producer receipts and the packaged `helpers/contract.json` retain that expected inventory; validators compare actual bytes, modes, architecture and source identity to it. Public prepare/run do not build helpers or accept an output receipt as its own inventory authority. Necessary case capabilities remain checked separately from the complete allowed inventory.
 
@@ -311,9 +319,8 @@ validation and execution still validate the actual delivered package.
 
 #### Repository-owned documentation selection
 
-Each repository declares its delivered user guides in `release/guide-inputs.txt`
-at the selected owner tag (the aggregate source for platform). Entries are repository-relative Markdown files,
-directories (recursive Markdown discovery), or glob patterns. Blank lines and
+The admitted platform source declares guide paths as a string array in `releases/guide-inputs.yaml`. Components and older tags can supply their newline-delimited `release/guide-inputs.txt`. Entries are repository-relative Markdown files,
+directories (recursive Markdown discovery), or glob patterns. In the legacy text format, blank lines and
 `#` comments are ignored. Every entry must match; missing/empty declarations,
 path escapes, symlinks, non-Markdown explicit inputs and overlapping entries fail
 assembly. Directory discovery preserves nested paths below `docs/`.
@@ -395,7 +402,7 @@ separate link checks described by [the review policy](../CONTRIBUTING.md#documen
 #### Validation
 
 ```sh
-python3 -m unittest release/test_documentation_package.py
+python3 test/release/test_documentation_package.py
 make test-release-tools
 ```
 
