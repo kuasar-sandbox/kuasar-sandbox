@@ -9,7 +9,7 @@ import tempfile
 import tarfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'test/e2e'))
 from package_inputs import PLATFORM_RUNTIME
 FIXTURE_GUIDES = {'platform': ['README',

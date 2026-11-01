@@ -13,7 +13,7 @@ import publication_body
 import release_notes
 
 
-def bind(bundle, plan, validation, workbench=None, *, notes_override=None):
+def bind(bundle, plan, validation, workbench=None, *, platform=None):
     artifacts.require(plan["mode"] == "exact-assets" and plan["baseline"].get("staged"), "release needs a staged exact-assets plan")
     artifacts.require(validation == artifacts.collect_results(plan, validation["architectures"]), "validation identity differs from staged plan")
     artifacts.require(plan.get('source_records') is not None, 'new publication requires selected tag source records')
@@ -42,8 +42,14 @@ def bind(bundle, plan, validation, workbench=None, *, notes_override=None):
         receipt = json.loads((bundle / 'workbench' / f'workbench-{arch}.json').read_text())
         artifacts.require(result['image_id'] == receipt['image_id'] and result['sha256'] == receipt['sha256'] and result['size'] == receipt['size'],
                           'workbench result differs from staged image receipt')
-    narrative = release_notes.Narrative(text, plan['baseline']['version'], plan['baseline']['sha'],
-        {unit: row['version'] for unit, row in plan['baseline']['units'].items()}, notes_override)
+    version = plan['baseline']['version']
+    units = {unit: row['version'] for unit, row in plan['baseline']['units'].items()}
+    fields, url = {}, None
+    if platform is not None:
+        fields, url = release_notes.publication_notes(platform, version, plan['baseline']['sha'], units, release_notes.ROOT)
+    narrative = release_notes.Narrative(text, fields, url, version=version, units=units)
+    if fields:
+        release_notes.validate(narrative.text, version, units)
     notes.write_text(publication_body.binding_text(narrative.text + '\n', binding, '\n',
                      reserve_registry_version=plan['baseline']['version'], fit_notes=narrative.fit))
 
@@ -54,8 +60,8 @@ if __name__ == "__main__":
     parser.add_argument("plan", type=Path)
     parser.add_argument("validation", type=Path)
     parser.add_argument("--workbench", type=Path, required=True)
-    parser.add_argument("--notes", type=Path, help="reviewed Markdown with a matching release identity header")
+    parser.add_argument("--platform", type=Path, default=Path("platform"), help="admitted platform checkout")
     args = parser.parse_args()
     bind(args.bundle, json.loads(args.plan.read_text()), json.loads(args.validation.read_text()),
          {arch: json.loads((args.workbench / f"{arch}.json").read_text()) for arch in artifacts.ARCHES},
-         notes_override=args.notes)
+         platform=args.platform)

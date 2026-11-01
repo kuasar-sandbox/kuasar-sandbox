@@ -141,6 +141,7 @@ def check_helper_materialization():
     from unittest.mock import patch
     sys.path.insert(0, str(ROOT / 'release'))
     import tag_sources
+    sys.path.insert(0, str(ROOT / 'test/release'))
     from test_tag_sources import fixture
     steps = load('aggregate-release.yml')['jobs']['helper-build']['steps']
     script = next(step['run'] for step in steps

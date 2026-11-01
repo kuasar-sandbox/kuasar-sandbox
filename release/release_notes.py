@@ -4,17 +4,15 @@ Only the human-readable Release prefix is adapted. Machine evidence remains in
 publication_body, with its existing schema and registry reservation.
 """
 import argparse
-import json
 from pathlib import Path
 import re
 import subprocess
 import sys
 
 import publication_body
+import selection
 
 ROOT = Path(__file__).resolve().parents[1]
-NOTES = ROOT / 'release/notes'
-HEADER = '<!-- kuasar-release-notes '
 NOTICE_START = '<!-- kuasar-release-notice -->'
 NOTICE_END = '<!-- /kuasar-release-notice -->'
 UNITS = ('accelerator', 'connector', 'sandboxer', 'orchestrator', 'runtime', 'vmlinux')
@@ -78,84 +76,111 @@ def compact_commits(text):
     return ''.join(parts)
 
 
-def immutable_notes_url(path):
-    """Link only to the exact committed prose; never invent a source URL."""
-    relative = path.resolve().relative_to(ROOT).as_posix()
-    revision = subprocess.check_output(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'], text=True).strip()
-    if not re.fullmatch('[0-9a-f]{40}', revision):
-        raise ValueError('reviewed notes need an exact publisher commit')
-    committed = subprocess.check_output(['git', '-C', str(ROOT), 'show', f'{revision}:{relative}'])
-    if committed != path.read_bytes():
-        raise ValueError('cannot link uncommitted release notes')
-    return f'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/{revision}/{relative}'
+def committed_manifest(root, revision, relative):
+    text = subprocess.check_output(['git', '-C', str(root), 'show', f'{revision}:{relative}']).decode('utf-8')
+    return text, selection.read_simple_yaml(text, relative)
 
 
-def linked_notes(version, units, url, notice=''):
-    """Keep the delivery contract inline; retain all prose at an immutable URL."""
+def publication_notes(platform, version, revision, units, publisher):
+    preview = '-preview.' in version
+    relative = 'releases/daily-preview.yaml' if preview else 'releases/release.yaml'
+    text, admitted = committed_manifest(platform, revision, relative)
+    selected, _, components = selection.parse_manifest(text, relative, preview)
+    if (selected, components) != (version, units):
+        raise ValueError('admitted manifest differs from validated release selection')
+    # Default to the exact tested source. A later correction must explicitly
+    # target the admitted SHA and may change only notes in the parsed manifest.
+    publisher_sha = subprocess.check_output(['git', '-C', str(publisher), 'rev-parse', 'HEAD'], text=True).strip()
+    latest_text, latest = committed_manifest(publisher, publisher_sha, relative)
+    config, source_sha = admitted, revision
+    if latest.get('notes', {}).get('aggregate_sha') is not None:
+        latest_version, _, _ = selection.parse_manifest(latest_text, relative, preview)
+        if latest_version == version or latest['notes']['aggregate_sha'] == revision:
+            if ({k: v for k, v in latest.items() if k != 'notes'} !=
+                    {k: v for k, v in admitted.items() if k != 'notes'}):
+                raise ValueError('notes revision changes the admitted manifest')
+            config, text, source_sha = latest, latest_text, publisher_sha
+    fields = config.get('notes', {})
+    if fields.get('aggregate_sha', revision) != revision:
+        raise ValueError('notes.aggregate_sha differs from the validated source')
+    if not fields:
+        return {}, None
+    start = next(i for i, line in enumerate(text.splitlines(), 1) if line.startswith('notes:'))
+    _, block = selection.split_notes(text, relative)
+    end = start + len(block.rstrip().splitlines()) - 1
+    return fields, f'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/{source_sha}/{relative}#L{start}-L{end}'
+
+
+def delivery_summary(version, units, url, notice, generated):
+    """Retain delivery instructions, selection and comparison links within the body budget."""
     docs = f'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/{version}/docs'
     lines = [f'# Kuasar Sandbox {version}', '']
     if notice:
         lines += [notice, '']
-    lines += [
-        f'[Full release summary and compatibility notes]({url}).', '',
-        '## Highlights', '', f'See the [reviewed changes]({url}#highlights).', '',
-        '## Component versions', '', '| Release unit | Version |', '|---|---|']
+    lines += ['## Highlights', '', f'[Full reviewed release notes]({url}).', '',
+              '## Component versions', '', '| Release unit | Version |', '|---|---|']
     lines += [f'| `{unit}` | `{units[unit]}` |' for unit in UNITS]
-    lines += ['', '## Asset categories', '',
-        'Verify every explicit asset with `SHA256SUMS`. Extract native products and platform-release together; '
-        'import workbench separately with `docker load -i`. Never extract the image archive into products.', '',
-        '## Supported environment', '',
-        'Native Linux x86_64 and aarch64. System tests need the documented KVM/TUN, UFFD/BPF, cgroup v2 '
-        'and Docker prerequisites. Workbench system mode uses trusted administrator privileged access, '
-        'not hostile-root confinement. The binding below records executed cases and qualification_scope. '
-        'ARM artifact-only qualification and planned cases do not establish system, network or snapshot execution.', '',
-        '## Quick Start', '', f'[Quick Start]({docs}/quickstart.md).', '',
-        '## Production deployment', '', f'[Deployment prerequisites and operational requirements]({docs}/deployment.md).', '',
-        '## Known limitations', '', f'Read [compatibility and limitations]({url}#known-limitations) before upgrading. '
-        'Demo credentials and self-signed certificates are for evaluation only.', '',
-        '## Security', '', '[Report vulnerabilities privately](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new).', '',
-        '## Versioning and release channels', '',
-        ('Preview prerelease; does not replace Stable.' if '-preview.' in version else 'Stable, non-prerelease release. Preview remains the development channel.'), '',
-        '## Component updates']
+    lines += ['', '## Asset categories', '', 'Verify each archive with SHA256SUMS. Extract products and platform together. '
+              'Import the Workbench image separately with `docker load -i`.', '',
+              '## Supported environment', '', 'Native Linux x86_64 and aarch64. System tests require the documented '
+              'KVM/TUN, UFFD/BPF, cgroup v2 and Docker prerequisites.', '',
+              '## Quick Start', '', f'[Quick Start]({docs}/quickstart.md).', '',
+              '## Production deployment', '', f'[Deployment]({docs}/deployment.md).', '',
+              '## Known limitations', '', 'See qualification_scope and executed cases below. '
+              'ARM artifact-only Workbench qualification does not establish system execution.', '',
+              '## Security', '', '[Private vulnerability reporting](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new).', '',
+              '## Versioning and release channels', '', 'Preview prerelease.' if '-preview.' in version else 'Stable release.', '',
+              '## Component updates']
+    sections = re.split(r'(?m)^### (\w+)\n', generated)
+    updates = dict(zip(sections[1::2], sections[2::2]))
     for unit in UNITS:
-        lines += ['', '### ' + unit, '', f'Selected version: `{units[unit]}`. [Changes and comparison]({url}#{unit}).']
-    return '\n'.join(lines) + '\n'
+        lines += ['', '### ' + unit, '', f'Selected version: `{units[unit]}`.']
+        lines += [f'[Full comparison]({link}).' for link in COMPARISON.findall(updates.get(unit, ''))]
+    summary = '\n'.join(lines) + '\n'
+    validate(summary, version, units)
+    return summary
 
 
 class Narrative:
-    def __init__(self, text, version, revision, units, override=None):
+    def __init__(self, text, fields=None, url=None, *, version=None, units=None):
         self.version, self.units = version, units
-        self.path = override if override is not None else NOTES / f'{version}.md'
-        self.reviewed = self.path.is_file()
-        if override is not None and not self.reviewed:
-            raise ValueError('reviewed release notes file is missing')
-        if self.reviewed:
-            raw = self.path.read_text()
-            header, separator, text = raw.partition('\n')
-            if not separator or not header.startswith(HEADER) or not header.endswith(' -->'):
-                raise ValueError('reviewed notes require an identity header')
-            identity = json.loads(header[len(HEADER):-4])
-            if identity != {'version': version, 'aggregate_sha': revision, 'components': units}:
-                raise ValueError('reviewed notes source/version/component selection differs from validated stage')
-            validate(text, version, units)
-        self.text = text
-        self.notice = inline_notice(text) if self.reviewed else ''
+        self.generated = text
+        self.fields = fields or {}
+        self.url = url
+        self.notice = ''
+        if self.fields.get('upgrade_notice'):
+            self.notice = (NOTICE_START + '\n## Important upgrade notice\n\n' +
+                           self.fields['upgrade_notice'].rstrip('\n') + '\n' + NOTICE_END)
+        self.text = self.render(self.fields.get('body'))
+
+    def render(self, body):
+        text = self.generated
+        if self.notice:
+            title, newline, rest = text.partition('\n')
+            if not newline or not title.startswith('# Kuasar Sandbox '):
+                raise ValueError('missing release title for upgrade notice')
+            text = title + '\n\n' + self.notice + '\n' + rest
+        if body:
+            heading = '\n## Highlights\n'
+            if text.count(heading) != 1:
+                raise ValueError('missing or duplicate release highlights')
+            text = text.replace(heading, heading + '\n' + body.rstrip('\n') + '\n', 1)
+        return text
 
     def fit(self, prefix, available):
-        compact = compact_commits(prefix)
-        if len(compact) <= available:
-            print(f'Release notes: generated commit rows replaced by comparisons; '
-                  f'original={len(prefix)}, adjusted={len(compact)}, budget={available}', file=sys.stderr)
-            return compact
-        if self.reviewed:
-            compact = linked_notes(self.version, self.units, immutable_notes_url(self.path), self.notice) + '\n'
-            validate(compact, self.version, self.units)
-            if len(compact) <= available:
-                print(f'Release notes: full reviewed prose retained at its publisher commit; '
-                      f'original={len(prefix)}, adjusted={len(compact)}, budget={available}', file=sys.stderr)
-                return compact
-        # Give publication_body the unchanged text so its final limit reports
-        # exact total and block sizes, even if evidence alone exceeds the limit.
+        # Compact only generated inventory. Authored Markdown is never passed
+        # to the commit-row reducer, even if it resembles generated inventory.
+        compact = Narrative(compact_commits(self.generated), self.fields, self.url)
+        if len(compact.text + '\n') <= available:
+            return compact.text + '\n'
+        if self.fields.get('body') and self.url:
+            linked = compact.render(f'[Full reviewed release notes]({self.url}).') + '\n'
+            if len(linked) <= available:
+                return linked
+        if self.fields and self.url and self.units is not None:
+            minimum = delivery_summary(self.version, self.units, self.url, self.notice, self.generated) + '\n'
+            if len(minimum) <= available:
+                return minimum
         return prefix
 
 

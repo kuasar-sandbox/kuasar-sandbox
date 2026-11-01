@@ -72,7 +72,7 @@ make -C /src/platform build
 '''
         subprocess.run([*launcher, 'exec', '--', 'bash', '-ceu', program], check=True, timeout=9000)
         result['products'] = artifacts.tree_files(sources / 'platform/bin' / platform.machine())
-        expected = [line.split()[1] for line in (ROOT / 'release/bin-inputs.manifest').read_text().splitlines()
+        expected = [line.split()[0].removesuffix(":") for line in (ROOT / 'releases/bin-inputs.yaml').read_text().splitlines()
                     if line.strip() and not line.startswith('#')]
         artifacts.require(set(result['products']) == set(expected), 'full native build did not produce every platform binary')
         result['conclusion'] = 'success'

@@ -680,6 +680,7 @@ class ArtifactContracts(unittest.TestCase):
         import sys
         sys.path.insert(0, str(subject.ROOT / 'release'))
         import helper_inputs, source_inputs
+        sys.path.insert(0, str(subject.ROOT / 'test/release'))
         import test_helper_discovery as discovery
         def load(name, relative):
             spec = importlib.util.spec_from_file_location(name, subject.ROOT / relative)

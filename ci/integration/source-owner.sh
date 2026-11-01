@@ -12,7 +12,7 @@ connector) echo "connector-ctl" ;;
 guest-runtime) echo "store-ctl flatten-ctl" ;;
 accelerator) echo "manifest-ctl store-ctl cache-ctl flatten-ctl" ;;
 sandboxer) echo "vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ctl sandbox-init cloud-hypervisor sandbox-runtime.bundle connector-ctl" ;;
-orchestrator|kuasar-sandbox) awk '!/^($|#)/ {print $2}' "$ROOT/release/bin-inputs.manifest" | xargs ;;
+orchestrator|kuasar-sandbox) awk '!/^($|#)/ {sub(/:$/, "", $1); print $1}' "$ROOT/releases/bin-inputs.yaml" | xargs ;;
 *) die "unknown owner $1" ;;
 esac; }
 native_components() { case "$1" in connector) ;; guest-runtime) ;; accelerator) echo "rocksdb" ;; sandboxer|orchestrator|kuasar-sandbox) echo "vmlinux envd rocksdb cloud-hypervisor" ;; *) die "unknown owner $1" ;; esac; }
@@ -24,7 +24,7 @@ local owner=$1 name repo src
 rm -rf "$ROOT/bin/$TARGET_ARCH"; mkdir -p "$ROOT/bin/$TARGET_ARCH"
 find "$ROOT/bin" -maxdepth 1 -type l -delete 2>/dev/null || true
 for name in $(required_bins "$owner"); do
-repo="$(awk -v n="$name" '!/^($|#)/ && $2==n {print $1; exit}' "$ROOT/release/bin-inputs.manifest")"
+repo="$(awk -v n="$name" '!/^($|#)/ && $1==n ":" {print $2; exit}' "$ROOT/releases/bin-inputs.yaml")"
 [ -n "$repo" ] || die "no bin-inputs entry for $name"
 src="$ORG/$repo/bin/$TARGET_ARCH/$name"
 [ -f "$src" ] || die "$owner closure did not build $repo/bin/$TARGET_ARCH/$name"

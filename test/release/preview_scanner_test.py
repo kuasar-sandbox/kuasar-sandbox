@@ -8,7 +8,7 @@ import tempfile
 import textwrap
 import unittest
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = Path(__file__).resolve().parents[2]
 FAKE_GH = r'''#!/usr/bin/env python3
 import json, os, sys
 from pathlib import Path

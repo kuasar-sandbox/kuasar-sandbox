@@ -2,11 +2,12 @@
 import copy
 import pathlib
 import sys
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'release'))
 import selection
 import preview_coordinator as coordinator
 import formal_coordinator as formal
@@ -28,6 +29,18 @@ def historical_manifest(preview=False):
 
 
 class TagSelectionTests(unittest.TestCase):
+    def test_repository_release_layout(self):
+        root = pathlib.Path(__file__).resolve().parents[2]
+        files = subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z', 'release', 'releases']).decode().split('\0')
+        for path in map(pathlib.PurePosixPath, filter(None, files)):
+            if path.parts[0] == 'release':
+                self.assertIn(path.suffix, {'.py', '.sh'}, path)
+                self.assertFalse(path.name.startswith('test') or path.stem.endswith('_test'), path)
+            else:
+                self.assertEqual(len(path.parts), 2, path)
+                self.assertEqual(path.suffix, '.yaml', path)
+                self.assertFalse(path.name.startswith('release-v'), path)
+
     def test_new_manifest_rejects_independent_test_selection(self):
         for preview in (False, True):
             with self.subTest(preview=preview), self.assertRaisesRegex(selection.ManifestError, 'test_revisions'):

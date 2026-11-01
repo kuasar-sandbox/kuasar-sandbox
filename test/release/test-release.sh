@@ -2,14 +2,14 @@
 
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # shellcheck source=release/lib.sh
 source "$ROOT/release/lib.sh"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-bash "$ROOT/release/test-preview-line.sh"
-bash "$ROOT/release/test-delete-preview.sh"
+bash "$ROOT/test/release/test-preview-line.sh"
+bash "$ROOT/test/release/test-delete-preview.sh"
 
 PREVIEW_BASE="$(awk '$1 == "version:" {print $2}' "$ROOT/releases/daily-preview.yaml")"
 PREVIEW_SUFFIX="$(awk '$1 == "preview_version:" {print $2}' "$ROOT/releases/daily-preview.yaml")"
@@ -404,7 +404,7 @@ grep -Fq 'usage: package-platform.sh package' "$TMP/rejected-test-source.log"
 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" validate "$VERSION" "$TMP/bundle"
 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
-  "$ROOT/release/test-publisher.sh" "$ROOT/release/publish-release.sh" \
+  "$ROOT/test/release/test-publisher.sh" "$ROOT/release/publish-release.sh" \
   "$TMP/bundle" kuasar-sandbox/kuasar-sandbox "$VERSION" \
   "$(git -C "$FORMAL_ROOT" rev-parse HEAD)" main
 

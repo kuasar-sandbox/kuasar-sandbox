@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'ci/integration'))
 import artifacts
 from test_fixtures import WORKBENCH_CASES, architecture_result, workbench_results, registry_binding, tag_source_plan

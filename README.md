@@ -211,7 +211,7 @@ make -C kuasar-sandbox perf E2E_WORKDIR=/absolute/path/to/prepared-inputs
 make -C kuasar-sandbox demo PYTHON_BIN=/absolute/path/to/pinned-venv/bin/python
 ```
 
-Runtime files are collected into `bin/<arch>/` according to [`release/bin-inputs.manifest`](release/bin-inputs.manifest). Each component also supports its documented standalone build. For example:
+Runtime files are collected into `bin/<arch>/` according to [`releases/bin-inputs.yaml`](releases/bin-inputs.yaml). Each component also supports its documented standalone build. For example:
 
 ```bash
 GOWORK=off make -C sandboxer build

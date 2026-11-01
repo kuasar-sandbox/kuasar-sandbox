@@ -14,7 +14,7 @@ import unittest
 from unittest import mock
 
 
-MODULE_PATH = pathlib.Path(__file__).with_name("preview_coordinator.py")
+MODULE_PATH = pathlib.Path(__file__).resolve().parents[2] / "release/preview_coordinator.py"
 SPEC = importlib.util.spec_from_file_location("preview_coordinator", MODULE_PATH)
 assert SPEC is not None and SPEC.loader is not None
 coordinator = importlib.util.module_from_spec(SPEC)
@@ -22,13 +22,13 @@ sys.modules[SPEC.name] = coordinator
 SPEC.loader.exec_module(coordinator)
 
 SELECTION_TEST_SPEC = importlib.util.spec_from_file_location(
-    "preview_selection_fixtures", MODULE_PATH.with_name("preview_selection_test.py")
+    "preview_selection_fixtures", pathlib.Path(__file__).with_name("preview_selection_test.py")
 )
 assert SELECTION_TEST_SPEC is not None and SELECTION_TEST_SPEC.loader is not None
 selection_fixtures = importlib.util.module_from_spec(SELECTION_TEST_SPEC)
 SELECTION_TEST_SPEC.loader.exec_module(selection_fixtures)
 
-FORMAL_PATH = pathlib.Path(__file__).with_name("formal_coordinator.py")
+FORMAL_PATH = pathlib.Path(__file__).resolve().parents[2] / "release/formal_coordinator.py"
 FORMAL_SPEC = importlib.util.spec_from_file_location(
     "formal_coordinator_test_subject", FORMAL_PATH
 )
@@ -1095,6 +1095,18 @@ components:
         )
         api.assert_called_once()
         gh_platform.assert_not_called()
+
+    def test_daily_notes_follow_only_the_same_aggregate_and_components(self):
+        manifest = ('version: release-v9.8.7\npreview_version: preview.20990101.1\ncomponents:\n' +
+            ''.join(f'  {unit}: {unit + "-" if unit in ("runtime", "vmlinux") else ""}v1.2.3\n'
+                    for unit in coordinator.selection.UNITS))
+        block = 'notes:\n  body: |\n    Fix #42.\n\n    Keep both paragraphs.\n'
+        path = 'releases/daily-preview.yaml'
+        current = manifest + block
+        self.assertEqual(coordinator.retain_preview_notes(current, manifest, path), current)
+        for updated in (manifest.replace('20990101.1', '20990101.2'),
+                        manifest.replace('v1.2.3', 'v1.2.4')):
+            self.assertEqual(coordinator.retain_preview_notes(current, updated, path), updated)
 
     def test_manifest_keeps_independent_component_versions(self) -> None:
         plans = {

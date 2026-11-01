@@ -16,6 +16,7 @@ from test_fixtures import CASES, select_plan
 spec = importlib.util.spec_from_file_location('release_source_set', Path(__file__).with_name('release-source-set.py'))
 gate = importlib.util.module_from_spec(spec); spec.loader.exec_module(gate)
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'release'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'test/release'))
 import test_helper_discovery as discovery
 git = discovery.git
 

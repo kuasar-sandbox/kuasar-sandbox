@@ -11,7 +11,7 @@ import sys
 import tempfile
 import unittest
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 TAG = 'release-v1.2.3'
 
 # Original release-v0.1.5 manifest; retain its historical test provenance verbatim.
