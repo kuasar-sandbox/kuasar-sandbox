@@ -16,7 +16,7 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work"/{bin,tarballs,tmp}
 source "$ROOT/ci/hosted/bootstrap.sh"
-pins="$ROOT/releases/helper-tools.yaml"
+pins="$ROOT/release/inputs/helper-tools.yaml"
 versity_version=$(jq -er .versitygw_version "$pins")
 zot_version=$(jq -er .zot_version "$pins")
 digest=$(jq -er .versitygw_sha256 "$pins")

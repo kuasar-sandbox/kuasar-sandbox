@@ -32,14 +32,18 @@ class TagSelectionTests(unittest.TestCase):
     def test_repository_release_layout(self):
         root = pathlib.Path(__file__).resolve().parents[2]
         files = subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z', 'release', 'releases']).decode().split('\0')
-        for path in map(pathlib.PurePosixPath, filter(None, files)):
-            if path.parts[0] == 'release':
+        paths = [pathlib.PurePosixPath(f) for f in files if f]
+        self.assertEqual({str(p) for p in paths if p.parts[0] == 'releases'},
+                         {'releases/release.yaml', 'releases/daily-preview.yaml'})
+        for path in (p for p in paths if p.parts[0] == 'release'):
+            if path.parts[:2] == ('release', 'inputs'):
+                self.assertEqual(len(path.parts), 3, path)
+                self.assertEqual(path.suffix, '.yaml', path)
+                self.assertNotIn(path.name, {'release.yaml', 'daily-preview.yaml'}, path)
+                self.assertFalse(path.name.startswith('release-v'), path)
+            else:
                 self.assertIn(path.suffix, {'.py', '.sh'}, path)
                 self.assertFalse(path.name.startswith('test') or path.stem.endswith('_test'), path)
-            else:
-                self.assertEqual(len(path.parts), 2, path)
-                self.assertEqual(path.suffix, '.yaml', path)
-                self.assertFalse(path.name.startswith('release-v'), path)
 
     def test_new_manifest_rejects_independent_test_selection(self):
         for preview in (False, True):
