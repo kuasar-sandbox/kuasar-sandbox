@@ -29,8 +29,10 @@ def inspect(root, source):
 def owner(root, source):
     inspect(root, source)
     git = tag_sources.git
-    path = 'releases/helper-inputs.yaml'
-    if not (root / path).exists() and not (root / path).is_symlink():
+    for path in ('release/inputs/helper-inputs.yaml', 'releases/helper-inputs.yaml'):
+        if (root / path).exists() or (root / path).is_symlink():
+            break
+    else:
         path = contract.DECLARATION
     data = contract.regular(root, path).read_bytes()
     declaration = contract.declaration(data.decode())

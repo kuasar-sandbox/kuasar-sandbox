@@ -3,16 +3,22 @@ from pathlib import Path
 import shutil
 import json
 
+def guide_declaration(root: Path):
+    for path in (Path('release/inputs/guide-inputs.yaml'), Path('releases/guide-inputs.yaml')):
+        if (root / path).exists() or (root / path).is_symlink():
+            return path
+    return Path('release/guide-inputs.txt')
+
+
 def guide_inputs(root: Path):
     """Read the selected repository's declaration; never maintain owner lists here."""
-    path = Path('releases/guide-inputs.yaml')
-    if (root / path).exists() or (root / path).is_symlink():
-        declaration = regular_input(root, path)
+    path = guide_declaration(root)
+    declaration = regular_input(root, path)
+    if path.suffix == '.yaml':
         patterns = json.loads(declaration.read_text(encoding='utf-8'))
         if not isinstance(patterns, list) or not all(isinstance(p, str) and p for p in patterns):
             raise ValueError('invalid guide input list')
     else:
-        declaration = regular_input(root, Path('release/guide-inputs.txt'))
         patterns = [line.strip() for line in declaration.read_text(encoding='utf-8').splitlines()
                     if line.strip() and not line.strip().startswith('#')]
     inputs = []

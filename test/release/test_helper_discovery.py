@@ -231,16 +231,19 @@ class OwnerDiscovery(unittest.TestCase):
 
     def test_yaml_helper_binds_original_blob_with_legacy_component_tags(self):
         root = self.roots['platform']
-        path = 'releases/helper-inputs.yaml'
-        (root / 'releases').mkdir()
-        git(root, 'mv', c.DECLARATION, path)
-        git(root, 'commit', '-qm', 'Move platform declaration')
-        self.sources['platform'].update(sha=git(root, 'rev-parse', 'HEAD'), tree=git(root, 'rev-parse', 'HEAD^{tree}'))
-        contract = helper_inputs.discover(self.roots, self.sources)
-        row = contract['owners']['platform']
-        self.assertEqual(row['declaration_blob'], git(root, 'rev-parse', 'HEAD:' + path))
-        self.assertEqual(row['declaration_sha256'], self.contract['owners']['platform']['declaration_sha256'])
-        self.assertEqual(contract['owners']['connector'], self.contract['owners']['connector'])
+        old = c.DECLARATION
+        for path in ('releases/helper-inputs.yaml', 'release/inputs/helper-inputs.yaml'):
+            with self.subTest(path=path):
+                (root / path).parent.mkdir()
+                git(root, 'mv', old, path)
+                git(root, 'commit', '-qm', 'Move platform declaration')
+                self.sources['platform'].update(sha=git(root, 'rev-parse', 'HEAD'), tree=git(root, 'rev-parse', 'HEAD^{tree}'))
+                contract = helper_inputs.discover(self.roots, self.sources)
+                row = contract['owners']['platform']
+                self.assertEqual(row['declaration_blob'], git(root, 'rev-parse', 'HEAD:' + path))
+                self.assertEqual(row['declaration_sha256'], self.contract['owners']['platform']['declaration_sha256'])
+                self.assertEqual(contract['owners']['connector'], self.contract['owners']['connector'])
+                old = path
 
     def test_source_declaration_and_tag_are_independently_bound(self):
         root = self.roots['connector']
