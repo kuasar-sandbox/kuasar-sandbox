@@ -148,6 +148,20 @@ class DocumentationPackageTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'invalid guide input list'):
             guide_inputs(source)
 
+    def test_inputs_guides_take_precedence_over_historical_declaration(self):
+        source = self.root / 'platform'
+        historical = source / 'releases/guide-inputs.yaml'
+        historical.parent.mkdir()
+        historical.write_text('["docs/"]')
+        current = source / 'release/inputs/guide-inputs.yaml'
+        current.parent.mkdir()
+        current.write_text('["README.md"]')
+        self.assertEqual(guide_inputs(source), [Path('README.md')])
+        current.unlink()
+        current.symlink_to('missing')
+        with self.assertRaisesRegex(ValueError, 'symbolic link'):
+            guide_inputs(source)
+
     def test_platform_directory_keeps_equal_basenames_in_distinct_subdirectories(self):
         source = self.root / 'platform'
         declaration = source / 'release/guide-inputs.txt'

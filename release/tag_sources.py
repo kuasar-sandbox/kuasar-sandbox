@@ -121,10 +121,10 @@ def validate_records(records):
 
 def require_owner_guides(sources, *, owner_layout=False):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'test/e2e'))
-    from package_inputs import guide_inputs
+    from package_inputs import guide_declaration, guide_inputs
     for owner, unit in OWNER_UNITS.items():
         source = source_path(sources, unit, owner_layout=owner_layout)
-        require(any((source / path).is_file() for path in ('releases/guide-inputs.yaml', 'release/guide-inputs.txt')),
+        require((source / guide_declaration(source)).is_file(),
                 f'{owner} selected tag lacks its guide declaration; '
                 'first cutover requires a normal new component tag, not newer HEAD inputs')
         guide_inputs(source)
