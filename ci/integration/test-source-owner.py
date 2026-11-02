@@ -46,10 +46,10 @@ class SourceOwnerClosureTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="source-owner-") as tmp:
             org=pathlib.Path(tmp); platform=org/"platform"
             (platform/"ci/integration").mkdir(parents=True)
-            (platform/"releases").mkdir()
+            (platform/"release/inputs").mkdir(parents=True)
             shutil.copy2(HELPER,platform/"ci/integration/source-owner.sh")
-            manifest=ROOT/"releases/bin-inputs.yaml"
-            shutil.copy2(manifest,platform/"releases/bin-inputs.yaml")
+            manifest=ROOT/"release/inputs/bin-inputs.yaml"
+            shutil.copy2(manifest,platform/"release/inputs/bin-inputs.yaml")
             required=set(self.words("required-bins","sandboxer"))
             for line in manifest.read_text().splitlines():
                 if not line.strip() or line.lstrip().startswith("#"): continue

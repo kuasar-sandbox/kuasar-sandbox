@@ -264,7 +264,7 @@ An additional native workbench gate imports those exact staged bytes and starts 
 
 Publication copies the tested saved images to `ghcr.io/kuasar-sandbox/workbench:<aggregate-version-without-release-prefix>`, verifies both architecture config identities and the multi-architecture index, and anonymously reads back each digest-pinned image into a temporary Docker archive. The archive verifier checks every expanded layer against the config from the tested offline image, including on publication retries. Registry digests, image IDs and offline archive hashes have distinct meanings. Existing same-name tags/assets must match; retries upload missing assets without overwriting tested bytes. Cross-service publication is resumable: the GitHub draft becomes public only after the registry and complete GitHub asset set agree. A conflict fails closed. Original source history and published release bytes are not amended.
 
-The `release/` directory contains publishing scripts. Put release declarations in `releases/*.yaml` and release-tool tests in `test/release/`. Stable reads `releases/release.yaml`; Preview reads `releases/daily-preview.yaml`. To describe the current selection, add either or both optional Markdown fields:
+Keep publishing scripts in `release/`, shared build and packaging inputs in `release/inputs/`, and release-tool tests in `test/release/`. The `releases/` directory contains only the two channel manifests. Stable reads `releases/release.yaml`; Preview reads `releases/daily-preview.yaml`. To describe the current selection, add either or both optional Markdown fields:
 
 ```yaml
 notes:
@@ -295,7 +295,7 @@ entrypoints. It does not copy the whole test tree or include undeclared guides.
 `test/e2e/assemble_docs.py` rebases links in whole selected documents without
 editing sections, executable examples, configuration values or product binaries.
 
-Platform helpers use `releases/helper-inputs.yaml` and tool pins in `releases/helper-tools.yaml`. Components and older tags can use `release/helper-inputs.json`. Platform helper and guide declarations use JSON-compatible YAML. Schema `1` declares the complete `helpers` inventory (`name`, optional `env`, and case filename patterns in `cases`), the repository-relative `recipe`, and dependency owners in `dependencies`. An owner with no helpers declares an empty list and a null recipe. The generic builder invokes `bash <recipe> <architecture> <output-directory>` in the owner's root with the fixed dependency workspace; internal commands remain in that repository. Every declared output must be a regular, safe executable with the requested ELF architecture. Undeclared, missing or duplicate outputs fail.
+Platform helpers use `release/inputs/helper-inputs.yaml` and tool pins in `release/inputs/helper-tools.yaml`. Components and older tags can use `release/helper-inputs.json`. Platform helper and guide declarations use JSON-compatible YAML. Schema `1` declares the complete `helpers` inventory (`name`, optional `env`, and case filename patterns in `cases`), the repository-relative `recipe`, and dependency owners in `dependencies`. An owner with no helpers declares an empty list and a null recipe. The generic builder invokes `bash <recipe> <architecture> <output-directory>` in the owner's root with the fixed dependency workspace; internal commands remain in that repository. Every declared output must be a regular, safe executable with the requested ELF architecture. Undeclared, missing or duplicate outputs fail.
 
 The input plan binds repository, selected tag or admitted candidate ref, commit/tree, declaration bytes and recipe blobs. Producer receipts and the packaged `helpers/contract.json` retain that expected inventory; validators compare actual bytes, modes, architecture and source identity to it. Public prepare/run do not build helpers or accept an output receipt as its own inventory authority. Necessary case capabilities remain checked separately from the complete allowed inventory.
 
@@ -319,7 +319,7 @@ validation and execution still validate the actual delivered package.
 
 #### Repository-owned documentation selection
 
-The admitted platform source declares guide paths as a string array in `releases/guide-inputs.yaml`. Components and older tags can supply their newline-delimited `release/guide-inputs.txt`. Entries are repository-relative Markdown files,
+The admitted platform source declares guide paths as a string array in `release/inputs/guide-inputs.yaml`. Components and older tags can supply their newline-delimited `release/guide-inputs.txt`. Entries are repository-relative Markdown files,
 directories (recursive Markdown discovery), or glob patterns. In the legacy text format, blank lines and
 `#` comments are ignored. Every entry must match; missing/empty declarations,
 path escapes, symlinks, non-Markdown explicit inputs and overlapping entries fail

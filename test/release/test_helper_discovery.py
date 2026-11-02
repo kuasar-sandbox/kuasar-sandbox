@@ -107,7 +107,7 @@ class OwnerDiscovery(unittest.TestCase):
         # and an owner fixture with the normal versitygw build ABI.
         root = self.root / 'platform-production'; root.mkdir()
         platform_root = root / 'platform'; platform_root.mkdir()
-        for name in ('release/build-platform-helpers.sh', 'releases/helper-tools.yaml', 'ci/integration/materialize-source.sh'):
+        for name in ('release/build-platform-helpers.sh', 'release/inputs/helper-tools.yaml', 'ci/integration/materialize-source.sh'):
             target = platform_root / name; target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, target)
         upstream = root / 'upstream'; upstream.mkdir()

@@ -375,7 +375,7 @@ Workbench 的 prepare 与构建期 collector 共享规范用例发现和外部�
 
 发布把已测试的保存镜像复制到 `ghcr.io/kuasar-sandbox/workbench:<去掉-release-前缀的聚合版本>`，验证两种架构的 config 身份和多架构 index，并匿名回读每个按 digest 固定的镜像到临时 Docker archive。归档校验器将每个解压后的镜像层与已测试离线镜像的 config 逐一绑定，发布重试也必须通过。registry digest、镜像 ID、离线 archive hash 含义各自独立。已有同名 Tag/资产必须匹配；重试只补传缺失资产，不覆盖测试字节。跨服务发布可恢复：只有 registry 和完整 GitHub 资产集合一致，GitHub draft 才公开。冲突时失败关闭，不改写历史源码和已发布字节。
 
-`release/` 只存放发布脚本。发布声明放在 `releases/*.yaml`，发布工具测试放在 `test/release/`。正式版读取 `releases/release.yaml`，Preview 读取 `releases/daily-preview.yaml`。可以为当前选择填写以下一个或两个可选 Markdown 字段：
+`release/` 存放发布脚本，`release/inputs/` 存放跨版本复用的构建和打包输入，发布工具测试放在 `test/release/`。`releases/` 只存放两份渠道发布清单。正式版读取 `releases/release.yaml`，Preview 读取 `releases/daily-preview.yaml`。可以为当前选择填写以下一个或两个可选 Markdown 字段：
 
 ```yaml
 notes:
@@ -401,7 +401,7 @@ Demo 脚本和锁文件、预构建 helper、本地 wheel 与轻量 workbench �
 `test/e2e/assemble_docs.py` 对完整的已选文档重写链接，不抽取章节、不改写可执行示例、
 配置值或产品二进制。
 
-平台 helper 使用 `releases/helper-inputs.yaml` 和固定的 `releases/helper-tools.yaml`。组件和旧 tag 可以继续使用 `release/helper-inputs.json`。平台的 helper 及指南清单均使用兼容 JSON 的 YAML 格式。Schema `1` 声明完整的 `helpers` 清单（`name`、可选 `env` 和 `cases` 中的用例文件名模式）、仓内相对路径 `recipe`，以及 `dependencies` 中的依赖 owner。没有 helper 的 owner 显式声明空清单和 null 配方。通用构建器在 owner 根目录中使用固定依赖工作区调用 `bash <recipe> <architecture> <output-directory>`；内部构建命令由该仓库维护。每个声明输出必须是权限安全且符合目标 ELF 架构的普通可执行文件。未声明、缺失或重复的输出均失败。
+平台 helper 使用 `release/inputs/helper-inputs.yaml` 和固定的 `release/inputs/helper-tools.yaml`。组件和旧 tag 可以继续使用 `release/helper-inputs.json`。平台的 helper 及指南清单均使用兼容 JSON 的 YAML 格式。Schema `1` 声明完整的 `helpers` 清单（`name`、可选 `env` 和 `cases` 中的用例文件名模式）、仓内相对路径 `recipe`，以及 `dependencies` 中的依赖 owner。没有 helper 的 owner 显式声明空清单和 null 配方。通用构建器在 owner 根目录中使用固定依赖工作区调用 `bash <recipe> <architecture> <output-directory>`；内部构建命令由该仓库维护。每个声明输出必须是权限安全且符合目标 ELF 架构的普通可执行文件。未声明、缺失或重复的输出均失败。
 
 输入计划绑定仓库、所选 Tag 或已准入候选 ref、commit/tree、声明原始内容和配方 blob。producer 收据和打包的 `helpers/contract.json` 保留该预期清单；校验器将实际字节、权限、架构及源码身份与之比较。公共 prepare/run 不构建 helper，也不允许输出收据自定其允许清单。用例必要能力独立于完整允许清单进行检查。
 
@@ -421,7 +421,7 @@ Demo 脚本和锁文件、预构建 helper、本地 wheel 与轻量 workbench �
 
 #### 仓库自行声明交付文档
 
-平台从已接纳源码的 `releases/guide-inputs.yaml` 读取字符串数组。组件和旧 tag 的 `release/guide-inputs.txt` 继续按行读取。
+平台从已接纳源码的 `release/inputs/guide-inputs.yaml` 读取字符串数组。组件和旧 tag 的 `release/guide-inputs.txt` 继续按行读取。
 条目可以是仓内相对 Markdown 路径、目录（递归发现 Markdown）或 glob 模式；
 旧文本清单忽略空行和 `#` 注释。每个条目必须匹配；声明缺失或为空、越界路径、符号链接、
 显式选择非 Markdown 文件以及重复匹配均使组装失败。目录发现保留 `docs/` 下的嵌套路径。
