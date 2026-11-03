@@ -1,8 +1,6 @@
 """Narrative adaptation preserves exact evidence and the existing body readers."""
 import copy
 import json
-import re
-from urllib.parse import urljoin
 from pathlib import Path
 import subprocess
 import sys
@@ -174,86 +172,6 @@ class NarrativeTests(unittest.TestCase):
         self.assertIn(compare, adjusted)
         self.assertIn(url, adjusted)
         notes.validate(adjusted, self.version, self.units)
-
-    def test_last_summary_keeps_warning_links_selection_and_evidence_at_exact_budget(self):
-        url = 'https://example.invalid/immutable#L11-L34'
-        comparison = 'https://github.com/kuasar-sandbox/sandboxer/compare/v1...v2'
-        generated = self.text + 'Generated detail.\n' * 2000 + '\n### sandboxer\n[Full comparison](' + comparison + ')\n'
-        fields = {'body': 'Authored prose. ' * 2000, 'upgrade_notice': 'Mandatory warning. 请保留。\n' * 120}
-        narrative = notes.Narrative(generated, fields, url, version=self.version, units=self.units)
-        minimum = notes.compact_delivery_summary(self.version, self.units, url, narrative.notice, generated)
-        self.assertLess(len(minimum), len(notes.delivery_summary(self.version, self.units, url, narrative.notice, generated)))
-        self.assertEqual(narrative.fit(narrative.text, len(minimum)), minimum)
-        self.assertEqual(narrative.fit(narrative.text, len(minimum) - 1), narrative.text)
-        self.assertEqual(notes.inline_notice(minimum), narrative.notice)
-        self.assertIn(comparison, [urljoin('https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/' + self.version, target)
-                                  for target in re.findall(r'\]\(([^)]+)\)', minimum)])
-        self.assertIn(url, minimum)
-        self.assertIn('/blob/' + self.version + '/docs', minimum)
-        self.assertIn('ARM Workbench artifact-only ≠ system tests.', minimum)
-        notes.validate(minimum, self.version, self.units)
-        record = self.binding()
-        original = copy.deepcopy(record)
-        baseline = body.binding_text(minimum, record, '\n')
-        with patch.object(body, 'MAX_CHARACTERS', len(baseline)):
-            adjusted = body.binding_text(narrative.text, record, '\n', fit_notes=narrative.fit)
-        self.assertEqual(adjusted, baseline)
-        self.assertEqual(json.loads(adjusted.split(body.MARKER)[1].split(' -->')[0]), original)
-        self.assertEqual(record, original)
-        with patch.object(body, 'MAX_CHARACTERS', len(baseline) - 1), self.assertRaisesRegex(ValueError, 'must not be truncated'):
-            body.binding_text(narrative.text, record, '\n', fit_notes=narrative.fit)
-
-    def test_last_summary_keeps_preview_label_and_no_notice(self):
-        version = self.version + '-preview.20990101'
-        summary = notes.compact_delivery_summary(version, self.units, 'https://example.invalid/notes', '', self.text)
-        self.assertIn('Preview.', summary)
-        self.assertNotIn('Stable.', summary)
-        self.assertEqual(notes.inline_notice(summary), '')
-        notes.validate(summary, version, self.units)
-
-    def test_richer_delivery_summary_still_wins_when_it_fits(self):
-        generated = self.text + 'Generated detail.\n' * 2000
-        fields = {'body': 'Long prose. ' * 2000, 'upgrade_notice': 'Full warning.'}
-        narrative = notes.Narrative(generated, fields, 'https://example.invalid/notes', version=self.version, units=self.units)
-        richer = notes.delivery_summary(self.version, self.units, narrative.url, narrative.notice, generated) + '\n'
-        self.assertEqual(narrative.fit(narrative.text, len(richer)), richer)
-
-    def test_last_summary_does_not_hide_malformed_marked_warning(self):
-        for notice in (notes.NOTICE_START + '\n## Warning\nMissing end.',
-                       notes.NOTICE_END, notes.NOTICE_START + '\nnot a heading\n' + notes.NOTICE_END):
-            with self.subTest(notice=notice), self.assertRaisesRegex(ValueError, 'release notice'):
-                notes.compact_delivery_summary(self.version, self.units, 'https://example.invalid/notes', notice, self.text)
-
-    def test_last_summary_removes_only_duplicate_generated_heading(self):
-        fields = {'upgrade_notice': '## Authored warning\n\nKeep every word. 请保留。\n'}
-        narrative = notes.Narrative(self.text, fields, 'https://example.invalid/notes')
-        summary = notes.compact_delivery_summary(self.version, self.units, narrative.url, narrative.notice, self.text)
-        expected = notes.NOTICE_START + '\n' + fields['upgrade_notice'] + notes.NOTICE_END
-        self.assertEqual(notes.inline_notice(summary), expected)
-        self.assertEqual(len(narrative.notice) - len(expected), len('## Important upgrade notice\n\n'))
-        self.assertTrue(summary.startswith('# Kuasar Sandbox ' + self.version + '\n' + expected))
-        # Do not deduplicate arbitrary authored titles or warnings without H2s.
-        for warning in ('No heading.\n', '# Authored H1\n', '### Authored H3\n'):
-            narrative = notes.Narrative(self.text, {'upgrade_notice': warning})
-            summary = notes.compact_delivery_summary(self.version, self.units, 'notes', narrative.notice, self.text)
-            self.assertEqual(notes.inline_notice(summary), narrative.notice)
-
-    def test_last_summary_keeps_exact_github_targets_and_private_reporting(self):
-        base = 'https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/' + self.version
-        manifest = 'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/' + self.revision + '/releases/release.yaml#L11-L34'
-        comparison = 'https://github.com/kuasar-sandbox/sandboxer/compare/v1...v2'
-        generated = self.text + '\n### sandboxer\n[Full comparison](' + comparison + ')\n'
-        summary = notes.compact_delivery_summary(self.version, self.units, manifest, '', generated)
-        targets = [urljoin(base, target) for target in re.findall(r'\]\(([^)]+)\)', summary)]
-        self.assertEqual(targets, [manifest.split('#', 1)[0],
-            'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/' + self.version + '/docs/quickstart.md',
-            'https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new', comparison])
-        self.assertIn('## Production deployment\nSee Quick Start.', summary)
-        self.assertIn('Verify SHA256SUMS.', summary)
-        self.assertIn('## Security\n[Private]', summary)
-        for url in ('https://github.com.evil.invalid/notes', 'https://example.invalid/notes'):
-            summary = notes.compact_delivery_summary(self.version, self.units, url, '', self.text)
-            self.assertIn('[↗](' + url + ')', summary)
 
     def test_irreducible_notice_or_evidence_rejects_publication(self):
         for long_notice in (True, False):

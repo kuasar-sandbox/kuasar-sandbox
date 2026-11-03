@@ -141,50 +141,6 @@ def delivery_summary(version, units, url, notice, generated):
     return summary
 
 
-def compact_delivery_summary(version, units, url, notice, generated):
-    """Last human-only fallback; preserve the authored warning and link targets."""
-    def link(label, target):
-        # Release bodies live on github.com. Keep a host-root-relative target,
-        # never a repository/file-relative path or a lookalike hostname.
-        if target.startswith('https://github.com/'):
-            target = target.removeprefix('https://github.com')
-        return f'[{label}]({target})'
-
-    title = f'# Kuasar Sandbox {version}'
-    if notice:
-        inline_notice(title + '\n' + notice)
-        # An authored H2 already supplies the notice heading. Remove only our
-        # redundant wrapper heading, never a character of the authored warning.
-        wrapper = NOTICE_START + '\n## Important upgrade notice\n\n'
-        if notice.startswith(wrapper + '## '):
-            notice = NOTICE_START + '\n' + notice.removeprefix(wrapper)
-    lines = [title]
-    if notice:
-        lines.append(notice)
-    # The same immutable manifest contains the complete reviewed notes; only
-    # its optional line-selection fragment is omitted in this final fallback.
-    notes_url = re.sub(r'(https://github\.com/kuasar-sandbox/kuasar-sandbox/blob/[0-9a-f]{40}/releases/(?:release|daily-preview)\.yaml)#L[0-9]+-L[0-9]+$', r'\1', url)
-    lines += ['## Highlights', link('↗', notes_url), '## Component versions',
-              'Unit|Tag', '---|---']
-    lines += [f'| `{unit}` | `{units[unit]}` |' for unit in UNITS]
-    docs = f'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/{version}/docs'
-    lines += ['## Supported environment', 'Linux x86_64/aarch64.', '## Quick Start',
-              link('↗', docs + '/quickstart.md'), 'Verify SHA256SUMS.',
-              '## Production deployment', 'See Quick Start.',
-              '## Known limitations', 'ARM Workbench artifact-only ≠ system tests.',
-              '## Security', link('Private', 'https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new'),
-              '## Versioning and release channels',
-              'Preview.' if '-preview.' in version else 'Stable.', '## Component updates']
-    sections = re.split(r'(?m)^### (\w+)\n', generated)
-    updates = dict(zip(sections[1::2], sections[2::2]))
-    for unit in UNITS:
-        lines.append('### ' + unit)
-        lines += [link('↗', target) for target in COMPARISON.findall(updates.get(unit, ''))]
-    summary = '\n'.join(lines) + '\n'
-    validate(summary, version, units)
-    return summary
-
-
 class Narrative:
     def __init__(self, text, fields=None, url=None, *, version=None, units=None):
         self.version, self.units = version, units
@@ -225,9 +181,6 @@ class Narrative:
             minimum = delivery_summary(self.version, self.units, self.url, self.notice, self.generated) + '\n'
             if len(minimum) <= available:
                 return minimum
-            compact = compact_delivery_summary(self.version, self.units, self.url, self.notice, self.generated)
-            if len(compact) <= available:
-                return compact
         return prefix
 
 
