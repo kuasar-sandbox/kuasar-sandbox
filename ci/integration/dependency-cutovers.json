@@ -78,6 +78,43 @@
     {
       "candidate": {
         "base_ref": "main",
+        "base_sha": "185f50b641ea84864bc8e0f7bab5c469100d45e3",
+        "candidate_sha": "888709eaad82f81f9054229b803126c1378c7283",
+        "head_sha": "73247999f0a4419b5cf609ea184fb41abcbca514",
+        "pull_request_number": 401,
+        "repository": "kuasar-sandbox/sandboxer"
+      },
+      "units": {
+        "accelerator": {
+          "tag": "v0.1.10-preview.20261103",
+          "sha": "6ecec94495c0a255479f18e6219e52b4eb2408e7",
+          "release_id": 432117550,
+          "assets": [
+            {
+              "name": "SHA256SUMS",
+              "id": 703691173,
+              "size": 247,
+              "digest": "sha256:c26330eee9c772efe00ca55d00f416f83e223987f1c546a853424b4b3a533969"
+            },
+            {
+              "name": "accelerator-v0.1.10-preview.20261103-linux-aarch64.tar.gz",
+              "id": 703691172,
+              "size": 35475852,
+              "digest": "sha256:1eb6ceda6117d18ac36e2f4f94422412092339a759e460c06aa5a46fc1251448"
+            },
+            {
+              "name": "accelerator-v0.1.10-preview.20261103-linux-x86_64.tar.gz",
+              "id": 703691174,
+              "size": 38835447,
+              "digest": "sha256:cbf122532a4cba365f6d38072ab51ee9cdebeeed1d009e0b6414051fdabc6d4d"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "candidate": {
+        "base_ref": "main",
         "base_sha": "4ca25c42299580d42d848d455ab4a360e37ce108",
         "candidate_sha": "3ad9131153d49c446663959fca1c72073f517386",
         "head_sha": "bc5db2b0435a193046ae669c33c70aca5117e3be",
