@@ -74,6 +74,68 @@
           ]
         }
       }
+    },
+    {
+      "candidate": {
+        "base_ref": "main",
+        "base_sha": "4ca25c42299580d42d848d455ab4a360e37ce108",
+        "candidate_sha": "3ad9131153d49c446663959fca1c72073f517386",
+        "head_sha": "bc5db2b0435a193046ae669c33c70aca5117e3be",
+        "pull_request_number": 500,
+        "repository": "kuasar-sandbox/orchestrator"
+      },
+      "units": {
+        "accelerator": {
+          "tag": "v0.1.10-preview.20261103",
+          "sha": "6ecec94495c0a255479f18e6219e52b4eb2408e7",
+          "release_id": 432117550,
+          "assets": [
+            {
+              "name": "SHA256SUMS",
+              "id": 703691173,
+              "size": 247,
+              "digest": "sha256:c26330eee9c772efe00ca55d00f416f83e223987f1c546a853424b4b3a533969"
+            },
+            {
+              "name": "accelerator-v0.1.10-preview.20261103-linux-aarch64.tar.gz",
+              "id": 703691172,
+              "size": 35475852,
+              "digest": "sha256:1eb6ceda6117d18ac36e2f4f94422412092339a759e460c06aa5a46fc1251448"
+            },
+            {
+              "name": "accelerator-v0.1.10-preview.20261103-linux-x86_64.tar.gz",
+              "id": 703691174,
+              "size": 38835447,
+              "digest": "sha256:cbf122532a4cba365f6d38072ab51ee9cdebeeed1d009e0b6414051fdabc6d4d"
+            }
+          ]
+        },
+        "sandboxer": {
+          "tag": "v0.1.12-preview.20261103",
+          "sha": "185f50b641ea84864bc8e0f7bab5c469100d45e3",
+          "release_id": 432121465,
+          "assets": [
+            {
+              "name": "SHA256SUMS",
+              "id": 703706196,
+              "size": 243,
+              "digest": "sha256:2d659824e44e54c16e0f4f272a19e01f6c9cb1a1bccf2ec504163995c399b56d"
+            },
+            {
+              "name": "sandboxer-v0.1.12-preview.20261103-linux-aarch64.tar.gz",
+              "id": 703706198,
+              "size": 15821739,
+              "digest": "sha256:418be8436c97c34ad46e0dabbae640f4e3e222a8fe8ab46e6635bdfcdfc749d6"
+            },
+            {
+              "name": "sandboxer-v0.1.12-preview.20261103-linux-x86_64.tar.gz",
+              "id": 703706207,
+              "size": 17018809,
+              "digest": "sha256:5eba53c05e838d92ac5bb1b9c006dda063a2644bb26fb8eecdc4a08099a39863"
+            }
+          ]
+        }
+      }
     }
   ]
 }
