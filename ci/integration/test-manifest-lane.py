@@ -98,9 +98,9 @@ class ClassificationTests(unittest.TestCase):
         broken = self.qualify({subject.MANIFESTS[0]: manifest() + '# plan\n', 'docs/plan.md': '[bad](missing.md)\n'})
         self.assertEqual(broken['conclusion'], 'failure')
 
-    def test_code_tooling_tests_configuration_unknown_and_companion_mix_are_full(self):
-        paths = ('src/code.go', 'ci/integration/docs_lane.py', '.github/workflows/ci.yml',
-                 'release/selection.py', 'test/e2e/cases/a.sh', 'config/settings.yaml',
+    def test_product_tests_configuration_unknown_and_companion_mix_are_full(self):
+        paths = ('src/code.go', 'Makefile', 'release/inputs/bin-inputs.yaml',
+                 'workbench/build.py', 'test/e2e/cases/a.sh', 'config/settings.yaml',
                  'releases/other.yaml', 'releases/release.yml', 'AGENTS.md')
         for path in paths:
             with self.subTest(path=path):
@@ -109,6 +109,13 @@ class ClassificationTests(unittest.TestCase):
         self.assertEqual(self.qualify({subject.MANIFESTS[0]: manifest() + '# plan\n'}, companion='main.go')['lane'], 'full')
         self.assertIsNone(docs_lane.classify('kuasar-sandbox/connector', tree(),
                                             tree({subject.MANIFESTS[0]: entry()})))
+
+    def test_tooling_manifest_mix_preserves_both_manifest_views(self):
+        result = self.qualify({subject.MANIFESTS[0]: manifest() + '# plan\n',
+                               'release/selection.py': 'VALUE = 1\n'})
+        self.assertEqual(result['lane'], 'tooling')
+        self.assertEqual(result['conclusion'], 'success')
+        self.assertEqual(set(result['repositories'][0]['manifests']), {'head', 'candidate'})
 
     def test_modes_deletions_and_incomplete_trees(self):
         for mode in ('120000', '100755', '160000'):
