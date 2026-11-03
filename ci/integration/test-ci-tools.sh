@@ -28,6 +28,7 @@ working_set_perf="$SCRIPT_DIR/../../test/perf/sandbox-perf-working-set.sh"
 
 python3 -B "$SCRIPT_DIR/test-e2e-tool-paths.py"
 python3 -B "$SCRIPT_DIR/test-workbench-build.py"
+python3 -B "$SCRIPT_DIR/test-tooling-lane.py"
 
 # These positive fixtures must remain compatible with the runtime's strict
 # disk/restore input contract. Deliberate rejection tests live in sandboxer

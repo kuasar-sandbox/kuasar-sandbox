@@ -56,7 +56,7 @@ Sandboxer library changes likewise rebuild `node-ctl`, whose management and publ
 
 Product-impact selection also adds consumer tests: accelerator/runtime changes that rebuild `flatten-ctl` select telemetry cases, and sandboxer library changes that rebuild `node-ctl` select `orchestrator.resource-*`. These cases use the plan's exact test-owner revisions and capability-matched lanes; they do not select another main revision. Atomic harness/dependency fixes use the reciprocal companion declaration above to qualify their explicit joint source tuple.
 
-### Documentation and manifest qualification before downloads
+### Documentation, manifest and tooling qualification before downloads
 
 Source PR resolution compares the complete exact base, head and integration Git
 trees for the primary and every admitted companion. The `docs` lane permits only
@@ -65,19 +65,42 @@ ordinary `100644` Markdown in `README{,_zh}.md`, `test/e2e/README{,_zh}.md`,
 `workbench/README{,_zh}.md`, `ci/runner/README{,_zh}.md` and
 `test/demo/DEMO{,_zh}.md`. The `manifest` lane adds only platform's
 `releases/release.yaml` and `releases/daily-preview.yaml`; it may include the same
-allowed documentation and runs both checks. Any source, CI/workflow, release
-tooling, test, runtime configuration, unknown path/repository or nonordinary file
-in any candidate retains full CI. Truncated trees and empty changes also retain
+allowed documentation and runs both checks. Product source, E2E/performance tests,
+runtime configuration, unknown paths/repositories and nonordinary files retain
+full CI. Truncated trees and empty changes also retain
 full CI. Missing exact identities fail. Deleting a maintained manifest fails its
 pair validation; a symlink sibling cannot supply a manifest.
+
+The `tooling` lane adds CI/release Python and shell files in `ci/`, `release/`
+and `test/release/`, workflow/action YAML and action JavaScript under `.github/`,
+and the component `scripts/ci-*`, `scripts/release*` and `scripts/test-release*`
+entries (including Go release validators). The explicit shared helper/publisher
+entry list is in `ci/integration/tooling_lane.py`; it also includes the platform's
+two extensionless runner shell scripts and `ci/integration/dependency-cutovers.json`.
+Scripts may be ordinary `100644` or executable `100755` blobs. Product files,
+`Makefile`, `workbench/` implementation, `release/inputs/` build declarations and
+`ci/integration/runner-capabilities.json` remain full. Any product change in the
+primary or a companion overrides every light classification.
+
+Tooling qualification checks syntax of changed files at both exact head and
+merge: Python compiles only to a discarded memory object, shell/JavaScript/Go
+use parse-only commands, and workflow/action YAML uses a safe parser and basic
+structure checks. It never imports or runs candidate tooling, installs candidate
+dependencies, invokes candidate actions or builds products. Cutover data reuses
+the trusted complete schema parser without admitting dependencies or querying
+publications. Changing that data cannot activate a dependency until a subsequent
+product run reads it from the trusted base. Script logic and product integration
+are exercised by the next applicable product build/E2E, not a script-only PR.
+Tooling may include allowed docs and manifests; their existing checks still run.
+No light lane skips the finalizer, and `exact-assets` release acceptance stays full.
 
 Policy and checking code come from the platform's trusted baseline, including
 the platform companion's base when present. A candidate cannot add itself to the
 allowlist. A baseline without the new manifest policy keeps manifest changes on
-full CI. The candidate workflow still tests its own contracts through the full
-source gate, so the implementation can be tested before activation. Classification
-precedes baseline assets, source archives and build environments. No candidate
-code executes in either light lane.
+full CI. The first tooling-policy implementation PR retains full CI under its
+older trusted base, so the change can be tested before activation. Classification
+precedes baseline assets, source archives and build environments. The trusted light
+checkers parse candidate files without executing them.
 
 The shared `ci/check_docs.py` rules check UTF-8, local links and anchors,
 reciprocal pairs and English defaults. English-only documents remain valid.
@@ -110,8 +133,7 @@ and current PR/base/head/companion admission is rechecked. Missing, cancelled,
 failed, empty or stale evidence cannot pass. Evidence retains the manifest plans,
 published identities and pending prerequisites. Aggregate release `exact-assets`
 always retains its complete E2E and Workbench acceptance. Record actual
-`docs`/`manifest`/`full` Actions timings before claiming savings. The implementation
-PR itself follows full CI because it changes executable policy/workflows.
+`docs`/`manifest`/`tooling`/`full` Actions timings before claiming savings.
 Rollback restores full scheduling without relaxing admission or required checks.
 
 
