@@ -198,6 +198,68 @@
           ]
         }
       }
+    },
+    {
+      "candidate": {
+        "repository": "kuasar-sandbox/sandboxer",
+        "pull_request_number": 404,
+        "base_ref": "main",
+        "base_sha": "c6fd3dd84345cba325256524e60897b81992a5b2",
+        "head_sha": "48e9b51d489911ecb1a747f5a087ed6a03f6cee5",
+        "candidate_sha": "3445f2751f53406d7ae039b11f524c462469df4c"
+      },
+      "units": {
+        "accelerator": {
+          "tag": "v0.1.10-preview.20261103",
+          "sha": "6ecec94495c0a255479f18e6219e52b4eb2408e7",
+          "release_id": 432117550,
+          "assets": [
+            {
+              "name": "SHA256SUMS",
+              "id": 703691173,
+              "size": 247,
+              "digest": "sha256:c26330eee9c772efe00ca55d00f416f83e223987f1c546a853424b4b3a533969"
+            },
+            {
+              "name": "accelerator-v0.1.10-preview.20261103-linux-aarch64.tar.gz",
+              "id": 703691172,
+              "size": 35475852,
+              "digest": "sha256:1eb6ceda6117d18ac36e2f4f94422412092339a759e460c06aa5a46fc1251448"
+            },
+            {
+              "name": "accelerator-v0.1.10-preview.20261103-linux-x86_64.tar.gz",
+              "id": 703691174,
+              "size": 38835447,
+              "digest": "sha256:cbf122532a4cba365f6d38072ab51ee9cdebeeed1d009e0b6414051fdabc6d4d"
+            }
+          ]
+        },
+        "orchestrator": {
+          "tag": "v0.1.11",
+          "sha": "852dbc5c4ef0ad8fefa358fb588e2c8e7f7d06e8",
+          "release_id": 432754350,
+          "assets": [
+            {
+              "name": "SHA256SUMS",
+              "id": 705764875,
+              "size": 215,
+              "digest": "sha256:95b596598401e842c3148996a0bf411c7176e066bb9e4070aa411abbda3026ec"
+            },
+            {
+              "name": "orchestrator-v0.1.11-linux-aarch64.tar.gz",
+              "id": 705764871,
+              "size": 77134631,
+              "digest": "sha256:43d46bd15b69a658a15b67afb55ae517f1c3d02e54e419189024636460bd5135"
+            },
+            {
+              "name": "orchestrator-v0.1.11-linux-x86_64.tar.gz",
+              "id": 705764869,
+              "size": 83969889,
+              "digest": "sha256:e3c29ab6f4dbd8c120de6c274a982e70a13951349a9f77a1a1fc9076fd318426"
+            }
+          ]
+        }
+      }
     }
   ]
 }
