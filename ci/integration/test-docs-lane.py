@@ -36,9 +36,9 @@ class DocsLaneTests(unittest.TestCase):
             for path in subject.PLATFORM:
                 self.assertEqual(subject.allowed(repo, path), repo == REPO)
 
-    def test_mixed_unknown_policy_workflow_modes_and_links_fall_back(self):
-        for path in ('src/code.go', 'docs/example.sh', 'docs/image.svg', '.github/workflows/ci.yml',
-                     'ci/check_docs.py', 'ci/integration/docs_lane.py', 'notes.md', 'test/README.md',
+    def test_mixed_product_unknown_modes_and_links_fall_back(self):
+        for path in ('src/code.go', 'docs/example.sh', 'docs/image.svg', 'Makefile',
+                     'release/inputs/bin-inputs.yaml', 'ci/integration/runner-capabilities.json', 'notes.md', 'test/README.md',
                      'docs/topic.MD', '../docs/topic.md'):
             with self.subTest(path=path):
                 self.assertIsNone(subject.classify(REPO, tree(), tree({'README.md': entry(), path: entry()})))
