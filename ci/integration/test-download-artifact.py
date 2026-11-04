@@ -231,7 +231,9 @@ class DownloadTests(unittest.TestCase):
         self.thread.join()
         self.temp.cleanup()
 
-    def run_download(self, mode, seconds=.18):
+    # Ordinary HTTP/process checks need scheduling headroom on shared CI hosts.
+    # Tests of the hard deadline opt into a short budget explicitly.
+    def run_download(self, mode, seconds=2):
         self.server.state['mode'] = mode
         with contextlib.redirect_stdout(io.StringIO()) as output:
             d.download({'name': 'wanted', 'pattern': ''}, self.root / 'out',
@@ -255,7 +257,7 @@ class DownloadTests(unittest.TestCase):
                     shutil.rmtree(self.root / 'out')
                 self.server.state.update(lists=0, urls=0, requests=[], ranges=[])
                 self.delays.clear()
-                self.run_download(mode)
+                self.run_download(mode, seconds=.18 if mode == "resume_deadline" else 2)
                 half = len(self.server.archive) // 2
                 self.assertEqual(self.server.state['ranges'], [None, f'bytes={half}-'])
                 self.assertEqual(self.server.state['urls'], 2)
@@ -313,7 +315,7 @@ class DownloadTests(unittest.TestCase):
         self.server.state['mode'] = 'multi_resume'
         with contextlib.redirect_stdout(io.StringIO()):
             d.download({'name': '', 'pattern': 'wanted*'}, self.root / 'out',
-                       seconds=.2, operation=local_operation, sleep=self.delays.append)
+                       seconds=2, operation=local_operation, sleep=self.delays.append)
         self.assertEqual(self.server.state['download_names'], ['wanted', 'wanted-2', 'wanted-2'])
         self.assertEqual(self.server.state['ranges'],
                          [None, None, f"bytes={len(self.server.state['archives']['wanted-2']) // 2}-"])
@@ -386,7 +388,7 @@ class DownloadTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(d.Failure, 'digest_mismatch'):
                 d.download({'name': '', 'pattern': 'wanted*'}, self.root / 'out',
-                           seconds=.2, operation=local_operation, sleep=corrupt_verified_archive)
+                           seconds=2, operation=local_operation, sleep=corrupt_verified_archive)
         self.assertEqual(self.server.state['urls'], 2)
         self.assertFalse((self.root / 'out').exists())
         self.assertFalse(list(self.root.glob('.kuasar-artifact-*')))
@@ -400,7 +402,7 @@ class DownloadTests(unittest.TestCase):
                 marker.touch()
                 time.sleep(.6)
         with mock.patch.object(d, 'extract_archive', side_effect=interrupted_extract):
-            self.run_download('ok')
+            self.run_download('ok', seconds=.18)
         self.assertEqual(self.server.state['urls'], 1)
         self.assertEqual(self.server.state['lists'], 2)
         self.assertEqual((self.root / 'out/payload.txt').read_bytes(), b'complete verified content')
@@ -544,7 +546,7 @@ class DownloadTests(unittest.TestCase):
                 self.server.state.update(mode=mode, lists=0, urls=0, requests=[])
                 self.delays.clear()
                 started = time.monotonic()
-                self.run_download(mode)
+                self.run_download(mode, seconds=.18)
                 self.assertLess(time.monotonic() - started, 1)
                 self.assertEqual(self.delays, [15])
 
@@ -565,7 +567,7 @@ class DownloadTests(unittest.TestCase):
 
     def test_three_attempts_then_block_without_destination(self):
         with self.assertRaisesRegex(d.Failure, 'attempt_deadline'):
-            self.run_download('headers_always')
+            self.run_download('headers_always', seconds=.18)
         self.assertEqual(self.delays, [15, 30])
         self.assertEqual(self.server.state['urls'], 3)
         self.assertFalse((self.root / 'out').exists())
@@ -715,7 +717,7 @@ class DownloadTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             with self.assertRaisesRegex(d.Failure, 'tls_error'):
                 d.download({'name': 'wanted', 'pattern': '', 'marker': str(marker)},
-                           self.root / 'out', seconds=.18, delays=(15, 30),
+                           self.root / 'out', seconds=2, delays=(15, 30),
                            operation=certificate_failure, sleep=self.delays.append)
         self.assertEqual(marker.read_text().splitlines(), ['attempt'])
         self.assertEqual(self.delays, [])
