@@ -93,11 +93,16 @@ notes:
 
     Selected version: `v0.1.12` → `v0.1.13-preview.20261104`.
 
+    - vhost: negotiate SEG_MAX and gather fragmented block reads in bounded windows ([#401](https://github.com/kuasar-sandbox/sandboxer/pull/401), [commit c6fd3dd](https://github.com/kuasar-sandbox/sandboxer/commit/c6fd3dd84345cba325256524e60897b81992a5b2)).
+    - perf(balloon): coalesce cold inflate releases within each descriptor ([#404](https://github.com/kuasar-sandbox/sandboxer/pull/404), [commit 0601547](https://github.com/kuasar-sandbox/sandboxer/commit/060154797297ab389fc5df5fdbd3276f3992da5d)).
+
     [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v0.1.12...v0.1.13-preview.20261104)
 
     ### orchestrator
 
     Selected version: `v0.1.11` → `v0.1.12-preview.20261104`.
+
+    No source commits changed between these selected tags.
 
     [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/v0.1.11...v0.1.12-preview.20261104)
 
@@ -105,11 +110,19 @@ notes:
 
     Selected version: `runtime-v0.1.11` → `runtime-v0.1.12-preview.20261104`.
 
+    The shared `guest-runtime` repository comparison contains the following merged change:
+
+    - perf(vmlinux): batch balloon pages within the upstream ACK bound ([#108](https://github.com/kuasar-sandbox/guest-runtime/pull/108), [commit 05ec31e](https://github.com/kuasar-sandbox/guest-runtime/commit/05ec31e0be19765dc54a96b71fb73a68068992fd)).
+
+    This change updates the guest kernel patch and related documentation; it does not introduce a runtime-specific source change.
+
     [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/runtime-v0.1.11...runtime-v0.1.12-preview.20261104)
 
     ### vmlinux
 
     Selected version: `vmlinux-v0.1.5` → `vmlinux-v0.1.6-preview.20261104`.
+
+    - perf(vmlinux): batch balloon pages within the upstream ACK bound ([#108](https://github.com/kuasar-sandbox/guest-runtime/pull/108), [commit 05ec31e](https://github.com/kuasar-sandbox/guest-runtime/commit/05ec31e0be19765dc54a96b71fb73a68068992fd)). Batches order-0 balloon page allocation and enqueue while retaining the upstream 256-PFN ACK bound.
 
     [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/vmlinux-v0.1.5...vmlinux-v0.1.6-preview.20261104)
 
