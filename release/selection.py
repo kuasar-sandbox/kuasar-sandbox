@@ -99,7 +99,7 @@ def parse_notes(block: str, source: str) -> dict[str, str]:
             raise ManifestError(f'invalid whitespace in notes in {source}')
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        match = re.fullmatch(r"  (body|upgrade_notice|aggregate_sha|mode|selection_sha256): +([^ #]+)(?: +#.*)? *", line)
+        match = re.fullmatch(r"  (body|upgrade_notice|aggregate_sha|mode|selection_sha256|overflow): +([^ #]+)(?: +#.*)? *", line)
         if not match:
             raise ManifestError(f"invalid notes field in {source}")
         key, value = match.groups()
@@ -108,6 +108,9 @@ def parse_notes(block: str, source: str) -> dict[str, str]:
         if key == "mode":
             if value not in ("auto", "fixed"):
                 raise ManifestError(f"notes.mode in {source} must be auto or fixed")
+        elif key == "overflow":
+            if value not in ("manual", "compact"):
+                raise ManifestError(f"notes.overflow in {source} must be manual or compact")
         elif key == "selection_sha256":
             if not re.fullmatch(r"[0-9a-f]{64}", value):
                 raise ManifestError(f"notes.selection_sha256 in {source} requires 64 lowercase hex characters")
@@ -140,6 +143,8 @@ def parse_notes(block: str, source: str) -> dict[str, str]:
 
 def validate_complete_notes(fields: dict[str, str], source: str) -> None:
     """Explicit-mode notes are a complete authored prefix, never an insertion."""
+    if fields.get('overflow', 'manual') not in ('manual', 'compact'):
+        raise ManifestError(f"notes.overflow in {source} must be manual or compact")
     if "mode" not in fields:
         if "selection_sha256" in fields:
             raise ManifestError(f"notes.selection_sha256 in {source} requires notes.mode")

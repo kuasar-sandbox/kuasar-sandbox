@@ -56,7 +56,7 @@ class PrepareNotesTests(unittest.TestCase):
         for selected in self.changes():
             with self.subTest(selected=selected), patch.object(prepare, 'render', return_value=self.generated) as render:
                 result = prepare.prepare(current, selected, self.relative, self.root)
-                render.assert_called_once_with(self.root, selected, self.relative, None)
+                render.assert_called_once_with(self.root, selected, self.relative, None, source_shas=None)
                 self.assertEqual(self.fields(result)['body'], self.generated)
                 self.assertEqual(self.fields(result)['selection_sha256'], self.digest(selected))
                 prepare.require_prepared(result, self.relative)
@@ -139,32 +139,63 @@ class PrepareNotesTests(unittest.TestCase):
                      self.selected + 'notes:\n  body: |-\n    Human text.'):
             with self.subTest(text=text):
                 prepare.require_prepared(text, self.relative)
-        for text in (self.selected, self.selected + 'notes:\n  body: |-\n    ',
-                     self.selected + 'notes:\n  body: |-\n    ' + 'x' * 125001):
+        prepare.require_prepared(self.selected + 'notes:\n  body: |-\n    ' + 'x' * 125001, self.relative)
+        for text in (self.selected, self.selected + 'notes:\n  body: |-\n    '):
             with self.subTest(text=text[:100]), self.assertRaises(ValueError):
                 prepare.require_prepared(text, self.relative)
 
-    def test_real_renderer_persists_complete_manuscript_without_gh(self):
+    def test_real_renderer_persists_source_pinned_inventory_before_future_tags(self):
         previous = dict(self.units, sandboxer='v1.2.2', runtime='runtime-v1.2.2', vmlinux='vmlinux-v1.2.2')
+        source_shas = {unit: 'b' * 40 for unit in self.units}
+        requests = []
+        def pages(endpoint):
+            requests.append(endpoint)
+            if '/git/ref/tags/' in endpoint:
+                self.assertTrue(endpoint.endswith('v1.2.2'))
+                return [{'object': {'type': 'commit', 'sha': 'a' * 40}}]
+            if '/compare/' in endpoint:
+                return [{'status': 'ahead', 'total_commits': 1,
+                         'base_commit': {'sha': 'a' * 40},
+                         'commits': [{'sha': 'b' * 40, 'commit': {'message': 'Improve selected component (#12)'}}]}]
+            return [{'sha': 'b' * 40, 'files': [{'filename': 'native-deps/deps/vmlinux/test.config'}]}]
         with tempfile.TemporaryDirectory() as directory:
             trap = Path(directory) / 'gh'
             called = Path(directory) / 'called'
             trap.write_text('#!/bin/sh\ntouch "' + str(called) + '"\nexit 99\n')
             trap.chmod(0o755)
-            with patch.dict(os.environ, {'PATH': directory + os.pathsep + os.environ['PATH']}):
-                result = prepare.prepare(self.selected, self.selected, self.relative, self.root, previous_units=previous)
+            with patch.dict(os.environ, {'PATH': directory + os.pathsep + os.environ['PATH']}), \
+                 patch.object(prepare.change_inventory.Inventory, 'pages', side_effect=pages):
+                result = prepare.prepare(self.selected, self.selected, self.relative, self.root,
+                                         previous_units=previous, source_shas=source_shas)
             self.assertFalse(called.exists())
             path = Path(directory) / 'manifest.yaml'
             path.write_text(result)
             body = self.fields(path.read_text())['body']
         version = 'release-v2.0.0-preview.20990101'
         release_notes.validate(body, version, self.units)
-        self.assertIn('https://github.com/kuasar-sandbox/sandboxer/compare/v1.2.2...v1.2.3', body)
-        self.assertIn('https://github.com/kuasar-sandbox/guest-runtime/compare/runtime-v1.2.2...runtime-v1.2.3', body)
+        self.assertIn('https://github.com/kuasar-sandbox/sandboxer/compare/' + 'a' * 40 + '...' + 'b' * 40, body)
+        self.assertIn('https://github.com/kuasar-sandbox/guest-runtime/pull/12', body)
         self.assertIn('Selected version unchanged: `v1.2.3`.', body)
-        self.assertNotIn('/commit/', body)
-        self.assertIn('The comparison covers the guest-runtime repository.', body)
+        self.assertIn('Improve selected component', body)
+        self.assertIn('/commit/' + 'b' * 40, body)
+        self.assertIn('Kernel release inputs:', body)
         prepare.require_prepared(result, self.relative)
+
+    def test_overflow_policy_survives_regeneration_and_length_waits_for_publication(self):
+        current = self.with_notes().replace('  mode: auto\n', '  mode: auto\n  overflow: compact\n')
+        with patch.object(prepare, 'render', return_value='x' * 125001):
+            result = prepare.prepare(current, self.changes()[0], self.relative, self.root)
+        self.assertEqual(self.fields(result)['overflow'], 'compact')
+        self.assertEqual(self.fields(result)['body'], 'x' * 125001 + '\n')
+        prepare.require_prepared(result, self.relative)
+        for policy in ('manual', 'compact'):
+            for mode in ('auto', 'fixed'):
+                current = self.with_notes(mode=mode).replace(f'  mode: {mode}\n', f'  mode: {mode}\n  overflow: {policy}\n')
+                with patch.object(prepare, 'render') as render:
+                    self.assertEqual(prepare.prepare(current, current, self.relative, self.root), current)
+                render.assert_not_called()
+        with self.assertRaisesRegex(ValueError, 'notes.overflow'):
+            self.fields(self.with_notes().replace('  mode: auto\n', '  mode: auto\n  overflow: truncate\n'))
 
 
 if __name__ == '__main__':

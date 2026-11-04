@@ -16,7 +16,7 @@ def checked(text, *, blocks=None):
         detail = f'actual={len(text)}, budget={MAX_CHARACTERS}'
         if blocks is not None:
             detail += ', blocks=' + json.dumps(blocks, sort_keys=True, separators=(',', ':'))
-        raise ValueError(f'Release body exceeds {MAX_CHARACTERS} characters ({detail}); evidence must not be truncated')
+        raise ValueError(f'Release body exceeds {MAX_CHARACTERS} characters ({detail}); evidence must not be truncated; edit and commit notes.body or opt in to notes.overflow: compact')
     return text
 
 

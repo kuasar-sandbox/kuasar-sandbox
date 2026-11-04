@@ -63,12 +63,12 @@ class NarrativeTests(unittest.TestCase):
 
     def test_validator_checks_only_text_availability_marker_count_and_size(self):
         output = self.root / 'notes.md'
-        for text in ('', '  \n', body.MARKER + '{} -->\n' + body.MARKER + '{} -->',
-                     'x' * (body.MAX_CHARACTERS + 1)):
+        for text in ('', '  \n', body.MARKER + '{} -->\n' + body.MARKER + '{} -->'):
             output.write_text(text)
             with self.subTest(text=text[:50]), self.assertRaises(ValueError):
                 notes.validate_file(self.root, self.version, output)
-        for text in ('Arbitrary human notes.', 'Changed prose\n' + body.MARKER + '{} -->\n'):
+        for text in ('Arbitrary human notes.', 'Changed prose\n' + body.MARKER + '{} -->\n',
+                     'x' * (body.MAX_CHARACTERS + 1)):
             output.write_text(text)
             notes.validate_file(self.root, self.version, output)
 
@@ -151,7 +151,7 @@ class NarrativeTests(unittest.TestCase):
         notes.export_notes(self.root, self.version, output)
         self.assertEqual(output.read_text(), 'Exact prose.  ')
 
-    def test_export_missing_body_and_oversize_fail_without_writing(self):
+    def test_export_requires_body_but_defers_size_until_binding(self):
         output = self.root / 'notes.md'
         output.write_text('unchanged')
         for block in ('', 'notes:\n  upgrade_notice: |-\n    Warning only.'):
@@ -159,9 +159,8 @@ class NarrativeTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'missing|body|text'):
                 notes.export_notes(self.root, self.version, output)
         self.commit(self.manifest + 'notes:\n  mode: fixed\n  body: |-\n    ' + 'x' * (body.MAX_CHARACTERS + 1))
-        with self.assertRaisesRegex(ValueError, 'must not be truncated'):
-            notes.export_notes(self.root, self.version, output)
-        self.assertEqual(output.read_text(), 'unchanged')
+        notes.export_notes(self.root, self.version, output)
+        self.assertEqual(output.read_text(), 'x' * (body.MAX_CHARACTERS + 1))
 
     def test_bound_validation_does_not_compare_prefix_source_or_metadata(self):
         output = self.root / 'notes.md'

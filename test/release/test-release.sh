@@ -388,10 +388,15 @@ python3 - "$TMP/fetched/updates/orchestrator.md" <<'PY'
 import pathlib, sys
 pathlib.Path(sys.argv[1]).write_text('x' * 125001)
 PY
-if "$ROOT/release/aggregate-release.sh" render-notes "$VERSION" '' "$TMP/selection.tsv" \
-  "$TMP/fetched/updates" "$TMP/rejected-notes.md" \
+"$ROOT/release/aggregate-release.sh" render-notes "$VERSION" '' "$TMP/selection.tsv" \
+  "$TMP/fetched/updates" "$TMP/rejected-notes.md"
+python3 - "$TMP/rejected-notes.md" <<'PY'
+import pathlib, sys
+assert 'x' * 125001 in pathlib.Path(sys.argv[1]).read_text()
+PY
+if python3 -B "$ROOT/release/publication_body.py" "$TMP/rejected-notes.md" \
   > "$TMP/rejected-notes.log" 2>&1; then
-  release_fail "pre-admission generator accepted oversized release notes"
+  release_fail "publication accepted oversized release notes"
 fi
 grep -Fq 'budget=125000' "$TMP/rejected-notes.log"
 grep -Fq 'evidence must not be truncated' "$TMP/rejected-notes.log"

@@ -304,7 +304,8 @@ write_release_notes() {
   } > "$output"
   # This generator is called before manifest admission, never by the publisher.
   # The complete result is reviewed and persisted in notes.body.
-  python3 -B "$ROOT/release/publication_body.py" "$output"
+  # Check the complete prose and machine evidence together immediately before
+  # publication. Selection must retain the full editable manuscript first.
 }
 
 # Existing x86-only releases retain their original contract. A dual aggregate

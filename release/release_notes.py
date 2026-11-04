@@ -4,6 +4,7 @@ Only the human-readable Release prefix is adapted. Machine evidence remains in
 publication_body, with its existing schema and registry reservation.
 """
 import argparse
+import base64
 from pathlib import Path
 import re
 import subprocess
@@ -20,6 +21,7 @@ HEADINGS = ('Highlights', 'Component versions', 'Supported environment', 'Quick 
             'Production deployment', 'Known limitations', 'Security',
             'Versioning and release channels', 'Component updates')
 COMMIT = re.compile(r'^- `([0-9a-f]{12})` [^\n]+ \(\[commit\]\(https://github.com/kuasar-sandbox/([^/]+)/commit/([0-9a-f]{40})\)\)$')
+INVENTORY_COMMIT = re.compile(r'^- [^\n]+ \((?:\[#([0-9]+)\]\(https://github.com/kuasar-sandbox/([^/]+)/pull/([0-9]+)\), )?\[commit ([0-9a-f]{12})\]\(https://github.com/kuasar-sandbox/([^/]+)/commit/([0-9a-f]{40})\)\)\.$')
 SELECTED = re.compile(r'^Selected version: `([^`\s]+)` → `([^`\s]+)`\.$', re.M)
 COMPARISON = re.compile(r'^\[Full comparison\]\((https://github.com/kuasar-sandbox/[^/]+/compare/[^\s)]+)\)$', re.M)
 
@@ -65,15 +67,87 @@ def compact_commits(text):
             continue
         previous, current = selected[0]
         expected = f'https://github.com/kuasar-sandbox/{repository}/compare/{previous}...{current}'
-        if COMPARISON.findall(section) != [expected]:
+        comparisons = COMPARISON.findall(section)
+        if len(comparisons) != 1 or (comparisons[0] != expected and re.fullmatch(
+                re.escape(f'https://github.com/kuasar-sandbox/{repository}/compare/') +
+                r'[0-9a-f]{40}\.\.\.[0-9a-f]{40}', comparisons[0]) is None):
             continue
         lines = section.splitlines(keepends=True)
         def generated(line):
             commit = COMMIT.fullmatch(line.rstrip('\n'))
-            return commit is not None and commit[2] == repository and commit[3].startswith(commit[1])
+            if commit is not None:
+                return commit[2] == repository and commit[3].startswith(commit[1])
+            commit = INVENTORY_COMMIT.fullmatch(line.rstrip('\n'))
+            return (commit is not None and commit[5] == repository and commit[6].startswith(commit[4])
+                    and (commit[1] is None or (commit[2] == repository and commit[1] == commit[3])))
         parts[index] = ''.join(line for line in lines if not generated(line)
             and line.rstrip('\n') != '- GitHub truncated the commit list; use the full comparison below.')
     return ''.join(parts)
+
+
+def replace_manifest_body(text, relative, body):
+    """Change only the literal body, retaining selection, policy and comments."""
+    _, block = selection.split_notes(text, relative)
+    fields = selection.parse_notes(block, relative)
+    if not fields.get('body'):
+        raise ValueError('automatic compaction requires a committed notes.body')
+    lines = re.findall(r'[^\n]*\n|[^\n]+$', block)
+    start = next(i for i, line in enumerate(lines) if re.match(r'  body: +\|', line))
+    end = start + 1
+    while end < len(lines) and (not lines[end].strip() or lines[end].startswith('    ')):
+        end += 1
+    style = '|' if body.endswith('\n') else '|-'
+    header = re.sub(r'(  body: +)\|-?', lambda match: match[1] + style, lines[start])
+    newline = '\r\n' if header.endswith('\r\n') else '\n'
+    replacement = header.rstrip('\r\n') + newline + ''.join(
+        '    ' + line + newline for line in body.removesuffix('\n').split('\n'))
+    revised = ''.join(lines[:start]) + replacement + ''.join(lines[end:])
+    result = text.replace(block, revised, 1)
+    checked = selection.read_simple_yaml(result, relative)
+    original = selection.read_simple_yaml(text, relative)
+    expected = dict(original, notes=dict(fields, body=body))
+    if checked != expected:
+        raise ValueError('compaction changed fields other than notes.body')
+    return result
+
+
+def persist_compacted_notes(fields, body, version, source_ref, source_url):
+    """CAS the same channel on its live maintained branch, then verify readback.
+
+    Uses the existing manifest writer. No retry on a denied/uncertain mutation,
+    no changes to the admitted product source, and no branch-protection bypass.
+    """
+    import preview_coordinator as coordinator
+    if not source_ref or not (source_ref == 'main' or re.fullmatch(r'release/v[0-9]+\.[0-9]+\.x', source_ref)):
+        raise ValueError('automatic compaction requires the maintained source branch')
+    relative = 'releases/daily-preview.yaml' if '-preview.' in version else 'releases/release.yaml'
+    provenance = re.fullmatch(
+        re.escape(f'https://github.com/{coordinator.PLATFORM_REPOSITORY}/blob/') +
+        r'([0-9a-f]{40})/' + re.escape(relative) + r'#L[0-9]+-L[0-9]+', source_url or '')
+    if provenance is None:
+        raise ValueError('automatic compaction requires the canonical committed notes snapshot')
+    head = coordinator.branch_sha(coordinator.PLATFORM_REPOSITORY, source_ref)
+    def read(revision):
+        record = coordinator.api(f'repos/{coordinator.PLATFORM_REPOSITORY}/contents/{relative}?ref={revision}')
+        return base64.b64decode(record['content']).decode()
+    current = read(head)
+    snapshot = selection.read_simple_yaml(read(provenance[1]), relative)
+    live = selection.read_simple_yaml(current, relative)
+    if (snapshot.get('notes') != fields or
+            {key: value for key, value in snapshot.items() if key != 'notes'} !=
+            {key: value for key, value in live.items() if key != 'notes'}):
+        raise ValueError('manifest selection advanced; rescan before automatic compaction')
+    selected, _, _ = selection.parse_manifest(current, relative, '-preview.' in version)
+    if selected != version or selection.read_simple_yaml(current, relative).get('notes') != fields:
+        raise ValueError('manifest advanced or notes changed; rescan before automatic compaction, or edit and commit notes manually')
+    revised = replace_manifest_body(current, relative, body)
+    sha = coordinator.commit_manifest(relative, revised, version, source_ref, head)
+    if coordinator.branch_sha(coordinator.PLATFORM_REPOSITORY, source_ref) != sha or read(sha) != revised:
+        raise ValueError('compacted manifest commit was not confirmed; rescan before publication')
+    committed = selection.read_simple_yaml(read(sha), relative)['notes']
+    if committed != dict(fields, body=body):
+        raise ValueError('committed compacted notes differ; publication stopped')
+    return committed['body']
 
 
 def stale_warnings(text, version, units):
@@ -138,8 +212,9 @@ def publication_notes(publisher, version, fallback=None):
 
 
 class Narrative:
-    def __init__(self, text, fields=None, url=None, *, version=None, units=None):
+    def __init__(self, text, fields=None, url=None, *, version=None, units=None, persist=None):
         self.version, self.units = version, units
+        self.persist = persist
         self.generated = text
         self.fields = fields or {}
         self.url = url
@@ -155,9 +230,24 @@ class Narrative:
         return text
 
     def fit(self, prefix, available):
-        # Authored prose is plain text, independent of mode, source or tests.
-        # Never trim it, substitute a link, or replace it with a template.
-        return prefix
+        if len(prefix) <= available or self.fields.get('overflow', 'manual') != 'compact':
+            return prefix
+        if available < 0:
+            raise ValueError('Release evidence exceeds its budget; evidence must not be truncated; manual intervention required')
+        if not self.fields.get('body'):
+            raise ValueError('automatic compaction requires committed notes.body; evidence must not be truncated')
+        compacted = compact_commits(self.fields['body'])
+        proposed = self.render(compacted) + prefix[len(self.text):] if prefix.startswith(self.text) else None
+        if proposed is None or len(proposed) > available:
+            raise ValueError(f'Release notes remain over budget after safe compaction (budget={available}); '
+                             'edit and commit notes.body manually; evidence must not be truncated')
+        if self.persist is None:
+            raise ValueError('automatic compaction needs manifest-write permission before publication; '
+                             'edit and commit notes.body manually; evidence must not be truncated')
+        committed = self.persist(self.fields, compacted)
+        if committed != compacted:
+            raise ValueError('compacted manifest readback differs; publication stopped')
+        return proposed
 
 
 def export_notes(platform, version, output):
@@ -167,13 +257,14 @@ def export_notes(platform, version, output):
     text = fields['body']
     if fields.get('upgrade_notice'):
         text = fields['upgrade_notice'].rstrip('\n') + '\n\n' + text
-    publication_body.checked(text)
     output.write_text(text)
 
 
 def validate_file(platform, version, notes_file):
-    """Compatibility entry point: check transport, not human prose provenance."""
-    validate_history(notes_file)
+    """Check staged prose availability; budget only after evidence is known."""
+    text = notes_file.read_text()
+    if not text.strip() or text.count(publication_body.MARKER) > 1:
+        raise ValueError('release notes must be nonempty with at most one validation binding')
 
 
 def validate_history(notes_file):
