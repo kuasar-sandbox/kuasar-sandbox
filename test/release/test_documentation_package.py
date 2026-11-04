@@ -224,6 +224,27 @@ class DocumentationPackageTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'missing package input'):
             guide_inputs(self.root / 'connector')
 
+    def test_legacy_release_guides_get_bilingual_errata_without_changing_source_or_licenses(self):
+        platform = self.root/'platform/docs/download_zh.md'
+        platform.write_text('# 下载\n')
+        original = '# Historical runtime\n\nCheck SHA256SUMS before installation.\n'
+        for suffix in ('', '_zh'):
+            (self.root/'guest-runtime'/('README'+suffix+'.md')).write_text(original)
+            (self.root/'vmlinux/docs'/('vmlinux'+suffix+'.md')).write_text(original)
+        legal = self.root/'guest-runtime/LICENSE_SCOPE.md'
+        legal.write_text('Legal text mentioning SHA256SUMS must remain unchanged.\n')
+        output, _ = self.assemble(kernel=True)
+        for owner, name in [('guest-runtime','README'),('vmlinux','vmlinux')]:
+            for suffix in ('', '_zh'):
+                page=output/'guide'/owner/(name+suffix+'.md')
+                text=page.read_text()
+                self.assertIn('发行文档勘误' if suffix else 'Aggregate distribution erratum',text)
+                self.assertIn('(../download'+suffix+'.md)',text)
+                self.assertTrue(text.endswith(original))
+        self.assertEqual((output/'guide/licenses/guest-runtime/LICENSE_SCOPE.md').read_bytes(),legal.read_bytes())
+        self.assertEqual((self.root/'guest-runtime/README.md').read_text(),original)
+        self.assertEqual((self.root/'vmlinux/docs/vmlinux.md').read_text(),original)
+
     def test_bilingual_navigation_and_source_links(self):
         source = self.root / 'connector'
         header = '[English](README.md) | [简体中文](README_zh.md)\n'

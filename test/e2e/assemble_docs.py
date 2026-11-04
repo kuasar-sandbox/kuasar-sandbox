@@ -23,6 +23,29 @@ CODE = re.compile(r'(`+).*?\1')
 FENCE = re.compile(r'^\s{0,3}(`{3,}|~{3,})')
 
 
+LEGACY_RELEASE_GUIDANCE = re.compile(r'SHA256SUMS|SOURCES\.tsv|GO-BUILD-INFO\.tsv|GO-MODULES\.tsv|MATERIALS\.sha256|kuasar-(?:preview-binding|release-source)')
+
+
+def release_erratum(text: str, owner: str, path: Path, dest: Path, mapping) -> str:
+    """Keep selected-tag documentation, with an explicit current distribution erratum."""
+    if owner == 'platform' or dest.parts[:2] == ('guide', 'licenses') or not LEGACY_RELEASE_GUIDANCE.search(text):
+        return ''
+    chinese = path.stem.endswith('_zh')
+    guide = mapping.get(('platform', 'docs/download' + ('_zh' if chinese else '') + '.md'))
+    if guide is None:
+        raise ValueError('missing aggregate download guide for historical documentation erratum')
+    link = quote(os.path.relpath(guide, dest.parent), safe='/._-')
+    if chinese:
+        return ('> **本聚合发行文档勘误：** 本页保留所选组件 Tag 的原始说明。'
+                '其中关于下载或审核独立 `SHA256SUMS`、Release 正文机器块、历史 Actions 验收记录、来源证明旁车的要求，对本聚合均不适用。'
+                '本聚合不发布独立校验附件或正文机器记录；新建 platform、helper 和 Workbench 包不携带来源或历史测试记录。复用的历史组件包可能保留旧来源文件，消费者忽略这些文件，不以此判断资格。下载和离线复核统一按[本包下载指南](' + link + ')执行：从所选聚合 Tag 的清单取得精确包名，并校验 GitHub 原生资产大小和摘要。'
+                '运行所需的 `vmlinux.sha256` 保留。本勘误不改变组件运行语义或许可证。\n\n')
+    return ('> **Aggregate distribution erratum:** This page preserves the selected component tag\'s original guidance. '
+            'Any requirement below to obtain or audit independent `SHA256SUMS`, machine blocks in release notes, historical Actions acceptance, or source-proof sidecars does not apply to this aggregate. '
+            'This aggregate publishes no independent checksum attachment or machine records in its release notes. Newly built platform, helper and Workbench packages carry no source or historical test records. Reused historical component archives may retain old source files; consumers ignore them as eligibility evidence. Follow the [bundled download guide](' + link + ') for downloads and offline checks: resolve exact package names from the selected aggregate tag\'s manifest and verify native GitHub asset sizes and digests. '
+            'The runtime file `vmlinux.sha256` remains required. This erratum does not change component runtime behavior or license text.\n\n')
+
+
 def source_files(root: Path, owner: str):
     yield from (guide_inputs(root) if owner in OWNERS else unit_guide_inputs(root, owner))
     # Legal material is not filtered by audience or rewritten as user guidance.
@@ -179,7 +202,9 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
         source, target = roots[owner] / path, output / dest
         target.parent.mkdir(parents=True, exist_ok=True)
         if path.suffix.lower() == '.md':
-            target.write_text(rewrite(source.read_text(encoding='utf-8'), owner, path, dest), encoding='utf-8')
+            text = source.read_text(encoding='utf-8')
+            target.write_text(release_erratum(text, owner, path, dest, mapping) +
+                              rewrite(text, owner, path, dest), encoding='utf-8')
             shutil.copymode(source, target)
         else:
             shutil.copy2(source, target)

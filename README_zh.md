@@ -179,7 +179,7 @@ Demo 结束后会清理节点服务；交互操作应通过 `--pause` 在同一�
 不能把容器内的 localhost 和临时凭据直接用于宿主 SDK。详见
 [快速开始](docs/quickstart_zh.md)和[Demo](test/demo/DEMO_zh.md)。
 
-[快速开始](docs/quickstart_zh.md) 从同一聚合版本下载所选原生资产与匹配 workbench、校验 `SHA256SUMS`,
+[快速开始](docs/quickstart_zh.md) 从同一聚合版本下载所选原生资产与匹配 workbench、按 GitHub 原生大小和摘要校验,
 准备单节点,并用上游 E2B Python SDK 构建就绪的快照模板。Demo 从精确 Build 的 ready
 状态读取已发布 Template ID;SDK 返回的注册句柄不是这个 ID。保持节点运行并完成文档中的
 SDK 连接配置后,把 `TEMPLATE_ID` 设置为该已发布 ID,再执行以下生命周期:
@@ -275,7 +275,7 @@ make -C kuasar-sandbox test-perf-tools
 聚合工作流解析精确组件 Tag、校验声明的资产与校验和、组装 platform archive,
 并在发布前运行跨组件验证。
 
-新 `workbench-v1` 聚合包含用户指南、Demo 和测试的 platform 包、每种架构六个原样发布单元归档、两个 workbench 镜像与统一 `SHA256SUMS`。只解压所选原生产品与 platform-release；workbench 使用 `docker load` 单独导入，或获取相同多架构 registry Tag。普通 UID 构建和离线测试见 [workbench 使用说明](workbench/README_zh.md)。源码仓保持独立，全部资产使用同一聚合版本。
+新 `workbench-v1` 聚合包含用户指南、Demo 和测试的 platform 包、每种架构六个原样发布单元归档、两个 workbench 镜像。只解压所选原生产品与 platform-release；workbench 使用 `docker load` 单独导入，或获取相同多架构 registry Tag。普通 UID 构建和离线测试见 [workbench 使用说明](workbench/README_zh.md)。源码仓保持独立，全部资产使用同一聚合版本。
 
 完整的两清单/历史和基线规则、维护分支选择、资产排除规则、人工发布命令、权限边界与
 失败恢复均由 [Release 规范](docs/release_zh.md) 维护。
