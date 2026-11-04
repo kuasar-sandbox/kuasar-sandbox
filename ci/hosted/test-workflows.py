@@ -271,7 +271,10 @@ def check_validation_only_publication():
                        CALL_LOG=str(log), OBSERVED_SHA=identity, VALIDATION_ONLY=mode, PUBLICATION_STATE=str(state),
                        PUBLISH_DURING_REGISTRY='true' if published == 'during-registry' else 'false',
                        SOURCE_SHA='a' * 40, VERSION='release-v1.2.3', SOURCE_REF='main',
-                       PLATFORM_SOURCE_ROOT=str(root / 'platform'))
+                       PLATFORM_SOURCE_ROOT=str(root / 'platform'),
+                       RELEASE_PLAN_FILE='validated/plan/plan.json',
+                       RELEASE_VALIDATION_FILE='validated/validation.json',
+                       RELEASE_WORKBENCH_RESULTS='workbench-results')
             result = subprocess.run(['bash', '-c', script], cwd=root, env=env, capture_output=True)
             assert (result.returncode == 0) == success, (mode, identity, published, result.stderr)
             assert (b'Validation-only acceptance completed;' in result.stdout) == (mode == 'true' and success)
@@ -289,7 +292,8 @@ def check_validation_only_publication():
                     'publish-release.sh:check release-v1.2.3',
                     'aggregate-release.sh:validate release-v1.2.3 aggregate-stage',
                     'python:-B release/publication_body.py aggregate-stage/release-notes.md',
-                    'python:-B release/workbench_registry.py aggregate-stage release-v1.2.3 ' + 'a' * 40 + ' --validate-only',
+                    'python:-B release/workbench_registry.py aggregate-stage release-v1.2.3 ' + 'a' * 40 + ' --validate-only'
+                    ' --plan validated/plan/plan.json --validation validated/validation.json --workbench workbench-results',
                     'publish-release.sh:check release-v1.2.3'], calls
                 assert state.read_text().strip() == ('true' if published == 'during-registry' else 'false')
         context = {'github': {'repository': 'kuasar-sandbox/kuasar-sandbox', 'event': {'repository': {
@@ -482,10 +486,18 @@ def check():
                                  ('exact-assets', 'failure', False), ('source', 'skipped', True),
                                  ('source', 'success', False), ('', 'skipped', False)]:
         environment = dict(os.environ, DOCS_LANE='full', RESOLVE_RESULT='success', X86_RESULT='success', ARM_RESULT='success',
-                           SOURCE_RESULT='success', WORKBENCH_SELECTED='false', WORKBENCH_RESULT='skipped',
+                           SOURCE_RESULT='skipped' if mode == 'exact-assets' else 'success',
+                           WORKBENCH_SELECTED='false', WORKBENCH_RESULT='skipped',
                            INTEGRATION_MODE=mode, WORKBENCH_RELEASE_RESULT=value)
         outcome = subprocess.run(['bash', '-c', script], env=environment, capture_output=True)
         assert (outcome.returncode == 0) == success, (mode, value, outcome.stderr)
+    # A skipped source group must not be reported as passed, and source mode
+    # still requires its actual checks. Exercise both incorrect summaries.
+    for mode, source in [('exact-assets','success'),('source','skipped')]:
+        environment.update(INTEGRATION_MODE=mode,SOURCE_RESULT=source,
+                           WORKBENCH_RELEASE_RESULT='success' if mode=='exact-assets' else 'skipped')
+        outcome=subprocess.run(['bash','-c',script],env=environment,capture_output=True)
+        assert outcome.returncode != 0 and b'source checks' in outcome.stderr, (mode,outcome.stderr)
     for job in lanes.values():
         assert "KUASAR_CI_APP_PRIVATE_KEY" not in json.dumps(job)
         assert "continue-on-error" not in json.dumps(job)
@@ -507,11 +519,12 @@ def check():
     # Docs success has no source result archive: neither transport nor binding
     # may run on that lane after integrating the source-group result collector.
     result_steps = {step.get('name'): step for step in integration['results']['steps']}
-    for lane in ('docs', 'full'):
-        lane_context = {'needs': {'resolve': {'outputs': {'lane': lane}}}}
-        for name in ('Download source evidence in separate artifact directories',
-                     'Bind every source result to its current successful producer'):
-            assert expression(result_steps[name]['if'], lane_context) == (lane == 'full')
+    for lane in ('docs','full'):
+        for mode in ('source','exact-assets'):
+            lane_context={'needs':{'resolve':{'outputs':{'lane':lane}}},'inputs':{'mode':mode}}
+            for name in ('Download source evidence in separate artifact directories',
+                         'Bind every source result to its current successful producer'):
+                assert expression(result_steps[name]['if'],lane_context)==(lane=='full' and mode=='source')
     assert expression(integration['resolve']['outputs']['source_groups'],
                       {'steps': {'plan': {'outputs': {'source_groups': ''}}}}) == '["all"]'
     source_steps = {step.get("name"): step for step in source_job["steps"]}

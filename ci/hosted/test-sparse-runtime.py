@@ -38,7 +38,7 @@ for mode in ('source', 'exact-assets'):
     payload = workspace / 'input'; payload.write_text('prepared bytes\n')
     provenance = dict(plan_id=identity, arch='x86_64', files=artifacts.tree_files(workspace),
         modes=artifacts.tree_modes(workspace), selection=plan['lanes']['x86_64']['selection'],
-        test_revisions=plan['test_revisions'], helper_contract=contract, helpers={})
+        helper_contract=artifacts.helper_contract_module().runtime(contract), helpers={})
     (workspace / 'provenance.json').write_text(json.dumps(provenance))
     artifacts.verify_workspace(workspace, plan, 'x86_64')
     def rejected(call, message):
