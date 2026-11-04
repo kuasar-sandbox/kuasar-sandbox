@@ -54,6 +54,19 @@ class ClassificationTests(unittest.TestCase):
             self.assertEqual(docs_lane.classify(REPO, tree(), tree({path: entry(mode='100755')})), [path])
             self.assertIsNone(docs_lane.classify('kuasar-sandbox/connector', tree(), tree({path: entry()})))
 
+    def test_packaged_human_attribution_and_license_scope_are_documentation(self):
+        notice = 'scripts/release-notices/rootless-containers-proto/NOTICE'
+        for repository in ('kuasar-sandbox/orchestrator', 'kuasar-sandbox/guest-runtime'):
+            paths = [notice, 'LICENSE_SCOPE.md', 'LICENSE_SCOPE_zh.md', 'scripts/release.sh']
+            changes = {path: entry() for path in paths}
+            self.assertEqual(docs_lane.classify(repository, tree(), tree(changes)), sorted(paths))
+            for unsafe in ('100755', '120000', '160000'):
+                self.assertIsNone(docs_lane.classify(repository, tree(), tree({notice: entry(mode=unsafe)})))
+            for product in ('scripts/release-notices/rootless-containers-proto/COPYING',
+                            'scripts/release-notices/another/NOTICE', 'LICENSE', 'cmd/main.go'):
+                self.assertIsNone(docs_lane.classify(repository, tree(), tree({**changes, product: entry()})))
+        self.assertIsNone(docs_lane.classify('kuasar-sandbox/connector', tree(), tree({notice: entry()})))
+
     def test_platform_harness_is_tooling_but_product_cases_remain_full(self):
         for path in ('test/e2e/e2e', 'test/e2e/lib/helper_contract.py',
                      'test/e2e/lib/nested/runner.py', 'test/e2e/test_e2e_runner.py',

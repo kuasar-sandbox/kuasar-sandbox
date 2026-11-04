@@ -58,7 +58,7 @@ Product-impact selection also adds consumer tests: accelerator/runtime changes t
 
 Source PR resolution compares the complete exact base, head and integration Git
 trees for the primary and every admitted companion. The `docs` lane permits only
-ordinary `100644` Markdown in `README{,_zh}.md`, `test/e2e/README{,_zh}.md`,
+ordinary `100644` Markdown in `README{,_zh}.md`, `LICENSE_SCOPE{,_zh}.md`, `test/e2e/README{,_zh}.md`,
 `docs/` and `test/e2e/guides/`. Platform also allows
 `workbench/README{,_zh}.md`, `ci/runner/README{,_zh}.md` and
 `test/demo/DEMO{,_zh}.md`. The `manifest` lane adds only platform's
@@ -69,7 +69,7 @@ full CI. Truncated trees and empty changes also retain
 full CI. Missing exact identities fail. Deleting a maintained manifest fails its
 pair validation; a symlink sibling cannot supply a manifest.
 
-Component release consumers and cleanup Python scripts, the platform E2E assembler, and the working-set benchmark runner and directory contract test also use this tooling lane. Product cases, product modules, build inputs and benchmark thresholds remain outside this script-only scope.
+Component release consumers and cleanup Python scripts, the platform E2E assembler, and the working-set benchmark runner and directory contract test also use this tooling lane. Product cases, product modules, build inputs and benchmark thresholds remain outside this script-only scope. Human attribution in the exact orchestrator/runtime rootless-containers NOTICE path and root LICENSE_SCOPE{,_zh}.md files in all six repositories counts as documentation; upstream license payloads and arbitrary notice paths retain full CI.
 
 The `tooling` lane adds CI/release Python and shell files in `ci/`, `release/`
 and `test/release/`, workflow/action YAML and action JavaScript under `.github/`,

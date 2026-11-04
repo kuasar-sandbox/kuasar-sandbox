@@ -77,7 +77,9 @@ sandboxer 库变更同样会重建 `node-ctl`，因为其管理和发布路径�
 
 ### 大型下载之前的文档、发布清单与工具脚本验收
 
-源码 PR 解析比较主仓和每个已准入 companion 精确 base、head 与 integration 提交的完整 Git 树。`docs` 档仅允许 `README{,_zh}.md`、`test/e2e/README{,_zh}.md`、`docs/` 和 `test/e2e/guides/` 内普通 `100644` Markdown；platform 另允许 `workbench/README{,_zh}.md`、`ci/runner/README{,_zh}.md` 和 `test/demo/DEMO{,_zh}.md`。`manifest` 档仅增加 platform 的 `releases/release.yaml` 与 `releases/daily-preview.yaml`；可组合上述白名单文档，并执行两类检查。任何候选混入产品源码、E2E/性能测试、运行配置、未知路径/仓库或非普通文件都保留 full。截断树与空差异也保留 full；缺失精确身份则失败。删除维护清单会使双文件检查失败，未变的 symlink 也不能作为另一份清单输入。
+源码 PR 解析比较主仓和每个已准入 companion 精确 base、head 与 integration 提交的完整 Git 树。`docs` 档仅允许 `README{,_zh}.md`、`LICENSE_SCOPE{,_zh}.md`、`test/e2e/README{,_zh}.md`、`docs/` 和 `test/e2e/guides/` 内普通 `100644` Markdown；platform 另允许 `workbench/README{,_zh}.md`、`ci/runner/README{,_zh}.md` 和 `test/demo/DEMO{,_zh}.md`。`manifest` 档仅增加 platform 的 `releases/release.yaml` 与 `releases/daily-preview.yaml`；可组合上述白名单文档，并执行两类检查。任何候选混入产品源码、E2E/性能测试、运行配置、未知路径/仓库或非普通文件都保留 full。截断树与空差异也保留 full；缺失精确身份则失败。删除维护清单会使双文件检查失败，未变的 symlink 也不能作为另一份清单输入。
+
+六仓根目录的 `LICENSE_SCOPE{,_zh}.md` 及 orchestrator/runtime 固定 `scripts/release-notices/rootless-containers-proto/NOTICE` 人类归属说明属于文档；上游许可证载荷和其他任意 notice 路径仍保留完整 CI。这些文档与发布脚本一起修改时只走 tooling 通道，不单独触发产品 E2E。
 
 组件发行下载消费者与清理 Python 脚本、平台 E2E 组装器，以及 working-set 基准运行脚本和目录契约测试也使用 tooling 通道。产品用例、产品模块、构建输入与基准阈值仍不属于此脚本范围。
 
