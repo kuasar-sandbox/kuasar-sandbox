@@ -461,9 +461,33 @@ jobs:
             *) echo 'invalid validation_only input' >&2; exit 1 ;;
           esac
 
+  published-download:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && inputs.validation_only != true
+    needs: [prepare, publish]
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.framework_sha }}
+          persist-credentials: false
+      - name: Run the published native download guide and compare offline and GHCR images
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python3 -B ci/integration/check-published-download.py \
+            --version "$VERSION" --root "$RUNNER_TEMP/published-download"
+
   cleanup:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && inputs.validation_only != true
-    needs: publish
+    needs: [publish, published-download]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
