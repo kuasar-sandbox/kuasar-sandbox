@@ -31,7 +31,7 @@ INITIALIZE_ARM = os.environ.get("INITIALIZE_ARM", "false") == "true"
 POLL_SECONDS = int(os.environ.get("PREVIEW_POLL_SECONDS", "120"))
 # Bounded only within this coordinator invocation; old failed workflows never ban retries.
 _cleanup_dispatches: dict[tuple[str, str, str, str], int] = {}
-_publication_resumes: dict[int, int] = {}
+_publication_resumes: dict[tuple[str, str, str], int] = {}
 
 
 def load_module(name: str, path: pathlib.Path) -> Any:
@@ -563,13 +563,6 @@ def active_delete_run(repository: str, version: str) -> dict[str, Any] | None:
     return max(active, key=lambda item: str(item.get("created_at", "")), default=None)
 
 
-def rerun_workflow(repository: str, state: dict[str, Any]) -> None:
-    args = ["run", "rerun", str(state["id"]), "--repo", repository]
-    if state.get("conclusion") == "failure":
-        args.append("--failed")
-    gh(*args)
-
-
 def count_cleanup_dispatch(repository, version, source_sha, mode):
     key = (repository, version, source_sha, mode)
     count = _cleanup_dispatches.get(key, 0)
@@ -609,29 +602,39 @@ def dispatch_cleanup(plan: Plan, mode: str) -> None:
     raise Pending(f"{action} {mode} cleanup for {plan.unit.name} {plan.selected}")
 
 
-def ensure_configured_state(
-    unit: Unit,
-    configured: str,
-    state: RepositoryState,
-) -> None:
+def ensure_configured_state(unit: Unit, configured: str, state: RepositoryState) -> str | None:
+    """Keep an incomplete configured publication available for stage recovery."""
     status = state.status(configured)
     if not status.partial or status.complete:
-        return
+        return None
     if "-preview." not in configured:
         raise Deferred(f"fixed Stable selection is incomplete: {unit.name} {configured}")
+    for active in (active_release_run(unit.repository, unit.workflow, configured),
+                   active_delete_run(unit.repository, configured)):
+        if active is not None:
+            raise Pending(f"publication or cleanup is active: {active.get('html_url')}")
     source_sha = recoverable_source_sha(status)
     if source_sha is None:
-        run_state = active_release_run(unit.repository, unit.workflow, configured)
-        if run_state is not None:
-            raise Pending(f"release is active: {run_state.get('html_url')}")
-        raise Deferred(
-            f"{unit.name} {configured} has no recoverable source target; keep it deferred"
-        )
-    plan = Plan(unit, configured, None, source_sha, configured, configured, "cleanup")
-    run_state = active_release_run(unit.repository, unit.workflow, configured)
-    if run_state is not None:
-        raise Pending(f"release is active: {run_state.get('html_url')}")
-    dispatch_cleanup(plan, "incomplete")
+        raise Deferred(f"{unit.name} {configured} has an ambiguous source; retain it and select a fresh Preview")
+    return source_sha
+
+
+def recover_configured_components(configured: dict[str, str], aggregate: str, aggregate_sha: str) -> None:
+    """Finish partial components against the unchanged channel dependency tuple."""
+    states = {name: RepositoryState(UNIT_BY_NAME[name]).status(tag) for name, tag in configured.items()}
+    if not any(status.partial and not status.complete for status in states.values()):
+        return
+    plans = {}
+    for name, tag in configured.items():
+        unit, status = UNIT_BY_NAME[name], states[name]
+        source = status.tag_sha if status.complete else recoverable_source_sha(status)
+        if source is None or (not status.complete and '-preview.' not in tag):
+            raise Deferred(f"configured {name} {tag} is unavailable; retain the channel and recover its original publication")
+        source_ref = None if status.complete else preview_selection.component_source_ref(PLATFORM_REF, name, tag)
+        plans[name] = Plan(unit, tag, source_ref, source, tag, tag, 'reuse' if status.complete else 'publish')
+    for unit in UNITS:
+        if unit.name in plans and not ensure_unit(plans[unit.name], plans, aggregate, aggregate_sha):
+            raise Pending(f"recover configured {unit.name} before selecting new component versions")
 
 
 def make_plan(
@@ -641,11 +644,14 @@ def make_plan(
     temporary: pathlib.Path,
 ) -> Plan:
     state = RepositoryState(unit)
-    ensure_configured_state(unit, configured, state)
+    recovery_sha = ensure_configured_state(unit, configured, state)
     source_ref = preview_selection.component_source_ref(
         PLATFORM_REF, unit.name, configured
     )
     source_sha = branch_sha(unit.repository, source_ref)
+    if recovery_sha is not None:
+        return Plan(unit, configured, source_ref, recovery_sha, configured, configured,
+                    "publish", source_sha)
     if source_sha is None:
         if PLATFORM_REF == "main":
             raise Deferred(f"required component main branch is missing: {unit.repository}")
@@ -671,27 +677,8 @@ def make_plan(
         resolution.winner_commit if resolution.action == "reuse" else source_sha
     )
     if selected_state.partial and not selected_state.complete:
-        if resolution.selected == configured and "-preview." in configured:
-            recovery_sha = recoverable_source_sha(selected_state)
-            if recovery_sha is None:
-                raise Deferred(
-                    f"{unit.name} {resolution.selected} has no recoverable source target"
-                )
-            dispatch_cleanup(
-                Plan(
-                    unit,
-                    configured,
-                    source_ref,
-                    recovery_sha,
-                    resolution.winner,
-                    resolution.selected,
-                    "cleanup",
-                ),
-                "incomplete",
-            )
-        raise Deferred(
-            f"ignore foreign incomplete publication: {unit.name} {resolution.selected}"
-        )
+        raise Deferred(f"incomplete publication occupies {unit.name} {resolution.selected}; "
+                       "retain it and select a fresh Preview or recover its original stage")
     if selected_state.complete and selected_state.tag_sha != selected_source_sha:
         raise Deferred(
             f"{unit.name} {resolution.selected} exists on another source commit"
@@ -720,19 +707,9 @@ def force_dependency_preview(plan: Plan, date: str, state: RepositoryState) -> P
     selected = preview_selection.preview_candidate(plan.unit.name, plan.winner, date)
     status = state.status(selected)
     if status.partial and not status.complete:
-        if selected == plan.configured:
-            recovery_sha = recoverable_source_sha(status)
-            if recovery_sha is None:
-                raise Deferred(
-                    f"{plan.unit.name} {selected} has no recoverable source target"
-                )
-            dispatch_cleanup(
-                replace(plan, selected=selected, source_sha=recovery_sha),
-                "incomplete",
-            )
-        raise Deferred(
-            f"ignore foreign incomplete dependency rebuild: {plan.unit.name} {selected}"
-        )
+        if recoverable_source_sha(status) != plan.source_sha:
+            raise Deferred(f"dependency rebuild conflicts with incomplete {plan.unit.name} {selected}; retain it")
+        return replace(plan, selected=selected, action="publish")
     if status.complete and status.tag_sha != plan.source_sha:
         raise Deferred(f"dependency rebuild tag collision: {plan.unit.name} {selected}")
     if status.complete and selected == plan.winner:
@@ -1003,40 +980,27 @@ def ensure_unit(
         return False
     if plan.source_ref is None:
         raise Deferred(f"fixed selection is unavailable: {plan.unit.name} {plan.selected}")
+    if active_delete_run(plan.unit.repository, plan.selected) is not None:
+        raise Pending(f"cleanup is active for {plan.unit.name} {plan.selected}")
+    if status.partial and recoverable_source_sha(status) != plan.source_sha:
+        raise Deferred(f"incomplete {plan.unit.name} {plan.selected} has another or ambiguous source; retain it")
     title = release_run_title(plan, plans)
-    if status.partial and "-preview." in plan.selected:
-        recovery_sha = recoverable_source_sha(status)
-        if recovery_sha is None:
-            raise Deferred(
-                f"{plan.unit.name} {plan.selected} has no recoverable source target"
-            )
-        dispatch_cleanup(replace(plan, source_sha=recovery_sha), "incomplete")
-
-    state_run = latest_run(plan.unit.repository, plan.unit.workflow, title)
-    if state_run is None:
-        gh(
-            "workflow",
-            "run",
-            plan.unit.workflow,
-            "--repo",
-            plan.unit.repository,
-            "--ref",
-            "main",
-            *release_inputs(plan, plans, aggregate, aggregate_sha),
-        )
-        print(f"==> dispatched {plan.unit.name} {plan.selected} from {plan.source_ref}")
+    runs = release_runs(plan.unit.repository, plan.unit.workflow, plan.selected)
+    exact = [item for item in runs if item.get("display_title") == title]
+    if resume_publish(plan.unit.repository, plan.unit.name, plan.selected, exact):
         return False
-    if run_active(state_run):
-        print(f"==> pending {state_run.get('html_url')}")
-        return False
-    if state_run.get("conclusion") == "success":
+    if status.partial:
+        raise Deferred(f"incomplete {plan.unit.name} {plan.selected} has no recoverable stage; "
+                       "retain it and select a fresh Preview")
+    if any(item.get("conclusion") == "success" for item in exact):
         raise Pending(f"successful run is waiting for Release API convergence: {title}")
-    attempt = int(state_run.get("run_attempt", 1))
-    if attempt < 3:
-        rerun_workflow(plan.unit.repository, state_run)
-        print(f"==> reran publication: {state_run.get('html_url')}")
-        return False
-    raise RuntimeError(f"publication remains failed after three attempts: {state_run.get('html_url')}")
+    count_publication(plan.unit.repository, plan.unit.name, plan.selected + ":build")
+    # No accepted stage or published bytes exist. A new run avoids replacing
+    # successful architecture artifacts from an earlier failed build attempt.
+    gh("workflow", "run", plan.unit.workflow, "--repo", plan.unit.repository,
+       "--ref", "main", *release_inputs(plan, plans, aggregate, aggregate_sha))
+    print(f"==> dispatched {plan.unit.name} {plan.selected} from {plan.source_ref}")
+    return False
 
 
 def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
@@ -1080,50 +1044,82 @@ def latest_actual_jobs(attempts: list[dict[str, Any]]) -> dict[str, dict[str, An
     return latest
 
 
-def resume_workbench_publish(version: str, source_sha: str) -> bool:
-    """Retry only publication of the already validated immutable stage."""
-    runs = aggregate_runs(version)
-    if any(run_active(item) for item in runs):
-        return False
-    exact = [item for item in runs if item.get('display_title') == aggregate_run_title(version, source_sha)]
-    state = max(exact, key=lambda item: str(item.get('created_at', '')), default=None)
-    if state is None:
-        raise RuntimeError('partial workbench publication has no exact original workflow; retaining its bytes')
-    if state.get('conclusion') == 'success':
-        raise Pending('aggregate run is waiting for Release API convergence')
-    attempts = paginated(f"repos/{PLATFORM_REPOSITORY}/actions/runs/{state['id']}/jobs?filter=all&per_page=100", 'jobs')
-    # A publish-only rerun has no new prerequisite jobs. Keep the latest
-    # actual job for each name across attempts, including the unchanged gates.
-    latest = latest_actual_jobs(attempts)
-    import sys
-    sys.path.insert(0, str(CONTROL_ROOT / 'ci/integration'))
-    import workbench_groups
-    workbench_groups.recovery_order(attempts)
-    jobs = list(latest.values())
-    publishers = [job for job in jobs if job.get('name') == 'publish']
-    required = ('prepare', 'stage', 'release-asset-validation / results')
-    for name in required:
-        matched = [job for job in jobs if job.get('name') == name]
-        if len(matched) != 1 or matched[0].get('status') != 'completed' or matched[0].get('conclusion') != 'success':
-            raise RuntimeError('cannot resume workbench publication without its successful original prerequisite: ' + name)
-    if len(publishers) != 1 or publishers[0].get('status') != 'completed' or publishers[0].get('conclusion') not in {'failure', 'cancelled', 'timed_out'}:
-        raise RuntimeError('partial workbench publication has no failed publish job; retaining its bytes')
-    artifacts = paginated(f"repos/{PLATFORM_REPOSITORY}/actions/runs/{state['id']}/artifacts?per_page=100", 'artifacts')
-    expected = f"aggregate-stage-{version}-{state['id']}"
-    stages = [item for item in artifacts if item.get('name') == expected]
-    if len(stages) != 1 or stages[0].get('expired') is not False:
-        raise RuntimeError('original workbench stage is unavailable; retain partial bytes and recover through owned cleanup with a fresh Preview selection')
-    # GitHub reruns this job and its dependents. Preparation, native builds and
-    # successful validation are not rerun or replaced; the publisher downloads
-    # that run's exact immutable stage and verifies source/head/bytes again.
-    count = _publication_resumes.get(state['id'], 0)
+def count_publication(repository: str, unit: str, identity: str) -> None:
+    key = (repository, unit, identity)
+    count = _publication_resumes.get(key, 0)
     if count >= 3:
-        raise RuntimeError('aggregate publication failed after three resumes in this invocation: ' + str(state.get('html_url')))
-    _publication_resumes[state['id']] = count + 1
-    gh('api', '--method', 'POST',
-       f"repos/{PLATFORM_REPOSITORY}/actions/jobs/{publishers[0]['id']}/rerun", '--silent')
-    print(f"==> resumed immutable workbench publication: {state.get('html_url')}")
-    return False
+        raise RuntimeError(f"publication failed after three attempts in this invocation: {repository} {identity}")
+    _publication_resumes[key] = count + 1
+
+
+def resume_publish(repository: str, unit: str, version: str, exact: list[dict[str, Any]]) -> bool:
+    """Resume an unfinished publication, never qualify an already released asset."""
+    if len(exact) > 20:
+        raise Deferred('too many exact publication runs to resolve safely; retain their stages and select a fresh Preview')
+    candidates = []
+    for state in exact:
+        if run_active(state):
+            raise Pending(f"publication is active: {state.get('html_url')}")
+        if state.get('conclusion') == 'success':
+            raise Pending('successful run is waiting for Release API convergence')
+        attempts = paginated(f"repos/{repository}/actions/runs/{state['id']}/jobs?filter=all&per_page=100", 'jobs')
+        latest = latest_actual_jobs(attempts)
+        publisher = latest.get('publish', {})
+        if publisher.get('status') == 'completed' and publisher.get('conclusion') == 'success':
+            raise Pending('successful publisher is waiting for Release API convergence')
+        if publisher.get('status') != 'completed' or publisher.get('conclusion') not in {'failure', 'cancelled', 'timed_out'}:
+            continue  # A newer run cancelled before publishing cannot hide an older accepted stage.
+        if unit == 'platform':
+            required = ['prepare', 'stage', 'release-asset-validation / results']
+            import sys
+            sys.path.insert(0, str(CONTROL_ROOT / 'ci/integration'))
+            import workbench_groups
+            workbench_groups.recovery_order(attempts)
+            grouped = any(re.search(r'workbench-release \(x86_64, [AB]\)$', name) for name in latest)
+            for arch in ('x86_64', 'aarch64'):
+                groups = ('A', 'B') if grouped and arch == 'x86_64' else ('all',)
+                for group in groups:
+                    name = f'release-asset-validation / workbench-release ({arch}, {group})'
+                    required.append(name)
+            expected = [f'aggregate-stage-{version}-{state["id"]}',
+                        f'integration-validation-{state["id"]}']
+            # Grouped results are collected inside integration-validation. The
+            # ordinary publisher downloads the two original architecture results.
+            if not grouped:
+                expected += [f'integration-workbench-result-{arch}-{state["id"]}'
+                             for arch in ('x86_64', 'aarch64')]
+        else:
+            required = ['preflight']
+            for arch in ('x86_64', 'aarch64'):
+                names = [name for name in latest if re.fullmatch(r'build \(' + arch + r'(?:, [^)]+)?\)', name)]
+                if len(names) != 1:
+                    raise Deferred(f"original {unit} stage lacks an unambiguous {arch} build; retain it")
+                required.extend(names)
+            prefix = unit + '-release' if unit in {'runtime', 'vmlinux'} else 'component-release'
+            expected = [f'workbench-selection-{state["id"]}'] + [
+                f'{prefix}-{version}-{arch}-{state["id"]}' for arch in ('x86_64', 'aarch64')]
+        for name in required:
+            job = latest.get(name, {})
+            if job.get('status') != 'completed' or job.get('conclusion') != 'success':
+                raise Deferred(f"cannot resume original publication without successful {name}; retain its stage")
+        available = paginated(f"repos/{repository}/actions/runs/{state['id']}/artifacts?per_page=100", 'artifacts')
+        for name in expected:
+            rows = [item for item in available if item.get('name') == name]
+            if len(rows) != 1 or rows[0].get('expired') is not False:
+                raise Deferred(f"original publication artifact is missing or expired: {name}; "
+                               "retain partial bytes and select a fresh Preview")
+        candidates.append((state, publisher))
+    if len(candidates) > 1:
+        raise Deferred('multiple accepted stages could own this publication; retain them and resolve the conflict')
+    if not candidates:
+        return False
+    state, publisher = candidates[0]
+    count_publication(repository, unit, str(state['id']))
+    # The publisher revalidates the original stage, version, current-run results,
+    # actual package bytes and any already uploaded assets before writing.
+    gh('api', '--method', 'POST', f"repos/{repository}/actions/jobs/{publisher['id']}/rerun", '--silent')
+    print(f"==> resumed original {unit} publication: {state.get('html_url')}")
+    return True
 
 
 def ensure_aggregate(version: str, source_sha: str) -> bool:
@@ -1133,44 +1129,24 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
             raise Deferred(f"aggregate {version} exists on another platform commit")
         print(f"==> aggregate {version} is complete")
         return True
-    if status.partial and status.tag_sha == source_sha:
-        # Use the exact source declaration, never infer a legacy contract from
-        # absent image assets in a partial GitHub release.
-        expected = platform_asset_names(version, source_sha)
-        if selection.workbench_archive(version, 'x86_64') in expected:
-            return resume_workbench_publish(version, source_sha)
-    if status.partial and "-preview." in version:
-        recovery_sha = recoverable_source_sha(status)
-        if recovery_sha is None:
-            raise Deferred(f"aggregate {version} has no recoverable source target")
-        dispatch_platform_cleanup(version, recovery_sha)
-    title = aggregate_run_title(version, source_sha)
+    if active_delete_run(PLATFORM_REPOSITORY, version) is not None:
+        raise Pending(f"aggregate cleanup is active: {version}")
+    if status.partial and recoverable_source_sha(status) != source_sha:
+        raise Deferred(f"incomplete aggregate {version} has another or ambiguous source; retain it")
     runs = aggregate_runs(version)
     active = [item for item in runs if run_active(item)]
     if active:
-        state = max(active, key=lambda item: str(item.get("created_at", "")))
-        print(f"==> pending {state.get('html_url')}")
+        print(f"==> pending {active[0].get('html_url')}")
         return False
-    exact = [item for item in runs if item.get("display_title") == title]
-    state = max(
-        exact, key=lambda item: str(item.get("created_at", "")), default=None
-    )
-    if state is None:
-        dispatch_aggregate_run(version, source_sha)
-        print(f"==> dispatched aggregate {version} from {PLATFORM_REF}")
+    exact = [item for item in runs if item.get('display_title') == aggregate_run_title(version, source_sha)]
+    if resume_publish(PLATFORM_REPOSITORY, 'platform', version, exact):
         return False
-    if state.get("conclusion") == "success":
-        raise Pending("aggregate run is waiting for Release API convergence")
-    attempts = sum(int(item.get("run_attempt", 1)) for item in exact)
-    if attempts < 3:
-        # prepare owns the immutable exact-stage artifact. A failed-job rerun
-        # reuses that stage, while a full rerun keeps its GITHUB_RUN_ID artifact
-        # identity. A fresh run guarantees that prepare fetches component assets
-        # again without overwriting another attempt's evidence.
-        dispatch_aggregate_run(version, source_sha)
-        print(f"==> redispatched aggregate {version} with a fresh exact stage")
-        return False
-    raise RuntimeError(f"aggregate publication failed: {state.get('html_url')}")
+    if status.partial:
+        raise Deferred(f"incomplete aggregate {version} has no recoverable stage; retain it and select a fresh Preview")
+    count_publication(PLATFORM_REPOSITORY, 'platform', version + ':build')
+    dispatch_aggregate_run(version, source_sha)
+    print(f"==> dispatched aggregate {version} with a fresh stage")
+    return False
 
 
 def converge(plans: dict[str, Plan], aggregate: str, source_sha: str) -> bool:
@@ -1228,6 +1204,15 @@ def main(deadline: float | None = None) -> str:
         return "closed"
 
     current_status = platform_release(current_aggregate)
+    if current_status.partial and not current_status.complete:
+        recovery_sha = recoverable_source_sha(current_status)
+        if recovery_sha is None:
+            raise Deferred(f"{current_aggregate} has ambiguous partial bytes; retain it and select a fresh Preview")
+        if not ensure_aggregate(current_aggregate, recovery_sha):
+            raise Pending(f"recover the original {current_aggregate} before changing the channel")
+        current_status = platform_release(current_aggregate)
+        if not current_status.complete:
+            raise Pending(f"recovered {current_aggregate} is waiting for Release API convergence")
     requested_order = selection.preview_order(f"preview.{TODAY}")
     current_order = selection.preview_order(preview)
     date = current_date
@@ -1239,13 +1224,6 @@ def main(deadline: float | None = None) -> str:
         date = TODAY
         next_previous_preview = preview
     elif requested_order > current_order:
-        if current_status.partial:
-            recovery_sha = recoverable_source_sha(current_status)
-            if recovery_sha is None:
-                raise Deferred(
-                    f"{current_aggregate} has no recoverable source target"
-                )
-            dispatch_platform_cleanup(current_aggregate, recovery_sha)
         date = TODAY
         # An unpublished selection may contain component tags that never existed.
         # Keep its previous published baseline rather than comparing against it.
@@ -1282,6 +1260,7 @@ def main(deadline: float | None = None) -> str:
                 f"{active_cleanup.get('html_url')}"
             )
 
+    recover_configured_components(configured, current_aggregate, PLATFORM_SHA)
     plans = plan_units(configured, date)
     for plan in plans.values():
         active_release = active_release_run(

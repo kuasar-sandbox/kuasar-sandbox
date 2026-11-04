@@ -41,6 +41,13 @@ FORMAL_SPEC.loader.exec_module(formal)
 class PreviewCoordinatorTest(unittest.TestCase):
     def setUp(self):
         coordinator._cleanup_dispatches.clear()
+        coordinator._publication_resumes.clear()
+        # Selection/dispatch tests have no accepted stage or active cleanup.
+        # Actual stage recovery and its artifact/job gates live in test_workbench_resume.py.
+        for name, value in (("active_delete_run", None), ("resume_publish", False), ("recover_configured_components", None)):
+            patcher = mock.patch.object(coordinator, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
 
     @staticmethod
     def binding_body(
@@ -314,26 +321,6 @@ class PreviewCoordinatorTest(unittest.TestCase):
             status = coordinator.ReleaseStatus({"body": body.replace("20260914.1", suffix)}, plan.source_sha, True)
             coordinator.validate_release_reuse(plan, status)
 
-    def test_cancelled_workflow_uses_full_rerun(self) -> None:
-        state = {"id": 17, "conclusion": "cancelled"}
-        with mock.patch.object(coordinator, "gh") as gh:
-            coordinator.rerun_workflow("kuasar-sandbox/accelerator", state)
-        gh.assert_called_once_with(
-            "run", "rerun", "17", "--repo", "kuasar-sandbox/accelerator"
-        )
-
-    def test_failed_workflow_uses_failed_job_rerun(self) -> None:
-        state = {"id": 18, "conclusion": "failure"}
-        with mock.patch.object(coordinator, "gh") as gh:
-            coordinator.rerun_workflow("kuasar-sandbox/accelerator", state)
-        gh.assert_called_once_with(
-            "run",
-            "rerun",
-            "18",
-            "--repo",
-            "kuasar-sandbox/accelerator",
-            "--failed",
-        )
 
     def test_aggregate_run_identity_includes_selected_source(self) -> None:
         sha = "c" * 40
@@ -372,6 +359,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
                     ordinary = dict(id=1, display_title=title, status='completed', conclusion='failure',
                                     run_attempt=2, created_at='2026-10-15T01:00:00Z')
                     for history in ([validation], [validation, ordinary]):
+                        coordinator._publication_resumes.clear()
                         with self.subTest(title=validation_title, status=status, conclusion=conclusion, retry=len(history)), \
                              mock.patch.object(coordinator, 'paginated', return_value=history), \
                              mock.patch.object(coordinator, 'platform_release', return_value=empty), \
@@ -379,13 +367,6 @@ class PreviewCoordinatorTest(unittest.TestCase):
                             self.assertIsNone(coordinator.active_aggregate_run(version))
                             self.assertFalse(coordinator.ensure_aggregate(version, sha))
                             dispatch.assert_called_once_with(version, sha)
-                    ordinary['run_attempt'] = 3
-                    with mock.patch.object(coordinator, 'paginated', return_value=[validation, ordinary]), \
-                         mock.patch.object(coordinator, 'platform_release', return_value=empty), \
-                         mock.patch.object(coordinator, 'dispatch_aggregate_run') as dispatch:
-                        with self.assertRaisesRegex(RuntimeError, 'aggregate publication failed'):
-                            coordinator.ensure_aggregate(version, sha)
-                        dispatch.assert_not_called()
 
     def test_newer_validation_does_not_hide_active_ordinary_publication(self) -> None:
         version, sha = 'release-v1.2.3-preview.20261015', 'a' * 40
@@ -484,7 +465,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
             ("20260831", "preview.20260829"),
         )
 
-    def test_stale_partial_aggregate_is_cleaned_before_rollover(self) -> None:
+    def test_stale_partial_aggregate_is_recovered_before_rollover(self) -> None:
         empty = coordinator.ReleaseStatus(None, None, False)
         partial = coordinator.ReleaseStatus(
             {"target_commitish": "b" * 40}, "b" * 40, False
@@ -512,16 +493,53 @@ class PreviewCoordinatorTest(unittest.TestCase):
             ),
             mock.patch.object(
                 coordinator,
-                "dispatch_platform_cleanup",
-                side_effect=coordinator.Pending("cleanup"),
-            ) as cleanup,
+                "ensure_aggregate",
+                return_value=False,
+            ) as recovery,
             mock.patch.object(coordinator, "plan_units") as plan_units,
-            self.assertRaisesRegex(coordinator.Pending, "cleanup"),
+            self.assertRaisesRegex(coordinator.Pending, "recover the original"),
         ):
             coordinator.main()
-        cleanup.assert_called_once_with(
-            "release-v1.2.3-preview.20260830", "b" * 40
+        recovery.assert_called_once_with("release-v1.2.3-preview.20260830", "b" * 40)
+        plan_units.assert_not_called()
+
+    def test_same_day_partial_recovers_original_source_before_main_drift(self) -> None:
+        empty = coordinator.ReleaseStatus(None, None, False)
+        partial = coordinator.ReleaseStatus(
+            {"target_commitish": "b" * 40}, "b" * 40, False
         )
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+            mock.patch.object(coordinator, "TODAY", "20260830"),
+            mock.patch.object(coordinator, "PLATFORM_SHA", "f" * 40),
+            mock.patch.object(coordinator, "validate_environment"),
+            mock.patch.object(
+                coordinator,
+                "manifest_values",
+                return_value=(
+                    "release-v1.2.3",
+                    "release-v1.2.2",
+                    "preview.20260830",
+                    None,
+                    {},
+                ),
+            ),
+            mock.patch.object(
+                coordinator, "release_version", return_value="release-v1.2.2"
+            ),
+            mock.patch.object(
+                coordinator, "platform_release", side_effect=(empty, partial)
+            ),
+            mock.patch.object(
+                coordinator,
+                "ensure_aggregate",
+                return_value=False,
+            ) as recovery,
+            mock.patch.object(coordinator, "plan_units") as plan_units,
+            self.assertRaisesRegex(coordinator.Pending, "recover the original"),
+        ):
+            coordinator.main()
+        recovery.assert_called_once_with("release-v1.2.3-preview.20260830", "b" * 40)
         plan_units.assert_not_called()
 
     def test_aggregate_lookup_is_exact_for_selected_source(self) -> None:
@@ -591,40 +609,20 @@ class PreviewCoordinatorTest(unittest.TestCase):
             f"source_sha={sha}",
         )
 
-    def test_aggregate_fresh_runs_share_the_three_attempt_budget(self) -> None:
-        version = "release-v0.1.2-preview.20260831"
-        sha = "d" * 40
-        title = coordinator.aggregate_run_title(version, sha)
-        empty = coordinator.ReleaseStatus(None, None, False)
-        failed = [
-            {
-                "id": 20,
-                "status": "completed",
-                "conclusion": "failure",
-                "run_attempt": 2,
-                "created_at": "2026-08-31T08:00:00Z",
-                "display_title": title,
-                "html_url": "https://example.invalid/run/20",
-            },
-            {
-                "id": 21,
-                "status": "completed",
-                "conclusion": "failure",
-                "run_attempt": 1,
-                "created_at": "2026-08-31T09:00:00Z",
-                "display_title": title,
-                "html_url": "https://example.invalid/run/21",
-            },
-        ]
-        with (
-            mock.patch.object(coordinator, "platform_release", return_value=empty),
-            mock.patch.object(coordinator, "aggregate_runs", return_value=failed),
-            mock.patch.object(coordinator, "gh") as gh,
-            self.assertRaisesRegex(RuntimeError, "aggregate publication failed") as failure,
-        ):
-            coordinator.ensure_aggregate(version, sha)
-        self.assertIs(type(failure.exception), RuntimeError)
-        gh.assert_not_called()
+    def test_aggregate_history_does_not_spend_current_invocation_budget(self):
+        version, sha = "release-v0.1.2-preview.20260831", "d" * 40
+        failed = dict(id=20, status="completed", conclusion="failure", run_attempt=99,
+                      display_title=coordinator.aggregate_run_title(version, sha))
+        with mock.patch.object(coordinator, "platform_release", return_value=coordinator.ReleaseStatus(None, None, False)), \
+             mock.patch.object(coordinator, "aggregate_runs", return_value=[failed]), \
+             mock.patch.object(coordinator, "dispatch_aggregate_run") as dispatch:
+            for _ in range(3): self.assertFalse(coordinator.ensure_aggregate(version, sha))
+            with self.assertRaisesRegex(RuntimeError, "three attempts in this invocation"):
+                coordinator.ensure_aggregate(version, sha)
+            self.assertEqual(dispatch.call_count, 3)
+            coordinator._publication_resumes.clear()
+            self.assertFalse(coordinator.ensure_aggregate(version, sha))
+            self.assertEqual(dispatch.call_count, 4)
 
     def test_older_active_aggregate_is_not_hidden_by_newer_cancelled_run(self) -> None:
         version = "release-v0.1.2-preview.20260831"
@@ -743,7 +741,7 @@ components:
         )
         self.assertEqual(coordinator.recoverable_source_sha(status), "c" * 40)
 
-    def test_configured_tagless_preview_dispatches_cleanup(self) -> None:
+    def test_configured_tagless_preview_preserves_original_source(self) -> None:
         unit = coordinator.UNIT_BY_NAME["connector"]
         tag = "v1.2.3-preview.20260831"
         state = mock.Mock()
@@ -756,9 +754,8 @@ components:
             ),
             mock.patch.object(coordinator, "dispatch_cleanup") as cleanup,
         ):
-            coordinator.ensure_configured_state(unit, tag, state)
-        self.assertEqual(cleanup.call_args.args[0].source_sha, "c" * 40)
-        self.assertEqual(cleanup.call_args.args[1], "incomplete")
+            self.assertEqual(coordinator.ensure_configured_state(unit, tag, state), "c" * 40)
+        cleanup.assert_not_called()
 
     def test_missing_component_maintenance_branch_freezes_exact_selection(self) -> None:
         unit = coordinator.UNIT_BY_NAME["sandboxer"]
@@ -770,7 +767,7 @@ components:
         with (
             mock.patch.object(coordinator, "PLATFORM_REF", "release/v0.5.x"),
             mock.patch.object(coordinator, "RepositoryState", return_value=fake_state),
-            mock.patch.object(coordinator, "ensure_configured_state"),
+            mock.patch.object(coordinator, "ensure_configured_state", return_value=None),
             mock.patch.object(coordinator, "branch_sha", return_value=None),
         ):
             plan = coordinator.make_plan(
@@ -1266,30 +1263,24 @@ notes:
             self.assertEqual(gh.call_count, 4)
             self.assertEqual(gh.call_args.args[:3], ('workflow', 'run', 'delete-preview.yml'))
 
-    def test_component_publication_retry_exhaustion_is_a_failure(self) -> None:
+    def test_component_history_does_not_spend_current_invocation_budget(self):
         tag = "v1.2.3-preview.20260909"
-        plan = coordinator.Plan(
-            coordinator.UNIT_BY_NAME["accelerator"],
-            tag, "main", "a" * 40, tag, tag, "publish",
-        )
+        plan = coordinator.Plan(coordinator.UNIT_BY_NAME["accelerator"], tag, "main", "a" * 40, tag, tag, "publish")
         state = mock.Mock()
         state.status.return_value = coordinator.ReleaseStatus(None, None, False)
-        failed = {
-            "status": "completed", "conclusion": "failure", "run_attempt": 3,
-            "html_url": "https://example.invalid/run/1",
-        }
-        with (
-            mock.patch.object(coordinator, "RepositoryState", return_value=state),
-            mock.patch.object(coordinator, "active_release_run", return_value=None),
-            mock.patch.object(coordinator, "latest_run", return_value=failed),
-            mock.patch.object(coordinator, "gh") as gh,
-            self.assertRaisesRegex(RuntimeError, "three attempts") as failure,
-        ):
-            coordinator.ensure_unit(
-                plan, {"accelerator": plan}, "release-v1.2.3-preview.20260909", "b" * 40
-            )
-        self.assertIs(type(failure.exception), RuntimeError)
-        gh.assert_not_called()
+        failed = dict(id=10, status="completed", conclusion="failure", run_attempt=99,
+                      display_title=coordinator.release_run_title(plan, {"accelerator": plan}))
+        with mock.patch.object(coordinator, "RepositoryState", return_value=state), \
+             mock.patch.object(coordinator, "active_release_run", return_value=None), \
+             mock.patch.object(coordinator, "release_runs", return_value=[failed]), \
+             mock.patch.object(coordinator, "gh") as gh:
+            for _ in range(3):
+                self.assertFalse(coordinator.ensure_unit(plan, {"accelerator": plan}, "unused", "b" * 40))
+            with self.assertRaisesRegex(RuntimeError, "three attempts in this invocation"):
+                coordinator.ensure_unit(plan, {"accelerator": plan}, "unused", "b" * 40)
+            self.assertEqual(gh.call_count, 3)
+            coordinator._publication_resumes.clear()
+            self.assertFalse(coordinator.ensure_unit(plan, {"accelerator": plan}, "unused", "b" * 40))
 
     def test_platform_cleanup_old_failures_do_not_prevent_current_attempts(self):
         tag = 'release-v1.2.3-preview.20260909'
@@ -1355,7 +1346,7 @@ notes:
         with (
             mock.patch.object(coordinator, "RepositoryState", return_value=state),
             mock.patch.object(coordinator, "active_release_run", return_value=None),
-            mock.patch.object(coordinator, "latest_run", return_value=cancelled),
+            mock.patch.object(coordinator, "release_runs", return_value=[cancelled]),
             mock.patch.object(coordinator, "gh") as gh,
         ):
             self.assertFalse(
@@ -1366,13 +1357,9 @@ notes:
                     "d" * 40,
                 )
             )
-        gh.assert_called_once_with(
-            "run",
-            "rerun",
-            "24",
-            "--repo",
-            plan.unit.repository,
-        )
+        gh.assert_called_once_with("workflow", "run", plan.unit.workflow, "--repo", plan.unit.repository,
+                                   "--ref", "main", *coordinator.release_inputs(plan, {"accelerator": plan},
+                                   "release-v9.8.7-preview.20260831", "d" * 40))
 
     def test_successful_old_cleanup_is_redispatched_for_recreated_preview(self) -> None:
         unit = coordinator.UNIT_BY_NAME["connector"]
