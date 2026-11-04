@@ -231,12 +231,14 @@ else:
         stage = next(step['run'] for step in data['jobs']['results']['steps']
                      if step.get('name') == 'Require every selected stage')
         good = {'DOCS_LANE': 'full', 'RESOLVE_RESULT': 'success', 'X86_RESULT': 'success',
-                'ARM_RESULT': 'success', 'SOURCE_RESULT': 'success',
+                'ARM_RESULT': 'success', 'SOURCE_RESULT': 'skipped',
                 'WORKBENCH_SELECTED': 'true', 'WORKBENCH_RESULT': 'success',
                 'INTEGRATION_MODE': 'exact-assets', 'WORKBENCH_RELEASE_RESULT': 'success'}
         self.assertEqual(subprocess.run(['bash', '-c', stage], env={**self.env, **good}).returncode, 0)
         for name in good:
-            for value in ('failure', 'cancelled', 'skipped', 'neutral', ''):
+            for value in ('success', 'failure', 'cancelled', 'skipped', 'neutral', ''):
+                if value == good[name]:
+                    continue
                 with self.subTest(stage=name, result=value):
                     env = {**self.env, **good, name: value}
                     self.assertNotEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
@@ -244,8 +246,11 @@ else:
         self.assertEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
         env['WORKBENCH_RESULT'] = 'success'
         self.assertNotEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
-        env = {**self.env, **good, 'INTEGRATION_MODE': 'source', 'WORKBENCH_RELEASE_RESULT': 'skipped'}
+        env = {**self.env, **good, 'INTEGRATION_MODE': 'source', 'SOURCE_RESULT': 'success', 'WORKBENCH_RELEASE_RESULT': 'skipped'}
         self.assertEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
+        for value in ('failure', 'cancelled', 'skipped', 'neutral', ''):
+            with self.subTest(mode='source', result=value):
+                self.assertNotEqual(subprocess.run(['bash', '-c', stage], env={**env, 'SOURCE_RESULT': value}).returncode, 0)
         for value in ('success', 'failure', 'cancelled', 'neutral', ''):
             env['WORKBENCH_RELEASE_RESULT'] = value
             self.assertNotEqual(subprocess.run(['bash', '-c', stage], env=env).returncode, 0)
