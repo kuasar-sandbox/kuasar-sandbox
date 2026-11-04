@@ -76,6 +76,22 @@ def compact_commits(text):
     return ''.join(parts)
 
 
+def stale_warnings(text, version, units):
+    """Warn only on recognizable generated selection references, not prose."""
+    warnings = []
+    titles = re.findall(r'^# Kuasar Sandbox (release-v[^\s]+)\s*$', text, re.M)
+    if any(title != version for title in titles):
+        warnings.append('release title names a different aggregate version')
+    rows = re.findall(r'^\| `([^`]+)` \| `([^`]+)` \|[ \t]*$', text, re.M)
+    for unit, tag in rows:
+        if unit in units and tag != units[unit]:
+            warnings.append(f'component table names a different {unit} version')
+    docs = re.findall(r'\[(?:Quick Start|Deployment)\]\(https://github\.com/kuasar-sandbox/kuasar-sandbox/blob/(release-v[^/\s)]+)/docs/(?:quickstart|deployment)\.md(?:#[^\s)]*)?\)', text)
+    if any(tag != version for tag in docs):
+        warnings.append('documentation link names a different aggregate version')
+    return warnings
+
+
 def committed_manifest(root, revision, relative):
     text = subprocess.check_output(['git', '-C', str(root), 'show', f'{revision}:{relative}']).decode('utf-8')
     return text, selection.read_simple_yaml(text, relative)
@@ -109,6 +125,21 @@ def publication_notes(platform, version, revision, units, publisher):
     _, block = selection.split_notes(text, relative)
     end = start + len(block.rstrip().splitlines()) - 1
     return fields, f'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/{source_sha}/{relative}#L{start}-L{end}'
+
+
+def legacy_admitted_source(platform, revision):
+    """Read-only bridge for stages admitted before manifest preparation existed.
+
+    New admission always requires complete notes. Dynamic publisher tooling can
+    also finish an older, already validated stage; it must not retroactively
+    require fields absent from that original admission contract. The absence
+    check is a compatibility discriminator, not independent age/authentication
+    proof: safety relies on the trusted workflow enforcing require_prepared
+    for every new admission, even when a selected source omits this tool.
+    """
+    value = subprocess.check_output(['git', '-C', str(platform), 'ls-tree', revision,
+                                     '--', 'release/prepare_notes.py'], text=True)
+    return not value.strip()
 
 
 def delivery_summary(version, units, url, notice, generated):
@@ -147,6 +178,8 @@ class Narrative:
         self.generated = text
         self.fields = fields or {}
         self.url = url
+        selection.validate_complete_notes(self.fields, 'release narrative')
+        self.complete = 'mode' in self.fields
         self.notice = ''
         if self.fields.get('upgrade_notice'):
             self.notice = (NOTICE_START + '\n## Important upgrade notice\n\n' +
@@ -154,6 +187,8 @@ class Narrative:
         self.text = self.render(self.fields.get('body'))
 
     def render(self, body):
+        if self.complete:
+            return body
         text = self.generated
         if self.notice:
             title, newline, rest = text.partition('\n')
@@ -168,6 +203,10 @@ class Narrative:
         return text
 
     def fit(self, prefix, available):
+        # Complete manifest prose is immutable at publication time. Let the
+        # evidence-aware budget fail rather than compacting or replacing it.
+        if self.complete:
+            return prefix
         # Compact only generated inventory. Authored Markdown is never passed
         # to the commit-row reducer, even if it resembles generated inventory.
         compact = Narrative(compact_commits(self.generated), self.fields, self.url)
@@ -184,12 +223,90 @@ class Narrative:
         return prefix
 
 
-if __name__ == '__main__':
+def source_selection(platform, version):
+    """Read only the selected committed channel, never an uncommitted edit."""
+    revision = subprocess.check_output(['git', '-C', str(platform), 'rev-parse', 'HEAD'], text=True).strip()
+    preview = '-preview.' in version
+    relative = 'releases/daily-preview.yaml' if preview else 'releases/release.yaml'
+    text, config = committed_manifest(platform, revision, relative)
+    selected, _, units = selection.parse_manifest(text, relative, preview)
+    if selected != version:
+        raise ValueError('manifest differs from requested release selection')
+    return revision, config, units
+
+
+def export_notes(platform, version, output):
+    _, config, units = source_selection(platform, version)
+    fields = config.get('notes', {})
+    selection.require_prepared_notes(config, 'committed release manifest')
+    publication_body.checked(fields['body'])
+    for warning in stale_warnings(fields['body'], version, units):
+        print('release notes warning: ' + warning, file=sys.stderr)
+    output.write_text(fields['body'])
+
+
+def validate_file(platform, version, notes_file):
+    revision, config, units = source_selection(platform, version)
+    text = notes_file.read_text()
+    fields = config.get('notes', {})
+    bound = publication_body.MARKER in text
+    if bound:
+        if text.count(publication_body.MARKER) != 1:
+            raise ValueError('release notes require exactly one validation binding')
+        fields, _ = publication_notes(platform, version, revision, units, ROOT)
+    if 'mode' not in fields:
+        if not legacy_admitted_source(platform, revision):
+            raise ValueError('publication requires complete manifest notes for this admitted source')
+        validate(text.split(publication_body.MARKER, 1)[0] if bound else text, version, units)
+        return
+    selection.validate_complete_notes(fields, 'committed release manifest')
+    prefix = text.split(publication_body.MARKER, 1)[0] if bound else text
+    expected = fields['body'] + ('\n' if bound else '')
+    if prefix != expected:
+        raise ValueError('release notes human prefix differs from complete manifest notes.body')
+    for warning in stale_warnings(prefix, version, units):
+        print('release notes warning: ' + warning, file=sys.stderr)
+
+
+def validate_history(notes_file):
+    """Consume immutable historical prose without applying today's template.
+
+    The aggregate caller still checks its resolved manifest selection, exact
+    asset set, hashes, source and Workbench identities. Human prose can have
+    come from a reviewed later correction whose commit is no longer main.
+    """
+    text = notes_file.read_text()
+    if not text.strip() or text.count(publication_body.MARKER) > 1:
+        raise ValueError('historical notes must be nonempty with at most one validation binding')
+    publication_body.checked(text)
+
+
+def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in ('export', 'validate', 'validate-history'):
+        parser = argparse.ArgumentParser(description=__doc__)
+        parser.add_argument('command', choices=('export', 'validate', 'validate-history'))
+        parser.add_argument('platform', type=Path)
+        parser.add_argument('version')
+        parser.add_argument('notes', type=Path)
+        args = parser.parse_args(argv)
+        if args.command == 'export':
+            export_notes(args.platform, args.version, args.notes)
+        elif args.command == 'validate':
+            validate_file(args.platform, args.version, args.notes)
+        else:
+            validate_history(args.notes)
+        return
+    # Compatibility for the historical generated-notes compaction command.
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('notes', type=Path)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     original = args.notes.read_text()
     adjusted = original if len(original) <= publication_body.MAX_CHARACTERS else compact_commits(original)
     publication_body.checked(adjusted)
     if adjusted != original:
         args.notes.write_text(adjusted)
+
+
+if __name__ == '__main__':
+    main()

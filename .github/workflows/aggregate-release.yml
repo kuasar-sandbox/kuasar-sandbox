@@ -94,6 +94,9 @@ jobs:
             --jq 'select(.object.type == "commit") | .object.sha')" = "$SOURCE_SHA" ] \
             || { echo "$SOURCE_REF moved after selection" >&2; exit 1; }
           [ "$(git -C platform rev-parse HEAD)" = "$SOURCE_SHA" ]
+          notes_channel=release
+          [[ "$VERSION" != *-preview.* ]] || notes_channel=daily-preview
+          python3 -B control/release/prepare_notes.py platform "$notes_channel" --check
           if [[ "$SOURCE_REF" =~ ^release/v([0-9]+)\.([0-9]+)\.x$ ]]; then
             [[ "$VERSION" =~ ^release-v${BASH_REMATCH[1]}\.${BASH_REMATCH[2]}\.[0-9]+(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]] \
               || { echo "$VERSION does not belong to $SOURCE_REF" >&2; exit 1; }

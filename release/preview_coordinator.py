@@ -45,6 +45,8 @@ def load_module(name: str, path: pathlib.Path) -> Any:
 
 
 selection = load_module("release_selection", CONTROL_ROOT / "release/selection.py")
+sys.path.insert(0, str(CONTROL_ROOT / 'release'))
+import prepare_notes  # noqa: E402
 preview_selection = load_module(
     "preview_selection", CONTROL_ROOT / "release/preview-selection.py"
 )
@@ -947,57 +949,74 @@ def render_manifest(
 
 
 def retain_preview_notes(current: str, generated: str, relative: str) -> str:
-    """A retry of the same selection retains its reviewed Markdown and formatting."""
-    without_notes, notes = selection.split_notes(current, relative)
-    if not notes:
-        return generated
-    before = selection.read_simple_yaml(without_notes, relative)
-    after = selection.read_simple_yaml(generated, relative)
-    if before == after:
-        return current
-    if all(before[key] == after[key] for key in ("version", "preview_version", "components")):
-        return generated + notes
-    return generated
+    """Finish prose before committing the source used by every producer."""
+    content = prepare_notes.prepare(current, generated, relative, PLATFORM_ROOT)
+    prepare_notes.require_prepared(content, relative)
+    return current if selection.read_simple_yaml(current, relative) == selection.read_simple_yaml(content, relative) else content
 
 
-def persist_manifest(content: str, aggregate: str) -> str:
-    relative = "releases/daily-preview.yaml"
-    local_path = PLATFORM_ROOT / relative
+def commit_manifest(relative: str, content: str, aggregate: str, source_ref: str, source_sha: str) -> str:
+    """Atomically create a single-file commit only on the exact selected head.
+
+    GitHub's ordinary force:false ref update is not an expected-parent CAS: a
+    concurrent branch rewind could still be fast-forwarded. GraphQL checks the
+    expectedHeadOid inside the commit transaction, including unrelated edits.
+    A lost response must stop dispatch. A fresh checkout/rescan sees an applied
+    commit's prepared body and does not create another one.
+    """
+    query = """mutation($input: CreateCommitOnBranchInput!) {
+      createCommitOnBranch(input: $input) { commit { oid } }
+    }"""
+    payload = {'query': query, 'variables': {'input': {
+        'branch': {'repositoryNameWithOwner': PLATFORM_REPOSITORY, 'branchName': source_ref},
+        'expectedHeadOid': source_sha,
+        'message': {'headline': f"release: select {'daily preview' if 'preview.' in aggregate else 'stable'} {aggregate.removeprefix('release-')}"},
+        'fileChanges': {'additions': [{'path': relative,
+            'contents': base64.b64encode(content.encode()).decode()}]},
+    }}}
+    with tempfile.NamedTemporaryFile('w', encoding='utf-8') as handle:
+        json.dump(payload, handle)
+        handle.flush()
+        result = gh_platform('api', 'graphql', '--input', handle.name)
+    response = json.loads(result.stdout)
+    if response.get('errors'):
+        raise Pending('manifest commit was not confirmed; rescan the branch before publication')
+    sha = response.get('data', {}).get('createCommitOnBranch', {}).get('commit', {}).get('oid')
+    if not isinstance(sha, str) or re.fullmatch(r'[0-9a-f]{40}', sha) is None:
+        raise Pending('manifest commit returned no valid source identity; rescan before publication')
+    return sha
+
+
+def persist_manifest(content: str, aggregate: str, *, channel: str = 'daily-preview',
+                     root: pathlib.Path | None = None, source_ref: str | None = None,
+                     source_sha: str | None = None) -> str:
+    if channel not in ('release', 'daily-preview'):
+        raise ValueError('unknown release manifest channel')
+    root = PLATFORM_ROOT if root is None else root
+    source_ref = PLATFORM_REF if source_ref is None else source_ref
+    source_sha = PLATFORM_SHA if source_sha is None else source_sha
+    relative = f'releases/{channel}.yaml'
+    local_path = root / relative
     current = local_path.read_text(encoding="utf-8")
-    head = branch_sha(PLATFORM_REPOSITORY, PLATFORM_REF)
-    if head != PLATFORM_SHA:
-        raise Pending(f"platform {PLATFORM_REF} moved; rescan the new head")
-    remote = api(
-        f"repos/{PLATFORM_REPOSITORY}/contents/{relative}?ref={quote(PLATFORM_REF, safe='')}"
-    )
+    if branch_sha(PLATFORM_REPOSITORY, source_ref) != source_sha:
+        raise Pending(f"platform {source_ref} moved; rescan the new head")
+    remote = api(f"repos/{PLATFORM_REPOSITORY}/contents/{relative}?ref={source_sha}")
     decoded = base64.b64decode(str(remote["content"]).replace("\n", "")).decode()
     if decoded != current:
-        raise Pending("daily-preview.yaml changed concurrently; rescan")
-    content = retain_preview_notes(current, content, relative)
-    if current == content:
-        return PLATFORM_SHA
-    request = {
-        "message": f"release: select daily preview {aggregate.removeprefix('release-')}",
-        "content": base64.b64encode(content.encode()).decode(),
-        "branch": PLATFORM_REF,
-        "sha": remote["sha"],
-    }
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8") as handle:
-        json.dump(request, handle)
-        handle.flush()
-        result = gh_platform(
-            "api",
-            "--method",
-            "PUT",
-            f"repos/{PLATFORM_REPOSITORY}/contents/{relative}",
-            "--input",
-            handle.name,
-        )
-    response = json.loads(result.stdout)
-    sha = response["commit"]["sha"]
-    local_path.write_text(content, encoding="utf-8")
-    print(f"==> committed {PLATFORM_REF}:{relative} at {sha}")
-    return str(sha)
+        raise Pending(f"{channel}.yaml differs from the selected committed source; review and commit local edits")
+    prepared = prepare_notes.prepare(current, content, relative, root)
+    prepare_notes.require_prepared(prepared, relative)
+    # Preserve comments and layout on exact semantic retries as well as prose.
+    if selection.read_simple_yaml(current, relative) == selection.read_simple_yaml(prepared, relative):
+        if branch_sha(PLATFORM_REPOSITORY, source_ref) != source_sha:
+            raise Pending('platform branch moved during manifest check; rescan before publication')
+        return source_sha
+    sha = commit_manifest(relative, prepared, aggregate, source_ref, source_sha)
+    if branch_sha(PLATFORM_REPOSITORY, source_ref) != sha:
+        raise Pending('platform branch moved after manifest commit; rescan before publication')
+    local_path.write_text(prepared, encoding="utf-8")
+    print(f"==> committed {source_ref}:{relative} at {sha}")
+    return sha
 
 
 def release_inputs(
@@ -1118,6 +1137,16 @@ def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
     raise Pending(f"{action} incomplete aggregate cleanup for {tag}")
 
 
+def latest_actual_jobs(attempts: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """A publish-only rerun retains earlier successful prerequisite jobs."""
+    latest = {}
+    for job in attempts:
+        previous = latest.get(job['name'])
+        if previous is None or job['id'] > previous['id']:
+            latest[job['name']] = job
+    return latest
+
+
 def resume_workbench_publish(version: str, source_sha: str) -> bool:
     """Retry only publication of the already validated immutable stage."""
     runs = aggregate_runs(version)
@@ -1134,11 +1163,7 @@ def resume_workbench_publish(version: str, source_sha: str) -> bool:
     attempts = paginated(f"repos/{PLATFORM_REPOSITORY}/actions/runs/{state['id']}/jobs?filter=all&per_page=100", 'jobs')
     # A publish-only rerun has no new prerequisite jobs. Keep the latest
     # actual job for each name across attempts, including the unchanged gates.
-    latest = {}
-    for job in attempts:
-        previous = latest.get(job['name'])
-        if previous is None or job['id'] > previous['id']:
-            latest[job['name']] = job
+    latest = latest_actual_jobs(attempts)
     import sys
     sys.path.insert(0, str(CONTROL_ROOT / 'ci/integration'))
     import workbench_groups

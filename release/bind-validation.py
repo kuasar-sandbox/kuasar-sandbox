@@ -47,9 +47,15 @@ def bind(bundle, plan, validation, workbench=None, *, platform=None):
     fields, url = {}, None
     if platform is not None:
         fields, url = release_notes.publication_notes(platform, version, plan['baseline']['sha'], units, release_notes.ROOT)
+    if (platform is not None and 'mode' not in fields
+            and not release_notes.legacy_admitted_source(platform, plan['baseline']['sha'])):
+        raise ValueError('publication requires complete manifest notes; prepare before admission or commit an exact-source notes correction')
     narrative = release_notes.Narrative(text, fields, url, version=version, units=units)
-    if fields:
+    if fields and not narrative.complete:
         release_notes.validate(narrative.text, version, units)
+    if narrative.complete:
+        for warning in release_notes.stale_warnings(narrative.text, version, units):
+            print('release notes warning: ' + warning, file=sys.stderr)
     notes.write_text(publication_body.binding_text(narrative.text + '\n', binding, '\n',
                      reserve_registry_version=plan['baseline']['version'], fit_notes=narrative.fit))
 

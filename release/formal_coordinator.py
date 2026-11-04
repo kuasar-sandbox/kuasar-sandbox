@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import base64
 import os
 import pathlib
 import re
@@ -14,6 +15,54 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "release"))
 import preview_coordinator as coordinator  # noqa: E402
+
+
+def validated_stage(state: dict, version: str) -> bool:
+    """Protect actual retained acceptance, not every failed workflow attempt."""
+    endpoint = f"repos/{coordinator.PLATFORM_REPOSITORY}/actions/runs/{state['id']}"
+    jobs = coordinator.latest_actual_jobs(coordinator.paginated(endpoint + '/jobs?filter=all&per_page=100', 'jobs'))
+    if not all(jobs.get(name, {}).get('status') == 'completed' and
+               jobs[name].get('conclusion') == 'success'
+               for name in ('prepare', 'stage', 'release-asset-validation / results')):
+        return False
+    artifacts = coordinator.paginated(endpoint + '/artifacts?per_page=100', 'artifacts')
+    stages = [item for item in artifacts if item.get('name') == f"aggregate-stage-{version}-{state['id']}"]
+    return len(stages) == 1 and stages[0].get('expired') is False
+
+
+def existing_publication(version: str, text: str, source_sha: str) -> bool:
+    """Do not prepare a replacement source after this version was admitted."""
+    status = coordinator.platform_release(version)
+    if status.complete:
+        if status.tag_sha is None:
+            raise coordinator.Deferred('complete Stable release has no immutable source')
+        remote = coordinator.api(f'repos/{coordinator.PLATFORM_REPOSITORY}/contents/releases/release.yaml?ref={status.tag_sha}')
+        original = base64.b64decode(str(remote['content']).replace('\n', '')).decode()
+        selected = coordinator.selection.read_simple_yaml(text, 'current Stable selection')
+        admitted = coordinator.selection.read_simple_yaml(original, 'published Stable selection')
+        if ({k: v for k, v in selected.items() if k != 'notes'} !=
+                {k: v for k, v in admitted.items() if k != 'notes'}):
+            raise coordinator.Deferred('Stable version is already published with another selection; select a new version')
+        print(f'==> Stable {version} is already complete at {status.tag_sha}; retaining its source and notes')
+        return True
+    active = coordinator.active_aggregate_run(version)
+    if active is not None:
+        raise coordinator.Deferred(f"Stable publication is active; retain its source and notes: {active.get('html_url')}")
+    if status.partial:
+        raise coordinator.Deferred('Stable publication is partial; recover its original validated stage before selecting a new source')
+    # A failed publisher may not have created a Release yet. The original run's
+    # immutable stage remains authoritative; a notes correction is not permission
+    # to admit a substitute source for that same attempted publication.
+    for state in coordinator.aggregate_runs(version):
+        title = state.get('display_title', '')
+        match = re.fullmatch(re.escape(f'Aggregate {version} @') + r'([0-9a-f]{40})', title)
+        if validated_stage(state, version):
+            if match is None or match.group(1) != source_sha:
+                raise coordinator.Deferred('Stable version has an earlier validated source; recover its original run or select a new version')
+            # The same accepted source may continue only when preparation is a
+            # proven no-op. Legacy bodies and correction pins require recovery.
+            coordinator.prepare_notes.require_prepared(text, 'releases/release.yaml')
+    return False
 
 
 def main() -> None:
@@ -50,15 +99,18 @@ def main() -> None:
     )
     if aggregate != version:
         coordinator.fail(f"release.yaml selects {aggregate}, not {version}")
+    if coordinator.run(['git', 'show', f'{source_sha}:releases/release.yaml'], cwd=ROOT).stdout != path.read_text(encoding='utf-8'):
+        coordinator.fail('release.yaml has uncommitted edits; review and commit before release admission')
 
-    historical_aggregate = coordinator.platform_release(version).complete
+    if existing_publication(version, path.read_text(encoding='utf-8'), source_sha):
+        return
     plans: dict[str, coordinator.Plan] = {}
     for unit in coordinator.UNITS:
         tag = configured[unit.name]
         state = coordinator.RepositoryState(unit)
         status = state.status(tag)
         if status.complete and status.tag_sha is not None:
-            if not historical_aggregate and not coordinator.has_arm_archive(unit.name, tag, status):
+            if not coordinator.has_arm_archive(unit.name, tag, status):
                 raise coordinator.Deferred(
                     f"{unit.name} {tag} is a valid historical AMD64 release; "
                     "select a new dual-architecture unit version before publishing a new Stable aggregate"
@@ -79,6 +131,11 @@ def main() -> None:
             unit, tag, candidate_ref, candidate_sha, tag, tag, "publish"
         )
 
+    # Stable and Daily share one pre-freeze preparation transaction. It never
+    # waits for the future component tags and every dispatch uses this exact
+    # persisted source, including the complete editable release notes.
+    source_sha = coordinator.persist_manifest(path.read_text(encoding='utf-8'), version,
+        channel='release', root=ROOT, source_ref=source_ref, source_sha=source_sha)
     wait_for_convergence(plans, version, source_sha)
 
 

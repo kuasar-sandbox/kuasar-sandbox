@@ -316,6 +316,8 @@ make -C kuasar-sandbox release RELEASE_VERSION="$RELEASE_VERSION" \
 ```
 
 
+Stable 准备需要创建平台清单提交时，通过 `PLATFORM_TOKEN` 提供已获授权的平台 writer token（仓库 contents 写权限）；组件工作流访问仍独立。也可先运行 `python3 -B release/prepare_notes.py . release`，编辑审阅正文，经正常评审流程提交到分支后再执行 `make release`；同一已准备选择不会写平台分支，因此不需要平台 writer token。不要把 token 写进清单或命令记录。
+
 聚合工作流同样从平台 `main` 加载受信任工具,但版本选择、系统文档、平台用例和打包
 内容来自所选平台分支的精确 HEAD。目标分支中的旧发布脚本不会作为控制器执行:
 
@@ -329,14 +331,13 @@ gh workflow run aggregate-release.yml \
   -f source_sha="$(gh api "repos/$PLATFORM_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)"
 ```
 
-正式发布前先在目标分支提交 `release.yaml`,发布所缺的 Stable 组件单元,再从目标分支最新
-HEAD 触发聚合。主线 Stable 成功后成为 Latest;维护分支 Stable 保留为可发现的正式版本,
+正式发布前先在目标分支提交 `release.yaml` 选定版本；`make release` 会先准备并持久化完整正文，再发布缺少的 Stable 组件并从该精确提交触发聚合。需要预先审阅时，先运行 `release/prepare_notes.py` 并编辑、提交正文。主线 Stable 成功后成为 Latest;维护分支 Stable 保留为可发现的正式版本,
 但不抢占主线 Latest。Stable 与 Preview 都必须由该 HEAD 当前清单直接选择;历史清单只
 用于解析已存在 Release 和 GC,不能通过手工 dispatch 回填成新的聚合发布。
 
 聚合 prepare 生成的短期 artifact 是一次 run 的不可变发布证据。构建/验证失败后重新 dispatch 相同版本、源码分支和源码 SHA，确保新的 prepare 重新下载当前组件 Release。
 新契约的残缺发布失败后，由控制器验证原先的成功前置 job 和保留 stage，只重跑该 publish job；
-不要完整重跑旧 workflow 来替换镜像字节。控制器按精确 run name 汇总新旧 run 的尝试次数,总计
+不要完整重跑旧 workflow 来替换镜像字节。Daily 可自动恢复原发布 job；Stable 不会为已经完成、正在发布、残缺或已按另一源码准入的相同版本重新选版，应走原 publisher 恢复路径。控制器按精确 run name 汇总新旧 run 的尝试次数,总计
 三次后报告失败。
 
 本地发布工具验证入口为:
@@ -375,19 +376,27 @@ Workbench 的 prepare 与构建期 collector 共享规范用例发现和外部�
 
 发布把已测试的保存镜像复制到 `ghcr.io/kuasar-sandbox/workbench:<去掉-release-前缀的聚合版本>`，验证两种架构的 config 身份和多架构 index，并匿名回读每个按 digest 固定的镜像到临时 Docker archive。归档校验器将每个解压后的镜像层与已测试离线镜像的 config 逐一绑定，发布重试也必须通过。registry digest、镜像 ID、离线 archive hash 含义各自独立。已有同名 Tag/资产必须匹配；重试只补传缺失资产，不覆盖测试字节。跨服务发布可恢复：只有 registry 和完整 GitHub 资产集合一致，GitHub draft 才公开。冲突时失败关闭，不改写历史源码和已发布字节。
 
-`release/` 存放发布脚本，`release/inputs/` 存放跨版本复用的构建和打包输入，发布工具测试放在 `test/release/`。`releases/` 只存放两份渠道发布清单。正式版读取 `releases/release.yaml`，Preview 读取 `releases/daily-preview.yaml`。可以为当前选择填写以下一个或两个可选 Markdown 字段：
+`release/` 存放发布脚本，`release/inputs/` 存放共享构建输入，测试放在 `test/release/`。`releases/` 只包含两个渠道清单：Stable 使用 `releases/release.yaml`，Daily 使用 `releases/daily-preview.yaml`。两个选版协调器都在冻结源码、派发组件构建及验收**之前**生成完整说明，并与选定版本一起提交到对应清单。发布器只读取已提交的清单正文，不临时生成模板，也不等待未来组件 tag 的 commit 清单。
 
 ```yaml
 notes:
+  mode: auto
+  selection_sha256: <工具生成的全部非 notes 选版字段指纹>
   body: |
-    说明本次变化及兼容性限制。
-  upgrade_notice: |
-    说明用户在升级前必须采取的操作。
+    # 完整发布说明
+
+    在此填写变化、升级步骤和兼容性限制。
 ```
 
-正文缩进四个空格，保留 Markdown 标题、空行和 Unicode 字符。省略 `notes` 时使用自动生成的说明。`body` 放在 Highlights 下，`upgrade_notice` 紧跟标题。组件版本、制品清单和验收证据来自实际测试的选择。Daily 重试同一聚合版本和六个组件 tag 时保留说明，任一发生变化时清空旧说明。已发布的说明由 GitHub Release 和固定 Git 提交保存。
+`mode: auto` 在选版变化时重新生成；同一选择重试会原样保留人工编辑及格式。聚合版本、组件版本、前序版本或交付契约改变都属于新选择。指纹只用于判断是否需要生成，不是源码或验收身份。`mode: fixed` 无需指纹，后续任何选版变化都保留完整正文；对可识别的旧标题、组件表或文档链接仅警告，不覆盖或拒绝固定说明。
 
-发布器读取已接纳源码提交中的渠道清单。如需在接纳后只修正文案，通过正常 PR 将可选的 `notes.aggregate_sha` 指向已验收的完整提交 SHA。除 `notes` 外，清单所有字段必须与已接纳清单一致；不匹配时发布失败。125000 字符预算包含完整验收证据和 registry 证明的预留空间。超限时允许收起自动生成的 commit 清单，并链接到固定提交中的 YAML 说明段。升级提醒始终内联；提醒、交付要求和完整证据无法同时容纳时发布失败。
+需要预先审阅时，先更新渠道版本，再运行 `python3 -B release/prepare_notes.py . release`（Daily 使用 `daily-preview`），编辑 `notes.body`，需要固定时设置 `notes.mode: fixed`，审阅差异并提交。`--check` 只检查、不写文件。Stable 的 `make release` 与 Daily 使用相同准备规则，在派发前持久化完整说明。单文件提交以读取到的精确分支 HEAD 为原子前提，人工编辑或其他文件并发变动都会阻止派发。提交响应丢失也停止派发；检查分支后从新 checkout 重试，已提交且准备完成的同一选择不会重复生成或提交。
+
+正文缩进四个空格。支持 literal `|`、`|-` 及其结尾换行语义，保留 Markdown、空行、行末空格和 Unicode。`body` 是整段人工发布说明，不再插入 Highlights。原始精确源码早于准备工具的已验收旧 stage 保留其原发布契约，避免动态更新发布工具后中断旧任务；新准入始终要求显式模式。没有 `mode` 的旧清单仍可作为历史证据读取；准备步骤会把旧 `body` 和 `upgrade_notice` 一起迁移进完整正文，不能丢弃升级提醒。显式模式不能同时使用 `upgrade_notice`。缺少正文或 auto 指纹过期时准入失败，发布器不回退生成。
+
+准入后仅修正文案时，通过正常评审提交 `notes.mode: fixed`、完整 `notes.body`，并把 `notes.aggregate_sha` 指向已验收的完整源码 SHA。全部非 notes 字段必须与已接纳清单相同。此 pin 只允许修正该旧 stage 的文案，不允许替换源码或制品；新选版准备始终清除旧 pin。恢复已有验收 stage 时不要调用选版协调器，原发布任务重跑会绑定新正文，保留原 plan、源码、制品、测试和 Workbench 结果。只读检查历史包可使用 `aggregate-release.sh validate VERSION BUNDLE --historical`；新发布默认严格校验。
+
+选版准备只能检查正文自身不超过 125000 字符，不能保证尚未知晓的最终证据一定能放下。最终 125000 字符预算预留完整验收及 registry 证据。显式模式正文不会被压缩、截断、链接替代或自动模板覆盖；正文和完整证据超限时，在发布变更前失败，必须人工修正清单。全部机器证据、源码/制品检查与验收门禁保持不变。
 
 用户只解压所选产品架构与 `platform-release`；`workbench-<arch>-v*.tar.gz` 使用 `docker load` 导入，不能解压到产品目录。[快速开始](quickstart_zh.md) 检查声明集合并按显式资产类别下载。用户可以不下载 workbench，但新聚合发布必须包含两种架构镜像。
 
