@@ -69,6 +69,15 @@ def files(root):
     return result
 
 
+def runtime_metadata(provenance):
+    keys = ('schema', 'arch', 'embedded', 'helper_contract', 'helpers', 'prepared_cases',
+            'selection', 'case_requirements', 'fixtures', 'images', 'python', 'preparation_environment')
+    result = {key: provenance[key] for key in keys if key in provenance}
+    if 'products' in provenance:
+        result['products'] = {name: {'sha256': row['sha256']} for name, row in provenance['products'].items()}
+    return result
+
+
 def seal(root, provenance):
     records = files(root)
     records.pop('provenance.json', None)
@@ -93,9 +102,8 @@ def declared_helpers(contract, cases):
 
 
 def helper_variables(provenance):
-    return {name: row['env'] or HELPERS.get(name)
-            for name, row in helper_contract.validate(provenance['helper_contract']).items()
-            if row['env'] is not None or (row.get('historical') and name in HELPERS)}
+    return {name: row['env'] for name, row in helper_contract.validate(provenance['helper_contract']).items()
+            if row['env'] is not None}
 
 
 def runtime_init_identity(root, arch):

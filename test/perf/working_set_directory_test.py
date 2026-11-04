@@ -73,20 +73,19 @@ class WorkingSetEnvironmentTest(unittest.TestCase):
                                "16777216", "targeted-posix-fadvise-dontneed"],
                               env=environment, text=True, capture_output=True)
 
-    def test_artifact_workspace_records_product_and_test_identities_without_git(self):
+    def test_artifact_workspace_records_runtime_bytes_without_source_queries(self):
         self.manifest.write_text(json.dumps(self.provenance))
         self.environment["KUASAR_REVISION_MANIFEST"] = str(self.root / "absent-source-manifest.tsv")
         result = self.run_environment(artifact=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(self.output.read_text())
-        for key, value in self.provenance.items():
-            self.assertEqual(report["prepared_inputs"][key], value)
-        self.assertEqual(report["prepared_inputs"]["provenance_sha256"],
+        self.assertEqual(report['prepared_inputs']['arch'], self.provenance['arch'])
+        self.assertEqual(report['prepared_inputs']['products'], {
+            name: {'sha256': row['sha256']} for name, row in self.provenance['products'].items()})
+        self.assertEqual(report['prepared_inputs']['provenance_sha256'],
                          hashlib.sha256(self.manifest.read_bytes()).hexdigest())
-        for owner, pin in self.provenance["test_revisions"].items():
-            self.assertEqual(report["repositories"][owner],
-                             {"sha": pin["sha"], "dirty": False, "role": pin["role"],
-                              "source": "prepared-test-revision"})
+        self.assertEqual(report['repositories'], {})
+        self.assertFalse({'plan_id', 'framework_sha', 'test_revisions'} & set(report['prepared_inputs']))
         self.assertEqual(report["inputs"]["image_id"], self.image)
         self.assertEqual(report["artifacts"]["kernel_sha256"], hashlib.sha256(b"vmlinux").hexdigest())
         for name, digest in report["artifacts"]["binaries_sha256"].items():
@@ -94,19 +93,26 @@ class WorkingSetEnvironmentTest(unittest.TestCase):
         self.assertFalse(self.git_calls.exists())
 
     def test_artifact_metadata_failure_never_falls_back_to_git(self):
-        for defect in ("missing-provenance", "missing-owner", "invalid-sha"):
+        for defect in ("missing-provenance", "missing-products", "invalid-digest"):
             with self.subTest(defect=defect):
                 provenance = copy.deepcopy(self.provenance)
-                if defect == "missing-owner":
-                    del provenance["test_revisions"]["accelerator"]
-                elif defect == "invalid-sha":
-                    provenance["test_revisions"]["accelerator"]["sha"] = "not-an-exact-sha"
+                if defect == "missing-products":
+                    del provenance["products"]
+                elif defect == "invalid-digest":
+                    provenance["products"]["cache-ctl"]["sha256"] = "invalid"
                 if defect != "missing-provenance":
                     self.manifest.write_text(json.dumps(provenance))
                 result = self.run_environment(artifact=True)
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertFalse(self.output.exists())
                 self.assertFalse(self.git_calls.exists(), result.stderr)
+
+    def test_minimal_prepared_inventory_needs_no_history(self):
+        self.provenance = {'arch': 'x86_64', 'products': {'cache-ctl': {'sha256': 'a' * 64}}}
+        self.manifest.write_text(json.dumps(self.provenance))
+        result = self.run_environment(artifact=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertFalse(self.git_calls.exists())
 
     def test_source_manifest_still_supplies_exact_revisions(self):
         source_manifest = self.root / "source-set.tsv"

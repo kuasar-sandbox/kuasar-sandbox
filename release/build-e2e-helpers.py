@@ -26,7 +26,6 @@ def build(unit_sources, selected, output, wheels_output, platform_source, arch=N
     source_records = tag_sources.inspect_sources(unit_sources, selected, owner_layout=True)
     tag_sources.require_owner_guides(unit_sources, owner_layout=True)
     pins = tag_sources.owner_revisions(source_records)
-    framework_sha = subprocess.check_output(['git', '-C', ROOT, 'rev-parse', 'HEAD'], text=True).strip()
     for owner, unit in tag_sources.OWNER_UNITS.items():
         artifacts.require((tag_sources.source_path(unit_sources, unit, owner_layout=True) / 'go.mod').is_file(),
                           f'missing complete tag helper source: {owner}')
@@ -57,10 +56,7 @@ def build(unit_sources, selected, output, wheels_output, platform_source, arch=N
             build_helpers.build(sources, arch, destination, selected, environment, contract)
             records = helper_inputs.contract.receipt(destination, arch, contract)
             (destination / 'helpers.json').write_bytes(artifacts.canonical(
-                {'schema': 1, 'arch': arch, 'contract_sha256': artifacts.identity(contract),
-                 'framework_sha': framework_sha, 'test_revisions': pins,
-                 'source_records': source_records, 'helpers': records}) + b'\n')
-        (output / 'contract.json').write_bytes(artifacts.canonical(contract) + b'\n')
+                {'schema': 2, 'arch': arch, 'helpers': records}) + b'\n')
 
 
 

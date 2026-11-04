@@ -395,9 +395,9 @@ Demo 脚本和锁文件、预构建 helper、本地 wheel 与轻量 workbench �
 
 平台 helper 使用 `release/inputs/helper-inputs.yaml` 和固定的 `release/inputs/helper-tools.yaml`。组件和旧 tag 可以继续使用 `release/helper-inputs.json`。平台的 helper 及指南清单均使用兼容 JSON 的 YAML 格式。Schema `1` 声明完整的 `helpers` 清单（`name`、可选 `env` 和 `cases` 中的用例文件名模式）、仓内相对路径 `recipe`，以及 `dependencies` 中的依赖 owner。没有 helper 的 owner 显式声明空清单和 null 配方。通用构建器在 owner 根目录中使用固定依赖工作区调用 `bash <recipe> <architecture> <output-directory>`；内部构建命令由该仓库维护。每个声明输出必须是权限安全且符合目标 ELF 架构的普通可执行文件。未声明、缺失或重复的输出均失败。
 
-输入计划绑定仓库、所选 Tag 或已准入候选 ref、commit/tree、声明原始内容和配方 blob。producer 收据和打包的 `helpers/contract.json` 保留该预期清单；校验器将实际字节、权限、架构及源码身份与之比较。公共 prepare/run 不构建 helper，也不允许输出收据自定其允许清单。用例必要能力独立于完整允许清单进行检查。
+本次构建计划固定所选源码、声明和配方输入，相关临时检查留在当次流水线。新包只包含每架构 schema `2` 的 `helpers.json`：helper 名称、owner、环境变量、适用用例、文件大小、SHA-256 与权限。两架构的运行清单必须一致，并交付所有声明 helper；旧 alias 表不会限制其数量。包内不保留 source/tree、测试修订、recipe/blob、原始 plan 或 producer 收据。
 
-针对声明协议引入前聚合版本的源码 CI，只有经验证的原始计划和完整资产集合才能授权只读复用 helper。五个原始组件的 Tag/源码身份及原 producer 的依赖范围必须全部匹配；候选依赖发生变化时拒绝复用。适配器保留原始元数据及 producer 上下文，平台自有工具则使用当前声明构建。新发布不能因缺少声明而回退。
+公共 prepare/run 校验实际 helper 文件、ELF 架构、安全路径与权限以及运行字段。旧包仅提取运行字段，不查询历史 Actions，也不把来源证明写入 prepared workspace。源码构建必须具有所选 owner 的声明和完整本地输入；缺失时明确失败，不借用新版源码或历史验收。
 
 #### 组件运行依赖自动发现
 

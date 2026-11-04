@@ -124,11 +124,6 @@ def recipes(plan, selected, facts, records, sources):
         if contract is not None:
             row = contract['owners'][owner]
             artifacts.require(row['source'] == facts[owner], 'helper owner differs from frozen source')
-            if row.get('historical'):
-                artifacts.require(owner not in plan['owners'] and records[owner]['role'] == 'baseline',
-                                  'candidate cannot use historical helper evidence')
-                rows[owner] = row
-                continue
         row = helpers.owner(sources / owner, facts[owner])
         if contract is not None:
             artifacts.require(row == contract['owners'][owner], 'helper declaration differs from original plan')
@@ -180,8 +175,6 @@ def execute(plan_path, sources, output, env):
         result.update(plan_id=plan_id, framework_sha=plan['framework_sha'], sources=facts,
                       selected_owners=sorted(selected), native_arch=platform.machine())
         regression = {'plan_id': plan_id, 'owners': rows}
-        if plan.get('helper_contract', {}).get('schema') == 2:
-            regression['historical_contract'] = plan['helper_contract']
         (output / 'inputs.json').write_bytes(artifacts.canonical(regression) + b'\n')
         result['inputs_sha256'] = artifacts.identity(regression)
         arch = platform.machine()
@@ -218,9 +211,6 @@ def execute(plan_path, sources, output, env):
                 unchanged()
         result['helpers'] = {}
         for owner, row in rows.items():
-            if row.get('historical'):
-                result['helpers'][owner] = {'status': 'retained-historical-evidence', 'source': row['source']}
-                save(); continue
             with tempfile.TemporaryDirectory(prefix='release-helpers-') as directory:
                 built = Path(directory) / 'bin'
                 artifacts.require(not built.resolve().is_relative_to(sources), 'recipe output is inside frozen sources')

@@ -187,7 +187,7 @@ assemble_release() {
     E2E_WHEEL_ROOT="${E2E_WHEEL_ROOT:-$fetched/e2e-wheels}" \
     "$ROOT/release/package-platform.sh" package "$version" "$fetched/sources" "$platform_bundle"
   platform_name="$(platform_archive "$version")"
-  python3 "$ROOT/release/validate-e2e-package.py" "$platform_bundle/assets/$platform_name" --source-records "$work/source-records.json"
+  python3 "$ROOT/release/validate-e2e-package.py" "$platform_bundle/assets/$platform_name" --publication
   mkdir -p "$output/assets"
   install -m 0644 "$platform_bundle/assets/$platform_name" "$output/assets/$platform_name"
   install -m 0644 "$expected_selection" "$output/selection.tsv"

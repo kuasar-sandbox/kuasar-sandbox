@@ -39,6 +39,9 @@ def prepare(plan, arch, assets, delta, workspace, clean_image=None, deps_dir=Non
                 command = execution.clean_prepare_command(clean_image, composed, workspace, arguments, deps_dir)
             subprocess.run(command, check=True)
             prepared = json.loads((workspace / 'provenance.json').read_text())
+            prepared['plan_id'] = artifacts.check_plan(plan)
+            if plan['schema'] >= 4:
+                prepared['runner_configuration_sha256'] = plan['runner_configuration']['sha256']
             prepared['preparation_environment'] = execution.runtime_identity(clean_image, verified=True) if clean_image else {'kind': 'native-host'}
             (workspace / 'provenance.json').write_bytes(artifacts.canonical(prepared) + b'\n')
         else:
