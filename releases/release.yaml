@@ -9,26 +9,58 @@ components:
   runtime: runtime-v0.1.11
   vmlinux: vmlinux-v0.1.5
 notes:
+  mode: fixed
+  aggregate_sha: 4108128b42c1b69965b033ef22b35d7a3a49c4be
   body: |
-    Compared with `release-v0.1.10`:
+    # Kuasar Sandbox release-v0.1.11
 
-    - Add retained current disks for terminated sandboxes and explicit Reset. Reset reconstructs an E-only paused sandbox; a later Wake/Resume creates a new run. It does not restore memory, immediately boot a VM, or roll back to an older run/template.
-    - Strengthen Pause with the Proxy activity handshake and `ifIdle`, and maintain one sandbox-owned retained checkpoint across Resume. Successful export by checkpoint ID consumes the retained checkpoint; failed export retains it.
-    - Derive an omitted DiffCOW dirty budget from half of the final effective cache budget after configuration merging. Explicit dirty limits remain unchanged. Default cache/dirty budgets remain 32/16 MiB; cache-only 64 MiB now derives a 32 MiB dirty budget.
-    - Separate named-reference tarstream encryption into `crypto.ref`, independently of local encryption, and improve explicit-read/descriptor validation and SDK/CLI launch-source, runtime-shape and identity consistency.
-    - Refresh the runtime dependency closure while retaining the selected Connector and guest kernel versions. Release tooling now keeps shared build inputs outside `releases/` and authored notes inside the two channel manifests.
+    Stable release. Preview is the development channel.
 
-    Reset retains current disks; it is not snapshot rollback or cross-node recovery. `autoReset` remains opt-in and defaults to false. Older instances without required current-disk metadata fail explicitly rather than guessing recovery state.
-  upgrade_notice: |
-    ## Important compatibility notice / 重要升级提醒
+    ## Important upgrade notice
 
-    **Existing deployments must plan the database, protocol, encryption-policy and retained-storage transition before upgrading. This is not an arbitrary mixed-version rolling upgrade.**
+    **No arbitrary mixed-version rolling upgrades**
+    - Fresh installs create SQLite schema; upgrades require `sandboxes.max_checkpoints` (unconverted v0.1.10 fails). No automatic column migration, even with additive Reset migration. Keep verified DB/artifact backups; validate schema/data transition. Never delete DB/add columns to bypass checks; no lossless in-place guarantee.
+    - Match conductor/proxy/node-link/cluster (routesync/node-link 10; Proxy SHM ABI 9), or fail closed.
+    - `crypto.ref` defaults to `auto`, independent of `crypto.local`. `auto` plaintext reads skip key lookup; encrypted reads need the correct key. `auto`/`required` publisher creation needs valid customer keys; new tarstreams are encrypted. `off` reads/writes only plaintext; `required` rejects it. Missing keys: no plaintext fallback. Config-free CLI named-location publication: `MANIFEST_KEY`; SDK: task-scoped customer-key resolver. To preserve old ref policy, set `crypto.ref: off` for former `crypto.local: off`, or `crypto.ref: required` for former `crypto.local: required`. No automatic graph re-encryption; Manifest/Bundle encoding unchanged.
+    - Dead sandboxes retain current disks/checkpoints until Delete or `dead_ttl` (default 24h from first durable dead transition); budget storage and review cache-only DiffCOW settings.
+    - #378/#383 remain fixed since `release-v0.1.10`; #378's all-versions warning covers earlier releases only. Upgrade Sandboxer/bundled patched Cloud Hypervisor together, including running processes. Snapshots with lost release history aren't auto-repaired.
 
-    - **Database:** fresh installations create the required SQLite schema. Upgraded orchestrators reject databases lacking `sandboxes.max_checkpoints`, including an unconverted v0.1.10 database. The column is not migrated automatically, and additive Reset metadata migration does not remove this prerequisite. Preserve verified database/artifact backups and validate the schema/data transition first. Do not delete the database or manually add a column merely to bypass startup validation; an in-place lossless upgrade is not promised.
-    - **Protocol:** deploy matching conductor, proxy, node-link and cluster components. The selected sources use routesync/node-link version 10 and Proxy SHM ABI 9; incompatible peers fail closed.
-    - **Named-reference encryption:** omitted `crypto.ref` now defaults to `auto`, independently of `crypto.local`. In `auto`, plaintext ref tarstreams can be read without resolving a key for that read; encrypted refs require the correct key. With `auto` (the default) or `required`, creating a named-location publisher requires a valid customer key and newly generated tarstreams are encrypted. Explicit `off` accepts and writes plaintext only; `required` rejects plaintext. Missing keys do not cause plaintext fallback. Config-free CLI named-location publication uses `MANIFEST_KEY`; SDK callers use a task-scoped customer-key resolver. Explicitly select `crypto.ref: off` to preserve the former ref policy of `crypto.local: off`, or `crypto.ref: required` to preserve the former rejection of plaintext refs under `crypto.local: required`. Existing dependency graphs are not automatically re-encrypted; Manifest/Bundle encoding is unchanged.
-    - **Storage:** dead sandboxes retain their current disks and checkpoints until Delete or `dead_ttl` (default 24 hours from the first durable dead transition). Budget the retained storage, and review custom DiffCOW cache-only configurations before rollout.
+    ## Highlights
 
-    **旧部署升级前须验证数据库/schema 切换、成套组件协议兼容、`crypto.ref` 策略及磁盘保留容量。未经转换且缺少 `sandboxes.max_checkpoints` 的 v0.1.10 数据库会被拒绝启动，本版本不会自动补列；不要直接删库或自行补列绕过校验。全新安装会建立完整 schema。**
+    - Reset retains current disks and reconstructs an E-only paused sandbox: no memory restore, VM boot, old-run/template rollback, snapshot rollback or cross-node recovery. Wake/Resume starts a new run. `autoReset` stays opt-in (false). Reset rejects missing current-disk metadata.
+    - Pause uses Proxy activity handshake and `ifIdle`; one sandbox-owned checkpoint survives Resume. Successful export by ID consumes it; failed export retains it.
+    - Named-ref encryption now uses `crypto.ref`. Omitted DiffCOW dirty budget is half the effective cache after config merge; explicit limits stay unchanged. Default cache/dirty budgets remain 32/16 MiB; cache-only 64 MiB derives 32 MiB dirty.
 
-    The #378 and #383 fixes first delivered in `release-v0.1.10` remain included. The historical "all previously released versions" warning concerns #378 and versions earlier than `release-v0.1.10`; it does not identify `release-v0.1.10` as affected. Upgrade Sandboxer and its bundled patched Cloud Hypervisor together, including running processes. Older snapshots with already-lost release history are not automatically repaired.
+    ## Versions and manifests
+
+    | Release unit | Version |
+    |---|---|
+    | `accelerator` | `v0.1.10` |
+    | `connector` | `v0.1.6` |
+    | `sandboxer` | `v0.1.12` |
+    | `orchestrator` | `v0.1.11` |
+    | `runtime` | `runtime-v0.1.11` |
+    | `vmlinux` | `vmlinux-v0.1.5` |
+
+    Version and 6 component tag selection: [releases/release.yaml](/kuasar-sandbox/kuasar-sandbox/blob/4108128b42c1b69965b033ef22b35d7a3a49c4be/releases/release.yaml). Verify 15 archives with Release asset [SHA256SUMS](/kuasar-sandbox/kuasar-sandbox/releases/download/release-v0.1.11/SHA256SUMS)
+
+    ## Deployment and security
+
+    Native Linux x86_64 and aarch64. Extract products/platform together; import Workbench separately with `docker load -i`.
+
+    - [Quick Start](/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.11/docs/quickstart.md)
+    - [Production deployment](/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.11/docs/deployment.md)
+    - [Report vulnerabilities privately](/kuasar-sandbox/kuasar-sandbox/security/advisories/new)
+
+    ## Validation scope
+
+    Product E2E: 88/88 passed per architecture. Workbench: x86_64 native-full (88/88); aarch64 artifact-only, which does not establish system execution.
+
+    ## Component changes
+
+    - [Accelerator changes](/kuasar-sandbox/accelerator/compare/v0.1.9...v0.1.10)
+    - Connector unchanged.
+    - [Sandboxer changes](/kuasar-sandbox/sandboxer/compare/v0.1.10...v0.1.12)
+    - [Orchestrator changes](/kuasar-sandbox/orchestrator/compare/v0.1.10...v0.1.11)
+    - [Runtime comparison](/kuasar-sandbox/guest-runtime/compare/runtime-v0.1.10...runtime-v0.1.11)
+    - Guest kernel unchanged.
