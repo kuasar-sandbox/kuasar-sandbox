@@ -368,7 +368,13 @@ jobs:
         env:
           EXECUTION_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
+          echo 'Task filesystem before prepared input extraction'
+          df -B1 "$E2E_WORKSPACE" || true
+          df -i "$E2E_WORKSPACE" || true
           python3 -B framework/ci/integration/transport.py extract "$E2E_WORKSPACE/transport/prepared.tar.gz" "$E2E_WORKSPACE/prepared"
+          echo 'Task filesystem after prepared input extraction'
+          df -B1 "$E2E_WORKSPACE" || true
+          df -i "$E2E_WORKSPACE" || true
           python3 -B framework/ci/integration/run-capability-group.py --plan "$E2E_WORKSPACE/plan/plan.json" \
             --arch "$TARGET_ARCH" --group "$TEST_SHARD" --workspace "$E2E_WORKSPACE/prepared/$TARGET_ARCH" \
             --runtime "$E2E_WORKSPACE/transport/runtime.tar.gz" --readers "$E2E_WORKSPACE/readers" --root "$E2E_WORKSPACE/state" \
