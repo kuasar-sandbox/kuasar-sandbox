@@ -54,6 +54,19 @@ class ClassificationTests(unittest.TestCase):
             self.assertEqual(docs_lane.classify(REPO, tree(), tree({path: entry(mode='100755')})), [path])
             self.assertIsNone(docs_lane.classify('kuasar-sandbox/connector', tree(), tree({path: entry()})))
 
+    def test_platform_harness_is_tooling_but_product_cases_remain_full(self):
+        for path in ('test/e2e/e2e', 'test/e2e/lib/helper_contract.py',
+                     'test/e2e/lib/nested/runner.py', 'test/e2e/test_e2e_runner.py'):
+            with self.subTest(path=path):
+                self.assertEqual(docs_lane.classify(REPO, tree(), tree({path: entry(mode='100755')})), [path])
+                self.assertEqual(subject.parser_for(REPO, path), 'python-compile')
+                self.assertEqual(subject.check_blob(REPO, path, b'raise RuntimeError("not executed")'), 'python-compile')
+                with self.assertRaises(SyntaxError): subject.check_blob(REPO, path, b'return 1')
+                self.assertIsNone(docs_lane.classify('kuasar-sandbox/connector', tree(), tree({path: entry()})))
+        for path in ('test/e2e/cases/basic.new.sh', 'test/e2e/platform/lib/probe.py',
+                     'test/e2e/lib/helper.go', 'test/e2e/lib/config.json', 'test/e2e/test_hidden/product.py'):
+            self.assertIsNone(docs_lane.classify(REPO, tree(), tree({path: entry()})))
+
     def test_product_configuration_and_unknown_paths_remain_full(self):
         rejected = ('src/product.go', 'Makefile', 'workbench/build.py', 'workbench/Dockerfile',
                     'test/e2e/cases/basic.test.sh', 'test/perf/performance.sh',
