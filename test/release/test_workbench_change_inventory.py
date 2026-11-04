@@ -97,6 +97,16 @@ class ChangeInventoryTests(unittest.TestCase):
         with self.api({endpoint: [{'object': {'type': 'commit', 'sha': NEW}}]}):
             self.assertEqual(inventory.Inventory().tag_sha('kuasar-sandbox/connector', 'release/v1.2.3'), NEW)
 
+    def test_annotated_tags_resolve_for_human_change_notes(self):
+        repo='kuasar-sandbox/connector'
+        responses=self.responses(repo,[commit(1,'Fix selected input (#2)')])
+        responses[f'repos/{repo}/git/ref/tags/new']=[{'object':{'type':'tag','sha':'c'*40}}]
+        responses[f'repos/{repo}/git/tags/'+ 'c'*40]=[{'object':{'type':'commit','sha':NEW}}]
+        with self.api(responses):
+            text=inventory.Inventory().render('connector','old','new')
+        self.assertIn('Fix selected input',text)
+        self.assertIn('/pull/2',text)
+
     def test_invalid_source_sha_and_unresolved_tags_fail(self):
         for target in [{'type': 'tag', 'sha': NEW}, {'type': 'commit', 'sha': 'bad'}, {}]:
             with self.subTest(target=target), patch.object(inventory.Inventory, 'pages', return_value=[{'object': target}]):

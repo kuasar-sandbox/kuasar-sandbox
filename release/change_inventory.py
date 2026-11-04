@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import tag_sources
 from urllib.parse import quote
 
 SHA = re.compile(r'[0-9a-f]{40}')
@@ -70,10 +71,11 @@ class Inventory:
     def tag_sha(self, repo, tag):
         pages = self.pages(f'repos/{repo}/git/ref/tags/{quote(tag, safe="")}')
         require(len(pages) == 1, 'ambiguous tag response')
-        target = pages[0].get('object', {})
-        require(target.get('type') == 'commit' and isinstance(target.get('sha'), str)
-                and SHA.fullmatch(target['sha']), 'selected tag must identify a commit')
-        return target['sha']
+        def load(sha):
+            result=self.pages(f'repos/{repo}/git/tags/{sha}')
+            require(len(result)==1, 'ambiguous annotated tag response')
+            return result[0]
+        return tag_sources.peel_tag(pages[0].get('object'),load)
 
     def comparison(self, repo, previous, current):
         pages = self.pages(f'repos/{repo}/compare/{previous}...{current}?per_page=100')

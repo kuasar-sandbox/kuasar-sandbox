@@ -87,6 +87,38 @@ class TagSourceTests(unittest.TestCase):
             expected = tag_sources.git(self.remote, 'show', f'{self.tag}:{name}')
             self.assertEqual((self.root / 'fetched' / name).read_text().strip(), expected)
 
+    def test_annotated_and_nested_tags_fetch_the_selected_commit(self):
+        tag_sources.git(self.remote,'tag','-d',self.tag)
+        tag_sources.git(self.remote,'tag','-a','inner','-m','inner',self.sha)
+        tag_sources.git(self.remote,'tag','-a',self.tag,'-m','outer','inner')
+        record=self.fetch()
+        self.assertEqual(record['sha'],self.sha)
+        self.assertEqual(tag_sources.inspect_unit(self.root/'fetched','connector',self.tag),record)
+
+    def test_annotated_tag_replacement_with_same_commit_is_detected(self):
+        tag_sources.git(self.remote,'tag','-d',self.tag)
+        tag_sources.git(self.remote,'tag','-a',self.tag,'-m','first',self.sha)
+        original=tag_sources.git
+        def replace(root,*args):
+            if args[0]=='ls-remote':
+                original(self.remote,'tag','-f','-a',self.tag,'-m','changed',self.sha)
+            return original(root,*args)
+        with mock.patch.object(tag_sources,'git',side_effect=replace),self.assertRaisesRegex(ValueError,'moved after fetching'):
+            self.fetch()
+
+    def test_api_peels_tags_and_rejects_unknown_cyclic_or_overdeep_objects(self):
+        commit={'type':'commit','sha':'a'*40};tag={'type':'tag','sha':'b'*40}
+        with mock.patch.object(tag_sources.subprocess,'run',side_effect=[
+            subprocess.CompletedProcess([],0,'{"object":{"type":"tag","sha":"'+'b'*40+'"}}',''),
+            subprocess.CompletedProcess([],0,'{"object":{"type":"commit","sha":"'+'a'*40+'"}}','')]) as run:
+            self.assertEqual(tag_sources.resolve_remote('connector',self.tag),'a'*40)
+            self.assertTrue(all('/git/' in call.args[0][-1] for call in run.call_args_list))
+        for value in ({'type':'tree','sha':'c'*40},{'type':'commit','sha':'bad'},tag):
+            with self.assertRaises(ValueError):tag_sources.peel_tag(value,lambda sha:{'object':tag})
+        count=iter(range(1,30))
+        with self.assertRaisesRegex(ValueError,'nesting'):
+            tag_sources.peel_tag(tag,lambda sha:{'object':{'type':'tag','sha':f'{next(count):040x}'}})
+
     def test_sha_branch_and_head_cannot_be_release_source_keys(self):
         for bad in (self.sha, 'main', 'HEAD', '../v1.2.3', 'refs/tags/v1.2.3'):
             with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, 'unit tag'):
