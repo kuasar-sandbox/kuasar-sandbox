@@ -16,7 +16,7 @@ COMPONENT_SCRIPTS = {
     'scripts/delete-preview.py', 'scripts/test-delete-preview.py',
     'scripts/prepare-sandbox-init.py', 'scripts/test-prepare-sandbox-init.py',
 }
-PLATFORM_PYTHON = {'test/e2e/e2e', 'test/perf/working_set_directory_test.py'}
+PLATFORM_PYTHON = {'test/e2e/e2e', 'test/e2e/assemble_docs.py', 'test/perf/working_set_directory_test.py'}
 
 
 def platform_harness(path):
