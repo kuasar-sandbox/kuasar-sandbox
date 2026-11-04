@@ -326,6 +326,82 @@ class WorkspaceTests(unittest.TestCase):
         result = subprocess.run(['go','env','GOWORK'], cwd=external, env=env, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
 
+    def release_repos(self):
+        for name in go_workspace.DEPENDENCIES:
+            path = self.root / name
+            for args in (['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture'],
+                         ['tag', 'v0.1.10'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'tag', '-am', 'annotated', 'v0.1.11-preview.20261104.1']):
+                subprocess.run(['git', '-C', str(path), *args], check=True, capture_output=True)
+
+    def test_release_selection_accepts_exact_lightweight_and_annotated_tags(self):
+        self.release_repos()
+        for owner in ('sandboxer', 'orchestrator', 'guest-runtime'):
+            for tag in ('v0.1.10', 'v0.1.11-preview.20261104.1'):
+                selections = [name+'='+tag for name in go_workspace.closure([owner]) if name != owner]
+                env = go_workspace.configure_release(self.root, [owner], selections, self.env)
+                self.assertTrue(Path(env['GOWORK']).is_file())
+        self.assertEqual(list((self.root/'.ci').rglob('*.*')), list((self.root/'.ci').rglob('go.work')))
+
+    def test_release_selection_rejects_incomplete_duplicate_unknown_and_bad_tags(self):
+        for selections in ([], ['accelerator=v0.1.10'], ['accelerator=v0.1.10']*2,
+                           ['vmlinux=v0.1.10'], ['accelerator=main'], ['accelerator=v0.1.0-preview.20261104.0']):
+            with self.subTest(selections=selections), self.assertRaises(ValueError):
+                go_workspace.configure_release(self.root, ['sandboxer'], selections, self.env)
+        with self.assertRaises(ValueError):
+            go_workspace.configure_release(self.root, ['sandboxer','orchestrator'], [], self.env)
+
+    def test_release_selection_rejects_missing_mismatched_tags_and_dirty_sources(self):
+        self.release_repos()
+        selections = ['accelerator=v0.1.10', 'connector=v0.1.10']
+        accelerator = self.root/'accelerator'
+        subprocess.run(['git','-C',str(accelerator),'tag','-d','v0.1.10'], check=True, capture_output=True)
+        with self.assertRaises(subprocess.CalledProcessError):
+            go_workspace.configure_release(self.root, ['sandboxer'], selections, self.env)
+        subprocess.run(['git','-C',str(accelerator),'tag','v0.1.10'], check=True)
+        (accelerator/'extra.go').write_text('package accelerator\n')
+        with self.assertRaisesRegex(ValueError, 'uncommitted'):
+            go_workspace.configure_release(self.root, ['sandboxer'], selections, self.env)
+        subprocess.run(['git','-C',str(accelerator),'add','.'], check=True)
+        subprocess.run(['git','-C',str(accelerator),'-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qm','changed'],check=True)
+        with self.assertRaisesRegex(ValueError, 'selected tag'):
+            go_workspace.configure_release(self.root, ['sandboxer'], selections, self.env)
+        self.assertFalse((self.root/'.ci').exists())
+
+    def test_release_selection_rejects_hidden_index_changes(self):
+        self.release_repos()
+        path = self.root/'accelerator'
+        for flag in ('assume-unchanged', 'skip-worktree'):
+            subprocess.run(['git','-C',str(path),'update-index','--'+flag,'selected.go'],check=True)
+            with self.subTest(flag=flag), self.assertRaisesRegex(ValueError, 'assume-unchanged or skip-worktree'):
+                go_workspace.configure_release(self.root, ['guest-runtime'], ['accelerator=v0.1.10'], self.env)
+            subprocess.run(['git','-C',str(path),'update-index','--no-'+flag,'selected.go'],check=True)
+        self.assertFalse((self.root/'.ci').exists())
+
+    def test_release_selection_cannot_hide_dirty_submodule_with_git_config(self):
+        self.release_repos()
+        path = self.root/'accelerator'
+        def git(*args):
+            subprocess.run(['git','-C',str(path),*args],check=True,capture_output=True)
+        git('-c','protocol.file.allow=always','submodule','add','../connector','nested')
+        git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qam','submodule')
+        git('tag','-f','v0.1.10')
+        git('config','submodule.nested.ignore','all')
+        (path/'nested/untracked.txt').write_text('changed')
+        with self.assertRaisesRegex(ValueError, 'uncommitted'):
+            go_workspace.configure_release(self.root, ['guest-runtime'], ['accelerator=v0.1.10'], self.env)
+        self.assertFalse((self.root/'.ci').exists())
+
+    def test_release_selection_rejects_different_license_source_overrides(self):
+        self.release_repos()
+        selections = ['accelerator=v0.1.10', 'connector=v0.1.10']
+        for key in ('RELEASE_SOURCE_ROOT', 'RELEASE_ACCELERATOR_SOURCE_DIR', 'RELEASE_CONNECTOR_SOURCE_DIR'):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'source directory'):
+                go_workspace.configure_release(self.root, ['sandboxer'], selections, dict(self.env, **{key:str(self.root/'elsewhere')}))
+        env = dict(self.env, RELEASE_SOURCE_ROOT=str(self.root/'sandboxer'),
+                   RELEASE_ACCELERATOR_SOURCE_DIR=str(self.root/'accelerator'))
+        go_workspace.configure_release(self.root, ['sandboxer'], selections, env)
+
+
     def test_missing_module_and_wrong_module_path_fail(self):
         self.check_manifests = False
         module = self.root/'connector/go.mod'; module.unlink()

@@ -68,7 +68,7 @@ class ClassificationTests(unittest.TestCase):
         self.assertIsNone(docs_lane.classify('kuasar-sandbox/connector', tree(), tree({notice: entry()})))
 
     def test_platform_harness_is_tooling_but_product_cases_remain_full(self):
-        for path in ('test/e2e/e2e', 'test/e2e/lib/helper_contract.py',
+        for path in ('test/e2e/e2e', 'test/e2e/assemble_docs.py', 'test/e2e/lib/helper_contract.py',
                      'test/e2e/lib/nested/runner.py', 'test/e2e/test_e2e_runner.py',
                      'test/perf/working_set_directory_test.py'):
             with self.subTest(path=path):
