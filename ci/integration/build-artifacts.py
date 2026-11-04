@@ -225,17 +225,11 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
         helper_source = helper_sources(plan, arch, sources)
         configure_workspace(helper_source)
         helper_environment = dict(environment, GOWORK=str(helper_source / 'go.work'))
-        extra = {}
-        if plan['helper_contract']['schema'] == 2:
-            extra['historical_archive'] = assets / ('platform-' + plan['baseline']['version'] + '.tar.gz')
-        build_helpers.build(helper_source, arch, output / "helpers", helpers, helper_environment, plan['helper_contract'], **extra)
+        build_helpers.build(helper_source, arch, output / "helpers", helpers, helper_environment, plan['helper_contract'])
     # Match the existing release packagers' executable/data modes independently
     # of the caller's umask. Tar transport preserves these through Actions.
     for name in artifacts.tree_files(output):
         file = output / name
-        if name.startswith('helpers/') and plan['helper_contract']['schema'] == 2 and \
-                name.removeprefix('helpers/') in plan['helper_contract']['history']['helpers'][arch]:
-            continue  # Retain the original safe mode of authenticated historical bytes.
         executable = file.stat().st_mode & 0o111
         file.chmod(0o755 if executable else 0o644)
     metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "products": {}, "embedded": {}, "tests": {}, "helpers": {},

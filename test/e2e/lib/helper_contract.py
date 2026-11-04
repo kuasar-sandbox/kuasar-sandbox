@@ -97,69 +97,6 @@ def declaration(text):
     return value
 
 
-def historical_inventory(contract):
-    history = contract['history']
-    require(isinstance(history, dict) and set(history) == {'plan', 'plan_id', 'metadata', 'helpers', 'producers', 'artifacts'},
-            'invalid historical helper evidence')
-    plan = history['plan']
-    require(plan.get('schema') == 2 and plan.get('mode') == 'exact-assets' and
-            'helper_contract' not in plan and digest(canonical(plan)) == history['plan_id'],
-            'historical helper plan identity mismatch')
-    require(set(history['helpers']) == set(history['metadata']) == set(history['producers']) == set(history['artifacts']) == set(ARCHES),
-            'incomplete historical helper architecture evidence')
-    sources = {}
-    for owner in OWNERS:
-        if owner == 'platform': continue
-        row = contract['owners'][owner]
-        unit = 'runtime' if owner == 'guest-runtime' else owner
-        require(row.get('historical') is True and row['source'] == plan.get('source_records', {}).get(unit) and
-                row['source']['sha'] == plan['test_revisions'][owner]['sha'] and
-                row['source']['repository'] == plan['test_revisions'][owner]['repository'],
-                'historical helper dependency tag/source changed')
-        sources[owner] = row['source']
-    shas = [row['sha'] for row in sources.values()]
-    require(len(set(shas)) == len(shas) and plan['framework_sha'] not in shas,
-            'ambiguous historical helper source identity')
-    inventory = None
-    for arch in ARCHES:
-        metadata = loads(history['metadata'][arch])
-        require(metadata['arch'] == arch and metadata['framework_sha'] == plan['framework_sha'] and
-                metadata['source_records'] == plan['source_records'] and
-                metadata['test_revisions'] == {owner: row['sha'] for owner, row in sources.items()},
-                'historical helper metadata identity mismatch')
-        expected = {}
-        for name, original in metadata['helpers'].items():
-            require(re.fullmatch('[a-z][a-z0-9_-]*', name) and set(original) == {'sha256', 'source_sha'},
-                    'invalid historical helper inventory')
-            if original['source_sha'] == plan['framework_sha']: continue
-            owners = [owner for owner, row in sources.items() if row['sha'] == original['source_sha']]
-            require(len(owners) == 1, 'ambiguous historical helper owner')
-            expected[name] = owners[0]
-            actual = history['helpers'][arch].get(name)
-            require(isinstance(actual, dict) and set(actual) == {'owner', 'source_sha', 'sha256', 'size', 'mode'} and
-                    actual['owner'] == owners[0] and all(actual[k] == original[k] for k in original),
-                    'historical helper output differs from original metadata')
-        require(set(history['helpers'][arch]) == set(expected), 'historical helper inventory mismatch')
-        if inventory is not None: require(expected == inventory, 'historical helper architectures disagree')
-        inventory = expected
-        producer = history['producers'][arch]
-        receipt, scope = loads(producer['receipt']), loads(producer['source_scope'])
-        artifact = history['artifacts'][arch]
-        run_id = artifact['workflow_run']['id']
-        require(type(artifact['id']) is int and artifact['id'] > 0 and type(run_id) is int and run_id > 0 and
-                re.fullmatch(r'workbench-evidence-helper-build-' + arch + r'-[0-9a-f]{32}', artifact['name']) and
-                re.fullmatch('sha256:[0-9a-f]{64}', artifact['digest']) and
-                artifact['workflow_run']['head_sha'] == plan['framework_sha'] and scope['run_id'] == str(run_id),
-                'historical helper producer artifact identity mismatch')
-        require(receipt['framework_sha'] == plan['framework_sha'] and receipt['arch'] == arch and
-                receipt['conclusion'] == 'success' and receipt['mode'] == 'build' and
-                receipt['cache']['WB_CACHE_COVERAGE'] == 'aggregate-helpers' and
-                all(command['exit_code'] == 0 for command in receipt['commands']) and
-                scope['repository'] == plan['baseline']['repository'], 'historical helper producer evidence mismatch')
-    return {name: {'name': name, 'owner': owner, 'env': None, 'cases': [], 'historical': True}
-            for name, owner in inventory.items()}
-
-
 def validate(contract):
     if isinstance(contract, dict) and contract.get('schema') == 3:
         require(set(contract) == {'schema', 'helpers'} and isinstance(contract['helpers'], dict),
@@ -182,20 +119,13 @@ def validate(contract):
                     'invalid helper case requirements')
             inventory[name] = dict(row, name=name)
         return inventory
-    require(isinstance(contract, dict) and set(contract) == ({'schema', 'owners', 'history'} if contract.get('schema') == 2 else {'schema', 'owners'})
-            and type(contract['schema']) is int and contract['schema'] in (1, 2)
+    require(isinstance(contract, dict) and set(contract) == {'schema', 'owners'}
+            and type(contract['schema']) is int and contract['schema'] == 1
             and isinstance(contract['owners'], dict) and set(contract['owners']) == set(OWNERS),
             'missing or invalid trusted helper contract')
     inventory, aliases = {}, set()
-    historical = historical_inventory(contract) if contract['schema'] == 2 else {}
-    for name in historical:
-        alias = LEGACY_ALIASES.get(name)
-        if alias is not None:
-            require(alias not in aliases, 'duplicate historical helper environment')
-            aliases.add(alias)
     for owner, row in contract['owners'].items():
-        require(isinstance(row, dict) and set(row) == ({'source', 'historical'} if row.get('historical') is True else
-                {'source', 'declaration', 'declaration_sha256', 'declaration_blob', 'recipe_sha256', 'recipe_blob'}),
+        require(isinstance(row, dict) and set(row) == {'source', 'declaration', 'declaration_sha256', 'declaration_blob', 'recipe_sha256', 'recipe_blob'},
                 'invalid helper owner evidence')
         source = row['source']
         require(isinstance(source, dict) and set(source) in ({'repository', 'sha', 'tree', 'tag'},
@@ -211,13 +141,6 @@ def validate(contract):
         if 'ref' in source:
             require(isinstance(source['ref'], str) and source['ref'].startswith(('refs/heads/', 'refs/pull/'))
                     and '..' not in source['ref'], 'invalid admitted helper source ref')
-        if row.get('historical') is True:
-            require(contract['schema'] == 2 and owner != 'platform', 'unauthorized historical helper source')
-            for name, item in historical.items():
-                if item['owner'] == owner:
-                    require(name not in inventory, 'duplicate helper across owners')
-                    inventory[name] = item
-            continue
         require(isinstance(row['declaration'], str), 'missing original helper declaration bytes')
         data = row['declaration'].encode()
         require(row['declaration_sha256'] == digest(data) and row['declaration_blob'] == blob(data),
@@ -238,15 +161,24 @@ def validate(contract):
 
 def runtime(contract):
     """Project declarations onto runtime fields without reading source evidence."""
-    if contract.get('schema') == 3:
+    if isinstance(contract, dict) and contract.get('schema') == 3:
         validate(contract)
         return contract
+    require(isinstance(contract, dict) and isinstance(contract.get('owners'), dict),
+            'invalid legacy helper inventory')
     helpers = {}
     for owner, row in contract['owners'].items():
         require(owner in OWNERS, 'unknown helper owner')
-        for item in declaration(row['declaration'])['helpers']:
+        require(isinstance(row, dict) and isinstance(row.get('declaration'), str),
+                'missing legacy helper runtime declaration')
+        declared = loads(row['declaration'])
+        require(isinstance(declared, dict) and isinstance(declared.get('helpers'), list),
+                'invalid legacy helper runtime declarations')
+        for item in declared['helpers']:
+            require(isinstance(item, dict) and {'name', 'env', 'cases'} <= set(item),
+                    'incomplete legacy helper runtime entry')
             name = item['name']
-            require(name not in helpers, 'duplicate helper across owners')
+            require(isinstance(name, str) and name not in helpers, 'invalid or duplicate helper name')
             helpers[name] = {'owner': owner, 'env': item['env'], 'cases': item['cases']}
     result = {'schema': 3, 'helpers': helpers}
     validate(result)
@@ -328,8 +260,7 @@ def required_capabilities(cases):
 
 def selected(contract, cases):
     selection = {name: item for name, item in validate(contract).items()
-            if (item.get('historical') is True and cases) or
-            any(fnmatch.fnmatchcase(case, pattern) for case in cases for pattern in item['cases'])}
+            if any(fnmatch.fnmatchcase(case, pattern) for case in cases for pattern in item['cases'])}
     require(all(name in selection and selection[name]['owner'] == owner
                 for name, owner in required_capabilities(cases).items()),
             'declaration omits required helper capability')
@@ -392,3 +323,42 @@ def install_reader(root):
     require(target.parent.is_dir() and not target.is_symlink(), 'missing or linked helper reader')
     shutil.copyfile(Path(__file__), target)
     target.chmod(0o644)
+
+
+def packages(root, *, runtime_only=False):
+    require(root.is_dir() and not root.is_symlink(), 'missing helper package directory')
+    require({path.name for path in root.iterdir()} <= set(ARCHES) | (set() if runtime_only else {'contract.json'}),
+            'unexpected helper package root entry')
+    result, previous = {}, None
+    for arch in ARCHES:
+        if runtime_only:
+            metadata = loads(regular(root / arch, 'helpers.json').read_text())
+            require(metadata.get('schema') == 2, 'new helpers require runtime-only metadata')
+        contract, records = package(root / arch, arch)
+        require(previous is None or contract == previous, 'architecture helper inventories differ')
+        previous = contract
+        result[arch] = records
+    return result
+
+
+def copy_packages(source, target):
+    """Package runtime fields only, also when the input came from an old producer."""
+    records = packages(source)
+    require(not target.exists() and not target.is_symlink(), 'helper package output already exists')
+    for arch in ARCHES:
+        destination = target / arch
+        destination.mkdir(parents=True)
+        for name in records[arch]:
+            shutil.copy2(regular(source / arch, name), destination / name)
+        (destination / 'helpers.json').write_bytes(canonical(
+            {'schema': 2, 'arch': arch, 'helpers': records[arch]}) + b'\n')
+        (destination / 'helpers.json').chmod(0o644)
+    packages(target, runtime_only=True)
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='Check both native runtime helper inventories.')
+    parser.add_argument('root', type=Path)
+    args = parser.parse_args()
+    packages(args.root, runtime_only=True)

@@ -179,6 +179,7 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             provenance['embedded'] = {'init': workspace.runtime_init_identity(work, arch)}
         provenance.update(workspace.prepare_fixtures(work, arch, [case.name for case in cases], deps_dir, offline))
         provenance["prepared_cases"] = [case.name for case in cases]
+        provenance = workspace.runtime_metadata(provenance)
         workspace.seal(work, provenance)
         workspace.require(not destination.exists(), f'workdir already exists: {destination}')
         work.rename(destination)

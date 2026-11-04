@@ -64,7 +64,12 @@ for index in "${!COMPONENTS[@]}"; do
 done
 copy_cases platform "$PLATFORM/test/e2e/platform"
 if [[ -n "${E2E_HELPER_ROOT:-}" ]]; then
-    cp -a "$E2E_HELPER_ROOT" "$OUTPUT/test/e2e/helpers"
+    python3 -B - "$ASSEMBLER/lib" "$E2E_HELPER_ROOT" "$OUTPUT/test/e2e/helpers" <<'PYHELPERS'
+import pathlib, sys
+sys.path.insert(0, sys.argv[1])
+from helper_contract import copy_packages
+copy_packages(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]))
+PYHELPERS
 fi
 if [[ -n "${E2E_WHEEL_ROOT:-}" ]]; then
     cp -a "$E2E_WHEEL_ROOT" "$OUTPUT/test/demo/wheels"

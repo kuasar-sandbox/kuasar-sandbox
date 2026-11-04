@@ -766,6 +766,7 @@ echo "==> immutable auto B: $AUTO_B_ARTIFACT" >&2
 
 # Record the complete environment after every binary and image has been used.
 python3 - "$ENVIRONMENT" "$REPO_ROOT" "$BIN" "$VMLINUX" "$IMAGE" "$ITERS" "${MATRIX_GROUPS[*]}" "$WARM_BYTES" "$HOST_CACHE_RESET_MODE" <<'PY'
+import re
 import csv
 import datetime
 import hashlib
@@ -817,14 +818,14 @@ if os.environ.get("KUASAR_ARTIFACT_E2E") == "1":
     # contains no source checkouts; product sources can differ from test pins.
     data = (platform_root / "provenance.json").read_bytes()
     provenance = json.loads(data)
-    prepared_inputs = {key: provenance[key] for key in
-                       ("plan_id", "arch", "framework_sha", "products", "test_revisions")}
+    if provenance.get("arch") not in ("x86_64", "aarch64") or not isinstance(provenance.get("products"), dict):
+        raise SystemExit("invalid prepared runtime inventory")
+    prepared_inputs = {"arch": provenance["arch"], "products": {
+        name: {"sha256": row["sha256"]} for name, row in provenance["products"].items()}}
+    for row in prepared_inputs["products"].values():
+        if not isinstance(row["sha256"], str) or re.fullmatch("[0-9a-f]{64}", row["sha256"]) is None:
+            raise SystemExit("invalid prepared product digest")
     prepared_inputs["provenance_sha256"] = hashlib.sha256(data).hexdigest()
-    repositories = {
-        name: {"sha": pin["sha"], "dirty": False, "role": pin["role"],
-               "source": "prepared-test-revision"}
-        for name, pin in provenance["test_revisions"].items()
-    }
 elif revision_manifest:
     manifest_path = pathlib.Path(revision_manifest)
     if not manifest_path.is_file():
@@ -846,7 +847,7 @@ else:
         path = platform_root if name == "platform" else workspace / name
         repositories[name] = git_revision(name, path)
 missing_repositories = sorted(set(repository_names) - set(repositories))
-if missing_repositories:
+if missing_repositories and prepared_inputs is None:
     raise SystemExit(f"revision set is incomplete: {missing_repositories}")
 for name, revision in repositories.items():
     sha = revision["sha"]

@@ -58,8 +58,5 @@ def discover(roots, sources):
 def verify_sources(expected, roots):
     contract.validate(expected)
     for name, row in expected['owners'].items():
-        if row.get('historical') is True:
-            inspect(roots[name], row['source'])
-        else:
-            contract.require(owner(roots[name], row['source']) == row,
-                             'helper source/declaration differs from admitted contract')
+        contract.require(owner(roots[name], row['source']) == row,
+                         'helper source/declaration differs from admitted contract')

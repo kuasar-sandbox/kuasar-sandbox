@@ -581,7 +581,6 @@ class ArtifactContracts(unittest.TestCase):
                 'archive': name, 'sha256': subject.digest(path), 'size': path.stat().st_size,
                 'image_id': 'sha256:' + str(index) * 64}
             (self.root / 'workbench' / f'workbench-{arch}.json').write_text(json.dumps(receipts[arch]))
-        (self.assets / 'SHA256SUMS').write_text(''.join(f'{value}  {name}\n' for name, value in subject.tree_files(self.assets).items()))
         self.plan['baseline'].update(delivery='workbench-v1', staged=True, assets=[
             {'name': path.name, 'size': path.stat().st_size, 'digest': 'sha256:' + subject.digest(path)}
             for path in sorted(self.assets.iterdir())])
@@ -750,7 +749,11 @@ class ArtifactContracts(unittest.TestCase):
             producer.build(sources, selected, owner.root / 'produced/e2e-helpers',
                            owner.root / 'produced/e2e-wheels', platform_root)
         produced = owner.root / 'produced/e2e-helpers'
-        contract = json.loads((produced / 'contract.json').read_text())
+        self.assertFalse((produced / 'contract.json').exists())
+        source_records = producer.tag_sources.inspect_sources(sources, selected, owner_layout=True)
+        identities = {owner: source_records[unit] for owner, unit in producer.tag_sources.OWNER_UNITS.items()}
+        identities['platform'] = source_inputs.inspect_platform(platform_root, git(platform_root, 'rev-parse', 'HEAD'))
+        contract = producer.helper_inputs.discover(roots, identities)
         original = json.loads((produced / arch / 'helpers.json').read_text())['helpers']['component-probe']
         self.assertEqual(original['mode'], 0o700)
         self.assertEqual(original['owner'], 'connector')
@@ -760,13 +763,10 @@ class ArtifactContracts(unittest.TestCase):
         for target in subject.ARCHES:
             archive_path = owner.root / (target + '.tar')
             subprocess.run(['tar', '-cf', str(archive_path), '-C', str(owner.root / 'produced'),
-                            'e2e-helpers/' + target, 'e2e-helpers/contract.json', 'e2e-wheels/' + target], check=True)
+                            'e2e-helpers/' + target, 'e2e-wheels/' + target], check=True)
             extracted = owner.root / ('transport-' + target)
             transport.extract(archive_path, extracted)
             incoming = extracted / 'e2e-helpers'
-            if (collected / 'contract.json').exists():
-                subprocess.run(['cmp', str(collected / 'contract.json'), str(incoming / 'contract.json')], check=True)
-            else: shutil.copy2(incoming / 'contract.json', collected / 'contract.json')
             shutil.move(incoming / target, collected / target)
         units = owner.root / 'units'; units.mkdir()
         for unit in selected:
@@ -849,7 +849,7 @@ class ArtifactContracts(unittest.TestCase):
             actual = (workspace / "bin/vmlinux.sha256").read_bytes()
             self.assertNotEqual(actual, old)
             self.assertEqual(actual, (hashlib.sha256(changed).hexdigest() + "  vmlinux\n").encode())
-            self.assertEqual(provenance["products"]["vmlinux"]["origin"], "candidate")
+            self.assertEqual(set(provenance["products"]["vmlinux"]), {"sha256"})
             subject.verify_workspace(workspace, self.plan, arch)
 
     def test_invalid_baseline_checksum_is_not_hidden_by_kernel_delta(self):
@@ -898,7 +898,7 @@ class ArtifactContracts(unittest.TestCase):
             workspace = self.root / "workspaces" / arch
             self.assertEqual(provenance["products"]["store-ctl"]["sha256"],
                              hashlib.sha256(self.files[arch]["store-ctl"]).hexdigest())
-            self.assertEqual(provenance["products"]["manifest-ctl"]["origin"], "candidate")
+            self.assertEqual(set(provenance["products"]["manifest-ctl"]), {"sha256"})
             self.assertFalse((workspace / "test/e2e/lib/accelerator/removed-helper.py").exists())
             self.assertTrue((workspace / "test/e2e/lib/accelerator/new-helper.py").exists())
             subject.verify_workspace(workspace, self.plan, arch)
@@ -920,15 +920,15 @@ class ArtifactContracts(unittest.TestCase):
             (delta / "outputs.json").write_text(json.dumps(self.metadata))
             provenance = self.compose(arch, delta)
             for name, product in provenance["products"].items():
-                self.assertEqual(product["origin"], "baseline")
+                self.assertEqual(set(product), {"sha256"})
                 self.assertEqual(product["sha256"], hashlib.sha256(self.files[arch][name]).hexdigest())
             workspace = self.root / "workspaces" / arch
             self.assertEqual((workspace / "test/e2e/lib/accelerator/new-helper.py").read_text(), "new helper")
-            self.assertEqual(provenance["test_revisions"], self.plan["test_revisions"])
-            broken = json.loads((workspace / "provenance.json").read_text())
-            broken["test_revisions"]["accelerator"]["sha"] = "c" * 40
-            (workspace / "provenance.json").write_text(json.dumps(broken))
-            with self.assertRaisesRegex(ValueError, "prepared test pins"):
+            self.assertFalse({'baseline', 'framework_sha', 'test_revisions', 'build_context'} & set(provenance))
+            broken = json.loads((workspace / 'provenance.json').read_text())
+            broken['plan_id'] = '0' * 64
+            (workspace / 'provenance.json').write_text(json.dumps(broken))
+            with self.assertRaisesRegex(ValueError, 'wrong plan/architecture'):
                 subject.verify_workspace(workspace, self.plan, arch)
         for wrong in ({}, {**test_revisions(), "orchestrator": {"repository": "other/repo", "sha": "c" * 40, "role": "release"}}):
             with self.assertRaisesRegex(ValueError, "test pin"):

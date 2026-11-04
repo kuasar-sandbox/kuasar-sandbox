@@ -541,14 +541,6 @@ def check_plan(plan):
                     re.fullmatch(r'[0-9a-f]{40}', platform['tree']), 'invalid admitted platform source facts')
     if 'helper_contract' in plan:
         helper_contract_module().validate(plan['helper_contract'])
-        if plan['helper_contract']['schema'] == 2:
-            historical = plan['helper_contract']['history']['plan']['baseline']
-            require(plan['mode'] == 'source' and historical['version'] == plan['baseline']['version'] and
-                    historical['sha'] == plan['baseline']['sha'] and historical['units'] == plan['baseline']['units'],
-                    'historical helper baseline admission changed')
-            require({row['name']: (row['size'], row['digest']) for row in historical['assets']} ==
-                    {row['name']: (row['size'], row['digest']) for row in plan['baseline']['assets']},
-                    'historical helper complete asset set changed')
         for owner, row in plan['helper_contract']['owners'].items():
             source = row['source']
             require((source['repository'], source['sha']) ==
@@ -715,9 +707,9 @@ def compose(plan, arch, assets, delta, output):
         if packaged_helpers.exists():
             shutil.rmtree(packaged_helpers)
         helper_contract_module().install_reader(stage)
-        provenance = {"schema": 2, "plan_id": plan_id, "arch": arch, "framework_sha": plan["framework_sha"],
-                      "baseline": baseline, "products": products, "test_revisions": plan["test_revisions"],
-                      "build_context": metadata["build_context"], "selection": lane["selection"],
+        provenance = {"schema": 2, "plan_id": plan_id, "arch": arch,
+                      "products": {name: {"sha256": row["sha256"]} for name, row in products.items()},
+                      "selection": lane["selection"],
                       "embedded": embedded, "helpers": helper_records, "helper_contract": helper_contract_module().runtime(plan["helper_contract"]),
                       "files": tree_files(stage), "modes": tree_modes(stage)}
         if plan['schema'] >= 4:
@@ -744,7 +736,6 @@ def verify_workspace(workspace, plan, arch):
     del modes["provenance.json"]
     require(modes == provenance["modes"], "prepared workspace permissions changed")
     require(provenance["selection"] == plan["lanes"][arch]["selection"], "selected cases changed after preparation")
-    require(provenance.get("test_revisions") == plan["test_revisions"], "prepared test pins differ from plan")
     if 'helper_contract' in plan:
         require(provenance.get('helper_contract') == helper_contract_module().runtime(plan['helper_contract']), 'prepared helper contract changed')
         names = planned_helpers(plan['lanes'][arch]['selection'], plan['helper_contract'])

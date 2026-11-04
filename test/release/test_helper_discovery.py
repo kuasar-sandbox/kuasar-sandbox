@@ -94,7 +94,7 @@ class OwnerDiscovery(unittest.TestCase):
         with tarfile.open(archive, 'w:gz') as tar:
             for path in sorted(release.rglob('*')):
                 if path.is_file(): tar.add(path, arcname=str(path.relative_to(release)), recursive=False)
-        package.validate(archive, pins, expected_contract=self.contract if expected_contract is None else expected_contract)
+        package.validate(archive, expected_contract=self.contract if expected_contract is None else expected_contract)
         return release
 
     def prepare(self, release, target='prepared', case='basic.component.sh'):
@@ -364,6 +364,22 @@ class RuntimePackages(unittest.TestCase):
         result = subprocess.run([sys.executable, '-B', str(prepared / 'test/e2e/e2e'), 'run',
             '--workdir', str(prepared), '--include', 'basic.component.sh'], text=True, capture_output=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_legacy_runtime_ignores_build_declarations(self):
+        changed = copy.deepcopy(self.contract)
+        for row in changed['owners'].values():
+            declared = json.loads(row['declaration'])
+            declared['recipe'] = None
+            declared['dependencies'] = ['obsolete-owner']
+            row['declaration'] = json.dumps(declared)
+            row['source'] = None
+            row['declaration_sha256'] = 'obsolete'
+        self.assertEqual(c.runtime(changed), c.runtime(self.contract))
+        declared = json.loads(changed['owners']['connector']['declaration'])
+        declared['helpers'][0]['env'] = 'unsafe-env'
+        changed['owners']['connector']['declaration'] = json.dumps(declared)
+        with self.assertRaisesRegex(ValueError, 'environment'):
+            c.runtime(changed)
 
     def test_legacy_inventory_keeps_all_seventeen_and_ignores_proofs(self):
         built = self.build()

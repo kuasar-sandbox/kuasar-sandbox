@@ -39,7 +39,7 @@ class PrebuiltPackage(unittest.TestCase):
                                    'arch': arch, 'framework_sha': 'b' * 40,
                                    'test_revisions': copy.deepcopy(self.pins), 'helpers': helpers}
 
-    def validate(self, expected=None, expected_sources=None):
+    def validate(self, *, publication=False):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'package.tar.gz'
             files = self.files | {f'test/e2e/helpers/{arch}/helpers.json': (json.dumps(record).encode(), 0o644)
@@ -53,13 +53,27 @@ class PrebuiltPackage(unittest.TestCase):
                     member = tarfile.TarInfo(name)
                     member.size, member.mode = len(data), mode
                     output.addfile(member, io.BytesIO(data))
-            package.validate(path, self.pins if expected is None else expected, expected_sources)
+            package.validate(path, publication=publication)
 
     def test_old_source_records_are_ignored(self):
         for record in self.metadata.values():
             record.update(source_records='unavailable', test_revisions='unavailable', framework_sha='obsolete')
             for helper in record['helpers'].values(): helper['source_sha'] = 'obsolete'
-        self.validate(expected_sources={'unavailable': True})
+        self.validate()
+
+    def test_new_publication_requires_only_runtime_metadata(self):
+        with self.assertRaisesRegex(ValueError, 'helper source records'):
+            self.validate(publication=True)
+        del self.files['test/e2e/helpers/contract.json']
+        runtime = package.helper_inputs.contract.runtime(self.contract)
+        for arch, old in self.metadata.items():
+            self.metadata[arch] = {'schema': 2, 'arch': arch, 'helpers': {
+                name: {**{key: row[key] for key in ('sha256', 'size', 'mode')}, **runtime['helpers'][name]}
+                for name, row in old['helpers'].items()}}
+        self.validate(publication=True)
+        self.metadata['x86_64']['source_records'] = {}
+        with self.assertRaisesRegex(ValueError, 'unexpected runtime helper metadata'):
+            self.validate(publication=True)
 
     def test_nested_discovered_owner_runtime_files_are_valid(self):
         self.files['test/e2e/lib/sandboxer/restore_dio_workload.py'] = (b'# owner runtime\n', 0o644)
@@ -163,7 +177,7 @@ class PrebuiltPackage(unittest.TestCase):
             self.validate()
 
     def test_obsolete_selected_pins_do_not_qualify_package(self):
-        self.validate(self.pins | {'orchestrator': 'c' * 40})
+        self.validate()
 
     def test_obsolete_architecture_source_sets_are_ignored(self):
         self.metadata['aarch64']['framework_sha'] = 'c' * 40

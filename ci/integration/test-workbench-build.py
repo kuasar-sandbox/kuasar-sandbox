@@ -216,9 +216,10 @@ class WorkbenchBuild(unittest.TestCase):
                 platform_fixture(work / 'platform')
                 facts = release_helpers.tag_sources.inspect_sources(sources, selected, owner_layout=True)
                 pins = release_helpers.tag_sources.owner_revisions(facts)
-                calls = []
+                calls, built_names = [], set()
                 def helpers(source, target, destination, chosen, environment, contract):
                     calls.append(target)
+                    built_names.update(chosen)
                     self.assertEqual(set(p.name for p in source.iterdir()), set(pins) | {'platform'})
                     for owner, unit in release_helpers.tag_sources.OWNER_UNITS.items():
                         expected = release_helpers.tag_sources.source_path(sources, unit, owner_layout=True)
@@ -240,12 +241,14 @@ class WorkbenchBuild(unittest.TestCase):
                     release_helpers.build(sources, selected, work / "helpers", work / "wheels", work / "platform", arch)
                 self.assertEqual(calls, [arch])
                 self.assertEqual(wheels.call_args.args[1], arch)
-                self.assertEqual({path.name for path in (work / "helpers").iterdir()}, {arch, "contract.json"})
+                self.assertEqual({path.name for path in (work / "helpers").iterdir()}, {arch})
                 record = json.loads((work / "helpers" / arch / "helpers.json").read_text())
-                self.assertEqual(record["test_revisions"], pins)
-                self.assertEqual(record["source_records"], facts)
-                self.assertEqual(record["framework_sha"], framework)
-                self.assertEqual(record["helpers"]["custom-proxy"]["source_sha"], facts['orchestrator']['sha'])
+                self.assertEqual(set(record), {'schema', 'arch', 'helpers'})
+                self.assertEqual(record['schema'], 2)
+                self.assertEqual(set(record['helpers']), built_names)
+                self.assertTrue(all(set(row) == {'owner', 'env', 'cases', 'size', 'sha256', 'mode'}
+                                    for row in record['helpers'].values()))
+
 
 
 if __name__ == "__main__":

@@ -46,7 +46,7 @@ def privileged_command(command, prepared):
 
 def result_record(plan, arch, provenance, workspace):
     return {"arch": arch, "plan_id": artifacts.identity(plan), "conclusion": "failure",
-            "test_revisions": provenance["test_revisions"],
+            "test_revisions": plan["test_revisions"],
             "provenance_sha256": artifacts.digest(workspace / "provenance.json"), "timings": [],
             "preparation_environment": provenance.get("preparation_environment")}
 

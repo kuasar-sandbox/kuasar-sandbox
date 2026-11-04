@@ -65,7 +65,7 @@ def verify_package(archive, roots, case_files, records):
     identities = {owner: records[unit] for owner, unit in tag_sources.OWNER_UNITS.items()}
     identities['platform'] = inspect_platform(roots['platform'], tag_sources.git(roots['platform'], 'rev-parse', 'HEAD'))
     expected_contract = helper_inputs.discover(roots, identities)
-    validator.validate(archive, expected_sources=records, expected_contract=expected_contract)
+    validator.validate(archive, expected_contract=expected_contract)
     with tempfile.TemporaryDirectory(prefix='source-package-') as directory:
         output = Path(directory)
         artifacts.unpack(archive, output, 'platform', {})

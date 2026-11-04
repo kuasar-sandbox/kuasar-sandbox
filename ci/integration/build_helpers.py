@@ -31,7 +31,7 @@ def build_owner(root, arch, output, environment, row, run=None):
             for r in declared['helpers']}
 
 
-def build(sources, arch, output, helpers, environment, contract, historical_archive=None):
+def build(sources, arch, output, helpers, environment, contract):
     for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY'):
         artifacts.require(not environment.get(key), f'helper build must not receive {key}')
     inventory = helper_inputs.contract.validate(contract)
@@ -41,23 +41,7 @@ def build(sources, arch, output, helpers, environment, contract, historical_arch
     helper_inputs.verify_sources(contract, roots)
     output.mkdir(parents=True, exist_ok=False)
     selected = dict(environment, TARGET_ARCH=arch, KUASAR_WORKSPACE_ROOT=str(sources))
-    historical_names = {name for name in helpers if inventory[name].get('historical')}
-    if historical_names:
-        import helper_history
-        import tarfile
-        artifacts.require(historical_archive is not None, 'missing authenticated historical helper archive')
-        observed, metadata = helper_history.inventory(historical_archive, contract['history']['plan'],
-            {owner: row['source'] for owner, row in contract['owners'].items() if owner != 'platform'})
-        artifacts.require(observed == contract['history']['helpers'] and metadata == contract['history']['metadata'],
-                          'historical helper inventory changed after admission')
-        with tarfile.open(historical_archive, 'r:gz') as archive:
-            entries = {member.name.removeprefix('./'): member for member in archive if member.isfile()}
-            for name in historical_names:
-                member = entries['test/e2e/helpers/' + arch + '/' + name]
-                with archive.extractfile(member) as stream, (output / name).open('xb') as target:
-                    shutil.copyfileobj(stream, target)
-                (output / name).chmod(member.mode)
-    for owner in sorted({inventory[name]['owner'] for name in set(helpers) - historical_names}):
+    for owner in sorted({inventory[name]['owner'] for name in helpers}):
         declared = helper_inputs.contract.declaration(contract['owners'][owner]['declaration'])
         with tempfile.TemporaryDirectory(prefix='owner-helpers-') as directory:
             built = Path(directory) / 'bin'; built.mkdir()

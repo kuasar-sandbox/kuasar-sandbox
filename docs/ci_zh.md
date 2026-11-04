@@ -53,14 +53,9 @@ finalize 才能成功；skip/cancel/failure 不能成为合并依据。
 
 产品影响选测也包含消费者：accelerator/runtime 改动若重建 `flatten-ctl`，增加 telemetry 用例；sandboxer 库改动若重建 `node-ctl`，增加 `orchestrator.resource-*`。这些用例使用 plan 固定的测试 owner revision 和匹配能力的 lane，不另选 main。需要原子验证的测试脚本/依赖修复使用上文双向 companion 声明，明确联合候选源码集合。
 
-`source` 模式从主线维护的 `releases/daily-preview.yaml`、或维护线的 `releases/release.yaml`
-选择一个已发布且通过声明验证范围的 aggregate。仅允许当前选择或显式前驱恢复中断发布。
-plan 固定 aggregate tag commit、六个独立 unit 的版本/SHA、Release/asset ID、大小、摘要和成功的聚合 run。
-新双架构 aggregate 的发布说明还绑定验证 profile 与真实制品摘要。
+`source` 模式通过维护渠道清单选择一个已发布聚合，发布未完成时仅允许使用该选版或其显式前驱。所选聚合 Tag 自身的 manifest 固定六个发行单元版本；GitHub Release/asset ID、精确名称、大小、摘要与状态固定本次使用的包，不读取历史验收记录。
 
-当前维护的 aggregate 尚未发布时，显式前驱仍是经过验证的二进制基线。对于已完整验收的 schema 4 聚合，普通源码 PR 的非候选产品、测试与 helper 均保留该聚合选定的 owner tag；待发布清单不替换这个已验收组合。已准入候选与 companion 仍按原有产品及消费端覆盖规则叠加。新发布组合必须通过独立的 aggregate exact-assets 门禁，才能成为基线。
-
-已认证聚合证据早于 schema 4 时，历史能力迁移保留现有 maintained-tag 路径。每个差异 tag 仍须已有完整双架构发布及精确 tag/commit、大小和摘要元数据，CI 运输这些固定源码并重建产品及消费者。候选清单不能选择这些 tag 或兼容模式；不完整发布、混合需求代际及需求降级仍然失败。runtime 与 kernel 保持独立。
+维护聚合尚未发布时，显式前驱仍为二进制基线。普通源码 PR 的非候选产品、测试和 helper 保留该聚合选定的 owner Tag；main 清单后续推进不能重新解释旧版本。已准入候选与 companion 继续按原有产品及消费端覆盖规则叠加。新组合在发布前通过独立 exact-assets 验收，runtime 与 kernel 保持独立。
 
 基线或 ARM 资产缺失时明确失败并要求初始化。不会拼接组件 Latest，也不会回退全源码构建。
 历史 AMD64-only 发布仍是合法历史发布，只是不满足双架构基线。
@@ -94,7 +89,7 @@ sandboxer 库变更同样会重建 `node-ctl`，因为其管理和发布路径�
 
 共享 `ci/check_docs.py` 检查 UTF-8、本地链接和锚点、双语互链与英文默认，已有英文单语文档仍合法。检查修改文档及引用已重命名、删除或修改目标的未变文档，不将无关文档债务扩入本次检查。外部访问和翻译完整性仍需人工验收。
 
-清单检查在精确 head 与 merge 上使用现有发布解析器读取两份维护清单，检查字段、unit tag、Stable/Preview 版本、前驱顺序、双文件一致性和维护线归属。复用现有 aggregate reader 验证声明的已发布前驱及已经发布的当前选择。历史 AMD64-only 前驱保留原 x86 验证范围，该比较引用不能作为双架构基线使用；已经发布的当前选择及新声明的 Workbench 发布仍要求完整架构和资产。已发布组件使用现有精确 tag/Release/双架构资产检查。Preview 的源码和依赖绑定仍为必需；已发布依赖改变时，仅当完整源码树中既有链接输入投影一致才可复用消费者。新组件 tag、等待发布的 tag 或 draft 明确记录为待满足发布前提，并保留发布源分支与所选依赖。复用尚未发布的依赖时，记录待执行的链接输入核验。后续发布 coordinator 仍负责冻结未来源码提交并满足这些前提。这是发布计划验证，不表示未来组合已经通过 E2E，也不会在此触发组件发布。
+清单检查在精确 head 与 merge 上使用现有发布解析器读取两份维护清单，检查字段、unit tag、Stable/Preview 版本、前驱顺序、双文件一致性和维护线归属。复用现有 aggregate reader 验证声明的已发布前驱及已经发布的当前选择。历史 AMD64-only 前驱保留原 x86 验证范围，该比较引用不能作为双架构基线使用；已经发布的当前选择及新声明的 Workbench 发布仍要求完整架构和资产。已发布组件使用现有精确 tag/Release/双架构资产检查。已发布 Tag 作为成品复用，不审核正文中的源码或依赖 marker；新构建仍固定本次依赖，并进行最终组合验收。新组件 tag、等待发布的 tag 或 draft 明确记录为待满足发布前提，并保留发布源分支与所选依赖。复用尚未发布的依赖时，记录待执行的链接输入核验。后续发布 coordinator 仍负责冻结未来源码提交并满足这些前提。这是发布计划验证，不表示未来组合已经通过 E2E，也不会在此触发组件发布。
 
 原 finalizer 仅在成功轻量证据匹配当前精确源码集、可信政策、run 和 attempt，且重新核对当前 PR/base/head/companion 准入后，接受有意跳过的重任务。缺失、取消、失败、空或过期证据不能通过。证据保留清单计划、已发布身份与待满足前提。aggregate 的 `exact-assets` 始终保留完整 E2E 和 Workbench 验收。宣称收益前须记录真实 `docs`/`manifest`/`tooling`/`full` Actions 时间。回退恢复完整调度，不放宽准入或必需检查。
 
@@ -186,7 +181,7 @@ exact-assets 模式直接消费 platform 包中的同一布局。两条路径都
 首段只能是 `basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder` 或 `telemetry`。
 内部 CI shard 按 suite 分组精确文件，plan 在执行前记录所选用例和架构排除项。
 
-source/helper build 从已准入的 owner 声明派生完整 helper 清单和配方，并将契约绑定到输入计划。通用构建器使用固定依赖工作区执行各 owner 配方，拒绝缺失或额外输出。内部二进制名称、包路径和构建目标由组件维护。prepare 校验预期契约、架构、源码身份、字节和安全权限，提供声明的环境变量别名与 `E2E_HELPERS_DIR`，不执行编译。包含静态无 libc cgroup probe 在内的用例必要能力仍单独检查，不作为完整允许清单。发布包携带两种架构的 helper 和相同 owner Tag 的证据。同一更早的 build 阶段按 `test/demo/requirements.lock`
+source/helper build 从已准入的 owner 声明派生完整 helper 清单和配方，并将契约绑定到输入计划。通用构建器使用固定依赖工作区执行各 owner 配方，拒绝缺失或额外输出。内部二进制名称、包路径和构建目标由组件维护。prepare 校验运行清单、架构、字节和安全权限，提供声明的环境变量别名与 `E2E_HELPERS_DIR`，不执行编译。包含静态无 libc cgroup probe 在内的用例必要能力仍单独检查，不作为完整允许清单。发布包携带两种架构的 helper 及一致的运行清单，不携带来源证明。公共 prepared workspace 仅保留运行字段，本次 CI 结果从当前 plan 获取测试修订。同一更早的 build 阶段按 `test/demo/requirements.lock`
 获取 Python 3.12 的完整 Demo SDK wheel 依赖闭包，固定全部版本及 wheel 摘要；发布包携带两种架构的 wheelhouse。prepare 消费这些二进制，
 准备 manifest archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像，并仅从本地 wheelhouse 通过
 `--no-index --find-links` 和 `--require-hashes` 安装 Demo SDK。wheel 缺失或变化时在安装前失败。provenance 绑定包名、版本、wheel 摘要、lock 身份和安装后的文件树。
@@ -210,7 +205,7 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 `snapshot.read-recovery.sh` 失败时，在 cleanup 前将用例、阶段、失败行及有界固定词表错误证据保留在 job 日志中。诊断保留测试的原始退出状态。
 
-现有 `make test-release-tools` 入口在源码 CI 上下文或任一物化文档存在时，还执行固定源码集的发布验证；此时 `.source-plan.json` 和 `.source-checks.json` 均为必需。入口接受原始 `source` 和 `exact-assets` plan，绑定未修改的 plan ID、干净源码树和现有 Go workspace。组件保留所选 tag 身份，候选保留已准入的 ref。对于 `exact-assets`，尚未发布的 platform 源码通过原始仓库、commit 和 tree 绑定暂存选择、固定运行输入、物化回执和 helper 声明。入口先验证这些输入，再串行执行所选组件原有的 `make test-release`；platform 候选会选择全部五个组件。入口同时执行所选 owner 声明的原生 helper 配方，校验完整输出，并在 `KUASAR_CI_DIR` 下记录命令、退出码、声明、依赖身份和二进制摘要。执行后源码及 workspace 输入必须保持不变。已认证的历史 helper 证据保留为历史事实，不宣称重新执行过其配方。该原生源码回归不替代各架构构建、prepare 或 E2E 验证。
+现有 `make test-release-tools` 入口在源码 CI 上下文或任一物化文档存在时，还执行固定源码集的发布验证；此时 `.source-plan.json` 和 `.source-checks.json` 均为必需。入口接受原始 `source` 和 `exact-assets` plan，绑定未修改的 plan ID、干净源码树和现有 Go workspace。组件保留所选 tag 身份，候选保留已准入的 ref。对于 `exact-assets`，尚未发布的 platform 源码通过原始仓库、commit 和 tree 绑定暂存选择、固定运行输入、物化回执和 helper 声明。入口先验证这些输入，再串行执行所选组件原有的 `make test-release`；platform 候选会选择全部五个组件。入口同时执行所选 owner 声明的原生 helper 配方，校验完整输出，并在 `KUASAR_CI_DIR` 下记录命令、退出码、声明、依赖身份和二进制摘要。执行后源码及 workspace 输入必须保持不变。已发布 helper 只提取运行字段，不查询历史 plan 或 producer 记录。聚合 exact-assets 任务不调度这些重复的源码检查。该原生源码回归不替代各架构构建、prepare 或 E2E 验证。
 
 独立运行 `make test-release-tools` 仍保持平台工具验证范围，未请求固定源码集验证时会明确说明。对已物化的本地源码集，可在保留现有 Go workspace 和工具链环境的情况下执行 `make test-release-source-set ORG=<fixed-source-root> RELEASE_CHECK_OUTPUT=<fresh-evidence-directory>`。该显式入口始终要求两份准入文档，不重新获取源码。
 

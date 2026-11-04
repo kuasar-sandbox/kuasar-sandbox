@@ -22,7 +22,7 @@ demo_wheels = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(demo_wheels)
 
 
-def validate(path, expected_pins=None, expected_sources=None, expected_contract=None):
+def validate(path, expected_contract=None, *, publication=False):
     with tarfile.open(path, 'r:gz') as archive:
         members = {}
         for entry in archive.getmembers():
@@ -63,6 +63,8 @@ def validate(path, expected_pins=None, expected_sources=None, expected_contract=
                             target.write_bytes(archive.extractfile(entry).read())
                 for arch in artifacts.ARCHES:
                     demo_wheels.validate(demo / 'wheels' / arch, demo / 'requirements.lock', demo / 'requirements.txt', arch)
+        if publication:
+            artifacts.require('test/e2e/helpers/contract.json' not in members, 'new package contains helper source records')
         previous = None
         with tempfile.TemporaryDirectory(prefix='release-helpers-') as directory:
             root = Path(directory)
@@ -72,6 +74,8 @@ def validate(path, expected_pins=None, expected_sources=None, expected_contract=
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(archive.extractfile(entry).read())
                     path.chmod(entry.mode)
+            if publication:
+                helper_inputs.contract.packages(root, runtime_only=True)
             for arch in artifacts.ARCHES:
                 contract, records = helper_inputs.contract.package(root / arch, arch)
                 helper_inputs.contract.selected(contract, [name.removeprefix('test/e2e/cases/') for name in cases])
@@ -85,8 +89,6 @@ def validate(path, expected_pins=None, expected_sources=None, expected_contract=
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('archive', type=Path)
-    parser.add_argument('owner_revisions', type=Path, nargs='?')
-    parser.add_argument('--source-records', type=Path)
+    parser.add_argument('--publication', action='store_true')
     args = parser.parse_args()
-    validate(args.archive, json.loads(args.owner_revisions.read_text()) if args.owner_revisions else None,
-             json.loads(args.source_records.read_text()) if args.source_records else None)
+    validate(args.archive, publication=args.publication)

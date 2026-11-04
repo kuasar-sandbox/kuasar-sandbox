@@ -100,7 +100,7 @@ package_archive() {
   tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$epoch" \
     --pax-option=delete=atime,delete=ctime -czf "$output/assets/$archive" -C "$stage" .
   validate_archive "$version" "$output/assets/$archive"
-  python3 -B "$ROOT/release/validate-e2e-package.py" "$output/assets/$archive" --source-records "$work/source-records.json"
+  python3 -B "$ROOT/release/validate-e2e-package.py" "$output/assets/$archive" --publication
   cat > "$output/release-notes.md" <<EOF
 Kuasar Sandbox platform integration package for $version.
 

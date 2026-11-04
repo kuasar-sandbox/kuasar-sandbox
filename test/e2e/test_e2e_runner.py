@@ -328,6 +328,20 @@ class PreparedRunnerTests(unittest.TestCase):
     def args_with(self, **values):
         return type('Args', (), self.args | values)()
 
+    def test_reprepare_discards_old_source_and_run_records(self):
+        self.assertEqual(runner.cmd_prepare(self.args_with()), 0)
+        old = runner.workspace.verify(self.work)
+        old.update(plan_id='a' * 64, framework_sha='b' * 40, test_revisions={'old': 'source'},
+                   baseline={'old': 'release'}, build_context={'old': 'producer'},
+                   source_records={'old': 'sha'}, history={'old': 'run'})
+        old['products'] = {'fixture': {'sha256': 'c' * 64, 'sources': {'old': 'sha'}, 'origin': 'baseline'}}
+        runner.workspace.seal(self.work, old)
+        target = self.root / 'prepared-again'
+        self.assertEqual(runner.cmd_prepare(self.args_with(release_dir=str(self.work), workdir=str(target))), 0)
+        actual = runner.workspace.verify(target)
+        self.assertFalse({'plan_id', 'framework_sha', 'test_revisions', 'baseline', 'build_context', 'source_records', 'history'} & set(actual))
+        self.assertEqual(actual['products'], {'fixture': {'sha256': 'c' * 64}})
+
     def test_prepare_and_run_use_only_release_inputs(self):
         case = self.release / 'test/e2e/cases/basic.fixture.sh'
         case.write_text('set -eu\n[ -z "${E2E_IMAGE:-}" ]\n[ -z "${ZOT_BIN:-}" ]\n'
@@ -464,13 +478,14 @@ class PreparePassThroughTests(unittest.TestCase):
                 def invoke(command, **kwargs):
                     work.mkdir()
                     (work / 'provenance.json').write_text(json.dumps({'prepared_cases': original['selection']['cases']}))
-                with patch.object(prepare.artifacts, 'compose', return_value=original), patch.object(
+                with patch.object(prepare.artifacts, 'check_plan', return_value='a' * 64), \
+                     patch.object(prepare.artifacts, 'compose', return_value=original), patch.object(
                         prepare.artifacts, 'verify_workspace', return_value={'prepared_cases': original['selection']['cases'],
                                                                            'files': {}, 'modes': {}}), patch.object(
                         prepare.subprocess, 'run', side_effect=invoke) as run, patch.object(
                         prepare.execution, 'clean_prepare_command', return_value=['clean-public-prepare']) as clean_command, patch.dict(
                         os.environ, {'E2E_DEPS_DIR': '/wrong-ambient-directory'}):
-                    prepare.prepare({}, 'x86_64', root / 'assets', root / 'delta', work, clean, str(deps), True)
+                    prepare.prepare({'schema': 2}, 'x86_64', root / 'assets', root / 'delta', work, clean, str(deps), True)
                 if clean:
                     args = clean_command.call_args.args
                     self.assertEqual(args[-1], str(deps))
