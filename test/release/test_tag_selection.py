@@ -137,16 +137,20 @@ class TagSelectionTests(unittest.TestCase):
             with mock.patch.object(formal, 'ROOT', root), \
                  mock.patch.dict(formal.os.environ, {'RELEASE_VERSION': 'release-v1.2.3',
                      'PLATFORM_REF': 'main', 'PLATFORM_SHA': 'a' * 40}), \
-                 mock.patch.object(formal.coordinator, 'run', return_value=mock.Mock(stdout='a' * 40)), \
+                 mock.patch.object(formal.coordinator, 'run', side_effect=[mock.Mock(stdout='a' * 40), mock.Mock(stdout=manifest())]), \
                  mock.patch.object(formal.coordinator, 'branch_sha', return_value='a' * 40), \
                  mock.patch.object(formal.coordinator, 'platform_release', return_value=coordinator.ReleaseStatus(None, None, False)), \
                  mock.patch.object(formal.coordinator, 'RepositoryState') as state, \
                  mock.patch.object(formal.coordinator, 'has_arm_archive', return_value=True), \
+                 mock.patch.object(formal.coordinator, 'active_aggregate_run', return_value=None), \
+                 mock.patch.object(formal.coordinator, 'aggregate_runs', return_value=[]), \
+                 mock.patch.object(formal.coordinator, 'persist_manifest', return_value='b' * 40) as persist, \
                  mock.patch.object(formal, 'wait_for_convergence') as converge:
                 state.return_value.status.return_value = coordinator.ReleaseStatus({}, 'c' * 40, True)
                 formal.main()
             plans, version, sha = converge.call_args.args
-            self.assertEqual((version, sha), ('release-v1.2.3', 'a' * 40))
+            self.assertEqual((version, sha), ('release-v1.2.3', 'b' * 40))
+            self.assertEqual(persist.call_args.kwargs, dict(channel='release', root=root, source_ref='main', source_sha='a' * 40))
             self.assertEqual({name: plan.selected for name, plan in plans.items()},
                              selection.parse_manifest(manifest(), 'fixture', False)[2])
 

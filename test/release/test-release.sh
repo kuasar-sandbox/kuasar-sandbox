@@ -45,6 +45,7 @@ git -C "$FORMAL_ROOT" init -q
 git -C "$FORMAL_ROOT" remote add origin https://github.com/kuasar-sandbox/kuasar-sandbox.git
 git -C "$FORMAL_ROOT" config user.name release-test
 git -C "$FORMAL_ROOT" config user.email release-test@example.invalid
+python3 -B "$ROOT/release/prepare_notes.py" "$FORMAL_ROOT" release
 git -C "$FORMAL_ROOT" add .
 git -C "$FORMAL_ROOT" commit -qm 'maintain first formal release fixture'
 
@@ -387,10 +388,10 @@ python3 - "$TMP/fetched/updates/orchestrator.md" <<'PY'
 import pathlib, sys
 pathlib.Path(sys.argv[1]).write_text('x' * 125001)
 PY
-if SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
-  "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/rejected-notes" \
+if "$ROOT/release/aggregate-release.sh" render-notes "$VERSION" '' "$TMP/selection.tsv" \
+  "$TMP/fetched/updates" "$TMP/rejected-notes.md" \
   > "$TMP/rejected-notes.log" 2>&1; then
-  release_fail "aggregate accepted oversized generated release notes"
+  release_fail "pre-admission generator accepted oversized release notes"
 fi
 grep -Fq 'budget=125000' "$TMP/rejected-notes.log"
 grep -Fq 'evidence must not be truncated' "$TMP/rejected-notes.log"
@@ -404,7 +405,7 @@ grep -Fq 'usage: package-platform.sh package' "$TMP/rejected-test-source.log"
 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" validate "$VERSION" "$TMP/bundle"
 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
-  "$ROOT/test/release/test-publisher.sh" "$ROOT/release/publish-release.sh" \
+  "$ROOT/test/release/test-publisher.sh" "$FORMAL_ROOT/release/publish-release.sh" \
   "$TMP/bundle" kuasar-sandbox/kuasar-sandbox "$VERSION" \
   "$(git -C "$FORMAL_ROOT" rev-parse HEAD)" main
 

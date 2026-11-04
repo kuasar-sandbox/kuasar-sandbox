@@ -1063,6 +1063,10 @@ components:
   orchestrator: v1.0.0
   runtime: runtime-v1.0.0
   vmlinux: vmlinux-v1.0.0
+notes:
+  mode: fixed
+  body: |
+    Maintained notes.
 """
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
@@ -1090,23 +1094,43 @@ components:
                     content, "release-v1.2.3-preview.20260831"
                 )
         self.assertEqual(result, "a" * 40)
-        branch_sha.assert_called_once_with(
-            coordinator.PLATFORM_REPOSITORY, "main"
-        )
+        self.assertEqual(branch_sha.call_args_list, [mock.call(coordinator.PLATFORM_REPOSITORY, "main")] * 2)
         api.assert_called_once()
         gh_platform.assert_not_called()
 
-    def test_daily_notes_follow_only_the_same_aggregate_and_components(self):
+    def test_daily_fixed_notes_follow_new_aggregate_and_components(self):
         manifest = ('version: release-v9.8.7\npreview_version: preview.20990101.1\ncomponents:\n' +
             ''.join(f'  {unit}: {unit + "-" if unit in ("runtime", "vmlinux") else ""}v1.2.3\n'
                     for unit in coordinator.selection.UNITS))
-        block = 'notes:\n  body: |\n    Fix #42.\n\n    Keep both paragraphs.\n'
+        block = 'notes:\n  mode: fixed\n  body: |\n    Fix #42.\n\n    Keep both paragraphs.\n'
         path = 'releases/daily-preview.yaml'
         current = manifest + block
         self.assertEqual(coordinator.retain_preview_notes(current, manifest, path), current)
         for updated in (manifest.replace('20990101.1', '20990101.2'),
                         manifest.replace('v1.2.3', 'v1.2.4')):
-            self.assertEqual(coordinator.retain_preview_notes(current, updated, path), updated)
+            self.assertEqual(coordinator.retain_preview_notes(current, updated, path), updated + block)
+
+    def test_manifest_commit_is_compare_and_swap_on_whole_branch(self):
+        content = 'complete manifest bytes\n'
+        for rejected in (False, True):
+            def mutate(*args):
+                self.assertEqual(args[:3], ('api', 'graphql', '--input'))
+                payload = json.loads(pathlib.Path(args[3]).read_text())
+                self.assertIn('createCommitOnBranch', payload['query'])
+                fields = payload['variables']['input']
+                self.assertEqual(fields['expectedHeadOid'], 'a' * 40)
+                self.assertEqual(fields['branch'], dict(repositoryNameWithOwner=coordinator.PLATFORM_REPOSITORY, branchName='main'))
+                self.assertEqual(fields['fileChanges'], dict(additions=[dict(path='releases/daily-preview.yaml', contents=base64.b64encode(content.encode()).decode())]))
+                response = {'errors': [{'message': 'expected head changed'}]} if rejected else {'data': {'createCommitOnBranch': {'commit': {'oid': 'b' * 40}}}}
+                return mock.Mock(stdout=json.dumps(response))
+            with mock.patch.object(coordinator, 'gh_platform', side_effect=mutate) as write:
+                args = ('releases/daily-preview.yaml', content, 'release-v1.2.3-preview.20990101', 'main', 'a' * 40)
+                if rejected:
+                    with self.assertRaisesRegex(coordinator.Pending, 'not confirmed'):
+                        coordinator.commit_manifest(*args)
+                else:
+                    self.assertEqual(coordinator.commit_manifest(*args), 'b' * 40)
+                write.assert_called_once()
 
     def test_manifest_keeps_independent_component_versions(self) -> None:
         plans = {

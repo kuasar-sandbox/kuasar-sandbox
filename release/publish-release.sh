@@ -83,7 +83,7 @@ publish_bundle() {
   [[ "$commit" =~ ^[0-9a-f]{40}$ ]] || release_fail "commit must be a full lowercase SHA"
   [[ "$source_ref" = main || "$source_ref" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]] \
     || release_fail "source-ref must be main or release/vMAJOR.MINOR.x"
-  "$ROOT/release/aggregate-release.sh" validate "$version" "$bundle"
+  "$ROOT/release/aggregate-release.sh" validate "$version" "$bundle" --publication
   python3 -B "$ROOT/release/publication_body.py" "$bundle/release-notes.md" \
     --reserve-registry-version "$version"
 

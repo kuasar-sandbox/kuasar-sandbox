@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import pathlib
+import hashlib
+import json
 import re
 import subprocess
 import sys
@@ -49,13 +51,30 @@ class ManifestError(ValueError):
     """A maintained manifest does not satisfy the release-state schema."""
 
 
+def notes_selection_sha256(config: dict[str, object]) -> str:
+    """Detect when auto prose needs generation, never substitute source proof."""
+    payload = {key: value for key, value in config.items() if key != 'notes'}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def require_prepared_notes(config: dict[str, object], source: str) -> None:
+    fields = config.get('notes', {})
+    if 'mode' not in fields:
+        raise ManifestError('prepare complete manifest notes and commit them before release admission')
+    validate_complete_notes(fields, source)
+    if 'aggregate_sha' in fields:
+        raise ManifestError('notes.aggregate_sha is only for publisher corrections; prepare notes before freezing a new source')
+    if fields['mode'] == 'auto' and fields.get('selection_sha256') != notes_selection_sha256(config):
+        raise ManifestError('auto release notes do not describe the current selection; run prepare_notes.py and commit')
+
+
 def fail(message: str) -> NoReturn:
     raise SystemExit(f"selection: {message}")
 
 
 def split_notes(text: str, source: str) -> tuple[str, str]:
     """Keep literal Markdown separate from the selection's scalar reader."""
-    lines = text.splitlines(keepends=True)
+    lines = re.findall(r'[^\n]*\n|[^\n]+$', text)
     starts = [i for i, line in enumerate(lines)
               if re.fullmatch(r"notes:[ ]*(?:#.*)?", line.rstrip("\r\n"))]
     if not starts:
@@ -70,21 +89,32 @@ def split_notes(text: str, source: str) -> tuple[str, str]:
 
 
 def parse_notes(block: str, source: str) -> dict[str, str]:
+    # YAML normalizes Windows line endings; match Path.read_text preparation
+    # when publication reads raw committed bytes through git show.
+    block = block.replace('\r\n', '\n')
     fields = {}
-    lines = block.splitlines()
+    lines = re.findall(r'[^\n]*\n|[^\n]+$', block)
     i = 1
     while i < len(lines):
-        line = lines[i]
+        line = lines[i].removesuffix('\n')
         i += 1
+        if not line.strip() and line.strip(' '):
+            raise ManifestError(f'invalid whitespace in notes in {source}')
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        match = re.fullmatch(r"  (body|upgrade_notice|aggregate_sha): +([^ #]+)(?: +#.*)? *", line)
+        match = re.fullmatch(r"  (body|upgrade_notice|aggregate_sha|mode|selection_sha256): +([^ #]+)(?: +#.*)? *", line)
         if not match:
             raise ManifestError(f"invalid notes field in {source}")
         key, value = match.groups()
         if key in fields:
             raise ManifestError(f"duplicate notes.{key} in {source}")
-        if key == "aggregate_sha":
+        if key == "mode":
+            if value not in ("auto", "fixed"):
+                raise ManifestError(f"notes.mode in {source} must be auto or fixed")
+        elif key == "selection_sha256":
+            if not re.fullmatch(r"[0-9a-f]{64}", value):
+                raise ManifestError(f"notes.selection_sha256 in {source} requires 64 lowercase hex characters")
+        elif key == "aggregate_sha":
             if not re.fullmatch(r"[0-9a-f]{40}", value):
                 raise ManifestError(f"notes.aggregate_sha in {source} requires an exact commit")
         else:
@@ -92,19 +122,44 @@ def parse_notes(block: str, source: str) -> dict[str, str]:
                 raise ManifestError(f"notes.{key} in {source} requires a literal Markdown block")
             body = []
             while i < len(lines) and (not lines[i].strip() or lines[i].startswith("    ")):
-                body.append(lines[i][4:])
+                raw = lines[i]
+                content = raw.removesuffix('\n')
+                if not content.strip() and content.strip(' '):
+                    raise ManifestError(f'invalid whitespace in notes.{key} in {source}')
+                body.append(raw[4:] if raw.startswith('    ') else ('\n' if raw.endswith('\n') else ''))
                 i += 1
-            value = "\n".join(body).rstrip("\n") + ("\n" if value == "|" else "")
+            literal = ''.join(body)
+            value = literal.rstrip('\n') + ('\n' if value == '|' and literal.endswith('\n') else '')
             if not value.strip() or any(marker in value for marker in (
                     "<!-- kuasar-integration-validation", "<!-- kuasar-release-notice", "<!-- /kuasar-release-notice")):
                 raise ManifestError(f"empty or reserved marker in notes.{key} in {source}")
         fields[key] = value
     if not ({"body", "upgrade_notice"} & fields.keys()):
         raise ManifestError(f"notes in {source} requires body or upgrade_notice")
+    validate_complete_notes(fields, source)
     return fields
 
 
+def validate_complete_notes(fields: dict[str, str], source: str) -> None:
+    """Explicit-mode notes are a complete authored prefix, never an insertion."""
+    if "mode" not in fields:
+        if "selection_sha256" in fields:
+            raise ManifestError(f"notes.selection_sha256 in {source} requires notes.mode")
+        return
+    if fields["mode"] not in ("auto", "fixed"):
+        raise ManifestError(f"notes.mode in {source} must be auto or fixed")
+    if "upgrade_notice" in fields:
+        raise ManifestError(f"migrate notes.upgrade_notice into notes.body before setting notes.mode in {source}")
+    body = fields.get("body")
+    if not isinstance(body, str) or not body.strip():
+        raise ManifestError(f"notes.mode in {source} requires a nonempty complete notes.body")
+    if any(marker in body for marker in ("<!-- kuasar-integration-validation",
+            "<!-- kuasar-release-notice", "<!-- /kuasar-release-notice")):
+        raise ManifestError(f"reserved marker in notes.body in {source}")
+
+
 def read_simple_yaml(text: str, source: str) -> dict[str, object]:
+    text = text.replace('\r\n', '\n')
     result: dict[str, object] = {}
     text, block = split_notes(text, source)
     if block:

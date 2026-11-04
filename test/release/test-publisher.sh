@@ -228,11 +228,18 @@ common_env=(
 env "${common_env[@]}" "$PUBLISHER" check "$TAG"
 cp "$BUNDLE/release-notes.md" "$TMP/notes"
 "$real_python" - "$BUNDLE/release-notes.md" <<'PY'
-import pathlib, sys
+import json, pathlib, sys
 notes = pathlib.Path(sys.argv[1])
-text = notes.read_text()
-assert len(text) < 125000
-notes.write_text('x' * (125000 - len(text) - 1) + '\n' + text)
+marker = '<!-- kuasar-integration-validation '
+prefix, payload = notes.read_text().split(marker)
+binding = json.loads(payload.split(' -->')[0])
+# Inflate only this publisher-transport double's machine record. The human
+# prefix must remain byte-for-byte equal to the committed manifest body.
+binding['fixture_padding'] = ''
+render = lambda: prefix + marker + json.dumps(binding) + ' -->\n'
+binding['fixture_padding'] = 'x' * (125000 - len(render()))
+assert len(render()) == 125000
+notes.write_text(render())
 PY
 if env "${common_env[@]}" "$PUBLISHER" publish \
   "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF" > "$TMP/oversize.log" 2>&1; then
