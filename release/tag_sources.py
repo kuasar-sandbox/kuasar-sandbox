@@ -49,6 +49,34 @@ def git(root, *args):
         raise ValueError(f'git {args[0]} failed while checking source inputs') from error
 
 
+def peel_tag(target, load_tag):
+    """Resolve a tag object for this invocation; never use Release prose or target_commitish."""
+    seen=set()
+    for _ in range(16):
+        require(isinstance(target,dict), 'invalid tag object')
+        sha=target.get('sha')
+        require(isinstance(sha,str) and re.fullmatch('[0-9a-f]{40}',sha) and sha not in seen,
+                'invalid or cyclic tag identity')
+        seen.add(sha)
+        if target.get('type')=='commit':return sha
+        require(target.get('type')=='tag', 'selected tag must identify a commit')
+        target=load_tag(sha).get('object')
+    raise ValueError('tag nesting exceeds supported limit')
+
+
+def resolve_remote(unit, tag):
+    validate_tag(unit,tag)
+    repo=repository(unit)
+    def load(endpoint):
+        result=subprocess.run(['gh','api',endpoint],text=True,capture_output=True,timeout=NETWORK_TIMEOUT)
+        require(result.returncode==0, result.stderr.strip() or 'cannot resolve selected tag')
+        value=json.loads(result.stdout)
+        require(isinstance(value,dict), 'invalid tag response')
+        return value
+    return peel_tag(load(f'repos/{repo}/git/ref/tags/{tag}').get('object'),
+                    lambda sha:load(f'repos/{repo}/git/tags/{sha}'))
+
+
 def inspect_unit(root, unit, tag):
     validate_tag(unit, tag)
     require(not root.is_symlink() and (root / '.git').is_dir() and not (root / '.git').is_symlink(),
@@ -58,8 +86,8 @@ def inspect_unit(root, unit, tag):
     require(git(root, 'config', '--get', 'remote.origin.url').removesuffix('.git') == f'https://github.com/{repository(unit)}',
             f'{unit} source repository differs from its owner')
     ref = 'refs/tags/' + tag
-    require(git(root, 'cat-file', '-t', ref) == 'commit', 'release tag must directly identify a commit')
-    sha = git(root, 'rev-parse', ref)
+    require(git(root, 'cat-file', '-t', ref) in ('commit','tag'), 'release tag must identify a commit')
+    sha = git(root, 'rev-parse', ref + '^{commit}')
     require(re.fullmatch(r'[0-9a-f]{40}', sha) and git(root, 'rev-parse', 'HEAD') == sha,
             f'{unit} source differs from selected tag {tag}')
     require(not git(root, 'diff', '--no-ext-diff', '--no-textconv', '--name-only', 'HEAD', '--'),
@@ -85,7 +113,8 @@ def fetch_unit(root, unit, tag, expected_sha):
     git(root, 'checkout', '--quiet', '--detach', ref)
     record = inspect_unit(root, unit, tag)
     require(record['sha'] == expected_sha, f'{unit} tag moved while fetching source')
-    require(git(root, 'ls-remote', '--refs', 'origin', ref) == f'{expected_sha}\t{ref}',
+    fetched_object = git(root, 'rev-parse', ref)
+    require(git(root, 'ls-remote', '--refs', 'origin', ref) == f'{fetched_object}\t{ref}',
             f'{unit} tag moved after fetching source')
     return record
 
@@ -133,6 +162,9 @@ def require_owner_guides(sources, *, owner_layout=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest='command', required=True)
+    resolve = commands.add_parser('resolve')
+    resolve.add_argument('unit', choices=selection.UNITS)
+    resolve.add_argument('tag')
     fetch = commands.add_parser('fetch')
     fetch.add_argument('unit', choices=selection.UNITS)
     fetch.add_argument('tag')
@@ -145,6 +177,9 @@ def main():
     inspect.add_argument('--evidence', type=Path, help='compare with previously recorded source facts')
     inspect.add_argument('--owner-revisions', action='store_true', help='emit derived owner SHA facts')
     args = parser.parse_args()
+    if args.command == 'resolve':
+        print(resolve_remote(args.unit,args.tag))
+        return
     if args.command == 'fetch':
         records = fetch_unit(args.output, args.unit, args.tag, args.expected_sha)
     else:
