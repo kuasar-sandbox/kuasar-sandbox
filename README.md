@@ -152,7 +152,7 @@ Use `--pause` inside the same workbench for interactive exploration; container
 localhost addresses and temporary credentials do not configure a host SDK. See
 [Quick Start](docs/quickstart.md) and [Demo](test/demo/DEMO.md).
 
-The [Quick Start](docs/quickstart.md) downloads every explicit asset from one aggregate release, verifies `SHA256SUMS`, prepares a standalone node, and builds a ready snapshot template with the upstream E2B Python SDK. The Demo reads its published template ID from the exact build's ready status; the SDK's registration handle is not that ID. With the node running and the documented SDK connection settings in place, set `TEMPLATE_ID` to that published ID for the lifecycle below:
+The [Quick Start](docs/quickstart.md) downloads every explicit asset from one aggregate release, verifies native GitHub asset sizes and digests, prepares a standalone node, and builds a ready snapshot template with the upstream E2B Python SDK. The Demo reads its published template ID from the exact build's ready status; the SDK's registration handle is not that ID. With the node running and the documented SDK connection settings in place, set `TEMPLATE_ID` to that published ID for the lifecycle below:
 
 ```python
 import os
@@ -237,9 +237,9 @@ The component repositories publish independent version lines:
 - guest runtime: `runtime-vX.Y.Z`;
 - guest kernel: `vmlinux-vX.Y.Z`.
 
-The project repository publishes aggregate versions named `release-vX.Y.Z`. An aggregate version may select different version numbers for different components. `releases/release.yaml` selects the next Stable aggregate, while `releases/daily-preview.yaml` selects the current daily Preview. The aggregate workflow resolves exact component tags, verifies the declared assets and checksums, assembles the platform archive, and runs cross-component validation before publishing.
+The project repository publishes aggregate versions named `release-vX.Y.Z`. An aggregate version may select different version numbers for different components. `releases/release.yaml` selects the next Stable aggregate, while `releases/daily-preview.yaml` selects the current daily Preview. The aggregate workflow resolves exact component tags, verifies the declared assets using native GitHub sizes and digests, assembles the platform archive, and runs cross-component validation before publishing.
 
-New `workbench-v1` aggregates contain one platform archive with user guides, Demo and tests, six unchanged release-unit archives per architecture, both workbench images and aggregate `SHA256SUMS`. Extract only the selected native products plus platform-release. Import workbench separately with `docker load`, or acquire the matching multi-architecture registry tag. See the [workbench instructions](workbench/README.md) for ordinary UID builds and offline tests. The source repositories remain independent; all assets share one aggregate version.
+New `workbench-v1` aggregates contain one platform archive with user guides, Demo and tests, six unchanged release-unit archives per architecture, both workbench images. Extract only the selected native products plus platform-release. Import workbench separately with `docker load`, or acquire the matching multi-architecture registry tag. See the [workbench instructions](workbench/README.md) for ordinary UID builds and offline tests. The source repositories remain independent; all assets share one aggregate version.
 
 See [docs/release.md](docs/release.md) for the full asset contract, trust boundaries, failure recovery, and Preview state machine.
 
