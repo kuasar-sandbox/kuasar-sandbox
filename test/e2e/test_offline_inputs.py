@@ -109,11 +109,23 @@ class InputTests(unittest.TestCase):
         for index in (False, True):
             with self.subTest(index=index):
                 self.record = image_fixture(self.deps, index=index)
-                self.assertEqual(self.local()['python'][1], self.record)
+                self.assertEqual(self.local()['python'][1], workspace.runtime_image_record(self.record))
                 self.record['reference'] += '@' + self.record['registry_digest']
                 self.requests['python']['reference'] = self.record['reference']
                 self.assertEqual(self.local()['python'][1]['image_id'], self.record['image_id'])
                 self.requests['python']['reference'] = 'python:3.12-slim'
+
+    def test_minimal_runtime_inventory_and_legacy_proofs_are_accepted_offline(self):
+        expected = workspace.runtime_image_record(self.record)
+        for record in (expected, dict(self.record, manifest=None, index='obsolete',
+                      registry_digest='obsolete', source_sha='obsolete', run_id=1)):
+            self.record = record
+            with patch.object(workspace, 'verify_registry_identity', side_effect=AssertionError('historical registry qualification')):
+                observed = self.local()['python'][1]
+            self.assertEqual(observed, expected)
+            self.assertEqual(set(observed), {'reference','platform','archive','sha256','image_id'})
+        prepared = workspace.runtime_metadata({'images': {'python': dict(self.record, plan={'old': True})}})
+        self.assertEqual(prepared, {'images': {'python': expected}})
 
     def test_selected_local_inputs_copy_without_docker_or_network(self):
         busybox = image_fixture(self.deps, 'busybox', 'busybox:latest')
@@ -124,6 +136,8 @@ class InputTests(unittest.TestCase):
         run.assert_not_called()
         output.assert_not_called()
         self.assertEqual(set(result['images']), {'python', 'busybox'})
+        self.assertTrue(all(set(record) == {'reference','platform','archive','sha256','image_id','owner'}
+                            for record in result['images'].values()))
         self.assertEqual(workspace.files(self.deps), before)
         source, copied = self.deps / 'python.tar', self.work / 'images/python.tar'
         self.assertEqual(copied.read_bytes(), source.read_bytes())
@@ -170,28 +184,28 @@ class InputTests(unittest.TestCase):
                 self.local(offline=False)
             self.record[field] = saved
 
-    def test_self_asserted_registry_digest_does_not_prove_identity(self):
+    def test_current_registry_resolution_checks_digest_identity(self):
         self.record['reference'] += '@sha256:' + 'c' * 64
         self.requests['python']['reference'] = self.record['reference']
         self.record['registry_digest'] = 'sha256:' + 'c' * 64
         with self.assertRaisesRegex(ValueError, 'resolved registry digest mismatch'):
-            self.local()
+            workspace.verify_registry_identity(self.record, workspace.verify_image_archive(self.deps / 'python.tar', 'linux/amd64'))
         self.record['registry_digest'] = self.record['manifest_digest']
         with self.assertRaisesRegex(ValueError, 'requested registry digest'):
-            self.local()
+            workspace.verify_registry_identity(self.record, workspace.verify_image_archive(self.deps / 'python.tar', 'linux/amd64'))
         self.record['manifest_digest'] = 'sha256:' + 'c' * 64
         with self.assertRaisesRegex(ValueError, 'manifest digest mismatch'):
-            self.local()
+            workspace.verify_registry_identity(self.record, workspace.verify_image_archive(self.deps / 'python.tar', 'linux/amd64'))
 
-    def test_manifest_must_bind_the_verified_archive_config(self):
+    def test_current_registry_manifest_must_bind_the_verified_archive_config(self):
         manifest = json.loads(self.record['manifest'])
         manifest['config']['digest'] = 'sha256:' + 'd' * 64
         self.record['manifest'] = json.dumps(manifest)
         self.record['registry_digest'] = self.record['manifest_digest'] = workspace.sha256_bytes(self.record['manifest'].encode())
         with self.assertRaisesRegex(ValueError, 'does not bind the archive'):
-            self.local()
+            workspace.verify_registry_identity(self.record, workspace.verify_image_archive(self.deps / 'python.tar', 'linux/amd64'))
 
-    def test_index_requires_unique_platform_digest_and_size(self):
+    def test_current_registry_index_requires_unique_platform_digest_and_size(self):
         record = image_fixture(self.deps, index=True)
         for mutation in ('platform', 'digest', 'size', 'duplicate'):
             self.record = copy.deepcopy(record)
@@ -205,7 +219,7 @@ class InputTests(unittest.TestCase):
             self.record['index'] = json.dumps(index)
             self.record['registry_digest'] = self.record['index_digest'] = workspace.sha256_bytes(self.record['index'].encode())
             with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'unique target manifest'):
-                self.local()
+                workspace.verify_registry_identity(self.record, workspace.verify_image_archive(self.deps / 'python.tar', 'linux/amd64'))
 
     def test_unsafe_dependency_paths_and_symlinks_fail(self):
         for name in ['/etc/passwd', '../python.tar', 'a/../../python.tar', './python.tar', 'a//b', 'a\\b']:
@@ -407,6 +421,8 @@ class InputTests(unittest.TestCase):
         self.assertEqual(pulls, [['timeout', '3m', 'docker', 'pull', '--platform=linux/amd64', reference]
                                  for reference in records])
         self.assertEqual(set(result['images']), {'python', 'busybox'})
+        self.assertTrue(all(set(record) == {'reference','platform','archive','sha256','image_id','owner','repo_digests'}
+                            for record in result['images'].values()))
         self.assertEqual([call.args[0][-1] for call in run.call_args_list
                           if call.args[0][:3] == ['docker', 'image', 'save']], list(records))
 

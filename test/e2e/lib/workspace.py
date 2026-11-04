@@ -69,10 +69,18 @@ def files(root):
     return result
 
 
+def runtime_image_record(record):
+    """Keep local load/run information; legacy registry/source proofs are not consumed."""
+    keys = ('reference', 'platform', 'archive', 'sha256', 'image_id', 'owner', 'repo_digests')
+    return {key: record[key] for key in keys if key in record}
+
+
 def runtime_metadata(provenance):
     keys = ('schema', 'arch', 'embedded', 'helper_contract', 'helpers', 'prepared_cases',
             'selection', 'case_requirements', 'fixtures', 'images', 'python', 'preparation_environment')
     result = {key: provenance[key] for key in keys if key in provenance}
+    if 'images' in provenance:
+        result['images'] = {name: runtime_image_record(row) for name, row in provenance['images'].items()}
     if 'products' in provenance:
         result['products'] = {name: {'sha256': row['sha256']} for name, row in provenance['products'].items()}
     return result
@@ -391,10 +399,9 @@ def local_image_inputs(requests, directory, offline):
                     'local image archive sha256 mismatch')
             image = verify_image_archive(path, request['platform'])
             require(image['image_id'] == record['image_id'], 'local image config ID mismatch')
-            verify_registry_identity(record, image)
         except (KeyError, TypeError, ValueError, OSError, tarfile.TarError) as error:
             raise ValueError(f'invalid local image: {context}: {error}') from error
-        inputs[label] = (path, record)
+        inputs[label] = (path, runtime_image_record(record))
     return inputs
 
 
