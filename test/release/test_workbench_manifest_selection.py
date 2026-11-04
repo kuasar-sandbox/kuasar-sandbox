@@ -53,7 +53,7 @@ class SelectionTransactionTests(unittest.TestCase):
                 self.assertEqual(fields['mode'], 'auto')
                 self.assertIn(f'[`releases/{channel}.yaml`]', fields['body'])
                 self.assertIn(f'/blob/{aggregate}/releases/{channel}.yaml', fields['body'])
-                self.assertIn('Consult the per-architecture validation records', fields['body'])
+                self.assertIn('verify GitHub asset sizes and SHA-256 digests', fields['body'])
                 self.assertNotIn('selection_sha256', fields)
                 self.assertNotIn('one tested platform combination', fields['body'])
                 prepare_notes.require_prepared(prepared, relative)

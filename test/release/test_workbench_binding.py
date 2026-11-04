@@ -27,7 +27,7 @@ class BindingTests(unittest.TestCase):
         self.version, self.sha = 'release-v1.2.3', 'b' * 40
         units = {unit: {'version': (unit + '-' if unit in ('runtime', 'vmlinux') else '') + 'v1.2.3',
                         'sha': 'c' * 40} for unit in artifacts.UNITS}
-        names = ['SHA256SUMS', 'platform-' + self.version + '.tar.gz']
+        names = ['platform-' + self.version + '.tar.gz']
         names += [artifacts.archive_name(unit, row['version'], arch) for unit, row in units.items() for arch in artifacts.ARCHES]
         names += ['workbench-' + arch + '-v1.2.3.tar.gz' for arch in artifacts.ARCHES]
         records = []
@@ -58,25 +58,15 @@ class BindingTests(unittest.TestCase):
         before = artifacts.tree_files(self.root / 'assets')
         binder.bind(self.root, self.plan, self.validation, self.results)
         self.assertEqual(artifacts.tree_files(self.root / 'assets'), before)
-        text = (self.root / 'release-notes.md').read_text()
-        self.assertTrue(text.startswith('Original notes\n'))
-        binding = json.loads(text.split('<!-- kuasar-integration-validation ')[1].split(' -->')[0])
-        self.assertEqual(binding['workbench'], self.results)
-        self.assertEqual(binding['case_files'], self.plan['case_files'])
-        self.assertEqual(binding['validation_plan'], self.plan)
-        self.assertEqual(artifacts.identity(binding['validation_plan']), binding['plan_id'])
-        with self.assertRaisesRegex(ValueError, 'registry identity'):
-            artifacts.check_registry_binding(self.version, binding)
-
-        binding['registry'] = registry_binding(self.version, self.results)
-        artifacts.check_registry_binding(self.version, binding)
-        binding['registry']['architectures']['x86_64']['image_id'] = 'sha256:' + '0' * 64
-        with self.assertRaisesRegex(ValueError, 'identity differs'):
-            artifacts.check_registry_binding(self.version, binding)
+        self.assertEqual((self.root / 'release-notes.md').read_text(), 'Original notes\n')
+        self.assertEqual(binder.verify_stage(self.root, self.plan, self.validation, self.results), self.results)
+        (self.root / 'assets' / next(iter(before))).write_bytes(b'changed after acceptance')
+        with self.assertRaisesRegex(ValueError, 'publisher bytes differ'):
+            binder.bind(self.root, self.plan, self.validation, self.results)
 
     def test_oversized_publication_preserves_original_notes_and_fails(self):
         notes = self.root / 'release-notes.md'
-        original = 'x' * binder.publication_body.MAX_CHARACTERS
+        original = 'x' * (binder.publication_body.MAX_CHARACTERS + 1)
         notes.write_text(original)
         with self.assertRaisesRegex(ValueError, 'must not be truncated'):
             binder.bind(self.root, self.plan, self.validation, self.results)
@@ -158,12 +148,12 @@ class BindingTests(unittest.TestCase):
 
     def test_explicit_hosted_arm_artifacts_bind_without_claiming_system_execution(self):
         results = self.artifact_only()
+        checked = binder.verify_stage(self.root, self.plan, self.validation, results)
         binder.bind(self.root, self.plan, self.validation, results)
-        binding = json.loads((self.root / 'release-notes.md').read_text().split(
-            '<!-- kuasar-integration-validation ')[1].split(' -->')[0])
-        self.assertEqual(binding['workbench']['aarch64']['cases'], [])
-        self.assertEqual(binding['workbench']['aarch64']['qualification_scope'], 'artifact-only')
-        self.assertEqual(binding['workbench']['x86_64']['qualification_scope'], 'system')
+        self.assertEqual(checked['aarch64']['cases'], [])
+        self.assertEqual(checked['aarch64']['qualification_scope'], 'artifact-only')
+        self.assertEqual(checked['x86_64']['qualification_scope'], 'system')
+        self.assertEqual((self.root / 'release-notes.md').read_text(), 'Original notes\n')
 
     def test_artifact_scope_is_never_inferred_or_accepted_as_system_proof(self):
         for key, value in [('qualification_scope', None), ('qualification_scope', 'system'),

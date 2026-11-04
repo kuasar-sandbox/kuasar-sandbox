@@ -115,7 +115,7 @@ class FrozenReleaseGates(unittest.TestCase):
             version=version, staged=True, delivery='workbench-v1', units={
                 unit:dict(repository=row['repository'],sha=row['sha'],version=row['tag'])
                 for unit,row in plan['source_records'].items()})
-        names={'SHA256SUMS','platform-'+version+'.tar.gz'}
+        names={'platform-'+version+'.tar.gz'}
         names.update(artifacts.archive_name(unit,tag,arch) for unit,tag in units.items() for arch in artifacts.ARCHES)
         names.update('workbench-'+arch+'-'+version.removeprefix('release-')+'.tar.gz' for arch in artifacts.ARCHES)
         plan['baseline']['assets']=[dict(name=name,size=1,digest='sha256:'+'a'*64) for name in sorted(names)]

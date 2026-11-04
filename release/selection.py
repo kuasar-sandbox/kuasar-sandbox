@@ -395,38 +395,24 @@ def resolve_record(
 ) -> tuple[str, str | None, dict[str, str]]:
     if AGGREGATE_RE.fullmatch(version) is None:
         fail("invalid aggregate version")
-    try:
-        validate_current_manifests(root)
-    except ManifestError as error:
-        fail(str(error))
-    preview = "-preview." in version
-    relative = pathlib.Path("releases/daily-preview.yaml" if preview else "releases/release.yaml")
+    preview = '-preview.' in version
+    relative = pathlib.Path('releases/daily-preview.yaml' if preview else 'releases/release.yaml')
+    tag_commit = git_commit(root, 'refs/tags/' + version)
+    if tag_commit is not None:
+        source = f'refs/tags/{version}:{relative.as_posix()}'
+        text = subprocess.check_output(['git', '-C', str(root), 'show', source], text=True)
+        selected, previous, units = parse_historical_manifest(text, source, preview)
+        if selected != version:
+            fail('aggregate tag does not select its own version: ' + version)
+        return tag_commit, previous, units
+    # Unpublished assembly may use the current admitted source tree. Historical
+    # versions must be materialized by their own tag, never first-parent main.
+    validate_current_manifests(root)
     path = root / relative
-    if not path.is_file():
-        fail(f"maintained release manifest is missing: {path}")
-
-    try:
-        current = parse_manifest(path.read_text(encoding="utf-8"), str(path), preview)
-    except ManifestError as error:
-        fail(str(error))
-    if current[0] == version:
-        return git_commit(root, "HEAD") or "", current[1], current[2]
-
-    history_ref = "HEAD"
-    if preview:
-        stable_ref = version.split("-preview.", 1)[0]
-        if git_commit(root, stable_ref) is not None:
-            history_ref = stable_ref
-    for commit, text in git_snapshots(root, relative, history_ref):
-        source = f"{commit}:{relative.as_posix()}"
-        try:
-            historical = parse_historical_manifest(text, source, preview)
-        except ManifestError:
-            # Commits before the two-file model are not release-state snapshots.
-            continue
-        if historical[0] == version:
-            return commit, historical[1], historical[2]
-    fail(f"aggregate selection not found in {relative.as_posix()} history: {version}")
+    current = parse_manifest(path.read_text(encoding='utf-8'), str(path), preview)
+    if current[0] != version:
+        fail(f'aggregate tag is not available locally: {version}; fetch that exact tag before resolving it')
+    return git_commit(root, 'HEAD') or '', current[1], current[2]
 
 
 def resolve(root: pathlib.Path, version: str) -> tuple[str | None, dict[str, str]]:
@@ -438,9 +424,10 @@ def resolve_config(root: pathlib.Path, version: str) -> dict[str, object]:
     commit, _, _ = resolve_record(root, version)
     preview = "-preview." in version
     relative = "releases/daily-preview.yaml" if preview else "releases/release.yaml"
-    text = (root / relative).read_text(encoding="utf-8")
-    if parse_manifest(text, relative, preview)[0] != version:
-        text = subprocess.check_output(["git", "-C", str(root), "show", f"{commit}:{relative}"], text=True)
+    if git_commit(root, 'refs/tags/' + version) is not None:
+        text = subprocess.check_output(['git', '-C', str(root), 'show', f'refs/tags/{version}:{relative}'], text=True)
+    else:
+        text = (root / relative).read_text(encoding='utf-8')
     return read_simple_yaml(text, relative)
 
 

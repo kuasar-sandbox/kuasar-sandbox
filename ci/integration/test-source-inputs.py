@@ -299,7 +299,7 @@ class FixedInputs(unittest.TestCase):
                     for entry in inputs.iterdir(): archive.add(entry, arcname=entry.name)
                 (stage / 'source-records.json').write_text(json.dumps(records))
                 (stage / 'selection.tsv').write_text(''.join(f'{unit}\t{tag}\n' for unit, tag in units.items()))
-                names = {'SHA256SUMS', 'platform-release-v1.2.3.tar.gz'}
+                names = {'platform-release-v1.2.3.tar.gz'}
                 for arch in artifacts.ARCHES:
                     names.add(resolver.release.selection.workbench_archive('release-v1.2.3', arch))
                     names.update(artifacts.archive_name(unit, tag, arch) for unit, tag in units.items())

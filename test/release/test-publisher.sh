@@ -27,17 +27,15 @@ mkdir -p "$TMP/bin" "$TMP/state"
 # Unit-only registry call double. Real registry identity checks are covered by
 # test_workbench_registry.py and require separate actual Preview acceptance.
 real_python=$(command -v python3)
-# The transport double below does not validate image receipts. Give this
-# publisher-only fixture the body shape produced by bind-validation.py.
+# Stage validation and registry transport are tested in Python; this fixture
+# exercises GitHub recovery with the same human notes and accepted asset list.
 cp -a "$BUNDLE" "$TMP/bundle"
 BUNDLE="$TMP/bundle"
-"$real_python" - "$BUNDLE/release-notes.md" <<'PY'
-import json, pathlib, sys
-notes = pathlib.Path(sys.argv[1])
-binding = {'delivery': 'workbench-v1', 'workbench': {
-    arch: {'image_id': 'sha256:' + '1' * 64, 'sha256': '2' * 64}
-    for arch in ('x86_64', 'aarch64')}}
-notes.write_text(notes.read_text() + '\n<!-- kuasar-integration-validation ' + json.dumps(binding) + ' -->\n')
+"$real_python" - "$BUNDLE" "$TMP/plan.json" <<'PY'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+assets = [dict(name=p.name, size=p.stat().st_size, digest='sha256:'+hashlib.sha256(p.read_bytes()).hexdigest()) for p in (root/'assets').iterdir()]
+pathlib.Path(sys.argv[2]).write_text(json.dumps({'baseline': {'assets': assets}}))
 PY
 cat > "$TMP/bin/python3" <<'PYTHON'
 #!/bin/bash
@@ -71,9 +69,9 @@ release_state() {
   draft="$(cat "$state/release-draft")"
   prerelease="$(cat "$state/release-prerelease" 2>/dev/null || printf false)"
   jq -cn --arg tag "$tag" --arg commit "$commit" --argjson draft "$draft" \
-    --argjson prerelease "$prerelease" --argjson assets "$assets" \
+    --argjson prerelease "$prerelease" --argjson assets "$assets" --rawfile body "$state/notes" \
     '{id: 77, tag_name: $tag, target_commitish: $commit, draft: $draft,
-      prerelease: $prerelease, assets: $assets}'
+      prerelease: $prerelease, assets: $assets, body: $body}'
 }
 
 emit() {
@@ -110,6 +108,9 @@ if [ "${1:-}" = api ]; then
       [ -f "$state/tag" ] || not_found
       emit "$(jq -cn --arg sha "$(cat "$state/tag")" '{object: {sha: $sha}}')" "$filter"
       ;;
+    "GET repos/$repository/commits/$tag")
+      emit "$(jq -cn --arg sha "$(cat "$state/tag")" '{sha: $sha}')" "$filter"
+      ;;
     "POST repos/$repository/git/refs")
       [ "$(jq -er '.ref' "$request")" = "refs/tags/$tag" ] || exit 2
       jq -er '.sha' "$request" > "$state/tag"
@@ -143,6 +144,7 @@ if [ "${1:-}" = api ]; then
       ;;
     "PATCH repos/$repository/releases/77")
       if jq -e 'has("body") and (has("draft") | not)' "$request" >/dev/null; then
+        jq -j .body "$request" > "$state/notes"
         emit "$(release_state)" "$filter"
         exit 0
       fi
@@ -174,7 +176,8 @@ if [ "${1:-}" = release ] && [ "${2:-}" = upload ]; then
         printf '%s\n' "$name" >> "$state/uploaded-on-retry"
         jq -cn --arg name "$name" --arg digest "sha256:$(sha256sum "$file" | awk '{print $1}')" \
           --argjson size "$(stat -c '%s' "$file")" \
-          '{name:$name,digest:$digest,size:$size,state:"uploaded"}' >> "$state/assets.ndjson"
+          --argjson id "$(( $(wc -l < "$state/assets.ndjson") + 100 ))" \
+          '{id:$id,name:$name,digest:$digest,size:$size,state:"uploaded"}' >> "$state/assets.ndjson"
         shift ;;
     esac
   done
@@ -188,14 +191,16 @@ if [ "${1:-}" = release ] && [ "${2:-}" = create ]; then
   : > "$state/assets.ndjson"
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --repo|--target|--title|--notes-file) shift 2 ;;
+      --notes-file) cp "$2" "$state/notes"; shift 2 ;;
+      --repo|--target|--title) shift 2 ;;
       --draft|--verify-tag) shift ;;
       *)
         file="$1"
         jq -cn --arg name "$(basename "$file")" \
           --arg digest "sha256:$(sha256sum "$file" | awk '{print $1}')" \
           --argjson size "$(stat -c '%s' "$file")" \
-          '{name: $name, digest: $digest, size: $size, state: "uploaded"}' \
+          --argjson id "$(( $(wc -l < "$state/assets.ndjson") + 100 ))" \
+          '{id:$id,name: $name, digest: $digest, size: $size, state: "uploaded"}' \
           >> "$state/assets.ndjson"
         shift
         ;;
@@ -219,6 +224,9 @@ chmod +x "$TMP/bin/gh"
 common_env=(
   PATH="$TMP/bin:$PATH"
   GH_REPO="$REPOSITORY"
+  RELEASE_PLAN_FILE="$TMP/plan.json"
+  RELEASE_VALIDATION_FILE="$TMP/validation.json"
+  RELEASE_WORKBENCH_RESULTS="$TMP/workbench"
   FAKE_GH_STATE="$TMP/state"
   FAKE_GH_REPOSITORY="$REPOSITORY"
   FAKE_GH_TAG="$TAG"
@@ -230,22 +238,13 @@ cp "$BUNDLE/release-notes.md" "$TMP/notes"
 "$real_python" - "$BUNDLE/release-notes.md" <<'PY'
 import json, pathlib, sys
 notes = pathlib.Path(sys.argv[1])
-marker = '<!-- kuasar-integration-validation '
-prefix, payload = notes.read_text().split(marker)
-binding = json.loads(payload.split(' -->')[0])
-# Inflate only this publisher-transport double's machine record. The human
-# prefix must remain byte-for-byte equal to the committed manifest body.
-binding['fixture_padding'] = ''
-render = lambda: prefix + marker + json.dumps(binding) + ' -->\n'
-binding['fixture_padding'] = 'x' * (125000 - len(render()))
-assert len(render()) == 125000
-notes.write_text(render())
+notes.write_text('Human notes.\n' + 'x' * 125001)
 PY
 if env "${common_env[@]}" "$PUBLISHER" publish \
   "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF" > "$TMP/oversize.log" 2>&1; then
-  echo 'test-publisher: accepted body without capacity for registry proof' >&2; exit 1
+  echo 'test-publisher: accepted oversized human notes' >&2; exit 1
 fi
-grep -Fq 'evidence must not be truncated' "$TMP/oversize.log"
+grep -Fq 'notes must not be truncated' "$TMP/oversize.log"
 for state in tag registry-calls release-draft; do
   [ ! -e "$TMP/state/$state" ] \
     || { echo "test-publisher: oversized body caused $state mutation" >&2; exit 1; }
@@ -259,14 +258,14 @@ fi
 [ "$(cat "$TMP/state/release-draft")" = true ] \
   || { echo "test-publisher: interrupted publish did not leave a draft" >&2; exit 1; }
 cp "$TMP/state/assets.ndjson" "$TMP/original-assets"
-registry_calls=$(wc -l < "$TMP/state/registry-calls")
+registry_calls=$(grep -vc -- --validate-only "$TMP/state/registry-calls")
 jq -sc '.[0].digest = "sha256:wrong" | .[]' "$TMP/original-assets" > "$TMP/state/assets.ndjson"
 if env "${common_env[@]}" "$PUBLISHER" publish \
   "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF" > "$TMP/conflict.log" 2>&1; then
   echo 'test-publisher: accepted conflicting existing asset bytes' >&2; exit 1
 fi
 grep -Fq 'existing draft asset differs' "$TMP/conflict.log"
-[ "$(wc -l < "$TMP/state/registry-calls")" = "$registry_calls" ]
+[ "$(grep -vc -- --validate-only "$TMP/state/registry-calls")" = "$registry_calls" ]
 [ "$(cat "$TMP/state/release-draft")" = true ]
 missing=$(tail -n 1 "$TMP/original-assets" | jq -r .name)
 head -n -1 "$TMP/original-assets" > "$TMP/state/assets.ndjson"
@@ -287,5 +286,17 @@ if env "${common_env[@]}" "$PUBLISHER" check "$TAG" >/dev/null 2>&1; then
   echo "test-publisher: preflight accepted an already published release" >&2
   exit 1
 fi
+
+# A finalization response can be lost after the Release became public.
+# The original successful stage must converge by verification, without edits.
+cp "$TMP/state/assets.ndjson" "$TMP/public-assets"
+env "${common_env[@]}" "$PUBLISHER" publish "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF"
+cmp "$TMP/public-assets" "$TMP/state/assets.ndjson"
+tail -n 1 "$TMP/state/registry-calls" | grep -Fq -- --read-only
+printf 'changed human notes' > "$TMP/state/notes"
+if env "${common_env[@]}" "$PUBLISHER" publish "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF" > "$TMP/public-conflict.log" 2>&1; then
+  echo 'test-publisher: accepted a different published body' >&2; exit 1
+fi
+grep -Fq 'published Release differs from the original stage' "$TMP/public-conflict.log"
 
 echo "test-publisher: PASS"

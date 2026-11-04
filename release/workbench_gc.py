@@ -15,33 +15,18 @@ PACKAGE = 'orgs/kuasar-sandbox/packages/container/workbench'
 SOURCE = 'https://github.com/' + coordinator.PLATFORM_REPOSITORY
 
 
-def protected_digests(releases, target):
-    protected = set()
-    for release in releases:
-        if release.get('tag_name') == target:
-            continue
-        text = release.get('body') or ''
-        if registry.MARKER not in text:
-            continue
-        registry.require(text.count(registry.MARKER) == 1, 'ambiguous live release validation binding')
-        binding = json.loads(text.split(registry.MARKER)[1].split(' -->')[0])
-        proof = binding.get('registry')
-        if proof is None:
-            continue  # Historical releases predate workbench publication.
-        registry.require(proof.get('reference', '').startswith(registry.REPOSITORY + ':'), 'foreign live registry binding')
-        protected.add(proof['digest'])
-        protected.update(item['digest'] for item in proof['architectures'].values())
-    return protected
-
-
-def candidates(versions, version, protected):
+def owned_tags(version):
     tag = version.removeprefix('release-')
-    owned = {tag, *(tag + '-' + arch for arch in registry.PLATFORMS)}
+    return {tag, *(tag + '-' + arch for arch in registry.PLATFORMS)}
+
+
+def candidates(versions, version, protected, descendants=()):
+    owned = owned_tags(version)
     result, retained = [], []
     for item in versions:
         tags = set(item.get('metadata', {}).get('container', {}).get('tags', []))
-        if not tags & owned:
-            continue  # Never infer ownership of untagged or unrelated versions.
+        if not tags & owned and item['name'] not in descendants:
+            continue  # Untagged images need an observed target parent in this run.
         registry.require(isinstance(item.get('id'), int) and item['id'] > 0
                          and re.fullmatch(r'sha256:[0-9a-f]{64}', item.get('name', '')), 'invalid owned package version')
         if tags - owned or item['name'] in protected:
@@ -70,6 +55,8 @@ def verify_source(identity, version, revision, auth, *, allow_index=True):
         raw_config = registry.inspect_raw(registry.REPOSITORY + '@' + identity, auth, config=True)
         registry.require(document.get('config', {}).get('digest') == registry.digest(raw_config), 'GC config identity differs')
         config = json.loads(raw_config)
+        registry.require(config.get('os') == 'linux' and config.get('architecture') in registry.PLATFORMS.values(),
+                         'owned image has an unexpected platform')
         labels = config.get('config', {}).get('Labels', {})
         registry.require(labels.get('org.opencontainers.image.source') == SOURCE
                          and labels.get('org.opencontainers.image.version') == version
@@ -77,13 +64,17 @@ def verify_source(identity, version, revision, auth, *, allow_index=True):
                          'refusing to delete an image from another source/version')
 
 
-def shared_closure(versions, version, protected, auth):
-    tag = version.removeprefix('release-')
-    owned = {tag, *(tag + '-' + arch for arch in registry.PLATFORMS)}
+def shared_closure(versions, version, protected, auth, *, scope=None):
+    owned = owned_tags(version)
+    if scope is None:
+        scope = {item['name'] for item in versions
+                 if set(item.get('metadata', {}).get('container', {}).get('tags', [])) & owned}
     protected = set(protected)
     for item in versions:
         tags = set(item.get('metadata', {}).get('container', {}).get('tags', []))
-        if tags - owned:
+        # Include tagless, non-target indexes as protection roots. This broadens
+        # protection, never the deletion scope.
+        if tags - owned or item['name'] not in scope:
             protected.add(item['name'])
     # A shared multiarch parent protects its children even when those children
     # still carry only this Preview's architecture tags.
@@ -114,8 +105,6 @@ def collect(version, revision):
         return {'deleted': [], 'retained_shared': []}
     registry.require(package.get('repository', {}).get('full_name') == coordinator.PLATFORM_REPOSITORY,
                      'workbench registry package is not owned by the platform repository')
-    releases = coordinator.paginated(f'repos/{coordinator.PLATFORM_REPOSITORY}/releases?per_page=100')
-    protected = protected_digests(releases, version)
     versions = coordinator.paginated(PACKAGE + '/versions?per_page=100')
     token, actor = os.environ.get('GH_TOKEN'), os.environ.get('GITHUB_ACTOR')
     registry.require(token and actor, 'registry GC needs the package-authorized job identity')
@@ -123,25 +112,54 @@ def collect(version, revision):
         auth = Path(directory) / 'config.json'
         auth.write_text(json.dumps({'auths': {'ghcr.io': {'auth': base64.b64encode((actor + ':' + token).encode()).decode()}}}))
         auth.chmod(0o600)
-        protected = shared_closure(versions, version, protected, auth)
-        pending, retained = candidates(versions, version, protected)
+        tagged, retained = candidates(versions, version, set())
+        descendants, indexes = set(), set()
+        # Only exact target tags and children of their observed indexes may be
+        # deleted. Existing untagged orphans are deliberately left alone.
+        for item in tagged:
+            raw = registry.inspect_raw(registry.REPOSITORY + '@' + item['name'], auth)
+            registry.require(registry.digest(raw) == item['name'], 'registry GC manifest identity differs')
+            document = json.loads(raw)
+            if 'manifests' in document:
+                indexes.add(item['name'])
+                descendants.update(row['digest'] for row in document['manifests'])
+        pending, shared = candidates(versions, version, set(), descendants)
+        retained.extend(shared)
+        scope = {item['name'] for item in pending}
+        protected = shared_closure(versions, version, set(), auth, scope=scope)
+        pending, shared = candidates(pending, version, protected, descendants)
+        retained.extend(shared)
         # Validate every selected image before deleting any. Shared versions are
         # retained whole: the package API cannot safely delete only one tag.
         for item in pending:
             verify_source(item['name'], version, revision, auth)
-        deleted = []
-        for item in pending:
+        deleted, retained_roots = [], set()
+        for item in sorted(pending, key=lambda row: (row['name'] not in indexes, row['id'])):
             # Re-read tags just before deletion; a newly shared version is no
             # longer ours to remove. Never use a registry-wide prune operation.
-            current = coordinator.api(PACKAGE + '/versions/' + str(item['id']))
-            fresh, shared = candidates([current], version, protected)
+            current_versions = coordinator.paginated(PACKAGE + '/versions?per_page=100')
+            current_candidates, _ = candidates(current_versions, version, set(), descendants)
+            current_scope = scope & {row['name'] for row in current_candidates}
+            protected = shared_closure(current_versions, version, retained_roots, auth, scope=current_scope)
+            endpoint = PACKAGE + '/versions/' + str(item['id'])
+            current = coordinator.api_optional(endpoint)
+            if current is None:
+                deleted.append(item['id'])
+                continue
+            fresh, shared = candidates([current], version, protected, descendants)
             if shared or not fresh:
                 retained.append(item['id'])
+                # The detail endpoint may observe a new shared/tagless parent
+                # before pagination does. Protect its descendants for this run.
+                retained_roots.add(current['name'])
                 continue
             registry.require(current['name'] == item['name'], 'package identity changed before deletion')
-            coordinator.gh('api', '--method', 'DELETE', PACKAGE + '/versions/' + str(item['id']), '--silent')
+            result = coordinator.gh('api', '--method', 'DELETE', endpoint, '--silent', check=False)
+            registry.require(result.returncode == 0 or '(HTTP 404)' in result.stderr,
+                             result.stderr.strip() or 'registry deletion failed')
+            registry.require(coordinator.api_optional(endpoint) is None, 'registry version still exists after deletion')
             deleted.append(item['id'])
-    return {'deleted': deleted, 'retained_shared': retained}
+    return {'deleted': deleted, 'retained_shared': sorted(set(retained))}
 
 
 if __name__ == '__main__':

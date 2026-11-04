@@ -419,7 +419,7 @@ jobs:
           pattern: integration-workbench-result-*-${{ github.run_id }}
           path: workbench-results
           merge-multiple: true
-      - name: Bind publication to the tested bytes
+      - name: Verify tested bytes and read committed release notes
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -427,6 +427,7 @@ jobs:
           mv fixed-inputs/platform platform
           workbench_results=workbench-results
           if [ -d validated/workbench ]; then workbench_results=validated/workbench; fi
+          printf "RELEASE_WORKBENCH_RESULTS=%s/%s\n" "$PWD" "$workbench_results" >> "$GITHUB_ENV"
           python3 -B release/bind-validation.py aggregate-stage validated/plan/plan.json validated/validation.json --workbench "$workbench_results"
 
       - name: Install registry transfer tooling
@@ -440,6 +441,8 @@ jobs:
           SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
           PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
           VALIDATION_ONLY: ${{ inputs.validation_only }}
+          RELEASE_PLAN_FILE: ${{ github.workspace }}/validated/plan/plan.json
+          RELEASE_VALIDATION_FILE: ${{ github.workspace }}/validated/validation.json
         run: |
           set -euo pipefail
           [ "$(git -C "$PLATFORM_SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_SHA" ] \
@@ -454,7 +457,8 @@ jobs:
               release/publish-release.sh check "$VERSION"
               bash release/aggregate-release.sh validate "$VERSION" aggregate-stage
               python3 -B release/publication_body.py aggregate-stage/release-notes.md
-              python3 -B release/workbench_registry.py aggregate-stage "$VERSION" "$SOURCE_SHA" --validate-only
+              python3 -B release/workbench_registry.py aggregate-stage "$VERSION" "$SOURCE_SHA" --validate-only \
+                --plan "$RELEASE_PLAN_FILE" --validation "$RELEASE_VALIDATION_FILE" --workbench "$RELEASE_WORKBENCH_RESULTS"
               release/publish-release.sh check "$VERSION"
               echo 'Validation-only acceptance completed; no release or registry publication was requested.'
               ;;

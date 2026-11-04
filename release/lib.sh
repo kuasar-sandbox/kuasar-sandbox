@@ -158,3 +158,11 @@ assert_safe_output() {
   fi
   [ ! -e "$output" ] || release_fail "output already exists: $output"
 }
+
+# Historical selection always comes from the immutable aggregate tag.
+ensure_aggregate_tag() {
+  local root="$1" version="$2"
+  if ! git -C "$root" rev-parse --verify "refs/tags/$version^{commit}" >/dev/null 2>&1; then
+    git -C "$root" fetch --no-tags --depth=1 origin "refs/tags/$version:refs/tags/$version"
+  fi
+}

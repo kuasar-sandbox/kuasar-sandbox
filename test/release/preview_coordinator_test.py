@@ -39,6 +39,9 @@ FORMAL_SPEC.loader.exec_module(formal)
 
 
 class PreviewCoordinatorTest(unittest.TestCase):
+    def setUp(self):
+        coordinator._cleanup_dispatches.clear()
+
     @staticmethod
     def binding_body(
         unit: str, source_sha: str, dependencies: str = ""
@@ -303,17 +306,13 @@ class PreviewCoordinatorTest(unittest.TestCase):
                 "fixture", True,
             )
 
-    def test_preview_reuse_requires_the_exact_revision(self) -> None:
+    def test_preview_reuse_ignores_obsolete_aggregate_marker(self) -> None:
         tag = "v1.2.3-preview.20260914.1"
         plan = coordinator.Plan(coordinator.UNIT_BY_NAME["accelerator"], tag, "main", "a" * 40, tag, tag, "reuse")
         body = self.binding_body("accelerator", plan.source_sha).replace("20260831", "20260914.1")
         for suffix in ("20260914.1", "20260914x1", "20260914.2"):
             status = coordinator.ReleaseStatus({"body": body.replace("20260914.1", suffix)}, plan.source_sha, True)
-            if suffix == "20260914.1":
-                coordinator.validate_preview_reuse(plan, {"accelerator": plan}, status)
-            else:
-                with self.assertRaisesRegex(coordinator.Deferred, "aggregate provenance"):
-                    coordinator.validate_preview_reuse(plan, {"accelerator": plan}, status)
+            coordinator.validate_release_reuse(plan, status)
 
     def test_cancelled_workflow_uses_full_rerun(self) -> None:
         state = {"id": 17, "conclusion": "cancelled"}
@@ -697,6 +696,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
                     {"name": "SHA256SUMS", "state": "uploaded"},
                     {
                         "name": "sandbox-runtime-x86_64-v1.2.3-preview.20260831.tar.gz",
+                        "id": 21, "size": 50, "digest": "sha256:" + "a" * 64,
                         "state": "uploaded",
                     },
                 ],
@@ -704,6 +704,16 @@ class PreviewCoordinatorTest(unittest.TestCase):
         }
         status = state.status("runtime-v1.2.3-preview.20260831")
         self.assertTrue(status.complete)
+        # Old checksum attachments and source/dependency prose are irrelevant.
+        state._statuses.clear()
+        release = state.releases['runtime-v1.2.3-preview.20260831']
+        release['assets'] = [row for row in release['assets'] if row['name'] != 'SHA256SUMS']
+        release.update(body='<!-- kuasar-preview-binding malformed old data -->', target_commitish='main')
+        self.assertTrue(state.status('runtime-v1.2.3-preview.20260831').complete)
+        state._statuses.clear()
+        release['assets'][0]['digest'] = None
+        with self.assertRaisesRegex(coordinator.Deferred, 'retain for inspection'):
+            state.status('runtime-v1.2.3-preview.20260831')
 
     def test_platform_assets_are_derived_from_exact_manifest_commit(self) -> None:
         manifest = """version: release-v9.8.7
@@ -723,7 +733,7 @@ components:
                 "release-v9.8.7-preview.20260831", "d" * 40
             )
         self.assertIn("?ref=release-v9.8.7-preview.20260831", contents.call_args.args[0])
-        self.assertEqual(len(assets), 8)
+        self.assertEqual(len(assets), 7)
         self.assertIn("connector-v1.0.2-linux-x86_64.tar.gz", assets)
         self.assertIn("sandbox-runtime-x86_64-v1.0.5.tar.gz", assets)
 
@@ -832,8 +842,7 @@ components:
                                 plan, {"vmlinux": plan}, "unused", "f" * 40
                             ))
                             released.release["body"] = self.binding_body("vmlinux", head_sha)
-                            with self.assertRaisesRegex(coordinator.Deferred, "another source binding"):
-                                coordinator.ensure_unit(plan, {"vmlinux": plan}, "unused", "f" * 40)
+                            self.assertTrue(coordinator.ensure_unit(plan, {"vmlinux": plan}, "unused", "f" * 40))
                         github.assert_not_called()
                 finally:
                     repository.close()
@@ -925,32 +934,16 @@ components:
             self.assertEqual(plan.selected, "v1.0.1-preview.20260921")
             self.assertEqual(plan.winner, "v1.0.0")
 
-    def test_dependency_cli_changes_reuse_linked_product_but_library_changes_do_not(self) -> None:
-        repository = selection_fixtures.Repository()
-        self.addCleanup(repository.close)
-        old = repository.commit_files("library", {"pkg/flatten/input.go": "old"})
-        current = repository.commit_files("independent CLI", {"cmd/cache-ctl/main.go": "new"})
-        tag = "runtime-v1.0.1-preview.20260831"
-        plan = coordinator.Plan(coordinator.UNIT_BY_NAME["runtime"], tag, "main", "a" * 40, tag, tag, "reuse")
-        plans = {
-            name: coordinator.Plan(coordinator.UNIT_BY_NAME[name], "v1.0.0", "main", current,
-                                   "v1.0.0", "v1.0.1", "reuse")
-            for name in ("accelerator", "sandboxer")
-        }
-        binding = "accelerator=v1.0.0,sandboxer=v1.0.1"
-        status = coordinator.ReleaseStatus({"body": self.binding_body("runtime", plan.source_sha, binding)}, plan.source_sha, True)
-        state = mock.Mock()
-        state.status.return_value = coordinator.ReleaseStatus({}, old, True)
-        with tempfile.TemporaryDirectory() as directory, mock.patch.object(coordinator, "RepositoryState", return_value=state):
-            root = pathlib.Path(directory)
-            (root / "accelerator").symlink_to(repository.root, target_is_directory=True)
-            verified = coordinator.verify_dependency_reuse(plan, plans, status, root)
-            coordinator.validate_preview_reuse(verified, plans, status)
-            self.assertEqual(verified.verified_dependency_binding, binding)
-            changed = repository.commit_files("linked implementation", {"pkg/flatten/input.go": "changed"})
-            plans["accelerator"] = coordinator.replace(plans["accelerator"], source_sha=changed)
-            with self.assertRaisesRegex(coordinator.Deferred, "linked inputs differ"):
-                coordinator.verify_dependency_reuse(plan, plans, status, root)
+    def test_published_dependency_reuse_does_not_read_source_or_history(self):
+        tag = 'runtime-v1.0.1-preview.20260831'
+        plan = coordinator.Plan(coordinator.UNIT_BY_NAME['runtime'], tag, 'main', 'a' * 40, tag, tag, 'reuse')
+        for body in ('Human notes.', self.binding_body('runtime', 'b' * 40, 'obsolete=version')):
+            status = coordinator.ReleaseStatus({'body': body}, plan.source_sha, True)
+            with mock.patch.object(coordinator, 'api', side_effect=AssertionError('historical query')), mock.patch.object(
+                    coordinator.preview_selection, 'run_git', side_effect=AssertionError('historical sources')):
+                coordinator.validate_release_reuse(plan, status)
+        with self.assertRaisesRegex(coordinator.Deferred, 'tag changed'):
+            coordinator.validate_release_reuse(plan, coordinator.ReleaseStatus({}, 'b' * 40, True))
 
     def test_dependency_inputs_handle_an_unpublished_configured_preview(self) -> None:
         repository = selection_fixtures.Repository()
@@ -1011,22 +1004,17 @@ components:
         self.assertEqual(plan.selected, tag)
         self.assertEqual(plan.action, "reuse")
 
-    def test_resumed_complete_preview_with_wrong_dependencies_stays_deferred(self) -> None:
-        tag = "v1.0.1-preview.20260831"
-        with self.assertRaisesRegex(coordinator.Deferred, "dependency binding"):
-            self.resumed_preview_plan(
-                "orchestrator", tag, tag, "20260831", complete=True
-            )
+    def test_resumed_complete_preview_ignores_old_dependency_marker(self):
+        tag = 'v1.0.1-preview.20260831'
+        plan = self.resumed_preview_plan('orchestrator', tag, tag, '20260831', complete=True)
+        self.assertEqual((plan.selected, plan.action), (tag, 'reuse'))
 
-    def test_pending_preview_does_not_revive_an_older_or_unrelated_version(self) -> None:
-        for configured in (
-            "v1.0.1-preview.20260829", "v1.0.2-preview.20260831",
-        ):
+    def test_pending_preview_does_not_revive_an_older_or_unrelated_version(self):
+        winner = 'v1.0.1-preview.20260830'
+        for configured in ('v1.0.1-preview.20260829', 'v1.0.2-preview.20260831'):
             with self.subTest(configured=configured):
-                with self.assertRaisesRegex(coordinator.Deferred, "dependency binding"):
-                    self.resumed_preview_plan(
-                        "orchestrator", "v1.0.1-preview.20260830", configured, "20260831"
-                    )
+                plan = self.resumed_preview_plan('orchestrator', winner, configured, '20260831')
+                self.assertEqual((plan.selected, plan.action), (winner, 'reuse'))
 
     def test_pending_preview_does_not_rebuild_a_unit_without_dependencies(self) -> None:
         plan = self.resumed_preview_plan(
@@ -1261,82 +1249,22 @@ notes:
             "connector=v1.0.1-preview.20260831]",
         )
 
-    def test_preview_reuse_rejects_another_dependency_binding(self) -> None:
-        accelerator = coordinator.Plan(
-            coordinator.UNIT_BY_NAME["accelerator"],
-            "v1.0.0",
-            "main",
-            "a" * 40,
-            "v1.0.1-preview.20260831",
-            "v1.0.1-preview.20260831",
-            "reuse",
-        )
-        connector = coordinator.Plan(
-            coordinator.UNIT_BY_NAME["connector"],
-            "v1.0.0",
-            "main",
-            "b" * 40,
-            "v1.0.1-preview.20260831",
-            "v1.0.1-preview.20260831",
-            "reuse",
-        )
-        sandboxer = coordinator.Plan(
-            coordinator.UNIT_BY_NAME["sandboxer"],
-            "v2.0.1-preview.20260831",
-            "main",
-            "c" * 40,
-            "v2.0.1-preview.20260831",
-            "v2.0.1-preview.20260831",
-            "reuse",
-        )
-        status = coordinator.ReleaseStatus(
-            {
-                "body": self.binding_body(
-                    "sandboxer",
-                    sandboxer.source_sha,
-                    "accelerator=v1.0.1-preview.20260831,connector=v1.0.0",
-                )
-            },
-            sandboxer.source_sha,
-            True,
-        )
-        with self.assertRaisesRegex(coordinator.Deferred, "dependency binding"):
-            coordinator.validate_preview_reuse(
-                sandboxer,
-                {
-                    "accelerator": accelerator,
-                    "connector": connector,
-                    "sandboxer": sandboxer,
-                },
-                status,
-            )
 
-    def test_cleanup_does_not_start_a_fourth_attempt(self) -> None:
-        unit = coordinator.UNIT_BY_NAME["connector"]
-        plan = coordinator.Plan(
-            unit,
-            "v1.2.3-preview.20260831",
-            "main",
-            "c" * 40,
-            "v1.2.3-preview.20260831",
-            "v1.2.3-preview.20260831",
-            "cleanup",
-        )
-        failed = {
-            "status": "completed",
-            "conclusion": "failure",
-            "run_attempt": 3,
-            "html_url": "https://example.invalid/run/1",
-        }
-        with (
-            mock.patch.object(coordinator, "active_delete_run", return_value=None),
-            mock.patch.object(coordinator, "latest_run", return_value=failed),
-            mock.patch.object(coordinator, "gh") as gh,
-            self.assertRaisesRegex(RuntimeError, "three attempts") as failure,
-        ):
-            coordinator.dispatch_cleanup(plan, "incomplete")
-        self.assertIs(type(failure.exception), RuntimeError)
-        gh.assert_not_called()
+    def test_cleanup_budget_is_local_to_current_invocation(self):
+        tag = 'v1.2.3-preview.20260831'
+        plan = coordinator.Plan(coordinator.UNIT_BY_NAME['connector'], tag, 'main', 'c'*40, tag, tag, 'cleanup')
+        failed = dict(status='completed', conclusion='failure', run_attempt=99)
+        with mock.patch.object(coordinator, 'active_delete_run', return_value=None), mock.patch.object(
+                coordinator, 'latest_run', return_value=failed), mock.patch.object(coordinator, 'gh') as gh:
+            for _ in range(3):
+                with self.assertRaises(coordinator.Pending): coordinator.dispatch_cleanup(plan, 'incomplete')
+            with self.assertRaisesRegex(RuntimeError, 'three attempts in this invocation'):
+                coordinator.dispatch_cleanup(plan, 'incomplete')
+            self.assertEqual(gh.call_count, 3)
+            coordinator._cleanup_dispatches.clear()
+            with self.assertRaises(coordinator.Pending): coordinator.dispatch_cleanup(plan, 'incomplete')
+            self.assertEqual(gh.call_count, 4)
+            self.assertEqual(gh.call_args.args[:3], ('workflow', 'run', 'delete-preview.yml'))
 
     def test_component_publication_retry_exhaustion_is_a_failure(self) -> None:
         tag = "v1.2.3-preview.20260909"
@@ -1363,23 +1291,17 @@ notes:
         self.assertIs(type(failure.exception), RuntimeError)
         gh.assert_not_called()
 
-    def test_platform_cleanup_retry_exhaustion_is_a_failure(self) -> None:
-        failed = {
-            "status": "completed", "conclusion": "failure", "run_attempt": 3,
-            "html_url": "https://example.invalid/run/1",
-        }
-        with (
-            mock.patch.object(coordinator, "active_aggregate_run", return_value=None),
-            mock.patch.object(coordinator, "active_delete_run", return_value=None),
-            mock.patch.object(coordinator, "latest_run", return_value=failed),
-            mock.patch.object(coordinator, "gh") as gh,
-            self.assertRaisesRegex(RuntimeError, "three attempts") as failure,
-        ):
-            coordinator.dispatch_platform_cleanup(
-                "release-v1.2.3-preview.20260909", "b" * 40
-            )
-        self.assertIs(type(failure.exception), RuntimeError)
-        gh.assert_not_called()
+    def test_platform_cleanup_old_failures_do_not_prevent_current_attempts(self):
+        tag = 'release-v1.2.3-preview.20260909'
+        failed = dict(status='completed', conclusion='failure', run_attempt=99)
+        with mock.patch.object(coordinator, 'active_aggregate_run', return_value=None), mock.patch.object(
+                coordinator, 'active_delete_run', return_value=None), mock.patch.object(
+                coordinator, 'latest_run', return_value=failed), mock.patch.object(coordinator, 'gh') as gh:
+            for _ in range(3):
+                with self.assertRaises(coordinator.Pending): coordinator.dispatch_platform_cleanup(tag, 'b'*40)
+            with self.assertRaisesRegex(RuntimeError, 'three attempts in this invocation'):
+                coordinator.dispatch_platform_cleanup(tag, 'b'*40)
+            self.assertEqual(gh.call_count, 3)
 
     def test_cancelled_cleanup_is_retried_after_concurrency_coalescing(self) -> None:
         plan = coordinator.Plan(
@@ -1402,16 +1324,11 @@ notes:
             mock.patch.object(coordinator, "active_delete_run", return_value=None),
             mock.patch.object(coordinator, "latest_run", return_value=cancelled),
             mock.patch.object(coordinator, "gh") as gh,
-            self.assertRaisesRegex(coordinator.Pending, "reran cleanup"),
+            self.assertRaisesRegex(coordinator.Pending, "redispatched"),
         ):
             coordinator.dispatch_cleanup(plan, "incomplete")
-        gh.assert_called_once_with(
-            "run",
-            "rerun",
-            "23",
-            "--repo",
-            plan.unit.repository,
-        )
+        gh.assert_called_once_with('workflow', 'run', 'delete-preview.yml', '--repo', plan.unit.repository,
+            '--ref', 'main', '-f', f'version={plan.selected}', '-f', f'source_sha={plan.source_sha}', '-f', 'mode=incomplete')
 
     def test_cancelled_publication_is_retried_after_mutation_coalescing(self) -> None:
         plan = coordinator.Plan(

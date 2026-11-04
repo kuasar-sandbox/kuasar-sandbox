@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind release notes to the exact staged bytes and both successful architecture selections."""
+"""Verify this publication stage, then copy its committed human release notes."""
 import argparse
 import json
 from pathlib import Path
@@ -13,7 +13,7 @@ import publication_body
 import release_notes
 
 
-def bind(bundle, plan, validation, workbench=None, *, platform=None):
+def verify_stage(bundle, plan, validation, workbench):
     artifacts.require(plan["mode"] == "exact-assets" and plan["baseline"].get("staged"), "release needs a staged exact-assets plan")
     artifacts.require(validation == artifacts.collect_results(plan, validation["architectures"]), "validation identity differs from staged plan")
     artifacts.require(plan.get('source_records') is not None, 'new publication requires selected tag source records')
@@ -22,32 +22,27 @@ def bind(bundle, plan, validation, workbench=None, *, platform=None):
     expected = {record["name"]: record["digest"] for record in plan["baseline"]["assets"]}
     actual = {name: "sha256:" + value for name, value in artifacts.tree_files(bundle / "assets").items()}
     artifacts.require(actual == expected, "publisher bytes differ from validated stage")
-    notes = bundle / "release-notes.md"
-    text = notes.read_text()
-    artifacts.require("<!-- kuasar-integration-validation " not in text, "reserved validation marker already present")
-    binding = {"aggregate_sha": plan["baseline"]["sha"], "plan_id": artifacts.identity(plan),
-               "framework_sha": plan["framework_sha"], "test_revisions": plan["test_revisions"],
-               "source_records": plan['source_records'], "case_files": plan['case_files'],
-               "validation_plan": plan,
-               "assets": {name: value for name, value in actual.items() if name != "SHA256SUMS"},
-               "architectures": validation["architectures"]}
     artifacts.require(plan['baseline'].get('delivery') == 'workbench-v1', 'new publication requires the declared workbench delivery contract')
-    binding['delivery'] = 'workbench-v1'
-    binding['workbench'] = artifacts.check_workbench_results(plan['baseline']['version'], plan['baseline']['sha'], workbench,
-                                                           expected_assets=binding['assets'], case_files=plan['case_files'])
-    for arch, result in binding['workbench'].items():
+    results = artifacts.check_workbench_results(plan['baseline']['version'], plan['baseline']['sha'], workbench,
+                                                expected_assets=actual, case_files=plan['case_files'])
+    for arch, result in results.items():
         workbench_groups.verify_live(result)
         artifacts.require(result['plan_id'] == artifacts.identity(plan) and result['framework_sha'] == plan['framework_sha']
                           and result['test_revisions'] == plan['test_revisions'], 'workbench executor provenance differs from plan')
         receipt = json.loads((bundle / 'workbench' / f'workbench-{arch}.json').read_text())
         artifacts.require(result['image_id'] == receipt['image_id'] and result['sha256'] == receipt['sha256'] and result['size'] == receipt['size'],
                           'workbench result differs from staged image receipt')
+    return results
+
+
+def bind(bundle, plan, validation, workbench=None, *, platform=None):
+    verify_stage(bundle, plan, validation, workbench)
     version = plan['baseline']['version']
     units = {unit: row['version'] for unit, row in plan['baseline']['units'].items()}
     fields, url = release_notes.publication_notes(release_notes.ROOT, version, platform)
-    narrative = release_notes.Narrative(text, fields, url, version=version, units=units)
-    notes.write_text(publication_body.binding_text(narrative.text + '\n', binding, '\n',
-                     reserve_registry_version=plan['baseline']['version']))
+    notes = bundle / 'release-notes.md'
+    narrative = release_notes.Narrative(notes.read_text(), fields, url, version=version, units=units)
+    notes.write_text(publication_body.checked(narrative.text))
 
 
 if __name__ == "__main__":

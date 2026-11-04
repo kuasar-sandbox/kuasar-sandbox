@@ -495,7 +495,7 @@ def exact_assets_plan(framework_sha, stage):
     artifacts.require(selected == version, "staged aggregate is not selected by its exact platform source")
     artifacts.require((stage / "selection.tsv").read_text() == "".join(f"{unit}\t{units[unit]}\n" for unit in release.selection.UNITS),
                       "staged selection differs from exact source")
-    names = {"SHA256SUMS", f"platform-{version}.tar.gz"} | {
+    names = {f"platform-{version}.tar.gz"} | {
         artifacts.archive_name(unit, tag, arch) for unit, tag in units.items() for arch in artifacts.ARCHES}
     contract = release.selection.delivery(release.selection.read_simple_yaml(manifest, relative), relative)
     artifacts.require(contract == release.selection.DELIVERY, 'new stages require the committed workbench delivery contract')

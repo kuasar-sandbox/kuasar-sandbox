@@ -80,11 +80,10 @@ def tag_index(repository: str) -> dict[str, str]:
         target = item.get("object")
         if not isinstance(ref, str) or not ref.startswith("refs/tags/"):
             continue
-        if not isinstance(target, dict) or target.get("type") != "commit":
-            continue
-        sha = target.get("sha")
-        if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha):
-            result[ref.removeprefix("refs/tags/")] = sha
+        try:
+            result[ref.removeprefix('refs/tags/')] = coordinator.resolve_tag_target(repository, target)
+        except coordinator.Deferred as error:
+            raise GCError(str(error)) from error
     return result
 
 
@@ -110,14 +109,10 @@ def platform_release_status(
     complete = (
         release.get("draft") is False
         and release.get("prerelease") is ("-preview." in tag)
-        and isinstance(assets, list)
         and expected is not None
-        and {str(asset.get("name")) for asset in assets} in (
-            expected, expected | {name.replace("x86_64", "aarch64") for name in expected})
-        and len(assets) == len({str(asset.get("name")) for asset in assets})
-        and all(asset.get("state") == "uploaded" for asset in assets)
         and sha is not None
-        and release.get("target_commitish") == sha
+        and coordinator.complete_assets(release, [expected, expected | {
+            name.replace('x86_64', 'aarch64') for name in expected}])
     )
     return coordinator.ReleaseStatus(release, sha, complete)
 
@@ -175,7 +170,7 @@ def stable_release(
         and re.fullmatch(r"sha256:[0-9a-f]{64}", asset["digest"])
         and isinstance(asset.get("size"), int)
         and asset["size"] > 0
-        for asset in assets
+        for asset in assets if asset.get("name") != "SHA256SUMS"
     ):
         raise GCError(f"Stable aggregate assets lack verified digests: {version}")
     return release
@@ -241,6 +236,8 @@ def validate_platform_ownership(
     if source_snapshot is not None:
         if source_snapshot[0] != tag:
             raise GCError(f"platform Preview Tag selects another manifest: {tag}")
+        if source_snapshot[1] != canonical.components or source_snapshot[2] != canonical.delivery:
+            raise GCError(f'platform Preview tag manifest differs from canonical selection; retain: {tag}')
         associated = first_parent_contains(canonical.commit, source_sha)
     else:
         # The oldest aggregate tags precede the commit that introduced their
@@ -256,12 +253,20 @@ def resolve_canonical_snapshot(
     release: dict[str, Any] | None,
     source_sha: str | None,
     snapshots: list[CanonicalSnapshot],
+    *, stable_sha: str | None = None,
 ) -> CanonicalSnapshot:
     if not snapshots:
         raise GCError(f"platform Preview has no canonical snapshot: {tag}")
-    # Without a tag, retain the newest selection and incomplete-candidate rules.
+    # A surviving tagless Release still names a concrete source. Validate it
+    # against the same canonical history used by the deletion executor.
+    if source_sha is None and release is not None:
+        source_sha = coordinator.recoverable_source_sha(coordinator.ReleaseStatus(release, None, False))
+        if source_sha is None:
+            raise GCError(f'tagless Preview source is unknown; retain: {tag}')
     canonical = snapshots[0]
     if source_sha is not None:
+        if stable_sha is not None and not first_parent_contains(source_sha, stable_sha):
+            raise GCError(f'platform Preview source is outside the Stable canonical history; retain: {tag}')
         if parse_snapshot(source_sha) is not None:
             reachable = next(
                 (snapshot for snapshot in snapshots
@@ -279,13 +284,18 @@ def resolve_canonical_snapshot(
 
 def retained_snapshot(
     tag: str,
-    release: dict[str, Any],
+    release: dict[str, Any] | None,
     platform_tags: dict[str, str],
     history_cache: dict[str, dict[str, list[CanonicalSnapshot]]],
 ) -> CanonicalSnapshot:
     source_sha = platform_tags.get(tag)
     if source_sha is None:
         raise GCError(f"retained aggregate Preview has no tag: {tag}")
+    current = parse_snapshot(source_sha)
+    if current is not None:
+        if current[0] != tag:
+            raise GCError(f'retained aggregate tag selects another version: {tag}')
+        return CanonicalSnapshot(source_sha, current[1], current[2])
     stable = tag.split("-preview.", 1)[0]
     stable_sha = platform_tags.get(stable)
     if stable_sha is not None:
@@ -300,7 +310,7 @@ def retained_snapshot(
         if snapshot is None or snapshot[0] != tag:
             raise GCError(f"retained pre-contract Preview has no Stable history: {tag}")
         choices = [CanonicalSnapshot(source_sha, snapshot[1], snapshot[2])]
-    return resolve_canonical_snapshot(tag, release, source_sha, choices)
+    return resolve_canonical_snapshot(tag, release, source_sha, choices, stable_sha=stable_sha)
 
 
 def all_platform_previews(
@@ -311,8 +321,6 @@ def all_platform_previews(
         for tag, item in releases.items()
         if isinstance(item.get("tag_name"), str)
         and AGGREGATE_PREVIEW_RE.fullmatch(item["tag_name"])
-        and item.get("draft") is False
-        and item.get("prerelease") is True
     }
 
 
@@ -323,11 +331,11 @@ def protected_component_tags(
 ) -> set[tuple[str, str]]:
     protected: set[tuple[str, str]] = set()
     history_cache: dict[str, dict[str, list[CanonicalSnapshot]]] = {}
-    for tag in platform_previews:
+    for tag in set(platform_previews) | {tag for tag in platform_tags if AGGREGATE_PREVIEW_RE.fullmatch(tag)}:
         if tag in candidates:
             continue
         snapshot = retained_snapshot(
-            tag, platform_previews[tag], platform_tags, history_cache
+            tag, platform_previews.get(tag), platform_tags, history_cache
         )
         for unit, component_tag in snapshot.components.items():
             if "-preview." in component_tag:
@@ -366,7 +374,7 @@ def current_manifest_protection(
     return protected
 
 
-def live_manifest_protection() -> set[tuple[str, str]]:
+def live_manifest_protection(collecting: set[str] = frozenset()) -> set[tuple[str, str]]:
     platform_releases = {
         item["tag_name"]: item
         for item in coordinator.paginated(
@@ -383,7 +391,8 @@ def live_manifest_protection() -> set[tuple[str, str]]:
         and item.get("prerelease") is False
         and platform_release_status(tag, item, platform_tags.get(tag)).complete
     }
-    return current_manifest_protection(closed_stables)
+    return current_manifest_protection(closed_stables) | protected_component_tags(
+        all_platform_previews(platform_releases), platform_tags, collecting)
 
 
 def release_candidate(
@@ -426,12 +435,10 @@ def release_candidate(
     if source_sha is None:
         raise GCError(f"Preview candidate has no recoverable source target: {repository} {tag}")
     assets = release.get("assets", []) if release is not None else []
-    if not isinstance(assets, list) or any(
-        not isinstance(asset, dict)
-        or not isinstance(asset.get("size"), int)
-        or asset["size"] < 0
-        for asset in assets
-    ):
+    if not isinstance(assets, list) or any(not isinstance(asset, dict) for asset in assets):
+        raise GCError(f"Preview candidate has invalid asset metadata: {repository} {tag}")
+    assets = [asset for asset in assets if asset.get('name') != 'SHA256SUMS']
+    if any(type(asset.get('size')) is not int or asset['size'] < 0 for asset in assets):
         raise GCError(f"Preview candidate has invalid asset metadata: {repository} {tag}")
     release_id = release.get("id") if release is not None else None
     if release_id is not None and (not isinstance(release_id, int) or release_id <= 0):
@@ -477,7 +484,7 @@ def plan(version: str) -> tuple[list[Candidate], dict[str, Any]]:
     history = canonical_snapshots(stable_sha, version)
     snapshots = {
         tag: resolve_canonical_snapshot(
-            tag, platform_releases.get(tag), platform_tags.get(tag), choices
+            tag, platform_releases.get(tag), platform_tags.get(tag), choices, stable_sha=stable_sha
         )
         for tag, choices in history.items()
     }
@@ -617,10 +624,17 @@ def dispatch_component(candidate: Candidate) -> None:
     coordinator.gh(*args)
 
 
-def apply(candidates: list[Candidate]) -> bool:
+def apply(candidates: list[Candidate], attempts: dict | None = None) -> bool:
+    if attempts is None:
+        attempts = {}
+    def dispatched(item):
+        key = (item.repository, item.unit, item.tag)
+        if attempts.get(key, 0) >= 3:
+            raise GCError(f'cleanup did not converge after three dispatches in this GC run: {item.tag}')
+        attempts[key] = attempts.get(key, 0) + 1
     components = [item for item in candidates if item.unit != "platform"]
     aggregates = [item for item in candidates if item.unit == "platform"]
-    protected = live_manifest_protection() if components else set()
+    protected = live_manifest_protection({item.tag for item in aggregates}) if components else set()
     newly_protected = sorted(
         (item.unit, item.tag)
         for item in components
@@ -643,19 +657,10 @@ def apply(candidates: list[Candidate]) -> bool:
             print(f"==> pending {state.get('html_url')}")
             pending = True
             continue
-        if state is not None and state.get("conclusion") != "success":
-            attempt = int(state.get("run_attempt", 1))
-            if attempt >= 3:
-                raise GCError(f"component GC failed: {state.get('html_url')}")
-            coordinator.rerun_workflow(item.repository, state)
-            pending = True
-            continue
-        if state is None or state.get("conclusion") == "success":
-            dispatch_component(item)
-            action = "redispatched" if state is not None else "dispatched"
-            print(f"==> {action} component GC: {item.repository} {item.tag}")
-            pending = True
-            continue
+        dispatched(item)
+        dispatch_component(item)
+        print(f"==> dispatched current component cleanup: {item.repository} {item.tag}")
+        pending = True
     if pending or components:
         return False
 
@@ -672,31 +677,12 @@ def apply(candidates: list[Candidate]) -> bool:
         )
         if state is not None and coordinator.run_active(state):
             return False
-        if state is None or state.get("conclusion") == "success":
-            coordinator.gh(
-                "workflow",
-                "run",
-                "delete-preview.yml",
-                "--repo",
-                coordinator.PLATFORM_REPOSITORY,
-                "--ref",
-                "main",
-                "-f",
-                f"version={item.tag}",
-                "-f",
-                f"source_sha={item.source_sha}",
-                "-f",
-                "mode=gc",
-            )
-            action = "redispatched" if state is not None else "dispatched"
-            print(f"==> {action} aggregate GC: {item.tag}")
-            return False
-        if state.get("conclusion") != "success":
-            attempt = int(state.get("run_attempt", 1))
-            if attempt >= 3:
-                raise GCError(f"aggregate GC failed: {state.get('html_url')}")
-            coordinator.rerun_workflow(coordinator.PLATFORM_REPOSITORY, state)
-            return False
+        dispatched(item)
+        coordinator.gh(
+            'workflow', 'run', 'delete-preview.yml', '--repo', coordinator.PLATFORM_REPOSITORY,
+            '--ref', 'main', '-f', f'version={item.tag}', '-f', f'source_sha={item.source_sha}', '-f', 'mode=gc')
+        print(f'==> dispatched current aggregate cleanup: {item.tag}')
+        return False
     return True
 
 
@@ -735,6 +721,7 @@ def main() -> None:
     if requested and STABLE_RE.fullmatch(requested) is None:
         raise GCError("stable_version must match release-vMAJOR.MINOR.PATCH")
     deadline = time.monotonic() + WAIT_SECONDS
+    attempts = {}
     for version in stable_versions(requested):
         if not dry_run:
             elapsed, eligible = grace_elapsed(stable_published_at(version))
@@ -762,7 +749,7 @@ def main() -> None:
                 break
             if time.monotonic() >= deadline:
                 raise GCError(f"Preview GC timed out with pending candidates for {version}")
-            apply(candidates)
+            apply(candidates, attempts)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise GCError(f"Preview GC timed out with pending candidates for {version}")

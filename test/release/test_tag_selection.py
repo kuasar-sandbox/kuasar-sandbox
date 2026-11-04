@@ -29,6 +29,26 @@ def historical_manifest(preview=False):
 
 
 class TagSelectionTests(unittest.TestCase):
+    def test_historical_tag_selects_its_own_units_after_main_drift(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / 'releases').mkdir()
+            def git(*args):
+                return subprocess.check_output(['git', '-C', str(root), '-c', 'user.name=Fixture',
+                    '-c', 'user.email=fixture@example.invalid', *args], text=True).strip()
+            git('init', '-q')
+            old = historical_manifest().replace('0000000000000000000000000000000000000001', 'ignored-obsolete-evidence')
+            (root / 'releases/release.yaml').write_text(old)
+            git('add', '.'); git('commit', '-qm', 'original selection')
+            original = git('rev-parse', 'HEAD')
+            git('tag', '-a', 'release-v1.2.3', '-m', 'annotated version identity')
+            (root / 'releases/release.yaml').write_text('deliberately invalid current manifest\n')
+            git('commit', '-qam', 'main drift')
+            commit, _, units = selection.resolve_record(root, 'release-v1.2.3')
+            self.assertEqual(commit, original)
+            self.assertEqual(units, selection.parse_historical_manifest(old, 'tag', False)[2])
+            self.assertEqual(selection.resolve_config(root, 'release-v1.2.3')['components'], units)
+
     def test_repository_release_layout(self):
         root = pathlib.Path(__file__).resolve().parents[2]
         files = subprocess.check_output(['git', '-C', str(root), 'ls-files', '-z', 'release', 'releases']).decode().split('\0')
