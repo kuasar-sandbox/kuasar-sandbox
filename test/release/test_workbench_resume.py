@@ -12,6 +12,7 @@ SHA = 'a' * 40
 
 class ResumeTests(unittest.TestCase):
     def setUp(self):
+        subject._publication_resumes.clear()
         self.run = {'id': 10, 'display_title': subject.aggregate_run_title(VERSION, SHA),
                     'created_at': '2026-09-29T01:00:00Z', 'status': 'completed', 'conclusion': 'failure', 'run_attempt': 1}
         self.jobs = [{'id': index, 'name': name, 'conclusion': 'success', 'status': 'completed'}
@@ -39,6 +40,7 @@ class ResumeTests(unittest.TestCase):
                 validation = dict(self.run, id=99, display_title=title, status=status, run_attempt=99,
                                   created_at='2026-09-29T02:00:00Z')
                 for ordinary in (False, True):
+                    subject._publication_resumes.clear()
                     history = [validation] + ([self.run] if ordinary else [])
                     def pages(endpoint, field):
                         return history if field == 'workflow_runs' else self.jobs if field == 'jobs' else self.artifacts
@@ -78,9 +80,13 @@ class ResumeTests(unittest.TestCase):
         self.jobs[-1]['conclusion'] = 'success'
         with self.assertRaisesRegex(RuntimeError, 'no failed publish job'):
             self.resume()
-        self.run['run_attempt'] = 3
-        with self.assertRaisesRegex(RuntimeError, 'three attempts'):
+        self.jobs[-1]['conclusion'] = 'failure'
+        self.run['run_attempt'] = 99
+        for _ in range(3): self.assertFalse(self.resume()[0])
+        with self.assertRaisesRegex(RuntimeError, 'three resumes in this invocation'):
             self.resume()
+        subject._publication_resumes.clear()
+        self.assertFalse(self.resume()[0])
 
     def test_active_publication_is_not_restarted(self):
         self.run['status'] = 'in_progress'

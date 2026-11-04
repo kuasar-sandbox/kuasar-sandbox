@@ -124,36 +124,26 @@ class RegistryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             receipt = image('x86_64')[2]
-            binding = {'delivery': 'workbench-v1', 'aggregate_sha': REVISION, 'workbench': {
-                arch: {'conclusion': 'success', 'image_id': receipt['image_id'], 'sha256': receipt['sha256']}
-                for arch in subject.PLATFORMS}}
-            (root / 'release-notes.md').write_text(subject.MARKER + json.dumps(binding) + ' -->')
+            (root / 'release-notes.md').write_text('Human release notes.\n')
             wrong_config, wrong_manifest, _ = image('aarch64')
-            with patch.object(subject.workbench_assets, 'validate', return_value=receipt), patch.dict(
+            with patch.object(subject, 'validate_stage', return_value={'x86_64': receipt}), patch.dict(
                     os.environ, {'GH_TOKEN': 'unit-test-only', 'GITHUB_ACTOR': 'unit-test'}), patch.object(
                     subject, 'inspect_raw', side_effect=[wrong_manifest, wrong_config]), patch.object(
                     subject.subprocess, 'run') as command:
                 with self.assertRaisesRegex(ValueError, 'config differs'):
-                    subject.publish(root, VERSION, REVISION)
+                    subject.publish(root, VERSION, REVISION, {}, {}, {})
                 command.assert_not_called()
-            self.assertNotIn('registry', json.loads((root / 'release-notes.md').read_text().split(subject.MARKER)[1].split(' -->')[0]))
+            self.assertEqual((root / 'release-notes.md').read_text(), 'Human release notes.\n')
 
     def test_full_body_limit_stops_before_registry_transport(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            receipts = {arch: image(arch)[2] for arch in subject.PLATFORMS}
-            binding = {'delivery': 'workbench-v1', 'aggregate_sha': REVISION, 'workbench': {
-                arch: dict(conclusion='success', image_id=row['image_id'], sha256=row['sha256'])
-                for arch, row in receipts.items()}}
-            body = subject.publication_body.binding_text('', binding, '')
-            body = 'x' * (subject.publication_body.MAX_CHARACTERS - len(body)) + body
+            body = 'x' * (subject.publication_body.MAX_CHARACTERS + 1)
             notes = root / 'release-notes.md'
             notes.write_text(body)
-            with patch.object(subject.workbench_assets, 'validate',
-                    side_effect=lambda assets, version, arch, *args, **kwargs: receipts[arch]), patch.object(
-                    subject, 'inspect_raw') as inspect, patch.object(subject.subprocess, 'run') as command:
+            with patch.object(subject, 'inspect_raw') as inspect, patch.object(subject.subprocess, 'run') as command:
                 with self.assertRaisesRegex(ValueError, 'must not be truncated'):
-                    subject.publish(root, VERSION, REVISION)
+                    subject.publish(root, VERSION, REVISION, {'baseline': {'version': VERSION, 'sha': REVISION}}, {}, {})
                 inspect.assert_not_called()
                 command.assert_not_called()
             self.assertEqual(notes.read_text(), body)
@@ -179,19 +169,16 @@ class RegistryTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            binding = {'delivery': 'workbench-v1', 'aggregate_sha': REVISION, 'workbench': {
-                arch: dict(conclusion='success', image_id=receipt['image_id'], sha256=receipt['sha256'])
-                for arch, (_, _, receipt) in images.items()}}
             notes = root / 'release-notes.md'
-            notes.write_text(subject.publication_body.binding_text('Original notes\n', binding, '\n'))
-            with patch.object(subject.workbench_assets, 'validate',
-                    side_effect=lambda assets, version, arch, *args, **kwargs: images[arch][2]), patch.dict(
+            notes.write_text('Original notes\n')
+            with patch.object(subject, 'validate_stage',
+                    return_value={arch: row[2] for arch, row in images.items()}), patch.dict(
                     os.environ, {'GH_TOKEN': 'unit-test-only', 'GITHUB_ACTOR': 'unit-test'}), patch.object(
                     subject, 'inspect_raw', side_effect=inspect), patch.object(
                     subject, 'verify_public_layers') as read_layers, patch.object(subject.subprocess, 'run') as command:
-                first = subject.publish(root, VERSION, REVISION)
+                first = subject.publish(root, VERSION, REVISION, {}, {}, {})
                 first_body = notes.read_text()
-                self.assertEqual(subject.publish(root, VERSION, REVISION), first)
+                self.assertEqual(subject.publish(root, VERSION, REVISION, {}, {}, {}, read_only=True), first)
                 self.assertEqual(notes.read_text(), first_body)
                 command.assert_not_called()
                 self.assertEqual(read_layers.call_count, 4)
@@ -199,9 +186,18 @@ class RegistryTests(unittest.TestCase):
                     ref, receipt, auth, destination = call.args
                     self.assertEqual(ref, subject.REPOSITORY + '@' + children[receipt['arch']]['digest'])
                     self.assertEqual(auth.name, 'anonymous.json')
-            actual = json.loads(first_body.split(subject.MARKER)[1].split(' -->')[0])
-            self.assertEqual(actual, dict(binding, registry=first))
+            self.assertEqual(first_body, 'Original notes\n')
             self.assertEqual(first, {'reference': reference, 'digest': subject.digest(index), 'architectures': children})
+
+    def test_read_only_recovery_never_creates_a_missing_image(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(subject, 'validate_stage', return_value={'x86_64': image('x86_64')[2]}), \
+                 patch.dict(os.environ, GH_TOKEN='test-only', GITHUB_ACTOR='fixture'), \
+                 patch.object(subject, 'inspect_raw', return_value=None), \
+                 patch.object(subject.subprocess, 'run') as command:
+                with self.assertRaisesRegex(ValueError, 'missing its Workbench image'):
+                    subject.publish(Path(directory), VERSION, REVISION, {}, {}, {}, read_only=True)
+                command.assert_not_called()
 
 
 if __name__ == '__main__':

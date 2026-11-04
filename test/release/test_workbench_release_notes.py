@@ -60,13 +60,13 @@ class NarrativeTests(unittest.TestCase):
         output.write_text('Human prose without a generated title or component table.')
         notes.validate_file(self.root / 'nonexistent-checkout', self.version, output)
 
-    def test_validator_checks_only_text_availability_marker_count_and_size(self):
+    def test_validator_rejects_machine_records_and_defers_body_size_to_publication(self):
         output = self.root / 'notes.md'
-        for text in ('', '  \n', body.MARKER + '{} -->\n' + body.MARKER + '{} -->'):
+        for text in ('', '  \n', 'Changed prose\n<!-- kuasar-integration-validation {} -->\n'):
             output.write_text(text)
             with self.subTest(text=text[:50]), self.assertRaises(ValueError):
                 notes.validate_file(self.root, self.version, output)
-        for text in ('Arbitrary human notes.', 'Changed prose\n' + body.MARKER + '{} -->\n',
+        for text in ('Arbitrary human notes.', 'Changed prose\n<!-- editorial comment -->\n',
                      'x' * (body.MAX_CHARACTERS + 1)):
             output.write_text(text)
             notes.validate_file(self.root, self.version, output)
@@ -96,7 +96,7 @@ class NarrativeTests(unittest.TestCase):
         for block in ('notes:\n  mode: invalid\n  body: |\n    Text',
                       'notes:\n  mode: fixed\n  aggregate_sha: ' + 'a' * 40,
                       'notes:\n  mode: fixed\n  body: |-\n    ',
-                      'notes:\n  mode: fixed\n  body: |\n    ' + body.MARKER):
+                      'notes:\n  mode: fixed\n  body: |\n    ' + '<!-- kuasar-integration-validation '):
             with self.subTest(block=block), self.assertRaises(ValueError):
                 notes.selection.read_simple_yaml(self.manifest + block, 'manifest')
 
@@ -163,7 +163,7 @@ class NarrativeTests(unittest.TestCase):
 
     def test_bound_validation_does_not_compare_prefix_source_or_metadata(self):
         output = self.root / 'notes.md'
-        suffix = '\n' + body.MARKER + '{} -->\n'
+        suffix = '\n<!-- editorial note -->\n'
         for prefix in ('Different human prose', '# Kuasar Sandbox release-v0.0.1\nOld component wording.'):
             output.write_text(prefix + suffix)
             with patch.object(notes, 'publication_notes', side_effect=AssertionError('no manifest gate')):
@@ -252,47 +252,22 @@ class NarrativeTests(unittest.TestCase):
     def test_reject_malformed_fields_and_reserved_markers(self):
         for block in ('notes: invalid', 'notes:\n  unknown: yes', 'notes:\n  body: |',
                       self.block + '  body: |\n    duplicate', self.block * 2,
-                      self.block.replace('Two lines.', body.MARKER), self.block.replace('Two lines.', notes.NOTICE_END)):
+                      self.block.replace('Two lines.', '<!-- kuasar-integration-validation '), self.block.replace('Two lines.', notes.NOTICE_END)):
             with self.subTest(block=block), self.assertRaises(notes.selection.ManifestError):
                 notes.selection.parse_manifest(self.manifest + block, 'manifest', False)
 
-    def binding(self):
-        return {'aggregate_sha': self.revision, 'validation_plan': {'cases': ['full case evidence']},
-                'workbench': {arch: {'image_id': 'sha256:' + '1' * 64, 'sha256': '2' * 64}
-                              for arch in body.WORKBENCH_ARCHES}}
 
-    def test_exact_budget_and_registry_reserve_require_manual_intervention(self):
-        binding = self.binding()
-        original = copy.deepcopy(binding)
-        prefix = 'Full reviewed prose\n' * 100
-        baseline = body.binding_text(prefix, binding, '\n')
-        with patch.object(body, 'MAX_CHARACTERS', len(baseline)):
-            self.assertEqual(body.binding_text(prefix, binding, '\n'), baseline)
-            with self.assertRaisesRegex(ValueError, 'manual intervention required'):
-                body.binding_text(prefix, binding, '\n', reserve_registry_version=self.version)
-            with self.assertRaisesRegex(ValueError, 'manual intervention required'):
-                body.binding_text(prefix + 'x', binding, '\n')
-        self.assertEqual(binding, original)
-        self.assertNotIn('registry', binding)
 
-    def test_evidence_conflicts_are_rejected(self):
-        binding = self.binding()
-        binding['case_files'] = {'a': [True]}
-        binding['validation_plan']['case_files'] = {'a': [1]}
-        with self.assertRaisesRegex(ValueError, 'conflicting evidence'):
-            body.binding_text('x' * 125000, binding, '\n')
+
+
+
 
     def test_authored_body_and_notice_never_shrink_to_a_manifest_link(self):
-        record = self.binding()
-        original = copy.deepcopy(record)
         fields = {'body': 'Long body. ' * 2000, 'upgrade_notice': '请同步升级。  '}
         narrative = notes.Narrative(self.text, fields, 'https://example.invalid/immutable')
-        expected = fields['upgrade_notice'] + '\n\n' + fields['body']
-        self.assertEqual(narrative.text, expected)
+        self.assertEqual(narrative.text, fields['upgrade_notice'] + '\n\n' + fields['body'])
         with patch.object(body, 'MAX_CHARACTERS', 2500), self.assertRaisesRegex(ValueError, 'must not be truncated'):
-            body.binding_text(narrative.text + '\n', record, '\n',
-                reserve_registry_version=self.version)
-        self.assertEqual(record, original)
+            body.checked(narrative.text + '\n')
 
     def test_notice_only_keeps_warning_and_stage_text_without_title_contract(self):
         warning = 'Upgrade both components.  \n请保留。'
@@ -301,15 +276,11 @@ class NarrativeTests(unittest.TestCase):
         expected = warning + '\n\n' + staged
         self.assertEqual(narrative.text, expected)
 
-    def test_irreducible_notice_or_evidence_rejects_publication(self):
-        for long_notice in (True, False):
-            record = self.binding()
-            fields = {'body': 'Long body. ' * 2000, 'upgrade_notice': 'Warning! ' * (2000 if long_notice else 1)}
-            if not long_notice:
-                record['validation_plan']['evidence'] = 'x' * 4000
-            narrative = notes.Narrative(self.text, fields, 'https://example.invalid/immutable')
-            with patch.object(body, 'MAX_CHARACTERS', 2500), self.assertRaisesRegex(ValueError, 'must not be truncated'):
-                body.binding_text(narrative.text, record, '\n', reserve_registry_version=self.version)
+    def test_long_notice_rejects_publication(self):
+        fields = {'body': 'Brief changes', 'upgrade_notice': 'Warning! ' * 2000}
+        narrative = notes.Narrative(self.text, fields, 'https://example.invalid/immutable')
+        with patch.object(body, 'MAX_CHARACTERS', 2500), self.assertRaisesRegex(ValueError, 'must not be truncated'):
+            body.checked(narrative.text)
 
     def test_no_fields_staged_fallback_preserves_prefix(self):
         row = '- `aaaaaaaaaaaa` title ([commit](https://github.com/kuasar-sandbox/sandboxer/commit/' + 'a' * 40 + '))\n'
@@ -318,7 +289,7 @@ class NarrativeTests(unittest.TestCase):
         narrative = notes.Narrative(staged, {}, None)
         self.assertEqual(narrative.text, staged)
         with patch.object(body, 'MAX_CHARACTERS', 2500), self.assertRaisesRegex(ValueError, 'must not be truncated'):
-            body.binding_text(staged, self.binding(), '\n')
+            body.checked(staged)
 
     def test_compatibility_cli_checks_size_without_rewriting_any_text(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -354,13 +325,7 @@ class ReviewedBindingTests(unittest.TestCase):
         with patch.object(notes, 'publication_notes', return_value=({'mode': 'fixed', 'body': human}, 'url')):
             binder.bind(self.root, self.plan, self.validation, self.results, platform=self.root)
         result = (self.root / 'release-notes.md').read_text()
-        self.assertEqual(result.split(body.MARKER)[0], human + '\n')
-        restored = json.loads(result.split(body.MARKER)[1].split(' -->')[0])
-        self.assertEqual(restored['validation_plan'], self.plan)
-        self.assertEqual(restored['source_records'], self.plan['source_records'])
-        self.assertEqual(restored['aggregate_sha'], self.sha)
-        self.assertEqual(restored['architectures'], self.validation['architectures'])
-        self.assertEqual(restored['workbench'], self.results)
+        self.assertEqual(result, human)
         for path, contents in before.items():
             if path.name != 'release-notes.md':
                 self.assertEqual(path.read_bytes(), contents)
@@ -411,10 +376,7 @@ class ReviewedBindingTests(unittest.TestCase):
             binder.bind(self.root, self.plan, self.validation, self.results, platform=self.root)
         selected.assert_called_once_with(notes.ROOT, self.version, self.root)
         result = (self.root / 'release-notes.md').read_text()
-        self.assertEqual(result.split(body.MARKER)[0], 'Original notes\n\n')
-        restored = json.loads(result.split(body.MARKER)[1].split(' -->')[0])
-        self.assertEqual(restored['validation_plan'], self.plan)
-        self.assertEqual(restored['workbench'], self.results)
+        self.assertEqual(result, 'Original notes\n')
 
     def test_missing_mode_does_not_gate_binding(self):
         binder = test_workbench_binding.binder
@@ -424,8 +386,7 @@ class ReviewedBindingTests(unittest.TestCase):
             with self.subTest(fields=fields), patch.object(notes, 'publication_notes', return_value=(fields, 'url')):
                 binder.bind(self.root, self.plan, self.validation, self.results, platform=self.root)
             result = (self.root / 'release-notes.md').read_text()
-            self.assertEqual(result.split(body.MARKER)[0], 'Full human text.\n')
-            self.assertEqual(json.loads(result.split(body.MARKER)[1].split(' -->')[0])['validation_plan'], self.plan)
+            self.assertEqual(result, 'Full human text.')
 
 
 if __name__ == '__main__':

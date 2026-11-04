@@ -25,6 +25,15 @@ SPEC.loader.exec_module(preview_gc)
 
 
 class PreviewGCTest(unittest.TestCase):
+    def test_annotated_tags_are_resolved_and_unknown_targets_are_not_absence(self):
+        row = {'ref': 'refs/tags/release-v1.2.3', 'object': {'type': 'tag', 'sha': 'a' * 40}}
+        with mock.patch.object(preview_gc.coordinator, 'paginated', return_value=[row]), \
+             mock.patch.object(preview_gc.coordinator, 'api', return_value={'object': {'type': 'commit', 'sha': 'b' * 40}}):
+            self.assertEqual(preview_gc.tag_index('fixture/repo'), {'release-v1.2.3': 'b' * 40})
+            row['object']['type'] = 'blob'
+            with self.assertRaisesRegex(preview_gc.GCError, 'unresolved tag'):
+                preview_gc.tag_index('fixture/repo')
+
     def test_complete_dual_release_is_not_incomplete_recovery_material(self) -> None:
         version, sha = "release-v1.2.3-preview.20260831", "a" * 40
         components = {unit: (unit + "-" if unit in ("runtime", "vmlinux") else "") + "v1.0.0"
@@ -34,7 +43,7 @@ class PreviewGCTest(unittest.TestCase):
         with mock.patch.object(preview_gc.coordinator, "platform_asset_names", return_value=old):
             for names in (old, dual):
                 release = {"draft": False, "prerelease": True, "target_commitish": sha,
-                           "assets": [{"name": name, "state": "uploaded"} for name in names]}
+                           "assets": [dict(id=i, name=name, state='uploaded', size=10, digest='sha256:'+'a'*64) for i,name in enumerate(names, 1)]}
                 self.assertTrue(preview_gc.platform_release_status(version, release, sha).complete)
             release["assets"].pop()
             self.assertFalse(preview_gc.platform_release_status(version, release, sha).complete)
@@ -219,7 +228,7 @@ class PreviewGCTest(unittest.TestCase):
             "draft": False,
             "prerelease": True,
             "target_commitish": "5" * 40,
-            "assets": [{"name": "legacy", "size": 19}],
+            "assets": [dict(id=9, name='platform-release-v1.2.3-preview.20260831.tar.gz', size=19, state='uploaded', digest='sha256:'+'a'*64)],
         }
         with mock.patch.object(
             preview_gc.coordinator,
@@ -313,14 +322,8 @@ class PreviewGCTest(unittest.TestCase):
             mock.patch.object(preview_gc.coordinator, "gh") as gh,
         ):
             self.assertFalse(preview_gc.apply([candidate]))
-        gh.assert_called_once_with(
-            "run",
-            "rerun",
-            "99",
-            "--repo",
-            preview_gc.coordinator.PLATFORM_REPOSITORY,
-            "--failed",
-        )
+        gh.assert_called_once_with('workflow', 'run', 'delete-preview.yml', '--repo', candidate.repository,
+            '--ref', 'main', '-f', f'version={candidate.tag}', '-f', f'source_sha={candidate.source_sha}', '-f', 'mode=gc')
 
     def test_cancelled_component_gc_is_retried_as_a_full_workflow(self) -> None:
         candidate = preview_gc.Candidate(
@@ -352,15 +355,10 @@ class PreviewGCTest(unittest.TestCase):
             mock.patch.object(preview_gc.coordinator, "gh") as gh,
         ):
             self.assertFalse(preview_gc.apply([candidate]))
-        gh.assert_called_once_with(
-            "run",
-            "rerun",
-            "100",
-            "--repo",
-            "kuasar-sandbox/connector",
-        )
+        gh.assert_called_once_with('workflow', 'run', 'delete-preview.yml', '--repo', candidate.repository,
+            '--ref', 'main', '-f', f'version={candidate.tag}', '-f', f'source_sha={candidate.source_sha}', '-f', 'mode=gc')
 
-    def test_failed_aggregate_deletion_stops_after_third_attempt(self) -> None:
+    def test_old_failures_do_not_block_new_run_but_current_dispatches_are_bounded(self) -> None:
         candidate = preview_gc.Candidate(
             preview_gc.coordinator.PLATFORM_REPOSITORY,
             "platform",
@@ -388,10 +386,15 @@ class PreviewGCTest(unittest.TestCase):
                 preview_gc.coordinator, "latest_run", return_value=failed
             ),
             mock.patch.object(preview_gc.coordinator, "gh") as gh,
-            self.assertRaisesRegex(preview_gc.GCError, "aggregate GC failed"),
         ):
-            preview_gc.apply([candidate])
-        gh.assert_not_called()
+            attempts = {}
+            for _ in range(3):
+                self.assertFalse(preview_gc.apply([candidate], attempts))
+            with self.assertRaisesRegex(preview_gc.GCError, 'three dispatches in this GC run'):
+                preview_gc.apply([candidate], attempts)
+            self.assertEqual(gh.call_count, 3)
+            self.assertFalse(preview_gc.apply([candidate], {}))
+            self.assertEqual(gh.call_count, 4)
 
     def test_apply_rechecks_live_manifest_protection_before_dispatch(self) -> None:
         candidate = preview_gc.Candidate(
@@ -598,7 +601,7 @@ class PreviewGCConvergenceTest(unittest.TestCase):
             self.assertRaisesRegex(preview_gc.GCError, "ownership changed"),
         ):
             preview_gc.main()
-        apply.assert_called_once_with([self.first])
+        apply.assert_called_once_with([self.first], {})
         self.assertNotIn("Preview GC converged", self.output.getvalue())
 
     def test_grace_period_is_rechecked_before_every_apply(self) -> None:
@@ -611,7 +614,7 @@ class PreviewGCConvergenceTest(unittest.TestCase):
             self.assertRaisesRegex(preview_gc.GCError, "publication timestamp changed"),
         ):
             preview_gc.main()
-        apply.assert_called_once_with([self.first])
+        apply.assert_called_once_with([self.first], {})
 
     def test_wait_budget_is_shared_across_stable_versions(self) -> None:
         second_version = "release-v1.2.4"
@@ -626,7 +629,7 @@ class PreviewGCConvergenceTest(unittest.TestCase):
             self.assertRaisesRegex(preview_gc.GCError, f"pending candidates for {second_version}"),
         ):
             preview_gc.main()
-        apply.assert_called_once_with([self.first])
+        apply.assert_called_once_with([self.first], {})
         self.assertEqual(self.output.getvalue().count("Preview GC converged"), 1)
 
 
@@ -691,7 +694,7 @@ class CanonicalSourceHistoryTest(unittest.TestCase):
     def release(self, tag: str, sha: str, identity: int = 42) -> dict:
         return dict(id=identity, tag_name=tag, target_commitish=sha, draft=False,
                     prerelease="-preview." in tag, published_at="2026-09-01T00:00:00Z",
-                    assets=[dict(name="archive", state="uploaded", size=1, digest="sha256:" + "1" * 64)])
+                    assets=[dict(id=1, name="archive", state="uploaded", size=1, digest="sha256:" + "1" * 64)])
 
     @contextmanager
     def public_state(self, stable_sha: str, source: str, retained: tuple | None = None):
@@ -835,7 +838,7 @@ class CanonicalSourceHistoryTest(unittest.TestCase):
         release = self.release(self.preview, source)
         for row in (None, release):
             selected = preview_gc.resolve_canonical_snapshot(self.preview, row, None, history)
-            self.assertEqual(selected.commit, newest)
+            self.assertEqual(selected.commit, source if row is not None else newest)
             candidate = preview_gc.release_candidate(preview_gc.coordinator.PLATFORM_REPOSITORY, "platform",
                 self.preview, platform_release=row, platform_snapshot=selected)
             if row is None:
@@ -848,6 +851,52 @@ class CanonicalSourceHistoryTest(unittest.TestCase):
             self.preview, platform_sha=source, platform_snapshot=selected)
         self.assertEqual(candidate.source_sha, source)
         self.assertIsNone(candidate.release_id)
+
+    def test_tagless_executor_and_planner_select_same_historical_source(self):
+        import delete_preview
+        source = self.selection(self.old_component)
+        self.selection(self.new_component)
+        stable_sha = self.stable()
+        release = self.release(self.preview, source)
+        stable_release = self.release(self.version, stable_sha)
+        stable_release['published_at'] = '2000-01-01T00:00:00Z'
+        choices = preview_gc.canonical_snapshots(stable_sha, self.version)[self.preview]
+        planned = preview_gc.resolve_canonical_snapshot(self.preview, release, None, choices)
+        with mock.patch.object(delete_preview, 'gc', preview_gc), \
+             mock.patch.object(delete_preview, 'coordinator', preview_gc.coordinator), \
+             mock.patch.object(preview_gc.coordinator, 'api', return_value=stable_release), \
+             mock.patch.object(preview_gc.coordinator, 'tag_sha', return_value=stable_sha), \
+             mock.patch.object(preview_gc.coordinator, 'platform_asset_names', return_value={'archive'}):
+            executed = delete_preview.canonical_gc_snapshot(self.preview, source, release)
+        self.assertEqual(executed, planned)
+        self.assertEqual(executed.commit, source)
+        self.assertEqual(executed.components['connector'], self.old_component)
+
+    def test_retained_tag_without_release_or_with_draft_protects_component(self):
+        source = self.selection(self.old_component)
+        tags = {self.preview: source}
+        for releases in ({}, {self.preview: dict(self.release(self.preview, source), draft=True)}):
+            with self.subTest(releases=bool(releases)):
+                self.assertIn(('connector', self.old_component),
+                    preview_gc.protected_component_tags(releases, tags, set()))
+
+    def test_gc_does_not_reinterpret_same_named_tag_outside_stable_history(self):
+        source = self.selection(self.old_component)
+        stable_sha = self.stable()
+        choices = preview_gc.canonical_snapshots(stable_sha, self.version)[self.preview]
+        (self.root / 'README').write_text('After Stable\n')
+        after_same = self.commit('Same selection after Stable')
+        after_changed = self.selection(self.new_component)
+        self.run_git('checkout', '-qb', 'parallel', source)
+        side_changed = self.selection(self.new_component)
+        for changed in (after_same, after_changed, side_changed):
+            with self.subTest(source=changed), self.assertRaisesRegex(preview_gc.GCError, 'outside the Stable canonical history'):
+                preview_gc.resolve_canonical_snapshot(self.preview, self.release(self.preview, changed), changed,
+                                                      choices, stable_sha=stable_sha)
+        # The lower-level ownership guard also refuses to substitute old units
+        # for a newer same-name tag manifest, even without the enclosing bound.
+        with self.assertRaisesRegex(preview_gc.GCError, 'manifest differs'):
+            preview_gc.resolve_canonical_snapshot(self.preview, self.release(self.preview, side_changed), side_changed, choices)
 
     def test_pre_manifest_resolution_keeps_existing_narrow_rule(self) -> None:
         self.selection(self.old_component)

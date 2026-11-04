@@ -81,11 +81,11 @@ components:
 `previous_preview_version` 为更新基线;该版本线的首个 Preview 以 `previous_version`
 为基线。
 
-新 Stable 与 Daily 清单只选择六个组件 **Tag**，拒绝 `test_revisions` 以及独立的测试、helper 或文档源码覆盖。每个 owner 的产品源码、E2E 用例、运行库、helper 和指南均来自所选单元 Tag；guest-runtime 使用 runtime Tag，kernel 指南使用独立选择的 vmlinux Tag。主仓测试与指南来自聚合源码。SHA 是自动记录和比较的来源事实，不是第二个版本选择器，也不是源码检索键。
+新 Stable 与 Daily 清单只选择六个组件 **Tag**，拒绝独立的测试、helper 或文档源码覆盖。每个 owner 的产品源码、用例、helper 和指南来自所选单元 Tag；guest-runtime 使用 runtime Tag，kernel 使用独立的 vmlinux Tag。消费旧版本时，从该聚合 Tag 下的 manifest 确定六个单元，不能用当前 main 或组件 Latest 重新解释。历史机器记录被忽略，不查询旧 Actions 来决定已发布包能否使用。
 
 聚合按具名 Tag 获取源码，并在获取前后核对自动解析的提交身份。源码 checkout 与 `source-records.json` 作为本次运行输入传递；打包再次检查 Tag、源码身份和干净工作树，并核对 helper 来源事实。组件指南的源码链接使用所选 Tag。复用旧产品 Tag 时，不会从更新分支补取测试或指南。
 
-组件预检通过可信分支准入聚合清单，记录其身份和完整内容。发布使用绑定到预检输出的固定证据，因此无关分支推进不会使已完成构建失效；Stable 版本线关闭状态仍实时检查。依赖恢复核对预检给出的完整所有者、Tag 与提交身份，artifact 回执不能自行选择替代依赖。新聚合记录保留含校验和资产在内的完整验证计划；Release 正文过大时明确失败，不截断证据。
+组件新构建仍固定本次源码、所选依赖、构建顺序与输入，执行最终组合验收。已发布包按精确 tag 复用，不从 Release 正文或旧 Actions 证明历史测试资格。发布当次的临时 stage、plan、哈希和测试结果独立于人类说明，且不成为 Release 协议。
 
 普通测试或文档变化不扩大产品输入差异，也不自动推动产品或 kernel 版本。需要交付这些变化时，显式选择正常发布的新 owner Tag。声明缺失时明确失败，不借用更新 HEAD，也不伪造声明。
 
@@ -171,11 +171,11 @@ kernel 继续使用已有 Makefile 相关输入投影。相关输入变化后，
 
 依赖选择比较 consumer 实际链接/内嵌的源码输入。独立 CLI 或文档变化不会无条件重建全部反向依赖。
 runtime 跟踪 accelerator flatten 库及 sandbox-init 输入；其他 Go consumer 跟踪链接库。
-复用的 Preview 保留原依赖版本绑定；若依赖版本元组不同，必须证明相关源码输入一致，不能跳过来源校验。
+已发布组件按所选 Tag 和原生资产元数据作为成品复用，不读取或审核历史依赖 marker。新构建仍固定本次依赖输入，并进行最终组合验收。
 vmlinux 不因这些依赖变化重建。同日同修订号已发布后再次需要重建时保持 deferred；可显式选择更大的修订号，
 例如 `gh workflow run daily-preview.yml --ref main -f date=20260914.1`。
 重复请求恢复相同发布，不覆盖完整 Release，不自动递增修订号。
-新发布组件与聚合使用相同日期/修订后缀，复用版本保留原精确来源。
+新发布组件与聚合使用相同日期/修订后缀，复用版本保留原始字节。
 
 平台自身在所选分支上的代码变化同样会产生新的聚合 Preview,即使六个组件都复用。
 同一聚合版本的 workflow run 名同时绑定平台源码 SHA。只要任意匹配 run 仍在运行,即使
@@ -186,8 +186,7 @@ run 身份,不会用旧输入重跑或改写运行中清单。
 
 若依赖重建已写入 Daily 清单,但对应组件 Release 尚未发布,后续扫描会继续完成这个
 待发布 Preview,即使所选依赖已与清单一致。获胜 Tag 为 Stable 或 Preview 时均适用;
-日期或修订号推进后,使用新选择的后缀发布重建结果。完整 Release 仍须通过原有的源码和
-依赖绑定校验。
+日期或修订号推进后,使用新选择的后缀发布重建结果。完整 Release 按所选 Tag、包集合和原生资产元数据复用，不审核历史依赖绑定。
 
 ### 4.3 首次迁移到 Tag 选择的输入
 
@@ -230,9 +229,7 @@ Preview 对已提交的选择使用 §6 的正常组件发行入口，按依赖�
 
 ## 5. 残缺发布恢复
 
-完整组件 Release 必须非 draft、prerelease 状态与 Tag 一致，且精确约定的归档与 `SHA256SUMS` 都已 uploaded。
-历史 AMD64-only 组件/聚合保留两项/八项契约，双架构组件使用三项，历史双架构聚合保留十四项；新 `workbench-v1` 聚合必须具备全部十六项资产。ARM 集合残缺仍是残缺；
-旧 AMD64-only 发布不因初始化被重判为损坏或删除。
+完整 Release 必须具有所选 Tag 对应的精确包集合、匹配的 prerelease 状态，以及有效的 GitHub 原生资产 ID、大小、digest 和上传状态。忽略可选的历史 SHA256SUMS。历史单架构发布仍有效，架构集合残缺才算残缺；新 Workbench 聚合需要全部十五项包。缺失或有歧义的资产元数据须保留并报告，不能据此把发布判作残缺而删除。
 
 选择器仅把完整 Release 的 Tag 当作候选。残缺状态不让整条 Daily schedule 失败:
 
@@ -242,11 +239,10 @@ Preview 对已提交的选择使用 §6 的正常组件发行入口，按依赖�
 - 外来残缺 Preview 或残缺 Stable:忽略,不作为候选,也不自动删除;
 - 无组件维护分支的固定版本不完整:延后,不派生替代版本;
 - 确定性失败最多尝试三次,超过后分支协调器和扫描器均报告失败,不会靠覆盖 Tag 或手工拼资产恢复。组件
-  发布和删除的普通 failure 只重跑失败 job;cancelled、timed out 等没有失败 job 的状态
+  发布的普通 failure 只重跑失败 job；清理以同一删除输入派发当前 main 工作流。cancelled、timed out 等没有失败 job 的状态
   重跑完整 workflow。聚合构建/验证失败创建同一精确输入的新 workflow run，重新拉取组件 Release 并生成新的 exact stage。
   对同一源码的残缺 `workbench-v1` 发布，控制器先核实原 prepare/stage/validation 成功且不可变 stage 仍保留，
-  然后只重跑失败的 publish job，不重建镜像或重跑健康验证；stage 缺失或重试耗尽时失败关闭；三次预算按这些 run 的
-  `run_attempt` 总数累计。
+  然后只重跑失败的 publish job，不重建镜像或重跑健康验证；stage 缺失或重试耗尽时明确失败。聚合构建/验证保留按精确输入计算的重试预算；仅发布恢复和清理各按本次协调调用最多尝试三次，历史失败不会永久耗尽后续恢复机会。
 
 若未完成的聚合选择推进到新的上海日期或显式请求的更大修订号,控制器不再用旧日期 Tag 绑定新的组件 HEAD。
 残缺聚合对象先通过受保护入口删除;随后清单滚到新日期并重新选择。旧选择中已经完整发布
@@ -254,10 +250,7 @@ Preview 对已提交的选择使用 §6 的正常组件发行入口，按依赖�
 保持 deferred。带修订号的 Preview 使用同样的受保护恢复和 GC 规则:删除仍受 Stable 关闭
 版本线后的七天回退窗口、规范归属和保留引用约束。
 
-恢复的目标是恢复 Daily 流程,不是修补或重建残缺 Release 的资产。同名完整 Release 永远
-不会被 `incomplete` 模式删除。若 Tag 已经缺失但 draft 或 prerelease 仍在,只有
-Release 的 `target_commitish` 是完整且匹配的源码 SHA 时才允许恢复删除。若同名残缺对象
-在一次成功清理后再次出现,控制器创建新的清理 run,不把历史成功结果当作当前对象已收敛。
+版本和字节一致且成功 stage 仍在时，优先恢复原发布步骤；只补缺失资产，拒绝同名不同字节。已公开 Release 只能对原验收 stage 只读确认。清理残留无 tag Release 时，必须具有已知精确源码，并通过与计划相同的 canonical 历史检查；GC 不要求旧源码仍为当前分支 HEAD。Release 和 tag 均不存在则已收敛。明确 404 可幂等重试，网络或权限错误不视为不存在。
 
 ## 6. 组件发布 CLI
 
@@ -337,8 +330,7 @@ gh workflow run aggregate-release.yml \
 
 聚合 prepare 生成的短期 artifact 是一次 run 的不可变发布证据。构建/验证失败后重新 dispatch 相同版本、源码分支和源码 SHA，确保新的 prepare 重新下载当前组件 Release。
 新契约的残缺发布失败后，由控制器验证原先的成功前置 job 和保留 stage，只重跑该 publish job；
-不要完整重跑旧 workflow 来替换镜像字节。Daily 可自动恢复原发布 job；Stable 不会为已经完成、正在发布、残缺或已按另一源码准入的相同版本重新选版，应走原 publisher 恢复路径。控制器按精确 run name 汇总新旧 run 的尝试次数,总计
-三次后报告失败。
+不要完整重跑旧 workflow 来替换镜像字节。Daily 可自动恢复原发布 job；Stable 不会为已经完成、正在发布、残缺或已按另一源码准入的相同版本重新选版，应走原 publisher 恢复路径。每次协调调用对原 publish job 最多恢复三次；过去的传输失败不会永久禁止以后恢复同一成功 stage。
 
 本地发布工具验证入口为:
 
@@ -349,22 +341,14 @@ make test-ci-tools
 
 ## 8. 发行资产验证
 
-每个新组件 Release 包含 x86_64、aarch64 两个 archive 与 `SHA256SUMS`。
-runtime、vmlinux 保留独立包名。两份维护中的聚合清单声明 `delivery: workbench-v1`。新 aggregate 包含架构无关的 platform 包、十二个原样组件包、两个原生 workbench Docker 镜像归档及统一 `SHA256SUMS`，共十六项资产。历史 AMD64-only 和双架构聚合保留八项/十四项原契约。reader 从精确 Tag 源码读取契约；缺失新资产绝不回退为历史兼容模式。
+组件包按单元、版本和架构精确命名；runtime 与 vmlinux 独立解析。新 `workbench-v1` 聚合包含十五项资产：一个平台包、十二个不变的组件包、两个原生 Workbench 镜像包，不再发布独立 `SHA256SUMS`。读取器忽略历史 checksum 附件，从所选聚合 Tag 下的 manifest 确定完整集合；缺包不会回退旧格式、main 或 Latest。
 
 不发布项目生成的 release metadata JSON,也不重复上传 GitHub 自动提供的源码归档。
 版本选择 YAML 只在仓库维护,既不是 Release 资产,也不进入 platform 包。
 组件 archive 不携带 `docs/` 或 `test/e2e/`；aggregate assembly 从所选 owner Tag 收集组件文档
 和 E2E 输入，统一写入 platform archive（§8.1）。kernel 文档使用单独选择的 vmlinux 产品源码。
 
-组件从固定准入源码 artifact 构建和测试，x86_64 与 aarch64 分别运行独立的原生 job，依赖源码按所选 Tag 固定。checkout 不保留凭据。校验后原样组装双架构包。
-聚合 prepare 下载六个所选 Release，校验 API size/digest、SHA-256、路径、归属与跨包覆盖，
-随后在无凭据源码步骤中构建固定测试 helper，并生成确定性的 platform 包。
-暂存字节通过共享的公开 prepare → 聚焦用例 → 公开 run 合同，不重建产品或 helper。
-解析阶段从所选 owner Tag 声明精确用例文件名；执行使用短的私有状态路径，直接读取暂存归档中的用例，无需源码 overlay。
-x86 在真实 KVM runner 运行九个 suite 中的所选用例；托管 ARM 运行预先声明的 accelerator/guest-runtime 非 KVM 子集。
-干净运行时中的 prepare 和所选完整 suite 执行保留 Go、Rust、组件源码树缺失的验证证据。源码检查是独立必需 job。
-publish 必须收齐两个架构的成功结果，在 `kuasar-integration-validation` 绑定用例选择、源码身份和资产摘要，原样上传归档。
+组件按固定输入在 x86_64 与 aarch64 独立原生 job 中构建、测试，保留正常源码 CI。聚合按固定 GitHub asset ID 下载六个所选 Release，校验原生 size/digest、安全路径、权限和跨包冲突，构建所选 tag 的 helper、platform 和 Workbench 包。最终结构、安装、启动、组合、公开 prepare/run 与 Workbench 验收使用本次暂存字节，不重建产品或 helper。聚合 exact-assets 不再重复组件源码 unit/race/vet，汇总明确报告 skipped。发布必须核对本次双架构和 Workbench 成功结果，并按已验收 plan 比较上传后的完整名称、大小、digest 和状态。plan、哈希和结果仅用于当次流水线，不写入 Release 正文或包内。
 
 Preview、维护分支 Stable 和主线 Stable 使用相同资产与发行资产验证门禁;差别只在发行状态与
 Latest 策略。
@@ -376,7 +360,7 @@ Workbench 的 prepare 与构建期 collector 共享规范用例发现和外部�
 
 发布把已测试的保存镜像复制到 `ghcr.io/kuasar-sandbox/workbench:<去掉-release-前缀的聚合版本>`，验证两种架构的 config 身份和多架构 index，并匿名回读每个按 digest 固定的镜像到临时 Docker archive。归档校验器将每个解压后的镜像层与已测试离线镜像的 config 逐一绑定，发布重试也必须通过。registry digest、镜像 ID、离线 archive hash 含义各自独立。已有同名 Tag/资产必须匹配；重试只补传缺失资产，不覆盖测试字节。跨服务发布可恢复：只有 registry 和完整 GitHub 资产集合一致，GitHub draft 才公开。冲突时失败关闭，不改写历史源码和已发布字节。
 
-`release/` 存放发布脚本，`release/inputs/` 存放共享构建输入，测试放在 `test/release/`。`releases/` 只包含两个渠道清单：Stable 使用 `releases/release.yaml`，Daily 使用 `releases/daily-preview.yaml`。两个选版协调器会生成完整说明，并与选定版本一起持久化。生成时读取前次选定 tag 到各组件计划 source SHA 的完整提交范围，不必等待未来组件 tag；逐条列出提交标题、commit 链接，以及 GitHub merge/squash 标题中的所属仓库 PR 链接，直接提交也保留。比较链接固定源码，区分源码相同、回退和分叉。内核清单仅列触及内核发布输入的提交，runtime 则明确标注为共享仓库历史。API 清单不完整时停止，不提交残缺说明。自动正文优先展示渠道、比较基线、组件版本和本次合入，再提供简明的下载方法、实际验收范围及安全提示；常驻介绍改用文档链接，避免重复宣传。清单仍是可编辑发布说明的唯一来源，发布器不重新生成合入清单，人工说明不属于产品验收内容。
+`release/` 存放发布脚本，`release/inputs/` 存放共享构建输入，测试放在 `test/release/`。`releases/` 只包含两个渠道清单：Stable 使用 `releases/release.yaml`，Daily 使用 `releases/daily-preview.yaml`。两个选版协调器会生成完整说明，并与选定版本一起持久化。生成时读取前次选定 tag 到各组件计划 source SHA 的完整提交范围，不必等待未来组件 tag；逐条列出提交标题、commit 链接，以及 GitHub merge/squash 标题中的所属仓库 PR 链接，直接提交也保留。比较链接固定源码，区分源码相同、回退和分叉。内核清单仅列触及内核发布输入的提交，runtime 则明确标注为共享仓库历史。API 清单不完整时停止，不提交残缺说明。自动正文优先展示渠道、比较基线、组件版本和本次合入，再提供简明的下载方法与安全提示；常驻介绍改用文档链接，避免重复宣传。清单仍是可编辑发布说明的唯一来源，发布器不重新生成合入清单，人工说明不属于产品验收内容。
 
 ```yaml
 notes:
@@ -393,9 +377,9 @@ notes:
 
 正文缩进四个空格。支持 literal `|`、`|-` 及其结尾换行语义，保留 Markdown、空行、行末空格和 Unicode。`body` 是整段人工发布说明，不再插入 Highlights。没有 `mode` 的旧清单仍可读取；准备步骤会把旧 `body` 和 `upgrade_notice` 一起迁移进完整正文，不能丢弃升级提醒。显式模式不能同时使用 `upgrade_notice`。缺少模式不是拒绝发布说明的理由。
 
-发布器读取目标聚合版本最新提交的渠道说明。渠道已进入新版本时，沿该清单的 first-parent 历史查找目标版本，不误用新版本文字；发布器历史中没有的维护分支版本可以使用自身清单。新说明不需要源码 SHA、plan ID、修正标记、与产品一致的组件表或验收结果。历史 `notes.aggregate_sha` 和 `notes.selection_sha256` 字段读取时忽略，准备清单时清除。人工说明不与已测试源码或 stage 中的旧文字比较。原 plan、产品源码、制品、架构测试和 Workbench 结果仍独立校验。已有验收 stage 通过原发布任务恢复，不重新选版或重建产品。历史包检查与新发布使用相同的文本传输检查。
+发布器读取目标聚合版本最新提交的渠道说明。渠道已进入新版本时，沿该清单的 first-parent 历史查找目标版本，不误用新版本文字；发布器历史中没有的维护分支版本可以使用自身清单。新说明不需要源码 SHA、plan ID、修正标记、与产品一致的组件表或验收结果。历史 `notes.aggregate_sha` 和 `notes.selection_sha256` 字段读取时忽略，准备清单时清除。人工说明不与已测试源码或 stage 中的旧文字比较。原 plan、产品源码、制品、架构测试和 Workbench 结果仍独立校验。已有验收 stage 通过原发布任务恢复，不重新选版或重建产品。包消费者忽略历史 Release 正文。
 
-选版仅更新清单，不在此时限制正文长度。开始发布前，按 125000 字符上限检查正文、完整验收证据及预留的 registry 证据；未超限正文保持原样。超限后在修改发布状态或传送发布资产之前停止，明确报告实际长度与预算，等待人工修改并提交清单，然后通过原发布任务恢复。发布器只读清单，不具备自动压缩或正文写回逻辑，不截断正文或机器证据。原有重复 `case_files` 的无损消重不变，全部源码/制品检查与验收门禁保持不变。
+选版仅更新清单，不在此时限制正文长度。发布前的 125000 字符上限只适用于完整人类说明。超限则停止并报告实际长度与预算，等待人工修改并提交清单；发布器不压缩、截断或写回说明。正文不携带验收、依赖、来源或 registry 机器记录。成功 stage 仍在且版本和字节一致时，优先恢复原发布步骤；stage 过期或冲突须明确失败并重新验收，不建立永久恢复证据库。
 
 用户只解压所选产品架构与 `platform-release`；`workbench-<arch>-v*.tar.gz` 使用 `docker load` 导入，不能解压到产品目录。[快速开始](quickstart_zh.md) 检查声明集合并按显式资产类别下载。用户可以不下载 workbench，但新聚合发布必须包含两种架构镜像。
 
@@ -503,22 +487,24 @@ make test-release-tools
 并验证全部相对路径和标题锚点。翻译完整性需要单独进行语义检视；打包检查通过不能证明
 尚未完成的文档已翻译。
 
-Workbench 分组证据显式使用 `workbench-groups-v1` 和 `qualification_scope=native-grouped`；历史 `system`、`native-full` 及 ARM `artifact-only` 记录仍可读取。它将两个 x86 组及 ARM 证据绑定到精确源码/资产、输入生产任务、Actions job、artifact 和 attempt。发布及基线选择拒绝已被生产任务重跑替代的验收；Preview 恢复不能复用早于最新生产任务的结果。公开资产集合和下载选择器不变。
+同一次发布的 Workbench 分组结果保留两次独立 x86 执行与必需的 ARM 结果。stage 校验核对本次实际字节、job/attempt 与输入生产任务；新的失败或重跑会使旧结果失效。这些仅为临时流水线记录，不进入 Release 正文，也不是已发布包的消费资格协议。
 
-兼容读取器必须先合入 main，才能启用 `workbench_runtime_groups`，因为 bind-validation 使用 main 工具。默认仍为完整调度，直到多次真实端到端测量及失败/重跑验收证明分组合理，详见 [CI](ci_zh.md#workbench-运行分组)。两组回执均保留，正文上限及完整 registry 预留不变。停用调度不能删除已发布证据的读取能力。
+兼容 stage 读取器必须先合入 main，再启用分组生产。默认仍为完整调度，直到真实端到端测量与失败重试验收证明分组合理，详见 [CI](ci_zh.md#workbench-运行分组)。正文不预留 registry 空间，普通发布包消费不依赖历史分组。
 
 ## 9. Preview GC
+
+Workbench GC 使用实际非目标 registry tag 与 multiarch 引用保护共享镜像，也保护保留的无 tag index。只删除明确属于目标 Preview 的 index 及其独占子镜像，先删 index；每次删除前刷新引用。明确 404 可幂等重试，网络或权限错误则停止。不确定归属的孤儿保留并报告。不读取 Release 正文，不扩大原有 GC 范围与保留期。
 
 Stable 聚合发布后,该版本线进入 7 天回退窗口。`Preview GC` 从 Stable Tag 可达的
 `daily-preview.yaml` first-parent 历史生成精确 allowlist,不使用宽泛版本 glob。它还会
 保护:
 
-- 任何其他仍保留的聚合 Preview 所引用的组件 Preview;
+- 其他保留聚合 Tag 所引用的组件 Preview，包括无 Release 的 Tag 和 draft;
 - `main` 和所有平台维护分支当前 Daily 清单引用的组件 Preview;
 - 正在运行发布或删除工作流的对象。
 
 计划阶段验证 Stable Release、Tag、声明资产 digest、canonical 清单、Preview 归属、
-Release ID、可恢复源码 SHA 和 active run,并输出稳定排序计划及 SHA-256 digest。正式版
+Release ID、可恢复源码 SHA 和 active run,并输出本次临时的稳定排序计划及摘要；包统计忽略旧校验和附件。正式版
 已经关闭的当前 Daily 清单不再保护同版本 Preview;其他仍开放分支和保留聚合 Preview 的
 引用继续受保护。完整或残缺的 canonical Preview 都由本仓删除 wrapper 收敛。任何分页、
 字段、引用或归属异常都会在零删除状态停止。手工 dry-run 不受 7 天限制,但 apply 不能
@@ -540,8 +526,7 @@ canonical 提交的 first-parent 祖先。旁支、指向其他清单和无法�
 Apply 先 dispatch 五个组件仓的本地删除 wrapper。每个 wrapper 仅使用本仓短期
 `GITHUB_TOKEN contents:write`,再次核对精确 Preview Tag 和源码 SHA,然后将 Release、
 所有资产与 Tag 一并删除。所有组件候选消失后,平台才删除聚合 Preview。中途失败不会
-重建已经删除的对象;组件和聚合删除的确定性失败都最多重跑三次,下一次根据 canonical
-历史重算并继续收敛。若一次成功清理后同名对象仍可见或被重新创建,下一次 Apply 会派发
+重建已经删除的对象。组件和聚合删除在本轮 GC 调用中各最多派发三次当前 main 工作流，历史失败次数不会锁死后续运行；每次调用都重新计算 canonical 历史与实际引用。若一次成功清理后同名对象仍可见或被重新创建,下一次 Apply 会派发
 新的清理 run。Stable Release、Stable Tag、Actions artifacts、非 canonical orphan 都
 不属于 GC 删除集合。
 
@@ -561,7 +546,7 @@ gh workflow run preview-gc.yml --repo kuasar-sandbox/kuasar-sandbox --ref main \
   -f stable_version=release-v0.5.7 -f dry_run=false
 ```
 
-Workbench Preview 清理遵守同样的 canonical 版本/源码归属检查。删除自有 package version 前验证仓库关联、不可变 digest 和源码/版本 label，并保护活跃发布、其他保留 Release 的 binding、共享 Tag、保留 index 引用的子 manifest。不会 prune 无关或无 Tag 的镜像版本。历史发布保持原清理契约。
+Workbench Preview 清理遵守同样的 canonical 版本/源码归属检查。删除自有 package version 前验证仓库关联、不可变 digest 和源码/版本 label，并保护活跃发布、实际非目标 Tag，以及保留 index 引用的子 manifest，包括无 tag index。目标 index 的子镜像仅在本次观察到的引用闭包内考虑删除；无关或归属不明的镜像保留。
 
 ## 10. 权限与可靠性
 
@@ -575,11 +560,11 @@ Workbench Preview 清理遵守同样的 canonical 版本/源码归属检查。�
 - 候选 Runner 的源码获取 token 为只读,并在执行前撤销。这不隔离持久 App/Runner
   凭据或共享可写状态;具体边界见 [CI Runner slot](../ci/runner/README_zh.md);
 - 发布先创建 draft、上传并复核 digest,全部一致后才公开;
-- 已发布 Tag 或 Release 不由发布器覆盖;残缺 Preview 只能经受保护删除入口恢复;
+- 发布器不覆盖已发布 Tag 或不同内容资产。成功 stage 仍在时恢复原发布步骤；已公开且一致的 Release 只读核对。过期或冲突的 stage 须经受保护入口明确恢复;
 - 分支 HEAD、Tag commit、清单 blob SHA 和发行资产验证共同固定一次发布;
 - 即使渲染后的 Daily 清单无需写入,协调器仍复核远端分支 HEAD 与清单 blob,不会用陈旧
   checkout 派发组件;
-- Preview Release 的构建绑定防止相同 Tag/源码在不同依赖闭包之间被错误复用;
+- 新构建固定本次依赖闭包；已发布组件按 Tag 复用，不做历史绑定资格审核，由最终组合验收检查所选成品;
 - scanner 使用独立 concurrency key;所有平台分支协调器与 GC 共用全局
   `preview-manifest-selection-and-gc` concurrency group。scanner 顺序等待每个分支,不同时
   填入多个 pending slot。组件完整构建/发布 workflow 与 delete 对同一精确版本共用

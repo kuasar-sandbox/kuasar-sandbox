@@ -29,9 +29,9 @@ TODAY = os.environ.get("PREVIEW_DATE", "")
 WAIT_SECONDS = int(os.environ.get("PREVIEW_WAIT_SECONDS", "3000"))
 INITIALIZE_ARM = os.environ.get("INITIALIZE_ARM", "false") == "true"
 POLL_SECONDS = int(os.environ.get("PREVIEW_POLL_SECONDS", "120"))
-PREVIEW_BINDING_RE = re.compile(
-    r"<!-- kuasar-preview-binding (?P<value>\{[^\r\n]*\}) -->"
-)
+# Bounded only within this coordinator invocation; old failed workflows never ban retries.
+_cleanup_dispatches: dict[tuple[str, str, str, str], int] = {}
+_publication_resumes: dict[int, int] = {}
 
 
 def load_module(name: str, path: pathlib.Path) -> Any:
@@ -107,7 +107,6 @@ class Plan:
     selected: str
     action: str
     source_head: str | None = None
-    verified_dependency_binding: str | None = None
 
 
 class Pending(RuntimeError):
@@ -244,7 +243,6 @@ def platform_asset_names_for_components(
     elif delivery != 'historical':
         raise ValueError('unsupported aggregate delivery contract')
     return {
-        "SHA256SUMS",
         archive_name("platform", tag),
         *(archive_name(unit, components[unit], arch) for unit in selection.UNITS for arch in architectures),
     } | ({selection.workbench_archive(tag, arch) for arch in architectures}
@@ -287,13 +285,49 @@ def tag_sha(repository: str, tag: str) -> str | None:
     state = api_optional(f"repos/{repository}/git/ref/tags/{quote(tag, safe='')}")
     if state is None:
         return None
-    target = state.get("object")
-    if not isinstance(target, dict) or target.get("type") != "commit":
-        raise Deferred(f"{repository} {tag} is not a lightweight commit tag")
-    sha = target.get("sha")
-    if not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
-        raise Deferred(f"{repository} {tag} has an invalid tag target")
-    return sha
+    return resolve_tag_target(repository, state.get('object'))
+
+
+def resolve_tag_target(repository, target):
+    seen = set()
+    while isinstance(target, dict):
+        sha, kind = target.get('sha'), target.get('type')
+        if not isinstance(sha, str) or re.fullmatch(r'[0-9a-f]{40}', sha) is None or sha in seen:
+            break
+        seen.add(sha)
+        if kind == 'commit':
+            return sha
+        if kind != 'tag' or len(seen) >= 16:
+            break
+        target = api(f'repos/{repository}/git/tags/{sha}').get('object')
+    raise Deferred(f'{repository} has an unresolved tag target; retain for inspection')
+
+
+def complete_assets(release, expected_sets):
+    """Check package availability, never historical qualification records.
+
+    Unknown metadata must not turn a complete public package into an automatic
+    incomplete-release deletion candidate. Historical checksum files are ignored.
+    """
+    rows = release.get('assets')
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise Deferred('Release asset inventory is unavailable')
+    rows = [row for row in rows if row.get('name') != 'SHA256SUMS']
+    names = [row.get('name') for row in rows]
+    allowed = set().union(*expected_sets)
+    if any(not isinstance(name, str) or name not in allowed for name in names) or len(names) != len(set(names)):
+        raise Deferred('Release asset inventory is unexpected or duplicated; retain for inspection')
+    ids = []
+    for row in rows:
+        if (type(row.get('id')) is not int or row['id'] <= 0 or type(row.get('size')) is not int
+                or row['size'] <= 0 or not isinstance(row.get('digest'), str)
+                or re.fullmatch(r'sha256:[0-9a-f]{64}', row['digest']) is None
+                or row.get('state') not in ('uploaded', 'starter')):
+            raise Deferred('Release asset size/digest/identity/state is unavailable; retain for inspection')
+        ids.append(row['id'])
+    if len(set(ids)) != len(ids):
+        raise Deferred('Release asset IDs are duplicated; retain for inspection')
+    return set(names) in expected_sets and all(row.get('state') == 'uploaded' for row in rows)
 
 
 class RepositoryState:
@@ -315,12 +349,10 @@ class RepositoryState:
             if not isinstance(ref, str) or not ref.startswith("refs/tags/"):
                 continue
             tag = ref.removeprefix("refs/tags/")
-            if not isinstance(target, dict) or target.get("type") != "commit":
+            try:
+                self.tag_shas[tag] = resolve_tag_target(unit.repository, target)
+            except Deferred:
                 self.invalid_tags.add(tag)
-                continue
-            sha = target.get("sha")
-            if isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha):
-                self.tag_shas[tag] = sha
         self._statuses: dict[str, ReleaseStatus] = {}
 
     def status(self, tag: str) -> ReleaseStatus:
@@ -329,23 +361,18 @@ class RepositoryState:
         release = self.releases.get(tag)
         if tag in self.invalid_tags:
             raise Deferred(
-                f"{self.unit.repository} {tag} is not a lightweight commit tag"
+                f"{self.unit.repository} {tag} has an unresolved tag target"
             )
         sha = self.tag_shas.get(tag)
         prerelease = "-preview." in tag
         archive = archive_name(self.unit.name, tag)
         complete = False
         if release is not None:
-            assets = release.get("assets")
             complete = (
                 release.get("draft") is False
                 and release.get("prerelease") is prerelease
-                and isinstance(assets, list)
-                and sorted(asset.get("name") for asset in assets)
-                in (sorted(("SHA256SUMS", archive)), sorted(("SHA256SUMS", archive, archive_name(self.unit.name, tag, "aarch64"))))
-                and all(asset.get("state") == "uploaded" for asset in assets)
+                and complete_assets(release, [{archive}, {archive, archive_name(self.unit.name, tag, "aarch64")}])
                 and sha is not None
-                and release.get("target_commitish") == sha
             )
         status = ReleaseStatus(release, sha, complete)
         self._statuses[tag] = status
@@ -372,53 +399,10 @@ def dependency_binding(plan: Plan, plans: dict[str, Plan]) -> str:
     )
 
 
-def preview_binding(status: ReleaseStatus, tag: str) -> dict[str, str]:
-    if status.release is None:
-        raise Deferred(f"{tag} has no Release metadata binding")
-    body = status.release.get("body")
-    if not isinstance(body, str):
-        raise Deferred(f"{tag} has no Preview build binding")
-    matches = list(PREVIEW_BINDING_RE.finditer(body))
-    if len(matches) != 1:
-        raise Deferred(f"{tag} must contain exactly one Preview build binding")
-    try:
-        value = json.loads(matches[0].group("value"))
-    except json.JSONDecodeError as error:
-        raise Deferred(f"{tag} has an invalid Preview build binding") from error
-    fields = {
-        "aggregate_sha",
-        "aggregate_version",
-        "dependencies",
-        "source_ref",
-        "source_sha",
-        "unit",
-    }
-    if not isinstance(value, dict) or set(value) != fields or any(
-        not isinstance(value[field], str) for field in fields
-    ):
-        raise Deferred(f"{tag} has an invalid Preview build binding schema")
-    assert isinstance(value, dict)
-    return {field: value[field] for field in fields}
-
-
-def validate_preview_reuse(
-    plan: Plan, plans: dict[str, Plan], status: ReleaseStatus
-) -> None:
-    if "-preview." not in plan.selected:
-        return
-    binding = preview_binding(status, plan.selected)
-    date = plan.selected.rsplit("-preview.", 1)[1]
-    if re.fullmatch(
-        rf"release-v[0-9]+\.[0-9]+\.[0-9]+-preview\.{re.escape(date)}",
-        binding["aggregate_version"],
-    ) is None or re.fullmatch(r"[0-9a-f]{40}", binding["aggregate_sha"]) is None:
-        raise Deferred(f"{plan.unit.name} {plan.selected} has invalid aggregate provenance")
-    if binding["unit"] != plan.unit.name:
-        raise Deferred(f"{plan.unit.name} {plan.selected} has another unit binding")
-    if binding["source_sha"] != plan.source_sha:
-        raise Deferred(f"{plan.unit.name} {plan.selected} has another source binding")
-    if binding["dependencies"] not in {dependency_binding(plan, plans), plan.verified_dependency_binding}:
-        raise Deferred(f"{plan.unit.name} {plan.selected} has another dependency binding")
+def validate_release_reuse(plan: Plan, status: ReleaseStatus) -> None:
+    """A published tag is a finished product, independent of old build records."""
+    if not status.complete or status.tag_sha != plan.source_sha:
+        raise Deferred(f"{plan.unit.name} {plan.selected} is incomplete or its tag changed")
 
 
 def release_run_title(plan: Plan, plans: dict[str, Plan]) -> str:
@@ -586,6 +570,14 @@ def rerun_workflow(repository: str, state: dict[str, Any]) -> None:
     gh(*args)
 
 
+def count_cleanup_dispatch(repository, version, source_sha, mode):
+    key = (repository, version, source_sha, mode)
+    count = _cleanup_dispatches.get(key, 0)
+    if count >= 3:
+        raise RuntimeError(f'cleanup did not converge after three attempts in this invocation: {version}')
+    _cleanup_dispatches[key] = count + 1
+
+
 def dispatch_cleanup(plan: Plan, mode: str) -> None:
     active = active_delete_run(plan.unit.repository, plan.selected)
     if active is not None:
@@ -594,15 +586,7 @@ def dispatch_cleanup(plan: Plan, mode: str) -> None:
     state = latest_run(plan.unit.repository, "delete-preview.yml", title)
     if state is not None and run_active(state):
         raise Pending(f"cleanup is active: {state.get('html_url')}")
-    if (
-        state is not None
-        and state.get("conclusion") != "success"
-        and int(state.get("run_attempt", 1)) < 3
-    ):
-        rerun_workflow(plan.unit.repository, state)
-        raise Pending(f"reran cleanup: {state.get('html_url')}")
-    if state is not None and state.get("conclusion") != "success":
-        raise RuntimeError(f"cleanup remains failed after three attempts: {state.get('html_url')}")
+    count_cleanup_dispatch(plan.unit.repository, plan.selected, plan.source_sha, mode)
     args = [
         "workflow",
         "run",
@@ -796,11 +780,9 @@ def plan_units(configured: dict[str, str], date: str) -> dict[str, Plan]:
                 status = state.status(plan.selected)
                 if status.complete and not has_arm_archive(unit.name, plan.selected, status):
                     raise Deferred("ARM initialization must choose a new unit version; historical assets cannot be amended")
-            if status.complete:
-                plan = verify_dependency_reuse(plan, plans, status, temporary)
             plans[unit.name] = plan
             if status.complete:
-                validate_preview_reuse(plan, plans, status)
+                validate_release_reuse(plan, status)
     return plans
 
 
@@ -834,38 +816,6 @@ def dependency_inputs_changed(dependency, consumer, plans, configured, temporary
     return any(not path.endswith("_test.go") for path in changed.splitlines())
 
 
-def verify_dependency_reuse(plan, plans, status, temporary):
-    """A CLI-only dependency release must not rebuild unchanged linked products.
-
-    Keep the original published binding. Verify any different dependency tuple
-    against its complete release's exact source, then retain that tuple in this
-    immutable plan for the later publication recheck.
-    """
-    if "-preview." not in plan.selected:
-        return plan
-    original = preview_binding(status, plan.selected)["dependencies"]
-    if original == dependency_binding(plan, plans):
-        return plan
-    try:
-        pairs = [item.split("=", 1) for item in original.split(",") if item]
-        versions = dict(pairs)
-        if len(versions) != len(pairs) or set(versions) != set(plan.unit.dependencies):
-            raise ValueError("unexpected dependency set")
-        for name, version in versions.items():
-            if version == plans[name].selected:
-                continue
-            preview_selection.parse_tag(name, version)
-            previous = RepositoryState(UNIT_BY_NAME[name]).status(version)
-            if not previous.complete or previous.tag_sha is None:
-                raise ValueError("original dependency is unavailable")
-            changed = preview_selection.run_git(temporary / name, "diff", "--name-only",
-                f"{previous.tag_sha}..{plans[name].source_sha}", "--", *dependency_paths(name, plan.unit.name))
-            if any(not path.endswith("_test.go") for path in changed.splitlines()):
-                raise ValueError("linked inputs differ")
-    except (ValueError, RuntimeError) as error:
-        raise Deferred(f"{plan.unit.name} {plan.selected} has another dependency binding: {error}") from error
-    return replace(plan, verified_dependency_binding=original)
-
 
 def manifest_values() -> tuple[str, str | None, str, str | None, dict[str, str]]:
     path = PLATFORM_ROOT / "releases/daily-preview.yaml"
@@ -897,18 +847,13 @@ def platform_release(tag: str) -> ReleaseStatus:
     sha = tag_sha(PLATFORM_REPOSITORY, tag)
     if release is None:
         return ReleaseStatus(None, sha, False)
-    assets = release.get("assets")
     expected = platform_asset_names(tag, sha) if sha is not None else set()
     dual = expected | {name.replace("x86_64", "aarch64") for name in expected if "x86_64" in name}
     complete = (
         release.get("draft") is False
         and release.get("prerelease") is ("-preview." in tag)
-        and isinstance(assets, list)
-        and {str(asset.get("name")) for asset in assets} in (expected, dual)
-        and len(assets) == len({str(asset.get("name")) for asset in assets})
-        and all(asset.get("state") == "uploaded" for asset in assets)
         and sha is not None
-        and release.get("target_commitish") == sha
+        and complete_assets(release, [expected, dual])
     )
     return ReleaseStatus(release, sha, complete)
 
@@ -1047,7 +992,7 @@ def ensure_unit(
     if status.complete:
         if status.tag_sha != plan.source_sha:
             raise Deferred(f"{plan.unit.name} {plan.selected} moved to another commit")
-        validate_preview_reuse(plan, plans, status)
+        validate_release_reuse(plan, status)
         print(f"==> reuse {plan.unit.repository} {plan.selected}")
         return True
     active_release = active_release_run(
@@ -1105,17 +1050,7 @@ def dispatch_platform_cleanup(tag: str, source_sha: str) -> None:
     state = latest_run(PLATFORM_REPOSITORY, "delete-preview.yml", title)
     if state is not None and run_active(state):
         raise Pending(f"platform cleanup is active: {state.get('html_url')}")
-    if (
-        state is not None
-        and state.get("conclusion") != "success"
-        and int(state.get("run_attempt", 1)) < 3
-    ):
-        rerun_workflow(PLATFORM_REPOSITORY, state)
-        raise Pending(f"reran platform cleanup: {state.get('html_url')}")
-    if state is not None and state.get("conclusion") != "success":
-        raise RuntimeError(
-            f"platform cleanup remains failed after three attempts: {state.get('html_url')}"
-        )
+    count_cleanup_dispatch(PLATFORM_REPOSITORY, tag, source_sha, 'incomplete')
     gh(
         "workflow",
         "run",
@@ -1154,8 +1089,6 @@ def resume_workbench_publish(version: str, source_sha: str) -> bool:
     state = max(exact, key=lambda item: str(item.get('created_at', '')), default=None)
     if state is None:
         raise RuntimeError('partial workbench publication has no exact original workflow; retaining its bytes')
-    if sum(int(item.get('run_attempt', 1)) for item in exact) >= 3:
-        raise RuntimeError('aggregate publication failed after three attempts: ' + str(state.get('html_url')))
     if state.get('conclusion') == 'success':
         raise Pending('aggregate run is waiting for Release API convergence')
     attempts = paginated(f"repos/{PLATFORM_REPOSITORY}/actions/runs/{state['id']}/jobs?filter=all&per_page=100", 'jobs')
@@ -1183,6 +1116,10 @@ def resume_workbench_publish(version: str, source_sha: str) -> bool:
     # GitHub reruns this job and its dependents. Preparation, native builds and
     # successful validation are not rerun or replaced; the publisher downloads
     # that run's exact immutable stage and verifies source/head/bytes again.
+    count = _publication_resumes.get(state['id'], 0)
+    if count >= 3:
+        raise RuntimeError('aggregate publication failed after three resumes in this invocation: ' + str(state.get('html_url')))
+    _publication_resumes[state['id']] = count + 1
     gh('api', '--method', 'POST',
        f"repos/{PLATFORM_REPOSITORY}/actions/jobs/{publishers[0]['id']}/rerun", '--silent')
     print(f"==> resumed immutable workbench publication: {state.get('html_url')}")
@@ -1394,6 +1331,8 @@ def converge_until_deadline(plans: dict[str, Plan], aggregate: str, deadline: fl
 
 def run_branch() -> dict[str, str]:
     """Keep healthy preflight work alive and report its actual terminal state."""
+    _cleanup_dispatches.clear()
+    _publication_resumes.clear()
     selected_sha = PLATFORM_SHA
     deadline = time.monotonic() + WAIT_SECONDS
     reason = ""

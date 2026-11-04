@@ -72,7 +72,11 @@ while IFS=$'\t' read -r unit tag; do
   tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@1700000000' \
     -czf "$directory/$archive" -C "$stage" .
   cp "$directory/$archive" "$directory/$(component_archive "$unit" "$tag" aarch64)"
-  (cd "$directory" && sha256sum ./*.tar.gz | sed 's@  ./@  @' > SHA256SUMS)
+  python3 - "$directory" <<'PYASSETS'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+(root/'assets.json').write_text(json.dumps([dict(id=i, name=p.name, size=p.stat().st_size, digest='sha256:'+hashlib.sha256(p.read_bytes()).hexdigest(), state='uploaded') for i,p in enumerate(sorted(root.glob('*.tar.gz')),1)]))
+PYASSETS
   printf "Fixture updates for \`%s\`.\n" "$unit" > "$TMP/fetched/updates/$unit.md"
 
   source_root="$TMP/fetched/sources/$unit"
@@ -258,7 +262,13 @@ printf 'foreign namespace fixture\n' \
   > "$TMP/foreign-stage/share/licenses/accelerator/injected/LICENSE"
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@1700000000' \
   -czf "$foreign_dir/$foreign_archive" -C "$TMP/foreign-stage" .
-(cd "$foreign_dir" && sha256sum ./*.tar.gz | sed 's@  ./@  @' > SHA256SUMS)
+python3 - "$foreign_dir" <<'PYASSETS'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1]); rows=json.loads((root/'assets.json').read_text())
+for row in rows:
+    p=root/row['name']; row.update(size=p.stat().st_size,digest='sha256:'+hashlib.sha256(p.read_bytes()).hexdigest())
+(root/'assets.json').write_text(json.dumps(rows))
+PYASSETS
 if SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" \
     "$TMP/fetched-foreign-material" "$TMP/foreign-bundle" \
@@ -399,7 +409,7 @@ if python3 -B "$ROOT/release/publication_body.py" "$TMP/rejected-notes.md" \
   release_fail "publication accepted oversized release notes"
 fi
 grep -Fq 'budget=125000' "$TMP/rejected-notes.log"
-grep -Fq 'evidence must not be truncated' "$TMP/rejected-notes.log"
+grep -Fq 'notes must not be truncated' "$TMP/rejected-notes.log"
 mv "$TMP/orchestrator-notes" "$TMP/fetched/updates/orchestrator.md"
 if PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" "$ROOT/release/package-platform.sh" \
   package "$VERSION" "$TMP/fetched/sources" "independent-test-source" "$TMP/rejected-test-source" \
@@ -414,8 +424,8 @@ PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$TMP/bundle" kuasar-sandbox/kuasar-sandbox "$VERSION" \
   "$(git -C "$FORMAL_ROOT" rev-parse HEAD)" main
 
-[ "$(find "$TMP/bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 16 ] \
-  || release_fail "aggregate bundle must contain exactly sixteen assets"
+[ "$(find "$TMP/bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 15 ] \
+  || release_fail "aggregate bundle must contain exactly fifteen assets"
 [ ! -e "$TMP/bundle/release.json" ] || release_fail "aggregate bundle contains release.json"
 if find "$TMP/bundle/assets" -maxdepth 1 -type f -name 'release-*.yaml' | grep -q .; then
   release_fail "aggregate assets contain a release manifest"
@@ -431,23 +441,13 @@ for heading in \
   '## Component versions' \
   '## Component updates' \
   '## Download and use' \
-  '## Qualification scope' \
   '## Security'; do
   grep -Fqx "$heading" "$TMP/bundle/release-notes.md" \
     || release_fail "aggregate release notes omit $heading"
 done
-# Notes precede validation: declared profiles must not claim planned ARM cases ran.
-for coverage in \
-  'The declared native x86_64 profile uses the current full ordinary case selection.' \
-  'The hosted ARM profile requires native non-KVM image/storage E2E and `artifact-only` Workbench qualification' \
-  'planned Workbench cases do not establish network, KVM lifecycle or snapshot/restore execution.' \
-  'Consult the per-architecture validation records for executed cases and `qualification_scope`, including any `native-full` acceptance.'; do
-  grep -Fq "$coverage" "$TMP/bundle/release-notes.md" \
-    || release_fail "aggregate release notes misrepresent declared or executed architecture coverage"
-done
-if grep -Fq 'ARM retains native image/storage coverage and adds workbench network' \
-  "$TMP/bundle/release-notes.md"; then
-  release_fail "aggregate release notes claim unexecuted hosted ARM Workbench cases"
+# Acceptance is ephemeral pipeline state, not part of human Release notes.
+if grep -Eq 'kuasar-(integration-validation|preview-binding|release-source)|qualification_scope|SHA256SUMS' "$TMP/bundle/release-notes.md"; then
+  release_fail 'human release notes still depend on machine records or checksum assets'
 fi
 grep -Fq 'This aggregate is a Stable, non-prerelease release.' \
   "$TMP/bundle/release-notes.md" \
@@ -459,7 +459,7 @@ grep -Fq 'https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/n
   "$TMP/bundle/release-notes.md" \
   || release_fail "formal release notes omit the private security reporting link"
 for guidance in \
-  'SHA256SUMS' \
+  'verify GitHub asset sizes and SHA-256 digests' \
   'docker load -i' \
   'trusted administrator environment with Docker privileged access' \
   'do not provide hostile-root confinement' \
@@ -534,11 +534,15 @@ while IFS=$'\t' read -r unit tag; do
   printf '%s ARM fixture\n' "$unit" > "$TMP/stage-$unit/bin/$unit"
   tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@1700000000' \
     -czf "$directory/$archive" -C "$TMP/stage-$unit" .
-  (cd "$directory" && sha256sum ./*.tar.gz | sed 's@  ./@  @' > SHA256SUMS)
+  python3 - "$directory" <<'PYASSETS'
+import hashlib, json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+(root/'assets.json').write_text(json.dumps([dict(id=i, name=p.name, size=p.stat().st_size, digest='sha256:'+hashlib.sha256(p.read_bytes()).hexdigest(), state='uploaded') for i,p in enumerate(sorted(root.glob('*.tar.gz')),1)]))
+PYASSETS
 done < "$TMP/selection.tsv"
 SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched-dual" "$TMP/dual-bundle"
-[ "$(find "$TMP/dual-bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 16 ] \
+[ "$(find "$TMP/dual-bundle/assets" -maxdepth 1 -type f | wc -l)" -eq 15 ] \
   || release_fail 'dual aggregate does not contain both exact architecture sets'
 for arch in x86_64 aarch64; do
   "$FORMAL_ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/dual-bundle" "$TMP/install-$arch" "$arch"
@@ -554,7 +558,7 @@ for arch in x86_64 aarch64; do
 done
 
 cp -a "$TMP/bundle" "$TMP/tampered"
-printf 'tampered\n' >> "$TMP/tampered/assets/$(platform_archive "$VERSION")"
+printf 'invalid archive\n' > "$TMP/tampered/assets/$(platform_archive "$VERSION")"
 if "$ROOT/release/aggregate-release.sh" validate "$VERSION" "$TMP/tampered" >/dev/null 2>&1; then
   release_fail "aggregate validator accepted a tampered platform package"
 fi
@@ -610,6 +614,8 @@ git -C "$history_root" config user.name release-test
 git -C "$history_root" config user.email release-test@example.invalid
 git -C "$history_root" add release/selection.py releases/release.yaml releases/daily-preview.yaml
 git -C "$history_root" commit -qm 'initial release state'
+git -C "$history_root" tag release-v0.1.0
+git -C "$history_root" tag release-v0.1.0-preview.20260808
 
 cat > "$history_root/releases/release.yaml" <<'EOF'
 version: release-v0.2.0
@@ -645,6 +651,8 @@ EOF
 
 git -C "$history_root" add releases/release.yaml releases/daily-preview.yaml
 git -C "$history_root" commit -qm 'advance release line'
+git -C "$history_root" tag release-v0.2.0
+git -C "$history_root" tag release-v0.2.0-preview.20260810
 sed -i 's/preview\.20260810/preview.20260811/g' "$history_root/releases/daily-preview.yaml"
 sed -i '/^preview_version:/a previous_preview_version: preview.20260810' \
   "$history_root/releases/daily-preview.yaml"
@@ -656,7 +664,7 @@ sed -i '/^preview_version:/a previous_preview_version: preview.20260810' \
   > "$TMP/historical-preview-selection.tsv"
 
 bash -n "$ROOT/release/preview-coordinator.sh" "$ROOT/release/delete-preview.sh"
-python3 -m py_compile "$ROOT/release/selection.py" \
+PYTHONPYCACHEPREFIX="$TMP/pycache" python3 -m py_compile "$ROOT/release/selection.py" \
   "$ROOT/release/preview-selection.py" "$ROOT/release/preview_coordinator.py" \
   "$ROOT/release/formal_coordinator.py" "$ROOT/release/preview_gc.py"
 for workflow in daily-preview.yml daily-preview-branch.yml aggregate-release.yml \

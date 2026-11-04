@@ -231,7 +231,7 @@ Source CI admits the existing PR merge refs and trusted branch refs against auto
 
 For an owner without an admitted candidate, the selected tag must retain every case ID in the validated baseline. Missing cases fail explicitly and require a reviewed new-tag selection; source CI must not silently reduce coverage.
 
-Historical aggregate consumers retrieve the manifest and packages by aggregate tag. They preserve original independent test provenance. New publication bindings embed the canonical validation plan, owner case mapping and source records alongside exact package digests. For an older binding without ownership, the reader requires its original retained integration-plan artifact, verifies its canonical identity against `plan_id`, and cross-checks all bound identities and assets. Missing or ambiguous evidence fails explicitly; filenames cannot establish historical ownership.
+Aggregate consumers retrieve the manifest from the selected aggregate tag and obtain its exact package set by GitHub asset ID, size and digest. They do not read Release machine blocks, SHA256SUMS or historical Actions plans/jobs/artifacts. Old records are ignored. Required source inputs are fetched only by the corresponding unit tag, with runtime and vmlinux resolved independently; current main and component Latest never reinterpret an old aggregate.
 
 The product contract is prebuilt products → `e2e prepare` → `<suite>.<case>.sh` → the shared public `e2e run`. The full filename is the case ID; its first segment is one of `basic`, `storage`, `image`, `network`, `sandbox`, `snapshot`, `orchestrator`, `builder` or `telemetry`. Internal CI shards group these exact files by suite. The plan records the selected files and architecture exclusions before execution.
 
@@ -321,22 +321,12 @@ agree. An unchanged earlier successful attempt may be reused; rerunning any
 bound producer invalidates the old validation. Missing, duplicate, failed,
 cancelled or shared-instance evidence cannot authorize publication.
 
-Reader compatibility must be merged before grouped production: the publisher
-loads `bind-validation.py` from **main**. Registry publication, release notes,
-baseline/artifact resolution, Hosted selection and Preview recovery retain
-legacy full and ARM results alongside grouped evidence. Public downloads keep
-the same assets and per-architecture selection. Release-body and complete
-registry-reservation limits are unchanged. Repeated comparable real Actions
-runs, including failure/rerun injections, queue/preparation/execution/final
-feedback and total job minutes, must justify activation. Local or simulated
-metadata is not Actions acceptance. Without stable final benefit at acceptable
-cost, keep `all`. Rollback disables production while retaining readers for any
-published grouped evidence.
+Compatible readers for the current stage must reach main before grouped production. Real Actions comparisons must cover failure/rerun, preparation, execution and total job time; local fixtures are not product acceptance. Group results remain temporary workflow state. Downloads, baseline resolution and Workbench selection do not read historical acceptance records.
 
 For repeated same-source qualification, aggregate dispatch also accepts
 `validation_only=true` (default false). It still requires main, the exact current
-selection and an unpublished version, and runs all original build/runtime/source
-checks, publication binding, body limits and registry-input verification. It
+selection and an unpublished version, and runs the required builds and package execution
+checks, stage verification, human body limits and registry-input verification. It
 stops before registry/Release writes and retains this run's artifacts under their
 existing expiry for failure/rerun tests. Its `Validate aggregate <version> @<sha>`
 identity and per-run `aggregate-validation` concurrency key let independent `all`
@@ -356,9 +346,9 @@ evidence merely to obtain a benchmark.
 
 ## 4. Daily and Stable
 
-`exact-assets` is callable only by the actual public platform aggregate workflow. Its plan binds the exact committed manifest and complete staged asset set (platform, component archives, Workbench images and SHA256SUMS). It selects no product or helper rebuilds. Each target uses the same download/compose/public-prepare/public-run/result primitives as PR mode and consumes the prebuilt helper packages from the exact staged platform archive. The separate required source checks remain outside artifact E2E.
+`exact-assets` is callable only by the public platform aggregate workflow. Its temporary plan fixes the selected manifest and complete fifteen-package stage: platform, twelve component archives and two Workbench image archives. It selects no product or helper rebuilds during acceptance. Both architectures run the necessary package, installation, startup, combination and Workbench checks using the exact staged bytes. Duplicate component source unit/race/vet jobs are skipped and reported as skipped; normal source CI keeps those gates.
 
-Publish verifies both successful architecture results against the staged digests and publishes the original archives unchanged. Component material/license/source identity validation, trusted publisher notes and version immutability remain required. The exact ARM selection and capability groups are recorded before execution and in the aggregate validation binding. Historical non-KVM evidence remains limited to its original scope.
+Publish verifies successful current architecture and Workbench results against the stage, uploads those bytes unchanged, and reads back GitHub asset metadata and GHCR image content. Human Release notes come only from the channel manifest. Plans, hashes and results are temporary workflow state; no machine records or independent SHA256SUMS are published. A retained successful stage can resume publication when its version and bytes match. Already public content is confirmed read-only; conflicts fail without replacement.
 
 ## 5. Native cache
 

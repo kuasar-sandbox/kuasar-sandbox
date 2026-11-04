@@ -1,5 +1,6 @@
 """Publish verified workbench archives without rebuilding or replacing image tags."""
 import argparse
+import importlib.util
 import publication_body
 import base64
 import gzip
@@ -16,7 +17,6 @@ import workbench_assets
 
 REPOSITORY = publication_body.WORKBENCH_REPOSITORY
 PLATFORMS = {'x86_64': 'amd64', 'aarch64': 'arm64'}
-MARKER = publication_body.MARKER
 
 
 def require(condition, message):
@@ -85,33 +85,21 @@ def check_index(raw, children):
     return digest(raw)
 
 
-def validate_binding(bundle, version, revision):
-    require(selection.AGGREGATE_RE.fullmatch(version), "invalid aggregate version")
-    receipts = {arch: workbench_assets.validate(bundle / 'assets', version, arch, revision,
-                                               receipt_directory=bundle / 'workbench') for arch in PLATFORMS}
-    notes = bundle / 'release-notes.md'
-    text = notes.read_text()
-    require(text.count(MARKER) == 1, 'registry publication requires the exact successful validation binding')
-    prefix, marker = text.split(MARKER)
-    encoded, suffix = marker.split(' -->', 1)
-    binding = json.loads(encoded)
-    require(binding.get('delivery') == 'workbench-v1' and binding.get('aggregate_sha') == revision,
-            'registry publication validation has another contract or source')
-    for arch, receipt in receipts.items():
-        result = binding.get('workbench', {}).get(arch, {})
-        import sys
-        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci/integration'))
-        import workbench_groups
-        workbench_groups.verify_live(result)
-        require(result.get('conclusion') == 'success' and result.get('image_id') == receipt['image_id']
-                and result.get('sha256') == receipt['sha256'], 'registry image has not passed staged workbench validation')
-    publication_body.binding_text(prefix, binding, suffix, reserve_registry_version=version)
-    return receipts, prefix, binding, suffix
+def validate_stage(bundle, version, revision, plan, validation, workbench):
+    require(selection.AGGREGATE_RE.fullmatch(version), 'invalid aggregate version')
+    require(plan['baseline']['version'] == version and plan['baseline']['sha'] == revision,
+            'registry publication stage has another version or source')
+    publication_body.checked((bundle / 'release-notes.md').read_text())
+    spec = importlib.util.spec_from_file_location('publication_stage_checks', Path(__file__).with_name('bind-validation.py'))
+    checks = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(checks)
+    checks.verify_stage(bundle, plan, validation, workbench)
+    return {arch: workbench_assets.validate(bundle / 'assets', version, arch, revision,
+                    receipt_directory=bundle / 'workbench') for arch in PLATFORMS}
 
 
-def publish(bundle, version, revision):
-    receipts, prefix, binding, suffix = validate_binding(bundle, version, revision)
-    notes = bundle / 'release-notes.md'
+def publish(bundle, version, revision, plan, validation, workbench, *, read_only=False):
+    receipts = validate_stage(bundle, version, revision, plan, validation, workbench)
     token = os.environ.get('GH_TOKEN', '')
     actor = os.environ.get('GITHUB_ACTOR', '')
     require(token and actor, 'registry publication needs the job package-write identity')
@@ -128,6 +116,7 @@ def publish(bundle, version, revision):
             tag = reference + '-' + arch
             raw = inspect_raw(tag, auth, missing=True)
             if raw is None:
+                require(not read_only, 'published Release is missing its Workbench image; refusing to alter completed publication')
                 archive = root / 'image.tar'
                 # skopeo consumes the saved image, never a rebuilt Dockerfile.
                 with gzip.open(bundle / 'assets' / receipt['archive'], 'rb') as source, archive.open('wb') as output:
@@ -148,6 +137,7 @@ def publish(bundle, version, revision):
             verify_public_layers(immutable, receipt, anonymous, root / 'public-image.tar')
         raw = inspect_raw(reference, auth, missing=True)
         if raw is None:
+            require(not read_only, 'published Release is missing its Workbench index; refusing to alter completed publication')
             environment = dict(os.environ, DOCKER_CONFIG=str(root))
             subprocess.run(['docker', 'manifest', 'create', reference,
                             *(REPOSITORY + '@' + row['digest'] for row in children.values())],
@@ -157,9 +147,6 @@ def publish(bundle, version, revision):
         identity = check_index(raw, children)
         require(inspect_raw(reference, anonymous) == raw, 'aggregate registry tag is not publicly readable with identical bytes')
         proof = {'reference': reference, 'digest': identity, 'architectures': children}
-    require('registry' not in binding or binding['registry'] == proof, 'existing validation names different registry bytes')
-    binding['registry'] = proof
-    notes.write_text(publication_body.binding_text(prefix, binding, suffix))
     return proof
 
 
@@ -168,11 +155,17 @@ if __name__ == '__main__':
     parser.add_argument('bundle', type=Path)
     parser.add_argument('version')
     parser.add_argument('revision')
+    parser.add_argument('--plan', required=True, type=Path)
+    parser.add_argument('--validation', required=True, type=Path)
+    parser.add_argument('--workbench', required=True, type=Path)
     parser.add_argument('--validate-only', action='store_true',
-                        help='Verify archives, binding and current producers without registry transport or writes')
+                        help='Verify this stage, accepted bytes and current producers without registry transport or writes')
+    parser.add_argument('--read-only', action='store_true', help='Verify already published images without registry writes')
     args = parser.parse_args()
+    inputs = (json.loads(args.plan.read_text()), json.loads(args.validation.read_text()),
+              {arch: json.loads((args.workbench / f'{arch}.json').read_text()) for arch in PLATFORMS})
     if args.validate_only:
-        receipts, _, _, _ = validate_binding(args.bundle, args.version, args.revision)
+        receipts = validate_stage(args.bundle, args.version, args.revision, *inputs)
         print(json.dumps({'mode': 'validation-only', 'conclusion': 'success', 'architectures': sorted(receipts)}))
     else:
-        print(json.dumps(publish(args.bundle, args.version, args.revision), sort_keys=True))
+        print(json.dumps(publish(args.bundle, args.version, args.revision, *inputs, read_only=args.read_only), sort_keys=True))

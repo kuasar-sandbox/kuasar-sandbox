@@ -57,14 +57,12 @@ check_release() {
 
 verify_uploaded_assets() {
   local state="$1" bundle="$2"
-  local expected="$TMP/expected-assets" actual="$TMP/actual-assets" file
-  : > "$expected"
-  while IFS= read -r file; do
-    printf '%s\tsha256:%s\t%s\tuploaded\n' \
-      "$(basename "$file")" \
-      "$(sha256sum "$file" | awk '{print $1}')" \
-      "$(stat -c '%s' "$file")" >> "$expected"
-  done < <(find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort)
+  local expected="$TMP/expected-assets" actual="$TMP/actual-assets"
+  # Compare remote bytes to the accepted plan, not a newly hashed upload tree.
+  jq -r '.baseline.assets[] | [.name, .digest, (.size | tostring), "uploaded"] | @tsv' \
+    "$RELEASE_PLAN_FILE" | LC_ALL=C sort > "$expected"
+  jq -e '[.assets[].id] | all(type == "number" and . > 0) and length == (unique | length)' \
+    "$state" >/dev/null || release_fail "uploaded assets have missing or duplicate IDs"
   jq -r '.assets[] | [.name, .digest, (.size | tostring), .state] | @tsv' "$state" \
     | LC_ALL=C sort > "$actual"
   LC_ALL=C sort -o "$expected" "$expected"
@@ -84,12 +82,18 @@ publish_bundle() {
   [[ "$source_ref" = main || "$source_ref" =~ ^release/v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.x$ ]] \
     || release_fail "source-ref must be main or release/vMAJOR.MINOR.x"
   "$ROOT/release/aggregate-release.sh" validate "$version" "$bundle" --publication
-  python3 -B "$ROOT/release/publication_body.py" "$bundle/release-notes.md" \
-    --reserve-registry-version "$version"
+  python3 -B "$ROOT/release/publication_body.py" "$bundle/release-notes.md"
+  : "${RELEASE_PLAN_FILE:?publication requires its original accepted plan}"
+  : "${RELEASE_VALIDATION_FILE:?publication requires successful stage validation}"
+  : "${RELEASE_WORKBENCH_RESULTS:?publication requires this stage Workbench results}"
+  local stage_inputs=(--plan "$RELEASE_PLAN_FILE" --validation "$RELEASE_VALIDATION_FILE" --workbench "$RELEASE_WORKBENCH_RESULTS")
+  python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit" --validate-only "${stage_inputs[@]}"
 
   local tag_state="$TMP/tag"
   if api_optional "repos/$REPOSITORY/git/ref/tags/$version" "$tag_state"; then
-    [ "$(jq -er '.object.sha' "$tag_state")" = "$commit" ] \
+    local resolved_commit
+    resolved_commit=$(gh api "repos/$REPOSITORY/commits/$version" --jq .sha)
+    [ "$resolved_commit" = "$commit" ] \
       || release_fail "$version already points to another commit"
   else
     local rc=$?
@@ -100,8 +104,20 @@ publish_bundle() {
 
   local release_state="$TMP/release"
   if api_optional "repos/$REPOSITORY/releases/tags/$version" "$release_state"; then
-    [ "$(jq -r .draft "$release_state")" = true ] \
-      || release_fail "$version is already published; refusing to replace it"
+    if [ "$(jq -r .draft "$release_state")" = false ]; then
+      # PATCH may have succeeded before the previous job lost its connection.
+      # An accepted, unchanged stage can confirm completion without mutation.
+      local expected_preview=false
+      is_preview "$version" && expected_preview=true
+      verify_uploaded_assets "$release_state" "$bundle"
+      jq -e --arg version "$version" --argjson preview "$expected_preview" \
+        --rawfile body "$bundle/release-notes.md" \
+        '.tag_name == $version and .prerelease == $preview and .body == $body' \
+        "$release_state" >/dev/null || release_fail "published Release differs from the original stage; refusing to replace it"
+      python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit" --read-only "${stage_inputs[@]}"
+      echo "==> verified already published $REPOSITORY $version from its original accepted stage"
+      return
+    fi
   else
     local rc=$?
     [ "$rc" -eq 4 ] || exit "$rc"
@@ -112,8 +128,8 @@ publish_bundle() {
   local files=() file name existing
   if [ "$(jq 'length' "$drafts")" -eq 1 ]; then
     jq '.[0]' "$drafts" > "$release_state"
-    [ "$(jq -er .target_commitish "$release_state")" = "$commit" ] \
-      || release_fail "existing draft belongs to another source commit"
+    [ "$(jq -er .tag_name "$release_state")" = "$version" ] \
+      || release_fail "existing draft belongs to another version"
     # A retry may fill absent assets, but must never replace same-name bytes.
     while IFS= read -r name; do
       [ -f "$bundle/assets/$name" ] || release_fail "unexpected existing draft asset: $name"
@@ -137,7 +153,7 @@ publish_bundle() {
 
   # Ownership and all existing asset bytes are checked before registry writes.
   # The registry publisher also refuses conflicting existing image tags.
-  python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit"
+  python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit" "${stage_inputs[@]}"
   python3 -B "$ROOT/release/publication_body.py" "$bundle/release-notes.md"
   if [ "$(jq 'length' "$drafts")" -eq 1 ]; then
     [ "${#files[@]}" -eq 0 ] || gh release upload "$version" "${files[@]}" --repo "$REPOSITORY"
@@ -165,12 +181,13 @@ publish_bundle() {
     | gh api --method PATCH \
       "repos/$REPOSITORY/releases/$(jq -er '.id' "$release_state")" --input - >/dev/null
   gh api "repos/$REPOSITORY/releases/tags/$version" > "$release_state"
-  jq -e --arg version "$version" --arg commit "$commit" --argjson prerelease "$prerelease" '
+  jq -e --arg version "$version" --rawfile body "$bundle/release-notes.md" --argjson prerelease "$prerelease" '
       .tag_name == $version
-      and .target_commitish == $commit
+      and .body == $body
       and .draft == false
       and .prerelease == $prerelease
     ' "$release_state" >/dev/null || release_fail "$version was not published as requested"
+  verify_uploaded_assets "$release_state" "$bundle"
   echo "==> published $REPOSITORY $version from $commit"
 }
 

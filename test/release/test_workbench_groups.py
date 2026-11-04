@@ -77,12 +77,10 @@ class GroupTests(unittest.TestCase):
         with patch.object(groups, 'api', return_value=self.run), patch.object(groups, 'pages', return_value=self.jobs):
             fixtures.binder.bind(self.fixture.root, self.plan, self.fixture.validation, combined)
         notes = (self.fixture.root / 'release-notes.md').read_text()
-        binding = json.loads(notes.split('<!-- kuasar-integration-validation ')[1].split(' -->')[0])
-        self.assertEqual(binding['workbench'], combined)
-        binding['registry'] = fixtures.registry_binding(self.fixture.version, combined)
-        artifacts.check_registry_binding(self.fixture.version, binding)
-        self.assertLess(len(notes), fixtures.binder.publication_body.MAX_CHARACTERS)
-        self.assertEqual(binding['workbench']['aarch64']['qualification_scope'], 'artifact-only')
+        self.assertNotIn('kuasar-integration-validation', notes)
+        self.assertEqual(combined['aarch64']['qualification_scope'], 'artifact-only')
+        with patch.object(groups, 'api', return_value=self.run), patch.object(groups, 'pages', return_value=self.jobs):
+            self.assertEqual(fixtures.binder.verify_stage(self.fixture.root, self.plan, self.fixture.validation, combined), combined)
         with patch.object(groups, 'api') as api:
             groups.verify_live(self.fixture.results['x86_64'])
             api.assert_not_called()
@@ -106,11 +104,13 @@ class GroupTests(unittest.TestCase):
                  patch.object(workbench_registry, 'inspect_raw', side_effect=RuntimeError('mock registry transport')) as transport:
                 if stale:
                     with self.assertRaisesRegex(ValueError, 'producer rerun'):
-                        workbench_registry.publish(self.fixture.root, self.fixture.version, self.fixture.sha)
+                        workbench_registry.publish(self.fixture.root, self.fixture.version, self.fixture.sha,
+                                                   self.plan, self.fixture.validation, grouped)
                     transport.assert_not_called()
                 else:
                     with self.assertRaisesRegex(RuntimeError, 'mock registry transport'):
-                        workbench_registry.publish(self.fixture.root, self.fixture.version, self.fixture.sha)
+                        workbench_registry.publish(self.fixture.root, self.fixture.version, self.fixture.sha,
+                                                   self.plan, self.fixture.validation, grouped)
                     transport.assert_called_once()
 
     def test_registry_validation_only_consumes_groups_without_transport_or_writes(self):
@@ -128,10 +128,9 @@ class GroupTests(unittest.TestCase):
                     side_effect=lambda assets, version, arch, revision, **kwargs: self.fixture.receipts[arch]), \
                  patch.object(workbench_registry, 'inspect_raw') as transport, \
                  patch.object(workbench_registry.subprocess, 'run') as command:
-                receipts, _, binding, _ = workbench_registry.validate_binding(
-                    self.fixture.root, self.fixture.version, self.fixture.sha)
+                receipts = workbench_registry.validate_stage(
+                    self.fixture.root, self.fixture.version, self.fixture.sha, self.plan, self.fixture.validation, grouped)
                 self.assertEqual(set(receipts), {'x86_64', 'aarch64'})
-                self.assertEqual(binding['workbench'], grouped)
                 transport.assert_not_called()
                 command.assert_not_called()
             self.assertEqual(notes.read_bytes(), before)

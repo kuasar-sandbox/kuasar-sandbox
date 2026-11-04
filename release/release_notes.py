@@ -1,8 +1,4 @@
-"""Editable release prose and evidence-aware publication budgets.
-
-Human prose is preserved unchanged. Machine evidence remains in
-publication_body, with its existing schema and registry reservation.
-"""
+"""Editable human release notes, preserved verbatim through publication."""
 import argparse
 from pathlib import Path
 import re
@@ -17,7 +13,7 @@ NOTICE_START = '<!-- kuasar-release-notice -->'
 NOTICE_END = '<!-- /kuasar-release-notice -->'
 UNITS = ('accelerator', 'connector', 'sandboxer', 'orchestrator', 'runtime', 'vmlinux')
 HEADINGS = ('Component versions', 'Component updates', 'Download and use',
-            'Qualification scope', 'Security')
+            'Security')
 
 
 def inline_notice(text):
@@ -40,7 +36,7 @@ def validate(text, version, units):
     required = [f'# Kuasar Sandbox {version}', *('## ' + h for h in HEADINGS)]
     required += [f'| `{unit}` | `{units[unit]}` |' for unit in UNITS]
     required += ['### ' + unit for unit in UNITS]
-    if publication_body.MARKER in text or any(lines.count(line) != 1 for line in required):
+    if publication_body.has_machine_records(text) or any(lines.count(line) != 1 for line in required):
         raise ValueError('release notes must retain the exact version, headings, component table and update sections')
     inline_notice(text)
 
@@ -135,39 +131,25 @@ def export_notes(platform, version, output):
 
 
 def validate_file(platform, version, notes_file):
-    """Check staged prose availability; budget only after evidence is known."""
+    """Check staged human prose before the publication budget gate."""
     text = notes_file.read_text()
-    if not text.strip() or text.count(publication_body.MARKER) > 1:
-        raise ValueError('release notes must be nonempty with at most one validation binding')
-
-
-def validate_history(notes_file):
-    """Check only transport limits and an unambiguous machine-evidence envelope.
-
-    Human text does not need to match a manifest, source commit or validation
-    result. The caller independently verifies the products and machine evidence.
-    """
-    text = notes_file.read_text()
-    if not text.strip() or text.count(publication_body.MARKER) > 1:
-        raise ValueError('release notes must be nonempty with at most one validation binding')
-    publication_body.checked(text)
+    if not text.strip() or publication_body.has_machine_records(text):
+        raise ValueError('release notes must be nonempty human prose without machine records')
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
-    if argv and argv[0] in ('export', 'validate', 'validate-history'):
+    if argv and argv[0] in ('export', 'validate'):
         parser = argparse.ArgumentParser(description=__doc__)
-        parser.add_argument('command', choices=('export', 'validate', 'validate-history'))
+        parser.add_argument('command', choices=('export', 'validate'))
         parser.add_argument('platform', type=Path)
         parser.add_argument('version')
         parser.add_argument('notes', type=Path)
         args = parser.parse_args(argv)
         if args.command == 'export':
             export_notes(args.platform, args.version, args.notes)
-        elif args.command == 'validate':
-            validate_file(args.platform, args.version, args.notes)
         else:
-            validate_history(args.notes)
+            validate_file(args.platform, args.version, args.notes)
         return
     # Compatibility entry point; transport checks never rewrite human text.
     parser = argparse.ArgumentParser(description=__doc__)

@@ -12,24 +12,18 @@ import test_workbench_binding
 
 
 class ManualBudgetTests(unittest.TestCase):
-    def test_exact_limit_keeps_complete_prose_and_evidence(self):
-        prefix = 'Keep this handwritten warning.  \n请保留全部正文。\n' * 100
-        evidence = {'validation_plan': {'cases': ['complete evidence'], 'sha': 'a' * 40}}
-        original = copy.deepcopy(evidence)
-        expected = body.binding_text(prefix, evidence, '\n')
-        with patch.object(body, 'MAX_CHARACTERS', len(expected)):
-            self.assertEqual(body.binding_text(prefix, evidence, '\n'), expected)
+    def test_exact_limit_keeps_complete_prose(self):
+        text = 'Keep this handwritten warning.  \n请保留全部正文。\n' * 100
+        with patch.object(body, 'MAX_CHARACTERS', len(text)):
+            self.assertEqual(body.checked(text), text)
             with self.assertRaisesRegex(ValueError, 'manual intervention required.*edit and commit notes.body'):
-                body.binding_text(prefix + 'x', evidence, '\n')
-        self.assertEqual(evidence, original)
-        self.assertEqual(json.loads(expected.split(body.MARKER)[1].split(' -->')[0]), original)
+                body.checked(text + 'x')
 
-    def test_oversized_machine_evidence_is_not_truncated(self):
-        evidence = {'validation_plan': {'evidence': 'x' * body.MAX_CHARACTERS}}
-        before = copy.deepcopy(evidence)
-        with self.assertRaisesRegex(ValueError, 'evidence must not be truncated'):
-            body.binding_text('Short notes', evidence, '\n')
-        self.assertEqual(evidence, before)
+    def test_machine_evidence_is_not_a_publication_input(self):
+        self.assertFalse(hasattr(body, 'binding_text'))
+        for marker in ('kuasar-integration-validation', 'kuasar-preview-binding', 'kuasar-release-source'):
+            with self.assertRaisesRegex(ValueError, 'machine'):
+                body.checked('Human notes\n<!-- ' + marker + ' {} -->')
 
     def test_no_automatic_rewriting_or_manifest_persistence_interface(self):
         self.assertFalse(hasattr(notes, 'compact_commits'))
@@ -58,8 +52,5 @@ class BindingManualBudgetTests(unittest.TestCase):
         with patch.object(notes, 'publication_notes', return_value=({'mode': 'fixed', 'body': human}, 'url')):
             binder.bind(self.root, self.plan, self.validation, self.results, platform=self.root)
         result = (self.root / 'release-notes.md').read_text()
-        self.assertEqual(result.split(body.MARKER)[0], human + '\n')
-        evidence = json.loads(result.split(body.MARKER)[1].split(' -->')[0])
-        self.assertEqual(evidence['validation_plan'], self.plan)
-        self.assertEqual(evidence['source_records'], self.plan['source_records'])
-        self.assertEqual(evidence['workbench'], self.results)
+        self.assertEqual(result, human)
+        self.assertFalse(body.has_machine_records(result))

@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -21,14 +23,17 @@ class WorkbenchGCTests(unittest.TestCase):
         self.assertEqual([row['id'] for row in pending], [1, 2])
         self.assertEqual(shared, [3, 6])
 
-    def test_other_live_release_binding_protects_parent_and_children(self):
-        proof = {'reference': subject.registry.REPOSITORY + ':other', 'digest': 'sha256:' + 'a' * 64,
-                 'architectures': {'x86_64': {'digest': 'sha256:' + 'b' * 64},
-                                   'aarch64': {'digest': 'sha256:' + 'c' * 64}}}
-        notes = subject.registry.MARKER + json.dumps({'registry': proof}) + ' -->'
-        self.assertEqual(subject.protected_digests([{'tag_name': 'other', 'body': notes}], VERSION),
-                         {proof['digest'], 'sha256:' + 'b' * 64, 'sha256:' + 'c' * 64})
-        self.assertFalse(subject.protected_digests([{'tag_name': VERSION, 'body': notes}], VERSION))
+    def test_tagless_non_target_index_protects_its_children(self):
+        child = json.dumps({'schemaVersion': 2, 'config': {}, 'layers': []}).encode()
+        child_id = subject.registry.digest(child)
+        parent = json.dumps({'schemaVersion': 2, 'manifests': [{'digest': child_id}]}).encode()
+        parent_id = subject.registry.digest(parent)
+        rows = [record(1, [], parent_id), record(2, [TAG + '-x86_64'], child_id)]
+        with patch.object(subject.registry, 'inspect_raw', side_effect=[parent, child]):
+            protected = subject.shared_closure(rows, VERSION, set(), None)
+        pending, retained = subject.candidates(rows, VERSION, protected)
+        self.assertEqual(pending, [])
+        self.assertEqual(retained, [2])
 
     def test_shared_index_protects_children_with_only_owned_architecture_tags(self):
         child = json.dumps({'schemaVersion': 2, 'config': {}, 'layers': []}).encode()
@@ -43,7 +48,7 @@ class WorkbenchGCTests(unittest.TestCase):
         self.assertEqual(retained, [1, 2])
 
     def test_foreign_source_or_self_claimed_config_prevents_deletion(self):
-        config = json.dumps({'config': {'Labels': {'org.opencontainers.image.source': subject.SOURCE,
+        config = json.dumps({'os': 'linux', 'architecture': 'amd64', 'config': {'Labels': {'org.opencontainers.image.source': subject.SOURCE,
                     'org.opencontainers.image.version': VERSION, 'org.opencontainers.image.revision': 'b' * 40}}}).encode()
         manifest = json.dumps({'config': {'digest': subject.registry.digest(config)}}).encode()
         with patch.object(subject.registry, 'inspect_raw', side_effect=[manifest, config]):
@@ -72,6 +77,82 @@ class WorkbenchGCTests(unittest.TestCase):
                         self.assertEqual(subject.collect(VERSION, 'a' * 40), {'deleted': [], 'retained_shared': []})
                         api.assert_called_once()
                     mutation.assert_not_called()
+
+    def fixture_collect(self, *, failure=None, shared_after_parent=False, missing=False, retained_parent=None):
+        configs, documents, children = {}, {}, []
+        for i, arch in enumerate(('amd64', 'arm64')):
+            config = json.dumps({'os': 'linux', 'architecture': arch, 'config': {'Labels': {
+                'org.opencontainers.image.source': subject.SOURCE,
+                'org.opencontainers.image.version': VERSION,
+                'org.opencontainers.image.revision': 'a' * 40}}}).encode()
+            child = json.dumps({'schemaVersion': 2, 'config': {'digest': subject.registry.digest(config)}, 'layers': []}).encode()
+            identity = subject.registry.digest(child)
+            documents[identity], configs[identity] = child, config
+            children.append({'digest': identity, 'platform': {'os': 'linux', 'architecture': arch}})
+        parent = json.dumps({'schemaVersion': 2, 'manifests': children}).encode()
+        parent_id = subject.registry.digest(parent)
+        documents[parent_id] = parent
+        # API order intentionally places a tagless child before its parent.
+        rows = [record(2, [], children[0]['digest']), record(1, [TAG], parent_id),
+                record(3, [TAG + '-aarch64'], children[1]['digest'])]
+        deletes, listings = [], []
+        def api(endpoint):
+            if endpoint == subject.PACKAGE:
+                return {'repository': {'full_name': subject.coordinator.PLATFORM_REPOSITORY}}
+            if retained_parent == 'detail' and endpoint.endswith('/1'):
+                parent = next(x for x in rows if x['id'] == 1)
+                return parent | {'metadata': {'container': {'tags': [TAG, 'shared']}}}
+            return next((x for x in rows if endpoint.endswith('/' + str(x['id']))), None)
+        def listing(endpoint):
+            self.assertEqual(endpoint, subject.PACKAGE + '/versions?per_page=100')
+            listings.append(endpoint)
+            if retained_parent == 'tagless' and len(listings) > 1:
+                next(x for x in rows if x['id'] == 1)['metadata']['container']['tags'] = []
+            if shared_after_parent and deletes:
+                rows[0]['metadata']['container']['tags'] = ['another-release']
+            return rows.copy()
+        def delete(*args, **kwargs):
+            self.assertEqual(args[:3], ('api', '--method', 'DELETE'))
+            identifier = int(args[3].rsplit('/', 1)[1])
+            deletes.append(identifier)
+            if failure:
+                return subprocess.CompletedProcess(args, 1, '', failure)
+            rows[:] = [x for x in rows if x['id'] != identifier]
+            return subprocess.CompletedProcess(args, 1 if missing else 0, '', 'gh: Not Found (HTTP 404)' if missing else '')
+        with patch.object(subject.coordinator, 'aggregate_runs', return_value=[]), patch.object(
+                subject.coordinator, 'api_optional', side_effect=api), patch.object(
+                subject.coordinator, 'paginated', side_effect=listing), patch.object(
+                subject.coordinator, 'gh', side_effect=delete), patch.object(subject.registry, 'inspect_raw',
+                side_effect=lambda ref, auth, config=False: (configs if config else documents)[ref.split('@')[1]]), patch.dict(
+                os.environ, {'GH_TOKEN': 'test-only', 'GITHUB_ACTOR': 'fixture'}):
+            if failure:
+                with self.assertRaises(ValueError): subject.collect(VERSION, 'a' * 40)
+                self.assertEqual(deletes, [1])
+                return
+            result = subject.collect(VERSION, 'a' * 40)
+        return result, deletes
+
+    def test_delete_index_before_exclusive_children_including_direct_tagless_child(self):
+        result, calls = self.fixture_collect()
+        self.assertEqual(calls, [1, 2, 3])
+        self.assertEqual(result, {'deleted': [1, 2, 3], 'retained_shared': []})
+
+    def test_refresh_sharing_before_each_delete(self):
+        result, calls = self.fixture_collect(shared_after_parent=True)
+        self.assertEqual(calls, [1, 3])
+        self.assertEqual(result['retained_shared'], [2])
+
+    def test_retained_parent_protects_children_even_if_paginated_state_is_stale(self):
+        for change in ('tagless', 'detail'):
+            with self.subTest(change=change):
+                result, calls = self.fixture_collect(retained_parent=change)
+                self.assertEqual(calls, [])
+                self.assertEqual(result['retained_shared'], [1, 2, 3])
+
+    def test_delete_404_is_idempotent_but_other_errors_are_not_absence(self):
+        self.assertEqual(self.fixture_collect(missing=True)[1], [1, 2, 3])
+        for error in ('gh: Forbidden (HTTP 403)', 'network timeout', 'gh: Server Error (HTTP 500)'):
+            with self.subTest(error=error): self.fixture_collect(failure=error)
 
     def test_active_publication_prevents_any_registry_mutation(self):
         with patch.object(subject.coordinator, 'aggregate_runs', return_value=[{'status': 'in_progress'}]), patch.object(

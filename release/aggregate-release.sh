@@ -17,6 +17,7 @@ fetch_components() {
   previous="$(previous_release "$PLATFORM_SOURCE_ROOT" "$version")"
   : > "$output/previous-selection.tsv"
   if [ -n "$previous" ]; then
+    ensure_aggregate_tag "$PLATFORM_SOURCE_ROOT" "$previous"
     resolve_selection "$PLATFORM_SOURCE_ROOT" "$previous" "$output/previous-selection.tsv"
   fi
 
@@ -39,19 +40,20 @@ fetch_components() {
         .tag_name == $tag
         and .draft == false
         and .prerelease == $prerelease
-        and (([.assets[].name] | sort) as $names |
-          $names == (["SHA256SUMS", $archive] | sort) or
-          $names == (["SHA256SUMS", $archive, $arm] | sort))
-        and ([.assets[].digest] | all(type == "string" and test("^sha256:[0-9a-f]{64}$")))
+        and (([.assets[] | select(.name != "SHA256SUMS") | .name] | sort) as $names |
+          $names == ([$archive] | sort) or
+          $names == ([$archive, $arm] | sort))
+        and ([.assets[] | select(.name != "SHA256SUMS")] | all(.state == "uploaded" and (.id | type == "number" and . > 0) and (.size | type == "number" and . > 0) and (.digest | type == "string" and test("^sha256:[0-9a-f]{64}$"))))
       ' <<< "$release_state" >/dev/null \
       || release_fail "$repository $tag does not satisfy its single/dual architecture release contract"
 
+    jq '[.assets[] | select(.name != "SHA256SUMS") | {id, name, size, digest, state}]' <<< "$release_state" > "$unit_dir/assets.json"
     local name asset
     while IFS= read -r name; do
       asset="$(jq -ce --arg name "$name" '.assets[] | select(.name == $name)' <<< "$release_state")"
       github_download_asset "$repository" "$(jq -er '.id' <<< "$asset")" "$unit_dir/$name"
       verify_github_asset "$unit_dir/$name" "$asset"
-    done < <(jq -r '.assets[].name' <<< "$release_state")
+    done < <(jq -r '.[] | .name' "$unit_dir/assets.json")
     validate_component_download "$unit" "$tag" "$unit_dir"
     local source_sha
     source_sha="$(github_api "repos/$repository/git/ref/tags/$tag" \
@@ -116,23 +118,18 @@ write_component_updates() {
 
 validate_component_download() {
   local unit="$1" tag="$2" directory="$3"
-  local archive arch checksum_line checksum_name checksum_value
+  local archive arch
   local arches=(x86_64)
   if [ -f "$directory/$(component_archive "$unit" "$tag" aarch64)" ]; then arches+=(aarch64); fi
-  [ -f "$directory/SHA256SUMS" ] || release_fail "$unit SHA256SUMS is missing"
-  [ "$(grep -cve '^[[:space:]]*$' "$directory/SHA256SUMS")" -eq "${#arches[@]}" ] \
-    || release_fail "$unit SHA256SUMS must contain exactly its architecture entries"
+  [ -f "$directory/assets.json" ] || release_fail "$unit download asset identities are missing"
+  [ "$(jq length "$directory/assets.json")" -eq "${#arches[@]}" ] || release_fail "$unit has an incomplete downloaded asset set"
   for arch in "${arches[@]}"; do
   archive="$(component_archive "$unit" "$tag" "$arch")"
   [ -f "$directory/$archive" ] || release_fail "$unit archive is missing"
-  checksum_line=$(awk -v name="$archive" '$2 == name || $2 == "*" name {print}' "$directory/SHA256SUMS")
-  [ "$(wc -l <<< "$checksum_line")" = 1 ] || release_fail "$unit checksum entry is missing or duplicated"
-  read -r checksum_value checksum_name extra <<< "$checksum_line"
-  checksum_name="${checksum_name#\*}"
-  [ "$checksum_name" = "$archive" ] && [ -z "${extra:-}" ] || release_fail "$unit SHA256SUMS names an unexpected asset"
-  [[ "$checksum_value" =~ ^[0-9a-f]{64}$ ]] || release_fail "$unit SHA256SUMS contains an invalid digest"
-  [ "$(sha256sum "$directory/$archive" | awk '{print $1}')" = "$checksum_value" ] \
-    || release_fail "$unit archive checksum mismatch"
+  local asset
+  asset=$(jq -ce --arg name "$archive" '[.[] | select(.name == $name)] | select(length == 1) | .[0]' "$directory/assets.json") \
+    || release_fail "$unit downloaded asset identity is missing or duplicated"
+  verify_github_asset "$directory/$archive" "$asset"
   if tar -tzf "$directory/$archive" \
     | grep -E '(^|/)docs(/|$)|(^|/)test/e2e(/|$)' >/dev/null; then
     release_fail "$unit archive contains docs/ or test/e2e/ content owned by the platform package"
@@ -156,22 +153,7 @@ validate_component_download() {
 
 validate_tar_paths() {
   local archive="$1" seen="$2"
-  local listing
-  listing="$(mktemp)"
-  tar -tzf "$archive" > "$listing"
-  local raw path
-  while IFS= read -r raw; do
-    path="${raw#./}"
-    [ -n "$path" ] || continue
-    [[ "$path" != /* && "$path" != ../* && "$path" != */../* && "$path" != */.. ]] \
-      || release_fail "unsafe path in $(basename "$archive"): $raw"
-    [[ "$path" == */ ]] && continue
-    if grep -Fx "$path" "$seen" >/dev/null; then
-      release_fail "release archives contain the same file path: $path"
-    fi
-    printf '%s\n' "$path" >> "$seen"
-  done < "$listing"
-  rm -f "$listing"
+  python3 -B "$ROOT/release/archive_paths.py" validate "$seen" "$archive"
 }
 
 assemble_release() {
@@ -190,6 +172,7 @@ assemble_release() {
   previous="$(previous_release "$PLATFORM_SOURCE_ROOT" "$version")"
   : > "$expected_previous_selection"
   if [ -n "$previous" ]; then
+    ensure_aggregate_tag "$PLATFORM_SOURCE_ROOT" "$previous"
     resolve_selection "$PLATFORM_SOURCE_ROOT" "$previous" "$expected_previous_selection"
   fi
   cmp -s "$expected_selection" "$fetched/selection.tsv" \
@@ -232,9 +215,6 @@ assemble_release() {
     install -m 0644 "$fetched/workbench/workbench-$arch.json" "$output/workbench/"
   done
 
-  find "$output/assets" -maxdepth 1 -type f -printf '%f\n' \
-    | LC_ALL=C sort > "$work/asset-names"
-  (cd "$output/assets" && xargs sha256sum < "$work/asset-names") > "$output/assets/SHA256SUMS"
   python3 -B "$ROOT/release/release_notes.py" export "$PLATFORM_SOURCE_ROOT" \
     "$version" "$output/release-notes.md"
   validate_bundle "$version" "$output" --publication
@@ -273,12 +253,10 @@ write_release_notes() {
     done < "$selection"
     printf '\n## Download and use\n\n'
     printf '%s\n' \
-      '- Choose native Linux x86_64 or aarch64 assets. Verify downloaded archives with `SHA256SUMS` before use.' \
+      '- Choose native Linux x86_64 or aarch64 assets. Follow the download guide to verify GitHub asset sizes and SHA-256 digests before use.' \
       '- Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.' \
       '- Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.'
     printf '\nSee [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.\n\n' "$version" "$version"
-    printf '## Qualification scope\n\n'
-    printf 'The declared native x86_64 profile uses the current full ordinary case selection. The hosted ARM profile requires native non-KVM image/storage E2E and `artifact-only` Workbench qualification; planned Workbench cases do not establish network, KVM lifecycle or snapshot/restore execution. Consult the per-architecture validation records for executed cases and `qualification_scope`, including any `native-full` acceptance. These are declared profiles, not evidence that every planned test ran.\n\n'
     printf '## Security\n\n'
     printf 'Workbench system mode is a trusted administrator environment with Docker privileged access. Private namespaces/data and owned cleanup do not provide hostile-root confinement.\n\n'
     printf 'Report vulnerabilities privately through [Report a vulnerability](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new), not public issues.\n'
@@ -313,7 +291,6 @@ expected_asset_names() {
   if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = workbench-v1 ]; then
     for arch in "${arches[@]}"; do workbench_archive "$version" "$arch"; done
   fi
-  printf 'SHA256SUMS\n'
 }
 
 validate_bundle() {
@@ -330,18 +307,19 @@ validate_bundle() {
   actual_names="$(mktemp)"
   resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$expected_selection"
   cmp -s "$expected_selection" "$bundle/selection.tsv" \
-    || release_fail "aggregate selection does not match project repository main"
-  python3 -B "$ROOT/release/release_notes.py" validate "$PLATFORM_SOURCE_ROOT" \
-    "$version" "$bundle/release-notes.md"
+    || release_fail "aggregate selection does not match the selected version manifest"
+  if [ "${3:-}" != --historical ]; then
+    python3 -B "$ROOT/release/release_notes.py" validate "$PLATFORM_SOURCE_ROOT" \
+      "$version" "$bundle/release-notes.md"
+  fi
   local unit tag
   local arches=() arch
   mapfile -t arches < <(bundle_arches "$bundle" "$version")
   expected_asset_names "$version" "$expected_selection" "${arches[@]}" | LC_ALL=C sort > "$expected_names"
-  find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | LC_ALL=C sort > "$actual_names"
+  find "$bundle/assets" -mindepth 1 -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | LC_ALL=C sort > "$actual_names"
+  if [ "${3:-}" = --publication ] && [ -e "$bundle/assets/SHA256SUMS" ]; then release_fail "new releases must not publish SHA256SUMS"; fi
   cmp -s "$expected_names" "$actual_names" \
     || { diff -u "$expected_names" "$actual_names" >&2 || true; release_fail "aggregate contains an unexpected asset set"; }
-  (cd "$bundle/assets" && sha256sum --quiet -c SHA256SUMS) \
-    || release_fail "aggregate SHA256SUMS validation failed"
   "$ROOT/release/package-platform.sh" validate "$version" \
     "$bundle/assets/$(platform_archive "$version")" "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")"
 
@@ -371,13 +349,13 @@ extract_bundle() {
   case "$arch" in x86_64|aarch64) ;; *) release_fail 'unsupported extraction architecture' ;; esac
   validate_bundle "$version" "$bundle" --historical
   assert_safe_output "$install"
-  mkdir -p "$install"
-  local name
+  local name archives=()
   while IFS= read -r name; do
     [ "$name" = SHA256SUMS ] && continue
     [[ "$name" = workbench-* ]] && continue # Docker import is separate from release extraction.
-    tar -xzf "$bundle/assets/$name" -C "$install"
+    archives+=("$bundle/assets/$name")
   done < <(expected_asset_names "$version" "$bundle/selection.tsv" "$arch")
+  python3 -B "$ROOT/release/archive_paths.py" extract "$install" "${archives[@]}"
 }
 
 case "${1:-}" in

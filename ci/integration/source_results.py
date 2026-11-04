@@ -18,6 +18,8 @@ require = artifacts.require
 
 
 def groups_for(plan, grouped=False):
+    if plan['mode'] == 'exact-assets':
+        return []
     return ['A', 'B'] if grouped and checks.checks_for(plan, Path('/src'), 'B') else ['A'] if grouped else ['all']
 
 
@@ -31,6 +33,7 @@ def validate(plan, groups, run, jobs, available, read):
     Query filter=all: a newer failed/running/cancelled producer invalidates old
     evidence. Never choose the newest *successful* job or merge ZIP directories.
     """
+    require(plan['mode'] == 'source', 'source checks are not executed for exact-assets; report skipped')
     require(groups in (['all'], groups_for(plan, True)), 'unexpected source group plan')
     require(type(run.get('id')) is int and run['id'] > 0 and
             type(run.get('run_attempt')) is int and run['run_attempt'] > 0 and

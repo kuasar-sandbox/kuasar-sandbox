@@ -178,7 +178,7 @@ exact-assets 模式直接消费 platform 包中的同一布局。两条路径都
 
 对于没有准入候选的 owner，所选 Tag 必须保留已验证基线中的每个用例 ID。缺少用例时明确失败，需要经评审的新 Tag 选择；源码 CI 不得静默缩减覆盖范围。
 
-历史消费者按聚合 Tag 获取清单及发布包，保留原始独立测试来源。新发布 binding 内嵌 canonical validation plan、owner 用例映射和源码记录，与包摘要共同绑定。旧 binding 缺少归属信息时，必须获取其真实保留的 integration-plan artifact，核验 canonical identity 等于 `plan_id`，并交叉验证所有绑定身份与资产。证据缺失或歧义时明确失败，不从文件名猜测历史归属。
+聚合消费者按所选 aggregate Tag 下的 manifest 确定组件组合，以固定 GitHub asset ID 下载包并校验原生 size/digest。忽略历史正文机器块与 SHA256SUMS，不查询旧 Actions 的 plan、job 或 artifact。仅在本次操作实际需要源码时，才按对应组件 Tag 获取；runtime 与 vmlinux 分别解析，不回退 main 或 Latest。
 
 产品合同为预构建产品 → `e2e prepare` → `<suite>.<case>.sh` → 共享公开入口 `e2e run`。完整文件名就是用例 ID，
 首段只能是 `basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder` 或 `telemetry`。
@@ -237,20 +237,15 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 分组证据显式声明 `workbench-groups-v1` / `native-grouped`，保留两次独立执行、共同的精确源码/资产/镜像身份、完整覆盖及不可覆盖的 run/attempt/group 产物。当前成功生产任务、ARM 证据、stage/plan 输入与最终验收任务必须一致。未变化的较早成功轮次可复用；任何已绑定生产任务重跑均使旧验收失效。缺失、重复、失败、取消或共享实例的证据不得授权发布。
 
-必须先合并兼容读取器，再生产分组结果：发布器从 **main** 加载 `bind-validation.py`。Registry 发布、Release 正文、基线/产物解析、Hosted 选择和 Preview 恢复同时支持历史 full、ARM 与分组证据。公开下载仍使用相同资产和按架构选择，正文上限及完整 registry 预留不变。启用前须用可比较的多次真实 Actions，覆盖失败/重跑注入、排队/准备/执行/最终反馈及总任务分钟，证明最终收益和成本合理。本地或模拟元数据不算 Actions 验收。缺少稳定最终收益或成本过高时保持 `all`；回退停用生产，但保留已发布分组证据的读取能力。
+必须先合并兼容的当次 stage 读取器，再生产分组结果。启用前通过真实 Actions 对比失败重跑、准备、执行和总任务时间；本地 fixture 不算产品验收。分组结果仅用于当前流水线，正常下载与 CI 不读取旧验收记录。
 
-需要在相同源码上重复验收时，聚合 dispatch 还接受 `validation_only=true`（默认 false）。它仍要求 main、精确当前选择及尚未发布的版本，并执行原有全部构建、运行、源码检查，以及发布绑定、正文上限和 registry 输入验证；仅在 registry/Release 写入前结束，并按原到期时间保留本轮产物供失败/重跑测试。它使用 `Validate aggregate <version> @<sha>` 标识和按 run 隔离的 `aggregate-validation` 并发键，使独立的 `all` 与分组验证可与普通发布并存。验证运行（包括旧的 `[validation only]` 后缀标题）不计入活动发布、发布重试、恢复候选或成功发布基线。普通发布与 delete-preview 继续共用 `aggregate-mutation` 锁。验证在归档、发布正文和 registry 输入消费者执行前后均检查版本尚未发布。第二次检查紧邻成功报告之前；如果此时 API 报告 Release 已发布，验证必须失败。这是最后一次 API 观察，并不原子排除该观察之后发生的发布。对照必须使用同一选择，且该选择仍为分支的精确当前 HEAD，发布前计时不能代替真实发布的端到端收益。最终通过正常发布模式完成所选版本；不得仅为取得基准数据而重跑已发布分组证据背后的生产任务。
+需要在相同源码上重复验收时，聚合 dispatch 还接受 `validation_only=true`（默认 false）。它仍要求 main、精确当前选择及尚未发布的版本，并执行本次必要构建、包验收，以及 stage、正文上限和 registry 输入验证；仅在 registry/Release 写入前结束，并按原到期时间保留本轮产物供失败/重跑测试。它使用 `Validate aggregate <version> @<sha>` 标识和按 run 隔离的 `aggregate-validation` 并发键，使独立的 `all` 与分组验证可与普通发布并存。验证运行（包括旧的 `[validation only]` 后缀标题）不计入活动发布、发布重试、恢复候选或成功发布基线。普通发布与 delete-preview 继续共用 `aggregate-mutation` 锁。验证在归档、发布正文和 registry 输入消费者执行前后均检查版本尚未发布。第二次检查紧邻成功报告之前；如果此时 API 报告 Release 已发布，验证必须失败。这是最后一次 API 观察，并不原子排除该观察之后发生的发布。对照必须使用同一选择，且该选择仍为分支的精确当前 HEAD，发布前计时不能代替真实发布的端到端收益。最终通过正常发布模式完成所选版本；不得仅为取得基准数据而重跑已发布分组证据背后的生产任务。
 
 ## 4. Daily 与 Stable
 
-`exact-assets` 仅接受实际公开的平台 aggregate workflow。
-plan 固定提交清单与暂存的十四项资产（platform + 十二个组件架构包 + SHA256SUMS），不选择产品或 helper 重建。
-各 target 与 PR 共用 download/compose/公开 prepare/公开 run/result 原语，并直接消费精确暂存 platform archive 中的预构建 helper 包。
-必需源码检查始终与 artifact E2E 分离。
+`exact-assets` 仅接受公开平台 aggregate workflow。本次临时 plan 固定所选 manifest 和十五项包：platform、十二个组件架构包和两个 Workbench 镜像包。验收阶段不重建产品或 helper。双架构使用同一批暂存字节执行必要的包结构、安装、启动、组合和 Workbench 检查。聚合重复的组件源码 unit/race/vet 明确跳过并报告 skipped；组件自身与源码 CI 保留正常门禁。
 
-publish 再次核对双架构成功结果与暂存摘要，原样发布归档，不重新编译。
-许可证/材料、源码身份、受信任 publisher 标记及版本不可变约束继续适用。
-精确 ARM 选择与能力分组在执行前及 aggregate 验证绑定中声明；历史非 KVM 证据仍限定于原范围。
+发布核对本次成功结果和暂存字节，再检查 GitHub 上传后的名称、大小、digest、状态以及 GHCR 实际读回内容。Release 正文只读取渠道清单中的人类说明，不发布机器记录或独立 SHA256SUMS。临时 plan、哈希、结果和 stage 不成为 Release 协议。成功 stage 仍在且版本和字节一致时可恢复发布；已公开对象只读确认，冲突拒绝覆盖。
 
 ## 5. Native cache
 

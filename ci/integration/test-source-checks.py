@@ -113,6 +113,11 @@ class SourceChecksTests(unittest.TestCase):
         self.assertEqual(result["test_revisions"], self.plan["test_revisions"])
         self.assertEqual(result["framework_sha"], self.plan["framework_sha"])
 
+    def test_unexecuted_exact_asset_source_checks_cannot_report_success(self):
+        self.plan['mode'] = 'exact-assets'
+        with self.assertRaisesRegex(ValueError, 'report skipped'):
+            source_results.validate(self.plan, [], {}, [], [], lambda _: None)
+
     def test_groups_preserve_all_commands_conditions_and_dependencies(self):
         owners = list(artifacts.OWNERS)
         for mode in ('source', 'exact-assets'):
@@ -129,8 +134,8 @@ class SourceChecksTests(unittest.TestCase):
                         self.assertEqual(len(a) + len(b), len(all_checks))
                         self.assertEqual(a[0][1], ['make', 'test-ci-tools', 'test-release-tools'])
                         self.assertEqual(a[1][1], ['sudo', '-n', '-E', 'make', 'test-perf-tools'])
-                        self.assertEqual(source_results.groups_for(self.plan, True), ['A', 'B'] if b else ['A'])
-                        self.assertEqual(source_results.groups_for(self.plan), ['all'])
+                        self.assertEqual(source_results.groups_for(self.plan, True), [] if mode == 'exact-assets' else ['A', 'B'] if b else ['A'])
+                        self.assertEqual(source_results.groups_for(self.plan), [] if mode == 'exact-assets' else ['all'])
         with self.assertRaises(ValueError):
             SUBJECT.checks_for(self.plan, self.sources, 'unknown')
 
