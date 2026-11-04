@@ -56,7 +56,8 @@ class ClassificationTests(unittest.TestCase):
 
     def test_platform_harness_is_tooling_but_product_cases_remain_full(self):
         for path in ('test/e2e/e2e', 'test/e2e/lib/helper_contract.py',
-                     'test/e2e/lib/nested/runner.py', 'test/e2e/test_e2e_runner.py'):
+                     'test/e2e/lib/nested/runner.py', 'test/e2e/test_e2e_runner.py',
+                     'test/perf/working_set_directory_test.py'):
             with self.subTest(path=path):
                 self.assertEqual(docs_lane.classify(REPO, tree(), tree({path: entry(mode='100755')})), [path])
                 self.assertEqual(subject.parser_for(REPO, path), 'python-compile')
