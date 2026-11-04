@@ -9,3 +9,110 @@ components:
   orchestrator: v0.1.12-preview.20261104
   runtime: runtime-v0.1.12-preview.20261104
   vmlinux: vmlinux-v0.1.6-preview.20261104
+notes:
+  mode: auto
+  selection_sha256: a006f7df54726c007c26a0ff4b2012eadc8ae1ceb64f3572d5df89d06da9df26
+  body: |
+    # Kuasar Sandbox release-v0.1.12-preview.20261104
+
+    Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains selected user guides, Demo and canonical tests, the original component archives, and both native workbench images under one aggregate version. The declared native x86_64 profile uses the current full ordinary case selection. The hosted ARM profile requires native non-KVM image/storage E2E and `artifact-only` Workbench qualification; planned Workbench cases do not establish network, KVM lifecycle or snapshot/restore execution. Consult the per-architecture validation records for executed cases and `qualification_scope`, including any `native-full` acceptance. Historical releases retain their original coverage.
+
+    ## Highlights
+
+    - Independent Guest Kernel isolation for each MicroVM sandbox.
+    - Snapshot templates for creating independent instances, plus stateful pause and resume for the same logical sandbox.
+    - Local files, shared file storage, and object storage with layered caches as selectable data paths.
+    - Node admission and resource reclamation for safely improving effective sandbox density.
+    - Isolated high-speed networking, an E2B-compatible API, and single-node or multi-node deployment.
+
+    ## Component versions
+
+    | Release unit | Version |
+    |---|---|
+    | `accelerator` | `v0.1.10` |
+    | `connector` | `v0.1.6` |
+    | `sandboxer` | `v0.1.13-preview.20261104` |
+    | `orchestrator` | `v0.1.12-preview.20261104` |
+    | `runtime` | `runtime-v0.1.12-preview.20261104` |
+    | `vmlinux` | `vmlinux-v0.1.6-preview.20261104` |
+
+    The five component repositories version and publish independently. `guest-runtime` supplies the `runtime` and `vmlinux` release units but remains one component repository. This aggregate pins all six units for joint platform qualification; the machine validation records below report the actual acceptance.
+
+    The channel manifest [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104/releases/daily-preview.yaml) records the selected versions and this editable full description. It is a source file, separate from the Release asset `SHA256SUMS`, which verifies downloaded archive bytes.
+
+    ## Asset categories
+
+    | Category | Contents | Use |
+    |---|---|---|
+    | Products | Six original upstream archives per architecture | Extract only the selected native architecture |
+    | platform-release | Bilingual guides, Demo, canonical tests, helpers, locked wheels and launcher | Extract beside products |
+    | workbench | One gzip-compressed Docker image archive per architecture | Import separately with `docker load -i`; never extract into products |
+    | SHA256SUMS | All declared archive hashes | Verify downloaded bytes before use |
+
+    Publication requires the qualified images at `ghcr.io/kuasar-sandbox/workbench:v0.1.12-preview.20261104`. Each compressed workbench archive must be smaller than 2 GiB. Consult the final validation binding for its archive hash, image ID, registry identities, actual sizes, import/start timings and observed peak disk usage separately.
+
+    ## Supported environment
+
+    Prebuilt products and workbench target native Linux x86_64 and aarch64. System tests require cgroup v2, 4096-byte pages, KVM/TUN, UFFD/BPF and the documented native Docker host prerequisites. Ordinary UID builds need no KVM or added capabilities. Workbench system mode is a trusted administrator environment with Docker privileged access; no custom host security-policy tools are required. Private namespaces/data and owned cleanup do not provide hostile-root confinement.
+
+    ## Quick Start
+
+    Follow the [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104/docs/quickstart.md) to select the native product/platform assets from this complete aggregate, optionally import workbench, verify `SHA256SUMS`, prepare a template, and exercise create, guest exec, pause, reconnect/resume, kill, and cleanup with the unmodified E2B Python SDK.
+
+    ## Production deployment
+
+    The system supports production deployment. Operators should complete workload-specific capacity validation and configure production TLS, durable storage, network policy, credentials, monitoring, and recovery for their topology. See [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104/docs/deployment.md).
+
+    ## Known limitations
+
+    - Multi-node clusters and centralized network policy require their documented supporting infrastructure.
+    - The Quick Start self-signed certificates, local registry, and demo credentials are for evaluation only.
+    - Node-local lightweight Egress and OpenTelemetry remain Proposed and are not release prerequisites.
+
+    ## Security
+
+    Report vulnerabilities privately through [Report a vulnerability](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new). Do not disclose unpatched vulnerabilities in public issues.
+
+    ## Versioning and release channels
+
+    This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
+
+    Previous aggregate selection: `release-v0.1.11`.
+
+    ## Component updates
+
+    ### accelerator
+
+    Selected version unchanged: `v0.1.10`.
+
+    ### connector
+
+    Selected version unchanged: `v0.1.6`.
+
+    ### sandboxer
+
+    Selected version: `v0.1.12` → `v0.1.13-preview.20261104`.
+
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v0.1.12...v0.1.13-preview.20261104)
+
+    ### orchestrator
+
+    Selected version: `v0.1.11` → `v0.1.12-preview.20261104`.
+
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/v0.1.11...v0.1.12-preview.20261104)
+
+    ### runtime
+
+    Selected version: `runtime-v0.1.11` → `runtime-v0.1.12-preview.20261104`.
+
+    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/runtime-v0.1.11...runtime-v0.1.12-preview.20261104)
+
+    ### vmlinux
+
+    Selected version: `vmlinux-v0.1.5` → `vmlinux-v0.1.6-preview.20261104`.
+
+    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/vmlinux-v0.1.5...vmlinux-v0.1.6-preview.20261104)
+
+    The comparison covers the guest-runtime repository. Kernel release inputs are `native-deps/deps/vmlinux/*.config` and `native-deps/deps/linux-patches/`.
+
+    Verify every explicit asset with `SHA256SUMS`. GitHub provides source archives automatically for this tag.
