@@ -496,11 +496,11 @@ def check_plan(plan):
     require(contract in ('historical', 'workbench-v1'), 'unsupported aggregate delivery contract')
     if contract == 'workbench-v1':
         baseline = plan['baseline']
-        expected = {'SHA256SUMS', 'platform-' + baseline['version'] + '.tar.gz'}
+        expected = {'platform-' + baseline['version'] + '.tar.gz'}
         expected.update(archive_name(unit, record['version'], arch)
                         for unit, record in baseline['units'].items() for arch in ARCHES)
         expected.update(f'workbench-{arch}-{baseline["version"].removeprefix("release-")}.tar.gz' for arch in ARCHES)
-        names = [record['name'] for record in baseline['assets']]
+        names = [record['name'] for record in baseline['assets'] if record['name'] != 'SHA256SUMS']
         require(set(names) == expected and len(names) == len(expected), 'new aggregate lacks its complete declared assets')
     case_files = plan["case_files"]
     require(set(plan["test_overlays"]) == (set(OWNERS) if plan["mode"] == "source" else set()),
@@ -613,9 +613,8 @@ def compose(plan, arch, assets, delta, output):
     for name, owner in helpers.items():
         file = delta / "helpers" / name
         record = metadata["helpers"][name]
-        revision = plan["helper_contract"]["owners"][owner]["source"]["sha"]
-        require(file.is_file() and not file.is_symlink() and digest(file) == record["sha256"]
-                and record["source_sha"] == revision, f"test helper identity mismatch: {name}")
+        require(file.is_file() and not file.is_symlink() and digest(file) == record["sha256"],
+                f"test helper identity mismatch: {name}")
         check_architecture(file, arch)
         expected_delta.add("helpers/" + name)
     for owner, files in metadata["tests"].items():
@@ -690,20 +689,14 @@ def compose(plan, arch, assets, delta, output):
         helper_records = metadata.get("helpers", {})
         if plan["mode"] == "exact-assets":
             package = stage / "test/e2e/helpers" / arch
-            declared = json.loads((package / "helpers.json").read_text())
-            require(declared["arch"] == arch and declared["test_revisions"] ==
-                    {owner: record["sha"] for owner, record in plan["test_revisions"].items() if owner != "platform"},
-                    "packaged helper test pins differ from the release plan")
-            verify_helpers = helper_contract_module().verify
-            packaged_contract = helper_contract_module().loads((package.parent / 'contract.json').read_text())
-            require(packaged_contract == plan['helper_contract'] and
-                    declared.get('contract_sha256') == identity(packaged_contract), 'packaged helper contract differs from plan')
-            verify_helpers(package, arch, packaged_contract, declared['helpers'], metadata=True)
+            packaged_contract, declared_helpers = helper_contract_module().package(package, arch)
+            require(packaged_contract == helper_contract_module().runtime(plan['helper_contract']),
+                    'packaged runtime helper inventory differs from plan')
             helper_records = {}
             for name in planned_helpers(lane['selection'], packaged_contract):
                 (stage / 'fixtures/bin').mkdir(exist_ok=True)
                 shutil.copy2(package / name, stage / 'fixtures/bin' / name)
-                helper_records[name] = declared['helpers'][name]
+                helper_records[name] = declared_helpers[name]
         elif helpers:
             shutil.copytree(delta / "helpers", stage / "fixtures/bin")
         expected_init = products["sandbox-init"]["sha256"] if "sandbox-init" in lane["products"] else original_embedded["init"]
@@ -717,10 +710,15 @@ def compose(plan, arch, assets, delta, output):
             for name in ("flatten-ctl", "mkfs.erofs"):
                 if name in embedded:
                     require(embedded[name] == products[name]["sha256"], f"embedded {name} differs from the selected product")
+        # Prepared workspaces need only selected executables and runtime fields.
+        packaged_helpers = stage / 'test/e2e/helpers'
+        if packaged_helpers.exists():
+            shutil.rmtree(packaged_helpers)
+        helper_contract_module().install_reader(stage)
         provenance = {"schema": 2, "plan_id": plan_id, "arch": arch, "framework_sha": plan["framework_sha"],
                       "baseline": baseline, "products": products, "test_revisions": plan["test_revisions"],
                       "build_context": metadata["build_context"], "selection": lane["selection"],
-                      "embedded": embedded, "helpers": helper_records, "helper_contract": plan["helper_contract"],
+                      "embedded": embedded, "helpers": helper_records, "helper_contract": helper_contract_module().runtime(plan["helper_contract"]),
                       "files": tree_files(stage), "modes": tree_modes(stage)}
         if plan['schema'] >= 4:
             provenance['case_requirements'] = plan['case_requirements']
@@ -748,7 +746,7 @@ def verify_workspace(workspace, plan, arch):
     require(provenance["selection"] == plan["lanes"][arch]["selection"], "selected cases changed after preparation")
     require(provenance.get("test_revisions") == plan["test_revisions"], "prepared test pins differ from plan")
     if 'helper_contract' in plan:
-        require(provenance.get('helper_contract') == plan['helper_contract'], 'prepared helper contract changed')
+        require(provenance.get('helper_contract') == helper_contract_module().runtime(plan['helper_contract']), 'prepared helper contract changed')
         names = planned_helpers(plan['lanes'][arch]['selection'], plan['helper_contract'])
         helper_contract_module().verify(workspace / 'fixtures/bin', arch, plan['helper_contract'],
                                         provenance.get('helpers'), names)

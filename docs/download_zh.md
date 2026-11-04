@@ -1,31 +1,16 @@
 [English](download.md) | [简体中文](download_zh.md)
 
-# 获取匹配的聚合发布版
+# 获取配套的聚合发布
 
-这是[快速开始](quickstart_zh.md)的制品获取参考。在原生 Linux **Docker 宿主机**的
-同一个 Bash shell 中执行，需要 Python 3.9+、curl、GNU tar、sha256sum 和 Docker
-访问权限。不需要 GitHub 登录、`gh`、源码检出或编译器。Workbench 提供产品用户态
-依赖库与 Python 3.12；该路径无需在宿主安装这些库或 Demo SDK。
+在原生 Linux Docker 主机的同一个 Bash 会话中运行以下命令。需要 Python 3.9+、curl、GNU tar、sha256sum 和 Docker；不需要 GitHub 登录、源码检出或编译器。
 
-只解析一次 Stable，或显式设置 `RELEASE_VERSION` 为已发布的
-`release-vX.Y.Z[-preview.YYYYMMDD[.N]]`。所选资产都来自该聚合版本。新发布版中，
-每个 owner 的产品、测试、helper 和指南来自所选 owner Tag；kernel 指南使用独立的
-vmlinux Tag。历史发布版保留其真实记录的来源，各来源可能不同，必须使用其配套指南。
-不要混用各组件的 Latest，也不要从 `main` 补取脚本。
-旧 Stable 可能尚不包含此流程：请显式选择符合要求的已发布版本，或使用它自己的
-历史原生指南。此过程不会自动从 Stable 切换到 Preview。源码选择清单不是最新发布通道。
+将 `RELEASE_VERSION` 设为已发布的聚合 tag，或留空以一次性解析 Stable。该聚合 tag 下的 manifest 决定全部六个发布单元和精确包名；runtime 与 vmlinux 使用独立 tag。不要混用组件 Latest 或从 main 替换文件。旧版本应遵循其包内指南。
 
-Workbench 优先路径要求 `workbench-v1` 交付合同及包内 `test/demo/prepared.py`
-适配器。较早的 workbench 发布版仍使用其配套指南，新源码文档不会为历史版本补文件。
-`DOWNLOAD_WORKBENCH=0` 仅用于按所选版本自身指南执行的原生替代路径；不要继续执行
-下面的 workbench 导入和启动步骤。
+## 1. 选版并下载本机架构的输入
 
-## 1. 选择并下载原生架构输入
+先检查 Release 的完整资产集合，再只下载本机架构及共享 platform 包。仅在采用该版本指南中的原生方案时设置 `DOWNLOAD_WORKBENCH=0`。下载固定 GitHub 资产 ID，并校验 GitHub 原生大小和 SHA-256 digest；摘要缺失或校验失败立即停止。历史正文机器块和 SHA256SUMS 均被忽略。
 
-默认下载本机架构产品、platform 材料、匹配的 workbench 归档和校验和，同时验证
-声明的完整资产集合。`DOWNLOAD_DIR` 保留 GitHub 元数据、所选 URL、摘要和大小。
-按 Tag 下载的清单必须匹配原始 Release 的提交和 Git blob；`source-evidence.json`
-保留已验证的 Tag、提交和树元数据。新一次尝试使用新的下载和安装目录。
+`files.tsv` 仅在本地保存已下载文件的名称、大小和哈希，供离线复核；它不是发布资产或测试记录。每次使用新的下载和安装目录。
 
 ```bash
 set -euo pipefail
@@ -34,250 +19,141 @@ ARCH="$(uname -m)"
 case "$ARCH" in x86_64|aarch64) ;; *) echo "unsupported native architecture: $ARCH" >&2; exit 1 ;; esac
 DOWNLOAD_WORKBENCH="${DOWNLOAD_WORKBENCH:-1}"
 export ARCH DOWNLOAD_WORKBENCH
-RELEASE_METADATA="$(mktemp)"
 ASSETS_TSV="$(mktemp)"
-SELECTION_MANIFEST="$(mktemp)"
-SOURCE_EVIDENCE="$(mktemp)"
-trap 'rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST" "$SOURCE_EVIDENCE"' EXIT
-
-if [ -n "$RELEASE_VERSION" ]; then
-    [[ "$RELEASE_VERSION" =~ ^release-v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-preview\.[0-9]{8}(\.[1-9][0-9]*)?)?$ ]]
-    RELEASE_API="https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/tags/$RELEASE_VERSION"
-else
-    RELEASE_API="https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox/releases/latest"
-fi
-curl --fail --silent --show-error --location --retry 4 \
-    -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2022-11-28' \
-    "$RELEASE_API" >"$RELEASE_METADATA"
-
-python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$SELECTION_MANIFEST" "$SOURCE_EVIDENCE" <<'PY'
-import hashlib, json, pathlib, re, sys
+trap 'rm -f -- "$ASSETS_TSV"' EXIT
+RELEASE_VERSION="$(python3 - "$RELEASE_VERSION" "$ASSETS_TSV" <<'PY'
+import base64, json, os, re, sys
 from urllib.request import Request, urlopen
-
-metadata, requested, manifest_output, evidence_output = sys.argv[1:]
-release = json.loads(pathlib.Path(metadata).read_text(encoding="utf-8"))
-tag = release["tag_name"]
-assert re.fullmatch(r"release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?", tag), tag
-assert not requested or requested == tag, (requested, tag)
-source_sha = release["target_commitish"]
-assert re.fullmatch(r"[0-9a-f]{40}", source_sha), source_sha
-api = "https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox"
-evidence = []
-
-def read_url(url):
-    request = Request(url, headers={"Accept": "application/vnd.github+json",
-                                   "X-GitHub-Api-Version": "2022-11-28"})
-    with urlopen(request, timeout=30) as response:
-        return response.read()
-
-def read_metadata(path):
-    value = json.loads(read_url(api + path))
-    assert isinstance(value, dict), path
-    evidence.append({"url": api + path, "response": value})
-    return value
-
-def object_sha(value):
-    assert isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}", value), value
-    return value
-
-def check_tag():
-    ref = read_metadata("/git/ref/tags/" + tag)
-    assert ref["ref"] == "refs/tags/" + tag, ref
-    obj, seen = ref["object"], set()
-    while obj["type"] == "tag":
-        sha = object_sha(obj["sha"])
-        assert sha not in seen and len(seen) < 16, "cyclic or excessive annotated tags"
-        seen.add(sha)
-        annotated = read_metadata("/git/tags/" + sha)
-        assert annotated["sha"] == sha, annotated
-        obj = annotated["object"]
-    assert obj["type"] == "commit" and object_sha(obj["sha"]) == source_sha, "release tag moved"
-
-check_tag()
-commit = read_metadata("/commits/refs/tags/" + tag)
-assert commit["sha"] == source_sha, "named tag commit differs from Release source"
-root_tree = object_sha(commit["commit"]["tree"]["sha"])
-
-def tree_entry(tree_sha, name, kind, modes):
-    tree = read_metadata("/git/trees/" + tree_sha)
-    assert tree["sha"] == tree_sha and tree["truncated"] is False, "incomplete or wrong tree"
-    entries = tree["tree"]
-    assert isinstance(entries, list)
-    names = set()
-    valid_modes = {"tree": {"040000"}, "blob": {"100644", "100755", "120000"}, "commit": {"160000"}}
-    for entry in entries:
-        path = entry["path"]
-        assert isinstance(path, str) and path not in ("", ".", "..") and "/" not in path
-        assert path not in names, "ambiguous tree entry"
-        names.add(path)
-        object_sha(entry["sha"])
-        assert entry["mode"] in valid_modes.get(entry["type"], set()), "invalid tree entry type/mode"
-    matches = [entry for entry in entries if entry["path"] == name]
-    assert len(matches) == 1, (name, "missing or ambiguous tree entry")
-    entry = matches[0]
-    assert entry["type"] == kind and entry["mode"] in modes, (name, "wrong entry type/mode")
-    return entry
-
-releases = tree_entry(root_tree, "releases", "tree", {"040000"})
-filename = "daily-preview.yaml" if "-preview." in tag else "release.yaml"
-blob = tree_entry(releases["sha"], filename, "blob", {"100644", "100755"})
-assert type(blob["size"]) is int and blob["size"] >= 0
-manifest_path = "releases/" + filename
-# Content is retrieved only through the explicit tag, never by a SHA or branch.
-content = read_url("https://raw.githubusercontent.com/kuasar-sandbox/kuasar-sandbox/refs/tags/" + tag + "/" + manifest_path)
-check_tag()
-actual_blob = hashlib.sha1(b"blob " + str(len(content)).encode("ascii") + b"\0" + content).hexdigest()
-assert len(content) == blob["size"] and actual_blob == blob["sha"], "manifest blob differs from Release source"
-pathlib.Path(manifest_output).write_bytes(content)
-pathlib.Path(evidence_output).write_text(json.dumps({
-    "tag": tag, "source_commit": source_sha, "manifest_path": manifest_path,
-    "manifest_blob": actual_blob, "manifest_size": len(content), "metadata": evidence
-}, indent=2) + "\n", encoding="utf-8")
-PY
-
-RELEASE_VERSION="$(python3 - "$RELEASE_METADATA" "$RELEASE_VERSION" "$ASSETS_TSV" "$SELECTION_MANIFEST" <<'PY'
-import json, os, platform, re, sys
-metadata, requested, output, manifest = sys.argv[1:]
-release = json.load(open(metadata, encoding="utf-8"))
-tag = release.get("tag_name", "")
-tag_re = re.compile(r"^release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?$")
-assert tag_re.fullmatch(tag), tag
-assert not release.get("draft")
-assert bool(re.search(r"-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?$", tag)) == bool(release.get("prerelease"))
-assert not requested or requested == tag, (requested, tag)
-arch = os.environ.get("ARCH", platform.machine())
-assert arch in ("x86_64", "aarch64"), arch
-other_arch = "aarch64" if arch == "x86_64" else "x86_64"
-patterns = {
-    "platform": re.compile(rf"^platform-{re.escape(tag)}\.tar\.gz$"),
-    "accelerator": re.compile(rf"^accelerator-v[^/]+-linux-{arch}\.tar\.gz$"),
-    "connector": re.compile(rf"^connector-v[^/]+-linux-{arch}\.tar\.gz$"),
-    "orchestrator": re.compile(rf"^orchestrator-v[^/]+-linux-{arch}\.tar\.gz$"),
-    "sandboxer": re.compile(rf"^sandboxer-v[^/]+-linux-{arch}\.tar\.gz$"),
-    "runtime": re.compile(rf"^sandbox-runtime-{arch}-v[^/]+\.tar\.gz$"),
-    "vmlinux": re.compile(rf"^vmlinux-{arch}-v[^/]+\.tar\.gz$"),
-}
-assets = release.get("assets", [])
-names = [a.get("name", "") for a in assets]
-assert len(names) == len(set(names))
-assert names.count("SHA256SUMS") == 1
-bindings = re.findall(r"<!-- kuasar-integration-validation (.*?) -->", release.get("body", ""), re.S)
-assert len(bindings) <= 1
-binding = json.loads(bindings[0]) if bindings else {}
-# The exact source declares compatibility, never missing image assets/notes.
-fields = {}
-for line in open(manifest, encoding="utf-8"):
-    if line[:1].isspace() or not line.strip() or line.startswith("#"):
+requested, output = sys.argv[1:]
+api = 'https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox'
+version_re = r'(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?'
+assert not requested or re.fullmatch('release-v' + version_re, requested), 'invalid aggregate version'
+def read(path):
+    request = Request(api + path, headers={'Accept': 'application/vnd.github+json',
+                                          'X-GitHub-Api-Version': '2022-11-28'})
+    with urlopen(request, timeout=60) as response:
+        return json.load(response)
+release = read('/releases/tags/' + requested if requested else '/releases/latest')
+tag = release['tag_name']
+assert re.fullmatch('release-v' + version_re, tag) and (not requested or tag == requested)
+assert release['draft'] is False and release['prerelease'] == ('-preview.' in tag)
+# The tag fixes the manifest. Never reinterpret an old version using main/latest.
+commit = read('/commits/refs/tags/' + tag)['sha']
+path = 'releases/' + ('daily-preview.yaml' if '-preview.' in tag else 'release.yaml')
+response = read('/contents/' + path + '?ref=' + tag)
+assert response['type'] == 'file' and response['encoding'] == 'base64'
+text = base64.b64decode(response['content']).decode('utf-8')
+assert read('/commits/refs/tags/' + tag)['sha'] == commit, 'tag moved during manifest download'
+fields, units, section = {}, {}, ''
+for raw in text.splitlines():
+    line = raw.split('#', 1)[0].rstrip()
+    if not line.strip():
         continue
-    key, separator, value = line.partition(":")
-    assert separator
-    if key in ("version", "preview_version", "delivery"):
-        assert key not in fields
-        fields[key] = value.strip()
-selected = fields["version"]
-if "-preview." in tag:
-    selected += "-" + fields["preview_version"]
-assert selected == tag
-contract = fields.get("delivery", "historical")
-assert "delivery" not in fields or contract == "workbench-v1"
-if contract != "workbench-v1" and os.environ.get("DOWNLOAD_WORKBENCH", "0") == "1":
-    raise SystemExit("selected Release has no workbench-v1 delivery; explicitly select a suitable published version, or set DOWNLOAD_WORKBENCH=0 and follow the selected historical native guide")
-if contract == "workbench-v1":
-    assert binding.get("delivery") == contract
-roles = {"SHA256SUMS": "checksum"}
-for label, pattern in patterns.items():
-    matches = [name for name in names if pattern.fullmatch(name)]
-    assert len(matches) == 1, (label, matches)
-    roles[matches[0]] = "platform" if label == "platform" else "product"
-other_patterns = [re.compile(pattern.pattern.replace(arch, other_arch))
-                for label, pattern in patterns.items() if label != "platform"]
-other = [name for name in names if any(pattern.fullmatch(name) for pattern in other_patterns)]
-if contract == "workbench-v1" or other:
-    for pattern in other_patterns:
-        assert sum(bool(pattern.fullmatch(name)) for name in names) == 1
-expected = set(roles) | set(other)
-if contract == "workbench-v1":
-    expected |= {f"workbench-{arch}-{tag.removeprefix('release-')}.tar.gz" for arch in ("x86_64", "aarch64")}
-    if os.environ.get("DOWNLOAD_WORKBENCH", "0") == "1":
-        roles[f"workbench-{arch}-{tag.removeprefix('release-')}.tar.gz"] = "workbench"
-assert set(names) == expected, (sorted(names), sorted(expected))
-assert os.environ.get("DOWNLOAD_WORKBENCH", "0") in ("0", "1")
-prefix = f"https://github.com/kuasar-sandbox/kuasar-sandbox/releases/download/{tag}/"
-with open(output, "w", encoding="utf-8") as stream:
-    for asset in sorted(assets, key=lambda item: item["name"]):
-        name, url, digest, size = (asset.get(k) for k in ("name", "browser_download_url", "digest", "size"))
-        assert re.fullmatch(r"[A-Za-z0-9._-]+", name), name
-        assert url == prefix + name, url
-        assert re.fullmatch(r"sha256:[0-9a-f]{64}", digest or ""), (name, digest)
-        assert isinstance(size, int) and size > 0, (name, size)
-        if name in roles:
-            stream.write(f"{name}\t{url}\t{digest}\t{size}\t{roles[name]}\n")
+    if not raw[:1].isspace():
+        key, separator, value = line.partition(':')
+        assert separator, 'invalid manifest'
+        section = key
+        if key in ('version', 'preview_version', 'delivery'):
+            assert key not in fields, 'duplicate manifest field'
+            fields[key] = value.strip()
+    elif section == 'components':
+        match = re.fullmatch(r'  ([a-z]+): +([^ ]+)', line)
+        assert match, 'invalid component selection'
+        unit, version = match.groups()
+        assert unit not in units, 'duplicate selected component'
+        units[unit] = version
+assert set(units) == {'accelerator', 'connector', 'sandboxer', 'orchestrator', 'runtime', 'vmlinux'}
+assert fields['version'] + ('-' + fields['preview_version'] if '-preview.' in tag else '') == tag
+for unit, version in units.items():
+    prefix = unit + '-v' if unit in ('runtime', 'vmlinux') else 'v'
+    assert re.fullmatch(prefix + version_re, version), ('invalid component tag', unit)
+contract = fields.get('delivery', 'historical')
+assert contract in ('historical', 'workbench-v1')
+arch = os.environ['ARCH']
+workbench = os.environ['DOWNLOAD_WORKBENCH']
+assert workbench in ('0', '1')
+assert workbench == '0' or contract == 'workbench-v1', 'selected version has no Workbench; use its native guide with DOWNLOAD_WORKBENCH=0'
+def names(architecture):
+    result = set()
+    for unit, version in units.items():
+        if unit == 'runtime':
+            result.add(f'sandbox-runtime-{architecture}-{version.removeprefix("runtime-")}.tar.gz')
+        elif unit == 'vmlinux':
+            result.add(f'vmlinux-{architecture}-{version.removeprefix("vmlinux-")}.tar.gz')
+        else:
+            result.add(f'{unit}-{version}-linux-{architecture}.tar.gz')
+    return result
+assets = [a for a in release['assets'] if a['name'] != 'SHA256SUMS']
+actual = {a['name'] for a in assets}
+assert len(actual) == len(assets), 'duplicate asset name'
+platform_name = f'platform-{tag}.tar.gz'
+expected = {platform_name} | names('x86_64')
+if contract == 'workbench-v1' or actual & names('aarch64'):
+    expected |= names('aarch64')
+if contract == 'workbench-v1':
+    expected |= {f'workbench-{a}-{tag.removeprefix("release-")}.tar.gz' for a in ('x86_64', 'aarch64')}
+assert actual == expected, 'missing or unexpected aggregate asset'
+selected = {platform_name} | names(arch)
+if workbench == '1':
+    selected.add(f'workbench-{arch}-{tag.removeprefix("release-")}.tar.gz')
+assert selected <= actual, 'selected native architecture is unavailable'
+with open(output, 'w', encoding='utf-8') as stream:
+    for asset in sorted(assets, key=lambda a: a['name']):
+        name, size, digest, aid = (asset.get(k) for k in ('name', 'size', 'digest', 'id'))
+        assert re.fullmatch(r'[A-Za-z0-9._-]+', name)
+        assert asset['state'] == 'uploaded' and type(aid) is int and aid > 0
+        assert type(size) is int and size > 0
+        assert re.fullmatch(r'sha256:[0-9a-f]{64}', digest or ''), ('missing asset digest', name)
+        if name in selected:
+            stream.write(f'{name}\t{size}\t{digest}\t{api}/releases/assets/{aid}\n')
 print(tag)
 PY
 )"
-
 DOWNLOAD_DIR="$PWD/kuasar-download-$RELEASE_VERSION"
 INSTALL_DIR="$PWD/kuasar-$RELEASE_VERSION"
 test ! -e "$DOWNLOAD_DIR"
 test ! -e "$INSTALL_DIR"
 mkdir -m 0755 "$DOWNLOAD_DIR"
-install -m 0644 "$RELEASE_METADATA" "$DOWNLOAD_DIR/release.json"
-install -m 0644 "$SOURCE_EVIDENCE" "$DOWNLOAD_DIR/source-evidence.json"
-install -m 0644 "$ASSETS_TSV" "$DOWNLOAD_DIR/assets.tsv"
-
-while IFS=$'\t' read -r name url digest size role; do
+while IFS=$'\t' read -r name size digest url; do
     curl --fail --silent --show-error --location --retry 4 \
+        -H 'Accept: application/octet-stream' -H 'X-GitHub-Api-Version: 2022-11-28' \
         --output "$DOWNLOAD_DIR/$name.part" "$url"
     test "$(stat -c %s "$DOWNLOAD_DIR/$name.part")" = "$size"
     test "sha256:$(sha256sum "$DOWNLOAD_DIR/$name.part" | awk '{print $1}')" = "$digest"
     mv "$DOWNLOAD_DIR/$name.part" "$DOWNLOAD_DIR/$name"
-done <"$DOWNLOAD_DIR/assets.tsv"
-rm -f -- "$RELEASE_METADATA" "$ASSETS_TSV" "$SELECTION_MANIFEST" "$SOURCE_EVIDENCE"
+done <"$ASSETS_TSV"
+cut -f1-3 "$ASSETS_TSV" >"$DOWNLOAD_DIR/files.tsv"
+rm -f -- "$ASSETS_TSV"
 trap - EXIT
-printf 'Pinned aggregate Release: %s\n' "$RELEASE_VERSION"
+printf 'Selected aggregate Release: %s\n' "$RELEASE_VERSION"
 ```
 
-## 2. 校验所选字节并解包产品及材料
+## 2. 复核所选字节并解压产品与材料
 
-所选文件必须全部存在，且大小和摘要与记录一致；未下载的另一架构文件不影响
-本机架构下载，但校验清单仍须精确描述该发布版资产。先验证成员类型、路径、权限
-及跨包冲突，再解包到新的 staging 目录。标准相对根目录（`.` 或 `./`）必须是
-不含 set-ID 位的目录；拒绝空名称或绝对根目录名称。此步骤有意不解包 workbench 归档。
+复核每个已下载文件，再检查归档类型、路径、权限及跨包路径冲突，全部通过后才解压。未选择架构的文件无需下载。Workbench 单独导入。
 
 ```bash
 set -euo pipefail
-(
-cd "$DOWNLOAD_DIR"
-sha256sum --quiet --check --ignore-missing SHA256SUMS
-)
-
 python3 - "$DOWNLOAD_DIR" <<'PY'
-import hashlib, json, pathlib, re, sys, tarfile
+import hashlib, pathlib, re, sys, tarfile
 root = pathlib.Path(sys.argv[1])
-rows = [line.split("\t") for line in (root / "assets.tsv").read_text().splitlines()]
-archives = [row[0] for row in rows if row[4] in ("platform", "product")]
-checksum_re = re.compile(r"^([0-9a-f]{64}) [ *]([A-Za-z0-9._-]+)$")
-checksums = {}
-for line in (root / "SHA256SUMS").read_text(encoding="utf-8").splitlines():
-    match = checksum_re.fullmatch(line)
-    assert match, line
-    digest, name = match.groups()
-    assert name not in checksums
-    checksums[name] = digest
-metadata = json.loads((root / "release.json").read_text())
-assert set(checksums) == {a["name"] for a in metadata["assets"] if a["name"] != "SHA256SUMS"}
-for name, _, digest, size, role in rows:
+rows = [line.split('\t') for line in (root / 'files.tsv').read_text().splitlines()]
+assert rows and all(len(row) == 3 for row in rows), 'invalid local file list'
+assert len(rows) == len({row[0] for row in rows}), 'duplicate local filename'
+archives = []
+for name, size, digest in rows:
+    assert re.fullmatch(r'[A-Za-z0-9._-]+\.tar\.gz', name), 'unsafe filename'
+    assert size.isdecimal() and int(size) > 0 and re.fullmatch(r'sha256:[0-9a-f]{64}', digest)
     asset = root / name
-    assert asset.is_file() and not asset.is_symlink(), ("missing selected asset", name)
-    assert asset.stat().st_size == int(size), ("selected asset size", name)
+    assert asset.is_file() and not asset.is_symlink(), ('missing selected asset', name)
+    assert asset.stat().st_size == int(size), ('selected asset size', name)
     hasher = hashlib.sha256()
-    with asset.open("rb") as stream:
-        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+    with asset.open('rb') as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b''):
             hasher.update(chunk)
-    assert "sha256:" + hasher.hexdigest() == digest, ("selected asset digest", name)
-    if role != "checksum":
-        assert "sha256:" + checksums[name] == digest
+    assert 'sha256:' + hasher.hexdigest() == digest, ('selected asset digest', name)
+    if not name.startswith('workbench-'):
+        archives.append(name)
 types = {}
 for archive in archives:
     with tarfile.open(root / archive, "r:gz") as stream:
@@ -308,20 +184,17 @@ for archive in archives:
                 assert not any(existing.startswith(raw + "/") for existing in types), (archive, raw)
             types[raw] = kind
 PY
-
 INSTALL_PARENT="$(dirname "$INSTALL_DIR")"
 STAGE_DIR="$(mktemp -d "$INSTALL_PARENT/.kuasar-install.XXXXXX")"
 cleanup_stage() {
     case "$STAGE_DIR" in "$INSTALL_PARENT"/.kuasar-install.*) rm -rf -- "$STAGE_DIR" ;; esac
 }
 trap cleanup_stage EXIT
-while IFS=$'\t' read -r name url digest size role; do
-    case "$role" in
-        platform|product) tar --extract --gzip --no-same-owner --no-same-permissions \
-            --file "$DOWNLOAD_DIR/$name" --directory "$STAGE_DIR" ;;
-    esac
-done <"$DOWNLOAD_DIR/assets.tsv"
-
+while IFS=$'\t' read -r name size digest; do
+    case "$name" in workbench-*) continue ;; esac
+    tar --extract --gzip --no-same-owner --no-same-permissions \
+        --file "$DOWNLOAD_DIR/$name" --directory "$STAGE_DIR"
+done <"$DOWNLOAD_DIR/files.tsv"
 test -f "$STAGE_DIR/test/demo/demo_common.sh"
 test -f "$STAGE_DIR/test/demo/requirements.txt"
 test -d "$STAGE_DIR/bin" && test -d "$STAGE_DIR/test"
@@ -329,7 +202,7 @@ if [ "$DOWNLOAD_WORKBENCH" = 1 ]; then
     test -f "$STAGE_DIR/workbench/workbench"
     test -d "$STAGE_DIR/guide"
     test -f "$STAGE_DIR/test/demo/prepared.py" || {
-        echo 'selected Release predates the prepared Demo guide; use its bundled instructions or explicitly select a newer published version' >&2
+        echo 'selected Release predates the prepared Demo guide; use its bundled instructions' >&2
         exit 1
     }
 fi
@@ -338,21 +211,19 @@ STAGE_DIR=""
 trap - EXIT
 ```
 
-## 3. 单独导入 workbench
+## 3. 单独导入 Workbench
+
+导入已下载归档，检查本机架构与版本，然后保留本地 image ID 用于启动。
 
 ```bash
-IMAGE="ghcr.io/kuasar-sandbox/workbench:${RELEASE_VERSION#release-}"
+IMAGE_TAG="ghcr.io/kuasar-sandbox/workbench:${RELEASE_VERSION#release-}"
 docker load --input "$DOWNLOAD_DIR/workbench-$ARCH-${RELEASE_VERSION#release-}.tar.gz"
-test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$IMAGE")" = "$RELEASE_VERSION"
+case "$ARCH" in x86_64) DOCKER_ARCH=amd64 ;; aarch64) DOCKER_ARCH=arm64 ;; esac
+test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_TAG")" = "linux/$DOCKER_ARCH"
+test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$IMAGE_TAG")" = "$RELEASE_VERSION"
+IMAGE="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
 RELEASE="$INSTALL_DIR"
-printf 'Release directory: %s\nWorkbench image: %s\n' "$RELEASE" "$IMAGE"
+printf 'Release directory: %s\nLocal Workbench image: %s\n' "$RELEASE" "$IMAGE"
 ```
 
-保留此 shell 中的 `RELEASE`、`IMAGE` 和 `ARCH`，继续执行
-[快速开始](quickstart_zh.md#2-启动私有系统环境)。启动器是
-`$RELEASE/workbench/workbench`，来自所选 platform 包，而不是源码检出。
-该归档是 gzip 压缩的 Docker 镜像归档，不是根文件系统或另一个产品包。
-
-已有完整验证的安装可以直接设置这些变量为绝对发布目录、匹配的镜像标签或 ID
-以及本机架构，无需重新下载。校验、命名、缺少输入或历史合同检查失败时应停止；
-不要从其他版本补文件来修复一个已选发布版。
+在当前会话保留 `RELEASE`、`IMAGE` 和 `ARCH`，继续[快速开始](quickstart_zh.md#2-启动私有系统环境)。启动器来自 `$RELEASE/workbench/workbench`。复用已验证安装时，使用其发布目录和本地 image ID。缺文件、架构不符、摘要、权限或路径检查失败时停止，不要从其他版本获取替代文件。

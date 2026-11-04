@@ -814,7 +814,7 @@ class ArtifactContracts(unittest.TestCase):
             helper_contract_sha256=subject.identity(contract))))
         workspace = owner.root / 'ci-prepared'
         observed = prepare.prepare(plan, arch, self.assets, delta, workspace, offline=True)
-        self.assertEqual(observed['helper_contract'], contract)
+        self.assertEqual(observed['helper_contract'], subject.helper_contract_module().runtime(contract))
         self.assertEqual(observed['helpers']['component-probe'], original)
         self.assertEqual(subject.digest(workspace / 'fixtures/bin/component-probe'), original['sha256'])
         execute(workspace)
@@ -978,42 +978,19 @@ class ArtifactContracts(unittest.TestCase):
                 subject.collect_results(plan, wrong)
             notes = self.root / 'release-notes.md'; notes.write_text('Exact stage\n')
             binding.bind(self.root, plan, subject.collect_results(plan, results), workbench_results(plan, receipts))
-            published = json.loads(resolver.PROFILE_BINDING.search(notes.read_text())[1])
-            self.assertEqual(published['validation_plan'], plan)
-            self.assertEqual(published.pop('case_files'), plan['case_files'])
-            published['registry'] = registry_binding(version, published['workbench'])
-            state = {'tag_name': version, 'target_commitish': sha, 'draft': False, 'prerelease': False,
-                     'id': 1, 'assets': [dict(row, id=i, state='uploaded') for i, row in enumerate(plan['baseline']['assets'], 1)]}
-            def notes_from(record):
-                state['body'] = '<!-- kuasar-integration-validation ' + json.dumps(record) + ' -->'
-            notes_from(published)
-            run = {'id': 1, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://example.invalid/run/1',
-                   'display_title': resolver.release.aggregate_run_title(version, sha)}
-            def fact(endpoint):
-                self.assertIn('/commits/', endpoint)
-                return {'sha': 'c' * 40, 'commit': {'tree': {'sha': '9' * 40}}}
+            state = {'tag_name': version, 'target_commitish': 'main', 'draft': False, 'prerelease': False,
+                     'id': 1, 'body': notes.read_text(),
+                     'assets': [dict(row, id=i, state='uploaded') for i, row in enumerate(plan['baseline']['assets'], 1)]}
             with patch.object(resolver.release, 'api_optional', return_value=state), \
-                 patch.object(resolver.release, 'aggregate_runs', return_value=[run]), \
-                 patch.object(resolver.release, 'api', side_effect=fact), \
+                 patch.object(resolver.release, 'aggregate_runs', side_effect=AssertionError('no history')), \
                  patch.object(resolver, 'source_text', return_value=manifest) as retrieve:
                 baseline = resolver.aggregate(version)
-                self.assertEqual(baseline['test_revisions'], plan['test_revisions'])
-                self.assertEqual(baseline['case_files'], WORKBENCH_CASES)
+                self.assertEqual(baseline['units'], plan['baseline']['units'])
+                self.assertNotIn('validation_plan', baseline)
+                self.assertNotIn('test_revisions', baseline)
                 retrieve.assert_called_with(resolver.PLATFORM, version, 'releases/release.yaml')
-                legacy = dict(published, case_files=copy.deepcopy(plan['case_files']))
-                notes_from(legacy)
-                self.assertEqual(resolver.aggregate(version)['case_files'], WORKBENCH_CASES)
-                for field in ('case_files', 'source_records', 'validation_plan'):
-                    broken = copy.deepcopy(legacy)
-                    if field == 'case_files': broken[field]['orchestrator'] = ['basic.guessed.sh']
-                    elif field == 'source_records': broken[field]['runtime']['tree'] = '0' * 40
-                    else: broken[field]['framework_sha'] = '0' * 40
-                    notes_from(broken)
-                    with self.subTest(field=field), self.assertRaises(ValueError): resolver.aggregate(version)
-                notes_from(published)
-                with patch.object(resolver.release, 'api', return_value={'sha': 'e' * 40, 'commit': {'tree': {'sha': '9' * 40}}}), \
-                     self.assertRaisesRegex(ValueError, 'source tag identity changed'):
-                    resolver.aggregate(version)
+                state['body'] = 'Human notes only'
+                self.assertEqual(resolver.aggregate(version), baseline)
 
     def test_baseline_and_candidate_tampering_fail(self):
         delta = self.delta()
@@ -1059,8 +1036,8 @@ class ArtifactContracts(unittest.TestCase):
             path = delta / "helpers" / name
             path.write_bytes(elf("x86_64", name))
             path.chmod(0o755)
-            self.metadata["helpers"][name] = {"owner": "platform" if owner == "framework" else owner, "size": path.stat().st_size, "mode": 0o755, "sha256": subject.digest(path), "source_sha":
-                self.plan["test_revisions"]["platform"]["sha"] if owner == "framework" else self.plan["test_revisions"][owner]["sha"]}
+            self.metadata["helpers"][name] = dict(subject.helper_contract_module().runtime(self.plan['helper_contract'])['helpers'][name],
+                size=path.stat().st_size, mode=0o755, sha256=subject.digest(path))
         (delta / "outputs.json").write_text(json.dumps(self.metadata))
         provenance = self.compose(delta=delta)
         probe = self.root / "workspaces/x86_64/fixtures/bin/usage-probe"
@@ -1069,7 +1046,7 @@ class ArtifactContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "prepared workspace changed"):
             subject.verify_workspace(self.root / "workspaces/x86_64", self.plan, "x86_64")
 
-    def test_proxy_helper_requires_exact_test_pin_and_survives_preparation(self):
+    def test_proxy_helper_runtime_metadata_and_bytes_survive_preparation(self):
         select_plan(self.plan, ["orchestrator"])
         self.plan["test_revisions"]["orchestrator"]["sha"] = "f" * 40
         delta = self.delta()
@@ -1084,21 +1061,21 @@ class ArtifactContracts(unittest.TestCase):
             path = delta / "helpers" / name
             path.write_bytes(elf("x86_64", name))
             path.chmod(0o755)
-            self.metadata["helpers"][name] = {"owner": "platform" if owner == "framework" else owner, "size": path.stat().st_size, "mode": 0o755, "sha256": subject.digest(path), "source_sha":
-                self.plan["test_revisions"]["platform"]["sha"] if owner == "framework" else self.plan["test_revisions"][owner]["sha"]}
+            self.metadata["helpers"][name] = dict(subject.helper_contract_module().runtime(self.plan['helper_contract'])['helpers'][name],
+                size=path.stat().st_size, mode=0o755, sha256=subject.digest(path))
         self.assertEqual(helpers['node-ctl-runner-test'], 'orchestrator')
         runner_helper = self.metadata['helpers']['node-ctl-runner-test']
-        runner_helper['source_sha'] = 'c' * 40
+        runner_helper['sha256'] = 'c' * 64
         (delta / 'outputs.json').write_text(json.dumps(self.metadata))
-        with self.assertRaisesRegex(ValueError, 'helper output identity differs from trusted source/bytes: node-ctl-runner-test'):
+        with self.assertRaisesRegex(ValueError, 'helper runtime fields or bytes differ: node-ctl-runner-test'):
             self.compose(delta=delta)
-        runner_helper['source_sha'] = 'f' * 40
+        runner_helper['sha256'] = subject.digest(delta / 'helpers/node-ctl-runner-test')
         helper = self.metadata["helpers"]["custom-proxy"]
-        helper["source_sha"] = "c" * 40
+        helper["sha256"] = "c" * 64
         (delta / "outputs.json").write_text(json.dumps(self.metadata))
-        with self.assertRaisesRegex(ValueError, "helper output identity differs from trusted source/bytes: custom-proxy"):
+        with self.assertRaisesRegex(ValueError, "helper runtime fields or bytes differ: custom-proxy"):
             self.compose(delta=delta)
-        helper["source_sha"] = "f" * 40
+        helper['sha256'] = subject.digest(delta / 'helpers/custom-proxy')
         (delta / "outputs.json").write_text(json.dumps(self.metadata))
         provenance = self.compose(delta=delta)
         prepared = self.root / "workspaces/x86_64/fixtures/bin/custom-proxy"

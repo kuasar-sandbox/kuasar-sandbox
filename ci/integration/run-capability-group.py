@@ -200,13 +200,23 @@ def execute(args):
 
     artifacts.require(not args.root.exists() and not args.inputs.exists(), 'supplemental E2E needs fresh task-owned directories')
     selected = plan['execution_images'][args.arch]
-    existing = subprocess.run(['docker', 'image', 'inspect', selected['image_id']], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    if existing.returncode:
-        image_pull.pull_image(selected['reference'])
+    image_pull.pull_image(selected['reference'])
+    images = json.loads(subprocess.check_output(['docker', 'image', 'inspect', selected['reference']], text=True))
+    artifacts.require(isinstance(images, list) and len(images) == 1, 'missing pulled Workbench image')
+    image = images[0]
+    version = 'release-' + selected['reference'].rsplit(':', 1)[1]
+    labels = image.get('Config', {}).get('Labels') or {}
+    artifacts.require(image.get('Os') == 'linux' and
+                      image.get('Architecture') == {'x86_64': 'amd64', 'aarch64': 'arm64'}[args.arch] and
+                      re.fullmatch(r'sha256:[0-9a-f]{64}', image.get('Id', '')) and
+                      labels.get('org.opencontainers.image.version') == version and
+                      labels.get('org.opencontainers.image.source') == 'https://github.com/kuasar-sandbox/kuasar-sandbox',
+                      'pulled Workbench image has the wrong architecture or version')
+    local_id = image['Id']
     # The launcher verifies native architecture, rootful Engine, image origin
-    # and private namespaces. The exact config ID is fixed by the plan.
+    # and private namespaces. Start the local image observed after this pull.
     subprocess.run([sys.executable, '-B', str(ROOT / 'workbench/workbench'), 'check',
-                    '--image', selected['image_id'], '--mode', 'system'], check=True)
+                    '--image', local_id, '--mode', 'system'], check=True)
     args.inputs.mkdir(parents=True, mode=0o700)
     shutil.copytree(args.workspace, args.inputs / 'prepared', copy_function=copy_input)
     shutil.copytree(args.readers, args.inputs / 'readers', copy_function=copy_input)
@@ -228,14 +238,15 @@ def execute(args):
               'cases': group['cases'], 'timings': []}
     failed = False
     try:
-        subprocess.run(command(args.root, 'start', '--mode', 'system', '--image', selected['image_id'],
+        subprocess.run(command(args.root, 'start', '--mode', 'system', '--image', local_id,
                                '--inputs', args.inputs, '--cpus', profile['resources']['cpus'],
                                '--memory-gib', profile['resources']['memory_gib']),
                        check=True, stdin=subprocess.DEVNULL, timeout=300)
         internal = ['/inputs/release/framework/ci/integration/run-capability-group.py', '--inside',
                     '--plan', '/inputs/release/plan.json', '--arch', args.arch, '--group', args.group,
                     '--workspace', '/inputs/release/prepared', '--runtime', '/inputs/release/runtime.tar.gz',
-                    '--result', '/output/result.json', '--runner-identity', '/inputs/release/runner.json']
+                    '--result', '/output/result.json', '--runner-identity', '/inputs/release/runner.json',
+                    '--executor-image', local_id]
         subprocess.run(command(args.root, 'exec', '--', 'env',
                                'PATH=/inputs/release/readers:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
                                'KUASAR_RUNTIME_READER=/inputs/release/readers/runtime-payloads.py',
@@ -243,6 +254,7 @@ def execute(args):
                        timeout=profile['resources']['timeout_minutes'] * 60)
         result = json.loads(read_owned(instance(args.root) / 'output/result.json'))
         routing.check_result(plan, args.arch, args.group, result)
+        artifacts.require(result['execution']['image_id'] == local_id, 'executor differs from the pulled local image')
         artifacts.verify_workspace(args.workspace, plan, args.arch)
         return result
     except BaseException as error:
@@ -280,6 +292,7 @@ def main():
         parser.add_argument('--' + name, type=Path)
     parser.add_argument('--arch', choices=artifacts.ARCHES)
     parser.add_argument('--group')
+    parser.add_argument('--executor-image')
     parser.add_argument('--inside', action='store_true')
     parser.add_argument('--cleanup', action='store_true')
     parser.add_argument('--delete-output', action='store_true')
@@ -300,7 +313,7 @@ def main():
         provenance = artifacts.verify_workspace(args.workspace, plan, args.arch)
         image = runtime_archive.load(args.runtime, provenance) if group['runtime'] == 'runtime-only' else None
         return run_module().execute(plan, args.arch, args.group, args.workspace, args.result, image,
-                                    json.loads(args.runner_identity.read_text()), plan['execution_images'][args.arch]['image_id'])
+                                    json.loads(args.runner_identity.read_text()), args.executor_image)
     def interrupted(signum, frame):
         raise InterruptedError('E2E group cancelled by signal ' + str(signum))
     signal.signal(signal.SIGTERM, interrupted)

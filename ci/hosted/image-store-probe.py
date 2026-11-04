@@ -112,8 +112,19 @@ def check_fixture(selection, arch, facts, inspections):
     images = json.loads(successful(chosen, 'inspect immutable fixture identity'))
     if len(images) != 1:
         raise ValueError('ambiguous fixture identity')
-    return workbench.image_check(selection, arch, images[0], metadata=(
-        facts['manifest_raw'].encode(), facts['config_raw'].encode()))
+    image = images[0]
+    workbench.image_check(selection, arch, image)
+    row = selection['architectures'][arch]
+    raw, config = facts['manifest_raw'].encode(), facts['config_raw'].encode()
+    if image['Id'] == row['image_id']:
+        parsed = json.loads(config)
+        if (digest(config) != image['Id'] or parsed['architecture'] != image['Architecture']
+                or parsed['os'] != image['Os'] or parsed['config']['Labels'] != image['Config']['Labels']
+                or image.get('RootFS', {}).get('Type') != 'layers'
+                or (image.get('RootFS', {}).get('Layers') or []) != []):
+            raise ValueError('local fixture config identity mismatch')
+        return image['Id']
+    return workbench.image_identity.check_manifest_config(row, image, raw, config)
 
 
 def pull_fixture(arch, report):

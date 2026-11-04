@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Download only the selected target of one resolved aggregate, using the release
-# downloader and the exact API size/digest plus aggregate checksum contract.
+# downloader and the exact GitHub asset identity, size and digest.
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT/release/lib.sh"
@@ -19,7 +19,7 @@ artifacts.check_plan(plan)
 baseline = plan['baseline']
 artifacts.require(baseline['repository'] == 'kuasar-sandbox/kuasar-sandbox', 'foreign aggregate baseline')
 names = {artifacts.archive_name(unit, record['version'], sys.argv[2]) for unit, record in baseline['units'].items()}
-names.update(('SHA256SUMS', 'platform-' + baseline['version'] + '.tar.gz'))
+names.add('platform-' + baseline['version'] + '.tar.gz')
 records = {record['name']: record for record in baseline['assets']}
 artifacts.require(names <= set(records), 'missing target assets; explicit initialization is required')
 for name in sorted(names):
@@ -40,18 +40,3 @@ while IFS= read -r asset; do
     fi
     verify_github_asset "$output/$name" "$asset"
 done < "$records"
-PYTHONPATH="$ROOT/ci/integration" python3 - "$plan" "$output/SHA256SUMS" <<'PY'
-import json, re, sys
-import artifacts
-plan = json.load(open(sys.argv[1]))
-expected = {record['name']: record['digest'].removeprefix('sha256:')
-            for record in plan['baseline']['assets'] if record['name'] != 'SHA256SUMS'}
-actual = {}
-for line in open(sys.argv[2]):
-    match = re.fullmatch(r'([0-9a-f]{64}) [ *]([^\r\n]+)\n?', line)
-    artifacts.require(match is not None, 'invalid aggregate checksum entry')
-    digest, name = match.groups()
-    artifacts.require(name not in actual, 'duplicate aggregate checksum entry')
-    actual[name] = digest
-artifacts.require(actual == expected, 'aggregate checksums differ from resolved API assets')
-PY

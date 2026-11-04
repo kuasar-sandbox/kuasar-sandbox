@@ -275,17 +275,17 @@ class PreparedRunnerTests(unittest.TestCase):
         helpers = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe']
         self.install_test_helpers(helpers)
         with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
-            with self.assertRaisesRegex(ValueError, 'helper receipt differs from trusted inventory'):
+            with self.assertRaisesRegex(ValueError, 'helper inventory differs'):
                 runner.cmd_prepare(self.args_with(include=[case]))
         prepare.assert_not_called()
         self.assertFalse(self.work.exists())
         self.install_test_helpers(['node-ctl-runner-test'])
         path = self.release / 'test/e2e/helpers' / platform.machine() / 'helpers.json'
         metadata = json.loads(path.read_text())
-        metadata['helpers']['node-ctl-runner-test']['source_sha'] = 'b' * 40
+        metadata['helpers']['node-ctl-runner-test']['sha256'] = 'b' * 64
         path.write_text(json.dumps(metadata))
         with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
-            with self.assertRaisesRegex(ValueError, 'helper output identity differs from trusted source/bytes'):
+            with self.assertRaisesRegex(ValueError, 'helper checksum mismatch'):
                 runner.cmd_prepare(self.args_with(include=[case]))
         prepare.assert_not_called()
         self.assertFalse(self.work.exists())
@@ -302,21 +302,21 @@ class PreparedRunnerTests(unittest.TestCase):
         (self.release / 'test/e2e/cases' / case).write_text('exit 0\n')
         self.install_test_helpers(['zot', 'usage-probe'])
         with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
-            with self.assertRaisesRegex(ValueError, 'helper receipt differs from trusted inventory'):
+            with self.assertRaisesRegex(ValueError, 'helper inventory differs'):
                 runner.cmd_prepare(self.args_with(include=[case]))
         prepare.assert_not_called()
         self.assertFalse(self.work.exists())
 
-    def test_selected_helper_source_mismatch_fails_before_fixture_work(self):
+    def test_selected_helper_hash_mismatch_fails_before_fixture_work(self):
         case = 'sandbox.cgroup.sh'
         (self.release / 'test/e2e/cases' / case).write_text('exit 0\n')
         self.install_test_helpers(['zot', 'usage-probe', 'cgroup-fork-probe'])
         path = self.release / 'test/e2e/helpers' / platform.machine() / 'helpers.json'
         metadata = json.loads(path.read_text())
-        metadata['helpers']['cgroup-fork-probe']['source_sha'] = 'b' * 40
+        metadata['helpers']['cgroup-fork-probe']['sha256'] = 'b' * 64
         path.write_text(json.dumps(metadata))
         with patch.object(runner.workspace, 'prepare_fixtures') as prepare:
-            with self.assertRaisesRegex(ValueError, 'helper output identity differs from trusted source/bytes'):
+            with self.assertRaisesRegex(ValueError, 'helper checksum mismatch'):
                 runner.cmd_prepare(self.args_with(include=[case]))
         prepare.assert_not_called()
         self.assertFalse(self.work.exists())

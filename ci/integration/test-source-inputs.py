@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Real named-ref admission, artifact restoration and historical evidence tests."""
+import base64
 import copy
 import importlib.util
 import json
@@ -620,7 +621,7 @@ class MaintainedSelection(unittest.TestCase):
     def release_state(self, unit, tag, sha):
         return {'tag_name': tag, 'draft': False, 'prerelease': '-preview.' in tag,
                 'target_commitish': sha, 'assets': [
-                    {'name': name, 'state': 'uploaded', 'size': 1, 'digest': 'sha256:' + 'e' * 64}
+                    {'name': name, 'id': 1, 'state': 'uploaded', 'size': 1, 'digest': 'sha256:' + 'e' * 64}
                     for name in ['SHA256SUMS', *(artifacts.archive_name(unit, tag, arch) for arch in artifacts.ARCHES)]]}
 
     def test_missing_aggregate_uses_only_explicit_validated_predecessor(self):
@@ -634,16 +635,16 @@ class MaintainedSelection(unittest.TestCase):
                 self.assertIs(resolver.baseline(root, 'main'), original)
                 self.assertEqual([call.args[0] for call in lookup.call_args_list],
                                  ['release-v1.2.3-preview.20261019.1', 'release-v1.2.3-preview.20261015.1'])
-            with patch.object(resolver, 'aggregate', return_value=None), self.assertRaisesRegex(ValueError, 'published validated baseline'):
+            with patch.object(resolver, 'aggregate', return_value=None), self.assertRaisesRegex(ValueError, 'published complete baseline'):
                 resolver.baseline(root, 'main')
 
     def test_incomplete_or_unverified_selected_publications_fail_closed(self):
         good = self.release_state('connector', 'v1.2.4', 'a' * 40)
-        bad = [None, dict(good, draft=True), dict(good, target_commitish='b' * 40),
+        bad = [None, dict(good, draft=True),
                dict(good, tag_name='v1.2.5'), dict(good, prerelease=True),
-               dict(good, assets=good['assets'][:-1]), dict(good, assets=good['assets'] + good['assets'][:1])]
-        for field, value in [('state', 'new'), ('size', 0), ('digest', None)]:
-            row = copy.deepcopy(good); row['assets'][0][field] = value; bad.append(row)
+               dict(good, assets=good['assets'][:-1]), dict(good, assets=good['assets'] + good['assets'][1:2])]
+        for field, value in [('state', 'new'), ('size', 0), ('digest', None), ('id', None)]:
+            row = copy.deepcopy(good); row['assets'][1][field] = value; bad.append(row)
         with patch.object(resolver, 'public'), patch.object(resolver.release, 'tag_sha', return_value='a' * 40):
             for state in bad:
                 with self.subTest(state=state), patch.object(resolver.release, 'api_optional', return_value=state), self.assertRaises(ValueError):
@@ -659,12 +660,13 @@ class MaintainedSelection(unittest.TestCase):
         self.assertEqual(resolver.maintained_products({'vmlinux': {}}), {'vmlinux'})
         self.assertNotIn('mkfs.erofs', resolver.maintained_products(dict.fromkeys(artifacts.UNITS)))
 
-    def test_modern_manifest_tags_overlay_legacy_aggregate_and_admitted_companion(self):
-        self.run_cutover()
+    def test_legacy_baseline_is_not_reinterpreted_by_current_manifest(self):
+        with self.assertRaisesRegex(ValueError, 'mixed E2E requirement generations'):
+            self.run_cutover(complete_baseline=False)
 
     def test_partial_requirement_migration_still_fails_closed(self):
         with self.assertRaisesRegex(ValueError, 'mixed E2E requirement generations'):
-            self.run_cutover(legacy_owner='connector')
+            self.run_cutover(complete_baseline=False, legacy_owner='connector')
 
     def test_runtime_tag_cannot_select_kernel_from_its_makefile(self):
         self.run_cutover(kernel_delta=False)
@@ -687,7 +689,7 @@ class MaintainedSelection(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'mixed E2E requirement generations'):
             self.run_cutover(complete_baseline=True, candidate_owner='connector', downgrade_candidate=True)
 
-    def run_cutover(self, legacy_owner=None, kernel_delta=True, base_ref='main', complete_baseline=False,
+    def run_cutover(self, legacy_owner=None, kernel_delta=True, base_ref='main', complete_baseline=True,
                     candidate_owner='platform', downgrade_candidate=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -828,137 +830,79 @@ class MaintainedSelection(unittest.TestCase):
                     self.assertEqual(row['sha'], baseline['units'][unit]['sha'])
                 artifacts.check_plan(plan)
                 return
-            self.assertEqual(plan['kernel_sha'], shas['vmlinux'])
-            self.assertNotEqual(plan['kernel_sha'], plan['sources']['guest-runtime']['sha'])
-            self.assertEqual(plan['test_revisions']['orchestrator']['sha'], companion_sha)
-            # Joint qualification must retain the admitted consumer test source
-            # and the selected dependency tuple; a rebuilt consumer is not an
-            # authorization to substitute another owner main or test revision.
-            self.assertEqual(plan['sources']['orchestrator']['sha'], companion_sha)
-            for owner, unit in (('accelerator', 'accelerator'), ('sandboxer', 'sandboxer'),
-                                ('guest-runtime', 'runtime')):
-                self.assertEqual(plan['sources'][owner]['sha'], shas[unit])
-                self.assertEqual(plan['test_revisions'][owner]['sha'], shas[unit])
-                self.assertEqual(plan['product_sources']['sandbox-runtime.bundle'][resolver.REPOSITORIES[owner]], shas[unit])
-            for owner in ('accelerator', 'sandboxer'):
-                self.assertEqual(plan['product_sources']['node-ctl'][resolver.REPOSITORIES[owner]], shas[owner])
-            self.assertIn('source-change.txt', plan['changes']['orchestrator'])
-            self.assertEqual(set(plan['maintained_deltas']), set(artifacts.UNITS) - (set() if kernel_delta else {'vmlinux'}))
-            for unit, row in plan['source_records'].items():
-                self.assertEqual((row['tag'], row['sha']), (maintained[unit], shas[unit]))
-                self.assertEqual(row, {key: plan['run_inputs'][('maintained/' if unit in plan['maintained_deltas'] else 'released/') + unit][key] for key in row})
-            for arch in artifacts.ARCHES:
-                self.assertEqual(set(plan['lanes'][arch]['products']), set(artifacts.PRODUCTS) - {'mkfs.erofs'} - (set() if kernel_delta else {'vmlinux'}))
-                self.assertEqual(plan['lanes'][arch]['embedded_products'], ['envd'])
-            if kernel_delta:
-                self.assertEqual(plan['product_sources']['vmlinux'], {'kuasar-sandbox/guest-runtime': shas['vmlinux']})
-            else:
-                self.assertNotIn('vmlinux', plan['product_sources'])
-            self.assertEqual(plan['product_sources']['node-ctl']['kuasar-sandbox/orchestrator'], companion_sha)
-            self.assertEqual(plan['product_sources']['node-ctl']['kuasar-sandbox/connector'], shas['connector'])
-            artifacts.check_plan(plan)
-            spec = importlib.util.spec_from_file_location('cutover_build', Path(__file__).with_name('build-artifacts.py'))
-            build = importlib.util.module_from_spec(spec); spec.loader.exec_module(build)
-            capsule = root / 'inputs.tar'
-            with tarfile.open(capsule, 'w') as archive:
-                for entry in sorted((root / 'admitted').iterdir()): archive.add(entry, arcname=entry.name)
-            for arch in artifacts.ARCHES:
-                output = root / arch
-                layout = build.source_layout(plan, arch)
-                if kernel_delta:
-                    self.assertEqual(layout['kernel-unit/guest-runtime']['sha'], shas['vmlinux'])
-                with patch.object(subject, 'INPUT_ARCHIVE', capsule):
-                    subject.copy_run_inputs(plan, layout, output)
-                self.assertEqual(git(output / 'orchestrator', 'rev-parse', 'HEAD'), companion_sha)
-                self.assertEqual(git(output / 'guest-runtime', 'rev-parse', 'HEAD'), shas['runtime'])
-                if kernel_delta:
-                    self.assertEqual(git(output / 'kernel-unit/guest-runtime', 'rev-parse', 'HEAD'), shas['vmlinux'])
 
-class HistoricalEvidence(unittest.TestCase):
+
+class PublishedConsumption(unittest.TestCase):
     def setUp(self):
-        tests = artifacts.release_test_revisions({owner: 'd' * 40 for owner in artifacts.OWNERS if owner != 'platform'}, 'b' * 40)
-        self.plan = {'schema': 2, 'mode': 'exact-assets', 'framework_sha': 'a' * 40, 'owners': ['platform'],
-            'baseline': {'version': 'release-v1.2.3', 'sha': 'b' * 40, 'assets': [{'name': 'payload', 'digest': 'sha256:' + 'e' * 64}]},
-            'case_files': CASES, 'test_revisions': tests, 'test_overlays': [],
-            'lanes': {arch: {'selection': artifacts.suite_selection(['platform'], arch, CASES), 'products': [], 'performance': []}
-                      for arch in artifacts.ARCHES}}
-        self.binding = {'aggregate_sha': 'b' * 40, 'framework_sha': 'a' * 40, 'plan_id': artifacts.identity(self.plan),
-                        'test_revisions': tests, 'assets': {'payload': 'sha256:' + 'e' * 64},
-                        'architectures': {arch: architecture_result(self.plan, arch) for arch in artifacts.ARCHES}}
+        self.version = 'release-v1.2.3'
+        self.sha = 'a' * 40
+        self.units = {unit: (unit + '-' if unit in ('runtime', 'vmlinux') else '') + 'v1.2.3'
+                      for unit in resolver.artifacts.UNITS}
+        self.units['vmlinux'] = 'vmlinux-v0.9.8'
+        self.manifest = ('version: ' + self.version + '\ndelivery: workbench-v1\ncomponents:\n' +
+                         ''.join(f'  {unit}: {tag}\n' for unit, tag in self.units.items()))
+        names = [f'platform-{self.version}.tar.gz']
+        names += [resolver.artifacts.archive_name(unit, tag, arch)
+                  for unit, tag in self.units.items() for arch in resolver.artifacts.ARCHES]
+        names += [resolver.release.selection.workbench_archive(self.version, arch)
+                  for arch in resolver.artifacts.ARCHES]
+        self.state = {'id': 10, 'tag_name': self.version, 'target_commitish': 'main',
+                      'draft': False, 'prerelease': False, 'body': 'Human notes only.',
+                      'assets': [dict(id=i + 1, name=name, size=100 + i,
+                                      digest='sha256:' + '1' * 64, state='uploaded')
+                                 for i, name in enumerate(names)]}
 
-    def read(self, binding=None):
-        return resolver.bound_plan(binding or self.binding, 'release-v1.2.3', 'b' * 40, self.binding['assets'], [{'id': 41}])
+    def resolve(self):
+        def api(path):
+            self.assertEqual(path, f'repos/{resolver.PLATFORM}/contents/releases/release.yaml?ref={self.version}')
+            return {'type': 'file', 'encoding': 'base64',
+                    'content': base64.b64encode(self.manifest.encode()).decode()}
+        with patch.object(resolver.release, 'api_optional', return_value=self.state), \
+             patch.object(resolver.release, 'api', side_effect=api), \
+             patch.object(resolver.release, 'tag_sha', return_value=self.sha), \
+             patch.object(resolver.release, 'aggregate_runs', side_effect=AssertionError('no historical Actions')), \
+             patch.object(resolver.release, 'paginated', side_effect=AssertionError('no historical jobs')):
+            return resolver.aggregate(self.version)
 
-    def test_original_plan_recovers_ownership_and_true_independent_test_facts(self):
-        def download(*args):
-            self.assertEqual(args[:3], ('run', 'download', '41'))
-            (Path(args[-1]) / 'plan.json').write_text(json.dumps(self.plan))
-        listing = {'total_count': 1, 'artifacts': [{'name': 'integration-plan-41', 'expired': False}]}
-        with patch.object(resolver.release, 'api', return_value=listing), patch.object(resolver.release, 'gh', side_effect=download), \
-             patch.object(resolver, 'source_text', side_effect=AssertionError('no old SHA retrieval')):
-            observed = self.read()
-        self.assertEqual(observed['case_files'], CASES)
-        self.assertEqual(observed['test_revisions']['connector']['sha'], 'd' * 40)
-        self.assertNotIn('source_records', observed)
+    def test_human_only_release_and_no_checksum_asset(self):
+        result = self.resolve()
+        self.assertEqual(len(result['assets']), 15)
+        self.assertEqual({u: r['version'] for u, r in result['units'].items()}, self.units)
+        for field in ('validation', 'validation_plan', 'validation_run', 'test_revisions', 'registry', 'workbench'):
+            self.assertNotIn(field, result)
 
-    def test_missing_expired_ambiguous_or_mismatched_evidence_fails(self):
-        for rows in ([], [{'name': 'integration-plan-41', 'expired': True}],
-                     [{'name': 'integration-plan-41', 'expired': False}] * 2):
-            def download(*args): (Path(args[-1]) / 'plan.json').write_text(json.dumps(self.plan))
-            with patch.object(resolver.release, 'api', return_value={'total_count': len(rows), 'artifacts': rows}), \
-                 patch.object(resolver.release, 'gh', side_effect=download), self.assertRaisesRegex(ValueError, 'missing or ambiguous'):
-                self.read()
-        embedded = dict(self.binding, validation_plan=copy.deepcopy(self.plan))
-        embedded['validation_plan']['case_files']['connector'] = ['basic.guessed.sh']
-        with self.assertRaisesRegex(ValueError, 'plan identity mismatch'): self.read(embedded)
+    def test_old_machine_records_and_checksum_asset_are_ignored(self):
+        self.manifest += 'test_revisions:\n  accelerator: obsolete\n'
+        self.state['body'] = '<!-- kuasar-integration-validation malformed historical content -->'
+        self.state['assets'].append({'name': 'SHA256SUMS', 'digest': None, 'state': 'old'})
+        result = self.resolve()
+        self.assertEqual(len(result['assets']), 15)
+        self.assertNotIn('SHA256SUMS', [r['name'] for r in result['assets']])
 
-    def test_self_contained_plan_needs_no_retained_run_artifact(self):
-        with patch.object(resolver.release, 'gh', side_effect=AssertionError('no artifact retrieval')), \
-             patch.object(resolver.release, 'api', side_effect=AssertionError('no artifact lookup')):
-            self.assertEqual(self.read(dict(self.binding, validation_plan=self.plan)), self.plan)
+    def test_main_drift_cannot_reselect_old_tuple(self):
+        result = self.resolve()
+        maintained = dict.fromkeys(self.units, 'v9.9.9')
+        self.assertEqual(resolver.qualification_units(result, maintained), self.units)
 
-    def test_replaced_checksum_file_fails_even_when_all_archives_match(self):
-        self.plan['baseline']['assets'].append({'name': 'SHA256SUMS', 'digest': 'sha256:' + '1' * 64})
-        binding = dict(self.binding, validation_plan=self.plan, plan_id=artifacts.identity(self.plan))
-        for result in binding['architectures'].values(): result['plan_id'] = binding['plan_id']
-        complete = dict(binding['assets'], SHA256SUMS='sha256:' + '1' * 64)
-        resolver.bound_plan(binding, 'release-v1.2.3', 'b' * 40, complete, [])
-        complete['SHA256SUMS'] = 'sha256:' + '2' * 64
-        with self.assertRaisesRegex(ValueError, 'complete asset inventory'):
-            resolver.bound_plan(binding, 'release-v1.2.3', 'b' * 40, complete, [])
+    def test_missing_extra_duplicate_digest_size_and_state_fail(self):
+        original = copy.deepcopy(self.state)
+        mutations = [lambda s: s['assets'].pop(),
+                     lambda s: s['assets'].append(dict(s['assets'][0])),
+                     lambda s: s['assets'][0].update(name='unexpected.tar.gz'),
+                     lambda s: s['assets'][0].update(digest=None),
+                     lambda s: s['assets'][0].update(size=0),
+                     lambda s: s['assets'][0].update(state='starter'),
+                     lambda s: s['assets'][0].update(id=0)]
+        for mutation in mutations:
+            self.state = copy.deepcopy(original)
+            mutation(self.state)
+            with self.assertRaises(ValueError):
+                self.resolve()
 
-    def test_retired_native_prerequisite_is_the_only_accepted_selection_difference(self):
-        for arch in artifacts.ARCHES:
-            current = artifacts.suite_selection(['platform'], arch, CASES)
-            legacy = dict(current, required_products=sorted(current['required_products'] + ['mkfs.erofs']))
-            for selection in (current, legacy):
-                self.assertTrue(artifacts.compatible_suite_selection(selection, ['platform'], arch, CASES))
-                for name in ('flatten-ctl', 'store-ctl'):
-                    changed = copy.deepcopy(selection)
-                    changed['required_products'].remove(name)
-                    self.assertFalse(artifacts.compatible_suite_selection(changed, ['platform'], arch, CASES))
-                changed = copy.deepcopy(selection)
-                changed['cases'] = changed['cases'][1:]
-                self.assertFalse(artifacts.compatible_suite_selection(changed, ['platform'], arch, CASES))
-
-    def test_actual_legacy_plan_preserves_independent_test_provenance_and_tag_identity(self):
-        plan = json.loads((Path(__file__).parent / 'fixtures/pre-cutover-plan.json').read_text())
-        self.assertEqual(artifacts.identity(plan), '35addc8b111a87289f5691f3928febc85e624cdcc1112d69889f8282e56f9560')
-        baseline = plan['baseline']
-        self.assertNotEqual(plan['test_revisions']['accelerator']['sha'], baseline['units']['accelerator']['sha'])
-        assets = {row['name']: row['digest'] for row in baseline['assets']}
-        binding = dict(aggregate_sha=baseline['sha'], framework_sha=plan['framework_sha'],
-                       test_revisions=plan['test_revisions'], plan_id=artifacts.identity(plan),
-                       assets={name: value for name, value in assets.items() if name != 'SHA256SUMS'},
-                       architectures={arch: architecture_result(plan, arch) for arch in artifacts.ARCHES},
-                       validation_plan=plan)
-        resolver.bound_plan(binding, baseline['version'], baseline['sha'], assets, [])
-        original = baseline['units']
-        resolver.check_published_units(original, plan)
-        for field, value in [('sha', 'e' * 40), ('version', 'v99.0.0'), ('repository', 'kuasar-sandbox/connector')]:
-            moved = copy.deepcopy(original); moved['accelerator'][field] = value
-            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'original validated plan'):
-                resolver.check_published_units(moved, plan)
+    def test_manifest_must_select_the_requested_version(self):
+        self.manifest = self.manifest.replace('version: release-v1.2.3', 'version: release-v9.9.9')
+        with self.assertRaisesRegex(ValueError, 'tag does not select'):
+            self.resolve()
 
 
 if __name__ == '__main__': unittest.main()

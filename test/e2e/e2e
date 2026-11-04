@@ -144,19 +144,13 @@ def cmd_prepare(args: argparse.Namespace) -> int:
                 workspace.files(source)
                 shutil.copytree(source, work / name)
         if 'helper_contract' in provenance:
-            contract = provenance['helper_contract']
-            workspace.helper_contract.validate(contract)
+            contract = workspace.helper_contract.runtime(provenance['helper_contract'])
         else:
-            contract = workspace.helper_contract.loads((work / 'test/e2e/helpers/contract.json').read_text())
-            workspace.helper_contract.validate(contract)
+            contract, _ = workspace.helper_contract.package(work / 'test/e2e/helpers' / arch, arch,
+                                                             private_extraction=True)
         selected_helpers = workspace.declared_helpers(contract, [case.name for case in cases])
         if 'helpers' not in provenance:
             helper_root = work / 'test/e2e/helpers' / arch
-            metadata = workspace.helper_contract.loads((helper_root / 'helpers.json').read_text())
-            workspace.require(metadata.get('schema') == 1 and metadata['arch'] == arch and
-                              metadata.get('contract_sha256') == workspace.helper_contract.digest(
-                                  workspace.helper_contract.canonical(contract)), 'helper package contract changed')
-            workspace.helper_contract.verify(helper_root, arch, contract, metadata['helpers'], metadata=True, private_extraction=True)
             (work / 'fixtures/bin').mkdir(parents=True, exist_ok=True)
             for name in selected_helpers:
                 shutil.copy2(helper_root / name, work / 'fixtures/bin' / name)
@@ -169,9 +163,12 @@ def cmd_prepare(args: argparse.Namespace) -> int:
             admitted_helpers = workspace.declared_helpers(contract, admitted_cases)
             workspace.require(set(provenance['helpers']) == set(admitted_helpers) and
                               set(selected_helpers) <= set(admitted_helpers), 'prepared helper inventory changed')
+        if (work / 'test/e2e/helpers').exists():
+            shutil.rmtree(work / 'test/e2e/helpers')
+        provenance['helpers'] = workspace.helper_contract.verify(work / 'fixtures/bin', arch,
+            provenance.get('helper_contract', contract), provenance['helpers'], admitted_helpers)
         provenance['helper_contract'] = contract
-        workspace.helper_contract.verify(work / 'fixtures/bin', arch, contract, provenance['helpers'],
-                                         admitted_helpers)
+        workspace.helper_contract.install_reader(work)
         # Re-preparing a subset retains only that subset's declared inputs,
         # after verifying every input copied from the previously sealed tree.
         for name in set(admitted_helpers) - set(selected_helpers):

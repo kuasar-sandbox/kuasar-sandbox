@@ -39,7 +39,7 @@ def manifest(preview=False):
 class FakeReferences:
     def __init__(self):
         self.published = {}
-        self.aggregates = {'release-v1.2.2': dict(sha='b' * 40, validation={'x86_64': {}, 'aarch64': {}})}
+        self.aggregates = {'release-v1.2.2': dict(sha='b' * 40, architectures=['x86_64', 'aarch64'])}
         self.trees = {}
 
     def unit(self, name, tag):
@@ -193,10 +193,10 @@ class ReferenceTests(unittest.TestCase):
     def test_existing_publication_uses_real_identity_and_asset_reader(self):
         state = published('connector', 'v1.2.3')['release']
         repo = dict(full_name='kuasar-sandbox/connector', visibility='public', private=False)
-        for mutate in (None, 'target', 'digest', 'assets', 'tag', 'draft'):
+        for mutate in (None, 'digest', 'assets', 'tag', 'draft'):
             value = copy.deepcopy(state)
-            if mutate == 'target': value['target_commitish'] = 'b' * 40
-            if mutate == 'digest': value['assets'][0]['digest'] = None
+            value['target_commitish'] = 'main'
+            if mutate == 'digest': value['assets'][1]['digest'] = None
             if mutate == 'assets': value['assets'].pop()
             if mutate == 'tag': value['tag_name'] = 'v9.9.9'
             if mutate == 'draft': value['draft'] = 'false'
@@ -209,32 +209,15 @@ class ReferenceTests(unittest.TestCase):
                 else:
                     self.assertEqual(subject.References().unit('connector', 'v1.2.3')['state'], 'published')
 
-    def test_preview_source_and_dependency_binding_including_legal_cli_only_reuse(self):
+    def test_preview_packages_are_used_without_historical_bindings(self):
         _, previous, components = subject.selection.parse_manifest(manifest(True), 'fixture', True)
         components['runtime'] = 'runtime-v1.2.3-preview.20261026'
         refs = FakeReferences()
-        refs.published['runtime', components['runtime']] = published('runtime', components['runtime'],
-                                                       dependencies='accelerator=v1.2.3,sandboxer=v1.2.3')
-        plan = subject.check_plan('release-v1.2.3-preview.20261026', previous, components, 'main', refs)
-        self.assertEqual(len(plan['pending']), 5)
-        refs.published['runtime', components['runtime']]['release']['body'] = refs.published['runtime', components['runtime']]['release']['body'].replace(SHA, 'f' * 40)
-        with self.assertRaisesRegex(RuntimeError, 'source binding'):
-            subject.check_plan('release-v1.2.3-preview.20261026', previous, components, 'main', refs)
-        refs.published['runtime', components['runtime']] = published('runtime', components['runtime'],
-                                                       dependencies='accelerator=v1.2.2,sandboxer=v1.2.3')
-        refs.published['accelerator', 'v1.2.2'] = published('accelerator', 'v1.2.2', sha='b' * 40)
-        refs.published['sandboxer', 'v1.2.3'] = published('sandboxer', 'v1.2.3')
-        repo = 'kuasar-sandbox/accelerator'
-        refs.trees[repo, 'b' * 40] = tree({'pkg/flatten/a.go': entry('same')})
-        plan = subject.check_plan('release-v1.2.3-preview.20261026', previous, components, 'main', refs)
-        self.assertIn(dict(unit='runtime', dependency='accelerator', requirement='verify-linked-inputs-before-reuse'), plan['pending'])
-        refs.published['accelerator', 'v1.2.3'] = published('accelerator', 'v1.2.3')
-        refs.trees[repo, SHA] = tree({'pkg/flatten/a.go': entry('same'), 'cmd/cli/main.go': entry('new')})
-        refs.trees['kuasar-sandbox/sandboxer', SHA] = tree()
-        subject.check_plan('release-v1.2.3-preview.20261026', previous, components, 'main', refs)
-        refs.trees[repo, SHA]['entries']['pkg/flatten/a.go'] = entry('different')
-        with self.assertRaisesRegex(ValueError, 'linked dependency inputs'):
-            subject.check_plan('release-v1.2.3-preview.20261026', previous, components, 'main', refs)
+        refs.published['runtime', components['runtime']] = published('runtime', components['runtime'])
+        for body in ('Human notes only', '<!-- kuasar-preview-binding obsolete -->'):
+            refs.published['runtime', components['runtime']]['release']['body'] = body
+            plan = subject.check_plan('release-v1.2.3-preview.20261026', previous, components, 'main', refs)
+            self.assertEqual(len(plan['pending']), 5)
 
     def test_historical_predecessor_keeps_x86_scope_without_relaxing_current_selection(self):
         version, previous, components = subject.selection.parse_manifest(manifest(), 'fixture', False)
@@ -251,7 +234,7 @@ class ReferenceTests(unittest.TestCase):
             return state if endpoint.endswith('/releases/tags/' + previous) else None
         with patch.object(subject.release, 'api_optional', side_effect=publication), \
              patch.object(subject.release, 'tag_sha', return_value=SHA), \
-             patch.object(subject.release, 'aggregate_runs', return_value=[run]), \
+             patch.object(subject.release, 'aggregate_runs', side_effect=AssertionError('no history')), \
              patch.object(subject.resolver, 'source_text', return_value=legacy) as source:
             refs = subject.References()
             with patch.object(refs, 'unit', return_value=dict(state='pending-publication', sha=None, release=None)):
@@ -261,20 +244,20 @@ class ReferenceTests(unittest.TestCase):
             self.assertEqual(len(plan['pending']), 6)
             # An explicit historical read is not cached as a usable current
             # dual baseline, even when its tag is identical.
-            with self.assertRaisesRegex(ValueError, 'explicit ARM initialization'):
+            with self.assertRaisesRegex(ValueError, 'complete declared asset set'):
                 refs.aggregate(previous)
             # The existing reader still rejects damaged identity/digests and
             # missing declared workbench assets even in predecessor mode.
-            state['target_commitish'] = 'b' * 40
+            state['tag_name'] = 'release-v9.9.9'
             with self.assertRaisesRegex(ValueError, 'identity mismatch'):
                 subject.References().aggregate(previous, predecessor=True)
-            state['target_commitish'] = SHA
-            state['assets'][0]['digest'] = None
-            with self.assertRaisesRegex(ValueError, 'unverified asset'):
+            state['tag_name'] = previous
+            state['assets'][1]['digest'] = None
+            with self.assertRaisesRegex(ValueError, 'asset lacks'):
                 subject.References().aggregate(previous, predecessor=True)
-            state['assets'][0]['digest'] = 'sha256:' + 'd' * 64
+            state['assets'][1]['digest'] = 'sha256:' + 'd' * 64
             source.return_value = 'delivery: workbench-v1\n' + legacy
-            with self.assertRaisesRegex(ValueError, 'complete workbench asset set'):
+            with self.assertRaisesRegex(ValueError, 'complete declared asset set'):
                 subject.References().aggregate(previous, predecessor=True)
 
     def test_already_published_aggregate_cannot_select_other_units(self):

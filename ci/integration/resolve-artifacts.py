@@ -31,7 +31,6 @@ LIBRARIES = {
     "accelerator": (), "connector": (), "sandboxer": ("accelerator", "connector"),
     "guest-runtime": ("accelerator",), "orchestrator": ("accelerator", "connector", "sandboxer"),
 }
-PROFILE_BINDING = re.compile(r"<!-- kuasar-integration-validation (\{[^\r\n]*\}) -->")
 
 
 def source_text(repository, tag, path):
@@ -57,189 +56,49 @@ def public(repository):
                       and state.get("private") is False, f"public artifact lane cannot qualify a non-public caller/companion: {repository}")
 
 
-def bound_plan(binding, version, sha, assets, runs):
-    """Read original evidence, including retained legacy plans; never infer owners."""
-    plan = binding.get('validation_plan')
-    if plan is None:
-        plans = []
-        for run in runs:
-            listing = release.api(f"repos/{PLATFORM}/actions/runs/{run['id']}/artifacts?per_page=100")
-            artifacts.require(listing.get('total_count', 0) <= 100, 'ambiguous historical plan artifact listing')
-            candidates = [item for item in listing.get('artifacts', [])
-                          if item['name'] == f"integration-plan-{run['id']}" and not item.get('expired')]
-            for item in candidates:
-                with tempfile.TemporaryDirectory(prefix='historical-plan-') as directory:
-                    release.gh('run', 'download', str(run['id']), '--repo', PLATFORM,
-                               '--name', item['name'], '--dir', directory)
-                    path = Path(directory) / 'plan.json'
-                    artifacts.require(path.is_file() and not path.is_symlink(), 'historical plan artifact is missing')
-                    candidate = json.loads(path.read_text())
-                    if artifacts.identity(candidate) == binding.get('plan_id'):
-                        plans.append(candidate)
-        artifacts.require(len(plans) == 1, 'missing or ambiguous original validated integration-plan evidence')
-        plan = plans[0]
-    artifacts.require(artifacts.identity(plan) == binding.get('plan_id'), 'published plan identity mismatch')
-    if plan.get('schema') == 4:
-        artifacts.check_plan(plan)
-        artifacts.collect_results(plan, binding['architectures'])
-    artifacts.require(plan.get('mode') == 'exact-assets' and plan['baseline']['version'] == version
-                      and plan['baseline']['sha'] == sha and plan['framework_sha'] == binding['framework_sha']
-                      and plan['test_revisions'] == binding['test_revisions'], 'published plan provenance mismatch')
-    expected = {row['name']: row['digest'] for row in plan['baseline']['assets']}
-    artifacts.require(len(expected) == len(plan['baseline']['assets']) and expected == assets,
-                      'published plan complete asset inventory mismatch')
-    artifacts.require({name: digest for name, digest in expected.items() if name != 'SHA256SUMS'} == binding['assets'],
-                      'published plan asset inventory mismatch')
-    selected_cases = plan.get('case_files')
-    artifacts.require(isinstance(selected_cases, dict) and set(selected_cases) == set(artifacts.OWNERS),
-                      'original validated plan lacks exact case ownership evidence')
-    # This validates duplicate IDs, filenames and architecture coverage without
-    # reading historical independent test sources.
-    for arch, result in binding['architectures'].items():
-        original_selection = plan['lanes'][arch].get('selection')
-        artifacts.require((plan['schema'] >= 4 or artifacts.compatible_suite_selection(original_selection, ['platform'], arch, selected_cases))
-                          and result.get('selection') == original_selection
-                          and result.get('plan_id') == binding['plan_id'], 'published case selection differs from original plan')
-    for result in binding.get('workbench', {}).values():
-        artifacts.require(result.get('plan_id') == binding['plan_id']
-                          and result.get('framework_sha') == binding['framework_sha']
-                          and result.get('test_revisions') == binding['test_revisions'],
-                          'published workbench provenance differs from original plan')
-    for key in ('case_files', 'source_records'):
-        if key in binding:
-            artifacts.require(binding[key] == plan.get(key), 'published ' + key + ' differs from original plan')
-    return plan
-
-
-def check_published_units(units, plan):
-    artifacts.require(units == plan['baseline'].get('units'),
-                      'selected component tags differ from original validated plan')
-
-
-def historical_profile(arch, cases=None):
-    """Interpret immutable pre-cutover release evidence, never execute its entries."""
-    cases = cases or {}
-    owners = set(artifacts.OWNERS if arch == 'x86_64' else ('accelerator', 'guest-runtime'))
-    exclusions = [{'owner': 'accelerator', 'case': 'storage.obs.sh', 'reason': 'credentialed OBS case is not selected'}]
-    if not cases.get('accelerator'):
-        exclusions = [{'owner': 'accelerator', 'case': 'e2e_obs.sh', 'reason': 'credentialed OBS suite is not selected'}]
-    elif 'storage.obs.sh' not in cases['accelerator']:
-        exclusions = []
-    if arch == 'aarch64':
-        exclusions.extend({'owner': owner, 'reason': 'no selected independent ARM non-KVM owner suite'}
-                          for owner in sorted(set(artifacts.OWNERS) - owners))
-    entries = []
-    for owner in artifacts.OWNERS:
-        if owner not in owners:
-            continue
-        if cases.get(owner):
-            entries.extend(f'test/e2e/{owner}/cases/{name}' for name in cases[owner]
-                           if not (owner == 'accelerator' and name == 'storage.obs.sh'))
-        else:
-            entries.append(f'test/e2e/{owner}/run_all.sh')
-    return {'cases': entries,
-            'required_products': sorted(set().union(*(artifacts.REQUIRED[owner] for owner in owners)) | {'mkfs.erofs'}),
-            'exclusions': exclusions, 'name': 'x86-owner-kvm' if arch == 'x86_64' else 'arm-native-non-kvm'}
-
-
 def aggregate(version, *, require_dual=True):
-    """Historical x86-only releases remain valid; normal dual lanes need ARM."""
+    """Resolve published bytes using only the selected tag's own manifest."""
     state = release.api_optional(f"repos/{PLATFORM}/releases/tags/{version}")
-    if state is None:
+    if state is None or state.get('draft') is True:
         return None
-    sha = release.tag_sha(PLATFORM, version)
-    if state.get("draft") is not False or sha is None:
-        return None
-    artifacts.require(state.get("tag_name") == version and state.get("target_commitish") == sha
-                      and state.get("prerelease") == ("-preview." in version), "aggregate release identity mismatch")
-    relative = "releases/daily-preview.yaml" if "-preview." in version else "releases/release.yaml"
+    sha = exact_sha(release.tag_sha(PLATFORM, version))
+    artifacts.require(state.get('tag_name') == version and state.get('draft') is False
+                      and state.get('prerelease') == ('-preview.' in version),
+                      'aggregate release identity mismatch')
+    relative = 'releases/daily-preview.yaml' if '-preview.' in version else 'releases/release.yaml'
     manifest = source_text(PLATFORM, version, relative)
-    selected, _, units = release.selection.parse_historical_manifest(manifest, f"{sha}:{relative}", "-preview." in version)
-    artifacts.require(selected == version, "aggregate tag does not select its published version")
+    selected, _, units = release.selection.parse_historical_manifest(manifest, f'{version}:{relative}', '-preview.' in version)
+    artifacts.require(selected == version, 'aggregate tag does not select its published version')
     contract = release.selection.delivery(release.selection.read_simple_yaml(manifest, relative), relative)
-    base_names = {"SHA256SUMS", f"platform-{version}.tar.gz"}
-    x86 = {artifacts.archive_name(unit, tag, "x86_64") for unit, tag in units.items()}
-    arm = {artifacts.archive_name(unit, tag, "aarch64") for unit, tag in units.items()}
-    names = [item["name"] for item in state["assets"]]
-    artifacts.require(len(names) == len(set(names)), "duplicate aggregate asset names")
+    # SHA256SUMS is tolerated on old releases, but never read or admitted as an input.
+    assets = [item for item in state['assets'] if item['name'] != 'SHA256SUMS']
+    names = [item['name'] for item in assets]
+    artifacts.require(len(names) == len(set(names)), 'duplicate aggregate asset names')
+    base = {f'platform-{version}.tar.gz'}
+    x86 = {artifacts.archive_name(unit, tag, 'x86_64') for unit, tag in units.items()}
+    arm = {artifacts.archive_name(unit, tag, 'aarch64') for unit, tag in units.items()}
+    expected = base | x86 | arm
     if contract == release.selection.DELIVERY:
-        expected_names = base_names | x86 | arm | {release.selection.workbench_archive(version, arch) for arch in artifacts.ARCHES}
-        artifacts.require(set(names) == expected_names, 'new aggregate is missing its declared complete workbench asset set')
-    elif set(names) not in (base_names | x86, base_names | x86 | arm):
-        return None
-    for asset in state["assets"]:
-        artifacts.require(asset.get("state") == "uploaded" and isinstance(asset.get("size"), int)
-                          and asset["size"] > 0 and re.fullmatch(r"sha256:[0-9a-f]{64}", asset.get("digest") or ""),
-                          "aggregate has an unfinished or unverified asset")
-    runs = [run for run in release.aggregate_runs(version)
-            if run.get("conclusion") == "success" and run.get("status") == "completed"
-            and run.get("display_title") == release.aggregate_run_title(version, sha)]
-    if not runs:
-        return None  # An interrupted current publication may use its declared predecessor.
-    bindings = PROFILE_BINDING.findall(state.get("body") or "")
-    validation = {"x86_64": {"name": "historical-real-kvm"}}
-    tests = None
-    if arm <= set(names):
-        artifacts.require(len(bindings) == 1, "dual aggregate lacks its declared validation profiles")
-        binding = json.loads(bindings[0])
-        artifacts.require(binding["aggregate_sha"] == sha and set(binding["architectures"]) == set(artifacts.ARCHES),
-                          "aggregate validation binding has the wrong source or architecture set")
-        expected = {asset["name"]: asset["digest"] for asset in state["assets"] if asset["name"] != "SHA256SUMS"}
-        artifacts.require(binding["assets"] == expected, "aggregate bytes differ from validated bytes")
-        config = release.selection.read_simple_yaml(manifest, relative)
-        evidence = bound_plan(binding, version, sha,
-                              {asset['name']: asset['digest'] for asset in state['assets']}, runs)
-        if 'test_revisions' in config:
-            pins = release.selection.historical_test_revisions(config, relative)
-        else:
-            source_inputs.tag_sources.validate_records(binding.get('source_records'))
-            pins = source_inputs.tag_sources.owner_revisions(binding['source_records'])
-            for unit, record in binding['source_records'].items():
-                artifacts.require(record['tag'] == units[unit], 'published source tag differs from manifest')
-                observed = release.api(f"repos/{record['repository']}/commits/{quote(record['tag'], safe='')}")
-                artifacts.require(observed['sha'] == record['sha'] and observed['commit']['tree']['sha'] == record['tree'],
-                                  'published source tag identity changed')
-        tests = artifacts.release_test_revisions(pins, sha)
-        artifacts.require(binding.get('test_revisions') == tests, 'published test provenance differs from original selection')
-        selected_files = evidence['case_files']
-        bootstrap_cases = selected_files
-        for arch, result in binding["architectures"].items():
-            if 'selection' in result:
-                actual = result['selection']
-                artifacts.require((evidence['schema'] >= 4 or artifacts.compatible_suite_selection(actual, ['platform'], arch, selected_files)),
-                                  'published case selection changed')
-                expected = evidence['lanes'][arch]['selection']
-            else:
-                artifacts.require(contract != release.selection.DELIVERY, 'new aggregate requires the current explicit case selection')
-                expected, actual = historical_profile(arch, bootstrap_cases), result.get('profile')
-            artifacts.require(result["arch"] == arch and result["conclusion"] == "success"
-                              and actual == expected
-                              and result.get("test_revisions") == tests,
-                              "aggregate did not pass its predeclared architecture profile")
-        validation = binding["architectures"]
-        if contract == release.selection.DELIVERY:
-            artifacts.require(binding.get('delivery') == contract, 'missing declared workbench validation binding')
-            artifacts.check_workbench_results(version, sha, binding.get('workbench'), expected_assets=binding['assets'], case_files=selected_files)
-            for record in binding['workbench'].values():
-                workbench_groups.verify_live(record)
-            artifacts.check_registry_binding(version, binding)
-    elif require_dual:
-        raise ValueError(f"{version} is a valid historical x86-only baseline; explicit ARM initialization and new unit versions are required")
+        expected |= {release.selection.workbench_archive(version, arch) for arch in artifacts.ARCHES}
+    elif set(names) == base | x86 and not require_dual:
+        expected = base | x86
+    artifacts.require(set(names) == expected, 'aggregate lacks its complete declared asset set')
+    for asset in assets:
+        artifacts.require(asset.get('state') == 'uploaded' and type(asset.get('id')) is int and asset['id'] > 0
+                          and type(asset.get('size')) is int and asset['size'] > 0
+                          and re.fullmatch(r'sha256:[0-9a-f]{64}', asset.get('digest') or ''),
+                          'aggregate asset lacks an uploaded identity, size or SHA-256 digest')
     unit_records = {}
     for unit, tag in units.items():
         repository = REPOSITORIES[unit_owner(unit)]
-        unit_records[unit] = {"version": tag, "repository": repository, "sha": exact_sha(release.tag_sha(repository, tag))}
-    if tests:
-        check_published_units(unit_records, evidence)
-    return {"repository": PLATFORM, "version": version, "sha": sha, "release_id": state["id"],
-            "units": unit_records, "validation": validation, "test_revisions": tests, "delivery": contract,
-            "validation_plan": evidence if tests else None,
-            "case_files": selected_files if tests else None,
-            "source_records": binding.get("source_records") if tests else None,
-            "validation_run": max(runs, key=lambda run: run["id"])["html_url"],
-            "workbench": binding.get("workbench") if contract == release.selection.DELIVERY else None,
-            "registry": binding.get("registry") if contract == release.selection.DELIVERY else None,
-            "assets": [{key: asset[key] for key in ("id", "name", "size", "digest")} for asset in state["assets"]]}
+        unit_records[unit] = {'version': tag, 'repository': repository,
+                              'sha': exact_sha(release.tag_sha(repository, tag))}
+    # Detect a tag moving across manifest retrieval. No Actions or release-body lookup.
+    artifacts.require(release.tag_sha(PLATFORM, version) == sha, 'aggregate tag moved during selection')
+    return {'repository': PLATFORM, 'version': version, 'sha': sha, 'release_id': state['id'],
+            'units': unit_records, 'delivery': contract,
+            'architectures': list(artifacts.ARCHES) if arm <= set(names) else ['x86_64'],
+            'assets': [{key: asset[key] for key in ('id', 'name', 'size', 'digest')} for asset in assets]}
 
 
 def baseline(platform_source, base_ref):
@@ -256,7 +115,7 @@ def baseline(platform_source, base_ref):
             result = aggregate(selected)
             if result is not None:
                 return result
-    raise ValueError("neither the maintained aggregate nor its explicit predecessor is a published validated baseline")
+    raise ValueError("neither the maintained aggregate nor its explicit predecessor is a published complete baseline")
 
 
 def maintained_units(platform_source, base_ref):
@@ -267,16 +126,8 @@ def maintained_units(platform_source, base_ref):
 
 
 def qualification_units(selected, maintained):
-    """Keep modern ordinary PR inputs on the fully validated aggregate tuple.
-
-    aggregate() authenticates the original plan before this function runs.
-    Legacy capability cutovers retain their existing published-tag admission;
-    candidate manifests and missing declarations cannot select compatibility.
-    """
-    original = selected.get('validation_plan')
-    if isinstance(original, dict) and original.get('schema') == 4:
-        return {unit: row['version'] for unit, row in selected['units'].items()}
-    return maintained
+    """The aggregate tag fixes its tuple even when the maintained manifest advances."""
+    return {unit: row['version'] for unit, row in selected['units'].items()}
 
 
 CUTOVER_PATH = "ci/integration/dependency-cutovers.json"
@@ -317,9 +168,10 @@ def cutover_request(text, records):
             source_inputs.tag_sources.validate_tag(unit, pin['tag'])
             exact_sha(pin['sha'])
             artifacts.require(type(pin['release_id']) is int and pin['release_id'] > 0, 'invalid cutover release ID')
-            expected = {'SHA256SUMS'} | {artifacts.archive_name(unit, pin['tag'], arch) for arch in artifacts.ARCHES}
-            assets = pin['assets']
-            artifacts.require(isinstance(assets, list) and len(assets) == len(expected), 'invalid cutover asset set')
+            expected = {artifacts.archive_name(unit, pin['tag'], arch) for arch in artifacts.ARCHES}
+            artifacts.require(isinstance(pin['assets'], list), 'invalid cutover asset set')
+            assets = [row for row in pin['assets'] if row.get('name') != 'SHA256SUMS']
+            artifacts.require(len(assets) == len(expected), 'invalid cutover asset set')
             names, ids = [], []
             for asset in assets:
                 artifacts.require(isinstance(asset, dict) and set(asset) == {'name', 'id', 'size', 'digest'}
@@ -344,8 +196,8 @@ def verify_cutover_publication(unit, pin):
     sha = exact_sha(release.tag_sha(repository, pin['tag']))
     check_published_unit(unit, pin['tag'], state, sha)
     assets = sorted(({key: row.get(key) for key in ('name', 'id', 'size', 'digest')}
-                     for row in state['assets']), key=lambda row: row['name'])
-    artifacts.require(sha == pin['sha'] and state.get('id') == pin['release_id'] and assets == pin['assets'],
+                     for row in state['assets'] if row['name'] != 'SHA256SUMS'), key=lambda row: row['name'])
+    artifacts.require(sha == pin['sha'] and state.get('id') == pin['release_id'] and assets == [row for row in pin['assets'] if row['name'] != 'SHA256SUMS'],
                       'cutover publication identity changed: ' + unit)
 
 
@@ -400,15 +252,14 @@ def check_published_unit(unit, tag, state, sha):
     """Validate one observed publication; shared with read-only manifest CI."""
     artifacts.require(isinstance(state, dict) and state.get('tag_name') == tag
                       and state.get('draft') is False
-                      and state.get('prerelease') == ('-preview.' in tag)
-                      and state.get('target_commitish') == sha,
+                      and state.get('prerelease') == ('-preview.' in tag),
                       'maintained component tag lacks a published release: ' + unit + ' ' + tag)
-    assets = state.get('assets', [])
+    assets = [row for row in state.get('assets', []) if row['name'] != 'SHA256SUMS']
     names = [row['name'] for row in assets]
-    expected = {'SHA256SUMS'} | {artifacts.archive_name(unit, tag, arch) for arch in artifacts.ARCHES}
+    expected = {artifacts.archive_name(unit, tag, arch) for arch in artifacts.ARCHES}
     artifacts.require(len(names) == len(set(names)) and set(names) == expected
                       and all(row.get('state') == 'uploaded' and type(row.get('size')) is int
-                              and row['size'] > 0 and re.fullmatch(r'sha256:[0-9a-f]{64}', row.get('digest') or '')
+                              and row['size'] > 0 and type(row.get('id')) is int and row['id'] > 0 and re.fullmatch(r'sha256:[0-9a-f]{64}', row.get('digest') or '')
                               for row in assets),
                       'maintained component release is incomplete or unverified: ' + unit + ' ' + tag)
     return sha
@@ -594,7 +445,6 @@ def source_plan(framework_sha, input_root):
     products = sorted(set(products) | maintained_products(tag_deltas))
     embedded = ["envd"] if "runtime" in tag_deltas or any(path in ("native-deps/deps/build-envd.sh", "native-deps/deps/common.sh", "native-deps/Makefile") for path in guest_changes) else []
     selected_files = source_inputs.cases(roots)
-    preserve_baseline_cases(selected.get('case_files'), selected_files, owners)
     if cutover:
         # Qualify the entire new source tuple, retaining ordinary architecture
         # capabilities and credentialed exclusions, not a new aggregate baseline.
@@ -617,25 +467,8 @@ def source_plan(framework_sha, input_root):
         row = run_inputs[str(root.relative_to(input_root))]
         identities[owner] = {key: row[key] for key in ('repository', 'sha', 'tree', 'tag', 'ref') if key in row}
         if 'tag' in identities[owner]: identities[owner].pop('ref', None)
-    original = selected.get('validation_plan')
-    historical = (isinstance(original, dict) and original.get('schema') == 2 and
-                  'helper_contract' not in original)
-    # The authenticated original plan selects compatibility, never an absent
-    # declaration or a producer-controlled schema. Candidates use declarations.
-    if historical and not (set(owners) - {'platform'}):
-        import helper_history
-        historical_platform = input_root / 'historical-platform'
-        run_inputs['historical-platform'] = source_inputs.fetch_named(historical_platform, PLATFORM,
-            'refs/tags/' + selected['version'], original['framework_sha'])
-        run_id = int(selected['validation_run'].rsplit('/', 1)[1])
-        with tempfile.TemporaryDirectory(prefix='historical-helper-admission-') as temporary:
-            plan['helper_contract'] = helper_history.admit(selected, dict(roots, vmlinux=released / 'vmlinux'),
-                identities, historical_platform, run_id, helper_history.api, helper_history.gh, Path(temporary))
-    else:
-        plan['helper_contract'] = helper_inputs.discover(roots, identities)
+    plan['helper_contract'] = helper_inputs.discover(roots, identities)
     requirements = artifacts.capabilities_module().discover(roots, selected_files)
-    artifacts.require(not (isinstance(original, dict) and original.get('schema', 0) >= 4) or requirements is not None,
-                      'selected sources cannot downgrade the E2E requirement generation')
     capability_routing.apply(plan, requirements)
     artifacts.check_plan(plan)
     return plan

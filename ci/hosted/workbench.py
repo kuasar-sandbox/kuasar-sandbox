@@ -65,40 +65,20 @@ def framework_sha():
 
 def from_aggregate(aggregate, framework):
     require(aggregate.get('delivery') == 'workbench-v1' and not aggregate.get('staged'),
-            'builds require a published and admitted Workbench')
-    binding = {'registry': aggregate['registry'], 'workbench': aggregate['workbench']}
-    artifacts.check_registry_binding(aggregate['version'], binding)
-    selected = {'framework_sha': framework, 'aggregate_version': aggregate['version'],
-                'source_revision': aggregate['sha'], 'validation_run': aggregate['validation_run'],
-                'registry_index': aggregate['registry']['digest'], 'architectures': {}}
-    for arch, row in aggregate['registry']['architectures'].items():
-        validated = aggregate['workbench'][arch]
-        selected['architectures'][arch] = {
-            'reference': REGISTRY + '@' + row['digest'], 'image_id': row['image_id'],
-            'archive': validated['archive'], 'archive_sha256': row['archive_sha256'],
-            'archive_size': validated['size'], 'qualification_scope': validated['qualification_scope']}
-    return check_selection(selected)
+            'builds require a published Workbench version')
+    return check_selection({'framework_sha': framework, 'aggregate_version': aggregate['version'],
+                            'reference': REGISTRY + ':' + aggregate['version'].removeprefix('release-')})
 
 
 def check_selection(selected, framework=None):
-    for key in ('framework_sha', 'source_revision'):
-        require(re.fullmatch('[0-9a-f]{40}', selected.get(key, '')), 'missing exact ' + key)
+    require(re.fullmatch('[0-9a-f]{40}', selected.get('framework_sha', '')), 'missing exact framework_sha')
     require(framework is None or selected['framework_sha'] == framework,
             'Workbench selection belongs to a different trusted framework')
-    require(re.fullmatch(r'release-v\d+\.\d+\.\d+(?:-preview\.\d{8}(?:\.\d+)?)?',
-                         selected.get('aggregate_version', '')), 'invalid Workbench release')
-    require(set(selected.get('architectures', {})) == set(PLATFORMS),
-            'Workbench selection must fix both native architectures')
-    require(re.fullmatch('sha256:[0-9a-f]{64}', selected.get('registry_index', '')),
-            'missing immutable registry index')
-    for arch, row in selected['architectures'].items():
-        require(re.fullmatch(re.escape(REGISTRY) + '@sha256:[0-9a-f]{64}', row.get('reference', ''))
-                and re.fullmatch('sha256:[0-9a-f]{64}', row.get('image_id', ''))
-                and re.fullmatch('[0-9a-f]{64}', row.get('archive_sha256', ''))
-                and type(row.get('archive_size')) is int and row['archive_size'] > 0,
-                'incomplete immutable Workbench identity: ' + arch)
-        require(row.get('qualification_scope') in ({'native-full', 'native-grouped'} if arch == 'x86_64' else {'artifact-only', 'native-full'}),
-                'Workbench lacks its declared architecture qualification')
+    version = selected.get('aggregate_version', '')
+    require(re.fullmatch(r'release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?', version),
+            'invalid Workbench release')
+    require(selected.get('reference') == REGISTRY + ':' + version.removeprefix('release-'),
+            'Workbench reference must use the selected aggregate version tag')
     return selected
 
 
@@ -122,42 +102,33 @@ def verify_selection(args):
 
 
 def image_check(selected, arch, image, *, metadata=None):
-    row = selected['architectures'][arch]
-    require(image and image['Os'] == 'linux'
-            and image['Architecture'] == PLATFORMS[arch], 'Workbench image/config/architecture mismatch')
-    labels = image['Config'].get('Labels') or {}
+    require(isinstance(image, dict) and image.get('Os') == 'linux'
+            and image.get('Architecture') == PLATFORMS[arch], 'Workbench image architecture mismatch')
+    require(re.fullmatch('sha256:[0-9a-f]{64}', image.get('Id', '')), 'invalid local Workbench image ID')
+    labels = image.get('Config', {}).get('Labels') or {}
     require(labels.get('org.opencontainers.image.version') == selected['aggregate_version']
-            and labels.get('org.opencontainers.image.revision') == selected['source_revision']
             and labels.get('org.opencontainers.image.source') == 'https://github.com/kuasar-sandbox/kuasar-sandbox',
-            'Workbench image release/source mismatch')
-    if image['Id'] == row['image_id'] and not image.get('Descriptor'):
-        return image['Id']  # Classic store: the local ID is the config digest.
-    require(image['Id'] == row['reference'].split('@')[1] and image.get('Descriptor'),
-            'Workbench image/config/architecture mismatch')
-    raw, config = metadata if metadata is not None else image_identity.registry_metadata(row)
-    return image_identity.check_manifest_config(row, image, raw, config)
+            'Workbench image release mismatch')
+    return image['Id']
 
 
 def acquire(selected, arch, *, evidence=None):
     require(platform.machine() == arch, 'Workbench builds require the selected native runner')
-    row = selected['architectures'][arch]
+    check_selection(selected)
+    reference = selected['reference']
     started = time.monotonic()
-    existing = launcher.inspect('image', row['image_id'])
-    if existing is None:
-        existing = launcher.inspect('image', row['reference'])
-    if existing is None:
-        image_pull.pull_image(row['reference'])
-        imported = launcher.inspect('image', row['reference'])
-    else:
-        imported = existing
+    existing = launcher.inspect('image', reference)
+    # Pull the version tag every time. Docker selects the native architecture;
+    # a stale local image must not hide a missing or failed remote publication.
+    image_pull.pull_image(reference)
+    imported = launcher.inspect('image', reference)
+    local_id = image_check(selected, arch, imported)
     if evidence is not None:
-        evidence.update(reference=row['reference'], expected_config_id=row['image_id'],
-                        observed=None if imported is None else {
-                            key: imported.get(key) for key in
-                            ('Id', 'Os', 'Architecture', 'Descriptor', 'RootFS', 'RepoDigests')})
-    docker_image_id = image_check(selected, arch, imported)
+        evidence.update(reference=reference, observed={key: imported.get(key) for key in
+                        ('Id', 'Os', 'Architecture', 'Descriptor', 'RootFS', 'RepoDigests')})
     return {'image_present_before': existing is not None, 'acquire_seconds': time.monotonic() - started,
-            'local_image_size': imported['Size'], **row, 'docker_image_id': docker_image_id}
+            'local_image_size': imported['Size'], 'reference': reference,
+            'image_id': local_id, 'docker_image_id': local_id}
 
 
 def command(root, *args):

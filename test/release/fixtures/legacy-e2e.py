@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""Small public runner for aggregated Kuasar product E2E cases."""
+
+from __future__ import annotations
+
+import argparse
+import fnmatch
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+sys.dont_write_bytecode = True
+sys.path.insert(0, str(ROOT / "lib"))
+import workspace
+import capabilities
+import capability_probe
+
+CASES = ROOT / "cases"
+SUITES = frozenset({
+    "basic",
+    "storage",
+    "image",
+    "network",
+    "sandbox",
+    "snapshot",
+    "orchestrator",
+    "builder",
+    "telemetry",
+})
+
+
+def discover(directory=None) -> list[Path]:
+    directory = Path(directory) if directory is not None else CASES
+    if not directory.is_dir() or directory.is_symlink():
+        raise SystemExit(f"missing case directory: {directory}")
+    cases = []
+    for path in sorted(directory.iterdir()):
+        name = path.name
+        if not path.is_file() or path.is_symlink() or ".." in name or not re.fullmatch(r"[a-z0-9_-]+\.[a-z0-9][a-z0-9._-]*\.sh", name):
+            raise SystemExit(f"invalid case file: {name}")
+        suite, rest = name.split(".", 1)
+        if suite not in SUITES:
+            raise SystemExit(f"unsupported suite in case file: {name}")
+        cases.append(path)
+    return cases
+
+
+def selected(args: argparse.Namespace, directory=None) -> list[Path]:
+    cases = discover(directory)
+    explicit = bool(args.suite or args.include or args.exclude or args.all)
+    if not explicit:
+        raise SystemExit("select cases with --suite/--include/--exclude/--all")
+
+    unknown = sorted(set(args.suite) - SUITES)
+    if unknown:
+        raise SystemExit("unknown suite(s): " + ", ".join(unknown))
+
+    if args.all:
+        chosen = set(cases)
+    else:
+        chosen = {p for p in cases if p.name.split(".", 1)[0] in args.suite}
+    for pattern in args.include:
+        matches = {p for p in cases if fnmatch.fnmatchcase(p.name, pattern)}
+        if not matches:
+            raise SystemExit(f"--include matched no case: {pattern}")
+        chosen |= matches
+
+    for pattern in args.exclude:
+        matches = {p for p in cases if fnmatch.fnmatchcase(p.name, pattern)}
+        if not matches:
+            raise SystemExit(f"--exclude matched no case: {pattern}")
+        chosen -= matches
+
+    result = sorted(chosen)
+    if not result:
+        raise SystemExit("selection contains no cases")
+    return result
+
+
+def add_selection(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--suite", action="append", default=[])
+    parser.add_argument("--include", action="append", default=[])
+    parser.add_argument("--exclude", action="append", default=[])
+    parser.add_argument("--all", action="store_true")
+
+
+def cmd_list(args: argparse.Namespace) -> int:
+    if not (args.suite or args.include or args.exclude or args.all):
+        args.all = True
+    directory = Path(args.workdir).resolve() / "test/e2e/cases" if args.workdir else None
+    for case in selected(args, directory):
+        print(case.name)
+    return 0
+
+
+def normalize_arch(value: str) -> str:
+    aliases = {"amd64": "x86_64", "arm64": "aarch64"}
+    value = aliases.get(value, value)
+    if value not in {"x86_64", "aarch64"}:
+        raise SystemExit(f"unsupported architecture: {value}")
+    return value
+
+
+def cmd_prepare(args: argparse.Namespace) -> int:
+    release = Path(args.release_dir).resolve()
+    work = Path(args.workdir).resolve()
+    arch = normalize_arch(args.arch)
+    deps_dir, offline = workspace.dependency_options(args.deps_dir, args.offline)
+    if work.exists():
+        raise SystemExit(f"workdir already exists: {work}")
+    workspace.require(not work.is_relative_to(release), "workdir must be outside release-dir")
+    workspace.require(deps_dir is None or not work.is_relative_to(deps_dir), "workdir must be outside deps-dir")
+    if not (args.suite or args.include or args.exclude or args.all):
+        args.all = True
+    cases = selected(args, release / "test/e2e/cases")
+    workspace.require((release / "test/e2e/e2e").is_file() and
+                      (release / "test/e2e/lib/common.sh").is_file(), "release has no public runner and libraries")
+    provenance = workspace.verify(release) if (release / "provenance.json").exists() else {"schema": 1, "arch": arch}
+    capabilities.workspace_contract(release, provenance)
+    workspace.require(provenance["arch"] == arch, "release inputs have the wrong architecture")
+    candidates = [release / "bin" / arch, release / "bin"]
+    source_bin = next((p for p in candidates if p.is_dir()), None)
+    if source_bin is None:
+        raise SystemExit(f"release has no bin directory for {arch}: {release}")
+
+    destination = work
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix=f'.{destination.name}-prepare-', dir=destination.parent) as directory:
+        work = Path(directory) / 'inputs'
+        work.mkdir()
+        workspace.files(source_bin)
+        shutil.copytree(source_bin, work / "bin")
+        for name in ("test", "docs", "guide", "workbench", "share", "deploy", "fixtures", "images", "manifests"):
+            source = release / name
+            if source.exists():
+                workspace.files(source)
+                shutil.copytree(source, work / name)
+        if 'helper_contract' in provenance:
+            contract = provenance['helper_contract']
+            workspace.helper_contract.validate(contract)
+        else:
+            contract = workspace.helper_contract.loads((work / 'test/e2e/helpers/contract.json').read_text())
+            workspace.helper_contract.validate(contract)
+        selected_helpers = workspace.declared_helpers(contract, [case.name for case in cases])
+        if 'helpers' not in provenance:
+            helper_root = work / 'test/e2e/helpers' / arch
+            metadata = workspace.helper_contract.loads((helper_root / 'helpers.json').read_text())
+            workspace.require(metadata.get('schema') == 1 and metadata['arch'] == arch and
+                              metadata.get('contract_sha256') == workspace.helper_contract.digest(
+                                  workspace.helper_contract.canonical(contract)), 'helper package contract changed')
+            workspace.helper_contract.verify(helper_root, arch, contract, metadata['helpers'], metadata=True, private_extraction=True)
+            (work / 'fixtures/bin').mkdir(parents=True, exist_ok=True)
+            for name in selected_helpers:
+                shutil.copy2(helper_root / name, work / 'fixtures/bin' / name)
+            provenance['helpers'] = workspace.helper_contract.receipt(
+                work / 'fixtures/bin', arch, contract, selected_helpers)
+            admitted_helpers = selected_helpers
+        else:
+            admitted_cases = provenance.get('prepared_cases', provenance.get('selection', {}).get('cases'))
+            workspace.require(isinstance(admitted_cases, list), 'missing prepared helper case inventory')
+            admitted_helpers = workspace.declared_helpers(contract, admitted_cases)
+            workspace.require(set(provenance['helpers']) == set(admitted_helpers) and
+                              set(selected_helpers) <= set(admitted_helpers), 'prepared helper inventory changed')
+        provenance['helper_contract'] = contract
+        workspace.helper_contract.verify(work / 'fixtures/bin', arch, contract, provenance['helpers'],
+                                         admitted_helpers)
+        # Re-preparing a subset retains only that subset's declared inputs,
+        # after verifying every input copied from the previously sealed tree.
+        for name in set(admitted_helpers) - set(selected_helpers):
+            (work / 'fixtures/bin' / name).unlink()
+        provenance['helpers'] = {name: provenance['helpers'][name] for name in selected_helpers}
+        (work / "ARCH").write_text(arch + "\n", encoding="utf-8")
+        if 'embedded' not in provenance and (work / 'bin/sandbox-runtime.bundle').is_file():
+            provenance['embedded'] = {'init': workspace.runtime_init_identity(work, arch)}
+        provenance.update(workspace.prepare_fixtures(work, arch, [case.name for case in cases], deps_dir, offline))
+        provenance["prepared_cases"] = [case.name for case in cases]
+        workspace.seal(work, provenance)
+        workspace.require(not destination.exists(), f'workdir already exists: {destination}')
+        work.rename(destination)
+    work = destination
+    print(work)
+    return 0
+
+
+def case_diagnostics(work, case, output):
+    if case not in {'snapshot.read-recovery.sh', 'orchestrator.cluster-recovery.sh',
+                    'sandbox.cgroup.sh', 'orchestrator.resource-startup.sh',
+                    'orchestrator.proxy-inplace-restart.sh'}:
+        return {}
+    helper = workspace.fixture_helper(work, 'platform', 'failure-diagnostics.sh')
+    return {'BASH_ENV': str(helper), 'KUASAR_CI_DIR': str(output)}
+
+
+def cmd_run(args: argparse.Namespace) -> int:
+    work = Path(args.workdir).resolve()
+    if not (work / "bin").is_dir():
+        raise SystemExit(f"prepared workspace is missing bin/: {work}")
+    provenance = workspace.verify(work)
+    contract = capabilities.workspace_contract(work, provenance)
+    arch = normalize_arch(args.arch or provenance["arch"])
+    workspace.require(arch == provenance["arch"] == platform.machine(), "execution requires the prepared native architecture")
+    cases = selected(args, work / "test/e2e/cases")
+    workspace.require(set(case.name for case in cases) <= set(provenance["prepared_cases"]),
+                      "selected cases were not prepared; prepare their inputs first")
+    run_root = Path(args.run_root).resolve() if args.run_root else Path(tempfile.mkdtemp(prefix=work.name + "-run-", dir=work.parent))
+    out_root = Path(args.out_root).resolve() if args.out_root else run_root / "out"
+    workspace.require(not run_root.is_relative_to(work) and not out_root.is_relative_to(work),
+                      "run and output roots must be outside immutable prepared inputs")
+    run_root.mkdir(parents=True, exist_ok=True)
+    out_root.mkdir(parents=True, exist_ok=True)
+    env_base = os.environ.copy()
+    for variable in (*workspace.HELPERS.values(), *workspace.helper_variables(provenance).values(), *workspace.IMAGE_VARIABLES.values(), "E2E_HELPERS_DIR", "E2E_IMAGE", "IMAGE", "E2E_CASES_DIR", "E2E_LIB", "BASH_ENV", "KUASAR_EXPECTED_RUNTIME_INIT_SHA256",
+                     "E2E_TEMPLATE_CACHE_DIR", "E2E_TEMPLATE_CACHE_PROVENANCE"):
+        env_base.pop(variable, None)
+    env_base["PYTHONDONTWRITEBYTECODE"] = "1"
+    report = {"arch": arch, "cases": [case.name for case in cases], "timings": [],
+              "provenance_sha256": workspace.digest(work / "provenance.json"), "conclusion": "failure"}
+    # A fresh directory per invocation prevents ambient or previous-run reuse,
+    # even when the caller supplies a persistent run_root. It is never inside
+    # immutable inputs or a case's owned work directory.
+    cache_enabled = not getattr(args, "no_template_cache", False)
+    report["template_cache"] = {"enabled": cache_enabled}
+    if cache_enabled:
+        cache = Path(tempfile.mkdtemp(prefix=".template-cache-", dir=run_root))
+        env_base.update(E2E_TEMPLATE_CACHE_DIR=str(cache),
+                        E2E_TEMPLATE_CACHE_PROVENANCE=report["provenance_sha256"])
+        report["template_cache"]["directory"] = str(cache)
+    failed = []
+    try:
+        if contract is not None:
+            required = sorted({cap for case in cases for cap in contract['cases'][case.name]['requires']})
+            report['capabilities'] = capability_probe.check(required)
+        workspace.load_images(work, provenance, env_base)
+        for case in cases:
+            case_id = case.name
+            case_work = run_root / case_id
+            case_out = out_root / case_id
+            case_work.mkdir(parents=True)
+            case_out.mkdir(parents=True, exist_ok=True)
+            env = env_base | workspace.case_environment(work, provenance, case_id) | {
+                "WORK": str(case_work), "OUT": str(case_out),
+                # Sandbox auto-created disk diffs are mutable case state too.
+                "SANDBOX_BASE_ROOT": str(case_work / "sandbox-base"),
+            }
+            env.update(case_diagnostics(work, case_id, case_out))
+            print(f"==> {case_id}", flush=True)
+            started = time.monotonic()
+            result = subprocess.run(["bash", str(case)], cwd=case_work, env=env, check=False)
+            report["timings"].append({"case": case_id, "wall_seconds": time.monotonic() - started, "exit_code": result.returncode})
+            if result.returncode:
+                failed.append((case_id, result.returncode))
+                print(f"FAIL {case_id} exit={result.returncode}", file=sys.stderr)
+        workspace.verify(work)
+        for record in report["timings"]:
+            if record["exit_code"] == 0:
+                print(f"PASS {record['case']}")
+        report["conclusion"] = "failure" if failed else "success"
+    finally:
+        destination = Path(args.result).resolve() if args.result else out_root / "result.json"
+        workspace.require(not destination.is_relative_to(work), "result must be outside immutable prepared inputs")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(json.dumps(report, sort_keys=True) + "\n")
+    if failed:
+        print("failed: " + ", ".join(f"{name}({code})" for name, code in failed), file=sys.stderr)
+        return 1
+    return 0
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="e2e")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    p = sub.add_parser("list")
+    add_selection(p)
+    p.add_argument("--workdir", help="list cases in this prepared workspace")
+    p.set_defaults(func=cmd_list)
+
+    p = sub.add_parser("prepare")
+    add_selection(p)
+    p.add_argument("--release-dir", required=True)
+    p.add_argument("--workdir", required=True)
+    p.add_argument("--arch", default=platform.machine())
+    p.add_argument("--deps-dir", help="local image archives and images.json; overrides E2E_DEPS_DIR")
+    p.add_argument("--offline", action="store_true", help="prohibit dependency downloads (also E2E_OFFLINE=1)")
+    p.set_defaults(func=cmd_prepare)
+
+    p = sub.add_parser("run")
+    add_selection(p)
+    p.add_argument("--workdir", required=True)
+    p.add_argument("--arch")
+    p.add_argument("--run-root", help="case state root; defaults to a fresh directory beside workdir")
+    p.add_argument("--out-root", help="case output root; defaults to <run-root>/out")
+    p.add_argument("--result", help="write the case result JSON outside the prepared workspace")
+    p.add_argument("--no-template-cache", action="store_true",
+                   help="disable run-local immutable template preparation reuse")
+    p.set_defaults(func=cmd_run)
+
+    return args.func(args) if (args := parser.parse_args()) else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
