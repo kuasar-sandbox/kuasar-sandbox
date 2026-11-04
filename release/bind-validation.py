@@ -47,7 +47,7 @@ def bind(bundle, plan, validation, workbench=None, *, platform=None):
     fields, url = release_notes.publication_notes(release_notes.ROOT, version, platform)
     narrative = release_notes.Narrative(text, fields, url, version=version, units=units)
     notes.write_text(publication_body.binding_text(narrative.text + '\n', binding, '\n',
-                     reserve_registry_version=plan['baseline']['version'], fit_notes=narrative.fit))
+                     reserve_registry_version=plan['baseline']['version']))
 
 
 if __name__ == "__main__":

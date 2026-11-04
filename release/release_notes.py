@@ -1,6 +1,6 @@
 """Editable release prose and evidence-aware publication budgets.
 
-Only the human-readable Release prefix is adapted. Machine evidence remains in
+Human prose is preserved unchanged. Machine evidence remains in
 publication_body, with its existing schema and registry reservation.
 """
 import argparse
@@ -16,12 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 NOTICE_START = '<!-- kuasar-release-notice -->'
 NOTICE_END = '<!-- /kuasar-release-notice -->'
 UNITS = ('accelerator', 'connector', 'sandboxer', 'orchestrator', 'runtime', 'vmlinux')
-HEADINGS = ('Highlights', 'Component versions', 'Supported environment', 'Quick Start',
-            'Production deployment', 'Known limitations', 'Security',
-            'Versioning and release channels', 'Component updates')
-COMMIT = re.compile(r'^- `([0-9a-f]{12})` [^\n]+ \(\[commit\]\(https://github.com/kuasar-sandbox/([^/]+)/commit/([0-9a-f]{40})\)\)$')
-SELECTED = re.compile(r'^Selected version: `([^`\s]+)` → `([^`\s]+)`\.$', re.M)
-COMPARISON = re.compile(r'^\[Full comparison\]\((https://github.com/kuasar-sandbox/[^/]+/compare/[^\s)]+)\)$', re.M)
+HEADINGS = ('Component versions', 'Component updates', 'Download and use',
+            'Qualification scope', 'Security')
 
 
 def inline_notice(text):
@@ -47,33 +43,6 @@ def validate(text, version, units):
     if publication_body.MARKER in text or any(lines.count(line) != 1 for line in required):
         raise ValueError('release notes must retain the exact version, headings, component table and update sections')
     inline_notice(text)
-
-
-def compact_commits(text):
-    """Replace only generated commit rows that retain their full comparison."""
-    notice = inline_notice(text)
-    if notice:
-        before, _, after = text.partition(notice)
-        return before + notice + compact_commits(after)
-    parts = re.split(r'(?m)(^### [^\n]+\n)', text)
-    for index in range(2, len(parts), 2):
-        unit = parts[index - 1].removeprefix('### ').strip()
-        repository = 'guest-runtime' if unit in ('runtime', 'vmlinux') else unit
-        section = parts[index]
-        selected = SELECTED.findall(section)
-        if unit not in UNITS or len(selected) != 1:
-            continue
-        previous, current = selected[0]
-        expected = f'https://github.com/kuasar-sandbox/{repository}/compare/{previous}...{current}'
-        if COMPARISON.findall(section) != [expected]:
-            continue
-        lines = section.splitlines(keepends=True)
-        def generated(line):
-            commit = COMMIT.fullmatch(line.rstrip('\n'))
-            return commit is not None and commit[2] == repository and commit[3].startswith(commit[1])
-        parts[index] = ''.join(line for line in lines if not generated(line)
-            and line.rstrip('\n') != '- GitHub truncated the commit list; use the full comparison below.')
-    return ''.join(parts)
 
 
 def stale_warnings(text, version, units):
@@ -154,11 +123,6 @@ class Narrative:
             text = self.notice.rstrip('\n') + '\n\n' + text
         return text
 
-    def fit(self, prefix, available):
-        # Authored prose is plain text, independent of mode, source or tests.
-        # Never trim it, substitute a link, or replace it with a template.
-        return prefix
-
 
 def export_notes(platform, version, output):
     fields, _ = publication_notes(platform, version)
@@ -167,13 +131,14 @@ def export_notes(platform, version, output):
     text = fields['body']
     if fields.get('upgrade_notice'):
         text = fields['upgrade_notice'].rstrip('\n') + '\n\n' + text
-    publication_body.checked(text)
     output.write_text(text)
 
 
 def validate_file(platform, version, notes_file):
-    """Compatibility entry point: check transport, not human prose provenance."""
-    validate_history(notes_file)
+    """Check staged prose availability; budget only after evidence is known."""
+    text = notes_file.read_text()
+    if not text.strip() or text.count(publication_body.MARKER) > 1:
+        raise ValueError('release notes must be nonempty with at most one validation binding')
 
 
 def validate_history(notes_file):

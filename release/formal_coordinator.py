@@ -145,7 +145,8 @@ def main() -> None:
     # persisted source, including the complete editable release notes.
     if publication is PublicationState.NEW:
         source_sha = coordinator.persist_manifest(path.read_text(encoding='utf-8'), version,
-            channel='release', root=ROOT, source_ref=source_ref, source_sha=source_sha)
+            channel='release', root=ROOT, source_ref=source_ref, source_sha=source_sha,
+            source_shas={name: plan.source_sha for name, plan in plans.items()})
     wait_for_convergence(plans, version, source_sha)
 
 

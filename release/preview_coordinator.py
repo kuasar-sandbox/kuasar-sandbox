@@ -988,7 +988,7 @@ def commit_manifest(relative: str, content: str, aggregate: str, source_ref: str
 
 def persist_manifest(content: str, aggregate: str, *, channel: str = 'daily-preview',
                      root: pathlib.Path | None = None, source_ref: str | None = None,
-                     source_sha: str | None = None) -> str:
+                     source_sha: str | None = None, source_shas: dict[str, str] | None = None) -> str:
     if channel not in ('release', 'daily-preview'):
         raise ValueError('unknown release manifest channel')
     root = PLATFORM_ROOT if root is None else root
@@ -1003,7 +1003,7 @@ def persist_manifest(content: str, aggregate: str, *, channel: str = 'daily-prev
     decoded = base64.b64decode(str(remote["content"]).replace("\n", "")).decode()
     if decoded != current:
         raise Pending(f"{channel}.yaml differs from the selected committed source; review and commit local edits")
-    prepared = prepare_notes.prepare(current, content, relative, root)
+    prepared = prepare_notes.prepare(current, content, relative, root, source_shas=source_shas)
     # Preserve comments and layout on exact semantic retries as well as prose.
     if selection.read_simple_yaml(current, relative) == selection.read_simple_yaml(prepared, relative):
         if branch_sha(PLATFORM_REPOSITORY, source_ref) != source_sha:
@@ -1373,7 +1373,8 @@ def main(deadline: float | None = None) -> str:
         return "pending"
     aggregate = f"{base}-preview.{date}"
     content = render_manifest(base, previous, date, next_previous_preview, plans)
-    PLATFORM_SHA = persist_manifest(content, aggregate)
+    PLATFORM_SHA = persist_manifest(content, aggregate,
+                                    source_shas={name: plan.source_sha for name, plan in plans.items()})
     return converge_until_deadline(plans, aggregate, deadline)
 
 

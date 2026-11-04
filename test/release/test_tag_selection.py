@@ -150,7 +150,8 @@ class TagSelectionTests(unittest.TestCase):
                 formal.main()
             plans, version, sha = converge.call_args.args
             self.assertEqual((version, sha), ('release-v1.2.3', 'b' * 40))
-            self.assertEqual(persist.call_args.kwargs, dict(channel='release', root=root, source_ref='main', source_sha='a' * 40))
+            self.assertEqual(persist.call_args.kwargs, dict(channel='release', root=root, source_ref='main',
+                source_sha='a' * 40, source_shas={name: 'c' * 40 for name in plans}))
             self.assertEqual({name: plan.selected for name, plan in plans.items()},
                              selection.parse_manifest(manifest(), 'fixture', False)[2])
 

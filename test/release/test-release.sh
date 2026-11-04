@@ -388,10 +388,15 @@ python3 - "$TMP/fetched/updates/orchestrator.md" <<'PY'
 import pathlib, sys
 pathlib.Path(sys.argv[1]).write_text('x' * 125001)
 PY
-if "$ROOT/release/aggregate-release.sh" render-notes "$VERSION" '' "$TMP/selection.tsv" \
-  "$TMP/fetched/updates" "$TMP/rejected-notes.md" \
+"$ROOT/release/aggregate-release.sh" render-notes "$VERSION" '' "$TMP/selection.tsv" \
+  "$TMP/fetched/updates" "$TMP/rejected-notes.md"
+python3 - "$TMP/rejected-notes.md" <<'PY'
+import pathlib, sys
+assert 'x' * 125001 in pathlib.Path(sys.argv[1]).read_text()
+PY
+if python3 -B "$ROOT/release/publication_body.py" "$TMP/rejected-notes.md" \
   > "$TMP/rejected-notes.log" 2>&1; then
-  release_fail "pre-admission generator accepted oversized release notes"
+  release_fail "publication accepted oversized release notes"
 fi
 grep -Fq 'budget=125000' "$TMP/rejected-notes.log"
 grep -Fq 'evidence must not be truncated' "$TMP/rejected-notes.log"
@@ -423,13 +428,11 @@ for unit in "${RELEASE_UNITS[@]}"; do
     || release_fail "aggregate release notes omit $unit updates"
 done
 for heading in \
-  '## Highlights' \
-  '## Supported environment' \
-  '## Quick Start' \
-  '## Production deployment' \
-  '## Known limitations' \
-  '## Security' \
-  '## Versioning and release channels'; do
+  '## Component versions' \
+  '## Component updates' \
+  '## Download and use' \
+  '## Qualification scope' \
+  '## Security'; do
   grep -Fqx "$heading" "$TMP/bundle/release-notes.md" \
     || release_fail "aggregate release notes omit $heading"
 done
@@ -455,6 +458,22 @@ grep -Fq "https://github.com/kuasar-sandbox/kuasar-sandbox/blob/$VERSION/docs/qu
 grep -Fq 'https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new' \
   "$TMP/bundle/release-notes.md" \
   || release_fail "formal release notes omit the private security reporting link"
+for guidance in \
+  'SHA256SUMS' \
+  'docker load -i' \
+  'trusted administrator environment with Docker privileged access' \
+  'do not provide hostile-root confinement' \
+  "https://github.com/kuasar-sandbox/kuasar-sandbox/blob/$VERSION/docs/deployment.md"; do
+  grep -Fq "$guidance" "$TMP/bundle/release-notes.md" \
+    || release_fail "aggregate release notes omit download, deployment or security guidance"
+done
+python3 - "$TMP/bundle/release-notes.md" <<'PY_ORDER'
+import pathlib, sys
+body = pathlib.Path(sys.argv[1]).read_text()
+assert body.index('## Component updates') < body.index('## Download and use')
+assert 'production-deployable' not in body
+assert 'The system supports production deployment.' not in body
+PY_ORDER
 grep -Fq 'This is the first formal aggregate release' "$TMP/bundle/release-notes.md" \
   || release_fail "first formal release notes do not identify the missing baseline"
 if grep -Fq 'Previous aggregate selection:' "$TMP/bundle/release-notes.md"; then

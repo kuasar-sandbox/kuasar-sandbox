@@ -5,8 +5,6 @@
 from __future__ import annotations
 
 import pathlib
-import hashlib
-import json
 import re
 import subprocess
 import sys
@@ -49,12 +47,6 @@ class AggregateVersion:
 
 class ManifestError(ValueError):
     """A maintained manifest does not satisfy the release-state schema."""
-
-
-def notes_selection_sha256(config: dict[str, object]) -> str:
-    """Detect when auto prose needs generation, never substitute source proof."""
-    payload = {key: value for key, value in config.items() if key != 'notes'}
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
 def check_notes_input(config: dict[str, object], source: str) -> None:
@@ -108,12 +100,9 @@ def parse_notes(block: str, source: str) -> dict[str, str]:
         if key == "mode":
             if value not in ("auto", "fixed"):
                 raise ManifestError(f"notes.mode in {source} must be auto or fixed")
-        elif key == "selection_sha256":
-            if not re.fullmatch(r"[0-9a-f]{64}", value):
-                raise ManifestError(f"notes.selection_sha256 in {source} requires 64 lowercase hex characters")
-        elif key == "aggregate_sha":
-            # Historical notes carried a correction pin. Accept it on read,
-            # but it has no text-routing or publication authority.
+        elif key in ("aggregate_sha", "selection_sha256"):
+            # Historical bookkeeping has no generation, text-routing or
+            # publication authority. Never require or emit these fields.
             continue
         else:
             if value not in ("|", "|-"):
@@ -141,8 +130,6 @@ def parse_notes(block: str, source: str) -> dict[str, str]:
 def validate_complete_notes(fields: dict[str, str], source: str) -> None:
     """Explicit-mode notes are a complete authored prefix, never an insertion."""
     if "mode" not in fields:
-        if "selection_sha256" in fields:
-            raise ManifestError(f"notes.selection_sha256 in {source} requires notes.mode")
         return
     if fields["mode"] not in ("auto", "fixed"):
         raise ManifestError(f"notes.mode in {source} must be auto or fixed")
