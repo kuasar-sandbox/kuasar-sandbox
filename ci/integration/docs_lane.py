@@ -18,7 +18,10 @@ import tooling_lane
 
 REPOSITORIES = {'kuasar-sandbox/' + name for name in
                 ('accelerator', 'connector', 'guest-runtime', 'kuasar-sandbox', 'orchestrator', 'sandboxer')}
-COMMON = {'README.md', 'README_zh.md', 'test/e2e/README.md', 'test/e2e/README_zh.md'}
+COMMON = {'README.md', 'README_zh.md', 'test/e2e/README.md', 'test/e2e/README_zh.md',
+          'LICENSE_SCOPE.md', 'LICENSE_SCOPE_zh.md'}
+RELEASE_NOTICES = {repository: {'scripts/release-notices/rootless-containers-proto/NOTICE'}
+                   for repository in ('kuasar-sandbox/orchestrator', 'kuasar-sandbox/guest-runtime')}
 MANIFESTS = {'releases/release.yaml', 'releases/daily-preview.yaml'}
 PLATFORM = {f'{base}{suffix}.md' for base in ('workbench/README', 'ci/runner/README', 'test/demo/DEMO')
             for suffix in ('', '_zh')}
@@ -59,7 +62,7 @@ def allowed(repository, path):
     parts = PurePosixPath(path).parts
     if not parts or any(p in ('.', '..', '.git') for p in parts) or path.startswith('/'):
         return False
-    return path in COMMON or (repository == 'kuasar-sandbox/kuasar-sandbox' and path in PLATFORM) or (
+    return path in COMMON or path in RELEASE_NOTICES.get(repository, set()) or (repository == 'kuasar-sandbox/kuasar-sandbox' and path in PLATFORM) or (
         path.endswith('.md') and (path.startswith('docs/') or path.startswith('test/e2e/guides/')))
 
 
