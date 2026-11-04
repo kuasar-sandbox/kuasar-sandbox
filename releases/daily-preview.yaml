@@ -1,7 +1,7 @@
 version: release-v0.1.12
 delivery: workbench-v1
 previous_version: release-v0.1.11
-preview_version: preview.20261104.1
+preview_version: preview.20261104.2
 components:
   accelerator: v0.1.10
   connector: v0.1.6
@@ -12,13 +12,24 @@ components:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.1.12-preview.20261104.1
+    # Kuasar Sandbox release-v0.1.12-preview.20261104.2
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
     Previous aggregate selection: `release-v0.1.11`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104.1/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104.2/releases/daily-preview.yaml).
+
+    ## Platform and delivery updates
+
+    This Preview rebuilds the platform, all 17 declared helpers and both Workbench images after the release/CI simplification. The six component artifacts below are unchanged from the November 4 `.1` selection; no later component source changes are included.
+
+    - Download packages from the selected aggregate tag manifest using GitHub asset IDs, sizes and digests; historical Release body records and checksum attachments are no longer required ([#325](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/325)).
+    - Publish human release notes and packages without machine acceptance blocks or a separate checksum attachment, while validating the current package combination and uploaded bytes ([#326](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/326)).
+    - Keep complete helper inventories and the runtime information needed to run them; use explicit local Go module workspaces for selected-source builds ([#328](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/328), [#329](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/329)).
+    - Preserve normal image runtime information and restore an interrupted publication from its still-valid accepted stage before selecting newer inputs ([#331](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/331), [#335](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/335)).
+
+    `release-v0.1.11` remains marked **Do not use**. The current Stable Latest remains `release-v0.1.10`; this Preview does not publish `v0.1.12` Stable.
 
     ## Component versions
 
@@ -37,11 +48,11 @@ notes:
 
     ### accelerator
 
-    Selected version unchanged: `v0.1.10`.
+    Selected version unchanged: `v0.1.10`. No source changes are included.
 
     ### connector
 
-    Selected version unchanged: `v0.1.6`.
+    Selected version unchanged: `v0.1.6`. No source changes are included.
 
     ### sandboxer
 
@@ -84,15 +95,11 @@ notes:
 
     ## Download and use
 
-    - Choose native Linux x86_64 or aarch64 assets. Verify downloaded archives with `SHA256SUMS` before use.
+    - Choose native Linux x86_64 or aarch64 assets. Follow the download guide to verify GitHub asset sizes and SHA-256 digests before use.
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
-
-    ## Qualification scope
-
-    The declared native x86_64 profile uses the current full ordinary case selection. The hosted ARM profile requires native non-KVM image/storage E2E and `artifact-only` Workbench qualification; planned Workbench cases do not establish network, KVM lifecycle or snapshot/restore execution. Consult the per-architecture validation records for executed cases and `qualification_scope`, including any `native-full` acceptance. These are declared profiles, not evidence that every planned test ran.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104.2/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104.2/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
