@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Classic and containerd identities must prove the same admitted config bytes."""
+"""Current Docker acquisition and isolated image-store diagnostic checks."""
 import argparse
 import copy
 from email.message import Message
@@ -69,7 +69,7 @@ class IdentityTests(unittest.TestCase):
                 image['Id'] = image['Descriptor']['digest'] = target
                 image['Descriptor']['size'] = len(raw)
             with self.subTest(changed=changed), self.assertRaises(ValueError):
-                ci.image_check(selected, 'x86_64', image, metadata=(raw, config))
+                identity.check_manifest_config(selected['architectures']['x86_64'], image, raw, config)
 
     def test_local_descriptor_and_config_conflicts_are_rejected(self):
         changes = [lambda i: i.update(Id='sha256:' + 'e' * 64),
@@ -86,7 +86,7 @@ class IdentityTests(unittest.TestCase):
             selected, image, metadata = fixture()
             change(image)
             with self.subTest(change=change), self.assertRaises(ValueError):
-                ci.image_check(selected, 'x86_64', image, metadata=metadata)
+                identity.check_manifest_config(selected['architectures']['x86_64'], image, *metadata)
 
     def test_remote_config_platform_and_labels_must_match_local_inspection(self):
         for field in ('architecture', 'labels', 'rootfs'):
@@ -109,44 +109,48 @@ class IdentityTests(unittest.TestCase):
             image['Id'] = image['Descriptor']['digest'] = target
             image['Descriptor']['size'] = len(raw)
             with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'local config'):
-                ci.image_check(selected, 'x86_64', image, metadata=(raw, config))
+                identity.check_manifest_config(selected['architectures']['x86_64'], image, raw, config)
 
-    def test_cold_and_warm_containerd_acquisition_keep_config_and_execution_ids_separate(self):
+    def test_cold_and_warm_acquisition_pull_the_version_and_use_local_image_id(self):
         for cold in (False, True):
-            selected, image, metadata = fixture()
-            row = selected['architectures']['x86_64']
+            selected, image, _ = fixture()
+            selected = ci.from_aggregate({'delivery': 'workbench-v1',
+                'version': selected['aggregate_version']}, 'a' * 40)
             evidence = {}
             with patch.object(ci.platform, 'machine', return_value='x86_64'), \
-                    patch.object(ci.launcher, 'inspect', side_effect=[None, None, image] if cold else [None, image]) as inspect, \
+                    patch.object(ci.launcher, 'inspect', side_effect=[None if cold else image, image]) as inspect, \
                     patch.object(ci.image_pull, 'pull_image') as pull, \
-                    patch.object(identity, 'registry_metadata', return_value=metadata) as fetch:
+                    patch.object(identity, 'registry_metadata') as fetch:
                 result = ci.acquire(selected, 'x86_64', evidence=evidence)
-            self.assertEqual(result['image_id'], row['image_id'])
+            self.assertEqual(result['image_id'], image['Id'])
             self.assertEqual(result['docker_image_id'], image['Id'])
             self.assertEqual(result['image_present_before'], not cold)
-            self.assertEqual(inspect.call_args.args, ('image', row['reference']))
+            self.assertEqual(inspect.call_count, 2)
+            self.assertEqual(inspect.call_args.args, ('image', selected['reference']))
             self.assertEqual(evidence['observed']['Id'], image['Id'])
-            fetch.assert_called_once_with(row)
-            if cold:
-                pull.assert_called_once_with(row['reference'])
-            else:
-                pull.assert_not_called()
+            fetch.assert_not_called()
+            pull.assert_called_once_with(selected['reference'])
 
-    def test_conflicting_config_lookup_does_not_fall_back_or_pull(self):
+    def test_wrong_architecture_after_pull_fails_without_fallback(self):
         selected, image, _ = fixture()
-        image['Id'] = 'sha256:' + 'e' * 64
+        selected = ci.from_aggregate({'delivery': 'workbench-v1',
+            'version': selected['aggregate_version']}, 'a' * 40)
+        image['Architecture'] = 'arm64'
         with patch.object(ci.platform, 'machine', return_value='x86_64'), \
                 patch.object(ci.launcher, 'inspect', return_value=image) as inspect, \
-                patch.object(ci.image_pull, 'pull_image') as pull, self.assertRaises(ValueError):
+                patch.object(ci.image_pull, 'pull_image') as pull, \
+                patch.object(identity, 'registry_metadata') as fetch, self.assertRaises(ValueError):
             ci.acquire(selected, 'x86_64')
-        inspect.assert_called_once()
-        pull.assert_not_called()
+        self.assertEqual(inspect.call_count, 2)
+        pull.assert_called_once_with(selected['reference'])
+        fetch.assert_not_called()
 
     def test_launcher_receives_verified_execution_id_and_receipt_retains_config(self):
         selected, image, _ = fixture()
         row = selected['architectures']['x86_64']
-        selected['framework_sha'] = 'a' * 40
-        acquired = {**row, 'docker_image_id': image['Id']}
+        selected = ci.from_aggregate({'delivery': 'workbench-v1',
+            'version': selected['aggregate_version']}, 'a' * 40)
+        acquired = {'image_id': image['Id'], 'docker_image_id': image['Id']}
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'sources').mkdir()
@@ -161,7 +165,7 @@ class IdentityTests(unittest.TestCase):
             command = run.call_args.args[0]
             self.assertEqual(command[command.index('--image') + 1], image['Id'])
             receipt = json.loads((args.root / 'receipt.json').read_text())
-            self.assertEqual(receipt['image']['image_id'], row['image_id'])
+            self.assertEqual(receipt['image']['image_id'], image['Id'])
             self.assertEqual(receipt['image']['docker_image_id'], image['Id'])
 
     def test_container_ownership_requires_the_recorded_docker_execution_id(self):
