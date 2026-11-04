@@ -259,8 +259,11 @@ class PullRetryTests(unittest.TestCase):
         driver = ci.module('retry_group_driver', ROOT / 'ci/integration/run-capability-group.py')
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            selected = {'image_id': 'sha256:' + '8' * 64,
-                        'reference': ci.REGISTRY + '@sha256:' + '9' * 64}
+            selected = {'reference': ci.REGISTRY + ':v1.2.3'}
+            local_id = 'sha256:' + '8' * 64
+            inspected = [{'Id': local_id, 'Os': 'linux', 'Architecture': 'arm64',
+                          'Config': {'Labels': {'org.opencontainers.image.version': 'release-v1.2.3',
+                              'org.opencontainers.image.source': 'https://github.com/kuasar-sandbox/kuasar-sandbox'}}}]
             profile = {'executor': 'workbench-system'}
             config = {'profiles': {'supplemental-arm': profile}}
             plan = {'schema': 4, 'lanes': {'aarch64': {'groups': {
@@ -277,14 +280,15 @@ class PullRetryTests(unittest.TestCase):
                     patch.object(driver.routing, 'read_config', return_value=config), \
                     patch.object(driver.routing, 'runner_identity', return_value={}), \
                     patch.object(driver.image_pull, 'pull_image') as pull, \
-                    patch.object(driver.subprocess, 'run', side_effect=[
-                        subprocess.CompletedProcess([], 1), ValueError('launcher rejected image')]) as run:
+                    patch.object(driver.subprocess, 'check_output', return_value=json.dumps(inspected)) as inspect, \
+                    patch.object(driver.subprocess, 'run', side_effect=ValueError('launcher rejected image')) as run:
                 with self.assertRaisesRegex(ValueError, 'launcher rejected image'):
                     driver.execute(args)
             self.assertIs(driver.image_pull, ci.image_pull)
             pull.assert_called_once_with(selected['reference'])
             self.assertIn('check', run.call_args.args[0])
-            self.assertIn(selected['image_id'], run.call_args.args[0])
+            inspect.assert_called_once_with(['docker', 'image', 'inspect', selected['reference']], text=True)
+            self.assertIn(local_id, run.call_args.args[0])
 
     def test_checkout_tolerance_is_local_to_group_executor(self):
         workflow = yaml.safe_load((ROOT / '.github/workflows/integration-architecture.yml').read_text())

@@ -17,6 +17,8 @@ def helper_fixture(sources):
         root = sources / owner
         root.mkdir(parents=True, exist_ok=True)
         (root / 'release').mkdir(exist_ok=True)
+        if owner in build_helpers.go_workspace.DEPENDENCIES and not (root / 'go.mod').exists():
+            (root / 'go.mod').write_text(f'module github.com/kuasar-sandbox/{owner}\ngo 1.22\n')
         recipe = 'release/build.sh' if owner == 'orchestrator' else None
         declared = {'schema': 1, 'recipe': recipe, 'dependencies': ['accelerator'] if recipe else [],
                     'helpers': [{'name': 'node-ctl-runner-test', 'env': 'NODE_CTL_RUNNER_TEST_BINARY',
@@ -105,24 +107,27 @@ class PreparedHelperSelectionTest(unittest.TestCase):
             owner, sdk = sources / 'orchestrator', sources / 'accelerator'
             (owner / 'cmd/node-ctl').mkdir(parents=True)
             sdk.mkdir()
-            (owner / 'go.mod').write_text('module example.test/orchestrator\ngo 1.22\nrequire example.test/sdk v0.0.0\n')
-            (sdk / 'go.mod').write_text('module example.test/sdk\ngo 1.22\n')
+            (owner / 'go.mod').write_text('module github.com/kuasar-sandbox/orchestrator\ngo 1.22\nrequire github.com/kuasar-sandbox/accelerator v0.0.0\n')
+            (sdk / 'go.mod').write_text('module github.com/kuasar-sandbox/accelerator\ngo 1.22\n')
             (sdk / 'identity.go').write_text('package sdk\nconst Identity = "exact-test-pin"\n')
             (sources / 'go.work').write_text('go 1.22\nuse (\n ./orchestrator\n ./accelerator\n)\n')
             (owner / 'cmd/node-ctl/main.go').write_text('package main\nfunc main() {}\n')
             (owner / 'cmd/node-ctl/main_test.go').write_text(
-                'package main\nimport ("testing"; "example.test/sdk")\n'
+                'package main\nimport ("testing"; "github.com/kuasar-sandbox/accelerator")\n'
                 'func TestPinnedRunner(t *testing.T) { if sdk.Identity != "exact-test-pin" { t.Fatal(sdk.Identity) } }\n')
             contract = helper_fixture(sources)
             environment = {key: value for key, value in os.environ.items()
                            if key not in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
             environment.update(GOWORK=str(sources / 'go.work'), GOPROXY='off', GOSUMDB='off')
+            originals = {p: p.read_bytes() for p in sources.glob('*/go.mod')}
+            originals[sources / 'go.work'] = (sources / 'go.work').read_bytes()
             for arch in ('x86_64', 'aarch64'):
                 output = root / arch
                 build_helpers.build(sources, arch, output, {'node-ctl-runner-test': 'orchestrator'}, environment, contract)
                 binary = output / 'node-ctl-runner-test'
                 artifacts.check_architecture(binary, arch)
                 self.assertEqual(set(artifacts.tree_files(output)), {'node-ctl-runner-test'})
+                self.assertEqual({p: p.read_bytes() for p in originals}, originals)
                 if arch == os.uname().machine:
                     result = subprocess.run([str(binary), '-test.run=^TestPinnedRunner$', '-test.v'],
                                             text=True, capture_output=True, timeout=30)
@@ -139,7 +144,8 @@ class PreparedHelperSelectionTest(unittest.TestCase):
                 return real(command, **kwargs)
             with patch.object(build_helpers.subprocess, 'run', side_effect=fail_recipe):
                 with self.assertRaises(subprocess.CalledProcessError) as failure:
-                    build_helpers.build(root, 'x86_64', root / 'output', {'node-ctl-runner-test': 'orchestrator'}, {}, contract)
+                    build_helpers.build(root, 'x86_64', root / 'output', {'node-ctl-runner-test': 'orchestrator'},
+                        {'PATH': os.environ['PATH'], 'HOME': str(root), 'GOPROXY': 'off', 'GOSUMDB': 'off'}, contract)
             self.assertEqual(failure.exception.returncode, 23)
             self.assertEqual(failure.exception.cmd[0], 'bash')
 
