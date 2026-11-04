@@ -14,7 +14,7 @@ notes:
   body: |
     # Kuasar Sandbox release-v0.1.11
 
-    Stable release. Preview is the development channel.
+    Stable release.
 
     ## Important upgrade notice
 
@@ -27,40 +27,43 @@ notes:
 
     ## Highlights
 
-    - Reset retains current disks and reconstructs an E-only paused sandbox: no memory restore, VM boot, old-run/template rollback, snapshot rollback or cross-node recovery. Wake/Resume starts a new run. `autoReset` stays opt-in (false). Reset rejects missing current-disk metadata.
-    - Pause uses Proxy activity handshake and `ifIdle`; one sandbox-owned checkpoint survives Resume. Successful export by ID consumes it; failed export retains it.
-    - Named-ref encryption now uses `crypto.ref`. Omitted DiffCOW dirty budget is half the effective cache after config merge; explicit limits stay unchanged. Default cache/dirty budgets remain 32/16 MiB; cache-only 64 MiB derives 32 MiB dirty.
+    - Reset keeps current disks and reconstructs E-only paused state: no memory restore, VM boot, old-run/template/snapshot rollback or cross-node recovery. Wake/Resume starts a new run. `autoReset` is opt-in (default false); missing current-disk metadata fails.
+    - Pause uses Proxy activity handshake and `ifIdle`; one sandbox-owned checkpoint survives Resume. Export by ID consumes it on success, retains it on failure.
+    - DiffCOW dirty defaults to half merged effective cache; explicit limits stay. Default cache/dirty: 32/16 MiB; cache-only 64 MiB gives 32 MiB dirty.
 
-    ## Versions and manifests
+    ## Versions
 
-    | Release unit | Version |
+    |Component|Version|
     |---|---|
-    | `accelerator` | `v0.1.10` |
-    | `connector` | `v0.1.6` |
-    | `sandboxer` | `v0.1.12` |
-    | `orchestrator` | `v0.1.11` |
-    | `runtime` | `runtime-v0.1.11` |
-    | `vmlinux` | `vmlinux-v0.1.5` |
+    |accelerator|v0.1.10|
+    |connector|v0.1.6|
+    |sandboxer|v0.1.12|
+    |orchestrator|v0.1.11|
+    |runtime|runtime-v0.1.11|
+    |vmlinux|vmlinux-v0.1.5|
 
-    Version and 6 component tag selection: [releases/release.yaml](/kuasar-sandbox/kuasar-sandbox/blob/4108128b42c1b69965b033ef22b35d7a3a49c4be/releases/release.yaml). Verify 15 archives with Release asset [SHA256SUMS](/kuasar-sandbox/kuasar-sandbox/releases/download/release-v0.1.11/SHA256SUMS)
+    Version and 6 component tags: [releases/release.yaml](/kuasar-sandbox/kuasar-sandbox/blob/4108128b42c1b69965b033ef22b35d7a3a49c4be/releases/release.yaml). Verify 15 archives with Release asset [SHA256SUMS](/kuasar-sandbox/kuasar-sandbox/releases/download/release-v0.1.11/SHA256SUMS)
 
-    ## Deployment and security
+    ## Deployment
 
-    Native Linux x86_64 and aarch64. Extract products/platform together; import Workbench separately with `docker load -i`.
+    Native Linux x86_64/aarch64. Extract products/platform together; import Workbench separately: `docker load -i`.
 
     - [Quick Start](/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.11/docs/quickstart.md)
-    - [Production deployment](/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.11/docs/deployment.md)
-    - [Report vulnerabilities privately](/kuasar-sandbox/kuasar-sandbox/security/advisories/new)
+    - [Deployment](/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.11/docs/deployment.md)
+    - [Private vulnerability reports](/kuasar-sandbox/kuasar-sandbox/security/advisories/new)
+
+    ## Known limitation
+
+    [#501](/kuasar-sandbox/orchestrator/issues/501): After restoring a published Build and pausing, high-level export to a new template can fail with HTTP 500 when a second-generation checkpoint retains an external named parent ref (missing parent-location mapping). Local checkpoint capture works.
 
     ## Validation scope
 
-    Product E2E: 88/88 passed per architecture. Workbench: x86_64 native-full (88/88); aarch64 artifact-only, which does not establish system execution.
+    Product E2E: 88/88 per architecture. Workbench: x86_64 native-full 88/88; aarch64 artifact-only (no system execution established).
 
-    ## Component changes
+    ## Changes
 
-    - [Accelerator changes](/kuasar-sandbox/accelerator/compare/v0.1.9...v0.1.10)
-    - Connector unchanged.
-    - [Sandboxer changes](/kuasar-sandbox/sandboxer/compare/v0.1.10...v0.1.12)
-    - [Orchestrator changes](/kuasar-sandbox/orchestrator/compare/v0.1.10...v0.1.11)
+    - [Accelerator](/kuasar-sandbox/accelerator/compare/v0.1.9...v0.1.10)
+    - [Sandboxer](/kuasar-sandbox/sandboxer/compare/v0.1.10...v0.1.12)
+    - [Orchestrator](/kuasar-sandbox/orchestrator/compare/v0.1.10...v0.1.11)
     - [Runtime comparison](/kuasar-sandbox/guest-runtime/compare/runtime-v0.1.10...runtime-v0.1.11)
-    - Guest kernel unchanged.
+    - Connector and guest kernel unchanged.
