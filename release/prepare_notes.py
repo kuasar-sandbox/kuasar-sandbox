@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prepare complete, editable manifest prose before admitting release inputs.
+"""Prepare complete, editable prose in the selected channel manifest.
 
 Generation describes selected tags and links their comparison. It does not
 claim to have fetched future tags or their commit inventories.
@@ -25,16 +25,15 @@ def identity(config):
     return selection.notes_selection_sha256(config)
 
 
-def without_correction(block):
-    # A late correction targets an old admitted source. A newly selected source
-    # must never inherit this pointer, even when its authored text is fixed.
+def without_legacy_pin(block):
+    # Drop obsolete metadata when rewriting old manifests; it has no semantics.
     return re.sub(r'(?m)^  aggregate_sha: [^\n]*\n?', '', block)
 
 
 def require_prepared(text, relative):
     selection.parse_manifest(text, relative, relative.endswith('daily-preview.yaml'))
     config = selection.read_simple_yaml(text, relative)
-    selection.require_prepared_notes(config, relative)
+    selection.check_notes_input(config, relative)
     publication_body.checked(config['notes']['body'])
 
 
@@ -74,14 +73,16 @@ def prepare(current, selected, relative, root, *, previous_units=None):
     """Retain hand edits on retries, regenerate auto text for a new selection."""
     before = selection.read_simple_yaml(current, relative)
     selected, _ = selection.split_notes(selected, relative)
-    selection.parse_manifest(selected, relative, relative.endswith('daily-preview.yaml'))
+    version, _, units = selection.parse_manifest(selected, relative, relative.endswith('daily-preview.yaml'))
     after = selection.read_simple_yaml(selected, relative)
     fields = before.get('notes', {})
     _, block = selection.split_notes(current, relative)
     if fields.get('mode') == 'fixed':
-        return selected + without_correction(block)
+        for warning in release_notes.stale_warnings(fields.get('body', ''), version, units):
+            print('release notes warning: ' + warning, file=sys.stderr)
+        return selected + without_legacy_pin(block)
     if fields.get('mode') == 'auto' and fields.get('selection_sha256') == identity(after):
-        return selected + without_correction(block)
+        return selected + without_legacy_pin(block)
     body = render(root, selected, relative, previous_units)
     if fields and 'mode' not in fields:
         # One explicit migration retains BOTH formerly authored prose fields.
@@ -101,7 +102,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('platform', type=Path)
     parser.add_argument('channel', choices=('release', 'daily-preview'))
-    parser.add_argument('--check', action='store_true', help='verify prepared prose without changing the manifest')
+    parser.add_argument('--check', action='store_true', help='check the manifest text input without changing it')
     args = parser.parse_args()
     root = args.platform.resolve()
     relative = f'releases/{args.channel}.yaml'
@@ -113,7 +114,7 @@ def main():
     content = prepare(selected, selected, relative, root)
     if content != selected:
         path.write_text(content)
-    print(f'Prepared {relative}; review the complete notes and commit before release admission.')
+    print(f'Prepared {relative}; edit the complete notes as needed and commit the manifest.')
 
 
 if __name__ == '__main__':

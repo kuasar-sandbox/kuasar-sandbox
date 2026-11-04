@@ -57,15 +57,12 @@ def notes_selection_sha256(config: dict[str, object]) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
 
 
-def require_prepared_notes(config: dict[str, object], source: str) -> None:
+def check_notes_input(config: dict[str, object], source: str) -> None:
+    """Check an editable text input, never its relationship to acceptance."""
     fields = config.get('notes', {})
-    if 'mode' not in fields:
-        raise ManifestError('prepare complete manifest notes and commit them before release admission')
     validate_complete_notes(fields, source)
-    if 'aggregate_sha' in fields:
-        raise ManifestError('notes.aggregate_sha is only for publisher corrections; prepare notes before freezing a new source')
-    if fields['mode'] == 'auto' and fields.get('selection_sha256') != notes_selection_sha256(config):
-        raise ManifestError('auto release notes do not describe the current selection; run prepare_notes.py and commit')
+    if not fields.get('body'):
+        raise ManifestError('release manifest has no notes.body')
 
 
 def fail(message: str) -> NoReturn:
@@ -115,8 +112,9 @@ def parse_notes(block: str, source: str) -> dict[str, str]:
             if not re.fullmatch(r"[0-9a-f]{64}", value):
                 raise ManifestError(f"notes.selection_sha256 in {source} requires 64 lowercase hex characters")
         elif key == "aggregate_sha":
-            if not re.fullmatch(r"[0-9a-f]{40}", value):
-                raise ManifestError(f"notes.aggregate_sha in {source} requires an exact commit")
+            # Historical notes carried a correction pin. Accept it on read,
+            # but it has no text-routing or publication authority.
+            continue
         else:
             if value not in ("|", "|-"):
                 raise ManifestError(f"notes.{key} in {source} requires a literal Markdown block")

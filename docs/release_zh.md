@@ -376,7 +376,7 @@ Workbench 的 prepare 与构建期 collector 共享规范用例发现和外部�
 
 发布把已测试的保存镜像复制到 `ghcr.io/kuasar-sandbox/workbench:<去掉-release-前缀的聚合版本>`，验证两种架构的 config 身份和多架构 index，并匿名回读每个按 digest 固定的镜像到临时 Docker archive。归档校验器将每个解压后的镜像层与已测试离线镜像的 config 逐一绑定，发布重试也必须通过。registry digest、镜像 ID、离线 archive hash 含义各自独立。已有同名 Tag/资产必须匹配；重试只补传缺失资产，不覆盖测试字节。跨服务发布可恢复：只有 registry 和完整 GitHub 资产集合一致，GitHub draft 才公开。冲突时失败关闭，不改写历史源码和已发布字节。
 
-`release/` 存放发布脚本，`release/inputs/` 存放共享构建输入，测试放在 `test/release/`。`releases/` 只包含两个渠道清单：Stable 使用 `releases/release.yaml`，Daily 使用 `releases/daily-preview.yaml`。两个选版协调器都在冻结源码、派发组件构建及验收**之前**生成完整说明，并与选定版本一起提交到对应清单。发布器只读取已提交的清单正文，不临时生成模板，也不等待未来组件 tag 的 commit 清单。
+`release/` 存放发布脚本，`release/inputs/` 存放共享构建输入，测试放在 `test/release/`。`releases/` 只包含两个渠道清单：Stable 使用 `releases/release.yaml`，Daily 使用 `releases/daily-preview.yaml`。两个选版协调器会生成完整说明，并与选定版本一起持久化。清单仍是可编辑发布说明的唯一来源。发布器不临时生成模板，也不等待未来组件 tag 的 commit 清单；人工说明不属于产品验收内容。
 
 ```yaml
 notes:
@@ -390,11 +390,11 @@ notes:
 
 `mode: auto` 在选版变化时重新生成；同一选择重试会原样保留人工编辑及格式。聚合版本、组件版本、前序版本或交付契约改变都属于新选择。指纹只用于判断是否需要生成，不是源码或验收身份。`mode: fixed` 无需指纹，后续任何选版变化都保留完整正文；对可识别的旧标题、组件表或文档链接仅警告，不覆盖或拒绝固定说明。
 
-需要预先审阅时，先更新渠道版本，再运行 `python3 -B release/prepare_notes.py . release`（Daily 使用 `daily-preview`），编辑 `notes.body`，需要固定时设置 `notes.mode: fixed`，审阅差异并提交。`--check` 只检查、不写文件。Stable 的 `make release` 与 Daily 使用相同准备规则，在派发前持久化完整说明。单文件提交以读取到的精确分支 HEAD 为原子前提，人工编辑或其他文件并发变动都会阻止派发。提交响应丢失也停止派发；检查分支后从新 checkout 重试，已提交且准备完成的同一选择不会重复生成或提交。
+需要编辑说明时，先更新渠道版本，再运行 `python3 -B release/prepare_notes.py . release`（Daily 使用 `daily-preview`），编辑 `notes.body`，需要固定时设置 `notes.mode: fixed`，然后提交。`--check` 只检查文本是否存在、语法和长度，不写文件，也不证明源码或测试来源。Stable 的 `make release` 与 Daily 使用相同准备规则。单文件提交以读取到的精确分支 HEAD 为原子前提，人工编辑或其他文件并发变动都会阻止派发。提交响应丢失也停止派发；检查分支后从新 checkout 重试，已提交且未变化的选择不会重复生成或提交。
 
-正文缩进四个空格。支持 literal `|`、`|-` 及其结尾换行语义，保留 Markdown、空行、行末空格和 Unicode。`body` 是整段人工发布说明，不再插入 Highlights。原始精确源码早于准备工具的已验收旧 stage 保留其原发布契约，避免动态更新发布工具后中断旧任务；新准入始终要求显式模式。没有 `mode` 的旧清单仍可作为历史证据读取；准备步骤会把旧 `body` 和 `upgrade_notice` 一起迁移进完整正文，不能丢弃升级提醒。显式模式不能同时使用 `upgrade_notice`。缺少正文或 auto 指纹过期时准入失败，发布器不回退生成。
+正文缩进四个空格。支持 literal `|`、`|-` 及其结尾换行语义，保留 Markdown、空行、行末空格和 Unicode。`body` 是整段人工发布说明，不再插入 Highlights。没有 `mode` 的旧清单仍可读取；准备步骤会把旧 `body` 和 `upgrade_notice` 一起迁移进完整正文，不能丢弃升级提醒。显式模式不能同时使用 `upgrade_notice`。缺少模式或生成指纹过期，都不是拒绝发布说明的理由。
 
-准入后仅修正文案时，通过正常评审提交 `notes.mode: fixed`、完整 `notes.body`，并把 `notes.aggregate_sha` 指向已验收的完整源码 SHA。全部非 notes 字段必须与已接纳清单相同。此 pin 只允许修正该旧 stage 的文案，不允许替换源码或制品；新选版准备始终清除旧 pin。恢复已有验收 stage 时不要调用选版协调器，原发布任务重跑会绑定新正文，保留原 plan、源码、制品、测试和 Workbench 结果。只读检查历史包可使用 `aggregate-release.sh validate VERSION BUNDLE --historical`；新发布默认严格校验。
+发布器读取目标聚合版本最新提交的渠道说明。渠道已进入新版本时，沿该清单的 first-parent 历史查找目标版本，不误用新版本文字；发布器历史中没有的维护分支版本可以使用自身清单。新说明不需要源码 SHA、plan ID、修正标记、与产品一致的组件表或验收结果。历史 `notes.aggregate_sha` 字段读取时忽略，准备清单时清除。人工说明不与已测试源码或 stage 中的旧文字比较。原 plan、产品源码、制品、架构测试和 Workbench 结果仍独立校验。已有验收 stage 通过原发布任务恢复，不重新选版或重建产品。历史包检查与新发布使用相同的文本传输检查。
 
 选版准备只能检查正文自身不超过 125000 字符，不能保证尚未知晓的最终证据一定能放下。最终 125000 字符预算预留完整验收及 registry 证据。显式模式正文不会被压缩、截断、链接替代或自动模板覆盖；正文和完整证据超限时，在发布变更前失败，必须人工修正清单。全部机器证据、源码/制品检查与验收门禁保持不变。
 

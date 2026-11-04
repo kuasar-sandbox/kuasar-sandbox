@@ -117,22 +117,22 @@ class SelectionTransactionTests(unittest.TestCase):
                     self.persist('release', desired)
             self.assertEqual(path.read_text(), current)
 
-    def test_new_admission_cannot_use_legacy_even_when_source_omits_helper(self):
+    def test_preparation_requires_body_availability_even_without_source_helper(self):
         self.assertFalse((self.root / 'release/prepare_notes.py').exists())
         for channel in ('release', 'daily-preview'):
-            with self.assertRaisesRegex(ValueError, 'prepare complete'):
+            with self.assertRaisesRegex(ValueError, 'body|text'):
                 prepare_notes.require_prepared(manifest(channel, notes=False), f'releases/{channel}.yaml')
 
 
 class StableRetryTests(unittest.TestCase):
-    def test_completed_release_is_noop_without_preparing_or_clearing_pin(self):
+    def test_completed_release_is_noop_regardless_of_obsolete_notes_metadata(self):
         original = manifest()
         correction = original.replace('  mode: fixed\n', '  mode: fixed\n  aggregate_sha: ' + SHA + '\n')
         status = coordinator.ReleaseStatus({}, SHA, True)
         with patch.object(coordinator, 'platform_release', return_value=status), \
              patch.object(coordinator, 'api', return_value=remote(original)), \
              patch.object(coordinator, 'persist_manifest') as persist:
-            self.assertTrue(formal.existing_publication(VERSION, correction, NEXT))
+            self.assertEqual(formal.existing_publication(VERSION, correction, NEXT), formal.PublicationState.COMPLETE)
             persist.assert_not_called()
             with self.assertRaisesRegex(coordinator.Deferred, 'another selection'):
                 formal.existing_publication(VERSION, correction.replace('sandboxer: v1.2.3', 'sandboxer: v1.2.4'), NEXT)
@@ -156,7 +156,7 @@ class StableRetryTests(unittest.TestCase):
                  patch.object(coordinator, 'active_aggregate_run', return_value=None), \
                  patch.object(coordinator, 'aggregate_runs', return_value=history), \
                  patch.object(formal, 'validated_stage', return_value=False):
-                self.assertFalse(formal.existing_publication(VERSION, manifest(notes=False), NEXT))
+                self.assertEqual(formal.existing_publication(VERSION, manifest(notes=False), NEXT), formal.PublicationState.NEW)
 
     def test_retained_stage_requires_latest_successful_gates_and_unexpired_artifact(self):
         state = {'id': 12}
@@ -172,7 +172,7 @@ class StableRetryTests(unittest.TestCase):
             with patch.object(coordinator, 'paginated', side_effect=pages):
                 self.assertEqual(formal.validated_stage(state, VERSION), expected)
 
-    def test_same_source_failed_legacy_or_correction_run_stops_before_preparation(self):
+    def test_same_source_validated_run_resumes_original_publisher_before_preparation(self):
         for text in (manifest(notes=False), manifest().replace('  mode: fixed\n',
                 '  mode: fixed\n  aggregate_sha: ' + SHA + '\n')):
             with tempfile.TemporaryDirectory() as directory:
@@ -189,11 +189,26 @@ class StableRetryTests(unittest.TestCase):
                      patch.object(coordinator, 'aggregate_runs', return_value=[{'display_title': f'Aggregate {VERSION} @{SHA}'}]), \
                      patch.object(formal, 'validated_stage', return_value=True), \
                      patch.object(coordinator, 'persist_manifest') as persist, \
-                     patch.object(coordinator, 'RepositoryState') as state:
-                    with self.assertRaises(ValueError):
-                        formal.main()
+                     patch.object(coordinator, 'RepositoryState') as state, \
+                     patch.object(coordinator, 'has_arm_archive', return_value=True), \
+                     patch.object(formal, 'wait_for_convergence') as wait:
+                    state.return_value.status.return_value = coordinator.ReleaseStatus({}, SHA, True)
+                    formal.main()
                     persist.assert_not_called()
-                    state.assert_not_called()
+                    wait.assert_called_once()
+                    self.assertEqual(wait.call_args.args[1:], (VERSION, SHA))
+
+    def test_mixed_retained_sources_reject_resume_in_either_history_order(self):
+        absent = coordinator.ReleaseStatus(None, None, False)
+        for sources in ((SHA, NEXT), (NEXT, SHA)):
+            history = [{'display_title': f'Aggregate {VERSION} @{source}'} for source in sources]
+            with self.subTest(sources=sources), \
+                 patch.object(coordinator, 'platform_release', return_value=absent), \
+                 patch.object(coordinator, 'active_aggregate_run', return_value=None), \
+                 patch.object(coordinator, 'aggregate_runs', return_value=history), \
+                 patch.object(formal, 'validated_stage', return_value=True):
+                with self.assertRaisesRegex(coordinator.Deferred, 'earlier validated source'):
+                    formal.existing_publication(VERSION, manifest(notes=False), SHA)
 
     def test_failed_original_stage_without_release_is_not_replaced(self):
         absent = coordinator.ReleaseStatus(None, None, False)
@@ -204,7 +219,8 @@ class StableRetryTests(unittest.TestCase):
              patch.object(formal, 'validated_stage', return_value=True):
             with self.assertRaisesRegex(coordinator.Deferred, 'earlier validated source'):
                 formal.existing_publication(VERSION, manifest(), NEXT)
-            self.assertFalse(formal.existing_publication(VERSION, manifest(), SHA))
+            for text in (manifest(), manifest(notes=False)):
+                self.assertEqual(formal.existing_publication(VERSION, text, SHA), formal.PublicationState.RESUME)
 
 
 if __name__ == '__main__':

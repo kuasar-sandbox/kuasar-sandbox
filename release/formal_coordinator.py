@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import base64
+from enum import Enum
 import os
 import pathlib
 import re
@@ -15,6 +16,12 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "release"))
 import preview_coordinator as coordinator  # noqa: E402
+
+
+class PublicationState(Enum):
+    NEW = 'new'
+    COMPLETE = 'complete'
+    RESUME = 'resume'
 
 
 def validated_stage(state: dict, version: str) -> bool:
@@ -30,7 +37,7 @@ def validated_stage(state: dict, version: str) -> bool:
     return len(stages) == 1 and stages[0].get('expired') is False
 
 
-def existing_publication(version: str, text: str, source_sha: str) -> bool:
+def existing_publication(version: str, text: str, source_sha: str) -> PublicationState:
     """Do not prepare a replacement source after this version was admitted."""
     status = coordinator.platform_release(version)
     if status.complete:
@@ -44,7 +51,7 @@ def existing_publication(version: str, text: str, source_sha: str) -> bool:
                 {k: v for k, v in admitted.items() if k != 'notes'}):
             raise coordinator.Deferred('Stable version is already published with another selection; select a new version')
         print(f'==> Stable {version} is already complete at {status.tag_sha}; retaining its source and notes')
-        return True
+        return PublicationState.COMPLETE
     active = coordinator.active_aggregate_run(version)
     if active is not None:
         raise coordinator.Deferred(f"Stable publication is active; retain its source and notes: {active.get('html_url')}")
@@ -53,16 +60,17 @@ def existing_publication(version: str, text: str, source_sha: str) -> bool:
     # A failed publisher may not have created a Release yet. The original run's
     # immutable stage remains authoritative; a notes correction is not permission
     # to admit a substitute source for that same attempted publication.
+    retained = False
     for state in coordinator.aggregate_runs(version):
         title = state.get('display_title', '')
         match = re.fullmatch(re.escape(f'Aggregate {version} @') + r'([0-9a-f]{40})', title)
         if validated_stage(state, version):
             if match is None or match.group(1) != source_sha:
                 raise coordinator.Deferred('Stable version has an earlier validated source; recover its original run or select a new version')
-            # The same accepted source may continue only when preparation is a
-            # proven no-op. Legacy bodies and correction pins require recovery.
-            coordinator.prepare_notes.require_prepared(text, 'releases/release.yaml')
-    return False
+            # Resume the same accepted stage without preparing a new source.
+            # The publisher obtains human text independently of acceptance.
+            retained = True
+    return PublicationState.RESUME if retained else PublicationState.NEW
 
 
 def main() -> None:
@@ -102,7 +110,8 @@ def main() -> None:
     if coordinator.run(['git', 'show', f'{source_sha}:releases/release.yaml'], cwd=ROOT).stdout != path.read_text(encoding='utf-8'):
         coordinator.fail('release.yaml has uncommitted edits; review and commit before release admission')
 
-    if existing_publication(version, path.read_text(encoding='utf-8'), source_sha):
+    publication = existing_publication(version, path.read_text(encoding='utf-8'), source_sha)
+    if publication is PublicationState.COMPLETE:
         return
     plans: dict[str, coordinator.Plan] = {}
     for unit in coordinator.UNITS:
@@ -134,8 +143,9 @@ def main() -> None:
     # Stable and Daily share one pre-freeze preparation transaction. It never
     # waits for the future component tags and every dispatch uses this exact
     # persisted source, including the complete editable release notes.
-    source_sha = coordinator.persist_manifest(path.read_text(encoding='utf-8'), version,
-        channel='release', root=ROOT, source_ref=source_ref, source_sha=source_sha)
+    if publication is PublicationState.NEW:
+        source_sha = coordinator.persist_manifest(path.read_text(encoding='utf-8'), version,
+            channel='release', root=ROOT, source_ref=source_ref, source_sha=source_sha)
     wait_for_convergence(plans, version, source_sha)
 
 
