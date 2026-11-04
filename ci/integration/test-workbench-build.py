@@ -367,6 +367,30 @@ class WorkspaceTests(unittest.TestCase):
             go_workspace.configure_release(self.root, ['sandboxer'], selections, self.env)
         self.assertFalse((self.root/'.ci').exists())
 
+    def test_release_selection_rejects_hidden_index_changes(self):
+        self.release_repos()
+        path = self.root/'accelerator'
+        for flag in ('assume-unchanged', 'skip-worktree'):
+            subprocess.run(['git','-C',str(path),'update-index','--'+flag,'selected.go'],check=True)
+            with self.subTest(flag=flag), self.assertRaisesRegex(ValueError, 'assume-unchanged or skip-worktree'):
+                go_workspace.configure_release(self.root, ['guest-runtime'], ['accelerator=v0.1.10'], self.env)
+            subprocess.run(['git','-C',str(path),'update-index','--no-'+flag,'selected.go'],check=True)
+        self.assertFalse((self.root/'.ci').exists())
+
+    def test_release_selection_cannot_hide_dirty_submodule_with_git_config(self):
+        self.release_repos()
+        path = self.root/'accelerator'
+        def git(*args):
+            subprocess.run(['git','-C',str(path),*args],check=True,capture_output=True)
+        git('-c','protocol.file.allow=always','submodule','add','../connector','nested')
+        git('-c','user.name=Test','-c','user.email=test@example.invalid','commit','-qam','submodule')
+        git('tag','-f','v0.1.10')
+        git('config','submodule.nested.ignore','all')
+        (path/'nested/untracked.txt').write_text('changed')
+        with self.assertRaisesRegex(ValueError, 'uncommitted'):
+            go_workspace.configure_release(self.root, ['guest-runtime'], ['accelerator=v0.1.10'], self.env)
+        self.assertFalse((self.root/'.ci').exists())
+
     def test_release_selection_rejects_different_license_source_overrides(self):
         self.release_repos()
         selections = ['accelerator=v0.1.10', 'connector=v0.1.10']

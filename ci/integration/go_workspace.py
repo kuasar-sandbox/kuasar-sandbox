@@ -125,7 +125,10 @@ def configure_release(root, owners, selections, environment=None):
             return subprocess.check_output(['git', '-C', str(module), *arguments], text=True).strip()
         require(git('rev-parse', 'HEAD') == git('rev-parse', '--verify', 'refs/tags/' + tag + '^{commit}'),
                 'local release dependency is not at selected tag: ' + name + '=' + tag)
-        require(not git('status', '--porcelain', '--untracked-files=all'),
+        flags = git('-c', 'core.quotePath=true', 'ls-files', '-v')
+        require(not any(re.match(r'^[a-zS] ', row) for row in flags.splitlines()),
+                'local release dependency uses assume-unchanged or skip-worktree: ' + name)
+        require(not git('status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'),
                 'local release dependency has uncommitted files: ' + name)
     return configure(root, owners, env)
 
