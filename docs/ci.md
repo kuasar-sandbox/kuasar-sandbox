@@ -77,6 +77,9 @@ and the component `scripts/ci-*`, `scripts/release*` and `scripts/test-release*`
 entries (including Go release validators). The explicit shared helper/publisher
 entry list is in `ci/integration/tooling_lane.py`; it also includes the platform's
 two extensionless runner shell scripts and `ci/integration/dependency-cutovers.json`.
+The platform E2E harness (`test/e2e/e2e`, Python files under `test/e2e/lib/`,
+and top-level `test/e2e/test_*.py`) also uses this lane. Product E2E cases,
+owner workloads and non-Python harness inputs still require full CI.
 Scripts may be ordinary `100644` or executable `100755` blobs. Product files,
 `Makefile`, `workbench/` implementation, `release/inputs/` build declarations and
 `ci/integration/runner-capabilities.json` remain full. Any product change in the
@@ -89,8 +92,9 @@ structure checks. It never imports or runs candidate tooling, installs candidate
 dependencies, invokes candidate actions or builds products. Cutover data reuses
 the trusted complete schema parser without admitting dependencies or querying
 publications. Changing that data cannot activate a dependency until a subsequent
-product run reads it from the trusted base. Script logic and product integration
-are exercised by the next applicable product build/E2E, not a script-only PR.
+product run reads it from the trusted base. Script-only changes must run their corresponding unit/contract tests and record
+the results for review. Product integration is exercised by the next applicable
+product build/E2E; script changes alone do not schedule a product E2E run.
 Tooling may include allowed docs and manifests; their existing checks still run.
 No light lane skips the finalizer, and `exact-assets` release acceptance stays full.
 

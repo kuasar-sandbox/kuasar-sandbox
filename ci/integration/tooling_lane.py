@@ -14,6 +14,14 @@ COMPONENT_SCRIPTS = {
     'scripts/test-preview-line.sh', 'scripts/test-delete-preview.sh', 'scripts/test-publisher.sh',
     'scripts/test-environment-tools.py', 'scripts/test-selected-go-materials.py',
 }
+PLATFORM_PYTHON = {'test/e2e/e2e'}
+
+
+def platform_harness(path):
+    return (path in PLATFORM_PYTHON or path.startswith('test/e2e/lib/') and path.endswith('.py')
+            or path.startswith('test/e2e/test_') and path.count('/') == 2 and path.endswith('.py'))
+
+
 PLATFORM_SHELLS = {'ci/runner/kuasar-ci-bpf', 'ci/runner/kuasar-ci-network'}
 
 
@@ -22,7 +30,7 @@ def allowed(repository, path):
     if not path or path.startswith('/') or any(p in ('', '.', '..', '.git') for p in parts):
         return False
     suffix = PurePosixPath(path).suffix
-    if repository == PLATFORM and path == CUTOVER:
+    if repository == PLATFORM and (path == CUTOVER or platform_harness(path)):
         return True
     if repository == PLATFORM and path in PLATFORM_SHELLS:
         return True
@@ -51,6 +59,8 @@ def run_parser(command, data):
 
 
 def parser_for(repository, path):
+    if repository == PLATFORM and path in PLATFORM_PYTHON:
+        return 'python-compile'
     if repository == PLATFORM and path == CUTOVER:
         return 'dependency-cutover-schema'
     if repository == PLATFORM and path in PLATFORM_SHELLS:
@@ -62,7 +72,7 @@ def parser_for(repository, path):
 
 def check_blob(repository, path, data):
     suffix = PurePosixPath(path).suffix
-    if suffix == '.py':
+    if suffix == '.py' or repository == PLATFORM and path in PLATFORM_PYTHON:
         # compile(), unlike ast.parse(), also rejects top-level return/break.
         # The code object is discarded. There is no import, exec or .pyc write.
         compile(data, path, 'exec', dont_inherit=True)
