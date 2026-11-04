@@ -949,9 +949,8 @@ def render_manifest(
 
 
 def retain_preview_notes(current: str, generated: str, relative: str) -> str:
-    """Finish prose before committing the source used by every producer."""
+    """Generate or retain the channel's editable prose."""
     content = prepare_notes.prepare(current, generated, relative, PLATFORM_ROOT)
-    prepare_notes.require_prepared(content, relative)
     return current if selection.read_simple_yaml(current, relative) == selection.read_simple_yaml(content, relative) else content
 
 
@@ -1005,7 +1004,6 @@ def persist_manifest(content: str, aggregate: str, *, channel: str = 'daily-prev
     if decoded != current:
         raise Pending(f"{channel}.yaml differs from the selected committed source; review and commit local edits")
     prepared = prepare_notes.prepare(current, content, relative, root)
-    prepare_notes.require_prepared(prepared, relative)
     # Preserve comments and layout on exact semantic retries as well as prose.
     if selection.read_simple_yaml(current, relative) == selection.read_simple_yaml(prepared, relative):
         if branch_sha(PLATFORM_REPOSITORY, source_ref) != source_sha:

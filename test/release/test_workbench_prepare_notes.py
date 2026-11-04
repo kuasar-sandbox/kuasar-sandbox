@@ -107,7 +107,7 @@ class PrepareNotesTests(unittest.TestCase):
         render.assert_called_once()
         self.assertEqual(self.fields(result)['selection_sha256'], self.digest(current))
 
-    def test_correction_pointer_cleared_in_all_prepare_paths(self):
+    def test_obsolete_sha_metadata_has_no_effect_on_preparation(self):
         for mode in ('auto', 'fixed'):
             current = self.with_notes(mode=mode, correction=True)
             for selected in (self.selected, self.changes()[0]):
@@ -133,13 +133,16 @@ class PrepareNotesTests(unittest.TestCase):
         self.assertNotIn(release_notes.NOTICE_END, fields['body'])
         prepare.require_prepared(result, self.relative)
 
-    def test_admission_rejects_unprepared_auto_legacy_and_correction(self):
-        for text in (self.selected, self.with_notes(digest=False), self.with_notes(digest='0' * 64),
-                     self.with_notes(correction=True), self.with_notes(mode='fixed', correction=True)):
-            with self.subTest(text=text), self.assertRaises(ValueError):
+    def test_preparation_availability_does_not_require_mode_fingerprint_or_sha(self):
+        for text in (self.with_notes(digest=False), self.with_notes(digest='0' * 64),
+                     self.with_notes(correction=True), self.with_notes(mode='fixed', correction=True),
+                     self.selected + 'notes:\n  body: |-\n    Human text.'):
+            with self.subTest(text=text):
                 prepare.require_prepared(text, self.relative)
-        prepare.require_prepared(self.with_notes(), self.relative)
-        prepare.require_prepared(self.with_notes(mode='fixed', digest='0' * 64), self.relative)
+        for text in (self.selected, self.selected + 'notes:\n  body: |-\n    ',
+                     self.selected + 'notes:\n  body: |-\n    ' + 'x' * 125001):
+            with self.subTest(text=text[:100]), self.assertRaises(ValueError):
+                prepare.require_prepared(text, self.relative)
 
     def test_real_renderer_persists_complete_manuscript_without_gh(self):
         previous = dict(self.units, sandboxer='v1.2.2', runtime='runtime-v1.2.2', vmlinux='vmlinux-v1.2.2')

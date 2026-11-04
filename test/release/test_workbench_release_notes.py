@@ -1,8 +1,7 @@
-"""Narrative adaptation preserves exact evidence and the existing body readers."""
+"""Human prose is independent of product admission and preserves exact evidence."""
 import copy
 import json
 from pathlib import Path
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -42,7 +41,7 @@ class NarrativeTests(unittest.TestCase):
         return self.git('rev-parse', 'HEAD')
 
     def narrative(self):
-        fields, url = notes.publication_notes(self.root, self.version, self.revision, self.units, self.root)
+        fields, url = notes.publication_notes(self.root, self.version)
         return notes.Narrative(self.text, fields, url)
 
     def test_complete_modes_use_exact_body_without_generated_template(self):
@@ -56,26 +55,21 @@ class NarrativeTests(unittest.TestCase):
                     self.assertEqual(narrative.text, expected)
                     self.assertEqual(narrative.fit(expected, 1), expected)
 
-    def test_legacy_stage_bridge_is_tied_to_exact_immutable_source(self):
-        original = self.revision
-        self.assertTrue(notes.legacy_admitted_source(self.root, original))
-        (self.root / 'release').mkdir()
-        (self.root / 'release/prepare_notes.py').write_text('# preparation contract\n')
-        self.git('add', 'release/prepare_notes.py')
-        self.git('commit', '-qm', 'introduce preparation')
-        self.assertFalse(notes.legacy_admitted_source(self.root, self.git('rev-parse', 'HEAD')))
-        self.assertTrue(notes.legacy_admitted_source(self.root, original))
-        with self.assertRaises(subprocess.CalledProcessError):
-            notes.legacy_admitted_source(self.root, 'f' * 40)
-
-    def test_strict_validator_rejects_new_source_without_complete_notes(self):
-        (self.root / 'release').mkdir()
-        (self.root / 'release/prepare_notes.py').write_text('# preparation contract\n')
-        self.git('add', 'release/prepare_notes.py')
-        self.git('commit', '-qm', 'introduce preparation')
+    def test_legacy_source_age_is_not_a_publication_gate(self):
+        self.assertFalse(hasattr(notes, 'legacy_admitted_source'))
         output = self.root / 'notes.md'
-        output.write_text(self.text)
-        with self.assertRaisesRegex(ValueError, 'publication requires complete manifest notes'):
+        output.write_text('Human prose without a generated title or component table.')
+        notes.validate_file(self.root / 'nonexistent-checkout', self.version, output)
+
+    def test_validator_checks_only_text_availability_marker_count_and_size(self):
+        output = self.root / 'notes.md'
+        for text in ('', '  \n', body.MARKER + '{} -->\n' + body.MARKER + '{} -->',
+                     'x' * (body.MAX_CHARACTERS + 1)):
+            output.write_text(text)
+            with self.subTest(text=text[:50]), self.assertRaises(ValueError):
+                notes.validate_file(self.root, self.version, output)
+        for text in ('Arbitrary human notes.', 'Changed prose\n' + body.MARKER + '{} -->\n'):
+            output.write_text(text)
             notes.validate_file(self.root, self.version, output)
 
     def test_windows_literal_line_endings_match_committed_and_local_readers(self):
@@ -107,20 +101,17 @@ class NarrativeTests(unittest.TestCase):
             with self.subTest(block=block), self.assertRaises(ValueError):
                 notes.selection.read_simple_yaml(self.manifest + block, 'manifest')
 
-    def test_complete_notes_correction_preserves_frozen_manifest_bridge(self):
-        correction = (f'notes:\n  mode: fixed\n  aggregate_sha: {self.revision}\n'
-                      '  body: |-\n    Full replacement including upgrade instructions.')
-        corrected = self.commit(self.manifest + correction)
-        narrative = self.narrative()
-        self.assertEqual(narrative.text, 'Full replacement including upgrade instructions.')
-        self.assertIn(corrected, narrative.url)
-        for text in (self.manifest + correction.replace(self.revision, '0' * 40),
-                     self.manifest.replace('components:', 'delivery: workbench-v1\ncomponents:') + correction,
-                     self.manifest.replace('sandboxer: v1.2.3', 'sandboxer: v2.0.0') + correction,
-                     self.manifest.replace(self.version, 'release-v9.8.8') + correction):
-            self.commit(text)
-            with self.assertRaisesRegex(ValueError, 'differs|changes'):
-                self.narrative()
+    def test_latest_matching_notes_ignore_sha_and_nonnotes_changes(self):
+        for pointer in ('a' * 40, '0' * 40, 'obsolete-not-a-sha'):
+            correction = (f'notes:\n  mode: fixed\n  aggregate_sha: {pointer}\n'
+                          '  body: |-\n    Full replacement including upgrade instructions.')
+            changed = self.manifest.replace('sandboxer: v1.2.3', 'sandboxer: v2.0.0')
+            changed = changed.replace('components:', 'delivery: workbench-v1\ncomponents:')
+            corrected = self.commit(changed + correction)
+            narrative = self.narrative()
+            self.assertEqual(narrative.text, 'Full replacement including upgrade instructions.')
+            self.assertNotIn('aggregate_sha', narrative.fields)
+            self.assertIn(corrected, narrative.url)
 
     def test_complete_notes_warn_only_on_generated_stale_references(self):
         old = 'release-v0.1.0'
@@ -150,59 +141,35 @@ class NarrativeTests(unittest.TestCase):
         subprocess.run(command + ['validate', str(self.root), self.version, str(output)], check=True, capture_output=True)
         output.write_text('Not in the manifest')
         result = subprocess.run(command + ['validate', str(self.root), self.version, str(output)], capture_output=True, text=True)
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn('differs from complete manifest', result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_export_rejects_legacy_and_oversize_without_writing(self):
+    def test_export_accepts_legacy_body_and_notice_verbatim(self):
+        output = self.root / 'notes.md'
+        notes.export_notes(self.root, self.version, output)
+        self.assertEqual(output.read_text(), '请同步升级。\n\n### Changed #12\n\nTwo lines.\n')
+        self.commit(self.manifest + f'notes:\n  aggregate_sha: stale\n  body: |-\n    Exact prose.  ')
+        notes.export_notes(self.root, self.version, output)
+        self.assertEqual(output.read_text(), 'Exact prose.  ')
+
+    def test_export_missing_body_and_oversize_fail_without_writing(self):
         output = self.root / 'notes.md'
         output.write_text('unchanged')
-        with self.assertRaisesRegex(ValueError, 'prepare complete'):
-            notes.export_notes(self.root, self.version, output)
-        self.commit(self.manifest + f'notes:\n  mode: fixed\n  aggregate_sha: {self.revision}\n  body: |-\n    Notes.')
-        with self.assertRaisesRegex(ValueError, 'only for publisher corrections'):
-            notes.export_notes(self.root, self.version, output)
+        for block in ('', 'notes:\n  upgrade_notice: |-\n    Warning only.'):
+            self.commit(self.manifest + block)
+            with self.assertRaisesRegex(ValueError, 'missing|body|text'):
+                notes.export_notes(self.root, self.version, output)
         self.commit(self.manifest + 'notes:\n  mode: fixed\n  body: |-\n    ' + 'x' * (body.MAX_CHARACTERS + 1))
         with self.assertRaisesRegex(ValueError, 'must not be truncated'):
             notes.export_notes(self.root, self.version, output)
         self.assertEqual(output.read_text(), 'unchanged')
 
-    def test_bound_validate_accepts_only_exact_corrected_manifest_prefix(self):
-        # Frozen platform remains on its legacy source; publisher carries the
-        # explicit notes-only correction with its original aggregate SHA.
-        frozen = self.root / 'frozen'
-        subprocess.run(['git', 'clone', '-q', str(self.root), str(frozen)], check=True)
-        self.commit(self.manifest + f'notes:\n  mode: fixed\n  aggregate_sha: {self.revision}\n'
-                    '  body: |-\n    Corrected full human prefix.')
+    def test_bound_validation_does_not_compare_prefix_source_or_metadata(self):
         output = self.root / 'notes.md'
         suffix = '\n' + body.MARKER + '{} -->\n'
-        output.write_text('Corrected full human prefix.' + suffix)
-        publisher_release = self.root / 'release'
-        publisher_release.mkdir()
-        for module in ('release_notes.py', 'selection.py', 'publication_body.py'):
-            shutil.copyfile(notes.ROOT / 'release' / module, publisher_release / module)
-        command = [sys.executable, '-B', str(publisher_release / 'release_notes.py'),
-                   'validate', str(frozen), self.version, str(output)]
-        subprocess.run(command, check=True, capture_output=True)
-        self.assertEqual(subprocess.check_output(['git', '-C', str(frozen), 'rev-parse', 'HEAD'],
-                                                text=True).strip(), self.revision)
-        with patch.object(notes, 'ROOT', self.root):
-            notes.validate_file(frozen, self.version, output)
-            output.write_text('Different human prose' + suffix)
-            with self.assertRaisesRegex(ValueError, 'human prefix differs'):
-                notes.validate_file(frozen, self.version, output)
-        failed = subprocess.run(command, capture_output=True, text=True)
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertIn('human prefix differs', failed.stderr)
-        output.write_text('Corrected full human prefix.' + suffix)
-        corrected_text = self.path.read_text()
-        self.commit(corrected_text.replace(self.revision, '0' * 40))
-        failed = subprocess.run(command, capture_output=True, text=True)
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertIn('notes.aggregate_sha differs', failed.stderr)
-        self.commit(corrected_text.replace('sandboxer: v1.2.3', 'sandboxer: v2.0.0'))
-        failed = subprocess.run(command, capture_output=True, text=True)
-        self.assertNotEqual(failed.returncode, 0)
-        self.assertIn('changes the admitted manifest', failed.stderr)
+        for prefix in ('Different human prose', '# Kuasar Sandbox release-v0.0.1\nOld component wording.'):
+            output.write_text(prefix + suffix)
+            with patch.object(notes, 'publication_notes', side_effect=AssertionError('no manifest gate')):
+                notes.validate_file(self.root / 'missing-source', self.version, output)
 
     def test_selection_fingerprint_is_optional_non_authoritative_metadata(self):
         for mode in ('auto', 'fixed'):
@@ -212,20 +179,9 @@ class NarrativeTests(unittest.TestCase):
             self.assertEqual(notes.Narrative(self.text, fields).text, 'Exact body.')
             self.commit(self.manifest + block)
             output = self.root / 'exported.md'
-            if mode == 'auto':
-                with self.assertRaisesRegex(ValueError, 'do not describe the current selection'):
-                    notes.export_notes(self.root, self.version, output)
-                self.assertFalse(output.exists())
-                # Historical bound bodies remain legitimate independently of
-                # optional generation bookkeeping, never test provenance.
-                output.write_text('Exact body.\n' + body.MARKER + '{} -->\n')
-                with patch.object(notes, 'ROOT', self.root):
-                    notes.validate_file(self.root, self.version, output)
-                output.unlink()
-            else:
-                notes.export_notes(self.root, self.version, output)
-                self.assertEqual(output.read_text(), 'Exact body.')
-                notes.validate_file(self.root, self.version, output)
+            notes.export_notes(self.root, self.version, output)
+            self.assertEqual(output.read_text(), 'Exact body.')
+            notes.validate_file(self.root, self.version, output)
         for digest in ('a' * 63, 'a' * 65, 'A' * 64, 'g' * 64):
             block = 'notes:\n  mode: auto\n  selection_sha256: ' + digest + '\n  body: |-\n    Text.'
             with self.subTest(digest=digest), self.assertRaisesRegex(ValueError, '64 lowercase hex'):
@@ -234,38 +190,73 @@ class NarrativeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'requires notes.mode'):
             notes.selection.read_simple_yaml(self.manifest + block, 'manifest')
 
-    def test_admitted_bytes_are_default_across_head_and_worktree_changes(self):
-        self.commit(self.manifest + self.block.replace('Two lines.', 'New notes.'))
+    def test_latest_committed_notes_win_over_old_source_and_worktree(self):
+        latest = self.commit(self.manifest + self.block.replace('Two lines.', 'New notes.'))
         self.path.write_text('uncommitted')
-        result = self.narrative()
-        self.assertIn('### Changed #12\n\nTwo lines.', result.text)
-        self.assertIn('请同步升级。', notes.inline_notice(result.text))
-        self.assertIn(self.revision + '/releases/release.yaml#L', result.url)
-        self.assertNotIn('New notes.', result.text)
+        fields, url = notes.publication_notes(self.root, self.version)
+        self.assertEqual(fields['body'], '### Changed #12\n\nNew notes.\n')
+        self.assertIn(latest + '/releases/release.yaml#L', url)
 
-    def test_correction_is_bound_to_sha_and_whole_selection(self):
-        correction = self.block.replace('Two lines.', 'Corrected.').replace(
-            'notes:\n', f'notes:\n  aggregate_sha: {self.revision}\n')
-        corrected_sha = self.commit(self.manifest + correction)
-        self.assertIn('Corrected.', self.narrative().text)
-        self.assertIn(corrected_sha, self.narrative().url)
-        for text in (self.manifest + correction.replace(self.revision, '0' * 40),
-                     self.manifest.replace('components:', 'delivery: workbench-v1\ncomponents:') + correction,
-                     self.manifest.replace('sandboxer: v1.2.3', 'sandboxer: v2.0.0') + correction):
-            self.commit(text)
-            with self.assertRaisesRegex(ValueError, 'differs|changes'):
-                self.narrative()
+    def test_historical_routing_uses_newest_matching_first_parent_snapshot(self):
+        for channel, suffix in (('release', ''), ('daily-preview', '-preview.20990101')):
+            self.path = self.root / 'releases' / (channel + '.yaml')
+            selected = self.manifest + ('preview_version: preview.20990101\n' if suffix else '')
+            self.commit(selected + 'notes:\n  body: |-\n    Original.')
+            newest = self.commit(selected + 'notes:\n  body: |-\n    Newest matching prose.  ')
+            moved = (selected.replace('preview.20990101', 'preview.20990102') if suffix
+                     else selected.replace(self.version, 'release-v9.8.8'))
+            self.commit(moved + 'notes:\n  body: |-\n    Another release.')
+            fields, url = notes.publication_notes(self.root, self.version + suffix)
+            self.assertEqual(fields['body'], 'Newest matching prose.  ')
+            self.assertIn(newest + '/releases/' + channel + '.yaml#L', url)
+            self.assertEqual(notes.publication_notes(self.root, 'release-v0.0.0' + suffix), ({}, None))
+
+    def test_latest_matching_without_notes_does_not_borrow_older_or_fallback_prose(self):
+        for channel, suffix in (('release', ''), ('daily-preview', '-preview.20990101')):
+            self.path = self.root / 'releases' / (channel + '.yaml')
+            selected = self.manifest + ('preview_version: preview.20990101\n' if suffix else '')
+            if suffix:
+                self.commit(selected + self.block)
+            fallback = self.root / (channel + '-fallback')
+            subprocess.run(['git', 'clone', '-q', str(self.root), str(fallback)], check=True)
+            self.commit(selected)
+            self.commit(selected.replace(self.version, 'release-v9.8.8') + self.block)
+            self.assertEqual(notes.publication_notes(self.root, self.version + suffix, fallback), ({}, None))
+
+    def test_missing_publisher_version_uses_optional_platform_history(self):
+        fallback = self.root / 'fallback'
+        subprocess.run(['git', 'clone', '-q', str(self.root), str(fallback)], check=True)
+        self.git('checkout', '--orphan', 'publisher')
+        self.git('rm', '-rf', 'releases')
+        (self.root / 'releases').mkdir()
+        self.commit(self.manifest.replace(self.version, 'release-v10.0.0') + self.block)
+        fields, url = notes.publication_notes(self.root, self.version, fallback)
+        self.assertEqual(fields['body'], '### Changed #12\n\nTwo lines.\n')
+        self.assertIn(self.revision, url)
+        self.assertEqual(notes.publication_notes(self.root, self.version), ({}, None))
+
+    def test_merged_side_branch_notes_do_not_override_first_parent_history(self):
+        original = self.revision
+        self.git('branch', 'side')
+        self.commit(self.manifest.replace(self.version, 'release-v10.0.0') + self.block)
+        self.git('checkout', '-q', 'side')
+        self.commit(self.manifest + self.block.replace('Two lines.', 'Side branch prose.'))
+        self.git('checkout', '-q', '-')
+        self.git('merge', '-q', '--no-ff', '-s', 'ours', 'side', '-m', 'merge side without prose')
+        fields, url = notes.publication_notes(self.root, self.version)
+        self.assertEqual(fields['body'], '### Changed #12\n\nTwo lines.\n')
+        self.assertIn(original, url)
 
     def test_preview_is_independent_and_absent_notes_keep_generated_text(self):
         self.path = self.path.with_name('daily-preview.yaml')
         preview = 'preview.20990101'
         sha = self.commit(self.manifest + 'preview_version: ' + preview + '\n')
-        fields, url = notes.publication_notes(self.root, self.version + '-' + preview, sha, self.units, self.root)
+        fields, url = notes.publication_notes(self.root, self.version + '-' + preview)
         self.assertEqual(notes.Narrative(self.text, fields, url).text, self.text)
         for field in ('body', 'upgrade_notice'):
             sha = self.commit(self.manifest + 'preview_version: ' + preview +
                               '\nnotes:\n  ' + field + ': |\n    Preview only.\n')
-            fields, _ = notes.publication_notes(self.root, self.version + '-' + preview, sha, self.units, self.root)
+            fields, _ = notes.publication_notes(self.root, self.version + '-' + preview)
             self.assertEqual(fields, {field: 'Preview only.\n'})
 
     def test_reject_malformed_fields_and_reserved_markers(self):
@@ -336,32 +327,26 @@ class NarrativeTests(unittest.TestCase):
             body.binding_text('x' * 125000, binding, '\n', fit_notes=fit)
         fit.assert_not_called()
 
-    def test_budget_links_body_to_its_exact_lines_and_retains_notice_and_evidence(self):
+    def test_authored_body_and_notice_never_shrink_to_a_manifest_link(self):
         record = self.binding()
         original = copy.deepcopy(record)
-        narrative = self.narrative()
-        narrative = notes.Narrative(self.text, dict(narrative.fields, body='Long body. ' * 2000), narrative.url)
-        with patch.object(body, 'MAX_CHARACTERS', 2500):
-            result = body.binding_text(narrative.text + '\n', record, '\n',
+        fields = {'body': 'Long body. ' * 2000, 'upgrade_notice': '请同步升级。  '}
+        narrative = notes.Narrative(self.text, fields, 'https://example.invalid/immutable')
+        expected = fields['upgrade_notice'] + '\n\n' + fields['body']
+        self.assertEqual(narrative.text, expected)
+        self.assertEqual(narrative.fit(expected, 2500), expected)
+        with patch.object(body, 'MAX_CHARACTERS', 2500), self.assertRaisesRegex(ValueError, 'must not be truncated'):
+            body.binding_text(narrative.text + '\n', record, '\n',
                 reserve_registry_version=self.version, fit_notes=narrative.fit)
-        self.assertIn(narrative.url, result)
-        self.assertLess(result.index(narrative.notice), result.index(narrative.url))
-        self.assertIn('Generated facts.', result)
-        self.assertEqual(json.loads(result.split(body.MARKER)[1].split(' -->')[0]), original)
-        self.assertEqual(original, record)
+        self.assertEqual(record, original)
 
-    def test_minimum_delivery_summary_retains_actual_comparison_and_notice(self):
-        url = 'https://example.invalid/committed-manifest#L12-L18'
-        compare = 'https://github.com/kuasar-sandbox/sandboxer/compare/v1...v2'
-        generated = self.text + 'Generated detail.\n' * 2000 + '\n### sandboxer\n[Full comparison](' + compare + ')\n'
-        fields = {'body': 'Long prose. ' * 2000, 'upgrade_notice': 'Upgrade both components.'}
-        narrative = notes.Narrative(generated, fields, url, version=self.version, units=self.units)
-        adjusted = narrative.fit(narrative.text, 5000)
-        self.assertLessEqual(len(adjusted), 5000)
-        self.assertEqual(notes.inline_notice(adjusted), narrative.notice)
-        self.assertIn(compare, adjusted)
-        self.assertIn(url, adjusted)
-        notes.validate(adjusted, self.version, self.units)
+    def test_notice_only_keeps_warning_and_stage_text_without_title_contract(self):
+        warning = 'Upgrade both components.  \n请保留。'
+        staged = 'Arbitrary staged prose without a generated title.  \n'
+        narrative = notes.Narrative(staged, {'upgrade_notice': warning}, 'url')
+        expected = warning + '\n\n' + staged
+        self.assertEqual(narrative.text, expected)
+        self.assertEqual(narrative.fit(expected, 1), expected)
 
     def test_irreducible_notice_or_evidence_rejects_publication(self):
         for long_notice in (True, False):
@@ -383,7 +368,18 @@ class NarrativeTests(unittest.TestCase):
         self.assertEqual(notes.inline_notice(compact), notice)
         self.assertLess(len(compact), len(original))
 
-    def test_generator_cli_keeps_normal_text_and_adapts_large_commit_inventory(self):
+    def test_no_fields_staged_fallback_never_compacts_or_replaces_prefix(self):
+        row = '- `aaaaaaaaaaaa` title ([commit](https://github.com/kuasar-sandbox/sandboxer/commit/' + 'a' * 40 + '))\n'
+        staged = ('### sandboxer\nSelected version: `v1` → `v2`.\n' + row * 100 +
+                  '[Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v1...v2)\n')
+        narrative = notes.Narrative(staged, {}, None)
+        self.assertEqual(narrative.text, staged)
+        with patch.object(notes, 'compact_commits', side_effect=AssertionError('never rewrite staged prose')):
+            self.assertEqual(narrative.fit(staged, 1), staged)
+            with patch.object(body, 'MAX_CHARACTERS', 2500), self.assertRaisesRegex(ValueError, 'must not be truncated'):
+                body.binding_text(staged, self.binding(), '\n', fit_notes=narrative.fit)
+
+    def test_compatibility_cli_checks_size_without_rewriting_any_text(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / 'notes.md'
             command = [sys.executable, '-B', str(notes.ROOT / 'release/release_notes.py'), str(path)]
@@ -394,8 +390,10 @@ class NarrativeTests(unittest.TestCase):
             text = '### accelerator\nSelected version: `v1` → `v2`.\n' + row * 1000 + '[Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/v1...v2)\n'
             self.assertGreater(len(text), body.MAX_CHARACTERS)
             path.write_text(text)
-            subprocess.run(command, check=True, capture_output=True)
-            self.assertEqual(path.read_text(), notes.compact_commits(text))
+            result = subprocess.run(command, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('must not be truncated', result.stderr)
+            self.assertEqual(path.read_text(), text)
             path.write_text('Unknown prose\n' * 10000)
             result = subprocess.run(command, capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
@@ -446,27 +444,48 @@ class ReviewedBindingTests(unittest.TestCase):
                 binder.bind(self.root, self.plan, self.validation, self.results, platform=self.root)
         self.assertEqual((self.root / 'release-notes.md').read_text(), 'Original notes\n')
 
-    def test_prefeature_stage_keeps_its_original_legacy_contract(self):
+    def test_arbitrary_human_text_never_bypasses_machine_corruption(self):
         binder = test_workbench_binding.binder
-        with patch.object(notes, 'publication_notes', return_value=({}, None)), \
-             patch.object(notes, 'legacy_admitted_source', return_value=True) as legacy:
+        for corruption in ('validation', 'source-records', 'workbench'):
+            validation, results = copy.deepcopy(self.validation), copy.deepcopy(self.results)
+            source = self.root / 'source-records.json'
+            original = source.read_text()
+            if corruption == 'validation':
+                validation['architectures']['x86_64']['plan_id'] = '0' * 64
+            elif corruption == 'source-records':
+                source.write_text('{}')
+            else:
+                results['x86_64']['image_id'] = 'sha256:' + '0' * 64
+            try:
+                with self.subTest(corruption=corruption), patch.object(notes, 'publication_notes',
+                        return_value=({'body': 'Any human text.'}, 'url')):
+                    with self.assertRaises(ValueError):
+                        binder.bind(self.root, self.plan, validation, results, platform=self.root)
+                self.assertEqual((self.root / 'release-notes.md').read_text(), 'Original notes\n')
+            finally:
+                source.write_text(original)
+
+    def test_missing_manifest_notes_preserve_stage_text_without_source_age_gate(self):
+        binder = test_workbench_binding.binder
+        with patch.object(notes, 'publication_notes', return_value=({}, None)) as selected:
             binder.bind(self.root, self.plan, self.validation, self.results, platform=self.root)
-        legacy.assert_called_once_with(self.root, self.sha)
+        selected.assert_called_once_with(notes.ROOT, self.version, self.root)
         result = (self.root / 'release-notes.md').read_text()
         self.assertEqual(result.split(body.MARKER)[0], 'Original notes\n\n')
         restored = json.loads(result.split(body.MARKER)[1].split(' -->')[0])
         self.assertEqual(restored['validation_plan'], self.plan)
         self.assertEqual(restored['workbench'], self.results)
 
-    def test_publication_rejects_unprepared_legacy_instead_of_generated_fallback(self):
+    def test_missing_mode_or_stale_bookkeeping_does_not_gate_binding(self):
         binder = test_workbench_binding.binder
-        before = {path: path.read_bytes() for path in self.root.rglob('*') if path.is_file()}
-        for fields in ({}, {'body': 'Old highlight.'}, {'upgrade_notice': 'Old notice.'}):
-            with self.subTest(fields=fields), patch.object(notes, 'publication_notes', return_value=(fields, 'url')), \
-                 patch.object(notes, 'legacy_admitted_source', return_value=False):
-                with self.assertRaisesRegex(ValueError, 'publication requires complete manifest notes'):
-                    binder.bind(self.root, self.plan, self.validation, self.results, platform=self.root)
-            self.assertEqual({path: path.read_bytes() for path in before}, before)
+        for fields in ({'body': 'Full human text.'},
+                       {'mode': 'auto', 'selection_sha256': '0' * 64, 'body': 'Full human text.'}):
+            (self.root / 'release-notes.md').write_text('Original notes\n')
+            with self.subTest(fields=fields), patch.object(notes, 'publication_notes', return_value=(fields, 'url')):
+                binder.bind(self.root, self.plan, self.validation, self.results, platform=self.root)
+            result = (self.root / 'release-notes.md').read_text()
+            self.assertEqual(result.split(body.MARKER)[0], 'Full human text.\n')
+            self.assertEqual(json.loads(result.split(body.MARKER)[1].split(' -->')[0])['validation_plan'], self.plan)
 
 
 if __name__ == '__main__':

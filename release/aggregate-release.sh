@@ -338,8 +338,7 @@ expected_asset_names() {
 validate_bundle() {
   [ "$#" -eq 2 ] || { [ "$#" -eq 3 ] && { [ "$3" = --publication ] || [ "$3" = --historical ]; }; } \
     || release_fail "usage: aggregate-release.sh validate <release-version> <bundle-dir> [--publication|--historical]"
-  local version="$1" bundle="$2" notes_check=validate
-  [ "${3:-}" != --historical ] || notes_check=validate-history
+  local version="$1" bundle="$2"
   validate_aggregate_version "$version"
   [ -d "$bundle/assets" ] || release_fail "aggregate assets directory is missing"
   [ -s "$bundle/release-notes.md" ] || release_fail "aggregate release notes are missing"
@@ -351,7 +350,7 @@ validate_bundle() {
   resolve_selection "$PLATFORM_SOURCE_ROOT" "$version" "$expected_selection"
   cmp -s "$expected_selection" "$bundle/selection.tsv" \
     || release_fail "aggregate selection does not match project repository main"
-  python3 -B "$ROOT/release/release_notes.py" "$notes_check" "$PLATFORM_SOURCE_ROOT" \
+  python3 -B "$ROOT/release/release_notes.py" validate "$PLATFORM_SOURCE_ROOT" \
     "$version" "$bundle/release-notes.md"
   local unit tag
   local arches=() arch

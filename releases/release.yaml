@@ -10,7 +10,6 @@ components:
   vmlinux: vmlinux-v0.1.5
 notes:
   mode: fixed
-  aggregate_sha: 4108128b42c1b69965b033ef22b35d7a3a49c4be
   body: |
     # Kuasar Sandbox release-v0.1.11
 
