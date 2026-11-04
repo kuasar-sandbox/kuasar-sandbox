@@ -127,6 +127,27 @@ class DeletePreviewTests(unittest.TestCase):
                 subject.collect(TAG, SHA, 'gc')
             self.assertEqual(self.calls, ['registry'])
 
+    def test_download_counts_and_asset_order_do_not_block_gc(self):
+        def registry(*args):
+            self.calls.append('registry')
+            self.release['assets'].reverse()
+            self.release['assets'][0]['download_count'] = 10
+        self.mocks['collect'].side_effect = registry
+        self.assertEqual(subject.collect(TAG, SHA, 'gc')['deleted'], ['release', 'tag'])
+
+    def test_changed_asset_identity_after_registry_work_retains_release(self):
+        original = copy.deepcopy(self.release)
+        for field, value in [('id', 99), ('name', 'renamed'), ('size', 99),
+                             ('digest', 'sha256:'+'f'*64), ('state', 'starter')]:
+            self.release = copy.deepcopy(original); self.calls.clear()
+            def registry(*args):
+                self.calls.append('registry')
+                self.release['assets'][0][field] = value
+            self.mocks['collect'].side_effect = registry
+            with self.assertRaisesRegex(ValueError, 'Release changed'):
+                subject.collect(TAG, SHA, 'gc')
+            self.assertEqual(self.calls, ['registry'])
+
     def test_incomplete_new_release_can_be_removed_after_ownership_checks(self):
         self.release['assets'].pop()
         self.assertEqual(subject.collect(TAG, SHA, 'incomplete')['deleted'], ['release', 'tag'])
