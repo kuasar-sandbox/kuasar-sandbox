@@ -693,7 +693,7 @@ class ArtifactContracts(unittest.TestCase):
                     for unit in producer.selection.UNITS}
         cases = {}
         for name, root in roots.items():
-            (root / 'go.mod').write_text('module example.test/' + name + '\ngo 1.22\n')
+            (root / 'go.mod').write_text('module github.com/kuasar-sandbox/' + name + '\ngo 1.22\n')
             (root / 'docs').mkdir(exist_ok=True)
             (root / 'README.md').write_text('Fixture owner guide\n')
             (root / 'README_zh.md').write_text('Fixture owner guide\n')
@@ -1267,7 +1267,8 @@ class ArtifactContracts(unittest.TestCase):
             select_plan(self.plan, [owner])
             result = self.root / (owner + "-source-result.json")
             with patch.object(source_checks.source_inputs, "copy_run_inputs", side_effect=restore_using(checkout)), \
-                 patch.object(source_checks.subprocess, "run", side_effect=execute):
+                 patch.object(source_checks.subprocess, "run", side_effect=execute), \
+                 patch.object(source_checks, "workspace", side_effect=lambda root, owner, env: dict(env, GOWORK="off")):
                 with self.assertRaisesRegex(ValueError, "required source check failed: connector-unit-race-vet"):
                     source_checks.execute(self.plan, self.root / (owner + "-sources"), result)
             record = json.loads(result.read_text())

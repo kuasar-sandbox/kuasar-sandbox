@@ -90,6 +90,7 @@ class SourceChecksTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, failure[1] if failure and command == failure[0] else 0)
         with patch.object(SUBJECT.source_inputs, "copy_run_inputs", side_effect=restore_using(self.checkout)), \
              patch.object(SUBJECT.subprocess, "run", side_effect=run), \
+             patch.object(SUBJECT, "workspace", side_effect=lambda root, owner, env: dict(env, GOWORK="off")), \
              patch.dict(os.environ, {"TMPDIR": "/build/t"}):
             SUBJECT.execute(self.plan, self.sources, self.output, group=group)
         return commands
@@ -322,7 +323,8 @@ class SourceChecksTests(unittest.TestCase):
                         return real_run(command, cwd=cwd, env=env, timeout=10)
                     return subprocess.CompletedProcess(command, 0)
                 with patch.object(SUBJECT.source_inputs, "copy_run_inputs", side_effect=restore_using(checkout)), \
-                     patch.object(SUBJECT.subprocess, "run", side_effect=run):
+                     patch.object(SUBJECT.subprocess, "run", side_effect=run), \
+                     patch.object(SUBJECT, "workspace", side_effect=lambda root, owner, env: dict(env, GOWORK="off")):
                     SUBJECT.execute(self.plan, self.sources, self.output)
                 self.assertEqual((self.sources / "connector/executed").read_text(), checks + "\n")
                 self.assertEqual((self.sources / "connector/scripts/ci-source-checks.sh").read_text(), script)
@@ -397,7 +399,7 @@ class SourceChecksTests(unittest.TestCase):
             (source / "README").write_text("source fixture\n")
             files = ["README"]
             if owner != "platform":
-                (source / "go.mod").write_text("module example.test/" + owner + "\n\ngo 1.26.0\n")
+                (source / "go.mod").write_text("module github.com/kuasar-sandbox/" + owner + "\n\ngo 1.26.0\n")
                 files.append("go.mod")
             for command in (["git", "init", "--quiet", source],
                             ["git", "-C", source, "config", "user.name", "Chen Xiaohui"],
@@ -413,22 +415,16 @@ class SourceChecksTests(unittest.TestCase):
                           shutil.copytree(upstreams[target.name], target))):
             SUBJECT.materialize(self.plan, self.sources, self.output)
 
-    def executor(self, seen, *, bad_workspace=False):
+    def executor(self, seen):
         real_run = subprocess.run
         def run(command, **kwargs):
             seen.append((command, kwargs))
-            if command[0] == "git":
+            if command[0] == "git" or Path(command[0]).name == "go":
                 return real_run(command, **kwargs)
-            if command[:3] == ["go", "work", "init"]:
-                (self.sources / "go.work").write_text("go 1.26.0\nuse ./connector\n")
-            if command[:3] == ["go", "work", "edit"]:
-                use = [{"DiskPath": "./connector"}]
-                if bad_workspace:
-                    use.append({"DiskPath": "../other"})
-                return subprocess.CompletedProcess(command, 0, stdout=json.dumps({"Use": use}))
             return subprocess.CompletedProcess(command, 0)
         return run
 
+    @unittest.skipUnless(shutil.which("go"), "Go compiler required")
     def test_fresh_materialized_sources_verify_git_and_reuse_exact_workspace(self):
         self.real_sources()
         seen = []
@@ -438,10 +434,12 @@ class SourceChecksTests(unittest.TestCase):
             SUBJECT.execute(self.plan, self.sources, self.output, materialized=True)
             SUBJECT.execute(self.plan, self.sources, self.output, materialized=True)
             checkout.assert_not_called()
-        self.assertEqual(sum(command[:3] == ["go", "work", "init"] for command, _ in seen), 1)
+        self.assertEqual(sum(Path(command[0]).name == "go" and command[1:3] == ["work", "init"] for command, _ in seen), 1)
         for command, kwargs in seen:
-            if command[0] in ("bash", "make"):
-                self.assertEqual(kwargs["env"]["GOWORK"], str(self.sources / "go.work"))
+            if command[0] == "bash":
+                self.assertEqual(kwargs["env"]["GOWORK"], str(self.sources / ".ci/go-workspaces/connector/go.work"))
+            elif command[0] == "make":
+                self.assertEqual(kwargs["env"]["GOWORK"], "off")
         self.assertEqual(self.result()["sources"]["connector"], self.plan["test_revisions"]["connector"])
 
     def test_untracked_source_injection_fails_before_any_compiler(self):
@@ -453,13 +451,17 @@ class SourceChecksTests(unittest.TestCase):
                 SUBJECT.execute(self.plan, self.sources, self.output, materialized=True)
         self.assertTrue(all(command[0] == "git" for command, _ in seen))
 
-    def test_workspace_cannot_add_unselected_module_before_checks(self):
+    @unittest.skipUnless(shutil.which("go"), "Go compiler required")
+    def test_workspace_cannot_add_unselected_module_before_owner_checks(self):
         self.real_sources()
+        env = SUBJECT.workspace(self.sources, 'connector', dict(os.environ))
+        path = Path(env['GOWORK'])
+        path.write_text(path.read_text() + '\nuse ' + str(self.sources/'platform') + '\n')
         seen = []
-        with patch.object(SUBJECT.subprocess, "run", side_effect=self.executor(seen, bad_workspace=True)):
-            with self.assertRaisesRegex(ValueError, "dependency closure"):
+        with patch.object(SUBJECT.subprocess, "run", side_effect=self.executor(seen)):
+            with self.assertRaisesRegex(ValueError, "selected module closure"):
                 SUBJECT.execute(self.plan, self.sources, self.output, materialized=True)
-        self.assertEqual(self.result()["checks"], [])
+        self.assertNotIn('connector-unit-race-vet', [row['name'] for row in self.result()['checks']])
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import sys
 import tempfile
 
 import artifacts
+import go_workspace
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'release'))
@@ -20,6 +21,10 @@ def build_owner(root, arch, output, environment, row, run=None):
     artifacts.require(output.is_dir() and not output.is_symlink() and not list(output.iterdir()),
                       'helper recipe requires a fresh output directory')
     if declared['recipe'] is not None:
+        if root.name in ('sandboxer', 'orchestrator'):
+            environment = go_workspace.helper_environment(root.parent, root.name, environment)
+        elif (root / 'go.mod').is_file() and root.name != 'platform':
+            environment = go_workspace.configure(root.parent, [root.name], environment)
         command = ['bash', str(root / declared['recipe']), arch, str(output)]
         if run is None:
             subprocess.run(command, cwd=root, env=environment, check=True)

@@ -389,18 +389,34 @@ class FrozenReleaseGates(unittest.TestCase):
                 status,result=self.run_gate()
                 self.assertNotEqual(status,0);self.assertEqual(result['commands'],[])
 
+    @unittest.skipUnless(shutil.which('go'), 'Go compiler required')
     def test_workspace_and_receipt_mutation_are_rejected_after_command(self):
         root=self.sources/'connector'
-        for target in ('go.work','.source-checks.json'):
+        (root/'go.mod').write_text('module github.com/kuasar-sandbox/connector\ngo 1.26.1\n')
+        for target in ('.ci/go-workspaces/connector/go.work','.source-checks.json'):
             with self.subTest(target=target):
                 (root/'Makefile').write_text('test-release:\n\t@echo changed > ../'+target+'\n')
                 git(root,'add','.');git(root,'commit','-qm','Mutate fixed evidence')
-                self.plan(['connector']);self.output=self.root/('changed-'+target)
+                self.plan(['connector']);self.output=self.root/('changed-'+Path(target).name)
                 status,result=self.run_gate()
                 self.assertNotEqual(status,0);self.assertEqual(len(result['commands']),1)
                 self.assertEqual(result['commands'][0]['exit_code'],0)
                 self.assertEqual((self.sources/target).read_text(),'changed\n')
-                if target=='go.work': (self.sources/target).unlink()
+                if target.endswith('go.work'): (self.sources/target).unlink()
+
+    @unittest.skipUnless(shutil.which('go'), 'Go compiler required')
+    def test_real_owner_go_module_uses_verified_closure_without_root_workspace(self):
+        root=self.sources/'connector'
+        (root/'go.mod').write_text('module github.com/kuasar-sandbox/connector\ngo 1.26.1\n')
+        (root/'Makefile').write_text('test-release:\n\t@test "$${GOWORK}" != off\n\t@go list -m > "$${EXECUTED}"\n')
+        git(root,'add','.');git(root,'commit','-qm','Real Go owner release gate')
+        self.plan(['connector'])
+        self.env['GOWORK']='off'
+        status,result=self.run_gate()
+        self.assertEqual(status,0,result)
+        self.assertFalse((self.sources/'go.work').exists())
+        self.assertEqual((self.root/'executed').read_text().strip(),'github.com/kuasar-sandbox/connector')
+        self.assertTrue((self.sources/'.ci/go-workspaces/connector/go.work').is_file())
 
     def test_explicit_python_syntax_check_keeps_source_clean(self):
         root=self.sources/'connector'

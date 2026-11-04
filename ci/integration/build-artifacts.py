@@ -15,6 +15,7 @@ import artifacts
 import source_inputs
 import build_helpers
 import build_demo_wheels
+import go_workspace
 
 ROOT = Path(__file__).resolve().parents[2]
 LIBRARIES = {"sandboxer": ("accelerator", "connector"), "guest-runtime": ("accelerator",),
@@ -58,12 +59,8 @@ def build_records(plan, arch):
     return records
 
 
-def configure_workspace(root):
-    modules = ["./" + owner.name for owner in sorted(root.iterdir())
-               if owner.is_dir() and (owner / "go.mod").is_file()]
-    if modules:
-        # Compiler/toolchain selection runs only inside the build environment.
-        run(["go", "work", "init", *modules], cwd=root, environment={**os.environ, "GOWORK": "off"})
+def configure_workspace(root, owners, environment):
+    return go_workspace.configure(root, owners, environment)
 
 
 def helper_owners(plan, arch):
@@ -145,7 +142,6 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
         verify_materialized(plan, arch, sources)
     else:
         materialize(plan, arch, sources)
-    configure_workspace(sources)
     (output / "bin").mkdir(parents=True)
     environment.update(TARGET_ARCH=arch, KUASAR_WORKSPACE_ROOT=str(sources))
     lane = plan["lanes"][arch]
@@ -164,7 +160,8 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
         if name in ("cloud-hypervisor", "vmlinux", "sandbox-runtime.bundle"):
             continue
         owner = "guest-runtime" if artifacts.PRODUCTS[name] == "runtime" else artifacts.PRODUCTS[name]
-        run(["make", "-C", sources / owner, f"TARGET_ARCH={arch}", name], environment=environment)
+        selected = configure_workspace(sources, [owner], environment)
+        run(["make", "-C", sources / owner, f"TARGET_ARCH={arch}", name], environment=selected)
     for name in lane["products"]:
         if name == "sandbox-runtime.bundle":
             continue
@@ -203,7 +200,7 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
                 mkfs = selected("mkfs.erofs", work / "baseline/bin/mkfs.erofs")
                 artifacts.require(mkfs.is_file(), "legacy runtime requires its selected native generator")
                 command.append(f"GUEST_MKFS_EROFS={mkfs}")
-            run(command, environment=environment)
+            run(command, environment=configure_workspace(sources, ["guest-runtime"], environment))
             shutil.copy2(sources / "guest-runtime/bin" / arch / "sandbox-runtime.bundle", output / "bin/sandbox-runtime.bundle")
     for owner in plan["test_overlays"]:
         destination = output / artifacts.test_overlay_root(owner)
@@ -223,9 +220,7 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
         build_demo_wheels.build(demo, arch, demo / 'wheels' / arch)
     if helpers:
         helper_source = helper_sources(plan, arch, sources)
-        configure_workspace(helper_source)
-        helper_environment = dict(environment, GOWORK=str(helper_source / 'go.work'))
-        build_helpers.build(helper_source, arch, output / "helpers", helpers, helper_environment, plan['helper_contract'])
+        build_helpers.build(helper_source, arch, output / "helpers", helpers, environment, plan['helper_contract'])
     # Match the existing release packagers' executable/data modes independently
     # of the caller's umask. Tar transport preserves these through Actions.
     for name in artifacts.tree_files(output):

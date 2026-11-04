@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import subprocess
 import struct
+import shutil
+import go_workspace
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -142,9 +144,7 @@ class WorkbenchBuild(unittest.TestCase):
                 self.assertEqual(fetched["test-helpers/orchestrator"], "c" * 40)
                 self.assertEqual(builder.helper_sources(plan, "x86_64", sources), sources / "test-helpers")
                 self.assertEqual(builder.test_source(plan, "x86_64", sources, "orchestrator"), sources / "test-overlays/orchestrator")
-                builder.configure_workspace(sources)
-                self.assertEqual(run.call_args.args[0][:3], ["go", "work", "init"])
-                self.assertEqual(run.call_args.kwargs["environment"]["GOWORK"], "off")
+                self.assertFalse((sources / ".ci/go-workspaces").exists())
 
     def test_changed_materialized_revision_is_rejected_before_compilation(self):
         plan = self.plan()
@@ -248,6 +248,110 @@ class WorkbenchBuild(unittest.TestCase):
                 self.assertEqual(set(record['helpers']), built_names)
                 self.assertTrue(all(set(row) == {'owner', 'env', 'cases', 'size', 'sha256', 'mode'}
                                     for row in record['helpers'].values()))
+
+
+
+@unittest.skipUnless(shutil.which('go'), 'Go compiler required')
+class WorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory(prefix='selected-go-')
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.env = dict(os.environ, GOWORK='off', GOPROXY='off', GOSUMDB='off')
+        for owner in go_workspace.DEPENDENCIES:
+            module = self.root / owner; module.mkdir()
+            (module / 'go.mod').write_text('module github.com/kuasar-sandbox/' + owner + '\n\ngo 1.26.1\n')
+        (self.root / 'accelerator/selected.go').write_text('package accelerator\nconst Selected = "fixed-local-source"\n')
+        (self.root / 'sandboxer/go.mod').write_text('module github.com/kuasar-sandbox/sandboxer\ngo 1.26.1\nrequire github.com/kuasar-sandbox/accelerator v0.1.10\n')
+        (self.root / 'sandboxer/main.go').write_text('package main\nimport ("fmt"; "github.com/kuasar-sandbox/accelerator")\nfunc main() { fmt.Println(accelerator.Selected) }\n')
+        self.before = {p: p.read_bytes() for p in self.root.glob('*/go.mod')}
+
+    def tearDown(self):
+        # Workspace generation and builds must not rewrite maintained manifests.
+        if getattr(self, 'check_manifests', True):
+            self.assertEqual({p: p.read_bytes() for p in self.before}, self.before)
+        self.assertEqual(list(self.root.glob('*/go.sum')), [])
+
+    def test_explicit_closures_do_not_include_uncompiled_modules(self):
+        for owner, names in [('sandboxer', {'sandboxer','accelerator','connector'}),
+                             ('orchestrator', {'orchestrator','sandboxer','accelerator','connector'}),
+                             ('guest-runtime', {'guest-runtime','accelerator'})]:
+            env = go_workspace.configure(self.root, [owner], self.env)
+            doc = json.loads(subprocess.check_output(['go','work','edit','-json',env['GOWORK']], env=env))
+            self.assertEqual({Path(x['DiskPath']).name for x in doc['Use']}, names)
+            self.assertFalse(doc.get('Replace'))
+            self.assertEqual(go_workspace.configure(self.root, [owner], self.env)['GOWORK'], env['GOWORK'])
+
+    def test_build_uses_selected_local_dependency_despite_inherited_off(self):
+        env = go_workspace.configure(self.root, ['sandboxer'], self.env)
+        executable = self.root / 'probe'
+        subprocess.run(['go', 'build', '-o', str(executable), '.'], cwd=self.root/'sandboxer', env=env, check=True)
+        self.assertEqual(subprocess.check_output([executable], text=True).strip(), 'fixed-local-source')
+        info = subprocess.check_output(['go','version','-m',executable], text=True)
+        self.assertIn('github.com/kuasar-sandbox/accelerator\t(devel)', info)
+
+    def test_legacy_sandboxer_make_override_keeps_recipe_and_selected_modules(self):
+        recipe = self.root / 'sandboxer/Makefile'
+        recipe.write_text('GO := go\nall:\n\tGOWORK=off $(GO) build -o ../probe .\n')
+        before = recipe.read_bytes()
+        env = go_workspace.helper_environment(self.root, 'sandboxer', self.env)
+        subprocess.run(['make'], cwd=recipe.parent, env=env, check=True)
+        self.assertEqual(subprocess.check_output([self.root/'probe'], text=True).strip(), 'fixed-local-source')
+        self.assertEqual(recipe.read_bytes(), before)
+
+    def test_legacy_explicit_go_entry_overrides_off_but_rejects_external_modules(self):
+        env = go_workspace.helper_environment(self.root, 'orchestrator', self.env)
+        env['GOWORK'] = 'off'
+        subprocess.run([env['KUASAR_E2E_GO'], '-C', str(self.root/'sandboxer'), 'build', '-o', str(self.root/'probe'), '.'], env=env, check=True)
+        external = self.root / 'external'; external.mkdir(); (external/'go.mod').write_text('module example.invalid/external\ngo 1.26.1\n')
+        result = subprocess.run([env['KUASAR_E2E_GO'],'-C='+str(external),'env','GOWORK'], env=env, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b'outside its selected', result.stderr)
+        self.assertEqual(self.env['GOWORK'], 'off')
+
+    def test_source_raw_go_uses_selected_modules_and_preserves_external_isolation(self):
+        env = go_workspace.helper_environment(self.root, 'orchestrator', self.env, source_checks=True)
+        env['GOWORK'] = 'off'
+        subprocess.run(['go','build','-o',str(self.root/'raw-probe'),'.'], cwd=self.root/'sandboxer', env=env, check=True)
+        self.assertEqual(subprocess.check_output([self.root/'raw-probe'], text=True).strip(), 'fixed-local-source')
+        external = self.root/'independent'; external.mkdir()
+        (external/'go.mod').write_text('module example.invalid/independent\ngo 1.26.1\n')
+        self.assertEqual(subprocess.check_output(['go','env','GOWORK'], cwd=external, env=env, text=True).strip(), 'off')
+        tool = self.root/'orchestrator/validator.go'
+        tool.write_text('package main\nimport "fmt"\nfunc main() { fmt.Println("isolated-validator") }\n')
+        isolated = dict(env, GO111MODULE='off')
+        self.assertEqual(subprocess.check_output(['go','run',str(tool)], cwd=tool.parent,
+                        env=isolated, text=True).strip(), 'isolated-validator')
+        env['GOWORK'] = str(self.root/'unexpected.work')
+        result = subprocess.run(['go','env','GOWORK'], cwd=external, env=env, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_missing_module_and_wrong_module_path_fail(self):
+        self.check_manifests = False
+        module = self.root/'connector/go.mod'; module.unlink()
+        with self.assertRaisesRegex(ValueError, 'missing local'):
+            go_workspace.configure(self.root, ['sandboxer'], self.env)
+        module.write_text('module example.invalid/wrong\ngo 1.26.1\n')
+        with self.assertRaisesRegex(ValueError, 'module path'):
+            go_workspace.configure(self.root, ['sandboxer'], self.env)
+
+    def test_existing_workspace_cannot_add_unselected_module_or_replace(self):
+        env = go_workspace.configure(self.root, ['sandboxer'], self.env)
+        path = Path(env['GOWORK']); original = path.read_text()
+        for extra in ('\nuse '+str(self.root/'guest-runtime')+'\n', '\nreplace example.invalid/module => ../elsewhere\n'):
+            path.write_text(original+extra)
+            with self.assertRaisesRegex(ValueError, 'selected module closure'):
+                go_workspace.configure(self.root, ['sandboxer'], self.env)
+        path.write_text(original)
+
+    def test_symlink_module_and_unknown_owner_fail(self):
+        self.check_manifests = False
+        shutil.rmtree(self.root/'connector')
+        (self.root/'connector').symlink_to(self.root/'accelerator', target_is_directory=True)
+        with self.assertRaisesRegex(ValueError, 'missing local'):
+            go_workspace.configure(self.root, ['sandboxer'], self.env)
+        for owners in (['vmlinux'], ['go-erofs'], []):
+            with self.assertRaises(ValueError): go_workspace.configure(self.root, owners, self.env)
 
 
 

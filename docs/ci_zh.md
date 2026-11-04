@@ -181,6 +181,8 @@ exact-assets 模式直接消费 platform 包中的同一布局。两条路径都
 首段只能是 `basic`、`storage`、`image`、`network`、`sandbox`、`snapshot`、`orchestrator`、`builder` 或 `telemetry`。
 内部 CI shard 按 suite 分组精确文件，plan 在执行前记录所选用例和架构排除项。
 
+Go 构建通过 `ci/integration/go_workspace.py` 统一生成并验证显式模块闭包：sandboxer 使用 sandboxer、accelerator、connector；orchestrator 在此基础上加入 orchestrator；runtime Go 构建只使用 guest-runtime、accelerator。未参与编译的源码不会因位于同一目录而进入工作区。生成器检查 module path、实际本地解析目录和完整 `use` 集合，拒绝额外 `replace`，不调用 `go work sync`，不改写 `go.mod`/`go.sum`。旧 tag helper/source 配方的局部 Go 入口保留这些选择；Envd、versitygw、标准库归档校验器继续隔离，vmlinux 不加入 Go workspace。
+
 source/helper build 从已准入的 owner 声明派生完整 helper 清单和配方，并将契约绑定到输入计划。通用构建器使用固定依赖工作区执行各 owner 配方，拒绝缺失或额外输出。内部二进制名称、包路径和构建目标由组件维护。prepare 校验运行清单、架构、字节和安全权限，提供声明的环境变量别名与 `E2E_HELPERS_DIR`，不执行编译。包含静态无 libc cgroup probe 在内的用例必要能力仍单独检查，不作为完整允许清单。发布包携带两种架构的 helper 及一致的运行清单，不携带来源证明。公共 prepared workspace 仅保留运行字段，本次 CI 结果从当前 plan 获取测试修订。同一更早的 build 阶段按 `test/demo/requirements.lock`
 获取 Python 3.12 的完整 Demo SDK wheel 依赖闭包，固定全部版本及 wheel 摘要；发布包携带两种架构的 wheelhouse。prepare 消费这些二进制，
 准备 manifest archive、guest flatten fixture、固定 image ID/digest、orchestrator 基础镜像，并仅从本地 wheelhouse 通过
@@ -205,9 +207,9 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 `snapshot.read-recovery.sh` 失败时，在 cleanup 前将用例、阶段、失败行及有界固定词表错误证据保留在 job 日志中。诊断保留测试的原始退出状态。
 
-现有 `make test-release-tools` 入口在源码 CI 上下文或任一物化文档存在时，还执行固定源码集的发布验证；此时 `.source-plan.json` 和 `.source-checks.json` 均为必需。入口接受原始 `source` 和 `exact-assets` plan，绑定未修改的 plan ID、干净源码树和现有 Go workspace。组件保留所选 tag 身份，候选保留已准入的 ref。对于 `exact-assets`，尚未发布的 platform 源码通过原始仓库、commit 和 tree 绑定暂存选择、固定运行输入、物化回执和 helper 声明。入口先验证这些输入，再串行执行所选组件原有的 `make test-release`；platform 候选会选择全部五个组件。入口同时执行所选 owner 声明的原生 helper 配方，校验完整输出，并在 `KUASAR_CI_DIR` 下记录命令、退出码、声明、依赖身份和二进制摘要。执行后源码及 workspace 输入必须保持不变。已发布 helper 只提取运行字段，不查询历史 plan 或 producer 记录。聚合 exact-assets 任务不调度这些重复的源码检查。该原生源码回归不替代各架构构建、prepare 或 E2E 验证。
+现有 `make test-release-tools` 入口在源码 CI 上下文或任一物化文档存在时，还执行固定源码集的发布验证；此时 `.source-plan.json` 和 `.source-checks.json` 均为必需。入口接受原始 `source` 和 `exact-assets` plan，绑定未修改的 plan ID、干净源码树，并为实际编译的 owner 生成和验证各自的 Go workspace。组件保留所选 tag 身份，候选保留已准入的 ref。对于 `exact-assets`，尚未发布的 platform 源码通过原始仓库、commit 和 tree 绑定暂存选择、固定运行输入、物化回执和 helper 声明。入口先验证这些输入，再串行执行所选组件原有的 `make test-release`；platform 候选会选择全部五个组件。入口同时执行所选 owner 声明的原生 helper 配方，校验完整输出，并在 `KUASAR_CI_DIR` 下记录命令、退出码、声明、依赖身份和二进制摘要。执行后源码及 workspace 输入必须保持不变。已发布 helper 只提取运行字段，不查询历史 plan 或 producer 记录。聚合 exact-assets 任务不调度这些重复的源码检查。该原生源码回归不替代各架构构建、prepare 或 E2E 验证。
 
-独立运行 `make test-release-tools` 仍保持平台工具验证范围，未请求固定源码集验证时会明确说明。对已物化的本地源码集，可在保留现有 Go workspace 和工具链环境的情况下执行 `make test-release-source-set ORG=<fixed-source-root> RELEASE_CHECK_OUTPUT=<fresh-evidence-directory>`。该显式入口始终要求两份准入文档，不重新获取源码。
+独立运行 `make test-release-tools` 仍保持平台工具验证范围，未请求固定源码集验证时会明确说明。对已物化的本地源码集，可在所选工具链环境中执行 `make test-release-source-set ORG=<fixed-source-root> RELEASE_CHECK_OUTPUT=<fresh-evidence-directory>`。该显式入口始终要求两份准入文档，不重新获取源码。
 
 ### 源码检查分组
 
