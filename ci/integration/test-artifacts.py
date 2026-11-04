@@ -376,14 +376,15 @@ class ArtifactExecutionContracts(unittest.TestCase):
                 return self.performance.execute(self.plan, arch, self.root, self.result)
             return self.executor.execute(self.plan, arch, shard, self.root, self.result)
 
-    def image(self, *, identity=None, architecture=None):
+    def image(self, *, identity=None, architecture=None, labels=('python',)):
         expected_arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}[self.arch]
         architecture = architecture or expected_arch
         archive = self.root / 'image.tar'
         archive.write_bytes(b'prepared image')
         expected = 'sha256:' + 'b' * 64
-        self.provenance['images'] = {'python': {'archive': archive.name, 'sha256': subject.digest(archive),
-                                               'image_id': expected, 'platform': 'linux/' + expected_arch}}
+        self.provenance['images'] = {label: {'archive': archive.name, 'sha256': subject.digest(archive),
+                                               'image_id': expected, 'platform': 'linux/' + expected_arch}
+                                     for label in labels}
         binary = self.root.parent / 'host-bin'
         binary.mkdir(exist_ok=True)
         record = [{'Id': identity or expected, 'Os': 'linux', 'Architecture': architecture}]
@@ -400,7 +401,8 @@ class ArtifactExecutionContracts(unittest.TestCase):
         self.provenance['selection']['cases'] = self.provenance['prepared_cases'] = [case]
         self.provenance['helpers'] = {'custom-proxy': {}}
         self.provenance['helper_contract'] = helper_contract(names=['custom-proxy'])
-        self.assertEqual(self.execute('orchestrator')['conclusion'], 'success')
+        with patch.dict(os.environ, PATH=self.image(labels=('python', 'orchestrator-base', 'orchestrator-execute'))):
+            self.assertEqual(self.execute('orchestrator')['conclusion'], 'success')
 
     def test_staged_case_socket_path_uses_direct_public_runner(self):
         case = 'sandbox.cgroup.sh'
@@ -413,7 +415,8 @@ class ArtifactExecutionContracts(unittest.TestCase):
             'PY\n')
         self.provenance['selection']['cases'] = self.provenance['prepared_cases'] = [case]
         self.plan['mode'] = 'exact-assets'
-        result = self.execute('sandbox')
+        with patch.dict(os.environ, PATH=self.image(labels=('python', 'busybox'))):
+            result = self.execute('sandbox')
         self.assertEqual(result['conclusion'], 'success')
         self.assertEqual(result['cases'], [case])
 
@@ -465,21 +468,29 @@ class ArtifactExecutionContracts(unittest.TestCase):
         self.assertEqual(result['conclusion'], 'failure')
 
     def test_loaded_image_identity_and_platform_are_required_before_case_execution(self):
+        case = 'basic.demo.sh'
+        source = self.root / 'test/e2e/cases' / self.case
+        source.with_name(case).write_bytes(source.read_bytes())
+        self.provenance['selection']['cases'] = self.provenance['prepared_cases'] = [case]
         for options in ({'architecture': 'arm64' if self.arch == 'x86_64' else 'amd64'}, {'identity': 'sha256:' + 'c' * 64}):
             with self.subTest(options=options), patch.dict(os.environ, PATH=self.image(**options)):
                 with self.assertRaisesRegex(ValueError, 'public runner reported failure'):
-                    self.execute()
+                    self.execute('basic')
             self.assertEqual(json.loads(self.result.read_text())['timings'], [])
             self.assertEqual(json.loads(self.result.read_text())['conclusion'], 'failure')
             self.assertFalse(self.marker.exists())
         with patch.dict(os.environ, PATH=self.image()):
-            self.assertEqual(self.execute()['conclusion'], 'success')
+            self.assertEqual(self.execute('basic')['conclusion'], 'success')
 
     def test_changed_image_archive_is_rejected_before_docker_load(self):
+        case = 'basic.demo.sh'
+        source = self.root / 'test/e2e/cases' / self.case
+        source.with_name(case).write_bytes(source.read_bytes())
+        self.provenance['selection']['cases'] = self.provenance['prepared_cases'] = [case]
         path = self.image()
         self.provenance['images']['python']['sha256'] = '0' * 64
         with patch.dict(os.environ, PATH=path), self.assertRaisesRegex(ValueError, 'public runner reported failure'):
-            self.execute()
+            self.execute('basic')
         self.assertFalse(self.marker.exists())
         self.assertEqual(json.loads(self.result.read_text())['conclusion'], 'failure')
 

@@ -109,7 +109,9 @@ class SelectionTests(unittest.TestCase):
             runner.workspace.seal(work, {'helper_contract': helper_contract(names=()), 'helpers': {}, 'arch': platform.machine(), 'prepared_cases': ['basic.one.sh']})
             args = self.args(include=["basic.one.sh"], workdir=str(work), arch=platform.machine(),
                              run_root=str(run_root), out_root=str(out_root), result=None)
-            self.assertEqual(runner.cmd_run(args), 0)
+            with patch.object(runner.workspace, 'load_images', wraps=runner.workspace.load_images) as load:
+                self.assertEqual(runner.cmd_run(args), 0)
+                self.assertEqual([path.name for path in load.call_args.kwargs['cases']], ['basic.one.sh'])
             self.assertEqual((out_root / "basic.one.sh/result").read_text(), "ok")
             self.assertFalse((work / "run").exists())
             self.assertFalse((work / "out").exists())

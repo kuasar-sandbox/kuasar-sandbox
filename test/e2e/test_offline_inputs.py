@@ -50,6 +50,67 @@ def image_fixture(directory, label='python', reference='python:3.12-slim', arch=
     return record
 
 
+class SelectedImageLoadTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.images = {label: image_fixture(self.root, label=label) for label in (
+            'python', 'busybox', 'prometheus', 'clickhouse', 'orchestrator-base',
+            'orchestrator-execute', 'guest-runtime')}
+        self.provenance = {'arch': 'x86_64', 'images': self.images}
+
+    def load(self, cases=None, architecture='amd64'):
+        with patch.object(workspace.subprocess, 'run') as load, patch.object(workspace.subprocess, 'check_output',
+                return_value=json.dumps([{'Id': self.images['python']['image_id'],
+                    'Os': 'linux', 'Architecture': architecture}]).encode()):
+            workspace.load_images(self.root, self.provenance, {}, cases=cases)
+        return [Path(call.args[0][-1]).stem for call in load.call_args_list]
+
+    def test_each_group_loads_only_its_prepared_images(self):
+        expected = {
+            ('snapshot.restore.sh',): {'python', 'busybox'},
+            ('image.flatten.sh', 'image.registry.sh'): {'guest-runtime'},
+            ('orchestrator.exec.sh',): {'python', 'orchestrator-base', 'orchestrator-execute'},
+            ('telemetry.backends.sh',): set(self.images) - {'guest-runtime'},
+            ('storage.cache.sh',): set(),
+        }
+        for cases, labels in expected.items():
+            with self.subTest(cases=cases):
+                self.assertEqual(set(self.load(cases)), labels)
+        self.assertEqual(set(self.load()), set(self.images))
+        for arch in ('x86_64', 'aarch64'):
+            self.assertEqual(workspace.execution_image_labels(['snapshot.restore.sh'], arch), {'python', 'busybox'})
+
+    def test_disk_diagnostics_do_not_change_image_execution(self):
+        with patch.object(workspace.os, 'statvfs', side_effect=OSError('unavailable')):
+            self.assertEqual(set(self.load(['snapshot.restore.sh'])), {'python', 'busybox'})
+
+    def test_missing_selected_image_fails_before_docker(self):
+        del self.images['busybox']
+        with patch.object(workspace.subprocess, 'run') as load:
+            with self.assertRaisesRegex(ValueError, 'missing prepared images: busybox'):
+                workspace.load_images(self.root, self.provenance, {}, cases=['snapshot.restore.sh'])
+            load.assert_not_called()
+
+    def test_selected_digest_and_native_architecture_still_fail_closed(self):
+        with self.assertRaisesRegex(ValueError, 'loaded image differs'):
+            self.load(['snapshot.restore.sh'], architecture='arm64')
+        (self.root/'python.tar').write_bytes(b'changed')
+        with patch.object(workspace.subprocess, 'run') as load:
+            with self.assertRaisesRegex(ValueError, 'prepared image bytes changed'):
+                workspace.load_images(self.root, self.provenance, {}, cases=['snapshot.restore.sh'])
+            load.assert_not_called()
+
+    def test_unselected_archives_remain_part_of_complete_workspace_validation(self):
+        workspace.seal(self.root, self.provenance)
+        workspace.verify(self.root)
+        self.assertEqual(set(self.load(['snapshot.restore.sh'])), {'python', 'busybox'})
+        (self.root/'clickhouse.tar').write_bytes(b'changed unused input')
+        with self.assertRaisesRegex(ValueError, 'workspace file contents changed'):
+            workspace.verify(self.root)
+
+
 class InputTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()

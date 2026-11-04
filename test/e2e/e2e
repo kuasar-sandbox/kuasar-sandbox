@@ -236,7 +236,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         if contract is not None:
             required = sorted({cap for case in cases for cap in contract['cases'][case.name]['requires']})
             report['capabilities'] = capability_probe.check(required)
-        workspace.load_images(work, provenance, env_base)
+        workspace.report_disk_space(run_root, "before selected images")
+        workspace.load_images(work, provenance, env_base, cases=cases)
         for case in cases:
             case_id = case.name
             case_work = run_root / case_id
@@ -250,8 +251,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             }
             env.update(case_diagnostics(work, case_id, case_out))
             print(f"==> {case_id}", flush=True)
+            workspace.report_disk_space(run_root, "before " + case_id)
             started = time.monotonic()
             result = subprocess.run(["bash", str(case)], cwd=case_work, env=env, check=False)
+            workspace.report_disk_space(run_root, "after " + case_id)
             report["timings"].append({"case": case_id, "wall_seconds": time.monotonic() - started, "exit_code": result.returncode})
             if result.returncode:
                 failed.append((case_id, result.returncode))

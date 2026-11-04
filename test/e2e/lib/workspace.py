@@ -482,14 +482,42 @@ def prepare_fixtures(root, arch, cases, deps_dir=None, offline=False):
     return dict(fixtures=fixtures, images=images, python=python)
 
 
-def load_images(root, provenance, environment):
-    for record in provenance.get('images', {}).values():
+def report_disk_space(root, phase):
+    try:
+        state = os.statvfs(root)
+    except OSError as error:
+        print(f'disk {phase} path={root}: unavailable ({error})', flush=True)
+        return
+    print(f'disk {phase} path={root}: available_bytes={state.f_bavail * state.f_frsize} '
+          f'available_inodes={state.f_favail}', flush=True)
+
+
+def execution_image_labels(cases, arch):
+    # Use the same selection as preparation, including its generated images.
+    names = {Path(case).name for case in cases}
+    labels = set(external_image_requests(cases, arch))
+    if names & {'image.flatten.sh', 'image.registry.sh'}:
+        labels.add('guest-runtime')
+    if needs_orchestrator_images(names):
+        labels.update(('orchestrator-base', 'orchestrator-execute'))
+    return labels
+
+
+def load_images(root, provenance, environment, cases=None):
+    images = provenance.get('images', {})
+    selected = set(images) if cases is None else execution_image_labels(cases, provenance['arch'])
+    require(selected <= set(images), 'selected cases are missing prepared images: ' + ', '.join(sorted(selected - set(images))))
+    for label, record in images.items():
+        if label not in selected:
+            continue
         path = root / record['archive']
         require(digest(path) == record['sha256'], 'prepared image bytes changed')
+        report_disk_space(root, 'before image ' + label)
         subprocess.run(['docker', 'image', 'load', '--input', str(path)], env=environment, check=True)
         image = json.loads(subprocess.check_output(['docker', 'image', 'inspect', record['image_id']], env=environment))[0]
         require(image['Id'] == record['image_id'] and image['Os'] + '/' + image['Architecture'] == record['platform'],
                 'loaded image differs from prepared platform/digest')
+        report_disk_space(root, 'after image ' + label)
 
 
 def case_environment(root, provenance, case):
