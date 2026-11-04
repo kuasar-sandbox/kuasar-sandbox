@@ -2,6 +2,7 @@
 import argparse
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -97,6 +98,41 @@ def configure(root, owners, environment=None):
     return env
 
 
+def configure_release(root, owners, selections, environment=None):
+    """Validate local release inputs before any build; persist only go.work."""
+    require(len(owners) == 1, 'local release requires exactly one owner')
+    root = root.resolve()
+    owner = owners[0]
+    expected = set(closure(owners)) - {owner}
+    selected = {}
+    for selection in selections:
+        name, separator, tag = selection.partition('=')
+        require(separator and name in expected and name not in selected,
+                'unknown or duplicate release dependency: ' + selection)
+        require(re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?', tag),
+                'invalid release dependency tag: ' + tag)
+        selected[name] = tag
+    require(set(selected) == expected, 'release dependency tags differ from Go module closure')
+    env = dict(os.environ if environment is None else environment)
+    for name in [owner, *sorted(expected)]:
+        module = root / name
+        variable = 'RELEASE_SOURCE_ROOT' if name == owner else 'RELEASE_' + name.upper().replace('-', '_') + '_SOURCE_DIR'
+        require(not env.get(variable) or Path(env[variable]).resolve() == module,
+                variable + ' differs from selected local source directory')
+    for name, tag in selected.items():
+        module = root / name
+        def git(*arguments):
+            return subprocess.check_output(['git', '-C', str(module), *arguments], text=True).strip()
+        require(git('rev-parse', 'HEAD') == git('rev-parse', '--verify', 'refs/tags/' + tag + '^{commit}'),
+                'local release dependency is not at selected tag: ' + name + '=' + tag)
+        flags = git('-c', 'core.quotePath=true', 'ls-files', '-v')
+        require(not any(re.match(r'^[a-zS] ', row) for row in flags.splitlines()),
+                'local release dependency uses assume-unchanged or skip-worktree: ' + name)
+        require(not git('status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'),
+                'local release dependency has uncommitted files: ' + name)
+    return configure(root, owners, env)
+
+
 def launch(go, workspace, modules, arguments, isolate_external=False):
     if isolate_external and os.environ.get('GOWORK') == 'off' and os.environ.get('GO111MODULE') == 'off':
         os.execve(go, [go, *arguments], dict(os.environ))
@@ -152,5 +188,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--owners', nargs='+', choices=sorted(DEPENDENCIES), required=True)
+    parser.add_argument('--dependency-tag', action='append', default=None, metavar='OWNER=TAG',
+                        help='verify the complete local release dependency selection before building')
     args = parser.parse_args()
-    print(configure(args.root, args.owners)['GOWORK'])
+    env = (configure(args.root, args.owners) if args.dependency_tag is None else
+           configure_release(args.root, args.owners, args.dependency_tag))
+    print(env['GOWORK'])
