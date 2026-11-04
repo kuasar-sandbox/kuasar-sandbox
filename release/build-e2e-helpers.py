@@ -25,7 +25,6 @@ def build(unit_sources, selected, output, wheels_output, platform_source, arch=N
     artifacts.require(not output.exists(), 'helper packages need a fresh output')
     source_records = tag_sources.inspect_sources(unit_sources, selected, owner_layout=True)
     tag_sources.require_owner_guides(unit_sources, owner_layout=True)
-    pins = tag_sources.owner_revisions(source_records)
     for owner, unit in tag_sources.OWNER_UNITS.items():
         artifacts.require((tag_sources.source_path(unit_sources, unit, owner_layout=True) / 'go.mod').is_file(),
                           f'missing complete tag helper source: {owner}')
@@ -45,10 +44,8 @@ def build(unit_sources, selected, output, wheels_output, platform_source, arch=N
             shutil.copytree(tag_sources.source_path(unit_sources, unit, owner_layout=True), sources / owner)
         shutil.copytree(platform_source, sources / 'platform')
         # Keep private source copy paths out of binaries and cache identities.
-        environment = {**os.environ, 'GOWORK': str(sources / 'go.work'),
+        environment = {**os.environ, 'GOWORK': 'off',
                        'GOFLAGS': (os.environ.get('GOFLAGS', '') + ' -trimpath').strip()}
-        subprocess.run(['go', 'work', 'init', *('./' + owner for owner in sorted(pins))], cwd=sources,
-                       env={**environment, 'GOWORK': 'off'}, check=True)
         for arch in ((arch,) if arch else artifacts.ARCHES):
             build_demo_wheels.build(platform_source / 'test/demo', arch, wheels_output / arch)
             selected = dict(helpers)

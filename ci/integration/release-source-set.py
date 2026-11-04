@@ -180,24 +180,20 @@ def execute(plan_path, sources, output, env):
         arch = platform.machine()
         artifacts.require(arch in artifacts.ARCHES and env.get('TARGET_ARCH', arch) == arch,
                           'release source recipes require the native architecture')
-        # Existing workspace only: do not create or repair it to hide changed inputs.
-        modules = [owner for owner in facts if (sources / owner / 'go.mod').is_file()]
-        work = sources / 'go.work'
-        before_work = work.read_bytes() if work.is_file() and not work.is_symlink() else None
-        artifacts.require(not work.is_symlink(), 'linked Go workspace input')
-        if modules:
-            artifacts.require(work.is_file() and not work.is_symlink() and env.get('GOWORK') == str(work),
-                              'missing fixed Go workspace')
-            before_work = work.read_bytes()
-            result['workspace_verification'] = source_checks.new_result(plan, 'verify')
-            source_checks.workspace(plan, sources, result['workspace_verification'], dict(env))
-            result['workspace_sha256'] = helpers.contract.digest(before_work)
+        # A source gate may compile several owners, but each gets only its own
+        # selected module closure. Source identities were checked above.
+        owner_environments, workspaces = {}, {}
+        for owner in sorted((selected | set(rows)) - {'platform'}):
+            if (sources / owner / 'go.mod').is_file():
+                owner_environments[owner] = source_checks.workspace(sources, owner, env)
+                path = Path(owner_environments[owner]['GOWORK'])
+                workspaces[path] = path.read_bytes()
         def unchanged():
             artifacts.require(validate(plan_path, sources, env) == (plan, plan_id, selected, facts, rows),
                               'frozen source evidence changed during release gates')
-            artifacts.require((work.read_bytes() if work.exists() else None) == before_work,
-                              'fixed Go workspace changed during release gates')
-            artifacts.require(not work.is_symlink(), 'linked Go workspace input')
+            for path, original in workspaces.items():
+                artifacts.require(path.is_file() and not path.is_symlink() and path.read_bytes() == original,
+                                  'fixed Go workspace changed during release gates')
         scratch = tempfile.TemporaryDirectory(prefix='release-python-')
         artifacts.require(not Path(scratch.name).resolve().is_relative_to(sources), 'Python cache is inside frozen sources')
         # Explicit py_compile writes even with -B. Its disposable cache must not
@@ -206,7 +202,9 @@ def execute(plan_path, sources, output, env):
                             TARGET_ARCH=arch, PYTHONDONTWRITEBYTECODE='1')
         for owner in sorted(selected - {'platform'}):
             try:
-                run(owner + '-release', ['make', 'test-release'], sources / owner, selected_env)
+                owner_env = dict(selected_env, **{key: value for key, value in owner_environments.get(owner, {}).items()
+                    if key in ('GOWORK', 'PATH', 'KUASAR_E2E_GO')})
+                run(owner + '-release', ['make', 'test-release'], sources / owner, owner_env)
             finally:
                 unchanged()
         result['helpers'] = {}

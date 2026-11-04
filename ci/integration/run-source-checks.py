@@ -11,6 +11,7 @@ import time
 
 import artifacts
 import source_inputs
+import go_workspace
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("artifact_build", Path(__file__).with_name("build-artifacts.py"))
@@ -123,25 +124,12 @@ def verify_sources(plan, sources, result, env):
     result["sources"] = records
 
 
-def workspace(plan, sources, result, env):
-    _, records = source_records(plan)
-    modules = ["./" + owner for owner in records if (sources / owner / "go.mod").is_file()]
-    if not modules:
-        return
-    path = sources / "go.work"
-    # A repeated check may already have initialized its workspace. Accept only
-    # the exact dependency closure rather than adding arbitrary local modules.
-    if not path.exists():
-        action(result, "actions", "go-work-init", ["go", "work", "init", *modules], sources,
-               {**env, "GOWORK": "off"})
-    document = json.loads(action(result, "actions", "go-work-check",
-                                 ["go", "work", "edit", "-json", str(path)], sources,
-                                 {**env, "GOWORK": "off"}, capture=True))
-    expected = {(sources / name).resolve() for name in modules}
-    actual = [(sources / record["DiskPath"]).resolve() for record in document.get("Use", [])]
-    artifacts.require(len(actual) == len(expected) and set(actual) == expected and not document.get("Replace"),
-                      "source-check workspace differs from exact test dependency closure")
-    env["GOWORK"] = str(path)
+def workspace(sources, owner, env):
+    if owner in ('sandboxer', 'orchestrator'):
+        return go_workspace.helper_environment(sources, owner, env, source_checks=True)
+    if owner in go_workspace.DEPENDENCIES:
+        return go_workspace.configure(sources, [owner], env)
+    return dict(env, GOWORK='off')
 
 
 def checks_for(plan, sources, group="all"):
@@ -184,9 +172,10 @@ def execute(plan, sources, output, *, materialized=False, group="all"):
             verify_sources(plan, sources, result, env)
         else:
             checkout_sources(plan, sources, result)
-        workspace(plan, sources, result, env)
         for name, command, directory in checks_for(plan, sources, group):
-            action(result, "checks", name, command, directory, env)
+            owner = "sandboxer" if name == "uffd-source-benchmark" else directory.name
+            selected = workspace(sources, owner, env)
+            action(result, "checks", name, command, directory, selected)
         result.update(conclusion="success", exit_code=0)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         result["error"] = str(error)
