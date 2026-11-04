@@ -63,6 +63,14 @@ def delete_endpoint(endpoint, read_endpoint=None):
     require(coordinator.api_optional(read_endpoint or endpoint) is None, 'GitHub object remains after deletion')
 
 
+def asset_identity(release):
+    fields = ('id', 'name', 'size', 'digest', 'state')
+    assets = release.get('assets')
+    require(isinstance(assets, list) and all(isinstance(row, dict) for row in assets),
+            'unknown asset collection before deletion')
+    return sorted(json.dumps({key: row.get(key) for key in fields}, sort_keys=True) for row in assets)
+
+
 def collect(tag, sha, mode):
     require(gc.AGGREGATE_PREVIEW_RE.fullmatch(tag), 'invalid aggregate Preview tag')
     require(re.fullmatch(r'[0-9a-f]{40}', sha), 'source-sha must be a full lowercase SHA')
@@ -96,12 +104,13 @@ def collect(tag, sha, mode):
     require(not any(coordinator.run_active(run) for run in coordinator.aggregate_runs(tag)),
             'aggregate publication is still active')
     # Human prose is irrelevant; object identity, state and assets must be stable.
-    fields = ('id', 'tag_name', 'target_commitish', 'draft', 'prerelease', 'immutable', 'assets')
+    fields = ('id', 'tag_name', 'target_commitish', 'draft', 'prerelease', 'immutable')
     def recheck():
         require(coordinator.api_optional(tag_endpoint) == original_ref, 'tag changed before deletion')
         current = release_for(tag)
         require((current is None and release is None) or (current is not None and release is not None and
-                all(current.get(key) == release.get(key) for key in fields)), 'Release changed before deletion')
+                all(current.get(key) == release.get(key) for key in fields)
+                and asset_identity(current) == asset_identity(release)), 'Release changed before deletion')
     recheck()
     registry_result = None
     if snapshot.delivery == coordinator.selection.DELIVERY:
