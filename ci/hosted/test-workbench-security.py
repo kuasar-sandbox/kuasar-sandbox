@@ -27,22 +27,14 @@ FRAMEWORK, SOURCE = '1' * 40, '2' * 40
 
 
 def selection():
-    return {
-        'framework_sha': FRAMEWORK, 'source_revision': SOURCE,
-        'aggregate_version': 'release-v0.1.6-preview.20261009',
-        'registry_index': 'sha256:' + '3' * 64,
-        'architectures': {
-            arch: {'reference': ci.REGISTRY + '@sha256:' + digit * 64,
-                   'image_id': 'sha256:' + digit * 64, 'archive_sha256': digit * 64,
-                   'archive_size': 1, 'qualification_scope': 'native-full'}
-            for arch, digit in [('x86_64', '4'), ('aarch64', '5')]
-        },
-    }
+    version = 'release-v0.1.6-preview.20261009'
+    return {'framework_sha': FRAMEWORK, 'aggregate_version': version,
+            'reference': ci.REGISTRY + ':' + version.removeprefix('release-')}
 
 
 def image(arch='x86_64'):
     selected = selection()
-    return {'Id': selected['architectures'][arch]['image_id'], 'Os': 'linux',
+    return {'Id': 'sha256:' + '4' * 64, 'Os': 'linux',
             'Architecture': ci.PLATFORMS[arch], 'Size': 100,
             'Config': {'Labels': {
                 'org.opencontainers.image.version': selected['aggregate_version'],
@@ -66,60 +58,42 @@ class TemporaryFiles(unittest.TestCase):
             (root / 'instances/ci' / name).mkdir(parents=True)
         value = {'owner_uid': os.getuid(), 'framework_sha': FRAMEWORK,
                  'sources': str(sources), 'started_ns': time.time_ns(), 'commands': [],
-                 'arch': 'x86_64', 'image': selection()['architectures']['x86_64'],
+                 'arch': 'x86_64', 'image': {'image_id': image()['Id']},
                  'conclusion': 'running'}
         ci.write(root / 'receipt.json', value)
         return root
 
 
 class SelectionTests(unittest.TestCase):
-    def test_grouped_native_selection_keeps_hosted_arm_scope(self):
-        selected = selection()
-        selected['architectures']['x86_64']['qualification_scope'] = 'native-grouped'
-        ci.check_selection(selected)
-        selected['architectures']['aarch64']['qualification_scope'] = 'native-grouped'
-        with self.assertRaises(ValueError):
-            ci.check_selection(selected)
-
     def test_selection_binds_the_checked_out_framework(self):
         ci.check_selection(selection(), FRAMEWORK)
         with self.assertRaisesRegex(ValueError, 'different trusted framework'):
             ci.check_selection(selection(), '9' * 40)
 
-    def test_selection_requires_both_immutable_native_images(self):
-        for arch in ('x86_64', 'aarch64'):
-            for field, value in [('reference', ci.REGISTRY + ':latest'),
-                                 ('image_id', 'sha256:short'), ('archive_size', 0),
-                                 ('archive_sha256', ''), ('qualification_scope', 'unchecked')]:
-                with self.subTest(arch=arch, field=field):
-                    changed = selection()
-                    changed['architectures'][arch][field] = value
-                    with self.assertRaises(ValueError):
-                        ci.check_selection(changed)
-        changed = selection()
-        del changed['architectures']['aarch64']
-        with self.assertRaisesRegex(ValueError, 'both native architectures'):
-            ci.check_selection(changed)
-        changed = selection()
-        changed['architectures']['x86_64']['qualification_scope'] = 'artifact-only'
-        with self.assertRaises(ValueError):
-            ci.check_selection(changed)
+    def test_selection_requires_exact_version_tag_without_registry_proof(self):
+        selected = selection()
+        self.assertEqual(set(selected), {'framework_sha', 'aggregate_version', 'reference'})
+        ci.check_selection(selected)
+        for reference in (ci.REGISTRY + ':latest', ci.REGISTRY + '@sha256:' + 'a' * 64,
+                          ci.REGISTRY + ':v0.1.7'):
+            with self.assertRaisesRegex(ValueError, 'selected aggregate version tag'):
+                ci.check_selection(dict(selected, reference=reference))
 
     def test_config_architecture_and_release_are_all_binding(self):
         for arch in ('x86_64', 'aarch64'):
             ci.image_check(selection(), arch, image(arch))
-        for field, value in [('Id', 'sha256:' + '8' * 64), ('Os', 'windows'),
+        for field, value in [('Id', 'invalid'), ('Os', 'windows'),
                              ('Architecture', 'arm64')]:
             with self.subTest(field=field):
                 changed = image()
                 changed[field] = value
-                with self.assertRaisesRegex(ValueError, 'image/config/architecture mismatch'):
+                with self.assertRaisesRegex(ValueError, 'image.*(architecture|ID)'):
                     ci.image_check(selection(), 'x86_64', changed)
-        for field in ('version', 'revision', 'source'):
+        for field in ('version', 'source'):
             with self.subTest(label=field):
                 changed = image()
                 changed['Config']['Labels']['org.opencontainers.image.' + field] = 'foreign'
-                with self.assertRaisesRegex(ValueError, 'release/source mismatch'):
+                with self.assertRaisesRegex(ValueError, 'release mismatch'):
                     ci.image_check(selection(), 'x86_64', changed)
 
     def test_wrong_native_runner_is_rejected_before_pull(self):
@@ -130,20 +104,22 @@ class SelectionTests(unittest.TestCase):
             inspect.assert_not_called()
             run.assert_not_called()
 
-    def test_cold_pull_uses_the_frozen_digest_and_verifies_the_config(self):
+    def test_cold_pull_uses_version_and_returns_local_image_id(self):
         with patch.object(ci.platform, 'machine', return_value='x86_64'), patch.object(
-                ci.launcher, 'inspect', side_effect=[None, None, image()]), patch.object(
+                ci.launcher, 'inspect', side_effect=[None, image()]), patch.object(
                 ci.subprocess, 'run') as run:
             result = ci.acquire(selection(), 'x86_64')
-        run.assert_called_once_with(['docker', 'pull', selection()['architectures']['x86_64']['reference']],
+        run.assert_called_once_with(['docker', 'pull', selection()['reference']],
                                     check=True, timeout=900, stderr=subprocess.PIPE, text=True)
         self.assertFalse(result['image_present_before'])
 
-    def test_warm_exact_image_does_not_resolve_or_pull_latest(self):
+    def test_warm_image_still_pulls_version_and_never_queries_registry_proof(self):
         with patch.object(ci.platform, 'machine', return_value='x86_64'), patch.object(
                 ci.launcher, 'inspect', return_value=image()), patch.object(ci.subprocess, 'run') as run:
-            self.assertTrue(ci.acquire(selection(), 'x86_64')['image_present_before'])
-            run.assert_not_called()
+            result = ci.acquire(selection(), 'x86_64')
+            self.assertTrue(result['image_present_before'])
+            self.assertEqual(result['docker_image_id'], image()['Id'])
+            self.assertEqual(run.call_args.args[0], ['docker', 'pull', selection()['reference']])
 
 
 class PullRetryTests(unittest.TestCase):
@@ -216,12 +192,12 @@ class PullRetryTests(unittest.TestCase):
 
     def test_successful_retry_still_rejects_wrong_image(self):
         wrong = image()
-        wrong['Id'] = 'sha256:' + '9' * 64
+        wrong['Architecture'] = 'arm64'
         with patch.object(ci.platform, 'machine', return_value='x86_64'), \
-                patch.object(ci.launcher, 'inspect', side_effect=[None, None, wrong]), \
+                patch.object(ci.launcher, 'inspect', side_effect=[None, wrong]), \
                 patch.object(ci.subprocess, 'run', side_effect=[self.failure(), None]) as run, \
                 patch.object(ci.time, 'sleep'), patch.object(ci.image_pull.random, 'uniform', return_value=1):
-            with self.assertRaisesRegex(ValueError, 'image/config/architecture mismatch'):
+            with self.assertRaisesRegex(ValueError, 'image.*(architecture|ID)'):
                 ci.acquire(selection(), 'x86_64')
         self.assertEqual(run.call_count, 2)
 

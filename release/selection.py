@@ -289,8 +289,6 @@ def _parse_manifest(text: str, source: str, preview: bool, *, historical: bool):
         expected = ", ".join(sorted(required | optional))
         raise ManifestError(f"top-level keys in {source} must be: {expected}")
     delivery(config, source)
-    if "test_revisions" in config:
-        historical_test_revisions(config, source)
 
     version = require_stable(config.get("version"), "version", source)
     previous_version: str | None = None

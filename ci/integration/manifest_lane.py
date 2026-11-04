@@ -30,10 +30,8 @@ class References:
         if state is not None:
             require(state.get('tag_name') == tag and type(state.get('draft')) is bool and
                     state.get('prerelease') is ('-preview.' in tag), 'component release identity mismatch')
-            target = docs_lane.sha(state.get('target_commitish'))
-            require(sha is None or target == sha, 'component tag and release target differ')
             if not state['draft']:
-                # Existing reader checks public repository, exact target and the
+                # Existing reader checks public repository, actual tag and the
                 # complete dual-architecture asset identity/size/digest evidence.
                 resolver.public(unit.repository)
                 resolver.check_published_unit(name, tag, state, resolver.exact_sha(sha))
@@ -67,7 +65,7 @@ def check_plan(version, previous, components, base_ref, references):
         require(line is not None and version.startswith(f'release-v{line[1]}.{line[2]}.'),
                 'aggregate version does not belong to the source maintenance line')
     predecessor = references.aggregate(previous, predecessor=True) if previous else None
-    require(previous is None or predecessor is not None, 'declared predecessor lacks published validation evidence')
+    require(previous is None or predecessor is not None, 'declared predecessor lacks a complete published asset set')
     published = references.aggregate(version)
     if published:
         require({name: row['version'] for name, row in published['units'].items()} == components,
@@ -91,39 +89,11 @@ def check_plan(version, previous, components, base_ref, references):
         else:
             state = observed['release']
             row['release_id'] = state['id']
-            row['assets'] = [{key: asset[key] for key in ('id', 'name', 'size', 'digest')} for asset in state['assets']]
-            if '-preview.' in tag:
-                status = release.ReleaseStatus(state, observed['sha'], True)
-                plan = plans[unit.name]
-                original = release.preview_binding(status, tag)['dependencies']
-                if original != release.dependency_binding(plan, plans):
-                    pairs = [item.split('=', 1) for item in original.split(',') if item]
-                    require(all(len(pair) == 2 for pair in pairs), 'invalid published dependency binding')
-                    versions = dict(pairs)
-                    require(len(versions) == len(pairs) and set(versions) == set(dependencies),
-                            'published dependency set differs from release plan')
-                    for name, old_tag in versions.items():
-                        if old_tag == components[name]:
-                            continue
-                        old = references.unit(name, old_tag)
-                        require(old['state'] == 'published', 'original dependency is not published')
-                        new = observations[name]
-                        if new['state'] != 'published':
-                            pending.append(dict(unit=unit.name, dependency=name,
-                                                requirement='verify-linked-inputs-before-reuse'))
-                            continue
-                        repository = release.UNIT_BY_NAME[name].repository
-                        require(dependency_projection(references.tree(repository, old['sha']), name, unit.name) ==
-                                dependency_projection(references.tree(repository, new['sha']), name, unit.name),
-                                'published consumer has different linked dependency inputs: ' + unit.name)
-                    plan = release.replace(plan, verified_dependency_binding=original)
-                # Preserve the existing date/unit/source/dependency binding rules.
-                release.validate_preview_reuse(plan, plans, status)
-                row['preview_binding'] = release.preview_binding(status, tag)
+            row['assets'] = [{key: asset[key] for key in ('id', 'name', 'size', 'digest')} for asset in state['assets'] if asset['name'] != 'SHA256SUMS']
         units[unit.name] = row
     return dict(version=version, previous=previous,
                 predecessor_sha=predecessor['sha'] if predecessor else None,
-                predecessor_architectures=sorted(predecessor['validation']) if predecessor else [],
+                predecessor_architectures=sorted(predecessor['architectures']) if predecessor else [],
                 published_aggregate_sha=published['sha'] if published else None,
                 units=units, pending=pending,
                 acceptance='release exact-assets E2E and Workbench remain required')

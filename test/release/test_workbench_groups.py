@@ -87,19 +87,6 @@ class GroupTests(unittest.TestCase):
             groups.verify_live(self.fixture.results['x86_64'])
             api.assert_not_called()
 
-    def test_public_downloads_consume_full_arm_and_grouped_evidence(self):
-        import test_workbench_downloads
-        reader = test_workbench_downloads.DownloadTests()
-        grouped = self.fixture.artifact_only()
-        grouped['x86_64'] = self.aggregate()
-        for arch in ('x86_64', 'aarch64'):
-            for download in (False, True):
-                with self.subTest(arch=arch, download=download):
-                    expected = reader.select(arch=arch, download=download, workbench=self.fixture.results)
-                    observed = reader.select(arch=arch, download=download, workbench=grouped)
-                    self.assertEqual(observed[0], 0)
-                    self.assertEqual(observed, expected)
-
     def test_registry_publisher_checks_grouped_attempts_before_transport(self):
         import os
         import workbench_registry

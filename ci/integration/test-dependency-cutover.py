@@ -21,7 +21,7 @@ class DependencyCutover(unittest.TestCase):
         self.candidate = dict(repository='kuasar-sandbox/sandboxer', pull_request_number=371,
                               base_ref='main', base_sha='a'*40, head_sha='b'*40, candidate_sha='c'*40)
         tag = 'v0.1.9-preview.20261028'
-        names = sorted({'SHA256SUMS'} | {artifacts.archive_name('accelerator', tag, arch) for arch in artifacts.ARCHES})
+        names = sorted(artifacts.archive_name('accelerator', tag, arch) for arch in artifacts.ARCHES)
         self.pin = dict(tag=tag, sha='d'*40, release_id=100,
                         assets=[dict(name=name, id=i, size=1000, digest='sha256:'+'e'*64) for i, name in enumerate(names, 1)])
         self.request = dict(candidate=self.candidate, units={'accelerator': self.pin})
@@ -85,7 +85,7 @@ class DependencyCutover(unittest.TestCase):
     def test_publication_requires_exact_release_tag_and_assets(self):
         self.verify_publication()
         with self.assertRaises(ValueError): self.verify_publication(sha='f'*40)
-        changes = [('id', 101), ('draft', True), ('prerelease', False), ('target_commitish', 'main')]
+        changes = [('id', 101), ('draft', True), ('prerelease', False)]
         for field, value in changes:
             state = copy.deepcopy(self.state); state[field] = value
             with self.subTest(field=field), self.assertRaises(ValueError): self.verify_publication(state)

@@ -23,10 +23,6 @@ spec.loader.exec_module(demo_wheels)
 
 
 def validate(path, expected_pins=None, expected_sources=None, expected_contract=None):
-    if expected_sources is not None:
-        derived = tag_sources.owner_revisions(expected_sources)
-        artifacts.require(expected_pins is None or expected_pins == derived, 'owner SHA facts differ from unit tag facts')
-        expected_pins = derived
     with tarfile.open(path, 'r:gz') as archive:
         members = {}
         for entry in archive.getmembers():
@@ -50,19 +46,11 @@ def validate(path, expected_pins=None, expected_sources=None, expected_contract=
              if name.startswith('test/e2e/') and entry.isfile()},
             (name.removeprefix('test/e2e/') for name, entry in members.items()
              if name.startswith('test/e2e/') and entry.isdir()))
-        contract_path = 'test/e2e/helpers/contract.json'
-        artifacts.require(contract_path in members and members[contract_path].isfile(), 'missing helper contract')
-        contract = helper_inputs.contract.loads(archive.extractfile(members[contract_path]).read())
-        inventory = helper_inputs.contract.validate(contract)
-        helper_inputs.contract.selected(contract, [name.removeprefix('test/e2e/cases/') for name in cases])
-        artifacts.require(contract['schema'] == 1, 'new publication requires owner declarations')
-        artifacts.require(expected_contract is None or contract == expected_contract, 'packaged helper contract differs from source inputs')
-        if expected_sources is not None:
-            for owner, unit in tag_sources.OWNER_UNITS.items():
-                artifacts.require(contract['owners'][owner]['source'] == expected_sources[unit], 'helper owner tag/source differs from selected unit')
-        for name in members:
-            if name.startswith('test/e2e/helpers/') and name != contract_path:
-                artifacts.require(Path(name).parts[3] in artifacts.ARCHES, 'unknown helper architecture')
+        for name, entry in members.items():
+            if name.startswith('test/e2e/helpers/'):
+                artifacts.require(not entry.mode & 0o7022, 'unsafe helper package permissions')
+                if name != 'test/e2e/helpers/contract.json':
+                    artifacts.require(Path(name).parts[3] in artifacts.ARCHES, 'unknown helper architecture')
         if 'test/e2e/cases/basic.demo.sh' in cases:
             # Validate with the controller's code, never with code from the archive.
             with tempfile.TemporaryDirectory(prefix='release-demo-wheels-') as directory:
@@ -76,52 +64,21 @@ def validate(path, expected_pins=None, expected_sources=None, expected_contract=
                 for arch in artifacts.ARCHES:
                     demo_wheels.validate(demo / 'wheels' / arch, demo / 'requirements.lock', demo / 'requirements.txt', arch)
         previous = None
-        for arch in artifacts.ARCHES:
-            root = f'test/e2e/helpers/{arch}/'
-            metadata_path = root + 'helpers.json'
-            artifacts.require(metadata_path in members, f'missing prebuilt helper package: {arch}')
-            metadata = helper_inputs.contract.loads(archive.extractfile(members[metadata_path]).read())
-            artifacts.require(metadata['arch'] == arch, 'helper package architecture mismatch')
-            pins = metadata['test_revisions']
-            if expected_sources is not None:
-                artifacts.require(metadata.get('source_records') == expected_sources,
-                                  'helper tag source facts differ from selected unit inputs')
-            if 'source_records' in metadata:
-                artifacts.require(tag_sources.owner_revisions(metadata['source_records']) == pins,
-                                  'helper owner SHA facts differ from unit tag facts')
-            for owner, row in contract['owners'].items():
-                if owner != 'platform':
-                    artifacts.require(row['source']['sha'] == pins.get(owner), 'helper declaration owner SHA differs from receipt')
-                    if 'source_records' in metadata:
-                        unit = tag_sources.OWNER_UNITS[owner]
-                        artifacts.require(row['source'] == metadata['source_records'][unit], 'helper declaration tag differs from receipt')
-            framework = metadata['framework_sha']
-            artifacts.require(set(pins) == set(artifacts.OWNERS) - {'platform'} and
-                              all(re.fullmatch(r'[0-9a-f]{40}', pin) for pin in [framework, *pins.values()]),
-                              'invalid helper source pins')
-            artifacts.require(expected_pins is None or pins == expected_pins, 'helper pins differ from selected test revisions')
-            facts = (framework, pins, metadata.get('source_records'))
-            artifacts.require(previous is None or previous == facts, 'architecture helper source sets differ')
-            previous = facts
-            artifacts.require(metadata.get('schema') == 1 and metadata.get('contract_sha256') == artifacts.identity(contract),
-                              'helper receipt lacks its expected declaration contract')
-            helpers = metadata['helpers']
-            artifacts.require(set(helpers) == set(inventory), 'helper inventory differs from admitted declarations')
-            actual = {name.removeprefix(root) for name, entry in members.items() if name.startswith(root) and entry.isfile()}
-            artifacts.require(actual == {'helpers.json', *helpers}, 'undeclared helper package files')
-            for name, record in helpers.items():
-                owner = inventory[name]['owner']
-                member = members[root + name]
-                artifacts.require(member.isfile() and member.mode & 0o500 == 0o500 and not member.mode & 0o7022,
-                                  'invalid helper permissions')
-                data = archive.extractfile(member).read()
-                artifacts.require(len(data) >= 64 and data[:7] == b'\x7fELF\x02\x01\x01' and
-                                  struct.unpack_from('<H', data, 18)[0] == {'x86_64': 62, 'aarch64': 183}[arch],
-                                  'helper binary architecture mismatch')
-                expected = {'owner': owner, 'source_sha': contract['owners'][owner]['source']['sha'],
-                            'sha256': hashlib.sha256(data).hexdigest(), 'size': len(data), 'mode': member.mode}
-                artifacts.require(record.get('sha256') == expected['sha256'], 'helper checksum mismatch: ' + name)
-                artifacts.require(record == expected, 'helper bytes/source/mode differ from expected declaration')
+        with tempfile.TemporaryDirectory(prefix='release-helpers-') as directory:
+            root = Path(directory)
+            for name, entry in members.items():
+                if name.startswith('test/e2e/helpers/') and entry.isfile():
+                    path = root / name.removeprefix('test/e2e/helpers/')
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(archive.extractfile(entry).read())
+                    path.chmod(entry.mode)
+            for arch in artifacts.ARCHES:
+                contract, records = helper_inputs.contract.package(root / arch, arch)
+                helper_inputs.contract.selected(contract, [name.removeprefix('test/e2e/cases/') for name in cases])
+                artifacts.require(previous is None or previous == contract, 'architecture helper inventories differ')
+                artifacts.require(expected_contract is None or contract == helper_inputs.contract.runtime(expected_contract),
+                                  'packaged runtime helper inventory differs from selected inputs')
+                previous = contract
 
 
 

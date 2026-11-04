@@ -34,8 +34,7 @@ def fixture():
     with patch.object(routing, 'read_config', return_value=config):
         routing.apply(plan, contract)
     plan['execution_run'] = {'repository': 'kuasar-sandbox/kuasar-sandbox', 'run_id': '1', 'run_attempt': '2'}
-    plan['execution_images'] = {arch: {'reference': 'ghcr.io/kuasar-sandbox/workbench@sha256:' + 'c' * 64,
-                                      'image_id': 'sha256:' + 'e' * 64} for arch in artifacts.ARCHES}
+    plan['execution_images'] = {arch: {'reference': 'ghcr.io/kuasar-sandbox/workbench:v1.2.3'} for arch in artifacts.ARCHES}
     return plan
 
 
@@ -54,7 +53,8 @@ def result_set(plan, arch):
         receipt = {'profile': group['profile'], 'executor': profile['executor'], 'runner': runner,
                    'configuration_sha256': plan['runner_configuration']['sha256']}
         if profile['executor'] == 'workbench-system':
-            receipt['image_id'] = plan['execution_images'][arch]['image_id']
+            receipt['image_id'] = 'sha256:' + 'e' * 64
+            receipt['reference'] = plan['execution_images'][arch]['reference']
         results[name] = {'arch': arch, 'plan_id': artifacts.identity(plan), 'shard': name, 'cases': group['cases'],
                          'conclusion': 'success', 'execution': receipt,
                          'capabilities': {cap: capability_probe.OPERATIONS[cap] for cap in group['requires']},
@@ -232,7 +232,7 @@ class Allocation(unittest.TestCase):
         key = 'supplemental-arm--basic'
         mutations = [lambda r: r.pop(key), lambda r: r[key].update(conclusion='cancelled'),
                      lambda r: r[key].update(conclusion='failure'), lambda r: r[key].update(capabilities={}),
-                     lambda r: r[key]['execution'].update(image_id='sha256:' + '0' * 64),
+                     lambda r: r[key]['execution'].update(image_id='invalid'),
                      lambda r: r[key]['execution']['runner'].update(run_attempt='1'),
                      lambda r: r[key].update(provenance_sha256='0' * 64),
                      lambda r: r[key].update(cases=[])]
@@ -306,6 +306,8 @@ class RuntimeTransport(unittest.TestCase):
                      patch.object(driver.platform, 'machine', return_value='aarch64'), \
                      patch.object(driver.routing, 'runner_identity', return_value={}), \
                      patch.object(driver.shutil, 'copytree'), patch.object(driver.shutil, 'copy2'), \
+                     patch.object(driver.image_pull, 'pull_image'), \
+                     patch.object(driver.subprocess, 'check_output', return_value=json.dumps([dict(Os='linux', Architecture='arm64', Id='sha256:' + 'e'*64, Config={'Labels': {'org.opencontainers.image.version': 'release-v1.2.3', 'org.opencontainers.image.source': 'https://github.com/kuasar-sandbox/kuasar-sandbox'}})])), \
                      patch.object(driver.subprocess, 'run', side_effect=invoke), patch.object(driver, 'cleanup') as clean, \
                      patch.object(driver, 'capture_startup_daemons', side_effect=OSError('private diagnostic error')) as diagnostic:
                     with self.assertRaises(type(error)):

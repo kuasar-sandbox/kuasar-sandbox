@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 import platform
+import re
 import subprocess
 import time
 
@@ -29,8 +30,9 @@ def execute(plan, arch, shard, workspace, result_path, clean_image=None, runner=
         result['execution'] = {'profile': group['profile'], 'executor': profile['executor'], 'runner': runner,
                                'configuration_sha256': plan['runner_configuration']['sha256']}
         if executor_image:
-            artifacts.require(executor_image == plan['execution_images'][arch]['image_id'], 'wrong Workbench image')
+            artifacts.require(re.fullmatch(r'sha256:[0-9a-f]{64}', executor_image), 'invalid local Workbench image')
             result['execution']['image_id'] = executor_image
+            result['execution']['reference'] = plan['execution_images'][arch]['reference']
             result['environment'] = {'kind': 'workbench-system', 'image_id': executor_image}
     started = time.monotonic()
     result_path.parent.mkdir(parents=True, exist_ok=True)

@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
+import shutil
 import stat
 import struct
 
@@ -160,6 +161,27 @@ def historical_inventory(contract):
 
 
 def validate(contract):
+    if isinstance(contract, dict) and contract.get('schema') == 3:
+        require(set(contract) == {'schema', 'helpers'} and isinstance(contract['helpers'], dict),
+                'invalid runtime helper inventory')
+        inventory, aliases = {}, set()
+        for name, row in contract['helpers'].items():
+            require(isinstance(name, str) and re.fullmatch(r'[a-z][a-z0-9_-]*', name), 'invalid helper name')
+            require(isinstance(row, dict) and set(row) == {'owner', 'env', 'cases'}
+                    and row['owner'] in OWNERS, 'invalid runtime helper entry')
+            alias = row['env']
+            require(alias is None or isinstance(alias, str) and
+                    re.fullmatch(r'[A-Z][A-Z0-9_]*(?:_BIN|_BINARY)', alias) and alias not in aliases,
+                    'invalid or duplicate helper environment binding')
+            if alias is not None:
+                aliases.add(alias)
+            patterns = row['cases']
+            require(isinstance(patterns, list) and len(patterns) == len(set(patterns)) and
+                    all(isinstance(p, str) and (p == '*' or re.fullmatch(
+                        r'[a-z][a-z0-9*_-]*\.[a-z0-9.*_-]+\.sh', p)) for p in patterns),
+                    'invalid helper case requirements')
+            inventory[name] = dict(row, name=name)
+        return inventory
     require(isinstance(contract, dict) and set(contract) == ({'schema', 'owners', 'history'} if contract.get('schema') == 2 else {'schema', 'owners'})
             and type(contract['schema']) is int and contract['schema'] in (1, 2)
             and isinstance(contract['owners'], dict) and set(contract['owners']) == set(OWNERS),
@@ -214,6 +236,72 @@ def validate(contract):
     return inventory
 
 
+def runtime(contract):
+    """Project declarations onto runtime fields without reading source evidence."""
+    if contract.get('schema') == 3:
+        validate(contract)
+        return contract
+    helpers = {}
+    for owner, row in contract['owners'].items():
+        require(owner in OWNERS, 'unknown helper owner')
+        for item in declaration(row['declaration'])['helpers']:
+            name = item['name']
+            require(name not in helpers, 'duplicate helper across owners')
+            helpers[name] = {'owner': owner, 'env': item['env'], 'cases': item['cases']}
+    result = {'schema': 3, 'helpers': helpers}
+    validate(result)
+    return result
+
+
+def package(root, arch, *, private_extraction=False):
+    """Read new and old package runtime fields. No historical jobs or receipts."""
+    metadata = loads(regular(root, 'helpers.json').read_text())
+    require(metadata.get('arch') == arch and isinstance(metadata.get('helpers'), dict),
+            'helper package architecture or inventory mismatch')
+    schema = metadata.get('schema')
+    require(schema is None or type(schema) is int and schema in (1, 2), 'unknown helper package schema')
+    records = metadata['helpers']
+    require(all(isinstance(row, dict) for row in records.values()), 'invalid helper file record')
+    if metadata.get('schema') == 2:
+        require(set(metadata) == {'schema', 'arch', 'helpers'}, 'unexpected runtime helper metadata')
+        require(all(set(row) == {'owner', 'env', 'cases', 'sha256', 'size', 'mode'} for row in records.values()),
+                'unexpected runtime helper fields')
+        helpers = {name: {key: row[key] for key in ('owner', 'env', 'cases')} for name, row in records.items()}
+        contract = {'schema': 3, 'helpers': helpers}
+    elif (root.parent / 'contract.json').is_file():
+        require(not (root.parent / 'contract.json').is_symlink(), 'linked helper declaration')
+        contract = runtime(loads((root.parent / 'contract.json').read_text()))
+    elif any('env' in row or 'cases' in row for row in records.values()):
+        require(all({'owner', 'env', 'cases'} <= set(row) for row in records.values()),
+                'incomplete legacy runtime helper fields')
+        contract = {'schema': 3, 'helpers': {name: {key: row[key] for key in ('owner', 'env', 'cases')}
+                                          for name, row in records.items()}}
+    else:
+        # Old packages did not declare applicability. Preserve every delivered
+        # helper; the alias map only supplies the old environment interface.
+        owners = required_capabilities(['orchestrator.exec.sh', 'sandbox.cgroup.sh'])
+        contract = {'schema': 3, 'helpers': {name: {'owner': owners.get(name, 'platform'),
+                    'env': LEGACY_ALIASES.get(name), 'cases': ['*']} for name in records}}
+    inventory = validate(contract)
+    require(set(records) == set(inventory), 'helper inventory differs from package declarations')
+    normalized = {}
+    for name, record in records.items():
+        actual = check_binary(regular(root, name), arch)
+        require(record.get('sha256') == actual['sha256'], 'helper checksum mismatch: ' + name)
+        for key in ('size', 'mode'):
+            if key in record:
+                if key == 'mode' and private_extraction:
+                    mode = record[key]
+                    require(type(mode) is int and 0 <= mode <= 0o7777 and mode & 0o500 == 0o500
+                            and not mode & 0o7022 and actual[key] & ~mode == 0, 'unsafe helper mode')
+                else:
+                    require(record[key] == actual[key], 'helper ' + key + ' mismatch: ' + name)
+        normalized[name] = dict(actual, **contract['helpers'][name])
+    require({p.name for p in root.iterdir()} == set(records) | {'helpers.json'},
+            'undeclared or missing helper package output')
+    return contract, normalized
+
+
 def required_capabilities(cases):
     """Required existing case capabilities, never an allowed delivery inventory."""
     cases = set(cases)
@@ -260,20 +348,18 @@ def check_binary(path, arch):
 
 
 def receipt(root, arch, contract, names=None):
+    contract = runtime(contract)
     inventory = validate(contract)
     names = set(inventory) if names is None else set(names)
     require(names <= set(inventory), 'undeclared helper request')
     files = {p.name for p in root.iterdir()}
     require(files == names, 'unexpected or missing built helper')
-    records = {name: dict(check_binary(root / name, arch), owner=inventory[name]['owner'],
-                      source_sha=contract['owners'][inventory[name]['owner']]['source']['sha']) for name in sorted(names)}
-    for name, record in records.items():
-        if inventory[name].get('historical'):
-            require(record == contract['history']['helpers'][arch][name], 'historical helper binary changed')
-    return records
+    return {name: dict(check_binary(root / name, arch), **contract['helpers'][name]) for name in sorted(names)}
 
 
 def verify(root, arch, contract, records, names=None, *, metadata=False, private_extraction=False):
+    legacy = contract.get('schema') != 3
+    contract = runtime(contract)
     inventory = validate(contract)
     names = set(inventory) if names is None else set(names)
     require(names <= set(inventory) and isinstance(records, dict) and set(records) == names,
@@ -283,17 +369,26 @@ def verify(root, arch, contract, records, names=None, *, metadata=False, private
     files = {p.name for p in root.iterdir()} if root.is_dir() else set()
     require(files == names | ({'helpers.json'} if metadata else set()),
             'undeclared or missing helper package output')
+    normalized = {}
     for name, record in records.items():
-        owner = inventory[name]['owner']
-        expected = dict(check_binary(root / name, arch), owner=owner,
-                        source_sha=contract['owners'][owner]['source']['sha'])
-        if inventory[name].get('historical'):
-            require(record == contract['history']['helpers'][arch][name], 'historical helper receipt changed')
+        expected = dict(check_binary(root / name, arch), **contract['helpers'][name])
         if private_extraction:
             original_mode = record.get('mode')
             require(type(original_mode) is int and 0 <= original_mode <= 0o7777 and
                     original_mode & 0o500 == 0o500 and not original_mode & 0o7022 and
                     expected['mode'] & ~original_mode == 0, 'unsafe private helper extraction mode')
             expected['mode'] = original_mode
-        require(record == expected, 'helper output identity differs from trusted source/bytes: ' + name)
-    return records
+        observed = {key: record.get(key, expected[key] if key in ('env', 'cases') else None)
+                    for key in expected} if legacy else record
+        require(observed == expected, 'helper runtime fields or bytes differ: ' + name)
+        normalized[name] = expected
+    return normalized
+
+
+def install_reader(root):
+    # The library writing runtime metadata also supplies its reader. Retain
+    # released component cases, binaries and the rest of the public runner.
+    target = root / 'test/e2e/lib/helper_contract.py'
+    require(target.parent.is_dir() and not target.is_symlink(), 'missing or linked helper reader')
+    shutil.copyfile(Path(__file__), target)
+    target.chmod(0o644)

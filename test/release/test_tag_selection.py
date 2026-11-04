@@ -58,8 +58,8 @@ class TagSelectionTests(unittest.TestCase):
         self.assertEqual(record[0], 'release-v1.2.3-preview.20261010')
         self.assertEqual(selection.historical_test_revisions(before, 'immutable history'), saved['test_revisions'])
         self.assertEqual(before, saved)
-        with self.assertRaises(selection.ManifestError):
-            selection.parse_historical_manifest(text.replace('0000000000000000000000000000000000000001', 'main'), 'bad history', True)
+        self.assertEqual(selection.parse_historical_manifest(
+            text.replace('0000000000000000000000000000000000000001', 'main'), 'old unused test fields', True), record)
 
     def test_new_selection_accepts_only_unit_tags(self):
         for value in ('a' * 40, 'main', 'HEAD', 'refs/heads/main'):

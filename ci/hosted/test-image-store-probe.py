@@ -147,7 +147,7 @@ class ImageStoreProbeTests(unittest.TestCase):
         _, _, facts = probe.fixture('x86_64', NONCE)
         status, report, _ = self.run_probe(image_change=lambda image: image.update(Id=facts['manifest_digest']))
         self.assertEqual(status, 1)
-        self.assertIn('image/config/architecture mismatch', report['error']['message'])
+        self.assertIn('local manifest descriptor mismatch', report['error']['message'])
         self.assertEqual(json.loads(report['inspections']['config']['stdout'])[0]['Id'], facts['manifest_digest'])
 
     def test_existing_name_is_not_adopted_or_removed(self):

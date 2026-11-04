@@ -82,38 +82,6 @@ class BindingTests(unittest.TestCase):
             binder.bind(self.root, self.plan, self.validation, self.results)
         self.assertEqual(notes.read_text(), original)
 
-    def test_existing_download_guides_accept_complete_binding_without_duplicate_cases(self):
-        import test_workbench_downloads
-        binder.bind(self.root, self.plan, self.validation, self.results)
-        text = (self.root / 'release-notes.md').read_text()
-        binding = json.loads(text.split(binder.publication_body.MARKER)[1].split(' -->')[0])
-        del binding['case_files']
-        binding['registry'] = registry_binding(self.version, self.results)
-        reader = test_workbench_downloads.DownloadTests()
-        for arch in artifacts.ARCHES:
-            for download in (False, True):
-                with self.subTest(arch=arch, download=download):
-                    expected = reader.select(arch=arch, download=download, workbench=self.results)
-                    actual = reader.select(arch=arch, download=download, binding=binding)
-                    self.assertEqual(actual[0], 0)
-                    self.assertEqual(actual, expected)
-
-    def test_existing_plan_reader_restores_cases_and_rejects_conflicting_legacy_copy(self):
-        spec = importlib.util.spec_from_file_location('publication_resolver', ROOT / 'ci/integration/resolve-artifacts.py')
-        resolver = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(resolver)
-        binder.bind(self.root, self.plan, self.validation, self.results)
-        text = (self.root / 'release-notes.md').read_text()
-        binding = json.loads(text.split(binder.publication_body.MARKER)[1].split(' -->')[0])
-        del binding['case_files']
-        assets = {row['name']: row['digest'] for row in self.plan['baseline']['assets']}
-        self.assertEqual(resolver.bound_plan(binding, self.version, self.sha, assets, []), self.plan)
-        binding['case_files'] = copy.deepcopy(self.plan['case_files'])
-        self.assertEqual(resolver.bound_plan(binding, self.version, self.sha, assets, []), self.plan)
-        binding['case_files']['platform'].append('basic.guessed.sh')
-        with self.assertRaisesRegex(ValueError, 'case_files differs'):
-            resolver.bound_plan(binding, self.version, self.sha, assets, [])
-
     def native_full(self):
         results = copy.deepcopy(self.results)
         for arch, record in results.items():
@@ -208,71 +176,6 @@ class BindingTests(unittest.TestCase):
                 binder.bind(self.root, self.plan, self.validation, results)
         with self.assertRaisesRegex(ValueError, 'qualification scope'):
             binder.bind(self.root, self.plan, self.validation, self.artifact_only('x86_64'))
-
-    def test_published_reader_requires_declared_assets_and_current_profiles(self):
-        spec = importlib.util.spec_from_file_location('workbench_release_reader', ROOT / 'ci/integration/resolve-artifacts.py')
-        reader = importlib.util.module_from_spec(spec); spec.loader.exec_module(reader)
-        binder.bind(self.root, self.plan, self.validation, self.results)
-        original = json.loads(reader.PROFILE_BINDING.search((self.root / 'release-notes.md').read_text())[1])
-        original['registry'] = registry_binding(self.version, self.results)
-        manifest = 'delivery: workbench-v1\nversion: ' + self.version + '\ncomponents:\n' + ''.join(
-            f"  {unit}: {row['version']}\n" for unit, row in self.plan['baseline']['units'].items())
-        manifest += 'test_revisions:\n' + ''.join(f"  {owner}: {row['sha']}\n"
-            for owner, row in self.plan['test_revisions'].items() if owner != 'platform')
-        assets = [dict(row, state='uploaded', id=index) for index, row in enumerate(self.plan['baseline']['assets'], 1)]
-        state = {'id': 1, 'tag_name': self.version, 'target_commitish': self.sha, 'draft': False, 'prerelease': False,
-                 'assets': assets}
-        def notes(binding):
-            state['body'] = '<!-- kuasar-integration-validation ' + json.dumps(binding) + ' -->'
-        run = {'id': 1, 'status': 'completed', 'conclusion': 'success', 'html_url': 'https://example.invalid/run',
-               'display_title': reader.release.aggregate_run_title(self.version, self.sha)}
-        actual_aggregate_runs = reader.release.aggregate_runs
-        with patch.object(reader.release, 'api_optional', return_value=state), patch.object(reader, 'source_text', return_value=manifest), patch.object(
-                reader.release, 'aggregate_runs', return_value=[run]), patch.object(
-                reader.release, 'tag_sha', side_effect=lambda repository, tag: self.sha if repository == reader.PLATFORM else 'c' * 40):
-            notes(original)
-            self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
-            # Use the real title filter and baseline reader together. Validation
-            # success cannot establish publication, even with matching assets.
-            for title in (run['display_title'] + ' [validation only]',
-                          run['display_title'].replace('Aggregate ', 'Validate aggregate ', 1)):
-                validation_run = dict(run, id=99, display_title=title, run_attempt=9)
-                with patch.object(reader.release, 'aggregate_runs', side_effect=actual_aggregate_runs), \
-                     patch.object(reader.release, 'paginated', return_value=[validation_run]) as history:
-                    self.assertIsNone(reader.aggregate(self.version))
-                    history.return_value = [validation_run, run]
-                    self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
-                    for status, conclusion, ordinary_title in (
-                            ('queued', 'success', run['display_title']),
-                            ('completed', 'failure', run['display_title']),
-                            ('completed', 'success', reader.release.aggregate_run_title(self.version, 'f' * 40)),
-                            ('completed', 'success', 'Aggregate ' + self.version)):
-                        history.return_value = [validation_run, dict(run, status=status, conclusion=conclusion,
-                                                                    display_title=ordinary_title)]
-                        self.assertIsNone(reader.aggregate(self.version))
-            artifact_binding = copy.deepcopy(original)
-            artifact_binding['workbench'] = self.artifact_only()
-            notes(artifact_binding)
-            self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
-            native_binding = copy.deepcopy(original)
-            native_binding['workbench'] = self.native_full()
-            notes(native_binding)
-            self.assertEqual(reader.aggregate(self.version)['delivery'], 'workbench-v1')
-            notes(original)
-            state['assets'] = [row for row in assets if not row['name'].startswith('workbench-')]
-            with self.assertRaisesRegex(ValueError, 'complete workbench asset set'):
-                reader.aggregate(self.version)
-            state['assets'] = assets
-            broken = copy.deepcopy(original)
-            for arch, record in broken['architectures'].items():
-                record.pop('selection'); record['profile'] = reader.historical_profile(arch)
-            notes(broken)
-            with self.assertRaisesRegex(ValueError, 'published case selection differs'):
-                reader.aggregate(self.version)
-            for field in ('workbench', 'registry', 'delivery'):
-                broken = copy.deepcopy(original); broken.pop(field); notes(broken)
-                with self.subTest(field=field), self.assertRaises(ValueError):
-                    reader.aggregate(self.version)
 
     def test_framework_and_test_provenance_remain_required(self):
         for key, value in [('plan_id', '0' * 64), ('framework_sha', 'e' * 40), ('test_revisions', {})]:

@@ -151,18 +151,17 @@ def check_execution_inputs(plan):
                       all(re.fullmatch(r'[1-9][0-9]*', run.get(key, '')) for key in ('run_id', 'run_attempt')),
                       'missing workflow run/attempt identity')
     images = plan.get('execution_images', {})
-    artifacts.require(set(images) == set(artifacts.ARCHES), 'missing immutable executor image selection')
+    artifacts.require(set(images) == set(artifacts.ARCHES), 'missing executor version selection')
     for image in images.values():
-        artifacts.require(set(image) == {'reference', 'image_id'} and
-                          re.fullmatch(r'ghcr.io/kuasar-sandbox/workbench@sha256:[0-9a-f]{64}', image['reference']) and
-                          re.fullmatch(r'sha256:[0-9a-f]{64}', image['image_id']), 'invalid immutable executor image')
+        artifacts.require(set(image) == {'reference'} and
+                          re.fullmatch(r'ghcr.io/kuasar-sandbox/workbench:v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?', image['reference']),
+                          'invalid executor version tag')
 
 
 def bind_execution(plan, selection, run):
     if plan['schema'] >= 4:
         artifacts.require(selection['framework_sha'] == plan['framework_sha'], 'executor image framework mismatch')
-        plan['execution_images'] = {arch: {key: row[key] for key in ('reference', 'image_id')}
-                                    for arch, row in selection['architectures'].items()}
+        plan['execution_images'] = {arch: {'reference': selection['reference']} for arch in artifacts.ARCHES}
         plan['execution_run'] = run
         check_execution_inputs(plan)
         artifacts.check_plan(plan)
@@ -213,8 +212,9 @@ def check_result(plan, arch, name, result):
     artifacts.require(result.get('capabilities') == {cap: capability_probe.OPERATIONS[cap] for cap in group['requires']},
                       'missing required capability startup evidence')
     if profile['executor'] == 'workbench-system':
-        artifacts.require(receipt.get('image_id') == plan['execution_images'][arch]['image_id'],
-                          'Workbench executor image differs from immutable selection')
+        artifacts.require(re.fullmatch(r'sha256:[0-9a-f]{64}', receipt.get('image_id', '')) and
+                          receipt.get('reference') == plan['execution_images'][arch]['reference'],
+                          'Workbench executor is missing its local image ID or selected version')
     else:
         artifacts.require('image_id' not in receipt, 'native execution cannot claim a Workbench image')
     if group['runtime'] == 'runtime-only':

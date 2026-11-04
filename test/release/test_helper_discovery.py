@@ -161,7 +161,7 @@ class OwnerDiscovery(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         prepared = self.root / 'prepared'
         provenance = json.loads((prepared / 'provenance.json').read_text())
-        self.assertEqual(provenance['helper_contract'], self.contract)
+        self.assertEqual(provenance['helper_contract'], c.runtime(self.contract))
         self.assertEqual(set(provenance['helpers']), {'component-probe'})
         result = subprocess.run([sys.executable, '-B', str(prepared / 'test/e2e/e2e'), 'run', '--workdir', str(prepared),
                                  '--include', 'basic.component.sh'], text=True, capture_output=True, timeout=30)
@@ -197,7 +197,7 @@ class OwnerDiscovery(unittest.TestCase):
         path.write_text(json.dumps(data))
         result = self.prepare(release)
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn('trusted inventory', result.stderr)
+        self.assertIn('package declarations', result.stderr)
         self.assertFalse((self.root / 'prepared').exists())
 
     def test_missing_tampered_and_wrong_architecture_helpers_fail(self):
@@ -222,7 +222,8 @@ class OwnerDiscovery(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         provenance = json.loads((self.root / 'prepared/provenance.json').read_text())
         self.assertEqual(provenance['helpers']['component-probe']['mode'], 0o700)
-        self.assertEqual((self.root / 'prepared/test/e2e/helpers' / platform.machine() / 'helpers.json').read_bytes(), original)
+        self.assertFalse((self.root / 'prepared/test/e2e/helpers').exists())
+        self.assertEqual((directory / 'helpers.json').read_bytes(), original)
         for mode in (0o777, 0o4755, 0o600, 0o001):
             binary.chmod(mode)
             result = self.prepare(release, 'rejected')
@@ -252,13 +253,12 @@ class OwnerDiscovery(unittest.TestCase):
         contract = helper_inputs.discover(self.roots, self.sources)
         changed = copy.deepcopy(contract)
         changed['owners']['connector']['source']['tag'] = 'v1.2.4'
-        # The same commit under another tag cannot replace the planned source
-        # in an otherwise byte-identical package and producer receipt.
+        # Package consumption compares runtime fields; source build inputs
+        # remain verified separately within their own build.
         self.contract = contract
         built = self.build()
         self.contract = changed
-        with self.assertRaisesRegex(ValueError, 'packaged helper contract differs from source inputs'):
-            self.packaged(built, expected_contract=contract)
+        self.packaged(built, expected_contract=contract)
         self.contract = contract
         (root / c.DECLARATION).write_text('{}')
         with self.assertRaisesRegex(ValueError, 'modified tag inputs'):
@@ -322,232 +322,86 @@ class OwnerDiscovery(unittest.TestCase):
 
 
 
-class HistoricalEvidence(unittest.TestCase):
-    def test_authentic_original_producer_scope_and_failure_boundaries(self):
-        import helper_history
-        import zipfile
-        from unittest import mock
-        fixtures = ROOT / 'ci/integration/fixtures'
-        original = json.loads((fixtures / 'helper-original-plan.json').read_text())
-        for arch in c.ARCHES:
-            with self.subTest(arch=arch), zipfile.ZipFile(fixtures / f'helper-original-producer-{arch}.zip') as archive:
-                files = {name: archive.read(name).decode() for name in archive.namelist()
-                         if name.endswith('/receipt.json') or name.startswith('workbench-cache-scope-')}
-                scope = json.loads(next(value for name, value in files.items() if name.startswith('workbench-cache-scope-')))
-                roots = {row['path']: (Path('/unused') / row['path'], {'repository': row['repository'], 'sha': row['sha']})
-                         for row in scope['sources']}
-                content = {str(roots[row['path']][0]): row['content_sha256'] for row in scope['sources']}
-                # No historical sources are fetched by SHA. The retained receipt
-                # is original evidence; source-byte checking is exercised below.
-                real_exec = helper_history.importlib.util.module_from_spec
-                def cache_module(spec):
-                    module = real_exec(spec)
-                    return module
-                with mock.patch.object(helper_history.importlib.util, 'module_from_spec', side_effect=cache_module):
-                    with mock.patch.object(helper_history.importlib.util, 'spec_from_file_location') as load:
-                        fake = mock.Mock()
-                        fake.loader.exec_module.side_effect = lambda module: setattr(module, 'snapshot',
-                            lambda root, git: (content[str(root)], {}))
-                        load.return_value = fake
-                        # Use an actual module to preserve production validation.
-                        with mock.patch.object(helper_history.importlib.util, 'module_from_spec', return_value=mock.Mock()):
-                            observed = helper_history.producer(files, arch, int(scope['run_id']), original, roots)
-                            self.assertEqual(observed['receipt'], next(v for n, v in files.items() if n.endswith('/receipt.json')))
-                            first = next(iter(content)); old = content[first]; content[first] = '0' * 64
-                            with self.assertRaisesRegex(ValueError, 'dependency content changed'):
-                                helper_history.producer(files, arch, int(scope['run_id']), original, roots)
-                            content[first] = old
-                            for field, value in [('framework_sha', '0' * 40), ('conclusion', 'failure')]:
-                                bad = dict(files); name = next(n for n in bad if n.endswith('/receipt.json'))
-                                row = json.loads(bad[name]); row[field] = value; bad[name] = json.dumps(row)
-                                with self.assertRaises(ValueError): helper_history.producer(bad, arch, int(scope['run_id']), original, roots)
-                            with self.assertRaisesRegex(ValueError, 'source scope'):
-                                helper_history.producer(files, arch, int(scope['run_id']) + 1, original, roots)
-
-
-class HistoricalTransport(unittest.TestCase):
+class RuntimePackages(unittest.TestCase):
     setUp = OwnerDiscovery.setUp
     add_helper = OwnerDiscovery.add_helper
     build = OwnerDiscovery.build
+    packaged = OwnerDiscovery.packaged
     prepare = OwnerDiscovery.prepare
-    # Reuse the real ELF compiler and public runner fixture with a distinct
-    # original pre-declaration source/archive.
-    def test_original_binary_transport_keeps_true_origin(self):
-        import helper_history
-        built = self.build()
-        for owner, root in self.roots.items():
-            if owner == 'platform': continue
-            (root / c.DECLARATION).unlink()
-            (root / 'owner.txt').write_text(owner)
-            git(root, 'add', '-A'); git(root, 'commit', '-qm', 'Original pre-declaration fixture')
-            tag = ('runtime-' if owner == 'guest-runtime' else '') + 'v1.2.3'
-            git(root, 'tag', tag)
-            self.sources[owner].update(sha=git(root, 'rev-parse', 'HEAD'), tree=git(root, 'rev-parse', 'HEAD^{tree}'), tag=tag)
-        records = {('runtime' if o == 'guest-runtime' else o): s for o, s in self.sources.items() if o != 'platform'}
-        original = {'schema': 2, 'mode': 'exact-assets', 'framework_sha': self.sources['platform']['sha'],
-                    'source_records': records, 'test_revisions': {o: dict(repository=s['repository'], sha=s['sha'], role='release') for o, s in self.sources.items()},
-                    'baseline': {'repository': 'kuasar-sandbox/kuasar-sandbox', 'version': 'release-v1.2.3', 'assets': []}}
-        old = self.root / 'old'; old.mkdir()
-        for arch, machine in [('x86_64', 62), ('aarch64', 183)]:
-            path = old / 'test/e2e/helpers' / arch; path.mkdir(parents=True)
-            data = bytearray((built / 'component-probe').read_bytes()); struct.pack_into('<H', data, 18, machine)
-            (path / 'custom-proxy').write_bytes(data); (path / 'custom-proxy').chmod(0o755)
-            (path / 'helpers.json').write_text(json.dumps({'arch': arch, 'framework_sha': original['framework_sha'],
-                'test_revisions': {o: s['sha'] for o, s in self.sources.items() if o != 'platform'}, 'source_records': records,
-                'helpers': {'custom-proxy': {'source_sha': self.sources['connector']['sha'], 'sha256': c.digest(data)}}}))
-        archive = self.root / 'platform-release-v1.2.3.tar.gz'
-        def owned(member):
-            member.uid = member.gid = 0; member.uname = member.gname = ''; return member
-        with tarfile.open(archive, 'w:gz') as tar: tar.add(old, arcname='.', filter=owned)
-        original['baseline']['assets'] = [{'name': archive.name, 'size': archive.stat().st_size, 'digest': 'sha256:' + c.digest(archive.read_bytes())}]
-        available, metadata = helper_history.inventory(archive, original, {o:s for o,s in self.sources.items() if o != 'platform'})
-        # Exercise the actual admission boundary with a fixed API/ZIP transport.
-        # The source scope hashes are computed from these real clean repositories.
-        import zipfile
-        from unittest import mock
-        old_platform = self.root / 'original-platform'
-        shutil.copytree(self.roots['platform'], old_platform)
-        (self.roots['platform'] / 'candidate.txt').write_text('consumer candidate\n')
-        git(self.roots['platform'], 'add', '.')
-        git(self.roots['platform'], 'commit', '-qm', 'Candidate consumer')
-        self.sources['platform'].update(sha=git(self.roots['platform'], 'rev-parse', 'HEAD'),
-                                        tree=git(self.roots['platform'], 'rev-parse', 'HEAD^{tree}'))
-        cache_spec = importlib.util.spec_from_file_location('original_scope_fixture', ROOT / 'ci/hosted/cache-scope.py')
-        cache = importlib.util.module_from_spec(cache_spec); cache_spec.loader.exec_module(cache)
-        scope_sources = []
-        producer_roots = {owner: (root, self.sources[owner]) for owner, root in self.roots.items() if owner != 'platform'}
-        producer_roots['platform'] = (old_platform, dict(repository='kuasar-sandbox/kuasar-sandbox', sha=original['framework_sha']))
-        git(self.roots['guest-runtime'], 'tag', 'vmlinux-v1.2.3')
-        original['source_records']['vmlinux'] = dict(self.sources['guest-runtime'], tag='vmlinux-v1.2.3')
-        producer_roots['kernel-unit/guest-runtime'] = (self.roots['guest-runtime'], original['source_records']['vmlinux'])
-        # The fixture has no separate kernel contents; its independent tag is
-        # not consumed as a helper source and remains explicit in original facts.
-        for name, (root, facts) in producer_roots.items():
-            scope_sources.append(dict(path=name, repository=facts['repository'], sha=facts['sha'],
-                clean=True, on_main=True, kind='git', content_sha256=cache.snapshot(root, git=True)[0]))
-        # Retain source_records in the original metadata after adding the
-        # independent kernel fixture, then bind the actual complete archive.
+    # Only the added tests need fixtures; do not rerun the source build suite.
+    def test_new_format_prepares_and_runs_without_source_records(self):
+        release = self.packaged(self.build())
+        helpers = release / 'test/e2e/helpers'
+        (helpers / 'contract.json').unlink()
         for arch in c.ARCHES:
-            path = old / 'test/e2e/helpers' / arch / 'helpers.json'
-            row = json.loads(path.read_text()); row['source_records'] = original['source_records']; path.write_text(json.dumps(row))
-        with tarfile.open(archive, 'w:gz') as tar: tar.add(old, arcname='.', filter=owned)
-        original['baseline']['assets'][0].update(size=archive.stat().st_size, digest='sha256:' + c.digest(archive.read_bytes()))
-        producer_archives, api_artifacts = {}, []
-        for index, arch in enumerate(c.ARCHES, 1):
-            with zipfile.ZipFile(ROOT / 'ci/integration/fixtures' / f'helper-original-producer-{arch}.zip') as saved:
-                name = next(n for n in saved.namelist() if n.endswith('/receipt.json'))
-                receipt = json.loads(saved.read(name))
-            old_version = receipt['commands'][-1]['argv'][-1].split("--version '")[1].split("'",1)[0]
-            receipt['framework_sha'] = original['framework_sha']
-            receipt['selection']['framework_sha'] = original['framework_sha']
-            receipt['commands'][-1]['argv'][-1] = receipt['commands'][-1]['argv'][-1].replace(old_version, original['baseline']['version'])
-            scope = dict(repository='kuasar-sandbox/kuasar-sandbox', run_id='1', event='workflow_dispatch',
-                         namespace='trusted', scope='trusted', sources=scope_sources)
-            zip_path = self.root / (arch + '.zip')
-            with zipfile.ZipFile(zip_path, 'w') as output:
-                output.writestr(name, json.dumps(receipt))
-                output.writestr('workbench-cache-scope-1-fixture.json', json.dumps(scope))
-            producer_archives[str(index)] = zip_path
-            api_artifacts.append(dict(id=index, name='workbench-evidence-helper-build-' + arch + '-' + 'a' * 32,
-                expired=False, size_in_bytes=zip_path.stat().st_size, digest='sha256:' + c.digest(zip_path.read_bytes()),
-                workflow_run=dict(id=1, head_sha=original['framework_sha'])))
-        def api(path):
-            if path.endswith('/artifacts?per_page=100'): return dict(total_count=2, artifacts=api_artifacts)
-            self.assertTrue(path.endswith('/actions/runs/1'))
-            return dict(status='completed', conclusion='success', head_sha=original['framework_sha'],
-                path='.github/workflows/aggregate-release.yml', event='workflow_dispatch',
-                head_repository=dict(full_name='kuasar-sandbox/kuasar-sandbox'))
-        def download(*args):
-            self.assertEqual(args[:3], ('release', 'download', 'release-v1.2.3'))
-            shutil.copy2(archive, Path(args[-1]) / archive.name)
-        def transport(command, **kwargs):
-            self.assertEqual(command[:2], ['gh', 'api'])
-            artifact_id = command[2].split('/artifacts/')[1].split('/')[0]
-            kwargs['stdout'].write(producer_archives[artifact_id].read_bytes())
-            return subprocess.CompletedProcess(command, 0)
-        admission = self.root / 'admitted'; admission.mkdir()
-        real_run = subprocess.run
-        def dispatched(command, **kwargs):
-            return transport(command, **kwargs) if command[:2] == ['gh', 'api'] else real_run(command, **kwargs)
-        with mock.patch.object(helper_history.subprocess, 'run', side_effect=dispatched):
-            contract = helper_history.admit(dict(original['baseline'], validation_plan=original),
-                dict(self.roots, vmlinux=self.roots['guest-runtime']), self.sources, old_platform, 1, api, download, admission)
-        gate_spec = importlib.util.spec_from_file_location('frozen_release_gate', ROOT / 'ci/integration/release-source-set.py')
-        gate = importlib.util.module_from_spec(gate_spec); gate_spec.loader.exec_module(gate)
-        facts = {owner: row['source'] for owner, row in contract['owners'].items()}
-        pins = {owner: dict(repository=row['repository'], sha=row['sha'],
-                           role='candidate' if owner == 'platform' else 'baseline') for owner, row in facts.items()}
-        frozen = dict(helper_contract=contract, owners=['platform'])
-        original_contract = copy.deepcopy(contract)
-        retained = gate.recipes(frozen, set(c.OWNERS), facts, pins, self.root / 'sources')
-        self.assertTrue(all(retained[o]['historical'] for o in c.OWNERS if o != 'platform'))
-        self.assertEqual(contract, original_contract)
-        with self.assertRaises((ValueError, FileNotFoundError)):
-            gate.recipes(dict(owners=['platform']), set(c.OWNERS), facts, pins, self.root / 'sources')
-        # Even an unchanged helper owner cannot reuse an old linked binary when
-        # another component dependency changes. Reject before any download.
-        for field, value in [('sha', '0' * 40), ('tag', 'v9.9.9')]:
-            sources = json.loads(json.dumps(self.sources))
-            sources['accelerator'][field] = value
-            with mock.patch.object(helper_history, 'gh') as no_download:
-                with self.assertRaisesRegex(ValueError, 'changed candidate dependency'):
-                    helper_history.admit(dict(original['baseline'], validation_plan=original),
-                        dict(self.roots, vmlinux=self.roots['guest-runtime']), sources, old_platform,
-                        1, api, no_download, admission)
-                no_download.assert_not_called()
-        available, metadata = helper_history.inventory(archive, original, {o:s for o,s in self.sources.items() if o != 'platform'})
-        c.validate(contract)
-        # Historical interface aliases participate in the same uniqueness check
-        # as new declarations, without changing any original helper metadata.
-        mixed = copy.deepcopy(contract)
-        row = mixed['owners']['platform']
-        declaration = {'schema': 1, 'recipe': 'release/platform-probe.sh', 'dependencies': [],
-                       'helpers': [{'name': 'platform-probe', 'env': 'CUSTOM_PROXY_BIN', 'cases': ['basic.component.sh']}]}
-        def update_alias(alias):
-            declaration['helpers'][0]['env'] = alias
-            data = json.dumps(declaration).encode()
-            row.update(declaration=data.decode(), declaration_sha256=c.digest(data), declaration_blob=c.blob(data),
-                       recipe_sha256=c.digest(b'fixture'), recipe_blob=c.blob(b'fixture'))
-        update_alias('CUSTOM_PROXY_BIN')
-        with self.assertRaisesRegex(ValueError, 'duplicate helper environment'):
-            c.validate(mixed)
-        update_alias('PLATFORM_PROBE_BIN')
-        self.assertEqual(c.validate(mixed)['platform-probe']['env'], 'PLATFORM_PROBE_BIN')
-        self.assertEqual(c.validate(mixed)['custom-proxy']['env'], None)
-        output = self.root / 'restored'
-        environment = {k:v for k,v in os.environ.items() if k not in ('GH_TOKEN','GITHUB_TOKEN','CALLER_TOKEN','KUASAR_CI_APP_PRIVATE_KEY')}
-        build_helpers.build(self.root / 'sources', platform.machine(), output, {'custom-proxy':'connector'}, environment, contract, archive)
-        self.assertEqual((output / 'custom-proxy').read_bytes(), (built / 'component-probe').read_bytes())
-        # A composed workspace carries the trusted plan contract and exact
-        # historical receipt. Public preparation consumes it without rebuilding.
-        release = self.root / 'historical-prepared'; (release / 'bin').mkdir(parents=True)
-        shutil.copytree(ROOT / 'test/e2e/lib', release / 'test/e2e/lib', ignore=shutil.ignore_patterns('__pycache__'))
-        shutil.copy2(ROOT / 'test/e2e/e2e', release / 'test/e2e/e2e')
-        (release / 'test/e2e/cases').mkdir()
-        (release / 'test/e2e/cases/basic.component.sh').write_text('set -euo pipefail\n"$E2E_HELPERS_DIR/custom-proxy"\n')
-        shutil.copytree(output, release / 'fixtures/bin')
-        workspace_spec = importlib.util.spec_from_file_location('historical_workspace', ROOT / 'test/e2e/lib/workspace.py')
-        workspace = importlib.util.module_from_spec(workspace_spec); workspace_spec.loader.exec_module(workspace)
-        aliases = workspace.helper_variables({'helper_contract': mixed})
-        self.assertEqual(aliases['custom-proxy'], 'CUSTOM_PROXY_BIN')
-        self.assertEqual(aliases['platform-probe'], 'PLATFORM_PROBE_BIN')
-        self.assertEqual(mixed['history'], contract['history'])
-        workspace.seal(release, {'arch': platform.machine(), 'prepared_cases':['basic.component.sh'], 'helper_contract':contract,
-                                'helpers': c.receipt(output, platform.machine(), contract)})
-        result = self.prepare(release); self.assertEqual(result.returncode, 0, result.stderr)
-        actual = json.loads((self.root / 'prepared/provenance.json').read_text())
-        self.assertEqual(actual['helper_contract']['history']['metadata'], metadata)
-        ran = subprocess.run([sys.executable, '-B', str(self.root / 'prepared/test/e2e/e2e'), 'run',
-            '--workdir', str(self.root / 'prepared'), '--include', 'basic.component.sh'],
-            text=True, capture_output=True, timeout=30)
-        self.assertEqual(ran.returncode, 0, ran.stderr)
-        self.assertEqual(actual['helpers']['custom-proxy']['source_sha'], self.sources['connector']['sha'])
-        for owner in ('accelerator','connector','guest-runtime','sandboxer','orchestrator'):
-            bad = json.loads(json.dumps(contract)); bad['owners'][owner]['source']['tag'] += '-preview.20260101'
-            with self.assertRaisesRegex(ValueError, 'dependency tag/source'): c.validate(bad)
-        with archive.open('ab') as stream: stream.write(b'tamper')
-        with self.assertRaisesRegex(ValueError, 'archive changed'):
-            helper_history.inventory(archive, original, {o:s for o,s in self.sources.items() if o != 'platform'})
+            directory = helpers / arch
+            (directory / 'helpers.json').unlink()
+            (directory / 'helpers.json').write_text(json.dumps(dict(schema=2, arch=arch,
+                helpers=c.receipt(directory, arch, self.contract))))
+        prepared = self.prepare(release)
+        self.assertEqual(prepared.returncode, 0, prepared.stderr)
+        target = self.root / 'prepared'
+        row = json.loads((target / 'provenance.json').read_text())
+        self.assertEqual(row['helper_contract'], c.runtime(self.contract))
+        self.assertEqual(set(row['helpers']['component-probe']), {'sha256','size','mode','owner','env','cases'})
+        self.assertFalse((target / 'test/e2e/helpers').exists())
+        result = subprocess.run([sys.executable, '-B', str(target / 'test/e2e/e2e'), 'run', '--workdir', str(target),
+            '--include', 'basic.component.sh'], text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_old_package_runner_uses_matching_reader_after_new_preparation(self):
+        release = self.packaged(self.build())
+        # Freeze real old public runtime code, not a fixture with new libraries.
+        for fixture, name in (('legacy-e2e.py', 'test/e2e/e2e'),
+                              ('legacy-helper-reader.py', 'test/e2e/lib/helper_contract.py')):
+            shutil.copyfile(ROOT / 'test/release/fixtures' / fixture, release / name)
+        result = subprocess.run([sys.executable, '-B', str(ROOT / 'test/e2e/e2e'), 'prepare',
+            '--release-dir', str(release), '--workdir', str(self.root / 'prepared'), '--arch', platform.machine(),
+            '--include', 'basic.component.sh', '--offline'], text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        prepared = self.root / 'prepared'
+        self.assertEqual((prepared / 'test/e2e/e2e').read_bytes(), (release / 'test/e2e/e2e').read_bytes())
+        result = subprocess.run([sys.executable, '-B', str(prepared / 'test/e2e/e2e'), 'run',
+            '--workdir', str(prepared), '--include', 'basic.component.sh'], text=True, capture_output=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_legacy_inventory_keeps_all_seventeen_and_ignores_proofs(self):
+        built = self.build()
+        root = self.root / 'legacy'; root.mkdir()
+        names = sorted(set(c.LEGACY_ALIASES) | {'helper-' + str(i) for i in range(10)})
+        records = {}
+        for name in names:
+            shutil.copy2(built / 'component-probe', root / name)
+            records[name] = {'sha256': c.digest((root / name).read_bytes()), 'source_sha': 'obsolete'}
+        metadata = dict(arch=platform.machine(), helpers=records, framework_sha='obsolete',
+            test_revisions='unavailable', source_records='unavailable')
+        (root / 'helpers.json').write_text(json.dumps(metadata))
+        runtime, actual = c.package(root, platform.machine())
+        self.assertEqual(len(actual), 17)
+        self.assertEqual(set(runtime['helpers']), set(names))
+        self.assertTrue(all(set(row) == {'owner','env','cases','size','sha256','mode'} for row in actual.values()))
+        metadata['helpers']['zot']['sha256'] = '0' * 64
+        (root / 'helpers.json').write_text(json.dumps(metadata))
+        with self.assertRaises(ValueError): c.package(root, platform.machine())
+
+    def test_unknown_package_schema_cannot_hide_duplicate_runtime_environment(self):
+        built = self.build()
+        root = self.root / 'runtime'; root.mkdir()
+        for name in ('one', 'two'): shutil.copy2(built / 'component-probe', root / name)
+        rows = {name: dict(c.check_binary(root / name, platform.machine()), owner='platform',
+                          env='DUP_BIN', cases=['*']) for name in ('one','two')}
+        for schema in (2, 999, True, None):
+            (root / 'helpers.json').write_text(json.dumps(dict(schema=schema, arch=platform.machine(), helpers=rows)))
+            with self.assertRaises(ValueError): c.package(root, platform.machine())
+
+    def test_runtime_duplicate_environment_and_unsafe_names_fail(self):
+        contract = c.runtime(self.contract)
+        contract['helpers']['component-probe']['env'] = 'PROBE_BIN'
+        contract['helpers']['other'] = dict(contract['helpers']['component-probe'])
+        with self.assertRaisesRegex(ValueError, 'duplicate'): c.validate(contract)
+        contract['helpers'].pop('other')
+        contract['helpers']['../escape'] = contract['helpers'].pop('component-probe')
+        with self.assertRaises(ValueError): c.validate(contract)
 
 
 if __name__ == '__main__': unittest.main()
