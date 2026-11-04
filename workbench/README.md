@@ -36,13 +36,18 @@ and reports actual capability availability. Selected product tests still require
 their real devices and kernel features; unavailable capability is not a pass.
 Host profiles, global sysctls, modules and existing services are not managed.
 
-Acquire the selected release's image through its registry tag or verify its
-`SHA256SUMS` entry and import its native `workbench-<arch>-v*.tar.gz` with
-`docker load`. This is a gzip-compressed Docker image archive; never extract it
+Acquire the selected release's image through its exact registry version tag, or
+follow the [download guide](../docs/download.md) to verify the native GitHub asset
+size and digest before importing `workbench-<arch>-v*.tar.gz` with `docker load`. This is a gzip-compressed Docker image archive; never extract it
 into the product release tree. The registry tag is
 `ghcr.io/kuasar-sandbox/workbench:vX.Y.Z[-preview.YYYYMMDD[.N]]`, using the
 aggregate version without the `release-` prefix. New `workbench-v1` releases
 require both native image archives; historical releases keep their original assets.
+
+The bundled offline image inventory contains only the reference, platform, archive
+name/hash and local image ID needed to load and run the included bytes. Older
+inventories are projected onto these fields; historical registry records are not
+required. OCI manifests, configurations and layers inside the archive remain validated.
 
 ### Windows and WSL 2 development hosts
 

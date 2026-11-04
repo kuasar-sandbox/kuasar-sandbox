@@ -31,13 +31,17 @@ systemd 与私有 daemon 就绪，并报告实际能力。所选产品测试仍�
 内核能力要求，不把不可用能力当成通过。启动器不管理宿主策略、全局 sysctl、
 模块或已有服务。
 
-通过选定发布版的 registry 标签获取镜像，或验证 `SHA256SUMS` 中的条目后，用
-`docker load` 导入本机架构的 `workbench-<arch>-v*.tar.gz`。这是 gzip 压缩的 Docker
+通过选定发布版的精确 registry 版本标签获取镜像，或按[下载指南](../docs/download_zh.md)
+验证 GitHub 资产原生大小和摘要后，用 `docker load` 导入本机架构的 `workbench-<arch>-v*.tar.gz`。这是 gzip 压缩的 Docker
 镜像归档，不能解压到产品发布树。registry 标签为
 `ghcr.io/kuasar-sandbox/workbench:vX.Y.Z[-preview.YYYYMMDD[.N]]`，即聚合版本去掉
 `release-` 前缀。新 `workbench-v1` 发布必须包含两个原生镜像归档；历史发布保留原有资产。
 
-CI 可在测量验收后将原生 x86 发布运行验收分成两个独立组。每个实例仍准备完整普通离线清单，保留原预算和全部 preflight、隔离、清理检查；仅执行选择不同。[CI 契约](../docs/ci_zh.md#workbench-运行分组)规定精确分组与当前轮次证据。`test-release.py --group all` 保持默认；`--group A` 和 `--group B` 要求原生 x86 及 2 CPU/8 GiB。Hosted ARM 仍为产物级验收。发布的 `native-grouped` 证据代表独立验收组的完整并集，不代表单个部分执行。
+CI 可在测量验收后将原生 x86 发布运行验收分成两个独立组。每个实例仍准备完整普通离线清单，保留原预算和全部 preflight、隔离、清理检查；仅执行选择不同。[CI 契约](../docs/ci_zh.md#workbench-运行分组)规定精确分组与当前轮次证据。`test-release.py --group all` 保持默认；`--group A` 和 `--group B` 要求原生 x86 及 2 CPU/8 GiB。Hosted ARM 仍为产物级验收。当次流水线的 `native-grouped` 结果代表独立验收组的完整并集，不代表单个部分执行。
+
+镜像内的离线清单只保留加载和运行所需的引用、平台、归档名称/哈希及本地镜像 ID。
+旧清单仅提取这些字段，不要求历史 registry 记录；归档内标准 OCI manifest、config、layer
+仍进行实际内容校验。
 
 ### Windows 与 WSL 2 开发宿主
 
