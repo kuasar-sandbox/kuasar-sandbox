@@ -5,8 +5,6 @@
 from __future__ import annotations
 
 import pathlib
-import hashlib
-import json
 import re
 import subprocess
 import sys
@@ -51,12 +49,6 @@ class ManifestError(ValueError):
     """A maintained manifest does not satisfy the release-state schema."""
 
 
-def notes_selection_sha256(config: dict[str, object]) -> str:
-    """Detect when auto prose needs generation, never substitute source proof."""
-    payload = {key: value for key, value in config.items() if key != 'notes'}
-    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
-
-
 def check_notes_input(config: dict[str, object], source: str) -> None:
     """Check an editable text input, never its relationship to acceptance."""
     fields = config.get('notes', {})
@@ -99,7 +91,7 @@ def parse_notes(block: str, source: str) -> dict[str, str]:
             raise ManifestError(f'invalid whitespace in notes in {source}')
         if not line.strip() or line.lstrip().startswith("#"):
             continue
-        match = re.fullmatch(r"  (body|upgrade_notice|aggregate_sha|mode|selection_sha256|overflow): +([^ #]+)(?: +#.*)? *", line)
+        match = re.fullmatch(r"  (body|upgrade_notice|aggregate_sha|mode|selection_sha256): +([^ #]+)(?: +#.*)? *", line)
         if not match:
             raise ManifestError(f"invalid notes field in {source}")
         key, value = match.groups()
@@ -108,15 +100,9 @@ def parse_notes(block: str, source: str) -> dict[str, str]:
         if key == "mode":
             if value not in ("auto", "fixed"):
                 raise ManifestError(f"notes.mode in {source} must be auto or fixed")
-        elif key == "overflow":
-            if value not in ("manual", "compact"):
-                raise ManifestError(f"notes.overflow in {source} must be manual or compact")
-        elif key == "selection_sha256":
-            if not re.fullmatch(r"[0-9a-f]{64}", value):
-                raise ManifestError(f"notes.selection_sha256 in {source} requires 64 lowercase hex characters")
-        elif key == "aggregate_sha":
-            # Historical notes carried a correction pin. Accept it on read,
-            # but it has no text-routing or publication authority.
+        elif key in ("aggregate_sha", "selection_sha256"):
+            # Historical bookkeeping has no generation, text-routing or
+            # publication authority. Never require or emit these fields.
             continue
         else:
             if value not in ("|", "|-"):
@@ -143,11 +129,7 @@ def parse_notes(block: str, source: str) -> dict[str, str]:
 
 def validate_complete_notes(fields: dict[str, str], source: str) -> None:
     """Explicit-mode notes are a complete authored prefix, never an insertion."""
-    if fields.get('overflow', 'manual') not in ('manual', 'compact'):
-        raise ManifestError(f"notes.overflow in {source} must be manual or compact")
     if "mode" not in fields:
-        if "selection_sha256" in fields:
-            raise ManifestError(f"notes.selection_sha256 in {source} requires notes.mode")
         return
     if fields["mode"] not in ("auto", "fixed"):
         raise ManifestError(f"notes.mode in {source} must be auto or fixed")

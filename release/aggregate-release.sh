@@ -246,46 +246,10 @@ write_release_notes() {
   if is_preview "$version"; then manifest=daily-preview.yaml; fi
   {
     printf '# Kuasar Sandbox %s\n\n' "$version"
-    printf 'Kuasar Sandbox is a production-deployable MicroVM sandbox platform for large-scale agent, serverless, and reinforcement-learning workloads. This aggregate contains selected user guides, Demo and canonical tests, the original component archives, and both native workbench images under one aggregate version. The declared native x86_64 profile uses the current full ordinary case selection. The hosted ARM profile requires native non-KVM image/storage E2E and `artifact-only` Workbench qualification; planned Workbench cases do not establish network, KVM lifecycle or snapshot/restore execution. Consult the per-architecture validation records for executed cases and `qualification_scope`, including any `native-full` acceptance. Historical releases retain their original coverage.\n\n'
-    printf '## Highlights\n\n'
-    printf '%s\n' \
-      '- Independent Guest Kernel isolation for each MicroVM sandbox.' \
-      '- Snapshot templates for creating independent instances, plus stateful pause and resume for the same logical sandbox.' \
-      '- Local files, shared file storage, and object storage with layered caches as selectable data paths.' \
-      '- Node admission and resource reclamation for safely improving effective sandbox density.' \
-      '- Isolated high-speed networking, an E2B-compatible API, and single-node or multi-node deployment.'
-    printf '\n## Component versions\n\n'
-    printf '| Release unit | Version |\n|---|---|\n'
-    while IFS=$'\t' read -r unit tag; do
-      printf '| `%s` | `%s` |\n' "$unit" "$tag"
-    done < "$selection"
-    printf '\nThe five component repositories version and publish independently. `guest-runtime` supplies the `runtime` and `vmlinux` release units but remains one component repository. This aggregate pins all six units for joint platform qualification; the machine validation records below report the actual acceptance.\n\n'
-    printf 'The channel manifest [`releases/%s`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/releases/%s) records the selected versions and this editable full description. It is a source file, separate from the Release asset `SHA256SUMS`, which verifies downloaded archive bytes.\n\n' "$manifest" "$version" "$manifest"
-    printf '## Asset categories\n\n'
-    printf '| Category | Contents | Use |\n|---|---|---|\n'
-    printf '| Products | Six original upstream archives per architecture | Extract only the selected native architecture |\n'
-    printf '| platform-release | Bilingual guides, Demo, canonical tests, helpers, locked wheels and launcher | Extract beside products |\n'
-    printf '| workbench | One gzip-compressed Docker image archive per architecture | Import separately with `docker load -i`; never extract into products |\n'
-    printf '| SHA256SUMS | All declared archive hashes | Verify downloaded bytes before use |\n\n'
-    printf 'Publication requires the qualified images at `ghcr.io/kuasar-sandbox/workbench:%s`. Each compressed workbench archive must be smaller than 2 GiB. Consult the final validation binding for its archive hash, image ID, registry identities, actual sizes, import/start timings and observed peak disk usage separately.\n\n' "${version#release-}"
-    printf '## Supported environment\n\n'
-    printf 'Prebuilt products and workbench target native Linux x86_64 and aarch64. System tests require cgroup v2, 4096-byte pages, KVM/TUN, UFFD/BPF and the documented native Docker host prerequisites. Ordinary UID builds need no KVM or added capabilities. Workbench system mode is a trusted administrator environment with Docker privileged access; no custom host security-policy tools are required. Private namespaces/data and owned cleanup do not provide hostile-root confinement.\n\n'
-    printf '## Quick Start\n\n'
-    printf 'Follow the [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/quickstart.md) to select the native product/platform assets from this complete aggregate, optionally import workbench, verify `SHA256SUMS`, prepare a template, and exercise create, guest exec, pause, reconnect/resume, kill, and cleanup with the unmodified E2B Python SDK.\n\n' "$version"
-    printf '## Production deployment\n\n'
-    printf 'The system supports production deployment. Operators should complete workload-specific capacity validation and configure production TLS, durable storage, network policy, credentials, monitoring, and recovery for their topology. See [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/deployment.md).\n\n' "$version"
-    printf '## Known limitations\n\n'
-    printf '%s\n' \
-      '- Multi-node clusters and centralized network policy require their documented supporting infrastructure.' \
-      '- The Quick Start self-signed certificates, local registry, and demo credentials are for evaluation only.' \
-      '- Node-local lightweight Egress and OpenTelemetry remain Proposed and are not release prerequisites.'
-    printf '\n## Security\n\n'
-    printf 'Report vulnerabilities privately through [Report a vulnerability](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new). Do not disclose unpatched vulnerabilities in public issues.\n\n'
-    printf '## Versioning and release channels\n\n'
     if is_preview "$version"; then
       printf 'This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.\n\n'
     else
-      printf 'This aggregate is a Stable, non-prerelease release. Preview continues as the development and evaluation channel. Production readiness and public release-channel stability are separate dimensions.\n\n'
+      printf 'This aggregate is a Stable, non-prerelease release. Channel status does not establish workload-specific production readiness.\n\n'
     fi
     if [ -n "$previous" ]; then
       printf "Previous aggregate selection: \`%s\`.\n\n" "$previous"
@@ -294,19 +258,35 @@ write_release_notes() {
     else
       printf 'This is the first formal aggregate release; no preview or repository history is used as a comparison baseline.\n\n'
     fi
+    printf 'Selection and editable release notes: [`releases/%s`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/releases/%s).\n\n' "$manifest" "$version" "$manifest"
+    printf '## Component versions\n\n'
+    printf '| Release unit | Version |\n|---|---|\n'
+    while IFS=$'\t' read -r unit tag; do
+      printf '| `%s` | `%s` |\n' "$unit" "$tag"
+    done < "$selection"
+    printf '\nSix release units from five independently versioned repositories; `guest-runtime` supplies both `runtime` and `vmlinux`.\n\n'
     printf '## Component updates\n'
     while IFS=$'\t' read -r unit _; do
       [ -s "$updates/$unit.md" ] || release_fail "component update notes are missing: $unit"
       printf '\n### %s\n\n' "$unit"
       cat "$updates/$unit.md"
     done < "$selection"
-    printf "\nVerify every explicit asset with \`SHA256SUMS\`. GitHub provides source archives automatically for this tag.\n"
+    printf '\n## Download and use\n\n'
+    printf '%s\n' \
+      '- Choose native Linux x86_64 or aarch64 assets. Verify downloaded archives with `SHA256SUMS` before use.' \
+      '- Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.' \
+      '- Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.'
+    printf '\nSee [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/%s/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.\n\n' "$version" "$version"
+    printf '## Qualification scope\n\n'
+    printf 'The declared native x86_64 profile uses the current full ordinary case selection. The hosted ARM profile requires native non-KVM image/storage E2E and `artifact-only` Workbench qualification; planned Workbench cases do not establish network, KVM lifecycle or snapshot/restore execution. Consult the per-architecture validation records for executed cases and `qualification_scope`, including any `native-full` acceptance. These are declared profiles, not evidence that every planned test ran.\n\n'
+    printf '## Security\n\n'
+    printf 'Workbench system mode is a trusted administrator environment with Docker privileged access. Private namespaces/data and owned cleanup do not provide hostile-root confinement.\n\n'
+    printf 'Report vulnerabilities privately through [Report a vulnerability](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new), not public issues.\n'
   } > "$output"
   # This generator is called before manifest admission, never by the publisher.
   # The complete result is reviewed and persisted in notes.body.
-  # Check the complete prose and machine evidence together immediately before
-  # publication. Selection must retain the full editable manuscript first.
 }
+
 
 # Existing x86-only releases retain their original contract. A dual aggregate
 # contains every ARM unit; a partially populated target is never accepted.

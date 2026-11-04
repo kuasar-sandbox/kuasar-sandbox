@@ -16,12 +16,12 @@ def checked(text, *, blocks=None):
         detail = f'actual={len(text)}, budget={MAX_CHARACTERS}'
         if blocks is not None:
             detail += ', blocks=' + json.dumps(blocks, sort_keys=True, separators=(',', ':'))
-        raise ValueError(f'Release body exceeds {MAX_CHARACTERS} characters ({detail}); evidence must not be truncated; edit and commit notes.body or opt in to notes.overflow: compact')
+        raise ValueError(f'Release body exceeds {MAX_CHARACTERS} characters ({detail}); evidence must not be truncated; manual intervention required: edit and commit notes.body before retrying publication')
     return text
 
 
-def binding_text(prefix, binding, suffix, *, reserve_registry_version=None, fit_notes=None):
-    """Budget evidence first, then adapt only the human-readable prefix."""
+def binding_text(prefix, binding, suffix, *, reserve_registry_version=None):
+    """Budget the unchanged human-readable prefix and complete machine evidence."""
     def encoded(value):
         return json.dumps(value, sort_keys=True, separators=(',', ':'))
 
@@ -62,11 +62,6 @@ def binding_text(prefix, binding, suffix, *, reserve_registry_version=None, fit_
         # Other projections (notably source_records) are required by readers.
         del record['case_files']
         del budget['case_files']
-    if len(render(budget)) > MAX_CHARACTERS and fit_notes is not None:
-        available = MAX_CHARACTERS - len(render(budget)) + len(prefix)
-        prefix = fit_notes(prefix, available)
-        if not isinstance(prefix, str) or MARKER in prefix:
-            raise ValueError('notes adjustment must return only human-readable text')
     blocks = {'notes': len(prefix) + len(suffix),
               **{key: len(encoded(value)) for key, value in budget.items()}}
     checked(render(budget), blocks=blocks)

@@ -428,13 +428,11 @@ for unit in "${RELEASE_UNITS[@]}"; do
     || release_fail "aggregate release notes omit $unit updates"
 done
 for heading in \
-  '## Highlights' \
-  '## Supported environment' \
-  '## Quick Start' \
-  '## Production deployment' \
-  '## Known limitations' \
-  '## Security' \
-  '## Versioning and release channels'; do
+  '## Component versions' \
+  '## Component updates' \
+  '## Download and use' \
+  '## Qualification scope' \
+  '## Security'; do
   grep -Fqx "$heading" "$TMP/bundle/release-notes.md" \
     || release_fail "aggregate release notes omit $heading"
 done
@@ -460,6 +458,22 @@ grep -Fq "https://github.com/kuasar-sandbox/kuasar-sandbox/blob/$VERSION/docs/qu
 grep -Fq 'https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new' \
   "$TMP/bundle/release-notes.md" \
   || release_fail "formal release notes omit the private security reporting link"
+for guidance in \
+  'SHA256SUMS' \
+  'docker load -i' \
+  'trusted administrator environment with Docker privileged access' \
+  'do not provide hostile-root confinement' \
+  "https://github.com/kuasar-sandbox/kuasar-sandbox/blob/$VERSION/docs/deployment.md"; do
+  grep -Fq "$guidance" "$TMP/bundle/release-notes.md" \
+    || release_fail "aggregate release notes omit download, deployment or security guidance"
+done
+python3 - "$TMP/bundle/release-notes.md" <<'PY_ORDER'
+import pathlib, sys
+body = pathlib.Path(sys.argv[1]).read_text()
+assert body.index('## Component updates') < body.index('## Download and use')
+assert 'production-deployable' not in body
+assert 'The system supports production deployment.' not in body
+PY_ORDER
 grep -Fq 'This is the first formal aggregate release' "$TMP/bundle/release-notes.md" \
   || release_fail "first formal release notes do not identify the missing baseline"
 if grep -Fq 'Previous aggregate selection:' "$TMP/bundle/release-notes.md"; then

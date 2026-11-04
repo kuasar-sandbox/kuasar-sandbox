@@ -20,14 +20,9 @@ import change_inventory
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def identity(config):
-    """Generation bookkeeping only, never a release admission/source identity."""
-    return selection.notes_selection_sha256(config)
-
-
-def without_legacy_pin(block):
+def without_legacy_metadata(block):
     # Drop obsolete metadata when rewriting old manifests; it has no semantics.
-    return re.sub(r'(?m)^  aggregate_sha: [^\n]*\n?', '', block)
+    return re.sub(r'(?m)^  (aggregate_sha|selection_sha256): [^\n]*\n?', '', block)
 
 
 def require_prepared(text, relative):
@@ -63,17 +58,21 @@ def render(root, text, relative, previous_units=None, *, source_shas=None):
 def prepare(current, selected, relative, root, *, previous_units=None, source_shas=None):
     """Retain hand edits on retries, regenerate auto text for a new selection."""
     before = selection.read_simple_yaml(current, relative)
-    selected, _ = selection.split_notes(selected, relative)
+    selected, edited_block = selection.split_notes(selected, relative)
     version, _, units = selection.parse_manifest(selected, relative, relative.endswith('daily-preview.yaml'))
     after = selection.read_simple_yaml(selected, relative)
-    fields = before.get('notes', {})
-    _, block = selection.split_notes(current, relative)
+    # The CLI may include an edited notes block with the pending selection.
+    # Coordinators pass only their selected fields, retaining committed notes.
+    _, original_block = selection.split_notes(current, relative)
+    block = edited_block or original_block
+    fields = selection.parse_notes(block, relative) if block else {}
+    unchanged = {key: value for key, value in before.items() if key != 'notes'} == after
     if fields.get('mode') == 'fixed':
         for warning in release_notes.stale_warnings(fields.get('body', ''), version, units):
             print('release notes warning: ' + warning, file=sys.stderr)
-        return selected + without_legacy_pin(block)
-    if fields.get('mode') == 'auto' and fields.get('selection_sha256') == identity(after):
-        return selected + without_legacy_pin(block)
+        return selected + without_legacy_metadata(block)
+    if fields.get('mode') == 'auto' and unchanged:
+        return selected + without_legacy_metadata(block)
     body = render(root, selected, relative, previous_units, source_shas=source_shas)
     if fields and 'mode' not in fields:
         # One explicit migration retains BOTH formerly authored prose fields.
@@ -81,10 +80,8 @@ def prepare(current, selected, relative, root, *, previous_units=None, source_sh
         body = release_notes.Narrative(body, fields).text
         body = body.replace(release_notes.NOTICE_START + '\n', '').replace(release_notes.NOTICE_END, '')
     body = body.rstrip('\n') + '\n'
-    note_block = ('notes:\n  mode: auto\n  selection_sha256: ' + identity(after) + '\n  body: |\n' +
+    note_block = ('notes:\n  mode: auto\n  body: |\n' +
                   ''.join(('    ' + line if line else '') + '\n' for line in body[:-1].split('\n')))
-    if 'overflow' in fields:
-        note_block = note_block.replace('  mode: auto\n', '  mode: auto\n  overflow: ' + fields['overflow'] + '\n', 1)
     result = selected + note_block
     selection.parse_manifest(result, relative, relative.endswith('daily-preview.yaml'))
     return result
@@ -111,7 +108,18 @@ def main():
         if not separator or unit not in selection.UNITS or unit in source_shas or not change_inventory.SHA.fullmatch(sha):
             parser.error('--source-sha requires one unique known UNIT=40-character-SHA')
         source_shas[unit] = sha
-    content = prepare(selected, selected, relative, root, source_shas=source_shas)
+    committed = subprocess.run(['git', '-C', str(root), 'show', f'HEAD:{relative}'],
+        text=True, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=False)
+    current = committed.stdout if committed.returncode == 0 else selected
+    before = selection.read_simple_yaml(current, relative)
+    pending = selection.read_simple_yaml(selected, relative)
+    fields = pending.get('notes', {})
+    if (fields.get('mode') == 'auto' and fields != before.get('notes', {}) and
+            {key: value for key, value in before.items() if key != 'notes'} !=
+            {key: value for key, value in pending.items() if key != 'notes'}):
+        parser.error('selection and auto notes are both modified relative to HEAD; '
+                     'review and commit them together; refusing to overwrite the edited notes')
+    content = prepare(current, selected, relative, root, source_shas=source_shas)
     if content != selected:
         path.write_text(content)
     print(f'Prepared {relative}; edit the complete notes as needed and commit the manifest.')

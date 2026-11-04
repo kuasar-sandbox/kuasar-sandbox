@@ -53,7 +53,6 @@ class NarrativeTests(unittest.TestCase):
                     expected = '自定义说明。  \n\nNo required headings.' + ending
                     narrative = notes.Narrative(self.text, fields, 'immutable-url')
                     self.assertEqual(narrative.text, expected)
-                    self.assertEqual(narrative.fit(expected, 1), expected)
 
     def test_legacy_source_age_is_not_a_publication_gate(self):
         self.assertFalse(hasattr(notes, 'legacy_admitted_source'))
@@ -170,24 +169,16 @@ class NarrativeTests(unittest.TestCase):
             with patch.object(notes, 'publication_notes', side_effect=AssertionError('no manifest gate')):
                 notes.validate_file(self.root / 'missing-source', self.version, output)
 
-    def test_selection_fingerprint_is_optional_non_authoritative_metadata(self):
+    def test_obsolete_selection_fingerprint_is_ignored_on_read(self):
         for mode in ('auto', 'fixed'):
-            block = f'notes:\n  mode: {mode}\n  selection_sha256: ' + '0' * 64 + '\n  body: |-\n    Exact body.'
+            block = f'notes:\n  mode: {mode}\n  selection_sha256: obsolete\n  body: |-\n    Exact body.'
             fields = notes.selection.read_simple_yaml(self.manifest + block, 'manifest')['notes']
-            self.assertEqual(fields['selection_sha256'], '0' * 64)
+            self.assertNotIn('selection_sha256', fields)
             self.assertEqual(notes.Narrative(self.text, fields).text, 'Exact body.')
             self.commit(self.manifest + block)
             output = self.root / 'exported.md'
             notes.export_notes(self.root, self.version, output)
             self.assertEqual(output.read_text(), 'Exact body.')
-            notes.validate_file(self.root, self.version, output)
-        for digest in ('a' * 63, 'a' * 65, 'A' * 64, 'g' * 64):
-            block = 'notes:\n  mode: auto\n  selection_sha256: ' + digest + '\n  body: |-\n    Text.'
-            with self.subTest(digest=digest), self.assertRaisesRegex(ValueError, '64 lowercase hex'):
-                notes.selection.read_simple_yaml(self.manifest + block, 'manifest')
-        block = 'notes:\n  selection_sha256: ' + 'a' * 64 + '\n  body: |-\n    Text.'
-        with self.assertRaisesRegex(ValueError, 'requires notes.mode'):
-            notes.selection.read_simple_yaml(self.manifest + block, 'manifest')
 
     def test_latest_committed_notes_win_over_old_source_and_worktree(self):
         latest = self.commit(self.manifest + self.block.replace('Two lines.', 'New notes.'))
@@ -265,66 +256,31 @@ class NarrativeTests(unittest.TestCase):
             with self.subTest(block=block), self.assertRaises(notes.selection.ManifestError):
                 notes.selection.parse_manifest(self.manifest + block, 'manifest', False)
 
-    def test_generated_commit_rows_compact_only_with_comparison_and_preserve_prose(self):
-        row = '- `aaaaaaaaaaaa` subject ([commit](https://github.com/kuasar-sandbox/sandboxer/commit/' + 'a' * 40 + '))\n'
-        intro = '## Component updates\n\n### sandboxer\n\nSelected version: `v1` → `v2`.\n\n'
-        comparison = '[Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v1...v2)\n'
-        prose = 'Required upgrade caveat, with unicode →.\n'
-        self.assertEqual(notes.compact_commits(intro + row + prose), intro + row + prose)
-        self.assertEqual(notes.compact_commits(intro + row + prose + comparison), intro + prose + comparison)
-        # Non-generated bullets and unknown prose are never clipped to length.
-        self.assertEqual(notes.compact_commits(intro + '- User-authored warning\n' + comparison),
-                         intro + '- User-authored warning\n' + comparison)
-        mismatch = intro + row.replace('/sandboxer/commit/', '/accelerator/commit/') + comparison
-        self.assertEqual(notes.compact_commits(mismatch), mismatch)
-
-    def test_commit_compaction_requires_unique_selection_and_exact_comparison_range(self):
-        row = '- `aaaaaaaaaaaa` subject ([commit](https://github.com/kuasar-sandbox/sandboxer/commit/' + 'a' * 40 + '))\n'
-        selected = 'Selected version: `v0.1.6` → `v0.1.7`.\n'
-        comparison = '[Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v0.1.6...v0.1.7)\n'
-        for selection, link in (
-                (selected, comparison.replace('v0.1.6...v0.1.7', 'v0.1.1...v0.1.2')),
-                ('', comparison), (selected * 2, comparison),
-                (selected, comparison * 2)):
-            original = '### sandboxer\n' + selection + row + link
-            with self.subTest(selection=selection, link=link):
-                self.assertEqual(notes.compact_commits(original), original)
-
     def binding(self):
         return {'aggregate_sha': self.revision, 'validation_plan': {'cases': ['full case evidence']},
                 'workbench': {arch: {'image_id': 'sha256:' + '1' * 64, 'sha256': '2' * 64}
                               for arch in body.WORKBENCH_ARCHES}}
 
-    def test_exact_budget_and_proof_only_overflow_adapt_prefix_not_evidence(self):
+    def test_exact_budget_and_registry_reserve_require_manual_intervention(self):
         binding = self.binding()
         original = copy.deepcopy(binding)
         prefix = 'Full reviewed prose\n' * 100
-        baseline = body.binding_text(prefix, binding, '\n', reserve_registry_version=self.version)
-        # Without future proof the original text fits, but reserve must drive fit.
-        calls = []
-        def adapt(text, available):
-            calls.append((text, available))
-            return text[:1]  # Test callback only; production never slices prose.
+        baseline = body.binding_text(prefix, binding, '\n')
         with patch.object(body, 'MAX_CHARACTERS', len(baseline)):
-            result = body.binding_text(prefix, binding, '\n', reserve_registry_version=self.version, fit_notes=adapt)
-        self.assertEqual(len(calls), 1)
-        self.assertLess(calls[0][1], len(prefix))
-        self.assertEqual(json.loads(result.split(body.MARKER)[1].split(' -->')[0]), original)
+            self.assertEqual(body.binding_text(prefix, binding, '\n'), baseline)
+            with self.assertRaisesRegex(ValueError, 'manual intervention required'):
+                body.binding_text(prefix, binding, '\n', reserve_registry_version=self.version)
+            with self.assertRaisesRegex(ValueError, 'manual intervention required'):
+                body.binding_text(prefix + 'x', binding, '\n')
         self.assertEqual(binding, original)
         self.assertNotIn('registry', binding)
-        # Equality is accepted, one more character invokes adaptation.
-        plain = body.binding_text(prefix, binding, '\n')
-        with patch.object(body, 'MAX_CHARACTERS', len(plain)), patch.object(self.narrative(), 'fit') as fit:
-            self.assertEqual(body.binding_text(prefix, binding, '\n', fit_notes=fit), plain)
-            fit.assert_not_called()
 
-    def test_evidence_conflicts_are_rejected_before_narrative_callback(self):
+    def test_evidence_conflicts_are_rejected(self):
         binding = self.binding()
         binding['case_files'] = {'a': [True]}
         binding['validation_plan']['case_files'] = {'a': [1]}
-        with patch.object(self.narrative(), 'fit') as fit, self.assertRaisesRegex(ValueError, 'conflicting evidence'):
-            body.binding_text('x' * 125000, binding, '\n', fit_notes=fit)
-        fit.assert_not_called()
+        with self.assertRaisesRegex(ValueError, 'conflicting evidence'):
+            body.binding_text('x' * 125000, binding, '\n')
 
     def test_authored_body_and_notice_never_shrink_to_a_manifest_link(self):
         record = self.binding()
@@ -333,10 +289,9 @@ class NarrativeTests(unittest.TestCase):
         narrative = notes.Narrative(self.text, fields, 'https://example.invalid/immutable')
         expected = fields['upgrade_notice'] + '\n\n' + fields['body']
         self.assertEqual(narrative.text, expected)
-        self.assertEqual(narrative.fit(expected, 2500), expected)
         with patch.object(body, 'MAX_CHARACTERS', 2500), self.assertRaisesRegex(ValueError, 'must not be truncated'):
             body.binding_text(narrative.text + '\n', record, '\n',
-                reserve_registry_version=self.version, fit_notes=narrative.fit)
+                reserve_registry_version=self.version)
         self.assertEqual(record, original)
 
     def test_notice_only_keeps_warning_and_stage_text_without_title_contract(self):
@@ -345,7 +300,6 @@ class NarrativeTests(unittest.TestCase):
         narrative = notes.Narrative(staged, {'upgrade_notice': warning}, 'url')
         expected = warning + '\n\n' + staged
         self.assertEqual(narrative.text, expected)
-        self.assertEqual(narrative.fit(expected, 1), expected)
 
     def test_irreducible_notice_or_evidence_rejects_publication(self):
         for long_notice in (True, False):
@@ -355,28 +309,16 @@ class NarrativeTests(unittest.TestCase):
                 record['validation_plan']['evidence'] = 'x' * 4000
             narrative = notes.Narrative(self.text, fields, 'https://example.invalid/immutable')
             with patch.object(body, 'MAX_CHARACTERS', 2500), self.assertRaisesRegex(ValueError, 'must not be truncated'):
-                body.binding_text(narrative.text, record, '\n', reserve_registry_version=self.version, fit_notes=narrative.fit)
+                body.binding_text(narrative.text, record, '\n', reserve_registry_version=self.version)
 
-    def test_generated_commit_compaction_cannot_change_any_marked_notice_bytes(self):
-        section = ('### sandboxer\nSelected version: `v1` → `v2`.\n'
-            '- `aaaaaaaaaaaa` title ([commit](https://github.com/kuasar-sandbox/sandboxer/commit/' + 'a' * 40 + '))\n'
-            '[Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v1...v2)\n')
-        notice = notes.NOTICE_START + '\n## Important upgrade notice\n' + section + notes.NOTICE_END
-        original = '# Kuasar Sandbox release-v0.1.10\n\n' + notice + '\n' + section
-        compact = notes.compact_commits(original)
-        self.assertEqual(notes.inline_notice(compact), notice)
-        self.assertLess(len(compact), len(original))
-
-    def test_no_fields_staged_fallback_never_compacts_or_replaces_prefix(self):
+    def test_no_fields_staged_fallback_preserves_prefix(self):
         row = '- `aaaaaaaaaaaa` title ([commit](https://github.com/kuasar-sandbox/sandboxer/commit/' + 'a' * 40 + '))\n'
         staged = ('### sandboxer\nSelected version: `v1` → `v2`.\n' + row * 100 +
                   '[Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v1...v2)\n')
         narrative = notes.Narrative(staged, {}, None)
         self.assertEqual(narrative.text, staged)
-        with patch.object(notes, 'compact_commits', side_effect=AssertionError('never rewrite staged prose')):
-            self.assertEqual(narrative.fit(staged, 1), staged)
-            with patch.object(body, 'MAX_CHARACTERS', 2500), self.assertRaisesRegex(ValueError, 'must not be truncated'):
-                body.binding_text(staged, self.binding(), '\n', fit_notes=narrative.fit)
+        with patch.object(body, 'MAX_CHARACTERS', 2500), self.assertRaisesRegex(ValueError, 'must not be truncated'):
+            body.binding_text(staged, self.binding(), '\n')
 
     def test_compatibility_cli_checks_size_without_rewriting_any_text(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -429,9 +371,8 @@ class ReviewedBindingTests(unittest.TestCase):
         human = 'Manually reviewed instructions.\n' * 5000
         for mode in ('auto', 'fixed'):
             with patch.object(notes, 'publication_notes', return_value=({'mode': mode, 'body': human}, 'url')):
-                with patch.object(notes, 'compact_commits') as compact, self.assertRaisesRegex(ValueError, 'must not be truncated'):
+                with self.assertRaisesRegex(ValueError, 'must not be truncated'):
                     binder.bind(self.root, self.plan, self.validation, self.results, platform=self.root)
-                compact.assert_not_called()
             self.assertEqual({path: path.read_bytes() for path in before}, before)
 
     def test_complete_notes_do_not_bypass_machine_asset_checks(self):
@@ -475,10 +416,10 @@ class ReviewedBindingTests(unittest.TestCase):
         self.assertEqual(restored['validation_plan'], self.plan)
         self.assertEqual(restored['workbench'], self.results)
 
-    def test_missing_mode_or_stale_bookkeeping_does_not_gate_binding(self):
+    def test_missing_mode_does_not_gate_binding(self):
         binder = test_workbench_binding.binder
         for fields in ({'body': 'Full human text.'},
-                       {'mode': 'auto', 'selection_sha256': '0' * 64, 'body': 'Full human text.'}):
+                       {'mode': 'auto', 'body': 'Full human text.'}):
             (self.root / 'release-notes.md').write_text('Original notes\n')
             with self.subTest(fields=fields), patch.object(notes, 'publication_notes', return_value=(fields, 'url')):
                 binder.bind(self.root, self.plan, self.validation, self.results, platform=self.root)

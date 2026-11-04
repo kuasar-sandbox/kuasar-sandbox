@@ -13,7 +13,7 @@ import publication_body
 import release_notes
 
 
-def bind(bundle, plan, validation, workbench=None, *, platform=None, source_ref=None, allow_notes_write=False):
+def bind(bundle, plan, validation, workbench=None, *, platform=None):
     artifacts.require(plan["mode"] == "exact-assets" and plan["baseline"].get("staged"), "release needs a staged exact-assets plan")
     artifacts.require(validation == artifacts.collect_results(plan, validation["architectures"]), "validation identity differs from staged plan")
     artifacts.require(plan.get('source_records') is not None, 'new publication requires selected tag source records')
@@ -45,11 +45,9 @@ def bind(bundle, plan, validation, workbench=None, *, platform=None, source_ref=
     version = plan['baseline']['version']
     units = {unit: row['version'] for unit, row in plan['baseline']['units'].items()}
     fields, url = release_notes.publication_notes(release_notes.ROOT, version, platform)
-    persist = (lambda current, compacted: release_notes.persist_compacted_notes(
-        current, compacted, version, source_ref, url)) if allow_notes_write else None
-    narrative = release_notes.Narrative(text, fields, url, version=version, units=units, persist=persist)
+    narrative = release_notes.Narrative(text, fields, url, version=version, units=units)
     notes.write_text(publication_body.binding_text(narrative.text + '\n', binding, '\n',
-                     reserve_registry_version=plan['baseline']['version'], fit_notes=narrative.fit))
+                     reserve_registry_version=plan['baseline']['version']))
 
 
 if __name__ == "__main__":
@@ -59,9 +57,7 @@ if __name__ == "__main__":
     parser.add_argument("validation", type=Path)
     parser.add_argument("--workbench", type=Path, required=True)
     parser.add_argument("--platform", type=Path, default=Path("platform"), help="admitted platform checkout")
-    parser.add_argument("--source-ref", help="maintained branch for canonical notes compaction")
-    parser.add_argument("--allow-notes-write", action="store_true", help="persist opt-in compaction using the manifest writer")
     args = parser.parse_args()
     bind(args.bundle, json.loads(args.plan.read_text()), json.loads(args.validation.read_text()),
          {arch: json.loads((args.workbench / f"{arch}.json").read_text()) for arch in artifacts.ARCHES},
-         platform=args.platform, source_ref=args.source_ref, allow_notes_write=args.allow_notes_write)
+         platform=args.platform)

@@ -419,31 +419,15 @@ jobs:
           pattern: integration-workbench-result-*-${{ github.run_id }}
           path: workbench-results
           merge-multiple: true
-      - name: Create platform notes writer token
-        id: notes-writer-token
-        if: ${{ inputs.validation_only != true }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
-        with:
-          client-id: ${{ vars.KUASAR_CI_APP_CLIENT_ID }}
-          private-key: ${{ secrets.KUASAR_CI_APP_PRIVATE_KEY }}
-          owner: kuasar-sandbox
-          repositories: kuasar-sandbox
-          permission-contents: write
       - name: Bind publication to the tested bytes
         env:
           GH_TOKEN: ${{ github.token }}
-          PLATFORM_TOKEN: ${{ steps.notes-writer-token.outputs.token }}
-          SOURCE_REF: ${{ needs.prepare.outputs.source_ref }}
-          VALIDATION_ONLY: ${{ inputs.validation_only }}
         run: |
           python3 -B ci/integration/transport.py extract aggregate-stage/source-inputs.tar fixed-inputs
           mv fixed-inputs/platform platform
           workbench_results=workbench-results
           if [ -d validated/workbench ]; then workbench_results=validated/workbench; fi
-          notes_write=()
-          if [ "$VALIDATION_ONLY" = false ]; then notes_write+=(--allow-notes-write); fi
-          python3 -B release/bind-validation.py aggregate-stage validated/plan/plan.json validated/validation.json \
-            --workbench "$workbench_results" --source-ref "$SOURCE_REF" "${notes_write[@]}"
+          python3 -B release/bind-validation.py aggregate-stage validated/plan/plan.json validated/validation.json --workbench "$workbench_results"
 
       - name: Install registry transfer tooling
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
