@@ -71,6 +71,8 @@ full CI. Truncated trees and empty changes also retain
 full CI. Missing exact identities fail. Deleting a maintained manifest fails its
 pair validation; a symlink sibling cannot supply a manifest.
 
+Component release consumers and cleanup Python scripts, the platform E2E assembler, and the working-set benchmark runner and directory contract test also use this tooling lane. Product cases, product modules, build inputs and benchmark thresholds remain outside this script-only scope.
+
 The `tooling` lane adds CI/release Python and shell files in `ci/`, `release/`
 and `test/release/`, workflow/action YAML and action JavaScript under `.github/`,
 and the component `scripts/ci-*`, `scripts/release*` and `scripts/test-release*`

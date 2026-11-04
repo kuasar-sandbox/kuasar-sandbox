@@ -13,8 +13,10 @@ COMPONENT_SCRIPTS = {
     'scripts/validate-preview-line.sh', 'scripts/validate-release-source.sh',
     'scripts/test-preview-line.sh', 'scripts/test-delete-preview.sh', 'scripts/test-publisher.sh',
     'scripts/test-environment-tools.py', 'scripts/test-selected-go-materials.py',
+    'scripts/delete-preview.py', 'scripts/test-delete-preview.py',
+    'scripts/prepare-sandbox-init.py', 'scripts/test-prepare-sandbox-init.py',
 }
-PLATFORM_PYTHON = {'test/e2e/e2e'}
+PLATFORM_PYTHON = {'test/e2e/e2e', 'test/perf/working_set_directory_test.py'}
 
 
 def platform_harness(path):
@@ -22,7 +24,8 @@ def platform_harness(path):
             or path.startswith('test/e2e/test_') and path.count('/') == 2 and path.endswith('.py'))
 
 
-PLATFORM_SHELLS = {'ci/runner/kuasar-ci-bpf', 'ci/runner/kuasar-ci-network'}
+PLATFORM_SHELLS = {'ci/runner/kuasar-ci-bpf', 'ci/runner/kuasar-ci-network',
+                   'test/e2e/assemble.sh', 'test/perf/sandbox-perf-working-set.sh'}
 
 
 def allowed(repository, path):

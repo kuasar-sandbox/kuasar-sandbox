@@ -84,6 +84,8 @@ sandboxer 库变更同样会重建 `node-ctl`，因为其管理和发布路径�
 
 源码 PR 解析比较主仓和每个已准入 companion 精确 base、head 与 integration 提交的完整 Git 树。`docs` 档仅允许 `README{,_zh}.md`、`test/e2e/README{,_zh}.md`、`docs/` 和 `test/e2e/guides/` 内普通 `100644` Markdown；platform 另允许 `workbench/README{,_zh}.md`、`ci/runner/README{,_zh}.md` 和 `test/demo/DEMO{,_zh}.md`。`manifest` 档仅增加 platform 的 `releases/release.yaml` 与 `releases/daily-preview.yaml`；可组合上述白名单文档，并执行两类检查。任何候选混入产品源码、E2E/性能测试、运行配置、未知路径/仓库或非普通文件都保留 full。截断树与空差异也保留 full；缺失精确身份则失败。删除维护清单会使双文件检查失败，未变的 symlink 也不能作为另一份清单输入。
 
+组件发行下载消费者与清理 Python 脚本、平台 E2E 组装器，以及 working-set 基准运行脚本和目录契约测试也使用 tooling 通道。产品用例、产品模块、构建输入与基准阈值仍不属于此脚本范围。
+
 `tooling` 档增加 `ci/`、`release/`、`test/release/` 内的 Python/Shell 文件、`.github/` 内的 workflow/action YAML 与 action JavaScript，以及组件 `scripts/ci-*`、`scripts/release*`、`scripts/test-release*` 入口（包括 Go 发布校验器）。明确的共享 helper/publisher 入口名单见 `ci/integration/tooling_lane.py`，还包括 platform 两个无扩展名 runner shell 脚本与 `ci/integration/dependency-cutovers.json`。platform E2E 运行器（`test/e2e/e2e`、`test/e2e/lib/` 下的 Python 文件和顶层 `test/e2e/test_*.py`）也走此档；产品 E2E 用例、owner 工作负载及非 Python 运行器输入仍走 full。脚本可为普通 `100644` 或可执行 `100755` blob。产品文件、`Makefile`、`workbench/` 实现、`release/inputs/` 构建声明和 `ci/integration/runner-capabilities.json` 仍走 full；主候选或任一 companion 混入产品改动时，full 优先。
 
 工具脚本检查分别读取精确 head 与 merge 的改动 blob：Python 只编译为随即丢弃的内存对象，Shell/JavaScript/Go 仅解析语法，workflow/action YAML 使用安全解析器并检查基本结构。可信检查器不 import 或运行候选工具、不安装候选依赖、不调用候选 action，也不构建产品。切换数据复用可信的完整结构解析器，不在本次准入依赖或查询发布；只有后续产品运行从可信 base 读取它时才可能生效。纯脚本变更必须运行对应单测/契约检查，并记录结果供检视。产品集成由下一次适用的产品构建/E2E 检查；脚本变更本身不单独派发产品 E2E。可混入已允许的文档和发布清单，其既有检查保留。所有轻量档仍运行 finalizer，`exact-assets` 发布验收保持完整。
