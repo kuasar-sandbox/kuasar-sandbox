@@ -141,11 +141,17 @@ class TagSelectionTests(unittest.TestCase):
              mock.patch.object(coordinator, 'active_aggregate_run', return_value=None), \
              mock.patch.object(coordinator, 'active_delete_run', return_value=None), \
              mock.patch.object(coordinator, 'active_release_run', return_value=None), \
+             mock.patch.object(coordinator, 'RepositoryState') as repository_state, \
+             mock.patch.object(coordinator, 'gh', side_effect=AssertionError('unexpected network access')), \
              mock.patch.object(coordinator, 'plan_units', return_value=plans), \
              mock.patch.object(coordinator, 'platform_changed_since', return_value=False), \
              mock.patch.object(coordinator, 'persist_manifest') as persist:
+            repository_state.return_value.status.return_value = coordinator.ReleaseStatus({}, 'a' * 40, True)
             self.assertEqual(coordinator.main(), 'unchanged')
             persist.assert_not_called()
+            self.assertEqual(repository_state.call_count, len(units))
+            self.assertEqual(repository_state.return_value.status.call_args_list,
+                             [mock.call(tag) for tag in units.values()])
 
     def test_formal_coordinator_requires_tags_not_independent_test_revisions(self):
         with tempfile.TemporaryDirectory() as directory:
