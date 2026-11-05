@@ -1,46 +1,35 @@
-version: release-v0.1.12
+version: release-v0.1.13
 delivery: workbench-v1
-previous_version: release-v0.1.11
-preview_version: preview.20261104.2
+previous_version: release-v0.1.12
+preview_version: preview.20261105
 components:
-  accelerator: v0.1.10
-  connector: v0.1.6
-  sandboxer: v0.1.13-preview.20261104.1
-  orchestrator: v0.1.12-preview.20261104.1
-  runtime: runtime-v0.1.12-preview.20261104.1
-  vmlinux: vmlinux-v0.1.6-preview.20261104
+  accelerator: v0.1.11
+  connector: v0.1.7
+  sandboxer: v0.1.13
+  orchestrator: v0.1.12
+  runtime: runtime-v0.1.12
+  vmlinux: vmlinux-v0.1.6
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.1.12-preview.20261104.2
+    # Kuasar Sandbox release-v0.1.13-preview.20261105
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
-    Previous aggregate selection: `release-v0.1.11`.
+    Previous aggregate selection: `release-v0.1.12`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104.2/releases/daily-preview.yaml).
-
-    ## Platform and delivery updates
-
-    This Preview rebuilds the platform, all 17 declared helpers and both Workbench images after the release/CI simplification. The six component artifacts below are unchanged from the November 4 `.1` selection; no later component source changes are included.
-
-    - Download packages from the selected aggregate tag manifest using GitHub asset IDs, sizes and digests; historical Release body records and checksum attachments are no longer required ([#325](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/325)).
-    - Publish human release notes and packages without machine acceptance blocks or a separate checksum attachment, while validating the current package combination and uploaded bytes ([#326](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/326)).
-    - Keep complete helper inventories and the runtime information needed to run them; use explicit local Go module workspaces for selected-source builds ([#328](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/328), [#329](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/329)).
-    - Preserve normal image runtime information and restore an interrupted publication from its still-valid accepted stage before selecting newer inputs ([#331](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/331), [#335](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/335)).
-
-    `release-v0.1.11` remains marked **Do not use**. The current Stable Latest remains `release-v0.1.10`; this Preview does not publish `v0.1.12` Stable.
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261105/releases/daily-preview.yaml).
 
     ## Component versions
 
     | Release unit | Version |
     |---|---|
-    | `accelerator` | `v0.1.10` |
-    | `connector` | `v0.1.6` |
-    | `sandboxer` | `v0.1.13-preview.20261104.1` |
-    | `orchestrator` | `v0.1.12-preview.20261104.1` |
-    | `runtime` | `runtime-v0.1.12-preview.20261104.1` |
-    | `vmlinux` | `vmlinux-v0.1.6-preview.20261104` |
+    | `accelerator` | `v0.1.11` |
+    | `connector` | `v0.1.7` |
+    | `sandboxer` | `v0.1.13` |
+    | `orchestrator` | `v0.1.12` |
+    | `runtime` | `runtime-v0.1.12` |
+    | `vmlinux` | `vmlinux-v0.1.6` |
 
     Six release units from five independently versioned repositories; `guest-runtime` supplies both `runtime` and `vmlinux`.
 
@@ -48,50 +37,27 @@ notes:
 
     ### accelerator
 
-    Selected version unchanged: `v0.1.10`. No source changes are included.
+    Selected version unchanged: `v0.1.11`.
 
     ### connector
 
-    Selected version unchanged: `v0.1.6`. No source changes are included.
+    Selected version unchanged: `v0.1.7`.
 
     ### sandboxer
 
-    Selected version: `v0.1.12` → `v0.1.13-preview.20261104.1`.
-
-    - vhost: negotiate SEG\_MAX and gather fragmented block reads in bounded windows ([#401](https://github.com/kuasar-sandbox/sandboxer/pull/401), [commit c6fd3dd84345](https://github.com/kuasar-sandbox/sandboxer/commit/c6fd3dd84345cba325256524e60897b81992a5b2)).
-    - perf(balloon): coalesce cold inflate releases within each descriptor ([#404](https://github.com/kuasar-sandbox/sandboxer/pull/404), [commit 060154797297](https://github.com/kuasar-sandbox/sandboxer/commit/060154797297ab389fc5df5fdbd3276f3992da5d)).
-    - artifact: avoid reading retained parents during publication ([#405](https://github.com/kuasar-sandbox/sandboxer/pull/405), [commit 9481156e0431](https://github.com/kuasar-sandbox/sandboxer/commit/9481156e0431ba41c04de66bf0d8e2df9f5c4cac)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/185f50b641ea84864bc8e0f7bab5c469100d45e3...9481156e0431ba41c04de66bf0d8e2df9f5c4cac)
+    Selected version unchanged: `v0.1.13`.
 
     ### orchestrator
 
-    Selected version: `v0.1.11` → `v0.1.12-preview.20261104.1`.
-
-    - test: make checkpoint ZIP fixtures deterministic ([#502](https://github.com/kuasar-sandbox/orchestrator/pull/502), [commit ca809e5530d6](https://github.com/kuasar-sandbox/orchestrator/commit/ca809e5530d647c0ae23602df2751f6685b9f0c1)).
-    - fix: reuse registry transports across membership and endpoint requests ([#496](https://github.com/kuasar-sandbox/orchestrator/pull/496), [commit 6fbe4c0b4bc8](https://github.com/kuasar-sandbox/orchestrator/commit/6fbe4c0b4bc8f4753994083c63c2b0c47a06067f)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/852dbc5c4ef0ad8fefa358fb588e2c8e7f7d06e8...6fbe4c0b4bc8f4753994083c63c2b0c47a06067f)
+    Selected version unchanged: `v0.1.12`.
 
     ### runtime
 
-    Selected version: `runtime-v0.1.11` → `runtime-v0.1.12-preview.20261104.1`.
-
-    The following repository history also includes shared guest-runtime and kernel changes; it is not limited to runtime-specific source changes.
-
-    - perf(vmlinux): batch balloon pages within the upstream ACK bound ([#108](https://github.com/kuasar-sandbox/guest-runtime/pull/108), [commit 05ec31e0be19](https://github.com/kuasar-sandbox/guest-runtime/commit/05ec31e0be19765dc54a96b71fb73a68068992fd)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/9cda6a9bea6951882b68575016c63d8d74cbcb78...05ec31e0be19765dc54a96b71fb73a68068992fd)
+    Selected version unchanged: `runtime-v0.1.12`.
 
     ### vmlinux
 
-    Selected version: `vmlinux-v0.1.5` → `vmlinux-v0.1.6-preview.20261104`.
-
-    Kernel release inputs: `native-deps/deps/vmlinux/*.config` and `native-deps/deps/linux-patches/`.
-
-    - perf(vmlinux): batch balloon pages within the upstream ACK bound ([#108](https://github.com/kuasar-sandbox/guest-runtime/pull/108), [commit 05ec31e0be19](https://github.com/kuasar-sandbox/guest-runtime/commit/05ec31e0be19765dc54a96b71fb73a68068992fd)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/9cda6a9bea6951882b68575016c63d8d74cbcb78...05ec31e0be19765dc54a96b71fb73a68068992fd)
+    Selected version unchanged: `vmlinux-v0.1.6`.
 
     ## Download and use
 
@@ -99,7 +65,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104.2/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.12-preview.20261104.2/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261105/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261105/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
