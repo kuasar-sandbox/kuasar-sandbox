@@ -35,7 +35,7 @@ daily-preview.yaml/version >= release.yaml/version
 
 The comparison uses numeric aggregate `MAJOR.MINOR.PATCH` values, not string ordering. A Stable manifest can select only Stable components. A Preview manifest can mix Stable and Preview components. Both manifests must list exactly six release units with their respective correct tag prefixes.
 
-The two manifests below are examples, not a list of current published versions.
+The two manifests below are examples, not a list of current published versions. New aggregate selections must declare `delivery: workbench-v1`. Omitting `delivery` selects the historical reading contract and cannot be used for new aggregate assembly.
 
 ### 2.1 Stable manifest
 
@@ -43,6 +43,7 @@ The two manifests below are examples, not a list of current published versions.
 
 ```yaml
 version: release-v0.5.7
+delivery: workbench-v1
 previous_version: release-v0.5.6
 components:
   accelerator: v0.2.1
@@ -59,6 +60,7 @@ components:
 
 ```yaml
 version: release-v0.5.7
+delivery: workbench-v1
 previous_version: release-v0.5.6
 preview_version: preview.20260831
 previous_preview_version: preview.20260830
@@ -95,7 +97,7 @@ Platform `main` publishes the latest mainline version. Maintenance patches use p
 
 If `release-v0.2.0` is not yet planned and `release-v0.1.0` immediately needs patches, `main` can first publish `release-v0.1.1` and `release-v0.1.2`, then create `release/v0.1.x` from a later patch point. Once that branch exists, mainline and maintenance each manage their own two manifests.
 
-Platform GitHub Latest is updated only by a Stable aggregate published from platform `main`. Each component repository independently manages its own Latest. A Stable publication from component `main` records its source branch and exact commit. A separate idempotent reconciliation workflow selects Latest from all published mainline Stable releases by source-commit order, comparing SemVer only when multiple tags refer to the same commit. Any completed component publication triggers reconciliation. It is serialized across versions, can be rerun independently after failure and has scheduled self-healing. Component maintenance Stable releases and all Previews do not update Latest. Platform aggregates always select components by exact manifest tags, not by component Latest.
+Platform GitHub Latest is updated only by a Stable aggregate published from platform `main`. Each component repository independently manages its own Latest through its serialized publisher, using the version and publication-time rules in [component publication](#6-component-publication-cli). Component maintenance Stable releases and all Previews do not update Latest. Platform aggregates always select components by exact manifest tags, not by component Latest.
 
 Platform and component maintenance branches need not have matching names. Platform `release/v0.5.x` can aggregate `sandboxer release/v0.3.x`, `orchestrator release/v0.4.x` and a fixed vmlinux version released only from `main`.
 
@@ -559,23 +561,22 @@ Workbench Preview cleanup follows the same canonical version/source ownership ch
 - Branch HEAD, tag commit, manifest blob SHA and release asset validation together pin a publication.
 - Even when the rendered Daily manifest needs no write, the coordinator rechecks remote branch HEAD and manifest blob rather than dispatching components from a stale checkout.
 - New builds pin their selected dependency closure for the current run. Published components are reused by tag without historical binding qualification; final combination acceptance checks the selected products together.
-- The scanner has a separate concurrency key. Platform branch coordinators and GC share `preview-manifest-selection-and-gc`. Complete build/publication and deletion workflows share an exact-version mutation group. Cancellation is pending work, not publication success. Successful retained stages resume publication; other safe retries use the current invocation budget described above. Component publish jobs additionally use a repository-wide queue so concurrent versions cannot race Latest. Only the Stable aggregate selected by `release.yaml` at current platform main can update aggregate Latest, with selection and Release readback checks.
+- The scanner has a separate concurrency key. Platform branch coordinators and GC share `preview-manifest-selection-and-gc`. Complete build/publication and deletion workflows share an exact-version mutation group. Cancellation is pending work, not publication success. Successful retained stages resume publication; other safe retries use the current invocation budget described above. Component publish jobs additionally use a repository-wide queue so concurrent versions cannot race Latest. A Stable aggregate admitted from platform main requests Latest; the publisher reads back the Release state and asset identities.
 
 
 ## 11. Protected branches
 
-The required `ci / finalize` check is backed by `kuasar/ci-exact-head` on the
-current two-parent integration commit. Failed, cancelled or skipped E2E cannot
-produce acceptance, including a draft workflow whose control jobs succeed.
-Do not substitute a result bridge or an independently supplied success status.
+The required `ci / finalize` check must pass for the current admitted source set. Same-repository platform PRs obtain it from the read-only reusable-workflow finalizer; component and fork callers retain their trusted admission/status finalization. See the [CI acceptance contract](ci.md#1-public-caller-and-trusted-control).
+
+Every check selected by the admitted lane must succeed. The ordinary x86/ARM product E2E jobs may be deliberately skipped for the trusted `docs`, `manifest`, `tooling` or `source` lanes only after their qualification and exact evidence pass. Failed, cancelled or unexpectedly skipped required work cannot produce acceptance; successful control jobs on a Draft do not substitute for qualification. Do not substitute a result bridge or an independently supplied success status.
 
 One repository ruleset governs project-branch protection. The active ruleset matches only `refs/heads/main` and `refs/heads/release/v*`. It requires a PR, resolved discussions, strict `ci / finalize` status checks and linear history, and blocks force pushes and branch deletion. It does not use default administrator bypass, signed-commit requirements, CODEOWNERS or a merge queue.
 
-The current `required_approving_review_count` is 0. GitHub counts approvals only from writers other than the PR author. Without an independent write reviewer, requiring one approval would prevent maintainers' own PRs from merging under the ruleset. Review still requires complete diff inspection, resolved review threads and exact Integration E2E evidence.
+The current `required_approving_review_count` is 0. GitHub counts approvals only from writers other than the PR author. Without an independent write reviewer, requiring one approval would prevent maintainers' own PRs from merging under the ruleset. Review still requires complete diff inspection, resolved review threads and exact current-source evidence required by the admitted CI lane.
 
 Before enabling this ruleset, confirm that the `kuasar-sandbox-bms-ci` installation has approved `Contents: write`. It must not be activated without that permission: Daily Preview could not commit its converged manifest and would be blocked by the deliberately exclusive bypass design.
 
-Status checks use `do_not_enforce_on_create: true` for a new branch, allowing a maintenance line to be created from an already-published Stable tag. Every subsequent update immediately returns to the same PR and Integration E2E gates; branch creation cannot bypass later commit checks.
+Status checks use `do_not_enforce_on_create: true` for a new branch, allowing a maintenance line to be created from an already-published Stable tag. Every subsequent update immediately returns to the same PR and required CI gates; branch creation cannot bypass later commit checks.
 
 Daily Preview must commit its converged manifest directly to the protected target branch. The active ruleset therefore grants `always` bypass only to the `kuasar-sandbox-bms-ci` GitHub App, ID `4283831`. That App's only write use is the repository-scoped short-lived token described above. Human maintenance, ordinary `github-actions` and all other Apps are absent from the bypass list. CI always revalidates the PR's exact integration commit and target branch; this bypass does not replace the `ci / finalize` gate for PRs. The App name is an existing registration identifier, not a validation method.
 

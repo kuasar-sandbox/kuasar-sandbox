@@ -45,6 +45,8 @@ daily-preview.yaml/version >= release.yaml/version
 
 下面两个清单都是示例,不是当前已发布版本的清单。
 
+新聚合选择必须显式声明 `delivery: workbench-v1`。省略 `delivery` 表示历史读取契约，不能用于新聚合组装。
+
 ### 2.1 Stable 清单
 
 首个 Stable 可省略 `previous_version`;提供时必须指向更早的 Stable。
@@ -52,6 +54,7 @@ daily-preview.yaml/version >= release.yaml/version
 
 ```yaml
 version: release-v0.5.7
+delivery: workbench-v1
 previous_version: release-v0.5.6
 components:
   accelerator: v0.2.1
@@ -69,6 +72,7 @@ components:
 
 ```yaml
 version: release-v0.5.7
+delivery: workbench-v1
 previous_version: release-v0.5.6
 preview_version: preview.20260831
 previous_preview_version: preview.20260830
@@ -117,12 +121,7 @@ Tag 尚不完整,Daily 同样在任何清单或组件变更前延后,不在残�
 `release-v0.1.2`,再从较晚的补丁点建立 `release/v0.1.x`。建立维护分支之后,主线与维护线各自
 维护自己的两个清单。
 
-平台仓的 GitHub Latest 只由平台 `main` 的 Stable 聚合发布更新。每个组件仓仍独立维护
-自己的 Latest:组件 `main` 的 Stable 发布记录源码分支和精确提交;独立的幂等协调工作流
-在该仓所有已发布的主线 Stable 中按源码提交先后重新选择 Latest,同一提交存在多个 Tag
-时才比较 SemVer。协调工作流由任一组件发布完成触发,跨版本串行,失败可独立重跑,并有
-定时自愈。组件维护分支 Stable 和任何 Preview 不更新 Latest。平台聚合始终通过清单中的
-精确 Tag 选择组件,不依赖组件仓的 Latest。
+平台仓的 GitHub Latest 只由平台 `main` 的 Stable 聚合发布更新。每个组件仓通过按仓串行的发布器独立维护自己的 Latest，版本与发布时间的比较规则见[组件发布](#6-组件发布-cli)。组件维护分支 Stable 和任何 Preview 不更新 Latest。平台聚合始终通过清单中的精确 Tag 选择组件，不依赖组件仓的 Latest。
 
 平台维护分支与组件维护分支不存在同名约束。平台 `release/v0.5.x` 可以聚合
 `sandboxer release/v0.3.x`、`orchestrator release/v0.4.x` 和只在 `main` 发布的
@@ -609,14 +608,14 @@ Workbench Preview 清理遵守同样的 canonical 版本/源码归属检查。�
 - 即使渲染后的 Daily 清单无需写入,协调器仍复核远端分支 HEAD 与清单 blob,不会用陈旧
   checkout 派发组件;
 - 新构建固定本次依赖闭包；已发布组件按 Tag 复用，不做历史绑定资格审核，由最终组合验收检查所选成品;
-- scanner 使用独立 concurrency key；平台分支协调器与 GC 共用 `preview-manifest-selection-and-gc`。完整构建／发布与删除工作流按精确版本共用 mutation group。取消表示仍需处理，不等于发布成功。保留的成功 stage 优先恢复发布，其余安全重试采用上述当前调用预算。组件 publish 另用全仓排队，避免不同版本并发更新 Latest。聚合 Latest 仍仅由当前平台 main 的 `release.yaml` 选定 Stable 更新，并复核选版及 Release 读回结果。
+- scanner 使用独立 concurrency key；平台分支协调器与 GC 共用 `preview-manifest-selection-and-gc`。完整构建／发布与删除工作流按精确版本共用 mutation group。取消表示仍需处理，不等于发布成功。保留的成功 stage 优先恢复发布，其余安全重试采用上述当前调用预算。组件 publish 另用全仓排队，避免不同版本并发更新 Latest。从平台 main 准入的 Stable 聚合请求更新 Latest；发布器读回 Release 状态和资产身份。
 
 
 ## 11. 受保护分支
 
-必需的 `ci / finalize` 检查以当前双亲 integration commit 上的
-`kuasar/ci-exact-head` 为依据。E2E 失败、取消或跳过都不能产生验收成功,
-包括控制 job 成功但跳过 E2E 的 Draft 工作流。不能用结果桥接或独立提供的成功状态替代。
+必需的 `ci / finalize` 检查必须对应当前已准入源码集并通过。平台同仓 PR 使用只读 reusable workflow 的 finalizer；组件和 fork 调用方保留受信 admission/status finalize，见 [CI 验收契约](ci_zh.md#1-公开调用方与受信任控制)。
+
+已准入 lane 选择的所有检查必须成功。常规 x86/ARM 产品 E2E job 只有在可信 `docs`、`manifest`、`tooling` 或 `source` lane 的资格及精确证据通过后，才可按该 lane 有意跳过。必需工作失败、取消或非预期跳过均不能产生验收；Draft 的控制 job 成功不能代替资格验证。不能用结果桥接或独立提供的成功状态替代。
 
 项目仓的分支保护以一个 repository ruleset 为准。当前已启用的 ruleset 只匹配
 `refs/heads/main` 与 `refs/heads/release/v*`。它要求 PR、所有讨论已解决、严格匹配
@@ -625,14 +624,13 @@ Workbench Preview 清理遵守同样的 canonical 版本/源码归属检查。�
 
 当前 `required_approving_review_count` 为 0。GitHub 只计入拥有 write 权限且不是 PR 作者的
 approval;仓库没有独立的 write reviewer 时,强制一个 approval 会让维护者自己的所有 PR
-无法按 ruleset 合入。代码检视仍通过完整 diff 自检、resolved review threads 和精确端到端集成测试
-门禁执行。
+无法按 ruleset 合入。检视仍要求完整 diff 检查、resolved review threads，以及已准入 CI lane 要求的精确当前源码证据。
 
 启用前必须确认 `kuasar-sandbox-bms-ci` 的安装已获批 `Contents: write`。未满足此条件时
 不得激活 ruleset: Daily Preview 无法提交收敛后的清单,会被唯一的 bypass 设计反向阻断。
 
 状态检查规则对新建 branch 使用 `do_not_enforce_on_create: true`,因此可以从已经发布的
-Stable Tag 建立一条新的维护线;创建后的任何更新立即回到同一套 PR 与端到端集成测试门禁，不能借此
+Stable Tag 建立一条新的维护线;创建后的任何更新立即回到同一套 PR 与必需 CI 门禁，不能借此
 绕过后续提交检查。
 
 Daily Preview 必须直接把收敛后的清单提交到受保护目标分支,因此当前已启用的 ruleset 只为
