@@ -34,7 +34,11 @@
 
 ## MMDS Route 安全与部署边界
 
-Conductor 配置拥有 `mmds.listen`、路由准入策略与本地服务注册。具体沙箱或 Build 路由由受支持请求提交，经 Conductor 按策略校验并投影。开放新沙箱准入前先启动并注册独立 Proxy；Create 依赖其 route barrier。服务工作负载前还须验证 data/MMDS 监听与路由。在配置的网络 namespace 中绑定 MMDS listener，并将 vSwitch 管理流量指向它。本地服务使用显式配置的绝对 Unix socket URI，不向 Guest 暴露宿主 socket。
+Conductor 配置拥有 `mmds.listen`、路由准入策略与本地服务注册。具体沙箱或 Build 路由由受支持请求提交，经 Conductor 按策略校验并投影。租户路由还须启用 `mmds.routes.enabled`，且不能在 MMDS 关闭时启用。
+
+当 `mmds.enabled=false` 时，envd 不执行自身鉴权，因此须以 `proxy.auth=enforce` 作为唯一数据面鉴权关口。启用 MMDS 时，Proxy 提供 MMDS v2 流程，为每个沙箱身份以新 token 初始化 envd。支持的鉴权模式见 [Proxy MMDS 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy_zh.md#mmds)。
+
+开放新沙箱准入前先启动并注册独立 Proxy；Create 依赖其 route barrier。服务工作负载前须验证 data 监听与路由。启用 MMDS 时，还须验证 Proxy master 使用位于预期网络 namespace 中、由 Conductor 配置指定的 MMDS listener，并确保 vSwitch 管理流量能到达它。本地服务使用显式配置的绝对 Unix socket URI，不向 Guest 暴露宿主 socket。
 
 [Proxy MMDS 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy_zh.md#mmds) 统一定义请求身份、路由匹配、secret 处理、Header 过滤和转发限制;[Build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md) 维护构建作用域注册与终态清理。公共 API 的 TLS/鉴权、本地 socket 权限、Guest 隔离网络与服务凭据需一并配置，不能在 Proxy YAML 再维护一份服务注册表。
 

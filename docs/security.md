@@ -31,7 +31,11 @@ Credential updates affect only later business records that are created with copi
 
 ## MMDS route security and deployment boundaries
 
-Conductor configuration owns `mmds.listen`, route admission policy and the local-service registry. Supported sandbox/Build requests supply concrete MMDS routes; Conductor validates and projects those routes under that policy. Start and register the independent Proxy before opening new sandbox admission; Create requires its route barrier. Verify the data/MMDS listeners and routing before serving workloads. Bind the MMDS listener in the configured network namespace and point vSwitch management traffic to that listener. Local services use explicitly configured absolute Unix-socket URIs; do not expose their host sockets to guests.
+Conductor configuration owns `mmds.listen`, route admission policy and the local-service registry. Supported sandbox/Build requests supply concrete MMDS routes; Conductor validates and projects those routes under that policy. Tenant routes additionally require `mmds.routes.enabled` and cannot be enabled while MMDS is disabled.
+
+When `mmds.enabled=false`, envd runs without its own authentication, so `proxy.auth=enforce` is required as the sole data-plane gate. When MMDS is enabled, Proxy provides the MMDS v2 flow that initializes envd with a fresh token for each sandbox identity. See the [Proxy MMDS contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md#mmds) for the supported authentication postures.
+
+Start and register the independent Proxy before opening new sandbox admission; Create requires its route barrier. Verify the data listener and routing before serving workloads. When MMDS is enabled, also verify that Proxy master uses the Conductor-configured MMDS listener in the intended network namespace and that vSwitch management traffic reaches it. Local services use explicitly configured absolute Unix-socket URIs; do not expose their host sockets to guests.
 
 The [Proxy MMDS contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md#mmds) owns request identity, route matching, secret handling, header filtering and forwarding restrictions; [Build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md) owns build-scoped registration and terminal cleanup. Public API TLS/authentication, local socket permissions, guest-isolated networking and service credentials must be configured together. Avoid a second service registry in proxy YAML.
 
