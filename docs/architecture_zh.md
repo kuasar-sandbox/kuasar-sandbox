@@ -8,19 +8,42 @@
 
 ```mermaid
 flowchart TD
-  C["Application / SDK"] --> O["Orchestrator: control and access"]
-  O --> R["Sandboxer: Runtime"]
-  O --> N["Connector: network identity"]
-  R --> V["Cloud Hypervisor / KVM"]
-  V --> G["Guest application"]
-  R --> D["Accelerator: artifact access"]
-  N --> G
-  P["Guest-runtime: kernel and bundle"] -.-> V
-  P -.-> G
+  C["Client / cluster Router"] -->|"Control API"| O["Orchestrator: Conductor"]
+  C -->|"Sandbox data"| X["Orchestrator: Proxy"]
+  O -->|"Routes and policy"| X
+  X -->|"Wake / route-barrier ACK"| O
+  O -->|"Lifecycle"| R["Sandboxer: Runtime"]
+  O -->|"Network identity"| N["Connector"]
+  R -->|"VM control"| V["Cloud Hypervisor / KVM"]
+  V -->|"Runs"| G["Guest services / application"]
+  X -->|"Local bridges or network forwarding"| G
+  N -->|"Network attachment and isolation"| G
+  R -->|"Artifact reads"| D["Accelerator"]
   D --> S["Local / shared files / object storage"]
+  P["Guest-runtime: kernel and bundle"] -.->|"Delivered inputs"| V
+  P -.->|"Delivered files"| G
 ```
 
-实线表示运行时控制或数据关系；虚线表示交付物输入。组件可独立使用，生产平台按任务选择组合。
+上图是节点级概览。实线区分控制、业务数据和制品读取；虚线表示交付物输入，
+不是运行中的服务调用。Conductor 与 Proxy 使用独立监听器，不在控制面与数据面之间回退。
+Proxy 到 Guest 的箭头概括不同后端，包括本地 Exec/Envd 桥接与用户端口的网络转发，
+并不表示所有业务数据都经过 sandboxer。部署细节见
+[Proxy 部署](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy_zh.md#deployment)。
+
+一次典型的受管启动会经过这些边界：
+
+1. **受理：** Create 持久化 `starting`，并等待已注册的 Proxy master 应用路由更新并确认后返回 `201`，
+   不等待 Runner、Runtime 或 Envd 就绪。
+2. **启动：** Conductor 准备执行资源和网络资源，由 sandboxer 冷启动或恢复 VM。
+   Runtime 就绪以及所需的 E2B Envd `/init` 完成后，管理状态才进入 `running`。
+3. **访问：** 数据请求进入 Proxy。符合路由与鉴权策略的请求可在 starting 时等待，
+   或从 paused 触发 Wake，仍受超时和生命周期规则约束。`running` 不代表用户应用、
+   转发端口或 code-interpreter 服务已经健康。
+
+精确的受理契约见[沙箱生命周期](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle_zh.md#create-acceptance)，
+访问和等待规则见 [Proxy](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy_zh.md)。
+就绪也不意味着所有制品字节都已下载：恢复后的内存可以从分层源按需缺页加载，
+详见[内存恢复](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/memory_zh.md#fault-path)。
 
 ## 功能树与权威主题
 
@@ -55,18 +78,26 @@ flowchart TD
 
 ## 依赖边界
 
-组件依赖保持薄而明确:
+代码依赖与构建时消费的交付物是不同关系。主要的项目内 Go module 依赖如下：
 
-| 层次 | 依赖 |
+| 使用方 | 项目内源码依赖 |
 | --- | --- |
-| T0 | accelerator, connector, guest-runtime/native-deps |
-| T1 | sandboxer → accelerator, connector/pkg/tapfd |
-| T2 | orchestrator → sandboxer, accelerator, connector |
+| accelerator、connector | 为其他组件提供基础模块 |
+| sandboxer | accelerator；connector 的 `pkg/tapfd` |
+| guest-runtime 的 `flatten-ctl` | accelerator |
+| orchestrator | sandboxer、accelerator、connector |
 
-实现留在所属组件内部,跨仓只导出具体包.上表描述仓库级关系,不是完整的包依赖白名单:
-orchestrator 使用 sandboxer 的资源和工件/恢复 API,MMDS source 索引还使用 connector
-vSwitch 常量.实际依赖集合由当前 module 文件与 import 确定.五个组件既可组合为完整平台,
-也可按场景独立采用.
+实现留在所属组件内部，跨仓导出具体包。上表不是完整的 import 白名单，
+实际集合以所选版本的 module 文件和 import 为准。
+
+Guest runtime **bundle** 还消费其他交付物：它打包 sandboxer 产出的 `sandbox-init`、
+Envd 和 `flatten-ctl`。Guest kernel 则是独立的原生构建与发布单元。
+因此 guest-runtime 不是无依赖的底层，上表也不是完整构建图或服务启动顺序。
+详见 [Runtime bundle 归属](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/runtime-bundle_zh.md)
+与 [Guest 构建流程](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/build_zh.md)。
+
+组件可分别采用，但组装成平台仍需兼容的版本组合。[聚合发布](release_zh.md)负责选定组合；
+仓库独立不意味着任意版本都可以互配。
 
 ## 设计原则
 
@@ -141,6 +172,8 @@ Agent 沙箱通常长期等待,短时突发.系统按以下闭环提高节点有
 | `sandboxer` | 执行单沙箱资源配置,协同 Guest Balloon,host Cgroup 和 VMM 生命周期,完成增长,收缩,暂停与恢复 |
 | `node-ctl` Reservation Controller | 管理节点准入，以及各资源池预算、水位、Grant、Inventory、容量感知恢复和平衡 |
 
+该动态闭环要求配置并启用 Reservation Controller；未启用时使用静态资源配置，
+而不是节点 Grant。以下增长与收缩顺序描述正常受控路径。
 节点控制器不读取或修改沙箱 Cgroup,也不直接调用 VMM Balloon;它只通过资源协议管理
 Reservation 和 Grant.增长先取得节点 Grant 再扩大沙箱预算;收缩先由单沙箱闭环收敛,
 再释放 Reservation.
@@ -176,7 +209,7 @@ OOM 和有效工作丢失.应用仍可能因为自身资源声明,内存上限�
 - `router`:提供 E2B 兼容统一入口,按 sandbox-group 路由;
 - `placer`:导入 group 配置并选择候选节点,不拥有沙箱生命周期.
 
-生命周期仍由目标 node 和 sandboxer 执行.公开 Sandbox ID 在同节点恢复,跨节点迁移和
+生命周期仍由目标 node 和 sandboxer 执行。在集群中，公开 Sandbox ID 在同节点恢复,跨节点迁移和
 重新放置时保持稳定;节点内部执行 ID 可以随 placement generation 变化.
 
 ## 下一步

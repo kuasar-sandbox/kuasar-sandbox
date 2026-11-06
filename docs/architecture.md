@@ -8,19 +8,47 @@ This guide explains capability layers, runtime paths and specification ownership
 
 ```mermaid
 flowchart TD
-  C["Application / SDK"] --> O["Orchestrator: control and access"]
-  O --> R["Sandboxer: Runtime"]
-  O --> N["Connector: network identity"]
-  R --> V["Cloud Hypervisor / KVM"]
-  V --> G["Guest application"]
-  R --> D["Accelerator: artifact access"]
-  N --> G
-  P["Guest-runtime: kernel and bundle"] -.-> V
-  P -.-> G
+  C["Client / cluster Router"] -->|"Control API"| O["Orchestrator: Conductor"]
+  C -->|"Sandbox data"| X["Orchestrator: Proxy"]
+  O -->|"Routes and policy"| X
+  X -->|"Wake / route-barrier ACK"| O
+  O -->|"Lifecycle"| R["Sandboxer: Runtime"]
+  O -->|"Network identity"| N["Connector"]
+  R -->|"VM control"| V["Cloud Hypervisor / KVM"]
+  V -->|"Runs"| G["Guest services / application"]
+  X -->|"Local bridges or network forwarding"| G
+  N -->|"Network attachment and isolation"| G
+  R -->|"Artifact reads"| D["Accelerator"]
   D --> S["Local / shared files / object storage"]
+  P["Guest-runtime: kernel and bundle"] -.->|"Delivered inputs"| V
+  P -.->|"Delivered files"| G
 ```
 
-Solid arrows show runtime control or data relationships; dashed arrows show delivered inputs. Components can be used independently and are composed according to the deployment task.
+This is a node-level overview. Solid arrows distinguish control, business data and
+artifact access; dashed arrows show delivered inputs, not live service calls.
+Conductor and Proxy have separate listeners with no cross-plane fallback.
+The Proxy-to-Guest arrow abstracts different backends, including local Exec/Envd
+bridges and network forwarding to user ports; it is not a single path through
+sandboxer. See [Proxy deployment](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md#deployment).
+
+A typical managed launch crosses these boundaries:
+
+1. **Accept:** Create returns `201` after durable `starting` acceptance and the
+   registered Proxy masters have applied and acknowledged the route updates. It does not wait for a runner, Runtime or
+   Envd to become ready.
+2. **Launch:** Conductor prepares the execution and network resources and asks
+   sandboxer to cold-start or restore the VM. Runtime readiness and any required
+   E2B Envd `/init` complete before the management state becomes `running`.
+3. **Use:** Data requests enter the Proxy. Requests admitted by its route and
+   authentication policy can park while starting or trigger Wake from paused,
+   subject to timeout and lifecycle rules. `running` does not prove that a user
+   application, forwarded port or code-interpreter service is healthy.
+
+The precise acceptance contract belongs to [sandbox lifecycle](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle.md#create-acceptance),
+and access/parking rules to [Proxy](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md).
+Readiness also does not mean every artifact byte has been downloaded: restored
+memory can fault in from layered sources on demand, as described in
+[memory restore](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/memory.md#fault-path).
 
 ## Capability tree and authoritative topics
 
@@ -56,15 +84,30 @@ The project repository does not duplicate these implementations. It maintains sy
 
 ## Dependency boundaries
 
-Component dependencies remain explicit. At the repository level:
+Code dependencies and delivered build inputs are different relationships.
+The main in-project Go module dependencies are:
 
-| Layer | Dependencies |
+| Consumer | In-project source dependencies |
 | --- | --- |
-| T0 | accelerator, connector, guest-runtime/native-deps |
-| T1 | sandboxer → accelerator, connector/pkg/tapfd |
-| T2 | orchestrator → sandboxer, accelerator, connector |
+| accelerator, connector | Foundational modules for the other components |
+| sandboxer | accelerator; connector's `pkg/tapfd` |
+| guest-runtime's `flatten-ctl` | accelerator |
+| orchestrator | sandboxer, accelerator, connector |
 
-Implementation stays inside its owning component, with specific packages exported across repositories. The table describes repository-level relationships, not an exhaustive package allowlist: orchestrator uses sandboxer resource and artifact/restore APIs, for example, and its MMDS source index uses connector vSwitch constants. The current module files and imports define the actual dependency set. The five components can form the complete platform or be adopted independently for particular scenarios.
+Implementation stays inside its owning component, with specific packages exported
+across repositories. This is not an exhaustive import allowlist: the selected
+module files and imports define the actual set.
+
+The Guest runtime **bundle** has additional delivered inputs: it packages
+`sandbox-init` produced by sandboxer, Envd and `flatten-ctl`. The guest kernel is
+a separate native build/release unit. Thus guest-runtime is not a dependency-free
+bottom layer, and this table is not a complete build graph or service startup
+order. See [runtime bundle ownership](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/runtime-bundle.md)
+and [Guest build workflows](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/build.md).
+
+Components can be adopted separately, but an assembled platform still needs a
+compatible version combination. The [aggregate release](release.md) selects that
+combination; separate repositories do not imply arbitrary versions are compatible.
 
 ## Design principles
 
@@ -134,6 +177,9 @@ Responsibilities are separated as follows:
 | `sandboxer` | Applies individual sandbox resource configuration and coordinates guest Balloon, host Cgroup and VMM lifecycle for growth, shrink, pause and resume |
 | `node-ctl` Reservation Controller | Manages node admission and resource-pool budgets, watermarks, Grant, Inventory, capacity-aware recovery and balancing |
 
+This dynamic loop requires the configured Reservation Controller; without it,
+resource operation uses the static configuration rather than node Grants.
+The following growth and shrink order describes the normal controlled path.
 The node controller does not inspect or modify sandbox Cgroups or directly call VMM Balloon operations. It manages Reservation and Grant through the resource protocol. Growth first obtains a node Grant and then expands the sandbox budget. Shrink first converges through the individual sandbox loop, then releases the Reservation. Long-inactive instances can be paused to return execution resources to their pool. Runner and Builder pools select execution units within one resource pool; pool-local budgets govern placement and resource recovery. A pause can release an execution for a later Resume into another eligible pool on the same node. This is distinct from cluster node placement. The complete rules belong to [Node resources](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md#resource-pools).
 
 The platform's protection boundary is to avoid OOM and loss of useful work caused by node-level resource reuse within the sandbox's declared resources and the node admission model. Applications can still encounter OOM because of their own declarations, memory limits or behavior; there is no unconditional guarantee.
@@ -161,7 +207,7 @@ On a standalone node, `node-ctl conductor serve` manages local sandboxes, builds
 - `router`: provides the E2B-compatible unified entry point and routes by sandbox-group;
 - `placer`: imports group configuration and selects candidate nodes, without owning sandbox lifecycle.
 
-The target node and sandboxer still execute the lifecycle. The public Sandbox ID remains stable through same-node restoration, cross-node migration and replacement placement. The node-internal execution ID can change with the placement generation.
+The target node and sandboxer still execute the lifecycle. In a cluster, the public Sandbox ID remains stable through same-node restoration, cross-node migration and replacement placement. The node-internal execution ID can change with the placement generation.
 
 ## Next steps
 
