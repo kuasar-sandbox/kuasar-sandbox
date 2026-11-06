@@ -164,7 +164,7 @@ prepare 导出已经构建的运行时镜像并绑定压缩归档摘要；执行
 
 ### 受审的依赖切换
 
-`ci/integration/dependency-cutovers.json` 默认请求列表为空。仅现有受信 admission **base** 可以启用；候选清单、PR 正文或候选树中的同名文件不能自行授权。每条请求绑定唯一主 PR 的仓库、编号、目标分支及 base/head/integration SHA，以及已经公开完整发布的组件 tag、源码 SHA、Release ID 和完整排序的资产名称/ID/大小/SHA-256 digest。未知字段、重复请求、额外 companion、过期候选、不完整或非公开发布、覆盖候选自身组件均失败关闭。
+`ci/integration/dependency-cutovers.json` 保存经过明确检视的请求。没有请求指向主候选仓库/PR 时，继续按普通流程选择聚合基线；若已有请求指向该 PR 但身份过期，则失败关闭。仅现有受信 admission **base** 可以启用；候选清单、PR 正文或候选树中的同名文件不能自行授权。每条请求绑定唯一主 PR 的仓库、编号、目标分支及 base/head/integration SHA，以及已经公开完整发布的组件 tag、源码 SHA、Release ID 和完整排序的架构包资产名称/ID/大小/SHA-256 digest。历史 `SHA256SUMS` 条目被忽略，不属于已核验的切换输入。未知字段、重复请求、额外 companion、过期候选、不完整或非公开发布、覆盖候选自身组件均失败关闭。
 
 命中的组件来源通过既有 maintained-delta 路径进入候选组合，重建链接/嵌入的消费者并运行完整 owner source gates 与现有架构能力和凭据排除规则下的 E2E。原聚合仍是已验证的二进制基线，新组合不是已验收聚合；独立 `dependency_cutover` 证据记录受信平台 SHA、配置摘要和精确请求，依赖测试来源使用既有 `release` 角色。最终验收除既有实时候选检查外，还复核当前受信分支仍包含同一请求，tag、Release 和资产身份均未变化；无关请求增补不影响它。实现必须先以空配置通过正常 CI 并合入，再单独审查配置启用。新聚合成为正常基线后删除请求；PR head 改动必须重新审查 pin，不能自动改选。
 
@@ -303,12 +303,9 @@ make -C kuasar-sandbox test-ci-tools
 
 `artifact-x86` 保留 Docker/systemd/cgroup v2/KVM/UFFD/netns/BPF, `artifact-arm` 只提供既定非 KVM 执行条件. x86 VM bootstrap 保留已有每 job KVM udev/group 配置并检查实际 KVM/UFFD 访问. 缺少必要能力或断言失败都会使 job 失败. Workbench receipt 记录镜像获取、预算、命令、退出码、缓存 scope 与 cleanup, GitHub job/step 时间提供 restore/save 和传输成本. 只清理本任务实例; 上传前拒绝越界 symlink 和特殊文件, 保留诊断后删除实例缓存和输出状态.
 
-证据 artifact 包括 `integration-plan`、每架构 `integration-provenance`、每 shard `integration-shard`、
-`integration-source-result`、两个 `integration-architecture-result` 和最终 `integration-validation`，均带 run ID/attempt。
-provenance 记录基线资产、产品来源/hash、精确源码/测试/框架、内嵌载荷、实际工具/native key、helper/fixture hash、权限及既定用例选择。独立 working-set 结果使用 `integration-performance`；
-干净环境的 prepare/run 结果记录经验证的运行时环境。
-结果记录所选用例、退出码、耗时和 prepared provenance 摘要。
-聚合 cleanup 仅移除大型 build/prepared/stage 传输物，验证元数据保留七天；不上传含测试凭据的原始运行状态。
+证据 artifact 使用 `integration-plan-<run_id>`、`integration-provenance-<arch>-<run_id>`、`integration-shard-<arch>-<group_id>-<run_id>`、`integration-architecture-result-<arch>-<run_id>` 和 `integration-validation-<run_id>`。源码组使用 `integration-source-result-<run_id>-<attempt>-<group>`。attempt 并非所有文件名的后缀；应根据结果 provenance 和上文当前成功生产任务的检查确认轮次，不能仅凭名称判断。最终 validation artifact 在重跑时替换。
+
+provenance 记录基线资产、产品来源/hash、精确源码/测试/框架、内嵌载荷、实际工具/native key、helper/fixture hash、权限及既定用例选择。独立 working-set 结果使用 `integration-shard-<arch>-performance-<run_id>`，由 `results/performance.json` 上传；干净环境的 prepare/run 结果记录经验证的运行时环境。结果记录所选用例、退出码、耗时和 prepared provenance 摘要。聚合 cleanup 仅移除大型 build/prepared/stage 传输物，验证元数据保留七天；不上传含测试凭据的原始运行状态。
 
 轻量合同检查沿用 `make test-ci-tools test-release-tools test-perf-tools`，需可信 EROFS readers 与 `KUASAR_RUNTIME_READER`。
 组件 release/workflow/fixture 检查保留原入口。开发者 `make test-e2e RELEASE_DIR=... E2E_WORKDIR=...`
