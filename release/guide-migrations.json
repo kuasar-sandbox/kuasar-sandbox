@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "redirects": [
+    {
+      "from": "docs/kuasar-sandbox.md",
+      "to": "docs/architecture.md"
+    },
+    {
+      "from": "docs/kuasar-sandbox_zh.md",
+      "to": "docs/architecture_zh.md"
+    }
+  ]
+}

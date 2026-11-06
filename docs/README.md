@@ -1,33 +1,45 @@
 [English](README.md) | [简体中文](README_zh.md)
 
-# Documentation
+# Documentation index
 
-## Start and operate
+Choose an entry by the task you need to complete. Platform guides retain complete workflows; component specifications own exact behavior and implementation boundaries.
 
-- [Quick Start](quickstart.md): run the first sandbox from one aggregate release.
-- [Workbench](../workbench/README.md): host requirements, native builds, private systems and lifecycle.
-- [Acquire a release](download.md): pin one aggregate, verify selected assets and import workbench separately.
-- [Deployment](deployment.md): choose a topology, services, storage and operational dependencies.
-- [Complete E2B demonstration](../test/demo/DEMO.md): lifecycle, networking, template fan-out and migration.
-- [Aggregate release validation](../test/QUICKSTART.md): validate delivered assets rather than source-build a first demo.
+## Platform guides
 
-## System and component contracts
+| Guide | Reading goal |
+| --- | --- |
+| [Concepts and terminology](concepts.md) | Understand instances, templates, E/S, identity and parents |
+| [Architecture and capability tree](architecture.md) | Inspect capability layers, paths and authority |
+| [Quick Start](quickstart.md) | Complete the first real run and cleanup |
+| [Installation](installation.md) | Select, download, verify and install matching inputs |
+| [Sandboxes](sandboxes.md) | Operate, access, pause/resume and reset instances |
+| [Templates](templates.md) | Build, qualify, publish and reuse applications |
+| [Deployment](deployment.md) | Assemble and qualify a node or cluster |
+| [Security boundaries](security.md) | Configure identity, isolation, content protection and trusted paths |
+| [Operations](operations.md) | Diagnose, recover, retain and clean up |
+| [Upgrades](upgrading.md) | Qualify compatibility, change versions and roll back |
+| [Performance and capacity](performance.md) | Measure, qualify capacity and tune |
+| [CI](ci.md) | Cross-repository source selection and validation |
+| [Release maintenance](release.md) | Component/aggregate selection, packaging and publication |
 
-- [System overview](kuasar-sandbox.md): user semantics and the five component boundaries.
-- [Terminology](terminology.md): concise cross-component vocabulary; detailed field semantics remain with their owners.
-- [orchestrator](https://github.com/kuasar-sandbox/orchestrator/blob/main/README.md#documentation): node lifecycle, Build, resource control, Registry, Router, Placer and extensions.
-- [sandboxer](https://github.com/kuasar-sandbox/sandboxer/blob/main/README.md#documentation): runtime lifecycle, portable artifacts, Guest ABI and VMM integration.
-- [accelerator](https://github.com/kuasar-sandbox/accelerator/blob/main/README.md#documentation): Manifest, file artifacts, Store and Cache.
-- [connector](https://github.com/kuasar-sandbox/connector/blob/main/README.md#documentation): vSwitch design/operations and the independent TAP FD protocol.
-- [guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README.md#documentation): image flattening, Runtime Bundle and Kernel.
+## Component contracts
 
-## Develop, validate and release
+| Component | Topics |
+| --- | --- |
+| orchestrator | [node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md), [sandbox-lifecycle](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle.md), [node-build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md), [node-proxy](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md), [node-resource](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md), [observability](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md), [cluster](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md), [extensions](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/extensions.md) |
+| sandboxer | [runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime.md), [configuration](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/configuration.md), [artifacts](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/artifacts.md), [memory](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/memory.md), [block-storage](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/block-storage.md), [resources](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/resources.md), [guest-abi](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/guest-abi.md), [vmm](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/vmm.md) |
+| accelerator | [artifacts](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/artifacts.md), [transfer](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/transfer.md), [store](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md), [cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md), [image-preparation](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/image-preparation.md) |
+| connector | [vswitch-operations](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations.md), [vswitch](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch.md), [tapfd](https://github.com/kuasar-sandbox/connector/blob/main/docs/tapfd.md) |
+| guest-runtime | [using-guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime.md), [runtime-bundle](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/runtime-bundle.md), [vmlinux](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/vmlinux.md), [flatten-cli](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/flatten-cli.md), [build](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/build.md) |
 
-- [Contribution and documentation review](../CONTRIBUTING.md#documentation-contributions).
-- [Performance methodology](perf.md): timing boundaries, evidence and regression entry points.
-- [CI](ci.md): exact source sets, trust boundaries and validation modes.
-- [Release contract](release.md): version selection, assets, publication/recovery and documentation packaging.
-- [Runner operations](../ci/runner/README.md): install and operate the validation runner.
-- [Security reporting](../SECURITY.md).
+## Development, validation and examples
 
-English is the default; maintained Chinese editions are linked at the top of each paired document. Follow the contribution guide for public Fork and pull request workflows. To use a release, select one published version and keep its documentation, scripts, binaries and checksums together.
+- [Contribution, source workspace and build/test](../CONTRIBUTING.md)
+- [Workbench environment](../workbench/README.md)
+- [Test organization](../test/README.md)
+- [Release validation](../test/QUICKSTART.md)
+- [Complete E2B Demo](../test/demo/DEMO.md)
+- [CI runner operation](../ci/runner/README.md)
+- [Vulnerability reporting policy](../SECURITY.md)
+
+Runtime and user guides are packaged with the selected version; omitted developer material links to the selected source revision. Check the actual release capabilities before applying current-source guidance to a historical release.

@@ -1,33 +1,45 @@
 [English](README.md) | [简体中文](README_zh.md)
 
-# 文档
+# 文档目录
 
-## 开始使用与部署运维
+按要完成的任务选择入口。平台指南保留完整操作流程，组件规范维护精确行为和实现边界。
 
-- [快速开始](quickstart_zh.md)：使用同一聚合版本运行第一个沙箱。
-- [Workbench](../workbench/README_zh.md)：宿主前置、原生构建、私有系统环境与生命周期。
-- [获取发布版](download_zh.md)：固定一个聚合版本、校验所选资产并单独导入 workbench。
-- [部署](deployment_zh.md)：选择拓扑、服务、存储与运维依赖。
-- [完整 E2B 演示](../test/demo/DEMO_zh.md)：生命周期、网络、模板扇出与迁移。
-- [聚合发布验证](../test/QUICKSTART_zh.md)：验收交付资产，不是首次体验的源码构建指南。
+## 平台指南
 
-## 系统与组件契约
+| 文档 | 阅读目标 |
+| --- | --- |
+| [概念与术语](concepts_zh.md) | 理解实例、模板、E/S、身份与父层 |
+| [架构与功能树](architecture_zh.md) | 查看能力分层、路径和权威归属 |
+| [快速开始](quickstart_zh.md) | 完成第一次真实运行与清理 |
+| [安装](installation_zh.md) | 选择、下载、校验与安装匹配版本 |
+| [沙箱使用](sandboxes_zh.md) | 实例操作、访问、暂停恢复和重置 |
+| [模板](templates_zh.md) | 构建、验证、发布和复用应用 |
+| [部署](deployment_zh.md) | 装配单节点或集群并验收 |
+| [安全边界](security_zh.md) | 配置身份、隔离、内容保护和可信路径 |
+| [运维](operations_zh.md) | 诊断、恢复、保留和清理 |
+| [升级](upgrading_zh.md) | 验证兼容性、改变版本和回退 |
+| [性能与容量](performance_zh.md) | 测量、验收容量和调优 |
+| [CI](ci_zh.md) | 跨仓源码选择和验证流程 |
+| [发布维护](release_zh.md) | 组件/聚合版本、打包和发布 |
 
-- [系统总览](kuasar-sandbox_zh.md)：用户语义与五个组件的职责边界。
-- [术语](terminology_zh.md)：跨组件词汇速查；精确字段语义由所属组件定义。
-- [orchestrator](https://github.com/kuasar-sandbox/orchestrator/blob/main/README_zh.md#文档)：节点生命周期、Build、资源控制、Registry、Router、Placer 与扩展。
-- [sandboxer](https://github.com/kuasar-sandbox/sandboxer/blob/main/README_zh.md#文档)：运行生命周期、便携工件、Guest ABI 与 VMM 集成。
-- [accelerator](https://github.com/kuasar-sandbox/accelerator/blob/main/README_zh.md#文档)：Manifest、文件工件、Store 与 Cache。
-- [connector](https://github.com/kuasar-sandbox/connector/blob/main/README_zh.md#文档)：vSwitch 设计及运维、独立 TAP FD 协议。
-- [guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README_zh.md#文档)：镜像展平、Runtime Bundle 与 Kernel。
+## 组件契约
 
-## 开发、验证与发布
+| 组件 | 主题 |
+| --- | --- |
+| orchestrator | [node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node_zh.md), [sandbox-lifecycle](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle_zh.md), [node-build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md), [node-proxy](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy_zh.md), [node-resource](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource_zh.md), [observability](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md), [cluster](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md), [extensions](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/extensions_zh.md) |
+| sandboxer | [runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime_zh.md), [configuration](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/configuration_zh.md), [artifacts](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/artifacts_zh.md), [memory](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/memory_zh.md), [block-storage](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/block-storage_zh.md), [resources](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/resources_zh.md), [guest-abi](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/guest-abi_zh.md), [vmm](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/vmm_zh.md) |
+| accelerator | [artifacts](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/artifacts_zh.md), [transfer](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/transfer_zh.md), [store](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store_zh.md), [cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md), [image-preparation](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/image-preparation_zh.md) |
+| connector | [vswitch-operations](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations_zh.md), [vswitch](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch_zh.md), [tapfd](https://github.com/kuasar-sandbox/connector/blob/main/docs/tapfd_zh.md) |
+| guest-runtime | [using-guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime_zh.md), [runtime-bundle](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/runtime-bundle_zh.md), [vmlinux](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/vmlinux_zh.md), [flatten-cli](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/flatten-cli_zh.md), [build](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/build_zh.md) |
 
-- [贡献与文档检视](../CONTRIBUTING_zh.md#文档贡献)。
-- [性能方法](perf_zh.md)：计时边界、证据与回归入口。
-- [持续集成](ci_zh.md)：精确源码集合、信任边界与验证模式。
-- [发布契约](release_zh.md)：版本选择、资产、发布恢复与文档打包。
-- [Runner 运维](../ci/runner/README_zh.md)：安装与运维验证 Runner。
-- [安全报告](../SECURITY_zh.md)。
+## 开发、验证与示例
 
-英文为默认入口；维护中的中文版本在各配对文档顶部互链。公共 Fork 与 Pull Request 流程见贡献指南。使用发行版时，选择一个已发布版本，并使用该版本配套的文档、脚本、二进制和校验文件。
+- [贡献、源码工作区和构建测试](../CONTRIBUTING_zh.md)
+- [Workbench 环境](../workbench/README_zh.md)
+- [测试组织](../test/README_zh.md)
+- [发布版验证](../test/QUICKSTART_zh.md)
+- [完整 E2B Demo](../test/demo/DEMO_zh.md)
+- [CI runner 运维](../ci/runner/README_zh.md)
+- [漏洞报告政策](../SECURITY_zh.md)
+
+运行时与用户文档随所选版本打包；未打包的开发文档链接到选定源码版本。以当前源码指南解释历史发布时，必须先核对该版本实际能力。

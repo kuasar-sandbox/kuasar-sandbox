@@ -1,5 +1,6 @@
 """Exercise the delivered documentation layout and independent kernel selection."""
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -244,6 +245,188 @@ class DocumentationPackageTest(unittest.TestCase):
         self.assertEqual((output/'guide/licenses/guest-runtime/LICENSE_SCOPE.md').read_bytes(),legal.read_bytes())
         self.assertEqual((self.root/'guest-runtime/README.md').read_text(),original)
         self.assertEqual((self.root/'vmlinux/docs/vmlinux.md').read_text(),original)
+
+    def test_project_entry_and_documentation_index_have_distinct_bilingual_paths(self):
+        source = self.root / 'platform'
+        declaration = source / 'release/guide-inputs.txt'
+        declaration.write_text(declaration.read_text() + 'docs/README.md\n')
+        for suffix in ('', '_zh'):
+            selector = '[English](README.md) | [简体中文](README_zh.md)\n\n'
+            (source / f'README{suffix}.md').write_text(
+                selector + f'# Project entry\n\n[Index](docs/README{suffix}.md)\n')
+            (source / f'docs/README{suffix}.md').write_text(
+                selector + f'# Documentation index\n\n[Project](../README{suffix}.md)\n')
+        output, _ = self.assemble()
+        for suffix in ('', '_zh'):
+            entry = output / f'guide/README{suffix}.md'
+            index = output / f'guide/index{suffix}.md'
+            self.assertIn(f'[Index](index{suffix}.md)', entry.read_text())
+            self.assertIn(f'[Project](README{suffix}.md)', index.read_text())
+            self.assertIn('[English](index.md) | [简体中文](index_zh.md)', index.read_text())
+            self.assertEqual(DOCS.check_file(output, entry), [])
+            self.assertEqual(DOCS.check_file(output, index), [])
+
+    def test_current_installation_guide_is_used_for_historical_distribution_errata(self):
+        source = self.root / 'platform'
+        declaration = source / 'release/guide-inputs.txt'
+        declaration.write_text(declaration.read_text().replace('docs/download.md', 'docs/installation.md'))
+        for suffix in ('', '_zh'):
+            (source / f'docs/installation{suffix}.md').write_text('# Installation\n')
+            (self.root / 'guest-runtime' / f'README{suffix}.md').write_text(
+                '# Historical guide\n\nCheck SHA256SUMS.\n')
+        (source / 'docs/download.md').unlink()
+        output, _ = self.assemble()
+        for suffix in ('', '_zh'):
+            text = (output / 'guide/guest-runtime' / f'README{suffix}.md').read_text()
+            self.assertIn(f'(../installation{suffix}.md)', text)
+            self.assertIn('Check SHA256SUMS.', text)
+
+    def test_old_independent_kernel_uses_owner_migrations_and_its_actual_anchors(self):
+        sandboxer = self.root / 'sandboxer'
+        platform = self.root / 'platform'
+        (sandboxer / 'release/guide-inputs.txt').write_text(
+            'README.md\ndocs/runtime.md\ndocs/guest-abi.md\ndocs/vmm.md\n')
+        for retired in ('sandbox.md', 'sandbox-init.md'):
+            (sandboxer / 'docs' / retired).unlink()
+        declaration = platform / 'release/guide-inputs.txt'
+        declaration.write_text(declaration.read_text().replace('docs/kuasar-sandbox.md', 'docs/architecture.md'))
+        (platform / 'docs/kuasar-sandbox.md').unlink()
+        migrations, platform_moves, original_kernel = [], [], {}
+        for suffix, title in (('', 'Balloon behavior'), ('_zh', '气球行为')):
+            kernel_slug = 'balloon-behavior' if not suffix else '气球行为'
+            selector = lambda name: f'[English]({name}.md) | [简体中文]({name}_zh.md)\n\n'
+            for name in ('runtime', 'guest-abi', 'vmm'):
+                text = selector(name) + '# Guide\n'
+                if name == 'guest-abi':
+                    text += '<a id="application-cgroups"></a>\n## Cgroups\n'
+                if name == 'vmm':
+                    text += ('<a id="patch-0004"></a>\n## Memory release\n'
+                             f'[Kernel](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/vmlinux{suffix}.md#{kernel_slug})\n')
+                (sandboxer / f'docs/{name}{suffix}.md').write_text(text)
+            (platform / f'docs/architecture{suffix}.md').write_text(selector('architecture') + '# Architecture\n')
+            # This newer Runtime copy has the requested anchor. It must NOT be
+            # used to validate the independently selected older Kernel page.
+            (self.root / f'guest-runtime/docs/vmlinux{suffix}.md').write_text(
+                selector('vmlinux') + f'# Wrong Runtime copy\n\n## {title}\n')
+            original = (selector('vmlinux') + f'# Selected old Kernel\n\n## 5.5 {title}\n'
+                        f'[ABI](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox-init{suffix}.md#321-old-cgroups)\n'
+                        f'[Patch](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/cloud-hypervisor{suffix}.md#34-old-release-title)\n'
+                        f'[Runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox{suffix}.md)\n'
+                        f'[Overview](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/docs/kuasar-sandbox{suffix}.md)\n'
+                        f'[History](https://github.com/kuasar-sandbox/sandboxer/blob/v0.0.1/docs/sandbox-init{suffix}.md#321-old-cgroups)\n')
+            original_kernel[suffix] = original
+            (self.root / f'vmlinux/docs/vmlinux{suffix}.md').write_text(original)
+            migrations += [
+                {'from': f'docs/sandbox-init{suffix}.md#321-old-cgroups', 'to': f'docs/guest-abi{suffix}.md#application-cgroups'},
+                {'from': f'docs/cloud-hypervisor{suffix}.md#34-old-release-title', 'to': f'docs/vmm{suffix}.md#patch-0004'},
+                {'from': f'docs/sandbox{suffix}.md', 'to': f'docs/runtime{suffix}.md'},
+            ]
+            platform_moves.append({'from': f'docs/kuasar-sandbox{suffix}.md', 'to': f'docs/architecture{suffix}.md'})
+        for source, rows in ((sandboxer, migrations), (platform, platform_moves)):
+            (source / 'release/guide-migrations.json').write_text(json.dumps({'schema': 1, 'redirects': rows}))
+
+        output, _ = self.assemble(kernel=True)
+        for suffix, fragment in (('', '55-balloon-behavior'), ('_zh', '55-气球行为')):
+            kernel = (output / f'guide/vmlinux/vmlinux{suffix}.md').read_text()
+            self.assertIn(f'## 5.5 {"Balloon behavior" if not suffix else "气球行为"}', kernel)
+            self.assertIn(f'(../sandboxer/guest-abi{suffix}.md#application-cgroups)', kernel)
+            self.assertIn(f'(../sandboxer/vmm{suffix}.md#patch-0004)', kernel)
+            self.assertIn(f'(../sandboxer/runtime{suffix}.md)', kernel)
+            self.assertIn(f'(../architecture{suffix}.md)', kernel)
+            self.assertIn(f'/blob/v0.0.1/docs/sandbox-init{suffix}.md#321-old-cgroups', kernel)
+            self.assertIn(f'(../vmlinux/vmlinux{suffix}.md#{fragment})',
+                          (output / f'guide/sandboxer/vmm{suffix}.md').read_text())
+            self.assertEqual((self.root / f'vmlinux/docs/vmlinux{suffix}.md').read_text(), original_kernel[suffix])
+        self.assertFalse(list(output.rglob('guide-migrations.json')))
+        for page in output.rglob('*.md'):
+            self.assertEqual(DOCS.check_file(output, page), [], str(page))
+
+    def test_exact_anchors_win_and_declared_moves_precede_heading_matching(self):
+        source = self.root / 'connector'
+        (source / 'docs/tapfd.md').write_text(
+            '# Wire\n<a id="topic"></a>\n## 1. Topic\n## 2. Destination\n## 3. Overview\n## 4. Cold start\n')
+        (source / 'release/guide-migrations.json').write_text(json.dumps({'schema': 1, 'redirects': [
+            {'from': 'docs/tapfd.md#topic', 'to': 'docs/tapfd.md#2-destination'},
+            {'from': 'docs/tapfd.md#overview', 'to': 'docs/tapfd.md#2-destination'},
+        ]}))
+        (self.root / 'platform/docs/quickstart.md').write_text(
+            '[Exact](https://github.com/kuasar-sandbox/connector/blob/main/docs/tapfd.md#topic)\n'
+            '[Declared](https://github.com/kuasar-sandbox/connector/blob/main/docs/tapfd.md#overview)\n'
+            '[Numbered](https://github.com/kuasar-sandbox/connector/blob/main/docs/tapfd.md#cold-start)\n')
+        output, _ = self.assemble()
+        text = (output / 'guide/quickstart.md').read_text()
+        self.assertIn('[Exact](connector/tapfd.md#topic)', text)
+        self.assertIn('[Declared](connector/tapfd.md#2-destination)', text)
+        self.assertIn('[Numbered](connector/tapfd.md#4-cold-start)', text)
+
+    def test_heading_matching_rejects_ambiguity_and_preserves_semantic_numbers(self):
+        for text, fragment, error in [
+                ('# Wire\n## 1. Topic\n## 2. Topic\n', 'topic', 'ambiguous unnumbered heading'),
+                ('# Wire\n## 32 MiB cache\n', 'mib-cache', 'missing heading/anchor')]:
+            with self.subTest(fragment=fragment):
+                (self.root / 'connector/docs/tapfd.md').write_text(text)
+                (self.root / 'platform/docs/quickstart.md').write_text(
+                    f'[Target](https://github.com/kuasar-sandbox/connector/blob/main/docs/tapfd.md#{fragment})\n')
+                output, result = self.assemble(success=False)
+                self.assertIn(error, result.stderr)
+                shutil.rmtree(output)
+
+    def test_page_moves_keep_fragments_and_cross_owner_destinations(self):
+        source = self.root / 'connector'
+        (source / 'docs/tapfd.md').write_text('# Wire\n## 1. Parameters\n')
+        (source / 'release/guide-migrations.json').write_text(json.dumps({'schema': 1, 'redirects': [
+            {'from': 'docs/retired.md', 'to': 'docs/tapfd.md'},
+            {'from': 'docs/shared.md#old', 'to_owner': 'accelerator', 'to': 'docs/store.md#store-contract'},
+        ]}))
+        (self.root / 'accelerator/docs/store.md').write_text('# Store contract\n')
+        page = self.root / 'platform/docs/quickstart.md'
+        page.write_text(
+            '[Moved](https://github.com/kuasar-sandbox/connector/blob/main/docs/retired.md#parameters)\n'
+            '[Owner](https://github.com/kuasar-sandbox/connector/blob/main/docs/shared.md#old)\n')
+        output, _ = self.assemble()
+        text = (output / 'guide/quickstart.md').read_text()
+        self.assertIn('[Moved](connector/tapfd.md#1-parameters)', text)
+        self.assertIn('[Owner](accelerator/store.md#store-contract)', text)
+        shutil.rmtree(output)
+        page.write_text('[Unknown](https://github.com/kuasar-sandbox/connector/blob/main/docs/retired.md#unknown)\n')
+        _, result = self.assemble(success=False)
+        self.assertIn('missing heading/anchor', result.stderr)
+
+    def test_documentation_migration_metadata_is_strict(self):
+        source = self.root / 'connector'
+        metadata = source / 'release/guide-migrations.json'
+        (source / 'docs/tapfd.md').write_text('# Wire\n## One\n## Two\n')
+        (source / 'docs/unselected.md').write_text('# Unselected\n')
+        valid = {'from': 'docs/retired.md', 'to': 'docs/tapfd.md'}
+        cases = [
+            ({'schema': True, 'redirects': []}, 'invalid documentation migration schema'),
+            ({'schema': 1, 'redirects': [], 'fallback': 'README.md'}, 'invalid documentation migration schema'),
+            ({'schema': 1, 'redirects': [valid, valid]}, 'duplicate documentation migration'),
+            ({'schema': 1, 'redirects': [{'from': '../README.md', 'to': 'docs/tapfd.md'}]}, 'unsafe documentation migration reference'),
+            ({'schema': 1, 'redirects': [{'from': 'docs/retired.md', 'to': '%2e%2e/README.md'}]}, 'unsafe documentation migration reference'),
+            ({'schema': 1, 'redirects': [{**valid, 'to_owner': 'absent'}]}, 'unselected documentation migration owner'),
+            ({'schema': 1, 'redirects': [{**valid, 'to': 'docs/unselected.md'}]}, 'migration target is not selected'),
+            ({'schema': 1, 'redirects': [{**valid, 'to': 'docs/tapfd.md#absent'}]}, 'missing heading/anchor'),
+            ({'schema': 1, 'redirects': [
+                {'from': 'docs/tapfd.md#one', 'to': 'docs/tapfd.md#two'},
+                {'from': 'docs/tapfd.md#two', 'to': 'docs/tapfd.md#one'}]}, 'cyclic documentation migration'),
+        ]
+        for data, error in cases:
+            with self.subTest(error=error):
+                metadata.write_text(json.dumps(data))
+                output, result = self.assemble(success=False)
+                self.assertIn(error, result.stderr)
+                shutil.rmtree(output)
+        metadata.write_text('{"schema":1,"schema":1,"redirects":[]}')
+        output, result = self.assemble(success=False)
+        self.assertIn('duplicate documentation migration field', result.stderr)
+        shutil.rmtree(output)
+        metadata.unlink()
+        external = self.root / 'external-migrations.json'
+        external.write_text(json.dumps({'schema': 1, 'redirects': [valid]}))
+        metadata.symlink_to(external)
+        _, result = self.assemble(success=False)
+        self.assertIn('symbolic link', result.stderr)
 
     def test_bilingual_navigation_and_source_links(self):
         source = self.root / 'connector'

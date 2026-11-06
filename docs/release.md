@@ -2,6 +2,11 @@
 
 # Release
 
+This is the maintainer contract for selecting component versions, producing and
+publishing aggregate assets, and recovering publication failures. Consumers use
+[installation](installation.md); operators changing a deployed system use
+[upgrades](upgrading.md). CI admission and execution evidence belong to [CI](ci.md).
+
 ## 1. Overview
 
 Kuasar Sandbox separates component publication from platform aggregate publication. A component version describes an independent component delivery; an aggregate version describes a set of already-published components that passed exact-asset validation together. Neither version is derived from the other, and they need not have matching names.
@@ -341,11 +346,49 @@ Legal material continues to use the existing LICENSE/NOTICE/COPYING conventions.
 An independently versioned unit uses `docs/<unit>.md` and its optional `_zh.md`
 peer from the unit's exact selected tag, including immutable older tags.
 
+#### Versioned navigation migrations
+
+An owner may declare a small, explicit `release/guide-migrations.json` in its
+selected source to keep independently versioned documentation navigable after a
+reorganization. This is assembly metadata, not another reader-facing guide or a
+set of permanent old Markdown pages. Older tags without it remain valid.
+
+```json
+{
+  "schema": 1,
+  "redirects": [
+    {"from": "docs/kuasar-sandbox.md", "to": "docs/architecture.md"}
+  ]
+}
+```
+
+Each `from`/`to` is a repository-relative Markdown path with an optional fragment.
+`to_owner` is optional and defaults to the declaring owner; a cross-owner target
+must be among the selected source inputs. The assembler reads declarations only
+from those exact inputs. It rejects unsafe paths, symlinks, unknown fields,
+duplicate sources, cycles and invalid declared targets.
+
+Resolution uses the document actually selected for the output, including an
+independent VMLinux source. An existing valid target/fragment wins. Otherwise an
+explicit migration can move the path/fragment; a unique heading match after
+removing a section-number prefix can resolve old/new heading spelling while
+preserving the selected document's real anchor. Ambiguous or unresolved fragments
+for a selected target or matched migration fail assembly. A path-only migration
+does not discard an unknown fragment or redirect it to a README. Explicit URLs to
+historical revisions remain unchanged; the selected original prose, examples and
+legal contents are not replaced with current text.
+
+Keep migrations limited to evidenced navigation compatibility. Update and test
+them with the owner document move, including current sources, a separately
+selected historical kernel, both languages and English-only older inputs.
+
 #### Layout
 
 | Source | Archive destination |
 | --- | --- |
-| Project README; quickstart, deployment, system and terminology guides | `guide/README*.md`, `guide/<topic>*.md` |
+| Project README | `guide/README*.md` |
+| Project documentation index (`docs/README*.md`) | `guide/index*.md` |
+| Selected platform concepts, architecture, user and operator guides | `guide/<topic>*.md` |
 | Component README and explicitly selected user contracts | `guide/<component>/<name>*.md` |
 | Independently selected kernel guide | `guide/vmlinux/vmlinux*.md` |
 | Project test README, QUICKSTART and Demo guide | Their existing `test/` paths |
@@ -353,16 +396,18 @@ peer from the unit's exact selected tag, including immutable older tags.
 | Workbench instructions, launcher and its policies/attribution | `workbench/` |
 | Project/component license, NOTICE and LICENSES material | `guide/licenses/<owner>/<original-path>` |
 
-The component guide list covers accelerator cache/store/manifest/file artifacts,
-connector TAP-FD and switch operations, guest flatten/runtime, sandbox control
-and guest-init contracts, and orchestrator node/build/proxy/resource/journal/
-telemetry contracts. Both language editions are included when present. Existing
-complete English-only documents remain valid. The four maintained E2E guide
-files remain beside the canonical flat case set.
+Owners select whole capability documents, including the reference and design
+sections needed to understand their runtime contracts. Platform input selection
+includes the documentation index, complete instance/template tasks, deployment,
+security, operations, upgrades and performance. Root README and the documentation
+index have distinct archive paths. Both maintained language editions travel
+together; complete English-only documents remain valid. The maintained E2E guide
+pairs remain beside the canonical flat case set.
 
-Internal design/patch analysis, CI/release documentation, extension development,
-source regression tests and experimental performance tools remain in their
-source repositories. Links to these materials use the selected source reference;
+Contributor workflows, unselected examples, CI/release maintenance, source tests
+and experimental tools remain in their source repositories. Selection belongs to
+each owner's declaration, not a duplicated filename list here. Links to omitted
+materials use the selected source reference;
 following a link does not pull an excluded document into the package. Source
 files are not deleted. Selected inputs must exist and be regular files; symbolic
 links and destination collisions fail assembly. License and attribution texts

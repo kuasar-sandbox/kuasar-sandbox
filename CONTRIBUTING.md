@@ -54,10 +54,109 @@ No particular review bot, additional approval count or formal review format is
 required by this procedure. It does not authorize bypassing repository rules.
 Control/App/release credentials remain outside candidate execution jobs.
 
+<a id="source-workspace"></a>
+## Source workspace
+
+The standard development workspace places the project repository and five component repositories next to one another:
+
+| Workspace directory | Responsibility |
+|---|---|
+| `kuasar-sandbox/` | Platform integration, tests, release coordination and shared documentation. |
+| `accelerator/` | Artifact and data infrastructure. |
+| `connector/` | Sandbox networking and descriptor handoff. |
+| `sandboxer/` | MicroVM lifecycle and resource mechanisms. |
+| `guest-runtime/` | Guest runtime bundle, kernel and image CLI delivery. |
+| `orchestrator/` | Managed sandbox, node and cluster services. |
+
+The project repository contains:
+
+```text
+docs/              System design, deployment, performance, CI, and release documents
+test/e2e/          Shared runner, flat suite cases and prepared-input helpers
+test/perf|demo/    Platform performance and demonstration scripts
+ci/integration/    CI helpers and source-cache maintenance
+ci/native-cache/   VMLinux, EROFS, Envd, RocksDB, and Cloud Hypervisor cache support
+ci/runner/         Self-hosted CI runner deployment
+release/           Version resolution, packaging, aggregation, and publishing
+releases/          Stable and daily Preview aggregate selections
+.github/workflows/ Reusable CI, aggregate-release, and daily-Preview workflows
+```
+
+<a id="build-and-test"></a>
+## Build and test
+
+Builds use environment-provided Go and inherit its `GOROOT` and `GOTOOLCHAIN` selection. Release automation requires a working `gh` on `PATH`; the project does not install, replace, or authenticate these environment tools against fixed binary digests. EROFS tools remain built from the project-selected sources, patches, and recipes.
+
+A complete source build is driven from this project repository and consumes the five sibling component repositories:
+
+```bash
+make -C kuasar-sandbox build
+make -C kuasar-sandbox test
+make -C kuasar-sandbox test-e2e RELEASE_DIR=/release E2E_WORKDIR=/tmp/kuasar-prepared
+make -C kuasar-sandbox perf E2E_WORKDIR=/absolute/path/to/prepared-inputs
+make -C kuasar-sandbox demo PYTHON_BIN=/absolute/path/to/pinned-venv/bin/python
+```
+
+Runtime files are collected into `bin/<arch>/` according to [`release/inputs/bin-inputs.yaml`](release/inputs/bin-inputs.yaml). Each component also supports its documented standalone build. For example:
+
+```bash
+GOWORK=off make -C sandboxer build
+```
+
+Product E2E consumes prebuilt products through `test/e2e/e2e prepare` and `run`. Full `<suite>.<case>.sh` filenames identify cases across nine suites; component ownership only determines where source cases are maintained. Preparation acquires immutable images and the pinned Demo SDK; execution uses prepared products, helpers and images without source discovery, compilation or automatic pulls. Unit/race/vet, UFFD and performance gates stay independent. See [test organization](test/README.md) and the [release validation guide](test/QUICKSTART.md).
+
+Release-tool tests do not contact GitHub or build the real native dependencies:
+
+```bash
+make -C kuasar-sandbox test-release-tools
+make -C kuasar-sandbox test-ci-tools
+make -C kuasar-sandbox test-perf-tools
+```
+
+Tests requiring KVM, root, eBPF, systemd, external storage, or the complete source workspace document those prerequisites separately. A skipped privileged suite must not be interpreted as a completed integration validation.
+
 <a id="documentation-language-and-review-policy"></a>
 ## Documentation contributions
 
 Organize documentation around one complete user task or component contract. Merge fix-specific notes into their owning specification; remove obsolete one-off reports instead of relocating them to a new archive hierarchy. Add or split a document only when it has a genuinely independent responsibility; a feature, fix, package or flag alone does not justify a separate file. Historical evidence does not require retaining one-off report files; original Git/PR/Issue history can preserve it. Record moved sections and removed duplication in the PR, preserve both language editions, and validate source and packaged navigation.
+
+<a id="documentation-organization"></a>
+### Organization and authoritative ownership
+
+Start with the capability and reader task, assign its owner, then choose files.
+The [architecture map](docs/architecture.md#configuration-and-contract-ownership)
+and [documentation index](docs/README.md) record the current boundaries.
+
+| Location | Responsibility |
+| --- | --- |
+| Project `docs/` | Platform concepts/architecture and complete cross-component user, deployment, operations and upgrade tasks |
+| Component `docs/` | Capability/object contracts: use, public interfaces, exact configuration, state, failure boundaries and implementation as appropriate |
+| Root README | Component/project scope, a short first-use path and topic navigation |
+| CONTRIBUTING | Source workspace, build/test entry, contribution and review workflow |
+| `examples/`, `test/`, `native-deps/` README | Instructions and prerequisites for the executable material beside them |
+| `release/` declarations | Delivered guide selection and explicit navigation compatibility; see the [release contract](docs/release.md#versioned-navigation-migrations) |
+
+An independent file needs a complete task or stable object/contract, a clear reader
+and owner, and an explicit boundary with adjacent topics. A package, flag, process,
+bug or page length is not enough. Runtime memory, block storage and resource
+control use the same subsystem scale; specific implementations are chapters.
+API and CLI bindings can share a capability's document rather than creating two
+independent feature specifications. Configuration syntax/defaults have one owner;
+mechanism documents explain behavior without copying the complete schema.
+
+Keep `docs/` shallow and use stable English topic names. Begin a document with
+scope, prerequisites and its authoritative boundary. Order content for its task:
+concepts, a complete example, precise reference, mechanisms/failures and validation
+where useful. Use semantic headings and links, not a second manually maintained
+section-number index. End related links after substantive content.
+
+Keep exact state transitions, wire versions, format fields and defaults in one
+authoritative topic. Guides retain executable examples and necessary explanation.
+For a structural change, map every old maintained section to a target or identify
+it as obsolete/duplicated with evidence; retiring a path does not permit losing
+its requirements or Chinese edition. Update declarations and test assembled
+navigation with both current and independently selected historical component
+inputs. Product behavior and release policy are outside a documentation rewrite.
 
 ### Scope
 
@@ -95,7 +194,8 @@ Run the standard-library checker without network access:
 
 ```sh
 python3 -m unittest discover -s ci -p 'test_check_docs.py'
-python3 ci/check_docs.py --root . --changed-base <base-commit>
+: "${BASE_COMMIT:?Set the reviewed base commit SHA}"
+python3 ci/check_docs.py --root . --changed-base "$BASE_COMMIT"
 python3 ci/check_docs.py --root . --json
 ```
 

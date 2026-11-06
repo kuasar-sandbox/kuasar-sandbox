@@ -3,7 +3,7 @@
 # Workbench
 
 For the first sandbox, follow [Quick Start](../docs/quickstart.md).
-[Acquire a release](../docs/download.md) supplies verified inputs and image import
+[Acquire a release](../docs/installation.md) supplies verified inputs and image import
 without a source checkout. This guide owns environment/lifecycle semantics. Run
 release examples from the extracted directory and source-build examples from the
 project checkout, using the matching launcher in each case.
@@ -37,7 +37,7 @@ their real devices and kernel features; unavailable capability is not a pass.
 Host profiles, global sysctls, modules and existing services are not managed.
 
 Acquire the selected release's image through its exact registry version tag, or
-follow the [download guide](../docs/download.md) to verify the native GitHub asset
+follow the [download guide](../docs/installation.md) to verify the native GitHub asset
 size and digest before importing `workbench-<arch>-v*.tar.gz` with `docker load`. This is a gzip-compressed Docker image archive; never extract it
 into the product release tree. The registry tag is
 `ghcr.io/kuasar-sandbox/workbench:vX.Y.Z[-preview.YYYYMMDD[.N]]`, using the
@@ -145,7 +145,7 @@ Check both Linux filesystem free space and free space on the Windows volume
 backing its VHDX; the virtual disk's maximum capacity is not available storage.
 
 Inside Workbench, use an explicit node assignment when sharing the environment.
-The [node reservation model](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md#41-pool)
+The [node reservation model](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md#pool)
 defines `physical_memory: auto` from host `MemTotal`, not the container's memory
 limit. Its startup pool is an admission budget, not preallocated RAM:
 

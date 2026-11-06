@@ -3,7 +3,7 @@
 # Workbench
 
 运行第一个沙箱请先按[快速开始](../docs/quickstart_zh.md)操作；
-[获取发布版](../docs/download_zh.md)提供无需源码检出的制品校验和镜像导入步骤。
+[获取发布版](../docs/installation_zh.md)提供无需源码检出的制品校验和镜像导入步骤。
 本文维护环境与生命周期合同，不重复首次体验步骤。发布版示例从解包目录执行，
 源码构建示例从主仓目录执行，启动器均使用与输入匹配的版本。
 
@@ -31,7 +31,7 @@ systemd 与私有 daemon 就绪，并报告实际能力。所选产品测试仍�
 内核能力要求，不把不可用能力当成通过。启动器不管理宿主策略、全局 sysctl、
 模块或已有服务。
 
-通过选定发布版的精确 registry 版本标签获取镜像，或按[下载指南](../docs/download_zh.md)
+通过选定发布版的精确 registry 版本标签获取镜像，或按[下载指南](../docs/installation_zh.md)
 验证 GitHub 资产原生大小和摘要后，用 `docker load` 导入本机架构的 `workbench-<arch>-v*.tar.gz`。这是 gzip 压缩的 Docker
 镜像归档，不能解压到产品发布树。registry 标签为
 `ghcr.io/kuasar-sandbox/workbench:vX.Y.Z[-preview.YYYYMMDD[.N]]`，即聚合版本去掉
