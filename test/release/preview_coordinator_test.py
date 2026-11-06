@@ -713,6 +713,106 @@ class PreviewCoordinatorTest(unittest.TestCase):
         with self.assertRaisesRegex(coordinator.Deferred, 'retain for inspection'):
             state.status('runtime-v1.2.3-preview.20260831')
 
+    @staticmethod
+    def repository_state(unit_name, tags):
+        state = coordinator.RepositoryState.__new__(coordinator.RepositoryState)
+        state.unit = coordinator.UNIT_BY_NAME[unit_name]
+        state._statuses = {}
+        state.invalid_tags = set()
+        state.tag_shas = {tag: "a" * 40 for tag in tags}
+        state.releases = {
+            tag: {
+                "draft": False,
+                "prerelease": "-preview." in tag,
+                "assets": [{
+                    "name": coordinator.archive_name(unit_name, tag),
+                    "id": 1, "size": 50, "digest": "sha256:" + "a" * 64,
+                    "state": "uploaded",
+                }],
+            }
+            for tag in tags
+        }
+        return state
+
+    def test_discovery_filters_other_units_before_asset_admission(self):
+        for unit, own, other in (
+            ("runtime", "runtime-v1.2.3", "vmlinux-v1.2.3"),
+            ("vmlinux", "vmlinux-v1.2.3", "runtime-v1.2.3"),
+            ("orchestrator", "v1.2.3", "release-v1.2.3-preview.20260805"),
+        ):
+            with self.subTest(unit=unit):
+                state = self.repository_state(unit, (other, own, "not-a-release"))
+                # Even apparently matching assets must not admit another unit.
+                with mock.patch.object(state, "status", wraps=state.status) as status:
+                    self.assertEqual(state.usable_tags(), [own])
+                status.assert_called_once_with(own)
+
+    def test_discovery_retains_legacy_metadata_without_admitting_it(self):
+        current, legacy = "v1.2.3", "v1.0.0-preview.20260808"
+        state = self.repository_state("accelerator", (current, legacy))
+        state.releases[legacy]["assets"].append({"name": "release.json"})
+        original = json.dumps(state.releases, sort_keys=True)
+        with mock.patch("builtins.print") as output:
+            self.assertEqual(state.usable_tags(), [current])
+        self.assertIn("kuasar-sandbox/accelerator " + legacy, output.call_args.args[0])
+        self.assertEqual(json.dumps(state.releases, sort_keys=True), original)
+        # Explicitly configured/selected versions still fail closed, including
+        # after discovery. A skipped candidate is not cached as incomplete.
+        with self.assertRaises(coordinator.Deferred):
+            state.status(legacy)
+        with self.assertRaises(coordinator.Deferred):
+            coordinator.ensure_configured_state(state.unit, legacy, state)
+
+    def test_discovery_excludes_unavailable_candidates_but_keeps_strict_status(self):
+        current, old = "runtime-v1.2.3", "runtime-v1.0.0-preview.20260808"
+        for problem in ("legacy_name", "digest", "duplicate", "unresolved", "incomplete"):
+            with self.subTest(problem=problem):
+                state = self.repository_state("runtime", (old, current))
+                assets = state.releases[old]["assets"]
+                if problem == "legacy_name":
+                    assets[0]["name"] = "sandbox-runtime-x86_64-" + old + ".tar.gz"
+                elif problem == "digest":
+                    assets[0]["digest"] = None
+                elif problem == "duplicate":
+                    assets.append(dict(assets[0]))
+                elif problem == "unresolved":
+                    state.invalid_tags.add(old)
+                else:
+                    assets.clear()
+                with mock.patch("builtins.print"):
+                    self.assertEqual(state.usable_tags(), [current])
+                if problem == "incomplete":
+                    self.assertFalse(state.status(old).complete)
+                else:
+                    with self.assertRaises(coordinator.Deferred):
+                        state.status(old)
+
+    def test_discovery_skipped_selected_tag_still_blocks_planning(self):
+        current, selected = "v1.2.3", "v1.2.4-preview.20261106"
+        state = self.repository_state("accelerator", (selected, current))
+        state.releases[selected]["assets"].append({"name": "release.json"})
+        resolution = coordinator.preview_selection.Resolution(
+            "main", "a" * 40, current, "a" * 40, "publish", selected,
+        )
+        with (
+            mock.patch.object(coordinator, "RepositoryState", return_value=state),
+            mock.patch.object(coordinator, "branch_sha", return_value="a" * 40),
+            mock.patch.object(coordinator, "clone_repository"),
+            mock.patch.object(coordinator.preview_selection, "resolve", return_value=resolution) as resolve,
+            mock.patch.object(coordinator, "gh") as github,
+            mock.patch("builtins.print"),
+            self.assertRaises(coordinator.Deferred),
+        ):
+            coordinator.make_plan(state.unit, current, "20261106", pathlib.Path("unused"))
+        self.assertEqual(resolve.call_args.args[4], [current])
+        github.assert_not_called()
+
+    def test_discovery_does_not_swallow_operational_failures(self):
+        state = self.repository_state("connector", ("v1.2.3",))
+        with mock.patch.object(state, "status", side_effect=RuntimeError("API unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "API unavailable"):
+                state.usable_tags()
+
     def test_platform_assets_are_derived_from_exact_manifest_commit(self) -> None:
         manifest = """version: release-v9.8.7
 preview_version: preview.20260831
