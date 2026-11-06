@@ -29,10 +29,9 @@
 
 ## 版本与验证
 
-组件有独立版本和 Release,主仓聚合版本选择精确的六个发布单元:四个组件 archive,
-Guest runtime 和 Guest kernel.聚合准备校验组件资产和 SHA256,再在真实 KVM 环境中运行
-owner E2E 与 platform 组合用例.发布包记录精确版本组合,避免混用不同日期或不同聚合
-版本的资产.
+组件有独立版本与 Release。主仓聚合版本选择精确的六个发布单元：四个组件 archive、Guest runtime 和 Guest kernel。聚合准备校验所选组件资产及 SHA256，验收按各架构声明的 profile 测试 staged bytes。发布包记录精确版本组合，避免混用不同日期或聚合版本的资产。
+
+验证结论限于实际 profile：原生 x86 执行要求的 KVM 用例，原生 ARM 执行其声明的 profile 并明确记录硬件排除项。托管 ARM Workbench 的 `artifact-only` 结果不能证明 VM 或离线系统执行通过。升级前须将记录的架构、profile 和已执行用例与目标部署核对，见[发行资产验证](release_zh.md#8-发行资产验证)。
 
 这些机制支持生产部署中的版本固定,故障定位和可重复验证.部署方仍需为 TLS,持久化
 后端,备份,监控,网络策略和容量配置生产级实现.
@@ -49,7 +48,7 @@ portable ref 描述内容，不认证任意目标。部署方放置前必须验�
   拒绝旧 schema，不会静默迁移或冷启动。
 - **kernel/runtime**：部署可信匹配 kernel 及 runtime 绑定。restore 的廉价
   kernel 检查不重算字节 hash；runtime basename/footer digest 必须匹配 E。
-  保留不可变版本输入，遵循[runtime 选择](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/runtime-bundle_zh.md)。
+  保留不可变版本输入，遵循[runtime 选择](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime_zh.md#节点升级)。
 - **完整持久闭包**：S、E、memory/disk 父链及不可变对象能按原 canonical identity/
   命名 location 解析。须从目标节点验证，不依赖热 cache。
 - **密钥/所有权**：保留每个加密层的客户密钥及 Node/集群要求的凭据/所有权状态。
@@ -59,7 +58,7 @@ portable ref 描述内容，不认证任意目标。部署方放置前必须验�
   目标 allocatable 策略和准入仍生效。portable 工件不是 reservation，也不允许
   复用旧主机 TAP FD。
 
-[Sandboxer 恢复](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime_zh.md)
+[Sandboxer 恢复](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime_zh.md#restore)
 及 [Node 工件生命周期](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle_zh.md#capture-and-pause)
 拥有检查和可覆盖字段。以文件/进程状态、热集外读取、网络往返及外部连接重建验证。
 任何 preflight 失败都停止放置、保留工件并修复绑定，不改捕获元数据强行通过。
@@ -69,4 +68,4 @@ portable ref 描述内容，不认证任意目标。部署方放置前必须验�
 | Proxy/Router/connector serve 进程崩溃 | 所有权与底层资源存活时可按契约重连/重开；准入前验证同步、身份、流量，不是 VM checkpoint 操作。 |
 | Sandbox/VMM 进程或整机丢失 | 未捕获内存丢失；残存本地状态不自动成为完整 portable checkpoint。仅恢复成功提交且资格/所有权合格的工件。 |
 | 原节点不可用，但此前已暂停 | 仍需完整持久闭包、密钥、绑定、网络、准入及对应 Node/集群所有权协议；共享存储仅满足一项。 |
-| Registry 执行状态丢失 | 当前协议不能从 route events 重建 ownership 或导入备份执行行。[Registry 恢复限制](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md)描述未实现 bootstrap；provider 或 portable 快照不授权伪造 Registry 行或承诺同 ID 恢复。 |
+| Registry 执行状态丢失 | 当前协议不能从 route events 重建 ownership 或导入备份执行行。[Registry 恢复限制](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#registry-state-ownership-and-disaster-recovery-boundaries)描述未实现 bootstrap；provider 或 portable 快照不授权伪造 Registry 行或承诺同 ID 恢复。 |
