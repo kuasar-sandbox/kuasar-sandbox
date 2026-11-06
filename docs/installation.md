@@ -4,7 +4,11 @@
 
 This task produces a verified local installation with a matching version set. Continue with [Quick Start](quickstart.md) for a first run or [deployment](deployment.md) for production assembly.
 
-Run these commands in one Bash shell on the native Linux Docker host with Python 3.9+, curl, GNU tar, sha256sum and Docker. No GitHub login, source checkout or compiler is needed.
+Run these commands in one Bash shell on a native Linux host with Python 3.9+,
+curl, GNU tar and sha256sum. Docker is needed when importing Workbench; downloading
+and extracting native products alone does not require it. No GitHub login, source
+checkout or compiler is needed for this installation task. Running the products
+has additional prerequisites in the selected version's deployment guide.
 
 Set `RELEASE_VERSION` to a published aggregate tag, or leave it empty to resolve Stable once. The manifest at that aggregate tag selects all six release units and exact package names; runtime and vmlinux have independent tags. Never combine component Latest releases or substitute files from main. Use the selected version's bundled guides for older releases.
 
@@ -69,8 +73,10 @@ assert fields['version'] + ('-' + fields['preview_version'] if '-preview.' in ta
 for unit, version in units.items():
     prefix = unit + '-v' if unit in ('runtime', 'vmlinux') else 'v'
     assert re.fullmatch(prefix + version_re, version), ('invalid component tag', unit)
+    assert '-preview.' in tag or '-preview.' not in version, ('Stable requires stable component', unit)
 contract = fields.get('delivery', 'historical')
 assert contract in ('historical', 'workbench-v1')
+assert 'delivery' not in fields or contract == 'workbench-v1', 'unsupported explicit delivery contract'
 arch = os.environ['ARCH']
 workbench = os.environ['DOWNLOAD_WORKBENCH']
 assert workbench in ('0', '1')
@@ -215,20 +221,39 @@ trap - EXIT
 
 ## Import Workbench separately
 
-Import the downloaded archive, check its native architecture and version, and retain its local image ID for startup.
+With the default `DOWNLOAD_WORKBENCH=1`, import the downloaded archive, check its
+native architecture and version, and retain its local image ID for startup. With
+`DOWNLOAD_WORKBENCH=0`, this block sets `RELEASE` and leaves `IMAGE` empty without
+invoking Docker or looking for an archive that was not downloaded.
 
 ```bash
-IMAGE_TAG="ghcr.io/kuasar-sandbox/workbench:${RELEASE_VERSION#release-}"
-docker load --input "$DOWNLOAD_DIR/workbench-$ARCH-${RELEASE_VERSION#release-}.tar.gz"
-case "$ARCH" in x86_64) DOCKER_ARCH=amd64 ;; aarch64) DOCKER_ARCH=arm64 ;; esac
-test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_TAG")" = "linux/$DOCKER_ARCH"
-test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$IMAGE_TAG")" = "$RELEASE_VERSION"
-IMAGE="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
 RELEASE="$INSTALL_DIR"
-printf 'Release directory: %s\nLocal Workbench image: %s\n' "$RELEASE" "$IMAGE"
+IMAGE=""
+if [ "$DOWNLOAD_WORKBENCH" = 1 ]; then
+    IMAGE_TAG="ghcr.io/kuasar-sandbox/workbench:${RELEASE_VERSION#release-}"
+    docker load --input "$DOWNLOAD_DIR/workbench-$ARCH-${RELEASE_VERSION#release-}.tar.gz"
+    case "$ARCH" in x86_64) DOCKER_ARCH=amd64 ;; aarch64) DOCKER_ARCH=arm64 ;; esac
+    test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_TAG")" = "linux/$DOCKER_ARCH"
+    test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$IMAGE_TAG")" = "$RELEASE_VERSION"
+    IMAGE="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
+    printf 'Local Workbench image: %s\n' "$IMAGE"
+fi
+printf 'Release directory: %s\n' "$RELEASE"
 ```
 
-Keep `RELEASE`, `IMAGE` and `ARCH` in this shell and continue with [Quick Start](quickstart.md#start-a-private-system-environment). The launcher comes from `$RELEASE/workbench/workbench`. For an existing verified installation, use its release directory and local image ID. Stop on missing files, wrong architecture, digest, permission or path errors; do not fetch replacements from another version.
+Choose the next step that matches the downloaded inputs:
+
+- **Workbench:** keep `RELEASE`, `IMAGE` and `ARCH` in this shell and continue with
+  [Quick Start](quickstart.md#start-a-private-system-environment). The launcher
+  comes from `$RELEASE/workbench/workbench`. For an existing verified installation,
+  use its release directory and local image ID.
+- **Native products only:** use `RELEASE` and `ARCH` with that version's bundled
+  deployment or native guide. There is no Workbench image to start; do not continue
+  with the Workbench Quick Start commands.
+
+Stop on missing files, wrong architecture, digest, permission or path errors;
+do not fetch replacements from another version.
+
 ## Installation result
 
 Retain the selected aggregate tag, `files.tsv` and original downloads. Product tools are in `bin/`; `guide/README.md` is the project entry and `guide/index.md` is the complete documentation index, with component guides under `guide/<component>/`. Tests and Demo material are under `test/`; Workbench is a separate image. Historical releases retain the layout documented by their bundled guides.
