@@ -101,11 +101,22 @@ state = control("GET", instance_path)
 print(state["sandboxID"], state["state"])
 ```
 
-Use `GET /v2/sandboxes` for tenant-scoped lists, with the lifecycle contract's
-state filter and `x-next-token` pagination. Default listing omits some transient
-and terminal states; use explicit filters for diagnosis. Resource, traffic and
-usage stats are read-only observations, not application readiness checks; their
-availability and historical coverage are defined in
+Listing depends on the entry point:
+
+- **Standalone Conductor:** `GET /v2/sandboxes` is tenant-scoped and supports the
+  lifecycle contract's `state` filter, `limit` and `nextToken` parameters, with
+  the next page token returned in `x-next-token`. Default listing omits some
+  transient and terminal states; use explicit filters for diagnosis.
+- **Cluster Router:** the same collection path returns the Group's current
+  Registry projection for `ready`, `pausing` and `paused` routes. It does not
+  forward the node's `state`/`limit`/`nextToken` parameters or provide that
+  pagination contract. These route states are not the full node lifecycle view.
+  Use the ID-based Get helper above with the saved Group/route key to inspect a
+  known instance. See the [cluster control contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#router-control-plane).
+
+Absence from a default list is not proof that the instance has been deleted.
+Resource, traffic and usage stats are read-only observations, not application
+readiness checks; their availability and historical coverage are defined in
 [observability](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md).
 
 ### Pause and resume choices
