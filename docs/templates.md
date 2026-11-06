@@ -31,12 +31,22 @@ This recipe targets the repository-pinned **e2b==2.25.1** and current
 Use the SDK pin and guide shipped with your selected aggregate if different;
 a current-source example does not certify an older Release. Set `APP_IMAGE` to
 your own digest-pinned, architecture-matching registry image containing Python 3,
-a shell and a writable `/tmp`. Configure registry credentials through Node's
-existing credential mechanism. First check [image and kernel adaptation](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/flatten-cli.md#decide-whether-your-workload-needs-adaptation).
+`/bin/bash`, `id` and a writable `/tmp`. If the `user` account is absent, it also
+needs `useradd`. Build RUN/start/ready commands use Bash, not an arbitrary shell.
+Configure registry credentials through Node's existing credential mechanism. First check [image and kernel adaptation](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/flatten-cli.md#decide-whether-your-workload-needs-adaptation).
 The 2 CPU/6 GiB build budget follows the Demo, not a sizing recommendation.
 
-The build command prepares files; the start command runs the application; the
-readiness command checks its HTTP response before snapshot publication. A fixed
+The recipe prepares the E2B `user` account inside the image before application
+steps, following the Demo's UID/GID `1000:1000` convention. It creates the account
+only when absent and rejects conflicting IDs; it does not rename or renumber an
+existing account. Build working directories are explicit rather than inherited
+from the base image. It checks `/home/user` as that user; Python 3 must be on the
+user's PATH and `/tmp` must be writable by that user. The snapshot phase
+runs start/ready commands as `user` in `/home/user`, so Python and a writable
+`/tmp` alone are not sufficient.
+
+The remaining build command prepares files; the start command runs the application;
+the readiness command checks its HTTP response before snapshot publication. A fixed
 sleep alone does not prove your application is ready. Nonempty start/ready commands
 select the auto memory target. No register-only configuration headers are passed
 to `Template.build`, because this SDK forwards them to trigger too.
@@ -51,6 +61,15 @@ image = os.environ["APP_IMAGE"]  # registry/repository@sha256:...
 start = "python3 -m http.server 8080 --directory /tmp/my-app"
 ready = "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=2)\""
 tpl = (Template().from_image(image)
+       .set_user("root")
+       .set_workdir("/")
+       .run_cmd(
+           'if ! id user >/dev/null 2>&1; then '
+           'useradd --create-home --home-dir /home/user --uid 1000 --user-group --shell /bin/bash user; '
+           'fi && test "$(id -u user):$(id -g user)" = 1000:1000')
+       .set_user("user")
+       .set_workdir("/home/user")
+       .run_cmd("test -d /home/user && test -w /home/user")
        .run_cmd("mkdir -p /tmp/my-app && printf 'my application\\n' > /tmp/my-app/index.html")
        .set_start_cmd(start, ready))
 info = Template.build(

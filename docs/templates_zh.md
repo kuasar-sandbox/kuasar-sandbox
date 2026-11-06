@@ -27,11 +27,20 @@ Demo 完成时会停止服务；临时凭据和容器 localhost 不会配置独�
 [Build 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md)。
 若所选 aggregate 不同，使用其打包指南和 SDK pin；当前源码示例不能认证旧 Release。
 把 `APP_IMAGE` 设为自己的 digest 固定、架构匹配的 registry 镜像，需包含 Python 3、
-shell 和可写 `/tmp`。按 Node 现有凭据机制配置 registry 认证。先检查
+`/bin/bash`、`id` 和可写 `/tmp`。若尚无 `user` 账户，还需要 `useradd`。
+Build 的 RUN/start/ready 命令使用 Bash，不是任意 shell。
+按 Node 现有凭据机制配置 registry 认证。先检查
 [镜像和内核适配](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/flatten-cli_zh.md)。
 2 CPU/6 GiB 构建预算沿用 Demo，不是容量推荐。
 
-build 命令准备文件，start 命令运行应用，ready 命令在快照发布前检查应用 HTTP
+本配方先在镜像内部准备 E2B 的 `user` 账户，沿用 Demo 的 UID/GID `1000:1000`
+约定。仅在账户不存在时创建；已有账户的 ID 不符则失败，不重命名或重编号。
+构建工作目录显式指定，不继承基础镜像的路径。随后以该用户检查 `/home/user`；
+Python 3 必须在该用户的 PATH 中，`/tmp` 必须对该用户可写。快照阶段以 `user`
+在 `/home/user` 中执行
+start/ready，因此只有 Python 和可写 `/tmp` 还不够。
+
+后续 build 命令准备文件，start 命令运行应用，ready 命令在快照发布前检查应用 HTTP
 响应。固定 sleep 本身不能证明应用就绪。非空 start/ready 选择 auto 内存目标。
 不要向 `Template.build` 传 register-only 配置头；此 SDK 也会把头传给 trigger。
 
@@ -45,6 +54,15 @@ image = os.environ["APP_IMAGE"]  # registry/repository@sha256:...
 start = "python3 -m http.server 8080 --directory /tmp/my-app"
 ready = "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=2)\""
 tpl = (Template().from_image(image)
+       .set_user("root")
+       .set_workdir("/")
+       .run_cmd(
+           'if ! id user >/dev/null 2>&1; then '
+           'useradd --create-home --home-dir /home/user --uid 1000 --user-group --shell /bin/bash user; '
+           'fi && test "$(id -u user):$(id -g user)" = 1000:1000')
+       .set_user("user")
+       .set_workdir("/home/user")
+       .run_cmd("test -d /home/user && test -w /home/user")
        .run_cmd("mkdir -p /tmp/my-app && printf 'my application\\n' > /tmp/my-app/index.html")
        .set_start_cmd(start, ready))
 info = Template.build(
