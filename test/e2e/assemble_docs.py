@@ -22,12 +22,65 @@ REPOS['vmlinux'] = 'guest-runtime'
 INLINE = re.compile(r'(!?\[[^\]\n]*\]\(\s*)(<[^>\n]+>|[^\s]+?)(\s+(?:"[^"\n]*"|\x27[^\x27\n]*\x27))?(\s*\))')
 REFERENCE = re.compile(r'^(\s{0,3}\[[^\]]+\]:\s*)(<[^>]+>|\S+)')
 HTML_LINK = re.compile(r'\b(href|src)=("|\x27)(.*?)\2')
-CODE = re.compile(r'(`+).*?\1')
 FENCE = re.compile(r'^\s{0,3}(`{3,}|~{3,})')
 HEADING = re.compile(r'^\s{0,3}#{1,6}\s+(.+?)\s*#*\s*$')
 EXPLICIT = re.compile(r'<(?:a|[a-z][\w-]*)\b[^>]*\b(?:id|name)=["\x27]([^"\x27]+)["\x27]', re.I)
 # Only dotted chapter prefixes, not meaningful leading numbers such as "32 MiB".
 CHAPTER = re.compile(r'^(?:\d+\.\s+|\d+(?:\.\d+)+\.?\s+)')
+
+
+def mask_inline_code(text: str) -> str:
+    """Mask literal code, retaining offsets and newlines for link diagnostics."""
+    def mask_block(block):
+        runs = list(re.finditer(r'`+', block))
+        result = list(block)
+        index = 0
+        while index < len(runs):
+            opening = runs[index]
+            # Escapes apply to an opener in prose, but not inside a code span.
+            before = block[:opening.start()]
+            if (len(before) - len(before.rstrip('\\'))) % 2:
+                index += 1
+                continue
+            closing = next((i for i in range(index + 1, len(runs))
+                            if len(runs[i].group()) == len(opening.group())), None)
+            if closing is None:
+                index += 1
+                continue
+            for position in range(opening.start(), runs[closing].end()):
+                if result[position] not in '\r\n':
+                    result[position] = ' '
+            index = closing + 1
+        return ''.join(result)
+
+    result, block, fence = [], [], None
+    for line in text.splitlines(keepends=True):
+        mark = FENCE.match(line)
+        heading = re.match(r'^ {0,3}#{1,6}(?:[ \t]|$)', line)
+        boundary = heading or re.match(
+            r'^ {0,3}(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+|>|(?:=+|-+)[ \t]*$|'
+            r'(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$|(?:-[ \t]*){3,}$)', line)
+        if boundary and block:
+            result.append(mask_block(''.join(block)))
+            block = []
+        if mark or fence is not None or not line.strip():
+            if block:
+                result.append(mask_block(''.join(block)))
+                block = []
+            result.append(line)
+            if mark:
+                token = mark.group(1)
+                if fence is None:
+                    fence = token
+                elif token[0] == fence[0] and len(token) >= len(fence) and not line.strip()[len(token):].strip():
+                    fence = None
+        elif heading:
+            result.append(mask_block(line))
+        else:
+            block.append(line)
+    if block:
+        result.append(mask_block(''.join(block)))
+    return ''.join(result)
 
 
 LEGACY_RELEASE_GUIDANCE = re.compile(r'SHA256SUMS|SOURCES\.tsv|GO-BUILD-INFO\.tsv|GO-MODULES\.tsv|MATERIALS\.sha256|kuasar-(?:preview-binding|release-source)')
@@ -401,7 +454,8 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
     def rewrite(text: str, owner: str, path: Path, dest: Path) -> str:
         fence = None
         result = []
-        for line in text.splitlines(keepends=True):
+        masked = mask_inline_code(text).splitlines(keepends=True)
+        for line, searchable in zip(text.splitlines(keepends=True), masked):
             mark = FENCE.match(line)
             if mark:
                 token = mark.group(1)
@@ -414,20 +468,17 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
             if fence is not None:
                 result.append(line)
                 continue
-            spans = [m.span() for m in CODE.finditer(line)]
             replacements = []
-            matches = list(INLINE.finditer(line))
-            ref = REFERENCE.match(line)
+            matches = list(INLINE.finditer(searchable))
+            ref = REFERENCE.match(searchable)
             if ref:
                 matches.append(ref)
             for match in matches:
                 start, end = match.span(2)
-                if not any(a <= start < b for a, b in spans):
-                    replacements.append((start, end, rewrite_url(match.group(2), owner, path, dest)))
-            for match in HTML_LINK.finditer(line):
+                replacements.append((start, end, rewrite_url(match.group(2), owner, path, dest)))
+            for match in HTML_LINK.finditer(searchable):
                 start, end = match.span(3)
-                if not any(a <= start < b for a, b in spans):
-                    replacements.append((start, end, rewrite_url(match.group(3), owner, path, dest)))
+                replacements.append((start, end, rewrite_url(match.group(3), owner, path, dest)))
             for start, end, value in sorted(set(replacements), reverse=True):
                 line = line[:start] + value + line[end:]
             result.append(line)

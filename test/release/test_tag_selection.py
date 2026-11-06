@@ -61,6 +61,8 @@ class TagSelectionTests(unittest.TestCase):
                 self.assertEqual(path.suffix, '.yaml', path)
                 self.assertNotIn(path.name, {'release.yaml', 'daily-preview.yaml'}, path)
                 self.assertFalse(path.name.startswith('release-v'), path)
+            elif path == pathlib.PurePosixPath('release/guide-migrations.json'):
+                continue  # Owner navigation metadata, not release selection.
             else:
                 self.assertIn(path.suffix, {'.py', '.sh'}, path)
                 self.assertFalse(path.name.startswith('test') or path.stem.endswith('_test'), path)

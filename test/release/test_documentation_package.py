@@ -639,6 +639,36 @@ class DocumentationPackageTest(unittest.TestCase):
         self.assertFalse((output / 'test/e2e/run_all.sh').exists())
         self.assertFalse((output / 'test/e2e/generated-compatibility-runners').exists())
 
+    def test_inline_code_is_preserved_while_adjacent_links_are_rebased(self):
+        source = self.root / 'connector'
+        examples = (
+            '`^[a-z0-9](?:[a-z0-9-]{0,55}[a-z0-9])?$`',
+            '`[literal](does-not-exist)`',
+            '``literal ` [literal](does-not-exist) ``',
+            '`literal `` [literal](does-not-exist) `',
+            'text ```literal `` [literal](does-not-exist) ```',
+            '`literal\n[literal](does-not-exist)`',
+            '`<a href="does-not-exist">literal</a>`',
+        )
+        text = '\n\n'.join(code + ' [real](docs/tapfd.md#wire)' for code in examples)
+        text += ('\n\nunmatched ` [real](docs/tapfd.md#wire)\n\n'
+                 '[real](docs/tapfd.md#wire) ` unmatched\n\n'
+                 '\\`[real](docs/tapfd.md#wire) ` unmatched\n\n'
+                 '[`label`](docs/tapfd.md#wire)\n'
+                 '<a href="docs/tapfd.md#wire">real</a>\n\n'
+                 'unmatched ` [real](docs/tapfd.md#wire)\n'
+                 '~~~text\n[literal](does-not-exist)\n~~~\n'
+                 '[real](docs/tapfd.md#wire) ` unmatched\n')
+        for prefix in ('# ', '- ', '1. ', '> ', '***\n', '---\n'):
+            text += '\n\nunmatched `\n' + prefix + '[real](docs/tapfd.md#wire) `literal`\n'
+        (source / 'README.md').write_text(text)
+        (source / 'docs/tapfd.md').write_text('# Wire\n')
+        output, _ = self.assemble()
+        expected = text.replace('(docs/tapfd.md#wire)', '(tapfd.md#wire)')
+        expected = expected.replace('href="docs/tapfd.md#wire"', 'href="tapfd.md#wire"')
+        self.assertEqual((output / 'guide/connector/README.md').read_text(), expected)
+        self.assertEqual(DOCS.check_file(output, output / 'guide/connector/README.md'), [])
+
     def test_kernel_pair_uses_independently_selected_source(self):
         for owner, prefix in [('guest-runtime', 'runtime'), ('vmlinux', 'selected')]:
             for suffix in ('', '_zh'):
