@@ -1,12 +1,14 @@
-[English](perf.md) | [简体中文](perf_zh.md)
+[English](performance.md) | [简体中文](performance_zh.md)
 
-# perf - Performance validation and tuning
+# Performance measurement, capacity and tuning
+
+This guide defines comparable measurements, capacity qualification and tuning. Historical results retain their environment and revision; they are not promises for every deployment.
 
 This document defines measurement boundaries, entry points, evidence requirements and regression methods for Kuasar Sandbox performance testing. Results apply only to the recorded versions, hardware, data path, cache state, sandbox specification and workload. A development-environment measurement cannot be extrapolated to all production deployments.
 
 Historical absolute numbers in earlier documentation did not retain exact aggregate/component versions, complete hardware details, failure rates and locations of raw reports together. They are therefore no longer retained as public baselines. This document does not publish startup or restore latency, cache hit rates, node capacity or storage savings without an evidence chain.
 
-## 1. Measurement entry points
+## Measurement entry points
 
 Project-level aggregate entry points:
 
@@ -28,7 +30,7 @@ make -C ../accelerator perf-cache
 
 Real MicroVM paths require read/write access to `/dev/kvm`, root or noninteractive sudo, and the necessary images and runtime artifacts. Manifest and density harnesses additionally check Docker, networking and filesystem tools as specified by their scripts. A skip caused by missing prerequisites is not successful performance validation. Release evidence must record actual exit status and every failed sample.
 
-## 2. Result evidence contract
+## Result evidence contract
 
 Any result intended for documentation, release notes or capacity planning must retain at least:
 
@@ -59,9 +61,9 @@ successful/failed/skipped counts rather than relying on its successful `N` alone
 
 A result missing a necessary dimension can support local diagnosis, but cannot be presented as a project-wide performance fact. Design thresholds must be labeled as a target or regression gate. Passing a gate only establishes that the candidate meets that test contract; it does not automatically establish a production SLO.
 
-## 3. Cache and data paths
+## Cache and data paths
 
-### 3.1 Measurement subjects
+### Measurement subjects
 
 The accelerator cache benchmark observes local cache, tiered cache, shard fan-out and store origin separately. Distinguish at least:
 
@@ -73,7 +75,7 @@ The accelerator cache benchmark observes local cache, tiered cache, shard fan-ou
 
 `CACHE_CTL_TIMING=1` supplies internal cache-stage diagnostics. Use pprof and tracing to locate CPU, allocation, network and scheduling costs. Internal timings do not replace the client's end-to-end measurement.
 
-### 3.2 Interpreting paths
+### Interpreting paths
 
 Compare these three artifact paths separately:
 
@@ -87,9 +89,9 @@ Do not interpret every ordinary `file://` reference as incapable of sharing. A n
 
 Content-reuse results describe observations for the particular dataset, security domain and parent relationships. Instances of a common template primarily share explicit read-only parents. Coincidentally identical memory bytes in different running VMs are not a prerequisite for snapshot efficiency.
 
-## 4. Sandbox startup, snapshots and restoration
+## Sandbox startup, snapshots and restoration
 
-### 4.1 Basic matrix
+### Basic matrix
 
 `test/perf/sandbox-perf.sh` characterizes current file/Manifest lifecycle cases with the timing scope above. `test/perf/sandbox-perf-manifest.sh` expands the matrix to Manifest cold/hot cache, snapshot publication and restoration. Reports should include at least:
 
@@ -101,7 +103,7 @@ Content-reuse results describe observations for the particular dataset, security
 
 `<run-root>/<sid>/ctl.sock` proves only that the host control socket exists. A performance harness must use an actual guest command, health check or workload-readiness condition as its completion signal.
 
-### 4.2 Working-set matrix
+### Working-set matrix
 
 `test/perf/sandbox-perf-working-set.sh` performs paired capture, publication, cold restore and optional prefetch comparisons against the same immutable parent. It produces:
 
@@ -117,7 +119,7 @@ raw/
 
 The mainline CI working-set step is a smoke test for obvious regressions. A formal performance report must explicitly set sample counts, retain all samples and label smoke tests separately from statistical reports.
 
-### 4.3 Snapshot semantics
+### Snapshot semantics
 
 Measurements should separately cover:
 
@@ -129,9 +131,9 @@ Measurements should separately cover:
 
 Snapshot layering, data carrier and cache state are three independent variables. A result for one cannot substitute for the other two.
 
-## 5. Node resources and density
+## Node resources and density
 
-### 5.1 Workload model
+### Workload model
 
 `test/perf/workload.py` provides three workload classes: `idle`, deterministic grow/rest cycles and heavy-tailed active/idle activity. When running `test/perf/density-perf.sh`, explicitly record concurrency, memory zone, resource floor/startup/capacity, workload parameters, observation window and random seed.
 
@@ -141,9 +143,10 @@ Reports observe all of the following:
 - host `MemAvailable` and sandbox cgroup `memory.current/events.local`;
 - guest workload completion and both guest/cgroup OOM;
 - timelines for startup, activity, reclamation and termination;
-- Reservation-pool watermarks, startup reserve and operational margin.
+- each resource pool's scheduling capacity, runtime allocatable, watermarks, startup reserve, growth rate and recovery obligations;
+- Runner/Builder pool mapping, idle `size`, slot `capacity`, `priority`, NUMA/CPU placement and actual masks. Compare pool-local pressure as well as aggregate node usage; unused capacity in another pool does not prove the selected pool can admit a request.
 
-### 5.2 Interpretation boundaries
+### Interpretation boundaries
 
 Density depends on workload peak working set, active fraction, resident VMM/guest overhead, reclamation latency, pause policy and node safety margin. The memory zone is a limit, not a constant that can be directly converted into physical occupancy or instance count.
 
@@ -152,13 +155,13 @@ Capacity planning must include guest kernel, page tables, slab and guest-service
 Explain resource responsibilities separately:
 
 - sandboxer coordinates Balloon, Cgroup, VMM and pause/resume for an individual sandbox;
-- the node-ctl Reservation Controller manages admission, the shared pool, watermarks, Grant, Inventory and recovery, without taking over the individual sandbox loop.
+- the node-ctl Reservation Controller manages admission, resource-pool budgets, watermarks, Grant, Inventory and recovery, without taking over the individual sandbox loop.
 
 Balloon is not the only source of elasticity. Idle-CPU scheduling, inactive-memory reclaim, Cgroup limits, node admission and pausing long waits all affect effective utilization. Every capacity conclusion must report OOM and loss of useful work within the declared-resource and admission model. OOM must not be counted as successful overcommit.
 
 High density is a result of improved resource utilization, not a promise of a predetermined instance count.
 
-### 5.3 Agent business-completion benchmark
+### Agent business-completion benchmark
 
 The existing `density-perf.sh` validates resource-control behavior; it is not a complete Agent business-throughput benchmark. `test/perf/agent-density/benchmark.py` checks the prepared BMS coding-Agent fixture's `summary.json` and `process-exit.json`. It requires 24 or 48 logical Agents, sequential fixed-three versus dynamic-sixteen wave plans (with a smaller final wave when needed), complete admission and business completion, correct work counts and deterministic output hashes, no host OOM kills, successful cleanup and clean process exits. Tasks restart their **IDs**, not their work, at zero in each wave: comparisons flatten declared wave order and then wave-local task ID. Rejected admission is **not** business completion. Sampled running peaks are reported separately and do not establish an allocator's configured limit.
 
@@ -166,7 +169,7 @@ The checker requires a disabled business-retry plan and one observed business st
 
 On 2026-10-08 the local **matched** BMS study used 8C16G, a 12GiB node pool, 1C4G sandbox capacity, 256MiB allocatable, 512MiB startup and no swap. The synthetic coding-Agent workload used the `held` profile, a 192MiB peak parameter and four tool-work rounds per Agent. The matched 48-Agent runs completed 48/48: x86_64 took **851s fixed versus 380s dynamic**, and ARM64 **802s versus 333s**, measured from the outer case START/DONE records including setup and cleanup. The corresponding checker warmup-plus-execution times were 832.21s/350.49s and 784.44s/302.53s. Plans disabled business retries, observed start counts were one, and host OOM/cleanup checks passed. The x86 dynamic run recorded **734 successful polls out of 735**, including one HTTP error; its business work nevertheless completed correctly. Do not describe this as zero forwarding failures. These are workload- and version-specific observations, not a comparison with a different static memory manager or a production capacity guarantee. See `test/perf/agent-density/README.md` for the 24/48-Agent evidence table and audit boundaries.
 
-## 6. Cluster control plane
+## Cluster control plane
 
 Cluster performance must distinguish hot and cold paths:
 
@@ -184,19 +187,19 @@ Hot-path validation checks that a route-cache hit does not enter Resolve/Reserve
 
 Placer only imports groups and recommends placement. Node admission performs final resource confirmation. Placer throughput must not be described as the throughput of completed MicroVM creation.
 
-## 7. Release and CI evidence
+## Release and CI evidence
 
 Source-candidate CI builds exact product and helper revisions before shared preparation. Product E2E runs flat cases through `test/e2e/e2e`; source/unit/race/vet and UFFD performance remain separate, and working-set smoke has an independent required job and result. Exact-assets validation consumes the packaged products, helpers and runner without rebuilding them. Architecture results record each selected case, explicit exclusions and the prepared input identity.
 
 Workflow and evidence entry points:
 
 - [`.github/workflows/integration-tests.yml`](../.github/workflows/integration-tests.yml): source-candidate Integration E2E and release asset validation;
-- [`test/perf/`](../test/perf/): project performance harnesses and report generators;
+- [`test/perf/`](../test/perf): project performance harnesses and report generators;
 - [`test/e2e/e2e`](../test/e2e/e2e): shared prepared-product case runner.
 
 A green aggregate status alone is not evidence for a performance claim. Cite the run URL, base/head SHA, mode, relevant job log and downloaded raw artifact. If a workflow ran only smoke tests, identify it as `smoke`; do not relabel it as complete statistical validation.
 
-## 8. Regression checks
+## Regression checks
 
 For cache-path changes:
 
@@ -230,11 +233,52 @@ make test-perf-tools
 
 Use identical harness parameters and environments for each comparison, and inspect successful samples, failures/skips, raw logs and machine-readable output together. A candidate exceeding an approved gate must first have its root cause identified. Do not update a public baseline without complete evidence.
 
-## 9. See also
+<a id="capacity-example"></a>
+## Capacity qualification with an assumed budget
 
-- [`kuasar-sandbox.md`](kuasar-sandbox.md) - system semantics, component boundaries and performance-evidence requirements
+This is an **arithmetic example, not measured performance**. Suppose a 16-vCPU,
+32-GiB node runs an agent that executes Python, reads a repository, writes a small
+workspace and makes external requests. Assume each active sandbox needs 1 GiB
+normally, 2.5 GiB during synchronized work and 2 CPU cores at the acceptance load.
+First measure those quantities with the actual image; OCI image size is not RSS.
+
+An initial budget might reserve 4 GiB for the host, 4 GiB for fleet control/VMM
+and non-workload overhead, 6 GiB for the whole accelerator/cache path, and 3 GiB
+for one additional cold-recovery transient. That leaves
+`32 - 4 - 4 - 6 - 3 = 15 GiB`, or six assumed 2.5-GiB burst workloads.
+If only 12 CPU cores are budgeted for work, `12 / 2 = 6` independently gives the
+same initial admission limit. Six normal workloads use an assumed 6 GiB, but
+that does **not** justify admitting fifteen if all can become active together.
+Guest capacity, allocatable/startup, controller grants and actual charged usage
+are different quantities; apply the [Node resource contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md),
+not this arithmetic as YAML defaults.
+
+The 6-GiB cache allowance must include Go heap, native RocksDB block/blob cache
+and memtables, inflight requests/blobs/decryption buffers, compaction and filesystem
+page-cache pressure. `GOMEMLIMIT` or `disk_bytes * mem_ratio` alone is not a process
+RSS limit. Record cgroup/RSS peaks, cache occupancy, compaction and disk/network
+traffic using the [Cache budget contract](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md).
+Large reference YAML files demonstrate options and are not the recommended first
+production size.
+
+| Measurement | Run and record | Acceptance/adjustment |
+|---|---|---|
+| Normal load | Representative requests at 1, then 3, then 6 concurrent sandboxes; warm steady state | Application latency/error target, charged memory, CPU, storage growth and endpoint throughput meet your declared SLO. |
+| Synchronized burst | Make all six exercise their peak phase together, including writes | No OOM/data loss; admission and controller headroom remain valid. If the assumed 2.5 GiB is exceeded, lower admission or increase budget before retesting. |
+| Cold recovery | Restore the qualified workload from a cold test cache/destination while normal load continues | Measure restore-to-ready and first-use p95/p99, source attempts, bandwidth and total peak memory; include the recovery transient. Do not flush production caches. |
+| Sustained run | Repeat pause/resume and cleanup long enough to include compaction and retention work | No unbounded RSS, disk, FD or inflight growth; all state assertions and cleanup pass. |
+
+Set numerical application/restore SLOs before the run; there is no universal
+latency promise here. Increase one budget/concurrency variable at a time only
+after the complete matrix passes. Stop on integrity/identity failure or OOM,
+retain the failure evidence, kill owned tests and return to the last qualified
+limit. Report cold and warm measurements separately, including unavailable probes.
+
+## See also
+
+- [System architecture](architecture.md) - system semantics, component boundaries and performance-evidence requirements
 - [`deployment.md`](deployment.md) - data backends, process topology and deployment choices
-- [accelerator Cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md) (archive: `docs/cache.md`) - cache architecture and component benchmark
-- [sandboxer lifecycle](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox.md) (archive: `docs/sandbox.md`) - snapshot/restore and statistics fields
-- [node resources](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md) (archive: `docs/node-resource.md`) - node resource-control protocol
-- [cluster design](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md) (archive: `docs/cluster.md`) - registry/router/placer design
+- [accelerator Cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md) - cache architecture and component benchmark
+- [sandboxer lifecycle](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime.md) - snapshot/restore and statistics fields
+- [node resources](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md) - node resource-control protocol
+- [cluster design](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md) - registry/router/placer design

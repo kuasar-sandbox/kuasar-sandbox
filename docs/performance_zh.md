@@ -1,6 +1,8 @@
-[English](perf.md) | [简体中文](perf_zh.md)
+[English](performance.md) | [简体中文](performance_zh.md)
 
-# perf - 性能验证与调优
+# 性能测量、容量与调优
+
+本篇定义可比较的测量、容量验收和调优方法。历史结果保留其环境和版本，不作为所有部署的性能承诺。
 
 本文定义 Kuasar Sandbox 性能测试的口径,入口,证据要求和回归方法.性能结果只对
 记录的版本,硬件,数据路径,cache 状态,沙箱规格和 workload 有效,不能从一次开发
@@ -10,7 +12,7 @@
 位置,因此不再作为公开基线保留.当前文档不发布无证据链的启动延迟,恢复延迟,cache
 命中率,单节点容量或存储收益数字.
 
-## 1. 测量入口
+## 测量入口
 
 主仓聚合入口:
 
@@ -35,7 +37,7 @@ make -C ../accelerator perf-cache
 Manifest 和 density harness 还会按脚本检查 Docker,网络与文件系统工具.缺少这些条件时
 产生的 skip 不是性能验证成功;发布证据必须记录实际退出状态和所有失败样本.
 
-## 2. 结果证据合同
+## 结果证据合同
 
 任何准备写入文档,Release Notes 或容量规划的结果,至少同时保存:
 
@@ -64,9 +66,9 @@ platform 发布，Makefile 直接从源码路径调用，不重新构建预备�
 结果缺少任一必要维度时,可以用于本地诊断,但不能作为项目级性能事实.设计阈值必须标注
 为 target 或 regression gate;门禁通过只说明该候选满足该测试合同,不自动形成生产 SLO.
 
-## 3. Cache 与数据路径
+## Cache 与数据路径
 
-### 3.1 测量对象
+### 测量对象
 
 accelerator cache benchmark 分别观察 local cache,tiered cache,shard fan-out 和 store
 origin.至少区分:
@@ -80,7 +82,7 @@ origin.至少区分:
 `CACHE_CTL_TIMING=1` 可以提供 cache 内部分段诊断;pprof 和 trace 用于定位 CPU,分配,
 网络与调度开销.这些内部计时不能替代从客户端观察的端到端口径.
 
-### 3.2 路径解释
+### 路径解释
 
 三种工件路径必须分开比较:
 
@@ -96,9 +98,9 @@ origin.至少区分:
 内容复用结果只能解释为该数据集,安全域和父层关系下的观测.同模板实例的首要共享来自
 明确只读父层;不同虚机运行后偶然相同的内存字节不是快照效率前提.
 
-## 4. Sandbox 启动,快照与恢复
+## Sandbox 启动,快照与恢复
 
-### 4.1 基础矩阵
+### 基础矩阵
 
 `test/perf/sandbox-perf.sh` 表征当前 file/Manifest 生命周期用例（计时范围见上文）,
 `test/perf/sandbox-perf-manifest.sh` 展开 Manifest cold/hot cache,snapshot publish 和
@@ -113,7 +115,7 @@ restore 场景.报告应至少包含:
 `<run-root>/<sid>/ctl.sock` 只证明 host 控制 socket 存在.性能 harness 必须使用实际
 Guest 命令,健康检查或 workload ready 条件作为完成信号.
 
-### 4.2 Working-set 矩阵
+### Working-set 矩阵
 
 `test/perf/sandbox-perf-working-set.sh` 对同一个不可变父层执行配对的 capture,publish,
 cold restore 和可选 prefetch 比较.它输出:
@@ -133,7 +135,7 @@ raw/
 主线 CI 的 working-set 项是 smoke,用于发现明显回归.正式性能报告应显式设置样本数,
 保存所有样本,并将 smoke 与统计报告分开命名.
 
-### 4.3 快照语义
+### 快照语义
 
 测量应分别覆盖:
 
@@ -145,9 +147,9 @@ raw/
 
 快照层级,数据载体和 cache 状态是三个独立变量,不能用其中一个结果替代另外两个.
 
-## 5. 节点资源与密度
+## 节点资源与密度
 
-### 5.1 Workload 模型
+### Workload 模型
 
 `test/perf/workload.py` 提供 `idle`,确定性的 grow/rest cycles 和重尾 active/idle
 三类负载.运行 `test/perf/density-perf.sh` 时应显式记录并发,memory zone,resource
@@ -159,9 +161,10 @@ floor/startup/capacity,workload 参数,观察窗口和随机种子.
 - host `MemAvailable` 与 sandbox cgroup `memory.current/events.local`;
 - Guest workload 是否完成,以及 Guest/cgroup OOM;
 - 启动,活跃,回收和终止阶段的时间线;
-- Reservation pool 的水位,startup reserve 和 operational margin.
+- 各资源池的调度 capacity、运行时 allocatable、水位、startup reserve、增长速率及恢复义务；
+- Runner/Builder pool 的映射、空闲 `size`、槽位 `capacity`、`priority`、NUMA/CPU 绑定与实际掩码。同时比较各池压力和节点总量；其他池有空闲容量，不证明所选池能准入该请求。
 
-### 5.2 解释边界
+### 解释边界
 
 密度由 workload 峰值 working set,活跃比例,VMM/Guest 常驻开销,回收时延,暂停策略
 和节点安全余量共同决定.memory zone 是上限,不是可直接换算为物理占用或实例数的常数.
@@ -175,7 +178,7 @@ guest 侧证据.退出码 137 表示 SIGKILL 类退出,单凭此值不能判定�
 资源职责必须分开解释:
 
 - sandboxer 执行单沙箱 Balloon,Cgroup,VMM 以及 pause/resume 协同;
-- node-ctl Reservation Controller 执行 admission,共享池,水位,Grant,Inventory
+- node-ctl Reservation Controller 执行 admission、各资源池预算、水位、Grant、Inventory
   和恢复,不直接接管单沙箱闭环.
 
 Balloon 不是唯一弹性来源.空闲 CPU 调度,非活跃内存回收,Cgroup 限制,节点准入以及
@@ -184,7 +187,7 @@ Balloon 不是唯一弹性来源.空闲 CPU 调度,非活跃内存回收,Cgroup 
 
 高密度是资源利用率提高后的结果,不是预先指定的实例数量承诺.
 
-### 5.3 Agent 业务完成基准
+### Agent 业务完成基准
 
 原有 `density-perf.sh` 用于资源控制回归，不等同于完整 Agent 业务吞吐基准。`test/perf/agent-density/benchmark.py` 检查 BMS coding-Agent fixture 的 `summary.json` 和 `process-exit.json`：逻辑任务总数须为 24 或 48，计划须按固定三并发与动态十六并发分批顺序执行（末批可以不足）；全部任务被接纳并正确完成；工具工作次数与确定性结果哈希正确；没有宿主机 OOM Kill、清理失败或进程异常退出。每批从零重新编号的是**任务 ID，而不是重新执行业务**：比较按计划批次顺序、批内任务 ID 展平后的逻辑任务。准入拒绝不能算业务完成。运行实例数采样峰值单独报告，不能据此认定分配器的配置上限。
 
@@ -192,7 +195,7 @@ Balloon 不是唯一弹性来源.空闲 CPU 调度,非活跃内存回收,Cgroup 
 
 2026-10-08 BMS 本地**匹配实验**采用 8C16G、12GiB 资源池、1C4G 沙箱、allocatable 256MiB、startup 512MiB、无 swap。合成 coding-Agent 负载采用 `held` profile、192MiB 峰值参数、每任务四轮工具工作。48 Agent 均 48/48 正确完成：x86_64 固定三并发 **851 秒**、动态十六并发 **380 秒**；ARM64 分别为 **802 秒、333 秒**，取外层 case START/DONE 日志，包含准备和清理。对应校验器的预热加执行时间为 832.21/350.49 秒、784.44/302.53 秒。计划禁用业务重试、观测启动次数均为一，宿主机 OOM 和清理校验通过。x86 动态组 **735 次轮询中 734 次成功、1 次 HTTP 错误**，最终业务仍正确完成，不能表述为零转发失败。这些结果只适用于记录的负载与版本，不代表与另一套静态内存管理器的比较，也不是生产环境通用容量承诺。24/48 Agent 证据表和审计边界见 `test/perf/agent-density/README.md`。
 
-## 6. Cluster 控制面
+## Cluster 控制面
 
 cluster 性能必须区分热路径和冷路径:
 
@@ -214,7 +217,7 @@ registry 副本/owner 配置,sandbox-group 数量,route cache 状态,node 数量
 placer 只做 group 导入和放置建议,最终资源确认在 node admission.测量不能把 placer
 吞吐解释为已创建 MicroVM 的吞吐.
 
-## 7. Release 与 CI 证据
+## Release 与 CI 证据
 
 源码候选 CI 在公共 prepare 之前构建精确产品与 helper revision。产品 E2E 通过 `test/e2e/e2e` 运行扁平用例；源码/unit/race/vet 和 UFFD 性能保持独立，working-set smoke 有单独必需 job 和结果。exact-assets 验证消费包中的产品、helper 和 runner，不重新构建它们。架构结果记录每个已选用例、明确排除项及预备输入身份。
 
@@ -222,14 +225,14 @@ placer 只做 group 导入和放置建议,最终资源确认在 node admission.�
 
 - [`.github/workflows/integration-tests.yml`](../.github/workflows/integration-tests.yml):源码候选的
   端到端集成测试与发行资产验证;
-- [`test/perf/`](../test/perf/):主仓性能 harness 与报告生成器;
+- [`test/perf/`](../test/perf):主仓性能 harness 与报告生成器;
 - [`test/e2e/e2e`](../test/e2e/e2e):公共预构建产品用例 runner。
 
 绿色聚合状态本身不是某个性能结论的证据.引用结果时必须给出 Run URL,base/head SHA,
 运行模式,相关 job log 和下载后的原始 artifact.如果 workflow 只运行 smoke,必须明确写
 `smoke`,不能改称完整统计验证.
 
-## 8. 回归检查
+## 回归检查
 
 修改 cache 路径时:
 
@@ -265,11 +268,44 @@ make test-perf-tools
 machine-readable 输出.超过已批准 gate 的候选必须先定位根因;没有完整证据时不更新
 公开基线.
 
-## 9. See Also
+<a id="capacity-example"></a>
+## 带假设预算的容量验收
 
-- [kuasar-sandbox_zh.md](kuasar-sandbox_zh.md) - 系统语义,组件边界与性能证据要求
+这是**假设算例，不是实测性能**。假设 16-vCPU/32-GiB 节点运行执行 Python、读取
+代码仓、写小型工作区并请求外部服务的 agent，每个活跃实例常态 1 GiB、同步突发
+2.5 GiB、验收负载下 2 CPU。先用实际镜像测量，OCI 镜像大小不是 RSS。
+
+初始预留可为 host 4 GiB、全体 control/VMM/非工作负载开销 4 GiB、完整 accelerator/
+cache 路径 6 GiB、额外一次冷恢复瞬时开销 3 GiB。余量
+`32 - 4 - 4 - 6 - 3 = 15 GiB`，可容纳六个假设 2.5-GiB 突发实例。若工作负载
+CPU 预算为 12，`12 / 2 = 6` 也得到六个初始准入。常态六实例仅 6 GiB，不代表
+所有实例可同时活跃时可以准入十五个。Guest capacity、allocatable/startup、
+controller grant 和实际计费使用量不同；按 [Node 资源契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource_zh.md)
+配置，不把算术当 YAML 默认值。
+
+6-GiB cache 预算必须覆盖 Go heap、native RocksDB block/blob cache/memtable、
+inflight 请求/blob/解密 buffer、compaction 和文件 page-cache 压力。
+`GOMEMLIMIT` 或 `disk_bytes * mem_ratio` 均不是进程 RSS 上限。按
+[Cache 预算契约](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md)
+记录 cgroup/RSS 峰值、占用、compaction、磁盘/网络。大型参考 YAML 展示选项，
+不是首个生产部署的推荐规模。
+
+| 测量 | 执行和记录 | 验收/调整 |
+|---|---|---|
+| 常态 | 代表性请求按 1、3、6 并发，热稳态 | 应用延迟/错误、内存、CPU、存储增长和吞吐符合预先声明 SLO。 |
+| 同步突发 | 六实例同时进入峰值阶段，包括写入 | 无 OOM/数据丢失，准入及余量有效；超过假设 2.5 GiB 则降低准入或加预算再测。 |
+| 冷恢复 | 常态业务继续时从冷测试 cache/目标节点恢复已合格负载 | 测 restore-to-ready、首次使用 p95/p99、源尝试、带宽、总内存峰值，包含恢复瞬时量；不得清生产 cache。 |
+| 持续运行 | 重复 pause/resume/清理，覆盖 compaction/保留作业 | RSS、磁盘、FD、inflight 不无限增长，状态断言与清理均成功。 |
+
+测试前设定数值化应用/恢复 SLO，这里不作通用延迟承诺。完整矩阵通过后每次只改
+一个预算/并发变量。完整性/身份失败或 OOM 时停止，保留证据，kill 自有测试并回到
+上次合格限制。冷/热结果分开报告，包含未运行探针。
+
+## See Also
+
+- [系统架构](architecture_zh.md) - 系统语义,组件边界与性能证据要求
 - [`deployment_zh.md`](deployment_zh.md) - 数据后端,进程拓扑和部署选择
-- [accelerator Cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md)(发布包:`docs/cache_zh.md`) - cache 架构和组件 benchmark
-- [sandboxer 生命周期](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/sandbox_zh.md)(发布包:`docs/sandbox_zh.md`) - snapshot/restore 和统计字段
-- [节点资源](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource_zh.md)(发布包:`docs/node-resource_zh.md`) - 节点资源控制协议
-- [集群设计](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md)(发布包:`docs/cluster_zh.md`) - registry/router/placer 设计
+- [accelerator Cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md) - cache 架构和组件 benchmark
+- [sandboxer 生命周期](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime_zh.md) - snapshot/restore 和统计字段
+- [节点资源](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource_zh.md) - 节点资源控制协议
+- [集群设计](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md) - registry/router/placer 设计

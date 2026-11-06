@@ -10,7 +10,7 @@ environment, not another runner, product bundle or case selector.
 <a id="1-extracted-layout"></a>
 ## 1. Release inputs and layout
 
-Use [Acquire a matching release](../docs/download.md) to obtain one explicit
+Use [Acquire a matching release](../docs/installation.md) to obtain one explicit
 aggregate's native products, platform materials and matching workbench image.
 The recipe validates every selected required file even when other architecture
 assets are intentionally not downloaded. Do not run a blanket checksum command
@@ -171,7 +171,7 @@ runs using the same underlying scripts; those runs do not claim the extra full
 case or complete suite acceptance.
 
 Performance harnesses stay in the source tree under `test/perf/`; use the
-[source performance guide](../docs/perf.md), not paths assumed to exist in the
+[source performance guide](../docs/performance.md), not paths assumed to exist in the
 platform archive. Unit/race/vet, UFFD and working-set source gates remain
 independent. A smoke run is not statistical performance qualification.
 

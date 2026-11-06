@@ -19,12 +19,16 @@ class PublishedDownloadTests(unittest.TestCase):
     def release(self):
         return dict(tag_name=VERSION, draft=False, prerelease=True, assets=[copy.deepcopy(ASSET)])
 
-    def archive(self, directory, *, language='en', mode=0o644, kind=tarfile.REGTYPE, duplicate=False, text=None):
-        name = 'guide/download' + ('_zh' if language == 'zh' else '') + '.md'
-        content = (ROOT / 'docs' / Path(name).name).read_bytes() if text is None else text
+    def archive(self, directory, *, language='en', guide='installation', alias=False,
+                mode=0o644, kind=tarfile.REGTYPE, duplicate=False, text=None, members=None):
+        suffix = '_zh' if language == 'zh' else ''
+        name = ('./' if alias else '') + f'guide/{guide}{suffix}.md'
+        content = (ROOT / 'docs' / f'installation{suffix}.md').read_bytes() if text is None else text
+        if members is None:
+            members = [(name, mode, kind)] * (2 if duplicate else 1)
         path = Path(directory) / 'platform.tar.gz'
         with tarfile.open(path, 'w:gz') as stream:
-            for _ in range(2 if duplicate else 1):
+            for name, mode, kind in members:
                 info = tarfile.TarInfo(name)
                 info.mode, info.type = mode, kind
                 info.linkname = '/outside' if kind == tarfile.SYMTYPE else ''
@@ -55,19 +59,42 @@ class PublishedDownloadTests(unittest.TestCase):
         with self.assertRaises(ValueError): check.platform_asset(self.release(), 'main')
 
     def test_real_bilingual_guides_have_identical_executable_commands(self):
-        with tempfile.TemporaryDirectory() as directory:
-            en = check.guide_script(self.archive(directory), 'en')
-            zh = check.guide_script(self.archive(directory, language='zh'), 'zh')
-        self.assertEqual(en, zh)
-        self.assertIn('docker load --input', en)
-        self.assertIn('RELEASE_VERSION', en)
-        self.assertIn('files.tsv', en)
+        for guide in ('installation', 'download'):
+            for alias in (False, True):
+                with self.subTest(guide=guide, alias=alias), tempfile.TemporaryDirectory() as directory:
+                    en = check.guide_script(self.archive(directory, guide=guide, alias=alias), 'en')
+                    zh = check.guide_script(self.archive(directory, language='zh', guide=guide, alias=alias), 'zh')
+                    self.assertEqual(en, zh)
+                    self.assertIn('docker load --input', en)
+                    self.assertIn('RELEASE_VERSION', en)
+                    self.assertIn('files.tsv', en)
 
     def test_reject_dangerous_or_duplicate_guide(self):
-        for change in [dict(mode=0o666), dict(mode=0o4644), dict(kind=tarfile.SYMTYPE), dict(duplicate=True), dict(text=b'no commands')]:
-            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
-                with self.assertRaises(ValueError):
-                    check.guide_script(self.archive(directory, **change), 'en')
+        for guide in ('installation', 'download'):
+            for change in [dict(mode=0o666), dict(mode=0o4644), dict(kind=tarfile.SYMTYPE),
+                           dict(kind=tarfile.DIRTYPE), dict(duplicate=True), dict(text=b''),
+                           dict(text=b'x' * (1024 * 1024 + 1)), dict(text=b'no commands')]:
+                with self.subTest(guide=guide, fields=list(change), text_size=len(change.get('text', b''))), tempfile.TemporaryDirectory() as directory:
+                    with self.assertRaises(ValueError):
+                        check.guide_script(self.archive(directory, guide=guide, **change), 'en')
+
+    def test_reject_alias_duplicates_and_current_legacy_ambiguity(self):
+        for language, suffix in (('en', ''), ('zh', '_zh')):
+            current, legacy = f'guide/installation{suffix}.md', f'guide/download{suffix}.md'
+            for names in ((current, legacy), (current, './' + current),
+                          (legacy, './' + legacy), ('./' + current, './' + legacy)):
+                with self.subTest(language=language, names=names), tempfile.TemporaryDirectory() as directory:
+                    members = [(name, 0o644, tarfile.REGTYPE) for name in names]
+                    with self.assertRaisesRegex(ValueError, 'expected one bundled download guide'):
+                        check.guide_script(self.archive(directory, language=language, members=members), language)
+
+    def test_unsafe_current_guide_never_falls_back_to_legacy(self):
+        for language, suffix in (('en', ''), ('zh', '_zh')):
+            with self.subTest(language=language), tempfile.TemporaryDirectory() as directory:
+                members = [(f'guide/installation{suffix}.md', 0o666, tarfile.REGTYPE),
+                           (f'guide/download{suffix}.md', 0o644, tarfile.REGTYPE)]
+                with self.assertRaisesRegex(ValueError, 'expected one bundled download guide'):
+                    check.guide_script(self.archive(directory, language=language, members=members), language)
 
     def test_post_publication_check_has_two_native_runners_and_no_write_permissions(self):
         workflow = (ROOT / '.github/workflows/aggregate-release.yml').read_text()

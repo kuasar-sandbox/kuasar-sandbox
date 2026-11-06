@@ -2,6 +2,8 @@
 
 # Continuous integration
 
+This contract owns cross-repository admission, source selection, execution and validation evidence. Component contribution guides reference it; runtime assembly belongs to [deployment](deployment.md) and publication transactions to [release](release.md).
+
 ## 1. Public caller and trusted control
 
 The platform owns `ci-entry.yml`, `integration-tests.yml` and `integration-architecture.yml`. Component PR wrappers keep `ci-entry.yml@main`; GitHub resolves that trusted framework once per run. Every job, including admission, coordination, publication, finalization and cleanup, checks **the actual event repository before runner allocation**:
@@ -208,10 +210,20 @@ and [case declarations](../test/README.md#static-execution-requirements).
 
 ## 3. Independent architecture lifecycles
 
-```text
-resolve plan ── x86 build ── x86 prepare ── native x86 shards ── x86 result ─┐
-             ├─ native ARM build ── ARM prepare ── native ARM shards ── ARM result ─┼─ required results
-             └─ source unit/race/vet and UFFD checks ─────────────────────┘
+```mermaid
+flowchart TD
+  P["Resolve admitted plan"] --> XB["x86 native build"]
+  P --> AB["ARM native build"]
+  P --> S["Source unit/race/vet and UFFD"]
+  XB --> XP["x86 prepare"]
+  XP --> XE["Native x86 shards"]
+  XE --> XR["x86 result"]
+  AB --> AP["ARM prepare"]
+  AP --> AE["Native ARM shards"]
+  AE --> AR["ARM result"]
+  XR --> G["Collect required results"]
+  AR --> G
+  S --> G
 ```
 
 Each architecture builds on its native Runner (`ubuntu-24.04` or `ubuntu-24.04-arm`) through `.github/actions/workbench`, using the existing Makefiles and native recipes. The trusted resolver selects a published, qualified Workbench once per run and binds both registry digests, image config IDs and the framework SHA. Later jobs verify that selection, including the actual image architecture and release/source labels. Ordinary PRs still build only the admitted product delta and required helpers. Each lane prepares its immutable inputs once and starts E2E when its own preparation finishes. Shards, artifacts and results retain architecture/run identities and are explicitly collected.
@@ -390,6 +402,12 @@ Run evidence uses `integration-plan`, per-architecture `integration-provenance`,
 
 Local contract checks: `make test-ci-tools test-release-tools test-perf-tools` with trusted EROFS readers and `KUASAR_RUNTIME_READER`; component release/workflow and fixture checks retain their existing entries. Developer `make test-e2e RELEASE_DIR=... E2E_WORKDIR=...` wraps the same public prepare/run pair without compiling products or helpers. Source build, helper and performance targets remain independent. Offline/fixture checks and native prechecks do not establish actual public-runner acceptance.
 
+### Artifact transport and supplemental executor
+
+Supplemental self-hosted E2E restores its fixed sparse executor from a small same-run capsule produced by the trusted resolve job. Git packs the original commit, tree and blob objects into a fresh repository with no copied remote configuration or credentials; export attributes cannot rewrite or omit tracked bytes. The resolver passes the archive SHA-256 and expected Git tree through workflow outputs. Before any capsule code runs, bootstrap verifies that hash and the exact workflow SHA; restoration then checks the commit/tree, all Git objects, clean tracked files and unchanged sparse scope. Symlinks, gitlinks, special modes, oversized archives and unsafe paths fail closed. The pinned official download action has a five-minute bootstrap limit and restoration has three minutes. Hosted E2E retains its normal checkout. This avoids repeated Git connections and lazy fetches on supplemental runners; prepared products still use the bounded local downloader below.
+
+Artifact acquisition in the architecture jobs uses the local same-run download action. Each attempt has a 600-second wall-clock deadline starting before metadata resolution and covering response headers, transfer, compressed SHA-256 verification and extraction. At most three attempts use fresh signed URLs, connections and private directories, with 15/30-second backoff. Artifact IDs, producing jobs, sizes and digests are frozen after the first successful metadata response. Authentication, certificate, identity, digest, archive and unknown errors stop immediately; only typed transient transport failures and deadlines retry. Cancellation kills and reaps the worker before cleanup, and a verified directory is promoted only after the complete selection succeeds. The step limit is 35 minutes; existing overall job deadlines still apply. Logs contain phase, attempt and elapsed time, never runtime tokens or signed URLs. The Node entry receives the runner-provided same-run identity and invokes Python standard-library code, without installing packages or widening workflow permissions.
+
 ## 7. Initial coverage and rollout evidence
 
 This is the single initial coverage ledger for #152. The Chinese guide links here for scope, reasons, evidence and follow-up. Selected cases require actual successful results.
@@ -417,7 +435,3 @@ Accelerator, connector, sandboxer and orchestrator are Public; visibility and an
 - [Deployment](deployment.md): runtime services and capabilities.
 - [Runner operations](../ci/runner/README.md): existing persistent infrastructure.
 - [Test quick start](../test/QUICKSTART.md): developer E2E prerequisites.
-
-Supplemental self-hosted E2E restores its fixed sparse executor from a small same-run capsule produced by the trusted resolve job. Git packs the original commit, tree and blob objects into a fresh repository with no copied remote configuration or credentials; export attributes cannot rewrite or omit tracked bytes. The resolver passes the archive SHA-256 and expected Git tree through workflow outputs. Before any capsule code runs, bootstrap verifies that hash and the exact workflow SHA; restoration then checks the commit/tree, all Git objects, clean tracked files and unchanged sparse scope. Symlinks, gitlinks, special modes, oversized archives and unsafe paths fail closed. The pinned official download action has a five-minute bootstrap limit and restoration has three minutes. Hosted E2E retains its normal checkout. This avoids repeated Git connections and lazy fetches on supplemental runners; prepared products still use the bounded local downloader below.
-
-Artifact acquisition in the architecture jobs uses the local same-run download action. Each attempt has a 600-second wall-clock deadline starting before metadata resolution and covering response headers, transfer, compressed SHA-256 verification and extraction. At most three attempts use fresh signed URLs, connections and private directories, with 15/30-second backoff. Artifact IDs, producing jobs, sizes and digests are frozen after the first successful metadata response. Authentication, certificate, identity, digest, archive and unknown errors stop immediately; only typed transient transport failures and deadlines retry. Cancellation kills and reaps the worker before cleanup, and a verified directory is promoted only after the complete selection succeeds. The step limit is 35 minutes; existing overall job deadlines still apply. Logs contain phase, attempt and elapsed time, never runtime tokens or signed URLs. The Node entry receives the runner-provided same-run identity and invokes Python standard-library code, without installing packages or widening workflow permissions.

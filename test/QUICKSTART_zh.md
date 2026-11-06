@@ -9,7 +9,7 @@
 <a id="1-解包布局"></a>
 ## 1. 发布输入与目录
 
-通过[获取匹配的发布版](../docs/download_zh.md)取得一个具体聚合版本的本机架构产品、
+通过[获取匹配的发布版](../docs/installation_zh.md)取得一个具体聚合版本的本机架构产品、
 platform 材料及匹配 workbench 镜像。即使不下载另一架构，该流程也逐一验证所选
 必需文件。不要用要求所有未选文件存在的全量校验命令，也不能忽略缺失的必需文件。
 Workbench 的 Docker 归档应单独导入，不能解包到此树中。
@@ -152,7 +152,7 @@ capability/fixture 选择机制。详见[测试组织](README_zh.md)。
 [Demo](demo/DEMO_zh.md)另外提供 quick/full/interactive 用户流程，共用相同底层脚本，
 但不声称覆盖额外的完整用例断言或整个 suite。
 
-性能 harness 保留在源码 `test/perf/` 下，应使用[源码性能指南](../docs/perf_zh.md)，
+性能 harness 保留在源码 `test/perf/` 下，应使用[源码性能指南](../docs/performance_zh.md)，
 不要假定 platform 包含这些路径。Unit/race/vet、UFFD 和 working-set 源码门禁保持
 独立，smoke 结果不代表统计性能验收。
 

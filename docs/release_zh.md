@@ -2,6 +2,10 @@
 
 # Release
 
+本文是维护者选择组件版本、生产和发布聚合资产、恢复发布失败的契约。
+使用者取得软件参照[安装](installation_zh.md)，部署运维者更换版本参照[升级](upgrading_zh.md)。
+CI 准入和执行证据由 [CI](ci_zh.md) 维护。
+
 ## 1. 概述
 
 Kuasar Sandbox 将组件发布与平台聚合发布分开。组件版本描述一个组件仓的独立交付,
@@ -412,11 +416,62 @@ Demo 脚本和锁文件、预构建 helper、本地 wheel 与轻量 workbench �
 独立版本单元按 `docs/<unit>.md` 及可选 `_zh.md` 对应文件约定，从该单元的
 精确选定 Tag 读取，包括不可变旧 Tag。
 
+<a id="resource-pool-availability"></a>
+#### 资源池的版本可用性
+
+资源池配置与按容量恢复由
+[Orchestrator #515](https://github.com/kuasar-sandbox/orchestrator/pull/515)、提交
+`766732d787db79ecb18882e4157bc01b8404168d` 引入。本次核验的 Stable 选择
+`v0.1.12` 与 Daily 选择 `v0.1.13-preview.20261106` 均不包含该变更及资源池契约。
+不要向这些版本照搬新的 `resource_pool` 配置。启用该能力前，应选择包含它的组件发布版，
+并按所选组件版本的完整指南使用。文档移动不会为旧产品增加运行时能力。
+
+导航优先使用所选 `node-resource.md#resource-pools` 契约；旧源码中存在
+`resource-pools.md` 时使用该完整契约。两者都不存在时，链接到本版本说明，
+不会把旧容量预算章节冒充为新功能契约。
+
+#### 带版本的导航迁移
+
+Owner 可以在所选源码中声明少量、明确的 `release/guide-migrations.json`，使独立选择版本的文档在重组后仍可导航。它是装配元数据，不是新的读者指南，也不要求永久保留旧 Markdown 页面。没有该文件的历史 Tag 仍然有效。
+
+```json
+{
+  "schema": 1,
+  "redirects": [
+    {"from": "docs/kuasar-sandbox.md", "to": "docs/architecture.md"}
+  ]
+}
+```
+
+`from`/`to` 是仓库相对 Markdown 路径，可包含 fragment。可选 `to_owner` 默认本 owner；跨 owner 目标必须属于本次选中的源码输入。装配器只读取这些精确输入中的声明，拒绝不安全路径、symlink、未知字段、重复来源、循环和无效声明目标。
+
+解析针对实际选入输出的文档，包括独立选择的 VMLinux 源码：原目标与 fragment 有效时优先保留；否则使用显式迁移调整路径/fragment，或在去掉章节编号前缀后找到唯一匹配标题，并输出所选原文真实存在的 anchor。对已选目标或命中迁移的 fragment，歧义或无匹配均使装配失败。整页迁移不能吞掉未知 fragment，也不能降级到 README。显式指向历史修订的 URL 保持原样；所选原文、示例与许可内容不会被当前正文替换。
+
+Schema `2` 保留 `redirects`，并增加用于已核实跨版本引用的 `fallbacks` 数组。
+每项声明 `from_owner`、`from`、`to`，可选 `to_owner` 默认 `from_owner`。
+原始引用有效时始终优先，其次使用结果 fragment 可解析的所选 owner 显式 redirect。同一来源的 redirect
+与 fallback 只有目标完全相同时才能并存；目标不同则拒绝。两者都不能直接解析时，
+显式 fallback 链必须落到所选源码树中真实存在的
+文档与 fragment。目标未列入交付指南时，仍按该 owner 的选定修订生成固定源码 URL；
+不会从较新 checkout 借正文，也不会在包内制造替代契约。循环、缺失的链终点、未知或
+歧义 fragment 都使装配失败。整页 fallback 继承请求的 fragment，不能偷偷改成
+fallback 页自带的 fragment。
+
+这些声明维护具体核验过的源码组合，不承诺任意历史版本混配。例如，镜像格式准备契约
+从 Guest Runtime 的 `docs/flatten.md` 移到 Accelerator 的 `docs/image-preparation.md`。
+选中新 Accelerator 时，即使 Guest Runtime 较旧，也使用所选 Accelerator 的真实契约。
+旧 Accelerator 配合已经移除旧契约的新 Guest Runtime，可能使两个位置都不存在；
+装配此时明确报出缺失终点。应选择保有契约的版本组合，不能把该引用改到 README。
+
+只为有证据的导航兼容需求维护迁移。Owner 移动文档时同步更新并验证当前源码、独立选择的历史内核、双语以及仅有英文的旧输入。
+
 #### 目录布局
 
 | 源码位置 | 归档位置 |
 | --- | --- |
-| 主仓 README；快速开始、部署、系统与术语指南 | `guide/README*.md`、`guide/<topic>*.md` |
+| 主仓 README | `guide/README*.md` |
+| 主仓文档目录（`docs/README*.md`） | `guide/index*.md` |
+| 选中的平台概念、架构、使用和运维指南 | `guide/<topic>*.md` |
 | 组件 README 与明确选择的用户契约 | `guide/<component>/<name>*.md` |
 | 独立选择的 kernel 指南 | `guide/vmlinux/vmlinux*.md` |
 | 主仓测试 README、QUICKSTART 与 Demo 指南 | 原有 `test/` 路径 |
@@ -424,13 +479,13 @@ Demo 脚本和锁文件、预构建 helper、本地 wheel 与轻量 workbench �
 | workbench 说明、启动器及其策略和归属声明 | `workbench/` |
 | 主仓/组件的许可证、NOTICE 与 LICENSES 材料 | `guide/licenses/<owner>/<original-path>` |
 
-组件指南列表覆盖 accelerator 的 cache/store/manifest/file artifacts、connector 的 TAP-FD
-与交换机运维、guest flatten/runtime、sandbox 控制与 guest-init 契约，以及 orchestrator 的
-node/build/proxy/resource/journal/telemetry 契约。存在两种语言时同时打包，已有完整英文
-单语文档仍有效。四个维护中的 E2E 指南文件保留在规范扁平用例集合旁。
+各组件选择完整能力文档，包括理解运行时契约所需的参考和设计章节。平台选择包含文档目录、
+完整实例/模板任务、部署、安全、运维、升级和性能指南。根 README 与文档目录具有不同归档路径。
+维护中的两种语言一起交付，完整英文单语文档仍有效。E2E 指南双语文件保留在规范扁平用例集合旁。
 
-内部设计/补丁分析、CI/发布文档、扩展开发、源码回归测试和实验性性能工具保留在源码仓库。
-指向这些材料的链接使用所选源码引用；不会因链接目标未打包就把它加入归档。源码文件不会
+贡献流程、未选中的示例、CI/发布维护、源码测试和实验工具保留在源码仓库。
+选取范围由所属仓库声明定义，不在这里再维护一份文件名清单。指向未打包材料的链接使用
+所选源码引用；不会因链接目标未打包就把它加入归档。源码文件不会
 被删除。已选输入必须存在且为普通文件，符号链接及目标冲突会使组装失败。许可证和归属
 声明保留原文，维护中的 Markdown 许可证范围文档仅重写导航。helper 和 wheel 保留原有
 清单、身份与验证。平台归档不重新打包组件二进制。

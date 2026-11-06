@@ -1,16 +1,18 @@
-[English](download.md) | [简体中文](download_zh.md)
+[English](installation.md) | [简体中文](installation_zh.md)
 
-# 获取配套的聚合发布
+# Installation and version selection
 
-在原生 Linux Docker 主机的同一个 Bash 会话中运行以下命令。需要 Python 3.9+、curl、GNU tar、sha256sum 和 Docker；不需要 GitHub 登录、源码检出或编译器。
+This task produces a verified local installation with a matching version set. Continue with [Quick Start](quickstart.md) for a first run or [deployment](deployment.md) for production assembly.
 
-将 `RELEASE_VERSION` 设为已发布的聚合 tag，或留空以一次性解析 Stable。该聚合 tag 下的 manifest 决定全部六个发布单元和精确包名；runtime 与 vmlinux 使用独立 tag。不要混用组件 Latest 或从 main 替换文件。旧版本应遵循其包内指南。
+Run these commands in one Bash shell on the native Linux Docker host with Python 3.9+, curl, GNU tar, sha256sum and Docker. No GitHub login, source checkout or compiler is needed.
 
-## 1. 选版并下载本机架构的输入
+Set `RELEASE_VERSION` to a published aggregate tag, or leave it empty to resolve Stable once. The manifest at that aggregate tag selects all six release units and exact package names; runtime and vmlinux have independent tags. Never combine component Latest releases or substitute files from main. Use the selected version's bundled guides for older releases.
 
-先检查 Release 的完整资产集合，再只下载本机架构及共享 platform 包。仅在采用该版本指南中的原生方案时设置 `DOWNLOAD_WORKBENCH=0`。下载固定 GitHub 资产 ID，并校验 GitHub 原生大小和 SHA-256 digest；摘要缺失或校验失败立即停止。历史正文机器块和 SHA256SUMS 均被忽略。
+## Select and download native inputs
 
-`files.tsv` 仅在本地保存已下载文件的名称、大小和哈希，供离线复核；它不是发布资产或测试记录。每次使用新的下载和安装目录。
+The complete Release asset set is checked, then only the host architecture and shared platform package are downloaded. Set `DOWNLOAD_WORKBENCH=0` only for the native alternative in that version's guide. Downloads use fixed GitHub asset IDs and verify GitHub's native size and SHA-256 digest. Missing digests or failed checks stop the download. Historical body markers and SHA256SUMS are ignored.
+
+`files.tsv` is a local list of downloaded filenames, sizes and hashes for offline rechecking. It is not a published asset or a test record. Use fresh download and installation directories.
 
 ```bash
 set -euo pipefail
@@ -128,9 +130,9 @@ trap - EXIT
 printf 'Selected aggregate Release: %s\n' "$RELEASE_VERSION"
 ```
 
-## 2. 复核所选字节并解压产品与材料
+## Verify selected bytes and extract products/materials
 
-复核每个已下载文件，再检查归档类型、路径、权限及跨包路径冲突，全部通过后才解压。未选择架构的文件无需下载。Workbench 单独导入。
+Recheck every downloaded file, then validate archive types, paths, permissions and cross-archive collisions before extraction. Missing files for an unselected architecture are harmless. Workbench is imported separately.
 
 ```bash
 set -euo pipefail
@@ -211,9 +213,9 @@ STAGE_DIR=""
 trap - EXIT
 ```
 
-## 3. 单独导入 Workbench
+## Import Workbench separately
 
-导入已下载归档，检查本机架构与版本，然后保留本地 image ID 用于启动。
+Import the downloaded archive, check its native architecture and version, and retain its local image ID for startup.
 
 ```bash
 IMAGE_TAG="ghcr.io/kuasar-sandbox/workbench:${RELEASE_VERSION#release-}"
@@ -226,4 +228,7 @@ RELEASE="$INSTALL_DIR"
 printf 'Release directory: %s\nLocal Workbench image: %s\n' "$RELEASE" "$IMAGE"
 ```
 
-在当前会话保留 `RELEASE`、`IMAGE` 和 `ARCH`，继续[快速开始](quickstart_zh.md#2-启动私有系统环境)。启动器来自 `$RELEASE/workbench/workbench`。复用已验证安装时，使用其发布目录和本地 image ID。缺文件、架构不符、摘要、权限或路径检查失败时停止，不要从其他版本获取替代文件。
+Keep `RELEASE`, `IMAGE` and `ARCH` in this shell and continue with [Quick Start](quickstart.md#start-a-private-system-environment). The launcher comes from `$RELEASE/workbench/workbench`. For an existing verified installation, use its release directory and local image ID. Stop on missing files, wrong architecture, digest, permission or path errors; do not fetch replacements from another version.
+## Installation result
+
+Retain the selected aggregate tag, `files.tsv` and original downloads. Product tools are in `bin/`; `guide/README.md` is the project entry and `guide/index.md` is the complete documentation index, with component guides under `guide/<component>/`. Tests and Demo material are under `test/`; Workbench is a separate image. Historical releases retain the layout documented by their bundled guides.

@@ -16,7 +16,7 @@ Please report vulnerabilities that affect the [current Stable channel](https://g
 
 Preview is a GitHub prerelease channel. The production readiness of the system and the stability label of a public release channel are separate concerns.
 
-This file defines vulnerability intake, coordination, and disclosure. It does not replace the implementation security model. System trust boundaries are documented in [Tenant security](docs/kuasar-sandbox.md#73-tenant-security); each component's linked design documents remain authoritative for its protocol, storage, runtime, and network mechanisms.
+This file defines vulnerability intake, coordination, and disclosure. It does not replace the implementation security model. System trust boundaries are documented in [Tenant security](docs/security.md#tenant-security); each component's linked design documents remain authoritative for its protocol, storage, runtime, and network mechanisms.
 
 ## Report a vulnerability privately
 

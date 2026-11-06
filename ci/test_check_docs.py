@@ -65,6 +65,41 @@ class DocumentationChecks(unittest.TestCase):
         path = self.write('a.md', '# Guide\n~~~text\n[example](missing.md)\n~~~\n`[inline](missing.md)`\n')
         self.assertEqual(docs.check_file(self.root, path), [])
 
+    def test_inline_code_delimiters_and_multiline_literals(self):
+        self.write('b.md', '# Section\n')
+        examples = (
+            '`^[a-z0-9](?:[a-z0-9-]{0,55}[a-z0-9])?$`',
+            '`[literal](missing.md)`',
+            '``literal ` [literal](missing.md) ``',
+            '`literal `` [literal](missing.md) `',
+            'text ```literal `` [literal](missing.md) ```',
+            '`literal\n[literal](missing.md)`',
+        )
+        for code in examples:
+            with self.subTest(code=code):
+                text = code + ' [real](b.md#section)\n'
+                path = self.write('a.md', text)
+                self.assertEqual(docs.check_file(self.root, path), [])
+                self.assertEqual(list(docs.destinations(text)),
+                                 [(len(text.splitlines()), 'b.md#section')])
+
+    def test_unmatched_and_escaped_ticks_do_not_hide_real_links(self):
+        text = ('unmatched ` [one](missing-one.md)\n\n'
+                '[two](missing-two.md) ` unmatched\n\n'
+                '\\`[three](missing-three.md) ` unmatched\n\n'
+                '[`label`](missing-four.md)\n\n'
+                'unmatched ` [five](missing-five.md)\n'
+                '~~~text\n[literal](missing-literal.md)\n~~~\n'
+                '[six](missing-six.md) ` unmatched\n')
+        self.assertEqual([target for _, target in docs.destinations(text)],
+                         [f'missing-{name}.md' for name in ('one', 'two', 'three', 'four', 'five', 'six')])
+
+    def test_code_does_not_cross_paragraph_interruptions(self):
+        for prefix in ('# ', '- ', '1. ', '> ', '***\n', '---\n'):
+            with self.subTest(prefix=prefix):
+                text = 'unmatched `\n' + prefix + '[real](missing.md) `literal`\n'
+                self.assertEqual([target for _, target in docs.destinations(text)], ['missing.md'])
+
     def test_external_and_escaped_path(self):
         path = self.write('a.md', '[public](https://example.org/docs)\n[escape](../outside.md)\n')
         result = docs.check_file(self.root, path)

@@ -43,7 +43,7 @@ class DownloadTests(unittest.TestCase):
         data = fixture(tag) if data is None else data
         requested = tag if requested is None else requested
         sources = [(ROOT/'docs'/n).read_text().split("<<'PY'\n",1)[1].split('\nPY\n',1)[0]
-                   for n in ('download.md','download_zh.md')]
+                   for n in ('installation.md','installation_zh.md')]
         self.assertEqual(*sources)
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
@@ -139,7 +139,7 @@ exec(compile((root/'example.py').read_text(),'<documented selector>','exec'))
 class DownloadBytesTests(unittest.TestCase):
     def validate(self, *, missing=False, corrupt=False, entry='bin/tool', symlink=False, collision=False,
                  root_entry=None, root_type=tarfile.DIRTYPE, root_mode=0o755):
-        text = (ROOT / 'docs/download.md').read_text()
+        text = (ROOT / 'docs/installation.md').read_text()
         source = text.split('python3 - "$DOWNLOAD_DIR" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -209,7 +209,7 @@ class DownloadBytesTests(unittest.TestCase):
 
 class DocumentedCommandTests(unittest.TestCase):
     def test_primary_guides_keep_equivalent_executable_examples(self):
-        for stem in ('docs/quickstart', 'docs/download', 'test/demo/DEMO', 'test/QUICKSTART'):
+        for stem in ('docs/quickstart', 'docs/installation', 'test/demo/DEMO', 'test/QUICKSTART'):
             blocks = []
             for suffix in ('', '_zh'):
                 text = (ROOT / (stem + suffix + '.md')).read_text()

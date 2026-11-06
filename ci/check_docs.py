@@ -24,6 +24,60 @@ EXPLICIT = re.compile(r'<(?:a|[a-z][\w-]*)\b[^>]*\b(?:id|name)=[\"\']([^\"\']+)[
 EXCLUDED = {'vendor', 'third_party', 'third-party', 'LICENSES', '.git', 'node_modules'}
 
 
+def mask_inline_code(text: str) -> str:
+    """Mask literal code, retaining offsets and newlines for link diagnostics."""
+    def mask_block(block):
+        runs = list(re.finditer(r'`+', block))
+        result = list(block)
+        index = 0
+        while index < len(runs):
+            opening = runs[index]
+            # Escapes apply to an opener in prose, but not inside a code span.
+            before = block[:opening.start()]
+            if (len(before) - len(before.rstrip('\\'))) % 2:
+                index += 1
+                continue
+            closing = next((i for i in range(index + 1, len(runs))
+                            if len(runs[i].group()) == len(opening.group())), None)
+            if closing is None:
+                index += 1
+                continue
+            for position in range(opening.start(), runs[closing].end()):
+                if result[position] not in '\r\n':
+                    result[position] = ' '
+            index = closing + 1
+        return ''.join(result)
+
+    result, block, fence = [], [], None
+    for line in text.splitlines(keepends=True):
+        mark = FENCE.match(line)
+        heading = re.match(r'^ {0,3}#{1,6}(?:[ \t]|$)', line)
+        boundary = heading or re.match(
+            r'^ {0,3}(?:(?:[-+*]|[0-9]{1,9}[.)])[ \t]+|>|(?:=+|-+)[ \t]*$|'
+            r'(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$|(?:-[ \t]*){3,}$)', line)
+        if boundary and block:
+            result.append(mask_block(''.join(block)))
+            block = []
+        if mark or fence is not None or not line.strip():
+            if block:
+                result.append(mask_block(''.join(block)))
+                block = []
+            result.append(line)
+            if mark:
+                token = mark.group(1)
+                if fence is None:
+                    fence = token
+                elif token[0] == fence[0] and len(token) >= len(fence) and not line.strip()[len(token):].strip():
+                    fence = None
+        elif heading:
+            result.append(mask_block(line))
+        else:
+            block.append(line)
+    if block:
+        result.append(mask_block(''.join(block)))
+    return ''.join(result)
+
+
 def prose(text: str):
     """Yield numbered lines outside fenced code; keep line numbers for findings."""
     fence = None
@@ -69,9 +123,7 @@ def anchors(text: str) -> set[str]:
 
 
 def destinations(text: str):
-    for n, line in prose(text):
-        # Inline code may deliberately demonstrate a nonexistent link.
-        line = re.sub(r'`+[^`]*`+', '', line)
+    for n, line in prose(mask_inline_code(text)):
         match = REFERENCE.match(line)
         if match:
             yield n, match.group(1).strip('<>')
@@ -100,11 +152,10 @@ def check_file(root: Path, path: Path) -> list[str]:
             if other.name not in targets:
                 issues.append(f'{item.relative_to(root)}: missing reciprocal language link to {other.name} in first five lines')
     if not chinese:
-        for n, line in prose(text):
+        for n, line in prose(mask_inline_code(text)):
             if n <= 5 and '[English]' in line and '[简体中文]' in line:
                 continue
-            cleaned = re.sub(r'`+[^`]*`+', '', line)
-            cleaned = re.sub(r'<[^>]*>', '', cleaned)
+            cleaned = re.sub(r'<[^>]*>', '', line)
             # Exact-line exception is reviewable and cannot mask an entire file.
             if HAN.search(cleaned) and '<!-- docs:allow-han -->' not in line:
                 issues.append(f'{rel}:{n}: Chinese prose in English default (translate or justify this line)')

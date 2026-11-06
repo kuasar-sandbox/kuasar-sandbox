@@ -34,6 +34,29 @@ resolve_selection "$ROOT" "$CURRENT_FORMAL_VERSION" \
 FORMAL_ROOT="$TMP/formal-root"
 mkdir -p "$FORMAL_ROOT"
 tar -C "$ROOT" --exclude='./.git' --exclude='./components' --exclude='*/__pycache__' -cf - . | tar -x -C "$FORMAL_ROOT"
+# This source set uses synthetic component guides. Give its platform fixture
+# matching navigation and an explicit declaration before recording its identity.
+# Real cross-version contracts are covered by the documentation package tests.
+python3 - "$FORMAL_ROOT" <<'PYGUIDES'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+paths = []
+for suffix in ('', '_zh'):
+    readme = f'README{suffix}.md'
+    architecture = f'docs/architecture{suffix}.md'
+    (root / readme).write_text(
+        '[English](README.md) | [简体中文](README_zh.md)\n\n'
+        '# Platform packaging fixture\n\n'
+        f'[Architecture](docs/architecture{suffix}.md)\n')
+    (root / architecture).write_text(
+        '[English](architecture.md) | [简体中文](architecture_zh.md)\n\n'
+        '# Packaging architecture fixture\n\n'
+        f'[Project entry](../README{suffix}.md)\n')
+    paths.extend((readme, architecture))
+(root / 'release/inputs/guide-inputs.yaml').write_text(json.dumps(paths) + '\n')
+(root / 'release/guide-migrations.json').write_text(
+    json.dumps({'schema': 2, 'redirects': [], 'fallbacks': []}) + '\n')
+PYGUIDES
 write_preview_base_fixture "$FORMAL_ROOT/releases/release.yaml"
 python3 - "$ROOT/ci/integration" "$FORMAL_ROOT/test/demo" "$TMP/demo-wheels" <<'PY'
 import pathlib, sys
@@ -281,6 +304,26 @@ grep -Fq "$foreign_unit archive contains another release unit's material namespa
 
 SOURCE_DATE_EPOCH=1700000000 PLATFORM_SOURCE_ROOT="$FORMAL_ROOT" \
   "$ROOT/release/aggregate-release.sh" assemble "$VERSION" "$TMP/fetched" "$TMP/bundle"
+# Exercise current and legacy guide markers directly, without an aggregate
+# asset digest rejecting a modified fixture before the archive-layout guard.
+platform_guide_stage="$TMP/platform-guide-markers/stage"
+platform_guide_archive="$TMP/platform-guide-markers/$(platform_archive "$VERSION")"
+mkdir -p "$platform_guide_stage"
+tar -xzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" -C "$platform_guide_stage"
+mv "$platform_guide_stage/guide/architecture.md" "$platform_guide_stage/guide/kuasar-sandbox.md"
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@1700000000' \
+  -czf "$platform_guide_archive" -C "$platform_guide_stage" .
+"$ROOT/release/package-platform.sh" validate "$VERSION" "$platform_guide_archive"
+rm -f "$platform_guide_stage/guide/architecture.md" "$platform_guide_stage/guide/kuasar-sandbox.md"
+tar --sort=name --owner=0 --group=0 --numeric-owner --mtime='@1700000000' \
+  -czf "$platform_guide_archive" -C "$platform_guide_stage" .
+if "$ROOT/release/package-platform.sh" validate "$VERSION" "$platform_guide_archive" \
+    > "$TMP/missing-platform-guide.log" 2>&1; then
+  release_fail "platform archive accepted neither current nor historical guide marker"
+fi
+grep -Fq 'platform archive is missing guide/architecture.md or guide/kuasar-sandbox.md' \
+  "$TMP/missing-platform-guide.log" \
+  || { cat "$TMP/missing-platform-guide.log" >&2; release_fail "missing platform guide fixture failed outside its intended guard"; }
 # Exercise exact-assets source verification against real tagged Git trees and
 # the actual assembled package, including the .git data in artifact transport.
 mkdir "$TMP/source-capsule"
@@ -493,7 +536,7 @@ if tar -tzf "$TMP/bundle/assets/$(platform_archive "$VERSION")" \
 fi
 
 "$FORMAL_ROOT/release/aggregate-release.sh" extract "$VERSION" "$TMP/bundle" "$TMP/install"
-[ -f "$TMP/install/guide/kuasar-sandbox.md" ] || release_fail "platform docs were not extracted"
+[ -f "$TMP/install/guide/architecture.md" ] || release_fail "platform docs were not extracted"
 [ -x "$TMP/install/test/e2e/e2e" ] || release_fail "public E2E runner was not extracted"
 python3 -B "$TMP/install/test/e2e/e2e" prepare --release-dir "$TMP/install" \
   --workdir "$TMP/prepared" --suite storage --exclude storage.obs.sh

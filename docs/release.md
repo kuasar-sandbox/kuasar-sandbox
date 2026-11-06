@@ -2,6 +2,11 @@
 
 # Release
 
+This is the maintainer contract for selecting component versions, producing and
+publishing aggregate assets, and recovering publication failures. Consumers use
+[installation](installation.md); operators changing a deployed system use
+[upgrades](upgrading.md). CI admission and execution evidence belong to [CI](ci.md).
+
 ## 1. Overview
 
 Kuasar Sandbox separates component publication from platform aggregate publication. A component version describes an independent component delivery; an aggregate version describes a set of already-published components that passed exact-asset validation together. Neither version is derived from the other, and they need not have matching names.
@@ -341,11 +346,89 @@ Legal material continues to use the existing LICENSE/NOTICE/COPYING conventions.
 An independently versioned unit uses `docs/<unit>.md` and its optional `_zh.md`
 peer from the unit's exact selected tag, including immutable older tags.
 
+<a id="resource-pool-availability"></a>
+#### Resource-pool version availability
+
+Resource-pool configuration and capacity-aware recovery were introduced by
+[Orchestrator #515](https://github.com/kuasar-sandbox/orchestrator/pull/515), commit
+`766732d787db79ecb18882e4157bc01b8404168d`. The reviewed Stable selection
+`v0.1.12` and Daily selection `v0.1.13-preview.20261106` do not contain that
+change or its resource-pool contract. Do not copy the newer `resource_pool`
+configuration into those versions. Use a component release containing the
+feature before enabling it, and follow the complete guide at the selected
+component version. A documentation move does not add runtime capabilities.
+
+Navigation uses the selected `node-resource.md#resource-pools` contract when
+present, or the selected older `resource-pools.md` contract when present. If
+neither exists, it leads to this version notice instead of presenting an older
+capacity-budget section as the new feature's contract.
+
+#### Versioned navigation migrations
+
+An owner may declare a small, explicit `release/guide-migrations.json` in its
+selected source to keep independently versioned documentation navigable after a
+reorganization. This is assembly metadata, not another reader-facing guide or a
+set of permanent old Markdown pages. Older tags without it remain valid.
+
+```json
+{
+  "schema": 1,
+  "redirects": [
+    {"from": "docs/kuasar-sandbox.md", "to": "docs/architecture.md"}
+  ]
+}
+```
+
+Each `from`/`to` is a repository-relative Markdown path with an optional fragment.
+`to_owner` is optional and defaults to the declaring owner; a cross-owner target
+must be among the selected source inputs. The assembler reads declarations only
+from those exact inputs. It rejects unsafe paths, symlinks, unknown fields,
+duplicate sources, cycles and invalid declared targets.
+
+Resolution uses the document actually selected for the output, including an
+independent VMLinux source. An existing valid target/fragment wins. Otherwise an
+explicit migration can move the path/fragment; a unique heading match after
+removing a section-number prefix can resolve old/new heading spelling while
+preserving the selected document's real anchor. Ambiguous or unresolved fragments
+for a selected target or matched migration fail assembly. A path-only migration
+does not discard an unknown fragment or redirect it to a README. Explicit URLs to
+historical revisions remain unchanged; the selected original prose, examples and
+legal contents are not replaced with current text.
+
+Schema `2` retains `redirects` and adds a `fallbacks` array for evidenced
+cross-version references. Each fallback has `from_owner`, `from`, `to`, and an
+optional `to_owner` (defaulting to `from_owner`). An original valid reference
+always wins, followed by a selected-owner redirect whose resulting fragment is
+valid. A redirect and
+fallback may share a source only when they name the identical destination; a
+different destination is rejected. If neither applies, an explicit fallback chain must reach an
+existing document and fragment in the selected source trees. A target outside
+the declared package guides stays a source URL pinned to that owner's selected
+revision; it is not copied from a newer checkout or manufactured in the package.
+Cycles, missing chain endpoints, and unknown or ambiguous fragments fail. A
+page-level fallback carries the requested fragment instead of silently replacing
+it with the fallback page's own fragment.
+
+These declarations preserve specific reviewed source combinations, not every
+historical version combination. For example, image-format preparation moved
+from Guest Runtime's `docs/flatten.md` to Accelerator's
+`docs/image-preparation.md`. A selected new Accelerator supplies its actual
+contract even with an older Guest Runtime. Selecting an old Accelerator together
+with a new Guest Runtime that no longer carries the old contract can leave both
+locations absent; assembly then fails with the missing endpoint. Select versions
+that retain the contract rather than redirecting that reference to a README.
+
+Keep migrations limited to evidenced navigation compatibility. Update and test
+them with the owner document move, including current sources, a separately
+selected historical kernel, both languages and English-only older inputs.
+
 #### Layout
 
 | Source | Archive destination |
 | --- | --- |
-| Project README; quickstart, deployment, system and terminology guides | `guide/README*.md`, `guide/<topic>*.md` |
+| Project README | `guide/README*.md` |
+| Project documentation index (`docs/README*.md`) | `guide/index*.md` |
+| Selected platform concepts, architecture, user and operator guides | `guide/<topic>*.md` |
 | Component README and explicitly selected user contracts | `guide/<component>/<name>*.md` |
 | Independently selected kernel guide | `guide/vmlinux/vmlinux*.md` |
 | Project test README, QUICKSTART and Demo guide | Their existing `test/` paths |
@@ -353,16 +436,18 @@ peer from the unit's exact selected tag, including immutable older tags.
 | Workbench instructions, launcher and its policies/attribution | `workbench/` |
 | Project/component license, NOTICE and LICENSES material | `guide/licenses/<owner>/<original-path>` |
 
-The component guide list covers accelerator cache/store/manifest/file artifacts,
-connector TAP-FD and switch operations, guest flatten/runtime, sandbox control
-and guest-init contracts, and orchestrator node/build/proxy/resource/journal/
-telemetry contracts. Both language editions are included when present. Existing
-complete English-only documents remain valid. The four maintained E2E guide
-files remain beside the canonical flat case set.
+Owners select whole capability documents, including the reference and design
+sections needed to understand their runtime contracts. Platform input selection
+includes the documentation index, complete instance/template tasks, deployment,
+security, operations, upgrades and performance. Root README and the documentation
+index have distinct archive paths. Both maintained language editions travel
+together; complete English-only documents remain valid. The maintained E2E guide
+pairs remain beside the canonical flat case set.
 
-Internal design/patch analysis, CI/release documentation, extension development,
-source regression tests and experimental performance tools remain in their
-source repositories. Links to these materials use the selected source reference;
+Contributor workflows, unselected examples, CI/release maintenance, source tests
+and experimental tools remain in their source repositories. Selection belongs to
+each owner's declaration, not a duplicated filename list here. Links to omitted
+materials use the selected source reference;
 following a link does not pull an excluded document into the package. Source
 files are not deleted. Selected inputs must exist and be regular files; symbolic
 links and destination collisions fail assembly. License and attribution texts
