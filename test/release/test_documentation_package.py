@@ -428,6 +428,180 @@ class DocumentationPackageTest(unittest.TestCase):
         _, result = self.assemble(success=False)
         self.assertIn('symbolic link', result.stderr)
 
+    def test_version_fallbacks_use_selected_old_guides_and_prefer_current_targets(self):
+        source = self.root / 'connector'
+        old_readme = '# Legacy connector\n\n## Tasks\n\nSelected old instructions.\n'
+        old_contract = '# Wire contract\n\n## 3. Parameters\n\n```sh\nkeep-old-example --exact\n```\n'
+        (source / 'README.md').write_text(old_readme)
+        (source / 'docs/tapfd.md').write_text(old_contract)
+        (source / 'LICENSE').write_bytes(b'Exact selected license\n')
+        metadata = self.root / 'platform/release/guide-migrations.json'
+        metadata.write_text(json.dumps({'schema': 2, 'redirects': [], 'fallbacks': [
+            {'from_owner': 'connector', 'from': 'README.md#choose-a-task', 'to': 'README.md#tasks'},
+            {'from_owner': 'connector', 'from': 'docs/contract.md', 'to': 'docs/tapfd.md#3-parameters'},
+            {'from_owner': 'connector', 'from': 'docs/contract.md#configuration', 'to': 'docs/tapfd.md#3-parameters'},
+        ]}))
+        page = self.root / 'platform/docs/quickstart.md'
+        page.write_text(
+            '[Tasks](https://github.com/kuasar-sandbox/connector/blob/main/README.md#choose-a-task)\n'
+            '[Contract](https://github.com/kuasar-sandbox/connector/blob/main/docs/contract.md)\n'
+            '[Config](https://github.com/kuasar-sandbox/connector/blob/main/docs/contract.md#configuration)\n'
+            '[History](https://github.com/kuasar-sandbox/connector/blob/v0.0.1/docs/contract.md#configuration)\n')
+        output, _ = self.assemble()
+        text = (output / 'guide/quickstart.md').read_text()
+        self.assertIn('[Tasks](connector/README.md#tasks)', text)
+        self.assertIn('[Contract](connector/tapfd.md#3-parameters)', text)
+        self.assertIn('[Config](connector/tapfd.md#3-parameters)', text)
+        self.assertIn('/blob/v0.0.1/docs/contract.md#configuration', text)
+        self.assertEqual((output / 'guide/connector/README.md').read_text(), old_readme)
+        self.assertEqual((output / 'guide/connector/tapfd.md').read_text(), old_contract)
+        self.assertEqual((output / 'guide/licenses/connector/LICENSE').read_bytes(), b'Exact selected license\n')
+        self.assertEqual(DOCS.check_file(output, output / 'guide/quickstart.md'), [])
+        shutil.rmtree(output)
+
+        # A current selected version wins without retaining the historical files.
+        (source / 'README.md').write_text('# Connector\n\n## Choose a task\n')
+        (source / 'docs/contract.md').write_text('# Current contract\n\n## Configuration\n')
+        declaration = source / 'release/guide-inputs.txt'
+        declaration.write_text(declaration.read_text().replace('docs/tapfd.md', 'docs/contract.md'))
+        (source / 'docs/tapfd.md').unlink()
+        output, _ = self.assemble()
+        text = (output / 'guide/quickstart.md').read_text()
+        self.assertIn('[Tasks](connector/README.md#choose-a-task)', text)
+        self.assertIn('[Contract](connector/contract.md)', text)
+        self.assertIn('[Config](connector/contract.md#configuration)', text)
+        self.assertFalse((output / 'guide/connector/tapfd.md').exists())
+
+    def test_version_fallbacks_do_not_discard_unknown_or_ambiguous_fragments(self):
+        (self.root / 'connector/docs/tapfd.md').write_text('# Wire\n## 1. Parameters\n## 2. Parameters\n')
+        (self.root / 'platform/release/guide-migrations.json').write_text(json.dumps({
+            'schema': 2, 'redirects': [], 'fallbacks': [
+                {'from_owner': 'connector', 'from': 'docs/contract.md', 'to': 'docs/tapfd.md#1-parameters'},
+            ]}))
+        for fragment, error in [('unknown', 'missing heading/anchor'),
+                                ('parameters', 'ambiguous unnumbered heading')]:
+            with self.subTest(fragment=fragment):
+                (self.root / 'platform/docs/quickstart.md').write_text(
+                    f'[Contract](https://github.com/kuasar-sandbox/connector/blob/main/docs/contract.md#{fragment})\n')
+                output, result = self.assemble(success=False)
+                self.assertIn(error, result.stderr)
+                shutil.rmtree(output)
+
+    def test_version_fallbacks_require_a_real_selected_endpoint_and_strict_metadata(self):
+        metadata = self.root / 'platform/release/guide-migrations.json'
+        valid = {'from_owner': 'connector', 'from': 'docs/current.md', 'to': 'docs/tapfd.md'}
+        for data, error in [
+                ({'schema': 2, 'redirects': [], 'fallbacks': {}}, 'invalid documentation migration schema'),
+                ({'schema': 2, 'redirects': [], 'fallbacks': [{**valid, 'extra': True}]}, 'invalid documentation fallback entry'),
+                ({'schema': 2, 'redirects': [], 'fallbacks': [{**valid, 'from_owner': 'absent'}]}, 'unselected documentation fallback owner'),
+                ({'schema': 2, 'redirects': [], 'fallbacks': [{**valid, 'to': '../README.md'}]}, 'unsafe documentation migration reference'),
+                ({'schema': 2, 'redirects': [], 'fallbacks': [valid, valid]}, 'duplicate documentation fallback'),
+                ({'schema': 2, 'redirects': [], 'fallbacks': [valid,
+                    {'from_owner': 'connector', 'from': 'docs/tapfd.md', 'to': 'docs/current.md'}]}, 'cyclic documentation fallback'),
+                ({'schema': 2, 'redirects': [], 'fallbacks': [{
+                    'from_owner': 'accelerator', 'from': 'docs/image-preparation.md',
+                    'to_owner': 'guest-runtime', 'to': 'docs/unselected-old-format.md'}]}, 'no selected documentation fallback endpoint'),
+                ({'schema': 2, 'redirects': [{'from': 'docs/retired.md', 'to': 'docs/quickstart.md'}],
+                  'fallbacks': [{'from_owner': 'platform', 'from': 'docs/retired.md', 'to': 'docs/download.md'}]}, 'conflicts with a declared migration'),
+        ]:
+            with self.subTest(error=error):
+                metadata.write_text(json.dumps(data))
+                output, result = self.assemble(success=False)
+                self.assertIn(error, result.stderr)
+                shutil.rmtree(output)
+
+    def test_matching_owner_redirect_and_legacy_fallback_can_coexist(self):
+        (self.root / 'connector/docs/tapfd.md').write_text('# Wire\n<a id="current-contract"></a>\n## Current contract\n')
+        (self.root / 'connector/release/guide-migrations.json').write_text(json.dumps({
+            'schema': 1, 'redirects': [
+                {'from': 'docs/retired.md#old-contract', 'to': 'docs/tapfd.md#current-contract'},
+            ]}))
+        (self.root / 'platform/release/guide-migrations.json').write_text(json.dumps({
+            'schema': 2, 'redirects': [], 'fallbacks': [
+                {'from_owner': 'connector', 'from': 'docs/retired.md#old-contract',
+                 'to': 'docs/tapfd.md#current-contract'},
+                {'from_owner': 'connector', 'from': 'docs/tapfd.md#current-contract',
+                 'to': 'docs/retired.md#actual-legacy-contract'},
+            ]}))
+        (self.root / 'platform/docs/quickstart.md').write_text(
+            '[Contract](https://github.com/kuasar-sandbox/connector/blob/main/docs/retired.md#old-contract)\n')
+        output, _ = self.assemble()
+        self.assertIn('(connector/tapfd.md#current-contract)', (output / 'guide/quickstart.md').read_text())
+        shutil.rmtree(output)
+        (self.root / 'connector/release/guide-migrations.json').unlink()
+        (self.root / 'connector/docs/tapfd.md').unlink()
+        declaration = self.root / 'connector/release/guide-inputs.txt'
+        declaration.write_text(declaration.read_text().replace('docs/tapfd.md', 'docs/retired.md'))
+        old = '# Legacy wire\n\n## Actual legacy contract\n\nOriginal selected prose.\n'
+        (self.root / 'connector/docs/retired.md').write_text(old)
+        output, _ = self.assemble()
+        self.assertIn('(connector/retired.md#actual-legacy-contract)', (output / 'guide/quickstart.md').read_text())
+        self.assertEqual((output / 'guide/connector/retired.md').read_text(), old)
+
+    def test_specific_fragment_fallback_repairs_an_inapplicable_owner_page_move(self):
+        (self.root / 'connector/docs/tapfd.md').write_text('# Wire\n\n## Destination\n')
+        (self.root / 'connector/release/guide-migrations.json').write_text(json.dumps({
+            'schema': 1, 'redirects': [{'from': 'docs/retired.md', 'to': 'docs/tapfd.md'}]}))
+        (self.root / 'platform/release/guide-migrations.json').write_text(json.dumps({
+            'schema': 2, 'redirects': [], 'fallbacks': [
+                {'from_owner': 'connector', 'from': 'docs/retired.md#old-topic', 'to': 'docs/tapfd.md#destination'},
+            ]}))
+        page = self.root / 'platform/docs/quickstart.md'
+        page.write_text('[Moved](https://github.com/kuasar-sandbox/connector/blob/main/docs/retired.md#old-topic)\n')
+        output, _ = self.assemble()
+        self.assertIn('(connector/tapfd.md#destination)', (output / 'guide/quickstart.md').read_text())
+        shutil.rmtree(output)
+        page.write_text('[Unknown](https://github.com/kuasar-sandbox/connector/blob/main/docs/retired.md#unknown)\n')
+        _, result = self.assemble(success=False)
+        self.assertIn('missing heading/anchor', result.stderr)
+
+    def test_feature_fallback_chain_distinguishes_current_legacy_and_unavailable_contracts(self):
+        platform, owner = self.root / 'platform', self.root / 'orchestrator'
+        (platform / 'docs/release.md').write_text(
+            '# Release\n\n<a id="resource-pool-availability"></a>\n## Resource pool availability\n'
+            'Selected older tags do not provide this contract. Do not use the new configuration.\n')
+        (platform / 'release/guide-migrations.json').write_text(json.dumps({
+            'schema': 2, 'redirects': [], 'fallbacks': [
+                {'from_owner': 'orchestrator', 'from': 'docs/node-resource.md#resource-pools',
+                 'to': 'docs/resource-pools.md'},
+                {'from_owner': 'orchestrator', 'from': 'docs/resource-pools.md',
+                 'to_owner': 'platform', 'to': 'docs/release.md#resource-pool-availability'},
+            ]}))
+        page = platform / 'docs/quickstart.md'
+        page.write_text('[Resource pools](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md#resource-pools)\n')
+
+        # Published older versions have neither contract. Link to a truthful,
+        # versioned platform explanation, not an invented old owner document.
+        output, _ = self.assemble()
+        text = (output / 'guide/quickstart.md').read_text()
+        self.assertIn('/kuasar-sandbox/blob/platform-revision/docs/release.md#resource-pool-availability', text)
+        self.assertFalse((output / 'guide/orchestrator/resource-pools.md').exists())
+        self.assertFalse((output / 'guide/release.md').exists())
+        shutil.rmtree(output)
+
+        # The intermediate owner version has the full contract in its source
+        # tree, outside its declared package guides. Preserve that selected ref.
+        legacy = '# Complete legacy resource-pool contract\n\nAll selected parameters.\n'
+        (owner / 'docs/resource-pools.md').write_text(legacy)
+        output, _ = self.assemble()
+        text = (output / 'guide/quickstart.md').read_text()
+        self.assertIn('/orchestrator/blob/orchestrator-revision/docs/resource-pools.md)', text)
+        self.assertNotIn('resource-pool-availability', text)
+        self.assertEqual((owner / 'docs/resource-pools.md').read_text(), legacy)
+        shutil.rmtree(output)
+
+        # The current declared guide contains the real contract and wins.
+        (owner / 'docs/node-resource.md').write_text('# Node resources\n<a id="resource-pools"></a>\n## Resource pools\n')
+        (owner / 'docs/resource-pools.md').unlink()
+        output, _ = self.assemble()
+        self.assertIn('(orchestrator/node-resource.md#resource-pools)', (output / 'guide/quickstart.md').read_text())
+        shutil.rmtree(output)
+
+        # A page fallback may not launder an unrecognized feature fragment.
+        page.write_text('[Unknown](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/resource-pools.md#unknown)\n')
+        _, result = self.assemble(success=False)
+        self.assertIn('missing heading/anchor', result.stderr)
+
     def test_bilingual_navigation_and_source_links(self):
         source = self.root / 'connector'
         header = '[English](README.md) | [简体中文](README_zh.md)\n'

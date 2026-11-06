@@ -1,5 +1,5 @@
 {
-  "schema": 1,
+  "schema": 2,
   "redirects": [
     {
       "from": "docs/kuasar-sandbox.md",
@@ -8,6 +8,530 @@
     {
       "from": "docs/kuasar-sandbox_zh.md",
       "to": "docs/architecture_zh.md"
+    },
+    {
+      "from": "docs/perf.md",
+      "to": "docs/performance.md"
+    },
+    {
+      "from": "docs/perf_zh.md",
+      "to": "docs/performance_zh.md"
+    },
+    {
+      "from": "docs/kuasar-sandbox.md#32-component-responsibilities",
+      "to": "docs/architecture.md#component-responsibilities"
+    },
+    {
+      "from": "docs/kuasar-sandbox_zh.md#32-组件职责",
+      "to": "docs/architecture_zh.md#组件职责"
+    },
+    {
+      "from": "docs/quickstart.md#first-application",
+      "to": "docs/sandboxes.md#create-execute-save-state-and-clean-up"
+    },
+    {
+      "from": "docs/quickstart_zh.md#first-application",
+      "to": "docs/sandboxes_zh.md#创建执行保存状态并清理"
+    }
+  ],
+  "fallbacks": [
+    {
+      "from_owner": "accelerator",
+      "from": "README.md#choose-a-complete-task-or-contract",
+      "to_owner": "accelerator",
+      "to": "README.md#documentation"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "README_zh.md#按完整任务或契约阅读",
+      "to_owner": "accelerator",
+      "to": "README_zh.md#文档"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/artifacts.md",
+      "to_owner": "accelerator",
+      "to": "docs/file-artifacts.md"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/artifacts_zh.md",
+      "to_owner": "accelerator",
+      "to": "docs/file-artifacts_zh.md"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/file-artifacts.md",
+      "to_owner": "accelerator",
+      "to": "docs/artifacts.md#immutable-local-tarstreams-and-encryption"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/file-artifacts.md#4-read-errors-random-access-and-recovery",
+      "to_owner": "accelerator",
+      "to": "docs/artifacts.md#read-errors-random-access-and-recovery"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/file-artifacts_zh.md",
+      "to_owner": "accelerator",
+      "to": "docs/artifacts_zh.md#不可变本地-tarstream-与加密"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/file-artifacts_zh.md#4-读取错误随机访问与恢复",
+      "to_owner": "accelerator",
+      "to": "docs/artifacts_zh.md#读取错误随机访问与恢复"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/image-preparation.md",
+      "to_owner": "guest-runtime",
+      "to": "docs/flatten.md#3-image-format"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/image-preparation_zh.md",
+      "to_owner": "guest-runtime",
+      "to": "docs/flatten_zh.md#3-镜像格式"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/manifest.md",
+      "to_owner": "accelerator",
+      "to": "docs/artifacts.md#manifest-objects-and-sparse-access"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/manifest_zh.md",
+      "to_owner": "accelerator",
+      "to": "docs/artifacts_zh.md#manifest-对象与稀疏访问"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/transfer.md",
+      "to_owner": "accelerator",
+      "to": "docs/manifest.md"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/transfer.md#manifest-configyaml",
+      "to_owner": "accelerator",
+      "to": "docs/manifest.md#31-manifest-configyaml"
+    },
+    {
+      "from_owner": "accelerator",
+      "from": "docs/transfer_zh.md",
+      "to_owner": "accelerator",
+      "to": "docs/manifest_zh.md"
+    },
+    {
+      "from_owner": "connector",
+      "from": "README.md#choose-a-task",
+      "to_owner": "connector",
+      "to": "README.md#documentation"
+    },
+    {
+      "from_owner": "connector",
+      "from": "README_zh.md#按任务阅读",
+      "to_owner": "connector",
+      "to": "README_zh.md#文档"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "README.md#choose-a-workflow-or-delivery-contract",
+      "to_owner": "guest-runtime",
+      "to": "README.md#documentation"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "README_zh.md#按流程或交付契约阅读",
+      "to_owner": "guest-runtime",
+      "to": "README_zh.md#文档"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/build.md",
+      "to_owner": "guest-runtime",
+      "to": "README.md#source-workspace"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/build_zh.md",
+      "to_owner": "guest-runtime",
+      "to": "README_zh.md#源码工作区"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/flatten-cli.md",
+      "to_owner": "guest-runtime",
+      "to": "docs/flatten.md"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/flatten-cli.md#decide-whether-your-workload-needs-adaptation",
+      "to_owner": "guest-runtime",
+      "to": "docs/flatten.md#7-decide-whether-your-workload-needs-adaptation"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/flatten-cli_zh.md",
+      "to_owner": "guest-runtime",
+      "to": "docs/flatten_zh.md"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/runtime-bundle.md",
+      "to_owner": "guest-runtime",
+      "to": "docs/sandbox-runtime.md"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/runtime-bundle_zh.md",
+      "to_owner": "guest-runtime",
+      "to": "docs/sandbox-runtime_zh.md"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/using-guest-runtime.md",
+      "to_owner": "guest-runtime",
+      "to": "docs/sandbox-runtime.md#4-runtime-consumption-contract"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/using-guest-runtime.md#node-upgrades",
+      "to_owner": "guest-runtime",
+      "to": "docs/sandbox-runtime.md#61-node-upgrades"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/using-guest-runtime_zh.md",
+      "to_owner": "guest-runtime",
+      "to": "docs/sandbox-runtime_zh.md#4-运行期消费契约"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/cluster.md#client-access",
+      "to_owner": "orchestrator",
+      "to": "docs/cluster-router.md"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/cluster.md#groups-and-placement",
+      "to_owner": "orchestrator",
+      "to": "docs/cluster-placer.md"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/cluster.md#registry-state-ownership-and-disaster-recovery-boundaries",
+      "to_owner": "orchestrator",
+      "to": "docs/cluster.md#13-state-ownership-and-disaster-recovery-boundaries"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/cluster_zh.md#client-access",
+      "to_owner": "orchestrator",
+      "to": "docs/cluster-router_zh.md"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/cluster_zh.md#groups-and-placement",
+      "to_owner": "orchestrator",
+      "to": "docs/cluster-placer_zh.md"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-build.md#5-target-aware-execution-and-publication",
+      "to": "docs/node-build.md#target-aware-execution-and-publication",
+      "to_owner": "orchestrator"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-build.md#client-workflow",
+      "to_owner": "orchestrator",
+      "to": "docs/node-build.md#explicit-target-recipe"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-build.md#execution-and-publication",
+      "to_owner": "orchestrator",
+      "to": "docs/node-build.md#5-target-aware-execution-and-publication"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-build_zh.md#5-按目标执行与发布",
+      "to": "docs/node-build_zh.md#按目标执行与发布",
+      "to_owner": "orchestrator"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-build_zh.md#client-workflow",
+      "to_owner": "orchestrator",
+      "to": "docs/node-build_zh.md#explicit-target-recipe"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-build_zh.md#execution-and-publication",
+      "to_owner": "orchestrator",
+      "to": "docs/node-build_zh.md#5-按目标执行与发布"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-proxy.md#credential-model",
+      "to_owner": "orchestrator",
+      "to": "docs/node.md#7-credentials-and-ownership-encrypted-apisecretmanifestkey-pairs"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-proxy_zh.md#credential-model",
+      "to_owner": "orchestrator",
+      "to": "docs/node_zh.md#7-密钥与归属模型apisecret--manifestkey-凭据对加密存-sqlite"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-proxy_zh.md#sdk-configuration",
+      "to_owner": "orchestrator",
+      "to": "docs/node_zh.md#43-sdk--cli-对接与协议-pin"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-resource.md#resource-pools",
+      "to_owner": "orchestrator",
+      "to": "docs/resource-pools.md"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node-resource_zh.md#resource-pools",
+      "to_owner": "orchestrator",
+      "to": "docs/resource-pools_zh.md"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node.md#local-control-channels",
+      "to_owner": "orchestrator",
+      "to": "docs/node.md#6-local-control-socket-run-task-admin-plugin-and-api-planes"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node.md#systemd-pools",
+      "to_owner": "orchestrator",
+      "to": "docs/node.md#5-process-management-through-systemd-template-units"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/node_zh.md#systemd-pools",
+      "to_owner": "orchestrator",
+      "to": "docs/node_zh.md#5-进程管理systemd-模板单元启动时自动生成安装"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/observability.md",
+      "to_owner": "orchestrator",
+      "to": "README.md#documentation"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/observability.md#telemetry-release-scope",
+      "to_owner": "orchestrator",
+      "to": "docs/telemetry.md#release-scope"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/observability_zh.md",
+      "to_owner": "orchestrator",
+      "to": "README_zh.md#文档"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/observability_zh.md#telemetry-release-scope",
+      "to_owner": "orchestrator",
+      "to": "docs/telemetry_zh.md#release-scope"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/resource-pools.md",
+      "to_owner": "platform",
+      "to": "docs/release.md#resource-pool-availability"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/resource-pools_zh.md",
+      "to_owner": "platform",
+      "to": "docs/release_zh.md#resource-pool-availability"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/sandbox-lifecycle.md",
+      "to_owner": "orchestrator",
+      "to": "docs/node.md#8-lifecycle-and-state-machine"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/sandbox-lifecycle.md#capture-and-pause",
+      "to_owner": "orchestrator",
+      "to": "docs/node.md#811-capture-and-pause"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/sandbox-lifecycle_zh.md",
+      "to_owner": "orchestrator",
+      "to": "docs/node_zh.md#8-生命周期与状态机"
+    },
+    {
+      "from_owner": "orchestrator",
+      "from": "docs/sandbox-lifecycle_zh.md#capture-and-pause",
+      "to_owner": "orchestrator",
+      "to": "docs/node_zh.md#811-capture-与-pause"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/artifacts.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox.md#11-artifact-model"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/artifacts.md#compatibility",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox.md#artifact-compatibility"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/artifacts_zh.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox_zh.md#11-工件模型"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/artifacts_zh.md#compatibility",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox_zh.md#artifact-compatibility"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/block-storage.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox.md#11-vhost-user-blk-backend"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/block-storage_zh.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox_zh.md#11-vhost-user-blk-backend"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/cloud-hypervisor.md#34-0004--skip-hole-only-runs-during-balloon-release",
+      "to": "docs/vmm.md#patch-0004",
+      "to_owner": "sandboxer"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/cloud-hypervisor_zh.md#34-0004--balloon-release-跳过-user-managed-zone-的空洞-run",
+      "to": "docs/vmm_zh.md#patch-0004",
+      "to_owner": "sandboxer"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/configuration.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox.md#3-configuration-and-artifact-formats"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/configuration_zh.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox_zh.md#3-配置与制品格式"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/guest-abi.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox-init.md"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/guest-abi_zh.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox-init_zh.md"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/memory.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox.md#8-uffd-handler"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/memory_zh.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox_zh.md#8-uffd-handler"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/resources.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox.md#4-resource-model"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/resources_zh.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox_zh.md#4-资源模型"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/runtime.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox.md"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/runtime.md#restore",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox.md#7-memory-restore-data-flow"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/runtime_zh.md",
+      "to_owner": "sandboxer",
+      "to": "docs/sandbox_zh.md"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/sandbox.md#7-memory-restore-data-flow",
+      "to_owner": "sandboxer",
+      "to": "docs/runtime.md#memory-restore-data-flow"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/sandbox_zh.md#7-memory-restore-数据流",
+      "to_owner": "sandboxer",
+      "to": "docs/runtime_zh.md#memory-restore-数据流"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/vmm.md",
+      "to_owner": "sandboxer",
+      "to": "docs/cloud-hypervisor.md"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/vmm.md#patch-0004",
+      "to": "docs/cloud-hypervisor.md#34-0004--preserve-logical-release-before-sparse-reclaim",
+      "to_owner": "sandboxer"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/vmm_zh.md",
+      "to_owner": "sandboxer",
+      "to": "docs/cloud-hypervisor_zh.md"
+    },
+    {
+      "from_owner": "sandboxer",
+      "from": "docs/vmm_zh.md#patch-0004",
+      "to": "docs/cloud-hypervisor_zh.md#34-0004--先保留逻辑释放通知再稀疏回收",
+      "to_owner": "sandboxer"
     }
   ]
 }

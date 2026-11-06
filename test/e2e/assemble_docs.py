@@ -155,7 +155,7 @@ def migration_reference(value, owner, roots):
 
 def guide_migrations(roots):
     """Read optional owner declarations; absent metadata is valid for old tags."""
-    redirects = {}
+    redirects, fallbacks = {}, {}
 
     def unique_object(pairs):
         result = {}
@@ -171,9 +171,12 @@ def guide_migrations(roots):
             continue
         source = regular_input(root, path)
         data = json.loads(source.read_text(encoding='utf-8'), object_pairs_hook=unique_object)
-        if (not isinstance(data, dict) or set(data) != {'schema', 'redirects'} or
-                type(data['schema']) is not int or data['schema'] != 1 or
-                not isinstance(data['redirects'], list)):
+        if (not isinstance(data, dict) or type(data.get('schema')) is not int or
+                data['schema'] not in {1, 2} or
+                set(data) != ({'schema', 'redirects'} if data['schema'] == 1 else
+                              {'schema', 'redirects', 'fallbacks'}) or
+                not isinstance(data['redirects'], list) or
+                (data['schema'] == 2 and not isinstance(data['fallbacks'], list))):
             raise ValueError(f'invalid documentation migration schema: {owner}/{path}')
         for row in data['redirects']:
             if (not isinstance(row, dict) or not {'from', 'to'} <= set(row) or
@@ -188,16 +191,38 @@ def guide_migrations(roots):
                 raise ValueError(f'duplicate documentation migration: {start}')
             redirects[start] = end
 
+        for row in data.get('fallbacks', []):
+            if (not isinstance(row, dict) or not {'from_owner', 'from', 'to'} <= set(row) or
+                    set(row) - {'from_owner', 'from', 'to_owner', 'to'}):
+                raise ValueError(f'invalid documentation fallback entry: {owner}/{path}')
+            source_owner = row['from_owner']
+            target_owner = row.get('to_owner', source_owner)
+            if (not isinstance(source_owner, str) or source_owner not in roots or
+                    not isinstance(target_owner, str) or target_owner not in roots):
+                raise ValueError(f'unselected documentation fallback owner: {source_owner} -> {target_owner}')
+            start = migration_reference(row['from'], source_owner, roots)
+            end = migration_reference(row['to'], target_owner, roots)
+            if start in fallbacks:
+                raise ValueError(f'duplicate documentation fallback: {start}')
+            fallbacks[start] = end
+
+    for start in redirects.keys() & fallbacks.keys():
+        # The platform may carry the same move for an older owner tag that
+        # predates its declaration. Distinct destinations remain ambiguous.
+        if redirects[start] != fallbacks[start]:
+            raise ValueError('documentation fallback conflicts with a declared migration')
+
     # Declarations point to final selected guides, not a redirect-page graph.
     # Reject cyclic declarations even when a still-valid old path would win.
-    for start in redirects:
-        seen, current = set(), start
-        while current in redirects:
-            if current in seen:
-                raise ValueError(f'cyclic documentation migration: {start}')
-            seen.add(current)
-            current = redirects[current]
-    return redirects
+    for rules, kind in ((redirects, 'migration'), (fallbacks, 'fallback')):
+        for start in rules:
+            seen, current = set(), start
+            while current in rules:
+                if current in seen:
+                    raise ValueError(f'cyclic documentation {kind}: {start}')
+                seen.add(current)
+                current = rules[current]
+    return redirects, fallbacks
 
 
 def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel: Path | None = None):
@@ -224,7 +249,7 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
             if owner == 'vmlinux' and path.as_posix() in {'docs/vmlinux.md', 'docs/vmlinux_zh.md'}:
                 mapping['guest-runtime', path.as_posix()] = dest
 
-    redirects = guide_migrations(roots)
+    redirects, fallbacks = guide_migrations(roots)
     navigation = {}
 
     def selected_source(target):
@@ -253,6 +278,51 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
         if target is None:
             raise ValueError(f'documentation migration target is not selected: {start} -> {target_owner}/{target_path}')
         resolve_fragment(selected_source(target), fragment)
+
+    def reference_source(reference):
+        owner, path, fragment = reference
+        target = mapping.get((owner, path))
+        return selected_source(target) if target is not None else roots[owner] / path
+
+    def selected_reference_exists(reference):
+        source = reference_source(reference)
+        if not source.is_file():
+            return False
+        try:
+            resolve_fragment(source, reference[2])
+        except ValueError:
+            return False
+        return True
+
+    def moved_reference(rules, key, fragment):
+        result = rules.get((*key, unquote(fragment)))
+        if result is None and fragment:
+            page = rules.get((*key, ''))
+            if page is not None:
+                # A page move does not authorize dropping an unknown anchor.
+                result = (*page[:2], unquote(fragment))
+        return result
+
+    def resolve_fallback(reference):
+        seen = set()
+        while not selected_reference_exists(reference):
+            if reference in seen:
+                raise ValueError(f'cyclic documentation fallback: {reference}')
+            seen.add(reference)
+            following = moved_reference(fallbacks, reference[:2], reference[2])
+            if following is None:
+                source = reference_source(reference)
+                if source.is_file():
+                    resolve_fragment(source, reference[2])
+                raise ValueError(f'no selected documentation fallback endpoint: {reference}')
+            reference = following
+        return reference
+
+    # A compatibility chain must end in a real document in the selected sources,
+    # never a newer checkout or a synthesized contract. Unpackaged source pages
+    # retain the normal immutable source-URL behavior below.
+    for start in fallbacks:
+        resolve_fallback(start)
 
     def rewrite_url(raw: str, owner: str, path: Path, dest: Path) -> str:
         angle = raw.startswith('<') and raw.endswith('>')
@@ -302,18 +372,19 @@ def assemble(output: Path, roots: dict[str, Path], refs: dict[str, str], kernel:
         source = selected_source(target) if target is not None else original
         valid = (target is not None or original.exists()) and exact_fragment(source, fragment)
         if not valid:
-            migration = redirects.get((*key, unquote(fragment)))
-            if migration is None and fragment:
-                page = redirects.get((*key, ''))
-                if page is not None:
-                    # A page move does not authorize dropping an unknown anchor.
-                    migration = (*page[:2], unquote(fragment))
+            migration = moved_reference(redirects, key, fragment)
+            # A page redirect carries the original fragment. If that fragment
+            # moved too, only an explicitly declared fallback may repair it.
+            if migration is None or not selected_reference_exists(migration):
+                fallback = moved_reference(fallbacks, key, fragment)
+                if fallback is not None:
+                    migration = resolve_fallback(fallback)
             if migration is not None:
                 target_owner, migrated_path, fragment = migration
                 target_path = Path(migrated_path)
-                target = mapping[target_owner, migrated_path]
+                target = mapping.get((target_owner, migrated_path))
                 original = roots[target_owner] / target_path
-                source = selected_source(target)
+                source = selected_source(target) if target is not None else original
         if target is not None:
             fragment = resolve_fragment(source, fragment)
             result = urlunsplit(('', '', quote(os.path.relpath(target, dest.parent), safe='/._-'), url.query, fragment))

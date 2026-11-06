@@ -346,6 +346,23 @@ Legal material continues to use the existing LICENSE/NOTICE/COPYING conventions.
 An independently versioned unit uses `docs/<unit>.md` and its optional `_zh.md`
 peer from the unit's exact selected tag, including immutable older tags.
 
+<a id="resource-pool-availability"></a>
+#### Resource-pool version availability
+
+Resource-pool configuration and capacity-aware recovery were introduced by
+[Orchestrator #515](https://github.com/kuasar-sandbox/orchestrator/pull/515), commit
+`766732d787db79ecb18882e4157bc01b8404168d`. The reviewed Stable selection
+`v0.1.12` and Daily selection `v0.1.13-preview.20261106` do not contain that
+change or its resource-pool contract. Do not copy the newer `resource_pool`
+configuration into those versions. Use a component release containing the
+feature before enabling it, and follow the complete guide at the selected
+component version. A documentation move does not add runtime capabilities.
+
+Navigation uses the selected `node-resource.md#resource-pools` contract when
+present, or the selected older `resource-pools.md` contract when present. If
+neither exists, it leads to this version notice instead of presenting an older
+capacity-budget section as the new feature's contract.
+
 #### Versioned navigation migrations
 
 An owner may declare a small, explicit `release/guide-migrations.json` in its
@@ -377,6 +394,29 @@ for a selected target or matched migration fail assembly. A path-only migration
 does not discard an unknown fragment or redirect it to a README. Explicit URLs to
 historical revisions remain unchanged; the selected original prose, examples and
 legal contents are not replaced with current text.
+
+Schema `2` retains `redirects` and adds a `fallbacks` array for evidenced
+cross-version references. Each fallback has `from_owner`, `from`, `to`, and an
+optional `to_owner` (defaulting to `from_owner`). An original valid reference
+always wins, followed by a selected-owner redirect whose resulting fragment is
+valid. A redirect and
+fallback may share a source only when they name the identical destination; a
+different destination is rejected. If neither applies, an explicit fallback chain must reach an
+existing document and fragment in the selected source trees. A target outside
+the declared package guides stays a source URL pinned to that owner's selected
+revision; it is not copied from a newer checkout or manufactured in the package.
+Cycles, missing chain endpoints, and unknown or ambiguous fragments fail. A
+page-level fallback carries the requested fragment instead of silently replacing
+it with the fallback page's own fragment.
+
+These declarations preserve specific reviewed source combinations, not every
+historical version combination. For example, image-format preparation moved
+from Guest Runtime's `docs/flatten.md` to Accelerator's
+`docs/image-preparation.md`. A selected new Accelerator supplies its actual
+contract even with an older Guest Runtime. Selecting an old Accelerator together
+with a new Guest Runtime that no longer carries the old contract can leave both
+locations absent; assembly then fails with the missing endpoint. Select versions
+that retain the contract rather than redirecting that reference to a README.
 
 Keep migrations limited to evidenced navigation compatibility. Update and test
 them with the owner document move, including current sources, a separately
