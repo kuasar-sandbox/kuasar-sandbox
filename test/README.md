@@ -25,6 +25,16 @@ sudo python3 /tmp/kuasar-prepared/test/e2e/e2e run --workdir /tmp/kuasar-prepare
 
 `--suite` and `--include` form a union; `--exclude` removes full filenames. Unknown selectors and empty selections fail. `--all` includes credentialed `storage.obs.sh`; normal public CI explicitly excludes it. There are no owner, tag, capability or fixture-graph selectors. The Makefile wrapper requires `RELEASE_DIR`, a fresh `E2E_WORKDIR` and optional `E2E_ARGS`.
 
+For snapshot suites, artifact CI invokes the unchanged packaged runner once per
+selected case. It checks each result's prepared identity, timing and startup capability evidence,
+then combines the results for the original shard. Each invocation's private
+work, output, temporary files and template cache are removed before the next
+case, including after a failed case. This bounds retained fixture storage to
+one case instead of accumulating RAM observations and snapshots across a shard.
+It repeats input verification and image loading and does not share template
+preparation across snapshot CI cases. Other suites retain their single runner
+invocation and shared template cache; direct public runs remain unchanged.
+
 Each `run` invocation provides a fresh private directory for eligible helpers
 to reuse immutable template preparation within that invocation. The directory
 is outside prepared inputs and case-owned work, even with an explicit
