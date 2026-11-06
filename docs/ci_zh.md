@@ -79,23 +79,38 @@ sandboxer 库变更同样会重建 `node-ctl`，因为其管理和发布路径�
 
 ### 大型下载之前的文档、发布清单与工具脚本验收
 
-源码 PR 解析比较主仓和每个已准入 companion 精确 base、head 与 integration 提交的完整 Git 树。`docs` 档仅允许 `README{,_zh}.md`、`LICENSE_SCOPE{,_zh}.md`、`test/e2e/README{,_zh}.md`、`docs/` 和 `test/e2e/guides/` 内普通 `100644` Markdown；platform 另允许 `workbench/README{,_zh}.md`、`ci/runner/README{,_zh}.md` 和 `test/demo/DEMO{,_zh}.md`。`manifest` 档仅增加 platform 的 `releases/release.yaml` 与 `releases/daily-preview.yaml`；可组合上述白名单文档，并执行两类检查。任何候选混入产品源码、E2E/性能测试、运行配置、未知路径/仓库或非普通文件都保留 full。截断树与空差异也保留 full；缺失精确身份则失败。删除维护清单会使双文件检查失败，未变的 symlink 也不能作为另一份清单输入。
+源码 PR 解析比较主仓和每个已准入 companion 精确 base、head 与 integration 提交的完整 Git 树，同时检查 base→head 和 base→integration 的差异。分类独立于已发布版本基线，较旧发布基线中的无关变化不会把本次文档或源码测试修改扩成产品 E2E。
 
-六仓根目录的 `LICENSE_SCOPE{,_zh}.md` 及 orchestrator/runtime 固定 `scripts/release-notices/rootless-containers-proto/NOTICE` 人类归属说明属于文档；上游许可证载荷和其他任意 notice 路径仍保留完整 CI。这些文档与发布脚本一起修改时只走 tooling 通道，不单独触发产品 E2E。
+| 通道 | 允许的修改 | 必需检查 | 产品 build / prepare / E2E |
+| --- | --- | --- | --- |
+| `docs` | 六仓各目录的普通 Markdown，以及固定的人类归属 NOTICE | 修改文档及受影响的反向引用 | 跳过 |
+| `manifest` | platform 两份维护发布清单，可混入文档 | 既有发布计划与已发布输入验证 | 跳过 |
+| `tooling` | 既有 CI/发布工具与 workflow 语法白名单 | 精确 head 与 integration 上的改动 blob 解析 | 跳过 |
+| `source` | 已支持的单测/脚本测试、明确列出的测试夹具，以及文档选择/装配输入 | 私有 Workbench 内实际源码测试；按需实际文档交付检查 | 跳过 |
+| `full` | 产品代码、配置、依赖、真实 E2E 用例及运行库，或任何不能准入的输入 | 既有产品与源码验收 | 保留 |
 
-组件发行下载消费者与清理 Python 脚本、平台 E2E 组装器，以及 working-set 基准运行脚本和目录契约测试也使用 tooling 通道。产品用例、产品模块、构建输入与基准阈值仍不属于此脚本范围。
+文档范围包括根目录指导、贡献/安全说明、workflow 模板，以及源码、示例和构建工具旁的 Markdown。`fixtures`、`testdata` 下的 Markdown 作为测试输入，仅说明性的 `README{,_zh}.md` 除外。orchestrator/runtime 固定 rootless-containers NOTICE 仍属于人类归属说明，任意 notice 路径和上游许可证载荷不属于文档。文档必须是普通 `100644` blob。未知仓库、不安全路径、symlink、截断树和空差异不能获得轻量资格，缺失精确身份则失败。
 
-`tooling` 档增加 `ci/`、`release/`、`test/release/` 内的 Python/Shell 文件、`.github/` 内的 workflow/action YAML 与 action JavaScript，以及组件 `scripts/ci-*`、`scripts/release*`、`scripts/test-release*` 入口（包括 Go 发布校验器）。明确的共享 helper/publisher 入口名单见 `ci/integration/tooling_lane.py`，还包括 platform 两个无扩展名 runner shell 脚本与 `ci/integration/dependency-cutovers.json`。platform E2E 运行器（`test/e2e/e2e`、`test/e2e/lib/` 下的 Python 文件和顶层 `test/e2e/test_*.py`）也走此档；产品 E2E 用例、owner 工作负载及非 Python 运行器输入仍走 full。脚本可为普通 `100644` 或可执行 `100755` blob。产品文件、`Makefile`、`workbench/` 实现、`release/inputs/` 构建声明和 `ci/integration/runner-capabilities.json` 仍走 full；主候选或任一 companion 混入产品改动时，full 优先。
+`source` 的独立 Python/Shell 测试入口和明确夹具范围由 `ci/integration/source_lane.py` 维护，包括顶层 `test/e2e/test_*.py` 契约测试，以及不会进入交付运行输入的 `test_*` 库测试。修改的脚本实际执行入口或发现到的 unittest；未登记的新测试不会仅凭语法通过，在册脚本缺失也不能伪装成删除。platform CI/发布契约始终执行；组件测试修改选择该组件的源码 gate，并补齐 Go 测试覆盖。仅改文档的 companion 不会选择无关 Go gate。只有性能测试输入发生变化时才执行相应特权契约。
 
-工具脚本检查分别读取精确 head 与 merge 的改动 blob：Python 只编译为随即丢弃的内存对象，Shell/JavaScript/Go 仅解析语法，workflow/action YAML 使用安全解析器并检查基本结构。可信检查器不 import 或运行候选工具、不安装候选依赖、不调用候选 action，也不构建产品。切换数据复用可信的完整结构解析器，不在本次准入依赖或查询发布；只有后续产品运行从可信 base 读取它时才可能生效。纯脚本变更必须运行对应单测/契约检查，并记录结果供检视。产品集成由下一次适用的产品构建/E2E 检查；脚本变更本身不单独派发产品 E2E。可混入已允许的文档和发布清单，其既有检查保留。所有轻量档仍运行 finalizer，`exact-assets` 发布验收保持完整。
+五个组件根模块的普通 Go 单测，只有当前 Linux/amd64 源码环境能够实际选择时才走 `source`。不支持的架构后缀/构建约束、Go 忽略的目录、嵌套模块及执行真实产品验收的测试保留完整流程，例如 `workbench/test-release.py`。需要参数的源码测试 helper 通过既有上层 suite 创建并传入真实夹具。普通产品 `.go` 文件即使看起来只改注释，仍作为产品输入。
 
-分类政策和检查代码来自 platform 可信基线；存在 platform companion 时使用其 base。候选不能将自身加入白名单。基线尚无新清单规则时，清单变更仍走 full；首次工具分类策略实现 PR 仍按旧可信 base 走 full，因此可在启用前得到验证。分类先于基线资产、源码归档与构建环境下载；可信轻量检查器仅解析候选文件，不执行它们。
+guide 输入声明、迁移元数据和明确列出的文档装配/打包/消费实现也走 `source`。可信分类使用实际解析器验证声明；私有源码 gate 再使用六个固定源码版本，真实装配并归档选中文档，检查导航和代码围栏保真，并将提取的中英文安装命令与源文件逐字比较。该检查不执行安装命令，也不启动产品 E2E。
+
+真实 `test/e2e/cases/` 脚本、运行库及其 requirements、harness 入口、产品 helper 输入和 demo 运行输入优先于类似测试的命名或宽泛 tooling 白名单，保持 `full`。产品文件、`Makefile`、Workbench 实现、构建输入声明和 runner capabilities 同样保留 full。主仓或任一 companion 混入上述修改时，full 优先。source scope 不能承担依赖切换验收；`exact-assets` 发布验收始终保留完整产品检查。
+
+其余 `tooling` 白名单由 `ci/integration/tooling_lane.py` 维护，包括 CI/发布 Python 和 Shell、workflow/action YAML 与 action JavaScript、组件发布工具，以及明确共享 helper/publisher 路径。脚本可为 `100644` 或 `100755`。Python 编译后丢弃代码对象；Shell/JavaScript/Go 仅解析语法；YAML 使用安全解析器并检查基本结构。宿主检查不执行候选代码。tooling 语法通过不代表单测已运行；识别到的测试修改进入 `source`，其他工具修改仍需相应单测或契约结果供检视。切换数据使用可信结构解析器，只有后续产品运行读取可信 base 时才能生效。
+
+分类政策和检查代码来自 platform 可信基线；存在 platform companion 时使用其 base。候选不能将自身加入白名单，首次实现 PR 按旧可信 base 验证，新政策在正常验收后生效。分类先于基线资产、源码归档与构建环境下载。source 通道保留固定执行器/源码传输及隔离 Workbench 来执行真实测试；计划绑定主仓和 companion 的精确 integration SHA、角色及 head/merge 差异并集，不能替换为旧发布版本的测试。
 
 共享 `ci/check_docs.py` 检查 UTF-8、本地链接和锚点、双语互链与英文默认，已有英文单语文档仍合法。检查修改文档及引用已重命名、删除或修改目标的未变文档，不将无关文档债务扩入本次检查。外部访问和翻译完整性仍需人工验收。
 
 清单检查在精确 head 与 merge 上使用现有发布解析器读取两份维护清单，检查字段、unit tag、Stable/Preview 版本、前驱顺序、双文件一致性和维护线归属。复用现有 aggregate reader 验证声明的已发布前驱及已经发布的当前选择。历史 AMD64-only 前驱保留原 x86 验证范围，该比较引用不能作为双架构基线使用；已经发布的当前选择及新声明的 Workbench 发布仍要求完整架构和资产。已发布组件使用现有精确 tag/Release/双架构资产检查。已发布 Tag 作为成品复用，不审核正文中的源码或依赖 marker；新构建仍固定本次依赖，并进行最终组合验收。新组件 tag、等待发布的 tag 或 draft 明确记录为待满足发布前提，并保留发布源分支与所选依赖。复用尚未发布的依赖时，记录待执行的链接输入核验。后续发布 coordinator 仍负责冻结未来源码提交并满足这些前提。这是发布计划验证，不表示未来组合已经通过 E2E，也不会在此触发组件发布。
 
-原 finalizer 仅在成功轻量证据匹配当前精确源码集、可信政策、run 和 attempt，且重新核对当前 PR/base/head/companion 准入后，接受有意跳过的重任务。缺失、取消、失败、空或过期证据不能通过。证据保留清单计划、已发布身份与待满足前提。aggregate 的 `exact-assets` 始终保留完整 E2E 和 Workbench 验收。宣称收益前须记录真实 `docs`/`manifest`/`tooling`/`full` Actions 时间。回退恢复完整调度，不放宽准入或必需检查。
+原 finalizer 仅在成功轻量证据匹配当前精确源码集、可信政策、run 和 attempt，且重新核对当前 PR/base/head/companion 准入后，接受有意跳过的重任务。source 通道还必须提供匹配精确计划、命令、测试版本和本轮成功 Actions 生产任务的证据；有意跳过产品任务不能替代失败的源码测试。缺失、取消、失败、空或过期证据不能通过。证据保留清单计划、已发布身份与待满足前提。aggregate 的 `exact-assets` 始终保留完整 E2E 和 Workbench 验收。宣称收益前须记录真实 `docs`/`manifest`/`tooling`/`source`/`full` Actions 时间。回退恢复完整调度，不放宽准入或必需检查。
+
+`source` 运行失败后使用 **Re-run all jobs**，为新的 attempt 重新生成分类和计划证据；复用旧 attempt 的分类证据会被明确拒绝。
+
 
 
 Go EROFS runtime 的 bundle 只需包含 init、envd 和 flatten-ctl，新的聚合制品

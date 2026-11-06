@@ -15,6 +15,7 @@ from urllib.parse import unquote, urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import check_docs
 import tooling_lane
+import source_lane
 
 REPOSITORIES = {'kuasar-sandbox/' + name for name in
                 ('accelerator', 'connector', 'guest-runtime', 'kuasar-sandbox', 'orchestrator', 'sandboxer')}
@@ -57,13 +58,16 @@ def request():
 
 
 def allowed(repository, path):
-    if repository not in REPOSITORIES:
+    if repository not in REPOSITORIES or not source_lane.safe_path(path):
         return False
     parts = PurePosixPath(path).parts
     if not parts or any(p in ('.', '..', '.git') for p in parts) or path.startswith('/'):
         return False
-    return path in COMMON or path in RELEASE_NOTICES.get(repository, set()) or (repository == 'kuasar-sandbox/kuasar-sandbox' and path in PLATFORM) or (
-        path.endswith('.md') and (path.startswith('docs/') or path.startswith('test/e2e/guides/')))
+    # Documentation is also maintained at repository roots and next to source,
+    # examples and build tools. Test input Markdown remains a test fixture.
+    document = path.endswith('.md') and (not set(parts) & {'fixtures', 'testdata'} or
+                                         parts[-1] in {'README.md', 'README_zh.md'})
+    return path in RELEASE_NOTICES.get(repository, set()) or document
 
 
 def manifest(repository, path):
@@ -71,11 +75,14 @@ def manifest(repository, path):
 
 
 def light_allowed(repository, path):
-    return allowed(repository, path) or manifest(repository, path) or tooling(repository, path)
+    return not source_lane.e2e_input(repository, path) and (
+        allowed(repository, path) or manifest(repository, path) or tooling(repository, path)
+        or source_lane.allowed(repository, path))
 
 
 def tooling(repository, path):
-    return repository in REPOSITORIES and tooling_lane.allowed(repository, path)
+    return (repository in REPOSITORIES and tooling_lane.allowed(repository, path)
+            and not source_lane.fixture(repository, path))
 
 
 def tree(repository, commit):
@@ -109,7 +116,8 @@ def classify(repository, before, after):
         # New/deleted directories are accounted for by all their leaf entries.
         if (old is None and new['type'] == 'tree') or (new is None and old['type'] == 'tree'):
             continue
-        modes = {'100644', '100755'} if tooling(repository, path) else {'100644'}
+        modes = {'100644', '100755'} if tooling(repository, path) or (
+            source_lane.allowed(repository, path) and not source_lane.metadata(repository, path)) else {'100644'}
         if not light_allowed(repository, path) or any(row and (row['type'] != 'blob' or row['mode'] not in modes)
                                                for row in (old, new)):
             return None
@@ -199,6 +207,9 @@ def qualify(records, policy_sha):
         head_changed = classify(repository, before, head)
         if head['truncated'] or head_changed is None:
             changed = None
+        if changed is not None and (not source_lane.supported(repository, head, head_changed, blob) or
+                                    not source_lane.supported(repository, after, changed, blob)):
+            changed = None
         light = light and changed is not None
         result['repositories'].append({'repository': repository, 'base_tree': before['sha'],
                                        'candidate_tree': after['sha'], 'head_tree': head['sha'], 'changed': changed,
@@ -211,7 +222,15 @@ def qualify(records, policy_sha):
                         for path in row['changed'] + row['head_changed'])
     has_tooling = any(tooling(row['repository'], path) for row in result['repositories']
                       for path in row['changed'] + row['head_changed'])
-    result['lane'] = 'tooling' if has_tooling else 'manifest' if has_manifests else 'docs'
+    has_source = any(source_lane.allowed(row['repository'], path) for row in result['repositories']
+                     for path in row['changed'] + row['head_changed'])
+    if has_source and any(path == tooling_lane.CUTOVER for row in result['repositories']
+                          for path in row['changed'] + row['head_changed']):
+        # A dependency admission can select new runtime inputs. Mixing it with
+        # a source-test change must not suppress the product qualification.
+        result['conclusion'] = 'success'
+        return result
+    result['lane'] = 'source' if has_source else 'tooling' if has_tooling else 'manifest' if has_manifests else 'docs'
     references = None
     if has_manifests:
         import manifest_lane
@@ -222,10 +241,18 @@ def qualify(records, policy_sha):
             # Parse the proposed head and actual merge independently. Trusted
             # parsers read exact blobs and never execute candidate tooling.
             row['tooling'] = {
-                'head': tooling_lane.check_tree(row['repository'], head, row['head_changed'], blob),
-                'candidate': tooling_lane.check_tree(row['repository'], candidate, row['changed'], blob),
+                'head': tooling_lane.check_tree(row['repository'], head,
+                          [p for p in row['head_changed'] if tooling(row['repository'], p)], blob),
+                'candidate': tooling_lane.check_tree(row['repository'], candidate,
+                               [p for p in row['changed'] if tooling(row['repository'], p)], blob),
             }
             row['findings'].extend(issue for checked in row['tooling'].values() for issue in checked['findings'])
+        if has_source:
+            row['source'] = {
+                'head': source_lane.check_tree(row['repository'], head, row['head_changed'], blob),
+                'candidate': source_lane.check_tree(row['repository'], candidate, row['changed'], blob),
+            }
+            row['findings'].extend(issue for checked in row['source'].values() for issue in checked['findings'])
         if has_manifests and row['repository'] == 'kuasar-sandbox/kuasar-sandbox':
             # Both proposed head and actual merge must satisfy the maintained
             # pair. This also rejects deletion or an unchanged symlink sibling.
@@ -236,7 +263,7 @@ def qualify(records, policy_sha):
 
 
 def verify(result, records, policy_sha):
-    require(result.get('schema') == 1 and result.get('lane') in ('docs', 'manifest', 'tooling') and result.get('conclusion') == 'success',
+    require(result.get('schema') == 1 and result.get('lane') in ('docs', 'manifest', 'tooling', 'source') and result.get('conclusion') == 'success',
             'missing successful light qualification evidence')
     require(result.get('sources') == records and result.get('policy_sha') == sha(policy_sha) and
             result.get('run_id') == os.environ['GITHUB_RUN_ID'] and
@@ -253,7 +280,9 @@ def verify(result, records, policy_sha):
                         for path in row['changed'] + row.get('head_changed', []))
     has_tooling = any(tooling(row['repository'], path) for row in rows
                       for path in row['changed'] + row.get('head_changed', []))
-    expected_lane = 'tooling' if has_tooling else 'manifest' if has_manifests else 'docs'
+    has_source = any(source_lane.allowed(row['repository'], path) for row in rows
+                     for path in row['changed'] + row.get('head_changed', []))
+    expected_lane = 'source' if has_source else 'tooling' if has_tooling else 'manifest' if has_manifests else 'docs'
     require(result['lane'] == expected_lane, 'light lane does not match changed paths')
     if has_tooling:
         for row in rows:
@@ -261,8 +290,18 @@ def verify(result, records, policy_sha):
                     all(light_allowed(row['repository'], p) for p in row['head_changed']), 'invalid tooling head changes')
             require(isinstance(row.get('tooling'), dict) and set(row['tooling']) == {'head', 'candidate'},
                     'missing tooling head/merge evidence')
-            tooling_lane.verify(row['tooling']['head'], row['head_changed'], row['repository'])
-            tooling_lane.verify(row['tooling']['candidate'], row['changed'], row['repository'])
+            tooling_lane.verify(row['tooling']['head'],
+                                [p for p in row['head_changed'] if tooling(row['repository'], p)], row['repository'])
+            tooling_lane.verify(row['tooling']['candidate'],
+                                [p for p in row['changed'] if tooling(row['repository'], p)], row['repository'])
+    if has_source:
+        for row in rows:
+            require(isinstance(row.get('head_changed'), list) and
+                    all(light_allowed(row['repository'], p) for p in row['head_changed']), 'invalid source head changes')
+            require(isinstance(row.get('source'), dict) and set(row['source']) == {'head', 'candidate'},
+                    'missing source head/merge classification')
+            source_lane.verify(row['source']['head'], row['head_changed'], row['repository'])
+            source_lane.verify(row['source']['candidate'], row['changed'], row['repository'])
     if has_manifests:
         row = next(row for row in rows if row['repository'] == 'kuasar-sandbox/kuasar-sandbox')
         require(isinstance(row.get('head_changed'), list) and

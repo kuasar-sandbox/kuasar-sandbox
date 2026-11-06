@@ -59,54 +59,81 @@ Product-impact selection also adds consumer tests: accelerator/runtime changes t
 ### Documentation, manifest and tooling qualification before downloads
 
 Source PR resolution compares the complete exact base, head and integration Git
-trees for the primary and every admitted companion. The `docs` lane permits only
-ordinary `100644` Markdown in `README{,_zh}.md`, `LICENSE_SCOPE{,_zh}.md`, `test/e2e/README{,_zh}.md`,
-`docs/` and `test/e2e/guides/`. Platform also allows
-`workbench/README{,_zh}.md`, `ci/runner/README{,_zh}.md` and
-`test/demo/DEMO{,_zh}.md`. The `manifest` lane adds only platform's
-`releases/release.yaml` and `releases/daily-preview.yaml`; it may include the same
-allowed documentation and runs both checks. Product source, E2E/performance tests,
-runtime configuration, unknown paths/repositories and nonordinary files retain
-full CI. Truncated trees and empty changes also retain
-full CI. Missing exact identities fail. Deleting a maintained manifest fails its
-pair validation; a symlink sibling cannot supply a manifest.
+trees for the primary and every admitted companion. Classification uses both
+base-to-head and base-to-integration changes, independently of the published
+release baseline. An unrelated older release delta cannot turn a documentation
+or source-test change into a product E2E request.
 
-Component release consumers and cleanup Python scripts, the platform E2E assembler, and the working-set benchmark runner and directory contract test also use this tooling lane. Product cases, product modules, build inputs and benchmark thresholds remain outside this script-only scope. Human attribution in the exact orchestrator/runtime rootless-containers NOTICE path and root LICENSE_SCOPE{,_zh}.md files in all six repositories counts as documentation; upstream license payloads and arbitrary notice paths retain full CI.
+| Lane | Admitted changes | Required checks | Product build / prepare / E2E |
+| --- | --- | --- | --- |
+| `docs` | Regular Markdown throughout the six repositories, plus the exact human attribution NOTICE paths | Changed documents and affected reverse references | Skipped |
+| `manifest` | The two maintained platform release manifests, optionally with documentation | Existing release-plan and published-input validation | Skipped |
+| `tooling` | The maintained CI/release syntax-only script and workflow allowlist | Parse changed blobs at both head and integration | Skipped |
+| `source` | Supported unit/script tests, their explicit fixtures, and documentation selection/assembly inputs | Real source tests in the private Workbench; actual documentation delivery checks when selected | Skipped |
+| `full` | Product code/configuration/dependencies, real E2E cases and runtime libraries, or any unqualified input | Existing product and source acceptance | Retained |
 
-The `tooling` lane adds CI/release Python and shell files in `ci/`, `release/`
-and `test/release/`, workflow/action YAML and action JavaScript under `.github/`,
-and the component `scripts/ci-*`, `scripts/release*` and `scripts/test-release*`
-entries (including Go release validators). The explicit shared helper/publisher
-entry list is in `ci/integration/tooling_lane.py`; it also includes the platform's
-two extensionless runner shell scripts and `ci/integration/dependency-cutovers.json`.
-The platform E2E harness (`test/e2e/e2e`, Python files under `test/e2e/lib/`,
-and top-level `test/e2e/test_*.py`) also uses this lane. Product E2E cases,
-owner workloads and non-Python harness inputs still require full CI.
-Scripts may be ordinary `100644` or executable `100755` blobs. Product files,
-`Makefile`, `workbench/` implementation, `release/inputs/` build declarations and
-`ci/integration/runner-capabilities.json` remain full. Any product change in the
-primary or a companion overrides every light classification.
+Documentation includes root guidance, contribution/security instructions, workflow
+templates, and Markdown beside source, examples and build tools. Markdown under
+`fixtures` or `testdata` is test input, except explanatory `README{,_zh}.md`.
+The exact orchestrator/runtime rootless-containers NOTICE files remain human
+attribution; arbitrary notice paths and upstream license payloads are not docs.
+Documents must be ordinary `100644` blobs. Unknown repositories, unsafe paths,
+symlinks, truncated trees and empty changes cannot qualify for a light lane.
+Missing exact identities fail.
 
-Tooling qualification checks syntax of changed files at both exact head and
-merge: Python compiles only to a discarded memory object, shell/JavaScript/Go
-use parse-only commands, and workflow/action YAML uses a safe parser and basic
-structure checks. It never imports or runs candidate tooling, installs candidate
-dependencies, invokes candidate actions or builds products. Cutover data reuses
-the trusted complete schema parser without admitting dependencies or querying
-publications. Changing that data cannot activate a dependency until a subsequent
-product run reads it from the trusted base. Script-only changes must run their corresponding unit/contract tests and record
-the results for review. Product integration is exercised by the next applicable
-product build/E2E; script changes alone do not schedule a product E2E run.
-Tooling may include allowed docs and manifests; their existing checks still run.
-No light lane skips the finalizer, and `exact-assets` release acceptance stays full.
+`source` covers the standalone Python/Shell test entry points and explicitly
+listed test fixtures in `ci/integration/source_lane.py`. This includes top-level
+`test/e2e/test_*.py` contracts and `test_*` library tests excluded from delivered
+runtime inputs. Changed scripts execute their real entry point or discovered
+unittest suite; an unregistered new test is not accepted on syntax alone, and a
+missing tracked script is not treated as a deletion. Platform CI/release contracts
+always run. Changed component tests select their component source gates, including
+Go test coverage; documentation-only companions do not select unrelated Go gates.
+Privileged performance contracts run only for affected performance test inputs.
+
+Portable Go tests in the five component root modules may use `source` when the
+Linux/amd64 source environment actually selects them. Unsupported architecture
+suffixes or build constraints, ignored Go directories, nested modules and
+tests that exercise real product acceptance retain full qualification, such as
+`workbench/test-release.py`. Parameterized source-test helpers use their maintained
+parent suite to construct and pass the required fixtures. Ordinary product
+`.go` files remain product inputs even when the edit appears to be a comment.
+
+Guide input declarations, migration metadata and the explicit documentation
+assembler/package/consumer implementations also use `source`. Trusted classification
+checks the declarations with the real parsers. The private source gate then uses
+the six fixed source revisions to assemble and archive the selected documentation,
+check navigation and fenced-code preservation, and compare the extracted English
+and Chinese installation commands with their source bytes. It does not execute
+installation commands or start product E2E.
+
+Real `test/e2e/cases/` scripts, runtime libraries and their requirements, harness
+entry points, product helper inputs and demo runtime inputs take precedence over
+test-like names or the broad tooling allowlist and retain `full`. Product files,
+`Makefile`, Workbench implementation, build input declarations and runner
+capabilities also remain full. Any such change in the primary or a companion
+overrides the lighter lanes. A source scope cannot qualify a dependency cutover.
+`exact-assets` release acceptance always retains its complete product checks.
+
+The remaining `tooling` allowlist is maintained in `ci/integration/tooling_lane.py`.
+It includes CI/release Python and Shell, workflow/action YAML and action JavaScript,
+component release tooling and the explicit shared helper/publisher paths. Scripts
+may be `100644` or `100755`. Python compilation discards its code object;
+Shell/JavaScript/Go use parse-only commands; YAML uses a safe parser and basic
+structure checks. These host-side checks never execute candidate code. Tooling
+syntax acceptance is not evidence that unit tests ran. Recognized test changes
+use the `source` gate; other tooling changes still need their relevant unit or
+contract results for review. Cutover data uses the trusted schema parser and can
+only take effect in a subsequent product run reading the trusted base.
 
 Policy and checking code come from the platform's trusted baseline, including
 the platform companion's base when present. A candidate cannot add itself to the
-allowlist. A baseline without the new manifest policy keeps manifest changes on
-full CI. The first tooling-policy implementation PR retains full CI under its
-older trusted base, so the change can be tested before activation. Classification
-precedes baseline assets, source archives and build environments. The trusted light
-checkers parse candidate files without executing them.
+allowlist. The first implementation PR is checked under its older trusted base;
+the new policy only applies after normal acceptance. Classification precedes
+baseline assets, source archives and build environments. The source lane retains
+fixed executor/source transport and the isolated Workbench for real tests.
+Its plan binds the primary and companion integration SHAs, roles and complete
+head/merge change union; it cannot substitute older release tests.
 
 The shared `ci/check_docs.py` rules check UTF-8, local links and anchors,
 reciprocal pairs and English defaults. English-only documents remain valid.
@@ -132,12 +159,20 @@ that a future tuple has passed E2E; no component publication is dispatched here.
 
 The existing finalizer accepts deliberate heavy-job skips only after successful
 light evidence matches this exact source set, trusted policy, run and attempt,
-and current PR/base/head/companion admission is rechecked. Missing, cancelled,
+and current PR/base/head/companion admission is rechecked. The source lane also
+requires its exact plan, commands, test revisions and current successful Actions
+producer evidence; its deliberate product skips cannot replace a failed source
+job. Missing, cancelled,
 failed, empty or stale evidence cannot pass. Evidence retains the manifest plans,
 published identities and pending prerequisites. Aggregate release `exact-assets`
 always retains its complete E2E and Workbench acceptance. Record actual
-`docs`/`manifest`/`tooling`/`full` Actions timings before claiming savings.
+`docs`/`manifest`/`tooling`/`source`/`full` Actions timings before claiming savings.
 Rollback restores full scheduling without relaxing admission or required checks.
+
+For a failed `source` run, use **Re-run all jobs** so classification and plan
+evidence are regenerated for the new attempt. Reusing a previous attempt's
+classification is deliberately rejected.
+
 
 
 The Go EROFS runtime requires only init, envd and flatten-ctl inside its bundle.
