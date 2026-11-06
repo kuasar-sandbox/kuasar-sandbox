@@ -27,8 +27,13 @@ validate_archive() {
     /^\// { exit 1 }
     { path=$0; sub(/^\.\//, "", path); if (path ~ /(^|\/)\.\.($|\/)/) exit 1 }
   ' "$listing" || release_fail "platform archive contains an unsafe path"
-  grep -Fx "./$guide/kuasar-sandbox.md" "$listing" >/dev/null \
-    || release_fail "platform archive is missing $guide/kuasar-sandbox.md"
+  if [ "$contract" = workbench-v1 ]; then
+    grep -Fx -e './guide/architecture.md' -e './guide/kuasar-sandbox.md' "$listing" >/dev/null \
+      || release_fail 'platform archive is missing guide/architecture.md or guide/kuasar-sandbox.md'
+  else
+    grep -Fx "./$guide/kuasar-sandbox.md" "$listing" >/dev/null \
+      || release_fail "platform archive is missing $guide/kuasar-sandbox.md"
+  fi
   grep -Fx './test/e2e/e2e' "$listing" >/dev/null \
     || release_fail "platform archive is missing test/e2e/e2e"
   grep -Fx './test/e2e/lib/common.sh' "$listing" >/dev/null \

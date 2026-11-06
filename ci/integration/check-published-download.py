@@ -34,9 +34,11 @@ def platform_asset(release, version):
 
 
 def guide_script(archive, language):
-    path = 'guide/download' + ('_zh' if language == 'zh' else '') + '.md'
+    suffix = '_zh' if language == 'zh' else ''
+    paths = {prefix + f'guide/{name}{suffix}.md'
+             for name in ('installation', 'download') for prefix in ('', './')}
     with tarfile.open(archive, 'r:gz') as stream:
-        matches = [m for m in stream.getmembers() if m.name in (path, './' + path)]
+        matches = [m for m in stream.getmembers() if m.name in paths]
         if len(matches) != 1:
             raise ValueError('expected one bundled download guide')
         member = matches[0]
