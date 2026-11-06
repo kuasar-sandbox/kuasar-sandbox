@@ -338,3 +338,5 @@ def assemble(output, roots, refs, kernel=None):
 
 if __name__ == '__main__':
     unittest.main()
+
+# CI route verification: exercise this source-test entry without product E2E.
