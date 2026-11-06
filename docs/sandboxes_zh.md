@@ -94,9 +94,19 @@ state = control("GET", instance_path)
 print(state["sandboxID"], state["state"])
 ```
 
-租户范围的列表使用 `GET /v2/sandboxes`，按生命周期规范指定 state 过滤并处理
-`x-next-token` 分页。默认列表不包含部分过渡和终止状态，诊断时应显式过滤。
-资源、流量及 usage stats 是只读观测，不能证明应用就绪；其可用性和历史覆盖由
+列表行为取决于访问入口：
+
+- **单节点 Conductor：** `GET /v2/sandboxes` 按租户隔离，支持生命周期规范中的
+  `state` 过滤、`limit` 和 `nextToken` 参数，下一页令牌在 `x-next-token` 中返回。
+  默认列表不包含部分过渡和终止状态，诊断时应显式过滤。
+- **集群 Router：** 相同集合路径返回当前 Group 在 Registry 中的
+  `ready`、`pausing` 和 `paused` 路由投影，不转发节点的
+  `state`/`limit`/`nextToken` 参数，也不提供相同分页契约。
+  这些路由状态不是节点的完整生命周期视图。检查已知实例时，使用上面的 ID Get helper，
+  携带保存的 Group/route key。详见[集群控制契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#router-control-plane)。
+
+默认列表中没有某个实例，不代表它已经被删除。资源、流量及 usage stats 是只读观测，
+不能证明应用就绪；其可用性和历史覆盖由
 [观测规范](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md)定义。
 
 ### 暂停与恢复选择
