@@ -1,34 +1,34 @@
 version: release-v0.1.13
 delivery: workbench-v1
 previous_version: release-v0.1.12
-preview_version: preview.20261105
+preview_version: preview.20261106
 components:
-  accelerator: v0.1.11
+  accelerator: v0.1.12-preview.20261106
   connector: v0.1.7
-  sandboxer: v0.1.13
-  orchestrator: v0.1.12
-  runtime: runtime-v0.1.12
+  sandboxer: v0.1.14-preview.20261106
+  orchestrator: v0.1.13-preview.20261106
+  runtime: runtime-v0.1.13-preview.20261106
   vmlinux: vmlinux-v0.1.6
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.1.13-preview.20261105
+    # Kuasar Sandbox release-v0.1.13-preview.20261106
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
     Previous aggregate selection: `release-v0.1.12`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261105/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261106/releases/daily-preview.yaml).
 
     ## Component versions
 
     | Release unit | Version |
     |---|---|
-    | `accelerator` | `v0.1.11` |
+    | `accelerator` | `v0.1.12-preview.20261106` |
     | `connector` | `v0.1.7` |
-    | `sandboxer` | `v0.1.13` |
-    | `orchestrator` | `v0.1.12` |
-    | `runtime` | `runtime-v0.1.12` |
+    | `sandboxer` | `v0.1.14-preview.20261106` |
+    | `orchestrator` | `v0.1.13-preview.20261106` |
+    | `runtime` | `runtime-v0.1.13-preview.20261106` |
     | `vmlinux` | `vmlinux-v0.1.6` |
 
     Six release units from five independently versioned repositories; `guest-runtime` supplies both `runtime` and `vmlinux`.
@@ -37,7 +37,11 @@ notes:
 
     ### accelerator
 
-    Selected version unchanged: `v0.1.11`.
+    Selected version: `v0.1.11` → `v0.1.12-preview.20261106`.
+
+    - fix(flatten): align root layer entries with containerd and Moby ([#222](https://github.com/kuasar-sandbox/accelerator/pull/222), [commit cd051bc9f3c1](https://github.com/kuasar-sandbox/accelerator/commit/cd051bc9f3c1efa0f3a2169eac6ad1cbb153d5d9)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/b6ff5d46cd63bb6afb96bc491e79cc01e6ab4087...cd051bc9f3c1efa0f3a2169eac6ad1cbb153d5d9)
 
     ### connector
 
@@ -45,15 +49,29 @@ notes:
 
     ### sandboxer
 
-    Selected version unchanged: `v0.1.13`.
+    Selected version: `v0.1.13` → `v0.1.14-preview.20261106`.
+
+    The version changed without additional repository commits.
+
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/65c6afb7d59ba7a3115fbb8a7f07cee9bbd29e10...65c6afb7d59ba7a3115fbb8a7f07cee9bbd29e10)
 
     ### orchestrator
 
-    Selected version unchanged: `v0.1.12`.
+    Selected version: `v0.1.12` → `v0.1.13-preview.20261106`.
+
+    - test(proxy): wait for candidate shutdown journal visibility ([#508](https://github.com/kuasar-sandbox/orchestrator/pull/508), [commit c62927210da7](https://github.com/kuasar-sandbox/orchestrator/commit/c62927210da708ae449b395b77c761a5ff84264c)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/2aafb16ddf4d2f0e3fe0e78425a328d8659508ca...c62927210da708ae449b395b77c761a5ff84264c)
 
     ### runtime
 
-    Selected version unchanged: `runtime-v0.1.12`.
+    Selected version: `runtime-v0.1.12` → `runtime-v0.1.13-preview.20261106`.
+
+    The version changed without additional repository commits.
+
+    The following repository history also includes shared guest-runtime and kernel changes; it is not limited to runtime-specific source changes.
+
+    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/f415d584b464f76426449f70534affbbf0726bb6...f415d584b464f76426449f70534affbbf0726bb6)
 
     ### vmlinux
 
@@ -65,7 +83,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261105/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261105/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261106/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261106/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
