@@ -27,18 +27,21 @@ def tree(entries=None, truncated=False):
 
 
 class DocsLaneTests(unittest.TestCase):
-    def test_all_six_repositories_and_explicit_whitelist(self):
+    def test_all_six_repositories_and_documentation_locations(self):
         for repo in subject.REPOSITORIES:
             for path in ('README.md', 'README_zh.md', 'test/e2e/README.md', 'test/e2e/README_zh.md',
-                         'docs/topic.md', 'docs/nested/topic_zh.md', 'test/e2e/guides/topic.md'):
+                         'docs/topic.md', 'docs/nested/topic_zh.md', 'test/e2e/guides/topic.md',
+                         'CONTRIBUTING.md', 'SECURITY_zh.md', 'AGENTS.md', 'notes.md', 'test/README.md',
+                         '.github/PULL_REQUEST_TEMPLATE.md', 'native-deps/README.md'):
                 with self.subTest(repo=repo, path=path):
                     self.assertEqual(subject.classify(repo, tree(), tree({path: entry()})), [path])
             for path in subject.PLATFORM:
-                self.assertEqual(subject.allowed(repo, path), repo == REPO)
+                self.assertTrue(subject.allowed(repo, path))
 
     def test_mixed_product_unknown_modes_and_links_fall_back(self):
         for path in ('src/code.go', 'docs/example.sh', 'docs/image.svg', 'Makefile',
-                     'release/inputs/bin-inputs.yaml', 'ci/integration/runner-capabilities.json', 'notes.md', 'test/README.md',
+                     'release/inputs/bin-inputs.yaml', 'ci/integration/runner-capabilities.json',
+                     'pkg/testdata/input.md', 'test/fixtures/expected.md',
                      'docs/topic.MD', '../docs/topic.md'):
             with self.subTest(path=path):
                 self.assertIsNone(subject.classify(REPO, tree(), tree({'README.md': entry(), path: entry()})))

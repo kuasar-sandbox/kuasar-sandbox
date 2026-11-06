@@ -51,7 +51,8 @@ class ClassificationTests(unittest.TestCase):
         self.assertIsNone(docs_lane.classify('kuasar-sandbox/connector', tree(),
                                             tree({subject.CUTOVER: entry()})))
         for path in subject.PLATFORM_SHELLS:
-            self.assertEqual(docs_lane.classify(REPO, tree(), tree({path: entry(mode='100755')})), [path])
+            expected = None if path == 'test/e2e/assemble.sh' else [path]
+            self.assertEqual(docs_lane.classify(REPO, tree(), tree({path: entry(mode='100755')})), expected)
             self.assertIsNone(docs_lane.classify('kuasar-sandbox/connector', tree(), tree({path: entry()})))
 
     def test_packaged_human_attribution_and_license_scope_are_documentation(self):
@@ -67,9 +68,8 @@ class ClassificationTests(unittest.TestCase):
                 self.assertIsNone(docs_lane.classify(repository, tree(), tree({**changes, product: entry()})))
         self.assertIsNone(docs_lane.classify('kuasar-sandbox/connector', tree(), tree({notice: entry()})))
 
-    def test_platform_harness_is_tooling_but_product_cases_remain_full(self):
-        for path in ('test/e2e/e2e', 'test/e2e/assemble_docs.py', 'test/e2e/lib/helper_contract.py',
-                     'test/e2e/lib/nested/runner.py', 'test/e2e/test_e2e_runner.py',
+    def test_source_tests_are_light_but_runtime_harness_and_cases_remain_full(self):
+        for path in ('test/e2e/assemble_docs.py', 'test/e2e/test_e2e_runner.py',
                      'test/perf/working_set_directory_test.py'):
             with self.subTest(path=path):
                 self.assertEqual(docs_lane.classify(REPO, tree(), tree({path: entry(mode='100755')})), [path])
@@ -77,7 +77,8 @@ class ClassificationTests(unittest.TestCase):
                 self.assertEqual(subject.check_blob(REPO, path, b'raise RuntimeError("not executed")'), 'python-compile')
                 with self.assertRaises(SyntaxError): subject.check_blob(REPO, path, b'return 1')
                 self.assertIsNone(docs_lane.classify('kuasar-sandbox/connector', tree(), tree({path: entry()})))
-        for path in ('test/e2e/cases/basic.new.sh', 'test/e2e/platform/lib/probe.py',
+        for path in ('test/e2e/e2e', 'test/e2e/assemble.sh', 'test/e2e/lib/helper_contract.py',
+                     'test/e2e/lib/nested/runner.py', 'test/e2e/cases/basic.new.sh', 'test/e2e/platform/lib/probe.py',
                      'test/e2e/lib/helper.go', 'test/e2e/lib/config.json', 'test/e2e/test_hidden/product.py'):
             self.assertIsNone(docs_lane.classify(REPO, tree(), tree({path: entry()})))
 
@@ -86,7 +87,7 @@ class ClassificationTests(unittest.TestCase):
                     'test/e2e/cases/basic.test.sh', 'test/perf/performance.sh',
                     'ci/hosted/e2e-runtime.Dockerfile', 'ci/integration/runner-capabilities.json',
                     'release/inputs/bin-inputs.yaml', 'release/inputs/helper-inputs.yaml',
-                    'release/inputs/helper-tools.yaml', 'release/inputs/guide-inputs.yaml',
+                    'release/inputs/helper-tools.yaml',
                     'scripts/product.go', 'scripts/ci-product.txt', '.github/workflows/source.go',
                     'scripts/ci-hidden/product.py', 'scripts/release-hidden/product.go',
                     'ci/../product.py', '/ci/check.py', 'ci//check.py', 'ci/.git/check.py')

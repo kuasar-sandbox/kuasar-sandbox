@@ -535,6 +535,8 @@ def workbench_requested(plan):
     # executing or relying on candidate files in the trusted framework checkout.
     if plan['mode'] != 'source':
         return False
+    if 'source_scope' in plan:
+        return False
     for record in plan['candidate_records']:
         if record['repository'] == PLATFORM:
             paths = plan.get('admission_changes', {}).get('platform')
@@ -544,6 +546,20 @@ def workbench_requested(plan):
     return False
 
 
+def attach_source_scope(plan, evidence, policy_sha):
+    """Bind the trusted PR comparison, never the release-to-candidate delta."""
+    import source_lane
+    artifacts.require(plan.get('mode') == 'source', 'source scope cannot weaken exact-assets qualification')
+    artifacts.require(evidence.get('policy_sha') == exact_sha(policy_sha) and
+                      evidence.get('run_id') == os.environ['GITHUB_RUN_ID'] and
+                      evidence.get('run_attempt') == os.environ['GITHUB_RUN_ATTEMPT'],
+                      'stale source qualification policy/run/attempt')
+    plan['source_scope'] = source_lane.scope_from_evidence(evidence)
+    source_lane.verify_plan_scope(plan, evidence)
+    artifacts.check_plan(plan)
+    return plan
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--framework-sha", required=True)
@@ -551,6 +567,7 @@ def main():
     parser.add_argument("--verify-cutover", type=Path)
     parser.add_argument("--stage", type=Path)
     parser.add_argument("--workbench-output", type=Path)
+    parser.add_argument("--source-scope", type=Path)
     args = parser.parse_args()
     if args.verify_cutover:
         verify_dependency_cutover(json.loads(args.verify_cutover.read_text()))
@@ -564,6 +581,7 @@ def main():
     capsule = args.output.parent / 'source-inputs.tar'
     with tempfile.TemporaryDirectory(prefix='admitted-run-') as directory:
         if args.stage:
+            artifacts.require(args.source_scope is None, 'exact-assets cannot use source-only qualification')
             plan = exact_assets_plan(args.framework_sha, args.stage)
             shutil.copyfile(args.stage / 'source-inputs.tar', capsule)
         else:
@@ -572,6 +590,9 @@ def main():
             with tarfile.open(capsule, 'w') as archive:
                 for entry in sorted(root.iterdir()):
                     archive.add(entry, arcname=entry.name)
+
+    if args.source_scope:
+        attach_source_scope(plan, json.loads(args.source_scope.read_text()), os.environ['DOCS_POLICY_SHA'])
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("xb") as output:

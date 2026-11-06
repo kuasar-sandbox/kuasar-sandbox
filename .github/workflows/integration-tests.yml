@@ -262,10 +262,13 @@ jobs:
           FRAMEWORK_SHA: ${{ job.workflow_sha }}
           WORKBENCH_SELECTION_ARTIFACT: ${{ inputs.workbench_selection_artifact }}
           SOURCE_CHECK_GROUPS: ${{ inputs.source_check_groups }}
+          QUALIFICATION_LANE: ${{ steps.docs.outputs.lane }}
+          DOCS_POLICY_SHA: ${{ steps.docs-policy.outputs.sha }}
         run: |
           set -euo pipefail
           options=()
           if [ "$INTEGRATION_MODE" = exact-assets ]; then options+=(--stage aggregate-stage); fi
+          if [ "$QUALIFICATION_LANE" = source ]; then options+=(--source-scope docs-result.json); fi
           python3 -B framework/ci/integration/resolve-artifacts.py \
             --framework-sha "$FRAMEWORK_SHA" --output plan.json --workbench-output workbench-selected.txt "${options[@]}"
           if [ -n "$WORKBENCH_SELECTION_ARTIFACT" ]; then
@@ -280,11 +283,15 @@ jobs:
           source_schedule=all
           if [ "$SOURCE_CHECK_GROUPS" = true ]; then source_schedule=grouped; fi
           source_groups=$(python3 -B framework/ci/integration/source_results.py --plan plan.json --schedule "$source_schedule")
+          workbench_selected=$(cat workbench-selected.txt)
+          # Source-only qualification executes tests in Workbench, without
+          # selecting the separate native product qualification.
+          if [ "$QUALIFICATION_LANE" = source ]; then workbench_selected=false; fi
           {
             echo "source_groups=$source_groups"
             echo "framework_sha=$FRAMEWORK_SHA"
             echo "artifact=integration-plan-${GITHUB_RUN_ID}"
-            echo "workbench=$(cat workbench-selected.txt)"
+            echo "workbench=$workbench_selected"
           } >> "$GITHUB_OUTPUT"
       - name: Upload resolved plan
         if: ${{ !contains(fromJSON('["docs", "manifest", "tooling"]'), steps.docs.outputs.lane) }}
@@ -295,6 +302,7 @@ jobs:
             plan.json
             source-inputs.tar
             workbench.json
+            docs-result.json
           if-no-files-found: error
           retention-days: 7
           overwrite: true
@@ -331,7 +339,7 @@ jobs:
       fail-fast: false
       matrix:
         group: ${{ fromJSON(needs.resolve.outputs.source_groups) }}
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.resolve.outputs.lane == 'full' && inputs.mode == 'source'
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && (needs.resolve.outputs.lane == 'full' || needs.resolve.outputs.lane == 'source') && inputs.mode == 'source'
     needs: resolve
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -573,6 +581,14 @@ jobs:
               && [ "$WORKBENCH_RELEASE_RESULT" = skipped ] && [ "$WORKBENCH_SELECTED" = false ] || exit 1
             exit 0
           fi
+          if [ "$DOCS_LANE" = source ]; then
+            [ "$INTEGRATION_MODE" = source ] && [ "$RESOLVE_RESULT" = success ] \
+              && [ "$SOURCE_RESULT" = success ] \
+              && [ "$X86_RESULT" = skipped ] && [ "$ARM_RESULT" = skipped ] \
+              && [ "$WORKBENCH_RESULT" = skipped ] && [ "$WORKBENCH_RELEASE_RESULT" = skipped ] \
+              && [ "$WORKBENCH_SELECTED" = false ] || exit 1
+            exit 0
+          fi
           [ "$DOCS_LANE" = full ] || exit 1
           [ "$RESOLVE_RESULT" = success ] && [ "$X86_RESULT" = success ] \
             && [ "$ARM_RESULT" = success ] || exit 1
@@ -605,14 +621,14 @@ jobs:
           path: results
           merge-multiple: true
       - name: Download source evidence in separate artifact directories
-        if: needs.resolve.outputs.lane == 'full' && inputs.mode == 'source'
+        if: (needs.resolve.outputs.lane == 'full' || needs.resolve.outputs.lane == 'source') && inputs.mode == 'source'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: integration-source-result-${{ github.run_id }}-*
           path: source-results
           merge-multiple: false
       - name: Bind every source result to its current successful producer
-        if: needs.resolve.outputs.lane == 'full' && inputs.mode == 'source'
+        if: (needs.resolve.outputs.lane == 'full' || needs.resolve.outputs.lane == 'source') && inputs.mode == 'source'
         env:
           GH_TOKEN: ${{ github.token }}
           SOURCE_GROUPS: ${{ needs.resolve.outputs.source_groups }}
@@ -640,7 +656,7 @@ jobs:
           python3 -B framework/ci/integration/artifacts.py results \
             --plan plan/plan.json --results results > validation.json
       - name: Check out the same trusted docs verifier
-        if: contains(fromJSON('["docs", "manifest", "tooling"]'), needs.resolve.outputs.lane)
+        if: contains(fromJSON('["docs", "manifest", "tooling", "source"]'), needs.resolve.outputs.lane)
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: kuasar-sandbox/kuasar-sandbox
@@ -657,9 +673,10 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
       - name: Bind docs success to this exact source set and attempt
-        if: contains(fromJSON('["docs", "manifest", "tooling"]'), needs.resolve.outputs.lane)
+        if: contains(fromJSON('["docs", "manifest", "tooling", "source"]'), needs.resolve.outputs.lane)
         env:
           DOCS_POLICY_SHA: ${{ needs.resolve.outputs.policy_sha }}
+          QUALIFICATION_LANE: ${{ needs.resolve.outputs.lane }}
           CANDIDATE_REPOSITORY: ${{ inputs.candidate_repository }}
           CANDIDATE_PR: ${{ inputs.pull_request_number }}
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
@@ -668,7 +685,17 @@ jobs:
           CANDIDATE_HEAD_SHA: ${{ inputs.head_sha }}
           COMPANION_CANDIDATES: ${{ needs.resolve.outputs.companions }}
         run: |
+          set -euo pipefail
           python3 -B docs-policy/ci/integration/docs_lane.py --policy-sha "$DOCS_POLICY_SHA" --verify plan/docs-result.json
+          if [ "$QUALIFICATION_LANE" = source ]; then
+            python3 -B - <<'PYTHON'
+          import json, sys
+          sys.path.insert(0, 'docs-policy/ci/integration')
+          import source_lane
+          source_lane.verify_plan_scope(json.load(open('plan/plan.json')),
+                                        json.load(open('plan/docs-result.json')))
+          PYTHON
+          fi
           cp plan/docs-result.json validation.json
       - name: Recheck the current exact source candidate before acceptance
         if: inputs.mode == 'source'

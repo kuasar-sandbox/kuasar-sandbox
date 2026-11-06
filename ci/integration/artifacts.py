@@ -485,6 +485,9 @@ def release_test_revisions(pins, platform_sha):
 
 
 def check_plan(plan):
+    if 'source_scope' in plan:
+        import source_lane
+        source_lane.validate_plan_scope(plan)
     require(plan["schema"] in (2, 3, 4), "unsupported integration plan")
     require(plan["schema"] < 3 or "helper_contract" in plan, "new plan lacks its helper contract")
     if plan['schema'] >= 4:

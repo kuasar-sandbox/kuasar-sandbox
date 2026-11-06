@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -52,6 +53,143 @@ class SourceChecksTests(unittest.TestCase):
 
     def result(self):
         return json.loads(self.output.read_text())
+
+    def source_scope(self, changes):
+        records = []
+        for owner in sorted(changes):
+            revision = self.plan['test_revisions'][owner]
+            records.append(dict(repository=revision['repository'], base_ref='main',
+                                pull_request_number=1, base_sha='b' * 40, head_sha='c' * 40,
+                                candidate_sha=revision['sha']))
+        records.sort(key=lambda row: row['repository'])
+        for index, record in enumerate(records):
+            owner = SUBJECT.source_lane.owner(record['repository'])
+            self.plan['test_revisions'][owner]['role'] = 'candidate' if index == 0 else 'companion'
+        self.plan['candidate_records'] = records
+        self.plan['source_scope'] = dict(schema=1, sources=copy.deepcopy(records),
+                                        changes={owner: sorted(set(paths)) for owner, paths in changes.items()})
+
+    def test_source_scope_uses_pr_owners_without_release_delta_expansion(self):
+        self.source_scope({'platform': ['ci/integration/test-new.py']})
+        selected, records = SUBJECT.source_records(self.plan)
+        self.assertEqual(selected, {'platform'})
+        self.assertEqual(records, self.plan['test_revisions'])
+        with patch.object(SUBJECT.source_inputs, 'copy_run_inputs', side_effect=restore_using(self.checkout)), \
+             patch.object(SUBJECT.subprocess, 'run') as run:
+            SUBJECT.materialize(self.plan, self.sources, self.output)
+        run.assert_not_called()
+        self.assertEqual(set(self.result()['sources']), set(artifacts.OWNERS))
+        checks = SUBJECT.checks_for(self.plan, self.sources)
+        self.assertEqual([row[0] for row in checks],
+                         ['platform-contracts', 'platform-test-script:ci/integration/test-new.py'])
+        self.assertTrue(all(row[2] == self.sources / 'platform' for row in checks))
+        self.assertEqual(SUBJECT.checks_for(self.plan, self.sources, 'B'), [])
+        self.assertEqual(source_results.groups_for(self.plan, True), ['A'])
+
+    def test_source_scope_covers_each_changed_go_owner_and_no_unrelated_gates(self):
+        original = copy.deepcopy(self.plan)
+        expected = {
+            'connector': [('connector-go-tests', ['env', 'CGO_ENABLED=0', 'go', 'test', '-count=1', './...']),
+                          ('connector-unit-race-vet', ['bash', 'scripts/ci-source-checks.sh'])],
+            'sandboxer': [('sandboxer-unit-race-vet', ['bash', 'scripts/ci-source-checks.sh'])],
+            'orchestrator': [('orchestrator-unit-race-vet', ['bash', 'scripts/ci-source-checks.sh'])],
+            'accelerator': [('accelerator-source-tests', ['make', 'test', 'vet']),
+                            ('accelerator-no-rocksdb-tests',
+                             ['env', 'CGO_ENABLED=0', 'go', 'test', '-count=1', '-tags', 'no_rocksdb', './...'])],
+            'guest-runtime': [('guest-runtime-source-tests', ['make', 'test', 'vet'])],
+        }
+        for owner, commands in expected.items():
+            with self.subTest(owner=owner):
+                self.plan = copy.deepcopy(original)
+                self.source_scope({owner: ['pkg/example/example_test.go']})
+                artifacts.check_plan(self.plan)
+                checks = SUBJECT.checks_for(self.plan, self.sources)
+                self.assertEqual(checks[0], ('platform-contracts',
+                                            ['make', 'test-ci-tools', 'test-release-tools'], self.sources / 'platform'))
+                self.assertEqual(checks[1:], [(name, command, self.sources / owner) for name, command in commands])
+
+    def test_source_scope_requires_privileged_perf_contracts_only_for_perf_changes(self):
+        self.source_scope({'platform': ['test/perf/working_set_tap_test.sh']})
+        checks = SUBJECT.checks_for(self.plan, self.sources)
+        self.assertEqual([row[0] for row in checks],
+                         ['platform-contracts', 'platform-privileged-perf-contracts',
+                          'platform-test-script:test/perf/working_set_tap_test.sh'])
+        self.assertEqual(checks[1][1], ['sudo', '-n', '-E', 'make', 'test-perf-tools'])
+        self.assertNotIn('uffd-source-benchmark', [row[0] for row in checks])
+
+    def test_source_scope_new_tests_are_mandatory_in_their_owner_group(self):
+        self.source_scope({'connector': ['scripts/test-new.py'],
+                           'orchestrator': ['test/source/test-new.sh']})
+        all_checks = SUBJECT.checks_for(self.plan, self.sources)
+        a = SUBJECT.checks_for(self.plan, self.sources, 'A')
+        b = SUBJECT.checks_for(self.plan, self.sources, 'B')
+        self.assertEqual(a, [row for row in all_checks if row[2].name != 'orchestrator'])
+        self.assertEqual(b, [row for row in all_checks if row[2].name == 'orchestrator'])
+        self.assertEqual([row[0] for row in b],
+                         ['orchestrator-unit-race-vet', 'orchestrator-test-script:test/source/test-new.sh'])
+        self.assertEqual(b[-1][1], ['python3', '-B', SUBJECT.TEST_SCRIPT_EXECUTOR, '--test-script',
+                                  'kuasar-sandbox/orchestrator', 'test/source/test-new.sh'])
+        self.assertEqual(self.validate_evidence(self.grouped_evidence())['conclusion'], 'success')
+        for mutation in ('missing', 'substituted', 'failed'):
+            with self.subTest(mutation=mutation):
+                data = self.grouped_evidence()
+                checks = data[3][2]['result']['checks']
+                if mutation == 'missing':
+                    checks.pop()
+                elif mutation == 'substituted':
+                    checks[-1]['command'] = ['true']
+                else:
+                    checks[-1]['exit_code'] = 19
+                with self.assertRaises(ValueError):
+                    self.validate_evidence(data)
+
+    def test_source_scope_changed_script_failure_preserves_its_real_exit(self):
+        path = 'ci/integration/test-new.py'
+        self.source_scope({'platform': [path]})
+        command = SUBJECT.checks_for(self.plan, self.sources)[-1][1]
+        with self.assertRaisesRegex(ValueError, 'platform-test-script:' + path):
+            self.run_checks(failure=(command, 29))
+        self.assertEqual(self.result()['exit_code'], 29)
+        self.assertEqual(self.result()['checks'][-1]['exit_code'], 29)
+
+    def test_source_scope_metadata_and_doc_companions_only_require_documentation_package(self):
+        self.source_scope({'guest-runtime': ['release/guide-inputs.txt'],
+                           'orchestrator': ['README.md'], 'platform': ['docs/contributing.md']})
+        selected, records = SUBJECT.source_records(self.plan)
+        self.assertEqual(selected, set())
+        self.assertEqual(records, self.plan['test_revisions'])
+        self.run_checks(group='A')
+        checks = self.result()['checks']
+        self.assertEqual([row['name'] for row in checks], ['platform-contracts', 'source-documentation-package'])
+        self.assertEqual(checks[1]['command'],
+                         ['python3', '-B', '/inputs/release/ci/integration/check-source-documentation.py',
+                          '--plan', '/src/.source-plan.json', '--sources', '/src',
+                          '--output', '/output/source-documentation.json'])
+        self.assertEqual(source_results.groups_for(self.plan, True), ['A'])
+        self.assertEqual(self.validate_evidence(self.grouped_evidence(('A',)), ('A',))['conclusion'], 'success')
+        evidence = self.grouped_evidence(('A',))
+        evidence[3][1]['result']['checks'].pop()
+        with self.assertRaises(ValueError):
+            self.validate_evidence(evidence, ('A',))
+
+    def test_source_scope_mixed_fixtures_tests_and_metadata_select_only_test_owners(self):
+        self.source_scope({'accelerator': ['pkg/tarstream/testdata/legacy-byte-holes.tar'],
+                           'connector': ['pkg/vswitch/new_test.go'],
+                           'guest-runtime': ['release/guide-migrations.json'],
+                           'orchestrator': ['docs/README.md']})
+        selected, _ = SUBJECT.source_records(self.plan)
+        self.assertEqual(selected, {'accelerator', 'connector'})
+        self.assertEqual([row[0] for row in SUBJECT.checks_for(self.plan, self.sources)],
+                         ['platform-contracts', 'source-documentation-package', 'connector-go-tests',
+                          'connector-unit-race-vet', 'accelerator-source-tests', 'accelerator-no-rocksdb-tests'])
+        self.assertEqual(source_results.groups_for(self.plan, True), ['A'])
+
+    def test_source_scope_documentation_package_failure_is_required(self):
+        self.source_scope({'platform': ['test/e2e/assemble_docs.py']})
+        command = SUBJECT.checks_for(self.plan, self.sources)[1][1]
+        with self.assertRaisesRegex(ValueError, 'source-documentation-package'):
+            self.run_checks(failure=(command, 23))
+        self.assertEqual(self.result()['exit_code'], 23)
 
     def test_materialize_only_uses_exact_test_pins_and_transitive_closure(self):
         select_plan(self.plan, ["orchestrator"])
@@ -462,6 +600,207 @@ class SourceChecksTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "selected module closure"):
                 SUBJECT.execute(self.plan, self.sources, self.output, materialized=True)
         self.assertNotIn('connector-unit-race-vet', [row['name'] for row in self.result()['checks']])
+
+
+class ChangedTestScriptTests(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory(prefix='changed-source-test-')
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        for args in (['init', '--quiet'], ['config', 'user.name', 'Source Test Fixture'],
+                     ['config', 'user.email', 'source-test@example.invalid'],
+                     ['config', 'commit.gpgsign', 'false']):
+            self.git(*args)
+
+    def git(self, *args):
+        return subprocess.run(['git', *args], cwd=self.root, check=True,
+                              capture_output=True, text=True).stdout
+
+    def commit(self, path, text):
+        target = self.root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text)
+        self.git('add', path)
+        self.git('commit', '--quiet', '-m', 'source test fixture')
+        return target
+
+    def run_test(self, path, repository='kuasar-sandbox/connector'):
+        real_run = subprocess.run
+        results = []
+        def run(command, **kwargs):
+            if command[0] in ('python3', 'bash'):
+                result = real_run(command, **kwargs, capture_output=True, text=True, timeout=10)
+                results.append(result)
+                return result
+            return real_run(command, **kwargs)
+        with patch.object(SUBJECT.subprocess, 'run', side_effect=run):
+            status = SUBJECT.run_test_script(repository, path, self.root)
+        return status, results
+
+    def test_unregistered_python_and_shell_entries_really_execute_from_repository_root(self):
+        scripts = {'scripts/test-new.py': 'from pathlib import Path\nPath("python-ran").write_text("yes")\n'
+                                        'assert Path("python-ran").read_text() == "yes"\n',
+                   'scripts/test-new.sh': 'set -eu\n[ "$#" = 0 ]\nprintf yes > shell-ran\n'}
+        for path, text in scripts.items():
+            with self.subTest(path=path):
+                self.commit(path, text)
+                status, results = self.run_test(path)
+                self.assertEqual(status, 0, results[0].stderr)
+        self.assertEqual((self.root / 'python-ran').read_text(), 'yes')
+        self.assertEqual((self.root / 'shell-ran').read_text(), 'yes')
+
+    def test_unittest_without_main_and_dashed_filename_runs_candidate_imports(self):
+        self.commit('scripts/artifacts.py', 'value = "candidate-module"\n')
+        self.commit('scripts/test-new.py',
+                    'from pathlib import Path\nfrom unittest import TestCase\nimport artifacts\n'
+                    'class CandidateTest(TestCase):\n'
+                    '    def test_candidate(self):\n'
+                    '        self.assertEqual(artifacts.value, "candidate-module")\n'
+                    '        Path("unittest-ran").write_text("yes")\n')
+        status, results = self.run_test('scripts/test-new.py')
+        self.assertEqual(status, 0, results[0].stderr)
+        self.assertIn('Ran 1 test', results[0].stderr)
+        self.assertEqual((self.root / 'unittest-ran').read_text(), 'yes')
+
+    def test_failed_unittest_and_empty_suite_cannot_report_success(self):
+        for path, text, expected in [
+            ('scripts/test-failure.py', 'import unittest\nclass Failure(unittest.TestCase):\n'
+             '    def test_failure(self):\n        self.fail("candidate-test-failed")\n', 'candidate-test-failed'),
+            ('scripts/test-empty.py', 'import unittest\n', 'discovered zero tests'),
+            ('scripts/test-exit.py', 'import unittest\nraise SystemExit(0)\n', 'exited before discovery'),
+        ]:
+            with self.subTest(path=path):
+                self.commit(path, text)
+                status, results = self.run_test(path)
+                self.assertNotEqual(status, 0)
+                self.assertIn(expected, results[0].stderr)
+
+    def test_standalone_mock_imports_do_not_select_an_empty_unittest_suite(self):
+        for index, statement in enumerate(('from unittest.mock import patch', 'import unittest.mock as mock',
+                                            'from unittest import mock')):
+            path = f'scripts/test-mock-{index}.py'
+            self.commit(path, statement + '\nassert True\n')
+            status, results = self.run_test(path)
+            self.assertEqual(status, 0, results[0].stderr)
+            self.assertIn('source standalone assertions executed: 1', results[0].stdout)
+
+    def test_standalone_definitions_logging_false_guards_and_early_exit_are_not_tests(self):
+        cases = [
+            'def test_bad():\n    assert False\n',
+            'def test_bad():\n    assert False\nprint("loaded")\n',
+            'if __name__ != "__main__":\n    assert False\n',
+            'if False and __name__ == "__main__":\n    assert False\n',
+            'if __name__ == "__main__":\n    pass\n\ndef test_bad():\n    assert False\n',
+            'raise SystemExit(0)\nassert False\n',
+            'def test_bad(): assert False\n',
+            'if False: assert False\n',
+        ]
+        for index, text in enumerate(cases):
+            with self.subTest(index=index):
+                path = f'scripts/test-no-execution-{index}.py'
+                self.commit(path, text)
+                status, results = self.run_test(path)
+                self.assertNotEqual(status, 0)
+                self.assertIn('executed zero assertions', results[0].stderr)
+        self.commit('scripts/test-import-only.py', 'from pathlib import Path\nprint("loaded")\n')
+        with self.assertRaisesRegex(ValueError, 'no supported executable assertion'):
+            self.run_test('scripts/test-import-only.py')
+
+    def test_standalone_main_executes_assertions_and_preserves_real_failures(self):
+        for index, value in enumerate(('True', 'False')):
+            path = f'scripts/test-main-{index}.py'
+            self.commit(path, 'def check():\n    assert ' + value + '\n'
+                              'if __name__ == "__main__":\n    check()\n')
+            status, results = self.run_test(path)
+            self.assertEqual(status, index, results[0].stderr)
+
+    def test_argument_helpers_execute_their_exact_fixture_driver(self):
+        for index, ((repository, path), driver) in enumerate(sorted(SUBJECT.source_lane.TEST_DRIVERS.items())):
+            with self.subTest(repository=repository, path=path):
+                suffix = str(index)
+                text = 'raise SystemExit("helper requires fixture arguments")\n' if path.endswith('.py') else 'exit 77\n'
+                self.commit(path, '# helper in ' + repository + '\n' + text)
+                self.commit(driver, 'set -eu\nprintf yes > driver-ran-' + suffix + '\n')
+                status, results = self.run_test(path, repository)
+                self.assertEqual(status, 0, results[0].stderr)
+                self.assertEqual((self.root / ('driver-ran-' + suffix)).read_text(), 'yes')
+
+    def test_argument_helper_and_driver_blobs_are_both_required(self):
+        repository = 'kuasar-sandbox/connector'
+        path, driver = 'scripts/test-publisher.sh', 'scripts/test-release.sh'
+        target = self.commit(path, 'exit 77\n')
+        with self.assertRaisesRegex(ValueError, 'missing source test driver'):
+            self.run_test(path, repository)
+        caller = self.commit(driver, 'exit 0\n')
+        caller.write_text('exit 31\n')
+        with self.assertRaisesRegex(ValueError, 'differs from its selected Git blob'):
+            self.run_test(path, repository)
+        caller.write_text('exit 0\n')
+        target.write_text('exit 0\n')
+        with self.assertRaisesRegex(ValueError, 'differs from its selected Git blob'):
+            self.run_test(path, repository)
+
+    def test_deleted_argument_helper_still_exercises_its_caller(self):
+        repository = 'kuasar-sandbox/connector'
+        path, driver = 'scripts/test-publisher.sh', 'scripts/test-release.sh'
+        self.commit(path, 'exit 77\n')
+        self.commit(driver, 'exit 31\n')
+        self.git('rm', path)
+        self.git('commit', '--quiet', '-m', 'delete fixture helper')
+        status, _ = self.run_test(path, repository)
+        self.assertEqual(status, 31)
+
+    def test_shell_failure_preserves_exit_status(self):
+        self.commit('scripts/test-failure.sh', 'exit 37\n')
+        status, _ = self.run_test('scripts/test-failure.sh')
+        self.assertEqual(status, 37)
+
+    def test_changed_test_command_line_entry_preserves_failure(self):
+        path = 'scripts/test-cli.sh'
+        self.commit(path, 'exit 31\n')
+        result = subprocess.run([sys.executable, '-B', SUBJECT.__file__, '--test-script',
+                                 'kuasar-sandbox/connector', path], cwd=self.root,
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 31, result.stderr)
+
+    def test_deleted_test_is_distinct_from_missing_modified_or_injected_test(self):
+        path = 'scripts/test-state.py'
+        original = 'assert True\n'
+        target = self.commit(path, original)
+        target.unlink()
+        with self.assertRaisesRegex(ValueError, 'missing regular source test'):
+            self.run_test(path)
+        target.write_text('assert False\n')
+        with self.assertRaisesRegex(ValueError, 'differs from its selected Git blob'):
+            self.run_test(path)
+        target.write_text(original)
+        self.git('rm', path)
+        self.git('commit', '--quiet', '-m', 'delete source test')
+        status, results = self.run_test(path)
+        self.assertEqual((status, results), (0, []))
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(original)
+        with self.assertRaisesRegex(ValueError, 'unexpected working file'):
+            self.run_test(path)
+
+    def test_symlink_and_parent_traversal_do_not_execute(self):
+        path = 'scripts/test-state.py'
+        target = self.commit(path, 'assert True\n')
+        target.unlink()
+        target.symlink_to(self.root / 'missing')
+        with self.assertRaisesRegex(ValueError, 'symbolic link'):
+            self.run_test(path)
+        with self.assertRaisesRegex(ValueError, 'unsupported source test script'):
+            self.run_test('scripts/../scripts/test-state.py')
+
+    def test_perf_script_uses_the_existing_privileged_execution_context(self):
+        path = 'test/perf/working_set_tap_test.sh'
+        self.commit(path, 'exit 0\n')
+        entry = subprocess.check_output(['git', 'ls-tree', '-z', 'HEAD', '--', path], cwd=self.root)
+        with patch.object(SUBJECT.subprocess, 'check_output', return_value=entry), \
+             patch.object(SUBJECT.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
+            self.assertEqual(SUBJECT.run_test_script('kuasar-sandbox/kuasar-sandbox', path, self.root), 0)
+        run.assert_called_once_with(['sudo', '-n', '-E', 'bash', path], cwd=self.root)
 
 
 if __name__ == "__main__":

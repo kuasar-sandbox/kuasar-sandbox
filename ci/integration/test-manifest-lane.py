@@ -101,7 +101,7 @@ class ClassificationTests(unittest.TestCase):
     def test_product_tests_configuration_unknown_and_companion_mix_are_full(self):
         paths = ('src/code.go', 'Makefile', 'release/inputs/bin-inputs.yaml',
                  'workbench/build.py', 'test/e2e/cases/a.sh', 'config/settings.yaml',
-                 'releases/other.yaml', 'releases/release.yml', 'AGENTS.md')
+                 'releases/other.yaml', 'releases/release.yml', 'configuration.toml')
         for path in paths:
             with self.subTest(path=path):
                 result = self.qualify({subject.MANIFESTS[0]: manifest() + '# plan\n', path: 'changed'})
