@@ -36,42 +36,59 @@ def execute(plan, arch, shard, workspace, result_path, clean_image=None, runner=
             result['environment'] = {'kind': 'workbench-system', 'image_id': executor_image}
     started = time.monotonic()
     result_path.parent.mkdir(parents=True, exist_ok=True)
+    failure = None
+    batches = [result['cases']] if result['cases'] else []
+    if all(case.split('.', 1)[0] == 'snapshot' for case in result['cases']):
+        batches = [[case] for case in result['cases']]
     try:
-        with execution.scratch_directory() as state:
-            environment, prepared = execution.environment(state)
-            if result["cases"]:
+        # Snapshot cases retain disks and full-RAM observations in WORK and OUT.
+        # Reclaim their private state before the next case. Other suites keep
+        # their existing single invocation and cross-case template preparation.
+        # The shipped runner, prepared inputs and selected coverage are unchanged.
+        for batch in batches:
+            with execution.scratch_directory() as state:
+                environment, prepared = execution.environment(state)
                 report = state / "result.json"
+                selection = [value for case in batch for value in ('--include', case)]
                 command = ["python3", "-B", str(workspace / "test/e2e/e2e"), "run",
                            "--workdir", str(workspace), "--arch", arch,
                            "--run-root", str(state / "cases"), "--out-root", str(state / "out"),
-                           "--result", str(report)]
-                for case in result["cases"]:
-                    command += ["--include", case]
+                           "--result", str(report), *selection]
                 if clean_image:
-                    arguments = ['--arch', arch]
-                    for case in result['cases']:
-                        arguments += ['--include', case]
+                    arguments = ['--arch', arch, *selection]
                     command = execution.clean_command(clean_image, workspace, state, arguments)
                     result['environment'] = execution.runtime_identity(clean_image)
                 else:
                     command = execution.privileged_command(command, prepared)
                 completed = subprocess.run(command, cwd=state, env=environment)
-                if report.is_file():
-                    public = json.loads(report.read_text())
-                    result["timings"] = public["timings"]
+                artifacts.require(report.is_file(), "public runner did not write execution evidence")
+                public = json.loads(report.read_text())
+                artifacts.require(public["arch"] == arch and public["cases"] == batch and
+                                  public["provenance_sha256"] == result["provenance_sha256"],
+                                  "public runner result differs from selected inputs")
+                result["timings"].extend(public["timings"])
+                if public["conclusion"] != "success":
+                    failure = "public runner reported failure"
+                elif completed.returncode:
+                    failure = "shared public runner failed"
+                else:
+                    artifacts.check_timings(public["timings"], batch)
                     if plan['schema'] >= 4:
-                        result['capabilities'] = public.get('capabilities')
-                    artifacts.require(public["arch"] == arch and public["cases"] == result["cases"] and
-                                      public["provenance_sha256"] == result["provenance_sha256"],
-                                      "public runner result differs from selected inputs")
-                    artifacts.require(public["conclusion"] == "success", "public runner reported failure")
-                artifacts.require(completed.returncode == 0, "shared public runner failed")
-                if clean_image:
-                    result['environment']['verified'] = True
-            artifacts.check_timings(result["timings"], result["cases"])
-            artifacts.verify_workspace(workspace, plan, arch)
-            if plan['schema'] >= 4:
-                capability_routing.check_result(plan, arch, shard, result)
+                        observed = public.get('capabilities')
+                        required = {cap for case in batch for cap in plan['case_requirements']['cases'][case]['requires']}
+                        previous = result.setdefault('capabilities', {})
+                        artifacts.require(isinstance(observed, dict) and set(observed) == set(required) and
+                                          all(cap not in previous or previous[cap] == value
+                                              for cap, value in observed.items()),
+                                          'missing or changed case capability startup evidence')
+                        previous.update(observed)
+        artifacts.require(failure is None, failure)
+        artifacts.check_timings(result["timings"], result["cases"])
+        artifacts.verify_workspace(workspace, plan, arch)
+        if plan['schema'] >= 4:
+            capability_routing.check_result(plan, arch, shard, result)
+        if clean_image and result['cases']:
+            result['environment']['verified'] = True
         result["conclusion"] = "success"
     finally:
         result["wall_seconds"] = time.monotonic() - started

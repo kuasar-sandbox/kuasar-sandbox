@@ -364,17 +364,182 @@ class ArtifactExecutionContracts(unittest.TestCase):
             privilege = [] if os.geteuid() == 0 else ['sudo', '-n']
             subprocess.run([*privilege, 'rm', '-rf', '--', str(state)], check=True)
 
-    def execute(self, shard='storage', performance=False):
+    def execute(self, shard=None, performance=False, **options):
+        shard = shard or self.provenance['selection']['cases'][0].split('.')[0]
         arch = 'x86_64' if performance else self.arch
         self.provenance['arch'] = arch
         self.plan['lanes'][arch]['selection'] = self.provenance['selection']
         self.inputs.seal(self.root, self.provenance)
         credentials = {key: '' for key in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}
+        credentials.update(getattr(self, 'sequence_environment', {}))
         with patch.object(self.executor.artifacts, 'verify_workspace', return_value=self.provenance), \
              patch.object(self.executor.platform, 'machine', return_value=arch), patch.dict(os.environ, credentials):
             if performance:
                 return self.performance.execute(self.plan, arch, self.root, self.result)
-            return self.executor.execute(self.plan, arch, shard, self.root, self.result)
+            return self.executor.execute(self.plan, arch, shard, self.root, self.result, **options)
+
+    def case_sequence(self, first_exit='exit 0', suite='snapshot'):
+        self.case = suite + '.fixture.sh'
+        names = [self.case, suite + '.second.sh']
+        self.sequence_environment = {'PATH': self.image(labels=('python', 'busybox'))} if suite == 'snapshot' else {}
+        self.provenance['selection']['cases'] = self.provenance['prepared_cases'] = names
+        (self.root / 'test/e2e/cases' / names[0]).write_text(
+            'set -eu\nprintf "%s" "$TMPDIR" > "' + str(self.marker) + '"\n'
+            'for path in "$WORK/disk" "$OUT/ram.bin" "$TMPDIR/temporary" "$E2E_TEMPLATE_CACHE_DIR/template"; do\n'
+            '  dd if=/dev/zero of="$path" bs=1048576 count=1 status=none\n'
+            'done\necho first-case-diagnostic >&2\n' + first_exit + '\n')
+        (self.root / 'test/e2e/cases' / names[1]).write_text(
+            'set -eu\nprevious=$(cat "' + str(self.marker) + '")\n'
+            '[ ! -e "$(dirname "$previous")" ] || exit 75\n'
+            '[ ! -e "$E2E_TEMPLATE_CACHE_DIR/template" ]\n')
+        return names
+
+    def test_complete_case_state_is_reclaimed_before_next_case(self):
+        names = self.case_sequence()
+        unrelated = self.root.parent / 'unrelated'
+        unrelated.write_text('do not remove')
+        result = self.execute()
+        self.assertEqual(result['conclusion'], 'success')
+        self.assertEqual(result['cases'], names)
+        self.assertEqual([row['case'] for row in result['timings']], names)
+        self.assertEqual([row['exit_code'] for row in result['timings']], [0, 0])
+        self.assertFalse(Path(self.marker.read_text()).parent.exists())
+        self.assertEqual(unrelated.read_text(), 'do not remove')
+        self.inputs.verify(self.root)
+
+    def test_failed_and_timed_out_cases_keep_diagnostics_and_do_not_poison_next_case(self):
+        original_run = subprocess.run
+        for command, code in [('exit 23', 23), ('timeout 0.05 sleep 10', 124)]:
+            with self.subTest(code=code):
+                names = self.case_sequence(command)
+                output = []
+                def run(args, **kwargs):
+                    if str(self.root / 'test/e2e/e2e') in args:
+                        completed = original_run(args, **kwargs, capture_output=True, text=True)
+                        output.append(completed.stdout + completed.stderr)
+                        return completed
+                    return original_run(args, **kwargs)
+                with patch.object(self.executor.subprocess, 'run', side_effect=run), \
+                     self.assertRaisesRegex(ValueError, 'public runner reported failure'):
+                    self.execute()
+                result = json.loads(self.result.read_text())
+                self.assertEqual(result['conclusion'], 'failure')
+                self.assertEqual([row['case'] for row in result['timings']], names)
+                self.assertEqual([row['exit_code'] for row in result['timings']], [code, 0])
+                self.assertIn('first-case-diagnostic', output[0])
+                self.assertIn(f'FAIL {self.case} exit={code}', output[0])
+                self.assertFalse(Path(self.marker.read_text()).parent.exists())
+
+    def test_clean_runtime_uses_same_image_and_one_case_per_private_state(self):
+        names = self.case_sequence()
+        image = 'sha256:' + 'f' * 64
+        calls = []
+        def clean_command(selected, workspace, state, arguments):
+            calls.append((selected, workspace, state, arguments))
+            # Exercise real public runner and scratch reclamation; container
+            # mount/preflight rules have their own command contract tests.
+            return ['python3', '-B', str(workspace / 'test/e2e/e2e'), 'run',
+                    '--workdir', str(workspace), '--run-root', str(state / 'cases'),
+                    '--out-root', str(state / 'out'), '--result', str(state / 'result.json'), *arguments]
+        with patch.object(self.executor.execution, 'clean_command', side_effect=clean_command):
+            result = self.execute(clean_image=image)
+        self.assertEqual([row[3] for row in calls], [['--arch', self.arch, '--include', case] for case in names])
+        self.assertEqual(len({row[2] for row in calls}), 2)
+        self.assertTrue(all(row[0] == image and row[1] == self.root and not row[2].exists() for row in calls))
+        self.assertEqual(result['environment'], self.executor.execution.runtime_identity(image, verified=True))
+
+    def test_other_suites_keep_one_invocation_and_shared_template_cache(self):
+        names = self.case_sequence(suite='storage')
+        (self.root / 'test/e2e/cases' / names[1]).write_text(
+            'set -eu\n[ "$TMPDIR" = "$(cat "' + str(self.marker) + '")" ]\n'
+            '[ -s "$E2E_TEMPLATE_CACHE_DIR/template" ]\n')
+        with patch.object(self.executor.subprocess, 'run', wraps=subprocess.run) as run:
+            result = self.execute()
+        public = [call.args[0] for call in run.call_args_list if str(self.root / 'test/e2e/e2e') in call.args[0]]
+        self.assertEqual(len(public), 1)
+        self.assertEqual(public[0][-4:], ['--include', names[0], '--include', names[1]])
+        self.assertEqual(result['conclusion'], 'success')
+        self.assertEqual([row['case'] for row in result['timings']], names)
+        self.assertFalse(Path(self.marker.read_text()).parent.exists())
+
+    def test_each_case_report_must_bind_identity_and_complete_timings(self):
+        names = self.case_sequence()
+        original_run = subprocess.run
+        changes = [({'arch': 'wrong'}, 'differs from selected inputs'),
+                   ({'cases': names}, 'differs from selected inputs'),
+                   ({'provenance_sha256': '0' * 64}, 'differs from selected inputs'),
+                   ({'timings': []}, 'execution evidence'),
+                   ({'timings': [{'case': names[0], 'exit_code': 0, 'wall_seconds': 0}]}, 'execution evidence')]
+        for changeset, error in changes:
+            with self.subTest(changeset=changeset):
+                def run(command, **kwargs):
+                    completed = original_run(command, **kwargs)
+                    if str(self.root / 'test/e2e/e2e') in command and command[-1] == names[1]:
+                        path = Path(command[command.index('--result') + 1])
+                        report = json.loads(path.read_text())
+                        path.unlink()  # The public runner may have written as root.
+                        path.write_text(json.dumps(report | changeset))
+                    return completed
+                with patch.object(self.executor.subprocess, 'run', side_effect=run), \
+                     self.assertRaisesRegex(ValueError, error):
+                    self.execute()
+                self.assertEqual(json.loads(self.result.read_text())['conclusion'], 'failure')
+
+    def test_capability_evidence_is_checked_per_case_and_combined_for_shard(self):
+        names = self.case_sequence()
+        required = {names[0]: ['kvm'], names[1]: ['docker', 'kvm']}
+        expected = {'kvm': 'api-12-create-vm', 'docker': 'daemon-connected'}
+        self.plan.update(schema=4,
+                         case_requirements={'cases': {case: {'requires': value} for case, value in required.items()}},
+                         runner_configuration={'sha256': 'a' * 64, 'value': {'profiles': {'fixture': {'executor': 'native'}}}})
+        self.plan['lanes'][self.arch]['groups'] = {'snapshot': {
+            'cases': names, 'profile': 'fixture', 'runtime': 'native', 'requires': ['docker', 'kvm']}}
+        original_run = subprocess.run
+        variations = [(expected, None), ({'docker': 'daemon-connected'}, 'case capability'),
+                      (expected | {'kvm': 'wrong'}, 'case capability'),
+                      (expected | {'netns': 'create-veth-remove'}, 'case capability'),
+                      ([], 'case capability')]
+        for second, error in variations:
+            with self.subTest(second=second):
+                def run(command, **kwargs):
+                    completed = original_run(command, **kwargs)
+                    if str(self.root / 'test/e2e/e2e') in command:
+                        path = Path(command[command.index('--result') + 1])
+                        report = json.loads(path.read_text())
+                        report['capabilities'] = {'kvm': expected['kvm']} if command[-1] == names[0] else second
+                        path.unlink()
+                        path.write_text(json.dumps(report))
+                    return completed
+                with patch.object(self.executor.capability_routing, 'runner_identity', return_value={}), \
+                     patch.object(self.executor.capability_routing, 'check_runner'), \
+                     patch.object(self.executor.subprocess, 'run', side_effect=run):
+                    if error:
+                        with self.assertRaisesRegex(ValueError, error):
+                            self.execute()
+                        self.assertEqual(json.loads(self.result.read_text())['conclusion'], 'failure')
+                    else:
+                        result = self.execute()
+                        self.assertEqual(result['capabilities'], expected)
+                        self.assertEqual(result['conclusion'], 'success')
+
+    def test_missing_report_or_failed_process_cannot_claim_success(self):
+        names = self.case_sequence()
+        original_run = subprocess.run
+        for missing in (True, False):
+            with self.subTest(missing=missing):
+                def run(command, **kwargs):
+                    completed = original_run(command, **kwargs)
+                    if str(self.root / 'test/e2e/e2e') in command and command[-1] == names[1]:
+                        if missing:
+                            Path(command[command.index('--result') + 1]).unlink()
+                        else:
+                            completed.returncode = 137
+                    return completed
+                error = 'execution evidence' if missing else 'shared public runner failed'
+                with patch.object(self.executor.subprocess, 'run', side_effect=run), \
+                     self.assertRaisesRegex(ValueError, error):
+                    self.execute()
+                self.assertEqual(json.loads(self.result.read_text())['conclusion'], 'failure')
 
     def image(self, *, identity=None, architecture=None, labels=('python',)):
         expected_arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}[self.arch]
@@ -453,6 +618,7 @@ class ArtifactExecutionContracts(unittest.TestCase):
         self.assertFalse(Path(self.marker.read_text()).parent.exists())
 
     def test_cleanup_failure_keeps_result_failed(self):
+        self.case_sequence()
         original_run = subprocess.run
         def run(command, **kwargs):
             if command[:5] == ['sudo', '-n', 'rm', '-rf', '--']:
@@ -464,6 +630,7 @@ class ArtifactExecutionContracts(unittest.TestCase):
                 self.execute()
         self.assertEqual(failure.exception.returncode, 23)
         result = json.loads(self.result.read_text())
+        self.assertEqual([row['case'] for row in result['timings']], [self.case])
         self.assertEqual(result['timings'][0]['exit_code'], 0)
         self.assertEqual(result['conclusion'], 'failure')
 

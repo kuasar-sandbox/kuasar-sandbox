@@ -24,6 +24,13 @@ sudo python3 /tmp/kuasar-prepared/test/e2e/e2e run --workdir /tmp/kuasar-prepare
 
 `--suite` 与 `--include` 取并集，`--exclude` 按完整文件名排除。未知选择和空集会失败。`--all` 包含需要凭据的 `storage.obs.sh`，公共 CI 明确排除该用例。没有 owner、tag、capability 或 fixture graph 选择器。Makefile 包装入口要求 `RELEASE_DIR`、全新的 `E2E_WORKDIR`，可选 `E2E_ARGS`。
 
+对于 snapshot suite，产物 CI 对每个选定用例分别调用原封不动的打包 runner，核对每份结果的准备身份、
+计时和启动能力证据，再汇总为原 shard 的结果。每次调用的私有工作目录、输出、临时
+文件和模板缓存都会在下一个用例启动前删除，失败用例也不例外。这样只需保留一个
+用例的 fixture 数据，不再跨整个 shard 累积 RAM 观测副本和快照。代价是每例重新
+校验输入、加载镜像，snapshot CI 用例之间不共享模板准备。其他 suite 保留单次
+runner 调用和共享模板缓存；直接调用公共 runner 的运行方式不变。
+
 每次 `run` 调用都为适用的 helper 提供新的私有目录，只在本次调用内复用不可变模板
 准备。即使显式指定 `--run-root`，目录也位于准备输入和用例自有工作目录之外。用例
 收到 `E2E_TEMPLATE_CACHE_DIR` 和完整准备 provenance 摘要
