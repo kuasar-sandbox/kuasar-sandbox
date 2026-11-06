@@ -29,7 +29,9 @@ Retire old dependencies only after migration and the rollback retention period, 
 
 ## Versions and validation
 
-Components have independent versions and releases. An aggregate version selects exactly six release units: four component archives, the guest runtime and the guest kernel. Aggregate preparation validates component assets and SHA256, then runs owner E2E and platform combination tests in a real KVM environment. The release package records the exact version combination to avoid mixing assets from different dates or aggregate versions.
+Components have independent versions and releases. An aggregate version selects exactly six release units: four component archives, the guest runtime and the guest kernel. Aggregate preparation validates the selected component assets and SHA256; acceptance tests the staged bytes under each architecture's declared profile. The release package records the exact version combination to avoid mixing assets from different dates or aggregate versions.
+
+Qualification is profile-specific: native x86 runs its required KVM cases, while native ARM runs its declared profile with explicit hardware exclusions. A hosted ARM Workbench `artifact-only` result is not evidence of VM or offline system execution. Compare the recorded architecture, profile and executed cases with the target deployment before upgrading; see [release asset validation](release.md#8-release-asset-validation).
 
 These mechanisms support version pinning, fault diagnosis and repeatable validation in production. Operators still need production implementations and configuration for TLS, persistent backends, backups, monitoring, network policy and capacity.
 
