@@ -4,7 +4,10 @@
 
 目标是得到可校验、版本匹配的本地安装目录。安装后按[快速开始](quickstart_zh.md)首次运行，或按[部署](deployment_zh.md)装配生产节点。
 
-在原生 Linux Docker 主机的同一个 Bash 会话中运行以下命令。需要 Python 3.9+、curl、GNU tar、sha256sum 和 Docker；不需要 GitHub 登录、源码检出或编译器。
+在原生 Linux 主机的同一个 Bash 会话中运行以下命令，需要 Python 3.9+、curl、
+GNU tar 和 sha256sum。导入 Workbench 时才需要 Docker；仅下载并解压原生产品不依赖它。
+此安装任务不需要 GitHub 登录、源码检出或编译器。运行产品还有额外前提，
+以所选版本的部署指南为准。
 
 将 `RELEASE_VERSION` 设为已发布的聚合 tag，或留空以一次性解析 Stable。该聚合 tag 下的 manifest 决定全部六个发布单元和精确包名；runtime 与 vmlinux 使用独立 tag。不要混用组件 Latest 或从 main 替换文件。旧版本应遵循其包内指南。
 
@@ -69,8 +72,10 @@ assert fields['version'] + ('-' + fields['preview_version'] if '-preview.' in ta
 for unit, version in units.items():
     prefix = unit + '-v' if unit in ('runtime', 'vmlinux') else 'v'
     assert re.fullmatch(prefix + version_re, version), ('invalid component tag', unit)
+    assert '-preview.' in tag or '-preview.' not in version, ('Stable requires stable component', unit)
 contract = fields.get('delivery', 'historical')
 assert contract in ('historical', 'workbench-v1')
+assert 'delivery' not in fields or contract == 'workbench-v1', 'unsupported explicit delivery contract'
 arch = os.environ['ARCH']
 workbench = os.environ['DOWNLOAD_WORKBENCH']
 assert workbench in ('0', '1')
@@ -215,20 +220,35 @@ trap - EXIT
 
 ## 单独导入 Workbench
 
-导入已下载归档，检查本机架构与版本，然后保留本地 image ID 用于启动。
+默认 `DOWNLOAD_WORKBENCH=1` 时，导入已下载归档，检查本机架构与版本，
+再保留本地 image ID 用于启动。`DOWNLOAD_WORKBENCH=0` 时，下方命令只设置
+`RELEASE` 并将 `IMAGE` 留空，不调用 Docker，也不寻找未下载的归档。
 
 ```bash
-IMAGE_TAG="ghcr.io/kuasar-sandbox/workbench:${RELEASE_VERSION#release-}"
-docker load --input "$DOWNLOAD_DIR/workbench-$ARCH-${RELEASE_VERSION#release-}.tar.gz"
-case "$ARCH" in x86_64) DOCKER_ARCH=amd64 ;; aarch64) DOCKER_ARCH=arm64 ;; esac
-test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_TAG")" = "linux/$DOCKER_ARCH"
-test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$IMAGE_TAG")" = "$RELEASE_VERSION"
-IMAGE="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
 RELEASE="$INSTALL_DIR"
-printf 'Release directory: %s\nLocal Workbench image: %s\n' "$RELEASE" "$IMAGE"
+IMAGE=""
+if [ "$DOWNLOAD_WORKBENCH" = 1 ]; then
+    IMAGE_TAG="ghcr.io/kuasar-sandbox/workbench:${RELEASE_VERSION#release-}"
+    docker load --input "$DOWNLOAD_DIR/workbench-$ARCH-${RELEASE_VERSION#release-}.tar.gz"
+    case "$ARCH" in x86_64) DOCKER_ARCH=amd64 ;; aarch64) DOCKER_ARCH=arm64 ;; esac
+    test "$(docker image inspect --format '{{.Os}}/{{.Architecture}}' "$IMAGE_TAG")" = "linux/$DOCKER_ARCH"
+    test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$IMAGE_TAG")" = "$RELEASE_VERSION"
+    IMAGE="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")"
+    printf 'Local Workbench image: %s\n' "$IMAGE"
+fi
+printf 'Release directory: %s\n' "$RELEASE"
 ```
 
-在当前会话保留 `RELEASE`、`IMAGE` 和 `ARCH`，继续[快速开始](quickstart_zh.md#启动私有系统环境)。启动器来自 `$RELEASE/workbench/workbench`。复用已验证安装时，使用其发布目录和本地 image ID。缺文件、架构不符、摘要、权限或路径检查失败时停止，不要从其他版本获取替代文件。
+根据实际下载的输入选择下一步：
+
+- **Workbench：** 在当前会话保留 `RELEASE`、`IMAGE` 和 `ARCH`，继续
+  [快速开始](quickstart_zh.md#启动私有系统环境)。启动器来自
+  `$RELEASE/workbench/workbench`。复用已验证安装时，使用其发布目录和本地 image ID。
+- **仅原生产品：** 使用 `RELEASE` 和 `ARCH`，按该版本包内的部署或原生指南继续。
+  此时没有可启动的 Workbench 镜像，不要执行 Workbench 快速开始命令。
+
+缺文件、架构不符、摘要、权限或路径检查失败时停止，不要从其他版本获取替代文件。
+
 ## 安装结果
 
 保留所选聚合 Tag、`files.tsv` 和原始下载包。`bin/` 保存产品工具，`guide/README.md` 是项目入口，`guide/index.md` 是完整文档目录，组件指南在 `guide/<component>/`。测试与演示材料在 `test/`，Workbench 在独立镜像中。历史版本的目录以其自带指南为准。
