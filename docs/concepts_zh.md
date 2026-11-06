@@ -2,7 +2,7 @@
 
 # 平台概念与术语
 
-本文帮助应用开发者理解平台对象、实例身份与保存状态。完整操作见[沙箱使用](sandboxes_zh.md)和[模板](templates_zh.md)；组件内部字段和编码由对应规范维护。
+在创建模板或选择暂停、恢复方式前，先阅读本文，弄清哪些身份保持不变、保存了哪些状态，以及哪些输入必须持续可用。阅读无需已运行的部署。[沙箱使用](sandboxes_zh.md)和[模板](templates_zh.md)提供实际步骤；精确字段、格式和状态转换由组件规范维护。
 
 ## 用户场景
 
@@ -24,34 +24,65 @@ Kuasar Sandbox 解决以下共同问题:
 | 对象 | 对平台使用者的含义 | 权威规范 |
 | --- | --- | --- |
 | 模板 | 可复用的已发布输入，用于创建新的独立实例 | [模板使用流程](templates_zh.md)与 [Build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md) |
-| Sandbox | 一个受管逻辑实例，拥有所属用户、稳定公开身份和保留状态 | [受管实例生命周期](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle_zh.md) |
+| Sandbox | 一个受管逻辑实例，拥有所属用户、稳定身份和保留状态；API/本地 ID 的含义取决于部署模式。 | [受管实例生命周期](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle_zh.md) |
 | Run | 该实例的一次执行尝试；RunID 和节点本地资源可以变化 | 受管实例生命周期及 [Runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime_zh.md) |
 | Image | 应用文件系统及启动配置，尚未捕获实例自身的磁盘状态 | [镜像生产](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/image-preparation_zh.md) |
-| Sandbox E | 可移植的工作负载配置与磁盘图，不含运行中进程内存 | [沙箱制品](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/artifacts_zh.md) |
-| Snapshot S | 捕获的 VM 内存/状态，以及对 E 的引用 | 沙箱制品规范 |
+| 沙箱制品 E | 保存的工作负载配置与磁盘图，不含运行中进程内存。它是一次运行的输入，不是受管 Sandbox 的身份。 | [沙箱制品](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/artifacts_zh.md) |
+| Snapshot S | 捕获的 VM 内存/状态，以及对关联 E 的引用；不一定自包含所有依赖。 | 沙箱制品规范 |
 | 载体 | 用于传输内容的文件、Bundle 或 Manifest 表示 | [通用制品](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/artifacts_zh.md) |
 
-控制请求成功可能只表示已接受启动，应用尚未就绪。应通过数据路径检查应用行为。
-dead 实例、仅含 E 的 paused 实例和含 S 的 paused 实例有不同恢复选择，
-精确状态转换由受管生命周期规范定义。
+模板是可复用的起点，受管 Sandbox 是从模板创建的会话，Run 是该会话的一次执行。E 和 S 描述保存的内容，不代表正在运行的服务或 ownership 记录。
+
+例如，从同一模板创建两个沙箱，暂停其中一个不会暂停另一个。在同一节点恢复时，Sandbox ID 和 StableID 保持不变，RunID 和执行资源可以变化。再次从模板创建沙箱则是另一个独立会话，不是继续之前暂停的会话。
+
+应区分三个身份层次：
+
+- `StableID` 在受支持的本地 ID 变化中标识同一个逻辑沙箱。在集群中，它是公开 SandboxID。
+- `Sandbox.ID` 是节点本地查找键，在集群契约中称为 `NodeSandboxID`。单节点 API 使用这个本地 ID；以不同目标 ID 导入时，它会改变，而 StableID 和服务凭据保持不变。
+- `RunID` 标识一次执行尝试，恢复或替换执行后可以变化。应用不应拿它作为重新连接会话的标识。
+
+保留身份的导入/复制不是获得独立授权的新分支。应遵循[身份契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle_zh.md#stable-identity)，不能把各 ID 字段互换使用。
+
+Create 或 Connect 成功可能只表示启动已被接受，应用尚未就绪。应通过应用的数据路径检查预期响应。dead 实例、仅含 E 的 paused 实例和含 S 的 paused 实例有不同恢复选择：
+
+| 下一步目标 | 所需状态或输入 | 进程状态 |
+| --- | --- | --- |
+| 创建独立会话 | 可用模板与成功准入 | Image/E 冷启动；S 在兼容环境中恢复捕获的状态。 |
+| 继续已保存内存的暂停会话 | 已接受的 S/E 对及其可达依赖 | 继续捕获的 VM/进程状态。 |
+| 冷启动仅保存磁盘的暂停会话 | 已保存的 E 及其依赖 | 从保存的磁盘重新启动应用，不带回先前进程内存。 |
+| 终止后恢复保留的磁盘 | 对 dead 实例成功 Reset，然后 Connect/Wake | Reset 准备 E-only paused 状态，不启动 VM；后续运行采用冷启动。 |
+
+E-only 来源无法提供缺失的进程内存，dead 实例也不是已经暂停的实例。[恢复契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle_zh.md#resume)定义模式选择和冲突；[Reset 与保留](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle_zh.md#reset-and-retention)定义哪些当前磁盘可以恢复，以及保留期限。
 
 ## 快照与实例语义
 
 ### 从快照模板创建新实例:1:N
 
-模板在发布前完成环境,依赖和可选应用进程的初始化.多个创建请求可以引用同一个只读
-模板父层,但每个实例获得独立 Sandbox ID,网络身份,凭据绑定和增量状态.后续写入,
-进程推进和暂停只属于该实例,不会反写模板或其他实例.
+模板可以发布不同的起始状态：Image 提供应用文件系统和启动配置；E 复用已准备的磁盘，不保存进程内存；S 在兼容执行环境中恢复已初始化的进程。应按应用所需状态选择[模板目标](templates_zh.md#选择要发布的状态)。
+
+多个创建请求可以引用同一个只读模板父层，但每个新实例获得独立身份、网络身份、凭据绑定和增量状态。后续写入、进程推进和暂停只属于该实例，不会反写模板或其他实例。
 
 这种语义适用于 Agent,Code Interpreter,RL rollout,Serverless 和并行任务:共同的
 初始化成本由模板承担,每个实例从统一起点独立演进.
 
 ### 暂停并恢复同一个实例:1:1
 
-捕获内存的暂停保留同一个逻辑实例的进程、内存和文件系统状态;显式 pause 默认采用
-这种快照行为.指定 `memory: false` 时暂停保存磁盘工件,之后重新启动应用,不恢复先前
-进程内存.`autoPauseMemory` 独立选择自动暂停时的捕获行为.两种情况下,连接/恢复都
-继续使用稳定的公开 Sandbox ID.工件保留在原节点时可以原地恢复;工件发布到命名共享文件位置或 Manifest 后解决跨节点数据可达性。跨节点导入/恢复还须保有 ownership、满足适用迁移协议（需要时提供有效 MigrationToken）、目标准入及执行输入兼容性，详见[恢复资格](upgrading_zh.md#restore-eligibility)。节点内部执行 ID 可以变化，公开身份不变。
+捕获内存的暂停保存同一个逻辑实例的进程、内存和文件系统状态。仅保存磁盘的暂停保存 E，之后重新启动应用，不恢复先前进程内存。两种情况下，同节点 Connect/Resume 都保持本地 Sandbox ID 和 StableID 不变。
+
+暂停的触发来源决定适用的策略：
+
+| 触发来源 | 保存状态及策略 |
+| --- | --- |
+| 显式 Pause | `memory` 缺省、null 或 true 时保存 S 及关联 E；`memory: false` 仅保存 E。 |
+| TTL 到期 | `autoPauseMemory` 选择保存 S 或仅保存 E，不改变显式 Pause 的默认行为。 |
+| Proxy 持续观察到空闲 | 由 `idleTimeout` 启用，始终请求保存内存，不受 `autoPauseMemory` 控制。Guest 后台工作及绕过 Proxy 的流量不在观察范围内，可能随 VM 被冻结。 |
+| 资源压力 | 采用独立的内存暂停和恢复策略，不由 `autoPauseMemory` 或 `idleTimeout` 配置。 |
+
+[捕获与暂停契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle_zh.md#capture-and-pause)维护精确前提和默认值。仅保存 VM 内存，不能保证外部对端、事务或有时效的凭据继续可用。
+
+制品保留在原节点时可以支持原地恢复。跨节点恢复要求目标能够访问完整引用图、绑定和密钥。仅把根制品发布到命名共享文件位置或 Manifest 还不够：[发布](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/artifacts_zh.md#artifact-publication)会保留已经发布的父层引用，不会递归复制或验证其完整历史图。
+
+数据可达也不转移 ownership 或证明满足恢复资格。跨节点导入/恢复还须满足适用迁移协议（需要时提供有效 MigrationToken）、执行输入兼容性及目标准入，详见[恢复资格](upgrading_zh.md#restore-eligibility)。StableID 保持不变，但单节点导入的 API/本地 ID 可能改变，具体区别见前文。
 
 这种语义适用于等待模型调用,人工确认,外部事件,长会话和节点迁移.预热池
 (`warm pool`)只是一种上层资源准备策略,可以提前维持可用实例或模板,不是独立的
@@ -131,4 +162,9 @@ flowchart TD
 | 安全域 | 配置的共享与保护范围，不是无条件跨所有租户共享。 |
 | Stable / Preview / Proposed | 公开发行通道及设计提案状态与生产部署能力分别描述；提案不是已交付功能。 |
 
-MUST/MUST NOT/SHOULD/SHOULD NOT/MAY 的使用必须保持源要求的强度。设计规范保留技术细节，总览与宣传材料以功能价值为主。
+## 继续完成实际任务
+
+- [快速开始](quickstart_zh.md)：创建并清理第一个运行中的沙箱。
+- [模板](templates_zh.md)：为独立会话准备可复用输入。
+- [沙箱使用](sandboxes_zh.md)：操作一个会话、暂停恢复或重置保留的磁盘。
+- [升级](upgrading_zh.md)：改变执行输入或节点前，先检查恢复资格。
