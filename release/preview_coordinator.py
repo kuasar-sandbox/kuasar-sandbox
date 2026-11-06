@@ -379,7 +379,23 @@ class RepositoryState:
         return status
 
     def usable_tags(self) -> list[str]:
-        return [tag for tag in self.releases if self.status(tag).complete]
+        # Discovery is not admission of a configured or selected publication.
+        # Shared repositories can contain other units and obsolete contracts;
+        # retain those releases without letting them block valid candidates.
+        usable = []
+        for tag in self.releases:
+            try:
+                preview_selection.parse_tag(self.unit.name, tag)
+            except preview_selection.SelectionError:
+                continue
+            try:
+                status = self.status(tag)
+            except Deferred as error:
+                print(f"==> skip unusable candidate {self.unit.repository} {tag}: {error}")
+                continue
+            if status.complete:
+                usable.append(tag)
+        return usable
 
 
 def recoverable_source_sha(status: ReleaseStatus) -> str | None:
