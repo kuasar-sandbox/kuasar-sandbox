@@ -26,6 +26,9 @@
 重新连接该实例时不要生成新的 route key。
 
 ```python
+if not __debug__:
+    raise RuntimeError("Run this recipe without Python optimization (-O/-OO or PYTHONOPTIMIZE).")
+
 import os, uuid
 from e2b import Sandbox
 
