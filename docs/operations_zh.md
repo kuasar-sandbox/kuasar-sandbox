@@ -24,7 +24,7 @@ journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pag
 - `sandbox-ctl`,VMM,node,registry,router 和 placer 是可独立观察和恢复的进程/故障域.
 - 节点持久记录与运行态 Inventory 用于重启恢复和孤儿清理;host socket 存在本身不是
   Guest ready 证据,恢复必须通过实际健康或执行操作确认.
-- 本地工件支持节点亲和恢复；共享文件或 Manifest 使制品可供其他节点读取。恢复仍要求已有 ownership、兼容输入与目标准入。原节点已被判断为 gone 的集群恢复还要求调用方持有有效 MigrationToken，并满足[恢复资格](upgrading_zh.md#restore-eligibility)，不能仅凭快照可读推断会自动迁移。
+- 本地工件支持节点亲和恢复。共享文件或 Manifest 根只有在完整引用图及所需 location/密钥绑定在目标端可用时，才能支持跨节点恢复；仅发布根不能证明满足此条件。恢复仍要求已有 ownership、兼容输入与目标准入。原节点已被判断为 gone 的集群恢复还要求调用方持有有效 MigrationToken，并满足[恢复资格](upgrading_zh.md#restore-eligibility)，不能仅凭快照可读推断会自动迁移。
 - registry 保存集群执行态,node 是运行中 sandbox 的事实来源;placer 只给出放置建议,
   最终资源确认仍在 node admission.
 - group 是集群分区键,路由,放置,凭据验证和操作保持 group-scoped.
@@ -34,11 +34,11 @@ journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pag
 | 故障 | 直接影响 | 恢复方式 |
 |---|---|---|
 | 单 compute node `store-ctl` 崩溃 | 本机 Manifest origin read/write 停;L1/L2 命中和文件路径不受影响 | systemd 重启后恢复 origin 访问 |
-| 单 compute node `cache-ctl tiered` 崩溃 | 需要 wire 的新 fault 按客户端 timeout/cancellation 等待或失败 | systemd 重启;持久的 RocksDB 数据可恢复 L1 命中,miss 仍正常下穿 |
-| 单 `cache-ctl shard` 节点崩溃 | 有效 RS 4+1 下,选中的 5 片中任意 4 个不同且有效的 shard index 可用于重建 | systemd 重启;peer 不可达不会自动修改 Maglev 成员表,也没有额外第 6 个 parity peer |
+| 单 compute node 分层缓存（`cache-ctl serve`，`mode: tiered`）崩溃 | 需要 wire 的新 fault 按客户端 timeout/cancellation 等待或失败 | systemd 重启;持久的 RocksDB 数据可恢复 L1 命中,miss 仍正常下穿 |
+| 单 shard daemon（`cache-ctl serve`，`mode: shard`）崩溃 | 有效 RS 4+1 下,选中的 5 片中任意 4 个不同且有效的 shard index 可用于重建 | systemd 重启;peer 不可达不会自动修改 Maglev 成员表,也没有额外第 6 个 parity peer |
 | 同一 4+1 key 的至少两个 shard 不可用 | 不足 4 个不同且有效的 shard 通常导致 L2 miss；显式路由、重建和格式错误仍作为错误返回 | 确认 miss 时下穿到可用 origin；错误可能使读取失败。成员变更一次只动 1 个 peer，并验证收敛 |
 | Conductor 崩溃 | API/准入与新启动中断；存量沙箱保留上次 grant | 重启后以全部有效 runner/builder 模板及 pool 对账持久 sandbox/Build 记录。完成已接受的执行结果和未完成清理，只接管符合条件的存活执行，并按原 launch mode 恢复已接受但中断的 Resume。开放准入前重建资源记账，见[重启对账](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node_zh.md#restart-reconciliation) |
-| S3-compatible 后端不可达 | 使用该 origin 的 Manifest 读写受影响 | 已 L1/L2 命中的沙箱继续跑;依赖新 origin 的写路径 / cold-image fault / 展平上传失败;本地或共享文件路径不受影响 |
+| S3-compatible 后端不可达 | 需要该 origin 的 Manifest 操作按其策略失败或等待 | L1/L2 命中的读取可以继续，但不保证沙箱持续运行；依赖 origin 的新写入、冷缺页和最终镜像上传受影响，独立的本地或共享文件路径不受影响 |
 | compute node 整机故障 | 该节点运行中的沙箱中断 | 隔离故障节点；集群恢复必须保有 ownership、调用方有效 MigrationToken 及符合条件的目标节点，并验证[完整恢复资格](upgrading_zh.md#restore-eligibility)。共享制品只解决数据可达性；仅本地制品仍依赖原节点/存储，不承诺自动恢复 |
 
 ### 资源池恢复
@@ -53,10 +53,10 @@ journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pag
 |---|---|---|
 | 单个 `registry` 成员崩溃 | 其参与的逻辑分片降一格;quorum 仍满足时继续服务,不足时该分片停写 | 成员恢复后通过 quorum read / read-repair catch-up;已路由会话可在无需新 registry lookup 时继续,仍取决于既有 node/transport 连接 |
 | registry 整集群完全下电但 shard 数据保留 | 下电期间 Reserve/Place 不可用 | registry quorum 恢复后读取原 shard 数据,node-link 重连并继续收敛 |
-| registry 执行 shard 不可恢复地丢失 | 不得从备份构造 sandbox/build 节点执行态 | provider 数据按其持久化流程恢复;存活 node 的执行投影恢复和 migration-token 持久 route 分别由 [orchestrator #34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33) 跟踪,完成前须明确报告不可恢复 |
+| registry 执行 shard 不可恢复地丢失 | 不得从备份构造 sandbox/build 节点执行态 | provider 数据按其持久化流程恢复。不支持从存活 node 投影或 migration-token 持久 route 重建丢失的执行 ownership。[orchestrator #34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33) 是历史提案，不是已实现的恢复流程；须明确报告这一限制 |
 | `router` 崩溃 | 该副本连接断 | 无状态,LB 改路由其余副本 |
 | `placer` 崩溃 | 该 placer 不再作为 ready 候选;冷放置 failover 到同 group 的其他 placer | 热路径不受影响;Place 超时后 registry 换下一个候选 |
-| 单 compute 节点 node-link 失联 | node owner 立即拒绝向该节点提交新请求；route owner 排除该节点并重新选择 | 重连后重报状态。`node_dead_after` 后 Registry 清理 node profile/list 与相关执行投影。孤儿清理比较完整 ownership、generation 和凭据绑定，见[集群恢复](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#registry-reliability) |
+| 单 compute 节点 node-link 失联 | node owner 立即拒绝向该节点提交新请求；route owner 排除该节点并重新选择 | 重连后重报状态。Registry 清理 node profile/list 与相关执行投影要求节点仍未连接，且有效的最后心跳记录距今已超过 `node_dead_after`；这不是精确清理期限。孤儿清理比较完整 ownership、generation 和凭据绑定，见[集群恢复](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#registry-reliability) |
 
 ## 恢复后的验收
 
