@@ -135,7 +135,7 @@ Dependency selection compares the linked/embedded source inputs used by each con
 
 A code change on the selected platform branch also creates a new aggregate Preview even if all six components are reused. Workflow run names for an aggregate version bind its platform source SHA. While any matching run remains active, the controller leaves the current Daily manifest unchanged, even if a newer run was cancelled or finished. A new branch HEAD gets a new run identity; old inputs are not rerun and an in-flight manifest is not rewritten. A branch-coordination task's identity also includes its requested date, so scans on different dates at the same platform SHA cannot incorrectly reuse each other's results.
 
-If a dependency rebuild was committed to the Daily manifest before its component Release existed, a later scan resumes that pending Preview even when the selected dependencies already equal the manifest. This applies to both Stable and Preview winners; advancing the date or revision publishes the rebuild under the newly selected suffix. Complete Releases still require the original source and dependency checks.
+If a dependency rebuild was committed to the Daily manifest before its component Release existed, a later scan resumes that pending Preview even when the selected dependencies already equal the manifest. This applies to both Stable and Preview winners; advancing the date or revision publishes the rebuild under the newly selected suffix. Complete Releases are reused by the selected tag, package set and native asset metadata, without auditing historical dependency bindings.
 
 <a id="first-arm-initialization"></a>
 ### 4.3 First migration to tag-selected inputs
@@ -295,7 +295,7 @@ Publication reads the newest committed channel description for the requested agg
 
 Selection updates the manifest without applying a length limit. Immediately before publication, the 125,000-character budget applies only to the complete human description. Over-budget prose stops publication and reports its actual size and budget. Edit and commit the manifest manually, then resume the original publisher while the successful stage and unchanged bytes remain available. The publisher only reads the manifest; it cannot compact, truncate or write back prose. Release bodies contain no machine validation, dependency, source or registry records. An expired or conflicting stage fails explicitly and requires fresh acceptance; no permanent recovery evidence store is created.
 
-Consumers extract only the selected product architecture plus `platform-release`; `workbench-<arch>-v*.tar.gz` is imported with `docker load`, never unpacked into that directory. The [Quick Start](quickstart.md) checks the declared set and selects explicit asset categories. Workbench is optional for users downloading products, but both image assets are mandatory for a new aggregate publication.
+Consumers extract only the selected product architecture plus `platform-release`; `workbench-<arch>-v*.tar.gz` is imported with `docker load`, never unpacked into that directory. [Installation](installation.md) checks the declared set and selects explicit asset categories. Workbench is optional for users downloading products, but both image assets are mandatory for a new aggregate publication.
 
 Preview, maintenance Stable and mainline Stable use identical asset contracts and release asset validation gates. They differ only in release state and Latest policy.
 
