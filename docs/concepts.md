@@ -107,7 +107,7 @@ The upper-level lifecycle uses common artifact references and integrity informat
 
 1. **Local files:** suitable for standalone nodes, local NVMe and node-affine workloads. Images, disk layers and snapshots can retain their native file representation.
 2. **Shared file storage:** NAS, NFS or another shared filesystem provides native file access across nodes. A named file location can hold snapshots and images directly, without first converting them to content chunks.
-3. **Manifest / object storage / tiered cache:** suitable for large-scale distribution, remote persistence, cross-node recovery, on-demand reads and hot-content caching. Artifacts do not depend on files on the original node; the store backend can be a filesystem or S3-compatible object storage.
+3. **Manifest / object storage / tiered cache:** suitable for large-scale distribution, remote persistence, cross-node recovery, on-demand reads and hot-content caching. A Manifest root does not prove that its entire dependency graph is remote: retained file-parent references must also be reachable at the destination. The store backend can be a filesystem or S3-compatible object storage.
 
 Operators can select different paths for different artifacts. For example, temporary node-local state can use NVMe, shared NAS snapshots can use file locations directly, and widely distributed images can use Manifest and tiered caching.
 
