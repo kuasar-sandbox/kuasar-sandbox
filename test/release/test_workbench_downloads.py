@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[2]
 TAG = 'release-v1.2.3'
@@ -42,7 +43,8 @@ class DownloadTests(unittest.TestCase):
     def select(self, data=None, *, tag=TAG, requested=None, arch='x86_64', download=True, failure=None):
         data = fixture(tag) if data is None else data
         requested = tag if requested is None else requested
-        sources = [(ROOT/'docs'/n).read_text().split("<<'PY'\n",1)[1].split('\nPY\n',1)[0]
+        command = 'python3 -I - "$RELEASE_VERSION" "$ASSETS_TSV" <<\'PY\'\n'
+        sources = [(ROOT/'docs'/n).read_text().split(command,1)[1].split('\nPY\n',1)[0]
                    for n in ('installation.md','installation_zh.md')]
         self.assertEqual(*sources)
         with tempfile.TemporaryDirectory() as directory:
@@ -67,7 +69,7 @@ urllib.request.urlopen=read
 sys.argv=['-',sys.argv[2],str(root/'assets.tsv')]
 exec(compile((root/'example.py').read_text(),'<documented selector>','exec'))
 """
-            result=subprocess.run([sys.executable,'-c',wrapper,str(root),requested],capture_output=True,text=True,
+            result=subprocess.run([sys.executable,'-I','-c',wrapper,str(root),requested],capture_output=True,text=True,
                 env=os.environ|{'ARCH':arch,'DOWNLOAD_WORKBENCH':str(int(download))},timeout=15)
             urls=json.loads((root/'requests.json').read_text()) if (root/'requests.json').exists() else []
             rows=(root/'assets.tsv').read_text().splitlines() if (root/'assets.tsv').exists() else []
@@ -135,12 +137,22 @@ exec(compile((root/'example.py').read_text(),'<documented selector>','exec'))
             self.assertEqual(len(urls),failure)
             self.assertEqual(rows,[])
 
+    def test_pythonoptimize_cannot_skip_metadata_validation(self):
+        data=fixture()
+        data['release']['assets'][0]['digest']=None
+        with patch.dict(os.environ, {'PYTHONOPTIMIZE': '2'}):
+            result,_,_=self.select()
+            self.assertEqual(result.returncode,0,result.stderr)
+            result,_,_=self.select(data)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('missing asset digest',result.stderr)
+
 
 class DownloadBytesTests(unittest.TestCase):
     def validate(self, *, missing=False, corrupt=False, entry='bin/tool', symlink=False, collision=False,
                  root_entry=None, root_type=tarfile.DIRTYPE, root_mode=0o755):
         text = (ROOT / 'docs/installation.md').read_text()
-        source = text.split('python3 - "$DOWNLOAD_DIR" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
+        source = text.split('python3 -I - "$DOWNLOAD_DIR" <<\'PY\'\n', 1)[1].split('\nPY\n', 1)[0]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             rows, sums, assets = [], [], []
@@ -174,7 +186,7 @@ class DownloadBytesTests(unittest.TestCase):
             if corrupt:
                 with (root / 'product.tar.gz').open('ab') as stream:
                     stream.write(b'corrupt')
-            return subprocess.run([sys.executable, '-c', source, str(root)], capture_output=True).returncode
+            return subprocess.run([sys.executable, '-I', '-c', source, str(root)], capture_output=True).returncode
 
     def test_native_subset_accepts_missing_unselected_assets(self):
         self.assertEqual(self.validate(), 0)
@@ -200,6 +212,11 @@ class DownloadBytesTests(unittest.TestCase):
 
     def test_changed_selected_asset_is_rejected(self):
         self.assertNotEqual(self.validate(corrupt=True), 0)
+
+    def test_pythonoptimize_cannot_skip_download_validation(self):
+        with patch.dict(os.environ, {'PYTHONOPTIMIZE': '2'}):
+            self.assertEqual(self.validate(), 0)
+            self.assertNotEqual(self.validate(corrupt=True), 0)
 
     def test_unsafe_members_and_cross_archive_collisions_are_rejected(self):
         for change in ({'entry': '../outside'}, {'entry': '/outside'}, {'symlink': True}, {'collision': True}):
