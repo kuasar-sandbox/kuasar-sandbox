@@ -91,9 +91,9 @@ Store 回源性能需要单独配置并记录真实拓扑。可比较的 cache/�
 
 | 路径 | 跨节点条件 | Cache 条件 | 恢复依赖 |
 |---|---|---|---|
-| Local file | 节点亲和或部署方复制 | 依赖文件系统 page cache | 需要原节点文件仍存在 |
+| Local file | 节点亲和或部署方复制 | 依赖文件系统 page cache | 被引用文件须在恢复目标端可用 |
 | Named shared file | NAS/NFS/共享文件系统对目标节点可见 | 依赖共享文件系统和 host page cache | 不要求转换为 Manifest |
-| Manifest | FS/S3-compatible store 对目标节点可达 | 可直接回源,也可使用 local/tiered cache | 由完整 Manifest 父链定位内容 |
+| Manifest | FS/S3-compatible store 对目标节点可达 | 可直接回源,也可使用 local/tiered cache | 目标端须能访问完整依赖图，包括保留的文件父引用及其绑定 |
 
 不能把普通 `file://` 统一解释为"不支持共享".当命名 location 位于共享文件系统时,
 它可以跨节点访问.也不能把 Manifest 的一次 cold-cache 成本写成所有后续请求的固定成本.

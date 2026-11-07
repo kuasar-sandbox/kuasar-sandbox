@@ -82,9 +82,9 @@ Compare these three artifact paths separately:
 
 | Path | Cross-node requirement | Cache behavior | Restore dependency |
 | --- | --- | --- | --- |
-| Local file | Node affinity or operator-managed copying | Filesystem page cache | Original node files must remain available |
+| Local file | Node affinity or operator-managed copying | Filesystem page cache | Referenced files must be available at the restore target |
 | Named shared file | NAS/NFS/shared filesystem visible to the target node | Shared-filesystem and host page caches | Conversion to Manifest is not required |
-| Manifest | FS/S3-compatible store reachable from the target node | Direct origin access or local/tiered cache | Content located through the complete Manifest parent chain |
+| Manifest | FS/S3-compatible store reachable from the target node | Direct origin access or local/tiered cache | The complete dependency graph, including retained file parents and their bindings, must be accessible at the target |
 
 Do not interpret every ordinary `file://` reference as incapable of sharing. A named location on a shared filesystem can be accessible across nodes. Nor is a Manifest cold-cache measurement a fixed cost for every subsequent request.
 
