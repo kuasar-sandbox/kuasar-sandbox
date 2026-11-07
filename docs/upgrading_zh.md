@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 从模板创建新实例 | 模板内容，新的实例身份 | 目标版本能读取该模板并完成启动、应用 ready 和数据访问 |
 | 从 S 恢复内存 | 进程、内存和磁盘的捕获状态 | CPU/架构、VMM、kernel/runtime、格式、完整父链及节点所有权均兼容 |
-| 从 E 冷启动，或显式从 S 选择冷启动 | 保存的磁盘状态，重新启动进程 | 目标版本支持 E 读取和所需配置覆盖；应用能重新初始化；不承诺任意替换捕获绑定 |
+| 从 E 冷启动，或显式从 S 选择冷启动 | 保存的磁盘状态，重新启动进程 | 目标版本支持 E 及其工作负载/磁盘图；冷启动用目标 kernel/runtime 身份派生新 C0，应用重新初始化 |
 | 重新构建模板 | 经明确迁移的应用数据和新软件环境 | 使用新输入完成 Build/ready/创建验收，并单独处理业务数据迁移 |
 
 对 paused 实例的 `connect(memory=false)` 是明确放弃旧进程内存的启动选择，不是绕过格式、身份或依赖校验的方法。对 running 实例 Connect 保持幂等，不会重启；需要重启时先按生命周期规则 Pause。无法证明 S 兼容时，应选择经过验收的冷启动或重建方案，不修改快照元数据伪装兼容。
@@ -46,9 +46,12 @@ portable ref 描述内容，不认证任意目标。部署方放置前必须验�
 - **VMM/快照格式**：配套 patched VMM 与 sandboxer 格式兼容。
   [工件兼容性](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/artifacts_zh.md#compatibility)
   拒绝旧 schema，不会静默迁移或冷启动。
-- **kernel/runtime**：部署可信匹配 kernel 及 runtime 绑定。restore 的廉价
-  kernel 检查不重算字节 hash；runtime basename/footer digest 必须匹配 E。
-  保留不可变版本输入，遵循[runtime 选择](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime_zh.md#节点升级)。
+- **kernel/runtime**：内存恢复保留 S 的原始 E/C0；运行中内核已捕获在 S 中，
+  因此 restore 不读取外部 kernel 文件或 identity sidecar。外部 runtime PMEM
+  backing 必须匹配 E 的 digest scheme 与 Bundle footer 声明的 digest，不扫描完整 payload。
+  匹配的配置 runtime 可以使用任意 basename；捕获 basename 仅是单一同目录候选的
+  fallback 提示，不是内容身份，也不表示扫描目录。被引用期间保持 runtime 字节不可变，
+  保留冷启动/回退所需 kernel 输入，遵循[runtime 选择](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime_zh.md#节点升级)。
 - **完整持久闭包**：S、E、memory/disk 父链及不可变对象能按原 canonical identity/
   命名 location 解析。须从目标节点验证，不依赖热 cache。
 - **密钥/所有权**：保留每个加密层的客户密钥及 Node/集群要求的凭据/所有权状态。
