@@ -45,6 +45,9 @@ start/ready，因此只有 Python 和可写 `/tmp` 还不够。
 不要向 `Template.build` 传 register-only 配置头；此 SDK 也会把头传给 trigger。
 
 ```python
+if not __debug__:
+    raise RuntimeError("Run this recipe without Python optimization (-O/-OO or PYTHONOPTIMIZE).")
+
 import json, os, urllib.request
 from e2b import Sandbox, Template
 

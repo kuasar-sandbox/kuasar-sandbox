@@ -52,6 +52,9 @@ select the auto memory target. No register-only configuration headers are passed
 to `Template.build`, because this SDK forwards them to trigger too.
 
 ```python
+if not __debug__:
+    raise RuntimeError("Run this recipe without Python optimization (-O/-OO or PYTHONOPTIMIZE).")
+
 import json, os, urllib.request
 from e2b import Sandbox, Template
 
