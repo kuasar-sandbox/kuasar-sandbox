@@ -30,6 +30,9 @@ identity in an application that outlives this client process; do not regenerate
 the route key when reconnecting to that instance.
 
 ```python
+if not __debug__:
+    raise RuntimeError("Run this recipe without Python optimization (-O/-OO or PYTHONOPTIMIZE).")
+
 import os, uuid
 from e2b import Sandbox
 
