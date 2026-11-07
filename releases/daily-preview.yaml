@@ -1,25 +1,25 @@
 version: release-v0.1.13
 delivery: workbench-v1
 previous_version: release-v0.1.12
-preview_version: preview.20261107
-previous_preview_version: preview.20261106
+preview_version: preview.20261107.1
+previous_preview_version: preview.20261107
 components:
   accelerator: v0.1.12-preview.20261107
   connector: v0.1.8-preview.20261107
-  sandboxer: v0.1.14-preview.20261107
-  orchestrator: v0.1.13-preview.20261107
-  runtime: runtime-v0.1.13-preview.20261107
+  sandboxer: v0.1.14-preview.20261107.1
+  orchestrator: v0.1.13-preview.20261107.1
+  runtime: runtime-v0.1.13-preview.20261107.1
   vmlinux: vmlinux-v0.1.7-preview.20261107
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.1.13-preview.20261107
+    # Kuasar Sandbox release-v0.1.13-preview.20261107.1
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
-    Previous aggregate selection: `release-v0.1.13-preview.20261106`.
+    Previous aggregate selection: `release-v0.1.13-preview.20261107`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261107/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261107.1/releases/daily-preview.yaml).
 
     ## Component versions
 
@@ -27,9 +27,9 @@ notes:
     |---|---|
     | `accelerator` | `v0.1.12-preview.20261107` |
     | `connector` | `v0.1.8-preview.20261107` |
-    | `sandboxer` | `v0.1.14-preview.20261107` |
-    | `orchestrator` | `v0.1.13-preview.20261107` |
-    | `runtime` | `runtime-v0.1.13-preview.20261107` |
+    | `sandboxer` | `v0.1.14-preview.20261107.1` |
+    | `orchestrator` | `v0.1.13-preview.20261107.1` |
+    | `runtime` | `runtime-v0.1.13-preview.20261107.1` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261107` |
 
     Six release units from five independently versioned repositories; `guest-runtime` supplies both `runtime` and `vmlinux`.
@@ -38,59 +38,44 @@ notes:
 
     ### accelerator
 
-    Selected version: `v0.1.12-preview.20261106` → `v0.1.12-preview.20261107`.
-
-    - docs: organize artifact, storage and image preparation handbooks ([#224](https://github.com/kuasar-sandbox/accelerator/pull/224), [commit a7e11f4a8399](https://github.com/kuasar-sandbox/accelerator/commit/a7e11f4a8399c58f838d966c37af283b6be8a17b)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/bbb0c79a7ee049fe54401c930780203df7efc64d...a7e11f4a8399c58f838d966c37af283b6be8a17b)
+    Selected version unchanged: `v0.1.12-preview.20261107`.
 
     ### connector
 
-    Selected version: `v0.1.7` → `v0.1.8-preview.20261107`.
-
-    - docs: reorganize connector operations and network contracts ([#104](https://github.com/kuasar-sandbox/connector/pull/104), [commit 35a6a0fe682a](https://github.com/kuasar-sandbox/connector/commit/35a6a0fe682ae001539abc8975e4992f1c03eb3a)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/connector/compare/7f0e35b11567c53cff7cbe4af825899fb53f0855...35a6a0fe682ae001539abc8975e4992f1c03eb3a)
+    Selected version unchanged: `v0.1.8-preview.20261107`.
 
     ### sandboxer
 
-    Selected version: `v0.1.14-preview.20261106` → `v0.1.14-preview.20261107`.
+    Selected version: `v0.1.14-preview.20261107` → `v0.1.14-preview.20261107.1`.
 
-    - docs: organize runtime handbook by capability and contract ownership ([#412](https://github.com/kuasar-sandbox/sandboxer/pull/412), [commit 63b29e5eed57](https://github.com/kuasar-sandbox/sandboxer/commit/63b29e5eed57b57df3544be905e414d022ddef43)).
-    - feat(storage): enable discard on managed ext4 mounts ([#414](https://github.com/kuasar-sandbox/sandboxer/pull/414), [commit 9debf9db56c8](https://github.com/kuasar-sandbox/sandboxer/commit/9debf9db56c881e6f605b7c8a4ee201b87d3cdcb)).
-    - docs: correct runtime capture and boot identity contracts ([#415](https://github.com/kuasar-sandbox/sandboxer/pull/415), [commit 556ae89579e9](https://github.com/kuasar-sandbox/sandboxer/commit/556ae89579e9fa283514a145da066c084a7a3621)).
+    - feat(storage): make automatic ext4 discard configurable ([#416](https://github.com/kuasar-sandbox/sandboxer/pull/416), [commit 7caf9e110f63](https://github.com/kuasar-sandbox/sandboxer/commit/7caf9e110f636c9b67964b78f5a9b3aa8c625bc4)).
+    - docs: distinguish retained checkpoint disk ownership ([#417](https://github.com/kuasar-sandbox/sandboxer/pull/417), [commit 8a8462d84065](https://github.com/kuasar-sandbox/sandboxer/commit/8a8462d8406507f08e8a1a9a672674a192093399)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/65c6afb7d59ba7a3115fbb8a7f07cee9bbd29e10...556ae89579e9fa283514a145da066c084a7a3621)
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/556ae89579e9fa283514a145da066c084a7a3621...8a8462d8406507f08e8a1a9a672674a192093399)
 
     ### orchestrator
 
-    Selected version: `v0.1.13-preview.20261106` → `v0.1.13-preview.20261107`.
+    Selected version: `v0.1.13-preview.20261107` → `v0.1.13-preview.20261107.1`.
 
-    - feat(conductor): add resource pools and capacity-aware recovery ([#515](https://github.com/kuasar-sandbox/orchestrator/pull/515), [commit 766732d787db](https://github.com/kuasar-sandbox/orchestrator/commit/766732d787db79ecb18882e4157bc01b8404168d)).
-    - docs: reorganize orchestration handbook and integrate resource-pool contracts ([#516](https://github.com/kuasar-sandbox/orchestrator/pull/516), [commit ebec98c94a01](https://github.com/kuasar-sandbox/orchestrator/commit/ebec98c94a014c74d31c7cc42731d9557fbc9610)).
-    - docs: clarify extension imports and telemetry startup order ([#517](https://github.com/kuasar-sandbox/orchestrator/pull/517), [commit 715941da4fc8](https://github.com/kuasar-sandbox/orchestrator/commit/715941da4fc837c9c68cacc8084146eabb7dbb8f)).
+    The version changed without additional repository commits.
 
-    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/c62927210da708ae449b395b77c761a5ff84264c...715941da4fc837c9c68cacc8084146eabb7dbb8f)
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/715941da4fc837c9c68cacc8084146eabb7dbb8f...715941da4fc837c9c68cacc8084146eabb7dbb8f)
 
     ### runtime
 
-    Selected version: `runtime-v0.1.13-preview.20261106` → `runtime-v0.1.13-preview.20261107`.
+    Selected version: `runtime-v0.1.13-preview.20261107` → `runtime-v0.1.13-preview.20261107.1`.
 
     The following repository history also includes shared guest-runtime and kernel changes; it is not limited to runtime-specific source changes.
 
-    - docs: separate runtime consumption, delivery contracts and production ([#113](https://github.com/kuasar-sandbox/guest-runtime/pull/113), [commit cee6f4b575c3](https://github.com/kuasar-sandbox/guest-runtime/commit/cee6f4b575c30b48f9896a10557569402f35fbc8)).
+    - docs: clarify runtime rollback ownership ([#114](https://github.com/kuasar-sandbox/guest-runtime/pull/114), [commit f44fda0b984d](https://github.com/kuasar-sandbox/guest-runtime/commit/f44fda0b984d9a6d9198ecbc850a4a0ba93f0cf7)).
+    - docs: clarify runtime bundle identity and package contents ([#115](https://github.com/kuasar-sandbox/guest-runtime/pull/115), [commit e6117a3eb6c3](https://github.com/kuasar-sandbox/guest-runtime/commit/e6117a3eb6c3222a4930086e2411a795ee5ce08f)).
+    - docs: align kernel guide with current device and identity contracts ([#116](https://github.com/kuasar-sandbox/guest-runtime/pull/116), [commit 5c16c51d4205](https://github.com/kuasar-sandbox/guest-runtime/commit/5c16c51d420564da7d1b33447b79a563f3b4e169)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/f415d584b464f76426449f70534affbbf0726bb6...cee6f4b575c30b48f9896a10557569402f35fbc8)
+    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/cee6f4b575c30b48f9896a10557569402f35fbc8...5c16c51d420564da7d1b33447b79a563f3b4e169)
 
     ### vmlinux
 
-    Selected version: `vmlinux-v0.1.6` → `vmlinux-v0.1.7-preview.20261107`.
-
-    Kernel release inputs: `native-deps/deps/vmlinux/*.config` and `native-deps/deps/linux-patches/`.
-
-    - docs: separate runtime consumption, delivery contracts and production ([#113](https://github.com/kuasar-sandbox/guest-runtime/pull/113), [commit cee6f4b575c3](https://github.com/kuasar-sandbox/guest-runtime/commit/cee6f4b575c30b48f9896a10557569402f35fbc8)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/f415d584b464f76426449f70534affbbf0726bb6...cee6f4b575c30b48f9896a10557569402f35fbc8)
+    Selected version unchanged: `vmlinux-v0.1.7-preview.20261107`.
 
     ## Download and use
 
@@ -98,7 +83,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261107/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261107/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261107.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261107.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
