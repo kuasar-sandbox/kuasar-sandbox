@@ -22,12 +22,13 @@ make perf-sandbox E2E_WORKDIR="$PREPARED"
 make perf-sandbox-manifest
 make perf-sandbox-working-set
 make perf-density
+make perf-warmpool-dedup
 make test-uffd-performance-gate
 make test-perf-tools
 ```
 
 `make perf` 先构建当前兄弟仓源码,再运行 accelerator cache benchmark 和主仓的 sandbox,
-Manifest,working-set 与 density harness.单独运行 cache benchmark:
+Manifest、working-set、density 与 warm-pool deduplication harness。density harness 存在[节点资源与密度](#节点资源与密度)所述的兼容性限制；聚合入口不代表每个 harness 都已通过当前产品验证。单独运行 cache benchmark:
 
 ```bash
 make -C ../accelerator perf-cache
@@ -70,8 +71,10 @@ platform 发布，Makefile 直接从源码路径调用，不重新构建预备�
 
 ### 测量对象
 
-accelerator cache benchmark 分别观察 local cache,tiered cache,shard fan-out 和 store
-origin.至少区分:
+accelerator cache benchmark 默认为 `BENCH_SCENARIO=local`。测量 tiered cache 或
+shard fan-out 时须显式选择 `tiered-l1` 或 `tiered-shard-l2`。这些由脚本管理的场景以
+另一个 local cache daemon 充当 upstream origin，不是真实的 Store/FS/S3 backend。
+Store 回源性能需要单独配置并记录真实拓扑。可比较的 cache/数据路径报告至少区分:
 
 - value size,prefill 数量,并发和运行时长;
 - client/server CPU 绑定与网络传输方式;
@@ -94,6 +97,10 @@ origin.至少区分:
 
 不能把普通 `file://` 统一解释为"不支持共享".当命名 location 位于共享文件系统时,
 它可以跨节点访问.也不能把 Manifest 的一次 cold-cache 成本写成所有后续请求的固定成本.
+
+`make perf-warmpool-dedup` 对同一镜像独立启动后的 overlay 和 memory snapshot 比较非零 chunk hash 集合的重合度；单次 image ingest 的共享只作为基本正确性检查。该受控负载不衡量通用跨镜像去重。
+
+Manifest 配置 facade 在 `cache.endpoint` 非空时选择 cache client，不会同时设置 cache miss 或故障时的直接回源路径。只有 `cache.endpoint` 为空时才选择直接读取 store。应单独记录 cache server 配置的回源行为，不能假设 local-cache 模式会自动获取缺失数据。
 
 内容复用结果只能解释为该数据集,安全域和父层关系下的观测.同模板实例的首要共享来自
 明确只读父层;不同虚机运行后偶然相同的内存字节不是快照效率前提.
@@ -132,7 +139,7 @@ raw/
 保留逐样本事实;`raw/` 保存 snapshot,publisher,restore 和 cache 证据.对外引用必须保留
 完整目录并给出对应 CI Run URL,不能只摘录 `report.md` 的某个分位数.
 
-主线 CI 的 working-set 项是 smoke,用于发现明显回归.正式性能报告应显式设置样本数,
+源码候选 CI 仅在 x86_64 且所选 owner 包含 `platform` 或 `sandboxer` 时选择 `working-set-smoke`，并非每种架构或 exact-assets run 都会运行。选中的步骤设置 `PERF_ITERS=1`，用于发现明显回归。正式性能报告应显式设置样本数,
 保存所有样本,并将 smoke 与统计报告分开命名.
 
 ### 快照语义
@@ -155,7 +162,11 @@ raw/
 三类负载.运行 `test/perf/density-perf.sh` 时应显式记录并发,memory zone,resource
 floor/startup/capacity,workload 参数,观察窗口和随机种子.
 
-报告同时观察:
+当前 density harness 不能原样兼容当前 conductor 配置：它仍输出已移除的 `proxy.mode`、`resource_listen.audit_path` 和 `resource_listen.dampening` 字段。默认 `$WORK/run` 也需要满足当前最大 ID 的 Unix socket 路径预算。在 harness 更新并针对精确组件版本验证之前，不得把 `make perf-density` 当作当前 conductor 的验收。
+
+脚本的文本报告采样 host `MemAvailable`、从日志提取的 controller 计数以及 cgroup `memory.events.local`（`high` 和 `oom`，不是 `oom_kill`）。它不能证明 Guest 业务完成，也不收集下列完整的各池和绑定证据。其打印的 `PASS` 和容量推算不是生产容量结论；最终打印的 verdict 本身也不会转换为失败退出状态。除报告外还须保留 stderr 和工作日志（`PERF_KEEP=1` 保留工作目录）。
+
+合格的密度报告必须同时观察:
 
 - 每个沙箱的 admission,settled,grant,reject 和终态;
 - host `MemAvailable` 与 sandbox cgroup `memory.current/events.local`;
@@ -189,7 +200,7 @@ Balloon 不是唯一弹性来源.空闲 CPU 调度,非活跃内存回收,Cgroup 
 
 ### Agent 业务完成基准
 
-原有 `density-perf.sh` 用于资源控制回归，不等同于完整 Agent 业务吞吐基准。`test/perf/agent-density/benchmark.py` 检查 BMS coding-Agent fixture 的 `summary.json` 和 `process-exit.json`：逻辑任务总数须为 24 或 48，计划须按固定三并发与动态十六并发分批顺序执行（末批可以不足）；全部任务被接纳并正确完成；工具工作次数与确定性结果哈希正确；没有宿主机 OOM Kill、清理失败或进程异常退出。每批从零重新编号的是**任务 ID，而不是重新执行业务**：比较按计划批次顺序、批内任务 ID 展平后的逻辑任务。准入拒绝不能算业务完成。运行实例数采样峰值单独报告，不能据此认定分配器的配置上限。
+原有 `density-perf.sh` 旨在表征资源控制行为，受上述兼容性和证据限制，不等同于完整 Agent 业务吞吐基准。`test/perf/agent-density/benchmark.py` 检查 BMS coding-Agent fixture 的 `summary.json` 和 `process-exit.json`：逻辑任务总数须为 24 或 48，计划须按固定三并发与动态十六并发分批顺序执行（末批可以不足）；全部任务被接纳并正确完成；工具工作次数与确定性结果哈希正确；没有宿主机 OOM Kill、清理失败或进程异常退出。每批从零重新编号的是**任务 ID，而不是重新执行业务**：比较按计划批次顺序、批内任务 ID 展平后的逻辑任务。准入拒绝不能算业务完成。运行实例数采样峰值单独报告，不能据此认定分配器的配置上限。
 
 校验器要求计划禁用业务重试，且每个任务观测到一次业务启动、任务与启动身份一致；报告 `planned_business_retries` 和 `observed_business_restarts`，但**不独立审计全部客户端 POST 尝试**。非 200 HTTP 轮询错误、传输错误及迟到响应分别计数，并与逐请求记录和逐任务计数交叉核对。一次轮询失败不自动等于业务失败或业务重试；HTTP 200 响应身份校验失败、最终结果错误或业务未完成仍须判失败。独立审计需保留每批 `timeline.jsonl`、原始请求与进程日志、精确环境和版本。校验器不负责启动沙箱，也不认证这些外部记录；报告 `seconds` 和 `speedup` 使用各批预热与执行时间之和，外层总耗时另含准备和清理。
 
@@ -219,7 +230,7 @@ placer 只做 group 导入和放置建议,最终资源确认在 node admission.�
 
 ## Release 与 CI 证据
 
-源码候选 CI 在公共 prepare 之前构建精确产品与 helper revision。产品 E2E 通过 `test/e2e/e2e` 运行扁平用例；源码/unit/race/vet 和 UFFD 性能保持独立，working-set smoke 有单独必需 job 和结果。exact-assets 验证消费包中的产品、helper 和 runner，不重新构建它们。架构结果记录每个已选用例、明确排除项及预备输入身份。
+源码候选 CI 在公共 prepare 之前构建精确产品与 helper revision。产品 E2E 通过 `test/e2e/e2e` 运行扁平用例；源码/unit/race/vet 和 UFFD 性能保持独立，按上述选择规则运行的 working-set smoke 有单独必需 job 和结果。exact-assets 验证消费包中的产品、helper 和 runner，不重新构建它们。架构结果记录每个已选用例、明确排除项及预备输入身份。
 
 工作流与证据入口:
 
@@ -251,7 +262,7 @@ make perf-sandbox-working-set
 make test-uffd-performance-gate
 ```
 
-修改节点资源控制路径时:
+修改节点资源控制路径时，使用下列单元测试入口。density 入口仅适用于已经验证兼容的 harness 版本，限制见上文：
 
 ```bash
 GOWORK=off make -C ../orchestrator test
