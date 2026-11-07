@@ -18,11 +18,12 @@ make perf-sandbox E2E_WORKDIR="$PREPARED"
 make perf-sandbox-manifest
 make perf-sandbox-working-set
 make perf-density
+make perf-warmpool-dedup
 make test-uffd-performance-gate
 make test-perf-tools
 ```
 
-`make perf` first builds the current sibling-repository sources, then runs accelerator's cache benchmark and the project's sandbox, Manifest, working-set and density harnesses. To run the cache benchmark separately:
+`make perf` first builds the current sibling-repository sources, then runs accelerator's cache benchmark and the project's sandbox, Manifest, working-set, density and warm-pool deduplication harnesses. The density harness has the compatibility limitations described under [Node resources and density](#node-resources-and-density); an aggregate target does not certify every harness against current products. To run the cache benchmark separately:
 
 ```bash
 make -C ../accelerator perf-cache
@@ -65,7 +66,7 @@ A result missing a necessary dimension can support local diagnosis, but cannot b
 
 ### Measurement subjects
 
-The accelerator cache benchmark observes local cache, tiered cache, shard fan-out and store origin separately. Distinguish at least:
+The accelerator cache benchmark defaults to `BENCH_SCENARIO=local`. Select `tiered-l1` or `tiered-shard-l2` explicitly for tiered-cache or shard-fan-out measurements. Those managed scenarios use another local cache daemon as their upstream origin, not a real Store/FS/S3 backend. Store-origin performance requires a separately configured and recorded real topology. For comparable cache/data-path reports, distinguish at least:
 
 - value size, prefill count, concurrency and run duration;
 - client/server CPU affinity and network transport;
@@ -86,6 +87,10 @@ Compare these three artifact paths separately:
 | Manifest | FS/S3-compatible store reachable from the target node | Direct origin access or local/tiered cache | Content located through the complete Manifest parent chain |
 
 Do not interpret every ordinary `file://` reference as incapable of sharing. A named location on a shared filesystem can be accessible across nodes. Nor is a Manifest cold-cache measurement a fixed cost for every subsequent request.
+
+`make perf-warmpool-dedup` compares unique nonzero chunk-hash overlap across independent boots of the same image, for overlay and memory snapshots; its single image ingest is a trivially shared sanity check. This controlled workload does not measure general cross-image deduplication.
+
+With the Manifest configuration facade, a nonempty `cache.endpoint` selects the cache client; it does not also install a direct-store fallback on a cache miss or failure. Direct store reads are selected when `cache.endpoint` is empty. Record the cache server's configured origin behavior separately, rather than assuming that local-cache mode automatically fetches missing data.
 
 Content-reuse results describe observations for the particular dataset, security domain and parent relationships. Instances of a common template primarily share explicit read-only parents. Coincidentally identical memory bytes in different running VMs are not a prerequisite for snapshot efficiency.
 
@@ -117,7 +122,7 @@ raw/
 
 `environment.json` records revisions, host, image, binaries and workload. `samples.jsonl` retains individual sample facts. `raw/` retains snapshot, publisher, restore and cache evidence. External citations must preserve the complete directory and provide the corresponding CI run URL, rather than extracting one percentile from `report.md`.
 
-The mainline CI working-set step is a smoke test for obvious regressions. A formal performance report must explicitly set sample counts, retain all samples and label smoke tests separately from statistical reports.
+The source-candidate CI plan selects `working-set-smoke` only for x86_64 when the selected owners include `platform` or `sandboxer`; it is not selected for every architecture or exact-assets run. The selected step sets `PERF_ITERS=1` to catch obvious regressions. A formal performance report must explicitly set sample counts, retain all samples and label smoke tests separately from statistical reports.
 
 ### Snapshot semantics
 
@@ -137,7 +142,11 @@ Snapshot layering, data carrier and cache state are three independent variables.
 
 `test/perf/workload.py` provides three workload classes: `idle`, deterministic grow/rest cycles and heavy-tailed active/idle activity. When running `test/perf/density-perf.sh`, explicitly record concurrency, memory zone, resource floor/startup/capacity, workload parameters, observation window and random seed.
 
-Reports observe all of the following:
+The current density harness is not compatible as-is with the current conductor configuration: it still emits removed `proxy.mode`, `resource_listen.audit_path` and `resource_listen.dampening` fields. Its default `$WORK/run` also needs to satisfy the current maximum-ID Unix-socket path budget. Do not treat `make perf-density` as current-conductor qualification until the harness has been updated and validated against the exact component revisions.
+
+The script's text report samples host `MemAvailable`, log-derived controller counters and cgroup `memory.events.local` (`high` and `oom`, not `oom_kill`). It does not establish guest business completion or collect the full per-pool and placement evidence below. Its printed `PASS` and projected ceiling are not a production capacity result; the final printed verdict is not itself propagated as a failing exit status. Retain stderr and work logs as well as the report (`PERF_KEEP=1` preserves the work directory).
+
+A qualifying density report must observe all of the following:
 
 - admission, settled, grant, reject and terminal state for every sandbox;
 - host `MemAvailable` and sandbox cgroup `memory.current/events.local`;
@@ -163,7 +172,7 @@ High density is a result of improved resource utilization, not a promise of a pr
 
 ### Agent business-completion benchmark
 
-The existing `density-perf.sh` validates resource-control behavior; it is not a complete Agent business-throughput benchmark. `test/perf/agent-density/benchmark.py` checks the prepared BMS coding-Agent fixture's `summary.json` and `process-exit.json`. It requires 24 or 48 logical Agents, sequential fixed-three versus dynamic-sixteen wave plans (with a smaller final wave when needed), complete admission and business completion, correct work counts and deterministic output hashes, no host OOM kills, successful cleanup and clean process exits. Tasks restart their **IDs**, not their work, at zero in each wave: comparisons flatten declared wave order and then wave-local task ID. Rejected admission is **not** business completion. Sampled running peaks are reported separately and do not establish an allocator's configured limit.
+The existing `density-perf.sh` is intended to characterize resource-control behavior, subject to the compatibility and evidence limits above; it is not a complete Agent business-throughput benchmark. `test/perf/agent-density/benchmark.py` checks the prepared BMS coding-Agent fixture's `summary.json` and `process-exit.json`. It requires 24 or 48 logical Agents, sequential fixed-three versus dynamic-sixteen wave plans (with a smaller final wave when needed), complete admission and business completion, correct work counts and deterministic output hashes, no host OOM kills, successful cleanup and clean process exits. Tasks restart their **IDs**, not their work, at zero in each wave: comparisons flatten declared wave order and then wave-local task ID. Rejected admission is **not** business completion. Sampled running peaks are reported separately and do not establish an allocator's configured limit.
 
 The checker requires a disabled business-retry plan and one observed business start with matching task/start identity. It reports `planned_business_retries` and `observed_business_restarts`; it does **not** independently audit all client POST attempts. Non-200 HTTP polls and transport failures are counted separately, including late replies, and cross-checked against per-request records and per-task counters. A failed poll is not automatically a failed or retried business task. An HTTP 200 response with failed identity validation, an incorrect final result, or incomplete work still fails validation. Preserve per-wave `timeline.jsonl`, raw request/process logs and exact environment/versions for independent audit. The checker does not launch sandboxes or certify those external records. Its `seconds` and `speedup` use the sum of per-wave warmup and execution; outer case wall time also includes setup/cleanup.
 
@@ -189,7 +198,7 @@ Placer only imports groups and recommends placement. Node admission performs fin
 
 ## Release and CI evidence
 
-Source-candidate CI builds exact product and helper revisions before shared preparation. Product E2E runs flat cases through `test/e2e/e2e`; source/unit/race/vet and UFFD performance remain separate, and working-set smoke has an independent required job and result. Exact-assets validation consumes the packaged products, helpers and runner without rebuilding them. Architecture results record each selected case, explicit exclusions and the prepared input identity.
+Source-candidate CI builds exact product and helper revisions before shared preparation. Product E2E runs flat cases through `test/e2e/e2e`; source/unit/race/vet and UFFD performance remain separate, and selected working-set smoke runs have an independent required job and result under the selection rule above. Exact-assets validation consumes the packaged products, helpers and runner without rebuilding them. Architecture results record each selected case, explicit exclusions and the prepared input identity.
 
 Workflow and evidence entry points:
 
@@ -218,7 +227,7 @@ make perf-sandbox-working-set
 make test-uffd-performance-gate
 ```
 
-For node-resource-control changes:
+For node-resource-control changes, use the unit-test entry below. The density entry is listed for compatibility-qualified harness revisions only; see the limitations above:
 
 ```bash
 GOWORK=off make -C ../orchestrator test
