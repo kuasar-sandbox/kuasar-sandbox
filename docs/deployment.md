@@ -14,7 +14,7 @@ Select roles according to the data path and control-plane topology. Local files,
 |---|---|---|
 | Compute Node | Hosts MicroVMs and node resource control; E2B template builds also run in build sandboxes on this node ([Build deployment](#build-deployment)). | `node-ctl conductor serve`, optionally with `resource_listen`; independent Proxy master and workers; `sandbox-ctl × N`. Deploy `cache-ctl` when selected for the Manifest path, and `store-ctl` when source access, publication or configured write admission requires it. |
 | Shared Storage | Native cross-node file access for named `file://` locations. | Operator-provided NAS, NFS or shared filesystem. |
-| L2 Cache Cluster (optional) | Distributed EC caching for the Manifest path; without it, cache can hit locally or read the origin. | `cache-ctl shard`. |
+| L2 Cache Cluster (optional) | Distributed EC caching for the Manifest path; without it, cache can hit locally or read the origin. | `cache-ctl serve` (`mode: shard`). |
 | Cluster Control Plane (optional) | E2B-compatible multi-node control: registry maintains execution state, router supplies the common entry point, and placer imports groups and selects placement. Nodes still execute lifecycle operations. | `cluster-ctl registry`, `cluster-ctl router`, `cluster-ctl placer`. |
 
 **External shared resources**, operated outside the platform:
@@ -34,7 +34,7 @@ Select roles according to the data path and control-plane topology. Local files,
 |---|---|---|---|---|
 | `node-ctl conductor serve` | Local orchestration, E2B-compatible control plane, optional node resource arbitration and node-link client. Drives sandbox-ctl through `sandbox-runner@<run-id>` and `sandbox-builder@<run-id>`. The independent Proxy owns sandbox data ingress; conductor does not serve the data plane. | One conductor per node. | systemd. | [orchestrator/node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md); resource protocol in [node-resource](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md). |
 | `node-ctl proxy serve` | Master subscribes to routes and conductor-owned MMDS policy over config-socket, binds data/MMDS listeners and manages workers. Workers read fixed routes through mmap and query mutable MMDS routes/values/services through local master RPC; they authenticate and proxy data traffic, including the native exec gate. | One master plus configured `workers`. | systemd. | [orchestrator/node-proxy](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md). |
-| `cache-ctl` (`mode: local|tiered`, optional) | Manifest read entry: local L1, optional EC L2 and store origin. | Commonly one per selected cache configuration; separate domains can use separate instances. | systemd; start before consumers of this Manifest path. | [accelerator/cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md). |
+| `cache-ctl` (`mode: local` / `mode: tiered`, optional) | Manifest read entry: `local` is direct KV; `tiered` composes configured cache tiers and an origin, optionally including EC L2. | Commonly one per selected cache configuration; separate domains can use separate instances. | systemd; start before consumers of this Manifest path. | [accelerator/cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md). |
 | `store-ctl` (optional) | Node-side read/write service for FS/S3-compatible Manifest storage. | Commonly one sidecar per node/storage configuration. | systemd; required when selected source access, publication or configured write admission uses Store ([Build deployment](#build-deployment)). | [accelerator/store](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md). |
 | `sandbox-ctl run` | Controls one sandbox, similar in lifecycle to `runc run`; not a shared daemon. | One per sandbox. | Assigned by node-ctl through `sandbox-runner@<run-id>` and its `run-sandbox` launcher. | [Sandboxer Runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime.md). |
 | `cloud-hypervisor` | Patched VMM, child of sandbox-ctl. | One per sandbox. | Spawned by sandbox-ctl. | [Sandboxer VMM](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/vmm.md). |
@@ -49,8 +49,8 @@ Bind node-local storage, cache and control services to loopback or UDS. Public A
 |---|---|---|---|
 | `store-ctl` | `127.0.0.1:7100` | gRPC | Persistent-object reads, write admission and writes for local clients; the Store specification owns the RPC schema. |
 | `store-ctl` | `127.0.0.1:7061` | gRPC health | Probes. |
-| `cache-ctl tiered` | `127.0.0.1:7070` | Custom binary TCP wire | sandbox-ctl/manifest-ctl chunk reads. |
-| `cache-ctl tiered` | `127.0.0.1:7071` | gRPC | Health, `ping`, `info`. |
+| `cache-ctl serve` (`mode: tiered`) | `127.0.0.1:7070` | Custom binary TCP wire | sandbox-ctl/manifest-ctl chunk reads. |
+| `cache-ctl serve` (`mode: tiered`) | `127.0.0.1:7071` | gRPC | Health, `ping`, `info`. |
 | `node-ctl conductor serve` (`resource_listen`) | `/run/sandbox-resource.sock` | Resource protocol over UDS | sandbox-ctl resource-controller dial target. |
 | `sandbox-ctl` | `<run_root>/sandboxes/<sid>/*.sock` for node-managed sandboxes | UDS | `ch.sock`, `blk{0,1}.sock`, `uffd.sock`, `ctl.sock`, `vsock.sock` and `_5000`; the runtime PID file identifies sandbox-ctl. Sandbox bootstrap/prepare on config-socket authenticates the parent RunID process against `<run_root>/runners/<run-id>.pid`. Assignment/launch parameters come through config-socket, not an `SANDBOX_ARGS` envfile. |
 | `node-ctl conductor serve` | `api.listen`, e.g. `:443` | HTTPS/h2 or HTTP/h2c, according to topology | E2B control API; the independent Proxy supplies the separate data entry. See [cluster listener constraints](#relationship-to-nodes-and-external-management). |
@@ -141,7 +141,7 @@ See [security boundaries](security.md) for the combined MMDS, public-ingress and
 
 ## L2 Cache Cluster
 
-L2 is optional acceleration for the Manifest path. Use local cache plus origin alone, or deploy shards according to working set and failure domains. It does not participate in native local/named shared-file reads.
+L2 is optional acceleration for the Manifest path. For node-local caching with Store fallback, use `mode: tiered` with an embedded local tier and Store origin, without an EC tier; add shards only when justified by working set and failure domains. `mode: local` is direct KV without origin fallback. A configured Manifest `cache.endpoint` takes precedence over `store.endpoint`; a cache miss does not make that client retry Store. L2 caching does not participate in native local/named shared-file reads.
 
 ### Cluster specification
 
@@ -156,14 +156,18 @@ L2 is optional acceleration for the Manifest path. Use local cache plus origin a
 
 | Process | Listener | Protocol | Purpose |
 |---|---|---|---|
-| `cache-ctl shard` | `0.0.0.0:7070` | wire | Shard PUT/GET from compute-node tiered cache. |
-| `cache-ctl shard` | `0.0.0.0:7071` | gRPC | Health and `info`. |
+| `cache-ctl serve` (`mode: shard`) | `0.0.0.0:7070` | wire | Shard PUT/GET from compute-node tiered cache. |
+| `cache-ctl serve` (`mode: shard`) | `0.0.0.0:7071` | gRPC | Health and `info`. |
 
 Shard mode neither reads L3 nor holds origin credentials. It is a KV service; peers do not require a shard leader.
 
 ### Membership changes
 
+Start every cache daemon with `cache-ctl serve --config <path>` and select `local`, `tiered` or `shard` in YAML. `cache-ctl shard get` / `cache-ctl shard put` are client operations, not a shard-daemon launcher.
+
 Each compute node's tiered YAML lists `tiers[].cluster.peers`. Adding/removing a peer is a compute-side **configuration change plus SIGHUP**, rebuilding the Maglev table. The affected keys depend on the old/new membership; do not assume a universal exact `1/M` movement ratio. Surviving peers can return existing framed shards by their recorded shard index.
+
+SIGHUP reloads EC peer membership, not the codec or other daemon settings. Keep at least the running codec's total shard count in the membership; shrinking below it can return routing errors rather than a clean miss. Expanding an initially clamped pool does not automatically upgrade its data/parity scheme.
 
 **Change one peer at a time.** Changing two or more peers can lose more than the single parity allowance of a 4+1 key, producing an L2 miss and falling through to origin. Confirm convergence/hit behavior before the next change; one-at-a-time operations are a precaution, not an unconditional no-miss guarantee. Shard nodes themselves remain KV servers and do not need the membership list.
 
@@ -250,7 +254,7 @@ flowchart TD
   S --> H["Cloud Hypervisor and guest"]
   S -->|"Resource UDS"| N
   S --> F["Local file / NAS / NFS"]
-  S -->|"Optional Manifest ObjectGet :7070"| C["cache-ctl local / tiered: L1 RocksDB"]
+  S -->|"Optional Manifest ObjectGet :7070"| C["cache-ctl tiered mode: L1 RocksDB"]
   C -->|"EC fan-out"| L["Optional L2 cluster"]
   C -->|"Origin gRPC :7100"| O["store-ctl sidecar"]
   O --> B["FS / S3-compatible backend"]
@@ -261,7 +265,7 @@ flowchart TD
 ```mermaid
 flowchart TD
   C["Compute-node tiered caches"] -->|"Configured EC shard fan-out"| P["Maglev peer placement"]
-  P --> S["cache-ctl shard peers: wire :7070 / gRPC :7071"]
+  P --> S["cache-ctl serve (mode: shard): wire :7070 / gRPC :7071"]
   S --> D["RocksDB on SSD"]
 ```
 
@@ -322,10 +326,10 @@ L2 shutdown has no strict ordering against compute shutdown; each tiered client 
 | Process | Example configuration |
 |---|---|
 | store-ctl | FS backend at `/var/store`. |
-| cache-ctl | `mode: local`, no L2. |
+| cache-ctl | `mode: tiered`, embedded local tier and Store origin, no EC/L2. |
 | sandbox-ctl × N | Manual runs may omit conductor. |
 
-This example uses no L2, remote object store or separate resource-controller daemon. Resource arbitration is integrated into conductor; without resource_listen, use static cgroup limits. Manifest-ctl uses local store/cache; see [local Cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md). For an unmodified E2B SDK, run conductor as the standalone API; the cluster layer remains unnecessary.
+This example uses no L2, remote object store or separate resource-controller daemon. Resource arbitration is integrated into conductor; without resource_listen, use static cgroup limits. Manifest-ctl uses local store/cache; see [Cache configuration](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md). For an unmodified E2B SDK, run Conductor as the standalone API together with the independent Proxy master/workers and verify their route barrier; Conductor alone is not a complete SDK deployment. The cluster layer remains unnecessary.
 
 ### Production in one AZ
 
@@ -336,7 +340,7 @@ This example uses no L2, remote object store or separate resource-controller dae
 | Optional cache | Local cache or L2 shards sized by hit rate and failure domain. |
 | Control plane | Standalone node-ctl or registry + router + placer. |
 
-Each compute node runs conductor and one sandbox-ctl per active sandbox. Add store and optional cache for Manifest data. Measure node count, per-node concurrency and cache capacity using the target versions, hardware, sandbox specifications and workload; architecture diagrams do not establish fixed capacity. For cluster mode, choose registry membership and LB-backed router/placer replicas according to availability and load.
+Each compute node runs Conductor, the independent Proxy master/workers and one sandbox-ctl per active sandbox. Add store and optional cache for Manifest data. Measure node count, per-node concurrency and cache capacity using the target versions, hardware, sandbox specifications and workload; architecture diagrams do not establish fixed capacity. For cluster mode, choose registry membership and LB-backed router/placer replicas according to availability and load.
 
 ### Multiple AZs
 

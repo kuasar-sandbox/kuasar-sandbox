@@ -15,7 +15,7 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 |---|---|---|
 | Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行([Build 部署](#build-部署)) | `node-ctl conductor serve`(含可选 `resource_listen`)、独立 Proxy master + workers、`sandbox-ctl × N`;Manifest 数据路径按需部署 `cache-ctl`,来源访问、发布或配置的写入准入需要 Store 时部署 `store-ctl` |
 | Shared Storage | 为命名 `file://` location 提供跨节点原生文件访问 | 部署方提供的 NAS,NFS 或共享文件系统 |
-| L2 Cache Cluster(可选) | 为 Manifest 路径提供分布式 EC 缓存,未部署时 cache 可以本地命中或直接回源 | `cache-ctl shard` |
+| L2 Cache Cluster(可选) | 为 Manifest 路径提供分布式 EC 缓存,未部署时 cache 可以本地命中或直接回源 | `cache-ctl serve` (`mode: shard`) |
 | Cluster Control Plane(可选) | E2B 兼容多节点控制面:registry 维护执行态,router 提供统一入口,placer 导入 group 并放置;生命周期仍由 node 执行 | `cluster-ctl registry`,`cluster-ctl router`,`cluster-ctl placer` |
 
 **外部共享资源**(由部署方运营,平台外)
@@ -35,7 +35,7 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 |---|---|---|---|---|
 | `node-ctl conductor serve` | 本机沙箱编排 + e2b 兼容控制面 + 节点级资源仲裁(`resource_listen`)+ node-link 集群接入客户端;经 run-id 模板单元 `sandbox-runner@<run-id>`/`sandbox-builder@<run-id>` 驱动 sandbox-ctl；数据入口由独立 Proxy 承载，Conductor 不直接提供数据面 | 单实例 | systemd | 平台内,[orchestrator/docs/node_zh.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node_zh.md)(资源协议见 node-resource.md)|
 | `node-ctl proxy serve`| proxy master 经 config-socket 订阅路由与 conductor-owned MMDS policy、绑定独立数据/MMDS入口并管理 worker;worker 用 mmap 读取固定路由,经 master 本机 RPC 查询可变 MMDS route/value/service,执行数据面鉴权、反代及 native exec gate | 1 master + `workers` 个 worker | systemd | 平台内,[orchestrator/docs/node-proxy_zh.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy_zh.md) |
-| `cache-ctl`(`mode: local|tiered`,可选)| Manifest 数据入口:节点本地 L1,可选 EC L2 和 store origin | 通常每个节点/所选配置一个实例;独立域可分实例 | systemd,使用 Manifest 路径时先于 node-ctl | 平台内,[docs/cache_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md) |
+| `cache-ctl`(`mode: local` / `mode: tiered`,可选)| Manifest 数据入口：`local` 为直接 KV；`tiered` 组合所配置缓存层与 origin，可选 EC L2 | 通常每个节点/所选配置一个实例;独立域可分实例 | systemd,使用 Manifest 路径时先于 node-ctl | 平台内,[docs/cache_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md) |
 | `store-ctl`(可选) | Manifest store 的节点侧 FS/S3-compatible 读写服务 | 通常每个节点/所选配置一个实例;独立域可分实例 | systemd,所选来源访问、发布或配置的写入准入使用 Store 时启动([Build 部署](#build-部署)) | 平台内,[docs/store_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store_zh.md) |
 | `sandbox-ctl`(`run`) | 单个沙箱的控制平面(类 `runc run`);非 daemon | 每沙箱一个 | 由 node-ctl 经 `sandbox-runner@<run-id>` 单元(`run-sandbox`)assignment 后启动 | 平台内,[Sandbox Runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime_zh.md) |
 | `cloud-hypervisor` | VMM(patched);`sandbox-ctl` 子进程 | 每沙箱一个 | `sandbox-ctl` 派生 | 平台内,[VMM 契约](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/vmm_zh.md) |
@@ -51,8 +51,8 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 |---|---|---|---|
 | `store-ctl` | `127.0.0.1:7100` | gRPC | 为本机客户端提供持久对象读取、写入准入及写入；RPC schema 由 Store 规范维护|
 | `store-ctl` | `127.0.0.1:7061` | gRPC health | 探针 |
-| `cache-ctl tiered` | `127.0.0.1:7070` | wire(自定义二进制 TCP)| 数据面:`sandbox-ctl` / `manifest-ctl` 拉 chunk |
-| `cache-ctl tiered` | `127.0.0.1:7071` | gRPC | health / `ping` / `info` |
+| `cache-ctl serve` (`mode: tiered`) | `127.0.0.1:7070` | wire(自定义二进制 TCP)| 数据面:`sandbox-ctl` / `manifest-ctl` 拉 chunk |
+| `cache-ctl serve` (`mode: tiered`) | `127.0.0.1:7071` | gRPC | health / `ping` / `info` |
 | `node-ctl conductor serve(resource_listen)` | `/run/sandbox-resource.sock` | UDS,自定义协议 | 沙箱资源协议(`sandbox-ctl` 拨号目标)|
 | `sandbox-ctl` | `<run_root>/sandboxes/<sid>/*.sock` | UDS | sandbox 内部:`ch.sock` / `blk{0,1}.sock` / `uffd.sock` / `ctl.sock` / `vsock.sock`(+ `_5000`);runtime PID file 标识 sandbox-ctl 进程；config-socket 上的 sandbox bootstrap/prepare 使用 `<run_root>/runners/<run-id>.pid` 鉴别父 RunID 进程;assignment/launch 参数经 config-socket 交接,不使用 SANDBOX_ARGS envfile|
 | `node-ctl conductor serve` | `api.listen`,如 `:443` | 按拓扑使用 HTTPS/h2 或 HTTP/h2c | E2B 控制 API；独立 Proxy 提供单独的数据入口。集群内部 listener 约束见 [节点与管理面连接](#与节点--平台管理面的关系) |
@@ -170,8 +170,7 @@ MMDS、公开入口和集群内部网络的保护要求统一见[安全边界](s
 
 ## L2 Cache Cluster
 
-L2 是 Manifest 数据路径的可选加速层.部署可以只使用 local cache + store origin,
-也可以按工作集和故障域部署 shard 集群.它不参与本地文件或命名共享文件读取.
+L2 是 Manifest 数据路径的可选加速层。若需节点本地缓存及 Store 回源，使用 `mode: tiered`，配置 embedded 本地层与 Store origin，无需 EC tier；仅在工作集与故障域需求确有必要时增加 shard。`mode: local` 是直接 KV，不会回源。Manifest 配置的 `cache.endpoint` 优先于 `store.endpoint`，cache miss 不会让该客户端重试 Store。L2 不参与本地文件或命名共享文件读取。
 
 ### 集群规格
 
@@ -190,18 +189,22 @@ L2 是 Manifest 数据路径的可选加速层.部署可以只使用 local cache
 
 | 进程 | 监听 | 协议 | 用途 |
 |---|---|---|---|
-| `cache-ctl shard` | `0.0.0.0:7070` | wire | shard PUT/GET(由 compute node 上 tiered cache-ctl 发起)|
-| `cache-ctl shard` | `0.0.0.0:7071` | gRPC | health / `info` |
+| `cache-ctl serve` (`mode: shard`) | `0.0.0.0:7070` | wire | shard PUT/GET(由 compute node 上 tiered cache-ctl 发起)|
+| `cache-ctl serve` (`mode: shard`) | `0.0.0.0:7071` | gRPC | health / `info` |
 
 `shard` 模式既不访问 L3 也不持有任何 origin 凭据,纯 KV——这是它能水平扩展、
 彼此对等无主的前提。
 
 ### 成员变更
 
+所有 cache daemon 均使用 `cache-ctl serve --config <path>` 启动，在 YAML 中选择 `local`、`tiered` 或 `shard`。`cache-ctl shard get` / `cache-ctl shard put` 是客户端操作，不是 shard daemon 的启动命令。
+
 各 compute node 的 tiered YAML 配置 `tiers[].cluster.peers`。增减 peer 是
 compute 侧**配置变更 + SIGHUP**,重建 Maglev 表。受影响的 key 取决于变更前后的
 成员表,不能承诺普遍且精确的 1/M 迁移比例。存活 peer 按返回帧内记录的 shard index
 继续提供既有 shard。
+
+SIGHUP 只重载 EC peer 成员表，不重建 codec，也不重载其他 daemon 设置。成员数必须至少达到运行中 codec 的总 shard 数；缩减到此数量以下可能返回路由错误，而不是 clean miss。初始被 clamp 的池即使扩容，也不会自动提升 data/parity scheme。
 
 **一次只变更一个 peer**。同时更换两个或更多 peer 可能超过 4+1 的单 parity 容忍度,
 使相关 key 发生 L2 miss 并回源。确认收敛/命中后再改下一个 peer;此规程是降低风险,
@@ -304,7 +307,7 @@ flowchart TD
   S --> H["Cloud Hypervisor and guest"]
   S -->|"Resource UDS"| N
   S --> F["Local file / NAS / NFS"]
-  S -->|"Optional Manifest ObjectGet :7070"| C["cache-ctl local / tiered: L1 RocksDB"]
+  S -->|"Optional Manifest ObjectGet :7070"| C["cache-ctl tiered mode: L1 RocksDB"]
   C -->|"EC fan-out"| L["Optional L2 cluster"]
   C -->|"Origin gRPC :7100"| O["store-ctl sidecar"]
   O --> B["FS / S3-compatible backend"]
@@ -315,7 +318,7 @@ flowchart TD
 ```mermaid
 flowchart TD
   C["Compute-node tiered caches"] -->|"Configured EC shard fan-out"| P["Maglev peer placement"]
-  P --> S["cache-ctl shard peers: wire :7070 / gRPC :7071"]
+  P --> S["cache-ctl serve (mode: shard): wire :7070 / gRPC :7071"]
   S --> D["RocksDB on SSD"]
 ```
 
@@ -347,18 +350,18 @@ flowchart TD
 
 **L2 Cache Cluster(可选,在使用它的 compute 之前)**
 
-2. 配置的 `cache-ctl shard` 成员启动并健康
+2. 配置的 `cache-ctl serve` (`mode: shard`) 成员启动并健康
 3. 集群成员清单(`tiers[].cluster.peers`)落到 compute node 配置仓
 
 **Compute Node(每节点独立)**
 
 4. 所选来源访问、发布或配置的写入准入使用 Store 时启动 `store-ctl`,确认 active
    generation 已 init 且 gRPC 健康
-5. 使用 cache 时启动 `cache-ctl local|tiered`;tiered 模式确认 L2 peer 和 store
+5. 使用 cache 时启动 `cache-ctl serve`，在 YAML 中选择 `local` 或 `tiered`;tiered 模式确认 L2 peer 和 store
    origin 可达
 6. 启动 Conductor 及配置的 resource_listen，完成节点恢复/对账；启动独立 Proxy master/workers，核验受信 registration、监听与路由同步。此后才通过 standalone E2B 或配置的 Registry/Router 入口开放沙箱准入。每个新 Create 都必须通过 Proxy route barrier，控制 API 已监听本身不代表已就绪。
 
-注：`cache-ctl tiered` 启动不要求 L2 全员在线。clean miss 可下穿，后端或协议错误则保持 Cache 契约的显式错误语义，不能把任意失败当作 miss(详见 [docs/cache_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md) 错误模型)。**写**路径
+注：`cache-ctl serve` (`mode: tiered`) 启动不要求 L2 全员在线。clean miss 可下穿，后端或协议错误则保持 Cache 契约的显式错误语义，不能把任意失败当作 miss(详见 [docs/cache_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md) 错误模型)。**写**路径
 (`manifest-ctl store` 直连 `store-ctl`)在所选持久化后端 / store-ctl 不可达时会失败.
 
 Build 复用 Conductor;待 Conductor、所选来源/发布后端及配置的 Store 写入准入 endpoint
@@ -373,8 +376,7 @@ Build 复用 Conductor;待 Conductor、所选来源/发布后端及配置的 Sto
 3. 若部署 cache-ctl,则 SIGTERM,等待正常在途请求处理和 RocksDB 关闭完成
 4. 若部署 `store-ctl`,则最后停止该服务
 
-L2 cluster 的关闭与 compute node 关闭无强序——每个 compute node 的 `cache-ctl
-tiered` 按 Cache 错误/回退契约处理 L2 不可达，不把任意错误自动当作 clean miss。
+L2 cluster 的关闭与 compute node 关闭无强序——每个 compute node 的 tiered cache 按 Cache 错误/回退契约处理 L2 不可达，不把任意错误自动当作 clean miss。
 
 ## 部署规模示例
 
@@ -382,13 +384,13 @@ tiered` 按 Cache 错误/回退契约处理 L2 不可达，不把任意错误自
 
 ```
 单机:  store-ctl       (fs backend, /var/store)
-       cache-ctl       (mode: local,无 L2)
+       cache-ctl       (mode: tiered,embedded 本地层 + Store origin,无 EC/L2)
        sandbox-ctl × N (node-ctl 可省,手工 run)
 ```
 
 无 L2 cluster,无远程对象存储,无独立资源控制器(资源仲裁随 `node-ctl conductor serve` 内置,`resource_listen`
 未配则静态 cgroup);`manifest-ctl` 走本机 `store-ctl` + `cache-ctl`。对应 [docs/cache_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md)
-中的 local 模式。**单机直供 e2b SDK,无需 cluster 层(`node-ctl conductor serve` 即北向面)**。
+中的 tiered 配置。单机直供未修改的 E2B SDK 时，需同时运行作为独立 API 的 Conductor 与独立 Proxy master/workers，并核验 route barrier；仅有 Conductor 不构成完整 SDK 部署，仍无需 cluster 层。
 
 ### 生产单 AZ
 
@@ -399,7 +401,7 @@ Optional cache:    local cache or an L2 shard cluster sized by hit rate and fail
 Control plane:     node-ctl standalone or registry + router + placer
 ```
 
-每个 compute 节点运行 `node-ctl` 和当前沙箱对应的 `sandbox-ctl`;使用 Manifest
+每个 compute 节点运行 Conductor、独立 Proxy master/workers 和当前沙箱对应的 `sandbox-ctl`;使用 Manifest
 数据路径时再部署 `store-ctl` 与可选 `cache-ctl`.节点数量,单节点并发和 cache
 容量必须用目标版本,硬件,沙箱规格与 workload 实测,不能由架构图中的固定值推导.
 Cluster Control Plane 由 registry 自聚簇,LB 后的 router 和 placer 组成,副本数按
