@@ -18,6 +18,8 @@ The complete Release asset set is checked, then only the host architecture and s
 
 `files.tsv` is a local list of downloaded filenames, sizes and hashes for offline rechecking. It is not a published asset or a test record. Use fresh download and installation directories.
 
+The inline Python checks use isolated mode (`-I`) so inherited `PYTHONOPTIMIZE` cannot disable their assertions.
+
 ```bash
 set -euo pipefail
 RELEASE_VERSION="${RELEASE_VERSION:-}"
@@ -27,7 +29,7 @@ DOWNLOAD_WORKBENCH="${DOWNLOAD_WORKBENCH:-1}"
 export ARCH DOWNLOAD_WORKBENCH
 ASSETS_TSV="$(mktemp)"
 trap 'rm -f -- "$ASSETS_TSV"' EXIT
-RELEASE_VERSION="$(python3 - "$RELEASE_VERSION" "$ASSETS_TSV" <<'PY'
+RELEASE_VERSION="$(python3 -I - "$RELEASE_VERSION" "$ASSETS_TSV" <<'PY'
 import base64, json, os, re, sys
 from urllib.request import Request, urlopen
 requested, output = sys.argv[1:]
@@ -142,7 +144,7 @@ Recheck every downloaded file, then validate archive types, paths, permissions a
 
 ```bash
 set -euo pipefail
-python3 - "$DOWNLOAD_DIR" <<'PY'
+python3 -I - "$DOWNLOAD_DIR" <<'PY'
 import hashlib, pathlib, re, sys, tarfile
 root = pathlib.Path(sys.argv[1])
 rows = [line.split('\t') for line in (root / 'files.tsv').read_text().splitlines()]

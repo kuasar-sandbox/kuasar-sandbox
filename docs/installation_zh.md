@@ -17,6 +17,8 @@ GNU tar 和 sha256sum。导入 Workbench 时才需要 Docker；仅下载并解�
 
 `files.tsv` 仅在本地保存已下载文件的名称、大小和哈希，供离线复核；它不是发布资产或测试记录。每次使用新的下载和安装目录。
 
+内联 Python 校验使用 `-I` 隔离模式，防止继承的 `PYTHONOPTIMIZE` 关闭断言校验。
+
 ```bash
 set -euo pipefail
 RELEASE_VERSION="${RELEASE_VERSION:-}"
@@ -26,7 +28,7 @@ DOWNLOAD_WORKBENCH="${DOWNLOAD_WORKBENCH:-1}"
 export ARCH DOWNLOAD_WORKBENCH
 ASSETS_TSV="$(mktemp)"
 trap 'rm -f -- "$ASSETS_TSV"' EXIT
-RELEASE_VERSION="$(python3 - "$RELEASE_VERSION" "$ASSETS_TSV" <<'PY'
+RELEASE_VERSION="$(python3 -I - "$RELEASE_VERSION" "$ASSETS_TSV" <<'PY'
 import base64, json, os, re, sys
 from urllib.request import Request, urlopen
 requested, output = sys.argv[1:]
@@ -141,7 +143,7 @@ printf 'Selected aggregate Release: %s\n' "$RELEASE_VERSION"
 
 ```bash
 set -euo pipefail
-python3 - "$DOWNLOAD_DIR" <<'PY'
+python3 -I - "$DOWNLOAD_DIR" <<'PY'
 import hashlib, pathlib, re, sys, tarfile
 root = pathlib.Path(sys.argv[1])
 rows = [line.split('\t') for line in (root / 'files.tsv').read_text().splitlines()]
