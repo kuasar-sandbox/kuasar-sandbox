@@ -342,7 +342,7 @@ x86 的全部六个 owner、独立源码检查和 UFFD benchmark 均成功；原
 使用旧受信任框架，通过源码 E2E、UFFD 和 working-set smoke。
 该源码验证与 artifact PR 验收分别记录：每个真实 caller 均保留实际解析的 framework SHA、
 baseline/delta plan、prepared-workspace 执行、两架构结果及适用的 working-set smoke。
-最终 caller 证据在 [#152](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/152) 中记录后再完成上线结案。
+[#152](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/152#issuecomment-5786411173) 已记录最终 caller 证据，并于 2026-09-22 按约定的首轮验收范围结案；上述覆盖排除项保持不变。
 
 accelerator、connector、sandboxer、orchestrator 已切为 Public，并读回可见性与匿名源码/资产访问结果。
 四组件以及平台、guest-runtime 均已通过各自真实 Public 源码 CI 后正常合入；精确运行链接见上方覆盖表所在章节。
