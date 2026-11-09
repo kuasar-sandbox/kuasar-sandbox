@@ -200,7 +200,8 @@ unit/配置、reload、启动并验证。显式回退使用选定旧镜像与匹
   cgroup 额度、内存及 E-only 暂停恢复、正常停止。
 - `basic.node-infra-config.sh`：原生分层配置、SDK 扩展和私有服务输入、worker 重建、
   两个实际执行池及部分启动失败收尾。
-- `basic.node-infra-lifecycle.sh`：两个运行实例、硬退出/恢复、重启及停止隔离。
+- `basic.node-infra-lifecycle.sh`：两个运行实例、PID 1 和 conmon 硬退出/恢复、配置变化、
+  清理冲突与 BPF 元数据丢失后的重试、重启及停止隔离。
 
 准备阶段接收同版部署包与原生 OCI 归档；执行阶段将镜像导入 Podman，使用交付的工具
 与模板。guest 和扩展 helper 在正常平台 helper 包中预先构建。测试仅创建自身网络

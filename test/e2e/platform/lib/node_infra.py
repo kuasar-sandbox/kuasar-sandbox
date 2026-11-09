@@ -167,7 +167,7 @@ class Node:
                  'unit_dropins': [f'/etc/node-infra/placement/p{i}.conf']} for i in (0, 1)]
             conductor['units'] = {kind + '_pools': [
                 {'name': kind[0] + str(i), 'resource_pool': f'p{i}', 'unit': f'{kind}-p{i}@.service',
-                 'size': 1 if kind == 'runner' else 0, 'capacity': 1} for i in (0, 1)]
+                 'size': 1, 'capacity': 1} for i in (0, 1)]
                 for kind in ('runner', 'builder')}
             (self.config / 'placement').mkdir()
             for i in (0, 1):
@@ -509,6 +509,14 @@ def config_case(fixture):
     node.assert_native_exec(first)
     units = node.execute('systemctl', 'list-units', '--plain', '--no-legend', '--state=active', 'runner-p*@*.service').stdout
     require('runner-p0@' in units and 'runner-p1@' in units, 'real guests did not occupy both native execution pools')
+    builders = node.execute('systemctl', 'list-units', '--plain', '--no-legend', '--state=active', 'builder-p*@*.service').stdout
+    require('builder-p0@' in builders and 'builder-p1@' in builders, 'native Builder pools did not start')
+    node.assert_outer_limits()
+    tokens = [node.state(sandbox)['token'] for sandbox in (first, second)]
+    node.execute('systemctl', 'restart', 'node-conductor.service')
+    wait_for('Conductor restart readiness', lambda: node.status()['ready'])
+    require([node.state(sandbox)['token'] for sandbox in (first, second)] == tokens,
+            'component restart ended active pool guests')
     master = node.execute('systemctl', 'show', 'node-proxy.service', '-p', 'MainPID', '--value').stdout.strip()
     # A Go master may fork from any runtime thread; /task/<main>/children
     # omits children forked by its other threads.

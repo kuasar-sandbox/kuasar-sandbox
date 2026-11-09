@@ -242,8 +242,9 @@ The matching platform package includes:
 - `basic.node-infra-config.sh`: layered native configuration, SDK extensions and
   private service input, worker rebuild, two actual execution pools and partial
   startup failure cleanup.
-- `basic.node-infra-lifecycle.sh`: two live instances, hard exit/recovery,
-  restart and stop isolation.
+- `basic.node-infra-lifecycle.sh`: two live instances, PID 1 and conmon hard
+  exit/recovery, changed configuration, cleanup conflict/retry with missing BPF
+  metadata, restart and stop isolation.
 
 Preparation takes the matching deployment package and native OCI archive;
 execution loads it into Podman and uses the delivered tool/template. The guest
