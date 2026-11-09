@@ -259,6 +259,35 @@ class DeploymentTests(unittest.TestCase):
         self.assertEqual(saved['mount_intents'][str(path)], {'type': 'nsfs', 'inode': 123})
         self.assertEqual(saved['mounts'], {})
 
+    def test_visible_mount_distinguishes_hidden_shared_peer_from_stack(self):
+        path = self.root / 'namespace'
+        path.touch()
+        # The peer at ID 13 is hidden below the self-bind at ID 11. ID 12
+        # is the mount reached by path lookup, independent of table order.
+        table = (f'10 1 0:1 / {self.root} rw shared:1 - tmpfs tmpfs rw\n'
+                 f'11 10 0:1 / {self.root} rw shared:1 - tmpfs tmpfs rw\n'
+                 f'12 11 0:4 net:[100] {path} rw shared:2 - nsfs nsfs rw\n'
+                 f'13 10 0:4 net:[100] {path} rw shared:2 - nsfs nsfs rw\n')
+
+        def inspect(table, visible):
+            def read(file):
+                return table if file == Path('/proc/self/mountinfo') else f'mnt_id:\t{visible}\n'
+            with patch.object(Path, 'read_text', read):
+                return ctl.mount_at(path)
+
+        for rows in (table, '\n'.join(reversed(table.splitlines()))):
+            self.assertEqual(inspect(rows, '12')['id'], '12')
+        # A real overmount has the previous mount as an ancestor, including
+        # when both refer to the same nsfs inode. It must still fail closed.
+        with self.assertRaisesRegex(ValueError, 'stacked mounts'):
+            inspect(table + f'14 12 0:4 net:[100] {path} rw - nsfs nsfs rw\n', '14')
+        # A stale entry hidden by a parent is not a mount at the current path.
+        self.assertEqual(inspect(table, '11'), {})
+        with self.assertRaisesRegex(ValueError, 'disappeared'):
+            inspect(table, '99')
+        path.unlink()
+        self.assertEqual(ctl.mount_at(path), {})
+
     def test_version_payload_cannot_be_replaced(self):
         package = self.root / 'package'
         (package / 'bin').mkdir(parents=True)

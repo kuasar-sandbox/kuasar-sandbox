@@ -692,18 +692,41 @@ def boot_id():
 
 
 def mount_at(path):
+    # Shared parent/self-bind mounts can propagate a second entry at the same
+    # printed path, hidden below the parent bind. Use the kernel's resolved
+    # mount ID, not a count of path strings, to distinguish it from a stack.
+    try:
+        fd = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return {}
+    try:
+        info = Path(f'/proc/self/fdinfo/{fd}').read_text()
+        visible = re.search(r'^mnt_id:\s*(\d+)$', info, re.MULTILINE)
+        require(visible, 'missing mount identity: ' + str(path))
+        visible = visible[1]
+        table = Path('/proc/self/mountinfo').read_text()
+    finally:
+        os.close(fd)
     # mountinfo escapes four whitespace/backslash characters. Decode only those.
     def decode(value):
         return re.sub(r'\\(040|011|012|134)', lambda m: chr(int(m[1], 8)), value)
-    found = []
-    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+    mounts, parents = {}, {}
+    for line in table.splitlines():
         left, right = line.split(' - ', 1)
         fields, rest = left.split(), right.split()
+        parents[fields[0]] = fields[1]
         if decode(fields[4]) == str(path):
-            found.append({'id': fields[0], 'device': fields[2], 'root': decode(fields[3]), 'type': rest[0],
-                          'source': decode(rest[1])})
-    require(len(found) <= 1, 'stacked mounts at owned path: ' + str(path))
-    return found[0] if found else {}
+            mounts[fields[0]] = {'id': fields[0], 'device': fields[2], 'root': decode(fields[3]),
+                                  'type': rest[0], 'source': decode(rest[1])}
+    require(visible in parents, 'mount disappeared during inspection: ' + str(path))
+    if visible not in mounts:
+        return {}
+    parent, seen = parents[visible], {visible}
+    while parent in parents and parent not in seen:
+        require(parent not in mounts, 'stacked mounts at owned path: ' + str(path))
+        seen.add(parent)
+        parent = parents[parent]
+    return mounts[visible]
 
 
 @contextmanager
