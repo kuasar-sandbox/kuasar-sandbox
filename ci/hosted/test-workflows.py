@@ -270,7 +270,7 @@ def check_validation_only_publication():
             env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
                        CALL_LOG=str(log), OBSERVED_SHA=identity, VALIDATION_ONLY=mode, PUBLICATION_STATE=str(state),
                        PUBLISH_DURING_REGISTRY='true' if published == 'during-registry' else 'false',
-                       SOURCE_SHA='a' * 40, VERSION='release-v1.2.3', SOURCE_REF='main',
+                       SOURCE_SHA='a' * 40, VERSION='release-v1.2.3', SOURCE_REF='main', DELIVERY='workbench-v1',
                        PLATFORM_SOURCE_ROOT=str(root / 'platform'),
                        RELEASE_PLAN_FILE='validated/plan/plan.json',
                        RELEASE_VALIDATION_FILE='validated/validation.json',

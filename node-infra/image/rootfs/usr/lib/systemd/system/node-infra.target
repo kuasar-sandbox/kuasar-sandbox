@@ -1,6 +1,6 @@
 [Unit]
 Description=kuasar-sandbox node-infra data plane
 Requires=multi-user.target
-Wants=node-conductor.service node-proxy.service node-telemetry.service connector-vswitch.service
+Wants=node-conductor.service node-proxy.service connector-vswitch.service
 After=multi-user.target
 AllowIsolate=yes

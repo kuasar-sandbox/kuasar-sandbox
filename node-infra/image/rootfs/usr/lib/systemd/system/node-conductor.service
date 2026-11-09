@@ -7,6 +7,8 @@ PartOf=node-infra.target
 [Service]
 Type=simple
 ExecStart=/usr/libexec/node-infra/service conductor
+StateDirectory=node-infra/sandbox
+StateDirectoryMode=0750
 RuntimeDirectory=sandbox
 RuntimeDirectoryMode=0750
 RuntimeDirectoryPreserve=yes

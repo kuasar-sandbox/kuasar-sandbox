@@ -90,6 +90,9 @@ func run(args []string) error {
 	if *force && command != "cleanup" {
 		return errors.New("--force is valid only for cleanup")
 	}
+	if command == "health" {
+		return health()
+	}
 	if command == "budget" {
 		return budget()
 	}

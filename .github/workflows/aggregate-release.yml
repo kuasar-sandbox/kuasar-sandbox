@@ -324,7 +324,7 @@ jobs:
           retention-days: 1
 
   node-infra-build:
-    if: needs.prepare.outputs.delivery == 'node-infra-v1'
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.prepare.outputs.delivery == 'node-infra-v1'
     needs: [prepare, helper-build]
     strategy:
       fail-fast: false
@@ -500,6 +500,7 @@ jobs:
           VALIDATION_ONLY: ${{ inputs.validation_only }}
           RELEASE_PLAN_FILE: ${{ github.workspace }}/validated/plan/plan.json
           RELEASE_VALIDATION_FILE: ${{ github.workspace }}/validated/validation.json
+          DELIVERY: ${{ needs.prepare.outputs.delivery }}
         run: |
           set -euo pipefail
           [ "$(git -C "$PLATFORM_SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_SHA" ] \
@@ -516,7 +517,7 @@ jobs:
               python3 -B release/publication_body.py aggregate-stage/release-notes.md
               python3 -B release/workbench_registry.py aggregate-stage "$VERSION" "$SOURCE_SHA" --validate-only \
                 --plan "$RELEASE_PLAN_FILE" --validation "$RELEASE_VALIDATION_FILE" --workbench "$RELEASE_WORKBENCH_RESULTS"
-              if [ "${{ needs.prepare.outputs.delivery }}" = node-infra-v1 ]; then
+              if [ "$DELIVERY" = node-infra-v1 ]; then
                 python3 -B release/node_infra_registry.py aggregate-stage "$VERSION" "$SOURCE_SHA" --validate-only \
                   --plan "$RELEASE_PLAN_FILE" --validation "$RELEASE_VALIDATION_FILE" --workbench "$RELEASE_WORKBENCH_RESULTS"
               fi

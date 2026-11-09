@@ -15,7 +15,6 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
-import tarfile
 import sys
 import time
 import urllib.error
@@ -439,8 +438,10 @@ class Fixture:
         artifact = self.inputs / 'image.tar'
         command(self.bin / 'flatten-ctl', 'export', '--no-progress', '--runtime-config', runtime,
                 '--output', artifact, rootfs)
-        with tarfile.open(artifact) as archive:
-            markers = [name for name in archive.getnames() if re.fullmatch(r'\.kuasar\.digest\.[0-9a-f]{64}', name)]
+        # Python tarfile mispositions the trailer after this GNU sparse 1.0
+        # carrier. GNU tar understands the emitted sparse map and marker.
+        members = command('tar', '-tf', artifact).stdout.splitlines()
+        markers = [name for name in members if re.fullmatch(r'\.kuasar\.digest\.[0-9a-f]{64}', name)]
         require(len(markers) == 1, 'native Image lacks one canonical digest marker')
         digest = markers[0].rsplit('.', 1)[1]
         location = self.key

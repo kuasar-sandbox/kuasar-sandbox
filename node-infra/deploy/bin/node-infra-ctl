@@ -543,6 +543,9 @@ class Instance:
                 result = run('podman', 'exec', self.container, 'systemctl', 'is-active', service, check=False, timeout=15)
                 checks.append({'name': service, 'status': 'pass' if result.returncode == 0 else 'fail',
                                'detail': result.stdout.strip()})
+            health = run('podman', 'exec', self.container, RUNTIME, 'health', check=False, timeout=10)
+            checks.append({'name': 'native-app-readiness', 'status': 'pass' if health.returncode == 0 else 'fail',
+                           'detail': 'Conductor admin and Proxy workers/routes' if health.returncode == 0 else health.stderr.strip()})
             result = run('podman', 'exec', self.container, RUNTIME, 'ready', '--timeout=1s', check=False, timeout=10)
             checks.append({'name': 'connector-capacity', 'status': 'pass' if result.returncode == 0 else 'fail',
                            'detail': 'native provisioned capacity' if result.returncode == 0 else result.stderr.strip()})
