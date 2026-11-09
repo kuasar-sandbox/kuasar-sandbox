@@ -24,6 +24,11 @@ import urllib.parse
 import urllib.request
 import uuid
 
+# The delivered unit allows 240 seconds to reap remaining consumers, followed
+# by the host recovery helper (120-second command timeout). The fixture must
+# observe that lifecycle before declaring failure, including conmon death.
+STOP_TIMEOUT = 360
+
 
 def require(condition, message):
     if not condition:
@@ -362,14 +367,19 @@ class Node:
         if hard:
             command('podman', 'kill', '--signal', 'KILL', self.container)
         else:
-            command('systemctl', 'stop', self.service, timeout=180)
-        wait_for('container exit and host recovery', lambda: self._stopped(), timeout=180)
+            command('systemctl', 'stop', self.service, timeout=STOP_TIMEOUT)
+        wait_for('container exit and host recovery', lambda: self._stopped(), timeout=STOP_TIMEOUT)
         self.assert_returned()
 
     def _stopped(self):
         status = self.status()
-        return (not status['container']['running'] and not status['recovery']['pending'] and
-                status['service']['active'] in ('inactive', 'failed'))
+        stopped = (not status['container']['running'] and not status['recovery']['pending'] and
+                   status['service']['active'] in ('inactive', 'failed'))
+        if not stopped:
+            state = command('systemctl', 'show', self.service,
+                            '--property=SubState,ControlPID,TimeoutStopUSec').stdout.strip()
+            raise RuntimeError('stop still pending: ' + json.dumps(status) + '; ' + state)
+        return True
 
     def diagnostics(self):
         output = self.fixture.output / self.name
@@ -388,7 +398,7 @@ class Node:
         if not self.reserved:
             return
         if self.installed:
-            command('systemctl', 'stop', self.service, timeout=180)
+            command('systemctl', 'stop', self.service, timeout=STOP_TIMEOUT)
             command(self.fixture.ctl, 'recover', '--name', self.name, timeout=180)
             self.assert_returned()
             self.unit.unlink(missing_ok=True)
@@ -610,7 +620,7 @@ def lifecycle_case(fixture):
     conmon = inspected['State']['ConmonPid']
     require(isinstance(conmon, int) and conmon > 1, 'missing actual conmon PID')
     os.kill(conmon, signal.SIGKILL)
-    wait_for('conmon exit and old-generation recovery', first._stopped, timeout=180)
+    wait_for('conmon exit and old-generation recovery', first._stopped, timeout=STOP_TIMEOUT)
     first.assert_returned()
     require(second.state(guest_b)['token'] == before['token'], 'conmon failure disrupted the second instance')
     overlay.write_bytes(saved)
