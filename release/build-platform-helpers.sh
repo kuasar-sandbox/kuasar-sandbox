@@ -38,3 +38,20 @@ expected="$(awk -v name="$asset" '{entry=$2; sub(/^\*/, "", entry); if (entry ==
 download "$url/$asset" "$work/bin/zot" "$expected"
 install -m 0755 "$work/bin/zot" "$2/zot"
 install -m 0755 "$work/bin/versitygw" "$2/versitygw"
+
+# Native node-infra fixtures use the admitted component SDK and are delivered
+# as helpers. Runtime-only E2E never compiles customer extensions or guest code.
+orchestrator="$KUASAR_WORKSPACE_ROOT/orchestrator"
+[ -f "$orchestrator/go.mod" ] || { echo 'missing admitted orchestrator SDK' >&2; exit 1; }
+export GOOS=linux GOARCH="$go_arch" CGO_ENABLED=0 GOMAXPROCS="$KUASAR_BUILD_JOBS"
+GOWORK=off go build -p "$KUASAR_BUILD_JOBS" -trimpath -o "$2/node-infra-guest" \
+    "$ROOT/test/e2e/platform/helpers/guest/main.go"
+# Reuse the admitted local module closure; platform recipes enter with GOWORK
+# disabled and must not resolve a different SDK dependency through the network.
+GOWORK=$(python3 "$ROOT/ci/integration/go_workspace.py" \
+    --root "$KUASAR_WORKSPACE_ROOT" --owners orchestrator)
+export GOWORK
+for component in xproxy xconductor; do
+    go -C "$orchestrator" build -p "$KUASAR_BUILD_JOBS" -trimpath -o "$2/node-infra-$component" \
+        "$ROOT/test/e2e/platform/helpers/$component/main.go"
+done

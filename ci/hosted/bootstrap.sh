@@ -36,8 +36,22 @@ select_profile() {
     if $with_vm || [ "$profile" = artifact-arm ]; then
         packages+=(python3-venv python3-pip iproute2 iptables nftables kmod acl
             e2fsprogs procps psmisc socat redis-server rsync cpio zstd lz4
-            systemd udev dbus iputils-ping netcat-openbsd openssl sqlite3 zip strace)
+            systemd podman crun conmon fuse-overlayfs udev dbus iputils-ping netcat-openbsd openssl sqlite3 zip strace)
     fi
+}
+
+# Existing supplemental executors may use a published Workbench from before
+# node-infra. Prepare only this job's owned system container. The staged
+# Workbench offline qualification never calls this compatibility preparation.
+prepare_node_infra_runtime() {
+    [ "$(id -u)" = 0 ] || die 'node-infra runtime preparation requires the owned container root'
+    [ "$#" = 1 ] && [ -f "$1" ] || die 'node-infra runtime preparation needs the admitted storage.conf'
+    if ! command -v podman >/dev/null 2>&1 || ! command -v fuse-overlayfs >/dev/null 2>&1; then
+        apt-get update
+        DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends podman crun conmon fuse-overlayfs
+    fi
+    install -D -m 0644 "$1" /etc/containers/storage.conf
+    podman info --format=json
 }
 
 emit() { export "$1=$2"; printf '%s=%s\n' "$1" "$2" >> "$GITHUB_ENV"; }

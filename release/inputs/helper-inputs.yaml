@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "recipe": "release/build-platform-helpers.sh",
-  "dependencies": ["guest-runtime"],
+  "dependencies": ["guest-runtime", "orchestrator", "accelerator", "connector", "sandboxer"],
   "helpers": [
     {
       "name": "zot",
@@ -36,6 +36,21 @@
         "telemetry.proxy.sh",
         "basic.demo.sh"
       ]
+    },
+    {
+      "name": "node-infra-guest",
+      "env": "NODE_INFRA_GUEST_BIN",
+      "cases": ["basic.node-infra-*.sh"]
+    },
+    {
+      "name": "node-infra-xproxy",
+      "env": "NODE_INFRA_XPROXY_BIN",
+      "cases": ["basic.node-infra-config.sh"]
+    },
+    {
+      "name": "node-infra-xconductor",
+      "env": "NODE_INFRA_XCONDUCTOR_BIN",
+      "cases": ["basic.node-infra-config.sh"]
     }
   ]
 }

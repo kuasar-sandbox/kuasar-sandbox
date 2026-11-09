@@ -1,0 +1,20 @@
+[Unit]
+Description=Prepare and retain node-infra Connector recovery resources
+DefaultDependencies=no
+After=local-fs.target
+RequiresMountsFor=/run/netns /sys/fs/bpf /run/node-infra/recovery
+Before=slices.target sandbox-runner.slice sandbox-builder.slice connector-vswitch.service node-conductor.service node-proxy.service node-telemetry.service shutdown.target
+Conflicts=shutdown.target
+PartOf=node-infra.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/node-infra/service prepare
+# Host recovery tears down Connector after every container consumer has ended.
+# Container shutdown must not unlink the host-owned namespace mount points.
+TimeoutStartSec=60
+TimeoutStopSec=60
+
+[Install]
+WantedBy=node-infra.target

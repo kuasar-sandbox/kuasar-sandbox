@@ -7,9 +7,11 @@ diagnose environment failures; the product cases still determine acceptance.
 from contextlib import contextmanager
 import ctypes
 import fcntl
+import json
 import os
 from pathlib import Path
 import platform
+import shutil
 import struct
 import stat
 import subprocess
@@ -24,6 +26,7 @@ OPERATIONS = {
     'netns': 'create-veth-remove', 'geneve': 'create-link-remove',
     'systemd': 'manager-connected', 'journald': 'journal-socket-sync',
     'cgroup-v2': 'create-writable-child', 'docker': 'daemon-connected',
+    'podman': 'rootful-info-cgroup-v2', 'quadlet': 'generate-private-delegated-service',
 }
 
 
@@ -135,6 +138,32 @@ def check_one(capability):
             child.rmdir()
     elif capability == 'docker':
         run('docker', 'info', '--format', '{{.OSType}}')
+    elif capability == 'podman':
+        info = json.loads(run('podman', 'info', '--format', 'json'))
+        host = info.get('host', {})
+        capabilities.require(os.geteuid() == 0 and not host.get('security', {}).get('rootless', True),
+                             'rootful Podman is required')
+        capabilities.require(host.get('cgroupVersion') == 'v2' and host.get('os') == 'linux',
+                             'Podman must use Linux cgroup v2')
+    elif capability == 'quadlet':
+        candidates = [shutil.which('podman-system-generator'),
+                      '/usr/lib/systemd/system-generators/podman-system-generator',
+                      '/usr/libexec/podman/quadlet']
+        generator = next((p for p in candidates if p and os.access(p, os.X_OK)), None)
+        capabilities.require(generator is not None, 'Quadlet generator is not installed')
+        with tempfile.TemporaryDirectory(prefix='e2e-quadlet-') as directory:
+            root = Path(directory)
+            units, output = root / 'units', root / 'output'
+            units.mkdir()
+            output.mkdir()
+            (units / 'e2e-probe.container').write_text(
+                '[Container]\nImage=localhost/node-infra-probe:local\nPull=never\n'
+                'Network=ns:/run/netns/node-infra-probe\nPodmanArgs=--systemd=always --cgroupns=private\n')
+            subprocess.check_output([generator, str(output)], env={**os.environ, 'QUADLET_UNIT_DIRS': str(units)},
+                                    text=True, stderr=subprocess.STDOUT, timeout=30)
+            service = (output / 'e2e-probe.service').read_text()
+            capabilities.require('Delegate=yes' in service and '--cgroups=split' in service,
+                                 'Quadlet did not generate cgroup delegation/split')
     else:
         raise ValueError('unknown required capability: ' + capability)
 

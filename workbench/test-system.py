@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Real, bounded Docker isolation/lifecycle checks. Requires the built native image."""
+"""Real, bounded Workbench isolation/lifecycle checks using the built native image."""
 import argparse
 import json
 import os
@@ -49,6 +49,8 @@ def smoke(image, root):
     program = r"""
 set -eu
 test -z "$(docker ps -aq)"
+test -z "$(podman ps -aq)"
+test -z "$(podman images -q)"
 test -z "$(ip -4 route show default)"
 # Pinned source gates invoke real sudo even when their caller is already root.
 # Keep its identity switching and exit propagation, rather than replacing it.
@@ -86,6 +88,10 @@ subprocess.run(['docker', 'network', 'create', 'same-network'], check=True)
 subprocess.run(['docker', 'run', '-d', '--pull=never', '--name', 'same-inner',
                 '--network', 'same-network', '--memory=64m', '--pids-limit=32',
                 identity, '/usr/bin/sleep', 'infinity'], check=True)
+podman = subprocess.check_output(['podman', 'import', str(archive)], text=True).strip()
+subprocess.run(['podman', 'run', '-d', '--pull=never', '--name', 'same-inner',
+                '--network=none', '--memory=64m', '--pids-limit=32',
+                podman, '/usr/bin/sleep', 'infinity'], check=True)
 INNER
 cp /etc/machine-id /work/identity
 systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
@@ -124,17 +130,21 @@ systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
             assert content == state['preflight']['machine_id']
             assert invoke(name, 'exec', '--', 'docker', 'inspect', 'same-inner',
                           '--format', '{{.State.Running}}') == 'true'
+            assert invoke(name, 'exec', '--', 'podman', 'inspect', 'same-inner',
+                          '--format', '{{.State.Running}}') == 'true'
         invoke(names[0], 'stop')
         assert invoke(names[1], 'exec', '--', 'curl', '--fail', '--silent',
                       'http://127.0.0.1:18080/identity') == b['preflight']['machine_id']
         assert invoke(names[1], 'exec', '--', 'docker', 'inspect', 'same-inner',
                       '--format', '{{.State.Running}}') == 'true'
+        assert invoke(names[1], 'exec', '--', 'podman', 'inspect', 'same-inner',
+                      '--format', '{{.State.Running}}') == 'true'
         result.update(complete=True, checks=['startup fixtures use local image IDs without a builder or pull',
                       'real sudo preserves root, switches UID and propagates command failure',
                       'temporary binaries execute from /tmp',
                       'outer task budget retained without hidden per-unit limits',
-                      'private namespaces and daemons',
-                      'real inner containers with identical names',
+                      'private namespaces, daemons and Podman stores',
+                      'real Docker and Podman containers with identical names',
                       'same systemd unit, network name and HTTP port coexist',
                       'stopping A preserves B'])
     finally:
@@ -143,6 +153,7 @@ systemd-run --quiet --unit=same-service --property=MemoryMax=64M \
                 try:
                     invoke(name, 'cleanup')
                     assert json.loads((root / name / 'instance.json').read_text())['status'] == 'cleaned'
+                    assert not (root / name / 'podman').exists()
                     result['cleanup'][name] = 'owned resources removed; output retained'
                 except Exception as error:
                     result['cleanup'][name] = str(error)
@@ -192,7 +203,14 @@ python3 -B - <<'PY'
 import ctypes,json,os,platform,struct,subprocess
 from pathlib import Path
 r=next(r for r in json.loads(Path('/opt/workbench/deps/images.json').read_text()) if r['reference']=='python:3.12-slim')
+assert not subprocess.check_output(['podman','images','-q'],text=True).strip()
+assert not subprocess.check_output(['podman','ps','-aq'],text=True).strip()
 subprocess.run(['docker','load','-i',str(Path('/opt/workbench/deps')/r['archive'])],check=True)
+subprocess.run(['podman','load','-i',str(Path('/opt/workbench/deps')/r['archive'])],check=True)
+podman_image=json.loads(subprocess.check_output(['podman','image','inspect',r['image_id']]))[0]
+assert podman_image['Id'].removeprefix('sha256:')==r['image_id'].removeprefix('sha256:')
+subprocess.run(['podman','run','-d','--pull=never','--name','same-inner','--network=none',
+ '--read-only','--cap-drop=ALL',r['image_id'],'python3','-c','import time; time.sleep(3600)'],check=True)
 Path('/work/shared-test').mkdir()
 Path('/work/shared-test/identity').write_text(Path('/etc/machine-id').read_text())
 subprocess.run(['docker','run','-d','--name','same-inner','--network','host','--read-only',
@@ -216,12 +234,13 @@ curl --fail --silent --retry 10 --retry-connrefused --retry-delay 1 http://127.0
         for name in names[:2]:
             response = execute(name, program)
             assert response.endswith(state(name)['preflight']['machine_id'])
-        results['checks'].append('distinct namespaces, machine IDs, daemons; identical inner names, port, netns, BPF pin and link')
+        results['checks'].append('distinct namespaces, machine IDs, daemons and Podman stores; identical inner names, port, netns, BPF pin and link')
         health = '''
 test -e /sys/fs/bpf/same-pin
 ip -n same-netns link show lo
 ip link show same-link
 test "$(docker inspect same-inner --format '{{.State.Running}}')" = true
+test "$(podman inspect same-inner --format '{{.State.Running}}')" = true
 curl --fail --silent http://127.0.0.1:18080/identity
 '''
         execute(names[0], 'systemctl stop docker.service docker.socket')
@@ -231,7 +250,7 @@ curl --fail --silent http://127.0.0.1:18080/identity
         results['checks'].append('A daemon failure and graceful stop leave B running')
         launch(names[0], 'start', '--image', args.image, '--timeout', '90')
         assert state(names[0])['preflight']['machine_id'] == a['preflight']['machine_id']
-        execute(names[0], "docker start same-inner; test -f /work/shared-test/identity; test ! -e /sys/fs/bpf/same-pin")
+        execute(names[0], "docker start same-inner; podman start same-inner; test -f /work/shared-test/identity; test ! -e /sys/fs/bpf/same-pin")
         results['checks'].append('restart retains only owned disk state, resets bpffs, restores private daemons')
         # Negative startup images deliberately delay or fail PID 1. They use
         # real Docker; no fake executable is substituted for system acceptance.
@@ -267,6 +286,7 @@ curl --fail --silent http://127.0.0.1:18080/identity
                     launch(name, 'cleanup', timeout=420)
                     results['cleanup'][name] = 'owned resources removed; output retained'
                     assert state(name)['status'] == 'cleaned'
+                    assert not (root / name / 'podman').exists()
                 except Exception as error:
                     results['cleanup'][name] = str(error)
                     results['complete'] = False

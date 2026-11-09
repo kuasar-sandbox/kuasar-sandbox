@@ -26,6 +26,15 @@ Select roles according to the data path and control-plane topology. Local files,
 | Platform management plane | Instance scheduling, configuration, tenancy and template-build credentials (registry pull tokens/customer keys). Imports sandbox-group configuration through the cluster placer/provider, or calls the standalone `node-ctl` E2B API directly. |
 | Container registry | Tenant image source, pulled as needed by `flatten-ctl` in the build sandbox; supports OCI 1.1 Referrers. |
 
+## Packaged system container
+
+The [node-infra deployment guide](node-infra.md) describes the complete OCI
+node image, rootful Podman/Quadlet host service, fixed native configuration
+paths and instance stop/recovery. The host supplies a dedicated namespace and
+two allocated interfaces; node-level Cache/Store remain externally operated.
+Use that guide when deploying the aggregated system container. The role and
+component relationships below also apply to those contained services.
+
 ## Compute Node
 
 ### Resident processes

@@ -103,13 +103,21 @@ class OwnerDiscovery(unittest.TestCase):
             '--include', case, '--offline'], text=True, capture_output=True, timeout=30)
 
     def test_platform_recipe_uses_fixed_owner_and_ignores_host_helpers(self):
-        # Isolate upstream transport only. Execute the unchanged platform entry
-        # and an owner fixture with the normal versitygw build ABI.
+        # Isolate upstream transport and the Go compiler boundary. Execute the
+        # platform entry with its normal owner/workspace ABI; actual SDK
+        # compilation belongs to the platform helper build, not this offline test.
         root = self.root / 'platform-production'; root.mkdir()
         platform_root = root / 'platform'; platform_root.mkdir()
         for name in ('release/build-platform-helpers.sh', 'release/inputs/helper-tools.yaml', 'ci/integration/materialize-source.sh'):
             target = platform_root / name; target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ROOT / name, target)
+        shutil.copytree(ROOT / 'test/e2e/platform/helpers', platform_root / 'test/e2e/platform/helpers')
+        orchestrator = root / 'orchestrator'; orchestrator.mkdir()
+        (orchestrator / 'go.mod').write_text('module github.com/kuasar-sandbox/orchestrator\n')
+        workspace = platform_root / 'ci/integration/go_workspace.py'
+        workspace.write_text('import os,sys\n'
+            'assert sys.argv[1:] == ["--root", os.environ["KUASAR_WORKSPACE_ROOT"], "--owners", "orchestrator"]\n'
+            'print(os.environ["FIXTURE_GO_WORKSPACE"])\n')
         upstream = root / 'upstream'; upstream.mkdir()
         (upstream / 'helper.c').write_text('int main(void) { return 0; }\n')
         subprocess.run(['cc', '-o', str(root / 'zot'), str(upstream / 'helper.c')], check=True)
@@ -138,16 +146,31 @@ class OwnerDiscovery(unittest.TestCase):
             'case "$*" in *https://github.com/project-zot/zot/releases/download/v2.1.17/checksums.sha256.txt*) ;; *) exit 92 ;; esac\n'
             'while [ "$1" != -o ]; do shift; done\n'
             'printf "%s  zot-linux-amd64-minimal\\n%s  zot-linux-arm64-minimal\\n" "$FIXTURE_ZOT_SHA" "$FIXTURE_ZOT_SHA" > "$2"\n'); curl.chmod(0o755)
+        compiler = commands / 'go'
+        compiler.write_text('#!/usr/bin/env python3\nimport os,pathlib,shutil,sys\n'
+            'args=sys.argv[1:]\n'
+            'if args[:1] == ["-C"]:\n'
+            ' assert args[1] == os.environ["KUASAR_WORKSPACE_ROOT"] + "/orchestrator"\n'
+            ' assert os.environ["GOWORK"] == os.environ["FIXTURE_GO_WORKSPACE"]\n'
+            ' args=args[2:]\n'
+            'else: assert os.environ["GOWORK"] == "off"\n'
+            'assert args[:4] == ["build", "-p", "2", "-trimpath"]\n'
+            'assert pathlib.Path(args[-1]).is_file()\n'
+            'assert "/test/e2e/platform/helpers/" in args[-1]\n'
+            'shutil.copy2(os.environ["FIXTURE_ZOT"],args[args.index("-o")+1])\n')
+        compiler.chmod(0o755)
         env = dict(os.environ, PATH=str(commands)+':'+os.environ['PATH'], KUASAR_WORKSPACE_ROOT=str(root),
                    KUASAR_BUILD_JOBS='2', FIXTURE_TARBALL=str(tarball), FIXTURE_ZOT=str(root/'zot'),
                    FIXTURE_ZOT_SHA=c.digest((root/'zot').read_bytes()), FIXTURE_OWNER_USED=str(root/'used'),
+                   FIXTURE_GO_WORKSPACE=str(root/'selected-go.work'),
                    FIXTURE_POISON=str(root/'poison'), E2E_ZOT_BIN=str(poison), ZOT_BIN=str(poison),
                    E2E_VGW_BIN=str(poison), VGW_BIN=str(poison))
         output = root / 'output'; output.mkdir()
         command = ['bash', str(platform_root/'release/build-platform-helpers.sh'), platform.machine(), str(output)]
         subprocess.run(command, env=env, check=True, capture_output=True)
-        self.assertEqual(set(p.name for p in output.iterdir()), {'zot','versitygw'})
-        for name in ('zot','versitygw'): c.check_binary(output/name, platform.machine())
+        names = {'zot', 'versitygw', 'node-infra-guest', 'node-infra-xproxy', 'node-infra-xconductor'}
+        self.assertEqual(set(p.name for p in output.iterdir()), names)
+        for name in names: c.check_binary(output/name, platform.machine())
         self.assertEqual((root/'used').read_text(), 'fixed-owner\n')
         self.assertFalse((root/'poison').exists())
         (guest/'build-versitygw.sh').unlink()

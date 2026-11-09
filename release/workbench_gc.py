@@ -1,4 +1,4 @@
-"""Remove only an authorized Preview's owned, unshared workbench versions."""
+"""Remove only an authorized Preview's owned, unshared aggregate image versions."""
 import argparse
 import base64
 import json
@@ -13,15 +13,19 @@ import workbench_registry as registry
 
 PACKAGE = 'orgs/kuasar-sandbox/packages/container/workbench'
 SOURCE = 'https://github.com/' + coordinator.PLATFORM_REPOSITORY
+REPOSITORIES = {'workbench': registry.REPOSITORY,
+                'node-infra': 'ghcr.io/kuasar-sandbox/node-infra'}
 
 
-def owned_tags(version):
-    tag = version.removeprefix('release-')
-    return {tag, *(tag + '-' + arch for arch in registry.PLATFORMS)}
+def owned_tags(version, *, image='workbench'):
+    registry.require(image in REPOSITORIES, 'unknown aggregate image package')
+    tag = version.removeprefix('release-') if image == 'workbench' else version
+    arches = registry.PLATFORMS if image == 'workbench' else registry.PLATFORMS.values()
+    return {tag, *(tag + '-' + arch for arch in arches)}
 
 
-def candidates(versions, version, protected, descendants=()):
-    owned = owned_tags(version)
+def candidates(versions, version, protected, descendants=(), *, image='workbench'):
+    owned = owned_tags(version, image=image)
     result, retained = [], []
     for item in versions:
         tags = set(item.get('metadata', {}).get('container', {}).get('tags', []))
@@ -36,23 +40,23 @@ def candidates(versions, version, protected, descendants=()):
     return result, retained
 
 
-def verify_source(identity, version, revision, auth, *, allow_index=True):
-    raw = registry.inspect_raw(registry.REPOSITORY + '@' + identity, auth)
+def verify_source(identity, version, revision, auth, *, allow_index=True, image='workbench'):
+    raw = registry.inspect_raw(REPOSITORIES[image] + '@' + identity, auth)
     registry.require(registry.digest(raw) == identity, 'registry GC manifest identity differs')
     document = json.loads(raw)
     if 'manifests' in document:
-        registry.require(allow_index, 'nested registry index is not a workbench image')
+        registry.require(allow_index, 'nested registry index is not an aggregate image')
         platforms = set()
-        registry.require(len(document['manifests']) == 2, 'owned workbench index is incomplete')
+        registry.require(len(document['manifests']) == 2, 'owned aggregate image index is incomplete')
         for descriptor in document['manifests']:
             platform = descriptor.get('platform', {})
             arch = platform.get('architecture')
             registry.require(platform.get('os') == 'linux' and arch in registry.PLATFORMS.values() and arch not in platforms,
                              'owned index has unexpected/duplicate platform')
             platforms.add(arch)
-            verify_source(descriptor['digest'], version, revision, auth, allow_index=False)
+            verify_source(descriptor['digest'], version, revision, auth, allow_index=False, image=image)
     else:
-        raw_config = registry.inspect_raw(registry.REPOSITORY + '@' + identity, auth, config=True)
+        raw_config = registry.inspect_raw(REPOSITORIES[image] + '@' + identity, auth, config=True)
         registry.require(document.get('config', {}).get('digest') == registry.digest(raw_config), 'GC config identity differs')
         config = json.loads(raw_config)
         registry.require(config.get('os') == 'linux' and config.get('architecture') in registry.PLATFORMS.values(),
@@ -64,8 +68,8 @@ def verify_source(identity, version, revision, auth, *, allow_index=True):
                          'refusing to delete an image from another source/version')
 
 
-def shared_closure(versions, version, protected, auth, *, scope=None):
-    owned = owned_tags(version)
+def shared_closure(versions, version, protected, auth, *, scope=None, image='workbench'):
+    owned = owned_tags(version, image=image)
     if scope is None:
         scope = {item['name'] for item in versions
                  if set(item.get('metadata', {}).get('container', {}).get('tags', [])) & owned}
@@ -87,7 +91,7 @@ def shared_closure(versions, version, protected, auth, *, scope=None):
         visited.add(identity)
         registry.require(len(visited) <= 10000 and re.fullmatch(r'sha256:[0-9a-f]{64}', identity),
                          'invalid or excessive shared registry references')
-        raw = registry.inspect_raw(registry.REPOSITORY + '@' + identity, auth)
+        raw = registry.inspect_raw(REPOSITORIES[image] + '@' + identity, auth)
         registry.require(registry.digest(raw) == identity, 'shared registry identity differs')
         for descriptor in json.loads(raw).get('manifests', []):
             protected.add(descriptor['digest'])
@@ -95,58 +99,60 @@ def shared_closure(versions, version, protected, auth, *, scope=None):
     return protected
 
 
-def collect(version, revision):
+def collect(version, revision, *, image='workbench'):
+    owned_tags(version, image=image)
+    package_path = PACKAGE if image == 'workbench' else 'orgs/kuasar-sandbox/packages/container/node-infra'
     registry.require(selection.AGGREGATE_RE.fullmatch(version) and '-preview.' in version
                      and re.fullmatch(r'[0-9a-f]{40}', revision), 'registry GC requires an exact Preview source')
     registry.require(not any(coordinator.run_active(run) for run in coordinator.aggregate_runs(version)),
                      'aggregate publication is still active')
-    package = coordinator.api_optional(PACKAGE)
+    package = coordinator.api_optional(package_path)
     if package is None:
         return {'deleted': [], 'retained_shared': []}
     registry.require(package.get('repository', {}).get('full_name') == coordinator.PLATFORM_REPOSITORY,
-                     'workbench registry package is not owned by the platform repository')
-    versions = coordinator.paginated(PACKAGE + '/versions?per_page=100')
+                     'aggregate image package is not owned by the platform repository')
+    versions = coordinator.paginated(package_path + '/versions?per_page=100')
     token, actor = os.environ.get('GH_TOKEN'), os.environ.get('GITHUB_ACTOR')
     registry.require(token and actor, 'registry GC needs the package-authorized job identity')
-    with tempfile.TemporaryDirectory(prefix='workbench-gc-') as directory:
+    with tempfile.TemporaryDirectory(prefix=image + '-gc-') as directory:
         auth = Path(directory) / 'config.json'
         auth.write_text(json.dumps({'auths': {'ghcr.io': {'auth': base64.b64encode((actor + ':' + token).encode()).decode()}}}))
         auth.chmod(0o600)
-        tagged, retained = candidates(versions, version, set())
+        tagged, retained = candidates(versions, version, set(), image=image)
         descendants, indexes = set(), set()
         # Only exact target tags and children of their observed indexes may be
         # deleted. Existing untagged orphans are deliberately left alone.
         for item in tagged:
-            raw = registry.inspect_raw(registry.REPOSITORY + '@' + item['name'], auth)
+            raw = registry.inspect_raw(REPOSITORIES[image] + '@' + item['name'], auth)
             registry.require(registry.digest(raw) == item['name'], 'registry GC manifest identity differs')
             document = json.loads(raw)
             if 'manifests' in document:
                 indexes.add(item['name'])
                 descendants.update(row['digest'] for row in document['manifests'])
-        pending, shared = candidates(versions, version, set(), descendants)
+        pending, shared = candidates(versions, version, set(), descendants, image=image)
         retained.extend(shared)
         scope = {item['name'] for item in pending}
-        protected = shared_closure(versions, version, set(), auth, scope=scope)
-        pending, shared = candidates(pending, version, protected, descendants)
+        protected = shared_closure(versions, version, set(), auth, scope=scope, image=image)
+        pending, shared = candidates(pending, version, protected, descendants, image=image)
         retained.extend(shared)
         # Validate every selected image before deleting any. Shared versions are
         # retained whole: the package API cannot safely delete only one tag.
         for item in pending:
-            verify_source(item['name'], version, revision, auth)
+            verify_source(item['name'], version, revision, auth, image=image)
         deleted, retained_roots = [], set()
         for item in sorted(pending, key=lambda row: (row['name'] not in indexes, row['id'])):
             # Re-read tags just before deletion; a newly shared version is no
             # longer ours to remove. Never use a registry-wide prune operation.
-            current_versions = coordinator.paginated(PACKAGE + '/versions?per_page=100')
-            current_candidates, _ = candidates(current_versions, version, set(), descendants)
+            current_versions = coordinator.paginated(package_path + '/versions?per_page=100')
+            current_candidates, _ = candidates(current_versions, version, set(), descendants, image=image)
             current_scope = scope & {row['name'] for row in current_candidates}
-            protected = shared_closure(current_versions, version, retained_roots, auth, scope=current_scope)
-            endpoint = PACKAGE + '/versions/' + str(item['id'])
+            protected = shared_closure(current_versions, version, retained_roots, auth, scope=current_scope, image=image)
+            endpoint = package_path + '/versions/' + str(item['id'])
             current = coordinator.api_optional(endpoint)
             if current is None:
                 deleted.append(item['id'])
                 continue
-            fresh, shared = candidates([current], version, protected, descendants)
+            fresh, shared = candidates([current], version, protected, descendants, image=image)
             if shared or not fresh:
                 retained.append(item['id'])
                 # The detail endpoint may observe a new shared/tagless parent
@@ -166,5 +172,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('version')
     parser.add_argument('revision')
+    parser.add_argument('--image', choices=REPOSITORIES, default='workbench')
     args = parser.parse_args()
-    print(json.dumps(collect(args.version, args.revision), sort_keys=True))
+    print(json.dumps(collect(args.version, args.revision, image=args.image), sort_keys=True))

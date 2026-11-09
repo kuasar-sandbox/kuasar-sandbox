@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+export PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export LC_ALL=C
+
+config_list() {
+    local directory="$1" base="$2" path joined
+    [[ -f "$directory/$base" ]] || { echo "Missing native config: $directory/$base" >&2; return 1; }
+    joined="$directory/$base"
+    shopt -s nullglob
+    for path in "$directory"/conf.d/*.yaml; do
+        [[ -f "$path" && "$path" != *:* ]] || { echo "Invalid configuration path: $path" >&2; return 1; }
+        joined+=":$path"
+    done
+    printf '%s' "$joined"
+}
+
+case "${1:-}" in
+    validate)
+        for role in conductor proxy telemetry; do
+            node-ctl config "$role" --config "$(config_list /etc/node-$role $role.yaml)" >/dev/null
+        done
+        exec /usr/libexec/node-infra/node-infra-runtime describe
+        ;;
+    config)
+        role="${2:-}"
+        case "$role" in conductor|proxy|telemetry) ;; *) exit 2 ;; esac
+        exec node-ctl config "$role" --config "$(config_list /etc/node-$role $role.yaml)"
+        ;;
+    conductor) exec node-ctl conductor serve --config "$(config_list /etc/node-conductor conductor.yaml)" ;;
+    proxy) exec node-ctl proxy serve --config "$(config_list /etc/node-proxy proxy.yaml)" ;;
+    telemetry) exec node-ctl telemetry serve --config "$(config_list /etc/node-telemetry telemetry.yaml)" ;;
+    connector)
+        configs="$(config_list /etc/connector-vswitch vswitch.yaml)"
+        /usr/libexec/node-infra/node-infra-runtime check --config "$configs"
+        exec connector-ctl vswitch serve --config "$configs" --tapfd-listen=/run/connector-vswitch/tapfd.sock
+        ;;
+    prepare) exec /usr/libexec/node-infra/node-infra-runtime prepare --config "$(config_list /etc/connector-vswitch vswitch.yaml)" ;;
+    ready) exec /usr/libexec/node-infra/node-infra-runtime ready ;;
+    cleanup) exec /usr/libexec/node-infra/node-infra-runtime cleanup ;;
+    *) echo 'usage: service conductor|proxy|telemetry|connector|prepare|ready|cleanup' >&2; exit 2 ;;
+esac

@@ -72,12 +72,14 @@ def files(root):
 def runtime_image_record(record):
     """Keep local load/run information; legacy registry/source proofs are not consumed."""
     keys = ('reference', 'platform', 'archive', 'sha256', 'image_id', 'owner', 'repo_digests')
+    if record.get('runtime') == 'podman':
+        keys += ('runtime', 'manifest_digest')
     return {key: record[key] for key in keys if key in record}
 
 
 def runtime_metadata(provenance):
     keys = ('schema', 'arch', 'embedded', 'helper_contract', 'helpers', 'prepared_cases',
-            'selection', 'case_requirements', 'fixtures', 'images', 'python', 'preparation_environment')
+            'selection', 'case_requirements', 'fixtures', 'images', 'python', 'preparation_environment', 'node_infra')
     result = {key: provenance[key] for key in keys if key in provenance}
     if 'images' in provenance:
         result['images'] = {name: runtime_image_record(row) for name, row in provenance['images'].items()}
@@ -215,6 +217,10 @@ def external_image_requests(cases, arch):
 def needs_orchestrator_images(names):
     return (any(name.startswith(('orchestrator.', 'builder.')) for name in names) or
             bool(set(names) & {'telemetry.backends.sh', 'telemetry.guest.sh', 'telemetry.proxy.sh'}))
+
+
+def needs_node_infra(names):
+    return any(Path(name).name.startswith('basic.node-infra-') for name in names)
 
 
 def required_helpers(cases):
@@ -416,8 +422,14 @@ def prepare_fixtures(root, arch, cases, deps_dir=None, offline=False):
     before = files(root)
     before_modes = {name: (root / name).stat().st_mode & 0o7777 for name in before}
     fixtures, images, python = {}, {}, {}
+    node_infra = None
     for directory in ('images', 'fixtures'):
         (root / directory).mkdir(exist_ok=True)
+    if needs_node_infra(names):
+        spec = importlib.util.spec_from_file_location('node_infra_inputs', Path(__file__).with_name('node_infra_inputs.py'))
+        reader = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(reader)
+        images['node-infra'], node_infra = reader.prepare(root, arch)
     if 'basic.demo.sh' in names:
         require(platform.machine() == arch, 'Demo SDK preparation requires the selected native architecture')
         python['demo'] = prepare_demo_sdk(root, arch)
@@ -478,8 +490,11 @@ def prepare_fixtures(root, arch, cases, deps_dir=None, offline=False):
     allowed = set(fixtures) | {record['archive'] for record in images.values()}
     for record in python.values():
         allowed.update(str(Path(record['directory']) / name) for name in record['files'])
-    require(set(after) - set(before) == allowed, 'fixture generator wrote undeclared workspace files')
-    return dict(fixtures=fixtures, images=images, python=python)
+    require(set(after) - set(before) == allowed - set(before), 'fixture generator wrote undeclared workspace files')
+    result = dict(fixtures=fixtures, images=images, python=python)
+    if node_infra is not None:
+        result['node_infra'] = node_infra
+    return result
 
 
 def report_disk_space(root, phase):
@@ -500,6 +515,8 @@ def execution_image_labels(cases, arch):
         labels.add('guest-runtime')
     if needs_orchestrator_images(names):
         labels.update(('orchestrator-base', 'orchestrator-execute'))
+    if needs_node_infra(names):
+        labels.add('node-infra')
     return labels
 
 
@@ -513,9 +530,15 @@ def load_images(root, provenance, environment, cases=None):
         path = root / record['archive']
         require(digest(path) == record['sha256'], 'prepared image bytes changed')
         report_disk_space(root, 'before image ' + label)
-        subprocess.run(['docker', 'image', 'load', '--input', str(path)], env=environment, check=True)
-        image = json.loads(subprocess.check_output(['docker', 'image', 'inspect', record['image_id']], env=environment))[0]
-        require(image['Id'] == record['image_id'] and image['Os'] + '/' + image['Architecture'] == record['platform'],
+        runtime = record.get('runtime', 'docker')
+        require(runtime in ('docker', 'podman') and (runtime != 'podman' or label == 'node-infra'),
+                'invalid prepared image runtime')
+        subprocess.run([runtime, 'image', 'load', '--input', str(path)], env=environment, check=True)
+        image = json.loads(subprocess.check_output([runtime, 'image', 'inspect', record['image_id']], env=environment))[0]
+        image_identity = image['Id']
+        if runtime == 'podman' and not image_identity.startswith('sha256:'):
+            image_identity = 'sha256:' + image_identity
+        require(image_identity == record['image_id'] and image['Os'] + '/' + image['Architecture'] == record['platform'],
                 'loaded image differs from prepared platform/digest')
         report_disk_space(root, 'after image ' + label)
 
@@ -536,4 +559,9 @@ def case_environment(root, provenance, case):
     label = 'guest-runtime' if case in {'image.flatten.sh', 'image.registry.sh'} else 'python'
     if label in images:
         environment.update(E2E_IMAGE=images[label]['image_id'], IMAGE=images[label]['image_id'])
+    if needs_node_infra([case]):
+        require('node-infra' in images and isinstance(provenance.get('node_infra'), dict),
+                'selected node-infra case is missing prepared deployment inputs')
+        environment.update(E2E_NODE_INFRA_IMAGE=images['node-infra']['image_id'],
+                           E2E_NODE_INFRA_DEPLOY=str(root / provenance['node_infra']['deploy']))
     return environment

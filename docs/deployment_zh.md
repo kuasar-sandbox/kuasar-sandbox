@@ -27,6 +27,13 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 | 平台管理面 | 沙箱实例调度、配置、租户管控、模板构建凭据(registry 拉取令牌 / 客户密钥);通过 **cluster 控制面**向 placer/provider 导入 sandbox-group 配置,或在单机部署中直接调用 `node-ctl` e2b API |
 | 容器镜像仓库 | 租户镜像来源;构建沙箱内 `flatten-ctl` 按需拉取(OCI v1.1,支持 Referrers) |
 
+## 系统容器交付
+
+[node-infra 部署指南](node-infra_zh.md)说明完整 OCI 节点镜像、rootful Podman/Quadlet
+宿主服务、固定原生配置路径及实例停止/恢复。宿主提供独立网络空间和两块已分配接口，
+节点级 Cache/Store 由外部维护。使用聚合系统容器时按该指南部署；下文角色与组件关系
+同样适用于其中的服务。
+
 ## Compute Node
 
 ### 常驻进程

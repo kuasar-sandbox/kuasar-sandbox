@@ -194,12 +194,14 @@ def historical_test_revisions(config: dict[str, object], source: str) -> dict[st
 
 
 DELIVERY = 'workbench-v1'
+NODE_INFRA_DELIVERY = 'node-infra-v1'
+MODERN_DELIVERIES = (DELIVERY, NODE_INFRA_DELIVERY)
 
 
 def delivery(config: dict[str, object], source: str) -> str:
     """Read the committed contract, never infer history from missing assets."""
     value = config.get('delivery', 'historical')
-    if value not in ('historical', DELIVERY) or ('delivery' in config and value == 'historical'):
+    if value not in ('historical', *MODERN_DELIVERIES) or ('delivery' in config and value == 'historical'):
         raise ManifestError(f'unsupported delivery contract in {source}: {value}')
     return str(value)
 
@@ -208,6 +210,32 @@ def workbench_archive(version: str, arch: str) -> str:
     if AGGREGATE_RE.fullmatch(version) is None or arch not in ('x86_64', 'aarch64'):
         raise ManifestError('invalid workbench aggregate version or architecture')
     return f'workbench-{arch}-{version.removeprefix("release-")}.tar.gz'
+
+
+def node_infra_archive(version: str, arch: str) -> str:
+    """The aggregate owns this image; it is not a seventh component unit."""
+    if AGGREGATE_RE.fullmatch(version) is None or arch not in ('x86_64', 'aarch64'):
+        raise ManifestError('invalid node-infra version or architecture')
+    return f'node-infra-{version}-linux-' + {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch] + '.oci.tar.gz'
+
+
+def node_infra_deploy_archive(version: str) -> str:
+    if AGGREGATE_RE.fullmatch(version) is None:
+        raise ManifestError('invalid node-infra aggregate version')
+    return f'node-infra-deploy-{version}.tar.gz'
+
+
+def delivery_assets(version: str, contract: str, arches=('x86_64', 'aarch64')) -> set[str]:
+    """Additional aggregate assets, preserving immutable historical contracts."""
+    if contract == 'historical':
+        return set()
+    if contract not in MODERN_DELIVERIES:
+        raise ManifestError('unsupported aggregate delivery contract: ' + contract)
+    names = {workbench_archive(version, arch) for arch in arches}
+    if contract == NODE_INFRA_DELIVERY:
+        names |= {node_infra_archive(version, arch) for arch in arches}
+        names.add(node_infra_deploy_archive(version))
+    return names
 
 
 def require_stable(value: object, field: str, source: str) -> str:

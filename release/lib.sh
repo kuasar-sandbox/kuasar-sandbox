@@ -80,6 +80,18 @@ workbench_archive() {
   printf 'workbench-%s-%s.tar.gz\n' "$2" "${1#release-}"
 }
 
+node_infra_archive() {
+  validate_aggregate_version "$1"
+  local arch
+  case "$2" in x86_64) arch=amd64 ;; aarch64) arch=arm64 ;; *) release_fail 'unsupported node-infra architecture' ;; esac
+  printf 'node-infra-%s-linux-%s.oci.tar.gz\n' "$1" "$arch"
+}
+
+node_infra_deploy_archive() {
+  validate_aggregate_version "$1"
+  printf 'node-infra-deploy-%s.tar.gz\n' "$1"
+}
+
 release_delivery() {
   python3 "$RELEASE_TOOL_ROOT/release/selection.py" "$1" "$2" --delivery
 }

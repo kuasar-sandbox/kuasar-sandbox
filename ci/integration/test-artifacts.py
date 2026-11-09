@@ -594,7 +594,11 @@ class ArtifactExecutionContracts(unittest.TestCase):
         recorded = self.root.parent / 'recorded-revisions.tsv'
         (perf / 'sandbox-perf-working-set.sh').write_text(
             'set -eu\ncp "$KUASAR_REVISION_MANIFEST" "' + str(recorded) + '"\nexit "$TEST_WORKING_SET_EXIT"\n')
-        path = self.image()
+        path = self.image(labels=('python', 'busybox', 'node-infra'))
+        self.provenance['images']['node-infra']['runtime'] = 'podman'
+        podman = self.root.parent / 'host-bin/podman'
+        podman.write_text('#!/bin/sh\necho "unselected node-infra image load" >&2\nexit 86\n')
+        podman.chmod(0o755)
         for exit_code in (0, 41):
             with self.subTest(exit_code=exit_code), patch.dict(os.environ, PATH=path, TEST_WORKING_SET_EXIT=str(exit_code)):
                 if exit_code:

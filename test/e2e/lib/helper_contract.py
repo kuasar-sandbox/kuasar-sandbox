@@ -254,6 +254,10 @@ def required_capabilities(cases):
         helpers['usage-probe'] = 'sandboxer'
     if 'sandbox.cgroup.sh' in cases:
         helpers['cgroup-fork-probe'] = 'sandboxer'
+    if any(name.startswith('basic.node-infra-') for name in cases):
+        helpers['node-infra-guest'] = 'platform'
+    if 'basic.node-infra-config.sh' in cases:
+        helpers.update({'node-infra-xproxy': 'platform', 'node-infra-xconductor': 'platform'})
     return helpers
 
 

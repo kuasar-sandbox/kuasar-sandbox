@@ -59,7 +59,7 @@ def read_config():
 def effective(profile, capability, runtime):
     # The existing runtime-only container has no service manager. A host's
     # capabilities cannot erase the selected executor's limitations.
-    if runtime == 'runtime-only' and capability in {'systemd', 'journald'}:
+    if runtime == 'runtime-only' and capability in {'systemd', 'journald', 'podman', 'quadlet'}:
         return 'unsupported'
     return profile['capabilities'][capability]['state']
 

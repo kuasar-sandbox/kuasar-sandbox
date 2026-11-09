@@ -1,0 +1,79 @@
+// A static guest workload for the delivered node-infra platform tests.
+package main
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+	"strings"
+	"sync"
+	"time"
+)
+
+const marker = "/state/node-infra-marker"
+
+func main() {
+	if len(os.Args) > 1 && os.Args[1] == "read" {
+		value, err := os.ReadFile(marker)
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Print(string(value))
+		return
+	}
+	if err := os.MkdirAll("/state", 0755); err != nil {
+		log.Fatal(err)
+	}
+	value := make([]byte, 16)
+	if _, err := rand.Read(value); err != nil {
+		log.Fatal(err)
+	}
+	token := hex.EncodeToString(value)
+	var mutex sync.Mutex
+	count := 0
+	http.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		if r.Method == http.MethodPost {
+			data, err := io.ReadAll(io.LimitReader(r.Body, 4097))
+			if err != nil || len(data) > 4096 {
+				http.Error(w, "invalid marker", 400)
+				return
+			}
+			if err := os.WriteFile(marker, data, 0600); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+		}
+		count++
+		disk, err := os.ReadFile(marker)
+		if err != nil && !os.IsNotExist(err) {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"token": token, "count": count, "disk": string(disk), "boot_id": strings.TrimSpace(string(boot))})
+	})
+	http.HandleFunc("/egress", func(w http.ResponseWriter, r *http.Request) {
+		client := &http.Client{Timeout: 5 * time.Second}
+		response, err := client.Get(r.URL.Query().Get("url"))
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer response.Body.Close()
+		w.WriteHeader(response.StatusCode)
+		_, _ = io.Copy(w, io.LimitReader(response.Body, 4096))
+	})
+	log.Fatal(http.ListenAndServe(":8000", nil))
+}

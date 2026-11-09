@@ -64,7 +64,7 @@ def framework_sha():
 
 
 def from_aggregate(aggregate, framework):
-    require(aggregate.get('delivery') == 'workbench-v1' and not aggregate.get('staged'),
+    require(aggregate.get('delivery') in artifacts.delivery_module().MODERN_DELIVERIES and not aggregate.get('staged'),
             'builds require a published Workbench version')
     return check_selection({'framework_sha': framework, 'aggregate_version': aggregate['version'],
                             'reference': REGISTRY + ':' + aggregate['version'].removeprefix('release-')})

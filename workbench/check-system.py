@@ -9,6 +9,7 @@ from pathlib import Path
 import platform
 import struct
 import subprocess
+import tempfile
 import tomllib
 import uuid
 
@@ -98,6 +99,27 @@ def check(host_namespaces):
             'containerd needs its private root and state paths independently of Docker data-root')
     for service in ('containerd', 'docker'):
         require(output('systemctl', 'is-active', service) == 'active', f'private {service} service is not active')
+    podman = json.loads(output('podman', 'info', '--format=json'))
+    store = podman.get('store', {})
+    require(store.get('graphRoot') == '/var/lib/containers/storage'
+            and store.get('runRoot') == '/run/containers/storage'
+            and store.get('graphDriverName') == 'overlay', 'Podman must use this instance private storage')
+    require(podman.get('host', {}).get('security', {}).get('rootless') is False
+            and podman['host'].get('cgroupVersion') == 'v2', 'node-infra needs rootful Podman on cgroup v2')
+    generators = [Path('/usr/lib/systemd/system-generators/podman-system-generator'),
+                  Path('/usr/libexec/podman/quadlet')]
+    generator = next((path for path in generators if path.is_file()), None)
+    require(generator is not None, 'Podman Quadlet generator is unavailable')
+    with tempfile.TemporaryDirectory(prefix='workbench-quadlet-') as temporary:
+        root = Path(temporary)
+        (root / 'input').mkdir()
+        (root / 'output').mkdir()
+        (root / 'input/probe.container').write_text('[Container]\nImage=localhost/workbench-probe:never-pulled\nPull=never\n')
+        subprocess.run([str(generator), str(root / 'output')], check=True,
+                       env={**os.environ, 'QUADLET_UNIT_DIRS': str(root / 'input')}, timeout=30)
+        generated = (root / 'output/probe.service').read_text()
+        require('Delegate=yes' in generated and '--cgroups=split' in generated,
+                'Quadlet did not generate the expected delegated service')
     # Exercise delegation in a task-owned transient unit, without host cgroups.
     program = '''import os
 from pathlib import Path
@@ -118,6 +140,10 @@ assert {'cpu','memory','pids'} <= set((child/'cgroup.controllers').read_text().s
             'machine_id': Path('/etc/machine-id').read_text().strip(), 'controllers': sorted(controllers),
             **capabilities, 'capability_errors': errors,
             'docker': {'version': info['ServerVersion'], 'driver': info['Driver'], 'root': info['DockerRootDir']},
+            'podman': {'version': podman['version']['Version'], 'graphroot': store['graphRoot'],
+                       'runroot': store['runRoot'], 'driver': store['graphDriverName'],
+                       'rootless': False, 'cgroup_version': 'v2'},
+            'quadlet': {'generator': str(generator), 'delegation': 'split'},
             'containerd': {'root': config['root'], 'state': config['state']}}
 
 

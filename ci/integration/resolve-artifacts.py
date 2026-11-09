@@ -78,8 +78,8 @@ def aggregate(version, *, require_dual=True):
     x86 = {artifacts.archive_name(unit, tag, 'x86_64') for unit, tag in units.items()}
     arm = {artifacts.archive_name(unit, tag, 'aarch64') for unit, tag in units.items()}
     expected = base | x86 | arm
-    if contract == release.selection.DELIVERY:
-        expected |= {release.selection.workbench_archive(version, arch) for arch in artifacts.ARCHES}
+    if contract in release.selection.MODERN_DELIVERIES:
+        expected |= release.selection.delivery_assets(version, contract)
     elif set(names) == base | x86 and not require_dual:
         expected = base | x86
     artifacts.require(set(names) == expected, 'aggregate lacks its complete declared asset set')
@@ -470,6 +470,18 @@ def source_plan(framework_sha, input_root):
     plan['helper_contract'] = helper_inputs.discover(roots, identities)
     requirements = artifacts.capabilities_module().discover(roots, selected_files)
     capability_routing.apply(plan, requirements)
+    if any(name.startswith('basic.node-infra-') for lane in plan['lanes'].values()
+           for name in lane['selection']['cases']):
+        # Candidate images use the admitted platform recipe and the same
+        # baseline-plus-delta products as ordinary E2E. No component main lookup.
+        components = {}
+        for unit, record in selected['units'].items():
+            owner = unit_owner(unit)
+            sha = kernel_sha if unit == 'vmlinux' else sources[owner]['sha']
+            components[unit] = {'repository': record['repository'], 'sha': sha,
+                                'version': record['version'] if sha == record['sha'] else 'source-' + sha}
+        plan['node_infra'] = {'version': selected['version'], 'source_revision': sources['platform']['sha'],
+                              'components': components}
     artifacts.check_plan(plan)
     return plan
 
@@ -498,8 +510,8 @@ def exact_assets_plan(framework_sha, stage):
     names = {f"platform-{version}.tar.gz"} | {
         artifacts.archive_name(unit, tag, arch) for unit, tag in units.items() for arch in artifacts.ARCHES}
     contract = release.selection.delivery(release.selection.read_simple_yaml(manifest, relative), relative)
-    artifacts.require(contract == release.selection.DELIVERY, 'new stages require the committed workbench delivery contract')
-    names |= {release.selection.workbench_archive(version, arch) for arch in artifacts.ARCHES}
+    artifacts.require(contract in release.selection.MODERN_DELIVERIES, 'new stages require the committed workbench delivery contract')
+    names |= release.selection.delivery_assets(version, contract)
     files = artifacts.tree_files(stage / "assets")
     artifacts.require(set(files) == names, "a new aggregate must stage both product and workbench architecture asset sets")
     unit_records = {}

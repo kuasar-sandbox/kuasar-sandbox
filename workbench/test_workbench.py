@@ -312,6 +312,7 @@ class LauncherTests(unittest.TestCase):
         self.assertIn(f'type=bind,src={self.inputs},dst=/inputs/release,readonly', command)
         self.assertIn(f'type=bind,src={self.state}/docker,dst=/var/lib/docker', command)
         self.assertIn(f'type=bind,src={self.state}/containerd,dst=/var/lib/containerd', command)
+        self.assertIn(f'type=bind,src={self.state}/podman,dst=/var/lib/containers/storage', command)
         self.assertEqual((self.state / 'machine-id').read_text().strip(), self.data['id'])
 
     def test_nested_services_use_the_outer_task_budget(self):
@@ -477,7 +478,7 @@ class LauncherTests(unittest.TestCase):
                 self.assertTrue(mount.endswith(',dst=/owned'))
                 directory = Path(mount[len('type=bind,src='):-len(',dst=/owned')])
                 self.assertEqual(directory.parent, self.state)
-                self.assertIn(directory.name, ('docker', 'containerd', 'output', 'work', 'build', 'home', 'journal'))
+                self.assertIn(directory.name, ('docker', 'containerd', 'podman', 'output', 'work', 'build', 'home', 'journal'))
                 # Execute the actual helper, translating only its bind mount.
                 program = arguments[-1]
                 self.assertEqual(program.count('"/owned"'), 1)

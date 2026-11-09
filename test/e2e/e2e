@@ -216,7 +216,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     out_root.mkdir(parents=True, exist_ok=True)
     env_base = os.environ.copy()
     for variable in (*workspace.HELPERS.values(), *workspace.helper_variables(provenance).values(), *workspace.IMAGE_VARIABLES.values(), "E2E_HELPERS_DIR", "E2E_IMAGE", "IMAGE", "E2E_CASES_DIR", "E2E_LIB", "BASH_ENV", "KUASAR_EXPECTED_RUNTIME_INIT_SHA256",
-                     "E2E_TEMPLATE_CACHE_DIR", "E2E_TEMPLATE_CACHE_PROVENANCE"):
+                     "E2E_TEMPLATE_CACHE_DIR", "E2E_TEMPLATE_CACHE_PROVENANCE", "E2E_NODE_INFRA_IMAGE", "E2E_NODE_INFRA_DEPLOY"):
         env_base.pop(variable, None)
     env_base["PYTHONDONTWRITEBYTECODE"] = "1"
     report = {"arch": arch, "cases": [case.name for case in cases], "timings": [],

@@ -23,6 +23,21 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 
+
+def delivery_module():
+    # Shared names keep downloaded historical assets and staged new assets on
+    # one contract without making node-infra a separately versioned component.
+    import sys
+    sys.path.insert(0, str(ROOT / 'release'))
+    import selection
+    return selection
+
+
+def node_infra_module():
+    delivery_module()
+    import node_infra_assets
+    return node_infra_assets
+
 ARCHES = ("x86_64", "aarch64")
 OWNERS = ("accelerator", "connector", "guest-runtime", "sandboxer", "orchestrator", "platform")
 UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vmlinux")
@@ -496,15 +511,27 @@ def check_plan(plan):
     require(re.fullmatch(r"[0-9a-f]{40}", plan["framework_sha"]), "missing exact framework revision")
     require(set(plan["lanes"]) == set(ARCHES), "plan must contain both architectures")
     contract = plan['baseline'].get('delivery', 'historical')
-    require(contract in ('historical', 'workbench-v1'), 'unsupported aggregate delivery contract')
-    if contract == 'workbench-v1':
+    delivery = delivery_module()
+    require(contract in ('historical', *delivery.MODERN_DELIVERIES), 'unsupported aggregate delivery contract')
+    if contract in delivery.MODERN_DELIVERIES:
         baseline = plan['baseline']
         expected = {'platform-' + baseline['version'] + '.tar.gz'}
         expected.update(archive_name(unit, record['version'], arch)
                         for unit, record in baseline['units'].items() for arch in ARCHES)
-        expected.update(f'workbench-{arch}-{baseline["version"].removeprefix("release-")}.tar.gz' for arch in ARCHES)
+        expected.update(delivery.delivery_assets(baseline['version'], contract))
         names = [record['name'] for record in baseline['assets'] if record['name'] != 'SHA256SUMS']
         require(set(names) == expected and len(names) == len(expected), 'new aggregate lacks its complete declared assets')
+    if 'node_infra' in plan:
+        node = plan['node_infra']
+        require(plan['mode'] == 'source' and set(node) == {'version', 'source_revision', 'components'}
+                and node['version'] == plan['baseline']['version']
+                and node['source_revision'] == plan['sources']['platform']['sha'],
+                'candidate node-infra source/version differs from plan')
+        node_infra_module().validate_components(node['components'])
+        for unit, record in node['components'].items():
+            owner = 'guest-runtime' if unit in ('runtime', 'vmlinux') else unit
+            require(record['sha'] == (plan['kernel_sha'] if unit == 'vmlinux' else plan['sources'][owner]['sha']),
+                    'candidate node-infra component source differs from plan')
     case_files = plan["case_files"]
     require(set(plan["test_overlays"]) == (set(OWNERS) if plan["mode"] == "source" else set()),
             "test overlays differ from the exact input mode")
@@ -623,6 +650,19 @@ def compose(plan, arch, assets, delta, output):
         if owner == "platform":
             require(all(platform_test_path(name) for name in files), "platform cannot replace another test owner")
         expected_delta.update(f"{directory}/{name}" for name in files)
+    if 'node_infra' in plan:
+        node = metadata.get('node_infra')
+        require(isinstance(node, dict) and node.get('files') == tree_files(delta / 'node-infra'),
+                'candidate node-infra asset bytes differ from build output')
+        delivery = delivery_module()
+        require(set(node['files']) == {
+                    delivery.node_infra_archive(plan['node_infra']['version'], arch),
+                    delivery.node_infra_deploy_archive(plan['node_infra']['version']),
+                    f'node-infra-{arch}.json', 'node-infra-index.json'},
+                'candidate node-infra output set differs from the delivery contract')
+        expected_delta.update('node-infra/' + name for name in node['files'])
+    else:
+        require('node_infra' not in metadata, 'unplanned candidate node-infra assets')
     require(set(tree_files(delta)) == expected_delta, "undeclared candidate overlay files")
     output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix=f".{arch}.", dir=output.parent) as temporary:
@@ -681,6 +721,19 @@ def compose(plan, arch, assets, delta, output):
             require(path.is_file(), f"missing selected test entry: {case}")
         for directory in ("images", "manifests", "fixtures"):
             (stage / directory).mkdir(exist_ok=True)
+        if 'node_infra' in plan:
+            node = plan['node_infra']
+            node_infra_module().install_inputs(delta / 'node-infra', stage, node['version'], arch,
+                                               revision=node['source_revision'], components=node['components'])
+        elif baseline.get('delivery') == delivery_module().NODE_INFRA_DELIVERY:
+            node = node_infra_module()
+            for name in (delivery_module().node_infra_archive(baseline['version'], arch),
+                         delivery_module().node_infra_deploy_archive(baseline['version'])):
+                path = assets / name
+                require(path.is_file() and not path.is_symlink() and path.stat().st_size == records[name]['size']
+                        and 'sha256:' + digest(path) == records[name]['digest'], 'node-infra baseline asset differs: ' + name)
+            node.install_inputs(assets, stage, baseline['version'], arch,
+                                revision=baseline['sha'], components=baseline['units'])
         helper_records = metadata.get("helpers", {})
         if plan["mode"] == "exact-assets":
             package = stage / "test/e2e/helpers" / arch
@@ -807,7 +860,7 @@ def check_workbench_record(version, source_sha, record, *, arch, expected_assets
     if scope == 'artifact-only':
         require(record.get('cases') == [] and record.get('planned_cases') == workbench_cases(case_files, arch),
                 'artifact-only qualification must distinguish planned cases from execution')
-        require(not any(key in record for key in ('offline', 'empty_private_daemon', 'isolation', 'preflight',
+        require(not any(key in record for key in ('offline', 'empty_private_daemon', 'empty_private_podman', 'isolation', 'preflight',
                     'apparmor', 'timings', 'provenance_sha256', 'start_seconds', 'preparation_network', 'execution_network')),
                 'artifact-only qualification cannot claim system or offline execution')
         return
@@ -825,6 +878,14 @@ def check_workbench_record(version, source_sha, record, *, arch, expected_assets
             and preflight['docker'].get('root') == '/var/lib/docker'
             and preflight.get('containerd') == {'root': '/var/lib/containerd', 'state': '/run/containerd'},
             'workbench daemons do not use their private storage')
+    if delivery_module().node_infra_deploy_archive(version) in expected_assets:
+        require(record.get('empty_private_podman') is True,
+                'node-infra requires offline preparation from empty private Podman state')
+        require(all(preflight.get('podman', {}).get(key) == value for key, value in {
+                    'graphroot': '/var/lib/containers/storage', 'runroot': '/run/containers/storage',
+                    'driver': 'overlay', 'rootless': False, 'cgroup_version': 'v2'}.items())
+                and preflight.get('quadlet', {}).get('delegation') == 'split',
+                'node-infra requires the private rootful Podman and delegated Quadlet preflight')
     require(record.get('cases') == (selected_cases if selected_cases is not None else workbench_cases(case_files, arch, native_full=scope == 'native-full')) and record.get('timings'),
             'workbench cases differ from the complete declared selection')
     check_timings(record['timings'], record['cases'])

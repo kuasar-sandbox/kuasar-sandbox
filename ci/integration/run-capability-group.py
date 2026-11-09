@@ -225,6 +225,8 @@ def execute(args):
     for directory in ('ci/integration', 'ci/hosted', 'test/e2e/lib', 'release'):
         shutil.copytree(ROOT / directory, args.inputs / 'framework' / directory,
                         ignore=shutil.ignore_patterns('__pycache__', '*.pyc'), copy_function=copy_input)
+    (args.inputs / 'framework/workbench').mkdir(parents=True)
+    shutil.copy2(ROOT / 'workbench/storage.conf', args.inputs / 'framework/workbench/storage.conf')
     (args.inputs / 'framework/test/e2e').mkdir(parents=True, exist_ok=True)
     shutil.copy2(ROOT / 'test/e2e/package_inputs.py', args.inputs / 'framework/test/e2e/package_inputs.py')
     (args.inputs / 'plan.json').write_bytes(artifacts.canonical(plan) + b'\n')
@@ -242,6 +244,14 @@ def execute(args):
                                '--inputs', args.inputs, '--cpus', profile['resources']['cpus'],
                                '--memory-gib', profile['resources']['memory_gib']),
                        check=True, stdin=subprocess.DEVNULL, timeout=300)
+        if any(name.startswith('basic.node-infra-') for name in group['cases']):
+            # The existing supplemental Workbench is an execution environment,
+            # not the staged product image. Keep any compatibility installation
+            # private to this owned container; offline release tests are separate.
+            subprocess.run(command(args.root, 'exec', '--', 'bash', '-euc',
+                'source /inputs/release/framework/ci/hosted/bootstrap.sh; '
+                'prepare_node_infra_runtime /inputs/release/framework/workbench/storage.conf'),
+                check=True, stdin=subprocess.DEVNULL, timeout=600)
         internal = ['/inputs/release/framework/ci/integration/run-capability-group.py', '--inside',
                     '--plan', '/inputs/release/plan.json', '--arch', args.arch, '--group', args.group,
                     '--workspace', '/inputs/release/prepared', '--runtime', '/inputs/release/runtime.tar.gz',

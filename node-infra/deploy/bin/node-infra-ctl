@@ -1,0 +1,783 @@
+#!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+"""Install and recover trusted, rootful kuasar-sandbox node-infra instances.
+
+Quadlet and native component files remain the configuration interfaces. JSON
+files below the instance data directory are ownership/recovery journals only.
+"""
+import argparse
+from contextlib import contextmanager
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
+
+RELEASES = Path('/opt/node-infra/releases')
+STATE = Path('/var/lib/node-infra/instances')
+RUN = Path('/run/node-infra/instances')
+QUADLETS = Path('/etc/containers/systemd')
+SYSTEMD = Path('/etc/systemd/system')
+LABEL = 'io.kuasar-sandbox.node-infra.instance'
+RUNTIME = '/usr/libexec/node-infra/node-infra-runtime'
+DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
+NAME = re.compile(r'[a-z0-9][a-z0-9-]{0,39}')
+
+
+def require(value, message):
+    if not value:
+        raise ValueError(message)
+
+
+def run(*args, check=True, timeout=120, pass_fds=()):
+    result = subprocess.run(list(map(str, args)), text=True, capture_output=True, timeout=timeout, pass_fds=pass_fds)
+    if check and result.returncode:
+        # Native config output can contain secrets: never echo its stdout.
+        raise ValueError(f'{args[0]} {args[1] if len(args)>1 else ""}: {result.stderr.strip()[-2000:]}')
+    return result
+
+
+def json_file(path):
+    require(not path.is_symlink() and path.is_file(), f'missing or linked record: {path}')
+    return json.loads(path.read_text())
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def atomic(path, data, mode=0o600):
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    require(not path.is_symlink(), f'refusing symlink: {path}')
+    fd, temporary = tempfile.mkstemp(prefix='.' + path.name, dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            os.fchmod(stream.fileno(), mode)
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+        sync_directory(path.parent)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def save(path, data):
+    atomic(path, json.dumps(data, sort_keys=True, indent=2) + '\n')
+
+
+def safe_path(value):
+    require(re.fullmatch(r'/[a-zA-Z0-9_./+-]+', value) and '..' not in Path(value).parts,
+            'binding must be a plain absolute path without whitespace, specifiers or parent traversal')
+    path = Path(value)
+    require(str(path) == value and path.resolve() == path, f'linked or noncanonical binding: {value}')
+    return path
+
+
+def private_directory(path):
+    safe_path(str(path))
+    path.mkdir(parents=True, exist_ok=True, mode=0o700)
+    require(path.is_dir() and path.stat().st_uid == 0 and not path.stat().st_mode & 0o022,
+            f'instance directory must be root-owned and not group/world writable: {path}')
+
+
+def hash_bytes(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def unit_values(text):
+    """Read the binding subset of a Quadlet, including repeated sections/resets.
+
+    Binding values are intentionally plain absolute paths/immutable identities.
+    Other systemd fields remain native text and are validated by the generator.
+    """
+    values, section, pending = {}, '', ''
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith(('#', ';')):
+            continue
+        line = pending + line
+        if line.endswith('\\'):
+            pending = line[:-1] + ' '
+            continue
+        pending = ''
+        if line.startswith('[') and line.endswith(']'):
+            section = line[1:-1]
+            continue
+        require(section and '=' in line, 'invalid Quadlet assignment')
+        key, value = line.split('=', 1)
+        key = (section, key.strip())
+        if not value.strip():
+            values[key] = []
+        else:
+            values.setdefault(key, []).append(value.strip())
+    require(not pending, 'unfinished Quadlet continuation')
+    return values
+
+
+def one(values, section, key, default=None):
+    entries = values.get((section, key), [])
+    return entries[-1] if entries else default
+
+
+def bindings(text, name):
+    require(not re.search(r'@[A-Z_]+@', text), 'unresolved Quadlet template token')
+    values = unit_values(text)
+    image = one(values, 'Container', 'Image', '')
+    require(DIGEST.fullmatch(image) or re.fullmatch(r'[a-zA-Z0-9./_:-]+@sha256:[0-9a-f]{64}', image),
+            'Image must be a full config ID or a digest-qualified reference')
+    require(one(values, 'Container', 'Pull') == 'never', 'Pull=never is required')
+    require(one(values, 'Container', 'ContainerName') == 'node-infra-' + name, 'ContainerName differs from instance')
+    network = one(values, 'Container', 'Network', '')
+    require(network.startswith('ns:'), 'Network must join a host-provided namespace')
+    netns = safe_path(network[3:])
+    args = ' '.join(values.get(('Container', 'PodmanArgs'), []))
+    require(args == '--privileged --cgroupns=private --systemd=always --stop-timeout=90',
+            'retain the delivered PodmanArgs lifecycle settings')
+    for key in ('Exec', 'Entrypoint', 'User', 'Group', 'UserNS', 'RemapUsers', 'Mount', 'Tmpfs', 'Rootfs'):
+        require(not values.get(('Container', key)), f'{key} overrides the system container contract')
+    for key in ('ExecStart', 'ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecStopPost'):
+        require(not values.get(('Service', key)), 'lifecycle hooks are installed by node-infra-ctl')
+    require(one(values, 'Service', 'KillMode') == 'control-group', 'KillMode=control-group is required')
+    mounts = {}
+    for value in values.get(('Container', 'Volume'), []):
+        parts = value.split(':')
+        require(len(parts) == 3, 'Volume requires SOURCE:DESTINATION:OPTIONS')
+        source, target, options = parts
+        safe_path(source)
+        require(target.startswith('/') and '%' not in target and '$' not in target,
+                'volume destination must be absolute without specifiers')
+        require(target not in mounts, 'duplicate volume destination: ' + target)
+        mounts[target] = (source, options)
+    required = {'/run/node-infra/recovery': (str(STATE / name / 'recovery'), 'rw'),
+                '/run/netns': (str(RUN / name / 'netns'), 'rw,rslave'),
+                '/sys/fs/bpf': (str(RUN / name / 'bpf'), 'rw')}
+    for target, value in required.items():
+        require(mounts.get(target) == value, 'retain the instance-private recovery volume: ' + target)
+    for target in mounts:
+        for protected in required:
+            require(target == protected or not (Path(target) in Path(protected).parents or
+                    Path(protected) in Path(target).parents), 'volume overlaps recovery mount: ' + target)
+    require('/var/lib/node-infra' in mounts, 'missing persistent data volume')
+    return {'image': image, 'netns': str(netns), 'volumes': [':'.join((src, dst, opt))
+            for dst, (src, opt) in mounts.items()], 'values': values}
+
+
+def memory_bytes(value):
+    # Compare explicit native quantities only. An unfamiliar/automatic value
+    # remains unknown; the native CLI, not this adapter, validates config.
+    match = re.fullmatch(r'(\d+(?:\.\d+)?)\s*([KMGTPE]?)(?:i?B)?', str(value), re.I)
+    if not match:
+        return None
+    return int(float(match[1]) * 1024 ** ('KMGTPE'.find(match[2].upper()) + 1 if match[2] else 0))
+
+
+def check_budget(data, cpu_limit, memory_limit):
+    pools = data.get('pools')
+    if not data.get('enabled') or not pools:
+        return {'name': 'budget', 'status': 'unknown', 'detail': 'explicit native resource pools are not configured'}
+    cpu, memory = 0, 0
+    for pool in pools:
+        amount = pool['allocatable']
+        size = memory_bytes(amount.get('memory'))
+        if amount.get('cpu') is None or size is None:
+            return {'name': 'budget', 'status': 'unknown', 'detail': 'pool uses implicit or automatic allocation'}
+        cpu += amount['cpu']
+        memory += size
+    if cpu_limit is None or memory_limit is None:
+        return {'name': 'budget', 'status': 'unknown', 'detail': 'outer CPU/memory limits are not both explicit'}
+    require(cpu < cpu_limit and memory < memory_limit, 'native allocatable pools leave no CPU/memory management headroom')
+    return {'name': 'budget', 'status': 'pass', 'detail': 'sum of explicit pools leaves management CPU/memory headroom'}
+
+
+def inspect(kind, identity):
+    result = run('podman', kind, 'inspect', identity, check=False, timeout=30)
+    if result.returncode:
+        require('no such' in result.stderr.lower() or 'not found' in result.stderr.lower()
+                or 'does not exist' in result.stderr.lower(), result.stderr.strip())
+        return None
+    rows = json.loads(result.stdout)
+    require(len(rows) == 1, 'ambiguous Podman identity')
+    return rows[0]
+
+
+def image_identity(reference, release):
+    image = inspect('image', reference)
+    require(image, 'image is not local; load/pull the exact image before installation')
+    identity = image['Id']
+    if not identity.startswith('sha256:'):
+        identity = 'sha256:' + identity
+    labels = image.get('Labels') or image.get('Config', {}).get('Labels') or {}
+    require(labels.get('io.kuasar-sandbox.node-infra.release') == release['version'] and
+            labels.get('io.kuasar-sandbox.node-infra.schema') == '1', 'image release/schema labels differ')
+    arch = {'x86_64': 'amd64', 'aarch64': 'arm64'}.get(platform.machine())
+    require(arch and image.get('Os') == 'linux' and image.get('Architecture') == arch,
+            'image must match the native Linux architecture')
+    official = release['images'].get(platform.machine())
+    require(official, 'deployment package has no image for this architecture')
+    if identity == official['id']:
+        require(official['config_digest'] == identity and image.get('Digest') == official['manifest_digest'],
+                'official image manifest/config identity differs from release.json')
+    # Customer images keep the release/schema labels; their own immutable ID
+    # is retained for this instance, rather than claiming an official digest.
+    return identity
+
+
+def payload(root):
+    require(root.is_dir() and not root.is_symlink(), 'invalid deployment package')
+    entries = {}
+    for path in root.rglob('*'):
+        require(not path.is_symlink(), 'deployment package cannot contain links')
+        if path.is_file():
+            entries[str(path.relative_to(root))] = (path.read_bytes(), 0o755 if path.stat().st_mode & 0o111 else 0o644)
+        else:
+            require(path.is_dir(), 'deployment package contains a special file')
+    require({'bin/node-infra-ctl', 'templates/node-infra.container', 'release.json'} <= entries.keys(),
+            'incomplete deployment package')
+    return entries
+
+
+def pin_release(root, release):
+    version = release['version']
+    require(re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,100}', version), 'invalid release version')
+    source = payload(root)
+    private_directory(RELEASES)
+    destination = RELEASES / version
+    if destination.exists():
+        require(payload(destination) == source, 'this release version is already installed with different bytes')
+        return destination
+    temporary = Path(tempfile.mkdtemp(prefix='.install-', dir=RELEASES))
+    try:
+        for name, (data, mode) in source.items():
+            path = temporary / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            path.chmod(mode)
+        temporary.rename(destination)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return destination
+
+
+class Instance:
+    def __init__(self, name):
+        require(NAME.fullmatch(name), 'name needs 1–40 lowercase letters, digits or hyphens')
+        self.name = name
+        self.directory, self.run = STATE / name, RUN / name
+        self.unit = QUADLETS / ('node-infra-' + name + '.container')
+        self.service = 'node-infra-' + name + '.service'
+        self.container = 'node-infra-' + name
+        self.installation = self.directory / 'installation.json'
+        self.applied = self.directory / 'applied.json'
+        self.recovery = self.directory / 'recovery'
+        self.connector = self.recovery / 'connector.json'
+        self.dropin = SYSTEMD / (self.service + '.d') / '90-node-infra.conf'
+
+    def installed(self):
+        data = json_file(self.installation)
+        require(data['name'] == self.name and data['schema'] == 1, 'foreign installation record')
+        return data
+
+    def source(self):
+        data = self.installed()
+        require(hash_bytes(self.unit.read_bytes()) == data['unit_sha256'],
+                'installed Quadlet changed; stop/recover, then install the edited source')
+        return bindings((self.directory / 'source.container').read_text(), self.name)
+
+    def owned_container(self, installed):
+        data = inspect('container', self.container)
+        if data:
+            require(data.get('Config', {}).get('Labels', {}).get(LABEL) == installed['owner'],
+                    'foreign container name collision; refusing operation')
+        return data
+
+    def service_state(self):
+        return run('systemctl', 'show', self.service, '--property=ActiveState', '--value').stdout.strip()
+
+    def helper_container(self, applied):
+        helper = applied.get('helper')
+        if not helper:
+            return None
+        require(helper['name'] == self.container + '-' + applied['generation'] + '-' + helper['operation']
+                and helper['operation'] in ('prepare', 'cleanup'), 'foreign helper intent')
+        data = inspect('container', helper['name'])
+        if data:
+            labels = data.get('Config', {}).get('Labels', {})
+            require(labels.get(LABEL) == applied['owner'] and
+                    labels.get(LABEL + '.generation') == applied['generation'] and
+                    labels.get(LABEL + '.operation') == helper['operation'] and
+                    data['Image'].removeprefix('sha256:') == applied['image'].removeprefix('sha256:') and
+                    (not helper.get('id') or helper['id'] == data['Id']), 'foreign helper container')
+        return data
+
+    def reap_helper(self, applied):
+        if not applied.get('helper'):
+            return
+        data = self.helper_container(applied)
+        if data:
+            # Podman serializes start/remove on the immutable container ID and
+            # kills/reaps its processes before removal. A delayed start CLI
+            # cannot resurrect this ID after recovery has removed it.
+            run('podman', 'rm', '--force', '--time=0', data['Id'])
+            require(self.helper_container(applied) is None, 'helper still exists after removal')
+        del applied['helper']
+        save(self.applied, applied)
+
+    def run_helper(self, applied, operation, arguments, *command):
+        require(not applied.get('helper'), 'previous helper needs recovery')
+        name = self.container + '-' + applied['generation'] + '-' + operation
+        require(inspect('container', name) is None, 'foreign helper name collision')
+        applied['helper'] = {'name': name, 'operation': operation}
+        save(self.applied, applied)
+        # Create does not run customer code. Inherit the instance lock only
+        # through create so a surviving CLI cannot create after recovery.
+        # Start uses the recorded immutable ID, never a reusable name. Do not
+        # use --rm: its inspectable ownership must survive any hook/CLI death.
+        run('podman', 'create', '--name', name, '--pull=never', '--privileged', '--cgroupns=private',
+            '--label', LABEL + '=' + applied['owner'],
+            '--label', LABEL + '.generation=' + applied['generation'],
+            '--label', LABEL + '.operation=' + operation, '--entrypoint=' + RUNTIME,
+            *arguments, applied['image'], operation, *command, pass_fds=(self.lock_fd,))
+        data = self.helper_container(applied)
+        require(data, 'created helper is missing')
+        applied['helper']['id'] = data['Id']
+        save(self.applied, applied)
+        run('podman', 'start', '--attach', data['Id'])
+        self.reap_helper(applied)
+
+    def archive_boot(self, applied):
+        require(re.fullmatch(r'[a-zA-Z0-9-]+', applied['generation']), 'invalid archive generation')
+        history = self.directory / 'history' / applied['generation']
+        safe_path(str(history.parent))
+        require(not history.is_symlink() and not self.connector.is_symlink(), 'linked reboot archive or Connector record')
+        snapshot = dict(applied, error='')
+        if not history.exists():
+            history.parent.mkdir(mode=0o700, exist_ok=True)
+            temporary = Path(tempfile.mkdtemp(prefix='.' + applied['generation'] + '-', dir=history.parent))
+            try:
+                # Publish the ownership snapshot and directory together; there
+                # is never an unowned empty final directory to guess about.
+                save(temporary / 'applied.json', snapshot)
+                save(temporary / 'connector-sha256.json',
+                     hash_bytes(self.connector.read_bytes()) if self.connector.exists() else None)
+                require(not history.exists(), 'foreign reboot archive appeared')
+                temporary.rename(history)
+                sync_directory(history.parent)
+            finally:
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+        require(not history.is_symlink() and json_file(history / 'applied.json') == snapshot,
+                'foreign reboot archive')
+        digest = json_file(history / 'connector-sha256.json')
+        archived = history / 'connector.json'
+        if self.connector.exists():
+            require(hash_bytes(self.connector.read_bytes()) == digest, 'reboot Connector record changed')
+            require(not archived.exists(), 'duplicate reboot Connector record')
+            self.connector.rename(archived)
+        require((not archived.exists() and digest is None) or
+                (archived.is_file() and not archived.is_symlink() and hash_bytes(archived.read_bytes()) == digest),
+                'reboot archive Connector identity differs')
+        sync_directory(history)
+        sync_directory(history.parent)
+        if self.recovery.exists():
+            sync_directory(self.recovery)
+        applied.update(state='cleaned', error='', archived_after_reboot=True)
+        save(self.applied, applied)
+
+    def consumers_gone(self, applied):
+        group = applied.get('cgroup')
+        require(group and group.startswith('/') and '..' not in Path(group).parts, 'missing/invalid applied cgroup')
+        root = Path('/sys/fs/cgroup') / group.lstrip('/')
+        require(root.resolve() == root, 'cgroup path is linked')
+        for path in root.rglob('cgroup.procs') if root.exists() else []:
+            try:
+                pids = {int(x) for x in path.read_text().split()}
+            except FileNotFoundError:
+                continue
+            # ExecStopPost itself belongs to the service. No other consumer is
+            # exempt, including conmon, custom pools and unexpected descendants.
+            require(not pids - {os.getpid()}, 'old instance still has consumers in ' + str(path.parent))
+
+    def install(self, source):
+        package = Path(__file__).resolve().parents[1]
+        release = json_file(package / 'release.json')
+        require(release.get('schema') == 1, 'unsupported deployment release schema')
+        text = source.read_text()
+        selected = bindings(text, self.name)
+        image = image_identity(selected['image'], release)
+        old = self.installed() if self.installation.exists() else None
+        require(self.service_state() not in ('active', 'activating', 'deactivating', 'reloading'),
+                'stop the instance before installation/replacement')
+        require(inspect('container', self.container) is None, 'existing container must be recovered before installation')
+        if self.applied.exists():
+            require(json_file(self.applied)['state'] == 'cleaned', 'unfinished recovery blocks installation')
+        if old:
+            require(self.unit.exists() and hash_bytes(self.unit.read_bytes()) == old['unit_sha256'],
+                    'installed unit differs; refusing overwrite')
+        else:
+            require(not self.unit.exists() and not self.dropin.parent.exists(), 'foreign unit/drop-in already exists')
+            require(not self.connector.exists(), 'unowned Connector recovery record exists')
+        pinned = pin_release(package, release)
+        owner = old['owner'] if old else uuid.uuid4().hex
+        # Keep the user source; generate the runtime join from the retained handle.
+        rendered = text + f'\n[Container]\nImage={image}\nNetwork=\nNetwork=ns:{self.run}/primary\nLabel={LABEL}={owner}\n'
+        tool = pinned / 'bin/node-infra-ctl'
+        hooks = (f'[Service]\nExecStartPre={tool} prepare --name {self.name}\n'
+                 f'ExecStartPost={tool} started --name {self.name}\n'
+                 f'ExecStopPost={tool} recover --name {self.name}\n')
+        data = {'schema': 1, 'name': self.name, 'owner': owner, 'version': release['version'],
+                'tool': str(tool), 'image': image, 'unit_sha256': hash_bytes(rendered.encode())}
+        # Write ownership first: interruptions cannot cause adoption of an
+        # unrelated unit. A partial install remains explicit and reviewable.
+        save(self.installation, data)
+        atomic(self.directory / 'source.container', text)
+        atomic(self.unit, rendered, 0o644)
+        atomic(self.dropin, hooks, 0o644)
+        print(json.dumps({'name': self.name, 'version': release['version'], 'unit': str(self.unit)}))
+
+    def check(self):
+        installed = self.installed()
+        selected = self.source()
+        require(not self.applied.exists() or json_file(self.applied)['state'] == 'cleaned',
+                'old generation is running or needs recovery')
+        require(self.owned_container(installed) is None, 'old container still exists')
+        require(Path('/run/systemd/system').is_dir() and Path('/sys/fs/cgroup/cgroup.controllers').is_file(),
+                'systemd and cgroup v2 are required')
+        version = run('podman', 'version', '--format', '{{.Client.Version}}').stdout.strip()
+        require(tuple(map(int, re.findall(r'\d+', version)[:3])) >= (4, 9, 3), 'Podman >= 4.9.3 required')
+        require(Path('/dev/kvm').is_char_device() and Path('/dev/net/tun').is_char_device(), 'KVM/TUN devices missing')
+        release = json_file(Path(installed['tool']).parents[1] / 'release.json')
+        require(image_identity(selected['image'], release) == installed['image'], 'installed image changed')
+        netns = Path(selected['netns'])
+        require(netns.exists() and mount_at(netns).get('type') == 'nsfs', 'primary namespace must be a retained nsfs mount')
+        links = json.loads(run('nsenter', '--net=' + str(netns), 'ip', '-j', 'link', 'show').stdout)
+        require(any(x['ifname'] == 'lo' and 'UP' in x['flags'] for x in links), 'primary loopback is not UP')
+        require(any(x['ifname'] == 'net0' and 'UP' in x['flags'] for x in links), 'ingress net0 is missing/down')
+        volumes = []
+        for value in selected['volumes']:
+            src, dst, options = value.split(':')
+            if dst in ('/run/netns', '/sys/fs/bpf', '/run/node-infra/recovery'):
+                continue
+            if dst == '/var/lib/node-infra':
+                private_directory(Path(src))
+            require(Path(src).exists(), 'missing volume source: ' + src)
+            volumes += ['--volume', value]
+        # Validation only: no PID 1, BPF setup or native service is started.
+        base = ['podman', 'run', '--rm', '--pull=never', '--network=none',
+                '--entrypoint=/usr/libexec/node-infra/service', *volumes, installed['image']]
+        run(*base, 'validate')
+        descriptor = json.loads(run('podman', 'run', '--rm', '--pull=never', '--network=none',
+                                    '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'describe').stdout)
+        transit = descriptor['transit']['name']
+        require(transit, 'Connector transit device must be configured')
+        matches = [x for x in links if x['ifname'] == transit]
+        require(len(matches) == 1 and 'UP' not in matches[0]['flags'] and matches[0].get('address'),
+                'transit input is missing, UP, or lacks a MAC identity')
+        budget = json.loads(run('podman', 'run', '--rm', '--pull=never', '--network=none',
+                                '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'budget').stdout)
+        limits = selected['values']
+        quota = one(limits, 'Service', 'CPUQuota', '')
+        cpu_limit = float(quota[:-1]) / 100 if re.fullmatch(r'\d+(?:\.\d+)?%', quota) else None
+        report = check_budget(budget, cpu_limit, memory_bytes(one(limits, 'Service', 'MemoryMax', '')))
+        selected['budget'] = report
+        return selected, descriptor, matches[0]
+
+    def prepare(self):
+        if self.applied.exists() and json_file(self.applied)['state'] != 'cleaned':
+            self.recover()
+        selected, descriptor, transit = self.check()
+        installed = self.installed()
+        private_directory(self.run)
+        require(not (self.run / 'owner.json').exists(), 'run handles already exist; recover first')
+        require(not list(self.run.iterdir()), 'unowned runtime entries exist')
+        private_directory(self.recovery)
+        if self.connector.exists():
+            require(json_file(self.connector)['state'] == 'cleaned', 'Connector recovery is unfinished')
+            self.connector.unlink()
+        group = run('systemctl', 'show', self.service, '--property=ControlGroup', '--value').stdout.strip()
+        require(group and group != '/', 'service has no delegated cgroup')
+        applied = {'schema': 1, 'state': 'preparing', 'name': self.name, 'owner': installed['owner'],
+                   'boot_id': boot_id(), 'generation': uuid.uuid4().hex, 'image': installed['image'],
+                   'tool': installed['tool'], 'cgroup': group, 'netns': selected['netns'],
+                   'primary_inode': Path(selected['netns']).stat().st_ino, 'mounts': {},
+                   'descriptor': descriptor, 'transit': transit, 'error': ''}
+        save(self.applied, applied)
+        save(self.run / 'owner.json', {'owner': applied['owner'], 'generation': applied['generation']})
+        primary = self.run / 'primary'
+        primary.touch(mode=0o600)
+        self.create_mount(applied, primary, 'nsfs', applied['primary_inode'], '--bind', selected['netns'], primary)
+        require(primary.stat().st_ino == applied['primary_inode'], 'primary namespace changed during prepare')
+        pins = self.run / 'netns'
+        pins.mkdir(mode=0o700)
+        self.create_mount(applied, pins, None, pins.stat().st_ino, '--bind', pins, pins)
+        run('mount', '--make-rshared', pins)
+        bpf = self.run / 'bpf'
+        bpf.mkdir(mode=0o700)
+        self.create_mount(applied, bpf, 'bpf', None, '-t', 'bpf', 'node-infra-' + self.name, bpf)
+        # Create native namespaces in a short-lived helper before starting PID 1.
+        # Only this helper and recovery share mounts back to the host. The main
+        # container receives slave mounts, so systemd's final unmount sweep cannot
+        # destroy the host's handles (and devices held in those namespaces).
+        volumes = []
+        for value in selected['volumes']:
+            if value.split(':')[1] == '/run/netns':
+                value = str(pins) + ':/run/netns:rw,rshared'
+            volumes += ['--volume', value]
+        self.run_helper(applied, 'prepare', ['--network=ns:' + str(primary), *volumes])
+        record = json_file(self.connector)
+        for namespace in record['namespaces']:
+            pin = pins / namespace['name']
+            require(mount_at(pin).get('type') == 'nsfs' and pin.stat().st_ino == namespace['inode'],
+                    'native namespace did not propagate to the host: ' + namespace['name'])
+        applied['state'] = 'prepared'
+        save(self.applied, applied)
+
+    def create_mount(self, applied, path, fs, inode, *arguments):
+        # Persist ownership intent before the mount syscall. A killed helper can
+        # then reconcile that syscall even if it never wrote the returned ID.
+        applied.setdefault('mount_intents', {})[str(path)] = {'type': fs, 'inode': inode}
+        save(self.applied, applied)
+        run('mount', *arguments)
+        mount = mount_at(path)
+        require(mount and (not fs or mount['type'] == fs), 'mount preparation failed: ' + str(path))
+        applied['mounts'][str(path)] = mount
+        del applied['mount_intents'][str(path)]
+        save(self.applied, applied)
+
+    def started(self):
+        applied = json_file(self.applied)
+        container = self.owned_container(self.installed())
+        require(container and container['State']['Running'], 'container failed to start')
+        pid = container['State']['Pid']
+        require(Path(f'/proc/{pid}/ns/net').stat().st_ino == applied['primary_inode'], 'container joined another namespace')
+        applied.update(state='running', container_id=container['Id'])
+        save(self.applied, applied)
+
+    def recover(self):
+        if not self.applied.exists():
+            require(not self.connector.exists() and not self.run.exists(), 'unowned recovery inputs; retain for diagnosis')
+            return
+        applied = json_file(self.applied)
+        if applied['state'] == 'cleaned':
+            return
+        installed = self.installed()
+        require(applied['owner'] == installed['owner'], 'foreign applied record')
+        # A newer CLI must use the old, pinned cleanup implementation too.
+        if str(Path(__file__).resolve()) != applied['tool']:
+            # CLOEXEC on the lock descriptor releases it before the pinned
+            # implementation reacquires the same instance lock.
+            os.execv(applied['tool'], [applied['tool'], 'recover', '--name', self.name])
+        try:
+            container = self.owned_container(installed)
+            require(not container or not container['State']['Running'],
+                    'old container still reports running; retain recovery handles')
+            self.reap_helper(applied)
+            self.consumers_gone(applied)
+            if container:
+                run('podman', 'rm', container['Id'])
+            if applied['boot_id'] != boot_id():
+                require(not self.run.exists(), 'old runtime handles remain after reboot; refusing stale-state adoption')
+                self.archive_boot(applied)
+                return
+            owner_path = self.run / 'owner.json'
+            if not owner_path.exists() and applied['state'] in ('preparing', 'releasing'):
+                require(not self.run.exists() or not list(self.run.iterdir()), 'unowned runtime entries remain')
+                if applied['state'] == 'preparing':
+                    save(owner_path, {'owner': applied['owner'], 'generation': applied['generation']})
+            if owner_path.exists():
+                owner = json_file(owner_path)
+                require(owner == {'owner': applied['owner'], 'generation': applied['generation']}, 'foreign runtime directory')
+            else:
+                require(applied['state'] == 'releasing', 'runtime ownership record is missing')
+            for value, intent in list(applied.get('mount_intents', {}).items()):
+                path = Path(value)
+                require(path.parent == self.run and path.name in ('primary', 'netns', 'bpf'), 'foreign mount intent')
+                current = mount_at(path)
+                if current:
+                    require(not intent['type'] or current['type'] == intent['type'], 'mount intent type differs')
+                    require(not intent['inode'] or path.stat().st_ino == intent['inode'], 'mount intent identity differs')
+                    if intent['type'] == 'bpf':
+                        require(current['source'] == 'node-infra-' + self.name, 'foreign bpffs source')
+                    applied['mounts'][value] = current
+                del applied['mount_intents'][value]
+                save(self.applied, applied)
+            for path, saved in applied['mounts'].items():
+                current = mount_at(Path(path))
+                require(current == saved or (not current and applied['state'] == 'releasing'),
+                        'owned mount changed or disappeared: ' + path)
+            primary = self.run / 'primary'
+            if self.connector.exists() and applied['state'] != 'releasing':
+                require(primary.exists() and primary.stat().st_ino == applied['primary_inode'], 'old primary namespace lost')
+                require(inspect('image', applied['image']), 'old immutable cleanup image is missing')
+                self.run_helper(applied, 'cleanup', ['--network=ns:' + str(primary),
+                    '--volume', str(self.recovery) + ':/run/node-infra/recovery:rw',
+                    '--volume', str(self.run / 'netns') + ':/run/netns:rw,rshared',
+                    '--volume', str(self.run / 'bpf') + ':/sys/fs/bpf:rw'], '--force')
+                require(json_file(self.connector)['state'] == 'cleaned', 'runtime did not confirm cleanup')
+            # Also verify when inner prepare failed before writing its record.
+            if mount_at(primary):
+                links = json.loads(run('nsenter', '--net=' + str(primary), 'ip', '-j', 'link', 'show',
+                                       'dev', applied['transit']['ifname']).stdout)
+                require(len(links) == 1 and links[0]['address'] == applied['transit']['address'] and
+                        'UP' not in links[0]['flags'], 'original transit has not returned DOWN')
+            for name in ('netns', 'bpf'):
+                path = self.run / name
+                if path.exists():
+                    require(not list(path.iterdir()), 'owned recovery resources remain: ' + str(path))
+            # Journal the release phase before unmounting. Retrying after a
+            # syscall succeeded but its journal update failed remains safe.
+            applied['state'] = 'releasing'
+            save(self.applied, applied)
+            for name in ('bpf', 'netns', 'primary'):
+                path = self.run / name
+                if mount_at(path):
+                    require(str(path) in applied['mounts'], 'unrecorded mount retained: ' + str(path))
+                    run('umount', path)  # never lazy: busy resources remain recoverable
+                applied['mounts'].pop(str(path), None)
+                save(self.applied, applied)
+                if path.is_dir():
+                    path.rmdir()
+                else:
+                    path.unlink(missing_ok=True)
+            owner_path.unlink(missing_ok=True)
+            if self.run.exists():
+                self.run.rmdir()
+            applied.update(state='cleaned', error='')
+            save(self.applied, applied)
+        except Exception as error:
+            applied.update(error=str(error))
+            save(self.applied, applied)
+            raise
+
+    def status(self):
+        installed = self.installed()
+        container = self.owned_container(installed)
+        applied = json_file(self.applied) if self.applied.exists() else {}
+        running = bool(container and container['State']['Running'])
+        active = self.service_state()
+        pending = bool(applied and applied['state'] != 'cleaned' and not running)
+        checks = []
+        if running:
+            for service in ('node-conductor', 'node-proxy', 'connector-vswitch'):
+                result = run('podman', 'exec', self.container, 'systemctl', 'is-active', service, check=False, timeout=15)
+                checks.append({'name': service, 'status': 'pass' if result.returncode == 0 else 'fail',
+                               'detail': result.stdout.strip()})
+            health = run('podman', 'exec', self.container, RUNTIME, 'health', check=False, timeout=10)
+            checks.append({'name': 'native-app-readiness', 'status': 'pass' if health.returncode == 0 else 'fail',
+                           'detail': 'Conductor admin and Proxy workers/routes' if health.returncode == 0 else health.stderr.strip()})
+            result = run('podman', 'exec', self.container, RUNTIME, 'ready', '--timeout=1s', check=False, timeout=10)
+            checks.append({'name': 'connector-capacity', 'status': 'pass' if result.returncode == 0 else 'fail',
+                           'detail': 'native provisioned capacity' if result.returncode == 0 else result.stderr.strip()})
+        ready = running and active == 'active' and bool(checks) and all(c['status'] == 'pass' for c in checks)
+        return {'name': self.name, 'container': {'exists': container is not None, 'running': running,
+                'image': container.get('Image') if container else installed['image']}, 'service': {'active': active},
+                'recovery': {'pending': pending, 'error': applied.get('error', '')}, 'checks': checks, 'ready': ready}
+
+
+def boot_id():
+    return Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+
+
+def mount_at(path):
+    # Shared parent/self-bind mounts can propagate a second entry at the same
+    # printed path, hidden below the parent bind. Use the kernel's resolved
+    # mount ID, not a count of path strings, to distinguish it from a stack.
+    try:
+        fd = os.open(path, os.O_PATH | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except FileNotFoundError:
+        return {}
+    try:
+        info = Path(f'/proc/self/fdinfo/{fd}').read_text()
+        visible = re.search(r'^mnt_id:\s*(\d+)$', info, re.MULTILINE)
+        require(visible, 'missing mount identity: ' + str(path))
+        visible = visible[1]
+        table = Path('/proc/self/mountinfo').read_text()
+    finally:
+        os.close(fd)
+    # mountinfo escapes four whitespace/backslash characters. Decode only those.
+    def decode(value):
+        return re.sub(r'\\(040|011|012|134)', lambda m: chr(int(m[1], 8)), value)
+    mounts, parents = {}, {}
+    for line in table.splitlines():
+        left, right = line.split(' - ', 1)
+        fields, rest = left.split(), right.split()
+        parents[fields[0]] = fields[1]
+        if decode(fields[4]) == str(path):
+            mounts[fields[0]] = {'id': fields[0], 'device': fields[2], 'root': decode(fields[3]),
+                                  'type': rest[0], 'source': decode(rest[1])}
+    require(visible in parents, 'mount disappeared during inspection: ' + str(path))
+    if visible not in mounts:
+        return {}
+    parent, seen = parents[visible], {visible}
+    while parent in parents and parent not in seen:
+        require(parent not in mounts, 'stacked mounts at owned path: ' + str(path))
+        seen.add(parent)
+        parent = parents[parent]
+    return mounts[visible]
+
+
+@contextmanager
+def locked(instance):
+    private_directory(STATE)
+    path = STATE / ('.' + instance.name + '.lock')
+    require(not path.is_symlink(), 'linked instance lock')
+    fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        private_directory(instance.directory)
+        instance.lock_fd = fd
+        yield
+    finally:
+        os.close(fd)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('command', choices=('install', 'check', 'status', 'prepare', 'started', 'recover'))
+    parser.add_argument('--name', required=True)
+    parser.add_argument('--unit', type=Path)
+    parser.add_argument('--json', action='store_true')
+    args = parser.parse_args()
+    try:
+        require(os.geteuid() == 0, 'node-infra-ctl requires root')
+        instance = Instance(args.name)
+        # status must remain observable while a recovery hook holds the lock.
+        if args.command == 'status':
+            result = instance.status()
+            print(json.dumps(result, indent=2))
+            return 0 if result['ready'] else 1
+        with locked(instance):
+            if args.command == 'install':
+                require(args.unit, 'install requires --unit')
+                instance.install(args.unit)
+            elif args.command == 'check':
+                selected, _, _ = instance.check()
+                print(json.dumps({'name': args.name, 'checks': [selected['budget'], {'name': 'startup', 'status': 'pass',
+                                  'detail': 'native static validation; application startup is checked separately'}]}))
+            else:
+                getattr(instance, args.command)()
+        return 0
+    except (ValueError, OSError, KeyError, subprocess.SubprocessError) as error:
+        if args.json:
+            print(json.dumps({'name': args.name, 'error': str(error), 'ready': False,
+                              'checks': [{'name': args.command, 'status': 'fail', 'detail': str(error)}]}))
+        else:
+            print('node-infra-ctl: ' + str(error), file=sys.stderr)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())

@@ -173,6 +173,27 @@ class BindingTests(unittest.TestCase):
             with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'provenance differs'):
                 binder.bind(self.root, self.plan, self.validation, broken)
 
+    def test_node_infra_delivery_requires_empty_private_podman_and_quadlet_evidence(self):
+        record = copy.deepcopy(self.results['x86_64'])
+        expected = dict(record['input_assets'])
+        expected['node-infra-deploy-' + self.version + '.tar.gz'] = 'sha256:' + '1' * 64
+        record['input_assets'] = expected
+        def check():
+            return artifacts.check_workbench_record(self.version, self.sha, record,
+                arch='x86_64', expected_assets=expected, case_files=self.plan['case_files'])
+        with self.assertRaisesRegex(ValueError, 'empty private Podman'):
+            check()
+        record['empty_private_podman'] = True
+        with self.assertRaisesRegex(ValueError, 'delegated Quadlet'):
+            check()
+        record['preflight']['podman'] = {'graphroot': '/var/lib/containers/storage',
+            'runroot': '/run/containers/storage', 'driver': 'overlay', 'rootless': False, 'cgroup_version': 'v2'}
+        record['preflight']['quadlet'] = {'delegation': 'split'}
+        check()
+        record['preflight']['podman']['graphroot'] = '/shared'
+        with self.assertRaisesRegex(ValueError, 'private rootful Podman'):
+            check()
+
 
 if __name__ == '__main__':
     unittest.main()

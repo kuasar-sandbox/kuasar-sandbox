@@ -11,6 +11,7 @@ import workbench_groups
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import publication_body
 import release_notes
+import selection
 
 
 def verify_stage(bundle, plan, validation, workbench):
@@ -22,7 +23,7 @@ def verify_stage(bundle, plan, validation, workbench):
     expected = {record["name"]: record["digest"] for record in plan["baseline"]["assets"]}
     actual = {name: "sha256:" + value for name, value in artifacts.tree_files(bundle / "assets").items()}
     artifacts.require(actual == expected, "publisher bytes differ from validated stage")
-    artifacts.require(plan['baseline'].get('delivery') == 'workbench-v1', 'new publication requires the declared workbench delivery contract')
+    artifacts.require(plan['baseline'].get('delivery') in selection.MODERN_DELIVERIES, 'new publication requires the declared workbench delivery contract')
     results = artifacts.check_workbench_results(plan['baseline']['version'], plan['baseline']['sha'], workbench,
                                                 expected_assets=actual, case_files=plan['case_files'])
     for arch, result in results.items():

@@ -35,7 +35,7 @@ daily-preview.yaml/version >= release.yaml/version
 
 The comparison uses numeric aggregate `MAJOR.MINOR.PATCH` values, not string ordering. A Stable manifest can select only Stable components. A Preview manifest can mix Stable and Preview components. Both manifests must list exactly six release units with their respective correct tag prefixes.
 
-The two manifests below are examples, not a list of current published versions. New aggregate selections must declare `delivery: workbench-v1`. Omitting `delivery` selects the historical reading contract and cannot be used for new aggregate assembly.
+The two manifests below are examples, not a list of current published versions. New aggregate selections declare `delivery: node-infra-v1`; `workbench-v1` remains readable for previously selected aggregates. Omitting `delivery` selects the historical reading contract and cannot be used for new aggregate assembly.
 
 ### 2.1 Stable manifest
 
@@ -43,7 +43,7 @@ The two manifests below are examples, not a list of current published versions. 
 
 ```yaml
 version: release-v0.5.7
-delivery: workbench-v1
+delivery: node-infra-v1
 previous_version: release-v0.5.6
 components:
   accelerator: v0.2.1
@@ -60,7 +60,7 @@ components:
 
 ```yaml
 version: release-v0.5.7
-delivery: workbench-v1
+delivery: node-infra-v1
 previous_version: release-v0.5.6
 preview_version: preview.20260831
 previous_preview_version: preview.20260830
@@ -170,7 +170,7 @@ The aggregate stage validates the current declared x86 and native ARM non-KVM pr
 
 ## 5. Recovering incomplete publication
 
-A complete Release has the exact package set for its selected tag, an appropriate prerelease state and valid native GitHub asset IDs, sizes, digests and upload states. Optional historical SHA256SUMS attachments are ignored. Single-architecture historical releases remain valid; partial architecture sets are incomplete. A new Workbench aggregate requires all fifteen packages. Missing or ambiguous asset metadata is retained and reported, never treated as authority to delete a supposedly incomplete release.
+A complete Release has the exact package set for its selected tag, an appropriate prerelease state and valid native GitHub asset IDs, sizes, digests and upload states. Optional historical SHA256SUMS attachments are ignored. Single-architecture historical releases remain valid; partial architecture sets are incomplete. A node-infra aggregate requires all eighteen packages; a historical Workbench aggregate requires fifteen. Missing or ambiguous asset metadata is retained and reported, never treated as authority to delete a supposedly incomplete release.
 
 Only tags with complete Releases are candidates for finished-product reuse. An incomplete publication stays available for recovery:
 
@@ -183,6 +183,26 @@ Only tags with complete Releases are candidates for finished-product reuse. An i
 A new date or revision does not attach old tags to new component HEADs. Finish the original partial publication before advancing the channel, or retain it and explicitly choose a fresh identifier. Unreferenced completed component Previews remain subject to the existing canonical GC scope and seven-day rollback window.
 
 Recovery first resumes a retained successful publication stage when the version and bytes agree. Missing assets may be filled; same-name different bytes are never replaced. A published Release can only be confirmed read-only against the original accepted stage. For cleanup, a surviving tagless Release must have a known exact source and pass the same canonical-history check used by planning; GC does not require that old source to remain current branch HEAD. Missing Release and tag is already converged. Confirmed 404 is idempotent; network or permission errors are not absence.
+
+### 5.1 First node-infra registry publication
+
+`ghcr.io/kuasar-sandbox/node-infra` must be publicly readable before an aggregate
+can complete publication. A public source repository or source label does not
+make a new GHCR package public: [GitHub defaults first publication to private](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-container-registry#pushing-container-images).
+
+For an existing package, a package administrator checks its visibility and the
+publishing repository's Actions access in the package settings before release.
+For a new package, let the normal publisher upload the first validated platform
+image; its anonymous read-back will fail while the package is private. Retain
+that run's stage and successful validation artifacts. A package administrator
+then changes the package visibility to **Public** in its settings and confirms
+that `kuasar-sandbox/kuasar-sandbox` has Actions access. Resume only the original
+failed publish job using the recovery procedure above. It verifies existing
+tag bytes, uploads only missing identities, and anonymously reads the manifests,
+configurations, all layers and index again before completing publication. Do not
+rebuild the same version, seed an unrelated image, overwrite a tag, or weaken the
+anonymous checks to initialize visibility. A package API 404 alone cannot
+distinguish absence from insufficient package access.
 
 ## 6. Component publication CLI
 
@@ -262,7 +282,7 @@ make test-ci-tools
 
 ## 8. Release asset validation
 
-Component packages use independent unit/version/architecture names; runtime and vmlinux remain separate version lines. Both maintained aggregate selections declare `delivery: workbench-v1`. A new aggregate contains one architecture-neutral platform archive, twelve unchanged component archives and two native Workbench image archives: fifteen assets, with no independent `SHA256SUMS`. Historical checksum attachments are ignored. Consumers read the manifest under the selected aggregate tag to obtain the complete required package set; missing packages never select compatibility with another version or current main.
+Component packages use independent unit/version/architecture names; runtime and vmlinux remain separate version lines. The `node-infra-v1` contract contains one architecture-neutral platform archive, twelve unchanged component archives, two native Workbench image archives, two native node-infra OCI archives and one common deployment archive: eighteen assets, with no independent `SHA256SUMS`. The prior `workbench-v1` contract retains its original fifteen assets. Historical checksum attachments are ignored. Consumers read the manifest under the selected aggregate tag to obtain the complete required package set; missing packages never select compatibility with another version or current main.
 
 Do not publish generated release-metadata JSON or duplicate GitHub's automatically supplied source archives. Selection YAML remains in the repository, not in Release assets or the platform package. Component archives exclude `docs/` and `test/e2e/`; aggregate assembly collects component documentation and E2E inputs from the selected owner tags into the platform archive (§8.1). Kernel documentation follows the separately selected vmlinux product source.
 

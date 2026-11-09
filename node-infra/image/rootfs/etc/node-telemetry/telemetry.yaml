@@ -1,0 +1,7 @@
+config_socket: /run/sandbox/node-ctl.socket
+api_socket: /run/sandbox/telemetry.sock
+query:
+  backend: none
+  handler: none
+local:
+  enabled: false

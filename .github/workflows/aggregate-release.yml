@@ -46,6 +46,7 @@ jobs:
       source_ref: ${{ steps.request.outputs.source_ref }}
       source_sha: ${{ steps.request.outputs.source_sha }}
       version: ${{ steps.request.outputs.version }}
+      delivery: ${{ steps.request.outputs.delivery }}
       framework_sha: ${{ steps.framework.outputs.sha }}
     steps:
       - name: Check out trusted release tooling
@@ -108,6 +109,7 @@ jobs:
             "$VERSION" > selection.tsv
           {
             echo "version=$VERSION"
+            echo "delivery=$(python3 -B control/release/selection.py "$GITHUB_WORKSPACE/platform" "$VERSION" --delivery)"
             echo "source_ref=$SOURCE_REF"
             echo "source_sha=$SOURCE_SHA"
             echo "artifact=aggregate-stage-${VERSION}-${GITHUB_RUN_ID}"
@@ -195,15 +197,17 @@ jobs:
           outputs: |
             .ci/e2e-helpers
             .ci/e2e-wheels
+            .ci/node-infra-helpers
           arch: ${{ matrix.arch }}
           cpus: '2'
           memory-gib: '8'
           run: |
             python3 -B /inputs/release/release/build-e2e-helpers.py \
               --sources /src --version '${{ needs.prepare.outputs.version }}' --arch "$TARGET_ARCH" \
-              --output /src/.ci/e2e-helpers --wheels-output /src/.ci/e2e-wheels --platform-source /src/platform
+              --output /src/.ci/e2e-helpers --wheels-output /src/.ci/e2e-wheels --platform-source /src/platform \
+              --node-infra-output /src/.ci/node-infra-helpers
       - name: Transport this native helper package
-        run: tar -cf "helpers-${{ matrix.arch }}.tar" -C helper-work/.ci e2e-helpers e2e-wheels
+        run: tar -cf "helpers-${{ matrix.arch }}.tar" -C helper-work/.ci e2e-helpers e2e-wheels node-infra-helpers
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: aggregate-helpers-${{ matrix.arch }}-${{ github.run_id }}
@@ -319,9 +323,59 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  node-infra-build:
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.prepare.outputs.delivery == 'node-infra-v1'
+    needs: [prepare, helper-build]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ job.workflow_sha }}
+          path: control
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: aggregate-sources-${{ github.run_id }}
+          path: transport
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: aggregate-helpers-${{ matrix.arch }}-${{ github.run_id }}
+          path: native-helpers
+      - name: Package the native system image from exact products and compiled helper
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends skopeo
+          python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
+          python3 -B control/ci/integration/transport.py extract "native-helpers/helpers-$TARGET_ARCH.tar" helpers
+          python3 -B control/release/build-node-infra.py --platform inputs/fetched/platform \
+            --components inputs/fetched/components --sources inputs/fetched/sources \
+            --runtime-helper "helpers/node-infra-helpers/$TARGET_ARCH/node-infra-runtime" \
+            --version "$VERSION" --arch "$TARGET_ARCH" --output image
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: node-infra-image-${{ matrix.arch }}-${{ github.run_id }}
+          path: image/node-infra-*
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+
   stage:
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: [prepare, workbench-build]
+    if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.workbench-build.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.node-infra-build.result)
+    needs: [prepare, workbench-build, node-infra-build]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -339,6 +393,12 @@ jobs:
           pattern: workbench-image-*-${{ github.run_id }}
           path: workbench-images
           merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: needs.prepare.outputs.delivery == 'node-infra-v1'
+        with:
+          pattern: node-infra-image-*-${{ github.run_id }}
+          path: node-infra-images
+          merge-multiple: true
       - name: Assemble the complete declared set without repackaging products
         env:
           PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
@@ -348,6 +408,7 @@ jobs:
           python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
           cp -a inputs/fetched/platform platform
           mv workbench-images inputs/fetched/workbench
+          if [ -d node-infra-images ]; then mv node-infra-images inputs/fetched/node-infra; fi
           export SOURCE_DATE_EPOCH=$(git -C platform show -s --format=%ct HEAD)
           control/release/aggregate-release.sh assemble "$VERSION" inputs/fetched aggregate-stage
           tar -cf aggregate-stage/source-inputs.tar platform -C inputs/fetched sources
@@ -439,6 +500,7 @@ jobs:
           VALIDATION_ONLY: ${{ inputs.validation_only }}
           RELEASE_PLAN_FILE: ${{ github.workspace }}/validated/plan/plan.json
           RELEASE_VALIDATION_FILE: ${{ github.workspace }}/validated/validation.json
+          DELIVERY: ${{ needs.prepare.outputs.delivery }}
         run: |
           set -euo pipefail
           [ "$(git -C "$PLATFORM_SOURCE_ROOT" rev-parse HEAD)" = "$SOURCE_SHA" ] \
@@ -455,6 +517,10 @@ jobs:
               python3 -B release/publication_body.py aggregate-stage/release-notes.md
               python3 -B release/workbench_registry.py aggregate-stage "$VERSION" "$SOURCE_SHA" --validate-only \
                 --plan "$RELEASE_PLAN_FILE" --validation "$RELEASE_VALIDATION_FILE" --workbench "$RELEASE_WORKBENCH_RESULTS"
+              if [ "$DELIVERY" = node-infra-v1 ]; then
+                python3 -B release/node_infra_registry.py aggregate-stage "$VERSION" "$SOURCE_SHA" --validate-only \
+                  --plan "$RELEASE_PLAN_FILE" --validation "$RELEASE_VALIDATION_FILE" --workbench "$RELEASE_WORKBENCH_RESULTS"
+              fi
               release/publish-release.sh check "$VERSION"
               echo 'Validation-only acceptance completed; no release or registry publication was requested.'
               ;;
@@ -482,6 +548,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
           python3 -B ci/integration/check-published-download.py \
             --version "$VERSION" --root "$RUNNER_TEMP/published-download"
 
@@ -500,7 +567,7 @@ jobs:
           set -euo pipefail
           artifact_id_lines=$(gh api --paginate \
             "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name | test("^(aggregate-stage-|aggregate-inputs-|aggregate-sources-|aggregate-helpers-|workbench-inputs-|workbench-image-|integration-build-|integration-readers-|integration-prepared-)")) | .id')
+            --jq '.artifacts[] | select(.name | test("^(aggregate-stage-|aggregate-inputs-|aggregate-sources-|aggregate-helpers-|workbench-inputs-|workbench-image-|node-infra-image-|integration-build-|integration-readers-|integration-prepared-)")) | .id')
           artifact_ids=()
           if [[ -n "$artifact_id_lines" ]]; then
             mapfile -t artifact_ids <<< "$artifact_id_lines"

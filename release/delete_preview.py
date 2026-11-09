@@ -113,8 +113,10 @@ def collect(tag, sha, mode):
                 and asset_identity(current) == asset_identity(release)), 'Release changed before deletion')
     recheck()
     registry_result = None
-    if snapshot.delivery == coordinator.selection.DELIVERY:
-        registry_result = workbench_gc.collect(tag, sha)
+    if snapshot.delivery in coordinator.selection.MODERN_DELIVERIES:
+        registry_result = {'workbench': workbench_gc.collect(tag, sha)}
+        if snapshot.delivery == coordinator.selection.NODE_INFRA_DELIVERY:
+            registry_result['node-infra'] = workbench_gc.collect(tag, sha, image='node-infra')
     recheck()  # Registry traversal can be slow; do not delete from stale state.
     deleted = []
     if release is not None:

@@ -12,6 +12,9 @@ class ExecutorTransportTests(unittest.TestCase):
         self.write('ci/integration/executable.sh','#!/bin/sh\nexit 0\n',0o755)
         self.write('ci/integration/ignored.py','retained despite export-ignore\n')
         self.write('ci/integration/subst.txt','$Format:%H$\n')
+        self.write('release/node_infra_assets.py','verified delivery input reader\n')
+        self.write('release/archive_paths.py','bounded archive reader\n')
+        self.write('workbench/storage.conf','private containers storage\n')
         self.write('outside/not-materialized.txt','object only\n')
         self.write('.gitattributes','ci/integration/ignored.py export-ignore\nci/integration/subst.txt export-subst\n')
         self.commit()
@@ -47,6 +50,8 @@ class ExecutorTransportTests(unittest.TestCase):
         self.assertEqual((target/'ci/integration/subst.txt').read_text(),'$Format:%H$\n')
         self.assertEqual((target/'ci/integration/executable.sh').stat().st_mode&0o777,0o755)
         self.assertFalse((target/'outside').exists())
+        for path in ('release/node_infra_assets.py','release/archive_paths.py','workbench/storage.conf'):
+            self.assertEqual((target/path).read_bytes(),(self.source/path).read_bytes())
         self.assertEqual(transport.git(target,'rev-parse','HEAD').decode().strip(),self.sha)
         self.assertEqual(transport.git(target,'cat-file','commit','HEAD'),transport.git(self.source,'cat-file','commit','HEAD'))
         self.assertFalse(transport.git(target,'status','--porcelain').strip())
