@@ -166,6 +166,36 @@ class PreparedHelperSelectionTest(unittest.TestCase):
                 cwd=target, text=True, capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_workflow_sparse_executors_validate_node_infra_components(self):
+        import yaml
+        jobs = yaml.safe_load((ROOT / '.github/workflows/integration-architecture.yml').read_text())['jobs']
+        for name, entry in [('e2e', 'run-artifact-tests.py'), ('performance', 'run-artifact-performance.py')]:
+            with self.subTest(job=name), tempfile.TemporaryDirectory() as directory:
+                target = pathlib.Path(directory)
+                checkout = next(step['with'] for step in jobs[name]['steps']
+                                if step.get('with', {}).get('path') == 'framework')
+                for pattern in checkout['sparse-checkout'].splitlines():
+                    pattern = pattern.lstrip('/')
+                    for path in ROOT.glob(pattern + '**/*' if pattern.endswith('/') else pattern):
+                        if path.is_file() and '__pycache__' not in path.parts:
+                            destination = target / path.relative_to(ROOT)
+                            destination.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copyfile(path, destination)
+                # Isolate imports from the source checkout: this is the actual
+                # executor file closure, including the lazy plan validator.
+                script = '''import runpy, sys
+sys.path.insert(0, 'ci/integration')
+executor = runpy.run_path(sys.argv[1])
+artifacts = executor['artifacts']
+components = {unit: {'version': 'fixture', 'sha': 'a' * 40,
+    'repository': 'kuasar-sandbox/' + ('guest-runtime' if unit in ('runtime', 'vmlinux') else unit)}
+    for unit in artifacts.UNITS}
+artifacts.node_infra_module().validate_components(components)
+'''
+                result = subprocess.run(['python3', '-I', '-B', '-c', script, 'ci/integration/' + entry],
+                                        cwd=target, text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_native_arm_full_selection_requires_the_same_probe(self):
         native = artifacts.suite_selection(['sandboxer'], 'aarch64',
                     CASES | {'sandboxer': ['sandbox.cgroup.sh']}, native_full=True)

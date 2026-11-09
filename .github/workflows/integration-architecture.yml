@@ -447,6 +447,8 @@ jobs:
             /ci/integration/
             /release/tag_sources.py
             /release/selection.py
+            /release/archive_paths.py
+            /release/node_infra_assets.py
             /test/e2e/package_inputs.py
             /test/e2e/lib/
       - uses: ./framework/.github/actions/download-artifact
