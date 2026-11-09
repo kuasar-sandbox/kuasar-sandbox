@@ -657,6 +657,13 @@ def interrupt_native_helpers(node):
         if operation == 'cleanup':
             node.start()
             node.assert_native_exec(node.create())
+            # Leave a genuine failed cleanup for an operator's manual retry.
+            # The retry runs outside the unit cgroup: systemd cannot reap its
+            # orphan helper for us when we subsequently kill the host CLI.
+            command('ip', '-n', node.netns, 'link', 'add', 'net1', 'type', 'dummy')
+            command('systemctl', 'stop', node.service, check=False, timeout=180)
+            wait_for('retained cleanup for manual retry', lambda: node.status()['recovery']['pending'])
+            command('ip', '-n', node.netns, 'link', 'delete', 'net1')
         recovery = node.data / 'recovery'
         recovery.mkdir(mode=0o700, exist_ok=True)
         with (recovery / '.lock').open('a') as lock:
@@ -667,7 +674,10 @@ def interrupt_native_helpers(node):
                 command('systemctl', 'reset-failed', node.service, check=False)
                 command('systemctl', 'start', '--no-block', node.service)
             else:
-                command('podman', 'kill', '--signal', 'KILL', node.container)
+                interrupted_log = (node.fixture.output / 'interrupted-manual-helper.log').open('w')
+                interrupted = subprocess.Popen([str(node.fixture.ctl), 'recover', '--name', node.name],
+                                               stdout=interrupted_log, stderr=subprocess.STDOUT)
+                interrupted_log.close()
 
             def blocked_helper():
                 applied = json.loads((node.data / 'applied.json').read_text())
@@ -682,7 +692,8 @@ def interrupt_native_helpers(node):
             require(pid > 1, 'helper has no real process')
             if operation == 'prepare':
                 require(not (recovery / 'connector.json').exists(), 'prepare pause missed first-record window')
-            hook = int(command('systemctl', 'show', node.service, '-p', 'ControlPID', '--value').stdout)
+            hook = (interrupted.pid if operation == 'cleanup' else
+                    int(command('systemctl', 'show', node.service, '-p', 'ControlPID', '--value').stdout))
             require(hook > 1 and b'node-infra-ctl' in Path(f'/proc/{hook}/cmdline').read_bytes(),
                     'expected the actual host hook')
             target = hook
@@ -704,8 +715,9 @@ def interrupt_native_helpers(node):
                 wait_for('interrupted startup recovered', node._stopped)
                 require(not (recovery / 'connector.json').exists(), 'old helper wrote after recovery')
             else:
-                wait_for('failed cleanup hook ended', lambda: int(command(
-                    'systemctl', 'show', node.service, '-p', 'ControlPID', '--value').stdout) == 0)
+                require(interrupted.wait(timeout=15) == -signal.SIGKILL, 'manual recovery was not interrupted')
+                require(json.loads(command('podman', 'inspect', identity).stdout)[0]['State']['Running'],
+                        'manual helper did not survive its host hook; missed the orphan window')
                 # Exercise manual recovery independently of ExecStopPost.
                 with (node.fixture.output / 'manual-helper-recover.log').open('w') as output:
                     process = subprocess.Popen([str(node.fixture.ctl), 'recover', '--name', node.name],
