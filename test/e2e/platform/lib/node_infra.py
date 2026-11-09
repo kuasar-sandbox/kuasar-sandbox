@@ -227,7 +227,7 @@ class Node:
         return json.loads(result.stdout)
 
     def start(self):
-        command(self.fixture.ctl, 'check', '--name', self.name, '--json')
+        command(self.fixture.ctl, 'check', '--name', self.name)
         command('systemctl', 'reset-failed', self.service, check=False)
         command('systemctl', 'start', self.service)
         wait_for(self.name + ' readiness', lambda: self.status().get('ready'))
