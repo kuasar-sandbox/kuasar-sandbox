@@ -1,35 +1,35 @@
 version: release-v0.1.13
 delivery: workbench-v1
 previous_version: release-v0.1.12
-preview_version: preview.20261108
-previous_preview_version: preview.20261107.1
+preview_version: preview.20261110
+previous_preview_version: preview.20261108
 components:
   accelerator: v0.1.12-preview.20261108
-  connector: v0.1.8-preview.20261107
-  sandboxer: v0.1.14-preview.20261108
-  orchestrator: v0.1.13-preview.20261108
-  runtime: runtime-v0.1.13-preview.20261108
+  connector: v0.1.8-preview.20261110
+  sandboxer: v0.1.14-preview.20261110
+  orchestrator: v0.1.13-preview.20261110
+  runtime: runtime-v0.1.13-preview.20261110
   vmlinux: vmlinux-v0.1.7-preview.20261107
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.1.13-preview.20261108
+    # Kuasar Sandbox release-v0.1.13-preview.20261110
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
-    Previous aggregate selection: `release-v0.1.13-preview.20261107.1`.
+    Previous aggregate selection: `release-v0.1.13-preview.20261108`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261108/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261110/releases/daily-preview.yaml).
 
     ## Component versions
 
     | Release unit | Version |
     |---|---|
     | `accelerator` | `v0.1.12-preview.20261108` |
-    | `connector` | `v0.1.8-preview.20261107` |
-    | `sandboxer` | `v0.1.14-preview.20261108` |
-    | `orchestrator` | `v0.1.13-preview.20261108` |
-    | `runtime` | `runtime-v0.1.13-preview.20261108` |
+    | `connector` | `v0.1.8-preview.20261110` |
+    | `sandboxer` | `v0.1.14-preview.20261110` |
+    | `orchestrator` | `v0.1.13-preview.20261110` |
+    | `runtime` | `runtime-v0.1.13-preview.20261110` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261107` |
 
     Six release units from five independently versioned repositories; `guest-runtime` supplies both `runtime` and `vmlinux`.
@@ -38,81 +38,46 @@ notes:
 
     ### accelerator
 
-    Selected version: `v0.1.12-preview.20261107` → `v0.1.12-preview.20261108`.
-
-    - docs: clarify image preparation ownership and limits ([#225](https://github.com/kuasar-sandbox/accelerator/pull/225), [commit 1a24709542f5](https://github.com/kuasar-sandbox/accelerator/commit/1a24709542f5bc188bc82064a5dc4a9f7ede5167)).
-    - fix(ec): isolate slow peer initialization from shared lookups ([#226](https://github.com/kuasar-sandbox/accelerator/pull/226), [commit 90de56f46ffd](https://github.com/kuasar-sandbox/accelerator/commit/90de56f46ffd8de3d00f6c8714b1c584734ef9b8)).
-    - docs: clarify artifact validation and writer memory accounting ([#228](https://github.com/kuasar-sandbox/accelerator/pull/228), [commit 0ee73874fd8f](https://github.com/kuasar-sandbox/accelerator/commit/0ee73874fd8faa0e03373ce4bc9268ce40922b95)).
-    - docs: clarify transfer validation and output completion boundaries ([#229](https://github.com/kuasar-sandbox/accelerator/pull/229), [commit 4da1861c946f](https://github.com/kuasar-sandbox/accelerator/commit/4da1861c946f3a514d72e7c809ac0665f58ee936)).
-    - docs: clarify Store administration and resource boundaries ([#230](https://github.com/kuasar-sandbox/accelerator/pull/230), [commit 1c2cd5e859a1](https://github.com/kuasar-sandbox/accelerator/commit/1c2cd5e859a179af84dec749f7937bd131ef9aeb)).
-    - docs: clarify cache diagnostics and cancellation ownership ([#231](https://github.com/kuasar-sandbox/accelerator/pull/231), [commit cc194d510926](https://github.com/kuasar-sandbox/accelerator/commit/cc194d5109260464670c41fcb8a51a5ad6fc25a6)).
-    - perf(cache): reuse successful data during equivalent pending fills ([#227](https://github.com/kuasar-sandbox/accelerator/pull/227), [commit 3bba5006bf53](https://github.com/kuasar-sandbox/accelerator/commit/3bba5006bf531a9ebfb15c68da960054b84c8f25)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/a7e11f4a8399c58f838d966c37af283b6be8a17b...3bba5006bf531a9ebfb15c68da960054b84c8f25)
+    Selected version unchanged: `v0.1.12-preview.20261108`.
 
     ### connector
 
-    Selected version unchanged: `v0.1.8-preview.20261107`.
+    Selected version: `v0.1.8-preview.20261107` → `v0.1.8-preview.20261110`.
+
+    - docs: clarify switch shutdown and TAP ownership ([#105](https://github.com/kuasar-sandbox/connector/pull/105), [commit a98c566702b1](https://github.com/kuasar-sandbox/connector/commit/a98c566702b1a2ebbbe94f7faba469ffa8dabaea)).
+    - docs: align switch network contract with current behavior ([#106](https://github.com/kuasar-sandbox/connector/pull/106), [commit 73f25dbc542c](https://github.com/kuasar-sandbox/connector/commit/73f25dbc542c31257067c601093dd4e5703ca057)).
+    - docs: distinguish TAPFD protocol from reference limits ([#107](https://github.com/kuasar-sandbox/connector/pull/107), [commit cad794161ea2](https://github.com/kuasar-sandbox/connector/commit/cad794161ea28e66e1c52f536799fe937fde4d1e)).
+    - docs: repair Chinese vSwitch test navigation ([#108](https://github.com/kuasar-sandbox/connector/pull/108), [commit 1e026ce37bd2](https://github.com/kuasar-sandbox/connector/commit/1e026ce37bd2a658c07e8bf34ac5ca8ccc32b86d)).
+    - docs: align vswitch operations with release layout and CLI behavior ([#109](https://github.com/kuasar-sandbox/connector/pull/109), [commit 47e9e8893c76](https://github.com/kuasar-sandbox/connector/commit/47e9e8893c7601d3c10f5087f6b10ffe1a36a3b0)).
+    - feat(config): support ordered JSON/YAML configuration files ([#111](https://github.com/kuasar-sandbox/connector/pull/111), [commit 146b8dcd38eb](https://github.com/kuasar-sandbox/connector/commit/146b8dcd38eb12384ab11a31ba3ea054ca521011)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/connector/compare/35a6a0fe682ae001539abc8975e4992f1c03eb3a...146b8dcd38eb12384ab11a31ba3ea054ca521011)
 
     ### sandboxer
 
-    Selected version: `v0.1.14-preview.20261107.1` → `v0.1.14-preview.20261108`.
+    Selected version: `v0.1.14-preview.20261108` → `v0.1.14-preview.20261110`.
 
-    - fix: decouple cold boot identity from memory restore compatibility ([#418](https://github.com/kuasar-sandbox/sandboxer/pull/418), [commit ae67e9e528ae](https://github.com/kuasar-sandbox/sandboxer/commit/ae67e9e528ae788a722e48cfca9dbef48bcdf2d5)).
-    - docs: clarify memory population and cleanup contracts ([#419](https://github.com/kuasar-sandbox/sandboxer/pull/419), [commit d53d9a1c8ebd](https://github.com/kuasar-sandbox/sandboxer/commit/d53d9a1c8ebd48ce1118889c4fd95f460269354c)).
-    - docs: clarify resource controller and cgroup boundaries ([#420](https://github.com/kuasar-sandbox/sandboxer/pull/420), [commit a7b101c2a1cc](https://github.com/kuasar-sandbox/sandboxer/commit/a7b101c2a1cc12c7371ca4a9713d3b18cdfb1c39)).
-    - docs: distinguish v3 and v4 block storage I/O contracts ([#421](https://github.com/kuasar-sandbox/sandboxer/pull/421), [commit 7c81cd925a5a](https://github.com/kuasar-sandbox/sandboxer/commit/7c81cd925a5ab42ca202ab1ad0f35eafd3d0358f)).
-    - docs: align guest ABI startup and shutdown contracts ([#422](https://github.com/kuasar-sandbox/sandboxer/pull/422), [commit 84370995de67](https://github.com/kuasar-sandbox/sandboxer/commit/84370995de67c0c5a3a788cc763d6e8dd58e6d8b)).
-    - docs: correct VMM boot and host memory contracts ([#423](https://github.com/kuasar-sandbox/sandboxer/pull/423), [commit 1e1a3f4e0b1b](https://github.com/kuasar-sandbox/sandboxer/commit/1e1a3f4e0b1b3415a84b929cd8c9d3f9501c1d5d)).
-    - docs: align Chinese runtime identity contracts ([#424](https://github.com/kuasar-sandbox/sandboxer/pull/424), [commit c21c4a16805c](https://github.com/kuasar-sandbox/sandboxer/commit/c21c4a16805cdf3673e558057eae8ebe0a87a665)).
-    - docs: align configuration boot identity rules ([#425](https://github.com/kuasar-sandbox/sandboxer/pull/425), [commit c8ac86d57695](https://github.com/kuasar-sandbox/sandboxer/commit/c8ac86d5769556d59591794e8469bc86af1bcdf4)).
-    - docs: align artifact boot and publication contracts ([#426](https://github.com/kuasar-sandbox/sandboxer/pull/426), [commit 0b3da0c56807](https://github.com/kuasar-sandbox/sandboxer/commit/0b3da0c56807ecb53e3212afd1fcb812b9d34871)).
-    - docs: correct exec proxy and local target rules ([#427](https://github.com/kuasar-sandbox/sandboxer/pull/427), [commit b041243188d1](https://github.com/kuasar-sandbox/sandboxer/commit/b041243188d135652b5027136bd0973c482fde05)).
-    - docs: correct block storage method navigation ([#428](https://github.com/kuasar-sandbox/sandboxer/pull/428), [commit 2a40c07fc047](https://github.com/kuasar-sandbox/sandboxer/commit/2a40c07fc047eff15f090ca2ff7b476311c456e0)).
-    - docs: correct guest ABI host endpoint identity ([#429](https://github.com/kuasar-sandbox/sandboxer/pull/429), [commit 989cf1075e52](https://github.com/kuasar-sandbox/sandboxer/commit/989cf1075e52685ec0dd3408e97d18ef8380bba4)).
-    - docs: clarify VMM socket path identity ([#430](https://github.com/kuasar-sandbox/sandboxer/pull/430), [commit 8205177d559b](https://github.com/kuasar-sandbox/sandboxer/commit/8205177d559ba03d7d8429fdcd45479650357862)).
+    - fix(journalio): avoid busy waits and isolate component diagnostics ([#431](https://github.com/kuasar-sandbox/sandboxer/pull/431), [commit 4d788fe5cda1](https://github.com/kuasar-sandbox/sandboxer/commit/4d788fe5cda1d5bcaa20eec8ee0fd9f5da08e015)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/8a8462d8406507f08e8a1a9a672674a192093399...8205177d559ba03d7d8429fdcd45479650357862)
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/8205177d559ba03d7d8429fdcd45479650357862...4d788fe5cda1d5bcaa20eec8ee0fd9f5da08e015)
 
     ### orchestrator
 
-    Selected version: `v0.1.13-preview.20261107.1` → `v0.1.13-preview.20261108`.
+    Selected version: `v0.1.13-preview.20261108` → `v0.1.13-preview.20261110`.
 
-    - fix: transfer runner reservations atomically at assignment ([#521](https://github.com/kuasar-sandbox/orchestrator/pull/521), [commit cd7f0d69dab8](https://github.com/kuasar-sandbox/orchestrator/commit/cd7f0d69dab8d002560e4f91279ff3b94df4404b)).
-    - feat(node): expose configurable ext4 discard policy ([#518](https://github.com/kuasar-sandbox/orchestrator/pull/518), [commit 2e43539dc1bd](https://github.com/kuasar-sandbox/orchestrator/commit/2e43539dc1bde0d8f2ed4461d5a10453ce66e13a)).
-    - feat: import memory snapshots as persistent disk-only state ([#520](https://github.com/kuasar-sandbox/orchestrator/pull/520), [commit e9255befae16](https://github.com/kuasar-sandbox/orchestrator/commit/e9255befae164e8468c080ffcdfd75bf5e016bdf)).
-    - docs: clarify sandbox pause and lifecycle admission boundaries ([#522](https://github.com/kuasar-sandbox/orchestrator/pull/522), [commit e237d0c468b0](https://github.com/kuasar-sandbox/orchestrator/commit/e237d0c468b070c44b16813d7c4735bba175df04)).
-    - docs: align observability guide with current telemetry contracts ([#523](https://github.com/kuasar-sandbox/orchestrator/pull/523), [commit b563bbb6204d](https://github.com/kuasar-sandbox/orchestrator/commit/b563bbb6204dfb64eb13ed254ebd56d3db9af31d)).
-    - docs: align node build handoff, readiness and resource accounting ([#524](https://github.com/kuasar-sandbox/orchestrator/pull/524), [commit 8f8896f1c35a](https://github.com/kuasar-sandbox/orchestrator/commit/8f8896f1c35a24d0ef0a5fa002712e4026ae5d55)).
-    - docs: clarify resource reservation expiry and configuration contracts ([#525](https://github.com/kuasar-sandbox/orchestrator/pull/525), [commit 21ed962fdb8e](https://github.com/kuasar-sandbox/orchestrator/commit/21ed962fdb8e8d0bb4d86800b9adbc5fae39dcfa)).
-    - docs: align node service startup and runtime dependency guidance ([#526](https://github.com/kuasar-sandbox/orchestrator/pull/526), [commit a48a45867a41](https://github.com/kuasar-sandbox/orchestrator/commit/a48a45867a41e49a00b9e365324852dd82f263f8)).
-    - docs: clarify node proxy access and authentication boundaries ([#527](https://github.com/kuasar-sandbox/orchestrator/pull/527), [commit c7d99f974a21](https://github.com/kuasar-sandbox/orchestrator/commit/c7d99f974a212cc5dfbe2ad333ae0b017aec987a)).
-    - docs: align cluster lifecycle and configuration boundaries ([#528](https://github.com/kuasar-sandbox/orchestrator/pull/528), [commit c0429c839ea9](https://github.com/kuasar-sandbox/orchestrator/commit/c0429c839ea9682cd55347c8834480ef57397b4c)).
-    - docs: clarify lifecycle SDK dependency selection ([#529](https://github.com/kuasar-sandbox/orchestrator/pull/529), [commit b723d1885d27](https://github.com/kuasar-sandbox/orchestrator/commit/b723d1885d276b6b22c036a5941e0609abe3afdb)).
-    - docs: reject optimized Python in Build recipe ([#530](https://github.com/kuasar-sandbox/orchestrator/pull/530), [commit 59aa7577c90e](https://github.com/kuasar-sandbox/orchestrator/commit/59aa7577c90e9dde5a9a38e40705af2df455010d)).
-    - docs: correct restore capacity preparation source ([#531](https://github.com/kuasar-sandbox/orchestrator/pull/531), [commit 702160dfd9f5](https://github.com/kuasar-sandbox/orchestrator/commit/702160dfd9f555b037a93aa492647f8c9b348060)).
-    - docs: clarify exec errors and identity-bound envd tokens ([#532](https://github.com/kuasar-sandbox/orchestrator/pull/532), [commit bc8c21c28361](https://github.com/kuasar-sandbox/orchestrator/commit/bc8c21c28361fe5b299ac215ff6543303f9d6cc7)).
-    - docs: clarify traffic admission and incomplete binding observations ([#533](https://github.com/kuasar-sandbox/orchestrator/pull/533), [commit 2cdffe9e1b3f](https://github.com/kuasar-sandbox/orchestrator/commit/2cdffe9e1b3fcf77b38963cf90d1a0fab5c5cf19)).
-    - docs: correct cluster acceptance and recovery boundaries ([#534](https://github.com/kuasar-sandbox/orchestrator/pull/534), [commit fb307e54c0df](https://github.com/kuasar-sandbox/orchestrator/commit/fb307e54c0dfb6bf8b8e3a3fa497a369236e0fdc)).
+    - feat(config): merge explicit YAML configuration files ([#536](https://github.com/kuasar-sandbox/orchestrator/pull/536), [commit 10215d6f2d6b](https://github.com/kuasar-sandbox/orchestrator/commit/10215d6f2d6bbf9e6b2c6a1c53706fde4efaceaf)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/715941da4fc837c9c68cacc8084146eabb7dbb8f...fb307e54c0dfb6bf8b8e3a3fa497a369236e0fdc)
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/fb307e54c0dfb6bf8b8e3a3fa497a369236e0fdc...10215d6f2d6bbf9e6b2c6a1c53706fde4efaceaf)
 
     ### runtime
 
-    Selected version: `runtime-v0.1.13-preview.20261107.1` → `runtime-v0.1.13-preview.20261108`.
+    Selected version: `runtime-v0.1.13-preview.20261108` → `runtime-v0.1.13-preview.20261110`.
+
+    The version changed without additional repository commits.
 
     The following repository history also includes shared guest-runtime and kernel changes; it is not limited to runtime-specific source changes.
 
-    - docs: clarify flatten CLI inspection and tar safety boundaries ([#117](https://github.com/kuasar-sandbox/guest-runtime/pull/117), [commit 4088c72223e3](https://github.com/kuasar-sandbox/guest-runtime/commit/4088c72223e320f3d7fc5ad2bed6d8d9652e4ab7)).
-    - docs: correct kernel boot and restore contracts ([#118](https://github.com/kuasar-sandbox/guest-runtime/pull/118), [commit c199f0ce92e4](https://github.com/kuasar-sandbox/guest-runtime/commit/c199f0ce92e46b8a77b9d808b1ae90a2f109513e)).
-    - docs: clarify runtime bundle content identity ([#119](https://github.com/kuasar-sandbox/guest-runtime/pull/119), [commit c64941b277d8](https://github.com/kuasar-sandbox/guest-runtime/commit/c64941b277d8f6b261c124c15bdecdf7917e5b81)).
-    - docs: align runtime upgrade examples with content identity ([#120](https://github.com/kuasar-sandbox/guest-runtime/pull/120), [commit 4f7981386d64](https://github.com/kuasar-sandbox/guest-runtime/commit/4f7981386d64f6f3d8944ed0d4bc76686c416b7a)).
-    - docs: clarify runtime build prerequisites and cache boundaries ([#121](https://github.com/kuasar-sandbox/guest-runtime/pull/121), [commit 95caac896d3c](https://github.com/kuasar-sandbox/guest-runtime/commit/95caac896d3c79b3ceebed710ffc509766cc6758)).
-    - docs: correct aggregate runtime guide layout ([#122](https://github.com/kuasar-sandbox/guest-runtime/pull/122), [commit dc82d736e14b](https://github.com/kuasar-sandbox/guest-runtime/commit/dc82d736e14b6363d84d2b9d5d7c4b43a754bddf)).
-    - docs: correct host UFFD registration ownership ([#123](https://github.com/kuasar-sandbox/guest-runtime/pull/123), [commit 118d08c263cf](https://github.com/kuasar-sandbox/guest-runtime/commit/118d08c263cfe6bd94ef49d1a1a42193d6ecc06a)).
-    - docs: correct target selection and EROFS reader prerequisites ([#124](https://github.com/kuasar-sandbox/guest-runtime/pull/124), [commit 20a3b140477c](https://github.com/kuasar-sandbox/guest-runtime/commit/20a3b140477c8ea84961a896f10fd74f6a8b1b60)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/5c16c51d420564da7d1b33447b79a563f3b4e169...20a3b140477c8ea84961a896f10fd74f6a8b1b60)
+    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/20a3b140477c8ea84961a896f10fd74f6a8b1b60...20a3b140477c8ea84961a896f10fd74f6a8b1b60)
 
     ### vmlinux
 
@@ -124,7 +89,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261108/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261108/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261110/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13-preview.20261110/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
