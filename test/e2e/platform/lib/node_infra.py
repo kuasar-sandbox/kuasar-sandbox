@@ -656,7 +656,9 @@ def interrupt_native_helpers(node):
     for operation, victim in (('prepare', 'hook'), ('prepare', 'cli'), ('cleanup', 'hook')):
         if operation == 'cleanup':
             node.start()
-            node.assert_native_exec(node.create())
+            sandbox = node.create()
+            node.write_marker(sandbox)
+            node.assert_native_exec(sandbox)
             # Leave a genuine failed cleanup for an operator's manual retry.
             # The retry runs outside the unit cgroup: systemd cannot reap its
             # orphan helper for us when we subsequently kill the host CLI.
@@ -731,7 +733,9 @@ def interrupt_native_helpers(node):
                              'helper_pid': pid, 'reaped_before_unlock': True})
         node.assert_returned()
         node.start()
-        node.assert_native_exec(node.create())
+        sandbox = node.create()
+        node.write_marker(sandbox)
+        node.assert_native_exec(sandbox)
         node.stop()
     write_json(node.fixture.output / 'helper-interruptions.json', evidence)
 

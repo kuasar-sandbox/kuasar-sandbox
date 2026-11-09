@@ -362,6 +362,7 @@ class Instance:
         require(re.fullmatch(r'[a-zA-Z0-9-]+', applied['generation']), 'invalid archive generation')
         history = self.directory / 'history' / applied['generation']
         safe_path(str(history.parent))
+        require(not history.is_symlink() and not self.connector.is_symlink(), 'linked reboot archive or Connector record')
         snapshot = dict(applied, error='')
         if not history.exists():
             history.parent.mkdir(mode=0o700, exist_ok=True)

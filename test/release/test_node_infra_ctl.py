@@ -172,6 +172,11 @@ class DeploymentTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.node.archive_boot(applied)
         self.assertEqual(ctl.json_file(history / 'applied.json')['owner'], 'other')
+        linked = self.node.directory / 'history/linked'
+        linked.symlink_to(self.root / 'missing')
+        with self.assertRaisesRegex(ValueError, 'linked reboot'):
+            self.node.archive_boot(dict(applied, generation='linked'))
+        self.assertTrue(linked.is_symlink())
 
     def test_helper_intent_survives_create_start_and_remove_death(self):
         for boundary in ('create', 'start', 'remove'):
