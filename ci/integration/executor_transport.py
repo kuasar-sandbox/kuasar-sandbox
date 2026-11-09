@@ -1,7 +1,8 @@
 """Package only the fixed sparse executor from existing exact Git objects; no network."""
 import argparse,hashlib,json,os,pathlib,re,shutil,subprocess,tarfile,tempfile
 SPARSE=('/.github/actions/download-artifact/','/ci/hosted/','/ci/integration/',
-        '/release/tag_sources.py','/release/selection.py','/test/e2e/package_inputs.py',
+        '/release/tag_sources.py','/release/selection.py','/release/archive_paths.py',
+        '/release/node_infra_assets.py','/test/e2e/package_inputs.py',
         '/test/e2e/lib/','/workbench/')
 ENV={'PATH':os.environ.get('PATH','/usr/bin:/bin'),'LC_ALL':'C','GIT_CONFIG_GLOBAL':'/dev/null',
      'GIT_CONFIG_NOSYSTEM':'1','GIT_ATTR_NOSYSTEM':'1','GIT_NO_LAZY_FETCH':'1'}

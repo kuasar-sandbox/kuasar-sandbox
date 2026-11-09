@@ -7,17 +7,17 @@
 本文维护环境与生命周期合同，不重复首次体验步骤。发布版示例从解包目录执行，
 源码构建示例从主仓目录执行，启动器均使用与输入匹配的版本。
 
-Workbench 为选定的 Kuasar Sandbox 发布版提供原生 Linux 构建工具和系统环境。
+Workbench 为选定的 kuasar-sandbox 发布版提供原生 Linux 构建工具和系统环境。
 同一个镜像支持普通 UID 构建，以及以 systemd 为 PID 1、包含私有 Docker/containerd
-的环境。镜像包含外部测试镜像归档；产品、测试辅助程序和 Demo wheel 则来自匹配的
+和 rootful Podman + Quadlet 的环境。镜像包含外部测试镜像归档；产品、测试辅助程序和 Demo wheel 则来自匹配的
 发布版。选择测试请参阅[公共 E2E 指南](../test/README_zh.md)，完整示例请参阅
 [Demo 指南](../test/demo/DEMO_zh.md)。
 
 ## 主机与镜像
 
 使用原生 x86_64 或 aarch64 Linux、Docker Engine 和 Python 3.9+。启动器使用本机的
-Unix Docker 端点。Docker Desktop、远程 Docker 端点、架构模拟、Podman 和 runner
-注册不属于 V1 范围。
+Unix Docker 端点。Docker Desktop、远程 Docker 端点、架构模拟和 runner 注册不属于
+V1 范围。外层 Workbench 启动器使用 Docker；Podman 在实例内部运行 node-infra 测试。
 
 系统模式是可信系统管理员工具，使用 rootful Docker 的 `--privileged`，并保留
 私有命名空间及独立 daemon 数据。宿主只需原生 Linux、Docker Engine、Python 3.9+、
@@ -36,6 +36,9 @@ systemd 与私有 daemon 就绪，并报告实际能力。所选产品测试仍�
 镜像归档，不能解压到产品发布树。registry 标签为
 `ghcr.io/kuasar-sandbox/workbench:vX.Y.Z[-preview.YYYYMMDD[.N]]`，即聚合版本去掉
 `release-` 前缀。新 `workbench-v1` 发布必须包含两个原生镜像归档；历史发布保留原有资产。
+`node-infra-v1` 交付保留这些 Workbench 资产，另外提供两种架构的 node-infra OCI
+归档和一个部署包。匹配的 platform-release 包含 `basic.node-infra-*` 用例；部署及
+测试输入见 [node-infra 指南](../docs/node-infra_zh.md)。
 
 CI 可在测量验收后将原生 x86 发布运行验收分成两个独立组。每个实例仍准备完整普通离线清单，保留原预算和全部 preflight、隔离、清理检查；仅执行选择不同。[CI 契约](../docs/ci_zh.md#workbench-运行分组)规定精确分组与当前轮次证据。`test-release.py --group all` 保持默认；`--group A` 和 `--group B` 要求原生 x86 及 2 CPU/8 GiB。Hosted ARM 仍为产物级验收。当次流水线的 `native-grouped` 结果代表独立验收组的完整并集，不代表单个部分执行。
 
@@ -217,18 +220,23 @@ suite 改成 `--all`。按所选负载增加 CPU/内存/磁盘余量；修改预
 不带命令的 `exec` 打开 shell。`stop` 请求 systemd 停止私有服务，最多等待 60 秒；
 未能正常停止视为错误。对已停止的实例执行 `start` 会使用记录的容器、挂载和资源
 预算，并要求原镜像和模式。更改这些设置请使用新名称。`cleanup` 仅停止并移除记录
-的容器、网络和守护进程数据，保留 work、build、home、journal 和 output 目录。
+的容器、网络、守护进程数据和该实例的 Podman graphroot，保留 work、build、home、
+journal 和 output 目录。
 显式添加 `--delete-output` 才会同时删除这些目录。所有权记录作为证据保留；清理后
 请使用新的实例名称。
 旧实例若记录了外部策略状态，必须先用原启动器完成清理再切换版本；新启动器
 不修改这些旧策略。
 
 每个系统实例仍有私有 PID/UTS/IPC/mount/network/cgroup 命名空间、bpffs、
-Docker/containerd socket 与数据，以及只读发行输入。不使用宿主命名空间、
+Docker/containerd socket 与数据、Podman 存储，以及只读发行输入。不使用宿主命名空间、
 宿主 Docker socket 或宿主根目录绑定。系统模式通过 Docker privileged 获得
 管理员能力和宿主设备访问权限；上述私有资源用于避免操作相互干扰，不是针对
 恶意 root 的安全边界。外层容器和 daemon 的 nofile 上限为 1048576，满足内层
 服务的实际需要。
+Podman graphroot 通过实例私有目录绑定至 `/var/lib/containers/storage`；runroot 位于
+实例私有运行期文件系统的 `/run/containers/storage`。镜像使用 overlay 和
+fuse-overlayfs。不同 Workbench 实例不共享导入的镜像。原生发布验收从空的 Docker
+与 Podman 存储开始，仅导入经过校验的输入。
 
 入口只在私有命名空间中将宿主全局 sysfs/sysctl 视图设为只读，并屏蔽不适用于
 容器的 udev 和模块加载服务。保留最小的私有绑定来遮蔽内层 Docker 的 AppArmor

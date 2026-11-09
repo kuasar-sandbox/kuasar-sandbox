@@ -15,6 +15,7 @@
 | [沙箱使用](sandboxes_zh.md) | 实例操作、访问、暂停恢复和重置 |
 | [模板](templates_zh.md) | 构建、验证、发布和复用应用 |
 | [部署](deployment_zh.md) | 装配单节点或集群并验收 |
+| [node-infra](node-infra_zh.md) | 部署、运维与恢复聚合数据面系统容器 |
 | [安全边界](security_zh.md) | 配置身份、隔离、内容保护和可信路径 |
 | [运维](operations_zh.md) | 诊断、恢复、保留和清理 |
 | [升级](upgrading_zh.md) | 验证兼容性、改变版本和回退 |

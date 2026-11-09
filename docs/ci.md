@@ -200,7 +200,7 @@ least one known unsupported requirement for **each** enabled public candidate.
 An unknown-only public candidate blocks allocation. Disabled or unavailable
 resources do not make required cases optional. Case metadata cannot set labels,
 images, commands, priority or credentials. Runtime-only containers cannot satisfy
-`systemd` or `journald`, even when the enclosing host can.
+`systemd`, `journald`, `podman` or `quadlet`, even when the enclosing host can.
 
 Groups are formed by profile, suite and effective runtime. Their disjoint union
 must equal the ordinary suite-selected cases, excluding credentialed OBS unless
@@ -389,6 +389,32 @@ same selection while it remains the exact current branch HEAD; do not substitute
 these pre-publication timings for real publication end-to-end benefit. Finish the selected release through the normal
 publication mode, and never rerun producers behind already published grouped
 evidence merely to obtain a benchmark.
+
+### node-infra delivery and acceptance
+
+The `node-infra-v1` aggregate contract adds two native OCI archives and one
+architecture-independent deployment package to the existing `workbench-v1`
+assets. Historical contracts keep their original asset sets. node-infra is a
+main-repository deliverable; the six component release units remain unchanged.
+
+Native build jobs compile the runtime and E2E helpers in the ordinary UID
+Workbench. A subsequent credential-free packaging step combines the admitted
+image recipe with the exact component products and compiled runtime helper.
+Source candidates use the same baseline plus affected product delta as other
+E2E cases; their image metadata records the admitted component and platform
+SHAs. Preparation verifies and installs the finished OCI/deployment inputs and
+never builds them. The existing `basic.node-infra-*` cases run through the same
+public prepare/run entry and capability routing as other platform cases.
+
+The deployment document binds the aggregate version, component tuple, native
+manifest/config identities, archive hashes and multi-architecture index digest.
+Publication preserves those OCI bytes, verifies anonymous registry readback and
+rejects conflicting existing tags. Native Workbench qualification uses private,
+initially empty Podman storage and delegated Quadlet services; hosted ARM
+artifact-only evidence retains its original scope. Supplemental execution may
+install Podman into its owned older Workbench before testing. This compatibility
+preparation is separate from the staged Workbench's offline release gate.
+See [node-infra deployment](node-infra.md) for the delivered interface.
 
 ## 4. Daily and Stable
 

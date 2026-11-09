@@ -13,7 +13,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
        libgcrypt20-dev libgflags-dev libgpg-error-dev liblz4-dev libncurses-dev \
        libnuma-dev libseccomp-dev libsnappy-dev libssl-dev libtool libtool-bin \
        liburing-dev libzstd-dev lld llvm lz4 make netcat-openbsd nftables ninja-build \
-       openssl patch pkg-config procps psmisc python3 python3-pip python3-venv \
+       openssl patch pkg-config podman crun conmon fuse-overlayfs procps psmisc python3 python3-pip python3-venv \
        python3-yaml redis-server rsync shellcheck skopeo socat sqlite3 strace sudo \
        systemd systemd-sysv tar tcpdump time udev unzip util-linux uuid-dev \
        xz-utils zip zlib1g-dev zstd \
@@ -34,6 +34,7 @@ LABEL org.opencontainers.image.title="Kuasar Sandbox workbench" \
       org.opencontainers.image.licenses="Apache-2.0"
 COPY daemon.json /etc/docker/daemon.json
 COPY containerd.toml /etc/containerd/config.toml
+COPY storage.conf /etc/containers/storage.conf
 COPY system-entrypoint.sh /usr/local/sbin/workbench-system
 COPY check-system.py /usr/local/lib/workbench/check-system.py
 COPY LICENSE /usr/share/workbench/LICENSE
@@ -53,6 +54,7 @@ RUN chmod 0755 /usr/local/sbin/workbench-system \
     && mkdir -p /inputs/release /work /output /build /var/log/journal \
     && if [ -d /root/.ssh ]; then rmdir /root/.ssh; fi \
     && test ! -e /var/lib/docker/containers \
+    && test ! -e /var/lib/containers/storage/libpod \
     && test ! -e /root/.docker/config.json \
     && test ! -e /root/.ssh
 ENV container=docker E2E_DEPS_DIR=/opt/workbench/deps E2E_OFFLINE=1

@@ -9,8 +9,9 @@ release examples from the extracted directory and source-build examples from the
 project checkout, using the matching launcher in each case.
 
 Workbench supplies the native Linux build tools and system environment for a
-selected Kuasar Sandbox release. One image supports ordinary UID builds and a
-systemd PID 1 environment with private Docker/containerd. It contains external
+selected kuasar-sandbox release. One image supports ordinary UID builds and a
+systemd PID 1 environment with private Docker/containerd and rootful Podman with
+Quadlet. It contains external
 test image archives, while products, test helpers and Demo wheels come from the
 matching release. See the [public E2E guide](../test/README.md) for selection
 and the [Demo guide](../test/demo/DEMO.md) for the complete example.
@@ -19,7 +20,8 @@ and the [Demo guide](../test/demo/DEMO.md) for the complete example.
 
 Use native x86_64 or aarch64 Linux with Docker Engine and Python 3.9+. The launcher
 uses the local Unix Docker endpoint. Docker Desktop, remote Docker endpoints,
-architecture emulation, Podman and runner registration are outside V1.
+architecture emulation and runner registration are outside V1. The outer
+Workbench launcher uses Docker; Podman runs inside it for node-infra tests.
 
 System mode is a trusted administrator tool. It uses rootful Docker with
 `--privileged`, private namespaces and its own daemon data. Host requirements
@@ -43,6 +45,10 @@ into the product release tree. The registry tag is
 `ghcr.io/kuasar-sandbox/workbench:vX.Y.Z[-preview.YYYYMMDD[.N]]`, using the
 aggregate version without the `release-` prefix. New `workbench-v1` releases
 require both native image archives; historical releases keep their original assets.
+The `node-infra-v1` delivery retains these Workbench assets and adds the two
+native node-infra OCI archives and one deployment package. The matching
+platform-release includes the `basic.node-infra-*` cases; see the
+[node-infra guide](../docs/node-infra.md) for deployment and test inputs.
 
 The bundled offline image inventory contains only the reference, platform, archive
 name/hash and local image ID needed to load and run the included bytes. Older
@@ -268,19 +274,25 @@ services and waits up to 60 seconds; an unsuccessful graceful stop is an error.
 `start` on a stopped instance uses its recorded container, mounts and budgets
 and requires the original image and mode. Use a fresh name to change those
 settings. `cleanup` stops and removes only the recorded container, network and
-daemon data; it preserves work, build, home, journal and output directories.
+daemon data and the instance's Podman graphroot; it preserves work, build, home,
+journal and output directories.
 Add `--delete-output` explicitly to delete those directories too. Ownership
 records remain as evidence; use a new instance name after cleanup. An older
 instance with recorded external policy state must be cleaned with its original
 launcher before switching versions; the new launcher does not alter that policy.
 
 Each system instance retains private PID/UTS/IPC/mount/network/cgroup namespaces,
-bpffs, Docker/containerd sockets and data, and read-only release inputs. It does
+bpffs, Docker/containerd sockets and data, Podman storage, and read-only release inputs. It does
 not use host namespaces, a host Docker socket or a host-root bind mount.
 System mode has administrator capabilities and host-device access through
 Docker privileged mode; these private resources avoid operational collisions,
 not a hostile-root security boundary. The nofile limit is 1048576 for the outer
 container and daemon units so nested services can use their required limits.
+Podman's graphroot is a private instance bind at `/var/lib/containers/storage`;
+its runroot is `/run/containers/storage` in the instance's private runtime
+filesystem. The image selects overlay with fuse-overlayfs. Images loaded by one
+Workbench instance are unavailable to another instance. The native release gate
+starts with empty Docker and Podman stores and imports only the verified inputs.
 
 The entrypoint creates read-only private views of host-global sysfs/sysctl paths
 and disables container-inappropriate udev/module-loading units. A private bind

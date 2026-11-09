@@ -54,6 +54,14 @@
         "journald": {
           "state": "supported",
           "evidence": "https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/38513108672"
+        },
+        "podman": {
+          "state": "supported",
+          "evidence": "Installed by the owned execution environment for node-infra; each selected case is gated by the live rootful Podman / Quadlet generator probe. https://github.com/kuasar-sandbox/kuasar-sandbox/issues/377"
+        },
+        "quadlet": {
+          "state": "supported",
+          "evidence": "Installed by the owned execution environment for node-infra; each selected case is gated by the live rootful Podman / Quadlet generator probe. https://github.com/kuasar-sandbox/kuasar-sandbox/issues/377"
         }
       },
       "resources": {
@@ -115,6 +123,14 @@
         "journald": {
           "state": "unknown",
           "evidence": "Separate journal socket/flush acceptance is not established by the hosted ARM systemd cases. Current journal-dependent cases also require the independently unsupported KVM capability; https://github.com/kuasar-sandbox/kuasar-sandbox/issues/254"
+        },
+        "podman": {
+          "state": "unknown",
+          "evidence": "Hosted ARM rootful Podman / Quadlet execution has not been qualified. Current node-infra cases also require independently unsupported KVM, so they route to the native supplemental ARM environment. https://github.com/kuasar-sandbox/kuasar-sandbox/issues/377"
+        },
+        "quadlet": {
+          "state": "unknown",
+          "evidence": "Hosted ARM rootful Podman / Quadlet execution has not been qualified. Current node-infra cases also require independently unsupported KVM, so they route to the native supplemental ARM environment. https://github.com/kuasar-sandbox/kuasar-sandbox/issues/377"
         }
       },
       "resources": {
@@ -179,6 +195,14 @@
         "journald": {
           "state": "supported",
           "evidence": "https://github.com/kuasar-sandbox/kuasar-sandbox/issues/207#issuecomment-5974823648"
+        },
+        "podman": {
+          "state": "supported",
+          "evidence": "Installed by the owned execution environment for node-infra; each selected case is gated by the live rootful Podman / Quadlet generator probe. https://github.com/kuasar-sandbox/kuasar-sandbox/issues/377"
+        },
+        "quadlet": {
+          "state": "supported",
+          "evidence": "Installed by the owned execution environment for node-infra; each selected case is gated by the live rootful Podman / Quadlet generator probe. https://github.com/kuasar-sandbox/kuasar-sandbox/issues/377"
         }
       },
       "resources": {

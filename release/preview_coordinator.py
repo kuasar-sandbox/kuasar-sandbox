@@ -238,7 +238,7 @@ def platform_asset_names_for_components(
     tag: str, components: dict[str, str], architectures: tuple[str, ...] = ("x86_64",),
     delivery: str = "historical",
 ) -> set[str]:
-    if delivery == selection.DELIVERY:
+    if delivery in selection.MODERN_DELIVERIES:
         architectures = ('x86_64', 'aarch64')
     elif delivery != 'historical':
         raise ValueError('unsupported aggregate delivery contract')
@@ -246,7 +246,9 @@ def platform_asset_names_for_components(
         archive_name("platform", tag),
         *(archive_name(unit, components[unit], arch) for unit in selection.UNITS for arch in architectures),
     } | ({selection.workbench_archive(tag, arch) for arch in architectures}
-         if delivery == selection.DELIVERY else set())
+         if delivery in selection.MODERN_DELIVERIES else set()) | (
+        {selection.node_infra_archive(tag, arch) for arch in architectures} | {selection.node_infra_deploy_archive(tag)}
+        if delivery == selection.NODE_INFRA_DELIVERY else set())
 
 
 def platform_asset_names(tag: str, sha: str) -> set[str]:
@@ -872,7 +874,8 @@ def render_manifest(
     previous_preview: str | None,
     plans: dict[str, Plan],
 ) -> str:
-    lines = [f"version: {base}", f"delivery: {selection.DELIVERY}"]
+    contract = selection.NODE_INFRA_DELIVERY if (PLATFORM_ROOT / 'node-infra/image/build.py').is_file() else selection.DELIVERY
+    lines = [f"version: {base}", f"delivery: {contract}"]
     if previous is not None:
         lines.append(f"previous_version: {previous}")
     lines.append(f"preview_version: preview.{date}")

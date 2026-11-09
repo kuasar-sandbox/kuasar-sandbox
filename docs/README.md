@@ -15,6 +15,7 @@ Choose an entry by the task you need to complete. Platform guides retain complet
 | [Sandboxes](sandboxes.md) | Operate, access, pause/resume and reset instances |
 | [Templates](templates.md) | Build, qualify, publish and reuse applications |
 | [Deployment](deployment.md) | Assemble and qualify a node or cluster |
+| [node-infra](node-infra.md) | Deploy, operate and recover the aggregated data-plane system container |
 | [Security boundaries](security.md) | Configure identity, isolation, content protection and trusted paths |
 | [Operations](operations.md) | Diagnose, recover, retain and clean up |
 | [Upgrades](upgrading.md) | Qualify compatibility, change versions and roll back |

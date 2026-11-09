@@ -47,7 +47,7 @@ class DeletePreviewTests(unittest.TestCase):
             else:
                 self.fail('unexpected mutation: ' + endpoint)
             return subprocess.CompletedProcess(args, 1 if error else 0, '', error or '')
-        def registry(*args):
+        def registry(*args, **kwargs):
             self.calls.append('registry')
             return {'deleted': [1], 'retained_shared': []}
         self.mocks = {}
@@ -76,6 +76,24 @@ class DeletePreviewTests(unittest.TestCase):
         self.assertEqual(self.calls[0], 'registry')
         self.assertTrue(self.calls[1].endswith('/releases/11'))
         self.assertIn('/git/refs/tags/', self.calls[2])
+
+    def test_node_infra_and_workbench_registry_checks_both_precede_github_deletion(self):
+        snapshot = subject.gc.CanonicalSnapshot(SHA, self.snapshot.components, 'node-infra-v1')
+        self.mocks['canonical_gc_snapshot'].return_value = snapshot
+        result = subject.collect(TAG, SHA, 'gc')
+        self.assertEqual(self.calls[:2], ['registry', 'registry'])
+        self.assertEqual(set(result['registry']), {'workbench', 'node-infra'})
+        self.assertEqual(self.mocks['collect'].call_args_list[-1].kwargs, {'image': 'node-infra'})
+
+    def test_node_infra_registry_failure_retains_release_and_tag(self):
+        snapshot = subject.gc.CanonicalSnapshot(SHA, self.snapshot.components, 'node-infra-v1')
+        self.mocks['canonical_gc_snapshot'].return_value = snapshot
+        self.mocks['collect'].side_effect = [{'deleted': [], 'retained_shared': []}, ValueError('node-infra uncertain')]
+        with self.assertRaisesRegex(ValueError, 'node-infra uncertain'):
+            subject.collect(TAG, SHA, 'gc')
+        self.assertIsNotNone(self.release)
+        self.assertIsNotNone(self.ref)
+        self.assertFalse(self.calls)
 
     def test_registry_failure_retains_github_objects(self):
         self.mocks['collect'].side_effect = ValueError('uncertain registry ownership')

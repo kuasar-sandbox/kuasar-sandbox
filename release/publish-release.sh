@@ -88,6 +88,11 @@ publish_bundle() {
   : "${RELEASE_WORKBENCH_RESULTS:?publication requires this stage Workbench results}"
   local stage_inputs=(--plan "$RELEASE_PLAN_FILE" --validation "$RELEASE_VALIDATION_FILE" --workbench "$RELEASE_WORKBENCH_RESULTS")
   python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit" --validate-only "${stage_inputs[@]}"
+  local node_infra=false
+  if [ "$(release_delivery "${PLATFORM_SOURCE_ROOT:-$ROOT}" "$version")" = node-infra-v1 ]; then
+    node_infra=true
+    python3 -B "$ROOT/release/node_infra_registry.py" "$bundle" "$version" "$commit" --validate-only "${stage_inputs[@]}"
+  fi
 
   local tag_state="$TMP/tag"
   if api_optional "repos/$REPOSITORY/git/ref/tags/$version" "$tag_state"; then
@@ -115,6 +120,9 @@ publish_bundle() {
         '.tag_name == $version and .prerelease == $preview and .body == $body' \
         "$release_state" >/dev/null || release_fail "published Release differs from the original stage; refusing to replace it"
       python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit" --read-only "${stage_inputs[@]}"
+      if [ "$node_infra" = true ]; then
+        python3 -B "$ROOT/release/node_infra_registry.py" "$bundle" "$version" "$commit" --read-only "${stage_inputs[@]}"
+      fi
       echo "==> verified already published $REPOSITORY $version from its original accepted stage"
       return
     fi
@@ -154,6 +162,9 @@ publish_bundle() {
   # Ownership and all existing asset bytes are checked before registry writes.
   # The registry publisher also refuses conflicting existing image tags.
   python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit" "${stage_inputs[@]}"
+  if [ "$node_infra" = true ]; then
+    python3 -B "$ROOT/release/node_infra_registry.py" "$bundle" "$version" "$commit" "${stage_inputs[@]}"
+  fi
   python3 -B "$ROOT/release/publication_body.py" "$bundle/release-notes.md"
   if [ "$(jq 'length' "$drafts")" -eq 1 ]; then
     [ "${#files[@]}" -eq 0 ] || gh release upload "$version" "${files[@]}" --repo "$REPOSITORY"

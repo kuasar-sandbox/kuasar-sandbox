@@ -131,7 +131,7 @@ profile 声明架构、Runner 标签、执行器、资源预算、优先级、�
 所有需求均满足后，优先公共 Runner，再按优先级及 profile ID 确定顺序。
 每次补充分配必须记录**每个**已启用公共候选至少一项必需能力已知不支持。
 公共候选只有 unknown 时阻止分配。资源禁用或不可用不会使必需用例变成可选。
-用例元数据不能指定标签、镜像、命令、优先级或凭据。运行时专用容器不支持 `systemd` 或 `journald`，
+用例元数据不能指定标签、镜像、命令、优先级或凭据。运行时专用容器不支持 `systemd`、`journald`、`podman` 或 `quadlet`，
 即使其宿主支持也不能满足该需求。
 
 分组依据 profile、suite 和有效运行环境生成，互斥并集必须等于普通 suite 选择的用例，
@@ -258,6 +258,25 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 必须先合并兼容的当次 stage 读取器，再生产分组结果。启用前通过真实 Actions 对比失败重跑、准备、执行和总任务时间；本地 fixture 不算产品验收。分组结果仅用于当前流水线，正常下载与 CI 不读取旧验收记录。
 
 需要在相同源码上重复验收时，聚合 dispatch 还接受 `validation_only=true`（默认 false）。它仍要求 main、精确当前选择及尚未发布的版本，并执行本次必要构建、包验收，以及 stage、正文上限和 registry 输入验证；仅在 registry/Release 写入前结束，并按原到期时间保留本轮产物供失败/重跑测试。它使用 `Validate aggregate <version> @<sha>` 标识和按 run 隔离的 `aggregate-validation` 并发键，使独立的 `all` 与分组验证可与普通发布并存。验证运行（包括旧的 `[validation only]` 后缀标题）不计入活动发布、发布重试、恢复候选或成功发布基线。普通发布与 delete-preview 继续共用 `aggregate-mutation` 锁。验证在归档、发布正文和 registry 输入消费者执行前后均检查版本尚未发布。第二次检查紧邻成功报告之前；如果此时 API 报告 Release 已发布，验证必须失败。这是最后一次 API 观察，并不原子排除该观察之后发生的发布。对照必须使用同一选择，且该选择仍为分支的精确当前 HEAD，发布前计时不能代替真实发布的端到端收益。最终通过正常发布模式完成所选版本；不得仅为取得基准数据而重跑已发布分组证据背后的生产任务。
+
+### node-infra 交付与验收
+
+`node-infra-v1` 聚合合同在原有 `workbench-v1` 资产之外，增加两个原生 OCI 归档和
+一个无架构区分的部署包。历史合同保留原有资产集合。node-infra 是主仓交付件，
+原有六个组件发布单元保持不变。
+
+原生 build 任务在普通 UID Workbench 内编译 runtime 及 E2E helper，随后独立的
+无凭据打包步骤将准入的镜像配方、精确组件产品和已编译 runtime helper 组合成镜像。
+源码候选使用与其他 E2E 相同的基线加受影响产品差异，镜像元数据记录已准入的组件
+及主仓 SHA。prepare 只核验、安装完成的 OCI 与部署输入，不构建镜像或部署工具。
+`basic.node-infra-*` 用例复用平台公开 prepare/run 入口和原有能力路由。
+
+部署描述绑定聚合版本、组件组合、原生 manifest/config 身份、归档摘要与多架构
+index digest。发布保留这些 OCI 字节，验证匿名 registry 回读，并拒绝覆盖冲突标签。
+原生 Workbench 验收使用独立且初始为空的 Podman 存储及委托的 Quadlet 服务；
+Hosted ARM 的 artifact-only 证据仍只代表原有产物范围。补充执行环境可在其所属的
+旧 Workbench 内安装 Podman 后执行测试；这一步与待发布 Workbench 的离线验收
+门禁分开。交付接口见 [node-infra 部署指南](node-infra_zh.md)。
 
 ## 4. Daily 与 Stable
 

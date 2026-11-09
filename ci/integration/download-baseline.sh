@@ -20,6 +20,10 @@ baseline = plan['baseline']
 artifacts.require(baseline['repository'] == 'kuasar-sandbox/kuasar-sandbox', 'foreign aggregate baseline')
 names = {artifacts.archive_name(unit, record['version'], sys.argv[2]) for unit, record in baseline['units'].items()}
 names.add('platform-' + baseline['version'] + '.tar.gz')
+delivery = artifacts.delivery_module()
+if baseline.get('delivery') == delivery.NODE_INFRA_DELIVERY and 'node_infra' not in plan:
+    names.update((delivery.node_infra_archive(baseline['version'], sys.argv[2]),
+                  delivery.node_infra_deploy_archive(baseline['version'])))
 records = {record['name']: record for record in baseline['assets']}
 artifacts.require(names <= set(records), 'missing target assets; explicit initialization is required')
 for name in sorted(names):

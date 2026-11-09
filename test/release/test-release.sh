@@ -230,8 +230,8 @@ root.mkdir(parents=True)
 for arch, machine in (('x86_64', 62), ('aarch64', 183)):
     directory = root / arch
     directory.mkdir(parents=True)
-    names = ['zot', 'versitygw', 'custom-proxy', 'telemetry-grpc-probe', 'node-ctl-runner-test', 'usage-probe']
-    names.append('cgroup-fork-probe')
+    inventory = helper_inputs.contract.validate(contract)
+    names = sorted(inventory)
     records = {}
     for name in names:
         header = bytearray(64)
@@ -240,8 +240,9 @@ for arch, machine in (('x86_64', 62), ('aarch64', 183)):
         data = bytes(header) + name.encode()
         (directory / name).write_bytes(data)
         (directory / name).chmod(0o755)
-        owner = 'orchestrator' if name in {'custom-proxy', 'telemetry-grpc-probe', 'node-ctl-runner-test'} else 'sandboxer'
-        records[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'source_sha': identities['platform']['sha'] if name in {'zot', 'versitygw'} else pins[owner], 'owner': 'platform' if name in {'zot', 'versitygw'} else owner, 'size': len(data), 'mode': 0o755}
+        owner = inventory[name]['owner']
+        records[name] = {'sha256': hashlib.sha256(data).hexdigest(), 'source_sha': identities[owner]['sha'],
+                         'owner': owner, 'size': len(data), 'mode': 0o755}
     (directory / 'helpers.json').write_text(json.dumps({'schema': 1, 'contract_sha256': artifacts.identity(contract), 'arch': arch, 'framework_sha': '1' * 40, 'test_revisions': pins, 'source_records': json.loads(pathlib.Path(sys.argv[3]).read_text()), 'helpers': records}))
 PY
 cp -a "$TMP/demo-wheels" "$TMP/fetched/e2e-wheels"

@@ -1,0 +1,18 @@
+[Unit]
+Description=kuasar-sandbox node proxy
+Requires=connector-vswitch.service
+Wants=node-conductor.service
+After=connector-vswitch.service node-conductor.service
+PartOf=node-infra.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/node-infra/service proxy
+Environment=PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LimitNOFILE=1048576
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=node-infra.target

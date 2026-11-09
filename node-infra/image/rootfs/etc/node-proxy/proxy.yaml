@@ -1,0 +1,8 @@
+config_socket: /run/sandbox/node-ctl.socket
+paths:
+  run_root: /run/sandbox
+data_listen: 0.0.0.0:3001
+proxy_netns: ""
+shutdown_timeout: 30s
+inplace_restart: true
+workers: 1

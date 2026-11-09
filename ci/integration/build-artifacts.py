@@ -221,6 +221,21 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
     if helpers:
         helper_source = helper_sources(plan, arch, sources)
         build_helpers.build(helper_source, arch, output / "helpers", helpers, environment, plan['helper_contract'])
+    node_helper = None
+    (sources / '.ci/node-infra-build').mkdir(parents=True, exist_ok=True)
+    if 'node_infra' in plan:
+        # Compile in the ordinary-UID native Workbench. The later credential-free
+        # image packaging step needs a container engine, but never a compiler.
+        build_dir = sources / '.ci/node-infra-build'
+        build_dir.mkdir(exist_ok=True)
+        artifacts.node_infra_module().require_config_sources(sources)
+        node_selection = build_dir / 'node-infra-selection.json'
+        node_selection.write_bytes(artifacts.canonical(plan['node_infra']['components']) + b'\n')
+        node_helper = build_dir / 'node-infra-runtime'
+        run(['python3', '-B', sources / 'platform/node-infra/runtime/build.py',
+             '--sources', sources, '--selection', node_selection, '--arch', arch,
+             '--output', node_helper, '--test'], environment=environment)
+        artifacts.check_architecture(node_helper, arch)
     # Match the existing release packagers' executable/data modes independently
     # of the caller's umask. Tar transport preserves these through Actions.
     for name in artifacts.tree_files(output):
@@ -230,6 +245,8 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
     metadata = {"plan_id": artifacts.identity(plan), "arch": arch, "products": {}, "embedded": {}, "tests": {}, "helpers": {},
                 "test_revisions": plan["test_revisions"],
                 "build_context": {"host": platform.machine(), "target": arch, "tools": {}, "native_inputs": {}}}
+    if node_helper is not None:
+        metadata['node_infra_helper'] = {'sha256': artifacts.digest(node_helper)}
     workbench = {name: environment[key] for name, key in (
         ("image_id", "KUASAR_WORKBENCH_IMAGE_ID"), ("framework_sha", "KUASAR_WORKBENCH_FRAMEWORK_SHA"))
         if key in environment}

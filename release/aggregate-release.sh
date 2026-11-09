@@ -206,7 +206,7 @@ assemble_release() {
 
   local delivery source_sha
   delivery=$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")
-  [ "$delivery" = workbench-v1 ] || release_fail 'new aggregate assembly requires delivery: workbench-v1 in the selected manifest'
+  [[ "$delivery" = workbench-v1 || "$delivery" = node-infra-v1 ]] || release_fail 'new aggregate assembly requires a supported delivery contract'
   source_sha=$(python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --commit)
   python3 -B "$ROOT/release/workbench_assets.py" "$fetched/workbench" "$version" "$source_sha" > "$work/workbench.json"
   mkdir -p "$output/workbench"
@@ -214,6 +214,18 @@ assemble_release() {
     install -m 0644 "$fetched/workbench/$(workbench_archive "$version" "$arch")" "$output/assets/"
     install -m 0644 "$fetched/workbench/workbench-$arch.json" "$output/workbench/"
   done
+
+  if [ "$delivery" = node-infra-v1 ]; then
+    python3 -B "$ROOT/release/node_infra_assets.py" package --platform "$PLATFORM_SOURCE_ROOT" \
+      --directory "$fetched/node-infra" --output "$fetched/node-infra" --version "$version" --revision "$source_sha" >/dev/null
+    mkdir -p "$output/node-infra"
+    for arch in x86_64 aarch64; do
+      install -m 0644 "$fetched/node-infra/$(node_infra_archive "$version" "$arch")" "$output/assets/"
+      install -m 0644 "$fetched/node-infra/node-infra-$arch.json" "$output/node-infra/"
+    done
+    install -m 0644 "$fetched/node-infra/$(node_infra_deploy_archive "$version")" "$output/assets/"
+    install -m 0644 "$fetched/node-infra/node-infra-index.json" "$output/node-infra/"
+  fi
 
   python3 -B "$ROOT/release/release_notes.py" export "$PLATFORM_SOURCE_ROOT" \
     "$version" "$output/release-notes.md"
@@ -270,7 +282,7 @@ write_release_notes() {
 # contains every ARM unit; a partially populated target is never accepted.
 bundle_arches() {
   local bundle=$1 version=$2
-  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = workbench-v1 ]; then
+  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" != historical ]; then
     printf 'x86_64\naarch64\n'
     return
   fi
@@ -288,8 +300,12 @@ expected_asset_names() {
       component_archive "$unit" "$tag" "$arch"
     done < "$selection"
   done
-  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = workbench-v1 ]; then
+  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" != historical ]; then
     for arch in "${arches[@]}"; do workbench_archive "$version" "$arch"; done
+  fi
+  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = node-infra-v1 ]; then
+    for arch in "${arches[@]}"; do node_infra_archive "$version" "$arch"; done
+    node_infra_deploy_archive "$version"
   fi
 }
 
@@ -323,10 +339,14 @@ validate_bundle() {
   "$ROOT/release/package-platform.sh" validate "$version" \
     "$bundle/assets/$(platform_archive "$version")" "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")"
 
-  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = workbench-v1 ]; then
+  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" != historical ]; then
     local source_sha
     source_sha=$(python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --commit)
     python3 -B "$ROOT/release/workbench_assets.py" "$bundle/assets" "$version" "$source_sha" --receipts "$bundle/workbench" >/dev/null
+  fi
+  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = node-infra-v1 ]; then
+    python3 -B "$ROOT/release/node_infra_assets.py" validate --directory "$bundle/assets" \
+      --version "$version" --revision "$source_sha" --receipts "$bundle/node-infra" >/dev/null
   fi
 
   local seen tag archive
@@ -352,10 +372,14 @@ extract_bundle() {
   local name archives=()
   while IFS= read -r name; do
     [ "$name" = SHA256SUMS ] && continue
-    [[ "$name" = workbench-* ]] && continue # Docker import is separate from release extraction.
+    [[ "$name" = workbench-* || "$name" = node-infra-* ]] && continue # Images and the host deployment package are separate inputs.
     archives+=("$bundle/assets/$name")
   done < <(expected_asset_names "$version" "$bundle/selection.tsv" "$arch")
   python3 -B "$ROOT/release/archive_paths.py" extract "$install" "${archives[@]}"
+  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = node-infra-v1 ]; then
+    python3 -B "$ROOT/release/node_infra_assets.py" install --directory "$bundle/assets" --output "$install" \
+      --version "$version" --revision "$(python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --commit)" --arch "$arch" >/dev/null
+  fi
 }
 
 case "${1:-}" in

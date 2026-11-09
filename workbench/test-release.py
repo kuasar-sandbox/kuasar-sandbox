@@ -19,6 +19,7 @@ sys.path[:0] = [str(ROOT / 'ci/integration'), str(ROOT / 'release')]
 import artifacts
 import selection
 import workbench_assets
+import node_infra_assets
 import workbench_groups
 
 
@@ -42,7 +43,7 @@ def host_output(command):
 
 def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False, group="all"):
     artifacts.check_plan(plan)
-    artifacts.require(plan['mode'] == 'exact-assets' and plan['baseline'].get('delivery') == selection.DELIVERY,
+    artifacts.require(plan['mode'] == 'exact-assets' and plan['baseline'].get('delivery') in selection.MODERN_DELIVERIES,
                       'workbench qualification requires the exact new-contract stage')
     artifacts.require(subprocess.check_output(['git', '-C', ROOT, 'rev-parse', 'HEAD'], text=True).strip()
                       == plan['framework_sha'], 'workbench executor differs from trusted framework')
@@ -94,6 +95,14 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False, group="all
             artifacts.require(path.stat().st_size == records[name]['size'] and 'sha256:' + artifacts.digest(path) == records[name]['digest'],
                               'release input bytes differ from exact stage: ' + name)
             artifacts.unpack(path, release, owner, seen)
+        if plan['baseline'].get('delivery') == selection.NODE_INFRA_DELIVERY:
+            for name in (selection.node_infra_archive(version, arch), selection.node_infra_deploy_archive(version)):
+                path = stage / 'assets' / name
+                artifacts.require(path.stat().st_size == records[name]['size']
+                                  and 'sha256:' + artifacts.digest(path) == records[name]['digest'],
+                                  'node-infra release bytes differ from exact stage: ' + name)
+            node_infra_assets.install_inputs(stage / 'assets', release, version, arch,
+                                             revision=revision, components=plan['baseline']['units'])
         result['release_inputs_verified'] = True
         cases = artifacts.workbench_cases(plan['case_files'], arch, native_full=not artifact_only)
         prepared_cases = cases
@@ -132,6 +141,10 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False, group="all
             return subprocess.check_output(invocation, text=True, timeout=timeout)
         artifacts.require(execute('docker', 'image', 'ls', '-q').strip() == ''
                           and execute('docker', 'ps', '-aq').strip() == '', 'private Docker state was not empty')
+        if plan['baseline'].get('delivery') == selection.NODE_INFRA_DELIVERY:
+            artifacts.require(execute('podman', 'images', '-q').strip() == ''
+                              and execute('podman', 'ps', '-aq').strip() == '', 'private Podman state was not empty')
+            result['empty_private_podman'] = True
         artifacts.require(not execute('ip', '-4', 'route', 'show', 'default').strip(), 'offline qualification has an external route')
         result['empty_private_daemon'] = True
         result['preparation_network'] = 'none'

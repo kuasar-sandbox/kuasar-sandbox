@@ -11,7 +11,7 @@ import re
 SCHEMA = 1
 CAPABILITIES = frozenset({
     'kvm', 'tun', 'userfaultfd', 'bpf-map', 'bpf-tc', 'netns', 'geneve',
-    'systemd', 'journald', 'cgroup-v2', 'docker',
+    'systemd', 'journald', 'cgroup-v2', 'docker', 'podman', 'quadlet',
 })
 HEADER = '# e2e-requires:'
 OWNERS = ('accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator', 'platform')

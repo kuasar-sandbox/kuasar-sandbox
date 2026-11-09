@@ -143,6 +143,7 @@ jobs:
           outputs: |
             .ci/delta
             .ci/build-time.txt
+            .ci/node-infra-build
           arch: ${{ inputs.arch }}
           cpus: '2'
           memory-gib: '8'
@@ -153,6 +154,15 @@ jobs:
               python3 -B /inputs/release/ci/integration/build-artifacts.py --materialized \
               --plan /src/.ci/plan.json --arch "$TARGET_ARCH" --assets /src/.ci/assets \
               --sources /src --output /src/.ci/delta
+      - name: Package the admitted node-infra candidate without compilers or credentials
+        run: |
+          if jq -e '.node_infra' plan/plan.json >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install --yes --no-install-recommends skopeo
+          fi
+          python3 -B framework/ci/integration/package-node-infra.py \
+            --plan plan/plan.json --arch "$TARGET_ARCH" --assets assets \
+            --sources sources --delta sources/.ci/delta
       - name: Transport original baseline bytes and the built delta
         run: |
           cp sources/.ci/build-time.txt build-time.txt
@@ -288,6 +298,8 @@ jobs:
             /ci/integration/
             /release/tag_sources.py
             /release/selection.py
+            /release/archive_paths.py
+            /release/node_infra_assets.py
             /test/e2e/package_inputs.py
             /test/e2e/lib/
             /workbench/

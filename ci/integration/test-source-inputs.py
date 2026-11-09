@@ -689,8 +689,11 @@ class MaintainedSelection(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'mixed E2E requirement generations'):
             self.run_cutover(complete_baseline=True, candidate_owner='connector', downgrade_candidate=True)
 
+    def test_node_infra_build_selection_uses_admitted_candidate_companion_and_kernel(self):
+        self.run_cutover(node_infra=True)
+
     def run_cutover(self, legacy_owner=None, kernel_delta=True, base_ref='main', complete_baseline=True,
-                    candidate_owner='platform', downgrade_candidate=False):
+                    candidate_owner='platform', downgrade_candidate=False, node_infra=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             git = subject.tag_sources.git
@@ -757,6 +760,16 @@ class MaintainedSelection(unittest.TestCase):
             platform_base = git(platform, 'rev-parse', 'HEAD')
             # A valid but untrusted candidate manifest must not choose sources.
             (platform / 'releases/daily-preview.yaml').write_text((stable + 'preview_version: preview.20261019.1\n').replace('v1.2.4', 'v1.2.5'))
+            if node_infra:
+                (platform / 'test/e2e/platform/cases/basic.node-infra-config.sh').write_text(
+                    '# e2e-requires: ["journald", "kvm", "podman", "quadlet", "systemd"]\necho node-infra candidate\n')
+                declaration = platform / 'release/helper-inputs.json'
+                value = json.loads(declaration.read_text())
+                value['helpers'].extend({'name': name, 'env': name.upper().replace('-', '_') + '_BIN',
+                                         'cases': ['basic.node-infra-config.sh']}
+                                        for name in ('node-infra-guest', 'node-infra-xproxy', 'node-infra-xconductor'))
+                declaration.write_text(json.dumps(value))
+                git(platform, 'add', 'test/e2e/platform/cases/basic.node-infra-config.sh')
             git(platform, 'commit', '-qam', 'candidate manifest cannot redirect')
             candidate = git(platform, 'rev-parse', 'HEAD')
             git(platform, 'update-ref', 'refs/pull/23/merge', candidate)
@@ -829,6 +842,22 @@ class MaintainedSelection(unittest.TestCase):
                     self.assertEqual(row['tag'], baseline['units'][unit]['version'])
                     self.assertEqual(row['sha'], baseline['units'][unit]['sha'])
                 artifacts.check_plan(plan)
+                if node_infra:
+                    node = plan['node_infra']
+                    self.assertEqual(node['source_revision'], candidate)
+                    self.assertEqual(node['version'], baseline['version'])
+                    self.assertEqual(set(node['components']), set(artifacts.UNITS))
+                    for unit, row in node['components'].items():
+                        source_sha = plan['kernel_sha'] if unit == 'vmlinux' else plan['sources'][resolver.unit_owner(unit)]['sha']
+                        self.assertEqual(row['sha'], source_sha)
+                        expected_version = baseline['units'][unit]['version'] if source_sha == baseline['units'][unit]['sha'] else 'source-' + source_sha
+                        self.assertEqual(row['version'], expected_version)
+                    changed = copy.deepcopy(plan)
+                    changed['node_infra']['components']['connector']['sha'] = '0' * 40
+                    with self.assertRaisesRegex(ValueError, 'component source differs'):
+                        artifacts.check_plan(changed)
+                else:
+                    self.assertNotIn('node_infra', plan)
                 return
 
 

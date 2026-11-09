@@ -1,0 +1,11 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY --chown=0:0 --chmod=0755 out/xproxy /opt/node-infra/extensions/xproxy
+COPY --chown=0:0 --chmod=0755 out/xconductor /opt/node-infra/extensions/xconductor
+COPY conductor.yaml /etc/node-conductor/conf.d/50-platform.yaml
+COPY proxy.yaml /etc/node-proxy/conf.d/50-platform.yaml
+COPY --chown=0:0 private/ /etc/node-infra/extensions/
+RUN chmod 0700 /etc/node-infra/extensions /etc/node-infra/extensions/r42 && \
+    chmod 0600 /etc/node-infra/extensions/*.env /etc/node-infra/extensions/r42/*.yaml
+COPY node-conductor.service.d/ /etc/systemd/system/node-conductor.service.d/
+COPY node-proxy.service.d/ /etc/systemd/system/node-proxy.service.d/

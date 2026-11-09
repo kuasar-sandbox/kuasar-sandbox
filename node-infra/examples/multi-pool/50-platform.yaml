@@ -1,0 +1,19 @@
+# Mount this file at /etc/node-conductor/conf.d/50-platform.yaml.
+# Example net budgets beneath an instance with CPUQuota=800%, MemoryMax=32G.
+# Lists replace inherited lists: include both Runner and Builder mappings.
+resource_listen:
+  enabled: true
+  pools:
+    - name: p0
+      allocatable: {cpu: 3, memory: 12GiB}
+      unit_dropins: [/etc/node-infra/placement/p0.conf]
+    - name: p1
+      allocatable: {cpu: 3, memory: 12GiB}
+      unit_dropins: [/etc/node-infra/placement/p1.conf]
+units:
+  runner_pools:
+    - {name: r0, resource_pool: p0, unit: runner-p0@.service, size: 1, capacity: 16}
+    - {name: r1, resource_pool: p1, unit: runner-p1@.service, size: 1, capacity: 16}
+  builder_pools:
+    - {name: b0, resource_pool: p0, unit: builder-p0@.service, size: 0, capacity: 2}
+    - {name: b1, resource_pool: p1, unit: builder-p1@.service, size: 0, capacity: 2}

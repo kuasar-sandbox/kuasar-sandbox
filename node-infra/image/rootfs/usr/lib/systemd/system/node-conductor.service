@@ -1,0 +1,21 @@
+[Unit]
+Description=kuasar-sandbox node conductor
+Requires=connector-vswitch.service
+After=connector-vswitch.service
+PartOf=node-infra.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/node-infra/service conductor
+RuntimeDirectory=sandbox
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+Environment=PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LimitNOFILE=1048576
+LimitMEMLOCK=infinity
+TimeoutStopSec=90
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=node-infra.target

@@ -1,0 +1,16 @@
+[Unit]
+Description=kuasar-sandbox node telemetry
+Wants=node-conductor.service
+After=node-conductor.service
+PartOf=node-infra.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/node-infra/service telemetry
+Environment=PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=node-infra.target

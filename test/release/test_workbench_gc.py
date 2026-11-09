@@ -16,6 +16,13 @@ def record(identifier, tags, digest=None):
 
 
 class WorkbenchGCTests(unittest.TestCase):
+    def test_node_infra_tag_namespace_is_explicit_and_does_not_adopt_workbench_tags(self):
+        rows = [record(1, [VERSION]), record(2, [VERSION + '-amd64']),
+                record(3, [VERSION + '-arm64', 'retained']), record(4, [TAG + '-x86_64'])]
+        pending, shared = subject.candidates(rows, VERSION, set(), image='node-infra')
+        self.assertEqual([row['id'] for row in pending], [1, 2])
+        self.assertEqual(shared, [3])
+
     def test_only_exact_preview_tags_are_candidates_and_shared_content_survives(self):
         rows = [record(1, [TAG]), record(2, [TAG + '-x86_64']), record(3, [TAG + '-aarch64', 'stable']),
                 record(4, ['v1.2.4']), record(5, []), record(6, [TAG + '-aarch64'])]
@@ -78,7 +85,11 @@ class WorkbenchGCTests(unittest.TestCase):
                         api.assert_called_once()
                     mutation.assert_not_called()
 
-    def fixture_collect(self, *, failure=None, shared_after_parent=False, missing=False, retained_parent=None):
+    def fixture_collect(self, *, failure=None, shared_after_parent=False, missing=False, retained_parent=None,
+                        image='workbench'):
+        tag = TAG if image == 'workbench' else VERSION
+        suffix = '-aarch64' if image == 'workbench' else '-arm64'
+        package = subject.PACKAGE if image == 'workbench' else 'orgs/kuasar-sandbox/packages/container/node-infra'
         configs, documents, children = {}, {}, []
         for i, arch in enumerate(('amd64', 'arm64')):
             config = json.dumps({'os': 'linux', 'architecture': arch, 'config': {'Labels': {
@@ -93,18 +104,18 @@ class WorkbenchGCTests(unittest.TestCase):
         parent_id = subject.registry.digest(parent)
         documents[parent_id] = parent
         # API order intentionally places a tagless child before its parent.
-        rows = [record(2, [], children[0]['digest']), record(1, [TAG], parent_id),
-                record(3, [TAG + '-aarch64'], children[1]['digest'])]
+        rows = [record(2, [], children[0]['digest']), record(1, [tag], parent_id),
+                record(3, [tag + suffix], children[1]['digest'])]
         deletes, listings = [], []
         def api(endpoint):
-            if endpoint == subject.PACKAGE:
+            if endpoint == package:
                 return {'repository': {'full_name': subject.coordinator.PLATFORM_REPOSITORY}}
             if retained_parent == 'detail' and endpoint.endswith('/1'):
                 parent = next(x for x in rows if x['id'] == 1)
-                return parent | {'metadata': {'container': {'tags': [TAG, 'shared']}}}
+                return parent | {'metadata': {'container': {'tags': [tag, 'shared']}}}
             return next((x for x in rows if endpoint.endswith('/' + str(x['id']))), None)
         def listing(endpoint):
-            self.assertEqual(endpoint, subject.PACKAGE + '/versions?per_page=100')
+            self.assertEqual(endpoint, package + '/versions?per_page=100')
             listings.append(endpoint)
             if retained_parent == 'tagless' and len(listings) > 1:
                 next(x for x in rows if x['id'] == 1)['metadata']['container']['tags'] = []
@@ -126,16 +137,22 @@ class WorkbenchGCTests(unittest.TestCase):
                 side_effect=lambda ref, auth, config=False: (configs if config else documents)[ref.split('@')[1]]), patch.dict(
                 os.environ, {'GH_TOKEN': 'test-only', 'GITHUB_ACTOR': 'fixture'}):
             if failure:
-                with self.assertRaises(ValueError): subject.collect(VERSION, 'a' * 40)
+                with self.assertRaises(ValueError): subject.collect(VERSION, 'a' * 40, image=image)
                 self.assertEqual(deletes, [1])
                 return
-            result = subject.collect(VERSION, 'a' * 40)
+            result = subject.collect(VERSION, 'a' * 40, image=image)
         return result, deletes
 
     def test_delete_index_before_exclusive_children_including_direct_tagless_child(self):
         result, calls = self.fixture_collect()
         self.assertEqual(calls, [1, 2, 3])
         self.assertEqual(result, {'deleted': [1, 2, 3], 'retained_shared': []})
+
+    def test_node_infra_uses_same_exclusive_scope_and_shared_parent_protection(self):
+        self.assertEqual(self.fixture_collect(image='node-infra')[1], [1, 2, 3])
+        result, calls = self.fixture_collect(image='node-infra', retained_parent='detail')
+        self.assertEqual(calls, [])
+        self.assertEqual(result['retained_shared'], [1, 2, 3])
 
     def test_refresh_sharing_before_each_delete(self):
         result, calls = self.fixture_collect(shared_after_parent=True)

@@ -1,0 +1,23 @@
+[Unit]
+Description=kuasar-sandbox Connector virtual switch
+Requires=node-infra-network.service
+After=node-infra-network.service
+Before=node-conductor.service node-proxy.service node-telemetry.service
+PartOf=node-infra.target
+
+[Service]
+Type=notify
+NotifyAccess=all
+ExecStart=/usr/libexec/node-infra/service connector
+ExecStartPost=/usr/libexec/node-infra/service ready
+RuntimeDirectory=connector-vswitch
+RuntimeDirectoryMode=0700
+WatchdogSec=60
+LimitMEMLOCK=infinity
+TimeoutStartSec=180
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=node-infra.target

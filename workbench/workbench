@@ -123,7 +123,7 @@ def create_command(args, state, data):
     allowed = sorted(os.sched_getaffinity(0))
     require(1 <= args.cpus <= len(allowed) and args.memory_gib >= 1 and args.pids >= 128, 'invalid CPU/memory/pids budget')
     require(shutil.disk_usage(state).free >= 5 * 1024**3, 'at least 5 GiB free task storage is required; this is not a disk quota')
-    for name in ('work', 'output', 'build', 'home', 'docker', 'containerd', 'journal'):
+    for name in ('work', 'output', 'build', 'home', 'docker', 'containerd', 'podman', 'journal'):
         require(not (state / name).is_symlink(), 'instance data directory cannot be a symlink')
         (state / name).mkdir(exist_ok=True)
     # Match /var/tmp's byte budget for existing Go test Unix socket paths.
@@ -167,6 +167,7 @@ def create_command(args, state, data):
                     '--ulimit', 'nofile=1048576:1048576']
         command += bind(state / 'machine-id', '/etc/machine-id', True)
         command += bind(state / 'docker', '/var/lib/docker') + bind(state / 'containerd', '/var/lib/containerd')
+        command += bind(state / 'podman', '/var/lib/containers/storage')
         command += bind(state / 'journal', '/var/log/journal')
         command += [data['image_id'], 'system']
     return command
@@ -327,7 +328,7 @@ def main():
                     require(network.get('Labels', {}).get(LABEL) == data['id'], 'foreign network; refusing cleanup')
                     require(not network.get('Containers'), 'network still has attached containers; refusing cleanup')
                     docker('network', 'rm', network['Id'])
-            directories = ['docker', 'containerd']
+            directories = ['docker', 'containerd', 'podman']
             if args.delete_output:
                 directories += ['output', 'work', 'build', 'home', 'journal']
             for name in directories:

@@ -1,0 +1,2 @@
+paths:
+  proxy_executable: /opt/node-infra/extensions/xproxy

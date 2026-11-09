@@ -1,0 +1,22 @@
+# Deployment-specific native values go in conf.d/90-instance.yaml.
+api:
+  domain: node-infra.invalid
+  listen: 0.0.0.0:3000
+paths:
+  run_root: /run/sandbox
+  base_root: /var/lib/node-infra/sandbox
+  config_socket: /run/sandbox/node-ctl.socket
+units:
+  install: true
+  dir: /etc/systemd/system
+sandbox:
+  network:
+    switch: sw0
+    tapfd_socket: /run/connector-vswitch/tapfd.sock
+  boot:
+    kernel: /opt/node-infra/boot/vmlinux
+    runtime: /opt/node-infra/boot/sandbox-runtime.bundle
+mmds:
+  enabled: true
+  listen: 127.0.0.1:19254
+manifest_config: /etc/node-infra/manifest.yaml
