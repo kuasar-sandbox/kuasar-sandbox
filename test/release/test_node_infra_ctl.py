@@ -126,6 +126,35 @@ class DeploymentTests(unittest.TestCase):
                 self.node.recover()
         self.assertEqual(ctl.json_file(self.node.applied)['state'], 'running')
 
+    def test_retry_after_unmount_or_final_owner_removal(self):
+        for owner_exists in (True, False):
+            with self.subTest(owner_exists=owner_exists):
+                applied = {'schema': 1, 'state': 'releasing', 'owner': 'ours', 'generation': 'old',
+                           'boot_id': ctl.boot_id(), 'tool': str(Path(ctl.__file__).resolve()),
+                           'mounts': {str(self.node.run / 'bpf'): {'id': 'old'}}}
+                ctl.save(self.node.applied, applied)
+                if owner_exists:
+                    ctl.save(self.node.run / 'owner.json', {'owner': 'ours', 'generation': 'old'})
+                    (self.node.run / 'bpf').mkdir()
+                with patch.object(self.node, 'installed', return_value={'owner': 'ours'}), \
+                     patch.object(self.node, 'owned_container', return_value=None), \
+                     patch.object(self.node, 'consumers_gone'), patch.object(ctl, 'mount_at', return_value={}), \
+                     patch.object(ctl, 'run') as command:
+                    self.node.recover()
+                    command.assert_not_called()
+                self.assertEqual(ctl.json_file(self.node.applied)['state'], 'cleaned')
+                self.assertFalse(self.node.run.exists())
+
+    def test_mount_intent_survives_exit_before_identity_update(self):
+        applied = {'mounts': {}}
+        path = self.node.run / 'primary'
+        with patch.object(ctl, 'run', side_effect=SystemExit):
+            with self.assertRaises(SystemExit):
+                self.node.create_mount(applied, path, 'nsfs', 123, '--bind', '/original', path)
+        saved = ctl.json_file(self.node.applied)
+        self.assertEqual(saved['mount_intents'][str(path)], {'type': 'nsfs', 'inode': 123})
+        self.assertEqual(saved['mounts'], {})
+
     def test_version_payload_cannot_be_replaced(self):
         package = self.root / 'package'
         (package / 'bin').mkdir(parents=True)

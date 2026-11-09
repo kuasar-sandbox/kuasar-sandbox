@@ -57,6 +57,10 @@ sudo podman pull ghcr.io/kuasar-sandbox/node-infra@sha256:PLATFORM_MANIFEST_DIGE
 Connector 配置设置。宿主负责入口地址与路由，并在宿主重启后先恢复主网络空间，
 再启动实例。
 
+对于目标为 loopback 的原生管理服务，runtime 将其配置的 IPv4 VIP 分配到对应
+管理设备，并启用 `route_localnet`。这样 Proxy 使用本地源地址，guest 回复通过
+管理平面返回。外部管理服务的地址仍由其部署方负责。
+
 Podman 通过 `Network=ns:...` 加入网络空间。提供可用 DNS 和匹配的
 `/etc/resolv.conf`；加入网络空间不会创建该文件。保证实例可访问外部存储端点和所选
 文件型制品。UDS 挂载提供方持有的父目录，使 socket 重建后仍可见。存储端点不会让

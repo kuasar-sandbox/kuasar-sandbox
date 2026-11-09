@@ -67,6 +67,12 @@ Set the transit address/gateway through native Connector configuration. The
 host owns ingress addressing/routes and restores the main namespace before
 starting the instance after host reboot.
 
+For native management services targeting loopback, the runtime assigns their
+configured IPv4 VIPs to the corresponding management device and enables
+`route_localnet`. This gives Proxy a local source address whose guest replies
+return through the management plane. External management service addressing
+remains the responsibility of its deployment.
+
 Podman joins this namespace through `Network=ns:...`. Provide usable DNS and a
 matching `/etc/resolv.conf`; joining a namespace does not create that file.
 Make external storage endpoints and any file-backed artifacts reachable from

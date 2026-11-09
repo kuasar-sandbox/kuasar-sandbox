@@ -424,18 +424,15 @@ class Instance:
         save(self.run / 'owner.json', {'owner': applied['owner'], 'generation': applied['generation']})
         primary = self.run / 'primary'
         primary.touch(mode=0o600)
-        run('mount', '--bind', selected['netns'], primary)
-        self.remember_mount(applied, primary, 'nsfs')
+        self.create_mount(applied, primary, 'nsfs', applied['primary_inode'], '--bind', selected['netns'], primary)
         require(primary.stat().st_ino == applied['primary_inode'], 'primary namespace changed during prepare')
         pins = self.run / 'netns'
         pins.mkdir(mode=0o700)
-        run('mount', '--bind', pins, pins)
-        self.remember_mount(applied, pins, None)
+        self.create_mount(applied, pins, None, pins.stat().st_ino, '--bind', pins, pins)
         run('mount', '--make-rshared', pins)
         bpf = self.run / 'bpf'
         bpf.mkdir(mode=0o700)
-        run('mount', '-t', 'bpf', 'node-infra-' + self.name, bpf)
-        self.remember_mount(applied, bpf, 'bpf')
+        self.create_mount(applied, bpf, 'bpf', None, '-t', 'bpf', 'node-infra-' + self.name, bpf)
         # Create native namespaces in a short-lived helper before starting PID 1.
         # Only this helper and recovery share mounts back to the host. The main
         # container receives slave mounts, so systemd's final unmount sweep cannot
@@ -456,10 +453,16 @@ class Instance:
         applied['state'] = 'prepared'
         save(self.applied, applied)
 
-    def remember_mount(self, applied, path, fs):
+    def create_mount(self, applied, path, fs, inode, *arguments):
+        # Persist ownership intent before the mount syscall. A killed helper can
+        # then reconcile that syscall even if it never wrote the returned ID.
+        applied.setdefault('mount_intents', {})[str(path)] = {'type': fs, 'inode': inode}
+        save(self.applied, applied)
+        run('mount', *arguments)
         mount = mount_at(path)
         require(mount and (not fs or mount['type'] == fs), 'mount preparation failed: ' + str(path))
         applied['mounts'][str(path)] = mount
+        del applied['mount_intents'][str(path)]
         save(self.applied, applied)
 
     def started(self):
@@ -501,13 +504,34 @@ class Instance:
                 applied.update(state='cleaned', error='', archived_after_reboot=True)
                 save(self.applied, applied)
                 return
-            owner = json_file(self.run / 'owner.json')
-            require(owner == {'owner': applied['owner'], 'generation': applied['generation']}, 'foreign runtime directory')
+            owner_path = self.run / 'owner.json'
+            if not owner_path.exists() and applied['state'] in ('preparing', 'releasing'):
+                require(not self.run.exists() or not list(self.run.iterdir()), 'unowned runtime entries remain')
+                if applied['state'] == 'preparing':
+                    save(owner_path, {'owner': applied['owner'], 'generation': applied['generation']})
+            if owner_path.exists():
+                owner = json_file(owner_path)
+                require(owner == {'owner': applied['owner'], 'generation': applied['generation']}, 'foreign runtime directory')
+            else:
+                require(applied['state'] == 'releasing', 'runtime ownership record is missing')
+            for value, intent in list(applied.get('mount_intents', {}).items()):
+                path = Path(value)
+                require(path.parent == self.run and path.name in ('primary', 'netns', 'bpf'), 'foreign mount intent')
+                current = mount_at(path)
+                if current:
+                    require(not intent['type'] or current['type'] == intent['type'], 'mount intent type differs')
+                    require(not intent['inode'] or path.stat().st_ino == intent['inode'], 'mount intent identity differs')
+                    if intent['type'] == 'bpf':
+                        require(current['source'] == 'node-infra-' + self.name, 'foreign bpffs source')
+                    applied['mounts'][value] = current
+                del applied['mount_intents'][value]
+                save(self.applied, applied)
             for path, saved in applied['mounts'].items():
                 current = mount_at(Path(path))
-                require(current == saved, 'owned mount changed or disappeared: ' + path)
+                require(current == saved or (not current and applied['state'] == 'releasing'),
+                        'owned mount changed or disappeared: ' + path)
             primary = self.run / 'primary'
-            if self.connector.exists():
+            if self.connector.exists() and applied['state'] != 'releasing':
                 require(primary.exists() and primary.stat().st_ino == applied['primary_inode'], 'old primary namespace lost')
                 require(inspect('image', applied['image']), 'old immutable cleanup image is missing')
                 run('podman', 'run', '--rm', '--pull=never', '--privileged', '--cgroupns=private',
@@ -527,19 +551,24 @@ class Instance:
                 path = self.run / name
                 if path.exists():
                     require(not list(path.iterdir()), 'owned recovery resources remain: ' + str(path))
+            # Journal the release phase before unmounting. Retrying after a
+            # syscall succeeded but its journal update failed remains safe.
+            applied['state'] = 'releasing'
+            save(self.applied, applied)
             for name in ('bpf', 'netns', 'primary'):
                 path = self.run / name
                 if mount_at(path):
                     require(str(path) in applied['mounts'], 'unrecorded mount retained: ' + str(path))
                     run('umount', path)  # never lazy: busy resources remain recoverable
-                    del applied['mounts'][str(path)]
-                    save(self.applied, applied)
+                applied['mounts'].pop(str(path), None)
+                save(self.applied, applied)
                 if path.is_dir():
                     path.rmdir()
                 else:
                     path.unlink(missing_ok=True)
-            (self.run / 'owner.json').unlink()
-            self.run.rmdir()
+            owner_path.unlink(missing_ok=True)
+            if self.run.exists():
+                self.run.rmdir()
             applied.update(state='cleaned', error='')
             save(self.applied, applied)
         except Exception as error:
@@ -585,7 +614,8 @@ def mount_at(path):
         left, right = line.split(' - ', 1)
         fields, rest = left.split(), right.split()
         if decode(fields[4]) == str(path):
-            found.append({'id': fields[0], 'device': fields[2], 'root': decode(fields[3]), 'type': rest[0]})
+            found.append({'id': fields[0], 'device': fields[2], 'root': decode(fields[3]), 'type': rest[0],
+                          'source': decode(rest[1])})
     require(len(found) <= 1, 'stacked mounts at owned path: ' + str(path))
     return found[0] if found else {}
 

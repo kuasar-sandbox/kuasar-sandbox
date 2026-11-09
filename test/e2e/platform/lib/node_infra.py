@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import shutil
 import subprocess
 import sys
@@ -509,11 +510,13 @@ def config_case(fixture):
     units = node.execute('systemctl', 'list-units', '--plain', '--no-legend', '--state=active', 'runner-p*@*.service').stdout
     require('runner-p0@' in units and 'runner-p1@' in units, 'real guests did not occupy both native execution pools')
     master = node.execute('systemctl', 'show', 'node-proxy.service', '-p', 'MainPID', '--value').stdout.strip()
-    children = node.execute('cat', f'/proc/{master}/task/{master}/children').stdout.split()
+    # A Go master may fork from any runtime thread; /task/<main>/children
+    # omits children forked by its other threads.
+    children = node.execute('pgrep', '-P', master).stdout.split()
     require(len(children) == 1, 'expected one actual Proxy worker')
     node.execute('kill', '-KILL', children[0])
     wait_for('Proxy worker rebuilt with private configuration', lambda: http('GET', endpoint) == expected)
-    after = node.execute('cat', f'/proc/{master}/task/{master}/children').stdout.split()
+    after = node.execute('pgrep', '-P', master).stdout.split()
     require(len(after) == 1 and after != children, 'Proxy worker did not restart beneath the same master')
     require(node.state(second)['token'], 'second pool guest did not survive worker restart')
     node.stop()
@@ -552,6 +555,43 @@ def lifecycle_case(fixture):
     first.assert_native_exec(replacement)
     first.stop()
     require(second.state(guest_b)['token'] == before['token'], 'normal stop disrupted the second instance')
+    first.start()
+    first.create()
+    # Recovery must use recorded identities even when the current YAML changes.
+    overlay = first.config / 'connector-vswitch/conf.d/90-instance.yaml'
+    saved = overlay.read_bytes()
+    write_json(overlay, {'switch_name': 'replacement', 'switch_netns': 'replacement-switch'})
+    inspected = json.loads(command('podman', 'inspect', first.container).stdout)[0]
+    conmon = inspected['State']['ConmonPid']
+    require(isinstance(conmon, int) and conmon > 1, 'missing actual conmon PID')
+    os.kill(conmon, signal.SIGKILL)
+    wait_for('conmon exit and old-generation recovery', first._stopped, timeout=180)
+    first.assert_returned()
+    require(second.state(guest_b)['token'] == before['token'], 'conmon failure disrupted the second instance')
+    overlay.write_bytes(saved)
+    first.start()
+    first.create()
+    # A conflicting input must preserve the original device and all recovery
+    # handles. After consumers end, remove BPF metadata to exercise the journal
+    # fallback instead of relying on a successful native Stop's metadata.
+    network = ['ip', '-n', first.netns]
+    command(*network, 'link', 'add', 'net1', 'type', 'dummy')
+    conflict = json.loads(command(*network, '-j', 'link', 'show', 'net1').stdout)[0]['address']
+    require(conflict != first.original_transit, 'failure fixture reused original transit identity')
+    command('systemctl', 'stop', first.service, check=False, timeout=180)
+    wait_for('failed cleanup retained inputs', lambda: first.status()['recovery']['pending'])
+    require((first.run / 'netns/sw0-switch').stat().st_ino ==
+            json.loads((first.data / 'recovery/connector.json').read_text())['namespaces'][0]['inode'],
+            'failed cleanup lost the original namespace')
+    require(command(fixture.ctl, 'check', '--name', first.name, check=False).returncode != 0,
+            'unfinished recovery allowed a new generation')
+    require(second.state(guest_b)['token'] == before['token'], 'cleanup failure disrupted the second instance')
+    shutil.rmtree(first.run / 'bpf/sw0', ignore_errors=False)
+    current = json.loads(command(*network, '-j', 'link', 'show', 'net1').stdout)[0]['address']
+    require(current == conflict, 'conflicting fixture device was replaced')
+    command(*network, 'link', 'delete', 'net1')
+    command(fixture.ctl, 'recover', '--name', first.name)
+    first.assert_returned()
     second.stop()
 
 
