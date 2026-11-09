@@ -35,6 +35,7 @@ LABEL org.opencontainers.image.title="Kuasar Sandbox workbench" \
 COPY daemon.json /etc/docker/daemon.json
 COPY containerd.toml /etc/containerd/config.toml
 COPY storage.conf /etc/containers/storage.conf
+COPY podman-shutdown.service /etc/systemd/system/workbench-podman-shutdown.service
 COPY system-entrypoint.sh /usr/local/sbin/workbench-system
 COPY check-system.py /usr/local/lib/workbench/check-system.py
 COPY LICENSE /usr/share/workbench/LICENSE
@@ -45,7 +46,7 @@ RUN chmod 0755 /usr/local/sbin/workbench-system \
     && cp /etc/systemd/system/docker.service.d/limits.conf /etc/systemd/system/containerd.service.d/limits.conf \
     && mkdir -p /etc/systemd/system.conf.d \
     && printf '[Manager]\nDefaultTasksMax=infinity\n' > /etc/systemd/system.conf.d/workbench.conf \
-    && systemctl enable containerd.service docker.service \
+    && systemctl enable containerd.service docker.service workbench-podman-shutdown.service \
     && systemctl mask getty.target console-getty.service systemd-logind.service redis-server.service \
        systemd-udevd.service systemd-udevd-control.socket systemd-udevd-kernel.socket systemd-modules-load.service \
     && rm -f /etc/machine-id /var/lib/dbus/machine-id \

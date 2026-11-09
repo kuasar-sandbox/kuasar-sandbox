@@ -307,12 +307,24 @@ class Node:
         require((root / 'memory.max').read_text().strip() == str(6 * 1024 ** 3), 'outer memory limit is not effective')
         quota, period = (root / 'cpu.max').read_text().split()
         require(quota != 'max' and int(quota) == 4 * int(period), 'outer CPU limit is not effective')
-        processes = command('podman', 'top', self.container, 'hpid', 'args').stdout.splitlines()
+        processes = command('podman', 'top', self.container, 'pid', 'args').stdout.splitlines()
         pids = [line.split()[0] for line in processes[1:] if 'cloud-hypervisor' in line]
         require(pids, 'no real VMM process beneath the delivered instance')
-        for pid in pids:
-            paths = [line.split(':', 2)[2] for line in Path('/proc', pid, 'cgroup').read_text().splitlines()]
-            require(any(path.startswith(group + '/') for path in paths), 'VMM escaped the instance resource boundary')
+        init = json.loads(command('podman', 'inspect', self.container).stdout)[0]['State']['Pid']
+        namespace = Path('/proc', str(init), 'ns/pid').stat().st_ino
+        bounded = set()
+        # Podman's hpid formatter can return '?' when it is itself nested.
+        # Match the actual namespace/PID through the outer cgroup instead.
+        for procs in root.rglob('cgroup.procs'):
+            for pid in procs.read_text().split():
+                try:
+                    if Path('/proc', pid, 'ns/pid').stat().st_ino != namespace:
+                        continue
+                    status = Path('/proc', pid, 'status').read_text()
+                except FileNotFoundError:
+                    continue
+                bounded.update(line.split()[-1] for line in status.splitlines() if line.startswith('NSpid:'))
+        require(set(pids) <= bounded, 'VMM escaped the instance resource boundary')
 
     def assert_restored(self, sandbox, *, memory):
         before = self.state(sandbox)

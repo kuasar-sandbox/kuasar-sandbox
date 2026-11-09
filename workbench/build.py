@@ -45,7 +45,7 @@ def build(version, arch, cases, deps, output, cpus=2, memory_gib=6):
     with tempfile.TemporaryDirectory(prefix='workbench-build-', dir=output) as directory:
         context = Path(directory)
         for name in ('Dockerfile', 'toolchains.json', 'install-toolchains.py', 'system-entrypoint.sh',
-                     'check-system.py', 'daemon.json', 'containerd.toml', 'storage.conf'):
+                     'check-system.py', 'daemon.json', 'containerd.toml', 'storage.conf', 'podman-shutdown.service'):
             shutil.copy2(ROOT / 'workbench' / name, context / name)
         shutil.copy2(ROOT / 'LICENSE', context / 'LICENSE')
         dependency_root = context / 'deps'

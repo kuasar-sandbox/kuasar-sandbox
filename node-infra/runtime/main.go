@@ -44,9 +44,10 @@ type transit struct {
 }
 
 type management struct {
-	Namespace string `json:"namespace"`
-	Device    string `json:"device"`
-	Loopback  bool   `json:"loopback"`
+	Namespace string   `json:"namespace"`
+	Device    string   `json:"device"`
+	Loopback  bool     `json:"loopback"`
+	Addresses []string `json:"addresses,omitempty"`
 }
 
 // Record is also the read-only describe output. It is written before namespace
@@ -192,14 +193,21 @@ func describe(explicit string) (*record, error) {
 			return nil, err
 		}
 		loopback := false
+		addresses := map[string]bool{}
 		for _, svc := range cfg.MgmtServices {
 			for _, route := range plane.ServiceRoutes {
 				if svc.TargetIP.IsLoopback() && route.Contains(svc.VIP) {
 					loopback = true
+					addresses[svc.VIP.String()+"/32"] = true
 				}
 			}
 		}
-		r.Management = append(r.Management, management{Namespace: plane.NetNS, Device: plane.Dev, Loopback: loopback})
+		m := management{Namespace: plane.NetNS, Device: plane.Dev, Loopback: loopback}
+		for address := range addresses {
+			m.Addresses = append(m.Addresses, address)
+		}
+		sort.Strings(m.Addresses)
+		r.Management = append(r.Management, m)
 	}
 	for name := range names {
 		if err := safeName(name); err != nil {
@@ -293,7 +301,7 @@ func checkConfiguration(explicit string) error {
 		}
 	}
 	for i := range r.Management {
-		if r.Management[i].Namespace != wanted.Management[i].Namespace || r.Management[i].Device != wanted.Management[i].Device {
+		if r.Management[i].Namespace != wanted.Management[i].Namespace || r.Management[i].Device != wanted.Management[i].Device || strings.Join(r.Management[i].Addresses, ",") != strings.Join(wanted.Management[i].Addresses, ",") {
 			return errors.New("Connector management link identities changed; replace the instance after cleanup")
 		}
 	}
@@ -488,6 +496,18 @@ func ready(timeout time.Duration) error {
 					for _, m := range r.Management {
 						if !m.Loopback {
 							continue
+						}
+						// Connector installs the floating return route but does not
+						// assign local service addresses. Without a local VIP here,
+						// Proxy uses the ingress source and guest replies take transit.
+						for _, address := range m.Addresses {
+							args := []string{"address", "replace", address, "dev", m.Device}
+							if m.Namespace != "" {
+								args = append([]string{"-n", m.Namespace}, args...)
+							}
+							if err := execute("ip", args...); err != nil {
+								return err
+							}
 						}
 						args := []string{"-w", "net/ipv4/conf/" + m.Device + "/route_localnet=1"}
 						if m.Namespace == "" {

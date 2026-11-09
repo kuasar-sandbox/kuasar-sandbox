@@ -43,6 +43,9 @@ mgmt_extracts: ["custom-mgmt:metadata:169.254.169.254/32"]
 	if len(r.ConfigSHA256) != 64 || r.State != "described" || r.MainNetNSInode != 0 {
 		t.Fatalf("describe unexpectedly needs running instance state: %+v", r)
 	}
+	if len(r.Management[0].Addresses) != 1 || r.Management[0].Addresses[0] != "169.254.169.254/32" {
+		t.Fatalf("missing local management VIP: %+v", r.Management)
+	}
 }
 
 func TestCleanupNamesCannotEscapeOwnedDirectory(t *testing.T) {

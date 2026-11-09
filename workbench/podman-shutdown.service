@@ -1,0 +1,17 @@
+[Unit]
+Description=Stop this Workbench's private Podman containers before unmounting storage
+After=local-fs.target
+Before=shutdown.target
+Conflicts=shutdown.target
+RequiresMountsFor=/var/lib/containers/storage
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/bin/podman stop --all --time=10
+ExecStop=/usr/bin/podman container cleanup --all
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
