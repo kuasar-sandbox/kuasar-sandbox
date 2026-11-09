@@ -7,6 +7,7 @@ instance cleanup. A failed recovery retains its inputs for operator diagnosis.
 """
 import argparse
 import base64
+import fcntl
 import hashlib
 import ipaddress
 import json
@@ -504,6 +505,8 @@ def config_case(fixture):
     require(node.api('GET', '/node-infra-extension') == expected, 'xconductor private configuration not applied')
     endpoint = f'http://{node.ingress}:3001/node-infra-extension'
     require(http('GET', endpoint) == expected, 'xproxy private configuration not applied')
+    node.execute('test', '-S', '/run/sandbox/customer-proxy-stats.sock')
+    node.execute('test', '!', '-e', '/run/sandbox/proxy-stats.sock')
     first, second = node.create(), node.create()
     node.write_marker(first)
     node.assert_native_exec(first)
@@ -524,6 +527,7 @@ def config_case(fixture):
     require(len(children) == 1, 'expected one actual Proxy worker')
     node.execute('kill', '-KILL', children[0])
     wait_for('Proxy worker rebuilt with private configuration', lambda: http('GET', endpoint) == expected)
+    wait_for('custom StatsSocket readiness after worker rebuild', lambda: node.status()['ready'])
     after = node.execute('pgrep', '-P', master).stdout.split()
     require(len(after) == 1 and after != children, 'Proxy worker did not restart beneath the same master')
     require(node.state(second)['token'], 'second pool guest did not survive worker restart')
@@ -642,8 +646,82 @@ def lifecycle_case(fixture):
     command('systemctl', 'daemon-reload')
     command(fixture.ctl, 'recover', '--name', first.name)
     first.assert_returned()
+    interrupt_native_helpers(first)
     require(second.state(guest_b)['token'] == before['token'], 'hook interruption disrupted the second instance')
     second.stop()
+
+
+def interrupt_native_helpers(node):
+    evidence = []
+    for operation, victim in (('prepare', 'hook'), ('prepare', 'cli'), ('cleanup', 'hook')):
+        if operation == 'cleanup':
+            node.start()
+            node.assert_native_exec(node.create())
+        recovery = node.data / 'recovery'
+        recovery.mkdir(mode=0o700, exist_ok=True)
+        with (recovery / '.lock').open('a') as lock:
+            # The delivered runtime acquires this native journal lock before
+            # its first record/write or cleanup effect. No test product shim.
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if operation == 'prepare':
+                command('systemctl', 'reset-failed', node.service, check=False)
+                command('systemctl', 'start', '--no-block', node.service)
+            else:
+                command('podman', 'kill', '--signal', 'KILL', node.container)
+
+            def blocked_helper():
+                applied = json.loads((node.data / 'applied.json').read_text())
+                helper = applied.get('helper', {})
+                if helper.get('operation') != operation or not helper.get('id'):
+                    return False
+                container = json.loads(command('podman', 'inspect', helper['id']).stdout)[0]
+                return container if container['State']['Running'] else False
+
+            helper = wait_for('native ' + operation + ' helper blocked before journal', blocked_helper)
+            identity, pid = helper['Id'], helper['State']['Pid']
+            require(pid > 1, 'helper has no real process')
+            if operation == 'prepare':
+                require(not (recovery / 'connector.json').exists(), 'prepare pause missed first-record window')
+            hook = int(command('systemctl', 'show', node.service, '-p', 'ControlPID', '--value').stdout)
+            require(hook > 1 and b'node-infra-ctl' in Path(f'/proc/{hook}/cmdline').read_bytes(),
+                    'expected the actual host hook')
+            target = hook
+            if victim == 'cli':
+                children = command('pgrep', '-P', str(hook)).stdout.split()
+                matches = [int(child) for child in children if
+                           b'podman\x00start\x00' in Path(f'/proc/{child}/cmdline').read_bytes()]
+                require(len(matches) == 1, 'expected one attached Podman start CLI')
+                target = matches[0]
+            os.kill(target, signal.SIGKILL)
+
+            def reaped():
+                result = command('podman', 'container', 'exists', identity, check=False)
+                require(result.returncode in (0, 1), 'cannot inspect interrupted helper')
+                return result.returncode == 1 and not Path(f'/proc/{pid}').exists()
+
+            if operation == 'prepare':
+                wait_for('prepare helper reaped before releasing journal lock', reaped)
+                wait_for('interrupted startup recovered', node._stopped)
+                require(not (recovery / 'connector.json').exists(), 'old helper wrote after recovery')
+            else:
+                wait_for('failed cleanup hook ended', lambda: int(command(
+                    'systemctl', 'show', node.service, '-p', 'ControlPID', '--value').stdout) == 0)
+                # Exercise manual recovery independently of ExecStopPost.
+                with (node.fixture.output / 'manual-helper-recover.log').open('w') as output:
+                    process = subprocess.Popen([str(node.fixture.ctl), 'recover', '--name', node.name],
+                                               stdout=output, stderr=subprocess.STDOUT)
+                    try:
+                        wait_for('manual recovery reaped interrupted cleanup helper', reaped)
+                    finally:
+                        fcntl.flock(lock, fcntl.LOCK_UN)
+                    require(process.wait(timeout=180) == 0, 'manual helper recovery failed; see retained log')
+            evidence.append({'operation': operation, 'killed': victim, 'helper_id': identity,
+                             'helper_pid': pid, 'reaped_before_unlock': True})
+        node.assert_returned()
+        node.start()
+        node.assert_native_exec(node.create())
+        node.stop()
+    write_json(node.fixture.output / 'helper-interruptions.json', evidence)
 
 
 def main():

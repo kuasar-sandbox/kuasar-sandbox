@@ -126,6 +126,105 @@ class DeploymentTests(unittest.TestCase):
                 self.node.recover()
         self.assertEqual(ctl.json_file(self.node.applied)['state'], 'running')
 
+    def test_reboot_archive_retries_each_interruption(self):
+        for boundary in ('directory', 'connector', 'current-record'):
+            with self.subTest(boundary=boundary):
+                node = ctl.Instance(boundary)
+                node.directory.mkdir()
+                applied = {'schema': 1, 'state': 'running', 'owner': 'ours', 'generation': 'old',
+                           'boot_id': 'old-boot', 'tool': str(Path(ctl.__file__).resolve())}
+                ctl.save(node.applied, applied)
+                ctl.save(node.connector, {'state': 'running', 'main_netns_inode': 123})
+                history = node.directory / 'history/old'
+                rename, save = Path.rename, ctl.save
+
+                def interrupted_rename(source, target):
+                    result = rename(source, target)
+                    if (boundary == 'directory' and target == history or
+                            boundary == 'connector' and source == node.connector):
+                        raise SystemExit('injected death after rename')
+                    return result
+
+                def interrupted_save(path, data):
+                    if boundary == 'current-record' and path == node.applied and data['state'] == 'cleaned':
+                        raise SystemExit('injected death before final save')
+                    return save(path, data)
+
+                with patch.object(node, 'installed', return_value={'owner': 'ours'}), \
+                     patch.object(node, 'owned_container', return_value=None), patch.object(node, 'consumers_gone'):
+                    with patch.object(Path, 'rename', interrupted_rename), patch.object(ctl, 'save', interrupted_save):
+                        with self.assertRaises(SystemExit):
+                            node.recover()
+                    self.assertEqual(ctl.json_file(node.applied)['state'], 'running')
+                    node.recover()
+                    node.recover()
+                self.assertEqual(ctl.json_file(node.applied)['state'], 'cleaned')
+                self.assertEqual(ctl.json_file(history / 'connector.json')['main_netns_inode'], 123)
+                self.assertFalse(node.connector.exists())
+
+    def test_foreign_reboot_archive_is_never_overwritten(self):
+        applied = {'state': 'running', 'owner': 'ours', 'generation': 'old', 'boot_id': 'old-boot'}
+        history = self.node.directory / 'history/old'
+        history.mkdir(parents=True)
+        for foreign in (None, dict(applied, owner='other', error='')):
+            if foreign:
+                ctl.save(history / 'applied.json', foreign)
+            with self.assertRaises(ValueError):
+                self.node.archive_boot(applied)
+        self.assertEqual(ctl.json_file(history / 'applied.json')['owner'], 'other')
+
+    def test_helper_intent_survives_create_start_and_remove_death(self):
+        for boundary in ('create', 'start', 'remove'):
+            with self.subTest(boundary=boundary):
+                applied = {'owner': 'ours', 'generation': 'g1', 'image': 'sha256:' + '1' * 64}
+                containers, calls = {}, []
+                self.node.lock_fd = 99
+
+                def command(*args, **kwargs):
+                    calls.append(args[1])
+                    saved = ctl.json_file(self.node.applied)['helper']
+                    if args[1] == 'create':
+                        self.assertEqual(kwargs['pass_fds'], (99,))
+                        self.assertNotIn('id', saved)
+                        containers[saved['name']] = {'Id': 'immutable-id', 'Image': applied['image'], 'Config': {'Labels': {
+                            ctl.LABEL: 'ours', ctl.LABEL + '.generation': 'g1', ctl.LABEL + '.operation': 'prepare'}}}
+                    if args[1] == 'start':
+                        self.assertEqual(args[-1], 'immutable-id')
+                        self.assertEqual(saved['id'], 'immutable-id')
+                    if args[1] == 'rm':
+                        self.assertEqual(args[-1], 'immutable-id')
+                        containers.clear()
+                    if args[1] == {'remove': 'rm'}.get(boundary, boundary):
+                        raise SystemExit('injected helper hook death')
+                    return types.SimpleNamespace(stdout='', returncode=0)
+
+                with patch.object(ctl, 'inspect', side_effect=lambda kind, name: containers.get(name)), \
+                     patch.object(ctl, 'run', side_effect=command):
+                    with self.assertRaises(SystemExit):
+                        self.node.run_helper(applied, 'prepare', ['--network=none'])
+                    applied = ctl.json_file(self.node.applied)
+                    self.assertIn('helper', applied)
+                    boundary = 'no-more-deaths'
+                    self.node.reap_helper(applied)
+                self.assertFalse(containers)
+                self.assertNotIn('helper', ctl.json_file(self.node.applied))
+                self.assertIn('rm', calls)
+
+    def test_foreign_helper_blocks_recovery_before_consumers_or_mounts(self):
+        applied = {'state': 'preparing', 'owner': 'ours', 'generation': 'g1', 'image': 'sha256:' + '1' * 64,
+                   'tool': str(Path(ctl.__file__).resolve()),
+                   'helper': {'name': self.node.container + '-g1-prepare', 'operation': 'prepare'}}
+        ctl.save(self.node.applied, applied)
+        with patch.object(self.node, 'installed', return_value={'owner': 'ours'}), \
+             patch.object(self.node, 'owned_container', return_value=None), \
+             patch.object(ctl, 'inspect', return_value={'Config': {'Labels': {ctl.LABEL: 'other'}}}), \
+             patch.object(self.node, 'consumers_gone') as consumers, patch.object(ctl, 'run') as command:
+            with self.assertRaisesRegex(ValueError, 'foreign helper'):
+                self.node.recover()
+            consumers.assert_not_called()
+            command.assert_not_called()
+        self.assertIn('helper', ctl.json_file(self.node.applied))
+
     def test_retry_after_unmount_or_final_owner_removal(self):
         for owner_exists in (True, False):
             with self.subTest(owner_exists=owner_exists):

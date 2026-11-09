@@ -37,8 +37,8 @@ def require(value, message):
         raise ValueError(message)
 
 
-def run(*args, check=True, timeout=120):
-    result = subprocess.run(list(map(str, args)), text=True, capture_output=True, timeout=timeout)
+def run(*args, check=True, timeout=120, pass_fds=()):
+    result = subprocess.run(list(map(str, args)), text=True, capture_output=True, timeout=timeout, pass_fds=pass_fds)
     if check and result.returncode:
         # Native config output can contain secrets: never echo its stdout.
         raise ValueError(f'{args[0]} {args[1] if len(args)>1 else ""}: {result.stderr.strip()[-2000:]}')
@@ -48,6 +48,14 @@ def run(*args, check=True, timeout=120):
 def json_file(path):
     require(not path.is_symlink() and path.is_file(), f'missing or linked record: {path}')
     return json.loads(path.read_text())
+
+
+def sync_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def atomic(path, data, mode=0o600):
@@ -61,11 +69,7 @@ def atomic(path, data, mode=0o600):
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
-        fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(fd)
-        finally:
-            os.close(fd)
+        sync_directory(path.parent)
     finally:
         Path(temporary).unlink(missing_ok=True)
 
@@ -303,6 +307,95 @@ class Instance:
     def service_state(self):
         return run('systemctl', 'show', self.service, '--property=ActiveState', '--value').stdout.strip()
 
+    def helper_container(self, applied):
+        helper = applied.get('helper')
+        if not helper:
+            return None
+        require(helper['name'] == self.container + '-' + applied['generation'] + '-' + helper['operation']
+                and helper['operation'] in ('prepare', 'cleanup'), 'foreign helper intent')
+        data = inspect('container', helper['name'])
+        if data:
+            labels = data.get('Config', {}).get('Labels', {})
+            require(labels.get(LABEL) == applied['owner'] and
+                    labels.get(LABEL + '.generation') == applied['generation'] and
+                    labels.get(LABEL + '.operation') == helper['operation'] and
+                    data['Image'].removeprefix('sha256:') == applied['image'].removeprefix('sha256:') and
+                    (not helper.get('id') or helper['id'] == data['Id']), 'foreign helper container')
+        return data
+
+    def reap_helper(self, applied):
+        if not applied.get('helper'):
+            return
+        data = self.helper_container(applied)
+        if data:
+            # Podman serializes start/remove on the immutable container ID and
+            # kills/reaps its processes before removal. A delayed start CLI
+            # cannot resurrect this ID after recovery has removed it.
+            run('podman', 'rm', '--force', '--time=0', data['Id'])
+            require(self.helper_container(applied) is None, 'helper still exists after removal')
+        del applied['helper']
+        save(self.applied, applied)
+
+    def run_helper(self, applied, operation, arguments, *command):
+        require(not applied.get('helper'), 'previous helper needs recovery')
+        name = self.container + '-' + applied['generation'] + '-' + operation
+        require(inspect('container', name) is None, 'foreign helper name collision')
+        applied['helper'] = {'name': name, 'operation': operation}
+        save(self.applied, applied)
+        # Create does not run customer code. Inherit the instance lock only
+        # through create so a surviving CLI cannot create after recovery.
+        # Start uses the recorded immutable ID, never a reusable name. Do not
+        # use --rm: its inspectable ownership must survive any hook/CLI death.
+        run('podman', 'create', '--name', name, '--pull=never', '--privileged', '--cgroupns=private',
+            '--label', LABEL + '=' + applied['owner'],
+            '--label', LABEL + '.generation=' + applied['generation'],
+            '--label', LABEL + '.operation=' + operation, '--entrypoint=' + RUNTIME,
+            *arguments, applied['image'], operation, *command, pass_fds=(self.lock_fd,))
+        data = self.helper_container(applied)
+        require(data, 'created helper is missing')
+        applied['helper']['id'] = data['Id']
+        save(self.applied, applied)
+        run('podman', 'start', '--attach', data['Id'])
+        self.reap_helper(applied)
+
+    def archive_boot(self, applied):
+        require(re.fullmatch(r'[a-zA-Z0-9-]+', applied['generation']), 'invalid archive generation')
+        history = self.directory / 'history' / applied['generation']
+        safe_path(str(history.parent))
+        snapshot = dict(applied, error='')
+        if not history.exists():
+            history.parent.mkdir(mode=0o700, exist_ok=True)
+            temporary = Path(tempfile.mkdtemp(prefix='.' + applied['generation'] + '-', dir=history.parent))
+            try:
+                # Publish the ownership snapshot and directory together; there
+                # is never an unowned empty final directory to guess about.
+                save(temporary / 'applied.json', snapshot)
+                save(temporary / 'connector-sha256.json',
+                     hash_bytes(self.connector.read_bytes()) if self.connector.exists() else None)
+                require(not history.exists(), 'foreign reboot archive appeared')
+                temporary.rename(history)
+                sync_directory(history.parent)
+            finally:
+                if temporary.exists():
+                    shutil.rmtree(temporary)
+        require(not history.is_symlink() and json_file(history / 'applied.json') == snapshot,
+                'foreign reboot archive')
+        digest = json_file(history / 'connector-sha256.json')
+        archived = history / 'connector.json'
+        if self.connector.exists():
+            require(hash_bytes(self.connector.read_bytes()) == digest, 'reboot Connector record changed')
+            require(not archived.exists(), 'duplicate reboot Connector record')
+            self.connector.rename(archived)
+        require((not archived.exists() and digest is None) or
+                (archived.is_file() and not archived.is_symlink() and hash_bytes(archived.read_bytes()) == digest),
+                'reboot archive Connector identity differs')
+        sync_directory(history)
+        sync_directory(history.parent)
+        if self.recovery.exists():
+            sync_directory(self.recovery)
+        applied.update(state='cleaned', error='', archived_after_reboot=True)
+        save(self.applied, applied)
+
     def consumers_gone(self, applied):
         group = applied.get('cgroup')
         require(group and group.startswith('/') and '..' not in Path(group).parts, 'missing/invalid applied cgroup')
@@ -442,9 +535,7 @@ class Instance:
             if value.split(':')[1] == '/run/netns':
                 value = str(pins) + ':/run/netns:rw,rshared'
             volumes += ['--volume', value]
-        run('podman', 'run', '--rm', '--pull=never', '--privileged', '--cgroupns=private',
-            '--network=ns:' + str(primary), '--entrypoint=' + RUNTIME,
-            *volumes, installed['image'], 'prepare')
+        self.run_helper(applied, 'prepare', ['--network=ns:' + str(primary), *volumes])
         record = json_file(self.connector)
         for namespace in record['namespaces']:
             pin = pins / namespace['name']
@@ -490,19 +581,15 @@ class Instance:
             os.execv(applied['tool'], [applied['tool'], 'recover', '--name', self.name])
         try:
             container = self.owned_container(installed)
+            require(not container or not container['State']['Running'],
+                    'old container still reports running; retain recovery handles')
+            self.reap_helper(applied)
             self.consumers_gone(applied)
             if container:
-                require(not container['State']['Running'], 'old container still reports running; retain recovery handles')
                 run('podman', 'rm', container['Id'])
             if applied['boot_id'] != boot_id():
                 require(not self.run.exists(), 'old runtime handles remain after reboot; refusing stale-state adoption')
-                history = self.directory / 'history' / applied['generation']
-                history.mkdir(parents=True, exist_ok=False, mode=0o700)
-                if self.connector.exists():
-                    self.connector.rename(history / 'connector.json')
-                save(history / 'applied.json', applied)
-                applied.update(state='cleaned', error='', archived_after_reboot=True)
-                save(self.applied, applied)
+                self.archive_boot(applied)
                 return
             owner_path = self.run / 'owner.json'
             if not owner_path.exists() and applied['state'] in ('preparing', 'releasing'):
@@ -534,12 +621,10 @@ class Instance:
             if self.connector.exists() and applied['state'] != 'releasing':
                 require(primary.exists() and primary.stat().st_ino == applied['primary_inode'], 'old primary namespace lost')
                 require(inspect('image', applied['image']), 'old immutable cleanup image is missing')
-                run('podman', 'run', '--rm', '--pull=never', '--privileged', '--cgroupns=private',
-                    '--network=ns:' + str(primary), '--entrypoint=' + RUNTIME,
+                self.run_helper(applied, 'cleanup', ['--network=ns:' + str(primary),
                     '--volume', str(self.recovery) + ':/run/node-infra/recovery:rw',
                     '--volume', str(self.run / 'netns') + ':/run/netns:rw,rshared',
-                    '--volume', str(self.run / 'bpf') + ':/sys/fs/bpf:rw',
-                    applied['image'], 'cleanup', '--force', timeout=120)
+                    '--volume', str(self.run / 'bpf') + ':/sys/fs/bpf:rw'], '--force')
                 require(json_file(self.connector)['state'] == 'cleaned', 'runtime did not confirm cleanup')
             # Also verify when inner prepare failed before writing its record.
             if mount_at(primary):
@@ -629,6 +714,7 @@ def locked(instance):
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         private_directory(instance.directory)
+        instance.lock_fd = fd
         yield
     finally:
         os.close(fd)

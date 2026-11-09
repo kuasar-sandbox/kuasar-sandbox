@@ -25,7 +25,12 @@ func (e *extension) WrapIngress(next http.Handler) http.Handler {
 	})
 }
 func main() {
-	app := proxy.New(proxy.Hooks{BindRuntime: func(_ context.Context, process proxy.Process, runtime *proxy.Runtime) error {
+	app := proxy.New(proxy.Hooks{Configure: func(_ context.Context, cfg *proxy.Config) error {
+		// Deliberately differ from the YAML default. Readiness must discover
+		// this effective native endpoint without replaying Configure.
+		cfg.StatsSocket = "/run/sandbox/customer-proxy-stats.sock"
+		return nil
+	}, BindRuntime: func(_ context.Context, process proxy.Process, runtime *proxy.Runtime) error {
 		data, err := os.ReadFile(os.Getenv("NODE_INFRA_TEST_CONFIG"))
 		if err != nil {
 			return err
