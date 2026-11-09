@@ -174,6 +174,15 @@ class Node:
             for i in (0, 1):
                 (self.config / f'placement/p{i}.conf').write_text('[Service]\nCPUWeight=100\n')
         if self.extension:
+            # Prepared inputs belong to the ordinary CI runner. Install private
+            # root-owned copies for the native SDK's executable trust check,
+            # keeping the immutable prepared binaries and their owners intact.
+            executables = self.config / 'executables'
+            executables.mkdir(mode=0o700)
+            for name in ('xproxy', 'xconductor'):
+                target = executables / name
+                shutil.copyfile(os.environ['NODE_INFRA_' + name.upper() + '_BIN'], target)
+                target.chmod(0o755)
             conductor['paths'] = {'conductor_executable': '/opt/node-infra/extensions/xconductor'}
             write_json(self.config / 'node-proxy/conf.d/50-platform.yaml',
                        {'paths': {'proxy_executable': '/opt/node-infra/extensions/xproxy'}})
@@ -205,8 +214,8 @@ class Node:
         if self.pools:
             mounts.append(f'{self.config}/placement:/etc/node-infra/placement:ro')
         if self.extension:
-            mounts += [f'{os.environ["NODE_INFRA_XPROXY_BIN"]}:/opt/node-infra/extensions/xproxy:ro',
-                       f'{os.environ["NODE_INFRA_XCONDUCTOR_BIN"]}:/opt/node-infra/extensions/xconductor:ro',
+            mounts += [f'{self.config}/executables/xproxy:/opt/node-infra/extensions/xproxy:ro',
+                       f'{self.config}/executables/xconductor:/opt/node-infra/extensions/xconductor:ro',
                        f'{self.config}/extensions:/etc/node-infra/extensions:ro']
             for component in ('node-conductor', 'node-proxy'):
                 mounts.append(f'{self.config}/{component}.service.d:/etc/systemd/system/{component}.service.d:ro')
