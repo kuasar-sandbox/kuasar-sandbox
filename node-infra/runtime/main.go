@@ -366,6 +366,18 @@ func execute(program string, args ...string) error {
 func prepare(explicit string) error {
 	old, err := readRecord()
 	if err == nil && old.State != "cleaned" {
+		// Host preparation pins namespaces before PID 1 starts. The system
+		// container only verifies that exact generation and configuration.
+		if old.State == "prepared" {
+			wanted, err := describe(explicit)
+			if err != nil {
+				return err
+			}
+			if old.ConfigSHA256 != wanted.ConfigSHA256 {
+				return errors.New("configuration changed after host preparation")
+			}
+			return checkConfiguration(explicit)
+		}
 		return errors.New("previous Connector generation needs cleanup before preparation")
 	}
 	if err != nil && !errors.Is(err, os.ErrNotExist) {

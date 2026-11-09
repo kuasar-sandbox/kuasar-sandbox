@@ -199,8 +199,11 @@ Connector from the instance's main namespace. Stopping only Conductor does not
 stop every independent runner unit; restarting a component retains its native
 recovery behavior.
 
-The host retains this instance's namespace pins, bpffs access, applied image/
-configuration identity and recovery record. After a hard exit, the host hook
+Before starting PID 1, a short-lived native helper creates namespace pins in
+the host's instance directory. The system container receives them with `rslave`
+propagation, so its final unmount sweep cannot remove the host's pins. The host
+retains these pins, bpffs access, applied image/configuration identity and the
+recovery record. On normal shutdown and after a hard exit, the host hook
 runs after the old container and Quadlet-generated removal have finished. It
 uses the old image/configuration to recover the original transit device. A
 failure retains the recovery inputs and blocks replacement. Use status and the

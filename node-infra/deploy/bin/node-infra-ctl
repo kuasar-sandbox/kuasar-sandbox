@@ -158,7 +158,7 @@ def bindings(text, name):
         require(target not in mounts, 'duplicate volume destination: ' + target)
         mounts[target] = (source, options)
     required = {'/run/node-infra/recovery': (str(STATE / name / 'recovery'), 'rw'),
-                '/run/netns': (str(RUN / name / 'netns'), 'rw,rshared'),
+                '/run/netns': (str(RUN / name / 'netns'), 'rw,rslave'),
                 '/sys/fs/bpf': (str(RUN / name / 'bpf'), 'rw')}
     for target, value in required.items():
         require(mounts.get(target) == value, 'retain the instance-private recovery volume: ' + target)
@@ -436,6 +436,23 @@ class Instance:
         bpf.mkdir(mode=0o700)
         run('mount', '-t', 'bpf', 'node-infra-' + self.name, bpf)
         self.remember_mount(applied, bpf, 'bpf')
+        # Create native namespaces in a short-lived helper before starting PID 1.
+        # Only this helper and recovery share mounts back to the host. The main
+        # container receives slave mounts, so systemd's final unmount sweep cannot
+        # destroy the host's handles (and devices held in those namespaces).
+        volumes = []
+        for value in selected['volumes']:
+            if value.split(':')[1] == '/run/netns':
+                value = str(pins) + ':/run/netns:rw,rshared'
+            volumes += ['--volume', value]
+        run('podman', 'run', '--rm', '--pull=never', '--privileged', '--cgroupns=private',
+            '--network=ns:' + str(primary), '--entrypoint=' + RUNTIME,
+            *volumes, installed['image'], 'prepare')
+        record = json_file(self.connector)
+        for namespace in record['namespaces']:
+            pin = pins / namespace['name']
+            require(mount_at(pin).get('type') == 'nsfs' and pin.stat().st_ino == namespace['inode'],
+                    'native namespace did not propagate to the host: ' + namespace['name'])
         applied['state'] = 'prepared'
         save(self.applied, applied)
 

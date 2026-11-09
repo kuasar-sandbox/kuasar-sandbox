@@ -56,6 +56,8 @@ class DeploymentTests(unittest.TestCase):
                 ctl.bindings(self.rendered() + '\n[Container]\nVolume=' + volume, 'test')
         with self.assertRaises(ValueError):
             ctl.bindings(self.rendered().replace(str(self.node.recovery), '/var/lib/foreign'), 'test')
+        with self.assertRaisesRegex(ValueError, 'recovery volume'):
+            ctl.bindings(self.rendered().replace('rw,rslave', 'rw,rshared'), 'test')
 
     def test_names_and_paths_cannot_escape_owner(self):
         for name in ('../x', '', 'x.service', '-x', 'x y', 'x' * 41):

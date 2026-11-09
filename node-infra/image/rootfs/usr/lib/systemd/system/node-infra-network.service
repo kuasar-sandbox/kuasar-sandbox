@@ -11,7 +11,8 @@ PartOf=node-infra.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/libexec/node-infra/service prepare
-ExecStop=/usr/libexec/node-infra/service cleanup
+# Host recovery tears down Connector after every container consumer has ended.
+# Container shutdown must not unlink the host-owned namespace mount points.
 TimeoutStartSec=60
 TimeoutStopSec=60
 

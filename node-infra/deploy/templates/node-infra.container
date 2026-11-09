@@ -19,7 +19,7 @@ Volume=@CONFIG_ROOT@/connector-vswitch/conf.d:/etc/connector-vswitch/conf.d:ro
 Volume=@CONFIG_ROOT@/manifest.yaml:/etc/node-infra/manifest.yaml:ro
 Volume=@DATA_ROOT@:/var/lib/node-infra:rw
 Volume=/var/lib/node-infra/instances/@NAME@/recovery:/run/node-infra/recovery:rw
-Volume=@RUN_ROOT@/netns:/run/netns:rw,rshared
+Volume=@RUN_ROOT@/netns:/run/netns:rw,rslave
 Volume=@RUN_ROOT@/bpf:/sys/fs/bpf:rw
 # The image uses STOPSIGNAL SIGRTMIN+3 for the inner systemd PID 1.
 
