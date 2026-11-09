@@ -546,6 +546,30 @@ def config_case(fixture):
     marker.write_bytes(saved)
 
 
+def interrupt_hook_after_syscall(node, operation):
+    """Execute the real mount syscall, then kill only this instance's host hook."""
+    directory = node.fixture.work / (node.name + '-' + operation)
+    directory.mkdir(mode=0o700)
+    marker = directory / 'armed'
+    marker.touch()
+    wrapper = directory / operation
+    wrapper.write_text('#!/usr/bin/python3\n'
+                       'import os,signal,subprocess,sys\nfrom pathlib import Path\n'
+                       'parent=os.getppid()\n'
+                       f'subprocess.run([{str(Path("/usr/bin") / operation)!r},*sys.argv[1:]],check=True)\n'
+                       f'marker=Path({str(marker)!r})\n'
+                       f'if sys.argv[-1]=={str(node.run / "bpf")!r} and marker.exists():\n'
+                       ' command=Path(f"/proc/{parent}/cmdline").read_bytes()\n'
+                       f' assert parent>1 and b"node-infra-ctl" in command and {node.name.encode()!r} in command\n'
+                       ' marker.unlink()\n os.kill(parent,signal.SIGKILL)\n')
+    wrapper.chmod(0o755)
+    dropin = node.dropin / '99-test-fault.conf'
+    dropin.write_text('[Service]\nEnvironment=PATH=' + str(directory) +
+                      ':/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n')
+    command('systemctl', 'daemon-reload')
+    return marker, dropin
+
+
 def lifecycle_case(fixture):
     first, second = Node(fixture, 0), Node(fixture, 1)
     first.start()
@@ -600,6 +624,25 @@ def lifecycle_case(fixture):
     command(*network, 'link', 'delete', 'net1')
     command(fixture.ctl, 'recover', '--name', first.name)
     first.assert_returned()
+    marker, dropin = interrupt_hook_after_syscall(first, 'mount')
+    command('systemctl', 'start', first.service, check=False)
+    require(not marker.exists(), 'mount interruption did not execute the real syscall')
+    wait_for('startup journal recovery after SIGKILL', first._stopped)
+    first.assert_returned()
+    dropin.unlink()
+    command('systemctl', 'daemon-reload')
+    first.start()
+    first.create()
+    marker, dropin = interrupt_hook_after_syscall(first, 'umount')
+    command('systemctl', 'stop', first.service, check=False, timeout=180)
+    require(not marker.exists(), 'unmount interruption did not execute the real syscall')
+    require(json.loads((first.data / 'applied.json').read_text())['state'] == 'releasing',
+            'unmount did not persist its retryable phase')
+    dropin.unlink()
+    command('systemctl', 'daemon-reload')
+    command(fixture.ctl, 'recover', '--name', first.name)
+    first.assert_returned()
+    require(second.state(guest_b)['token'] == before['token'], 'hook interruption disrupted the second instance')
     second.stop()
 
 
