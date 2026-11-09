@@ -143,6 +143,11 @@ Configure/BindRuntime，需要验证真实自定义应用启动与请求。
 标记的宿主绑定值。保留交付的权限、网络恢复挂载和生命周期钩子。实例额度配置在
 `[Service]`；检查前准备引用的原生配置文件和目录。
 
+将 `Image` 设为 `sha256:<64位十六进制配置ID>` 或带摘要的 registry 引用。
+即使 `podman image inspect` 返回的配置 ID 没有前缀，也要补上 `sha256:`。
+使用预置配置的客户镜像时，移除对应配置的 `Volume` 条目，或只挂载具体站点文件：
+挂载整个 `conf.d` 目录会遮蔽镜像内的内容。保留实例的数据与恢复挂载。
+
 ```sh
 sudo ./bin/node-infra-ctl install --name node-a --unit ./node-infra-node-a.container
 sudo ./bin/node-infra-ctl check --name node-a --json

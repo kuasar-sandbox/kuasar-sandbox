@@ -170,6 +170,13 @@ delivered permissions, namespace recovery mounts and lifecycle hooks. Set
 instance limits under `[Service]`; prepare the referenced native configuration
 files and directories before checking them.
 
+Set `Image` to `sha256:<64-hex-configuration-ID>` or a digest-qualified registry
+reference. Include the `sha256:` prefix even when `podman image inspect` returns
+the configuration ID without it. For a customer image with baked configuration,
+remove the corresponding configuration `Volume` entries or mount only the
+individual site files: mounting a whole `conf.d` directory hides its image
+contents. Retain the instance's data and recovery mounts.
+
 ```sh
 sudo ./bin/node-infra-ctl install --name node-a --unit ./node-infra-node-a.container
 sudo ./bin/node-infra-ctl check --name node-a --json

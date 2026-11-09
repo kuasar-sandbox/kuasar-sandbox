@@ -34,6 +34,10 @@ podman build --build-arg BASE_IMAGE=ghcr.io/kuasar-sandbox/node-infra@sha256:BAS
   --tag localhost/node-infra-custom:r42 --file extensions/Containerfile extensions
 ```
 
+在 Quadlet 模板中移除会遮蔽 COPY 文件的配置目录挂载，或改为具体站点文件的单文件
+挂载；保留数据与恢复挂载。派生镜像使用带 `sha256:` 前缀的完整配置 ID，构建时使用
+的可变 tag 不能作为安装身份。
+
 服务仍启动官方 `node-ctl conductor serve` 或 `node-ctl proxy serve`，由原生
 bootstrap 执行所选应用。保留 `/opt/node-infra/bin/` 中的官方程序与相邻 helper。
 示例安装 root 持有的可执行文件，并通过具体组件服务上的 `EnvironmentFile` 设置环境。

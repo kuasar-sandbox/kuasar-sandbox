@@ -40,6 +40,11 @@ podman build --build-arg BASE_IMAGE=ghcr.io/kuasar-sandbox/node-infra@sha256:BAS
   --tag localhost/node-infra-custom:r42 --file extensions/Containerfile extensions
 ```
 
+In the Quadlet template, remove configuration directory mounts that would hide
+the copied files, or replace them with individual site-file mounts. Keep the
+data and recovery mounts. Use the full `sha256:` configuration ID for the
+derived image; its mutable build tag is not an installation identity.
+
 The service still starts official `node-ctl conductor serve` or `node-ctl proxy
 serve`; the native bootstrap executes the selected application. Keep official
 programs and sibling helpers in `/opt/node-infra/bin/`. The sample installs
