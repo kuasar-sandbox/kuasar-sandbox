@@ -27,7 +27,7 @@ def execute(plan, arch, workspace, result_path):
             spec = importlib.util.spec_from_file_location("prepared_inputs", workspace / "test/e2e/lib/workspace.py")
             inputs = importlib.util.module_from_spec(spec)
             spec.loader.exec_module(inputs)
-            inputs.load_images(workspace, provenance, environment)
+            inputs.load_images(workspace, provenance, environment, cases=['sandbox.working-set.sh'])
             environment.update(inputs.case_environment(workspace, provenance, "sandbox.working-set.sh"))
             revisions = state / "working-set-revisions.tsv"
             with revisions.open("w", newline="") as output:
