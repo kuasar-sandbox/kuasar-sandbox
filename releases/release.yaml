@@ -7,7 +7,7 @@ components:
   sandboxer: v0.1.14
   orchestrator: v0.1.13
   runtime: runtime-v0.1.13
-  vmlinux: vmlinux-v0.1.7
+  vmlinux: vmlinux-v0.1.6
 notes:
   mode: auto
   body: |
@@ -43,9 +43,9 @@ notes:
     | sandboxer | `v0.1.14` |
     | orchestrator | `v0.1.13` |
     | runtime | `runtime-v0.1.13` |
-    | vmlinux | `vmlinux-v0.1.7` |
+    | vmlinux | `vmlinux-v0.1.6` |
 
-    Runtime and VMLinux are independently versioned units from the guest-runtime repository. The selected kernel source updates delivery documentation without new kernel product inputs relative to `vmlinux-v0.1.6`; the Runtime also incorporates the selected Accelerator and sandbox-init inputs.
+    Runtime and VMLinux are independently versioned units from the guest-runtime repository. This release reuses `vmlinux-v0.1.6`: the kernel configuration, patches and production build inputs are unchanged. Documentation-only changes do not require a new kernel release. The Runtime incorporates the updated Accelerator and sandbox-init inputs.
 
     ## Downloads and deployment
 
