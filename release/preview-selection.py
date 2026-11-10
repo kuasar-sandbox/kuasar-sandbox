@@ -267,7 +267,7 @@ def resolve(
     usable_tags: Iterable[str],
     date: str,
 ) -> Resolution:
-    parse_tag(unit, configured)
+    configured_tag = parse_tag(unit, configured)
     usable = set(usable_tags)
     commits = first_parent_commits(root, source_ref)
     positions = {commit: index for index, commit in enumerate(commits)}
@@ -313,6 +313,14 @@ def resolve(
                 # the Preview version progression for any real input changes.
                 winner = configured_parsed
                 winner_commit = configured_commit
+
+    if (source_ref == "main" and unit != "vmlinux" and configured not in usable
+            and configured_tag.is_preview
+            and configured_tag.version_line > winner.version_line):
+        # A reviewed, unpublished Preview can explicitly open a newer version
+        # line. Keep the real published winner and the current scan's suffix.
+        selected = preview_candidate(unit, configured, date)
+        return Resolution(source_ref, head, winner.raw, winner_commit, "publish", selected)
 
     if winner_commit == head or not unit_inputs_changed(root, winner_commit, head, unit):
         return Resolution(source_ref, head, winner.raw, winner_commit, "reuse", winner.raw)

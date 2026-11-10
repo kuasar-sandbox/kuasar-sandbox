@@ -1,54 +1,43 @@
 version: release-v0.2.0
 delivery: node-infra-v1
 previous_version: release-v0.1.13
-preview_version: preview.20261110
+preview_version: preview.20261110.1
+previous_preview_version: preview.20261110
 components:
-  accelerator: v0.1.12
-  connector: v0.1.8
-  sandboxer: v0.1.14
-  orchestrator: v0.1.13
-  runtime: runtime-v0.1.13
+  accelerator: v0.2.0-preview.20261110.1
+  connector: v0.2.0-preview.20261110.1
+  sandboxer: v0.2.0-preview.20261110.1
+  orchestrator: v0.2.0-preview.20261110.1
+  runtime: runtime-v0.2.0-preview.20261110.1
   vmlinux: vmlinux-v0.1.6
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261110
+    # Kuasar Sandbox release-v0.2.0-preview.20261110.1
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
-    Previous aggregate selection: `release-v0.1.13`.
+    Previous aggregate selection: [`release-v0.2.0-preview.20261110`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.2.0-preview.20261110). The previous Stable baseline remains [`release-v0.1.13`](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.13).
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110.1/releases/daily-preview.yaml).
 
-    ## Preview line initialization
+    ## Component version line transition
 
-    This first Preview opens the v0.2.0 development line from [release-v0.1.13](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.1.13). All six selected component versions are unchanged from that Stable baseline. This Preview adds the node-infra platform changes below while retaining the `node-infra-v1` asset layout. Changes delivered in v0.1.13 remain documented in that release.
+    This Preview moves `accelerator`, `connector`, `sandboxer`, `orchestrator` and `runtime` onto the aggregate's v0.2.0 development line. The four ordinary component tags use `v0.2.0-preview.20261110.1`; Runtime uses `runtime-v0.2.0-preview.20261110.1`. The next Stable cut for these five units is intended to use `v0.2.0` and `runtime-v0.2.0`, respectively.
 
-    ## Platform updates
+    The dependency selections move together: Sandboxer uses this Preview's Accelerator and Connector; Orchestrator uses its Accelerator, Connector and Sandboxer; Runtime uses its Accelerator and the published Sandboxer payload. The exact versions appear below.
 
-    ### Node-infra host networking and optional transit
-
-    [PR #379](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/379) ([commit 3276a3852d6e](https://github.com/kuasar-sandbox/kuasar-sandbox/commit/3276a3852d6e172b6617e92b152149e9622091fc)) changes the platform image, deployment tool and templates:
-
-    - The delivered Quadlet now defaults to `Network=host`, and the default Connector configuration omits transit. The default deployment no longer requires a pre-created primary namespace or an ingress interface with a fixed name. Explicit `Network=ns:/absolute/path` remains available; either network mode can be used with or without a transit device.
-    - Deployment verifies the selected network namespace and management peer ownership, and preflight rejects conflicting management interfaces, addresses/routes and native TCP listeners. Recovery uses the retained namespace and recorded image/configuration, including deployments without transit and existing recovery records.
-    - English and Chinese deployment guides and examples now cover the default host setup and the optional namespace/transit choices.
-
-    With transit omitted, Proxy ingress, guest Exec and MMDS/management communication remain available; ordinary guest internet egress is not supplied. The deployment does not install NAT or a GENEVE gateway. See the versioned [node-infra guide](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110/docs/node-infra.md) for prerequisites and configuration.
-
-    ### Installation guide compatibility
-
-    The installation guide recognizes the complete 18-asset `node-infra-v1` layout and retains fixed GitHub asset-ID downloads with native size and SHA-256 verification. Node-infra OCI images and the deployment archive remain separate from native product extraction. See the fixed-revision [English](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/aa623ff2da9dbb37225d3316e665b00ba015c04a/docs/installation.md) and [Chinese](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/aa623ff2da9dbb37225d3316e665b00ba015c04a/docs/installation_zh.md) guides. The [supplementary x86_64/aarch64 download check](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/42784963708) validates these corrected commands against the existing v0.1.13 assets. This guide correction leaves the six selected component versions unchanged.
+    The kernel selection remains `vmlinux-v0.1.6`. The aggregate retains the `node-infra-v1` delivery layout. Platform changes introduced by the preceding Preview remain documented in that release; use this Preview's versioned guides below for installation and deployment.
 
     ## Component versions
 
     | Release unit | Version |
     |---|---|
-    | `accelerator` | `v0.1.12` |
-    | `connector` | `v0.1.8` |
-    | `sandboxer` | `v0.1.14` |
-    | `orchestrator` | `v0.1.13` |
-    | `runtime` | `runtime-v0.1.13` |
+    | `accelerator` | `v0.2.0-preview.20261110.1` |
+    | `connector` | `v0.2.0-preview.20261110.1` |
+    | `sandboxer` | `v0.2.0-preview.20261110.1` |
+    | `orchestrator` | `v0.2.0-preview.20261110.1` |
+    | `runtime` | `runtime-v0.2.0-preview.20261110.1` |
     | `vmlinux` | `vmlinux-v0.1.6` |
 
     Six release units from five independently versioned repositories; `guest-runtime` supplies both `runtime` and `vmlinux`.
@@ -57,36 +46,36 @@ notes:
 
     ### accelerator
 
-    Selected version unchanged: `v0.1.12`.
+    Selected version changes from `v0.1.12` to `v0.2.0-preview.20261110.1`.
 
     ### connector
 
-    Selected version unchanged: `v0.1.8`.
+    Selected version changes from `v0.1.8` to `v0.2.0-preview.20261110.1`.
 
     ### sandboxer
 
-    Selected version unchanged: `v0.1.14`.
+    Selected version changes from `v0.1.14` to `v0.2.0-preview.20261110.1`. Build dependencies: Accelerator `v0.2.0-preview.20261110.1` and Connector `v0.2.0-preview.20261110.1`.
 
     ### orchestrator
 
-    Selected version unchanged: `v0.1.13`.
+    Selected version changes from `v0.1.13` to `v0.2.0-preview.20261110.1`. Build dependencies: Accelerator `v0.2.0-preview.20261110.1`, Connector `v0.2.0-preview.20261110.1` and Sandboxer `v0.2.0-preview.20261110.1`.
 
     ### runtime
 
-    Selected version unchanged: `runtime-v0.1.13`.
+    Selected version changes from `runtime-v0.1.13` to `runtime-v0.2.0-preview.20261110.1`. Runtime uses Accelerator `v0.2.0-preview.20261110.1` for `flatten-ctl` and embeds `sandbox-init` from the published Sandboxer `v0.2.0-preview.20261110.1` release.
 
     ### vmlinux
 
-    Selected version unchanged: `vmlinux-v0.1.6`.
+    Selected version unchanged: `vmlinux-v0.1.6`. Documentation-only changes do not require a new kernel release.
 
     ## Download and use
 
-    - Choose native Linux x86_64 or aarch64 assets. Follow the download guide to verify GitHub asset sizes and SHA-256 digests before use.
+    - Choose native Linux x86_64 or aarch64 assets. Follow the [English](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110.1/docs/installation.md) or [Chinese](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110.1/docs/installation_zh.md) download guide to verify GitHub asset sizes and SHA-256 digests before use.
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
-    - Node-infra OCI images and the shared deployment archive follow the versioned [node-infra guide](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110/docs/node-infra.md).
+    - Node-infra OCI images and the shared deployment archive follow the versioned [node-infra guide](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110.1/docs/node-infra.md).
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261110.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
