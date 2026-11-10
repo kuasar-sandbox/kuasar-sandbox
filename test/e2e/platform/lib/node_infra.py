@@ -627,6 +627,14 @@ def network_snapshot():
     return result
 
 
+def network_unchanged(before):
+    after = network_snapshot()
+    changes = {key: {'before': value, 'after': after.get(key)}
+               for key, value in before.items() if after.get(key) != value}
+    require(after == before, 'host network changed: ' + json.dumps(changes, sort_keys=True))
+    return True
+
+
 def host_case(fixture):
     with metadata_sentinel(fixture), socket.socket() as sentinel:
         sentinel.bind(('127.0.0.1', 0))
@@ -658,14 +666,19 @@ def metadata_sentinel(fixture):
             listener.listen()
             before = network_snapshot()
             write_json(fixture.output / 'metadata-before.json', before)
-            yield
             try:
+                yield
                 # A bridge's carrier/linkdown flags settle after the engine
                 # removes its last veth. Poll the full preserved state.
-                wait_for('original host network state', lambda: network_snapshot() == before, timeout=30)
+                wait_for('original host network state', lambda: network_unchanged(before), timeout=30)
             finally:
                 after = network_snapshot()
                 write_json(fixture.output / 'metadata-after.json', after)
+                changes = {key: {'before': value, 'after': after.get(key)}
+                           for key, value in before.items() if after.get(key) != value}
+                if changes:
+                    print('metadata fixture network difference: ' + json.dumps(changes, sort_keys=True),
+                          file=sys.stderr, flush=True)
             require(after == before, 'host metadata resources changed')
             with socket.create_connection(listener.getsockname(), timeout=2):
                 connection, _ = listener.accept()

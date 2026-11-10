@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import time
 
-from node_infra import Node, Fixture, command, require, wait_for, write_json, network_snapshot, metadata_sentinel
+from node_infra import Node, Fixture, command, require, wait_for, write_json, network_snapshot, network_unchanged, metadata_sentinel
 from node_infra_egress import ExternalEgress
 
 RUNTIME = '/usr/libexec/node-infra/node-infra-runtime'
@@ -370,6 +370,29 @@ def copy_case(fixture):
 
 def run():
     fixture = Fixture()
+    # A cold Docker bridge acquires kernel IPv6 routes and native firewall
+    # tables on its first ordinary endpoint. Initialize that engine-owned
+    # state without running node-infra before taking the preservation baseline.
+    cold = network_snapshot()
+    network = json.loads(command('docker', 'network', 'inspect', 'bridge').stdout)[0]
+    bridge = network['Options'].get('com.docker.network.bridge.name', 'docker0')
+    original = next(link for link in cold['links'] if link['ifname'] == bridge)
+    command('docker', 'run', '--rm', '--pull=never', '--network=bridge',
+            '--entrypoint=/bin/true', fixture.image)
+
+    def bridge_settled():
+        link = json.loads(command('ip', '-j', 'address', 'show', bridge).stdout)[0]
+        require(link['ifindex'] == original['ifindex'], 'Docker replaced its existing bridge')
+        routes = json.loads(command('ip', '-j', '-4', 'route', 'show', 'table', 'all').stdout)
+        return (link['flags'] == original['flags'] and
+                not any(address.get('tentative') for address in link.get('addr_info', [])) and
+                [route for route in routes if route.get('dev') == bridge] ==
+                [route for route in cold['routes'] if route.get('dev') == bridge])
+
+    wait_for('ordinary Docker endpoint removal and bridge address readiness', bridge_settled)
+    write_json(fixture.output / 'docker-network-initialization.json',
+               {'image': fixture.image, 'entrypoint': '/bin/true', 'privileged': False,
+                'before': cold, 'after': network_snapshot()})
     with metadata_sentinel(fixture):
         run_cases(fixture)
 
@@ -438,7 +461,7 @@ def run_cases(fixture):
             retained.create()
             retained.stop(hard=hard)
         retained.remove()
-        wait_for('Docker lifecycle preserved host network', lambda: network_snapshot() == before, timeout=30)
+        wait_for('Docker lifecycle preserved host network', lambda: network_unchanged(before), timeout=30)
         write_json(fixture.output / 'docker-result.json', {'host': 'passed', 'bridge': 'passed', 'three_instances': 'passed'})
     finally:
         for node in fixture.nodes:

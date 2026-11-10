@@ -468,7 +468,7 @@ class Instance:
         network = 'host' if selected['network'] == 'host' else 'ns:' + str(self.run / 'primary')
         rendered = text + f'\n[Container]\nImage={image}\nNetwork=\nNetwork={network}\nLabel={LABEL}={owner}\n'
         tool = pinned / 'bin/node-infra-ctl'
-        hooks = (f'[Service]\nExecStartPre={tool} prepare --name {self.name}\n'
+        hooks = (f'[Service]\nKillSignal=SIGRTMIN+3\nExecStartPre={tool} prepare --name {self.name}\n'
                  f'ExecStartPost={tool} started --name {self.name}\n'
                  f'ExecStopPost={tool} recover --name {self.name}\n')
         data = {'schema': 1, 'name': self.name, 'owner': owner, 'version': release['version'],

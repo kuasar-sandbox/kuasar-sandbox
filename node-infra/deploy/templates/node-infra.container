@@ -27,6 +27,8 @@ Volume=@RUN_ROOT@/bpf:/sys/fs/bpf:rw
 TimeoutStartSec=240
 TimeoutStopSec=600
 KillMode=control-group
+# Conmon failure reaches systemd's kill phase without a normal container stop.
+KillSignal=SIGRTMIN+3
 Restart=no
 CPUQuota=400%
 MemoryMax=6G
