@@ -683,9 +683,14 @@ class Instance:
         if running:
             pid = container['State']['Pid']
             primary = self.run / 'primary'
-            identity = (applied.get('boot_id') == boot_id() and primary.exists() and
-                        primary.stat().st_ino == applied.get('primary_inode') and
-                        Path(f'/proc/{pid}/ns/net').stat().st_ino == applied.get('primary_inode'))
+            try:
+                identity = (applied.get('boot_id') == boot_id() and
+                            primary.stat().st_ino == applied.get('primary_inode') and
+                            Path(f'/proc/{pid}/ns/net').stat().st_ino == applied.get('primary_inode'))
+            except FileNotFoundError:
+                # PID1 or its retained handle can disappear after inspect while
+                # a stop/recovery hook runs. Keep the status shape, fail readiness.
+                identity = False
             checks.append({'name': 'primary-namespace', 'status': 'pass' if identity else 'fail',
                            'detail': 'container and retained primary namespace identity'})
             for service in ('node-conductor', 'node-proxy', 'connector-vswitch'):

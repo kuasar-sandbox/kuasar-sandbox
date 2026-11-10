@@ -97,6 +97,24 @@ class DeploymentTests(unittest.TestCase):
                 with self.subTest(network=network, options=options), self.assertRaises(ValueError):
                     self.check_fixture(network, True, **options)
 
+    def test_status_keeps_shape_when_pid_namespace_disappears(self):
+        primary = self.node.run / 'primary'
+        primary.parent.mkdir(parents=True)
+        primary.touch()
+        ctl.save(self.node.applied, {'state': 'running', 'boot_id': ctl.boot_id(),
+                                    'primary_inode': primary.stat().st_ino})
+        # /proc/0 cannot exist: model inspect racing with the container's exit.
+        container = {'State': {'Running': True, 'Pid': 0}, 'Image': 'image'}
+        with patch.object(self.node, 'installed', return_value={'image': 'image'}), \
+             patch.object(self.node, 'owned_container', return_value=container), \
+             patch.object(self.node, 'service_state', return_value='deactivating'), \
+             patch.object(ctl, 'run', return_value=types.SimpleNamespace(returncode=1, stdout='', stderr='exited')):
+            result = self.node.status()
+        self.assertFalse(result['ready'])
+        self.assertTrue(result['container']['running'])
+        self.assertIn('pending', result['recovery'])
+        self.assertEqual(result['checks'][0]['status'], 'fail')
+
     def test_recover_optional_transit_and_legacy_records(self):
         for network in ('host', 'ns:/run/netns/custom', None):
             for transit in (None, {'ifname': 'uplink', 'address': '02:00:00:00:00:01'}):

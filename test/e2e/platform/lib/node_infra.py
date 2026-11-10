@@ -392,6 +392,9 @@ class Node:
 
     def _stopped(self):
         status = self.status()
+        if 'error' in status:
+            write_json(self.fixture.output / self.name / f'status-error-{time.time_ns()}.json', status)
+            raise RuntimeError('status during recovery: ' + json.dumps(status))
         stopped = (not status['container']['running'] and not status['recovery']['pending'] and
                    status['service']['active'] in ('inactive', 'failed'))
         if not stopped:
