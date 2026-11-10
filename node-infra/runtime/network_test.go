@@ -2,6 +2,7 @@
 package main
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -10,6 +11,25 @@ import (
 
 	"github.com/kuasar-sandbox/connector/pkg/vswitch"
 )
+
+func TestCustomConfigureListenerSelection(t *testing.T) {
+	for _, tt := range []struct {
+		conductor, proxy string
+		want             []string
+	}{
+		{"", "", []string{"api:1", "conductor-metrics:2", "data:3", "proxy-metrics:4", "mmds:5"}},
+		{"/custom/conductor", "", []string{"data:3", "proxy-metrics:4"}},
+		{"", "/custom/proxy", []string{"api:1", "conductor-metrics:2"}},
+		{"/custom/conductor", "/custom/proxy", nil},
+	} {
+		conductor := fmt.Sprintf("paths: {conductor_executable: %q}\napi: {listen: 'api:1'}\nproxy: {metrics_listen: 'conductor-metrics:2'}\nmmds: {enabled: true, listen: 'mmds:5'}\n", tt.conductor)
+		proxy := fmt.Sprintf("paths: {proxy_executable: %q}\ndata_listen: 'data:3'\nmetrics_listen: 'proxy-metrics:4'\n", tt.proxy)
+		got, err := listenerAddresses([]byte(conductor), []byte(proxy))
+		if err != nil || !reflect.DeepEqual(got, tt.want) {
+			t.Fatalf("custom conductor=%q proxy=%q: %v, %v; want %v", tt.conductor, tt.proxy, got, err, tt.want)
+		}
+	}
+}
 
 func TestOptionalTransitNativeConfig(t *testing.T) {
 	for _, value := range []string{"", "transit_dev: \"\"\n", "transit_dev: null\n", "transit_dev: uplink0\n"} {

@@ -198,7 +198,9 @@ class Node:
                 target.chmod(0o755)
             conductor['paths'] = {'conductor_executable': '/opt/node-infra/extensions/xconductor'}
             write_json(self.config / 'node-proxy/conf.d/50-platform.yaml',
-                       {'paths': {'proxy_executable': '/opt/node-infra/extensions/xproxy'}})
+                       {'paths': {'proxy_executable': '/opt/node-infra/extensions/xproxy'},
+                        # Configure moves this off Conductor's occupied port.
+                        'data_listen': '0.0.0.0:3000'})
             private = self.config / 'extensions/r42'
             private.mkdir(parents=True)
             (private / 'marker').write_text(self.name + '-private-r42\n')

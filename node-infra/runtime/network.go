@@ -99,7 +99,26 @@ func preflight(r *record) error {
 // Probe ordinary native TCP listeners, using the native CLI's normalized output.
 // SDK Configure hooks and inherited fd expressions remain native startup checks.
 func checkListeners() error {
+	outputs := map[string][]byte{}
+	for _, role := range []string{"conductor", "proxy"} {
+		output, err := exec.Command("/usr/libexec/node-infra/service", "config", role).Output()
+		if err != nil {
+			return fmt.Errorf("native %s configuration: %w", role, err)
+		}
+		outputs[role] = output
+	}
+	addresses, err := listenerAddresses(outputs["conductor"], outputs["proxy"])
+	if err != nil {
+		return err
+	}
+	return probeListeners(addresses)
+}
+
+func listenerAddresses(conductorConfig, proxyConfig []byte) ([]string, error) {
 	var conductor struct {
+		Paths struct {
+			Executable string `yaml:"conductor_executable"`
+		} `yaml:"paths"`
 		API struct {
 			Listen string `yaml:"listen"`
 		} `yaml:"api"`
@@ -112,24 +131,33 @@ func checkListeners() error {
 		} `yaml:"proxy"`
 	}
 	var proxy struct {
+		Paths struct {
+			Executable string `yaml:"proxy_executable"`
+		} `yaml:"paths"`
 		DataListen    string `yaml:"data_listen"`
 		MetricsListen string `yaml:"metrics_listen"`
 		ProxyNetNS    string `yaml:"proxy_netns"`
 	}
-	for role, target := range map[string]any{"conductor": &conductor, "proxy": &proxy} {
-		output, err := exec.Command("/usr/libexec/node-infra/service", "config", role).Output()
-		if err != nil {
-			return fmt.Errorf("native %s configuration: %w", role, err)
-		}
-		if err := yaml.Unmarshal(output, target); err != nil {
-			return err
-		}
+	if err := yaml.Unmarshal(conductorConfig, &conductor); err != nil {
+		return nil, err
 	}
-	addresses := []string{conductor.API.Listen, conductor.Proxy.MetricsListen, proxy.DataListen, proxy.MetricsListen}
-	if conductor.MMDS.Enabled && proxy.ProxyNetNS == "" {
+	if err := yaml.Unmarshal(proxyConfig, &proxy); err != nil {
+		return nil, err
+	}
+	// A custom SDK Configure hook can replace these addresses. As in the
+	// native config CLI, defer that service's final validation to startup.
+	var addresses []string
+	if conductor.Paths.Executable == "" {
+		addresses = append(addresses, conductor.API.Listen, conductor.Proxy.MetricsListen)
+	}
+	if proxy.Paths.Executable == "" {
+		addresses = append(addresses, proxy.DataListen, proxy.MetricsListen)
+	}
+	if conductor.Paths.Executable == "" && proxy.Paths.Executable == "" &&
+		conductor.MMDS.Enabled && proxy.ProxyNetNS == "" {
 		addresses = append(addresses, conductor.MMDS.Listen)
 	}
-	return probeListeners(addresses)
+	return addresses, nil
 }
 
 func probeListeners(addresses []string) error {
