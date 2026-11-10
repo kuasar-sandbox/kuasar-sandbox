@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the published package's native download/install guide, then compare GHCR."""
+"""Check published bytes with their bundled guide or an explicit reviewed guide."""
 import argparse
 import json
 import os
@@ -13,6 +13,7 @@ import tarfile
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = 'kuasar-sandbox/kuasar-sandbox'
 VERSION = r'release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?'
+GUIDE_SOURCES = ('bundled', 'current-checkout')
 
 
 def download_asset(asset, destination, *, env=None):
@@ -94,6 +95,14 @@ def platform_asset(release, version):
     return asset
 
 
+def guide_commands(text):
+    fence = chr(96) * 3
+    blocks = re.findall(r'(?m)^' + fence + r'bash\n(.*?)^' + fence + r'\s*$', text, re.S)
+    if len(blocks) != 3 or any(not block.strip() for block in blocks):
+        raise ValueError('expected download, installation and image-import commands')
+    return '\n'.join(blocks)
+
+
 def guide_script(archive, language):
     suffix = '_zh' if language == 'zh' else ''
     paths = {prefix + f'guide/{name}{suffix}.md'
@@ -106,20 +115,66 @@ def guide_script(archive, language):
         if not member.isfile() or member.mode & 0o6002 or not 0 < member.size <= 1024 * 1024:
             raise ValueError('unsafe bundled download guide')
         text = stream.extractfile(member).read().decode('utf-8')
-    fence = chr(96) * 3
-    blocks = re.findall(r'(?m)^' + fence + r'bash\n(.*?)^' + fence + r'\s*$', text, re.S)
-    if len(blocks) != 3 or any(not block.strip() for block in blocks):
-        raise ValueError('expected download, installation and image-import commands')
-    return '\n'.join(blocks)
+    return guide_commands(text)
 
 
-def main():
+def validate_guide_source(source, revision):
+    if source not in GUIDE_SOURCES:
+        raise ValueError('unsupported guide source')
+    if source == 'bundled':
+        if revision is not None:
+            raise ValueError('bundled guides do not accept a guide revision')
+    elif not isinstance(revision, str) or not re.fullmatch('[0-9a-f]{40}', revision):
+        raise ValueError('current-checkout requires a full lowercase 40-character guide revision')
+
+
+def checkout_guide_script(checkout, revision, language):
+    validate_guide_source('current-checkout', revision)
+    git = ['git', '-C', str(checkout)]
+    head = subprocess.check_output(git + ['rev-parse', '--verify', 'HEAD^{commit}'], text=True).strip()
+    if head != revision:
+        raise ValueError('guide revision must equal the exact current checkout HEAD')
+    suffix = '_zh' if language == 'zh' else ''
+    relative = f'docs/installation{suffix}.md'
+    status = subprocess.check_output(
+        git + ['status', '--porcelain=v1', '--untracked-files=all', '--', relative], text=True)
+    if status:
+        raise ValueError('guide checkout has staged or worktree changes')
+    committed = subprocess.check_output(git + ['show', f'{revision}:{relative}'])
+    path = checkout / relative
+    if (path.is_symlink() or not path.is_file() or not 0 < len(committed) <= 1024 * 1024
+            or path.read_bytes() != committed):
+        raise ValueError('guide worktree does not match its committed regular file')
+    return guide_commands(committed.decode('utf-8'))
+
+
+def selected_guide_script(archive, language, *, source='bundled', revision=None, checkout=ROOT):
+    validate_guide_source(source, revision)
+    if source == 'bundled':
+        return guide_script(archive, language)
+    return checkout_guide_script(checkout, revision, language)
+
+
+def argument_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--version', required=True)
     parser.add_argument('--root', type=Path, required=True)
+    parser.add_argument('--guide-source', choices=GUIDE_SOURCES, default='bundled',
+                        help='bundled by default; current-checkout explicitly checks a revised online guide')
+    parser.add_argument('--guide-revision',
+                        help='full exact checkout HEAD, required only for current-checkout')
+    return parser
+
+
+def main():
+    parser = argument_parser()
     args = parser.parse_args()
     if not re.fullmatch(VERSION, args.version):
         parser.error('invalid aggregate version')
+    try:
+        validate_guide_source(args.guide_source, args.guide_revision)
+    except ValueError as error:
+        parser.error(str(error))
     arch = platform.machine()
     if arch not in ('x86_64', 'aarch64'):
         parser.error('unsupported native architecture')
@@ -130,10 +185,15 @@ def main():
     asset = platform_asset(release, args.version)
     archive = root / 'bootstrap-platform.tar.gz'
     download_asset(asset, archive)
-    script = guide_script(archive, 'zh' if arch == 'aarch64' else 'en')
-    # Execute the package's unmodified commands anonymously, as documented.
+    script = selected_guide_script(archive, 'zh' if arch == 'aarch64' else 'en',
+                                   source=args.guide_source, revision=args.guide_revision)
+    print('Guide source:', args.guide_source, 'guide revision:', args.guide_revision or 'bundled',
+          'aggregate:', args.version, 'platform digest:', asset['digest'], flush=True)
+    # Execute the explicitly selected guide's unmodified commands anonymously.
+    # The aggregate manifest and every downloaded product still belong to args.version.
     env = {key: value for key, value in os.environ.items() if key not in ('GH_TOKEN', 'GITHUB_TOKEN')}
-    env.update(RELEASE_VERSION=args.version, DOWNLOAD_WORKBENCH='1', BOOTSTRAP_PLATFORM=str(archive))
+    env.update(RELEASE_VERSION=args.version, DOWNLOAD_WORKBENCH='1', BOOTSTRAP_PLATFORM=str(archive),
+               PUBLISHED_GUIDE_SOURCE=args.guide_source)
     script += """
 cmp "$BOOTSTRAP_PLATFORM" "$DOWNLOAD_DIR/platform-$RELEASE_VERSION.tar.gz"
 test "$(wc -l < "$DOWNLOAD_DIR/files.tsv")" -eq 8
@@ -141,7 +201,7 @@ test "$(wc -l < "$DOWNLOAD_DIR/files.tsv")" -eq 8
 docker pull "$IMAGE_TAG"
 test "$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG")" = "$IMAGE"
 docker run --rm --entrypoint /bin/true "$IMAGE"
-printf 'Published guide passed: %s %s, offline/GHCR image %s\n' "$RELEASE_VERSION" "$ARCH" "$IMAGE"
+printf 'Published %s guide passed: %s %s, offline/GHCR image %s\n' "$PUBLISHED_GUIDE_SOURCE" "$RELEASE_VERSION" "$ARCH" "$IMAGE"
 """
     subprocess.run(['bash', '-euo', 'pipefail', '-c', script], cwd=root, env=env, check=True)
     sys.path.insert(0, str(ROOT / 'test/e2e/lib'))
