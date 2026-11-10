@@ -6,6 +6,18 @@
 [部署指南](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/docs/node-infra_zh.md)说明宿主前置条件、安装、运维与恢复。
 使用展开的部署包时，请阅读随包提供的部署指南。完整配置 schema 由组件仓库维护。
 
+## 默认宿主网络与可选 transit
+
+从交付的 `Network=host` 模板开始，省略 transit 字段。按部署指南提供原生组件配置、
+外部存储和持久数据路径；无需主 netns 或入口接口改名。不提供 guest 普通出口时，
+Proxy 与管理通信仍可用。
+
+需要显式隔离时使用 `Network=ns:/run/netns/node-a`，保持 loopback UP，入口接口
+可以使用任意适用名称。独立选择的 `transit/90-transit.yaml` 为可选原生覆盖片段：
+配置实际专用 DOWN 设备、地址和网关，再挂载或 COPY 到
+`/etc/connector-vswitch/conf.d/90-transit.yaml`。不得选择承载宿主业务的接口。
+两种示例使用同一部署工具、恢复挂载与服务配置路径。
+
 ## 多资源池
 
 将 `multi-pool/50-platform.yaml` 挂载到

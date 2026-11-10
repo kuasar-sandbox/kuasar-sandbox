@@ -44,10 +44,11 @@ type transit struct {
 }
 
 type management struct {
-	Namespace string   `json:"namespace"`
-	Device    string   `json:"device"`
-	Loopback  bool     `json:"loopback"`
-	Addresses []string `json:"addresses,omitempty"`
+	Namespace    string   `json:"namespace"`
+	Device       string   `json:"device"`
+	SwitchDevice string   `json:"switch_device,omitempty"`
+	Loopback     bool     `json:"loopback"`
+	Addresses    []string `json:"addresses,omitempty"`
 }
 
 // Record is also the read-only describe output. It is written before namespace
@@ -82,11 +83,18 @@ func run(args []string) error {
 	config := flags.String("config", "", "explicit native Connector configuration list")
 	force := flags.Bool("force", false, "cleanup after the instance and all consumers have ended")
 	timeout := flags.Duration("timeout", 120*time.Second, "readiness timeout")
+	primary := flags.Uint64("primary-netns-inode", 0, "expected host preparation namespace")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+	if *primary != 0 {
+		current, err := inode("/proc/self/ns/net")
+		if err != nil || current != *primary {
+			return errors.New("helper joined another primary namespace")
+		}
 	}
 	if *force && command != "cleanup" {
 		return errors.New("--force is valid only for cleanup")
@@ -97,10 +105,19 @@ func run(args []string) error {
 	if command == "budget" {
 		return budget()
 	}
-	if command == "describe" {
+	if command == "describe" || command == "preflight" {
 		r, err := describe(*config)
 		if err != nil {
 			return err
+		}
+		if command == "preflight" {
+			if err := preflight(r); err != nil {
+				return err
+			}
+			r.MainNetNSInode, err = inode("/proc/self/ns/net")
+			if err != nil {
+				return err
+			}
 		}
 		return json.NewEncoder(os.Stdout).Encode(r)
 	}
@@ -185,7 +202,7 @@ func describe(explicit string) (*record, error) {
 			names[name] = true
 		}
 	}
-	for _, plane := range cfg.MgmtExtracts {
+	for i, plane := range cfg.MgmtExtracts {
 		if plane.NetNS != "" {
 			names[plane.NetNS] = true
 		}
@@ -202,7 +219,7 @@ func describe(explicit string) (*record, error) {
 				}
 			}
 		}
-		m := management{Namespace: plane.NetNS, Device: plane.Dev, Loopback: loopback}
+		m := management{Namespace: plane.NetNS, Device: plane.Dev, SwitchDevice: cfg.MgmtDeviceName(i), Loopback: loopback}
 		for address := range addresses {
 			m.Addresses = append(m.Addresses, address)
 		}
@@ -426,6 +443,9 @@ func prepare(explicit string) error {
 	if err != nil {
 		return err
 	}
+	if err := preflight(r); err != nil {
+		return err
+	}
 	if r.Transit.Name != "" {
 		link, err := netlink.LinkByName(r.Transit.Name)
 		if err != nil {
@@ -493,9 +513,15 @@ func ready(timeout time.Duration) error {
 					}
 				}
 				if healthy && status.PortsAvailable+status.PortsUsed > 0 {
+					if err := validateNamespaces(r); err != nil {
+						return err
+					}
 					for _, m := range r.Management {
 						if !m.Loopback {
 							continue
+						}
+						if err := verifyManagementPeer(r, m); err != nil {
+							return err
 						}
 						// Connector installs the floating return route but does not
 						// assign local service addresses. Without a local VIP here,

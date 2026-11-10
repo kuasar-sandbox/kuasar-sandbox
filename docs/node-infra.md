@@ -48,37 +48,38 @@ uses its native systemd enablement. Cache/Store endpoints come from the
 node-level storage access layer. The deployment tool does not start those
 external services.
 
-## Prepare one instance's host resources
+## Prepare the default host deployment
 
-Prepare an independent namespace, for example `/run/netns/node-infra-node-a`:
+For one instance on a host without a dedicated transit exit, keep the delivered
+`Network=host`. No primary namespace, specially named ingress interface or
+transit device is required. Conductor and Proxy listen on the native configured
+addresses/ports using the host's existing network. Keep loopback UP and provide
+usable routes, DNS, KVM/TUN, cgroup delegation and a private persistent directory.
 
-| Input | State before startup | Use |
-|---|---|---|
-| `lo` | UP | Local communication. |
-| `net0` | Present, UP, ingress address/routes configured | Conductor and Proxy ingress. |
-| `net1` | Present, DOWN | Connector takes it into its internal switch namespace for transit. |
-| Devices and mounts | Accessible to the selected runtime | KVM/TUN, cgroup delegation and component-created network resources. |
-| Persistent directory | Private to this instance | Node database, writable disks and checkpoints. |
+The tool pins the local runner's actual network namespace in the instance's
+private runtime directory; it does not assume that `/proc/1/ns/net` identifies
+that context. Preflight verifies Podman's selected namespace, and startup/status
+verify the main container against the retained handle. Run the tool and rootful
+Podman in the same local host context.
 
-The host can move already allocated interfaces into the namespace and rename
-them to the defaults. The delivery interface uses names and a namespace path;
-it does not depend on whether a device is a VF, veth or another supported link.
-Set the transit address/gateway through native Connector configuration. The
-host owns ingress addressing/routes and restores the main namespace before
-starting the instance after host reboot.
+Internal switch namespaces, TAPs, management veths and bpffs remain automatic.
+For loopback management services, the runtime assigns their configured IPv4 VIPs
+to the owned management peer and enables `route_localnet` on that device. The
+native Connector adds the floating-IP return routes; it does not replace the
+host default route. Preflight refuses existing management interface names,
+overlapping management addresses/routes and occupied native TCP listeners.
+Choose nonconflicting native settings or an isolated primary namespace when
+needed. Custom SDK listener changes and later races are checked by native
+startup and readiness. There is no artificial global single-instance limit.
 
-For native management services targeting loopback, the runtime assigns their
-configured IPv4 VIPs to the corresponding management device and enables
-`route_localnet`. This gives Proxy a local source address whose guest replies
-return through the management plane. External management service addressing
-remains the responsibility of its deployment.
+Provide reachable external Cache/Store endpoints and any file-backed artifacts.
+For UDS, mount the provider-owned parent directory so a recreated socket remains
+visible. Storage endpoints do not make arbitrary host files visible inside the
+container. Host networking does not expose them automatically either.
 
-Podman joins this namespace through `Network=ns:...`. Provide usable DNS and a
-matching `/etc/resolv.conf`; joining a namespace does not create that file.
-Make external storage endpoints and any file-backed artifacts reachable from
-the instance. For UDS, mount the provider-owned parent directory so a recreated
-socket is still visible. A storage endpoint does not make arbitrary host files
-visible inside the container.
+The default Connector configuration omits transit. Proxy ingress, guest Exec and
+MMDS/management communication remain available; ordinary guest internet egress
+is not supplied. This deployment does not install NAT or a GENEVE gateway.
 
 ## Configure using native paths
 
@@ -121,12 +122,6 @@ api:
 sandbox:
   boot:
     overlay_diff_template: /var/lib/node-infra/overlay.ext4
-```
-
-```yaml
-# /etc/connector-vswitch/conf.d/90-instance.yaml
-transit_dev: net1
-transit_dev_addr: "192.0.2.6/30:192.0.2.5"
 ```
 
 For image cold starts, create a new sparse ext4 overlay template in the
@@ -203,6 +198,35 @@ Connector control socket alone does not establish available execution slots
 or successful sandbox traffic. Admit workload only after actual node readiness
 and the required business acceptance checks.
 
+## Optional namespace isolation and transit
+
+Both choices use the same template/tool and are independent: host or explicit
+namespace, each with or without transit. To isolate an instance, replace only
+`Network=host` with `Network=ns:/run/netns/node-a`. Before `check`, prepare that
+retained nsfs mount, bring its loopback UP and configure the required ingress
+addresses/routes on any suitable interface name, for example `ingress0`. The
+path must remain absolute, canonical and unlinked. Provide suitable DNS and
+`/etc/resolv.conf`; joining a namespace does not create them. After reboot,
+restore that external namespace before starting the instance.
+
+To enable a dedicated transit device in either primary-network mode, explicitly
+provide a native fragment (also shipped as `examples/transit/90-transit.yaml`):
+
+```yaml
+# /etc/connector-vswitch/conf.d/90-transit.yaml
+transit_dev: uplink0
+transit_dev_addr: "192.0.2.6/30:192.0.2.5"
+transit_dev_mtu: auto
+```
+
+The selected device must exist in the primary namespace, have a stable MAC and
+be DOWN before handoff. Never select an UP interface carrying host traffic.
+Connector moves it into the internal switch namespace and returns the same
+device DOWN during cleanup. Missing/empty transit performs no handoff or return
+and records no fictitious device identity. The host owns device allocation;
+this package does not manage VFs or deploy transit gateways. The same fragment
+works through customer image COPY and runtime mounts.
+
 ## Stop, recover and replace an instance
 
 Full-instance stop ends its running VMs. The platform first stops new placement
@@ -218,7 +242,10 @@ propagation, so its final unmount sweep cannot remove the host's pins. The host
 retains these pins, bpffs access, applied image/configuration identity and the
 recovery record. On normal shutdown and after a hard exit, the host hook
 runs after the old container and Quadlet-generated removal have finished. It
-uses the old image/configuration to recover the original transit device. A
+uses the old image/configuration to remove its internal resources and, when
+configured, recover the original transit device. The retained primary handle
+also applies to host mode; changed current network/configuration cannot redirect
+cleanup. Existing schema-1 records and their pinned cleanup tools remain usable. A
 failure retains the recovery inputs and blocks replacement. Use status and the
 outer journal to identify the failed step, correct the stated input, then retry:
 
@@ -244,8 +271,10 @@ does not transfer running memory or change snapshot/migration-token formats.
 
 The matching platform package includes:
 
-- `basic.node-infra-deploy.sh`: formal installation, real bare guest, ingress,
-  native exec, transit, cgroup limits, memory and E-only pause/resume, normal stop.
+- `basic.node-infra-deploy.sh`: default host/no-transit and explicit namespace/transit
+  deployment, real guest Exec/Proxy/MMDS, cgroup limits, memory and E-only restore,
+  host hard exits/helper interruption, resource preservation, conflicts and the
+  other two network/transit combinations.
 - `basic.node-infra-config.sh`: layered native configuration, SDK extensions and
   private service input, worker rebuild, two actual execution pools and partial
   startup failure cleanup.

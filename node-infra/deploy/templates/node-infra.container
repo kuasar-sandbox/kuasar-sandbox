@@ -1,5 +1,5 @@
 # Trusted administrator system container; privileged is not a tenant boundary.
-# Replace all six @...@ tokens before node-infra-ctl install.
+# Replace all five @...@ tokens before node-infra-ctl install.
 [Unit]
 Description=kuasar-sandbox node-infra @NAME@
 After=network-online.target
@@ -9,7 +9,7 @@ Wants=network-online.target
 Image=@IMAGE@
 ContainerName=node-infra-@NAME@
 Pull=never
-Network=ns:@NETNS@
+Network=host
 # Quadlet 4.9.3 generates Delegate=yes and --cgroups=split.
 PodmanArgs=--privileged --cgroupns=private --systemd=always --stop-timeout=90
 Volume=@CONFIG_ROOT@/node-conductor/conf.d:/etc/node-conductor/conf.d:ro

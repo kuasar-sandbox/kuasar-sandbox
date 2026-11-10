@@ -7,6 +7,3 @@ mgmt_extracts:
   - ":sw0_m0:169.254.169.254/32"
 mgmt_services:
   - "169.254.169.254:80:127.0.0.1:19254"
-transit_dev: net1
-transit_dev_addr: auto
-transit_dev_mtu: auto

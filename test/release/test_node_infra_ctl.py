@@ -38,6 +38,103 @@ class DeploymentTests(unittest.TestCase):
             text = text.replace('@' + key + '@', value)
         return text.replace('/var/lib/node-infra/instances/test/recovery', str(self.node.recovery))
 
+    def test_host_and_explicit_namespace_bindings(self):
+        host = ctl.bindings(self.rendered(), 'test')
+        self.assertEqual((host['network'], host['netns']), ('host', '/proc/self/ns/net'))
+        isolated = ctl.bindings(self.rendered().replace('Network=host', 'Network=ns:/run/netns/custom'), 'test')
+        self.assertEqual(isolated['netns'], '/run/netns/custom')
+        for network in ('none', 'bridge', 'ns:relative', 'ns:/tmp/../net', 'ns:/proc/self/ns/net',
+                        'host\nNetwork=host'):
+            with self.subTest(network=network), self.assertRaises(ValueError):
+                ctl.bindings(self.rendered().replace('Network=host', 'Network=' + network), 'test')
+
+    def check_fixture(self, network, transit, *, up=False, missing=False, wrong_namespace=False):
+        selected = {'network': network, 'netns': '/proc/self/ns/net', 'image': 'image', 'volumes': [], 'values': {}}
+        descriptor = {'transit': {'name': 'uplink' if transit else ''},
+                      'main_netns_inode': Path('/proc/self/ns/net').stat().st_ino + int(wrong_namespace)}
+        links = [{'ifname': 'lo', 'flags': ['UP']}, {'ifname': 'arbitrary-ingress', 'flags': ['UP']}]
+        if transit and not missing:
+            links.append({'ifname': 'uplink', 'flags': ['UP'] if up else [], 'address': '02:00:00:00:00:01'})
+
+        def command(*args, **kwargs):
+            if args[:2] == ('podman', 'version'):
+                output = '4.9.3'
+            elif args[0] == 'nsenter':
+                output = json.dumps(links)
+            elif args[-1] == 'preflight':
+                self.assertIn('--network=' + network, args)
+                output = json.dumps(descriptor)
+            elif args[-1] == 'budget':
+                output = '{}'
+            elif args[-1] == 'validate':
+                output = ''
+            else:
+                self.fail('unexpected command: ' + repr(args))
+            return types.SimpleNamespace(stdout=output, returncode=0)
+
+        with patch.object(self.node, 'installed', return_value={'tool': '/release/bin/node-infra-ctl', 'image': 'image'}), \
+             patch.object(self.node, 'source', return_value=selected), \
+             patch.object(self.node, 'owned_container', return_value=None), \
+             patch.object(ctl, 'json_file', return_value={}), \
+             patch.object(ctl, 'image_identity', return_value='image'), \
+             patch.object(Path, 'is_dir', return_value=True), patch.object(Path, 'is_file', return_value=True), \
+             patch.object(Path, 'is_char_device', return_value=True), \
+             patch.object(ctl, 'mount_at', return_value={'type': 'nsfs'}), \
+             patch.object(ctl, 'run', side_effect=command):
+            return self.node.check()
+
+    def test_check_four_combinations_without_fixed_ingress(self):
+        for network in ('host', 'ns:/run/netns/custom'):
+            for transit in (False, True):
+                with self.subTest(network=network, transit=transit):
+                    selected, descriptor, device = self.check_fixture(network, transit)
+                    self.assertEqual(selected['primary_inode'], descriptor['main_netns_inode'])
+                    self.assertEqual(bool(device), transit)
+
+    def test_check_rejects_missing_up_and_wrong_namespace(self):
+        for network in ('host', 'ns:/run/netns/custom'):
+            for options in ({'up': True}, {'missing': True}, {'wrong_namespace': True}):
+                with self.subTest(network=network, options=options), self.assertRaises(ValueError):
+                    self.check_fixture(network, True, **options)
+
+    def test_recover_optional_transit_and_legacy_records(self):
+        for network in ('host', 'ns:/run/netns/custom', None):
+            for transit in (None, {'ifname': 'uplink', 'address': '02:00:00:00:00:01'}):
+                with self.subTest(network=network, transit=transit):
+                    primary = self.node.run / 'primary'
+                    ctl.save(self.node.run / 'owner.json', {'owner': 'ours', 'generation': 'g1'})
+                    primary.touch()
+                    mounts = {str(primary): {'type': 'nsfs', 'id': '1'}}
+                    applied = {'schema': 1, 'state': 'prepared', 'owner': 'ours', 'generation': 'g1',
+                               'boot_id': ctl.boot_id(), 'tool': str(Path(ctl.__file__).resolve()),
+                               'mounts': dict(mounts), 'primary_inode': primary.stat().st_ino, 'transit': transit}
+                    if network is not None:
+                        applied['network'] = network
+                    ctl.save(self.node.applied, applied)
+                    calls = []
+
+                    def command(*args, **kwargs):
+                        calls.append(args)
+                        if args[0] == 'umount':
+                            mounts.pop(str(args[1]))
+                        else:
+                            self.assertEqual(args[0], 'nsenter')
+                            self.assertIsNotNone(transit)
+                            self.assertEqual(args[-1], 'uplink')
+                        return types.SimpleNamespace(stdout=json.dumps([dict(transit or {}, flags=[])]), returncode=0)
+
+                    with patch.object(self.node, 'installed', return_value={'owner': 'ours'}), \
+                         patch.object(self.node, 'owned_container', return_value=None), \
+                         patch.object(self.node, 'consumers_gone'), \
+                         patch.object(self.node, 'source', side_effect=AssertionError('must use old inputs')), \
+                         patch.object(ctl, 'mount_at', side_effect=lambda path: mounts.get(str(path), {})), \
+                         patch.object(ctl, 'run', side_effect=command):
+                        self.node.recover()
+                        self.node.recover()
+                    self.assertEqual(ctl.json_file(self.node.applied)['state'], 'cleaned')
+                    self.assertEqual(sum(call[0] == 'nsenter' for call in calls), int(transit is not None))
+                    self.assertFalse(self.node.run.exists())
+
     def test_native_repeated_sections_and_reset(self):
         values = ctl.unit_values('[Container]\nVolume=/a:/a:ro\n[Service]\nCPUQuota=100%\n'
                                  '[Container]\nVolume=\nVolume=/b:/b:ro\n')
