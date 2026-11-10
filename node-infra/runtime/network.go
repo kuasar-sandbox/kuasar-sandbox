@@ -193,11 +193,18 @@ func verifyManagementPeer(r *record, m management) error {
 	if err != nil {
 		return err
 	}
-	nsid, err := mgmt.GetNetNsIdByFd(int(switchNS))
-	if err != nil {
-		return err
+	// Connector also allows both veth ends in the same private namespace.
+	// That topology has no cross-namespace ID, but still has reciprocal indexes.
+	if !switchNS.Equal(managementNS) {
+		nsid, err := mgmt.GetNetNsIdByFd(int(switchNS))
+		if err != nil {
+			return err
+		}
+		if nsid < 0 || link.Attrs().NetNsID != nsid {
+			return errors.New("management peer belongs to another network namespace")
+		}
 	}
-	if peer.Type() != "veth" || link.Type() != "veth" || nsid < 0 || link.Attrs().NetNsID != nsid ||
+	if peer.Type() != "veth" || link.Type() != "veth" ||
 		peer.Attrs().ParentIndex != link.Attrs().Index || link.Attrs().ParentIndex != peer.Attrs().Index {
 		return errors.New("management interface is not the retained switch's peer; refusing address changes")
 	}
