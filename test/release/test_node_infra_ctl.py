@@ -438,6 +438,19 @@ class DeploymentTests(unittest.TestCase):
         command.assert_not_called()
         self.assertEqual(ctl.json_file(node.applied), applied)
 
+    def test_docker_previous_boot_has_no_pending_daemon_request(self):
+        node = ctl.DockerInstance('test')
+        applied = {'boot_id': 'old-boot', 'generation': 'g1', 'helper': {
+            'name': node.container + '-g1-prepare', 'operation': 'prepare'}}
+        ctl.save(node.applied, applied)
+        with patch.object(node, 'inspect', return_value=None), patch.object(ctl, 'boot_id', return_value='new-boot'):
+            node.run.mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, 'outcome is unknown'):
+                node.reap_helper(applied)
+            node.run.rmdir()
+            node.reap_helper(applied)
+        self.assertNotIn('helper', ctl.json_file(node.applied))
+
     def test_docker_empty_placeholders_have_identity_and_reject_foreign_contents(self):
         node = ctl.DockerInstance('test')
         (node.run / 'netns').mkdir(parents=True)

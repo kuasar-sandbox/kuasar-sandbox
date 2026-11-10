@@ -359,7 +359,10 @@ class Instance:
         elif self.runtime == 'docker' and not applied['helper'].get('id'):
             # A daemon may finish create after the client died. An absent
             # response is not evidence of cancellation: retain pins and intent.
-            raise ValueError('Docker helper create outcome is unknown; retain handles and retry recovery')
+            require(applied.get('boot_id') and applied['boot_id'] != boot_id() and not self.run.exists(),
+                    'Docker helper create outcome is unknown; retain handles and retry recovery')
+            # A request from a previous kernel cannot still execute. Only the
+            # absent helper and absent boot-scoped handles permit archiving.
         del applied['helper']
         save(self.applied, applied)
 
