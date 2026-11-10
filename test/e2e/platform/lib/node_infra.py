@@ -617,18 +617,22 @@ def _host_case(fixture, sentinel):
     overlay = node.config / 'connector-vswitch/conf.d/90-instance.yaml'
     saved = overlay.read_bytes()
     write_json(overlay, {'switch_name': 'replacement', 'switch_netns': 'replacement-switch', 'transit_dev': 'missing'})
+    saved_unit = node.unit.read_bytes()
+    node.unit.write_text(re.sub(r'^Image=.*$', 'Image=sha256:' + '0' * 64,
+                               saved_unit.decode(), flags=re.MULTILINE))
     inspected = json.loads(command('podman', 'inspect', node.container).stdout)[0]
     os.kill(inspected['State']['ConmonPid'], signal.SIGKILL)
     wait_for('host conmon recovery with old no-transit inputs', node._stopped, timeout=STOP_TIMEOUT)
     node.assert_returned()
     overlay.write_bytes(saved)
+    node.unit.write_bytes(saved_unit)
     marker, dropin = interrupt_hook_after_syscall(node, 'mount')
     command('systemctl', 'start', node.service, check=False)
     require(not marker.exists(), 'host partial preparation did not reach mount syscall')
     wait_for('host partial preparation recovery', node._stopped)
     dropin.unlink()
     command('systemctl', 'daemon-reload')
-    interrupt_native_helpers(node, operations=(('prepare', 'hook'), ('prepare', 'cli')))
+    interrupt_native_helpers(node)
     node.remove()
     # Orthogonal combinations use the same delivered lifecycle and real guest.
     for index, host, transit in ((0, False, False), (0, True, True)):
@@ -826,11 +830,22 @@ def interrupt_native_helpers(node, operations=(('prepare', 'hook'), ('prepare', 
             # Leave a genuine failed cleanup for an operator's manual retry.
             # The retry runs outside the unit cgroup: systemd cannot reap its
             # orphan helper for us when we subsequently kill the host CLI.
-            require(node.with_transit, 'cleanup conflict fixture requires explicit transit')
-            command(*node.network, 'link', 'add', node.transit_name, 'type', 'dummy')
+            if node.with_transit:
+                command(*node.network, 'link', 'add', node.transit_name, 'type', 'dummy')
+            else:
+                # Fail this instance's outer stop hook before recovery. The
+                # stopped container and applied handles must survive for the
+                # manual helper test, without inventing a transit device.
+                deferred = node.dropin / '99-test-defer-recovery.conf'
+                deferred.write_text('[Service]\nExecStopPost=\nExecStopPost=/usr/bin/false\n')
+                command('systemctl', 'daemon-reload')
             command('systemctl', 'stop', node.service, check=False, timeout=180)
             wait_for('retained cleanup for manual retry', lambda: node.status()['recovery']['pending'])
-            command(*node.network, 'link', 'delete', node.transit_name)
+            if node.with_transit:
+                command(*node.network, 'link', 'delete', node.transit_name)
+            else:
+                deferred.unlink()
+                command('systemctl', 'daemon-reload')
         recovery = node.data / 'recovery'
         recovery.mkdir(mode=0o700, exist_ok=True)
         with (recovery / '.lock').open('a') as lock:
