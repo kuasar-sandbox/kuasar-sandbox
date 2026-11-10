@@ -17,6 +17,24 @@ import (
 
 const inputsRoot = "/run/node-infra/netns-inputs"
 
+func ensureNamespaceMount() error {
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 4 && fields[4] == namespaceRoot {
+			return nil // Reuse the runner's retained bind and its propagation.
+		}
+	}
+	// ip netns add self-binds this directory on first use. Publish external
+	// handles only after that parent mount exists: binding it later can leave
+	// a second, hidden external mount beneath the published pin, making its
+	// final unlink fail with EBUSY. This bind is private to the container.
+	return unix.Mount(namespaceRoot, namespaceRoot, "", unix.MS_BIND, "")
+}
+
 func namespaceIdentity(path string) (uint64, uint64, error) {
 	f, err := os.Open(path)
 	if err != nil {

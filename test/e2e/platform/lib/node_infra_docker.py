@@ -193,6 +193,7 @@ class RetainedDockerNode(DockerNode):
         self.engine_environment = os.environ.copy()
         self.bridge, self.netns_inputs, self.identity = False, {}, None
         self.extra_mounts, self.failed_start = [], False
+        self.recovery_pending = False
         Node.__init__(self, fixture, index, host=True, transit=True)
 
     def status(self):
@@ -216,20 +217,23 @@ class RetainedDockerNode(DockerNode):
         # Retain the exact ID even when preparation fails; cleanup must never
         # replace it with a container subsequently created under the same name.
         self.identity = identity
+        self.recovery_pending = True
         command(self.fixture.ctl, 'prepare', '--runtime', 'docker', '--name', self.name, '--container', identity, env=self.engine_environment)
         self.docker('start', identity)
         command(self.fixture.ctl, 'started', '--runtime', 'docker', '--name', self.name, env=self.engine_environment)
         return identity
 
     def stop(self, *, hard=False):
-        if self.identity is None:
+        if self.identity is not None:
+            super().stop(hard=hard)
+        if not self.recovery_pending:
             return
-        super().stop(hard=hard)
         command(self.fixture.ctl, 'recover', '--runtime', 'docker', '--name', self.name, env=self.engine_environment)
         command(self.fixture.ctl, 'recover', '--runtime', 'docker', '--name', self.name, env=self.engine_environment)
         self.assert_returned()
         write_json(self.fixture.output / self.name / ('retained-kill.json' if hard else 'retained-normal.json'),
                    json.loads((self.data / 'applied.json').read_text()))
+        self.recovery_pending = False
 
     def remove(self):
         if self.reserved:
@@ -307,6 +311,28 @@ def cgroupfs_case(fixture):
             command('ip', 'link', 'delete', bridge)
 
 
+def external_case(fixture):
+    external = ExternalEgress(fixture)
+    clean = False
+    try:
+        for hard in (False, True):
+            node = DockerNode(fixture, 0, bridge=True)
+            external.configure(node)
+            node.start()
+            guest = node.create()
+            external.traffic(node, guest)
+            if not hard:
+                external.input_changes(node, guest)
+            node.stop(hard=hard)
+            external.unchanged('forced' if hard else 'normal')
+            node.remove()
+        external.failure_cases(DockerNode)
+        clean = True
+    finally:
+        if clean:
+            external.close()
+
+
 def run():
     fixture = Fixture()
     with metadata_sentinel(fixture):
@@ -368,25 +394,7 @@ def run_cases(fixture):
             require(nodes[i].state(states[i][0])['token'] == states[i][1]['token'], 'Docker instance stop crossed boundaries')
         for node in nodes:
             node.remove()
-        external = ExternalEgress(fixture)
-        clean = False
-        try:
-            for hard in (False, True):
-                node = DockerNode(fixture, 0, bridge=True)
-                external.configure(node)
-                node.start()
-                guest = node.create()
-                external.traffic(node, guest)
-                if not hard:
-                    external.input_changes(node, guest)
-                node.stop(hard=hard)
-                external.unchanged('forced' if hard else 'normal')
-                node.remove()
-            external.failure_cases(DockerNode)
-            clean = True
-        finally:
-            if clean:
-                external.close()
+        external_case(fixture)
         cgroupfs_case(fixture)
         retained = RetainedDockerNode(fixture, 0)
         for hard in (False, True):

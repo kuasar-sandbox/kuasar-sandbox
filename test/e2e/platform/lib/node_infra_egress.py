@@ -58,8 +58,9 @@ class ExternalEgress:
             command('ip', '-n', self.name, 'route', 'add', 'default', 'via', '192.0.2.1')
             command('ip', 'netns', 'exec', self.name, 'sysctl', '-w', 'net.ipv4.ip_forward=1')
             rules = fixture.work / 'provider-egress.nft'
-            rules.write_text('table ip provider { chain postrouting { type nat hook postrouting priority srcnat; '
-                             'oifname "out0" snat to 192.0.2.2; } }\n')
+            rules.write_text('table ip provider {\n chain postrouting {\n'
+                             '  type nat hook postrouting priority srcnat;\n'
+                             '  oifname "out0" snat to 192.0.2.2;\n }\n}\n')
             command('ip', 'netns', 'exec', self.name, 'nft', '-f', rules)
             ready = fixture.work / 'egress-target.ready'
             self.process = subprocess.Popen(['ip', 'netns', 'exec', self.target, sys.executable,
@@ -106,20 +107,28 @@ class ExternalEgress:
         path = '/run/node-infra/netns-inputs/egress'
         before = node.state(guest)['token']
         node.execute('umount', path)
-        missing = node.execute(runtime, 'cleanup', '--force', check=False)
-        require(missing.returncode != 0, 'missing input allowed live cleanup')
+        node.execute('rm', path)
+        missing = node.execute(runtime, 'check', check=False)
+        require(missing.returncode != 0 and 'no such file' in missing.stderr,
+                'missing explicit input did not fail native configuration check')
+        node.execute('touch', path)
         node.execute('ip', 'netns', 'add', 'replacement')
         try:
             node.execute('mount', '--bind', '/run/netns/replacement', path)
+            node.execute('mount', '--make-private', path)
             changed = node.execute(runtime, 'cleanup', '--force', check=False)
-            require(changed.returncode != 0, 'changed input allowed live cleanup')
+            require(changed.returncode != 0 and 'external input egress was replaced' in changed.stderr,
+                    'changed input did not fail the saved ownership check')
             require(node.state(guest)['token'] == before, 'input mismatch cleanup stopped the guest')
             node.execute('umount', path)
         finally:
             node.execute('mount', '--bind', '/run/netns/egress', path)
+            node.execute('mount', '--make-private', path)
             node.execute('ip', 'netns', 'delete', 'replacement')
+        mounts = node.execute('cat', '/proc/self/mountinfo').stdout
         write_json(self.fixture.output / node.name / 'input-mismatch.json',
-                   {'missing': missing.stderr, 'changed': changed.stderr, 'guest_preserved': True})
+                   {'missing': missing.stderr, 'changed': changed.stderr, 'guest_preserved': True,
+                    'mountinfo_after_restore': mounts})
 
     def failure_cases(self, node_type):
         for phase in ('post-start', 'partial-netns', 'wrong-type', 'foreign-interface'):

@@ -503,6 +503,9 @@ func prepare(explicit string, retained bool) error {
 	if err := publishOwnership(r); err != nil {
 		return err
 	}
+	if err := ensureNamespaceMount(); err != nil {
+		return err
+	}
 	for i := range r.Namespaces {
 		if err := publishNamespace(r.Namespaces[i]); err != nil {
 			return err
