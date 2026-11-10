@@ -187,7 +187,7 @@ Host runtime packing, independent fsck and native control tests retain their too
 Plan schema 4 separates the required case selection from execution placement.
 It discovers headers from all six selected owner trees and freezes case hashes,
 requirements, the trusted `ci/integration/runner-capabilities.json` configuration,
-its digest, executor image IDs, run/attempt and deterministic groups. Existing
+its digest, executor version-tag references, run/attempt and deterministic groups. Existing
 schema 2/3 plans and published results keep their original ARM selection and
 Workbench qualification meanings.
 
@@ -261,7 +261,7 @@ flowchart TD
   S --> G
 ```
 
-Each architecture builds on its native Runner (`ubuntu-24.04` or `ubuntu-24.04-arm`) through `.github/actions/workbench`, using the existing Makefiles and native recipes. The trusted resolver selects a published, qualified Workbench once per run and binds both registry digests, image config IDs and the framework SHA. Later jobs verify that selection, including the actual image architecture and release/source labels. Ordinary PRs still build only the admitted product delta and required helpers. Each lane prepares its immutable inputs once and starts E2E when its own preparation finishes. Shards, artifacts and results retain architecture/run identities and are explicitly collected.
+Each architecture builds on its native Runner (`ubuntu-24.04` or `ubuntu-24.04-arm`) through `.github/actions/workbench`, using the existing Makefiles and native recipes. The trusted resolver selects a published, qualified Workbench once per run and records `aggregate_version`, its version-tag reference and `framework_sha`. Registry digests and image config IDs are not fixed by that selection. Each job using Workbench pulls the selected version tag, checks the actual native image architecture and release/source labels, then records and uses the observed local Docker image ID. Ordinary PRs still build only the admitted product delta and required helpers. Each lane prepares its immutable inputs once and starts E2E when its own preparation finishes. Shards, artifacts and results retain architecture/run identities and are explicitly collected.
 
 Build mode uses the existing `workbench/workbench` launcher: ordinary UID, read-only root, no capabilities, no host Docker socket or KVM. Private sources are mounted at `/src`; the trusted framework is read-only at `/inputs/release`. `HOME=/work/home`, the short disk-backed `TMPDIR=/build/t`, Go/Cargo state and `/build/native-cache` are task-owned. Explicit CPU/memory budgets reach Go, Cargo, CMake and native `make` recipes; CPU quota alone is not treated as `nproc`. Publisher credentials stay in host orchestration. Trusted publisher validators and archive readers use separate uncached Workbench invocations before host validation/publication.
 

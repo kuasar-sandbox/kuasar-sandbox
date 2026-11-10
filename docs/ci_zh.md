@@ -123,7 +123,7 @@ go-erofs 模块记录选择合同，无须执行该二进制或安装 Go。宿�
 
 计划 schema 4 将应执行用例选择与执行位置分开。它从六个已选 owner 源码树发现头部声明，
 固定用例摘要、需求、可信 `ci/integration/runner-capabilities.json` 配置及摘要、
-执行器镜像 ID、run/attempt 和确定性分组。schema 2/3 的旧计划与已发布结果继续保留
+执行器版本 tag 引用、run/attempt 和确定性分组。schema 2/3 的旧计划与已发布结果继续保留
 原 ARM 选择范围和 Workbench 资格含义。
 
 profile 声明架构、Runner 标签、执行器、资源预算、优先级、启用状态以及每项能力证据。
@@ -177,7 +177,7 @@ resolve → x86 build → x86 prepare → 原生 x86 shards → x86 result
                                   全部所选结果显式汇总
 ```
 
-两个架构分别选择原生 Runner (`ubuntu-24.04` 或 `ubuntu-24.04-arm`), 通过 `.github/actions/workbench` 调用已有 Makefile/native recipe. 受信 resolver 每次运行只选择一次已发布且验证通过的 Workbench, 固定两个架构的 registry digest、image config ID 和 framework SHA. 后续 job 核验同一选择、实际镜像架构及 release/source 标签. 普通 PR 仍只构建准入的产品差异和必要 helper. 每条 lane 独立 prepare 一次, 不等待另一架构构建; 所有 shard 和架构结果保留独立身份并显式汇总.
+两个架构分别选择原生 Runner (`ubuntu-24.04` 或 `ubuntu-24.04-arm`), 通过 `.github/actions/workbench` 调用已有 Makefile/native recipe. 受信 resolver 每次运行只选择一次已发布且验证通过的 Workbench, 记录 `aggregate_version`、对应的版本 tag 引用和 `framework_sha`; 这一步不固定 registry digest 或 image config ID. 每个使用 Workbench 的 job 拉取所选版本 tag, 核验实际原生镜像架构及 release/source 标签, 然后记录并使用观察到的本地 Docker image ID. 普通 PR 仍只构建准入的产品差异和必要 helper. 每条 lane 独立 prepare 一次, 不等待另一架构构建; 所有 shard 和架构结果保留独立身份并显式汇总.
 
 构建复用 `workbench/workbench` build 模式: ordinary UID、只读根文件系统、移除 capabilities, 不挂载宿主 Docker socket 或 KVM. 私有源码位于 `/src`, 受信框架只读挂载至 `/inputs/release`. `HOME=/work/home`、磁盘上的短路径 `TMPDIR=/build/t`、Go/Cargo 状态及 `/build/native-cache` 都属于任务. CPU/内存预算明确传给 Go、Cargo、CMake 和 native make recipe, 不把 CPU quota 当作 `nproc`. 发布凭据留在宿主编排侧; publisher 校验器和 archive readers 使用单独禁用缓存的 Workbench 调用.
 
