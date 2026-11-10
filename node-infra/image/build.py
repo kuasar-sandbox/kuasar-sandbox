@@ -10,6 +10,7 @@ from pathlib import Path
 import re
 import shutil
 import struct
+import sys
 import subprocess
 import tarfile
 import tempfile
@@ -18,6 +19,9 @@ import tempfile
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 ARCHES = {"x86_64": "amd64", "aarch64": "arm64", "amd64": "amd64", "arm64": "arm64"}
+sys.path.insert(0, str(ROOT / "release"))
+import node_infra_assets
+
 REQUIRED = ("node-ctl", "sandbox-ctl", "sandbox-init", "cloud-hypervisor", "connector-ctl", "vmlinux", "sandbox-runtime.bundle", "manifest-ctl", "cache-ctl", "store-ctl", "flatten-ctl")
 
 
@@ -106,8 +110,9 @@ def build(args):
             validate_elf(path, arch)
     args.output.mkdir(parents=True, exist_ok=True)
     destination = args.output / f"node-infra-{args.version}-linux-{arch}.oci.tar.gz"
+    docker_destination = args.output / f"node-infra-{args.version}-linux-{arch}.docker.tar.gz"
     receipt_path = args.output / f"node-infra-{release_arch}.json"
-    if destination.exists() or receipt_path.exists():
+    if destination.exists() or receipt_path.exists() or docker_destination.exists():
         raise ValueError("node-infra output already exists; retain the original release bytes")
     receipt = {"schema": 1, "aggregate_version": args.version, "arch": release_arch,
                "source_revision": revision, "components": selection}
@@ -135,7 +140,8 @@ def build(args):
                 shutil.copy2(ROOT / name, own_license / name)
         shutil.copytree(HERE / "rootfs", context / "rootfs")
         shutil.copy2(HERE / "Containerfile", context / "Containerfile")
-        shutil.copy2(HERE.parent / "runtime/service", context / "service")
+        for name in ("service", "entrypoint"):
+            shutil.copy2(HERE.parent / "runtime" / name, context / name)
         if helper.resolve() != (context / "node-infra-runtime").resolve():
             shutil.copy2(helper, context / "node-infra-runtime")
         (context / "release.json").write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
@@ -168,6 +174,17 @@ def build(args):
                 finally:
                     pending.unlink(missing_ok=True)
             receipt.update(archive=destination.name, sha256=sha256_file(destination), size=destination.stat().st_size)
+            if args.delivery == "node-infra-v2":
+                docker_raw = context / "image.docker.tar"
+                run(["skopeo", "copy", "oci-archive:" + str(raw_archive),
+                     "docker-archive:" + str(docker_raw) + ":localhost/node-infra:" + args.version])
+                node_infra_assets.inspect_docker(docker_raw, release_arch, image_id=receipt["image_id"],
+                                                version=args.version, revision=revision)
+                with docker_destination.open("xb") as stream:
+                    with docker_raw.open("rb") as source, gzip.GzipFile(filename="", mode="wb", fileobj=stream, mtime=0) as compressed:
+                        shutil.copyfileobj(source, compressed, length=1024 * 1024)
+                receipt["docker_archive"] = {"name": docker_destination.name, "sha256": sha256_file(docker_destination),
+                                             "size": docker_destination.stat().st_size}
             with receipt_path.open("x") as stream:
                 stream.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
             print(json.dumps({"archive": str(destination), "receipt": str(receipt_path)}, sort_keys=True))
@@ -178,6 +195,7 @@ def build(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--delivery", choices=("node-infra-v1", "node-infra-v2"), default="node-infra-v2")
     parser.add_argument("--arch", choices=ARCHES, required=True)
     parser.add_argument("--products", type=Path, required=True)
     parser.add_argument("--selection", type=Path, required=True)

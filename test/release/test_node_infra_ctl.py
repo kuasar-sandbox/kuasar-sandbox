@@ -38,6 +38,17 @@ class DeploymentTests(unittest.TestCase):
             text = text.replace('@' + key + '@', value)
         return text.replace('/var/lib/node-infra/instances/test/recovery', str(self.node.recovery))
 
+    def test_docker_start_normalizes_only_default_oom_switch(self):
+        created = {'Id': 'a' * 64, 'Image': 'sha256:' + 'b' * 64,
+                   'Config': {'Entrypoint': ['/init']},
+                   'HostConfig': {'OomKillDisable': False, 'Memory': 1024, 'Binds': ['/owned:/run/netns:rw,rslave']}}
+        started = {**created, 'HostConfig': {**created['HostConfig'], 'OomKillDisable': None}}
+        self.assertEqual(ctl.DockerInstance.fingerprint(created), ctl.DockerInstance.fingerprint(started))
+        for key, value in (('OomKillDisable', True), ('Memory', 2048), ('Binds', ['/foreign:/run/netns:rw,rslave'])):
+            changed = {**started, 'HostConfig': {**started['HostConfig'], key: value}}
+            self.assertNotEqual(ctl.DockerInstance.fingerprint(created), ctl.DockerInstance.fingerprint(changed))
+        self.assertIsNone(started['HostConfig']['OomKillDisable'])
+
     def test_host_and_explicit_namespace_bindings(self):
         host = ctl.bindings(self.rendered(), 'test')
         self.assertEqual((host['network'], host['netns']), ('host', '/proc/self/ns/net'))
@@ -47,6 +58,14 @@ class DeploymentTests(unittest.TestCase):
                         'host\nNetwork=host'):
             with self.subTest(network=network), self.assertRaises(ValueError):
                 ctl.bindings(self.rendered().replace('Network=host', 'Network=' + network), 'test')
+
+    def test_mixed_mode_and_old_control_group_source_remain_readable(self):
+        for mode in ('mixed', 'control-group'):
+            with self.subTest(mode=mode):
+                ctl.bindings(self.rendered().replace('KillMode=mixed', 'KillMode=' + mode), 'test')
+        for mode in ('process', 'none'):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                ctl.bindings(self.rendered().replace('KillMode=mixed', 'KillMode=' + mode), 'test')
 
     def check_fixture(self, network, transit, *, up=False, missing=False, wrong_namespace=False):
         selected = {'network': network, 'netns': '/proc/self/ns/net', 'image': 'image', 'volumes': [], 'values': {}}
@@ -104,7 +123,7 @@ class DeploymentTests(unittest.TestCase):
         ctl.save(self.node.applied, {'state': 'running', 'boot_id': ctl.boot_id(),
                                     'primary_inode': primary.stat().st_ino})
         # /proc/0 cannot exist: model inspect racing with the container's exit.
-        container = {'State': {'Running': True, 'Pid': 0}, 'Image': 'image'}
+        container = {'Id': 'immutable', 'State': {'Running': True, 'Pid': 0}, 'Image': 'image'}
         with patch.object(self.node, 'installed', return_value={'image': 'image'}), \
              patch.object(self.node, 'owned_container', return_value=container), \
              patch.object(self.node, 'service_state', return_value='deactivating'), \
@@ -318,7 +337,7 @@ class DeploymentTests(unittest.TestCase):
                         raise SystemExit('injected helper hook death')
                     return types.SimpleNamespace(stdout='', returncode=0)
 
-                with patch.object(ctl, 'inspect', side_effect=lambda kind, name: containers.get(name)), \
+                with patch.object(ctl, 'inspect', side_effect=lambda kind, name, runtime='podman': containers.get(name)), \
                      patch.object(ctl, 'run', side_effect=command):
                     with self.assertRaises(SystemExit):
                         self.node.run_helper(applied, 'prepare', ['--network=none'])
@@ -417,6 +436,60 @@ class DeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'different bytes'):
                 ctl.pin_release(package, {'version': 'v1'})
         self.assertEqual((destination / 'bin/node-infra-ctl').read_text(), 'original')
+
+    def test_docker_helper_enters_saved_primary_without_podman_network_syntax(self):
+        node = ctl.DockerInstance('test')
+        primary = node.run / 'primary'
+        arguments, executable = node.helper_arguments(['--network=ns:' + str(primary),
+                                                       '--volume', '/pins:/run/netns:rw,rshared'])
+        self.assertIn('--network=none', arguments)
+        self.assertIn(str(primary) + ':/run/node-infra-primary:ro', arguments)
+        self.assertFalse(any(x.startswith('--network=ns:') for x in arguments))
+        self.assertEqual(executable, ['/usr/bin/nsenter', '--net=/run/node-infra-primary', ctl.RUNTIME])
+
+    def test_docker_lost_create_response_retains_intent(self):
+        node = ctl.DockerInstance('test')
+        applied = {'generation': 'g1', 'helper': {'name': node.container + '-g1-prepare', 'operation': 'prepare'}}
+        ctl.save(node.applied, applied)
+        with patch.object(node, 'inspect', return_value=None), patch.object(ctl, 'run') as command:
+            with self.assertRaisesRegex(ValueError, 'outcome is unknown'):
+                node.reap_helper(applied)
+        command.assert_not_called()
+        self.assertEqual(ctl.json_file(node.applied), applied)
+
+    def test_docker_previous_boot_has_no_pending_daemon_request(self):
+        node = ctl.DockerInstance('test')
+        applied = {'boot_id': 'old-boot', 'generation': 'g1', 'helper': {
+            'name': node.container + '-g1-prepare', 'operation': 'prepare'}}
+        ctl.save(node.applied, applied)
+        with patch.object(node, 'inspect', return_value=None), patch.object(ctl, 'boot_id', return_value='new-boot'):
+            node.run.mkdir(parents=True)
+            with self.assertRaisesRegex(ValueError, 'outcome is unknown'):
+                node.reap_helper(applied)
+            node.run.rmdir()
+            node.reap_helper(applied)
+        self.assertNotIn('helper', ctl.json_file(node.applied))
+
+    def test_docker_empty_placeholders_have_identity_and_reject_foreign_contents(self):
+        node = ctl.DockerInstance('test')
+        (node.run / 'netns').mkdir(parents=True)
+        (node.run / 'bpf').mkdir()
+        with patch.object(ctl, 'private_directory'), patch.object(ctl, 'mount_at', return_value={}):
+            initial = node.initial_handles()
+            self.assertEqual(initial['netns'], [(node.run / 'netns').stat().st_dev,
+                                               (node.run / 'netns').stat().st_ino])
+            (node.run / 'netns/foreign').touch()
+            with self.assertRaisesRegex(ValueError, 'unowned Docker handle placeholder'):
+                node.initial_handles()
+
+    def test_docker_context_override_cannot_hide_remote_daemon(self):
+        node = ctl.DockerInstance('test')
+        with patch.dict(ctl.os.environ, {'DOCKER_CONTEXT': 'remote', 'DOCKER_HOST': 'unix:///run/docker.sock'}), \
+             patch.object(ctl, 'run', return_value=types.SimpleNamespace(stdout=json.dumps([
+                 {'Endpoints': {'docker': {'Host': 'ssh://remote'}}}]))) as command:
+            with self.assertRaisesRegex(ValueError, 'local Unix socket'):
+                node.daemon()
+        command.assert_called_once_with('docker', 'context', 'inspect')
 
 
 if __name__ == '__main__':

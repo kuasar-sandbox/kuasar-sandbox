@@ -61,3 +61,21 @@ bootstrap 执行所选应用。保留 `/opt/node-infra/bin/` 中的官方程序�
 `node-ctl config` 检查声明配置，不执行自定义 Configure/BindRuntime。使用所选
 SDK/镜像组合验证真实启动、自定义请求路径和 worker 重启。platform 的
 `basic.node-infra-config.sh` 用例通过正式部署入口和仅用于测试的 SDK 应用演示这条链路。
+
+## 外部 egress 与站点网络钩子
+
+默认管理平面为私有 `mgmt`，API/数据入口仍在主网络。将 `external-egress/90-egress.yaml`
+挂载或 COPY 为 Connector 覆盖片段，仅将提供方的 nsfs 句柄绑定到
+`/run/node-infra/netns-inputs/egress:ro`。出口、路由与 SNAT 由提供方拥有，管理提取项
+保留在列表最前。
+
+自定义 setup 将 `network-extension/node-site-network` 安装为可执行的
+`/usr/local/libexec/node-site-network`，unit 放在 `/etc/systemd/system/`，Connector
+片段放在 `/etc/systemd/system/connector-vswitch.service.d/`。在脚本中为实例分配唯一
+nft table 名称。drop-in 要求启动该 oneshot，无需额外 enable。脚本幂等，仅删除所分配
+的 table。保留基础 ready 钩子；追加 `ExecStartPost` 可以令启动失败。镜像已包含
+nftables，其他工具在派生镜像构建时安装。
+
+部署指南另提供直接 Docker host/bridge 命令，使用相同原生文件、私有 cgroup、正常
+内部清理，以及三个实例的独立端口。可选借入 transit 需要保留恢复句柄；默认 Docker
+路径无需宿主 install 或 prepare helper。

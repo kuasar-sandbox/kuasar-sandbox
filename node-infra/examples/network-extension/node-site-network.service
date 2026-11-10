@@ -1,0 +1,14 @@
+[Unit]
+Description=Site-owned egress policy
+Requires=node-infra-network.service
+After=node-infra-network.service
+Before=connector-vswitch.service
+PartOf=node-infra.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/libexec/node-site-network setup
+ExecStopPost=/usr/local/libexec/node-site-network teardown
+TimeoutStartSec=30
+TimeoutStopSec=30

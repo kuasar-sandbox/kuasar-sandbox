@@ -245,10 +245,8 @@ def platform_asset_names_for_components(
     return {
         archive_name("platform", tag),
         *(archive_name(unit, components[unit], arch) for unit in selection.UNITS for arch in architectures),
-    } | ({selection.workbench_archive(tag, arch) for arch in architectures}
-         if delivery in selection.MODERN_DELIVERIES else set()) | (
-        {selection.node_infra_archive(tag, arch) for arch in architectures} | {selection.node_infra_deploy_archive(tag)}
-        if delivery == selection.NODE_INFRA_DELIVERY else set())
+    } | selection.delivery_assets(tag, delivery, architectures)
+
 
 
 def platform_asset_names(tag: str, sha: str) -> set[str]:

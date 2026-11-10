@@ -206,7 +206,7 @@ assemble_release() {
 
   local delivery source_sha
   delivery=$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")
-  [[ "$delivery" = workbench-v1 || "$delivery" = node-infra-v1 ]] || release_fail 'new aggregate assembly requires a supported delivery contract'
+  [[ "$delivery" = workbench-v1 || "$delivery" = node-infra-v[12] ]] || release_fail 'new aggregate assembly requires a supported delivery contract'
   source_sha=$(python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --commit)
   python3 -B "$ROOT/release/workbench_assets.py" "$fetched/workbench" "$version" "$source_sha" > "$work/workbench.json"
   mkdir -p "$output/workbench"
@@ -215,12 +215,15 @@ assemble_release() {
     install -m 0644 "$fetched/workbench/workbench-$arch.json" "$output/workbench/"
   done
 
-  if [ "$delivery" = node-infra-v1 ]; then
+  if [[ "$delivery" = node-infra-v[12] ]]; then
     python3 -B "$ROOT/release/node_infra_assets.py" package --platform "$PLATFORM_SOURCE_ROOT" \
       --directory "$fetched/node-infra" --output "$fetched/node-infra" --version "$version" --revision "$source_sha" >/dev/null
     mkdir -p "$output/node-infra"
     for arch in x86_64 aarch64; do
       install -m 0644 "$fetched/node-infra/$(node_infra_archive "$version" "$arch")" "$output/assets/"
+      if [ "$delivery" = node-infra-v2 ]; then
+        install -m 0644 "$fetched/node-infra/$(node_infra_docker_archive "$version" "$arch")" "$output/assets/"
+      fi
       install -m 0644 "$fetched/node-infra/node-infra-$arch.json" "$output/node-infra/"
     done
     install -m 0644 "$fetched/node-infra/$(node_infra_deploy_archive "$version")" "$output/assets/"
@@ -303,8 +306,11 @@ expected_asset_names() {
   if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" != historical ]; then
     for arch in "${arches[@]}"; do workbench_archive "$version" "$arch"; done
   fi
-  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = node-infra-v1 ]; then
-    for arch in "${arches[@]}"; do node_infra_archive "$version" "$arch"; done
+  if [[ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = node-infra-v[12] ]]; then
+    for arch in "${arches[@]}"; do
+      node_infra_archive "$version" "$arch"
+      if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = node-infra-v2 ]; then node_infra_docker_archive "$version" "$arch"; fi
+    done
     node_infra_deploy_archive "$version"
   fi
 }
@@ -344,7 +350,7 @@ validate_bundle() {
     source_sha=$(python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --commit)
     python3 -B "$ROOT/release/workbench_assets.py" "$bundle/assets" "$version" "$source_sha" --receipts "$bundle/workbench" >/dev/null
   fi
-  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = node-infra-v1 ]; then
+  if [[ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = node-infra-v[12] ]]; then
     python3 -B "$ROOT/release/node_infra_assets.py" validate --directory "$bundle/assets" \
       --version "$version" --revision "$source_sha" --receipts "$bundle/node-infra" >/dev/null
   fi
@@ -376,7 +382,7 @@ extract_bundle() {
     archives+=("$bundle/assets/$name")
   done < <(expected_asset_names "$version" "$bundle/selection.tsv" "$arch")
   python3 -B "$ROOT/release/archive_paths.py" extract "$install" "${archives[@]}"
-  if [ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = node-infra-v1 ]; then
+  if [[ "$(release_delivery "$PLATFORM_SOURCE_ROOT" "$version")" = node-infra-v[12] ]]; then
     python3 -B "$ROOT/release/node_infra_assets.py" install --directory "$bundle/assets" --output "$install" \
       --version "$version" --revision "$(python3 "$ROOT/release/selection.py" "$PLATFORM_SOURCE_ROOT" "$version" --commit)" --arch "$arch" >/dev/null
   fi

@@ -9,27 +9,27 @@ LABEL org.opencontainers.image.title="kuasar-sandbox node-infra" \
       org.opencontainers.image.revision="${SOURCE_REVISION}" \
       io.kuasar-sandbox.node-infra.release="${RELEASE_VERSION}" \
       io.kuasar-sandbox.node-infra.schema="1"
-ENV container=podman \
-    PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ENV PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       systemd systemd-sysv dbus ca-certificates iproute2 iputils-ping \
-      util-linux procps curl jq libnuma1 liburing2 libssl3t64 libzstd1 liblz4-1 \
+      util-linux procps curl jq nftables libnuma1 liburing2 libssl3t64 libzstd1 liblz4-1 \
       libsnappy1v5 libbz2-1.0 libstdc++6 \
     && rm -rf /var/lib/apt/lists/* /etc/machine-id /var/lib/dbus/machine-id \
     && mkdir -p /run/netns /sys/fs/bpf /var/lib/node-infra \
       /etc/node-conductor/conf.d /etc/node-proxy/conf.d /etc/node-telemetry/conf.d \
       /etc/connector-vswitch/conf.d /etc/node-infra/extensions \
-    && systemctl mask systemd-networkd.service systemd-networkd.socket \
-      systemd-resolved.service systemd-logind.service getty.target \
+    && systemctl mask nftables.service systemd-networkd.service systemd-networkd.socket \
+      systemd-resolved.service systemd-logind.service systemd-firstboot.service getty.target \
       systemd-remount-fs.service systemd-udevd.service systemd-udevd-control.socket \
       systemd-udevd-kernel.socket
 COPY bin/ /opt/node-infra/bin/
 COPY share/ /opt/node-infra/share/
 COPY node-infra-runtime /usr/libexec/node-infra/node-infra-runtime
 COPY service /usr/libexec/node-infra/service
+COPY entrypoint /usr/libexec/node-infra/entrypoint
 COPY rootfs/ /
 COPY release.json /usr/share/node-infra/image.json
-RUN chmod 0755 /usr/libexec/node-infra/node-infra-runtime /usr/libexec/node-infra/service \
+RUN chmod 0755 /usr/libexec/node-infra/node-infra-runtime /usr/libexec/node-infra/service /usr/libexec/node-infra/entrypoint \
     && ln -sfn /usr/lib/systemd/system/node-infra.target /etc/systemd/system/default.target \
     && mkdir -p /opt/node-infra/boot \
     && ln -s ../bin/vmlinux /opt/node-infra/boot/vmlinux \
@@ -39,4 +39,6 @@ RUN chmod 0755 /usr/libexec/node-infra/node-infra-runtime /usr/libexec/node-infr
     && test -f /opt/node-infra/bin/vmlinux \
     && test -f /opt/node-infra/bin/sandbox-runtime.bundle
 STOPSIGNAL SIGRTMIN+3
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s CMD /usr/libexec/node-infra/node-infra-runtime health
+ENTRYPOINT ["/usr/libexec/node-infra/entrypoint"]
 CMD ["/sbin/init"]

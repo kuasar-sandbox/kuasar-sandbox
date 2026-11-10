@@ -71,7 +71,7 @@ def check_node_infra(release, root, version, arch, env):
         return  # Historical aggregate asset sets remain unchanged.
     expected = {selection.node_infra_archive(version, item) for item in node.ARCHES}
     expected.add(selection.node_infra_deploy_archive(version))
-    node.require(len(rows) == len(expected) and {item['name'] for item in rows} == expected,
+    node.require(len(rows) == len({item['name'] for item in rows}) and expected <= {item['name'] for item in rows},
                  'published node-infra asset set is incomplete or duplicated')
     for item in rows:
         node.require(type(item.get('id')) is int and item['id'] > 0
@@ -88,13 +88,22 @@ def check_node_infra(release, root, version, arch, env):
     deploy_name = selection.node_infra_deploy_archive(version)
     download_anonymous_asset(by_name[deploy_name], assets / deploy_name, env=env)
     document = node.read_deploy(assets / deploy_name, version, source, arches=node.ARCHES)
+    if document['schema'] == 2:
+        expected.update(selection.node_infra_docker_archive(version, item) for item in node.ARCHES)
+    node.require({item['name'] for item in rows} == expected, 'published node-infra asset set is incomplete or duplicated')
     for image in document['images'].values():
-        item = by_name[image['archive']['name']]
-        node.require(item['size'] == image['archive']['size']
-                     and item['digest'] == 'sha256:' + image['archive']['sha256'],
-                     'published image asset differs from the deployment document')
+        for key in ('archive', 'docker_archive'):
+            if key not in image:
+                continue
+            item = by_name[image[key]['name']]
+            node.require(item['size'] == image[key]['size']
+                         and item['digest'] == 'sha256:' + image[key]['sha256'],
+                         'published image asset differs from the deployment document')
     image = document['images'][arch]
     download_anonymous_asset(by_name[image['archive']['name']], assets / image['archive']['name'], env=env)
+    if 'docker_archive' in image:
+        name = image['docker_archive']['name']
+        download_anonymous_asset(by_name[name], assets / name, env=env)
     node.install_inputs(assets, root / 'node-infra', version, arch, revision=source)
     anonymous = root / 'node-infra-anonymous.json'
     anonymous.write_text('{"auths":{}}\n')

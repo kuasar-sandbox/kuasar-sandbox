@@ -11,9 +11,11 @@ owners.
 
 ## Prerequisites and release inputs
 
-Use a native amd64 or arm64 Linux host with systemd, cgroup v2, usable KVM/TUN,
-network namespaces, BPF/TC and userfaultfd. Install rootful Podman, its Quadlet
-generator and a supported OCI runtime. The deployment archive's `release.json`
+Use a native amd64 or arm64 Linux host with cgroup v2, usable KVM/TUN,
+network namespaces, BPF/TC and userfaultfd. Production uses host systemd with
+rootful Podman/Quadlet. Development can use rootful Docker directly, including
+the cgroupfs driver; host node-infra units and Podman are not prerequisites for
+that path. The same image runs systemd as container PID 1 in both cases. The deployment archive's `release.json`
 records the selected support baseline; the shipped platform E2E exercises the
 actual template. A successful systemd or generator probe alone is not VM or
 recovery acceptance.
@@ -24,6 +26,7 @@ Acquire the same aggregate version of:
 |---|---|
 | `ghcr.io/kuasar-sandbox/node-infra:<version>` | Multi-architecture OCI image. Select and record the concrete platform manifest. |
 | `node-infra-<version>-linux-<amd64|arm64>.oci.tar.gz` | Offline alternative for the same platform image, imported with `podman load`. |
+| `node-infra-<version>-linux-<amd64|arm64>.docker.tar.gz` | Docker-compatible offline archive from the same OCI image; import with `docker load`. Available with `node-infra-v2`. |
 | `node-infra-deploy-<version>.tar.gz` | Host tool, complete Quadlet template, runtime hooks, examples and this guide. |
 | Matching workbench and `platform-<version>.tar.gz` | Repeatable acceptance environment and corresponding tests. |
 
@@ -62,15 +65,26 @@ that context. Preflight verifies Podman's selected namespace, and startup/status
 verify the main container against the retained handle. Run the tool and rootful
 Podman in the same local host context.
 
-Internal switch namespaces, TAPs, management veths and bpffs remain automatic.
-For loopback management services, the runtime assigns their configured IPv4 VIPs
-to the owned management peer and enables `route_localnet` on that device. The
-native Connector adds the floating-IP return routes; it does not replace the
-host default route. Preflight refuses existing management interface names,
-overlapping management addresses/routes and occupied native TCP listeners.
-Choose nonconflicting native settings or an isolated primary namespace when
-needed. Custom SDK listener changes and later races are checked by native
-startup and readiness. There is no artificial global single-instance limit.
+The default planes are the primary network (Conductor API and Proxy ingress),
+`sw0-switch` (vSwitch), and `mgmt` (management). Connector defaults to
+`mgmt_extracts: ["mgmt:mgmt0:169.254.169.254/32"]` and keeps
+`mgmt_services: ["169.254.169.254:80:127.0.0.1:19254"]`. Proxy and Telemetry use
+native `proxy_netns: mgmt`; Telemetry enablement remains explicit.
+
+Proxy's master opens the data listener in the primary network. Its workers,
+backend connections and MMDS listener use MGMT, while Conductor supplies MMDS
+policy over the native control channel. Customer xproxy worker connections use
+that worker namespace; connections opened by a master extension use the master's
+primary namespace. Do not put the whole Proxy service in `NetworkNamespacePath`.
+
+The runtime assigns local service VIPs and per-interface `route_localnet` only
+on verified instance management peers. Connector installs device-scoped floating
+return routes. Preflight checks each actual management plane, including borrowed
+namespaces; a pre-existing egress default route is allowed. The default layout
+leaves the host's existing metadata VIP, routes and listeners untouched.
+Primary API/data listener conflicts still fail. Explicit older native layouts
+remain explicit; changing defaults requires a maintenance rebuild, not hot
+migration or automatic rewriting of configuration files.
 
 Provide reachable external Cache/Store endpoints and any file-backed artifacts.
 For UDS, mount the provider-owned parent directory so a recreated socket remains
@@ -198,6 +212,90 @@ Connector control socket alone does not establish available execution slots
 or successful sandbox traffic. Admit workload only after actual node readiness
 and the required business acceptance checks.
 
+## Direct Docker development
+
+Use the same immutable image and native configuration paths. The short entrypoint
+recognizes Docker/Podman, verifies private cgroup v2 delegation, prepares private
+bpffs when absent, protects global `/proc/sys` and `/sys`, and execs `/sbin/init`.
+It does not bind the writable host cgroup tree or install a supervisor. This is
+a trusted administrator privileged system container, not a tenant boundary.
+
+With `IMAGE`, `CONFIG_ROOT` and `DATA_ROOT` set to the selected image and prepared
+absolute paths (including all four `conf.d` directories and `manifest.yaml`):
+
+```sh
+docker load --input node-infra-VERSION-linux-amd64.docker.tar.gz
+docker run -d --tty --name node-infra-dev --pull=never --privileged \
+  --cgroupns=private --network=host --cpus=4 --memory=6g --memory-swap=6g \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
+  -v "$CONFIG_ROOT/node-conductor/conf.d:/etc/node-conductor/conf.d:ro" \
+  -v "$CONFIG_ROOT/node-proxy/conf.d:/etc/node-proxy/conf.d:ro" \
+  -v "$CONFIG_ROOT/node-telemetry/conf.d:/etc/node-telemetry/conf.d:ro" \
+  -v "$CONFIG_ROOT/connector-vswitch/conf.d:/etc/connector-vswitch/conf.d:ro" \
+  -v "$CONFIG_ROOT/manifest.yaml:/etc/node-infra/manifest.yaml:ro" \
+  -v "$DATA_ROOT:/var/lib/node-infra:rw" "$IMAGE"
+docker exec node-infra-dev /usr/libexec/node-infra/node-infra-runtime health
+docker logs node-infra-dev
+docker exec node-infra-dev journalctl --no-pager
+docker stop node-infra-dev
+```
+
+For bridge, replace `--network=host` with `--network=bridge` and publish
+`-p 127.0.0.1:23000:3000 -p 127.0.0.1:23001:3001`. Three instances use distinct
+names/data/config directories and port pairs `23000/23001`, `23010/23011`,
+`23020/23021`. Container bridge connectivity does not provide sandbox NAT.
+Outer limits cover management, pools and VM descendants; native pool budgets
+must leave management headroom, with native CPU/NUMA placement unchanged.
+
+The image stop signal is `SIGRTMIN+3`. The 420-second runner budget covers the
+ordered inner stop budgets; the production outer unit additionally allows its
+recovery hook. The TTY supplies systemd’s console to `docker logs`. With privileged PID namespaces,
+a completed halt may report exit 130; verify the network cleanup completion log
+and resource results, not just the exit code. A forced stop is a different result
+from normal internal cleanup.
+`node-infra-ctl health --runtime docker --container node-infra-dev` is a thin
+adapter to the internal health entry; `describe` and `check` work the same way.
+No `node-infra-ctl install` is required for this Docker path.
+
+## Explicit external management and egress
+
+Bind only each referenced nsfs handle, read-only, at
+`/run/node-infra/netns-inputs/<name>`. Do not expose the host's entire `/run/netns`.
+For example, prepare the external `node-a-egress` namespace's exit device,
+addresses, default route, forwarding and SNAT on the host, then add:
+
+```sh
+# Additional docker run argument; --mount fails if the source does not exist.
+--mount type=bind,source=/run/netns/node-a-egress,target=/run/node-infra/netns-inputs/egress,readonly
+```
+
+The equivalent Quadlet binding is
+`Volume=/run/netns/node-a-egress:/run/node-infra/netns-inputs/egress:ro`.
+Use the native Connector overlay:
+
+```yaml
+mgmt_extracts:
+  - "mgmt:mgmt0:169.254.169.254/32"
+  - "egress:egress0:0.0.0.0/0"
+```
+
+Arrays replace the entire inherited list: keep the management item, with the
+catch-all last. Only referenced names are imported. A supplied placeholder,
+wrong namespace type or changed identity fails; unprovided named management
+planes are created privately. External switch/port namespace adoption is not
+supported. The applied record ties borrowed inputs to boot/generation and their
+actual handles. The instance releases only its local reference and Connector's
+own peers/return routes. Existing external devices, addresses, default routes,
+SNAT and namespace handles remain the caller's property.
+
+Customer networking uses native oneshot units and service drop-ins. See
+`examples/network-extension/` in the deployment package. Its setup/teardown
+owns only its named nft table, runs between network preparation and Connector,
+and retains the base Connector `ExecStartPost` readiness step. An appended
+post-start failure fails Connector and its startup dependents. The official
+image includes nftables, with the distribution-wide flush service masked; derived images must include any other required tools
+at build time. Never download packages during runtime setup.
+
 ## Optional namespace isolation and transit
 
 Both choices use the same template/tool and are independent: host or explicit
@@ -227,6 +325,57 @@ and records no fictitious device identity. The host owns device allocation;
 this package does not manage VFs or deploy transit gateways. The same fragment
 works through customer image COPY and runtime mounts.
 
+For Docker with borrowed transit, explicitly prepare retained handles before the
+first start. This optional path accepts a complete, never-started container ID
+from the local rootful Docker daemon. It uses native host networking; ordinary
+bridge development remains available without borrowed transit. Keep the normal
+image entrypoint, no automatic restart/auto-remove, and the three recovery binds.
+Use a dedicated native cgroup parent so recovery can prove that all old consumers
+have ended even when the caller dies immediately after `docker start`:
+
+```sh
+name=node-a
+run=/run/node-infra/instances/$name
+state=/var/lib/node-infra/instances/$name
+sudo install -d -m 700 "$run/netns" "$run/bpf" "$state/recovery" "$state/data"
+parent=/node-infra-$name
+if [ "$(docker info --format '{{.CgroupDriver}}')" = systemd ]; then
+  suffix=$(printf %s "$name" | sha256sum | cut -c1-16)
+  parent=nodeinfra${suffix}.slice
+fi
+# Add the same native configuration/fixture bindings used by the direct example.
+id=$(docker create --tty --name node-infra-$name --pull=never --privileged \
+  --network=host --cgroupns=private --cgroup-parent="$parent" \
+  --cpus=4 --memory=6g --memory-swap=6g --stop-timeout=420 \
+  --tmpfs=/run --tmpfs=/run/lock --tmpfs=/tmp:exec \
+  -v "$CONFIG/node-conductor/conf.d:/etc/node-conductor/conf.d:ro" \
+  -v "$CONFIG/node-proxy/conf.d:/etc/node-proxy/conf.d:ro" \
+  -v "$CONFIG/connector-vswitch/conf.d:/etc/connector-vswitch/conf.d:ro" \
+  -v "$CONFIG/manifest.yaml:/etc/node-infra/manifest.yaml:ro" \
+  -v "$state/data:/var/lib/node-infra:rw" \
+  -v "$state/recovery:/run/node-infra/recovery:rw" \
+  -v "$run/netns:/run/netns:rw,rslave" -v "$run/bpf:/sys/fs/bpf:rw" "$IMAGE_ID")
+sudo ./bin/node-infra-ctl prepare --runtime docker --name "$name" --container "$id"
+docker start "$id"
+sudo ./bin/node-infra-ctl started --runtime docker --name "$name"
+# After normal stop or abnormal exit, use the recorded old generation.
+docker stop "$id"
+sudo ./bin/node-infra-ctl recover --runtime docker --name "$name"
+```
+
+The tool records the exact container/image, local daemon, dedicated cgroup,
+namespace generation and pinned cleanup implementation. Recovery removes the
+old stopped container by ID before releasing handles; a reused name cannot
+redirect it. An interrupted daemon-side helper create whose outcome is still
+unknown retains its journal and handles and reports that uncertainty. Do not
+remove the pins or edit the journal to bypass it; inspect the recorded helper
+and retry recovery if the helper appears after the daemon completes the operation.
+If the helper remains absent, recovery can continue to refuse within the same
+boot: an absent inspection result does not prove that a pending create request
+has ended. Do not delete the journal or pins manually. Automatic retirement of
+an absent helper intent requires a different boot and disappearance of the
+entire old runtime directory.
+
 ## Stop, recover and replace an instance
 
 Full-instance stop ends its running VMs. The platform first stops new placement
@@ -236,18 +385,40 @@ Connector from the instance's main namespace. Stopping only Conductor does not
 stop every independent runner unit; restarting a component retains its native
 recovery behavior.
 
-Before starting PID 1, a short-lived native helper creates namespace pins in
-the host's instance directory. The system container receives them with `rslave`
-propagation, so its final unmount sweep cannot remove the host's pins. The host
-retains these pins, bpffs access, applied image/configuration identity and the
-recovery record. On normal shutdown and after a hard exit, the host hook
-runs after the old container and Quadlet-generated removal have finished. It
-uses the old image/configuration to remove its internal resources and, when
-configured, recover the original transit device. The retained primary handle
-also applies to host mode; changed current network/configuration cannot redirect
-cleanup. Existing schema-1 records and their pinned cleanup tools remain usable. A
-failure retains the recovery inputs and blocks replacement. Use status and the
-outer journal to identify the failed step, correct the stated input, then retry:
+`node-infra-network.service` owns setup and `ExecStopPost` cleanup, including
+partial setup failure. Connector's service owns its process and base readiness
+step. The independent drain unit stops the applied native Runner/Builder pools,
+including custom templates, and waits for their actual cgroups and VM consumers.
+The reverse stop order is Proxy/Conductor and other producers, execution pools,
+Connector, then network cleanup. Component restart does not tear down the switch
+or stop existing Guests. Remaining allocated slots may be forced only after
+producers and consumers have ended. Failed cleanup keeps the applied record.
+
+For production recovery, a short-lived helper pins necessary namespaces and
+private bpffs before PID 1. The main container receives `rslave` pins; ordinary
+internal cleanup dismantles objects but leaves the host-owned pins intact. After
+the old container and helpers have ended, the outer hook invokes the same cleanup
+primitive with the recorded image/tool/generation/boot identity and releases its
+own bindings. Changed current configuration cannot redirect cleanup. Older
+schema-1 records continue through their pinned old tools and images.
+
+The installed outer unit retains Quadlet's `KillMode=mixed`. Normal stop uses
+Podman's image stop signal and the internal ordered shutdown, keeping storage
+helpers alive until the container exits. If conmon dies, systemd kills the
+remaining instance cgroup before recovery; this abnormal path terminates Guests
+immediately. Sending a soft signal to the entire group could kill a FUSE storage
+helper before PID 1 can finish shutting down. Recovery still checks that all
+consumers have ended before releasing pins.
+
+SIGKILL, `docker rm -f` and power loss cannot run internal teardown. Default
+Docker without borrowed devices uses private kernel objects; the business data
+volume does not contain live namespace handles. Borrowed transit requires the
+explicit retained-handle prepare/recover path to guarantee return after hard
+exit. Never replace a missing old handle with a new same-named namespace. Across
+boot boundaries the host archives old journals separately; it does not treat old
+JSON as a live reference. Automatic restart is disabled while recovery is pending.
+Use status and the outer journal to identify failed production recovery, correct
+the stated input, then retry:
 
 ```sh
 sudo ./bin/node-infra-ctl status --name node-a --json
@@ -282,8 +453,16 @@ The matching platform package includes:
   exit/recovery, changed configuration, cleanup conflict/retry with missing BPF
   metadata, restart and stop isolation.
 
-Preparation takes the matching deployment package and native OCI archive;
-execution loads it into Podman and uses the delivered tool/template. The guest
+Preparation validates the matching deployment package and both archives when
+using `node-infra-v2`; execution imports OCI into Podman and Docker archive into
+Docker, requiring identical configuration and ordered rootfs diffIDs.
+`basic.node-infra-docker.sh` exercises direct host/bridge startup, component
+restart, real Files/Build/OTLP, normal/hard stops, snapshots, external MGMT/egress
+TCP/UDP SNAT and failure rollback, cgroupfs, retained transit and three-instance
+isolation. Preparation also creates a COPY-only customer fixture from the
+selected image and prebuilt SDK helpers; execution consumes its sealed archive
+to test copied configuration together with runtime fragments. The Podman
+path uses the delivered tool/template. The guest
 and extension helpers are prebuilt in the normal platform helper package.
 Tests create only their own namespaces/devices/state; a failed cleanup retains
 its recovery inputs and reports failure. They do not start a substitute

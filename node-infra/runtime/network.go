@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/kuasar-sandbox/connector/pkg/vswitch"
@@ -38,62 +39,88 @@ func preflight(r *record) error {
 	if err != nil {
 		return err
 	}
-	links, err := netlink.LinkList()
-	if err != nil {
+	if err := externalInputs(r); err != nil {
 		return err
 	}
-	var wanted []*net.IPNet
 	for _, m := range r.Management {
-		// Named management namespaces are created in the instance-private pin
-		// directory. Only the caller namespace can contain pre-existing peers.
-		if m.Namespace != "" {
-			continue
-		}
-		for _, link := range links {
-			if link.Attrs().Name == m.Device {
-				return fmt.Errorf("management interface %s already exists in primary namespace", m.Device)
+		var handle *netlink.Handle
+		if m.Namespace == "" {
+			handle, err = netlink.NewHandle()
+		} else {
+			external := false
+			for _, ns := range r.Namespaces {
+				if ns.Name == m.Namespace {
+					external = ns.External
+				}
 			}
-		}
-		wanted = append(wanted, returnNetworks(cfg)...)
-		for _, address := range m.Addresses {
-			_, subnet, err := net.ParseCIDR(address)
-			if err != nil {
-				return err
-			}
-			wanted = append(wanted, subnet)
-		}
-	}
-	if len(wanted) != 0 {
-		routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{}, netlink.RT_FILTER_TABLE)
-		if err != nil {
-			return err
-		}
-		for _, route := range routes {
-			if route.Dst == nil {
-				continue // existing default egress is not an owned management route
-			}
-			if prefix, _ := route.Dst.Mask.Size(); prefix == 0 {
+			if !external {
 				continue
 			}
-			for _, subnet := range wanted {
-				if overlaps(route.Dst, subnet) {
-					return fmt.Errorf("management network %s conflicts with existing route %s (table %d)", subnet, route.Dst, route.Table)
-				}
+			ns, nsErr := netns.GetFromPath(filepath.Join(inputsRoot, m.Namespace))
+			if nsErr != nil {
+				return nsErr
 			}
+			handle, err = netlink.NewHandleAt(ns)
+			ns.Close()
 		}
-		addresses, err := netlink.AddrList(nil, netlink.FAMILY_V4)
 		if err != nil {
 			return err
 		}
-		for _, address := range addresses {
-			for _, subnet := range wanted {
-				if overlaps(address.IPNet, subnet) {
-					return fmt.Errorf("management network %s conflicts with existing address %s", subnet, address.IPNet)
-				}
-			}
+		err = preflightPlane(handle, m, returnNetworks(cfg))
+		handle.Close()
+		if err != nil {
+			return fmt.Errorf("management namespace %q: %w", m.Namespace, err)
 		}
 	}
 	return checkListeners()
+}
+
+func preflightPlane(handle *netlink.Handle, m management, wanted []*net.IPNet) error {
+	links, err := handle.LinkList()
+	if err != nil {
+		return err
+	}
+	for _, link := range links {
+		if link.Attrs().Name == m.Device {
+			return fmt.Errorf("management interface %s already exists", m.Device)
+		}
+	}
+	for _, address := range m.Addresses {
+		_, subnet, err := net.ParseCIDR(address)
+		if err != nil {
+			return err
+		}
+		wanted = append(wanted, subnet)
+	}
+	routes, err := handle.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{}, netlink.RT_FILTER_TABLE)
+	if err != nil {
+		return err
+	}
+	for _, route := range routes {
+		if route.Dst == nil {
+			continue
+		}
+		if prefix, _ := route.Dst.Mask.Size(); prefix == 0 {
+			continue
+		}
+		for _, subnet := range wanted {
+			if overlaps(route.Dst, subnet) {
+				return fmt.Errorf("management network %s conflicts with existing route %s (table %d)", subnet, route.Dst, route.Table)
+			}
+		}
+	}
+	addresses, err := handle.AddrList(nil, netlink.FAMILY_V4)
+	if err != nil {
+		return err
+	}
+	for _, address := range addresses {
+		for _, subnet := range wanted {
+			if overlaps(address.IPNet, subnet) {
+				return fmt.Errorf("management network %s conflicts with existing address %s", subnet, address.IPNet)
+			}
+		}
+	}
+	return nil
 }
 
 // Probe ordinary native TCP listeners, using the native CLI's normalized output.

@@ -35,7 +35,7 @@ daily-preview.yaml/version >= release.yaml/version
 
 The comparison uses numeric aggregate `MAJOR.MINOR.PATCH` values, not string ordering. A Stable manifest can select only Stable components. A Preview manifest can mix Stable and Preview components. Both manifests must list exactly six release units with their respective correct tag prefixes.
 
-The two manifests below are examples, not a list of current published versions. New aggregate selections declare `delivery: node-infra-v1`; `workbench-v1` remains readable for previously selected aggregates. Omitting `delivery` selects the historical reading contract and cannot be used for new aggregate assembly.
+The two manifests below are examples, not a list of current published versions. New aggregate selections declare `delivery: node-infra-v2`; `node-infra-v1` and `workbench-v1` remain readable for previously selected aggregates. Omitting `delivery` selects the historical reading contract and cannot be used for new aggregate assembly.
 
 ### 2.1 Stable manifest
 
@@ -43,7 +43,7 @@ The two manifests below are examples, not a list of current published versions. 
 
 ```yaml
 version: release-v0.5.7
-delivery: node-infra-v1
+delivery: node-infra-v2
 previous_version: release-v0.5.6
 components:
   accelerator: v0.2.1
@@ -60,7 +60,7 @@ components:
 
 ```yaml
 version: release-v0.5.7
-delivery: node-infra-v1
+delivery: node-infra-v2
 previous_version: release-v0.5.6
 preview_version: preview.20260831
 previous_preview_version: preview.20260830
@@ -172,7 +172,7 @@ The aggregate stage validates the current declared x86 and native ARM non-KVM pr
 
 ## 5. Recovering incomplete publication
 
-A complete Release has the exact package set for its selected tag, an appropriate prerelease state and valid native GitHub asset IDs, sizes, digests and upload states. Optional historical SHA256SUMS attachments are ignored. Single-architecture historical releases remain valid; partial architecture sets are incomplete. A node-infra aggregate requires all eighteen packages; a historical Workbench aggregate requires fifteen. Missing or ambiguous asset metadata is retained and reported, never treated as authority to delete a supposedly incomplete release.
+A complete Release has the exact package set for its selected tag, an appropriate prerelease state and valid native GitHub asset IDs, sizes, digests and upload states. Optional historical SHA256SUMS attachments are ignored. Single-architecture historical releases remain valid; partial architecture sets are incomplete. A `node-infra-v2` aggregate requires all twenty packages; `node-infra-v1` retains eighteen; a historical Workbench aggregate requires fifteen. Missing or ambiguous asset metadata is retained and reported, never treated as authority to delete a supposedly incomplete release.
 
 Only tags with complete Releases are candidates for finished-product reuse. An incomplete publication stays available for recovery:
 
@@ -284,7 +284,7 @@ make test-ci-tools
 
 ## 8. Release asset validation
 
-Component packages use independent unit/version/architecture names; runtime and vmlinux remain separate version lines. The `node-infra-v1` contract contains one architecture-neutral platform archive, twelve unchanged component archives, two native Workbench image archives, two native node-infra OCI archives and one common deployment archive: eighteen assets, with no independent `SHA256SUMS`. The prior `workbench-v1` contract retains its original fifteen assets. Historical checksum attachments are ignored. Consumers read the manifest under the selected aggregate tag to obtain the complete required package set; missing packages never select compatibility with another version or current main.
+Component packages use independent unit/version/architecture names; runtime and vmlinux remain separate version lines. The `node-infra-v2` contract adds two Docker-compatible archives converted from the same native OCI images, with matching configuration IDs and ordered layer diffIDs, for twenty assets. The `node-infra-v1` contract retains one architecture-neutral platform archive, twelve unchanged component archives, two native Workbench image archives, two native node-infra OCI archives and one common deployment archive: eighteen assets, with no independent `SHA256SUMS`. The prior `workbench-v1` contract retains its original fifteen assets. Historical checksum attachments are ignored. Consumers read the manifest under the selected aggregate tag to obtain the complete required package set; missing packages never select compatibility with another version or current main.
 
 Do not publish generated release-metadata JSON or duplicate GitHub's automatically supplied source archives. Selection YAML remains in the repository, not in Release assets or the platform package. Component archives exclude `docs/` and `test/e2e/`; aggregate assembly collects component documentation and E2E inputs from the selected owner tags into the platform archive (§8.1). Kernel documentation follows the separately selected vmlinux product source.
 

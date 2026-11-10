@@ -38,6 +38,7 @@ case "${1:-}" in
         ;;
     prepare) exec /usr/libexec/node-infra/node-infra-runtime prepare --config "$(config_list /etc/connector-vswitch vswitch.yaml)" ;;
     ready) exec /usr/libexec/node-infra/node-infra-runtime ready ;;
-    cleanup) exec /usr/libexec/node-infra/node-infra-runtime cleanup ;;
+    cleanup) exec /usr/libexec/node-infra/node-infra-runtime cleanup --internal --force ;;
+    drain) exec /usr/libexec/node-infra/node-infra-runtime drain --timeout=120s ;;
     *) echo 'usage: service conductor|proxy|telemetry|connector|prepare|ready|cleanup' >&2; exit 2 ;;
 esac

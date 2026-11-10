@@ -223,6 +223,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
                     mock.patch.object(coordinator, "PLATFORM_SHA", "a" * 40),
                     mock.patch.object(coordinator, "TODAY", "20260909"),
                     mock.patch.object(coordinator, "validate_environment"),
+                    mock.patch.object(coordinator, "manifest_next_versions", return_value={}),
                     mock.patch.object(
                         coordinator, "manifest_values",
                         return_value=(base, "release-v1.2.2", current, prior, {}),
@@ -278,6 +279,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
                     mock.patch.object(coordinator, "PLATFORM_REF", "main"),
                     mock.patch.object(coordinator, "TODAY", requested),
                     mock.patch.object(coordinator, "validate_environment"),
+                    mock.patch.object(coordinator, "manifest_next_versions", return_value={}),
                     mock.patch.object(coordinator, "manifest_values", return_value=(
                         "release-v1.2.3", "release-v1.2.2", f"preview.{current}",
                         "preview.20260909", {},

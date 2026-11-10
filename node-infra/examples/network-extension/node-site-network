@@ -1,0 +1,25 @@
+#!/bin/sh
+# SPDX-License-Identifier: Apache-2.0
+set -eu
+# Allocate this table name to this instance/site before using the example.
+# The external namespace's existing exit/SNAT tables belong to its provider.
+table=site_node_a
+case "${1:-}" in
+  setup)
+    if ip netns exec egress nft list table inet "$table" >/dev/null 2>&1; then
+      exit 0
+    fi
+    ip netns exec egress nft -f - <<EOF
+add table inet $table
+add chain inet $table forward { type filter hook forward priority 10; policy accept; }
+add rule inet $table forward iifname "egress0" counter comment "node-a management egress"
+EOF
+    ;;
+  check) ip netns exec egress nft list table inet "$table" >/dev/null ;;
+  teardown)
+    if ip netns exec egress nft list table inet "$table" >/dev/null 2>&1; then
+      ip netns exec egress nft delete table inet "$table"
+    fi
+    ;;
+  *) echo 'usage: node-site-network setup|check|teardown' >&2; exit 2 ;;
+esac

@@ -7,8 +7,10 @@ instance cleanup. A failed recovery retains its inputs for operator diagnosis.
 """
 import argparse
 import base64
+from contextlib import contextmanager
 import fcntl
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
 import os
@@ -19,16 +21,16 @@ import socket
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 
-# The delivered unit allows 240 seconds to reap remaining consumers, followed
-# by the host recovery helper (120-second command timeout). The fixture must
-# observe that lifecycle before declaring failure, including conmon death.
-STOP_TIMEOUT = 360
+# The outer unit covers internal drain/cleanup and the retained-handle helper.
+# Observe the delivered budget before declaring failure, including conmon death.
+STOP_TIMEOUT = 600
 
 
 def require(condition, message):
@@ -36,9 +38,9 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def command(*args, check=True, timeout=120):
+def command(*args, check=True, timeout=120, env=None):
     result = subprocess.run([str(x) for x in args], text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=timeout)
+                            stderr=subprocess.PIPE, timeout=timeout, env=env)
     if check and result.returncode:
         raise RuntimeError(f'{Path(str(args[0])).name} {args[1] if len(args)>1 else ""} '
                            f'exited {result.returncode}: {result.stderr[-3000:]}')
@@ -77,7 +79,7 @@ def http(method, url, *, headers=None, body=None, expected=200):
     with response:
         data = response.read()
         require(response.status == expected, f'{method} {urllib.parse.urlsplit(url).path}: '
-                f'HTTP {response.status}, expected {expected}')
+                f'HTTP {response.status}, expected {expected}; {data[:500].decode("utf-8", errors="replace")}')
     return data
 
 
@@ -89,7 +91,7 @@ class Node:
         self.service += '.service'
         self.netns = 'node-infra-' + self.name
         self.host, self.with_transit = host, transit
-        self.mmds_vip = fixture.host_mmds_vip if host else '169.254.169.254'
+        self.mmds_vip = '169.254.169.254'
         self.network = ['ip'] if host else ['ip', '-n', self.netns]
         self.transit_name = self.name + 't' if host else 'uplink0'
         self.gateway = self.netns + '-gw' if gateway else None
@@ -162,6 +164,7 @@ class Node:
             (self.config / component / 'conf.d').mkdir(parents=True)
         manifest_key = command(self.fixture.bin / 'e2b-key-ctl', 'gen-key').stdout.strip()
         secret = command(self.fixture.bin / 'e2b-key-ctl', 'derive-api-secret', manifest_key).stdout.strip()
+        self.api_port, self.proxy_port = 3000, 3001
         self.api_key = command(self.fixture.bin / 'e2b-key-ctl', 'gen-apikey', secret).stdout.strip()
         self.manifest_key = manifest_key
         conductor = {
@@ -212,11 +215,6 @@ class Node:
                 (dropin / '20-platform.conf').write_text('[Service]\nEnvironmentFile=/etc/node-infra/extensions/service.env\n')
         write_json(self.config / 'node-conductor/conf.d/90-instance.yaml', conductor)
         connector = {'num_ports': 8}
-        if self.mmds_vip != '169.254.169.254':
-            # Cloud runners can own the default metadata route. Use a native
-            # service VIP from this fixture's reserved range; preserve theirs.
-            connector.update(mgmt_extracts=[f':sw0_m0:{self.mmds_vip}/32'],
-                             mgmt_services=[f'{self.mmds_vip}:80:127.0.0.1:19254'])
         if self.with_transit:
             connector.update(transit_dev=self.transit_name, transit_dev_addr=self.transit + '/30:' + self.transit_host,
                              transit_dev_mtu='auto')
@@ -225,7 +223,8 @@ class Node:
             write_json(self.config / 'connector-vswitch/conf.d/95-transit-test.yaml',
                        {'geneve_encap_eth': True, 'geneve_locator': 'port', 'geneve_port_base': 50000})
         write_json(self.config / 'manifest.yaml', {'manifest': {'key': ''}, 'store': {'endpoint': ''},
-                                                  'cache': {'endpoint': ''}, 'crypto': {'local': 'off'}})
+                                                  'cache': {'endpoint': ''}, 'crypto': {'local': 'off', 'chunk': 'aes', 'manifest': 'aes'},
+                                                  'chunker': {'mode': 'cdc', 'cdc': {'min': '128KiB', 'avg': '512KiB', 'max': '1MiB'}}})
 
     def _install(self):
         template = (self.fixture.deploy / 'templates/node-infra.container').read_text()
@@ -269,17 +268,26 @@ class Node:
         self.execute('/opt/node-infra/bin/node-ctl', 'manifest-key', 'add', '--socket',
                      '/run/sandbox/node-ctl.socket', self.manifest_key)
 
-    def api(self, method, path, body=None, expected=200):
-        return http(method, f'http://{self.ingress}:3000' + path, body=body, expected=expected,
-                    headers={'Host': 'api.node-infra.test', 'X-API-KEY': self.api_key})
+    def api(self, method, path, body=None, expected=200, *, headers=None):
+        return http(method, f'http://{self.ingress}:{self.api_port}' + path, body=body, expected=expected,
+                    headers={'Host': 'api.node-infra.test', 'X-API-KEY': self.api_key, **(headers or {})})
+
+    def assert_units(self):
+        units = ('node-infra.target', 'node-infra-network.service', 'node-infra-consumers.service',
+                 'connector-vswitch.service', 'node-conductor.service', 'node-proxy.service', 'node-telemetry.service')
+        result = self.execute('systemd-analyze', 'verify', *units, check=False)
+        write_json(self.fixture.output / self.name / 'systemd-verify.json',
+                   {'units': units, 'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+        require(result.returncode == 0, 'native systemd unit verification failed: ' + result.stderr)
 
     def guest(self, sandbox, path='/state', *, method='GET', body=None):
-        return http(method, f'http://{self.ingress}:3001' + path, body=body,
+        return http(method, f'http://{self.ingress}:{self.proxy_port}' + path, body=body,
                     headers={'Host': f'8000-{sandbox["sandboxID"]}.node-infra.test',
                              'X-Access-Token': sandbox['forwardAccessToken']})
 
-    def create(self):
-        request = {'templateID': self.fixture.template, 'timeout': 600}
+    def create(self, template=None):
+        self.wait_capacity('sandbox')
+        request = {'templateID': template or self.fixture.template, 'timeout': 600}
         if self.gateway:
             request['metadata'] = {'kuasar-sandbox.network': json.dumps({
                 'inner_ip': '10.231.0.2/24', 'nexthop': '10.231.0.1',
@@ -290,19 +298,78 @@ class Node:
         wait_for('real guest response', lambda: self.guest(sandbox))
         return sandbox
 
+    def assert_build(self):
+        self.wait_capacity('build')
+        registration = json.loads(self.api('POST', '/v3/templates',
+            {'name': self.name + '-build', 'profile': 'bare', 'cpuCount': 1, 'memoryMB': 512}, 202,
+            headers={'X-Kuasar-Sandbox-Builder': json.dumps({'target': {'kind': 'sandbox', 'memory': True}})}))
+        tid, bid = registration['templateID'], registration['buildID']
+        self.api('POST', f'/v2/templates/{tid}/builds/{bid}', {'fromTemplate': self.fixture.template}, 202)
+
+        def completed():
+            status = json.loads(self.api('GET', f'/templates/{tid}/builds/{bid}/status'))
+            write_json(self.fixture.output / self.name / 'build-status.json', status)
+            return status if status['status'] in ('ready', 'error') else None
+
+        status = wait_for('real Build transaction', completed, timeout=180)
+        require(status['status'] == 'ready', 'native Build failed: ' + json.dumps(status))
+        require(status['kind'] == 'snp' and status['templateID'].startswith('bare-snp-'),
+                'Build did not publish its requested memory snapshot')
+        guest = self.create(status['templateID'])
+        self.write_marker(guest)
+        self.assert_native_exec(guest)
+        self.api('DELETE', '/sandboxes/' + guest['sandboxID'], expected=204)
+
+    def wait_capacity(self, kind, *, resume=False):
+        def available():
+            result = self.execute('curl', '--fail', '--silent', '--unix-socket', '/run/sandbox/node-ctl.socket',
+                                  'http://localhost/internal/admin/resource-pressure')
+            status = json.loads(result.stdout)
+            write_json(self.fixture.output / self.name / ('capacity-' + kind + '.json'), status)
+            zones = ('green', 'yellow', 'red') if resume else ('green', 'yellow')
+            pools = {p['name'] for p in status.get('pools', []) if p['pressure']['zone'] in zones and
+                     all(p['capacity'][dimension] == 0 or p['available'][dimension] >= amount
+                         for dimension, amount in (('cpu_milli', 1000), ('memory_bytes', 512 * 1024**2)))}
+            return any(p['kind'] == kind and p['resource_pool'] in pools and p['states'].get('idle', 0) > 0
+                       for p in status.get('runner_pools', []))
+        # Native pressure hysteresis can retain critical after a VM exits.
+        # Wait for authoritative placement capacity; an HTTP-200 health read
+        # alone does not establish admission or an available execution slot.
+        wait_for('native ' + kind + ' placement capacity', available)
+
     def state(self, sandbox):
         return json.loads(self.guest(sandbox))
 
     def write_marker(self, sandbox):
         return json.loads(self.guest(sandbox, method='POST', body=(self.name + '-disk').encode()))
 
-    def assert_native_exec(self, sandbox):
+    def assert_native_exec(self, sandbox, expected=None):
         token = json.loads(self.api('POST', f'/sandboxes/{sandbox["sandboxID"]}/exec-sessions', {}, 201))['execAccessToken']
-        result = command(self.fixture.bin / 'sandbox-ctl', 'exec', '--proxy', f'http://{self.ingress}:3001',
+        result = command(self.fixture.bin / 'sandbox-ctl', 'exec', '--proxy', f'http://{self.ingress}:{self.proxy_port}',
                          '--proxy-header', 'E2b-Sandbox-Id: ' + sandbox['sandboxID'],
                          '--proxy-header', 'E2b-Sandbox-Service: exec', '--proxy-header', 'X-Access-Token: ' + token,
                          '--', '/node-infra-guest', 'read')
-        require(result.stdout == self.name + '-disk', 'native exec did not read guest disk state')
+        require(result.stdout == (expected or self.name + '-disk'), 'native exec did not read guest disk state')
+
+    def assert_files(self, sandbox):
+        self.guest(sandbox, '/start-envd', method='POST')
+        base = f'http://{self.ingress}:{self.proxy_port}'
+        headers = {'Host': f'49983-{sandbox["sandboxID"]}.node-infra.test',
+                   'X-Access-Token': sandbox['forwardAccessToken'],
+                   'Authorization': 'Basic ' + base64.b64encode(b'root:').decode()}
+        wait_for('real runtime envd Files service', lambda: http('GET', base + '/health', headers=headers, expected=204) or True)
+        http('POST', base + '/init', headers=headers, expected=204,
+             body={'envVars': {}, 'defaultUser': 'root', 'defaultWorkdir': '/state',
+                   'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
+        payload, boundary = self.name + '-files', 'node-infra-files'
+        body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="node-infra-marker"\r\n'
+                f'Content-Type: application/octet-stream\r\n\r\n{payload}\r\n--{boundary}--\r\n').encode()
+        path = '/files?path=/state/node-infra-marker'
+        http('POST', base + path, headers={**headers, 'Content-Type': 'multipart/form-data; boundary=' + boundary}, body=body)
+        require(http('GET', base + path, headers=headers).decode() == payload, 'real Files round trip differs')
+        self.assert_native_exec(sandbox, payload)
+        self.write_marker(sandbox)
+        write_json(self.fixture.output / self.name / 'files.json', {'service': 'bundled envd', 'upload_download_exec': 'passed'})
 
     def assert_transit(self, sandbox):
         require(self.gateway is not None, 'transit assertion requires an owned GENEVE gateway')
@@ -367,6 +434,11 @@ class Node:
         before = self.state(sandbox)
         sid = sandbox['sandboxID']
         self.api('POST', f'/sandboxes/{sid}/pause', {'memory': memory}, 204)
+        self.wait_capacity('sandbox', resume=True)
+        pressure = self.execute('curl', '--fail', '--silent', '--unix-socket', '/run/sandbox/node-ctl.socket',
+                                'http://localhost/internal/admin/resource-pressure')
+        write_json(self.fixture.output / self.name / ('before-connect-' + str(memory) + '.json'),
+                   json.loads(pressure.stdout))
         self.api('POST', f'/sandboxes/{sid}/connect', {'memory': memory, 'timeout': 600}, 200)
         after = wait_for('restored guest response', lambda: self.state(sandbox))
         require(after['disk'] == before['disk'] == self.name + '-disk', 'pause/resume lost persistent disk content')
@@ -388,7 +460,48 @@ class Node:
         status = self.status()
         require(not status['container']['running'] and not status['recovery']['pending'], 'old instance still runs or needs recovery')
 
-    def stop(self, *, hard=False):
+    def stop(self, *, hard=False, verify_order=False):
+        if verify_order:
+            require(not hard, 'ordered shutdown requires normal stop')
+            inspected = json.loads(command('podman', 'inspect', self.container).stdout)[0]
+            applied = json.loads((self.data / 'applied.json').read_text())
+            identity = inspected['Id']
+            output = self.fixture.output / self.name / ('normal-stop-' + identity + '.log')
+            output.parent.mkdir(parents=True, exist_ok=True)
+            # Follow the actual inner journal before the outer unit removes the
+            # container. The unique marker confirms the reader is attached.
+            marker = 'node-infra-stop-observer-' + uuid.uuid4().hex
+            with output.open('w') as stream:
+                reader = subprocess.Popen(['podman', 'exec', identity, 'journalctl', '--follow',
+                                           '--no-pager', '-o', 'cat'], stdout=stream, stderr=subprocess.STDOUT)
+                try:
+                    self.execute('logger', '-t', 'node-infra-e2e', marker)
+                    wait_for('inner shutdown journal observer', lambda: marker in output.read_text())
+                    self.stop()
+                finally:
+                    try:
+                        reader.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        reader.terminate()
+                        reader.wait(timeout=5)
+            log = output.read_text()
+            position = marker_offset = log.index(marker)
+            positions = {}
+            for entry in ('node-infra-consumers.service: Deactivated successfully.',
+                          'Stopped node-infra-consumers.service',
+                          'connector-vswitch.service: Deactivated successfully.',
+                          'Stopped connector-vswitch.service',
+                          'node-infra: network cleanup complete (outer handles retained)',
+                          'node-infra-network.service: Deactivated successfully.',
+                          'Stopped node-infra-network.service'):
+                position = log.find(entry, position)
+                require(position >= 0, 'normal outer stop missed ordered inner shutdown: ' + entry)
+                positions[entry] = position
+            write_json(output.with_suffix('.json'), {'container_id': identity, 'generation': applied['generation'],
+                       'image': inspected['Image'], 'observer_marker': marker, 'marker_offset': marker_offset,
+                       'ordered_markers': positions,
+                       'log_sha256': hashlib.sha256(output.read_bytes()).hexdigest()})
+            return
         if hard:
             command('podman', 'kill', '--signal', 'KILL', self.container)
         else:
@@ -405,7 +518,16 @@ class Node:
                    status['service']['active'] in ('inactive', 'failed'))
         if not stopped:
             state = command('systemctl', 'show', self.service,
-                            '--property=SubState,ControlPID,TimeoutStopUSec').stdout.strip()
+                            '--property=SubState,ControlPID,TimeoutStopUSec,ExecStopPost').stdout.strip()
+            control = dict(line.split('=', 1) for line in state.splitlines()).get('ControlPID', '0')
+            if control.isdigit() and int(control) > 1:
+                try:
+                    process = Path('/proc') / control
+                    state += '\ncontrol_command=' + process.joinpath('cmdline').read_text().replace('\0', ' ')
+                    state += '\ncontrol_wait=' + process.joinpath('wchan').read_text().strip()
+                    state += '\ncontrol_children=' + process.joinpath('task', control, 'children').read_text().strip()
+                except FileNotFoundError:
+                    pass  # The real stop job can finish between these reads.
             raise RuntimeError('stop still pending: ' + json.dumps(status) + '; ' + state)
         return True
 
@@ -482,9 +604,6 @@ class Fixture:
             offset = int(uuid.uuid4().hex[:4], 16) % 8192 * 16
             candidate = ipaddress.ip_network((int(ipaddress.IPv4Address('198.18.0.0')) + offset, 28))
             if not any(candidate.overlaps(network) for network in occupied):
-                default_vip = ipaddress.ip_address('169.254.169.254')
-                self.host_mmds_vip = (str(candidate.broadcast_address) if
-                                     any(default_vip in network for network in occupied) else str(default_vip))
                 return int(candidate.network_address)
         raise RuntimeError('no private test subnet available')
 
@@ -536,6 +655,20 @@ class Fixture:
         require(not errors, '; '.join(errors))
 
 
+def listener_snapshot():
+    listeners = []
+    for line in command('ss', '-H', '-lntue').stdout.splitlines():
+        fields = line.split()
+        inodes = re.findall(r'\bino:(\d+)\b', line)
+        require(len(fields) >= 7 and len(inodes) == 1 and int(inodes[0]) > 0,
+                'listener lacks an unambiguous socket identity: ' + line)
+        # Recv-Q changes with ordinary traffic. Preserve every listening socket,
+        # its identity and configuration, including Send-Q's listen backlog.
+        listeners.append({'protocol': fields[0], 'state': fields[1], 'backlog': int(fields[3]),
+                          'local': fields[4], 'peer': fields[5], 'inode': int(inodes[0])})
+    return sorted(listeners, key=lambda item: json.dumps(item, sort_keys=True))
+
+
 def network_snapshot():
     links = json.loads(command('ip', '-j', 'address', 'show').stdout)
     result = {'links': [{key: row.get(key) for key in ('ifindex', 'ifname', 'address', 'mtu', 'flags', 'link_index')}
@@ -543,7 +676,7 @@ def network_snapshot():
                                          for address in row.get('addr_info', [])]} for row in links],
               'routes': json.loads(command('ip', '-j', '-4', 'route', 'show', 'table', 'all').stdout),
               'routes6': json.loads(command('ip', '-j', '-6', 'route', 'show', 'table', 'all').stdout),
-              'listeners': sorted(command('ss', '-H', '-lntu').stdout.splitlines()),
+              'listeners': listener_snapshot(),
               'bpf_pins': {str(path): path.stat().st_ino for path in Path('/sys/fs/bpf').rglob('*')}}
     for tool, arguments in (('iptables', ['-S']), ('ip6tables', ['-S']), ('nft', ['-s', 'list', 'ruleset'])):
         if shutil.which(tool):
@@ -551,14 +684,107 @@ def network_snapshot():
     return result
 
 
+def network_unchanged(before):
+    after = network_snapshot()
+    changes = {key: {'before': value, 'after': after.get(key)}
+               for key, value in before.items() if after.get(key) != value}
+    require(after == before, 'host network changed: ' + json.dumps(changes, sort_keys=True))
+    return True
+
+
 def host_case(fixture):
-    with socket.socket() as sentinel:
+    with metadata_sentinel(fixture), socket.socket() as sentinel:
         sentinel.bind(('127.0.0.1', 0))
         sentinel.listen()
         _host_case(fixture, sentinel)
         with socket.create_connection(sentinel.getsockname(), timeout=2):
             connection, _ = sentinel.accept()
             connection.close()
+
+
+@contextmanager
+def metadata_sentinel(fixture):
+    name = fixture.key + 'meta'
+    require(command('ip', 'link', 'show', name, check=False).returncode != 0, 'metadata fixture name occupied')
+    command('ip', 'link', 'add', name, 'type', 'dummy')
+    index = json.loads(command('ip', '-j', 'link', 'show', name).stdout)[0]['ifindex']
+    try:
+        command('ip', 'link', 'set', name, 'up')
+        command('ip', 'address', 'add', '169.254.169.254/32', 'dev', name)
+        command('ip', 'route', 'add', '169.254.169.0/24', 'dev', name, 'metric', '4096')
+        command('nft', 'add', 'table', 'inet', name)
+        wait_for('metadata sentinel address duplicate detection', lambda: all(
+            not address.get('tentative')
+            for link in json.loads(command('ip', '-j', 'address', 'show', name).stdout)
+            for address in link.get('addr_info', [])))
+        token = ('node-infra-host-metadata-' + fixture.key).encode()
+
+        class Handler(BaseHTTPRequestHandler):
+            def setup(self):
+                self.request.settimeout(2)
+                super().setup()
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(token)))
+                self.end_headers()
+                self.wfile.write(token)
+
+            def log_message(self, *_):
+                pass
+
+        class Server(ThreadingHTTPServer):
+            daemon_threads = False
+            request_queue_size = 128
+
+        with Server(('169.254.169.254', 80), Handler) as server:
+            listener = server.socket
+            identity = {'inode': os.fstat(listener.fileno()).st_ino, 'address': listener.getsockname()}
+
+            def probe():
+                require(os.fstat(listener.fileno()).st_ino == identity['inode'] and
+                        listener.getsockname() == identity['address'] and
+                        listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1,
+                        'metadata listening socket was replaced or stopped')
+                require(http('GET', 'http://169.254.169.254/') == token,
+                        'host metadata listener response changed')
+
+            worker = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.05})
+            worker.start()
+            try:
+                probe()
+                before = network_snapshot()
+                write_json(fixture.output / 'metadata-before.json', before)
+                (fixture.output / 'metadata-listeners-before.txt').write_text(command('ss', '-H', '-lntue').stdout)
+                try:
+                    yield
+                    probe()
+                    # A bridge's carrier/linkdown flags settle after its last
+                    # veth disappears. Poll every preserved resource category.
+                    wait_for('original host network state', lambda: network_unchanged(before), timeout=30)
+                finally:
+                    after = network_snapshot()
+                    write_json(fixture.output / 'metadata-after.json', after)
+                    (fixture.output / 'metadata-listeners-after.txt').write_text(command('ss', '-H', '-lntue').stdout)
+                    changes = {key: {'before': value, 'after': after.get(key)}
+                               for key, value in before.items() if after.get(key) != value}
+                    if changes:
+                        print('metadata fixture network difference: ' + json.dumps(changes, sort_keys=True),
+                              file=sys.stderr, flush=True)
+                require(after == before, 'host metadata resources changed')
+                write_json(fixture.output / 'metadata-sentinel.json',
+                           {'before': before, 'after': after, 'listener_survived': True,
+                            'listener_identity': identity, 'response': token.decode()})
+            finally:
+                server.shutdown()
+                worker.join(timeout=2)
+                require(not worker.is_alive(), 'metadata HTTP accept worker did not stop')
+    finally:
+        current = json.loads(command('ip', '-j', 'link', 'show', name).stdout)[0]
+        require(current['ifindex'] == index, 'metadata fixture device was replaced')
+        command('ip', 'link', 'delete', name)
+        if command('nft', 'list', 'table', 'inet', name, check=False).returncode == 0:
+            command('nft', 'delete', 'table', 'inet', name)
 
 
 def _host_case(fixture, sentinel):
@@ -569,18 +795,6 @@ def _host_case(fixture, sentinel):
     node = Node(fixture, 0, host=True, transit=False)
     require(not (Path('/run/netns') / node.netns).exists() and not node.peers,
             'default host fixture created an external namespace/device')
-    if node.mmds_vip != '169.254.169.254':
-        overlay = node.config / 'connector-vswitch/conf.d/90-instance.yaml'
-        saved = overlay.read_bytes()
-        try:
-            write_json(overlay, {'num_ports': 8})
-            result = command(fixture.ctl, 'check', '--name', node.name, check=False)
-            write_json(fixture.output / 'host-existing-metadata-route.json',
-                       {'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
-            require(result.returncode != 0 and 'existing route' in result.stderr,
-                    'default metadata VIP did not reject the existing host route: ' + result.stderr)
-        finally:
-            overlay.write_bytes(saved)
     with socket.socket() as occupied:
         occupied.bind(('127.0.0.1', 3000))
         occupied.listen()
@@ -597,21 +811,9 @@ def _host_case(fixture, sentinel):
             client.shutdown(socket.SHUT_WR)
             require(connection.recv(1) == b'', 'listener sentinel did not receive client EOF')
             connection.close()
-    command('ip', 'link', 'add', 'sw0_m0', 'type', 'dummy')
-    try:
-        identity = json.loads(command('ip', '-j', 'link', 'show', 'sw0_m0').stdout)[0]
-        result = command(fixture.ctl, 'check', '--name', node.name, check=False)
-        require(result.returncode != 0 and 'management interface' in result.stderr, 'foreign management link accepted')
-        require(json.loads(command('ip', '-j', 'link', 'show', 'sw0_m0').stdout)[0] == identity,
-                'preflight changed the foreign management link')
-    finally:
-        command('ip', 'link', 'delete', 'sw0_m0')
-    command('ip', 'route', 'add', 'blackhole', '100.100.96.0/20', 'proto', '186')
-    try:
-        result = command(fixture.ctl, 'check', '--name', node.name, check=False)
-        require(result.returncode != 0 and 'existing route' in result.stderr, 'conflicting management route accepted')
-    finally:
-        command('ip', 'route', 'delete', 'blackhole', '100.100.96.0/20', 'proto', '186')
+    # Default management resources now live in mgmt. Conflicting host names,
+    # VIPs and floating return routes must remain untouched and allow startup.
+    before = network_snapshot()
     node.start()
     inspected = json.loads(command('podman', 'inspect', node.container).stdout)[0]
     applied = json.loads((node.data / 'applied.json').read_text())
@@ -624,12 +826,13 @@ def _host_case(fixture, sentinel):
     sandbox = node.create()
     node.write_marker(sandbox)
     node.assert_native_exec(sandbox)
+    node.assert_files(sandbox)
     metadata = json.loads(node.guest(sandbox, '/mmds?' + urllib.parse.urlencode({'ip': node.mmds_vip})))
     require(metadata.get('instanceID') == sandbox['sandboxID'], 'MMDS did not identify the real guest')
     node.assert_outer_limits()
     node.assert_restored(sandbox, memory=True)
     node.assert_restored(sandbox, memory=False)
-    node.stop()
+    node.stop(verify_order=True)
     node.start()
     node.create()
     node.stop(hard=True)
@@ -679,6 +882,7 @@ def deploy_case(fixture):
     sandbox = node.create()
     node.write_marker(sandbox)
     node.assert_native_exec(sandbox)
+    node.assert_files(sandbox)
     node.assert_transit(sandbox)
     node.assert_outer_limits()
     node.assert_restored(sandbox, memory=True)
@@ -690,6 +894,7 @@ def deploy_case(fixture):
 def config_case(fixture):
     node = Node(fixture, 0, extension=True, pools=True)
     node.start()
+    node.assert_units()
     expected = (node.name + '-private-r42').encode()
     require(node.api('GET', '/node-infra-extension') == expected, 'xconductor private configuration not applied')
     endpoint = f'http://{node.ingress}:3001/node-infra-extension'
@@ -720,7 +925,15 @@ def config_case(fixture):
     after = node.execute('pgrep', '-P', master).stdout.split()
     require(len(after) == 1 and after != children, 'Proxy worker did not restart beneath the same master')
     require(node.state(second)['token'], 'second pool guest did not survive worker restart')
-    node.stop()
+    node.execute('systemd-run', '--unit=node-infra-ignore-term.service', '--slice=sandbox-runner.slice',
+                 '--property=TimeoutStopSec=2s', '--property=KillMode=control-group', '/bin/sh', '-c',
+                 'trap "echo TERM >>/var/lib/node-infra/term-seen" TERM; '
+                 'touch /run/ignore-term-ready; while :; do sleep 1; done')
+    wait_for('controlled TERM-ignoring consumer', lambda: node.execute('test', '-e', '/run/ignore-term-ready', check=False).returncode == 0)
+    node.stop(verify_order=True)
+    require('TERM' in (node.data / 'data/term-seen').read_text(), 'drain did not signal the controlled consumer')
+    write_json(fixture.output / node.name / 'consumer-timeout.json',
+               {'term_observed': True, 'native_kill_budget_seconds': 2, 'outer_recovery_confirmed_no_consumers': True})
     # Static native validation intentionally does not execute custom Configure.
     # Its real startup failure occurs after the network unit has been prepared.
     marker = node.config / 'extensions/r42/marker'
@@ -806,7 +1019,7 @@ def lifecycle_case(fixture):
     command('systemctl', 'stop', first.service, check=False, timeout=180)
     wait_for('failed cleanup retained inputs', lambda: first.status()['recovery']['pending'])
     require((first.run / 'netns/sw0-switch').stat().st_ino ==
-            json.loads((first.data / 'recovery/connector.json').read_text())['namespaces'][0]['inode'],
+            next(ns['inode'] for ns in json.loads((first.data / 'recovery/connector.json').read_text())['namespaces'] if ns['name'] == 'sw0-switch'),
             'failed cleanup lost the original namespace')
     require(command(fixture.ctl, 'check', '--name', first.name, check=False).returncode != 0,
             'unfinished recovery allowed a new generation')
@@ -848,6 +1061,7 @@ def interrupt_native_helpers(node, operations=(('prepare', 'hook'), ('prepare', 
             sandbox = node.create()
             node.write_marker(sandbox)
             node.assert_native_exec(sandbox)
+            node.assert_files(sandbox)
             # Leave a genuine failed cleanup for an operator's manual retry.
             # The retry runs outside the unit cgroup: systemd cannot reap its
             # orphan helper for us when we subsequently kill the host CLI.
@@ -937,6 +1151,7 @@ def interrupt_native_helpers(node, operations=(('prepare', 'hook'), ('prepare', 
         sandbox = node.create()
         node.write_marker(sandbox)
         node.assert_native_exec(sandbox)
+        node.assert_files(sandbox)
         node.stop()
     write_json(node.fixture.output / (node.name + '-helper-interruptions.json'), evidence)
 

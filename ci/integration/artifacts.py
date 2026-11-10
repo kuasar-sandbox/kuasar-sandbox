@@ -657,6 +657,7 @@ def compose(plan, arch, assets, delta, output):
         delivery = delivery_module()
         require(set(node['files']) == {
                     delivery.node_infra_archive(plan['node_infra']['version'], arch),
+                    delivery.node_infra_docker_archive(plan['node_infra']['version'], arch),
                     delivery.node_infra_deploy_archive(plan['node_infra']['version']),
                     f'node-infra-{arch}.json', 'node-infra-index.json'},
                 'candidate node-infra output set differs from the delivery contract')
@@ -725,10 +726,12 @@ def compose(plan, arch, assets, delta, output):
             node = plan['node_infra']
             node_infra_module().install_inputs(delta / 'node-infra', stage, node['version'], arch,
                                                revision=node['source_revision'], components=node['components'])
-        elif baseline.get('delivery') == delivery_module().NODE_INFRA_DELIVERY:
+        elif baseline.get('delivery') in delivery_module().NODE_INFRA_DELIVERIES:
             node = node_infra_module()
-            for name in (delivery_module().node_infra_archive(baseline['version'], arch),
-                         delivery_module().node_infra_deploy_archive(baseline['version'])):
+            for name in ({delivery_module().node_infra_archive(baseline['version'], arch),
+                          delivery_module().node_infra_deploy_archive(baseline['version'])} |
+                         ({delivery_module().node_infra_docker_archive(baseline['version'], arch)}
+                          if baseline['delivery'] == delivery_module().NODE_INFRA_DELIVERY else set())):
                 path = assets / name
                 require(path.is_file() and not path.is_symlink() and path.stat().st_size == records[name]['size']
                         and 'sha256:' + digest(path) == records[name]['digest'], 'node-infra baseline asset differs: ' + name)

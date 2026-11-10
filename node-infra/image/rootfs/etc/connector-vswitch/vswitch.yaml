@@ -4,6 +4,6 @@ num_ports: 128
 mac_addr: "02:00:00:00:00:01"
 floating_ip_base: 100.100.96.0
 mgmt_extracts:
-  - ":sw0_m0:169.254.169.254/32"
+  - "mgmt:mgmt0:169.254.169.254/32"
 mgmt_services:
   - "169.254.169.254:80:127.0.0.1:19254"

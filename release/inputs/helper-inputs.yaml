@@ -45,12 +45,12 @@
     {
       "name": "node-infra-xproxy",
       "env": "NODE_INFRA_XPROXY_BIN",
-      "cases": ["basic.node-infra-config.sh"]
+      "cases": ["basic.node-infra-config.sh", "basic.node-infra-docker.sh"]
     },
     {
       "name": "node-infra-xconductor",
       "env": "NODE_INFRA_XCONDUCTOR_BIN",
-      "cases": ["basic.node-infra-config.sh"]
+      "cases": ["basic.node-infra-config.sh", "basic.node-infra-docker.sh"]
     }
   ]
 }

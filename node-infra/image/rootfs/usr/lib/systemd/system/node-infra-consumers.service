@@ -1,0 +1,15 @@
+[Unit]
+Description=Drain all node-infra execution pools before network shutdown
+After=connector-vswitch.service
+Before=node-conductor.service node-proxy.service node-telemetry.service
+PartOf=node-infra.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/true
+ExecStop=/usr/libexec/node-infra/service drain
+TimeoutStopSec=135
+
+[Install]
+WantedBy=node-infra.target

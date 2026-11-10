@@ -87,6 +87,10 @@ node_infra_archive() {
   printf 'node-infra-%s-linux-%s.oci.tar.gz\n' "$1" "$arch"
 }
 
+node_infra_docker_archive() {
+  node_infra_archive "$1" "$2" | sed 's/\.oci\.tar\.gz$/.docker.tar.gz/'
+}
+
 node_infra_deploy_archive() {
   validate_aggregate_version "$1"
   printf 'node-infra-deploy-%s.tar.gz\n' "$1"

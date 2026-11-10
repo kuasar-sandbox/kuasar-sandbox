@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +38,24 @@ func main() {
 	}
 	token := hex.EncodeToString(value)
 	var mutex sync.Mutex
+	var envdOnce sync.Once
+	var envdError error
 	count := 0
+	http.HandleFunc("/start-envd", func(w http.ResponseWriter, r *http.Request) {
+		envdOnce.Do(func() {
+			// Exercise the delivered runtime's real Files service. The fixture
+			// itself only supplies the workload and never implements that API.
+			cmd := exec.Command("/opt/sandbox-runtime/bin/envd", "-isnotfc", "-port", "49983")
+			cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+			envdError = cmd.Start()
+			if envdError == nil {
+				go func() { _ = cmd.Wait() }()
+			}
+		})
+		if envdError != nil {
+			http.Error(w, envdError.Error(), 500)
+		}
+	})
 	http.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
 		mutex.Lock()
 		defer mutex.Unlock()
@@ -103,6 +122,38 @@ func main() {
 	http.HandleFunc("/egress", func(w http.ResponseWriter, r *http.Request) {
 		client := &http.Client{Timeout: 5 * time.Second}
 		response, err := client.Get(r.URL.Query().Get("url"))
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer response.Body.Close()
+		w.WriteHeader(response.StatusCode)
+		_, _ = io.Copy(w, io.LimitReader(response.Body, 4096))
+	})
+	http.HandleFunc("/udp", func(w http.ResponseWriter, r *http.Request) {
+		connection, err := net.DialTimeout("udp", r.URL.Query().Get("address"), 5*time.Second)
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer connection.Close()
+		_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err := connection.Write([]byte(r.URL.Query().Get("marker"))); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		data := make([]byte, 4096)
+		n, err := connection.Read(data)
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		_, _ = w.Write(data[:n])
+	})
+	http.HandleFunc("/otlp", func(w http.ResponseWriter, r *http.Request) {
+		payload := fmt.Sprintf(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"node-infra"},"metrics":[{"name":"node_infra_probe","gauge":{"dataPoints":[{"timeUnixNano":"%d","asDouble":17}]}}]}]}]}`, time.Now().UnixNano())
+		client := &http.Client{Timeout: 5 * time.Second}
+		response, err := client.Post("http://169.254.169.254:4318/v1/metrics", "application/json", bytes.NewBufferString(payload))
 		if err != nil {
 			http.Error(w, err.Error(), 502)
 			return

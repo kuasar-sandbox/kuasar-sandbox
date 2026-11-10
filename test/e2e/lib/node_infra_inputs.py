@@ -90,7 +90,7 @@ def prepare(root, arch):
     release = json.loads(regular(root, 'deploy/node-infra/release.json').read_text())
     regular(root, 'deploy/node-infra/bin/node-infra-ctl')
     regular(root, 'deploy/node-infra/templates/node-infra.container')
-    require(type(release.get('schema')) is int and release['schema'] == 1,
+    require(type(release.get('schema')) is int and release['schema'] in (1, 2),
             'unsupported release.json schema')
     require(isinstance(release.get('version'), str) and release['version'] and
             re.fullmatch('[0-9a-f]{40}', release.get('source_revision', '')),
@@ -119,3 +119,21 @@ def prepare(root, arch):
              'sha256': record['sha256'], 'image_id': image['id'], 'reference': image['reference'],
              'manifest_digest': image['manifest_digest'], 'owner': 'platform'},
             {'deploy': str(deploy.relative_to(root)), 'release_version': release['version']})
+
+
+def prepare_docker(root, arch):
+    release = json.loads(regular(root, 'deploy/node-infra/release.json').read_text())
+    if release['schema'] == 1:
+        return None
+    image = release['images'][arch]
+    record = image['docker_archive']
+    target = 'linux/' + {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch]
+    name = f"node-infra-{release['version']}-{target.replace('/', '-')}.docker.tar.gz"
+    require(record['name'] == name, 'Docker archive name differs')
+    path = regular(root, 'images/' + name)
+    require(path.stat().st_size == record['size'] and checksum(path) == record['sha256'], 'Docker archive checksum differs')
+    import workspace
+    verified = workspace.verify_image_archive(path, target)
+    require(verified['image_id'] == image['id'], 'Docker/OCI config differs')
+    return {'runtime': 'docker', 'platform': target, 'archive': 'images/' + name,
+            'sha256': record['sha256'], 'image_id': image['id'], 'owner': 'platform'}

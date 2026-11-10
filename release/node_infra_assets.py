@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import sys
 import tarfile
 
 import archive_paths
@@ -124,8 +125,13 @@ def inspect_oci(path, arch, *, version=None, revision=None):
         require(isinstance(layers, list) and layers
                 and len(layers) == len(config.get('rootfs', {}).get('diff_ids', [])),
                 'node-infra OCI layer/config count differs')
-        for layer in layers:
+        for layer, expected_diff in zip(layers, config['rootfs']['diff_ids']):
             blob(layer)
+            name = 'blobs/sha256/' + layer['digest'][7:]
+            with archive.extractfile(members[name]) as raw:
+                stream = gzip.GzipFile(fileobj=raw) if layer.get('mediaType', '').endswith('+gzip') else raw
+                require('sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest() == expected_diff,
+                        'OCI layer diffID differs from image config')
         require({name for name, member in members.items() if member.isfile()} == used,
                 'unreferenced files in node-infra OCI archive')
         labels = config.get('config', {}).get('Labels', {})
@@ -135,6 +141,25 @@ def inspect_oci(path, arch, *, version=None, revision=None):
             require(labels.get('org.opencontainers.image.revision') == revision, 'node-infra image source differs')
         return {'image_id': manifest['config']['digest'], 'manifest_digest': descriptor['digest'],
                 'manifest_size': len(manifest_raw), 'media_type': OCI_MANIFEST}
+
+
+def inspect_docker(path, arch, *, image_id, version, revision):
+    """Verify Docker save bytes against the SAME OCI configuration and rootfs.
+
+    Transport conversion may change a manifest; the configuration hash binds
+    platform, ordered uncompressed layer diffIDs, labels and component inputs.
+    """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'test/e2e/lib'))
+    import workspace
+    verified = workspace.verify_image_archive(path, 'linux/' + ARCHES[arch])
+    require(verified['image_id'] == image_id, 'Docker configuration differs from OCI image')
+    with tarfile.open(path, 'r:*') as archive:
+        manifest = json.load(archive.extractfile('manifest.json'))
+        config = json.load(archive.extractfile(manifest[0]['Config']))
+    labels = config.get('config', {}).get('Labels', {})
+    require(labels.get('org.opencontainers.image.version') == version and
+            labels.get('org.opencontainers.image.revision') == revision, 'Docker source/version differs')
+    return {'image_id': image_id, 'diff_ids': config['rootfs']['diff_ids']}
 
 
 def validate(directory, version, arch, revision, *, receipts=None):
@@ -152,6 +177,13 @@ def validate(directory, version, arch, revision, *, receipts=None):
     require(all(record.get(key) == value for key, value in inspect_oci(path, arch, version=version, revision=revision).items()),
             'node-infra image identity differs from its receipt')
     validate_components(record.get('components'))
+    if 'docker_archive' in record:
+        docker = record['docker_archive']
+        path = directory / selection.node_infra_docker_archive(version, arch)
+        require(docker.get('name') == path.name and path.is_file() and not path.is_symlink()
+                and docker.get('size') == path.stat().st_size and docker.get('sha256') == digest(path),
+                'Docker archive differs from receipt')
+        inspect_docker(path, arch, image_id=record['image_id'], version=version, revision=revision)
     return record
 
 
@@ -173,7 +205,12 @@ def release_document(version, revision, records):
                     **{key: record[key] for key in ('manifest_digest', 'manifest_size', 'media_type')},
                     'archive': {'name': record['archive'], 'sha256': record['sha256'], 'size': record['size']}}
               for arch, record in records.items()}
-    return {'schema': 1, 'version': version, 'source_revision': revision, 'repository': REPOSITORY,
+    docker = ['docker_archive' in record for record in records.values()]
+    require(all(docker) or not any(docker), 'node-infra archive contracts differ by architecture')
+    if all(docker):
+        for arch in images:
+            images[arch]['docker_archive'] = records[arch]['docker_archive']
+    return {'schema': 2 if all(docker) else 1, 'version': version, 'source_revision': revision, 'repository': REPOSITORY,
             'index_digest': 'sha256:' + hashlib.sha256(index_bytes(images)).hexdigest(),
             'images': images, 'components': components,
             'host': {'podman_min_version': '4.9.3', 'cgroup_version': 2}}
@@ -221,7 +258,7 @@ def read_deploy(path, version, revision=None, *, arches=None):
         entry = next(member for member in archive if archive_paths.relative_name(member) == 'release.json')
         require(entry.size < 1024 * 1024, 'oversized node-infra release.json')
         document = json.load(archive.extractfile(entry))
-    require(document.get('schema') == 1 and document.get('version') == version
+    require(document.get('schema') in (1, 2) and document.get('version') == version
             and document.get('repository') == REPOSITORY, 'invalid node-infra deployment release identity')
     require(re.fullmatch(r'[0-9a-f]{40}', document.get('source_revision', ''))
             and (revision is None or document['source_revision'] == revision), 'node-infra deployment source differs')
@@ -241,6 +278,12 @@ def read_deploy(path, version, revision=None, *, arches=None):
                 and re.fullmatch(r'[0-9a-f]{64}', archive.get('sha256', ''))
                 and type(archive.get('size')) is int and archive['size'] > 0,
                 'invalid node-infra archive identity')
+        docker = image.get('docker_archive')
+        require((document['schema'] == 2) == (docker is not None), 'Docker archive/schema differs')
+        if docker is not None:
+            require(docker.get('name') == selection.node_infra_docker_archive(version, arch)
+                    and re.fullmatch(r'[0-9a-f]{64}', docker.get('sha256', ''))
+                    and type(docker.get('size')) is int and docker['size'] > 0, 'invalid Docker archive identity')
     require(document.get('index_digest') == 'sha256:' + hashlib.sha256(index_bytes(images)).hexdigest(),
             'node-infra index digest differs from selected native images')
     return document
@@ -264,6 +307,15 @@ def install_inputs(assets, destination, version, arch, *, revision=None, compone
     require(not (image_dir / path.name).exists(), 'node-infra image input already exists')
     shutil.copyfile(path, image_dir / path.name)
     (image_dir / path.name).chmod(0o644)
+    if 'docker_archive' in image:
+        record = image['docker_archive']
+        docker = assets / record['name']
+        require(docker.is_file() and not docker.is_symlink() and docker.stat().st_size == record['size']
+                and digest(docker) == record['sha256'], 'Docker input archive digest differs')
+        inspect_docker(docker, arch, image_id=image['id'], version=version, revision=document['source_revision'])
+        require(not (image_dir / docker.name).exists(), 'Docker image input already exists')
+        shutil.copyfile(docker, image_dir / docker.name)
+        (image_dir / docker.name).chmod(0o644)
     archive_paths.extract([deploy], destination / 'deploy/node-infra')
     return document
 
