@@ -458,7 +458,48 @@ class Node:
         status = self.status()
         require(not status['container']['running'] and not status['recovery']['pending'], 'old instance still runs or needs recovery')
 
-    def stop(self, *, hard=False):
+    def stop(self, *, hard=False, verify_order=False):
+        if verify_order:
+            require(not hard, 'ordered shutdown requires normal stop')
+            inspected = json.loads(command('podman', 'inspect', self.container).stdout)[0]
+            applied = json.loads((self.data / 'applied.json').read_text())
+            identity = inspected['Id']
+            output = self.fixture.output / self.name / ('normal-stop-' + identity + '.log')
+            output.parent.mkdir(parents=True, exist_ok=True)
+            # Follow the actual inner journal before the outer unit removes the
+            # container. The unique marker confirms the reader is attached.
+            marker = 'node-infra-stop-observer-' + uuid.uuid4().hex
+            with output.open('w') as stream:
+                reader = subprocess.Popen(['podman', 'exec', identity, 'journalctl', '--follow',
+                                           '--no-pager', '-o', 'cat'], stdout=stream, stderr=subprocess.STDOUT)
+                try:
+                    self.execute('logger', '-t', 'node-infra-e2e', marker)
+                    wait_for('inner shutdown journal observer', lambda: marker in output.read_text())
+                    self.stop()
+                finally:
+                    try:
+                        reader.wait(timeout=15)
+                    except subprocess.TimeoutExpired:
+                        reader.terminate()
+                        reader.wait(timeout=5)
+            log = output.read_text()
+            position = marker_offset = log.index(marker)
+            positions = {}
+            for entry in ('node-infra-consumers.service: Deactivated successfully.',
+                          'Stopped node-infra-consumers.service',
+                          'connector-vswitch.service: Deactivated successfully.',
+                          'Stopped connector-vswitch.service',
+                          'node-infra: network cleanup complete (outer handles retained)',
+                          'node-infra-network.service: Deactivated successfully.',
+                          'Stopped node-infra-network.service'):
+                position = log.find(entry, position)
+                require(position >= 0, 'normal outer stop missed ordered inner shutdown: ' + entry)
+                positions[entry] = position
+            write_json(output.with_suffix('.json'), {'container_id': identity, 'generation': applied['generation'],
+                       'image': inspected['Image'], 'observer_marker': marker, 'marker_offset': marker_offset,
+                       'ordered_markers': positions,
+                       'log_sha256': hashlib.sha256(output.read_bytes()).hexdigest()})
+            return
         if hard:
             command('podman', 'kill', '--signal', 'KILL', self.container)
         else:
@@ -738,7 +779,7 @@ def _host_case(fixture, sentinel):
     node.assert_outer_limits()
     node.assert_restored(sandbox, memory=True)
     node.assert_restored(sandbox, memory=False)
-    node.stop()
+    node.stop(verify_order=True)
     node.start()
     node.create()
     node.stop(hard=True)
@@ -836,7 +877,7 @@ def config_case(fixture):
                  'trap "echo TERM >>/var/lib/node-infra/term-seen" TERM; '
                  'touch /run/ignore-term-ready; while :; do sleep 1; done')
     wait_for('controlled TERM-ignoring consumer', lambda: node.execute('test', '-e', '/run/ignore-term-ready', check=False).returncode == 0)
-    node.stop()
+    node.stop(verify_order=True)
     require('TERM' in (node.data / 'data/term-seen').read_text(), 'drain did not signal the controlled consumer')
     write_json(fixture.output / node.name / 'consumer-timeout.json',
                {'term_observed': True, 'native_kill_budget_seconds': 2, 'outer_recovery_confirmed_no_consumers': True})

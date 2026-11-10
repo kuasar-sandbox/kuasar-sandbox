@@ -26,9 +26,9 @@ Volume=@RUN_ROOT@/bpf:/sys/fs/bpf:rw
 [Service]
 TimeoutStartSec=240
 TimeoutStopSec=600
-KillMode=control-group
-# Conmon failure reaches systemd's kill phase without a normal container stop.
-KillSignal=SIGRTMIN+3
+# Keep Quadlet's mixed mode: normal ExecStop drains the container; conmon
+# failure kills the remaining group without first killing its storage helpers.
+KillMode=mixed
 Restart=no
 CPUQuota=400%
 MemoryMax=6G

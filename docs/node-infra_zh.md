@@ -332,11 +332,11 @@ Proxy/Conductor 等生产者、执行池、Connector、网络清理。组件局�
 以记录的镜像、工具、generation 和 boot 身份调用同一清理原语，释放自己的绑定。
 当前配置不能重定向旧清理目标。旧 schema-1 记录继续使用固定的旧工具与镜像。
 
-安装的外层 unit 同时设置 `KillSignal=SIGRTMIN+3`。conmon 异常退出后，systemd 的
-故障停止阶段必须让剩余容器 PID 1 halt；默认 `SIGTERM` 会要求 system manager
-重执行自身。这条异常路径向整个实例 cgroup 发信号，可能立即终止 Guest。正常停止
-仍使用 Podman 的镜像停止信号和内部有序关闭。恢复在释放 pins 前继续确认全部消费者
-已经退出。
+安装的外层 unit 保留 Quadlet 的 `KillMode=mixed`。正常停止使用 Podman 的镜像停止
+信号和内部有序关闭，让存储 helper 存活至容器退出。conmon 异常退出后，systemd
+先杀死剩余实例 cgroup，再执行恢复；这条异常路径会立即终止 Guest。向整个组发送
+软信号可能先杀死 FUSE 存储 helper，导致 PID 1 无法完成关闭。恢复在释放 pins 前
+仍确认全部消费者已经退出。
 
 SIGKILL、`docker rm -f` 和掉电不能执行内部 teardown。默认无借入设备的 Docker 使用
 私有内核对象，业务数据卷不保存活 namespace 句柄。借入 transit 时，需要显式的保留

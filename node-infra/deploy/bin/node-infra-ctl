@@ -154,7 +154,10 @@ def bindings(text, name):
         require(not values.get(('Container', key)), f'{key} overrides the system container contract')
     for key in ('ExecStart', 'ExecStartPre', 'ExecStartPost', 'ExecStop', 'ExecStopPost'):
         require(not values.get(('Service', key)), 'lifecycle hooks are installed by node-infra-ctl')
-    require(one(values, 'Service', 'KillMode') == 'control-group', 'KillMode=control-group is required')
+    # Read old delivered sources for recovery; new installations override the
+    # old mode so storage helpers survive the normal container stop operation.
+    require(one(values, 'Service', 'KillMode') in ('mixed', 'control-group'),
+            'retain the delivered KillMode')
     mounts = {}
     for value in values.get(('Container', 'Volume'), []):
         parts = value.split(':')
@@ -468,7 +471,7 @@ class Instance:
         network = 'host' if selected['network'] == 'host' else 'ns:' + str(self.run / 'primary')
         rendered = text + f'\n[Container]\nImage={image}\nNetwork=\nNetwork={network}\nLabel={LABEL}={owner}\n'
         tool = pinned / 'bin/node-infra-ctl'
-        hooks = (f'[Service]\nKillSignal=SIGRTMIN+3\nExecStartPre={tool} prepare --name {self.name}\n'
+        hooks = (f'[Service]\nKillMode=mixed\nKillSignal=SIGTERM\nExecStartPre={tool} prepare --name {self.name}\n'
                  f'ExecStartPost={tool} started --name {self.name}\n'
                  f'ExecStopPost={tool} recover --name {self.name}\n')
         data = {'schema': 1, 'name': self.name, 'owner': owner, 'version': release['version'],

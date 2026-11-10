@@ -402,12 +402,13 @@ primitive with the recorded image/tool/generation/boot identity and releases its
 own bindings. Changed current configuration cannot redirect cleanup. Older
 schema-1 records continue through their pinned old tools and images.
 
-The installed outer unit also uses `KillSignal=SIGRTMIN+3`. If conmon dies,
-systemd's failure stop phase must halt the remaining container PID 1; its
-default `SIGTERM` would ask a system manager to re-execute instead. This abnormal
-path signals the whole instance cgroup and can terminate Guests immediately.
-Normal stop still uses Podman's image stop signal and the internal ordered
-shutdown. Recovery checks that all consumers have ended before releasing pins.
+The installed outer unit retains Quadlet's `KillMode=mixed`. Normal stop uses
+Podman's image stop signal and the internal ordered shutdown, keeping storage
+helpers alive until the container exits. If conmon dies, systemd kills the
+remaining instance cgroup before recovery; this abnormal path terminates Guests
+immediately. Sending a soft signal to the entire group could kill a FUSE storage
+helper before PID 1 can finish shutting down. Recovery still checks that all
+consumers have ended before releasing pins.
 
 SIGKILL, `docker rm -f` and power loss cannot run internal teardown. Default
 Docker without borrowed devices uses private kernel objects; the business data

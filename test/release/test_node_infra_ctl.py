@@ -59,6 +59,14 @@ class DeploymentTests(unittest.TestCase):
             with self.subTest(network=network), self.assertRaises(ValueError):
                 ctl.bindings(self.rendered().replace('Network=host', 'Network=' + network), 'test')
 
+    def test_mixed_mode_and_old_control_group_source_remain_readable(self):
+        for mode in ('mixed', 'control-group'):
+            with self.subTest(mode=mode):
+                ctl.bindings(self.rendered().replace('KillMode=mixed', 'KillMode=' + mode), 'test')
+        for mode in ('process', 'none'):
+            with self.subTest(mode=mode), self.assertRaises(ValueError):
+                ctl.bindings(self.rendered().replace('KillMode=mixed', 'KillMode=' + mode), 'test')
+
     def check_fixture(self, network, transit, *, up=False, missing=False, wrong_namespace=False):
         selected = {'network': network, 'netns': '/proc/self/ns/net', 'image': 'image', 'volumes': [], 'values': {}}
         descriptor = {'transit': {'name': 'uplink' if transit else ''},
