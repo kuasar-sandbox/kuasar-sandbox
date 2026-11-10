@@ -1,0 +1,65 @@
+name: Published Download Check
+run-name: Check published ${{ inputs.version }} with ${{ inputs.guide_source }} guide
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact published aggregate release-vX.Y.Z or Preview tag
+        required: true
+        type: string
+      guide_source:
+        description: Bundled guide, or explicitly revised guide from this trusted workflow checkout
+        required: true
+        type: choice
+        default: bundled
+        options:
+          - bundled
+          - current-checkout
+
+permissions:
+  contents: read
+
+jobs:
+  published-download:
+    if: github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.event.repository.visibility == 'public'
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Require the official main workflow entry
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          test "$WORKFLOW_REF" = refs/heads/main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - name: Check the explicit guide against unchanged published assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+          GUIDE_SOURCE: ${{ inputs.guide_source }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$WORKFLOW_SHA"
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo
+          export DOCKER_CONFIG="$RUNNER_TEMP/published-download-docker"
+          mkdir "$DOCKER_CONFIG"
+          printf '{"auths":{}}\n' > "$DOCKER_CONFIG/config.json"
+          guide_args=(--guide-source "$GUIDE_SOURCE")
+          if [ "$GUIDE_SOURCE" = current-checkout ]; then
+            guide_args+=(--guide-revision "$WORKFLOW_SHA")
+          fi
+          python3 -B ci/integration/check-published-download.py \
+            --version "$VERSION" --root "$RUNNER_TEMP/published-download" "${guide_args[@]}"
+          {
+            printf 'Verified published assets: %s\n\n' "$VERSION"
+            printf 'Guide source: %s; trusted checkout: %s\n\n' "$GUIDE_SOURCE" "$WORKFLOW_SHA"
+            printf 'This independent check does not change the original aggregate run or its bundled guide.\n'
+          } >> "$GITHUB_STEP_SUMMARY"

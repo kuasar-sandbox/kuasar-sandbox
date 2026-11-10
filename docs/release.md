@@ -319,6 +319,50 @@ Consumers extract only the selected product architecture plus `platform-release`
 
 Preview, maintenance Stable and mainline Stable use identical asset contracts and release asset validation gates. They differ only in release state and Latest policy.
 
+### Independent published-download checks
+
+`Published Download Check` is a separate, read-only workflow for an exact
+already-published version. Its default `bundled` mode executes the unchanged
+guide inside the published platform archive. The explicit `current-checkout`
+mode uses the reviewed online installation guide from that workflow's exact
+checkout commit, requires its full 40-character SHA to equal HEAD, and rejects
+staged or working-tree guide changes. It reads the guide with `git show` and
+never falls back between sources. The manifest, product selection, platform
+archive and every image still come from the requested aggregate version.
+
+After the correction has passed normal review and merged, request both native
+architecture checks explicitly:
+
+~~~bash
+gh workflow run published-download-check.yml \
+  --repo kuasar-sandbox/kuasar-sandbox --ref main \
+  -f version=release-v0.1.13 -f guide_source=current-checkout
+~~~
+
+The run records its guide mode and exact commit. It retains the complete asset
+set, native subset, digest, safe-installation, helper, Workbench/GHCR and node-infra
+checks. This is supplementary evidence for the revised online guide and the
+unchanged published bytes. It neither changes the original aggregate run's
+failure nor repairs the guide inside the old package. Do not rebuild or replace
+that version to make the original check pass.
+
+Human errata follow the existing editable-notes contract above: review and commit
+the target version's `notes.body` before syncing its exact text. Export and
+check the committed description, then update only the public human body:
+
+~~~bash
+python3 -B release/release_notes.py export . release-v0.1.13 /tmp/release-v0.1.13-notes.md
+python3 -B release/publication_body.py /tmp/release-v0.1.13-notes.md
+gh release edit release-v0.1.13 --repo kuasar-sandbox/kuasar-sandbox \
+  --notes-file /tmp/release-v0.1.13-notes.md
+~~~
+
+Read back the exact body and unchanged release/tag/asset identities. Explain the
+bundled-guide defect and link the reviewed correction and separate check without
+claiming that the original run passed. Human prose remains separate from product
+acceptance; no machine validation records belong in that body. This notes-only
+operation does not resume the publisher or change any publication or PR gate.
+
 <a id="documentation-in-the-platform-package"></a>
 ### 8.1 Documentation payload and source mapping
 

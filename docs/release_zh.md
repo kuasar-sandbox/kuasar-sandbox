@@ -547,6 +547,43 @@ make test-release-tools
 
 兼容 stage 读取器必须先合入 main，再启用分组生产。默认仍为完整调度，直到真实端到端测量与失败重试验收证明分组合理，详见 [CI](ci_zh.md#workbench-运行分组)。正文不预留 registry 空间，普通发布包消费不依赖历史分组。
 
+### 独立复验已公开下载
+
+`Published Download Check` 是针对精确已发布版本的独立只读工作流。
+默认 `bundled` 模式执行公开 platform 包内未修改的指南；
+显式 `current-checkout` 模式使用该工作流精确 checkout 提交中的已评审在线安装指南，
+要求完整 40 位 SHA 等于 HEAD，并拒绝指南的暂存区或工作树改动。
+工具通过 `git show` 读取指南，不在两种来源间自动回退。
+清单、产品选择、platform 包和镜像始终来自所请求的聚合版本。
+
+修正通过正常评审并合入后，显式请求双原生架构检查：
+
+~~~bash
+gh workflow run published-download-check.yml \
+  --repo kuasar-sandbox/kuasar-sandbox --ref main \
+  -f version=release-v0.1.13 -f guide_source=current-checkout
+~~~
+
+运行记录指南模式和精确提交，保留完整资产集合、本机子集、摘要、安全安装、
+helper、Workbench/GHCR 及 node-infra 的全部检查。
+其结果只是修订在线指南消费原公开字节的补充证据，不改变原聚合 run 的失败结论，
+也不修复旧包内的指南；不能为使原检查通过而重建或替换该版本。
+
+人工勘误沿用前述可编辑说明契约：先正常评审并提交目标版本的 `notes.body`，
+再导出、检查已提交正文，仅同步公开的人类说明：
+
+~~~bash
+python3 -B release/release_notes.py export . release-v0.1.13 /tmp/release-v0.1.13-notes.md
+python3 -B release/publication_body.py /tmp/release-v0.1.13-notes.md
+gh release edit release-v0.1.13 --repo kuasar-sandbox/kuasar-sandbox \
+  --notes-file /tmp/release-v0.1.13-notes.md
+~~~
+
+读回确认正文精确一致，Release、Tag 与资产身份保持不变。
+勘误应说明包内指南缺陷并链接已评审修正与独立复验，不声称原 run 已通过。
+人类说明仍独立于产品验收，正文不携带机器验收记录。
+仅同步说明不会恢复 publisher，也不改变发布或 PR 门禁。
+
 ## 9. Preview GC
 
 Workbench GC 使用实际非目标 registry tag 与 multiarch 引用保护共享镜像，也保护保留的无 tag index。只删除明确属于目标 Preview 的 index 及其独占子镜像，先删 index；每次删除前刷新引用。明确 404 可幂等重试，网络或权限错误则停止。不确定归属的孤儿保留并报告。不读取 Release 正文，不扩大原有 GC 范围与保留期。

@@ -33,7 +33,12 @@ def fixture(tag=TAG, delivery='workbench-v1', dual=True):
             names.append(f'sandbox-runtime-{arch}-{version.removeprefix("runtime-")}.tar.gz' if unit == 'runtime' else
                          f'vmlinux-{arch}-{version.removeprefix("vmlinux-")}.tar.gz' if unit == 'vmlinux' else
                          f'{unit}-{version}-linux-{arch}.tar.gz')
-        if delivery == 'workbench-v1': names.append(f'workbench-{arch}-{tag.removeprefix("release-")}.tar.gz')
+        if delivery in ('workbench-v1', 'node-infra-v1'):
+            names.append(f'workbench-{arch}-{tag.removeprefix("release-")}.tar.gz')
+        if delivery == 'node-infra-v1':
+            native = {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch]
+            names.append(f'node-infra-{tag}-linux-{native}.oci.tar.gz')
+    if delivery == 'node-infra-v1': names.append(f'node-infra-deploy-{tag}.tar.gz')
     return dict(release=dict(tag_name=tag, draft=False, prerelease='-preview.' in tag, body='Human notes only',
         assets=[dict(name=n, id=i+1, size=100, digest='sha256:'+'a'*64, state='uploaded') for i,n in enumerate(names)]),
         manifest=text, commits=['b'*40, 'b'*40])
@@ -99,6 +104,66 @@ exec(compile((root/'example.py').read_text(),'<documented selector>','exec'))
         result,_,urls=self.select(tag=TAG+'-preview.20261104.2')
         self.assertEqual(result.returncode,0,result.stderr)
         self.assertTrue(any('daily-preview.yaml?ref='+TAG+'-preview.20261104.2' in u for u in urls))
+
+    def test_node_infra_checks_eighteen_assets_and_keeps_the_native_subset(self):
+        for tag in (TAG, TAG+'-preview.20261104.2'):
+            for arch in ('x86_64', 'aarch64'):
+                for download in (True, False):
+                    with self.subTest(tag=tag, arch=arch, download=download):
+                        data=fixture(tag, delivery='node-infra-v1')
+                        self.assertEqual(len(data['release']['assets']), 18)
+                        result,rows,_=self.select(data, tag=tag, arch=arch, download=download)
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertEqual(len(rows), 8 if download else 7)
+                        names={row.split('\t')[0] for row in rows}
+                        self.assertFalse(any(name.startswith('node-infra-') for name in names))
+                        other='aarch64' if arch == 'x86_64' else 'x86_64'
+                        self.assertFalse(any(other in name for name in names))
+                        reference,reference_rows,_=self.select(tag=tag, arch=arch, download=download)
+                        self.assertEqual(reference.returncode, 0, reference.stderr)
+                        self.assertEqual(names, {row.split('\t')[0] for row in reference_rows})
+
+    def test_node_infra_missing_or_extra_assets_fail_even_when_not_downloaded(self):
+        node_names=[a['name'] for a in fixture(delivery='node-infra-v1')['release']['assets']
+                    if a['name'].startswith('node-infra-')]
+        for arch in ('x86_64', 'aarch64'):
+            for missing in node_names:
+                for download in (True, False):
+                    with self.subTest(arch=arch, missing=missing, download=download):
+                        data=fixture(delivery='node-infra-v1')
+                        data['release']['assets']=[a for a in data['release']['assets'] if a['name'] != missing]
+                        result,rows,_=self.select(data, arch=arch, download=download)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertIn('missing or unexpected aggregate asset', result.stderr)
+                        self.assertEqual(rows, [])
+        for name in ('unexpected.tar.gz', f'node-infra-{TAG}-linux-riscv64.oci.tar.gz'):
+            data=fixture(delivery='node-infra-v1')
+            data['release']['assets'].append(dict(name=name))
+            self.assertNotEqual(self.select(data, download=False)[0].returncode, 0)
+
+    def test_node_infra_unselected_assets_still_require_valid_native_metadata(self):
+        for changes in ({'digest': None}, {'size': 0}, {'id': True}, {'state': 'new'}):
+            with self.subTest(changes=changes):
+                data=fixture(delivery='node-infra-v1')
+                asset=next(a for a in data['release']['assets'] if a['name'].startswith('node-infra-'))
+                asset.update(changes)
+                self.assertNotEqual(self.select(data, download=False)[0].returncode, 0)
+
+    def test_delivery_contracts_do_not_infer_node_infra_from_asset_presence(self):
+        for original, replacement in (('node-infra-v1', 'workbench-v1'),
+                                      ('workbench-v1', 'node-infra-v1'),
+                                      ('node-infra-v1', None),
+                                      ('workbench-v1', 'historical'),
+                                      ('node-infra-v1', 'node-infra-v2')):
+            with self.subTest(original=original, replacement=replacement):
+                data=fixture(delivery=original)
+                data['manifest']=data['manifest'].replace('delivery: '+original+'\n',
+                    'delivery: '+replacement+'\n' if replacement else '')
+                self.assertNotEqual(self.select(data, download=False)[0].returncode, 0)
+        for arch in ('x86_64', 'aarch64'):
+            result,rows,_=self.select(fixture(delivery=None), arch=arch, download=False)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(len(rows), 7)
 
     def test_old_markers_checksums_and_test_records_are_not_audited(self):
         data=fixture(); data['release']['body']='<!-- kuasar-integration-validation invalid -->'
