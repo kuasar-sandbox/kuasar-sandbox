@@ -475,7 +475,16 @@ class Node:
                    status['service']['active'] in ('inactive', 'failed'))
         if not stopped:
             state = command('systemctl', 'show', self.service,
-                            '--property=SubState,ControlPID,TimeoutStopUSec').stdout.strip()
+                            '--property=SubState,ControlPID,TimeoutStopUSec,ExecStopPost').stdout.strip()
+            control = dict(line.split('=', 1) for line in state.splitlines()).get('ControlPID', '0')
+            if control.isdigit() and int(control) > 1:
+                try:
+                    process = Path('/proc') / control
+                    state += '\ncontrol_command=' + process.joinpath('cmdline').read_text().replace('\0', ' ')
+                    state += '\ncontrol_wait=' + process.joinpath('wchan').read_text().strip()
+                    state += '\ncontrol_children=' + process.joinpath('task', control, 'children').read_text().strip()
+                except FileNotFoundError:
+                    pass  # The real stop job can finish between these reads.
             raise RuntimeError('stop still pending: ' + json.dumps(status) + '; ' + state)
         return True
 
@@ -644,6 +653,7 @@ def metadata_sentinel(fixture):
             for link in json.loads(command('ip', '-j', 'address', 'show', name).stdout)
             for address in link.get('addr_info', [])))
         with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(('169.254.169.254', 80))
             listener.listen()
             before = network_snapshot()
@@ -808,7 +818,7 @@ def config_case(fixture):
     after = node.execute('pgrep', '-P', master).stdout.split()
     require(len(after) == 1 and after != children, 'Proxy worker did not restart beneath the same master')
     require(node.state(second)['token'], 'second pool guest did not survive worker restart')
-    node.execute('systemd-run', '--unit=runner-p0@ignore-term.service', '--slice=sandbox-runner.slice',
+    node.execute('systemd-run', '--unit=node-infra-ignore-term.service', '--slice=sandbox-runner.slice',
                  '--property=TimeoutStopSec=2s', '--property=KillMode=control-group', '/bin/sh', '-c',
                  'trap "echo TERM >>/var/lib/node-infra/term-seen" TERM; '
                  'touch /run/ignore-term-ready; while :; do sleep 1; done')
