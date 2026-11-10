@@ -38,6 +38,17 @@ class DeploymentTests(unittest.TestCase):
             text = text.replace('@' + key + '@', value)
         return text.replace('/var/lib/node-infra/instances/test/recovery', str(self.node.recovery))
 
+    def test_docker_start_normalizes_only_default_oom_switch(self):
+        created = {'Id': 'a' * 64, 'Image': 'sha256:' + 'b' * 64,
+                   'Config': {'Entrypoint': ['/init']},
+                   'HostConfig': {'OomKillDisable': False, 'Memory': 1024, 'Binds': ['/owned:/run/netns:rw,rslave']}}
+        started = {**created, 'HostConfig': {**created['HostConfig'], 'OomKillDisable': None}}
+        self.assertEqual(ctl.DockerInstance.fingerprint(created), ctl.DockerInstance.fingerprint(started))
+        for key, value in (('OomKillDisable', True), ('Memory', 2048), ('Binds', ['/foreign:/run/netns:rw,rslave'])):
+            changed = {**started, 'HostConfig': {**started['HostConfig'], key: value}}
+            self.assertNotEqual(ctl.DockerInstance.fingerprint(created), ctl.DockerInstance.fingerprint(changed))
+        self.assertIsNone(started['HostConfig']['OomKillDisable'])
+
     def test_host_and_explicit_namespace_bindings(self):
         host = ctl.bindings(self.rendered(), 'test')
         self.assertEqual((host['network'], host['netns']), ('host', '/proc/self/ns/net'))

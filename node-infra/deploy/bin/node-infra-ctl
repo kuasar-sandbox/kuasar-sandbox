@@ -778,8 +778,14 @@ class DockerInstance(Instance):
 
     @staticmethod
     def fingerprint(data):
-        return hash_bytes(json.dumps({key: data[key] for key in ('Id', 'Image', 'Config', 'HostConfig')},
-                                     sort_keys=True).encode())
+        bindings = {key: data[key] for key in ('Id', 'Image', 'Config', 'HostConfig')}
+        bindings['HostConfig'] = dict(data['HostConfig'])
+        # On cgroup v2 Docker normalizes the unsupported false OOM-kill
+        # switch to null when starting a created container. Both mean the
+        # default; preserve true and every actual resource/binding change.
+        if bindings['HostConfig'].get('OomKillDisable') is None:
+            bindings['HostConfig']['OomKillDisable'] = False
+        return hash_bytes(json.dumps(bindings, sort_keys=True).encode())
 
     def owned_container(self, installed):
         data = self.inspect('container', installed['container_id'])
