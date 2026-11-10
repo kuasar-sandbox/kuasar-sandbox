@@ -9,6 +9,12 @@ components:
   orchestrator: v0.1.13
   runtime: runtime-v0.1.13
   vmlinux: vmlinux-v0.1.6
+component_next_versions:
+  accelerator: v0.2.0
+  connector: v0.2.0
+  sandboxer: v0.2.0
+  orchestrator: v0.2.0
+  runtime: runtime-v0.2.0
 notes:
   mode: auto
   body: |
