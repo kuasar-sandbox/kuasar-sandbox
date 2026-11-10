@@ -318,7 +318,7 @@ class DeploymentTests(unittest.TestCase):
                         raise SystemExit('injected helper hook death')
                     return types.SimpleNamespace(stdout='', returncode=0)
 
-                with patch.object(ctl, 'inspect', side_effect=lambda kind, name: containers.get(name)), \
+                with patch.object(ctl, 'inspect', side_effect=lambda kind, name, runtime='podman': containers.get(name)), \
                      patch.object(ctl, 'run', side_effect=command):
                     with self.assertRaises(SystemExit):
                         self.node.run_helper(applied, 'prepare', ['--network=none'])
@@ -417,6 +417,47 @@ class DeploymentTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'different bytes'):
                 ctl.pin_release(package, {'version': 'v1'})
         self.assertEqual((destination / 'bin/node-infra-ctl').read_text(), 'original')
+
+    def test_docker_helper_enters_saved_primary_without_podman_network_syntax(self):
+        node = ctl.DockerInstance('test')
+        primary = node.run / 'primary'
+        arguments, executable = node.helper_arguments(['--network=ns:' + str(primary),
+                                                       '--volume', '/pins:/run/netns:rw,rshared'])
+        self.assertIn('--network=none', arguments)
+        self.assertIn(str(primary) + ':/run/node-infra-primary:ro', arguments)
+        self.assertFalse(any(x.startswith('--network=ns:') for x in arguments))
+        self.assertEqual(executable, ['/usr/bin/nsenter', '--net=/run/node-infra-primary', ctl.RUNTIME])
+
+    def test_docker_lost_create_response_retains_intent(self):
+        node = ctl.DockerInstance('test')
+        applied = {'generation': 'g1', 'helper': {'name': node.container + '-g1-prepare', 'operation': 'prepare'}}
+        ctl.save(node.applied, applied)
+        with patch.object(node, 'inspect', return_value=None), patch.object(ctl, 'run') as command:
+            with self.assertRaisesRegex(ValueError, 'outcome is unknown'):
+                node.reap_helper(applied)
+        command.assert_not_called()
+        self.assertEqual(ctl.json_file(node.applied), applied)
+
+    def test_docker_empty_placeholders_have_identity_and_reject_foreign_contents(self):
+        node = ctl.DockerInstance('test')
+        (node.run / 'netns').mkdir(parents=True)
+        (node.run / 'bpf').mkdir()
+        with patch.object(ctl, 'private_directory'), patch.object(ctl, 'mount_at', return_value={}):
+            initial = node.initial_handles()
+            self.assertEqual(initial['netns'], [(node.run / 'netns').stat().st_dev,
+                                               (node.run / 'netns').stat().st_ino])
+            (node.run / 'netns/foreign').touch()
+            with self.assertRaisesRegex(ValueError, 'unowned Docker handle placeholder'):
+                node.initial_handles()
+
+    def test_docker_context_override_cannot_hide_remote_daemon(self):
+        node = ctl.DockerInstance('test')
+        with patch.dict(ctl.os.environ, {'DOCKER_CONTEXT': 'remote', 'DOCKER_HOST': 'unix:///run/docker.sock'}), \
+             patch.object(ctl, 'run', return_value=types.SimpleNamespace(stdout=json.dumps([
+                 {'Endpoints': {'docker': {'Host': 'ssh://remote'}}}]))) as command:
+            with self.assertRaisesRegex(ValueError, 'local Unix socket'):
+                node.daemon()
+        command.assert_called_once_with('docker', 'context', 'inspect')
 
 
 if __name__ == '__main__':

@@ -7,6 +7,7 @@ instance cleanup. A failed recovery retains its inputs for operator diagnosis.
 """
 import argparse
 import base64
+from contextlib import contextmanager
 import fcntl
 import hashlib
 import ipaddress
@@ -25,10 +26,9 @@ import urllib.parse
 import urllib.request
 import uuid
 
-# The delivered unit allows 240 seconds to reap remaining consumers, followed
-# by the host recovery helper (120-second command timeout). The fixture must
-# observe that lifecycle before declaring failure, including conmon death.
-STOP_TIMEOUT = 360
+# The outer unit covers internal drain/cleanup and the retained-handle helper.
+# Observe the delivered budget before declaring failure, including conmon death.
+STOP_TIMEOUT = 600
 
 
 def require(condition, message):
@@ -77,7 +77,7 @@ def http(method, url, *, headers=None, body=None, expected=200):
     with response:
         data = response.read()
         require(response.status == expected, f'{method} {urllib.parse.urlsplit(url).path}: '
-                f'HTTP {response.status}, expected {expected}')
+                f'HTTP {response.status}, expected {expected}; {data[:500].decode("utf-8", errors="replace")}')
     return data
 
 
@@ -221,7 +221,8 @@ class Node:
             write_json(self.config / 'connector-vswitch/conf.d/95-transit-test.yaml',
                        {'geneve_encap_eth': True, 'geneve_locator': 'port', 'geneve_port_base': 50000})
         write_json(self.config / 'manifest.yaml', {'manifest': {'key': ''}, 'store': {'endpoint': ''},
-                                                  'cache': {'endpoint': ''}, 'crypto': {'local': 'off'}})
+                                                  'cache': {'endpoint': ''}, 'crypto': {'local': 'off', 'chunk': 'aes', 'manifest': 'aes'},
+                                                  'chunker': {'mode': 'cdc', 'cdc': {'min': '128KiB', 'avg': '512KiB', 'max': '1MiB'}}})
 
     def _install(self):
         template = (self.fixture.deploy / 'templates/node-infra.container').read_text()
@@ -265,17 +266,18 @@ class Node:
         self.execute('/opt/node-infra/bin/node-ctl', 'manifest-key', 'add', '--socket',
                      '/run/sandbox/node-ctl.socket', self.manifest_key)
 
-    def api(self, method, path, body=None, expected=200):
+    def api(self, method, path, body=None, expected=200, *, headers=None):
         return http(method, f'http://{self.ingress}:{self.api_port}' + path, body=body, expected=expected,
-                    headers={'Host': 'api.node-infra.test', 'X-API-KEY': self.api_key})
+                    headers={'Host': 'api.node-infra.test', 'X-API-KEY': self.api_key, **(headers or {})})
 
     def guest(self, sandbox, path='/state', *, method='GET', body=None):
         return http(method, f'http://{self.ingress}:{self.proxy_port}' + path, body=body,
                     headers={'Host': f'8000-{sandbox["sandboxID"]}.node-infra.test',
                              'X-Access-Token': sandbox['forwardAccessToken']})
 
-    def create(self):
-        request = {'templateID': self.fixture.template, 'timeout': 600}
+    def create(self, template=None):
+        self.wait_capacity('sandbox')
+        request = {'templateID': template or self.fixture.template, 'timeout': 600}
         if self.gateway:
             request['metadata'] = {'kuasar-sandbox.network': json.dumps({
                 'inner_ip': '10.231.0.2/24', 'nexthop': '10.231.0.1',
@@ -285,6 +287,45 @@ class Node:
         self.sandboxes.append(sandbox)
         wait_for('real guest response', lambda: self.guest(sandbox))
         return sandbox
+
+    def assert_build(self):
+        self.wait_capacity('build')
+        registration = json.loads(self.api('POST', '/v3/templates',
+            {'name': self.name + '-build', 'profile': 'bare', 'cpuCount': 1, 'memoryMB': 512}, 202,
+            headers={'X-Kuasar-Sandbox-Builder': json.dumps({'target': {'kind': 'sandbox', 'memory': True}})}))
+        tid, bid = registration['templateID'], registration['buildID']
+        self.api('POST', f'/v2/templates/{tid}/builds/{bid}', {'fromTemplate': self.fixture.template}, 202)
+
+        def completed():
+            status = json.loads(self.api('GET', f'/templates/{tid}/builds/{bid}/status'))
+            write_json(self.fixture.output / self.name / 'build-status.json', status)
+            return status if status['status'] in ('ready', 'error') else None
+
+        status = wait_for('real Build transaction', completed, timeout=180)
+        require(status['status'] == 'ready', 'native Build failed: ' + json.dumps(status))
+        require(status['kind'] == 'snp' and status['templateID'].startswith('bare-snp-'),
+                'Build did not publish its requested memory snapshot')
+        guest = self.create(status['templateID'])
+        self.write_marker(guest)
+        self.assert_native_exec(guest)
+        self.api('DELETE', '/sandboxes/' + guest['sandboxID'], expected=204)
+
+    def wait_capacity(self, kind, *, resume=False):
+        def available():
+            result = self.execute('curl', '--fail', '--silent', '--unix-socket', '/run/sandbox/node-ctl.socket',
+                                  'http://localhost/internal/admin/resource-pressure')
+            status = json.loads(result.stdout)
+            write_json(self.fixture.output / self.name / ('capacity-' + kind + '.json'), status)
+            zones = ('green', 'yellow', 'red') if resume else ('green', 'yellow')
+            pools = {p['name'] for p in status.get('pools', []) if p['pressure']['zone'] in zones and
+                     all(p['capacity'][dimension] == 0 or p['available'][dimension] >= amount
+                         for dimension, amount in (('cpu_milli', 1000), ('memory_bytes', 512 * 1024**2)))}
+            return any(p['kind'] == kind and p['resource_pool'] in pools and p['states'].get('idle', 0) > 0
+                       for p in status.get('runner_pools', []))
+        # Native pressure hysteresis can retain critical after a VM exits.
+        # Wait for authoritative placement capacity; an HTTP-200 health read
+        # alone does not establish admission or an available execution slot.
+        wait_for('native ' + kind + ' placement capacity', available)
 
     def state(self, sandbox):
         return json.loads(self.guest(sandbox))
@@ -363,6 +404,11 @@ class Node:
         before = self.state(sandbox)
         sid = sandbox['sandboxID']
         self.api('POST', f'/sandboxes/{sid}/pause', {'memory': memory}, 204)
+        self.wait_capacity('sandbox', resume=True)
+        pressure = self.execute('curl', '--fail', '--silent', '--unix-socket', '/run/sandbox/node-ctl.socket',
+                                'http://localhost/internal/admin/resource-pressure')
+        write_json(self.fixture.output / self.name / ('before-connect-' + str(memory) + '.json'),
+                   json.loads(pressure.stdout))
         self.api('POST', f'/sandboxes/{sid}/connect', {'memory': memory, 'timeout': 600}, 200)
         after = wait_for('restored guest response', lambda: self.state(sandbox))
         require(after['disk'] == before['disk'] == self.name + '-disk', 'pause/resume lost persistent disk content')
@@ -545,13 +591,43 @@ def network_snapshot():
 
 
 def host_case(fixture):
-    with socket.socket() as sentinel:
+    with metadata_sentinel(fixture), socket.socket() as sentinel:
         sentinel.bind(('127.0.0.1', 0))
         sentinel.listen()
         _host_case(fixture, sentinel)
         with socket.create_connection(sentinel.getsockname(), timeout=2):
             connection, _ = sentinel.accept()
             connection.close()
+
+
+@contextmanager
+def metadata_sentinel(fixture):
+    name = fixture.key + 'meta'
+    require(command('ip', 'link', 'show', name, check=False).returncode != 0, 'metadata fixture name occupied')
+    command('ip', 'link', 'add', name, 'type', 'dummy')
+    index = json.loads(command('ip', '-j', 'link', 'show', name).stdout)[0]['ifindex']
+    try:
+        command('ip', 'link', 'set', name, 'up')
+        command('ip', 'address', 'add', '169.254.169.254/32', 'dev', name)
+        command('ip', 'route', 'add', '169.254.169.0/24', 'dev', name, 'metric', '4096')
+        command('nft', 'add', 'table', 'inet', name)
+        with socket.socket() as listener:
+            listener.bind(('169.254.169.254', 80))
+            listener.listen()
+            before = network_snapshot()
+            yield
+            require(network_snapshot() == before, 'host metadata resources changed')
+            with socket.create_connection(listener.getsockname(), timeout=2):
+                connection, _ = listener.accept()
+                connection.close()
+            write_json(fixture.output / 'metadata-sentinel.json',
+                       {'before': before, 'after': network_snapshot(), 'listener_survived': True})
+    finally:
+        current = json.loads(command('ip', '-j', 'link', 'show', name).stdout)[0]
+        require(current['ifindex'] == index, 'metadata fixture device was replaced')
+        command('ip', 'link', 'delete', name)
+        if command('nft', 'list', 'table', 'inet', name, check=False).returncode == 0:
+            command('nft', 'delete', 'table', 'inet', name)
 
 
 def _host_case(fixture, sentinel):

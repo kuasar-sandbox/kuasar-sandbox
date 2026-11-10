@@ -206,19 +206,19 @@ def check_budget(data, cpu_limit, memory_limit):
     return {'name': 'budget', 'status': 'pass', 'detail': 'sum of explicit pools leaves management CPU/memory headroom'}
 
 
-def inspect(kind, identity):
-    result = run('podman', kind, 'inspect', identity, check=False, timeout=30)
+def inspect(kind, identity, runtime='podman'):
+    result = run(runtime, kind, 'inspect', identity, check=False, timeout=30)
     if result.returncode:
         require('no such' in result.stderr.lower() or 'not found' in result.stderr.lower()
                 or 'does not exist' in result.stderr.lower(), result.stderr.strip())
         return None
     rows = json.loads(result.stdout)
-    require(len(rows) == 1, 'ambiguous Podman identity')
+    require(len(rows) == 1, 'ambiguous container runtime identity')
     return rows[0]
 
 
-def image_identity(reference, release):
-    image = inspect('image', reference)
+def image_identity(reference, release, runtime='podman'):
+    image = inspect('image', reference, runtime)
     require(image, 'image is not local; load/pull the exact image before installation')
     identity = image['Id']
     if not identity.startswith('sha256:'):
@@ -232,7 +232,8 @@ def image_identity(reference, release):
     official = release['images'].get(platform.machine())
     require(official, 'deployment package has no image for this architecture')
     if identity == official['id']:
-        require(official['config_digest'] == identity and image.get('Digest') == official['manifest_digest'],
+        require(official['config_digest'] == identity and
+                (runtime == 'docker' or image.get('Digest') == official['manifest_digest']),
                 'official image manifest/config identity differs from release.json')
     # Customer images keep the release/schema labels; their own immutable ID
     # is retained for this instance, rather than claiming an official digest.
@@ -277,6 +278,23 @@ def pin_release(root, release):
 
 
 class Instance:
+    runtime = 'podman'
+
+    def inspect(self, kind, identity):
+        return inspect(kind, identity, self.runtime)
+
+    def group(self):
+        group = run('systemctl', 'show', self.service, '--property=ControlGroup', '--value').stdout.strip()
+        require(group and group != '/', 'service has no delegated cgroup')
+        return group
+
+    def initial_handles(self):
+        require(not list(self.run.iterdir()), 'unowned runtime entries exist')
+        return {}
+
+    def helper_arguments(self, arguments):
+        return ['--entrypoint=' + RUNTIME, *arguments], [RUNTIME]
+
     def __init__(self, name):
         require(NAME.fullmatch(name), 'name needs 1–40 lowercase letters, digits or hyphens')
         self.name = name
@@ -292,7 +310,8 @@ class Instance:
 
     def installed(self):
         data = json_file(self.installation)
-        require(data['name'] == self.name and data['schema'] == 1, 'foreign installation record')
+        require(data['name'] == self.name and data['schema'] == 1 and
+                data.get('runtime', 'podman') == self.runtime, 'foreign installation/runtime record')
         return data
 
     def source(self):
@@ -302,7 +321,7 @@ class Instance:
         return bindings((self.directory / 'source.container').read_text(), self.name)
 
     def owned_container(self, installed):
-        data = inspect('container', self.container)
+        data = self.inspect('container', self.container)
         if data:
             require(data.get('Config', {}).get('Labels', {}).get(LABEL) == installed['owner'],
                     'foreign container name collision; refusing operation')
@@ -317,7 +336,7 @@ class Instance:
             return None
         require(helper['name'] == self.container + '-' + applied['generation'] + '-' + helper['operation']
                 and helper['operation'] in ('prepare', 'cleanup'), 'foreign helper intent')
-        data = inspect('container', helper['name'])
+        data = self.inspect('container', helper['name'])
         if data:
             labels = data.get('Config', {}).get('Labels', {})
             require(labels.get(LABEL) == applied['owner'] and
@@ -335,31 +354,36 @@ class Instance:
             # Podman serializes start/remove on the immutable container ID and
             # kills/reaps its processes before removal. A delayed start CLI
             # cannot resurrect this ID after recovery has removed it.
-            run('podman', 'rm', '--force', '--time=0', data['Id'])
+            run(self.runtime, 'rm', '--force', *(['--time=0'] if self.runtime == 'podman' else []), data['Id'])
             require(self.helper_container(applied) is None, 'helper still exists after removal')
+        elif self.runtime == 'docker' and not applied['helper'].get('id'):
+            # A daemon may finish create after the client died. An absent
+            # response is not evidence of cancellation: retain pins and intent.
+            raise ValueError('Docker helper create outcome is unknown; retain handles and retry recovery')
         del applied['helper']
         save(self.applied, applied)
 
     def run_helper(self, applied, operation, arguments, *command):
         require(not applied.get('helper'), 'previous helper needs recovery')
         name = self.container + '-' + applied['generation'] + '-' + operation
-        require(inspect('container', name) is None, 'foreign helper name collision')
+        require(self.inspect('container', name) is None, 'foreign helper name collision')
         applied['helper'] = {'name': name, 'operation': operation}
         save(self.applied, applied)
         # Create does not run customer code. Inherit the instance lock only
         # through create so a surviving CLI cannot create after recovery.
         # Start uses the recorded immutable ID, never a reusable name. Do not
         # use --rm: its inspectable ownership must survive any hook/CLI death.
-        run('podman', 'create', '--name', name, '--pull=never', '--privileged', '--cgroupns=private',
+        arguments, executable = self.helper_arguments(arguments)
+        run(self.runtime, 'create', '--name', name, '--pull=never', '--privileged', '--cgroupns=private',
             '--label', LABEL + '=' + applied['owner'],
             '--label', LABEL + '.generation=' + applied['generation'],
-            '--label', LABEL + '.operation=' + operation, '--entrypoint=' + RUNTIME,
-            *arguments, applied['image'], operation, *command, pass_fds=(self.lock_fd,))
+            '--label', LABEL + '.operation=' + operation,
+            *arguments, applied['image'], *executable[1:], operation, *command, pass_fds=(self.lock_fd,))
         data = self.helper_container(applied)
         require(data, 'created helper is missing')
         applied['helper']['id'] = data['Id']
         save(self.applied, applied)
-        run('podman', 'start', '--attach', data['Id'])
+        run(self.runtime, 'start', '--attach', data['Id'])
         self.reap_helper(applied)
 
     def archive_boot(self, applied):
@@ -425,7 +449,7 @@ class Instance:
         old = self.installed() if self.installation.exists() else None
         require(self.service_state() not in ('active', 'activating', 'deactivating', 'reloading'),
                 'stop the instance before installation/replacement')
-        require(inspect('container', self.container) is None, 'existing container must be recovered before installation')
+        require(self.inspect('container', self.container) is None, 'existing container must be recovered before installation')
         if self.applied.exists():
             require(json_file(self.applied)['state'] == 'cleaned', 'unfinished recovery blocks installation')
         if old:
@@ -462,7 +486,7 @@ class Instance:
         require(self.owned_container(installed) is None, 'old container still exists')
         require(Path('/run/systemd/system').is_dir() and Path('/sys/fs/cgroup/cgroup.controllers').is_file(),
                 'systemd and cgroup v2 are required')
-        version = run('podman', 'version', '--format', '{{.Client.Version}}').stdout.strip()
+        version = run(self.runtime, 'version', '--format', '{{.Client.Version}}').stdout.strip()
         require(tuple(map(int, re.findall(r'\d+', version)[:3])) >= (4, 9, 3), 'Podman >= 4.9.3 required')
         require(Path('/dev/kvm').is_char_device() and Path('/dev/net/tun').is_char_device(), 'KVM/TUN devices missing')
         release = json_file(Path(installed['tool']).parents[1] / 'release.json')
@@ -486,7 +510,7 @@ class Instance:
         base = ['podman', 'run', '--rm', '--pull=never', '--network=none',
                 '--entrypoint=/usr/libexec/node-infra/service', *volumes, installed['image']]
         run(*base, 'validate')
-        descriptor = json.loads(run('podman', 'run', '--rm', '--pull=never', '--cap-add=SYS_ADMIN',
+        descriptor = json.loads(run(self.runtime, 'run', '--rm', '--pull=never', '--cap-add=SYS_ADMIN',
                                     '--network=' + selected['network'],
                                     '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'preflight').stdout)
         require(descriptor['main_netns_inode'] == selected['primary_inode'],
@@ -496,7 +520,7 @@ class Instance:
         if transit:
             require(len(matches) == 1 and 'UP' not in matches[0]['flags'] and matches[0].get('address'),
                     'transit input is missing, UP, or lacks a MAC identity')
-        budget = json.loads(run('podman', 'run', '--rm', '--pull=never', '--network=none',
+        budget = json.loads(run(self.runtime, 'run', '--rm', '--pull=never', '--network=none',
                                 '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'budget').stdout)
         limits = selected['values']
         quota = one(limits, 'Service', 'CPUQuota', '')
@@ -512,18 +536,20 @@ class Instance:
         installed = self.installed()
         private_directory(self.run)
         require(not (self.run / 'owner.json').exists(), 'run handles already exist; recover first')
-        require(not list(self.run.iterdir()), 'unowned runtime entries exist')
+        placeholders = self.initial_handles()
         private_directory(self.recovery)
         if self.connector.exists():
             require(json_file(self.connector)['state'] == 'cleaned', 'Connector recovery is unfinished')
             self.connector.unlink()
-        group = run('systemctl', 'show', self.service, '--property=ControlGroup', '--value').stdout.strip()
-        require(group and group != '/', 'service has no delegated cgroup')
+        group = self.group()
         applied = {'schema': 1, 'state': 'preparing', 'name': self.name, 'owner': installed['owner'],
                    'boot_id': boot_id(), 'generation': uuid.uuid4().hex, 'image': installed['image'],
                    'tool': installed['tool'], 'cgroup': group, 'netns': selected['netns'],
                    'network': selected['network'], 'primary_inode': selected['primary_inode'], 'mounts': {},
-                   'descriptor': descriptor, 'transit': transit, 'error': ''}
+                   'descriptor': descriptor, 'transit': transit, 'error': '', 'runtime': self.runtime,
+                   'placeholders': placeholders}
+        if self.runtime == 'docker':
+            applied.update(container_id=installed['container_id'], daemon=installed['daemon'])
         save(self.applied, applied)
         save(self.run / 'owner.json', {'owner': applied['owner'], 'generation': applied['generation']})
         primary = self.run / 'primary'
@@ -531,11 +557,11 @@ class Instance:
         self.create_mount(applied, primary, 'nsfs', applied['primary_inode'], '--bind', selected['netns'], primary)
         require(primary.stat().st_ino == applied['primary_inode'], 'primary namespace changed during prepare')
         pins = self.run / 'netns'
-        pins.mkdir(mode=0o700)
+        pins.mkdir(mode=0o700, exist_ok=True)
         self.create_mount(applied, pins, None, pins.stat().st_ino, '--bind', pins, pins)
         run('mount', '--make-rshared', pins)
         bpf = self.run / 'bpf'
-        bpf.mkdir(mode=0o700)
+        bpf.mkdir(mode=0o700, exist_ok=True)
         self.create_mount(applied, bpf, 'bpf', None, '-t', 'bpf', 'node-infra-' + self.name, bpf)
         # Create native namespaces in a short-lived helper before starting PID 1.
         # Only this helper and recovery share mounts back to the host. The main
@@ -575,6 +601,9 @@ class Instance:
         require(container and container['State']['Running'], 'container failed to start')
         pid = container['State']['Pid']
         require(Path(f'/proc/{pid}/ns/net').stat().st_ino == applied['primary_inode'], 'container joined another namespace')
+        if self.runtime == 'docker':
+            actual = Path(f'/proc/{pid}/cgroup').read_text().strip().split(':', 2)[2]
+            require(actual.startswith(applied['cgroup'] + '/'), 'Docker container escaped its declared cgroup parent')
         applied.update(state='running', container_id=container['Id'])
         save(self.applied, applied)
 
@@ -591,7 +620,10 @@ class Instance:
         if str(Path(__file__).resolve()) != applied['tool']:
             # CLOEXEC on the lock descriptor releases it before the pinned
             # implementation reacquires the same instance lock.
-            os.execv(applied['tool'], [applied['tool'], 'recover', '--name', self.name])
+            arguments = [applied['tool'], 'recover', '--name', self.name]
+            if applied.get('runtime') == 'docker':
+                arguments += ['--runtime', 'docker']
+            os.execv(applied['tool'], arguments)
         try:
             container = self.owned_container(installed)
             require(not container or not container['State']['Running'],
@@ -599,14 +631,17 @@ class Instance:
             self.reap_helper(applied)
             self.consumers_gone(applied)
             if container:
-                run('podman', 'rm', container['Id'])
+                run(self.runtime, 'rm', container['Id'])
             if applied['boot_id'] != boot_id():
                 require(not self.run.exists(), 'old runtime handles remain after reboot; refusing stale-state adoption')
                 self.archive_boot(applied)
                 return
             owner_path = self.run / 'owner.json'
             if not owner_path.exists() and applied['state'] in ('preparing', 'releasing'):
-                require(not self.run.exists() or not list(self.run.iterdir()), 'unowned runtime entries remain')
+                if self.run.exists():
+                    expected = applied.get('placeholders', {}) if applied['state'] == 'preparing' else {}
+                    require(self.initial_handles() == expected,
+                            'unowned runtime placeholders changed')
                 if applied['state'] == 'preparing':
                     save(owner_path, {'owner': applied['owner'], 'generation': applied['generation']})
             if owner_path.exists():
@@ -633,7 +668,7 @@ class Instance:
             primary = self.run / 'primary'
             if self.connector.exists() and applied['state'] != 'releasing':
                 require(primary.exists() and primary.stat().st_ino == applied['primary_inode'], 'old primary namespace lost')
-                require(inspect('image', applied['image']), 'old immutable cleanup image is missing')
+                require(self.inspect('image', applied['image']), 'old immutable cleanup image is missing')
                 self.run_helper(applied, 'cleanup', ['--network=ns:' + str(primary),
                     '--volume', str(self.recovery) + ':/run/node-infra/recovery:rw',
                     '--volume', str(self.run / 'netns') + ':/run/netns:rw,rshared',
@@ -696,19 +731,187 @@ class Instance:
             checks.append({'name': 'primary-namespace', 'status': 'pass' if identity else 'fail',
                            'detail': 'container and retained primary namespace identity'})
             for service in ('node-conductor', 'node-proxy', 'connector-vswitch'):
-                result = run('podman', 'exec', self.container, 'systemctl', 'is-active', service, check=False, timeout=15)
+                result = run(self.runtime, 'exec', self.container, 'systemctl', 'is-active', service, check=False, timeout=15)
                 checks.append({'name': service, 'status': 'pass' if result.returncode == 0 else 'fail',
                                'detail': result.stdout.strip()})
-            health = run('podman', 'exec', self.container, RUNTIME, 'health', check=False, timeout=10)
+            health = run(self.runtime, 'exec', self.container, RUNTIME, 'health', check=False, timeout=10)
             checks.append({'name': 'native-app-readiness', 'status': 'pass' if health.returncode == 0 else 'fail',
                            'detail': 'Conductor admin and Proxy workers/routes' if health.returncode == 0 else health.stderr.strip()})
-            result = run('podman', 'exec', self.container, RUNTIME, 'ready', '--timeout=1s', check=False, timeout=10)
+            result = run(self.runtime, 'exec', self.container, RUNTIME, 'ready', '--timeout=1s', check=False, timeout=10)
             checks.append({'name': 'connector-capacity', 'status': 'pass' if result.returncode == 0 else 'fail',
                            'detail': 'native provisioned capacity' if result.returncode == 0 else result.stderr.strip()})
         ready = running and active == 'active' and bool(checks) and all(c['status'] == 'pass' for c in checks)
         return {'name': self.name, 'container': {'exists': container is not None, 'running': running,
                 'image': container.get('Image') if container else installed['image']}, 'service': {'active': active},
                 'recovery': {'pending': pending, 'error': applied.get('error', '')}, 'checks': checks, 'ready': ready}
+
+
+class DockerInstance(Instance):
+    """Optional retained handles for one explicitly selected native container.
+
+    Ordinary Docker runs do not use this adapter. No host service is installed;
+    the immutable, never-started container supplies its native bindings.
+    """
+    runtime = 'docker'
+
+    def daemon(self):
+        endpoint = os.environ.get('DOCKER_HOST')
+        if os.environ.get('DOCKER_CONTEXT') or not endpoint:
+            context = json.loads(run('docker', 'context', 'inspect').stdout)
+            endpoint = context[0]['Endpoints']['docker']['Host']
+        require(endpoint.startswith('unix:///'), 'retained Docker handles require a local Unix socket')
+        info = json.loads(run('docker', 'info', '--format', '{{json .}}').stdout)
+        require(info['CgroupVersion'] == '2' and info['CgroupDriver'] in ('systemd', 'cgroupfs'),
+                'Docker cgroup v2 with a native systemd/cgroupfs driver is required')
+        require(not any('rootless' in option for option in info.get('SecurityOptions', [])),
+                'retained Docker handles require rootful Docker')
+        return {'endpoint': endpoint, 'id': info['ID'], 'driver': info['CgroupDriver']}
+
+    def installed(self):
+        data = super().installed()
+        require(data.get('runtime') == 'docker' and data['daemon'] == self.daemon(),
+                'saved Docker runtime/daemon differs; use the original local daemon')
+        return data
+
+    @staticmethod
+    def fingerprint(data):
+        return hash_bytes(json.dumps({key: data[key] for key in ('Id', 'Image', 'Config', 'HostConfig')},
+                                     sort_keys=True).encode())
+
+    def owned_container(self, installed):
+        data = self.inspect('container', installed['container_id'])
+        if data:
+            require(data['Id'] == installed['container_id'] and
+                    self.fingerprint(data) == installed['bindings_sha256'],
+                    'saved Docker container bindings changed; retain recovery handles')
+        return data
+
+    def select(self, identity):
+        require(re.fullmatch(r'[0-9a-f]{64}', identity), 'prepare requires the complete created Docker container ID')
+        require(not self.applied.exists() or json_file(self.applied)['state'] == 'cleaned',
+                'recover the previous generation before selecting a new Docker container')
+        old = self.installed() if self.installation.exists() else None
+        if old:
+            require(old['container_id'] == identity or self.owned_container(old) is None,
+                    'previous selected Docker container still exists')
+        data = self.inspect('container', identity)
+        require(data and data['Id'] == identity and data['State']['Status'] == 'created' and
+                data['State']['StartedAt'].startswith('0001-'), 'Docker container must never have started')
+        package = Path(__file__).resolve().parents[1]
+        release = json_file(package / 'release.json')
+        image = image_identity(data['Image'], release, 'docker')
+        daemon = self.daemon()
+        self.native_bindings(data, daemon)
+        require(not self.connector.exists() or json_file(self.connector)['state'] == 'cleaned',
+                'unowned Connector recovery record exists')
+        pinned = pin_release(package, release)
+        save(self.installation, {'schema': 1, 'runtime': 'docker', 'name': self.name,
+            'owner': old['owner'] if old else uuid.uuid4().hex, 'version': release['version'],
+            'tool': str(pinned / 'bin/node-infra-ctl'), 'image': image, 'daemon': daemon,
+            'container_id': identity, 'bindings_sha256': self.fingerprint(data)})
+
+    def native_bindings(self, data, daemon):
+        host, config = data['HostConfig'], data['Config']
+        image = self.inspect('image', data['Image'])
+        require(host['NetworkMode'] == 'host', 'retained Docker transit uses native host networking')
+        require(host['Privileged'] and host['CgroupnsMode'] == 'private' and not host['PidMode'] and
+                not host.get('UsernsMode') and not host['AutoRemove'] and
+                host['RestartPolicy']['Name'] in ('', 'no'),
+                'retain privileged/private PID and cgroup namespaces, no auto-remove and no restart policy')
+        require(config['Entrypoint'] == image['Config']['Entrypoint'] and
+                config.get('Cmd') == image['Config'].get('Cmd') and config.get('User') in ('', '0', 'root') and
+                config.get('StopSignal') == 'SIGRTMIN+3', 'retain the image entrypoint and stop signal')
+        suffix = hashlib.sha256(self.name.encode()).hexdigest()[:16]
+        parent = ('nodeinfra' + suffix + '.slice' if daemon['driver'] == 'systemd' else '/node-infra-' + self.name)
+        require(host['CgroupParent'] == parent, 'dedicated --cgroup-parent must be ' + parent)
+        mounts = {}
+        for item in data['Mounts']:
+            require(item['Type'] == 'bind', 'retained Docker bindings must be explicit host paths')
+            source, target = item['Source'], item['Destination']
+            safe_path(source)
+            require(target not in mounts, 'duplicate Docker destination')
+            mounts[target] = (source, 'rw' if item['RW'] else 'ro', item.get('Propagation', 'rprivate'))
+        required = {'/run/node-infra/recovery': (str(self.recovery), 'rw'),
+                    '/run/netns': (str(self.run / 'netns'), 'rw'),
+                    '/sys/fs/bpf': (str(self.run / 'bpf'), 'rw')}
+        for target, binding in required.items():
+            require(target in mounts and mounts[target][:2] == binding, 'missing recovery binding: ' + target)
+        require(mounts['/run/netns'][2] == 'rslave', 'main namespace handles require rslave propagation')
+        require('/var/lib/node-infra' in mounts, 'missing persistent business data binding')
+        for target in mounts:
+            for protected in required:
+                require(target == protected or not (Path(target) in Path(protected).parents or
+                        Path(protected) in Path(target).parents), 'volume overlaps recovery mount: ' + target)
+        return {'image': data['Image'], 'network': 'host', 'netns': '/proc/self/ns/net',
+                'group': '/' + parent.lstrip('/'),
+                'volumes': [f'{source}:{target}:{mode},{propagation}'
+                            for target, (source, mode, propagation) in mounts.items()]}
+
+    def source(self):
+        installed = self.installed()
+        data = self.owned_container(installed)
+        require(data, 'selected created Docker container is missing')
+        return self.native_bindings(data, installed['daemon'])
+
+    def group(self):
+        return self.source()['group']
+
+    def initial_handles(self):
+        # Docker create accepts precreated bind directories. Adopt only these
+        # exact empty placeholders, never an existing namespace or mount.
+        placeholders = {}
+        for path in self.run.iterdir():
+            require(path.name in ('netns', 'bpf') and path.is_dir() and not path.is_symlink() and
+                    not mount_at(path) and not list(path.iterdir()), 'unowned Docker handle placeholder: ' + str(path))
+            private_directory(path)
+            placeholders[path.name] = [path.stat().st_dev, path.stat().st_ino]
+        return placeholders
+
+    def check(self):
+        installed = self.installed()
+        container = self.owned_container(installed)
+        require(container and container['State']['Status'] == 'created', 'selected Docker container is not newly created')
+        selected = self.source()
+        self.consumers_gone({'cgroup': selected['group']})
+        selected['primary_inode'] = Path(selected['netns']).stat().st_ino
+        volumes = []
+        for value in selected['volumes']:
+            source, target, _ = value.split(':')
+            if target not in ('/run/netns', '/sys/fs/bpf', '/run/node-infra/recovery'):
+                require(Path(source).exists(), 'missing volume source: ' + source)
+                volumes += ['--volume', value]
+        # These helpers only validate native input; no network object is made.
+        run('docker', 'run', '--rm', '--pull=never', '--network=none',
+            '--entrypoint=/usr/libexec/node-infra/service', *volumes, installed['image'], 'validate')
+        descriptor = json.loads(run('docker', 'run', '--rm', '--pull=never', '--network=host',
+            '--cap-add=SYS_ADMIN', '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'preflight').stdout)
+        require(descriptor['main_netns_inode'] == selected['primary_inode'],
+                'Docker daemon and controller use different primary namespaces')
+        links = json.loads(run('ip', '-j', 'link', 'show').stdout)
+        require(any(x['ifname'] == 'lo' and 'UP' in x['flags'] for x in links), 'primary loopback is not UP')
+        transit = descriptor['transit']['name']
+        matches = [x for x in links if x['ifname'] == transit]
+        require(not transit or len(matches) == 1 and 'UP' not in matches[0]['flags'] and matches[0].get('address'),
+                'transit is missing, UP or lacks a MAC identity')
+        budget = json.loads(run('docker', 'run', '--rm', '--pull=never', '--network=none',
+            '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'budget').stdout)
+        host = container['HostConfig']
+        cpu = host.get('NanoCpus', 0) / 1e9 or (host['CpuQuota'] / host['CpuPeriod']
+              if host.get('CpuQuota', 0) > 0 and host.get('CpuPeriod', 0) > 0 else None)
+        selected['budget'] = check_budget(budget, cpu, host.get('Memory') or None)
+        return selected, descriptor, matches[0] if transit else None
+
+    def helper_arguments(self, arguments):
+        primary = self.run / 'primary'
+        network = '--network=ns:' + str(primary)
+        require(network in arguments, 'helper must use the saved primary namespace')
+        arguments = [value for value in arguments if value != network]
+        return (['--network=none', '--volume', str(primary) + ':/run/node-infra-primary:ro',
+                 '--entrypoint=/usr/bin/nsenter', *arguments],
+                ['/usr/bin/nsenter', '--net=/run/node-infra-primary', RUNTIME])
+
+    def service_state(self):
+        return 'active'
 
 
 def boot_id():
@@ -772,26 +975,38 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('command', choices=('install', 'check', 'status', 'prepare', 'started', 'recover', 'describe', 'health', 'cleanup'))
     parser.add_argument('--name')
-    parser.add_argument('--runtime', choices=('podman', 'docker'), default='podman')
-    parser.add_argument('--container', help='query an already-running system container without a host installation')
+    parser.add_argument('--runtime', choices=('podman', 'docker'))
+    parser.add_argument('--container', help='query a running container, or explicitly prepare a never-started Docker ID')
     parser.add_argument('--unit', type=Path)
     parser.add_argument('--json', action='store_true')
     args = parser.parse_args()
     try:
         require(os.geteuid() == 0, 'node-infra-ctl requires root')
+        if args.command == 'prepare' and args.runtime == 'docker':
+            require(args.name and args.container, 'Docker prepare requires --name and the complete --container ID')
+            instance = DockerInstance(args.name)
+            with locked(instance):
+                instance.select(args.container)
+                instance.prepare()
+            return 0
         if args.container:
             require(args.command in ('describe', 'check', 'health', 'cleanup'),
                     '--container supports describe/check/health/cleanup')
             require(re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*', args.container), 'invalid container identity')
             options = ['--internal'] if args.command == 'cleanup' else []
-            result = run(args.runtime, 'exec', args.container, RUNTIME, args.command, *options, check=False)
+            result = run(args.runtime or 'podman', 'exec', args.container, RUNTIME, args.command, *options, check=False)
             sys.stdout.write(result.stdout)
             sys.stderr.write(result.stderr)
             return result.returncode
         require(args.command not in ('describe', 'health', 'cleanup'), 'describe/health/cleanup require --container')
         require(args.name, 'host installation operations require --name')
-        require(args.runtime == 'podman', 'host systemd installation uses Podman/Quadlet')
-        instance = Instance(args.name)
+        require(NAME.fullmatch(args.name), 'invalid instance name')
+        saved = STATE / args.name / 'installation.json'
+        runtime = json_file(saved).get('runtime', 'podman') if saved.exists() else (args.runtime or 'podman')
+        require(not args.runtime or args.runtime == runtime, 'runtime differs from the saved instance')
+        require(runtime == 'podman' or args.command in ('check', 'status', 'recover', 'started'),
+                'Docker uses explicit prepare/recover; host installation uses Podman/Quadlet')
+        instance = DockerInstance(args.name) if runtime == 'docker' else Instance(args.name)
         # status must remain observable while a recovery hook holds the lock.
         if args.command == 'status':
             result = instance.status()

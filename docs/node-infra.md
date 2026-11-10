@@ -293,7 +293,7 @@ Customer networking uses native oneshot units and service drop-ins. See
 owns only its named nft table, runs between network preparation and Connector,
 and retains the base Connector `ExecStartPost` readiness step. An appended
 post-start failure fails Connector and its startup dependents. The official
-image includes nftables; derived images must include any other required tools
+image includes nftables, with the distribution-wide flush service masked; derived images must include any other required tools
 at build time. Never download packages during runtime setup.
 
 ## Optional namespace isolation and transit
@@ -324,6 +324,52 @@ device DOWN during cleanup. Missing/empty transit performs no handoff or return
 and records no fictitious device identity. The host owns device allocation;
 this package does not manage VFs or deploy transit gateways. The same fragment
 works through customer image COPY and runtime mounts.
+
+For Docker with borrowed transit, explicitly prepare retained handles before the
+first start. This optional path accepts a complete, never-started container ID
+from the local rootful Docker daemon. It uses native host networking; ordinary
+bridge development remains available without borrowed transit. Keep the normal
+image entrypoint, no automatic restart/auto-remove, and the three recovery binds.
+Use a dedicated native cgroup parent so recovery can prove that all old consumers
+have ended even when the caller dies immediately after `docker start`:
+
+```sh
+name=node-a
+run=/run/node-infra/instances/$name
+state=/var/lib/node-infra/instances/$name
+sudo install -d -m 700 "$run/netns" "$run/bpf" "$state/recovery" "$state/data"
+parent=/node-infra-$name
+if [ "$(docker info --format '{{.CgroupDriver}}')" = systemd ]; then
+  suffix=$(printf %s "$name" | sha256sum | cut -c1-16)
+  parent=nodeinfra${suffix}.slice
+fi
+# Add the same native configuration/fixture bindings used by the direct example.
+id=$(docker create --tty --name node-infra-$name --pull=never --privileged \
+  --network=host --cgroupns=private --cgroup-parent="$parent" \
+  --cpus=4 --memory=6g --memory-swap=6g --stop-timeout=420 \
+  --tmpfs=/run --tmpfs=/run/lock --tmpfs=/tmp:exec \
+  -v "$CONFIG/node-conductor/conf.d:/etc/node-conductor/conf.d:ro" \
+  -v "$CONFIG/node-proxy/conf.d:/etc/node-proxy/conf.d:ro" \
+  -v "$CONFIG/connector-vswitch/conf.d:/etc/connector-vswitch/conf.d:ro" \
+  -v "$CONFIG/manifest.yaml:/etc/node-infra/manifest.yaml:ro" \
+  -v "$state/data:/var/lib/node-infra:rw" \
+  -v "$state/recovery:/run/node-infra/recovery:rw" \
+  -v "$run/netns:/run/netns:rw,rslave" -v "$run/bpf:/sys/fs/bpf:rw" "$IMAGE_ID")
+sudo ./bin/node-infra-ctl prepare --runtime docker --name "$name" --container "$id"
+docker start "$id"
+sudo ./bin/node-infra-ctl started --runtime docker --name "$name"
+# After normal stop or abnormal exit, use the recorded old generation.
+docker stop "$id"
+sudo ./bin/node-infra-ctl recover --runtime docker --name "$name"
+```
+
+The tool records the exact container/image, local daemon, dedicated cgroup,
+namespace generation and pinned cleanup implementation. Recovery removes the
+old stopped container by ID before releasing handles; a reused name cannot
+redirect it. An interrupted daemon-side helper create whose outcome is still
+unknown retains its journal and handles and reports that uncertainty. Do not
+remove the pins or edit the journal to bypass it; inspect the recorded helper
+and retry recovery after the daemon has completed the operation.
 
 ## Stop, recover and replace an instance
 

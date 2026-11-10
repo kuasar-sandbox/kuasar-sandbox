@@ -2,6 +2,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -103,6 +104,38 @@ func main() {
 	http.HandleFunc("/egress", func(w http.ResponseWriter, r *http.Request) {
 		client := &http.Client{Timeout: 5 * time.Second}
 		response, err := client.Get(r.URL.Query().Get("url"))
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer response.Body.Close()
+		w.WriteHeader(response.StatusCode)
+		_, _ = io.Copy(w, io.LimitReader(response.Body, 4096))
+	})
+	http.HandleFunc("/udp", func(w http.ResponseWriter, r *http.Request) {
+		connection, err := net.DialTimeout("udp", r.URL.Query().Get("address"), 5*time.Second)
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer connection.Close()
+		_ = connection.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err := connection.Write([]byte(r.URL.Query().Get("marker"))); err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		data := make([]byte, 4096)
+		n, err := connection.Read(data)
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		_, _ = w.Write(data[:n])
+	})
+	http.HandleFunc("/otlp", func(w http.ResponseWriter, r *http.Request) {
+		payload := fmt.Sprintf(`{"resourceMetrics":[{"scopeMetrics":[{"scope":{"name":"node-infra"},"metrics":[{"name":"node_infra_probe","gauge":{"dataPoints":[{"timeUnixNano":"%d","asDouble":17}]}}]}]}]}`, time.Now().UnixNano())
+		client := &http.Client{Timeout: 5 * time.Second}
+		response, err := client.Post("http://169.254.169.254:4318/v1/metrics", "application/json", bytes.NewBufferString(payload))
 		if err != nil {
 			http.Error(w, err.Error(), 502)
 			return

@@ -1,16 +1,20 @@
 """Direct Docker coverage using the existing prepared node-infra fixture."""
 import json
+import hashlib
 import os
 from pathlib import Path
 import shutil
+import subprocess
 import time
 
-from node_infra import Node, Fixture, command, require, wait_for, write_json, network_snapshot
+from node_infra import Node, Fixture, command, require, wait_for, write_json, network_snapshot, metadata_sentinel
+from node_infra_egress import ExternalEgress
 
 RUNTIME = '/usr/libexec/node-infra/node-infra-runtime'
 
 
 class DockerNode(Node):
+    retained = False
     def __init__(self, fixture, index, *, bridge=False, pools=False):
         self.bridge = bridge
         self.netns_inputs = {}
@@ -21,6 +25,23 @@ class DockerNode(Node):
         # Configuration and business data are ordinary run bindings. There is
         # deliberately no install/prepare helper or host node-infra service.
         (self.data / 'data').mkdir(parents=True, mode=0o700)
+        if self.pools:
+            shutil.copytree(self.fixture.inputs / 'publications', self.data / 'data/publications')
+            write_json(self.config / 'node-conductor/conf.d/95-build.yaml',
+                       {'builder': {'diff_template': '/run/node-infra/fixtures/overlay.ext4'},
+                        'checkpoint': {'remote': {'ref_location_parent': 'file:///var/lib/node-infra/publications',
+                                                  'manifest': True}}})
+            write_json(self.config / 'connector-vswitch/conf.d/96-otlp.yaml',
+                       {'mgmt_services': ['169.254.169.254:80:127.0.0.1:19254',
+                                          '169.254.169.254:4318:127.0.0.1:4318']})
+            write_json(self.config / 'node-telemetry/conf.d/90-otlp.yaml', {
+                'query': {'backend': 'local', 'handler': 'e2b'},
+                'local': {'enabled': True, 'path': '/var/lib/node-infra/telemetry'},
+                'collector': {'receivers': {'sandboxotlp': {'http_listen': '127.0.0.1:4318'}},
+                    'processors': {'batch': {'timeout': '1s'}}, 'exporters': {'sandboxlocal': {}},
+                    'service': {'telemetry': {'metrics': {'level': 'none'}},
+                        'pipelines': {'metrics': {'receivers': ['sandboxotlp'], 'processors': ['batch'],
+                                                  'exporters': ['sandboxlocal']}}}}})
 
     def execute(self, *args, check=True, timeout=120):
         return command('docker', 'exec', self.container, *args, check=check, timeout=timeout)
@@ -47,17 +68,21 @@ class DockerNode(Node):
             args += ['--volume', f'{self.config}/placement:/etc/node-infra/placement:ro']
         for name, path in self.netns_inputs.items():
             args += ['--mount', f'type=bind,source={path},target=/run/node-infra/netns-inputs/{name},readonly']
-        self.identity = command(*args, self.fixture.image).stdout.strip()
+        self.identity = self.launch(args)
         inspected = json.loads(command('docker', 'inspect', self.identity).stdout)[0]
         if self.bridge:
             ports = inspected['NetworkSettings']['Ports']
             self.api_port = int(ports['3000/tcp'][0]['HostPort'])
             self.proxy_port = int(ports['3001/tcp'][0]['HostPort'])
         wait_for('direct Docker internal readiness', lambda: self.status()['ready'], timeout=180)
+        require(self.execute('systemctl', 'is-enabled', 'nftables', check=False).stdout.strip() == 'masked',
+                'distribution nftables service must not own the host ruleset')
+        if self.pools:
+            self.execute('systemctl', 'start', 'node-telemetry')
         self.execute('/opt/node-infra/bin/node-ctl', 'manifest-key', 'add', '--socket',
                      '/run/sandbox/node-ctl.socket', self.manifest_key)
         record = json.loads(self.execute('cat', '/run/node-infra/recovery/connector.json').stdout)
-        require(not record.get('retained', False), 'direct Docker unexpectedly needs outer preparation')
+        require(record.get('retained', False) == self.retained, 'unexpected Docker handle ownership')
         main = int(self.execute('stat', '-Lc', '%i', '/proc/1/ns/net').stdout)
         planes = {ns['name']: ns['inode'] for ns in record['namespaces']}
         require(len({main, planes['mgmt'], planes['sw0-switch']}) == 3, 'network planes are not distinct')
@@ -65,11 +90,20 @@ class DockerNode(Node):
                    {'container_id': self.identity, 'image_id': inspected['Image'], 'main_netns': main,
                     'record': record, 'docker_driver': command('docker', 'info', '--format', '{{.CgroupDriver}}').stdout.strip()})
 
+    def launch(self, arguments):
+        return command(*arguments, self.fixture.image).stdout.strip()
+
     def assert_outer_limits(self):
         inspected = json.loads(command('docker', 'inspect', self.identity).stdout)[0]
         pid = inspected['State']['Pid']
         relative = Path(f'/proc/{pid}/cgroup').read_text().strip().split(':', 2)[2]
-        root = Path('/sys/fs/cgroup') / relative.lstrip('/')
+        init_group = Path('/sys/fs/cgroup') / relative.lstrip('/')
+        # systemd moves PID 1 into init.scope. Limits belong to the runtime's
+        # outer group, which also contains execution units and their VMs.
+        expected = {self.identity, 'docker-' + self.identity + '.scope'}
+        root = next((group for group in (init_group, *init_group.parents) if group.name in expected), None)
+        require(root is not None, 'cannot identify Docker outer cgroup from actual init ancestry')
+        relative = '/' + str(root.relative_to('/sys/fs/cgroup'))
         quota, period = (root / 'cpu.max').read_text().split()
         require(quota != 'max' and int(quota) == 4 * int(period), 'Docker CPU limit is not effective')
         require(int((root / 'memory.max').read_text()) == 6 * 1024**3, 'Docker memory limit is not effective')
@@ -132,8 +166,111 @@ class DockerNode(Node):
         self.reserved = False
 
 
+class RetainedDockerNode(DockerNode):
+    retained = True
+
+    def __init__(self, fixture, index):
+        self.bridge, self.netns_inputs, self.identity = False, {}, None
+        Node.__init__(self, fixture, index, host=True, transit=True)
+
+    def launch(self, arguments):
+        for path in (self.run / 'netns', self.run / 'bpf', self.data / 'recovery'):
+            path.mkdir(parents=True, mode=0o700, exist_ok=True)
+        driver = command('docker', 'info', '--format', '{{.CgroupDriver}}').stdout.strip()
+        parent = ('nodeinfra' + hashlib.sha256(self.name.encode()).hexdigest()[:16] + '.slice'
+                  if driver == 'systemd' else '/node-infra-' + self.name)
+        args = ['docker', 'create', *[arg for arg in arguments[2:] if arg != '--detach'],
+                '--cgroup-parent=' + parent,
+                '--volume', f'{self.run}/netns:/run/netns:rw,rslave',
+                '--volume', f'{self.run}/bpf:/sys/fs/bpf:rw',
+                '--volume', f'{self.data}/recovery:/run/node-infra/recovery:rw']
+        identity = command(*args, self.fixture.image).stdout.strip()
+        # Retain the exact ID even when preparation fails; cleanup must never
+        # replace it with a container subsequently created under the same name.
+        self.identity = identity
+        command(self.fixture.ctl, 'prepare', '--runtime', 'docker', '--name', self.name, '--container', identity)
+        command('docker', 'start', identity)
+        command(self.fixture.ctl, 'started', '--runtime', 'docker', '--name', self.name)
+        return identity
+
+    def stop(self, *, hard=False):
+        if self.identity is None:
+            return
+        super().stop(hard=hard)
+        command(self.fixture.ctl, 'recover', '--runtime', 'docker', '--name', self.name)
+        command(self.fixture.ctl, 'recover', '--runtime', 'docker', '--name', self.name)
+        self.assert_returned()
+        write_json(self.fixture.output / self.name / ('retained-kill.json' if hard else 'retained-normal.json'),
+                   json.loads((self.data / 'applied.json').read_text()))
+
+    def remove(self):
+        if self.reserved:
+            self.stop()
+            Node.remove(self)
+
+
+def cgroupfs_case(fixture):
+    """A task-private Docker daemon, independent of host systemd delegation."""
+    data = fixture.work / 'cgroupfs-daemon'
+    runtime = Path('/run') / (fixture.key + '-docker')
+    runtime.mkdir(mode=0o700)
+    endpoint = 'unix://' + str(runtime / 'docker.sock')
+    original = os.environ.copy()
+    log = (fixture.output / 'cgroupfs-daemon.log').open('w')
+    daemon = subprocess.Popen(['dockerd', '--host=' + endpoint, '--data-root=' + str(data),
+        '--exec-root=' + str(runtime / 'exec'), '--pidfile=' + str(runtime / 'pid'),
+        '--exec-opt=native.cgroupdriver=cgroupfs', '--bridge=none', '--iptables=false',
+        '--ip-forward=false', '--ip-masq=false'], stdout=log, stderr=subprocess.STDOUT)
+    node = None
+    try:
+        os.environ['DOCKER_HOST'] = endpoint
+        wait_for('isolated cgroupfs Docker daemon',
+                 lambda: command('docker', 'info', check=False).returncode == 0)
+        require(command('docker', 'info', '--format', '{{.CgroupDriver}}').stdout.strip() == 'cgroupfs',
+                'isolated daemon did not use cgroupfs')
+        producer = subprocess.Popen(['docker', 'image', 'save', fixture.image],
+                                    env=original, stdout=subprocess.PIPE)
+        try:
+            subprocess.run(['docker', 'image', 'load'], stdin=producer.stdout, check=True)
+        finally:
+            producer.stdout.close()
+            require(producer.wait(timeout=120) == 0, 'same-image export to isolated daemon failed')
+        node = DockerNode(fixture, 0)
+        node.start()
+        guest = node.create()
+        node.write_marker(guest)
+        node.assert_native_exec(guest)
+        node.assert_outer_limits()
+        node.stop()
+        node.remove()
+        node = RetainedDockerNode(fixture, 0)
+        for hard in (False, True):
+            node.start()
+            node.create()
+            node.stop(hard=hard)
+        node.remove()
+        write_json(fixture.output / 'cgroupfs-result.json', {'driver': 'cgroupfs', 'create_exec_limits_stop': 'passed'})
+    finally:
+        try:
+            if node:
+                node.remove()
+        finally:
+            if 'DOCKER_HOST' in original:
+                os.environ['DOCKER_HOST'] = original['DOCKER_HOST']
+            else:
+                os.environ.pop('DOCKER_HOST', None)
+            daemon.terminate()
+            daemon.wait(timeout=30)
+            log.close()
+
+
 def run():
     fixture = Fixture()
+    with metadata_sentinel(fixture):
+        run_cases(fixture)
+
+
+def run_cases(fixture):
     require(os.environ.get('E2E_NODE_INFRA_DOCKER_IMAGE') == fixture.image,
             'Docker and OCI archives must both be prepared from the same image')
     before = network_snapshot()
@@ -141,11 +278,16 @@ def run():
         for bridge in (False, True):
             node = DockerNode(fixture, 0, bridge=bridge, pools=True)
             node.start()
+            node.assert_build()
             guest = node.create()
             node.write_marker(guest)
             node.assert_native_exec(guest)
             metadata = json.loads(node.guest(guest, '/mmds'))
             require(metadata.get('instanceID') == guest['sandboxID'], 'Docker MMDS failed')
+            wait_for('real guest OTLP to MGMT listener', lambda: node.guest(guest, '/otlp') or True)
+            listeners = node.execute('ip', 'netns', 'exec', 'mgmt', 'ss', '-lnpt').stdout
+            require('127.0.0.1:4318' in listeners, 'OTLP listener is absent from MGMT')
+            write_json(fixture.output / node.name / 'otlp.json', {'guest_post': 'passed', 'listeners': listeners})
             node.assert_outer_limits()
             for service in ('node-conductor', 'node-proxy', 'connector-vswitch'):
                 token = node.state(guest)['token']
@@ -164,6 +306,9 @@ def run():
             node.start()
             node.create()
             node.stop()
+            write_json(fixture.output / ('bridge-result.json' if bridge else 'host-result.json'),
+                       {'build': 'passed', 'create_exec_mmds_otlp': 'passed', 'memory_disk_restore': 'passed',
+                        'component_restarts': 'passed', 'normal_and_kill_restart': 'passed'})
             node.remove()
         nodes = [DockerNode(fixture, i, bridge=True) for i in range(3)]
         states = []
@@ -176,6 +321,29 @@ def run():
             require(nodes[i].state(states[i][0])['token'] == states[i][1]['token'], 'Docker instance stop crossed boundaries')
         for node in nodes:
             node.remove()
+        cgroupfs_case(fixture)
+        retained = RetainedDockerNode(fixture, 0)
+        for hard in (False, True):
+            retained.start()
+            retained.create()
+            retained.stop(hard=hard)
+        retained.remove()
+        external = ExternalEgress(fixture)
+        clean = False
+        try:
+            for hard in (False, True):
+                node = DockerNode(fixture, 0, bridge=True)
+                external.configure(node)
+                node.start()
+                guest = node.create()
+                external.traffic(node, guest)
+                node.stop(hard=hard)
+                external.unchanged('forced' if hard else 'normal')
+                node.remove()
+            clean = True
+        finally:
+            if clean:
+                external.close()
         require(network_snapshot() == before, 'Docker lifecycle changed host network state')
         write_json(fixture.output / 'docker-result.json', {'host': 'passed', 'bridge': 'passed', 'three_instances': 'passed'})
     finally:
