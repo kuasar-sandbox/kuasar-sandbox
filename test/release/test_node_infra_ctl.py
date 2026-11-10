@@ -104,7 +104,7 @@ class DeploymentTests(unittest.TestCase):
         ctl.save(self.node.applied, {'state': 'running', 'boot_id': ctl.boot_id(),
                                     'primary_inode': primary.stat().st_ino})
         # /proc/0 cannot exist: model inspect racing with the container's exit.
-        container = {'State': {'Running': True, 'Pid': 0}, 'Image': 'image'}
+        container = {'Id': 'immutable', 'State': {'Running': True, 'Pid': 0}, 'Image': 'image'}
         with patch.object(self.node, 'installed', return_value={'image': 'image'}), \
              patch.object(self.node, 'owned_container', return_value=container), \
              patch.object(self.node, 'service_state', return_value='deactivating'), \

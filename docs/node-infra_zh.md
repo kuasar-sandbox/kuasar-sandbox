@@ -242,7 +242,7 @@ mgmt_extracts:
 客户网络设置使用原生 oneshot unit 和服务 drop-in，见部署包 `examples/network-extension/`。
 示例仅拥有分配给自己的 nft table，运行在网络准备与 Connector 之间，保留基础
 Connector `ExecStartPost` ready 步骤。追加的 post-start 失败会使 Connector 及依赖方
-启动失败。官方镜像包含 nftables；其他工具由派生镜像构建时提供，不在启动时下载软件。
+启动失败。官方镜像包含 nftables，并屏蔽会清空全局规则的发行版服务；其他工具由派生镜像构建时提供，不在启动时下载软件。
 
 ## 可选的网络空间隔离与 transit
 
@@ -268,6 +268,48 @@ transit_dev_mtu: auto
 同一设备以 DOWN 状态归还。缺省/空 transit 不接管或归还设备，不记录虚假设备身份。
 宿主负责设备分配；本部署包不管理 VF 或部署 transit 网关。客户镜像 COPY 与
 运行期挂载使用同一片段。
+
+Docker 借入 transit 时，在第一次启动前显式准备保留句柄。这个可选路径接受本地
+rootful Docker daemon 中完整、从未启动过的容器 ID，使用原生 host 网络；不借入
+transit 的普通开发仍可使用 bridge。保留镜像正常入口，禁用自动重启/自动删除，并
+提供三个恢复绑定。使用专用原生 cgroup parent，即使调用方在 `docker start` 后
+立即退出，恢复仍可证明旧消费者已经全部结束：
+
+```sh
+name=node-a
+run=/run/node-infra/instances/$name
+state=/var/lib/node-infra/instances/$name
+sudo install -d -m 700 "$run/netns" "$run/bpf" "$state/recovery" "$state/data"
+parent=/node-infra-$name
+if [ "$(docker info --format '{{.CgroupDriver}}')" = systemd ]; then
+  suffix=$(printf %s "$name" | sha256sum | cut -c1-16)
+  parent=nodeinfra${suffix}.slice
+fi
+# 添加与直接启动示例相同的原生配置/输入绑定。
+id=$(docker create --tty --name node-infra-$name --pull=never --privileged \
+  --network=host --cgroupns=private --cgroup-parent="$parent" \
+  --cpus=4 --memory=6g --memory-swap=6g --stop-timeout=420 \
+  --tmpfs=/run --tmpfs=/run/lock --tmpfs=/tmp:exec \
+  -v "$CONFIG/node-conductor/conf.d:/etc/node-conductor/conf.d:ro" \
+  -v "$CONFIG/node-proxy/conf.d:/etc/node-proxy/conf.d:ro" \
+  -v "$CONFIG/connector-vswitch/conf.d:/etc/connector-vswitch/conf.d:ro" \
+  -v "$CONFIG/manifest.yaml:/etc/node-infra/manifest.yaml:ro" \
+  -v "$state/data:/var/lib/node-infra:rw" \
+  -v "$state/recovery:/run/node-infra/recovery:rw" \
+  -v "$run/netns:/run/netns:rw,rslave" -v "$run/bpf:/sys/fs/bpf:rw" "$IMAGE_ID")
+sudo ./bin/node-infra-ctl prepare --runtime docker --name "$name" --container "$id"
+docker start "$id"
+sudo ./bin/node-infra-ctl started --runtime docker --name "$name"
+# 正常停止或异常退出后，使用记录的旧 generation。
+docker stop "$id"
+sudo ./bin/node-infra-ctl recover --runtime docker --name "$name"
+```
+
+工具记录精确容器/镜像、本地 daemon、专用 cgroup、namespace generation 和固定的
+旧清理工具。恢复按 ID 删除旧的已停止容器后才释放句柄；同名新容器不能重定向清理。
+若 daemon 侧 helper create 被中断且结果仍未知，工具保留 journal/句柄并报告不确定
+状态。不要删除 pin 或修改 journal 绕过；检查记录的 helper，待 daemon 完成操作后
+重试恢复。
 
 ## 停止、恢复与更换实例
 
