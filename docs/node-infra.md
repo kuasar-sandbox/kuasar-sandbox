@@ -369,7 +369,12 @@ old stopped container by ID before releasing handles; a reused name cannot
 redirect it. An interrupted daemon-side helper create whose outcome is still
 unknown retains its journal and handles and reports that uncertainty. Do not
 remove the pins or edit the journal to bypass it; inspect the recorded helper
-and retry recovery after the daemon has completed the operation.
+and retry recovery if the helper appears after the daemon completes the operation.
+If the helper remains absent, recovery can continue to refuse within the same
+boot: an absent inspection result does not prove that a pending create request
+has ended. Do not delete the journal or pins manually. Automatic retirement of
+an absent helper intent requires a different boot and disappearance of the
+entire old runtime directory.
 
 ## Stop, recover and replace an instance
 

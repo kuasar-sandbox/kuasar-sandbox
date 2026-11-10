@@ -308,8 +308,10 @@ sudo ./bin/node-infra-ctl recover --runtime docker --name "$name"
 工具记录精确容器/镜像、本地 daemon、专用 cgroup、namespace generation 和固定的
 旧清理工具。恢复按 ID 删除旧的已停止容器后才释放句柄；同名新容器不能重定向清理。
 若 daemon 侧 helper create 被中断且结果仍未知，工具保留 journal/句柄并报告不确定
-状态。不要删除 pin 或修改 journal 绕过；检查记录的 helper，待 daemon 完成操作后
-重试恢复。
+状态。不要删除 pin 或修改 journal 绕过；检查记录的 helper，若 daemon 完成操作后
+helper 出现，再重试恢复。如果 helper 始终不存在，同一次 boot 内的恢复可能持续
+拒绝：inspect 不存在不能证明待处理的 create 请求已经结束。不存在的 helper intent
+只有在 boot 已改变且整个旧运行目录消失后，才能自动退役。
 
 ## 停止、恢复与更换实例
 

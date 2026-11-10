@@ -58,7 +58,7 @@ class ExternalEgress:
             command('ip', '-n', self.name, 'route', 'add', 'default', 'via', '192.0.2.1')
             command('ip', 'netns', 'exec', self.name, 'sysctl', '-w', 'net.ipv4.ip_forward=1')
             rules = fixture.work / 'provider-egress.nft'
-            rules.write_text('table ip provider { chain snat { type nat hook postrouting priority srcnat; '
+            rules.write_text('table ip provider { chain postrouting { type nat hook postrouting priority srcnat; '
                              'oifname "out0" snat to 192.0.2.2; } }\n')
             command('ip', 'netns', 'exec', self.name, 'nft', '-f', rules)
             ready = fixture.work / 'egress-target.ready'
@@ -99,6 +99,69 @@ class ExternalEgress:
         actual = self.snapshot()
         write_json(self.fixture.output / ('external-' + phase + '.json'), actual)
         require(actual == self.before, 'external namespace, exit, route or provider rules changed: ' + phase)
+
+    def input_changes(self, node, guest):
+        """A replaced/missing provider input must never redirect old cleanup."""
+        runtime = '/usr/libexec/node-infra/node-infra-runtime'
+        path = '/run/node-infra/netns-inputs/egress'
+        before = node.state(guest)['token']
+        node.execute('umount', path)
+        missing = node.execute(runtime, 'cleanup', '--force', check=False)
+        require(missing.returncode != 0, 'missing input allowed live cleanup')
+        node.execute('ip', 'netns', 'add', 'replacement')
+        try:
+            node.execute('mount', '--bind', '/run/netns/replacement', path)
+            changed = node.execute(runtime, 'cleanup', '--force', check=False)
+            require(changed.returncode != 0, 'changed input allowed live cleanup')
+            require(node.state(guest)['token'] == before, 'input mismatch cleanup stopped the guest')
+            node.execute('umount', path)
+        finally:
+            node.execute('mount', '--bind', '/run/netns/egress', path)
+            node.execute('ip', 'netns', 'delete', 'replacement')
+        write_json(self.fixture.output / node.name / 'input-mismatch.json',
+                   {'missing': missing.stderr, 'changed': changed.stderr, 'guest_preserved': True})
+
+    def failure_cases(self, node_type):
+        for phase in ('post-start', 'partial-netns', 'wrong-type', 'foreign-interface'):
+            node = node_type(self.fixture, 0, bridge=True)
+            self.configure(node)
+            fault = node.config / 'fault'
+            fault.mkdir()
+            failed_unit = 'node-infra-network.service'
+            foreign = False
+            if phase == 'post-start':
+                dropin = fault / '90-fail.conf'
+                dropin.write_text('[Service]\nRestart=no\nExecStartPost=/bin/false\n')
+                node.extra_mounts.append((dropin, '/etc/systemd/system/connector-vswitch.service.d/90-fail.conf'))
+                failed_unit = 'connector-vswitch.service'
+            elif phase == 'partial-netns':
+                wrapper = fault / 'ip'
+                wrapper.write_text('#!/bin/sh\nif [ "$1 $2 $3" = "netns add sw0-switch" ]; then\n'
+                                   '  touch /run/netns/sw0-switch\n  exit 1\nfi\nexec /usr/sbin/ip "$@"\n')
+                wrapper.chmod(0o755)
+                node.extra_mounts.append((wrapper, '/opt/node-infra/bin/ip'))
+            elif phase == 'wrong-type':
+                ordinary = fault / 'egress'
+                ordinary.write_text('not a namespace\n')
+                node.netns_inputs['egress'] = ordinary
+            else:
+                command('ip', '-n', self.name, 'link', 'add', 'egress0', 'type', 'dummy')
+                foreign = True
+            expected = self.snapshot()
+            try:
+                node.start(failure=failed_unit)
+                node.stop()
+                actual = self.snapshot()
+                require(actual == expected, 'failed setup changed external resources: ' + phase)
+                write_json(self.fixture.output / ('external-failure-' + phase + '.json'),
+                           {'before': expected, 'after': actual, 'repeated_cleanup': 'passed'})
+                node.remove()
+            finally:
+                if foreign:
+                    current = self.snapshot()
+                    require(current == expected, 'refusing cleanup of changed foreign fixture')
+                    command('ip', '-n', self.name, 'link', 'delete', 'egress0')
+            self.unchanged(phase)
 
     def close(self):
         if self.process:

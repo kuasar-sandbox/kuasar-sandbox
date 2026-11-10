@@ -12,6 +12,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -37,7 +38,24 @@ func main() {
 	}
 	token := hex.EncodeToString(value)
 	var mutex sync.Mutex
+	var envdOnce sync.Once
+	var envdError error
 	count := 0
+	http.HandleFunc("/start-envd", func(w http.ResponseWriter, r *http.Request) {
+		envdOnce.Do(func() {
+			// Exercise the delivered runtime's real Files service. The fixture
+			// itself only supplies the workload and never implements that API.
+			cmd := exec.Command("/opt/sandbox-runtime/bin/envd", "-isnotfc", "-port", "49983")
+			cmd.Stdout, cmd.Stderr = os.Stderr, os.Stderr
+			envdError = cmd.Start()
+			if envdError == nil {
+				go func() { _ = cmd.Wait() }()
+			}
+		})
+		if envdError != nil {
+			http.Error(w, envdError.Error(), 500)
+		}
+	})
 	http.HandleFunc("/state", func(w http.ResponseWriter, r *http.Request) {
 		mutex.Lock()
 		defer mutex.Unlock()

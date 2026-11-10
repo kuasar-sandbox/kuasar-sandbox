@@ -36,9 +36,9 @@ def require(condition, message):
         raise RuntimeError(message)
 
 
-def command(*args, check=True, timeout=120):
+def command(*args, check=True, timeout=120, env=None):
     result = subprocess.run([str(x) for x in args], text=True, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, timeout=timeout)
+                            stderr=subprocess.PIPE, timeout=timeout, env=env)
     if check and result.returncode:
         raise RuntimeError(f'{Path(str(args[0])).name} {args[1] if len(args)>1 else ""} '
                            f'exited {result.returncode}: {result.stderr[-3000:]}')
@@ -270,6 +270,14 @@ class Node:
         return http(method, f'http://{self.ingress}:{self.api_port}' + path, body=body, expected=expected,
                     headers={'Host': 'api.node-infra.test', 'X-API-KEY': self.api_key, **(headers or {})})
 
+    def assert_units(self):
+        units = ('node-infra.target', 'node-infra-network.service', 'node-infra-consumers.service',
+                 'connector-vswitch.service', 'node-conductor.service', 'node-proxy.service', 'node-telemetry.service')
+        result = self.execute('systemd-analyze', 'verify', *units, check=False)
+        write_json(self.fixture.output / self.name / 'systemd-verify.json',
+                   {'units': units, 'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+        require(result.returncode == 0, 'native systemd unit verification failed: ' + result.stderr)
+
     def guest(self, sandbox, path='/state', *, method='GET', body=None):
         return http(method, f'http://{self.ingress}:{self.proxy_port}' + path, body=body,
                     headers={'Host': f'8000-{sandbox["sandboxID"]}.node-infra.test',
@@ -333,13 +341,33 @@ class Node:
     def write_marker(self, sandbox):
         return json.loads(self.guest(sandbox, method='POST', body=(self.name + '-disk').encode()))
 
-    def assert_native_exec(self, sandbox):
+    def assert_native_exec(self, sandbox, expected=None):
         token = json.loads(self.api('POST', f'/sandboxes/{sandbox["sandboxID"]}/exec-sessions', {}, 201))['execAccessToken']
         result = command(self.fixture.bin / 'sandbox-ctl', 'exec', '--proxy', f'http://{self.ingress}:{self.proxy_port}',
                          '--proxy-header', 'E2b-Sandbox-Id: ' + sandbox['sandboxID'],
                          '--proxy-header', 'E2b-Sandbox-Service: exec', '--proxy-header', 'X-Access-Token: ' + token,
                          '--', '/node-infra-guest', 'read')
-        require(result.stdout == self.name + '-disk', 'native exec did not read guest disk state')
+        require(result.stdout == (expected or self.name + '-disk'), 'native exec did not read guest disk state')
+
+    def assert_files(self, sandbox):
+        self.guest(sandbox, '/start-envd', method='POST')
+        base = f'http://{self.ingress}:{self.proxy_port}'
+        headers = {'Host': f'49983-{sandbox["sandboxID"]}.node-infra.test',
+                   'X-Access-Token': sandbox['forwardAccessToken'],
+                   'Authorization': 'Basic ' + base64.b64encode(b'root:').decode()}
+        wait_for('real runtime envd Files service', lambda: http('GET', base + '/health', headers=headers, expected=204) or True)
+        http('POST', base + '/init', headers=headers, expected=204,
+             body={'envVars': {}, 'defaultUser': 'root', 'defaultWorkdir': '/state',
+                   'timestamp': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())})
+        payload, boundary = self.name + '-files', 'node-infra-files'
+        body = (f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="node-infra-marker"\r\n'
+                f'Content-Type: application/octet-stream\r\n\r\n{payload}\r\n--{boundary}--\r\n').encode()
+        path = '/files?path=/state/node-infra-marker'
+        http('POST', base + path, headers={**headers, 'Content-Type': 'multipart/form-data; boundary=' + boundary}, body=body)
+        require(http('GET', base + path, headers=headers).decode() == payload, 'real Files round trip differs')
+        self.assert_native_exec(sandbox, payload)
+        self.write_marker(sandbox)
+        write_json(self.fixture.output / self.name / 'files.json', {'service': 'bundled envd', 'upload_download_exec': 'passed'})
 
     def assert_transit(self, sandbox):
         require(self.gateway is not None, 'transit assertion requires an owned GENEVE gateway')
@@ -669,6 +697,7 @@ def _host_case(fixture, sentinel):
     sandbox = node.create()
     node.write_marker(sandbox)
     node.assert_native_exec(sandbox)
+    node.assert_files(sandbox)
     metadata = json.loads(node.guest(sandbox, '/mmds?' + urllib.parse.urlencode({'ip': node.mmds_vip})))
     require(metadata.get('instanceID') == sandbox['sandboxID'], 'MMDS did not identify the real guest')
     node.assert_outer_limits()
@@ -724,6 +753,7 @@ def deploy_case(fixture):
     sandbox = node.create()
     node.write_marker(sandbox)
     node.assert_native_exec(sandbox)
+    node.assert_files(sandbox)
     node.assert_transit(sandbox)
     node.assert_outer_limits()
     node.assert_restored(sandbox, memory=True)
@@ -735,6 +765,7 @@ def deploy_case(fixture):
 def config_case(fixture):
     node = Node(fixture, 0, extension=True, pools=True)
     node.start()
+    node.assert_units()
     expected = (node.name + '-private-r42').encode()
     require(node.api('GET', '/node-infra-extension') == expected, 'xconductor private configuration not applied')
     endpoint = f'http://{node.ingress}:3001/node-infra-extension'
@@ -765,7 +796,15 @@ def config_case(fixture):
     after = node.execute('pgrep', '-P', master).stdout.split()
     require(len(after) == 1 and after != children, 'Proxy worker did not restart beneath the same master')
     require(node.state(second)['token'], 'second pool guest did not survive worker restart')
+    node.execute('systemd-run', '--unit=runner-p0@ignore-term.service', '--slice=sandbox-runner.slice',
+                 '--property=TimeoutStopSec=2s', '--property=KillMode=control-group', '/bin/sh', '-c',
+                 'trap "echo TERM >>/var/lib/node-infra/term-seen" TERM; '
+                 'touch /run/ignore-term-ready; while :; do sleep 1; done')
+    wait_for('controlled TERM-ignoring consumer', lambda: node.execute('test', '-e', '/run/ignore-term-ready', check=False).returncode == 0)
     node.stop()
+    require('TERM' in (node.data / 'data/term-seen').read_text(), 'drain did not signal the controlled consumer')
+    write_json(fixture.output / node.name / 'consumer-timeout.json',
+               {'term_observed': True, 'native_kill_budget_seconds': 2, 'outer_recovery_confirmed_no_consumers': True})
     # Static native validation intentionally does not execute custom Configure.
     # Its real startup failure occurs after the network unit has been prepared.
     marker = node.config / 'extensions/r42/marker'
@@ -893,6 +932,7 @@ def interrupt_native_helpers(node, operations=(('prepare', 'hook'), ('prepare', 
             sandbox = node.create()
             node.write_marker(sandbox)
             node.assert_native_exec(sandbox)
+            node.assert_files(sandbox)
             # Leave a genuine failed cleanup for an operator's manual retry.
             # The retry runs outside the unit cgroup: systemd cannot reap its
             # orphan helper for us when we subsequently kill the host CLI.
@@ -982,6 +1022,7 @@ def interrupt_native_helpers(node, operations=(('prepare', 'hook'), ('prepare', 
         sandbox = node.create()
         node.write_marker(sandbox)
         node.assert_native_exec(sandbox)
+        node.assert_files(sandbox)
         node.stop()
     write_json(node.fixture.output / (node.name + '-helper-interruptions.json'), evidence)
 
