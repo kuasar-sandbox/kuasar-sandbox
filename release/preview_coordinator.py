@@ -658,12 +658,14 @@ def make_plan(
     configured: str,
     date: str,
     temporary: pathlib.Path,
+    next_version: str | None = None,
 ) -> Plan:
     state = RepositoryState(unit)
     recovery_sha = ensure_configured_state(unit, configured, state)
     source_ref = preview_selection.component_source_ref(
         PLATFORM_REF, unit.name, configured
     )
+    preview_selection.validate_next_version(unit.name, next_version, source_ref)
     source_sha = branch_sha(unit.repository, source_ref)
     if recovery_sha is not None:
         return Plan(unit, configured, source_ref, recovery_sha, configured, configured,
@@ -684,7 +686,7 @@ def make_plan(
     clone_repository(unit, source_ref, repository)
     usable = state.usable_tags()
     resolution = preview_selection.resolve(
-        repository, source_ref, unit.name, configured, usable, date
+        repository, source_ref, unit.name, configured, usable, date, next_version
     )
     if resolution.head != source_sha:
         raise Deferred(f"{unit.repository}:{source_ref} moved while selecting")
@@ -711,7 +713,9 @@ def make_plan(
     )
 
 
-def force_dependency_preview(plan: Plan, date: str, state: RepositoryState) -> Plan:
+def force_dependency_preview(
+    plan: Plan, date: str, state: RepositoryState, next_version: str | None = None,
+) -> Plan:
     if plan.source_ref is None:
         raise Deferred(
             f"{plan.unit.name} has no derived source branch for a required "
@@ -720,7 +724,9 @@ def force_dependency_preview(plan: Plan, date: str, state: RepositoryState) -> P
     # A reused unit can predate documentation-only HEAD commits. A new version
     # forced by dependencies/architecture uses the already resolved branch HEAD.
     plan = replace(plan, source_sha=plan.source_head or plan.source_sha)
-    selected = preview_selection.preview_candidate(plan.unit.name, plan.winner, date)
+    selected = preview_selection.preview_candidate(
+        plan.unit.name, plan.winner, date, next_version, plan.source_ref,
+    )
     status = state.status(selected)
     if status.partial and not status.complete:
         if recoverable_source_sha(status) != plan.source_sha:
@@ -736,12 +742,16 @@ def force_dependency_preview(plan: Plan, date: str, state: RepositoryState) -> P
     return replace(plan, selected=selected, action=action)
 
 
-def plan_units(configured: dict[str, str], date: str) -> dict[str, Plan]:
+def plan_units(
+    configured: dict[str, str], date: str, next_versions: dict[str, str] | None = None,
+) -> dict[str, Plan]:
+    next_versions = next_versions or {}
     plans: dict[str, Plan] = {}
     with tempfile.TemporaryDirectory(prefix="preview-source-") as directory:
         temporary = pathlib.Path(directory)
         for unit in UNITS:
-            plan = make_plan(unit, configured[unit.name], date, temporary)
+            next_version = next_versions.get(unit.name)
+            plan = make_plan(unit, configured[unit.name], date, temporary, next_version)
             state = RepositoryState(unit)
             status = state.status(plan.selected)
             dependency_changed = any(dependency_inputs_changed(name, unit.name, plans, configured, temporary)
@@ -755,21 +765,24 @@ def plan_units(configured: dict[str, str], date: str) -> dict[str, Plan]:
                 bool(unit.dependencies)
                 and "-preview." in plan.configured
                 and configured_tag.same_commit_order > winner_tag.same_commit_order
-                and plan.configured == preview_selection.preview_candidate(
-                    unit.name, plan.winner, plan.configured.rsplit("-preview.", 1)[1]
-                )
+                and plan.configured in {
+                    preview_selection.preview_candidate(
+                        unit.name, plan.winner, plan.configured.rsplit("-preview.", 1)[1],
+                        target, plan.source_ref or "main",
+                    ) for target in (None, next_version)
+                }
                 and not state.status(plan.configured).complete
             )
             if (
                 dependency_changed or pending_dependency_preview
             ) and plan.action != "publish":
-                plan = force_dependency_preview(plan, date, state)
+                plan = force_dependency_preview(plan, date, state, next_version)
                 status = state.status(plan.selected)
             if status.complete and not has_arm_archive(unit.name, plan.selected, status):
                 if not INITIALIZE_ARM:
                     raise Deferred(f"{unit.name} {plan.selected} is a valid historical AMD64 release; "
                                    "explicit INITIALIZE_ARM with a new Preview date/version is required")
-                plan = force_dependency_preview(plan, date, state)
+                plan = force_dependency_preview(plan, date, state, next_version)
                 status = state.status(plan.selected)
                 if status.complete and not has_arm_archive(unit.name, plan.selected, status):
                     raise Deferred("ARM initialization must choose a new unit version; historical assets cannot be amended")
@@ -835,6 +848,12 @@ def release_version() -> str:
     return str(config["version"])
 
 
+def manifest_next_versions() -> dict[str, str]:
+    path = PLATFORM_ROOT / "releases/daily-preview.yaml"
+    config = selection.read_simple_yaml(path.read_text(encoding="utf-8"), str(path))
+    return selection.component_next_versions(config, str(path))
+
+
 def platform_release(tag: str) -> ReleaseStatus:
     release = api_optional(f"repos/{PLATFORM_REPOSITORY}/releases/tags/{quote(tag, safe='')}")
     sha = tag_sha(PLATFORM_REPOSITORY, tag)
@@ -871,6 +890,7 @@ def render_manifest(
     date: str,
     previous_preview: str | None,
     plans: dict[str, Plan],
+    next_versions: dict[str, str] | None = None,
 ) -> str:
     contract = selection.NODE_INFRA_DELIVERY if (PLATFORM_ROOT / 'node-infra/image/build.py').is_file() else selection.DELIVERY
     lines = [f"version: {base}", f"delivery: {contract}"]
@@ -882,6 +902,14 @@ def render_manifest(
     lines.append("components:")
     for name in selection.UNITS:
         lines.append(f"  {name}: {plans[name].selected}")
+    if next_versions:
+        selection.component_next_versions(
+            {"component_next_versions": next_versions}, "generated Preview selection",
+        )
+        lines.append("component_next_versions:")
+        for name in selection.UNITS:
+            if name in next_versions:
+                lines.append(f"  {name}: {next_versions[name]}")
     content = "\n".join(lines) + "\n"
     selection.parse_manifest(content, "generated Preview selection", True)
     return content
@@ -1202,6 +1230,7 @@ def main(deadline: float | None = None) -> str:
         deadline = time.monotonic() + WAIT_SECONDS
     validate_environment()
     base, previous, preview, previous_preview, configured = manifest_values()
+    next_versions = manifest_next_versions()
     if PLATFORM_REF != "main":
         branch = re.fullmatch(r"release/v([0-9]+)\.([0-9]+)\.x", PLATFORM_REF)
         version = re.fullmatch(r"release-v([0-9]+)\.([0-9]+)\.[0-9]+", base)
@@ -1278,7 +1307,7 @@ def main(deadline: float | None = None) -> str:
             )
 
     recover_configured_components(configured, current_aggregate, PLATFORM_SHA)
-    plans = plan_units(configured, date)
+    plans = plan_units(configured, date, next_versions)
     for plan in plans.values():
         active_release = active_release_run(
             plan.unit.repository, plan.unit.workflow, plan.selected
@@ -1305,7 +1334,7 @@ def main(deadline: float | None = None) -> str:
         print("==> selection exhausted the branch budget; resume before manifest mutation")
         return "pending"
     aggregate = f"{base}-preview.{date}"
-    content = render_manifest(base, previous, date, next_previous_preview, plans)
+    content = render_manifest(base, previous, date, next_previous_preview, plans, next_versions)
     PLATFORM_SHA = persist_manifest(content, aggregate,
                                     source_shas={name: plan.source_sha for name, plan in plans.items()})
     return converge_until_deadline(plans, aggregate, deadline)

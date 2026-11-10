@@ -154,7 +154,7 @@ def read_simple_yaml(text: str, source: str) -> dict[str, object]:
         line = raw.split("#", 1)[0].rstrip()
         if not line:
             continue
-        if line in ("components:", "test_revisions:"):
+        if line in ("components:", "component_next_versions:", "test_revisions:"):
             section = line[:-1]
             if section in result:
                 raise ManifestError(f"duplicate section {section} in {source}")
@@ -265,6 +265,19 @@ def preview_order(value: str) -> tuple[int, int]:
     return int(parts[1]), int(parts[2]) if len(parts) == 3 else 0
 
 
+def component_next_versions(config: dict[str, object], source: str) -> dict[str, str]:
+    """Optional core floors for future Preview publication, never selected tags."""
+    values = config.get("component_next_versions", {})
+    if not isinstance(values, dict) or not set(values) <= set(UNITS) - {"vmlinux"}:
+        raise ManifestError(f"component_next_versions in {source} must name only non-kernel units")
+    targets = {unit: str(value) for unit, value in values.items()}
+    for unit, value in targets.items():
+        pattern = RUNTIME_RE if unit == "runtime" else COMPONENT_RE
+        if pattern.fullmatch(value) is None or "-preview." in value:
+            raise ManifestError(f"invalid {unit} next version in {source}: expected a stable core")
+    return targets
+
+
 def validate_components(
     config: dict[str, object], source: str, preview: bool
 ) -> dict[str, str]:
@@ -319,11 +332,13 @@ def _parse_manifest(text: str, source: str, preview: bool, *, historical: bool):
     if preview:
         required.add("preview_version")
         optional.add("previous_preview_version")
+        optional.add("component_next_versions")
     keys = set(config)
     if not required <= keys or not keys <= required | optional:
         expected = ", ".join(sorted(required | optional))
         raise ManifestError(f"top-level keys in {source} must be: {expected}")
     delivery(config, source)
+    component_next_versions(config, source)
 
     version = require_stable(config.get("version"), "version", source)
     previous_version: str | None = None
