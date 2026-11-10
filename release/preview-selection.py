@@ -120,12 +120,30 @@ def component_source_ref(platform_ref: str, unit: str, configured: str) -> str:
     return f"release/v{parsed.major}.{parsed.minor}.x"
 
 
-def preview_candidate(unit: str, winner: str, date: str) -> str:
+def validate_next_version(unit: str, value: str | None, source_ref: str) -> UnitTag | None:
+    if value is None:
+        return None
+    target = parse_tag(unit, value)
+    if unit == "vmlinux" or target.is_preview:
+        raise SelectionError("next version must be a non-kernel stable core")
+    if source_ref != "main" and source_ref != f"release/v{target.major}.{target.minor}.x":
+        raise SelectionError(f"next version {value} does not belong to source branch {source_ref}")
+    return target
+
+
+def preview_candidate(
+    unit: str, winner: str, date: str, next_version: str | None = None,
+    source_ref: str = "main",
+) -> str:
     parsed = parse_tag(unit, winner)
     if re.fullmatch(r"[0-9]{8}(?:\.[1-9][0-9]*)?", date) is None:
         raise SelectionError("preview date must match YYYYMMDD[.N]")
     patch = parsed.patch if parsed.is_preview else parsed.patch + 1
-    return f"{parsed.prefix}{parsed.major}.{parsed.minor}.{patch}-preview.{date}"
+    core = (parsed.major, parsed.minor, patch)
+    target = validate_next_version(unit, next_version, source_ref)
+    if target is not None:
+        core = max(core, (target.major, target.minor, target.patch))
+    return f"{parsed.prefix}{core[0]}.{core[1]}.{core[2]}-preview.{date}"
 
 
 def run_git(root: pathlib.Path, *args: str, allow_failure: bool = False) -> str:
@@ -266,8 +284,10 @@ def resolve(
     configured: str,
     usable_tags: Iterable[str],
     date: str,
+    next_version: str | None = None,
 ) -> Resolution:
     parse_tag(unit, configured)
+    validate_next_version(unit, next_version, source_ref)
     usable = set(usable_tags)
     commits = first_parent_commits(root, source_ref)
     positions = {commit: index for index, commit in enumerate(commits)}
@@ -316,7 +336,7 @@ def resolve(
 
     if winner_commit == head or not unit_inputs_changed(root, winner_commit, head, unit):
         return Resolution(source_ref, head, winner.raw, winner_commit, "reuse", winner.raw)
-    selected = preview_candidate(unit, winner.raw, date)
+    selected = preview_candidate(unit, winner.raw, date, next_version, source_ref)
     return Resolution(source_ref, head, winner.raw, winner_commit, "publish", selected)
 
 

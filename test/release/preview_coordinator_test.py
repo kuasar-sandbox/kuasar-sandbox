@@ -244,7 +244,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
                 ):
                     coordinator.main()
                 render.assert_called_once_with(
-                    base, "release-v1.2.2", "20260909", current if complete else prior, {}
+                    base, "release-v1.2.2", "20260909", current if complete else prior, {}, {}
                 )
 
     def test_formal_coordinator_polls_after_pending_api_convergence(self) -> None:
@@ -292,7 +292,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
                     mock.patch.object(coordinator, "converge", return_value=True),
                 ):
                     coordinator.main()
-                plan.assert_called_once_with({}, selected)
+                plan.assert_called_once_with({}, selected, {})
                 self.assertEqual(render.call_args.args[2:4], (selected, "preview.20260909"))
 
     def test_manifest_revision_order_is_numeric(self) -> None:
@@ -425,11 +425,13 @@ class PreviewCoordinatorTest(unittest.TestCase):
     def test_stale_incomplete_selection_rolls_to_requested_date(self) -> None:
         empty = coordinator.ReleaseStatus(None, None, False)
         selected = "a" * 40
+        targets = {"connector": "v2.0.0"}
         with (
             mock.patch.object(coordinator, "PLATFORM_REF", "main"),
             mock.patch.object(coordinator, "PLATFORM_SHA", selected),
             mock.patch.object(coordinator, "TODAY", "20260831"),
             mock.patch.object(coordinator, "validate_environment"),
+            mock.patch.object(coordinator, "manifest_next_versions", return_value=targets),
             mock.patch.object(
                 coordinator,
                 "manifest_values",
@@ -459,7 +461,8 @@ class PreviewCoordinatorTest(unittest.TestCase):
             mock.patch.object(coordinator, "converge", return_value=True),
         ):
             coordinator.main()
-        plan_units.assert_called_once_with({}, "20260831")
+        plan_units.assert_called_once_with({}, "20260831", targets)
+        self.assertEqual(render_manifest.call_args.args[-1], targets)
         self.assertEqual(
             render_manifest.call_args.args[2:4],
             ("20260831", "preview.20260829"),
@@ -965,6 +968,7 @@ components:
     def resumed_preview_plan(
         self, unit_name: str, winner: str, configured: str, date: str,
         *, complete: bool = False, matching_dependencies: bool = False, arm: bool = True,
+        next_version: str | None = None,
     ) -> coordinator.Plan:
         dependent = coordinator.UNIT_BY_NAME[unit_name]
         names = {unit_name, *dependent.dependencies}
@@ -1019,7 +1023,96 @@ components:
                 side_effect=lambda unit: states[unit.name],
             ),
         ):
-            return coordinator.plan_units(configured_versions, date)[unit_name]
+            targets = {unit_name: next_version} if next_version is not None else {}
+            return coordinator.plan_units(configured_versions, date, targets)[unit_name]
+
+    def test_next_versions_do_not_force_unchanged_dependency_consumers(self) -> None:
+        for unit in ("accelerator", "connector", "sandboxer", "orchestrator", "runtime"):
+            prefix = coordinator.preview_selection.unit_prefix(unit)
+            winner = prefix + "1.0.0"
+            with self.subTest(unit=unit):
+                plan = self.resumed_preview_plan(
+                    unit, winner, winner, "20260831", next_version=prefix + "2.0.0",
+                )
+                self.assertEqual((plan.action, plan.selected), ("reuse", winner))
+
+    def test_dependency_update_applies_next_version_floor(self) -> None:
+        for unit, prefix in (("orchestrator", "v"), ("runtime", "runtime-v")):
+            with self.subTest(unit=unit), mock.patch.object(
+                coordinator, "dependency_inputs_changed", return_value=True,
+            ):
+                plan = self.resumed_preview_plan(
+                    unit, prefix + "1.0.0", prefix + "1.0.0", "20260831.1",
+                    next_version=prefix + "2.0.0",
+                )
+                self.assertEqual((plan.action, plan.selected),
+                                 ("publish", prefix + "2.0.0-preview.20260831.1"))
+
+    def test_pending_dependency_preview_preserves_target_across_restarts(self) -> None:
+        for unit, prefix in (("orchestrator", "v"), ("runtime", "runtime-v")):
+            for pending_core in ("1.0.1", "2.0.0"):
+                for date in ("20260831", "20260831.1", "20260901"):
+                    with self.subTest(unit=unit, pending_core=pending_core, date=date):
+                        plan = self.resumed_preview_plan(
+                            unit, prefix + "1.0.0", prefix + pending_core + "-preview.20260831",
+                            date, matching_dependencies=True, next_version=prefix + "2.0.0",
+                        )
+                        self.assertEqual((plan.action, plan.selected),
+                                         ("publish", prefix + "2.0.0-preview." + date))
+
+    def test_next_version_does_not_replace_partial_publication_recovery(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["connector"]
+        configured = "v1.0.1-preview.20260831"
+        state = mock.Mock()
+        state.status.return_value = coordinator.ReleaseStatus(None, "c" * 40, False)
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+            mock.patch.object(coordinator, "RepositoryState", return_value=state),
+            mock.patch.object(coordinator, "active_release_run", return_value=None),
+            mock.patch.object(coordinator, "branch_sha", return_value="d" * 40),
+            mock.patch.object(coordinator, "clone_repository") as clone,
+        ):
+            plan = coordinator.make_plan(unit, configured, "20260901", pathlib.Path("unused"), "v2.0.0")
+        self.assertEqual((plan.selected, plan.source_sha, plan.action), (configured, "c" * 40, "publish"))
+        clone.assert_not_called()
+
+    def test_next_version_keeps_dependency_publication_collision_checks(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["sandboxer"]
+        plan = coordinator.Plan(unit, "v1.0.0", "main", "a" * 40, "v1.0.0", "v1.0.0", "reuse")
+        for complete in (False, True):
+            state = mock.Mock()
+            state.status.return_value = coordinator.ReleaseStatus({}, "b" * 40, complete)
+            with self.subTest(complete=complete), self.assertRaises(coordinator.Deferred):
+                coordinator.force_dependency_preview(plan, "20260831", state, "v2.0.0")
+            state.status.assert_called_once_with("v2.0.0-preview.20260831")
+
+    def test_make_plan_passes_target_only_after_actual_source_change(self) -> None:
+        unit = coordinator.UNIT_BY_NAME["connector"]
+        repository = selection_fixtures.Repository()
+        self.addCleanup(repository.close)
+        winner = "v0.1.9"
+        tagged = repository.commit("published")
+        repository.git("tag", winner, tagged)
+        head = repository.commit_files("guide update", {"README.md": "guide\n"})
+        state = mock.Mock()
+        state.usable_tags.return_value = [winner]
+        state.status.side_effect = lambda tag: (coordinator.ReleaseStatus({}, tagged, True)
+                                               if tag == winner else coordinator.ReleaseStatus(None, None, False))
+        for changed in (False, True):
+            if changed:
+                head = repository.commit("changed product")
+            with (
+                self.subTest(changed=changed), tempfile.TemporaryDirectory() as directory,
+                mock.patch.object(coordinator, "PLATFORM_REF", "main"),
+                mock.patch.object(coordinator, "RepositoryState", return_value=state),
+                mock.patch.object(coordinator, "branch_sha", return_value=head),
+                mock.patch.object(coordinator, "clone_repository",
+                                  side_effect=lambda unit, source_ref, path: path.symlink_to(repository.root)),
+            ):
+                plan = coordinator.make_plan(unit, winner, "20260831", pathlib.Path(directory), "v0.2.0")
+            self.assertEqual(plan.action, "publish" if changed else "reuse")
+            self.assertEqual(plan.selected, "v0.2.0-preview.20260831" if changed else winner)
+            self.assertEqual(plan.source_sha, head if changed else tagged)
 
     def test_first_arm_requires_explicit_initialization_and_a_new_version(self) -> None:
         with mock.patch.object(coordinator, "INITIALIZE_ARM", False):
@@ -1251,6 +1344,27 @@ notes:
         self.assertIn("  sandboxer: v0.3.6-preview.20260831\n", content)
         self.assertIn("  orchestrator: v0.4.3\n", content)
         self.assertIn("previous_preview_version: preview.20260830\n", content)
+
+    def test_manifest_round_trip_retains_targets_and_reused_components(self) -> None:
+        plans = {unit.name: coordinator.Plan(
+            unit, coordinator.preview_selection.unit_prefix(unit.name) + "1.0.0", "main", "a" * 40,
+            coordinator.preview_selection.unit_prefix(unit.name) + "1.0.0",
+            coordinator.preview_selection.unit_prefix(unit.name) + "1.0.0", "reuse",
+        ) for unit in coordinator.UNITS}
+        targets = {"accelerator": "v2.0.0", "runtime": "runtime-v2.0.0"}
+        content = coordinator.render_manifest("release-v2.0.0", None, "20260831", None, plans, targets)
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            (root / "releases").mkdir()
+            (root / "releases/daily-preview.yaml").write_text(content)
+            with mock.patch.object(coordinator, "PLATFORM_ROOT", root):
+                retained = coordinator.manifest_next_versions()
+                selected = coordinator.manifest_values()[-1]
+        self.assertEqual(retained, targets)
+        self.assertEqual(selected, {name: plan.selected for name, plan in plans.items()})
+        self.assertEqual(coordinator.render_manifest(
+            "release-v2.0.0", None, "20260831", None, plans, retained,
+        ), content)
 
     def test_e2e_only_change_keeps_tag_selection_and_does_not_select_branch_tests(self) -> None:
         repository = selection_fixtures.Repository()

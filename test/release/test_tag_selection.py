@@ -29,6 +29,36 @@ def historical_manifest(preview=False):
 
 
 class TagSelectionTests(unittest.TestCase):
+    def test_daily_next_versions_are_separate_from_selected_tags(self):
+        targets = {unit: ('runtime-' if unit == 'runtime' else '') + 'v2.0.0'
+                   for unit in selection.UNITS if unit != 'vmlinux'}
+        text = manifest(True) + 'component_next_versions:\n' + ''.join(
+            f'  {unit}: {value}\n' for unit, value in targets.items())
+        self.assertEqual(selection.parse_manifest(text, 'Daily', True),
+                         selection.parse_manifest(manifest(True), 'Daily', True))
+        self.assertEqual(selection.component_next_versions(
+            selection.read_simple_yaml(text, 'Daily'), 'Daily'), targets)
+        self.assertEqual(selection.component_next_versions({}, 'legacy Daily'), {})
+
+    def test_next_versions_are_only_allowed_in_daily(self):
+        with self.assertRaisesRegex(selection.ManifestError, 'top-level keys'):
+            selection.parse_manifest(manifest() + 'component_next_versions:\n  accelerator: v2.0.0\n',
+                                     'Stable', False)
+
+    def test_invalid_next_versions_fail_before_publication(self):
+        for entries in (
+            '  vmlinux: vmlinux-v2.0.0\n', '  unknown: v2.0.0\n',
+            '  accelerator: v2.0.0-preview.20261010\n', '  runtime: v2.0.0\n',
+            '  connector: runtime-v2.0.0\n', '  accelerator: main\n',
+            '  accelerator: v2.0.0\n  accelerator: v3.0.0\n',
+        ):
+            with self.subTest(entries=entries), self.assertRaises(selection.ManifestError):
+                selection.parse_manifest(manifest(True) + 'component_next_versions:\n' + entries,
+                                         'Daily', True)
+        with self.assertRaises(selection.ManifestError):
+            selection.parse_manifest(manifest(True) + 'component_next_versions: v2.0.0\n',
+                                     'Daily', True)
+
     def test_historical_tag_selects_its_own_units_after_main_drift(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory)
