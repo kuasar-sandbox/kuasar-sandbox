@@ -230,6 +230,7 @@ class PreviewSelectionTest(unittest.TestCase):
                 "native-deps/deps/vmlinux/sandbox-common.config": "CONFIG_A=y\n",
                 "native-deps/deps/vmlinux/sandbox-x86_64.config": "CONFIG_B=y\n",
                 "native-deps/deps/linux-patches/0001.patch": "patch\n",
+                "native-deps/deps/linux-patches/README.md": "[Build](../README.md#build)\n",
             },
         )
         self.repository.git("tag", "vmlinux-v1.2.3", tagged)
@@ -260,7 +261,6 @@ class PreviewSelectionTest(unittest.TestCase):
             "native-deps/deps/vmlinux/sandbox-arm64.config",
             "native-deps/deps/linux-patches/0001.patch",
             "native-deps/deps/linux-patches/0002.patch",
-            "native-deps/deps/linux-patches/README.md",
         ):
             with self.subTest(path=path):
                 self.repository.close()
@@ -272,6 +272,96 @@ class PreviewSelectionTest(unittest.TestCase):
                 self.assertEqual(
                     result.selected, "vmlinux-v1.2.4-preview.20260921.2"
                 )
+
+    def test_vmlinux_patch_documentation_changes_reuse_stable(self) -> None:
+        tagged = self.seed_vmlinux()
+        path = "native-deps/deps/linux-patches/README.md"
+        self.repository.commit_files("repair README link", {path: "[Build](../../../docs/build.md)\n"})
+        result = self.resolve_vmlinux()
+        self.assertEqual(result.action, "reuse")
+        self.assertEqual(result.selected, "vmlinux-v1.2.3")
+        self.assertEqual(result.winner_commit, tagged)
+        self.repository.git("rm", path)
+        self.repository.git("commit", "-qm", "move patch documentation")
+        self.assertEqual(self.resolve_vmlinux().action, "reuse")
+
+    def test_vmlinux_keeps_configured_stable_over_equivalent_preview(self) -> None:
+        for same_commit in (False, True):
+            with self.subTest(same_commit=same_commit):
+                self.repository.close()
+                self.repository = Repository()
+                tagged = self.seed_vmlinux()
+                preview = "vmlinux-v1.2.4-preview.20260920"
+                if not same_commit:
+                    self.repository.commit_files("repair README link", {
+                        "native-deps/deps/linux-patches/README.md": "updated documentation\n",
+                    })
+                self.repository.git("tag", preview)
+                head = self.repository.commit_files("runtime documentation", {"docs/runtime.md": "updated\n"})
+                result = preview_selection.resolve(
+                    self.repository.root, "main", "vmlinux", "vmlinux-v1.2.3",
+                    ["vmlinux-v1.2.3", preview], "20260921.2",
+                )
+                self.assertEqual(result.head, head)
+                self.assertEqual(result.action, "reuse")
+                self.assertEqual(result.selected, "vmlinux-v1.2.3")
+                self.assertEqual(result.winner_commit, tagged)
+
+    def test_vmlinux_publishes_changed_inputs_after_equivalent_preview(self) -> None:
+        self.seed_vmlinux()
+        preview = "vmlinux-v1.2.5-preview.20260920"
+        self.repository.commit_files("patch documentation", {
+            "native-deps/deps/linux-patches/README.md": "updated documentation\n",
+        })
+        self.repository.git("tag", preview)
+        self.repository.commit_files("kernel patch", {
+            "native-deps/deps/linux-patches/0001.patch": "new kernel code\n",
+        })
+        result = preview_selection.resolve(
+            self.repository.root, "main", "vmlinux", "vmlinux-v1.2.3",
+            ["vmlinux-v1.2.3", preview], "20260921.2",
+        )
+        self.assertEqual(result.winner, preview)
+        self.assertEqual(result.action, "publish")
+        self.assertEqual(result.selected, "vmlinux-v1.2.5-preview.20260921.2")
+
+    def test_vmlinux_stable_preference_requires_available_stable_and_preview_winner(self) -> None:
+        for latest, configured, usable_stable in (
+            ("vmlinux-v1.2.4-preview.20260920", "vmlinux-v1.2.3", False),
+            ("vmlinux-v1.2.4", "vmlinux-v1.2.3", True),
+            ("vmlinux-v1.2.4-preview.20260920", "vmlinux-v1.2.4-preview.20260920", True),
+        ):
+            with self.subTest(latest=latest, configured=configured, usable_stable=usable_stable):
+                self.repository.close()
+                self.repository = Repository()
+                self.seed_vmlinux()
+                tagged = self.repository.commit_files("patch documentation", {
+                    "native-deps/deps/linux-patches/README.md": "updated documentation\n",
+                })
+                self.repository.git("tag", latest)
+                result = preview_selection.resolve(
+                    self.repository.root, "main", "vmlinux", configured,
+                    [latest] + (["vmlinux-v1.2.3"] if usable_stable else []), "20260921.2",
+                )
+                self.assertEqual(result.action, "reuse")
+                self.assertEqual(result.selected, latest)
+                self.assertEqual(result.winner_commit, tagged)
+
+    def test_vmlinux_revert_of_changed_preview_still_publishes(self) -> None:
+        self.seed_vmlinux()
+        path = "native-deps/deps/linux-patches/0001.patch"
+        preview = "vmlinux-v1.2.4-preview.20260920"
+        tagged = self.repository.commit_files("kernel patch", {path: "changed kernel code\n"})
+        self.repository.git("tag", preview)
+        self.repository.commit_files("revert kernel patch", {path: "patch\n"})
+        result = preview_selection.resolve(
+            self.repository.root, "main", "vmlinux", "vmlinux-v1.2.3",
+            ["vmlinux-v1.2.3", preview], "20260921.2",
+        )
+        self.assertEqual(result.winner, preview)
+        self.assertEqual(result.winner_commit, tagged)
+        self.assertEqual(result.action, "publish")
+        self.assertEqual(result.selected, "vmlinux-v1.2.4-preview.20260921.2")
 
     def test_vmlinux_reuses_when_linux_source_pin_changes_without_config(self) -> None:
         for old, new in (
@@ -377,6 +467,13 @@ class PreviewSelectionTest(unittest.TestCase):
         self.seed_vmlinux()
         self.repository.git("rm", "native-deps/deps/linux-patches/0001.patch")
         self.repository.git("commit", "-qm", "drop kernel patch")
+        self.assertEqual(self.resolve_vmlinux().action, "publish")
+
+    def test_kernel_patch_filename_order_change_triggers_release(self) -> None:
+        self.seed_vmlinux()
+        self.repository.git("mv", "native-deps/deps/linux-patches/0001.patch",
+                            "native-deps/deps/linux-patches/0002.patch")
+        self.repository.git("commit", "-qm", "change kernel patch order")
         self.assertEqual(self.resolve_vmlinux().action, "publish")
 
     def test_reverted_config_change_reuses_release(self) -> None:

@@ -34,6 +34,7 @@ class KernelUpdatesTest(unittest.TestCase):
             "runtime/main.go": "package runtime\n",
             "native-deps/deps/common.sh": "# new helper comment\n",
             "native-deps/Makefile": "LINUX_VERSION=changed\n",
+            "native-deps/deps/linux-patches/README.md": "Updated documentation links.\n",
         })
         result = self.finish()
         self.assertIn("No changes to kernel release inputs", result)
