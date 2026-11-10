@@ -10,6 +10,7 @@ import base64
 from contextlib import contextmanager
 import fcntl
 import hashlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import ipaddress
 import json
 import os
@@ -20,6 +21,7 @@ import socket
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -653,6 +655,20 @@ class Fixture:
         require(not errors, '; '.join(errors))
 
 
+def listener_snapshot():
+    listeners = []
+    for line in command('ss', '-H', '-lntue').stdout.splitlines():
+        fields = line.split()
+        inodes = re.findall(r'\bino:(\d+)\b', line)
+        require(len(fields) >= 7 and len(inodes) == 1 and int(inodes[0]) > 0,
+                'listener lacks an unambiguous socket identity: ' + line)
+        # Recv-Q changes with ordinary traffic. Preserve every listening socket,
+        # its identity and configuration, including Send-Q's listen backlog.
+        listeners.append({'protocol': fields[0], 'state': fields[1], 'backlog': int(fields[3]),
+                          'local': fields[4], 'peer': fields[5], 'inode': int(inodes[0])})
+    return sorted(listeners, key=lambda item: json.dumps(item, sort_keys=True))
+
+
 def network_snapshot():
     links = json.loads(command('ip', '-j', 'address', 'show').stdout)
     result = {'links': [{key: row.get(key) for key in ('ifindex', 'ifname', 'address', 'mtu', 'flags', 'link_index')}
@@ -660,7 +676,7 @@ def network_snapshot():
                                          for address in row.get('addr_info', [])]} for row in links],
               'routes': json.loads(command('ip', '-j', '-4', 'route', 'show', 'table', 'all').stdout),
               'routes6': json.loads(command('ip', '-j', '-6', 'route', 'show', 'table', 'all').stdout),
-              'listeners': sorted(command('ss', '-H', '-lntu').stdout.splitlines()),
+              'listeners': listener_snapshot(),
               'bpf_pins': {str(path): path.stat().st_ino for path in Path('/sys/fs/bpf').rglob('*')}}
     for tool, arguments in (('iptables', ['-S']), ('ip6tables', ['-S']), ('nft', ['-s', 'list', 'ruleset'])):
         if shutil.which(tool):
@@ -701,31 +717,68 @@ def metadata_sentinel(fixture):
             not address.get('tentative')
             for link in json.loads(command('ip', '-j', 'address', 'show', name).stdout)
             for address in link.get('addr_info', [])))
-        with socket.socket() as listener:
-            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            listener.bind(('169.254.169.254', 80))
-            listener.listen()
-            before = network_snapshot()
-            write_json(fixture.output / 'metadata-before.json', before)
+        token = ('node-infra-host-metadata-' + fixture.key).encode()
+
+        class Handler(BaseHTTPRequestHandler):
+            def setup(self):
+                self.request.settimeout(2)
+                super().setup()
+
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-Length', str(len(token)))
+                self.end_headers()
+                self.wfile.write(token)
+
+            def log_message(self, *_):
+                pass
+
+        class Server(ThreadingHTTPServer):
+            daemon_threads = False
+            request_queue_size = 128
+
+        with Server(('169.254.169.254', 80), Handler) as server:
+            listener = server.socket
+            identity = {'inode': os.fstat(listener.fileno()).st_ino, 'address': listener.getsockname()}
+
+            def probe():
+                require(os.fstat(listener.fileno()).st_ino == identity['inode'] and
+                        listener.getsockname() == identity['address'] and
+                        listener.getsockopt(socket.SOL_SOCKET, socket.SO_ACCEPTCONN) == 1,
+                        'metadata listening socket was replaced or stopped')
+                require(http('GET', 'http://169.254.169.254/') == token,
+                        'host metadata listener response changed')
+
+            worker = threading.Thread(target=server.serve_forever, kwargs={'poll_interval': 0.05})
+            worker.start()
             try:
-                yield
-                # A bridge's carrier/linkdown flags settle after the engine
-                # removes its last veth. Poll the full preserved state.
-                wait_for('original host network state', lambda: network_unchanged(before), timeout=30)
+                probe()
+                before = network_snapshot()
+                write_json(fixture.output / 'metadata-before.json', before)
+                (fixture.output / 'metadata-listeners-before.txt').write_text(command('ss', '-H', '-lntue').stdout)
+                try:
+                    yield
+                    probe()
+                    # A bridge's carrier/linkdown flags settle after its last
+                    # veth disappears. Poll every preserved resource category.
+                    wait_for('original host network state', lambda: network_unchanged(before), timeout=30)
+                finally:
+                    after = network_snapshot()
+                    write_json(fixture.output / 'metadata-after.json', after)
+                    (fixture.output / 'metadata-listeners-after.txt').write_text(command('ss', '-H', '-lntue').stdout)
+                    changes = {key: {'before': value, 'after': after.get(key)}
+                               for key, value in before.items() if after.get(key) != value}
+                    if changes:
+                        print('metadata fixture network difference: ' + json.dumps(changes, sort_keys=True),
+                              file=sys.stderr, flush=True)
+                require(after == before, 'host metadata resources changed')
+                write_json(fixture.output / 'metadata-sentinel.json',
+                           {'before': before, 'after': after, 'listener_survived': True,
+                            'listener_identity': identity, 'response': token.decode()})
             finally:
-                after = network_snapshot()
-                write_json(fixture.output / 'metadata-after.json', after)
-                changes = {key: {'before': value, 'after': after.get(key)}
-                           for key, value in before.items() if after.get(key) != value}
-                if changes:
-                    print('metadata fixture network difference: ' + json.dumps(changes, sort_keys=True),
-                          file=sys.stderr, flush=True)
-            require(after == before, 'host metadata resources changed')
-            with socket.create_connection(listener.getsockname(), timeout=2):
-                connection, _ = listener.accept()
-                connection.close()
-            write_json(fixture.output / 'metadata-sentinel.json',
-                       {'before': before, 'after': network_snapshot(), 'listener_survived': True})
+                server.shutdown()
+                worker.join(timeout=2)
+                require(not worker.is_alive(), 'metadata HTTP accept worker did not stop')
     finally:
         current = json.loads(command('ip', '-j', 'link', 'show', name).stdout)[0]
         require(current['ifindex'] == index, 'metadata fixture device was replaced')

@@ -371,14 +371,14 @@ def copy_case(fixture):
 def run():
     fixture = Fixture()
     # A cold Docker bridge acquires kernel IPv6 routes and native firewall
-    # tables on its first ordinary endpoint. Initialize that engine-owned
-    # state without running node-infra before taking the preservation baseline.
+    # tables on its first ordinary endpoint and port publication. Initialize
+    # that engine-owned state without running node-infra before the baseline.
     cold = network_snapshot()
     network = json.loads(command('docker', 'network', 'inspect', 'bridge').stdout)[0]
     bridge = network['Options'].get('com.docker.network.bridge.name', 'docker0')
     original = next(link for link in cold['links'] if link['ifname'] == bridge)
     command('docker', 'run', '--rm', '--pull=never', '--network=bridge',
-            '--entrypoint=/bin/true', fixture.image)
+            '--publish=127.0.0.1::80', '--entrypoint=/bin/true', fixture.image)
 
     def bridge_settled():
         link = json.loads(command('ip', '-j', 'address', 'show', bridge).stdout)[0]
@@ -392,6 +392,7 @@ def run():
     wait_for('ordinary Docker endpoint removal and bridge address readiness', bridge_settled)
     write_json(fixture.output / 'docker-network-initialization.json',
                {'image': fixture.image, 'entrypoint': '/bin/true', 'privileged': False,
+                'publish': '127.0.0.1::80',
                 'before': cold, 'after': network_snapshot()})
     with metadata_sentinel(fixture):
         run_cases(fixture)
