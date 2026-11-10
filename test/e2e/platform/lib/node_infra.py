@@ -529,6 +529,7 @@ def network_snapshot():
                                          for address in row.get('addr_info', [])]} for row in links],
               'routes': json.loads(command('ip', '-j', '-4', 'route', 'show', 'table', 'all').stdout),
               'routes6': json.loads(command('ip', '-j', '-6', 'route', 'show', 'table', 'all').stdout),
+              'listeners': sorted(command('ss', '-H', '-lntu').stdout.splitlines()),
               'bpf_pins': {str(path): path.stat().st_ino for path in Path('/sys/fs/bpf').rglob('*')}}
     for tool, arguments in (('iptables', ['-S']), ('ip6tables', ['-S']), ('nft', ['-s', 'list', 'ruleset'])):
         if shutil.which(tool):
@@ -537,11 +538,21 @@ def network_snapshot():
 
 
 def host_case(fixture):
+    with socket.socket() as sentinel:
+        sentinel.bind(('127.0.0.1', 0))
+        sentinel.listen()
+        _host_case(fixture, sentinel)
+        with socket.create_connection(sentinel.getsockname(), timeout=2):
+            connection, _ = sentinel.accept()
+            connection.close()
+
+
+def _host_case(fixture, sentinel):
     # The Workbench is the tested host context. No primary netns or ingress
     # device is created: the delivered Quadlet must actually remain host mode.
     before = network_snapshot()
     write_json(fixture.output / 'host-before.json', before)
-    node = Node(fixture, 2, host=True, transit=False)
+    node = Node(fixture, 0, host=True, transit=False)
     require(not (Path('/run/netns') / node.netns).exists() and not node.peers,
             'default host fixture created an external namespace/device')
     with socket.socket() as sentinel:
@@ -606,11 +617,8 @@ def host_case(fixture):
     command('systemctl', 'daemon-reload')
     interrupt_native_helpers(node, operations=(('prepare', 'hook'), ('prepare', 'cli')))
     node.remove()
-    after = network_snapshot()
-    write_json(fixture.output / 'host-after.json', after)
-    require(before == after, 'default host lifecycle changed pre-existing host network resources')
     # Orthogonal combinations use the same delivered lifecycle and real guest.
-    for index, host, transit in ((2, False, False), (2, True, True)):
+    for index, host, transit in ((0, False, False), (0, True, True)):
         extra = Node(fixture, index, host=host, transit=transit)
         extra.start()
         guest = extra.create()
@@ -618,6 +626,9 @@ def host_case(fixture):
         extra.assert_native_exec(guest)
         extra.stop()
         extra.remove()
+    after = network_snapshot()
+    write_json(fixture.output / 'host-after.json', after)
+    require(before == after, 'host lifecycle changed pre-existing host network resources')
     write_json(fixture.output / 'host-result.json', {'host_no_transit': 'passed', 'ns_no_transit': 'passed',
                'host_transit': 'passed', 'preserved_host_network': before == after,
                'exec_proxy_mmds_memory_and_disk_restore': 'passed', 'pid1_conmon_partial_prepare_and_helpers': 'passed'})
