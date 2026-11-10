@@ -89,7 +89,7 @@ class Node:
         self.service += '.service'
         self.netns = 'node-infra-' + self.name
         self.host, self.with_transit = host, transit
-        self.mmds_vip = fixture.host_mmds_vip if host else '169.254.169.254'
+        self.mmds_vip = '169.254.169.254'
         self.network = ['ip'] if host else ['ip', '-n', self.netns]
         self.transit_name = self.name + 't' if host else 'uplink0'
         self.gateway = self.netns + '-gw' if gateway else None
@@ -162,6 +162,7 @@ class Node:
             (self.config / component / 'conf.d').mkdir(parents=True)
         manifest_key = command(self.fixture.bin / 'e2b-key-ctl', 'gen-key').stdout.strip()
         secret = command(self.fixture.bin / 'e2b-key-ctl', 'derive-api-secret', manifest_key).stdout.strip()
+        self.api_port, self.proxy_port = 3000, 3001
         self.api_key = command(self.fixture.bin / 'e2b-key-ctl', 'gen-apikey', secret).stdout.strip()
         self.manifest_key = manifest_key
         conductor = {
@@ -212,11 +213,6 @@ class Node:
                 (dropin / '20-platform.conf').write_text('[Service]\nEnvironmentFile=/etc/node-infra/extensions/service.env\n')
         write_json(self.config / 'node-conductor/conf.d/90-instance.yaml', conductor)
         connector = {'num_ports': 8}
-        if self.mmds_vip != '169.254.169.254':
-            # Cloud runners can own the default metadata route. Use a native
-            # service VIP from this fixture's reserved range; preserve theirs.
-            connector.update(mgmt_extracts=[f':sw0_m0:{self.mmds_vip}/32'],
-                             mgmt_services=[f'{self.mmds_vip}:80:127.0.0.1:19254'])
         if self.with_transit:
             connector.update(transit_dev=self.transit_name, transit_dev_addr=self.transit + '/30:' + self.transit_host,
                              transit_dev_mtu='auto')
@@ -270,11 +266,11 @@ class Node:
                      '/run/sandbox/node-ctl.socket', self.manifest_key)
 
     def api(self, method, path, body=None, expected=200):
-        return http(method, f'http://{self.ingress}:3000' + path, body=body, expected=expected,
+        return http(method, f'http://{self.ingress}:{self.api_port}' + path, body=body, expected=expected,
                     headers={'Host': 'api.node-infra.test', 'X-API-KEY': self.api_key})
 
     def guest(self, sandbox, path='/state', *, method='GET', body=None):
-        return http(method, f'http://{self.ingress}:3001' + path, body=body,
+        return http(method, f'http://{self.ingress}:{self.proxy_port}' + path, body=body,
                     headers={'Host': f'8000-{sandbox["sandboxID"]}.node-infra.test',
                              'X-Access-Token': sandbox['forwardAccessToken']})
 
@@ -298,7 +294,7 @@ class Node:
 
     def assert_native_exec(self, sandbox):
         token = json.loads(self.api('POST', f'/sandboxes/{sandbox["sandboxID"]}/exec-sessions', {}, 201))['execAccessToken']
-        result = command(self.fixture.bin / 'sandbox-ctl', 'exec', '--proxy', f'http://{self.ingress}:3001',
+        result = command(self.fixture.bin / 'sandbox-ctl', 'exec', '--proxy', f'http://{self.ingress}:{self.proxy_port}',
                          '--proxy-header', 'E2b-Sandbox-Id: ' + sandbox['sandboxID'],
                          '--proxy-header', 'E2b-Sandbox-Service: exec', '--proxy-header', 'X-Access-Token: ' + token,
                          '--', '/node-infra-guest', 'read')
@@ -482,9 +478,6 @@ class Fixture:
             offset = int(uuid.uuid4().hex[:4], 16) % 8192 * 16
             candidate = ipaddress.ip_network((int(ipaddress.IPv4Address('198.18.0.0')) + offset, 28))
             if not any(candidate.overlaps(network) for network in occupied):
-                default_vip = ipaddress.ip_address('169.254.169.254')
-                self.host_mmds_vip = (str(candidate.broadcast_address) if
-                                     any(default_vip in network for network in occupied) else str(default_vip))
                 return int(candidate.network_address)
         raise RuntimeError('no private test subnet available')
 
@@ -569,18 +562,6 @@ def _host_case(fixture, sentinel):
     node = Node(fixture, 0, host=True, transit=False)
     require(not (Path('/run/netns') / node.netns).exists() and not node.peers,
             'default host fixture created an external namespace/device')
-    if node.mmds_vip != '169.254.169.254':
-        overlay = node.config / 'connector-vswitch/conf.d/90-instance.yaml'
-        saved = overlay.read_bytes()
-        try:
-            write_json(overlay, {'num_ports': 8})
-            result = command(fixture.ctl, 'check', '--name', node.name, check=False)
-            write_json(fixture.output / 'host-existing-metadata-route.json',
-                       {'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
-            require(result.returncode != 0 and 'existing route' in result.stderr,
-                    'default metadata VIP did not reject the existing host route: ' + result.stderr)
-        finally:
-            overlay.write_bytes(saved)
     with socket.socket() as occupied:
         occupied.bind(('127.0.0.1', 3000))
         occupied.listen()
@@ -597,21 +578,9 @@ def _host_case(fixture, sentinel):
             client.shutdown(socket.SHUT_WR)
             require(connection.recv(1) == b'', 'listener sentinel did not receive client EOF')
             connection.close()
-    command('ip', 'link', 'add', 'sw0_m0', 'type', 'dummy')
-    try:
-        identity = json.loads(command('ip', '-j', 'link', 'show', 'sw0_m0').stdout)[0]
-        result = command(fixture.ctl, 'check', '--name', node.name, check=False)
-        require(result.returncode != 0 and 'management interface' in result.stderr, 'foreign management link accepted')
-        require(json.loads(command('ip', '-j', 'link', 'show', 'sw0_m0').stdout)[0] == identity,
-                'preflight changed the foreign management link')
-    finally:
-        command('ip', 'link', 'delete', 'sw0_m0')
-    command('ip', 'route', 'add', 'blackhole', '100.100.96.0/20', 'proto', '186')
-    try:
-        result = command(fixture.ctl, 'check', '--name', node.name, check=False)
-        require(result.returncode != 0 and 'existing route' in result.stderr, 'conflicting management route accepted')
-    finally:
-        command('ip', 'route', 'delete', 'blackhole', '100.100.96.0/20', 'proto', '186')
+    # Default management resources now live in mgmt. Conflicting host names,
+    # VIPs and floating return routes must remain untouched and allow startup.
+    before = network_snapshot()
     node.start()
     inspected = json.loads(command('podman', 'inspect', node.container).stdout)[0]
     applied = json.loads((node.data / 'applied.json').read_text())
@@ -806,7 +775,7 @@ def lifecycle_case(fixture):
     command('systemctl', 'stop', first.service, check=False, timeout=180)
     wait_for('failed cleanup retained inputs', lambda: first.status()['recovery']['pending'])
     require((first.run / 'netns/sw0-switch').stat().st_ino ==
-            json.loads((first.data / 'recovery/connector.json').read_text())['namespaces'][0]['inode'],
+            next(ns['inode'] for ns in json.loads((first.data / 'recovery/connector.json').read_text())['namespaces'] if ns['name'] == 'sw0-switch'),
             'failed cleanup lost the original namespace')
     require(command(fixture.ctl, 'check', '--name', first.name, check=False).returncode != 0,
             'unfinished recovery allowed a new generation')

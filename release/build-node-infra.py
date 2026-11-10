@@ -23,7 +23,7 @@ def build(platform, components, sources, helper, version, arch, output):
     selected = selection.resolve_new_selection(platform, version)
     records = tag_sources.inspect_sources(sources, selected)
     node.require(selection.delivery(selection.resolve_config(platform, version), str(platform))
-                 == selection.NODE_INFRA_DELIVERY, 'aggregate does not declare node-infra delivery')
+                 in selection.NODE_INFRA_DELIVERIES, 'aggregate does not declare node-infra delivery')
     node.require_config_sources(sources)
     revision = tag_sources.git(platform, 'rev-parse', 'HEAD')
     units = {unit: {'version': selected[unit], 'repository': row['repository'], 'sha': row['sha']}
@@ -50,7 +50,7 @@ def build(platform, components, sources, helper, version, arch, output):
         subprocess.run(['python3', '-B', str(platform / 'node-infra/image/build.py'),
                         '--version', version, '--arch', arch, '--products', str(root / 'products'),
                         '--selection', str(selected_file), '--output', str(output),
-                        '--source-revision', revision, '--runtime-helper', str(helper), '--engine', 'docker'], check=True)
+                        '--source-revision', revision, '--delivery', selection.delivery(selection.resolve_config(platform, version), str(platform)), '--runtime-helper', str(helper), '--engine', 'docker'], check=True)
     node.validate(output, version, arch, revision)
 
 

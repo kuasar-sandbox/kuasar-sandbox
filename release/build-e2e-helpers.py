@@ -90,4 +90,4 @@ if __name__ == '__main__':
     build(args.sources.resolve(), selection.resolve_new_selection(args.platform_source, args.version), args.output.resolve(),
           args.wheels_output.resolve(), args.platform_source.resolve(), args.arch, args.node_infra_output,
           selection.delivery(selection.resolve_config(args.platform_source, args.version), str(args.platform_source))
-          == selection.NODE_INFRA_DELIVERY)
+          in selection.NODE_INFRA_DELIVERIES)

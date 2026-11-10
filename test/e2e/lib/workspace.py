@@ -430,6 +430,9 @@ def prepare_fixtures(root, arch, cases, deps_dir=None, offline=False):
         reader = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(reader)
         images['node-infra'], node_infra = reader.prepare(root, arch)
+        docker_image = reader.prepare_docker(root, arch)
+        if docker_image:
+            images['node-infra-docker'] = docker_image
     if 'basic.demo.sh' in names:
         require(platform.machine() == arch, 'Demo SDK preparation requires the selected native architecture')
         python['demo'] = prepare_demo_sdk(root, arch)
@@ -523,6 +526,8 @@ def execution_image_labels(cases, arch):
 def load_images(root, provenance, environment, cases=None):
     images = provenance.get('images', {})
     selected = set(images) if cases is None else execution_image_labels(cases, provenance['arch'])
+    if 'node-infra' in selected and 'node-infra-docker' in images:
+        selected.add('node-infra-docker')
     require(selected <= set(images), 'selected cases are missing prepared images: ' + ', '.join(sorted(selected - set(images))))
     for label, record in images.items():
         if label not in selected:
@@ -562,6 +567,8 @@ def case_environment(root, provenance, case):
     if needs_node_infra([case]):
         require('node-infra' in images and isinstance(provenance.get('node_infra'), dict),
                 'selected node-infra case is missing prepared deployment inputs')
+        if 'node-infra-docker' in images:
+            environment['E2E_NODE_INFRA_DOCKER_IMAGE'] = images['node-infra-docker']['image_id']
         environment.update(E2E_NODE_INFRA_IMAGE=images['node-infra']['image_id'],
                            E2E_NODE_INFRA_DEPLOY=str(root / provenance['node_infra']['deploy']))
     return environment

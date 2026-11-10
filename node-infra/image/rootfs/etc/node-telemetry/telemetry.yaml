@@ -5,3 +5,4 @@ query:
   handler: none
 local:
   enabled: false
+proxy_netns: mgmt

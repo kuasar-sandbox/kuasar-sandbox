@@ -324,7 +324,7 @@ jobs:
           retention-days: 1
 
   node-infra-build:
-    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.prepare.outputs.delivery == 'node-infra-v1'
+    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && contains(fromJSON('["node-infra-v1","node-infra-v2"]'), needs.prepare.outputs.delivery)
     needs: [prepare, helper-build]
     strategy:
       fail-fast: false
@@ -394,7 +394,7 @@ jobs:
           path: workbench-images
           merge-multiple: true
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        if: needs.prepare.outputs.delivery == 'node-infra-v1'
+        if: contains(fromJSON('["node-infra-v1","node-infra-v2"]'), needs.prepare.outputs.delivery)
         with:
           pattern: node-infra-image-*-${{ github.run_id }}
           path: node-infra-images
@@ -517,7 +517,7 @@ jobs:
               python3 -B release/publication_body.py aggregate-stage/release-notes.md
               python3 -B release/workbench_registry.py aggregate-stage "$VERSION" "$SOURCE_SHA" --validate-only \
                 --plan "$RELEASE_PLAN_FILE" --validation "$RELEASE_VALIDATION_FILE" --workbench "$RELEASE_WORKBENCH_RESULTS"
-              if [ "$DELIVERY" = node-infra-v1 ]; then
+              if [[ "$DELIVERY" = node-infra-v[12] ]]; then
                 python3 -B release/node_infra_registry.py aggregate-stage "$VERSION" "$SOURCE_SHA" --validate-only \
                   --plan "$RELEASE_PLAN_FILE" --validation "$RELEASE_VALIDATION_FILE" --workbench "$RELEASE_WORKBENCH_RESULTS"
               fi

@@ -10,7 +10,7 @@ source "$ROOT/release/lib.sh"
 validate_archive() {
   local version="$1" archive="$2" contract="${3:-workbench-v1}" guide owner_path
   case "$contract" in
-    workbench-v1|node-infra-v1) guide=guide; owner_path='guide/%s/README.md' ;;
+    workbench-v1|node-infra-v1|node-infra-v2) guide=guide; owner_path='guide/%s/README.md' ;;
     historical) guide=docs; owner_path='docs/%s.md' ;;
     *) release_fail 'unsupported platform delivery contract' ;;
   esac
@@ -27,7 +27,7 @@ validate_archive() {
     /^\// { exit 1 }
     { path=$0; sub(/^\.\//, "", path); if (path ~ /(^|\/)\.\.($|\/)/) exit 1 }
   ' "$listing" || release_fail "platform archive contains an unsafe path"
-  if [[ "$contract" = workbench-v1 || "$contract" = node-infra-v1 ]]; then
+  if [[ "$contract" = workbench-v1 || "$contract" = node-infra-v[12] ]]; then
     grep -Fx -e './guide/architecture.md' -e './guide/kuasar-sandbox.md' "$listing" >/dev/null \
       || release_fail 'platform archive is missing guide/architecture.md or guide/kuasar-sandbox.md'
   else
@@ -49,7 +49,7 @@ validate_archive() {
     grep -Fx "./$(printf "$owner_path" "$owner")" "$listing" >/dev/null \
       || release_fail "platform archive is missing guide/$owner/README.md"
   done
-  if [[ "$contract" = workbench-v1 || "$contract" = node-infra-v1 ]]; then
+  if [[ "$contract" = workbench-v1 || "$contract" = node-infra-v[12] ]]; then
   grep -Fx './workbench/workbench' "$listing" >/dev/null \
     || release_fail 'platform archive is missing the workbench launcher'
   if grep -E '/test_[^/]*$|/test/perf/|/assemble(_docs)?\.(sh|py)$|/package_inputs\.py$' "$listing" >/dev/null; then

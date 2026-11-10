@@ -11,7 +11,7 @@ ContainerName=node-infra-@NAME@
 Pull=never
 Network=host
 # Quadlet 4.9.3 generates Delegate=yes and --cgroups=split.
-PodmanArgs=--privileged --cgroupns=private --systemd=always --stop-timeout=90
+PodmanArgs=--privileged --cgroupns=private --systemd=always --stop-timeout=420
 Volume=@CONFIG_ROOT@/node-conductor/conf.d:/etc/node-conductor/conf.d:ro
 Volume=@CONFIG_ROOT@/node-proxy/conf.d:/etc/node-proxy/conf.d:ro
 Volume=@CONFIG_ROOT@/node-telemetry/conf.d:/etc/node-telemetry/conf.d:ro
@@ -25,7 +25,7 @@ Volume=@RUN_ROOT@/bpf:/sys/fs/bpf:rw
 
 [Service]
 TimeoutStartSec=240
-TimeoutStopSec=240
+TimeoutStopSec=600
 KillMode=control-group
 Restart=no
 CPUQuota=400%

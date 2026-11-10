@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+set -euo pipefail
+fail() { echo "node-infra entrypoint: $*" >&2; exit 1; }
+[[ $$ == 1 && $EUID == 0 ]] || fail 'requires root and private PID namespace (PID 1)'
+[[ ${1:-} == /sbin/init ]] || fail 'use the systemd entry point; diagnostic helpers use --entrypoint'
+if [[ -f /run/.containerenv ]]; then
+    export container=podman
+elif [[ -f /.dockerenv ]]; then
+    export container=docker
+else
+    fail 'unrecognized container runtime'
+fi
+# Mount changes must never propagate to the host. Do not change the existing
+# rslave namespace recovery input: its one-way propagation is intentional.
+mount --make-rslave /
+[[ $(stat -f -c %T /run) == tmpfs ]] || fail 'provide a private tmpfs at /run'
+mkdir -p /run/node-infra/recovery /run/netns /sys/fs/bpf
+chmod 0700 /run/node-infra /run/node-infra/recovery
+[[ $(cat /proc/self/cgroup) == '0::/' ]] || fail 'requires cgroup v2 with a private cgroup namespace'
+[[ $(stat -f -c %T /sys/fs/cgroup) == cgroup2fs ]] || fail 'cgroup v2 mount missing'
+if [[ ! -w /sys/fs/cgroup/cgroup.procs ]]; then
+    # A new mount is rooted in our cgroup namespace, never the host tree.
+    mount -t cgroup2 -o nosuid,nodev,noexec cgroup2 /sys/fs/cgroup
+fi
+[[ -w /sys/fs/cgroup/cgroup.procs ]] || fail 'container cgroup is not delegated'
+if ! mountpoint -q /sys/fs/bpf; then
+    mount -t bpf -o nosuid,nodev,noexec node-infra /sys/fs/bpf
+fi
+[[ $(stat -f -c %t /sys/fs/bpf) == cafe4a11 ]] || fail '/sys/fs/bpf is not bpffs'
+# Protect global kernel settings even with Docker --privileged and host network.
+# Named-plane sysctls are set by a short helper with a private mount namespace.
+mount --bind /proc/sys /proc/sys
+mount -o remount,bind,ro /proc/sys
+mount -o remount,bind,ro /sys
+exec "$@"

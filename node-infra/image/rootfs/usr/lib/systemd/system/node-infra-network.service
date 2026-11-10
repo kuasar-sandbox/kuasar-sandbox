@@ -1,5 +1,5 @@
 [Unit]
-Description=Prepare and retain node-infra Connector recovery resources
+Description=Own node-infra network resources
 DefaultDependencies=no
 After=local-fs.target
 RequiresMountsFor=/run/netns /sys/fs/bpf /run/node-infra/recovery
@@ -11,8 +11,7 @@ PartOf=node-infra.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/libexec/node-infra/service prepare
-# Host recovery tears down Connector after every container consumer has ended.
-# Container shutdown must not unlink the host-owned namespace mount points.
+ExecStopPost=/usr/libexec/node-infra/service cleanup
 TimeoutStartSec=60
 TimeoutStopSec=60
 

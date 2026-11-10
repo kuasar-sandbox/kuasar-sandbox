@@ -89,7 +89,7 @@ publish_bundle() {
   local stage_inputs=(--plan "$RELEASE_PLAN_FILE" --validation "$RELEASE_VALIDATION_FILE" --workbench "$RELEASE_WORKBENCH_RESULTS")
   python3 -B "$ROOT/release/workbench_registry.py" "$bundle" "$version" "$commit" --validate-only "${stage_inputs[@]}"
   local node_infra=false
-  if [ "$(release_delivery "${PLATFORM_SOURCE_ROOT:-$ROOT}" "$version")" = node-infra-v1 ]; then
+  if [[ "$(release_delivery "${PLATFORM_SOURCE_ROOT:-$ROOT}" "$version")" = node-infra-v[12] ]]; then
     node_infra=true
     python3 -B "$ROOT/release/node_infra_registry.py" "$bundle" "$version" "$commit" --validate-only "${stage_inputs[@]}"
   fi

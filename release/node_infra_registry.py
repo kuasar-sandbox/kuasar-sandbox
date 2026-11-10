@@ -18,7 +18,7 @@ import workbench_registry as registry
 
 
 def validate_stage(bundle, version, revision, plan, validation, workbench):
-    node.require(plan['baseline'].get('delivery') == selection.NODE_INFRA_DELIVERY
+    node.require(plan['baseline'].get('delivery') in selection.NODE_INFRA_DELIVERIES
                  and plan['baseline']['version'] == version and plan['baseline']['sha'] == revision,
                  'node-infra publication differs from the admitted aggregate')
     spec = importlib.util.spec_from_file_location('node_infra_publication_checks', Path(__file__).with_name('bind-validation.py'))

@@ -16,7 +16,9 @@ Set `RELEASE_VERSION` to a published aggregate tag, or leave it empty to resolve
 
 The complete Release asset set is checked, then only the host architecture and shared platform package are downloaded. Set `DOWNLOAD_WORKBENCH=0` only for the native alternative in that version's guide. Downloads use fixed GitHub asset IDs and verify GitHub's native size and SHA-256 digest. Missing digests or failed checks stop the download. Historical body markers and SHA256SUMS are ignored.
 
-For `node-infra-v1`, the complete set contains 18 assets, including both native
+For `node-infra-v2`, the complete set contains 20 assets, including two Docker
+archives from the same node-infra images. Historical `node-infra-v1` keeps its
+18-asset contract, including both native
 node-infra OCI archives and the shared deployment package. This installation
 downloads eight assets for the host architecture, or seven with
 `DOWNLOAD_WORKBENCH=0`. Download and use the separate node-infra OCI archives and
@@ -84,7 +86,7 @@ for unit, version in units.items():
     assert re.fullmatch(prefix + version_re, version), ('invalid component tag', unit)
     assert '-preview.' in tag or '-preview.' not in version, ('Stable requires stable component', unit)
 contract = fields.get('delivery', 'historical')
-modern = contract in ('workbench-v1', 'node-infra-v1')
+modern = contract in ('workbench-v1', 'node-infra-v1', 'node-infra-v2')
 assert contract == 'historical' or modern
 assert 'delivery' not in fields or modern, 'unsupported explicit delivery contract'
 arch = os.environ['ARCH']
@@ -110,9 +112,11 @@ if modern or actual & names('aarch64'):
     expected |= names('aarch64')
 if modern:
     expected |= {f'workbench-{a}-{tag.removeprefix("release-")}.tar.gz' for a in ('x86_64', 'aarch64')}
-if contract == 'node-infra-v1':
+if contract in ('node-infra-v1', 'node-infra-v2'):
     expected |= {f'node-infra-{tag}-linux-{a}.oci.tar.gz' for a in ('amd64', 'arm64')}
     expected.add(f'node-infra-deploy-{tag}.tar.gz')
+    if contract == 'node-infra-v2':
+        expected |= {f'node-infra-{tag}-linux-{a}.docker.tar.gz' for a in ('amd64', 'arm64')}
 assert actual == expected, 'missing or unexpected aggregate asset'
 # Node-infra inputs use their separate guide, outside this native extraction set.
 selected = {platform_name} | names(arch)

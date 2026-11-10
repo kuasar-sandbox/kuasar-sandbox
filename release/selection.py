@@ -194,8 +194,9 @@ def historical_test_revisions(config: dict[str, object], source: str) -> dict[st
 
 
 DELIVERY = 'workbench-v1'
-NODE_INFRA_DELIVERY = 'node-infra-v1'
-MODERN_DELIVERIES = (DELIVERY, NODE_INFRA_DELIVERY)
+NODE_INFRA_DELIVERY = 'node-infra-v2'
+NODE_INFRA_DELIVERIES = ('node-infra-v1', NODE_INFRA_DELIVERY)
+MODERN_DELIVERIES = (DELIVERY, *NODE_INFRA_DELIVERIES)
 
 
 def delivery(config: dict[str, object], source: str) -> str:
@@ -219,6 +220,10 @@ def node_infra_archive(version: str, arch: str) -> str:
     return f'node-infra-{version}-linux-' + {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch] + '.oci.tar.gz'
 
 
+def node_infra_docker_archive(version: str, arch: str) -> str:
+    return node_infra_archive(version, arch).replace(".oci.tar.gz", ".docker.tar.gz")
+
+
 def node_infra_deploy_archive(version: str) -> str:
     if AGGREGATE_RE.fullmatch(version) is None:
         raise ManifestError('invalid node-infra aggregate version')
@@ -232,9 +237,11 @@ def delivery_assets(version: str, contract: str, arches=('x86_64', 'aarch64')) -
     if contract not in MODERN_DELIVERIES:
         raise ManifestError('unsupported aggregate delivery contract: ' + contract)
     names = {workbench_archive(version, arch) for arch in arches}
-    if contract == NODE_INFRA_DELIVERY:
+    if contract in NODE_INFRA_DELIVERIES:
         names |= {node_infra_archive(version, arch) for arch in arches}
         names.add(node_infra_deploy_archive(version))
+        if contract == NODE_INFRA_DELIVERY:
+            names |= {node_infra_docker_archive(version, arch) for arch in arches}
     return names
 
 

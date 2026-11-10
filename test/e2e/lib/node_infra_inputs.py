@@ -90,7 +90,7 @@ def prepare(root, arch):
     release = json.loads(regular(root, 'deploy/node-infra/release.json').read_text())
     regular(root, 'deploy/node-infra/bin/node-infra-ctl')
     regular(root, 'deploy/node-infra/templates/node-infra.container')
-    require(type(release.get('schema')) is int and release['schema'] == 1,
+    require(type(release.get('schema')) is int and release['schema'] in (1, 2),
             'unsupported release.json schema')
     require(isinstance(release.get('version'), str) and release['version'] and
             re.fullmatch('[0-9a-f]{40}', release.get('source_revision', '')),
@@ -119,3 +119,39 @@ def prepare(root, arch):
              'sha256': record['sha256'], 'image_id': image['id'], 'reference': image['reference'],
              'manifest_digest': image['manifest_digest'], 'owner': 'platform'},
             {'deploy': str(deploy.relative_to(root)), 'release_version': release['version']})
+
+
+def prepare_docker(root, arch):
+    release = json.loads(regular(root, 'deploy/node-infra/release.json').read_text())
+    if release['schema'] == 1:
+        return None
+    image = release['images'][arch]
+    record = image['docker_archive']
+    target = 'linux/' + {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch]
+    name = f"node-infra-{release['version']}-{target.replace('/', '-')}.docker.tar.gz"
+    require(record['name'] == name, 'Docker archive name differs')
+    path = regular(root, 'images/' + name)
+    require(path.stat().st_size == record['size'] and checksum(path) == record['sha256'], 'Docker archive checksum differs')
+    # The standard image reader checks archive path safety and configuration
+    # identity; verify the raw ordered layer hashes too, before runtime import.
+    with tarfile.open(path) as archive:
+        members = {}
+        for member in archive:
+            name_in_tar = member.name.rstrip('/')
+            require(name_in_tar and not name_in_tar.startswith('/') and '\\' not in name_in_tar and
+                    all(p not in ('', '.', '..') for p in name_in_tar.split('/')) and
+                    name_in_tar not in members and (member.isfile() or member.isdir()), 'unsafe Docker archive member')
+            members[name_in_tar] = member
+        manifest = json.load(archive.extractfile(members['manifest.json']))
+        require(len(manifest) == 1, 'Docker archive must contain one image')
+        row = manifest[0]
+        raw = archive.extractfile(members[row['Config']]).read()
+        require('sha256:' + hashlib.sha256(raw).hexdigest() == image['id'], 'Docker/OCI config differs')
+        config = json.loads(raw)
+        require(config['os'] + '/' + config['architecture'] == target, 'Docker platform differs')
+        require(len(row['Layers']) == len(config['rootfs']['diff_ids']), 'Docker layer count differs')
+        for layer, diff_id in zip(row['Layers'], config['rootfs']['diff_ids']):
+            require('sha256:' + hashlib.file_digest(archive.extractfile(members[layer]), 'sha256').hexdigest() == diff_id,
+                    'Docker/OCI layer diffID differs')
+    return {'runtime': 'docker', 'platform': target, 'archive': 'images/' + name,
+            'sha256': record['sha256'], 'image_id': image['id'], 'owner': 'platform'}

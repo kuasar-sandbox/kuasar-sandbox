@@ -33,8 +33,12 @@ const (
 )
 
 type namespace struct {
-	Name  string `json:"name"`
-	Inode uint64 `json:"inode"`
+	Name        string `json:"name"`
+	Inode       uint64 `json:"inode"`
+	Device      uint64 `json:"device,omitempty"`
+	External    bool   `json:"external,omitempty"`
+	InputInode  uint64 `json:"input_inode,omitempty"`
+	InputDevice uint64 `json:"input_device,omitempty"`
 }
 
 type transit struct {
@@ -55,6 +59,10 @@ type management struct {
 // creation or transit handoff, and survives destruction of the container layer.
 type record struct {
 	Schema         int          `json:"schema"`
+	Generation     string       `json:"generation,omitempty"`
+	BootID         string       `json:"boot_id,omitempty"`
+	Retained       bool         `json:"retained,omitempty"`
+	ConsumerUnits  []string     `json:"consumer_units,omitempty"`
 	State          string       `json:"state"`
 	SwitchName     string       `json:"switch_name"`
 	SwitchNetNS    string       `json:"switch_netns"`
@@ -83,6 +91,8 @@ func run(args []string) error {
 	config := flags.String("config", "", "explicit native Connector configuration list")
 	force := flags.Bool("force", false, "cleanup after the instance and all consumers have ended")
 	timeout := flags.Duration("timeout", 120*time.Second, "readiness timeout")
+	retained := flags.Bool("retain-handles", false, "retain prepared handles for outer recovery")
+	internal := flags.Bool("internal", false, "normal in-container lifecycle cleanup")
 	primary := flags.Uint64("primary-netns-inode", 0, "expected host preparation namespace")
 	if err := flags.Parse(args[1:]); err != nil {
 		return err
@@ -98,6 +108,9 @@ func run(args []string) error {
 	}
 	if *force && command != "cleanup" {
 		return errors.New("--force is valid only for cleanup")
+	}
+	if command == "drain" {
+		return drain(*timeout)
 	}
 	if command == "health" {
 		return health()
@@ -144,11 +157,11 @@ func run(args []string) error {
 	defer unix.Flock(int(lock.Fd()), unix.LOCK_UN)
 	switch command {
 	case "prepare":
-		return prepare(*config)
+		return prepare(*config, *retained)
 	case "ready":
 		return ready(*timeout)
 	case "cleanup":
-		return cleanup(*force)
+		return cleanup(*force, *internal)
 	}
 	return nil
 }
@@ -195,7 +208,7 @@ func describe(explicit string) (*record, error) {
 	if err := safeName(cfg.Name); err != nil {
 		return nil, err
 	}
-	r := &record{Schema: 1, State: "described", SwitchName: cfg.Name, SwitchNetNS: cfg.SwitchNetNS, PortNetNS: cfg.PortNetNS, Transit: transit{Name: cfg.TransitDev}, ConfigPaths: paths}
+	r := &record{Schema: 2, State: "described", SwitchName: cfg.Name, SwitchNetNS: cfg.SwitchNetNS, PortNetNS: cfg.PortNetNS, Transit: transit{Name: cfg.TransitDev}, ConfigPaths: paths}
 	names := map[string]bool{}
 	for _, name := range []string{cfg.SwitchNetNS, cfg.PortNetNS} {
 		if name != "" {
@@ -262,8 +275,22 @@ func readRecord() (*record, error) {
 	if err := json.Unmarshal(data, &r); err != nil {
 		return nil, err
 	}
-	if r.Schema != 1 {
+	if r.Schema != 1 && r.Schema != 2 {
 		return nil, fmt.Errorf("unsupported recovery record schema %d", r.Schema)
+	}
+	if r.Schema == 2 {
+		generation, err := hex.DecodeString(r.Generation)
+		if err != nil || len(generation) != 16 || len(r.Generation) != 32 {
+			return nil, errors.New("invalid recovery generation")
+		}
+		if err := safeName(r.BootID); err != nil {
+			return nil, err
+		}
+		switch r.State {
+		case "preparing", "prepared", "running", "stopped", "releasing", "cleaned":
+		default:
+			return nil, errors.New("invalid recovery state")
+		}
 	}
 	if err := safeName(r.SwitchName); err != nil {
 		return nil, err
@@ -290,6 +317,9 @@ func readRecord() (*record, error) {
 func checkConfiguration(explicit string) error {
 	r, err := readRecord()
 	if err != nil {
+		return err
+	}
+	if err := validateOwnership(r, false); err != nil {
 		return err
 	}
 	if r.State != "prepared" && r.State != "running" {
@@ -388,7 +418,7 @@ func execute(program string, args ...string) error {
 	return cmd.Run()
 }
 
-func prepare(explicit string) error {
+func prepare(explicit string, retained bool) error {
 	old, err := readRecord()
 	if err == nil && old.State != "cleaned" {
 		// Host preparation pins namespaces before PID 1 starts. The system
@@ -432,6 +462,9 @@ func prepare(explicit string) error {
 	if err := os.MkdirAll(namespaceRoot, 0755); err != nil {
 		return err
 	}
+	if err := externalInputs(r); err != nil {
+		return err
+	}
 	for _, ns := range r.Namespaces {
 		if _, err := os.Lstat(filepath.Join(namespaceRoot, ns.Name)); err == nil {
 			return fmt.Errorf("namespace pin %s already exists; recover it before preparation", ns.Name)
@@ -459,26 +492,37 @@ func prepare(explicit string) error {
 			return errors.New("transit has no stable hardware address for recovery")
 		}
 	}
-	r.State = "prepared"
+	r.Retained = retained
+	if err := initializeOwnership(r); err != nil {
+		return err
+	}
+	r.State = "preparing"
 	if err := writeRecord(r); err != nil {
 		return err
 	}
+	if err := publishOwnership(r); err != nil {
+		return err
+	}
 	for i := range r.Namespaces {
-		if err := execute("ip", "netns", "add", r.Namespaces[i].Name); err != nil {
+		if err := publishNamespace(r.Namespaces[i]); err != nil {
 			return err
 		}
-		r.Namespaces[i].Inode, err = inode(filepath.Join(namespaceRoot, r.Namespaces[i].Name))
+		r.Namespaces[i].Device, r.Namespaces[i].Inode, err = namespaceIdentity(filepath.Join(namespaceRoot, r.Namespaces[i].Name))
 		if err != nil {
 			return err
 		}
 		if err := writeRecord(r); err != nil {
 			return err
 		}
+		if r.Namespaces[i].External {
+			continue
+		}
 		if err := execute("ip", "-n", r.Namespaces[i].Name, "link", "set", "lo", "up"); err != nil {
 			return err
 		}
 	}
-	return nil
+	r.State = "prepared"
+	return writeRecord(r)
 }
 
 func ready(timeout time.Duration) error {
@@ -487,6 +531,9 @@ func ready(timeout time.Duration) error {
 	}
 	r, err := readRecord()
 	if err != nil {
+		return err
+	}
+	if err := validateOwnership(r, false); err != nil {
 		return err
 	}
 	if r.State != "prepared" && r.State != "running" {
@@ -537,9 +584,9 @@ func ready(timeout time.Duration) error {
 						}
 						args := []string{"-w", "net/ipv4/conf/" + m.Device + "/route_localnet=1"}
 						if m.Namespace == "" {
-							err = execute("sysctl", args...)
+							err = planeSysctl("", args)
 						} else {
-							err = execute("ip", append([]string{"netns", "exec", m.Namespace, "sysctl"}, args...)...)
+							err = planeSysctl(m.Namespace, args)
 						}
 						if err != nil {
 							return err
@@ -557,7 +604,7 @@ func ready(timeout time.Duration) error {
 	return fmt.Errorf("Connector readiness timeout: %w", last)
 }
 
-func consumersGone() error {
+func legacyConsumersGone() error {
 	for _, name := range []string{"sandbox-runner.slice", "sandbox-builder.slice"} {
 		path := filepath.Join("/sys/fs/cgroup/sandbox.slice", name, "cgroup.events")
 		data, err := os.ReadFile(path)
@@ -582,6 +629,25 @@ func validateNamespaces(r *record) error {
 		}
 		if err != nil {
 			return err
+		}
+		if r.Schema >= 2 && (ns.Inode != 0 || ns.External) {
+			var fs unix.Statfs_t
+			if err := unix.Statfs(filepath.Join(namespaceRoot, ns.Name), &fs); err != nil {
+				return err
+			}
+			if ns.Inode == 0 && fs.Type != unix.NSFS_MAGIC {
+				continue
+			} // reserved mount target before bind
+			dev, ino, err := namespaceIdentity(filepath.Join(namespaceRoot, ns.Name))
+			if err != nil {
+				return err
+			}
+			if ns.External && (dev != ns.InputDevice || ino != ns.InputInode) {
+				return fmt.Errorf("external namespace %s changed", ns.Name)
+			}
+			if ns.Inode != 0 && (dev != ns.Device || ino != ns.Inode) {
+				return fmt.Errorf("namespace %s changed", ns.Name)
+			}
 		}
 		// Inode zero records a crash between creating the run-owned namespace
 		// and persisting its inode. Its name was reserved in the private pin
@@ -675,7 +741,7 @@ func verifyTransit(r *record, restore bool) error {
 	return nil
 }
 
-func cleanup(force bool) error {
+func cleanup(force, internal bool) error {
 	r, err := readRecord()
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -693,7 +759,10 @@ func cleanup(force bool) error {
 	if r.MainNetNSInode != current {
 		return errors.New("cleanup must run in the original instance main network namespace")
 	}
-	if err := consumersGone(); err != nil {
+	if err := validateOwnership(r, true); err != nil {
+		return err
+	}
+	if err := consumersGone(r); err != nil {
 		return err
 	}
 	if err := validateNamespaces(r); err != nil {
@@ -712,7 +781,7 @@ func cleanup(force bool) error {
 	stopErr := execute(connector, args...)
 	var exit *exec.ExitError
 	absent := errors.As(stopErr, &exit) && exit.ExitCode() == 3
-	if stopErr != nil && !absent && !force {
+	if stopErr != nil && !absent {
 		return fmt.Errorf("native stop did not complete: %w", stopErr)
 	}
 	// The saved names and identities also cover startup rollback that already
@@ -721,8 +790,19 @@ func cleanup(force bool) error {
 	if err := verifyTransit(r, true); err != nil {
 		return err
 	}
+	if err := removeManagementLinks(r); err != nil {
+		return err
+	}
 	if err := os.RemoveAll(filepath.Join(bpfRoot, r.SwitchName)); err != nil {
 		return err
+	}
+	if internal && r.Retained {
+		r.State = "stopped"
+		if err := writeRecord(r); err != nil {
+			return err
+		}
+		fmt.Println("node-infra: network cleanup complete (outer handles retained)")
+		return nil
 	}
 	for i := len(r.Namespaces) - 1; i >= 0; i-- {
 		name := r.Namespaces[i].Name
@@ -730,6 +810,13 @@ func cleanup(force bool) error {
 			continue
 		} else if err != nil {
 			return err
+		}
+		var fs unix.Statfs_t
+		if r.Namespaces[i].Inode == 0 && unix.Statfs(filepath.Join(namespaceRoot, name), &fs) == nil && fs.Type != unix.NSFS_MAGIC {
+			if err := os.Remove(filepath.Join(namespaceRoot, name)); err != nil {
+				return err
+			}
+			continue
 		}
 		if err := execute("ip", "netns", "delete", name); err != nil {
 			return err
@@ -741,6 +828,22 @@ func cleanup(force bool) error {
 	if err := verifyTransit(r, true); err != nil {
 		return err
 	}
+	if r.Schema >= 2 {
+		r.State = "releasing"
+		if err := writeRecord(r); err != nil {
+			return err
+		}
+		if err := os.Remove(filepath.Join(namespaceRoot, ".node-infra-owner-"+r.Generation)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if err := os.Remove(filepath.Join(namespaceRoot, ".node-infra-owner")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
 	r.State = "cleaned"
-	return writeRecord(r)
+	if err := writeRecord(r); err != nil {
+		return err
+	}
+	fmt.Println("node-infra: network cleanup complete")
+	return nil
 }

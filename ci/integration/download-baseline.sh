@@ -21,9 +21,11 @@ artifacts.require(baseline['repository'] == 'kuasar-sandbox/kuasar-sandbox', 'fo
 names = {artifacts.archive_name(unit, record['version'], sys.argv[2]) for unit, record in baseline['units'].items()}
 names.add('platform-' + baseline['version'] + '.tar.gz')
 delivery = artifacts.delivery_module()
-if baseline.get('delivery') == delivery.NODE_INFRA_DELIVERY and 'node_infra' not in plan:
+if baseline.get('delivery') in delivery.NODE_INFRA_DELIVERIES and 'node_infra' not in plan:
     names.update((delivery.node_infra_archive(baseline['version'], sys.argv[2]),
                   delivery.node_infra_deploy_archive(baseline['version'])))
+if baseline.get('delivery') == delivery.NODE_INFRA_DELIVERY and 'node_infra' not in plan:
+    names.add(delivery.node_infra_docker_archive(baseline['version'], sys.argv[2]))
 records = {record['name']: record for record in baseline['assets']}
 artifacts.require(names <= set(records), 'missing target assets; explicit initialization is required')
 for name in sorted(names):
