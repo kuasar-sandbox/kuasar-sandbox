@@ -75,3 +75,24 @@ Configure/BindRuntime hooks. Verify real startup, the intended custom request
 path and worker restart with the selected SDK/image combination. The platform
 `basic.node-infra-config.sh` case demonstrates this against test-only SDK
 applications, using the delivered deployment entry point.
+
+## External egress and site network hooks
+
+The default MGMT plane is private `mgmt`; API/data ingress stays in the primary
+network. Mount or COPY `external-egress/90-egress.yaml` as a Connector overlay
+and bind only the provider's nsfs handle to `/run/node-infra/netns-inputs/egress:ro`.
+The provider owns the exit, routes and SNAT. Keep the metadata extraction first.
+
+For custom setup, install `network-extension/node-site-network` as executable
+`/usr/local/libexec/node-site-network`, its unit under `/etc/systemd/system/`,
+and its Connector drop-in under `/etc/systemd/system/connector-vswitch.service.d/`.
+Allocate a unique nft table name to the instance in the script. The oneshot is
+required by the drop-in, so no separate enable command is needed. The script is
+idempotent and only deletes that allocated table. Preserve the base ready hook;
+appended `ExecStartPost` checks can fail startup. nftables is included in the
+image. Install other tools while building a derived image.
+
+The deployment guide also provides direct Docker host/bridge commands with the
+same native files, private cgroups, normal internal cleanup and distinct ports
+for three instances. Optional borrowed transit uses retained recovery handles;
+the default Docker path needs no host install or prepare helper.

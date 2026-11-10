@@ -768,6 +768,30 @@ func cleanup(force, internal bool) error {
 	if err := validateNamespaces(r); err != nil {
 		return err
 	}
+	// A killed namespace publisher may leave its reserved, empty mount target.
+	// Remove it before native Stop or transit/peer lookup tries to enter it.
+	// validateNamespaces and the boot/generation owner guard run first.
+	for _, ns := range r.Namespaces {
+		if ns.Inode != 0 {
+			continue
+		}
+		path := filepath.Join(namespaceRoot, ns.Name)
+		var fs unix.Statfs_t
+		if err := unix.Statfs(path, &fs); errors.Is(err, os.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return err
+		}
+		if fs.Type != unix.NSFS_MAGIC {
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || info.Size() != 0 {
+				return fmt.Errorf("invalid reserved namespace target %s", path)
+			}
+			if err := os.Remove(path); err != nil {
+				return err
+			}
+		}
+	}
 	// Check conflicts before native Stop: native stop can ignore EEXIST and
 	// unpin metadata even when its transit device did not return.
 	if err := verifyTransit(r, false); err != nil {

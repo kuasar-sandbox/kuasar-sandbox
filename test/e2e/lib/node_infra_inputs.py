@@ -132,26 +132,8 @@ def prepare_docker(root, arch):
     require(record['name'] == name, 'Docker archive name differs')
     path = regular(root, 'images/' + name)
     require(path.stat().st_size == record['size'] and checksum(path) == record['sha256'], 'Docker archive checksum differs')
-    # The standard image reader checks archive path safety and configuration
-    # identity; verify the raw ordered layer hashes too, before runtime import.
-    with tarfile.open(path) as archive:
-        members = {}
-        for member in archive:
-            name_in_tar = member.name.rstrip('/')
-            require(name_in_tar and not name_in_tar.startswith('/') and '\\' not in name_in_tar and
-                    all(p not in ('', '.', '..') for p in name_in_tar.split('/')) and
-                    name_in_tar not in members and (member.isfile() or member.isdir()), 'unsafe Docker archive member')
-            members[name_in_tar] = member
-        manifest = json.load(archive.extractfile(members['manifest.json']))
-        require(len(manifest) == 1, 'Docker archive must contain one image')
-        row = manifest[0]
-        raw = archive.extractfile(members[row['Config']]).read()
-        require('sha256:' + hashlib.sha256(raw).hexdigest() == image['id'], 'Docker/OCI config differs')
-        config = json.loads(raw)
-        require(config['os'] + '/' + config['architecture'] == target, 'Docker platform differs')
-        require(len(row['Layers']) == len(config['rootfs']['diff_ids']), 'Docker layer count differs')
-        for layer, diff_id in zip(row['Layers'], config['rootfs']['diff_ids']):
-            require('sha256:' + hashlib.file_digest(archive.extractfile(members[layer]), 'sha256').hexdigest() == diff_id,
-                    'Docker/OCI layer diffID differs')
+    import workspace
+    verified = workspace.verify_image_archive(path, target)
+    require(verified['image_id'] == image['id'], 'Docker/OCI config differs')
     return {'runtime': 'docker', 'platform': target, 'archive': 'images/' + name,
             'sha256': record['sha256'], 'image_id': image['id'], 'owner': 'platform'}

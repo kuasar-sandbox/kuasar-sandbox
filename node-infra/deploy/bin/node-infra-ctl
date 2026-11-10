@@ -486,7 +486,8 @@ class Instance:
         base = ['podman', 'run', '--rm', '--pull=never', '--network=none',
                 '--entrypoint=/usr/libexec/node-infra/service', *volumes, installed['image']]
         run(*base, 'validate')
-        descriptor = json.loads(run('podman', 'run', '--rm', '--pull=never', '--network=' + selected['network'],
+        descriptor = json.loads(run('podman', 'run', '--rm', '--pull=never', '--cap-add=SYS_ADMIN',
+                                    '--network=' + selected['network'],
                                     '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'preflight').stdout)
         require(descriptor['main_netns_inode'] == selected['primary_inode'],
                 'Podman and node-infra-ctl selected different primary namespaces; use the local runner context')
@@ -782,7 +783,8 @@ def main():
             require(args.command in ('describe', 'check', 'health', 'cleanup'),
                     '--container supports describe/check/health/cleanup')
             require(re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]*', args.container), 'invalid container identity')
-            result = run(args.runtime, 'exec', args.container, RUNTIME, args.command, check=False)
+            options = ['--internal'] if args.command == 'cleanup' else []
+            result = run(args.runtime, 'exec', args.container, RUNTIME, args.command, *options, check=False)
             sys.stdout.write(result.stdout)
             sys.stderr.write(result.stderr)
             return result.returncode

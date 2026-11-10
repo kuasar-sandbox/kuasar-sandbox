@@ -19,7 +19,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       /etc/node-conductor/conf.d /etc/node-proxy/conf.d /etc/node-telemetry/conf.d \
       /etc/connector-vswitch/conf.d /etc/node-infra/extensions \
     && systemctl mask systemd-networkd.service systemd-networkd.socket \
-      systemd-resolved.service systemd-logind.service getty.target \
+      systemd-resolved.service systemd-logind.service systemd-firstboot.service getty.target \
       systemd-remount-fs.service systemd-udevd.service systemd-udevd-control.socket \
       systemd-udevd-kernel.socket
 COPY bin/ /opt/node-infra/bin/

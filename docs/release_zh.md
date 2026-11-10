@@ -45,7 +45,7 @@ daily-preview.yaml/version >= release.yaml/version
 
 下面两个清单都是示例,不是当前已发布版本的清单。
 
-新聚合选择声明 `delivery: node-infra-v1`；`workbench-v1` 保留用于读取此前已选择的聚合。省略 `delivery` 表示历史读取契约，不能用于新聚合组装。
+新聚合选择声明 `delivery: node-infra-v2`；`node-infra-v1` 和 `workbench-v1` 保留用于读取此前已选择的聚合。省略 `delivery` 表示历史读取契约，不能用于新聚合组装。
 
 ### 2.1 Stable 清单
 
@@ -54,7 +54,7 @@ daily-preview.yaml/version >= release.yaml/version
 
 ```yaml
 version: release-v0.5.7
-delivery: node-infra-v1
+delivery: node-infra-v2
 previous_version: release-v0.5.6
 components:
   accelerator: v0.2.1
@@ -72,7 +72,7 @@ components:
 
 ```yaml
 version: release-v0.5.7
-delivery: node-infra-v1
+delivery: node-infra-v2
 previous_version: release-v0.5.6
 preview_version: preview.20260831
 previous_preview_version: preview.20260830
@@ -232,7 +232,7 @@ Preview 对已提交的选择使用 §6 的正常组件发行入口，按依赖�
 
 ## 5. 残缺发布恢复
 
-完整 Release 必须具有所选 Tag 对应的精确包集合、匹配的 prerelease 状态，以及有效的 GitHub 原生资产 ID、大小、digest 和上传状态。忽略可选的历史 SHA256SUMS。历史单架构发布仍有效，架构集合残缺才算残缺；node-infra 聚合需要全部十八项包；历史 Workbench 聚合需要十五项包。缺失或有歧义的资产元数据须保留并报告，不能据此把发布判作残缺而删除。
+完整 Release 必须具有所选 Tag 对应的精确包集合、匹配的 prerelease 状态，以及有效的 GitHub 原生资产 ID、大小、digest 和上传状态。忽略可选的历史 SHA256SUMS。历史单架构发布仍有效，架构集合残缺才算残缺；`node-infra-v2` 聚合需要全部二十项包，`node-infra-v1` 保留十八项包；历史 Workbench 聚合需要十五项包。缺失或有歧义的资产元数据须保留并报告，不能据此把发布判作残缺而删除。
 
 只有完整 Release 的 Tag 才作为成品复用候选。残缺发布保留给恢复流程：
 
@@ -245,6 +245,8 @@ Preview 对已提交的选择使用 §6 的正常组件发行入口，按依赖�
 新日期或修订号不会把旧 tag 绑定到新的组件 HEAD。先完成原残缺发布再推进渠道，或保留旧对象并明确使用新标识。已完成但不再被引用的组件 Preview 仍遵守现有 canonical GC 范围和七天回退窗口。
 
 版本和字节一致且成功 stage 仍在时，优先恢复原发布步骤；只补缺失资产，拒绝同名不同字节。已公开 Release 只能对原验收 stage 只读确认。清理残留无 tag Release 时，必须具有已知精确源码，并通过与计划相同的 canonical 历史检查；GC 不要求旧源码仍为当前分支 HEAD。Release 和 tag 均不存在则已收敛。明确 404 可幂等重试，网络或权限错误不视为不存在。
+
+`node-infra-v2` 在既有十八项 `node-infra-v1` 资产之上增加两个原生 Docker 兼容归档，共二十项。归档从同一受测 OCI 镜像转换，配置 ID 与有序层 diffID 必须相同；不重建第二个镜像。历史 `node-infra-v1` 和 `workbench-v1` 仍按其原合同读取。
 
 ### 5.1 首次 node-infra 镜像仓库发布
 
@@ -346,7 +348,7 @@ make test-ci-tools
 
 ## 8. 发行资产验证
 
-组件包按单元、版本和架构精确命名；runtime 与 vmlinux 独立解析。`node-infra-v1` 聚合包含十八项资产：一个平台包、十二个不变的组件包、两个原生 Workbench 镜像包、两个原生 node-infra OCI 包和一个通用部署包，不再发布独立 `SHA256SUMS`。此前 `workbench-v1` 契约保留原十五项资产。读取器忽略历史 checksum 附件，从所选聚合 Tag 下的 manifest 确定完整集合；缺包不会回退旧格式、main 或 Latest。
+组件包按单元、版本和架构精确命名；runtime 与 vmlinux 独立解析。`node-infra-v2` 增加由同一受测 OCI 镜像转换的两个 Docker 兼容归档，配置 ID 和有序层 diffID 相同，共二十项资产。`node-infra-v1` 保留十八项资产：一个平台包、十二个不变的组件包、两个原生 Workbench 镜像包、两个原生 node-infra OCI 包和一个通用部署包，不再发布独立 `SHA256SUMS`。此前 `workbench-v1` 契约保留原十五项资产。读取器忽略历史 checksum 附件，从所选聚合 Tag 下的 manifest 确定完整集合；缺包不会回退旧格式、main 或 Latest。
 
 不发布项目生成的 release metadata JSON,也不重复上传 GitHub 自动提供的源码归档。
 版本选择 YAML 只在仓库维护,既不是 Release 资产,也不进入 platform 包。

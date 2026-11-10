@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import re
 import shutil
+import sys
 import tarfile
 
 import archive_paths
@@ -148,38 +149,17 @@ def inspect_docker(path, arch, *, image_id, version, revision):
     Transport conversion may change a manifest; the configuration hash binds
     platform, ordered uncompressed layer diffIDs, labels and component inputs.
     """
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'test/e2e/lib'))
+    import workspace
+    verified = workspace.verify_image_archive(path, 'linux/' + ARCHES[arch])
+    require(verified['image_id'] == image_id, 'Docker configuration differs from OCI image')
     with tarfile.open(path, 'r:*') as archive:
-        members = {}
-        for member in archive:
-            name = archive_paths.relative_name(member)
-            require(name not in members and (member.isfile() or member.isdir()), 'unsafe Docker archive member')
-            members[name] = member
-
-        def read(name, limit=None):
-            require(name in members and members[name].isfile() and
-                    (limit is None or members[name].size <= limit), 'missing or oversized Docker archive member')
-            return archive.extractfile(members[name])
-
-        with read('manifest.json', 16 * 1024 * 1024) as stream:
-            manifest = json.load(stream)
-        require(isinstance(manifest, list) and len(manifest) == 1, 'Docker archive requires exactly one image')
-        row = manifest[0]
-        with read(row['Config'], 16 * 1024 * 1024) as stream:
-            config_bytes = stream.read()
-        require('sha256:' + hashlib.sha256(config_bytes).hexdigest() == image_id,
-                'Docker configuration differs from OCI image')
-        config = json.loads(config_bytes)
-        require(config.get('os') == 'linux' and config.get('architecture') == ARCHES[arch], 'Docker platform differs')
-        labels = config.get('config', {}).get('Labels', {})
-        require(labels.get('org.opencontainers.image.version') == version and
-                labels.get('org.opencontainers.image.revision') == revision, 'Docker source/version differs')
-        layers, diff_ids = row.get('Layers', []), config.get('rootfs', {}).get('diff_ids', [])
-        require(layers and len(layers) == len(diff_ids) and len(layers) == len(set(layers)), 'Docker layer count differs')
-        for name, expected in zip(layers, diff_ids):
-            with read(name) as stream:
-                require('sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest() == expected,
-                        'Docker layer diffID differs from OCI configuration')
-    return {'image_id': image_id, 'diff_ids': diff_ids}
+        manifest = json.load(archive.extractfile('manifest.json'))
+        config = json.load(archive.extractfile(manifest[0]['Config']))
+    labels = config.get('config', {}).get('Labels', {})
+    require(labels.get('org.opencontainers.image.version') == version and
+            labels.get('org.opencontainers.image.revision') == revision, 'Docker source/version differs')
+    return {'image_id': image_id, 'diff_ids': config['rootfs']['diff_ids']}
 
 
 def validate(directory, version, arch, revision, *, receipts=None):

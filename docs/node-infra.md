@@ -225,7 +225,7 @@ absolute paths (including all four `conf.d` directories and `manifest.yaml`):
 
 ```sh
 docker load --input node-infra-VERSION-linux-amd64.docker.tar.gz
-docker run -d --name node-infra-dev --pull=never --privileged \
+docker run -d --tty --name node-infra-dev --pull=never --privileged \
   --cgroupns=private --network=host --cpus=4 --memory=6g --memory-swap=6g \
   --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
   -v "$CONFIG_ROOT/node-conductor/conf.d:/etc/node-conductor/conf.d:ro" \
@@ -249,7 +249,10 @@ must leave management headroom, with native CPU/NUMA placement unchanged.
 
 The image stop signal is `SIGRTMIN+3`. The 420-second runner budget covers the
 ordered inner stop budgets; the production outer unit additionally allows its
-recovery hook. A forced stop is a different result from normal internal cleanup.
+recovery hook. The TTY supplies systemd’s console to `docker logs`. With privileged PID namespaces,
+a completed halt may report exit 130; verify the network cleanup completion log
+and resource results, not just the exit code. A forced stop is a different result
+from normal internal cleanup.
 `node-infra-ctl health --runtime docker --container node-infra-dev` is a thin
 adapter to the internal health entry; `describe` and `check` work the same way.
 No `node-infra-ctl install` is required for this Docker path.
@@ -396,7 +399,7 @@ using `node-infra-v2`; execution imports OCI into Podman and Docker archive into
 Docker, requiring identical configuration and ordered rootfs diffIDs.
 `basic.node-infra-docker.sh` exercises direct host/bridge startup, component
 restart, normal/hard stops, snapshots and three-instance isolation. The Podman
-path uses the delivered tool/template and uses the delivered tool/template. The guest
+path uses the delivered tool/template. The guest
 and extension helpers are prebuilt in the normal platform helper package.
 Tests create only their own namespaces/devices/state; a failed cleanup retains
 its recovery inputs and reports failure. They do not start a substitute

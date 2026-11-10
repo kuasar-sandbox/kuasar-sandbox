@@ -10,6 +10,8 @@ PartOf=node-infra.target
 [Service]
 Type=oneshot
 RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
 ExecStart=/usr/libexec/node-infra/service prepare
 ExecStopPost=/usr/libexec/node-infra/service cleanup
 TimeoutStartSec=60

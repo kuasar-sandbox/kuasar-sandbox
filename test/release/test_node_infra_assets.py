@@ -56,6 +56,28 @@ def archive(root, arch='x86_64', mutation=None):
     return receipt
 
 
+def docker_archive(root, record, *, corrupt=False, alias='../outside'):
+    with tarfile.open(root / record['archive']) as source:
+        manifest = json.load(source.extractfile('blobs/sha256/' + record['manifest_digest'][7:]))
+        config = source.extractfile('blobs/sha256/' + record['image_id'][7:]).read()
+        layer = gzip.decompress(source.extractfile('blobs/sha256/' + manifest['layers'][0]['digest'][7:]).read())
+    layer_name = hashlib.sha256(layer).hexdigest() + '.tar'
+    files = {'config.json': config, layer_name: layer + (b'corruption' if corrupt else b''),
+             'manifest.json': subject.canonical([{'Config': 'config.json', 'Layers': [layer_name]}])}
+    path = root / selection.node_infra_docker_archive(VERSION, record['arch'])
+    with tarfile.open(path, 'w:gz') as stream:
+        for name, data in files.items():
+            entry = tarfile.TarInfo(name)
+            entry.size, entry.mode = len(data), 0o644
+            stream.addfile(entry, io.BytesIO(data))
+        entry = tarfile.TarInfo('a' * 64 + '/layer.tar')
+        entry.type, entry.linkname = tarfile.SYMTYPE, ('../' + layer_name if alias == 'valid' else alias)
+        stream.addfile(entry)
+    record['docker_archive'] = {'name': path.name, 'sha256': subject.digest(path), 'size': path.stat().st_size}
+    (root / ('node-infra-' + record['arch'] + '.json')).write_text(json.dumps(record))
+    return path
+
+
 class DeliveryTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
@@ -89,6 +111,27 @@ class DeliveryTests(unittest.TestCase):
             subject.inspect_oci(self.images / record['archive'], 'aarch64')
         with self.assertRaisesRegex(ValueError, 'source'):
             subject.inspect_oci(self.images / record['archive'], 'x86_64', revision='3' * 40)
+
+    def test_docker_archive_retains_oci_identity_and_safe_legacy_aliases(self):
+        for arch in subject.ARCHES:
+            record = archive(self.images, arch)
+            docker_archive(self.images, record, alias='valid')
+            self.assertEqual(subject.validate(self.images, VERSION, arch, REVISION), record)
+        document = subject.package(self.platform, self.images, self.images, VERSION, REVISION)
+        self.assertEqual(document['schema'], 2)
+        self.assertEqual(subject.validate_set(self.images, VERSION, REVISION), document)
+
+    def test_docker_corruption_cannot_be_hidden_by_rewriting_archive_receipt(self):
+        record = archive(self.images)
+        docker_archive(self.images, record, alias='valid', corrupt=True)
+        with self.assertRaisesRegex(ValueError, 'layer differs'):
+            subject.validate(self.images, VERSION, 'x86_64', REVISION)
+
+    def test_docker_alias_cannot_escape_to_an_unverified_member(self):
+        record = archive(self.images)
+        docker_archive(self.images, record)
+        with self.assertRaisesRegex(ValueError, 'unsafe image archive member'):
+            subject.validate(self.images, VERSION, 'x86_64', REVISION)
 
     def test_layer_corruption_is_detected_even_with_a_new_outer_checksum(self):
         def mutate(blobs):

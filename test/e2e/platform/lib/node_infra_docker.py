@@ -32,7 +32,7 @@ class DockerNode(Node):
     def start(self):
         require(command('docker', 'inspect', self.container, check=False).returncode != 0,
                 'previous Docker container must be removed before a new generation')
-        args = ['docker', 'run', '--detach', '--name', self.container, '--pull=never', '--privileged',
+        args = ['docker', 'run', '--detach', '--tty', '--name', self.container, '--pull=never', '--privileged',
                 '--cgroupns=private', '--cpus=4', '--memory=6g', '--memory-swap=6g',
                 '--stop-timeout=420', '--tmpfs=/run', '--tmpfs=/run/lock', '--tmpfs=/tmp:exec',
                 '--network=' + ('bridge' if self.bridge else 'host')]
@@ -104,7 +104,9 @@ class DockerNode(Node):
         logs = command('docker', 'logs', self.identity, check=False)
         (self.fixture.output / self.name / ('forced-stop.log' if hard else 'normal-stop.log')).write_text(logs.stdout + logs.stderr)
         if not hard:
-            require(inspected['State']['ExitCode'] == 0, 'normal Docker shutdown was not clean')
+            # A privileged PID-namespace halt may terminate init via SIGINT.
+            # Require positive cleanup evidence as well as the native exit.
+            require(inspected['State']['ExitCode'] in (0, 130), 'normal Docker shutdown was not clean')
             require('node-infra: network cleanup complete' in logs.stdout + logs.stderr,
                     'normal Docker shutdown did not execute internal cleanup')
         command('docker', 'rm', self.identity)

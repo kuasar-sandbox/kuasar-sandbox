@@ -8,9 +8,10 @@
 
 ## 前置条件与发布输入
 
-使用原生 amd64 或 arm64 Linux 宿主，提供 systemd、cgroup v2、可用的 KVM/TUN、
-网络空间、BPF/TC 与 userfaultfd。安装 rootful Podman、Quadlet generator 和受支持的
-OCI runtime。部署包 `release.json` 记录所选支持基线；随包平台 E2E 验证实际模板。
+使用原生 amd64 或 arm64 Linux 宿主，提供 cgroup v2、可用的 KVM/TUN、网络空间、
+BPF/TC 与 userfaultfd。生产使用宿主 systemd 和 rootful Podman/Quadlet；开发可以直接
+使用 rootful Docker，包括 cgroupfs driver，无需 Podman 或宿主 node-infra unit。
+两种路径均使用同一镜像，由 systemd 担任容器 PID 1。部署包 `release.json` 记录所选支持基线；随包平台 E2E 验证实际模板。
 systemd 启动或 generator 检查成功，不能单独作为 VM 与恢复验收通过的证据。
 
 获取同一聚合版本的以下输入：
@@ -19,6 +20,7 @@ systemd 启动或 generator 检查成功，不能单独作为 VM 与恢复验收
 |---|---|
 | `ghcr.io/kuasar-sandbox/node-infra:<version>` | 多架构 OCI 镜像，选择并记录具体平台 manifest。 |
 | `node-infra-<version>-linux-<amd64|arm64>.oci.tar.gz` | 对应平台镜像的离线归档，通过 `podman load` 导入。 |
+| `node-infra-<version>-linux-<amd64|arm64>.docker.tar.gz` | 同一 OCI 镜像的 Docker 兼容离线归档，通过 `docker load` 导入，由 `node-infra-v2` 提供。 |
 | `node-infra-deploy-<version>.tar.gz` | 宿主工具、完整 Quadlet 模板、运行钩子、示例和本指南。 |
 | 对应 workbench 和 `platform-<version>.tar.gz` | 可重复验收环境与对应测试。 |
 
@@ -51,12 +53,20 @@ DNS、KVM/TUN、cgroup 委托及实例私有持久目录。
 `/proc/1/ns/net` 就是该上下文。预检查核对 Podman 选中的网络空间，启动与状态检查
 核对主容器和保留句柄的身份。工具与 rootful Podman 必须在同一本地宿主上下文执行。
 
-内部 switch 网络空间、TAP、管理 veth 与 bpffs 仍自动维护。对于目标为 loopback
-的管理服务，runtime 将配置的 IPv4 VIP 分配到已验证归属的管理 peer，并在该设备
-启用 `route_localnet`。原生 Connector 添加浮动 IP 回程路由，不替换宿主默认路由。
-预检查拒绝已存在的管理接口名称、重叠管理地址/路由及已占用的原生 TCP 监听。
-需要时选择不冲突的原生配置或隔离的主网络空间。SDK 自定义监听变化及后续竞态由
-原生启动与就绪检查确认。不人为限制全局只能运行一个实例。
+默认三平面为主网络（Conductor API 与 Proxy 入口）、`sw0-switch`（vSwitch）及
+`mgmt`（管理）。Connector 默认使用 `mgmt_extracts: ["mgmt:mgmt0:169.254.169.254/32"]`，
+保留 `mgmt_services: ["169.254.169.254:80:127.0.0.1:19254"]`。Proxy 与 Telemetry
+使用原生 `proxy_netns: mgmt`；Telemetry 仍需显式启用。
+
+Proxy master 在主网络创建数据监听；worker、后端连接与 MMDS 监听使用 MGMT，
+Conductor 经原生控制通道提供 MMDS 策略。客户 xproxy worker 的连接使用 worker 网络
+空间；master 扩展创建的连接使用主网络。不要将整个 Proxy service 放入 `NetworkNamespacePath`。
+
+runtime 仅在经过归属验证的管理 peer 上配置服务 VIP 与设备级 `route_localnet`。
+Connector 安装按设备限定的浮动地址回程路由。预检查进入实际管理平面（包括借用的网络
+空间），允许外部 egress 已有默认路由。默认布局保留宿主原有 metadata VIP、路由和监听；
+主网络 API/数据监听冲突仍明确失败。显式旧原生布局继续生效；更换默认布局需要维护重建，
+不承诺热迁移或自动改写配置文件。
 
 提供可达的外部 Cache/Store 端点及文件型制品。UDS 挂载提供方持有的父目录，使
 socket 重建后仍可见。存储端点不会让任意宿主文件自动在容器内可见，host 网络也
@@ -162,6 +172,78 @@ Quadlet 从源文件 `[Install]` 段生成开机启动关系。`install` 将宿�
 检查失败/未就绪时返回一。容器运行或 Connector 控制 socket 存在，并不能单独证明
 有可分配的执行槽位或沙箱流量正常。完成真实节点就绪和所需业务验收后再接入负载。
 
+## 直接使用 Docker 开发
+
+使用相同的不可变镜像和原生配置路径。短时入口识别 Docker/Podman，验证私有 cgroup v2
+委托，在缺少时准备私有 bpffs，保护全局 `/proc/sys` 和 `/sys`，随后 exec `/sbin/init`。
+它不绑定可写的宿主 cgroup 树，也不引入 supervisor。这是受信管理员的 privileged 系统
+容器，不是租户隔离边界。
+
+将 `IMAGE`、`CONFIG_ROOT` 和 `DATA_ROOT` 设置为所选镜像与已准备的绝对路径，包含
+四个 `conf.d` 目录和 `manifest.yaml`：
+
+```sh
+docker load --input node-infra-VERSION-linux-amd64.docker.tar.gz
+docker run -d --tty --name node-infra-dev --pull=never --privileged \
+  --cgroupns=private --network=host --cpus=4 --memory=6g --memory-swap=6g \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
+  -v "$CONFIG_ROOT/node-conductor/conf.d:/etc/node-conductor/conf.d:ro" \
+  -v "$CONFIG_ROOT/node-proxy/conf.d:/etc/node-proxy/conf.d:ro" \
+  -v "$CONFIG_ROOT/node-telemetry/conf.d:/etc/node-telemetry/conf.d:ro" \
+  -v "$CONFIG_ROOT/connector-vswitch/conf.d:/etc/connector-vswitch/conf.d:ro" \
+  -v "$CONFIG_ROOT/manifest.yaml:/etc/node-infra/manifest.yaml:ro" \
+  -v "$DATA_ROOT:/var/lib/node-infra:rw" "$IMAGE"
+docker exec node-infra-dev /usr/libexec/node-infra/node-infra-runtime health
+docker logs node-infra-dev
+docker exec node-infra-dev journalctl --no-pager
+docker stop node-infra-dev
+```
+
+bridge 模式将 `--network=host` 换为 `--network=bridge`，发布
+`-p 127.0.0.1:23000:3000 -p 127.0.0.1:23001:3001`。三个实例使用独立名称、数据与配置
+目录，以及 `23000/23001`、`23010/23011`、`23020/23021` 三组端口。容器 bridge 联网不
+代表沙箱获得 NAT。外层额度约束管理进程、资源池与 VM 后代；原生池预算预留管理空间，
+原生 CPU/NUMA placement 语义不变。
+
+镜像停止信号为 `SIGRTMIN+3`，运行器的 420 秒预算覆盖内部有序停止，生产外层 unit
+另为恢复钩子预留时间。TTY 将 systemd console 接入 `docker logs`。privileged PID
+namespace 中的正常 halt 可能返回 130，需同时检查网络 cleanup 完成日志和实际资源结果，
+不能只看退出码。强制停止与正常内部清理是不同结果。
+`node-infra-ctl health --runtime docker --container node-infra-dev` 仅适配内部健康入口；
+`describe` 和 `check` 同样可用。这条 Docker 路径不要求 `node-infra-ctl install`。
+
+## 显式外部管理与 egress 网络空间
+
+将每个实际引用的 nsfs 句柄单独只读绑定到 `/run/node-infra/netns-inputs/<name>`，
+不要暴露宿主整个 `/run/netns`。例如先在宿主准备外部 `node-a-egress` 的出口设备、
+地址、默认路由、转发与 SNAT，再增加以下 Docker 参数：
+
+```sh
+# --mount 在源路径不存在时失败。
+--mount type=bind,source=/run/netns/node-a-egress,target=/run/node-infra/netns-inputs/egress,readonly
+```
+
+对应 Quadlet 绑定为
+`Volume=/run/netns/node-a-egress:/run/node-infra/netns-inputs/egress:ro`。
+原生 Connector 覆盖片段如下：
+
+```yaml
+mgmt_extracts:
+  - "mgmt:mgmt0:169.254.169.254/32"
+  - "egress:egress0:0.0.0.0/0"
+```
+
+数组整体替换继承列表，保留管理项，兜底项放最后。只导入实际引用的名称；提供的占位
+文件、错误 namespace 类型或身份变化均失败。未提供外部输入的命名管理平面由实例
+私有创建，不支持接管外部 switch/port 网络空间。已应用记录关联 boot/generation 与
+真实句柄。实例只释放本地引用和 Connector 自己的 peer/回程路由；外部已有网卡、地址、
+默认路由、SNAT 和网络空间句柄仍归调用者所有。
+
+客户网络设置使用原生 oneshot unit 和服务 drop-in，见部署包 `examples/network-extension/`。
+示例仅拥有分配给自己的 nft table，运行在网络准备与 Connector 之间，保留基础
+Connector `ExecStartPost` ready 步骤。追加的 post-start 失败会使 Connector 及依赖方
+启动失败。官方镜像包含 nftables；其他工具由派生镜像构建时提供，不在启动时下载软件。
+
 ## 可选的网络空间隔离与 transit
 
 两项选择彼此独立，使用同一模板与工具：host 或显式网络空间，均可有/无 transit。
@@ -194,14 +276,23 @@ transit_dev_mtu: auto
 网络空间中拆除 Connector。单独停止 Conductor 不会停止全部独立 runner unit；
 组件重启保留其原生恢复行为。
 
-启动 PID 1 前，一次性原生 helper 在宿主实例目录中创建 netns pins。系统容器以
-`rslave` 传播方式接收这些挂载，容器最终卸载不会移除宿主持有的 pins。
-宿主保留实例专属 netns pins、bpffs 入口、已应用镜像/配置身份和恢复记录。正常停止或硬退出后，
-宿主钩子在旧容器及 Quadlet 删除完成后执行，使用旧镜像/配置删除内部资源，并在
-配置了 transit 时收回原设备。host 模式同样保留主网络句柄；当前网络/配置变化不能
-改变旧清理目标。已有 schema-1 记录及其固定的旧清理工具仍可使用。
-失败时保留恢复输入并阻止更换。先通过状态和外层日志确认失败步骤，修复指出的输入，
-再重试：
+`node-infra-network.service` 拥有 setup 与 `ExecStopPost` 清理，也覆盖部分启动失败。
+Connector service 负责进程和基础 ready 步骤。独立 drain unit 停止已应用的全部原生
+Runner/Builder 池（含自定义模板），等待真实 cgroup 与 VM 消费者退出。逆序停止为
+Proxy/Conductor 等生产者、执行池、Connector、网络清理。组件局部重启不拆 switch 或
+停止现有 Guest。只有生产者和消费者均已退出后，才可强制收尾剩余 allocated 记录；
+清理失败保留已应用日志。
+
+生产恢复通过短时 helper 在 PID 1 前固定必要网络空间和私有 bpffs。主容器以 `rslave`
+接收 pins，内部正常清理拆除对象但保留宿主 pins。旧容器及 helper 退出后，外层钩子
+以记录的镜像、工具、generation 和 boot 身份调用同一清理原语，释放自己的绑定。
+当前配置不能重定向旧清理目标。旧 schema-1 记录继续使用固定的旧工具与镜像。
+
+SIGKILL、`docker rm -f` 和掉电不能执行内部 teardown。默认无借入设备的 Docker 使用
+私有内核对象，业务数据卷不保存活 namespace 句柄。借入 transit 时，需要显式的保留
+句柄 prepare/recover 路径保证强杀后准确归还。不能用新建同名网络空间替代丢失句柄。
+跨 boot 时宿主单独归档旧日志，不将 JSON 当作活引用。未完成恢复时禁用自动重启。
+通过状态和外层日志定位生产恢复失败，修正指出的输入后重试：
 
 ```sh
 sudo ./bin/node-infra-ctl status --name node-a --json
@@ -229,10 +320,11 @@ unit/配置、reload、启动并验证。显式回退使用选定旧镜像与匹
 - `basic.node-infra-lifecycle.sh`：两个运行实例、PID 1 和 conmon 硬退出/恢复、配置变化、
   清理冲突与 BPF 元数据丢失后的重试、重启及停止隔离。
 
-准备阶段接收同版部署包与原生 OCI 归档；执行阶段将镜像导入 Podman，使用交付的工具
-与模板。guest 和扩展 helper 在正常平台 helper 包中预先构建。测试仅创建自身网络
-空间、设备与状态，收尾失败时保留恢复输入并报错，不会在系统容器旁另起替代的
-Conductor/Proxy。
+`node-infra-v2` 准备阶段验证同版部署包与两种归档，执行阶段分别导入 Podman OCI 和
+Docker archive，要求配置及有序 rootfs diffID 相同。`basic.node-infra-docker.sh` 覆盖
+直接 host/bridge 启动、组件重启、正常/强制停止、快照和三实例隔离。Podman 路径使用
+交付的工具和模板。guest 与扩展 helper 在正常平台 helper 包中预先构建。测试只创建
+自己的网络空间、设备和状态；收尾失败保留输入并报错，不在系统容器旁另起替代服务。
 
 在 workbench system 模式或目标宿主中，使用公开 E2E runner 的
 `--include 'basic.node-infra-*.sh'` 选择用例。缺少输入或能力会明确失败。报告原生架构、
