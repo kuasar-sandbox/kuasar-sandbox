@@ -20,7 +20,8 @@ ALL_UNITS = COMPONENT_UNITS | {"runtime", "vmlinux"}
 # its complete build-input closure independently of this release rule.
 VMLINUX_RELEASE_INPUTS = (
     ":(glob)native-deps/deps/vmlinux/*.config",
-    "native-deps/deps/linux-patches",
+    # build-vmlinux.sh applies only these top-level patches in filename order.
+    ":(glob)native-deps/deps/linux-patches/*.patch",
 )
 # These targets are not prerequisites of vmlinux in guest-runtime/native-deps.
 VMLINUX_UNRELATED_MAKE_TARGETS = {
@@ -303,6 +304,15 @@ def resolve(
                     (winner, configured_parsed),
                     key=lambda item: item.same_commit_order,
                 )
+            if (unit == "vmlinux" and not configured_parsed.is_preview
+                    and winner.is_preview
+                    and not vmlinux_inputs_changed(root, configured_commit, winner_commit)
+                    and not vmlinux_inputs_changed(root, configured_commit, head)):
+                # Reuse the explicit Stable baseline only when the historical
+                # Preview and current source have the same kernel inputs. Keep
+                # the Preview version progression for any real input changes.
+                winner = configured_parsed
+                winner_commit = configured_commit
 
     if winner_commit == head or not unit_inputs_changed(root, winner_commit, head, unit):
         return Resolution(source_ref, head, winner.raw, winner_commit, "reuse", winner.raw)

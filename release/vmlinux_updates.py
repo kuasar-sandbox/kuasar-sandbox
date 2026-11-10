@@ -61,7 +61,7 @@ def render_updates(root, previous, current):
         lines += ["The selected version is behind the previous selection; this is a version rollback, not a forward update.", ""]
     elif ahead and behind:
         lines += ["The selected version has diverged from the previous selection.", ""]
-    lines += ["Kernel release inputs: `native-deps/deps/vmlinux/*.config` and `native-deps/deps/linux-patches/`.", ""]
+    lines += ["Kernel release inputs: `native-deps/deps/vmlinux/*.config` and `native-deps/deps/linux-patches/*.patch`.", ""]
     if not selection.vmlinux_inputs_changed(root, previous, current):
         lines.append("No changes to kernel release inputs between the selected versions.")
     else:
