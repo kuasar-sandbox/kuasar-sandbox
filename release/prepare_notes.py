@@ -31,6 +31,12 @@ def require_prepared(text, relative):
     selection.check_notes_input(config, relative)
 
 
+def selection_fields(config):
+    """Future version policy does not change the selected release or its prose."""
+    return {key: value for key, value in config.items()
+            if key not in {'notes', 'component_next_versions'}}
+
+
 def render(root, text, relative, previous_units=None, *, source_shas=None):
     preview = relative.endswith('daily-preview.yaml')
     version, previous, units = selection.parse_manifest(text, relative, preview)
@@ -66,7 +72,7 @@ def prepare(current, selected, relative, root, *, previous_units=None, source_sh
     _, original_block = selection.split_notes(current, relative)
     block = edited_block or original_block
     fields = selection.parse_notes(block, relative) if block else {}
-    unchanged = {key: value for key, value in before.items() if key != 'notes'} == after
+    unchanged = selection_fields(before) == selection_fields(after)
     if fields.get('mode') == 'fixed':
         for warning in release_notes.stale_warnings(fields.get('body', ''), version, units):
             print('release notes warning: ' + warning, file=sys.stderr)
@@ -115,8 +121,7 @@ def main():
     pending = selection.read_simple_yaml(selected, relative)
     fields = pending.get('notes', {})
     if (fields.get('mode') == 'auto' and fields != before.get('notes', {}) and
-            {key: value for key, value in before.items() if key != 'notes'} !=
-            {key: value for key, value in pending.items() if key != 'notes'}):
+            selection_fields(before) != selection_fields(pending)):
         parser.error('selection and auto notes are both modified relative to HEAD; '
                      'review and commit them together; refusing to overwrite the edited notes')
     content = prepare(current, selected, relative, root, source_shas=source_shas)

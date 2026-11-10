@@ -182,78 +182,77 @@ class PreviewSelectionTest(unittest.TestCase):
                 with self.assertRaises(preview_selection.SelectionError):
                     preview_selection.preview_candidate("runtime", "runtime-v1.2.3", suffix)
 
-    def test_explicit_new_line_preview_publishes_unchanged_non_kernel_units(self) -> None:
+    def test_next_versions_wait_for_changed_product_inputs_in_each_non_kernel_unit(self) -> None:
         tagged = self.repository.commit("published")
         for tag in ("v0.1.9", "runtime-v0.1.9"):
             self.repository.git("tag", tag, tagged)
-        for docs_only in (False, True):
-            head = (self.repository.commit_files("guide update", {"README.md": "guide\n"})
-                    if docs_only else tagged)
+        for change in ("none", "docs", "product"):
+            if change == "docs":
+                self.repository.commit_files("guide update", {"README.md": "guide\n"})
+            elif change == "product":
+                self.repository.commit("changed product")
             for unit in ("accelerator", "connector", "sandboxer", "orchestrator", "runtime"):
-                prefix = preview_selection.unit_prefix(unit)
-                winner = f"{prefix}0.1.9"
-                for core in ("0.2.0", "1.0.0"):
-                    configured = f"{prefix}{core}-preview.20260830.1"
-                    for date in ("20260830.1", "20260831"):
-                        with self.subTest(unit=unit, docs_only=docs_only, core=core, date=date):
-                            result = preview_selection.resolve(
-                                self.repository.root, "main", unit, configured, [winner], date,
-                            )
-                            self.assertEqual(result.head, head)
-                            self.assertEqual(result.winner, winner)
-                            self.assertEqual(result.winner_commit, tagged)
-                            self.assertEqual(result.action, "publish")
-                            self.assertEqual(result.selected, f"{prefix}{core}-preview.{date}")
+                with self.subTest(unit=unit, change=change):
+                    prefix = preview_selection.unit_prefix(unit)
+                    winner = f"{prefix}0.1.9"
+                    result = preview_selection.resolve(
+                        self.repository.root, "main", unit, winner, [winner], "20260830.1",
+                        next_version=f"{prefix}0.2.0",
+                    )
+                    self.assertEqual(result.winner, winner)
+                    self.assertEqual(result.winner_commit, tagged)
+                    self.assertEqual(result.action, "publish" if change == "product" else "reuse")
+                    self.assertEqual(result.selected, f"{prefix}0.2.0-preview.20260830.1"
+                                     if change == "product" else winner)
 
-    def test_explicit_new_line_preview_keeps_core_when_product_inputs_change(self) -> None:
+    def test_next_version_floor_preserves_normal_progression_and_never_downgrades(self) -> None:
+        for winner, target, expected in (
+            ("v0.1.9", "v0.2.0", "v0.2.0"),
+            ("v0.1.10-preview.20260829", "v0.2.0", "v0.2.0"),
+            ("v0.2.0-preview.20260829", "v0.2.0", "v0.2.0"),
+            ("v0.2.0", "v0.2.0", "v0.2.1"),
+            ("v0.3.1", "v0.2.0", "v0.3.2"),
+            ("v0.1.9", "v0.1.5", "v0.1.10"),
+        ):
+            with self.subTest(winner=winner, target=target):
+                self.assertEqual(preview_selection.preview_candidate(
+                    "sandboxer", winner, "20260831", target,
+                ), expected + "-preview.20260831")
+
+    def test_unpublished_component_selection_does_not_replace_a_next_version_policy(self) -> None:
         tagged = self.repository.commit("published")
         self.repository.git("tag", "v0.1.9", tagged)
-        head = self.repository.commit("product change")
         result = self.resolve("main", "v0.2.0-preview.20260829", ["v0.1.9"])
-        self.assertEqual(result.head, head)
-        self.assertEqual(result.winner, "v0.1.9")
-        self.assertEqual(result.winner_commit, tagged)
-        self.assertEqual(result.action, "publish")
-        self.assertEqual(result.selected, "v0.2.0-preview.20260830")
+        self.assertEqual((result.action, result.selected), ("reuse", "v0.1.9"))
 
-    def test_unpublished_same_or_older_line_and_stable_do_not_force_a_release(self) -> None:
+    def test_maintenance_next_version_must_stay_on_derived_source_line(self) -> None:
         tagged = self.repository.commit("published")
         self.repository.git("tag", "v1.2.3", tagged)
-        for configured in ("v1.2.4-preview.20260829", "v1.2.99-preview.20260829",
-                           "v1.1.99-preview.20260829", "v0.99.99-preview.20260829", "v1.3.0"):
-            with self.subTest(configured=configured):
-                result = self.resolve("main", configured, ["v1.2.3"])
-                self.assertEqual(result.action, "reuse")
-                self.assertEqual(result.selected, "v1.2.3")
-
-    def test_new_line_intent_does_not_change_maintenance_branch_selection(self) -> None:
-        tagged = self.repository.commit("published")
-        self.repository.git("tag", "v1.2.3", tagged)
-        self.repository.git("branch", "release/v1.2.x", tagged)
-        result = self.resolve("release/v1.2.x", "v1.3.0-preview.20260829", ["v1.2.3"])
-        self.assertEqual(result.action, "reuse")
-        self.assertEqual(result.selected, "v1.2.3")
-
-    def test_published_new_line_preview_is_reused(self) -> None:
-        tagged = self.repository.commit("published")
-        configured = "v0.2.0-preview.20260829"
-        for tag in ("v0.1.9", configured):
-            self.repository.git("tag", tag, tagged)
-        result = self.resolve("main", configured, ["v0.1.9", configured])
-        self.assertEqual(result.winner, configured)
-        self.assertEqual(result.winner_commit, tagged)
-        self.assertEqual(result.action, "reuse")
-        self.assertEqual(result.selected, configured)
-
-    def test_new_line_intent_does_not_force_a_kernel_release(self) -> None:
-        self.seed_vmlinux()
-        self.repository.commit_files("guide update", {"README.md": "guide\n"})
+        self.repository.commit("changed product")
+        self.repository.git("branch", "release/v1.2.x")
         result = preview_selection.resolve(
-            self.repository.root, "main", "vmlinux", "vmlinux-v1.3.0-preview.20260829",
-            ["vmlinux-v1.2.3"], "20260830",
+            self.repository.root, "release/v1.2.x", "sandboxer", "v1.2.3",
+            ["v1.2.3"], "20260830", "v1.2.8",
         )
-        self.assertEqual(result.action, "reuse")
-        self.assertEqual(result.selected, "vmlinux-v1.2.3")
+        self.assertEqual(result.selected, "v1.2.8-preview.20260830")
+        for target in ("v1.1.9", "v1.3.0"):
+            with self.subTest(target=target), self.assertRaisesRegex(
+                preview_selection.SelectionError, "does not belong to source branch",
+            ):
+                preview_selection.resolve(
+                    self.repository.root, "release/v1.2.x", "sandboxer", "v1.2.3",
+                    ["v1.2.3"], "20260830", target,
+                )
+
+    def test_preview_and_kernel_next_versions_are_rejected(self) -> None:
+        for unit, winner, target in (
+            ("sandboxer", "v1.2.3", "v1.3.0-preview.20260829"),
+            ("vmlinux", "vmlinux-v1.2.3", "vmlinux-v1.3.0"),
+        ):
+            with self.subTest(unit=unit), self.assertRaisesRegex(
+                preview_selection.SelectionError, "non-kernel stable core",
+            ):
+                preview_selection.preview_candidate(unit, winner, "20260830", target)
 
     def test_release_branch_filters_tags_to_its_version_line(self) -> None:
         matching = self.repository.commit("matching")

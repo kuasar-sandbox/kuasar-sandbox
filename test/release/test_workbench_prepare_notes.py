@@ -36,6 +36,12 @@ class PrepareNotesTests(unittest.TestCase):
     def fields(self, text):
         return selection.read_simple_yaml(text, self.relative)['notes']
 
+    def with_next_versions(self, text=None, core='2.0.0'):
+        return (self.selected if text is None else text) + (
+            'component_next_versions:\n'
+            f'  accelerator: v{core}\n'
+            f'  runtime: runtime-v{core}\n')
+
     def changes(self):
         return [self.selected.replace('release-v2.0.0', 'release-v2.0.1'),
                 self.selected.replace('preview.20990101', 'preview.20990102'),
@@ -48,6 +54,31 @@ class PrepareNotesTests(unittest.TestCase):
         with patch.object(prepare, 'render') as render:
             self.assertEqual(prepare.prepare(current, current, self.relative, self.root), current)
         render.assert_not_called()
+
+    def test_future_version_policy_changes_preserve_current_auto_notes(self):
+        first = self.with_next_versions()
+        updated = self.with_next_versions(core='2.1.0')
+        for before, selected in ((self.selected, first), (first, updated), (updated, self.selected)):
+            with self.subTest(before=before, selected=selected):
+                current = self.with_notes(before)
+                with patch.object(prepare, 'render') as render:
+                    result = prepare.prepare(current, selected, self.relative, self.root)
+                render.assert_not_called()
+                self.assertEqual(selection.split_notes(result, self.relative)[1],
+                                 selection.split_notes(current, self.relative)[1])
+                self.assertTrue(result.startswith(selected))
+                prepare.require_prepared(result, self.relative)
+
+    def test_future_version_policy_does_not_hide_a_component_selection_change(self):
+        current = self.with_notes(self.with_next_versions())
+        selected = self.with_next_versions(self.changes()[2])
+        with patch.object(prepare, 'render', return_value=self.generated) as render:
+            result = prepare.prepare(current, selected, self.relative, self.root)
+        render.assert_called_once_with(self.root, selected, self.relative, None, source_shas=None)
+        self.assertEqual(self.fields(result)['body'], self.generated)
+        self.assertEqual(selection.read_simple_yaml(result, self.relative)['component_next_versions'],
+                         {'accelerator': 'v2.0.0', 'runtime': 'runtime-v2.0.0'})
+        prepare.require_prepared(result, self.relative)
 
     def test_new_auto_tuple_regenerates_each_selection_dimension(self):
         current = self.with_notes()
@@ -154,6 +185,29 @@ class PrepareNotesTests(unittest.TestCase):
                 prepare.main()
             render.assert_not_called()
             self.assertEqual(path.read_text(), expected)
+
+    def test_cli_preserves_future_policy_with_unchanged_or_edited_current_notes(self):
+        for edit_notes in (False, True):
+            with self.subTest(edit_notes=edit_notes), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                path = root / self.relative
+                path.parent.mkdir()
+                def git(*args):
+                    return subprocess.run(['git', '-C', str(root), *args], check=True, capture_output=True)
+                git('init', '-q')
+                path.write_text(self.with_notes())
+                git('add', '.')
+                git('-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'initial')
+                pending = self.with_notes(self.with_next_versions())
+                if edit_notes:
+                    pending = pending.replace('Human edit.', 'Reviewed future policy.')
+                path.write_text(pending)
+                with patch.object(sys, 'argv', ['prepare_notes.py', str(root), 'daily-preview']), \
+                     patch.object(prepare, 'render') as render:
+                    prepare.main()
+                render.assert_not_called()
+                self.assertEqual(path.read_text(), pending)
+                prepare.require_prepared(pending, self.relative)
 
     def test_obsolete_sha_metadata_has_no_effect_on_preparation(self):
         for mode in ('auto', 'fixed'):

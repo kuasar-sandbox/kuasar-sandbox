@@ -172,7 +172,7 @@ Daily 清单中指定的 Tag 也参加提交位置比较:
 kernel 继续使用已有 Makefile 相关输入投影。相关输入变化后，Stable winner 的 Patch 自增一次形成
 `vX.Y.(Z+1)-preview.YYYYMMDD`；Preview winner 保持 core，仅改变日期/显式修订号。
 
-在 `main` 上，经评审的 `components.<unit>` 选择可以显式开启除 vmlinux 外各单元的新 major/minor 版本线：当配置为尚未发布的 Preview，且其 `MAJOR.MINOR` 高于可用 winner 时，即使产品输入未变，Daily 也从所选源码 HEAD 发布配置的 core 版本，日期与修订号使用本次扫描值。比较基线仍保留真实已发布的 winner。同版本线或更旧的选择、Stable 选择、维护分支与 vmlinux 保持原有规则。残缺发布恢复、版本冲突检查、依赖顺序和全部正常发布门禁继续适用，不扩大产品变化输入。
+Daily 清单可独立声明 `component_next_versions`，把非 kernel 单元映射到 Stable core，例如 `accelerator: v0.2.0` 或 `runtime: runtime-v0.2.0`。它是未来 Preview 发布的版本下限，不是已选 Tag：产品及依赖输入未变时仍复用原版，只有正常规则要求新发布时，候选 core 才取普通计算结果与配置下限的较大者，并使用本次扫描的日期及修订号。Daily 写回复用的组件和恢复依赖重建时会保留此映射。维护分支目标必须与该单元派生源码分支的 major/minor 一致；vmlinux 不允许配置目标。残缺发布恢复、冲突检查和全部正常发布门禁不变。后续 Stable 发布仍须在 `release.yaml` 显式选择已更新单元对应的 Stable core，并复用未更新的 Stable 单元；formal coordinator 不读取这些 Daily 目标。
 
 依赖选择比较 consumer 实际链接/内嵌的源码输入。独立 CLI 或文档变化不会无条件重建全部反向依赖。
 runtime 跟踪 accelerator flatten 库及 sandbox-init 输入；其他 Go consumer 跟踪链接库。
