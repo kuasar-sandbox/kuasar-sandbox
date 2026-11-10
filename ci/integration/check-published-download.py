@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Check published bytes with their bundled guide or an explicit reviewed guide."""
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import re
 import subprocess
 import sys
 import tarfile
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
 REPOSITORY = 'kuasar-sandbox/kuasar-sandbox'
@@ -21,6 +23,41 @@ def download_asset(asset, destination, *, env=None):
         'source "$1"; github_download_asset "$2" "$3" "$4"; verify_github_asset "$4" "$5"',
         'published-asset', str(ROOT / 'release/lib.sh'), REPOSITORY,
         str(asset['id']), str(destination), json.dumps(asset)], check=True, env=env)
+
+
+def download_anonymous_asset(asset, destination, *, env):
+    """Read a public asset by its fixed ID without publisher credentials."""
+    if (type(asset.get('id')) is not int or asset['id'] <= 0
+            or type(asset.get('size')) is not int or asset['size'] <= 0
+            or not isinstance(asset.get('digest'), str)
+            or not re.fullmatch(r'sha256:[0-9a-f]{64}', asset['digest'])):
+        raise ValueError('anonymous asset lacks native identity, size or digest')
+    destination = Path(destination)
+    anonymous_env = {key: value for key, value in env.items()
+                     if key not in ('GH_TOKEN', 'GITHUB_TOKEN')}
+    with tempfile.NamedTemporaryFile(prefix=destination.name + '.tmp.',
+                                     dir=destination.parent, delete=False) as stream:
+        temporary = Path(stream.name)
+    try:
+        subprocess.run([
+            'curl', '--disable', '--fail', '--show-error', '--silent', '--location',
+            '--retry', '4', '--retry-all-errors', '--connect-timeout', '10', '--max-time', '900',
+            '-H', 'Accept: application/octet-stream',
+            '-H', 'X-GitHub-Api-Version: 2022-11-28',
+            '--output', str(temporary),
+            f'https://api.github.com/repos/{REPOSITORY}/releases/assets/{asset["id"]}',
+        ], env=anonymous_env, check=True)
+        if temporary.stat().st_size != asset['size']:
+            raise ValueError('anonymous GitHub asset size mismatch: ' + destination.name)
+        hasher = hashlib.sha256()
+        with temporary.open('rb') as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                hasher.update(chunk)
+        if 'sha256:' + hasher.hexdigest() != asset['digest']:
+            raise ValueError('anonymous GitHub asset digest mismatch: ' + destination.name)
+        temporary.replace(destination)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def check_node_infra(release, root, version, arch, env):
@@ -49,7 +86,7 @@ def check_node_infra(release, root, version, arch, env):
     assets.mkdir()
     by_name = {item['name']: item for item in rows}
     deploy_name = selection.node_infra_deploy_archive(version)
-    download_asset(by_name[deploy_name], assets / deploy_name, env=env)
+    download_anonymous_asset(by_name[deploy_name], assets / deploy_name, env=env)
     document = node.read_deploy(assets / deploy_name, version, source, arches=node.ARCHES)
     for image in document['images'].values():
         item = by_name[image['archive']['name']]
@@ -57,7 +94,7 @@ def check_node_infra(release, root, version, arch, env):
                      and item['digest'] == 'sha256:' + image['archive']['sha256'],
                      'published image asset differs from the deployment document')
     image = document['images'][arch]
-    download_asset(by_name[image['archive']['name']], assets / image['archive']['name'], env=env)
+    download_anonymous_asset(by_name[image['archive']['name']], assets / image['archive']['name'], env=env)
     node.install_inputs(assets, root / 'node-infra', version, arch, revision=source)
     anonymous = root / 'node-infra-anonymous.json'
     anonymous.write_text('{"auths":{}}\n')
