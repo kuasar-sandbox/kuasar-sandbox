@@ -555,13 +555,21 @@ def _host_case(fixture, sentinel):
     node = Node(fixture, 0, host=True, transit=False)
     require(not (Path('/run/netns') / node.netns).exists() and not node.peers,
             'default host fixture created an external namespace/device')
-    with socket.socket() as sentinel:
-        sentinel.bind(('127.0.0.1', 3000))
-        sentinel.listen()
+    with socket.socket() as occupied:
+        occupied.bind(('127.0.0.1', 3000))
+        occupied.listen()
         result = command(fixture.ctl, 'check', '--name', node.name, check=False)
-        require(result.returncode != 0 and 'listener' in result.stderr, 'occupied native listener was accepted')
-        with socket.create_connection(sentinel.getsockname(), timeout=2):
-            connection, _ = sentinel.accept()
+        write_json(fixture.output / 'host-occupied-listener.json',
+                   {'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+        require(result.returncode != 0 and 'listener' in result.stderr,
+                f'occupied native listener check: rc={result.returncode}, '
+                f'stdout={result.stdout!r}, stderr={result.stderr!r}')
+        with socket.create_connection(occupied.getsockname(), timeout=2) as client:
+            connection, _ = occupied.accept()
+            # Let the client own TIME_WAIT; the fixture must release the native
+            # service port immediately without changing production bind checks.
+            client.shutdown(socket.SHUT_WR)
+            require(connection.recv(1) == b'', 'listener sentinel did not receive client EOF')
             connection.close()
     command('ip', 'link', 'add', 'sw0_m0', 'type', 'dummy')
     try:
