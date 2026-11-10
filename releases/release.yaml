@@ -13,6 +13,14 @@ notes:
   body: |
     # Kuasar Sandbox release-v0.1.13
 
+    ## Installation erratum
+
+    **The installation guide bundled with v0.1.13 rejects the `node-infra-v1` delivery contract.** Both x86_64 and aarch64 `published-download` checks in the [original release workflow](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/42760404178) failed. The original tag, all 18 published assets and the published image contents remain unchanged.
+
+    To download and verify the existing v0.1.13 assets, set `RELEASE_VERSION` to `release-v0.1.13` and use the corrected installation guide at this fixed revision: [English](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/aa623ff2da9dbb37225d3316e665b00ba015c04a/docs/installation.md) or [简体中文](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/aa623ff2da9dbb37225d3316e665b00ba015c04a/docs/installation_zh.md). Supplementary verification of these existing v0.1.13 assets on x86_64 and aarch64: [download check](https://github.com/kuasar-sandbox/kuasar-sandbox/actions/runs/42784963708).
+
+    After installation, continue with the v0.1.13 package's [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13/docs/quickstart.md), [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13/docs/deployment.md) and [node-infra guide](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13/docs/node-infra.md). The corrected download procedure does not change this release's deployment behavior: v0.1.13 still requires the prepared namespace, `net0` and transit `net1` described below. The host-network defaults and optional-transit behavior in [#379](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/379) belong to the v0.2.0 development line and are not part of v0.1.13.
+
     This Stable release updates the component set from `release-v0.1.12` and introduces the `node-infra-v1` delivery.
 
     Selection and editable release notes: [`releases/release.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13/releases/release.yaml).
