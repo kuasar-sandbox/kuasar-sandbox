@@ -22,7 +22,7 @@ permissions:
 
 jobs:
   published-download:
-    if: github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.event.repository.visibility == 'public'
+    if: github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
     strategy:
       fail-fast: false
       matrix:
