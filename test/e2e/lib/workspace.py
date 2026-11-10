@@ -29,6 +29,7 @@ IMAGE_VARIABLES = {
     "prometheus": "TELEMETRY_PROMETHEUS_IMAGE", "clickhouse": "TELEMETRY_CLICKHOUSE_IMAGE",
     "orchestrator-base": "ORCHESTRATOR_BASE_IMAGE", "orchestrator-execute": "ORCHESTRATOR_EXECUTE_IMAGE",
     "busybox": "KUASAR_BUSYBOX_IMAGE",
+    "node-infra-copy": "NODE_INFRA_COPY_IMAGE",
 }
 BACKENDS = {
     "prometheus": "prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996",
@@ -487,6 +488,15 @@ def prepare_fixtures(root, arch, cases, deps_dir=None, offline=False):
                 subprocess.run(['bash', str(fixture_helper(root, 'orchestrator', 'prepare_base_image.sh')),
                                 images['python']['image_id'], reference, variant], env=environment, check=True)
                 save(label, reference, 'orchestrator')
+        if 'basic.node-infra-docker.sh' in names:
+            require(platform.machine() == arch, 'node-infra COPY preparation requires the selected native architecture')
+            require('node-infra-docker' in images, 'Docker case requires the delivered Docker archive')
+            load_images(root, {'images': {'node-infra-docker': images['node-infra-docker']}}, environment)
+            reference = 'kuasar-e2e-node-infra-copy:' + images['node-infra']['image_id'].split(':')[1][:16]
+            subprocess.run([sys.executable, '-B', str(fixture_helper(root, 'platform', 'prepare_node_infra_copy.py')),
+                            images['node-infra']['image_id'], reference, str(root / 'fixtures/bin')],
+                           env=environment, check=True)
+            save('node-infra-copy', reference, 'platform')
     after = files(root)
     require(all(after.get(name) == value and (root / name).stat().st_mode & 0o7777 == before_modes[name]
                 for name, value in before.items()), 'fixture preparation modified existing inputs')
@@ -520,6 +530,8 @@ def execution_image_labels(cases, arch):
         labels.update(('orchestrator-base', 'orchestrator-execute'))
     if needs_node_infra(names):
         labels.add('node-infra')
+    if 'basic.node-infra-docker.sh' in names:
+        labels.add('node-infra-copy')
     return labels
 
 

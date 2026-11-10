@@ -449,7 +449,11 @@ Preparation validates the matching deployment package and both archives when
 using `node-infra-v2`; execution imports OCI into Podman and Docker archive into
 Docker, requiring identical configuration and ordered rootfs diffIDs.
 `basic.node-infra-docker.sh` exercises direct host/bridge startup, component
-restart, normal/hard stops, snapshots and three-instance isolation. The Podman
+restart, real Files/Build/OTLP, normal/hard stops, snapshots, external MGMT/egress
+TCP/UDP SNAT and failure rollback, cgroupfs, retained transit and three-instance
+isolation. Preparation also creates a COPY-only customer fixture from the
+selected image and prebuilt SDK helpers; execution consumes its sealed archive
+to test copied configuration together with runtime fragments. The Podman
 path uses the delivered tool/template. The guest
 and extension helpers are prebuilt in the normal platform helper package.
 Tests create only their own namespaces/devices/state; a failed cleanup retains

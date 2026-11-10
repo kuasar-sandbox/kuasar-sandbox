@@ -366,7 +366,10 @@ unit/配置、reload、启动并验证。显式回退使用选定旧镜像与匹
 
 `node-infra-v2` 准备阶段验证同版部署包与两种归档，执行阶段分别导入 Podman OCI 和
 Docker archive，要求配置及有序 rootfs diffID 相同。`basic.node-infra-docker.sh` 覆盖
-直接 host/bridge 启动、组件重启、正常/强制停止、快照和三实例隔离。Podman 路径使用
+直接 host/bridge 启动、组件重启、真实 Files/Build/OTLP、正常/强制停止、快照、外部
+MGMT/egress 的 TCP/UDP SNAT 和失败回滚、cgroupfs、保留句柄的 transit 及三实例隔离。
+准备阶段还用所选镜像和预构建 SDK helper 生成仅含 COPY 的客户测试镜像；执行阶段
+消费其固定归档，验证 COPY 配置与运行期片段共同生效。Podman 路径使用
 交付的工具和模板。guest 与扩展 helper 在正常平台 helper 包中预先构建。测试只创建
 自己的网络空间、设备和状态；收尾失败保留输入并报错，不在系统容器旁另起替代服务。
 

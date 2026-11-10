@@ -68,7 +68,8 @@ class DockerNode(Node):
         if self.bridge:
             args += ['--publish=127.0.0.1::3000', '--publish=127.0.0.1::3001']
         for role in ('node-conductor', 'node-proxy', 'node-telemetry', 'connector-vswitch'):
-            args += ['--volume', f'{self.config}/{role}/conf.d:/etc/{role}/conf.d:ro']
+            for fragment in sorted((self.config / role / 'conf.d').glob('*.yaml')):
+                args += ['--mount', f'type=bind,source={fragment},target=/etc/{role}/conf.d/{fragment.name},readonly']
         args += ['--volume', f'{self.config}/manifest.yaml:/etc/node-infra/manifest.yaml:ro',
                  '--volume', f'{self.data}/data:/var/lib/node-infra:rw',
                  '--volume', f'{self.fixture.inputs}:/run/node-infra/fixtures:ro']
@@ -88,7 +89,9 @@ class DockerNode(Node):
             wait_for('expected native startup failure',
                      lambda: self.execute('systemctl', 'is-failed', failure, check=False).returncode == 0)
             require(not self.status()['ready'], 'failed native startup was marked ready')
-            self.execute('systemctl', 'stop', 'node-infra.target')
+            self.execute('systemctl', 'stop', 'node-infra.target', 'node-conductor.service',
+                         'node-proxy.service', 'node-telemetry.service', 'node-infra-consumers.service',
+                         'connector-vswitch.service', 'node-infra-network.service')
             for _ in range(2):
                 self.execute(RUNTIME, 'cleanup', '--internal', '--force')
             require(not self.execute('ip', 'netns', 'list').stdout.strip(), 'partial startup leaked a namespace')
@@ -257,10 +260,13 @@ def cgroupfs_case(fixture):
     command('ip', 'link', 'add', bridge, 'type', 'bridge')
     bridge_index = json.loads(command('ip', '-j', 'link', 'show', bridge).stdout)[0]['ifindex']
     bridge_address = str(ipaddress.IPv4Address(fixture.subnet + 13)) + '/30'
+    command('ip', 'address', 'add', bridge_address, 'dev', bridge)
+    command('ip', 'link', 'set', bridge, 'up')
     log = (fixture.output / 'cgroupfs-daemon.log').open('w')
     daemon = subprocess.Popen(['dockerd', '--config-file=' + str(config), '--host=' + endpoint, '--data-root=' + str(data),
         '--exec-root=' + str(runtime / 'exec'), '--pidfile=' + str(runtime / 'pid'),
-        '--exec-opt=native.cgroupdriver=cgroupfs', '--bridge=' + bridge, '--bip=' + bridge_address, '--iptables=false',
+        '--containerd-namespace=' + fixture.key, '--containerd-plugins-namespace=' + fixture.key + '-plugins',
+        '--exec-opt=native.cgroupdriver=cgroupfs', '--bridge=' + bridge, '--iptables=false', '--ip6tables=false',
         '--ip-forward=false', '--ip-masq=false'], stdout=log, stderr=subprocess.STDOUT)
     node = None
     try:
@@ -273,7 +279,7 @@ def cgroupfs_case(fixture):
         producer = subprocess.Popen(['docker', 'image', 'save', fixture.image],
                                     env=original, stdout=subprocess.PIPE)
         try:
-            subprocess.run(['docker', 'image', 'load'], stdin=producer.stdout, check=True)
+            subprocess.run(['docker', 'image', 'load'], stdin=producer.stdout, check=True, timeout=180)
         finally:
             producer.stdout.close()
             require(producer.wait(timeout=120) == 0, 'same-image export to isolated daemon failed')
@@ -306,6 +312,9 @@ def cgroupfs_case(fixture):
             daemon.terminate()
             daemon.wait(timeout=30)
             log.close()
+            if node is None or not node.reserved:
+                if command('mountpoint', '--quiet', data, check=False).returncode == 0:
+                    command('umount', data)
             actual = json.loads(command('ip', '-j', 'link', 'show', bridge).stdout)[0]
             require(actual['ifindex'] == bridge_index, 'task Docker bridge identity changed')
             command('ip', 'link', 'delete', bridge)
@@ -331,6 +340,32 @@ def external_case(fixture):
     finally:
         if clean:
             external.close()
+
+
+def copy_case(fixture):
+    official = fixture.image
+    fixture.image = os.environ['NODE_INFRA_COPY_IMAGE']
+    node = None
+    try:
+        node = DockerNode(fixture, 0, bridge=True, pools=True)
+        node.start()
+        expected = b'node-infra-customer-copy'
+        from node_infra import http
+        require(node.api('GET', '/node-infra-extension') == expected, 'copied xconductor/config was not used')
+        require(http('GET', f'http://{node.ingress}:{node.proxy_port}/node-infra-extension') == expected,
+                'copied xproxy/config was not used')
+        guest = node.create()
+        node.write_marker(guest)
+        node.assert_native_exec(guest)
+        node.assert_files(guest)
+        node.stop()
+        write_json(fixture.output / 'customer-copy.json',
+                   {'official_base': official, 'customer_image': fixture.image,
+                    'copy_config_runtime_fragments_sdk_files': 'passed'})
+    finally:
+        if node:
+            node.remove()
+        fixture.image = official
 
 
 def run():
@@ -394,6 +429,7 @@ def run_cases(fixture):
             require(nodes[i].state(states[i][0])['token'] == states[i][1]['token'], 'Docker instance stop crossed boundaries')
         for node in nodes:
             node.remove()
+        copy_case(fixture)
         external_case(fixture)
         cgroupfs_case(fixture)
         retained = RetainedDockerNode(fixture, 0)
@@ -402,7 +438,7 @@ def run_cases(fixture):
             retained.create()
             retained.stop(hard=hard)
         retained.remove()
-        require(network_snapshot() == before, 'Docker lifecycle changed host network state')
+        wait_for('Docker lifecycle preserved host network', lambda: network_snapshot() == before, timeout=30)
         write_json(fixture.output / 'docker-result.json', {'host': 'passed', 'bridge': 'passed', 'three_instances': 'passed'})
     finally:
         for node in fixture.nodes:

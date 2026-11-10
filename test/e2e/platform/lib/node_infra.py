@@ -639,12 +639,24 @@ def metadata_sentinel(fixture):
         command('ip', 'address', 'add', '169.254.169.254/32', 'dev', name)
         command('ip', 'route', 'add', '169.254.169.0/24', 'dev', name, 'metric', '4096')
         command('nft', 'add', 'table', 'inet', name)
+        wait_for('metadata sentinel address duplicate detection', lambda: all(
+            not address.get('tentative')
+            for link in json.loads(command('ip', '-j', 'address', 'show', name).stdout)
+            for address in link.get('addr_info', [])))
         with socket.socket() as listener:
             listener.bind(('169.254.169.254', 80))
             listener.listen()
             before = network_snapshot()
+            write_json(fixture.output / 'metadata-before.json', before)
             yield
-            require(network_snapshot() == before, 'host metadata resources changed')
+            try:
+                # A bridge's carrier/linkdown flags settle after the engine
+                # removes its last veth. Poll the full preserved state.
+                wait_for('original host network state', lambda: network_snapshot() == before, timeout=30)
+            finally:
+                after = network_snapshot()
+                write_json(fixture.output / 'metadata-after.json', after)
+            require(after == before, 'host metadata resources changed')
             with socket.create_connection(listener.getsockname(), timeout=2):
                 connection, _ = listener.accept()
                 connection.close()
