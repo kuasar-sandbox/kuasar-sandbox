@@ -89,6 +89,7 @@ class Node:
         self.service += '.service'
         self.netns = 'node-infra-' + self.name
         self.host, self.with_transit = host, transit
+        self.mmds_vip = fixture.host_mmds_vip if host else '169.254.169.254'
         self.network = ['ip'] if host else ['ip', '-n', self.netns]
         self.transit_name = self.name + 't' if host else 'uplink0'
         self.gateway = self.netns + '-gw' if gateway else None
@@ -211,6 +212,11 @@ class Node:
                 (dropin / '20-platform.conf').write_text('[Service]\nEnvironmentFile=/etc/node-infra/extensions/service.env\n')
         write_json(self.config / 'node-conductor/conf.d/90-instance.yaml', conductor)
         connector = {'num_ports': 8}
+        if self.mmds_vip != '169.254.169.254':
+            # Cloud runners can own the default metadata route. Use a native
+            # service VIP from this fixture's reserved range; preserve theirs.
+            connector.update(mgmt_extracts=[f':sw0_m0:{self.mmds_vip}/32'],
+                             mgmt_services=[f'{self.mmds_vip}:80:127.0.0.1:19254'])
         if self.with_transit:
             connector.update(transit_dev=self.transit_name, transit_dev_addr=self.transit + '/30:' + self.transit_host,
                              transit_dev_mtu='auto')
@@ -476,6 +482,9 @@ class Fixture:
             offset = int(uuid.uuid4().hex[:4], 16) % 8192 * 16
             candidate = ipaddress.ip_network((int(ipaddress.IPv4Address('198.18.0.0')) + offset, 28))
             if not any(candidate.overlaps(network) for network in occupied):
+                default_vip = ipaddress.ip_address('169.254.169.254')
+                self.host_mmds_vip = (str(candidate.broadcast_address) if
+                                     any(default_vip in network for network in occupied) else str(default_vip))
                 return int(candidate.network_address)
         raise RuntimeError('no private test subnet available')
 
@@ -560,6 +569,18 @@ def _host_case(fixture, sentinel):
     node = Node(fixture, 0, host=True, transit=False)
     require(not (Path('/run/netns') / node.netns).exists() and not node.peers,
             'default host fixture created an external namespace/device')
+    if node.mmds_vip != '169.254.169.254':
+        overlay = node.config / 'connector-vswitch/conf.d/90-instance.yaml'
+        saved = overlay.read_bytes()
+        try:
+            write_json(overlay, {'num_ports': 8})
+            result = command(fixture.ctl, 'check', '--name', node.name, check=False)
+            write_json(fixture.output / 'host-existing-metadata-route.json',
+                       {'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+            require(result.returncode != 0 and 'existing route' in result.stderr,
+                    'default metadata VIP did not reject the existing host route: ' + result.stderr)
+        finally:
+            overlay.write_bytes(saved)
     with socket.socket() as occupied:
         occupied.bind(('127.0.0.1', 3000))
         occupied.listen()
@@ -599,11 +620,11 @@ def _host_case(fixture, sentinel):
             Path(f'/proc/{inspected["State"]["Pid"]}/ns/net').stat().st_ino, 'host namespace identity differs')
     write_json(fixture.output / 'host-identity.json', {'image': inspected['Image'], 'network': 'host',
                'primary_inode': applied['primary_inode'], 'container_id': inspected['Id'],
-               'transit': applied['transit'], 'boot_id': applied['boot_id']})
+               'transit': applied['transit'], 'boot_id': applied['boot_id'], 'mmds_vip': node.mmds_vip})
     sandbox = node.create()
     node.write_marker(sandbox)
     node.assert_native_exec(sandbox)
-    metadata = json.loads(node.guest(sandbox, '/mmds'))
+    metadata = json.loads(node.guest(sandbox, '/mmds?' + urllib.parse.urlencode({'ip': node.mmds_vip})))
     require(metadata.get('instanceID') == sandbox['sandboxID'], 'MMDS did not identify the real guest')
     node.assert_outer_limits()
     node.assert_restored(sandbox, memory=True)
