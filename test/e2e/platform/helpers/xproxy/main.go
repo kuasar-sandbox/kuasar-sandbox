@@ -28,6 +28,7 @@ func main() {
 	app := proxy.New(proxy.Hooks{Configure: func(_ context.Context, cfg *proxy.Config) error {
 		// Deliberately differ from the YAML default. Readiness must discover
 		// this effective native endpoint without replaying Configure.
+		cfg.DataListen = "0.0.0.0:3001"
 		cfg.StatsSocket = "/run/sandbox/customer-proxy-stats.sock"
 		return nil
 	}, BindRuntime: func(_ context.Context, process proxy.Process, runtime *proxy.Runtime) error {

@@ -7,6 +7,20 @@ These files extend one delivered kuasar-sandbox node-infra instance. The
 installation, operation and recovery. In an extracted deployment package, use
 the accompanying deployment guide. Component repositories own complete schemas.
 
+## Default host network and optional transit
+
+Start with the delivered `Network=host` template and omit transit fields. Supply
+the native component configuration, external storage and persistent data paths
+as described in the deployment guide; no primary netns or interface renaming is
+needed. Proxy and management traffic work without an ordinary guest egress.
+
+For explicit isolation use `Network=ns:/run/netns/node-a`, with loopback UP and
+an ingress interface of any suitable name. Independently, `transit/90-transit.yaml`
+is an opt-in native overlay: configure its real dedicated DOWN device, address
+and gateway, then mount or COPY it to `/etc/connector-vswitch/conf.d/90-transit.yaml`.
+Do not select an interface carrying host traffic. Both examples keep the same
+deployment tool, recovery mounts and service configuration paths.
+
 ## Multiple resource pools
 
 Mount `multi-pool/50-platform.yaml` at

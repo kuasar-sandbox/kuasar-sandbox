@@ -15,6 +15,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import socket
 import shutil
 import subprocess
 import sys
@@ -81,13 +82,17 @@ def http(method, url, *, headers=None, body=None, expected=200):
 
 
 class Node:
-    def __init__(self, fixture, index, *, extension=False, pools=False, transit=False):
+    def __init__(self, fixture, index, *, extension=False, pools=False, host=False, transit=True, gateway=False):
         self.fixture, self.index = fixture, index
         self.name = fixture.key + str(index)
         self.container = self.service = 'node-infra-' + self.name
         self.service += '.service'
         self.netns = 'node-infra-' + self.name
-        self.gateway = self.netns + '-gw' if transit else None
+        self.host, self.with_transit = host, transit
+        self.mmds_vip = fixture.host_mmds_vip if host else '169.254.169.254'
+        self.network = ['ip'] if host else ['ip', '-n', self.netns]
+        self.transit_name = self.name + 't' if host else 'uplink0'
+        self.gateway = self.netns + '-gw' if gateway else None
         self.gateway_process = self.gateway_log = None
         self.config = Path('/etc/node-infra/instances') / self.name
         self.data = Path('/var/lib/node-infra/instances') / self.name
@@ -115,12 +120,15 @@ class Node:
         return command('podman', 'exec', self.container, *args, check=check, timeout=timeout)
 
     def _network(self):
-        command('ip', 'netns', 'add', self.netns)
-        command('ip', '-n', self.netns, 'link', 'set', 'lo', 'up')
+        if self.host:
+            self.ingress = '127.0.0.1'
+        else:
+            command('ip', 'netns', 'add', self.netns)
+            command(*self.network, 'link', 'set', 'lo', 'up')
         if self.gateway:
             command('ip', 'netns', 'add', self.gateway)
             command('ip', '-n', self.gateway, 'link', 'set', 'lo', 'up')
-        for plane in (0, 1):
+        for plane in ([0] if not self.host else []) + ([1] if self.with_transit else []):
             peer = f'{self.name}{plane}h'
             inside = f'{self.name}{plane}p'
             require(len(peer) <= 15, 'test interface name exceeds IFNAMSIZ')
@@ -129,24 +137,25 @@ class Node:
             host, guest = str(ipaddress.IPv4Address(block + 1)), str(ipaddress.IPv4Address(block + 2))
             command('ip', 'link', 'add', peer, 'type', 'veth', 'peer', 'name', inside)
             self.peers.append(peer)
-            command('ip', 'link', 'set', inside, 'netns', self.netns)
-            command('ip', '-n', self.netns, 'link', 'set', inside, 'name', f'net{plane}')
+            if not self.host:
+                command('ip', 'link', 'set', inside, 'netns', self.netns)
+            command(*self.network, 'link', 'set', inside, 'name', 'ingress0' if plane == 0 else self.transit_name)
             peer_ip = ['ip']
             if plane == 1 and self.gateway:
                 command('ip', 'link', 'set', peer, 'netns', self.gateway)
                 peer_ip += ['-n', self.gateway]
                 command(*peer_ip, 'link', 'set', peer, 'mtu', '1600')
-                command('ip', '-n', self.netns, 'link', 'set', 'net1', 'mtu', '1600')
+                command(*self.network, 'link', 'set', self.transit_name, 'mtu', '1600')
             command(*peer_ip, 'addr', 'add', host + '/30', 'dev', peer)
             command(*peer_ip, 'link', 'set', peer, 'up')
             if plane == 0:
                 self.ingress = guest
-                command('ip', '-n', self.netns, 'addr', 'add', guest + '/30', 'dev', 'net0')
-                command('ip', '-n', self.netns, 'link', 'set', 'net0', 'up')
-                command('ip', '-n', self.netns, 'route', 'add', 'default', 'via', host, 'dev', 'net0')
+                command(*self.network, 'addr', 'add', guest + '/30', 'dev', 'ingress0')
+                command(*self.network, 'link', 'set', 'ingress0', 'up')
+                command(*self.network, 'route', 'add', 'default', 'via', host, 'dev', 'ingress0')
             else:
                 self.transit, self.transit_host = guest, host
-                self.original_transit = json.loads(command('ip', '-n', self.netns, '-j', 'link', 'show', 'net1').stdout)[0]['address']
+                self.original_transit = json.loads(command(*self.network, '-j', 'link', 'show', self.transit_name).stdout)[0]['address']
 
     def _configuration(self):
         for component in ('node-conductor', 'node-proxy', 'node-telemetry', 'connector-vswitch'):
@@ -190,7 +199,9 @@ class Node:
                 target.chmod(0o755)
             conductor['paths'] = {'conductor_executable': '/opt/node-infra/extensions/xconductor'}
             write_json(self.config / 'node-proxy/conf.d/50-platform.yaml',
-                       {'paths': {'proxy_executable': '/opt/node-infra/extensions/xproxy'}})
+                       {'paths': {'proxy_executable': '/opt/node-infra/extensions/xproxy'},
+                        # Configure moves this off Conductor's occupied port.
+                        'data_listen': '0.0.0.0:3000'})
             private = self.config / 'extensions/r42'
             private.mkdir(parents=True)
             (private / 'marker').write_text(self.name + '-private-r42\n')
@@ -200,8 +211,16 @@ class Node:
                 dropin.mkdir()
                 (dropin / '20-platform.conf').write_text('[Service]\nEnvironmentFile=/etc/node-infra/extensions/service.env\n')
         write_json(self.config / 'node-conductor/conf.d/90-instance.yaml', conductor)
-        write_json(self.config / 'connector-vswitch/conf.d/90-instance.yaml',
-                   {'num_ports': 8, 'transit_dev_addr': self.transit + '/30:' + self.transit_host})
+        connector = {'num_ports': 8}
+        if self.mmds_vip != '169.254.169.254':
+            # Cloud runners can own the default metadata route. Use a native
+            # service VIP from this fixture's reserved range; preserve theirs.
+            connector.update(mgmt_extracts=[f':sw0_m0:{self.mmds_vip}/32'],
+                             mgmt_services=[f'{self.mmds_vip}:80:127.0.0.1:19254'])
+        if self.with_transit:
+            connector.update(transit_dev=self.transit_name, transit_dev_addr=self.transit + '/30:' + self.transit_host,
+                             transit_dev_mtu='auto')
+        write_json(self.config / 'connector-vswitch/conf.d/90-instance.yaml', connector)
         if self.gateway:
             write_json(self.config / 'connector-vswitch/conf.d/95-transit-test.yaml',
                        {'geneve_encap_eth': True, 'geneve_locator': 'port', 'geneve_port_base': 50000})
@@ -210,10 +229,12 @@ class Node:
 
     def _install(self):
         template = (self.fixture.deploy / 'templates/node-infra.container').read_text()
-        values = {'NAME': self.name, 'IMAGE': self.fixture.image, 'NETNS': '/run/netns/' + self.netns,
+        values = {'NAME': self.name, 'IMAGE': self.fixture.image,
                   'CONFIG_ROOT': str(self.config), 'DATA_ROOT': str(self.data / 'data'), 'RUN_ROOT': str(self.run)}
         for key, value in values.items():
             template = template.replace('@' + key + '@', value)
+        if not self.host:
+            template = template.replace('Network=host', 'Network=ns:/run/netns/' + self.netns)
         require(not re.search(r'@[A-Z_]+@', template), 'unresolved delivered Quadlet token')
         mounts = [f'{self.fixture.inputs}:/run/node-infra/fixtures:ro']
         if self.pools:
@@ -357,9 +378,13 @@ class Node:
                     'E-only restore did not cold-start the guest')
 
     def assert_returned(self):
-        link = json.loads(command('ip', '-n', self.netns, '-j', 'link', 'show', 'net1').stdout)[0]
-        require(link['address'] == self.original_transit, 'original transit did not return to the main namespace')
-        require('UP' not in link['flags'], 'returned transit must be DOWN for the next native start')
+        if self.with_transit:
+            link = json.loads(command(*self.network, '-j', 'link', 'show', self.transit_name).stdout)[0]
+            require(link['address'] == self.original_transit, 'original transit did not return to the main namespace')
+            require('UP' not in link['flags'], 'returned transit must be DOWN for the next native start')
+        else:
+            applied = json.loads((self.data / 'applied.json').read_text()) if (self.data / 'applied.json').exists() else {}
+            require(applied.get('transit') is None, 'no-transit instance recorded a fictitious device')
         status = self.status()
         require(not status['container']['running'] and not status['recovery']['pending'], 'old instance still runs or needs recovery')
 
@@ -373,6 +398,9 @@ class Node:
 
     def _stopped(self):
         status = self.status()
+        if 'error' in status:
+            write_json(self.fixture.output / self.name / f'status-error-{time.time_ns()}.json', status)
+            raise RuntimeError('status during recovery: ' + json.dumps(status))
         stopped = (not status['container']['running'] and not status['recovery']['pending'] and
                    status['service']['active'] in ('inactive', 'failed'))
         if not stopped:
@@ -382,12 +410,14 @@ class Node:
         return True
 
     def diagnostics(self):
+        if not self.reserved:
+            return
         output = self.fixture.output / self.name
         output.mkdir(parents=True, exist_ok=True)
         for name, args in {
             'outer-journal.log': ['journalctl', '-u', self.service, '--no-pager', '-n', '800'],
             'inner-journal.log': ['podman', 'exec', self.container, 'journalctl', '--no-pager', '-n', '1200'],
-            'main-network.json': ['ip', '-n', self.netns, '-j', 'link', 'show'],
+            'main-network.json': [*self.network, '-j', 'link', 'show'],
         }.items():
             result = command(*args, check=False, timeout=30)
             (output / name).write_text(result.stdout + result.stderr)
@@ -452,6 +482,9 @@ class Fixture:
             offset = int(uuid.uuid4().hex[:4], 16) % 8192 * 16
             candidate = ipaddress.ip_network((int(ipaddress.IPv4Address('198.18.0.0')) + offset, 28))
             if not any(candidate.overlaps(network) for network in occupied):
+                default_vip = ipaddress.ip_address('169.254.169.254')
+                self.host_mmds_vip = (str(candidate.broadcast_address) if
+                                     any(default_vip in network for network in occupied) else str(default_vip))
                 return int(candidate.network_address)
         raise RuntimeError('no private test subnet available')
 
@@ -503,8 +536,145 @@ class Fixture:
         require(not errors, '; '.join(errors))
 
 
+def network_snapshot():
+    links = json.loads(command('ip', '-j', 'address', 'show').stdout)
+    result = {'links': [{key: row.get(key) for key in ('ifindex', 'ifname', 'address', 'mtu', 'flags', 'link_index')}
+                        | {'addresses': [{key: address.get(key) for key in ('family', 'local', 'prefixlen', 'scope', 'label')}
+                                         for address in row.get('addr_info', [])]} for row in links],
+              'routes': json.loads(command('ip', '-j', '-4', 'route', 'show', 'table', 'all').stdout),
+              'routes6': json.loads(command('ip', '-j', '-6', 'route', 'show', 'table', 'all').stdout),
+              'listeners': sorted(command('ss', '-H', '-lntu').stdout.splitlines()),
+              'bpf_pins': {str(path): path.stat().st_ino for path in Path('/sys/fs/bpf').rglob('*')}}
+    for tool, arguments in (('iptables', ['-S']), ('ip6tables', ['-S']), ('nft', ['-s', 'list', 'ruleset'])):
+        if shutil.which(tool):
+            result[tool] = command(tool, *arguments).stdout
+    return result
+
+
+def host_case(fixture):
+    with socket.socket() as sentinel:
+        sentinel.bind(('127.0.0.1', 0))
+        sentinel.listen()
+        _host_case(fixture, sentinel)
+        with socket.create_connection(sentinel.getsockname(), timeout=2):
+            connection, _ = sentinel.accept()
+            connection.close()
+
+
+def _host_case(fixture, sentinel):
+    # The Workbench is the tested host context. No primary netns or ingress
+    # device is created: the delivered Quadlet must actually remain host mode.
+    before = network_snapshot()
+    write_json(fixture.output / 'host-before.json', before)
+    node = Node(fixture, 0, host=True, transit=False)
+    require(not (Path('/run/netns') / node.netns).exists() and not node.peers,
+            'default host fixture created an external namespace/device')
+    if node.mmds_vip != '169.254.169.254':
+        overlay = node.config / 'connector-vswitch/conf.d/90-instance.yaml'
+        saved = overlay.read_bytes()
+        try:
+            write_json(overlay, {'num_ports': 8})
+            result = command(fixture.ctl, 'check', '--name', node.name, check=False)
+            write_json(fixture.output / 'host-existing-metadata-route.json',
+                       {'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+            require(result.returncode != 0 and 'existing route' in result.stderr,
+                    'default metadata VIP did not reject the existing host route: ' + result.stderr)
+        finally:
+            overlay.write_bytes(saved)
+    with socket.socket() as occupied:
+        occupied.bind(('127.0.0.1', 3000))
+        occupied.listen()
+        result = command(fixture.ctl, 'check', '--name', node.name, check=False)
+        write_json(fixture.output / 'host-occupied-listener.json',
+                   {'returncode': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr})
+        require(result.returncode != 0 and 'listener' in result.stderr,
+                f'occupied native listener check: rc={result.returncode}, '
+                f'stdout={result.stdout!r}, stderr={result.stderr!r}')
+        with socket.create_connection(occupied.getsockname(), timeout=2) as client:
+            connection, _ = occupied.accept()
+            # Let the client own TIME_WAIT; the fixture must release the native
+            # service port immediately without changing production bind checks.
+            client.shutdown(socket.SHUT_WR)
+            require(connection.recv(1) == b'', 'listener sentinel did not receive client EOF')
+            connection.close()
+    command('ip', 'link', 'add', 'sw0_m0', 'type', 'dummy')
+    try:
+        identity = json.loads(command('ip', '-j', 'link', 'show', 'sw0_m0').stdout)[0]
+        result = command(fixture.ctl, 'check', '--name', node.name, check=False)
+        require(result.returncode != 0 and 'management interface' in result.stderr, 'foreign management link accepted')
+        require(json.loads(command('ip', '-j', 'link', 'show', 'sw0_m0').stdout)[0] == identity,
+                'preflight changed the foreign management link')
+    finally:
+        command('ip', 'link', 'delete', 'sw0_m0')
+    command('ip', 'route', 'add', 'blackhole', '100.100.96.0/20', 'proto', '186')
+    try:
+        result = command(fixture.ctl, 'check', '--name', node.name, check=False)
+        require(result.returncode != 0 and 'existing route' in result.stderr, 'conflicting management route accepted')
+    finally:
+        command('ip', 'route', 'delete', 'blackhole', '100.100.96.0/20', 'proto', '186')
+    node.start()
+    inspected = json.loads(command('podman', 'inspect', node.container).stdout)[0]
+    applied = json.loads((node.data / 'applied.json').read_text())
+    require(inspected['HostConfig']['NetworkMode'] == 'host', 'host case silently used namespace join')
+    require(Path('/proc/self/ns/net').stat().st_ino == applied['primary_inode'] ==
+            Path(f'/proc/{inspected["State"]["Pid"]}/ns/net').stat().st_ino, 'host namespace identity differs')
+    write_json(fixture.output / 'host-identity.json', {'image': inspected['Image'], 'network': 'host',
+               'primary_inode': applied['primary_inode'], 'container_id': inspected['Id'],
+               'transit': applied['transit'], 'boot_id': applied['boot_id'], 'mmds_vip': node.mmds_vip})
+    sandbox = node.create()
+    node.write_marker(sandbox)
+    node.assert_native_exec(sandbox)
+    metadata = json.loads(node.guest(sandbox, '/mmds?' + urllib.parse.urlencode({'ip': node.mmds_vip})))
+    require(metadata.get('instanceID') == sandbox['sandboxID'], 'MMDS did not identify the real guest')
+    node.assert_outer_limits()
+    node.assert_restored(sandbox, memory=True)
+    node.assert_restored(sandbox, memory=False)
+    node.stop()
+    node.start()
+    node.create()
+    node.stop(hard=True)
+    node.start()
+    node.create()
+    overlay = node.config / 'connector-vswitch/conf.d/90-instance.yaml'
+    saved = overlay.read_bytes()
+    write_json(overlay, {'switch_name': 'replacement', 'switch_netns': 'replacement-switch', 'transit_dev': 'missing'})
+    saved_unit = node.unit.read_bytes()
+    node.unit.write_text(re.sub(r'^Image=.*$', 'Image=sha256:' + '0' * 64,
+                               saved_unit.decode(), flags=re.MULTILINE))
+    inspected = json.loads(command('podman', 'inspect', node.container).stdout)[0]
+    os.kill(inspected['State']['ConmonPid'], signal.SIGKILL)
+    wait_for('host conmon recovery with old no-transit inputs', node._stopped, timeout=STOP_TIMEOUT)
+    node.assert_returned()
+    overlay.write_bytes(saved)
+    node.unit.write_bytes(saved_unit)
+    marker, dropin = interrupt_hook_after_syscall(node, 'mount')
+    command('systemctl', 'start', node.service, check=False)
+    require(not marker.exists(), 'host partial preparation did not reach mount syscall')
+    wait_for('host partial preparation recovery', node._stopped)
+    dropin.unlink()
+    command('systemctl', 'daemon-reload')
+    interrupt_native_helpers(node)
+    node.remove()
+    # Orthogonal combinations use the same delivered lifecycle and real guest.
+    for index, host, transit in ((0, False, False), (0, True, True)):
+        extra = Node(fixture, index, host=host, transit=transit)
+        extra.start()
+        guest = extra.create()
+        extra.write_marker(guest)
+        extra.assert_native_exec(guest)
+        extra.stop()
+        extra.remove()
+    after = network_snapshot()
+    write_json(fixture.output / 'host-after.json', after)
+    require(before == after, 'host lifecycle changed pre-existing host network resources')
+    write_json(fixture.output / 'host-result.json', {'host_no_transit': 'passed', 'ns_no_transit': 'passed',
+               'host_transit': 'passed', 'preserved_host_network': before == after,
+               'exec_proxy_mmds_memory_and_disk_restore': 'passed', 'pid1_conmon_partial_prepare_and_helpers': 'passed'})
+
+
 def deploy_case(fixture):
-    node = Node(fixture, 0, transit=True)
+    host_case(fixture)
+    node = Node(fixture, 0, gateway=True)
     node.start()
     sandbox = node.create()
     node.write_marker(sandbox)
@@ -629,9 +799,9 @@ def lifecycle_case(fixture):
     # A conflicting input must preserve the original device and all recovery
     # handles. After consumers end, remove BPF metadata to exercise the journal
     # fallback instead of relying on a successful native Stop's metadata.
-    network = ['ip', '-n', first.netns]
-    command(*network, 'link', 'add', 'net1', 'type', 'dummy')
-    conflict = json.loads(command(*network, '-j', 'link', 'show', 'net1').stdout)[0]['address']
+    network = first.network
+    command(*network, 'link', 'add', first.transit_name, 'type', 'dummy')
+    conflict = json.loads(command(*network, '-j', 'link', 'show', first.transit_name).stdout)[0]['address']
     require(conflict != first.original_transit, 'failure fixture reused original transit identity')
     command('systemctl', 'stop', first.service, check=False, timeout=180)
     wait_for('failed cleanup retained inputs', lambda: first.status()['recovery']['pending'])
@@ -642,9 +812,9 @@ def lifecycle_case(fixture):
             'unfinished recovery allowed a new generation')
     require(second.state(guest_b)['token'] == before['token'], 'cleanup failure disrupted the second instance')
     shutil.rmtree(first.run / 'bpf/sw0', ignore_errors=False)
-    current = json.loads(command(*network, '-j', 'link', 'show', 'net1').stdout)[0]['address']
+    current = json.loads(command(*network, '-j', 'link', 'show', first.transit_name).stdout)[0]['address']
     require(current == conflict, 'conflicting fixture device was replaced')
-    command(*network, 'link', 'delete', 'net1')
+    command(*network, 'link', 'delete', first.transit_name)
     command(fixture.ctl, 'recover', '--name', first.name)
     first.assert_returned()
     marker, dropin = interrupt_hook_after_syscall(first, 'mount')
@@ -670,9 +840,9 @@ def lifecycle_case(fixture):
     second.stop()
 
 
-def interrupt_native_helpers(node):
+def interrupt_native_helpers(node, operations=(('prepare', 'hook'), ('prepare', 'cli'), ('cleanup', 'hook'))):
     evidence = []
-    for operation, victim in (('prepare', 'hook'), ('prepare', 'cli'), ('cleanup', 'hook')):
+    for operation, victim in operations:
         if operation == 'cleanup':
             node.start()
             sandbox = node.create()
@@ -681,10 +851,22 @@ def interrupt_native_helpers(node):
             # Leave a genuine failed cleanup for an operator's manual retry.
             # The retry runs outside the unit cgroup: systemd cannot reap its
             # orphan helper for us when we subsequently kill the host CLI.
-            command('ip', '-n', node.netns, 'link', 'add', 'net1', 'type', 'dummy')
+            if node.with_transit:
+                command(*node.network, 'link', 'add', node.transit_name, 'type', 'dummy')
+            else:
+                # Fail this instance's outer stop hook before recovery. The
+                # stopped container and applied handles must survive for the
+                # manual helper test, without inventing a transit device.
+                deferred = node.dropin / '99-test-defer-recovery.conf'
+                deferred.write_text('[Service]\nExecStopPost=\nExecStopPost=/usr/bin/false\n')
+                command('systemctl', 'daemon-reload')
             command('systemctl', 'stop', node.service, check=False, timeout=180)
             wait_for('retained cleanup for manual retry', lambda: node.status()['recovery']['pending'])
-            command('ip', '-n', node.netns, 'link', 'delete', 'net1')
+            if node.with_transit:
+                command(*node.network, 'link', 'delete', node.transit_name)
+            else:
+                deferred.unlink()
+                command('systemctl', 'daemon-reload')
         recovery = node.data / 'recovery'
         recovery.mkdir(mode=0o700, exist_ok=True)
         with (recovery / '.lock').open('a') as lock:
@@ -756,7 +938,7 @@ def interrupt_native_helpers(node):
         node.write_marker(sandbox)
         node.assert_native_exec(sandbox)
         node.stop()
-    write_json(node.fixture.output / 'helper-interruptions.json', evidence)
+    write_json(node.fixture.output / (node.name + '-helper-interruptions.json'), evidence)
 
 
 def main():

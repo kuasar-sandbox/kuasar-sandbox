@@ -40,31 +40,30 @@ sudo podman pull ghcr.io/kuasar-sandbox/node-infra@sha256:PLATFORM_MANIFEST_DIGE
 及其执行 units；Telemetry 使用原生 systemd 启用方式。Cache/Store 端点由节点级
 存储访问层提供，部署工具不启动这些外部服务。
 
-## 准备单个实例的宿主资源
+## 准备默认宿主网络部署
 
-准备一个独立网络空间，例如 `/run/netns/node-infra-node-a`：
+一个宿主部署一个实例、无需专用 transit 出口时，保留模板的 `Network=host`。
+无需预建主网络空间、准备特定名称的入口接口或 transit 设备。Conductor 和 Proxy
+按原生配置的地址/端口监听，使用宿主现有网络。保持 loopback UP，并提供可用路由、
+DNS、KVM/TUN、cgroup 委托及实例私有持久目录。
 
-| 输入 | 启动前状态 | 用途 |
-|---|---|---|
-| `lo` | UP | 本地通信。 |
-| `net0` | 存在、UP，已配置入口地址和路由 | Conductor 和 Proxy 入口。 |
-| `net1` | 存在、DOWN | Connector 接管并移入内部 switch 网络空间，承载 transit。 |
-| 设备与挂载 | 所选运行器可访问 | KVM/TUN、cgroup 委托及组件创建的网络资源。 |
-| 持久目录 | 本实例独立使用 | 节点数据库、可写磁盘与 checkpoint。 |
+工具将本地运行器实际使用的网络空间固定在实例私有运行目录中，不假定
+`/proc/1/ns/net` 就是该上下文。预检查核对 Podman 选中的网络空间，启动与状态检查
+核对主容器和保留句柄的身份。工具与 rootful Podman 必须在同一本地宿主上下文执行。
 
-宿主可以将已经分配的接口移入网络空间，并按默认约定改名。交付接口使用名称和网络
-空间路径，不依赖设备是 VF、veth 还是其他受支持类型。transit 地址和网关通过原生
-Connector 配置设置。宿主负责入口地址与路由，并在宿主重启后先恢复主网络空间，
-再启动实例。
+内部 switch 网络空间、TAP、管理 veth 与 bpffs 仍自动维护。对于目标为 loopback
+的管理服务，runtime 将配置的 IPv4 VIP 分配到已验证归属的管理 peer，并在该设备
+启用 `route_localnet`。原生 Connector 添加浮动 IP 回程路由，不替换宿主默认路由。
+预检查拒绝已存在的管理接口名称、重叠管理地址/路由及已占用的原生 TCP 监听。
+需要时选择不冲突的原生配置或隔离的主网络空间。SDK 自定义监听变化及后续竞态由
+原生启动与就绪检查确认。不人为限制全局只能运行一个实例。
 
-对于目标为 loopback 的原生管理服务，runtime 将其配置的 IPv4 VIP 分配到对应
-管理设备，并启用 `route_localnet`。这样 Proxy 使用本地源地址，guest 回复通过
-管理平面返回。外部管理服务的地址仍由其部署方负责。
+提供可达的外部 Cache/Store 端点及文件型制品。UDS 挂载提供方持有的父目录，使
+socket 重建后仍可见。存储端点不会让任意宿主文件自动在容器内可见，host 网络也
+不会自动提供文件访问。
 
-Podman 通过 `Network=ns:...` 加入网络空间。提供可用 DNS 和匹配的
-`/etc/resolv.conf`；加入网络空间不会创建该文件。保证实例可访问外部存储端点和所选
-文件型制品。UDS 挂载提供方持有的父目录，使 socket 重建后仍可见。存储端点不会让
-任意宿主文件自动在容器内可见。
+默认 Connector 配置不启用 transit。Proxy 入口、guest Exec 和 MMDS/管理通信仍可用，
+但不提供 guest 普通互联网出口。此部署不安装 NAT 或 GENEVE 网关。
 
 ## 使用原生路径配置
 
@@ -102,12 +101,6 @@ api:
 sandbox:
   boot:
     overlay_diff_template: /var/lib/node-infra/overlay.ext4
-```
-
-```yaml
-# /etc/connector-vswitch/conf.d/90-instance.yaml
-transit_dev: net1
-transit_dev_addr: "192.0.2.6/30:192.0.2.5"
 ```
 
 Image 冷启动需要在实例持久数据目录中准备新的稀疏 ext4 overlay 模板，并引用其
@@ -169,6 +162,31 @@ Quadlet 从源文件 `[Install]` 段生成开机启动关系。`install` 将宿�
 检查失败/未就绪时返回一。容器运行或 Connector 控制 socket 存在，并不能单独证明
 有可分配的执行槽位或沙箱流量正常。完成真实节点就绪和所需业务验收后再接入负载。
 
+## 可选的网络空间隔离与 transit
+
+两项选择彼此独立，使用同一模板与工具：host 或显式网络空间，均可有/无 transit。
+需要隔离时，只将 `Network=host` 改为 `Network=ns:/run/netns/node-a`。
+在 `check` 前准备该保留的 nsfs 挂载，启用 loopback，并在任意适用名称的接口上
+配置所需入口地址/路由，例如 `ingress0`。路径必须为规范绝对路径且不能含符号链接。
+提供适用 DNS 与 `/etc/resolv.conf`；加入网络空间不会创建它们。宿主重启后，先
+恢复这个外部网络空间，再启动实例。
+
+任一主网络模式需要专用 transit 时，明确提供原生片段（随包示例为
+`examples/transit/90-transit.yaml`）：
+
+```yaml
+# /etc/connector-vswitch/conf.d/90-transit.yaml
+transit_dev: uplink0
+transit_dev_addr: "192.0.2.6/30:192.0.2.5"
+transit_dev_mtu: auto
+```
+
+所选设备必须存在于主网络空间，有稳定 MAC，并在接管前处于 DOWN。不得选择
+仍承载宿主业务的 UP 接口。Connector 将其移入内部 switch 网络空间，清理时将
+同一设备以 DOWN 状态归还。缺省/空 transit 不接管或归还设备，不记录虚假设备身份。
+宿主负责设备分配；本部署包不管理 VF 或部署 transit 网关。客户镜像 COPY 与
+运行期挂载使用同一片段。
+
 ## 停止、恢复与更换实例
 
 完整实例停止会结束其中的运行 VM。平台先停止新放置，并完成所需 Pause/Export。
@@ -179,7 +197,9 @@ Quadlet 从源文件 `[Install]` 段生成开机启动关系。`install` 将宿�
 启动 PID 1 前，一次性原生 helper 在宿主实例目录中创建 netns pins。系统容器以
 `rslave` 传播方式接收这些挂载，容器最终卸载不会移除宿主持有的 pins。
 宿主保留实例专属 netns pins、bpffs 入口、已应用镜像/配置身份和恢复记录。正常停止或硬退出后，
-宿主钩子在旧容器及 Quadlet 删除完成后执行，使用旧镜像/配置收回原 transit 设备。
+宿主钩子在旧容器及 Quadlet 删除完成后执行，使用旧镜像/配置删除内部资源，并在
+配置了 transit 时收回原设备。host 模式同样保留主网络句柄；当前网络/配置变化不能
+改变旧清理目标。已有 schema-1 记录及其固定的旧清理工具仍可使用。
 失败时保留恢复输入并阻止更换。先通过状态和外层日志确认失败步骤，修复指出的输入，
 再重试：
 
@@ -201,8 +221,9 @@ unit/配置、reload、启动并验证。显式回退使用选定旧镜像与匹
 
 对应 platform 包包含：
 
-- `basic.node-infra-deploy.sh`：正式安装、真实 bare guest、入口、原生 exec、transit、
-  cgroup 额度、内存及 E-only 暂停恢复、正常停止。
+- `basic.node-infra-deploy.sh`：默认 host/无 transit 与显式网络空间/transit 部署，
+  真实 guest Exec/Proxy/MMDS、cgroup 额度、内存及 E-only 恢复、host 硬退出/helper
+  中断、资源保护、冲突和另外两种网络/transit 组合。
 - `basic.node-infra-config.sh`：原生分层配置、SDK 扩展和私有服务输入、worker 重建、
   两个实际执行池及部分启动失败收尾。
 - `basic.node-infra-lifecycle.sh`：两个运行实例、PID 1 和 conmon 硬退出/恢复、配置变化、

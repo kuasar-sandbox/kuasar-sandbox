@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -63,6 +64,41 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{"token": token, "count": count, "disk": string(disk), "boot_id": strings.TrimSpace(string(boot))})
+	})
+	http.HandleFunc("/mmds", func(w http.ResponseWriter, r *http.Request) {
+		vip := r.URL.Query().Get("ip")
+		if vip == "" {
+			vip = "169.254.169.254"
+		}
+		if ip := net.ParseIP(vip); ip == nil || ip.To4() == nil {
+			http.Error(w, "invalid MMDS test VIP", 400)
+			return
+		}
+		endpoint := "http://" + vip
+		client := &http.Client{Timeout: 5 * time.Second}
+		request, _ := http.NewRequest(http.MethodPut, endpoint+"/latest/api/token", nil)
+		request.Header.Set("X-metadata-token-ttl-seconds", "60")
+		response, err := client.Do(request)
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		token, err := io.ReadAll(io.LimitReader(response.Body, 4096))
+		response.Body.Close()
+		if err != nil || response.StatusCode != 200 {
+			http.Error(w, "MMDS token failed", 502)
+			return
+		}
+		request, _ = http.NewRequest(http.MethodGet, endpoint+"/", nil)
+		request.Header.Set("X-metadata-token", string(token))
+		response, err = client.Do(request)
+		if err != nil {
+			http.Error(w, err.Error(), 502)
+			return
+		}
+		defer response.Body.Close()
+		w.WriteHeader(response.StatusCode)
+		_, _ = io.Copy(w, io.LimitReader(response.Body, 4096))
 	})
 	http.HandleFunc("/egress", func(w http.ResponseWriter, r *http.Request) {
 		client := &http.Client{Timeout: 5 * time.Second}

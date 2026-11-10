@@ -141,8 +141,11 @@ def bindings(text, name):
     require(one(values, 'Container', 'Pull') == 'never', 'Pull=never is required')
     require(one(values, 'Container', 'ContainerName') == 'node-infra-' + name, 'ContainerName differs from instance')
     network = one(values, 'Container', 'Network', '')
-    require(network.startswith('ns:'), 'Network must join a host-provided namespace')
-    netns = safe_path(network[3:])
+    require(len(values.get(('Container', 'Network'), [])) == 1 and
+            (network == 'host' or network.startswith('ns:')), 'Network must be host or ns:/absolute/path')
+    # Podman host networking inherits the local runner's namespace, which need
+    # not be /proc/1/ns/net (for example inside a Workbench host context).
+    netns = Path('/proc/self/ns/net') if network == 'host' else safe_path(network[3:])
     args = ' '.join(values.get(('Container', 'PodmanArgs'), []))
     require(args == '--privileged --cgroupns=private --systemd=always --stop-timeout=90',
             'retain the delivered PodmanArgs lifecycle settings')
@@ -171,7 +174,7 @@ def bindings(text, name):
             require(target == protected or not (Path(target) in Path(protected).parents or
                     Path(protected) in Path(target).parents), 'volume overlaps recovery mount: ' + target)
     require('/var/lib/node-infra' in mounts, 'missing persistent data volume')
-    return {'image': image, 'netns': str(netns), 'volumes': [':'.join((src, dst, opt))
+    return {'image': image, 'network': network, 'netns': str(netns), 'volumes': [':'.join((src, dst, opt))
             for dst, (src, opt) in mounts.items()], 'values': values}
 
 
@@ -432,8 +435,10 @@ class Instance:
             require(not self.connector.exists(), 'unowned Connector recovery record exists')
         pinned = pin_release(package, release)
         owner = old['owner'] if old else uuid.uuid4().hex
-        # Keep the user source; generate the runtime join from the retained handle.
-        rendered = text + f'\n[Container]\nImage={image}\nNetwork=\nNetwork=ns:{self.run}/primary\nLabel={LABEL}={owner}\n'
+        # Keep real host mode. Explicit ns deployments join the retained handle
+        # so replacing the external path cannot redirect the main container.
+        network = 'host' if selected['network'] == 'host' else 'ns:' + str(self.run / 'primary')
+        rendered = text + f'\n[Container]\nImage={image}\nNetwork=\nNetwork={network}\nLabel={LABEL}={owner}\n'
         tool = pinned / 'bin/node-infra-ctl'
         hooks = (f'[Service]\nExecStartPre={tool} prepare --name {self.name}\n'
                  f'ExecStartPost={tool} started --name {self.name}\n'
@@ -462,10 +467,11 @@ class Instance:
         release = json_file(Path(installed['tool']).parents[1] / 'release.json')
         require(image_identity(selected['image'], release) == installed['image'], 'installed image changed')
         netns = Path(selected['netns'])
-        require(netns.exists() and mount_at(netns).get('type') == 'nsfs', 'primary namespace must be a retained nsfs mount')
+        if selected['network'] != 'host':
+            require(netns.exists() and mount_at(netns).get('type') == 'nsfs', 'primary namespace must be a retained nsfs mount')
+        selected['primary_inode'] = netns.stat().st_ino
         links = json.loads(run('nsenter', '--net=' + str(netns), 'ip', '-j', 'link', 'show').stdout)
         require(any(x['ifname'] == 'lo' and 'UP' in x['flags'] for x in links), 'primary loopback is not UP')
-        require(any(x['ifname'] == 'net0' and 'UP' in x['flags'] for x in links), 'ingress net0 is missing/down')
         volumes = []
         for value in selected['volumes']:
             src, dst, options = value.split(':')
@@ -479,13 +485,15 @@ class Instance:
         base = ['podman', 'run', '--rm', '--pull=never', '--network=none',
                 '--entrypoint=/usr/libexec/node-infra/service', *volumes, installed['image']]
         run(*base, 'validate')
-        descriptor = json.loads(run('podman', 'run', '--rm', '--pull=never', '--network=none',
-                                    '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'describe').stdout)
+        descriptor = json.loads(run('podman', 'run', '--rm', '--pull=never', '--network=' + selected['network'],
+                                    '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'preflight').stdout)
+        require(descriptor['main_netns_inode'] == selected['primary_inode'],
+                'Podman and node-infra-ctl selected different primary namespaces; use the local runner context')
         transit = descriptor['transit']['name']
-        require(transit, 'Connector transit device must be configured')
         matches = [x for x in links if x['ifname'] == transit]
-        require(len(matches) == 1 and 'UP' not in matches[0]['flags'] and matches[0].get('address'),
-                'transit input is missing, UP, or lacks a MAC identity')
+        if transit:
+            require(len(matches) == 1 and 'UP' not in matches[0]['flags'] and matches[0].get('address'),
+                    'transit input is missing, UP, or lacks a MAC identity')
         budget = json.loads(run('podman', 'run', '--rm', '--pull=never', '--network=none',
                                 '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'budget').stdout)
         limits = selected['values']
@@ -493,7 +501,7 @@ class Instance:
         cpu_limit = float(quota[:-1]) / 100 if re.fullmatch(r'\d+(?:\.\d+)?%', quota) else None
         report = check_budget(budget, cpu_limit, memory_bytes(one(limits, 'Service', 'MemoryMax', '')))
         selected['budget'] = report
-        return selected, descriptor, matches[0]
+        return selected, descriptor, matches[0] if transit else None
 
     def prepare(self):
         if self.applied.exists() and json_file(self.applied)['state'] != 'cleaned':
@@ -512,7 +520,7 @@ class Instance:
         applied = {'schema': 1, 'state': 'preparing', 'name': self.name, 'owner': installed['owner'],
                    'boot_id': boot_id(), 'generation': uuid.uuid4().hex, 'image': installed['image'],
                    'tool': installed['tool'], 'cgroup': group, 'netns': selected['netns'],
-                   'primary_inode': Path(selected['netns']).stat().st_ino, 'mounts': {},
+                   'network': selected['network'], 'primary_inode': selected['primary_inode'], 'mounts': {},
                    'descriptor': descriptor, 'transit': transit, 'error': ''}
         save(self.applied, applied)
         save(self.run / 'owner.json', {'owner': applied['owner'], 'generation': applied['generation']})
@@ -536,8 +544,10 @@ class Instance:
             if value.split(':')[1] == '/run/netns':
                 value = str(pins) + ':/run/netns:rw,rshared'
             volumes += ['--volume', value]
-        self.run_helper(applied, 'prepare', ['--network=ns:' + str(primary), *volumes])
+        self.run_helper(applied, 'prepare', ['--network=ns:' + str(primary), *volumes],
+                        '--primary-netns-inode=' + str(applied['primary_inode']))
         record = json_file(self.connector)
+        require(record['main_netns_inode'] == applied['primary_inode'], 'helper joined another namespace')
         for namespace in record['namespaces']:
             pin = pins / namespace['name']
             require(mount_at(pin).get('type') == 'nsfs' and pin.stat().st_ino == namespace['inode'],
@@ -628,7 +638,7 @@ class Instance:
                     '--volume', str(self.run / 'bpf') + ':/sys/fs/bpf:rw'], '--force')
                 require(json_file(self.connector)['state'] == 'cleaned', 'runtime did not confirm cleanup')
             # Also verify when inner prepare failed before writing its record.
-            if mount_at(primary):
+            if mount_at(primary) and applied.get('transit'):
                 links = json.loads(run('nsenter', '--net=' + str(primary), 'ip', '-j', 'link', 'show',
                                        'dev', applied['transit']['ifname']).stdout)
                 require(len(links) == 1 and links[0]['address'] == applied['transit']['address'] and
@@ -671,6 +681,18 @@ class Instance:
         pending = bool(applied and applied['state'] != 'cleaned' and not running)
         checks = []
         if running:
+            pid = container['State']['Pid']
+            primary = self.run / 'primary'
+            try:
+                identity = (applied.get('boot_id') == boot_id() and
+                            primary.stat().st_ino == applied.get('primary_inode') and
+                            Path(f'/proc/{pid}/ns/net').stat().st_ino == applied.get('primary_inode'))
+            except FileNotFoundError:
+                # PID1 or its retained handle can disappear after inspect while
+                # a stop/recovery hook runs. Keep the status shape, fail readiness.
+                identity = False
+            checks.append({'name': 'primary-namespace', 'status': 'pass' if identity else 'fail',
+                           'detail': 'container and retained primary namespace identity'})
             for service in ('node-conductor', 'node-proxy', 'connector-vswitch'):
                 result = run('podman', 'exec', self.container, 'systemctl', 'is-active', service, check=False, timeout=15)
                 checks.append({'name': service, 'status': 'pass' if result.returncode == 0 else 'fail',
