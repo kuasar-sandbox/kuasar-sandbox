@@ -128,7 +128,13 @@ class BootstrapTests(unittest.TestCase):
         for command in ("usermod", "groupmod", "groupadd", "chmod 666", "chmod 0666"):
             self.assertNotIn(command, vm)
         main = source.split("main() {", 1)[1]
-        self.assertLess(main.index('render_kvm_rule "$(id -u)" "$(id -g)"'), main.index("sudo -n apt-get"))
+        # Hosted package installation now goes through a signed, one-transaction APT fallback.
+        # Preserve the security ordering: reject invalid job IDs before any sudo install.
+        self.assertLess(main.index('render_kvm_rule "$(id -u)" "$(id -g)"'),
+                        main.index("install_hosted_packages"))
+        install = source.split("install_hosted_packages() {", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn('sudo -n apt-get "${update_options[@]}" update', install)
+        self.assertIn("Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg", install)
 
     def test_real_network_gate_has_no_redundant_host_probe(self):
         source = BOOTSTRAP.read_text()

@@ -11,11 +11,19 @@ LABEL org.opencontainers.image.title="kuasar-sandbox node-infra" \
       io.kuasar-sandbox.node-infra.schema="1"
 ENV container=podman \
     PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+# Use the signed mirror only for this transaction if an Ubuntu index is unavailable.
+RUN set -e; \
+    if ! apt-get --error-on=any update; then \
+        sed -E '/^URIs:/s#https?://(archive|security|ports)\.ubuntu\.com/#http://mirrors.mit.edu/#g' \
+            /etc/apt/sources.list.d/ubuntu.sources > /tmp/build-ubuntu.sources; \
+        set -- -o Dir::Etc::sourcelist=/tmp/build-ubuntu.sources -o Dir::Etc::sourceparts=-; \
+        apt-get "$@" --error-on=any update; \
+    fi; \
+    DEBIAN_FRONTEND=noninteractive apt-get "$@" install -y --no-install-recommends \
       systemd systemd-sysv dbus ca-certificates iproute2 iputils-ping \
       util-linux procps curl jq libnuma1 liburing2 libssl3t64 libzstd1 liblz4-1 \
       libsnappy1v5 libbz2-1.0 libstdc++6 \
-    && rm -rf /var/lib/apt/lists/* /etc/machine-id /var/lib/dbus/machine-id \
+    && rm -rf /var/lib/apt/lists/* /tmp/build-ubuntu.sources /etc/machine-id /var/lib/dbus/machine-id \
     && mkdir -p /run/netns /sys/fs/bpf /var/lib/node-infra \
       /etc/node-conductor/conf.d /etc/node-proxy/conf.d /etc/node-telemetry/conf.d \
       /etc/connector-vswitch/conf.d /etc/node-infra/extensions \

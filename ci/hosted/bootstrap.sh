@@ -40,6 +40,41 @@ select_profile() {
     fi
 }
 
+# Keep the distribution's APT configuration unchanged. On hosted runners
+# Ubuntu's archive DNS can fail even though a signed mirror remains reachable.
+# Use a temporary, Ubuntu-keyring-verified source for this one transaction.
+install_hosted_packages() {
+    local source= mirror=
+    local -a update_options=(-o Acquire::Retries=0 -o Acquire::http::Timeout=8
+        -o Acquire::https::Timeout=8 -o APT::Update::Error-Mode=any)
+    local -a source_options=()
+    if ! sudo -n apt-get "${update_options[@]}" update; then
+        case "$(dpkg --print-architecture)" in
+            amd64) mirror=http://mirrors.mit.edu/ubuntu ;;
+            arm64) mirror=http://mirrors.mit.edu/ubuntu-ports ;;
+            *) die "unsupported APT mirror architecture" ;;
+        esac
+        source=$(mktemp "$RUNNER_TEMP/kuasar-ubuntu.XXXXXXXX.sources")
+        cat > "$source" <<EOF
+Types: deb
+URIs: $mirror
+Suites: noble noble-updates noble-backports noble-security
+Components: main restricted universe multiverse
+Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg
+EOF
+        chmod 0644 "$source"
+        source_options=(-o "Dir::Etc::sourcelist=$source" -o Dir::Etc::sourceparts=-)
+        if ! sudo -n apt-get "${source_options[@]}" "${update_options[@]}" update; then
+            rm -f "$source"
+            die "Ubuntu signed mirror package index unavailable"
+        fi
+    fi
+    sudo -n env DEBIAN_FRONTEND=noninteractive apt-get "${source_options[@]}" \
+        -o Acquire::Retries=0 -o Acquire::http::Timeout=8 \
+        install -y --no-install-recommends "${packages[@]}"
+    if [ -n "$source" ]; then rm -f "$source"; fi
+}
+
 # Existing supplemental executors may use a published Workbench from before
 # node-infra. Prepare only this job's owned system container. The staged
 # Workbench offline qualification never calls this compatibility preparation.
@@ -198,8 +233,7 @@ main() {
     if $with_vm; then render_kvm_rule "$(id -u)" "$(id -g)" >/dev/null; fi
     : "${RUNNER_TEMP:?}" "${GITHUB_ENV:?}" "${GITHUB_PATH:?}"
     need sudo curl sha256sum tar python3
-    sudo -n apt-get update
-    sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends "${packages[@]}"
+    install_hosted_packages
     need git jq python3 flock file /usr/bin/time
     emit KUASAR_HOSTED_ROOT "$(mktemp -d "$RUNNER_TEMP/kuasar-hosted.XXXXXX")"
     mkdir -p "$KUASAR_HOSTED_ROOT/bin" "$KUASAR_HOSTED_ROOT/tarballs" "$KUASAR_HOSTED_ROOT/sources"

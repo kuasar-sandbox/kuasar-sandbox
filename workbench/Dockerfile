@@ -2,10 +2,17 @@
 # and both official toolchain archive identities are retained in the image.
 FROM ubuntu:24.04@sha256:008173c23f95b170204355c12626cb5a965d779a7e1283b09e9cffbb1bf33ca3 AS toolchain
 ARG DEBIAN_FRONTEND=noninteractive
-RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
-    && chmod 0755 /usr/sbin/policy-rc.d \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends \
+# Use the signed mirror only for this transaction if an Ubuntu index is unavailable.
+RUN set -e; \
+    printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d; \
+    chmod 0755 /usr/sbin/policy-rc.d; \
+    if ! apt-get --error-on=any update; then \
+        sed -E '/^URIs:/s#https?://(archive|security|ports)\.ubuntu\.com/#http://mirrors.mit.edu/#g' \
+            /etc/apt/sources.list.d/ubuntu.sources > /tmp/build-ubuntu.sources; \
+        set -- -o Dir::Etc::sourcelist=/tmp/build-ubuntu.sources -o Dir::Etc::sourceparts=-; \
+        apt-get "$@" --error-on=any update; \
+    fi; \
+    apt-get "$@" install -y --no-install-recommends \
        acl autoconf automake bc binutils bison build-essential ca-certificates \
        clang cmake containerd cpio curl dbus diffutils docker.io e2fsprogs erofs-utils \
        file findutils flex gawk git gperf gzip iproute2 iptables iputils-ping jq kmod \
@@ -19,7 +26,7 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
        xz-utils zip zlib1g-dev zstd \
     && mkdir -p /usr/share/workbench \
     && dpkg-query -W -f='${Package}\t${Version}\t${Architecture}\n' > /usr/share/workbench/packages.tsv \
-    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/*
+    && rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* /tmp/build-ubuntu.sources
 COPY toolchains.json install-toolchains.py /usr/share/workbench/
 RUN python3 -B /usr/share/workbench/install-toolchains.py
 ENV PATH=/usr/local/go/bin:/usr/local/rust/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
