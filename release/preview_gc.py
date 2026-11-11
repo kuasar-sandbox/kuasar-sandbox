@@ -32,6 +32,15 @@ AGGREGATE_PREVIEW_RE = re.compile(
 )
 
 
+# Immutable orchestrator go.mod versions reference these Sandboxer releases.
+# For pseudo-versions Go needs the preceding Preview tag as well as the commit.
+PUBLISHED_GO_DEPENDENCY_TAGS = frozenset({
+    ("sandboxer", "v0.1.1-preview.20260826"),      # orchestrator v0.1.0–v0.1.2
+    ("sandboxer", "v0.1.13-preview.20261104.1"),   # orchestrator v0.1.12
+    ("sandboxer", "v0.1.14-preview.20261107.1"),   # orchestrator v0.1.13
+})
+
+
 @dataclass(frozen=True, order=True)
 class Candidate:
     repository: str
@@ -329,7 +338,7 @@ def protected_component_tags(
     platform_tags: dict[str, str],
     candidates: set[str],
 ) -> set[tuple[str, str]]:
-    protected: set[tuple[str, str]] = set()
+    protected = set(PUBLISHED_GO_DEPENDENCY_TAGS)
     history_cache: dict[str, dict[str, list[CanonicalSnapshot]]] = {}
     for tag in set(platform_previews) | {tag for tag in platform_tags if AGGREGATE_PREVIEW_RE.fullmatch(tag)}:
         if tag in candidates:
@@ -642,7 +651,7 @@ def apply(candidates: list[Candidate], attempts: dict | None = None) -> bool:
     )
     if newly_protected:
         rendered = ", ".join(f"{unit}={tag}" for unit, tag in newly_protected)
-        raise GCError(f"current Daily manifest now protects GC candidate: {rendered}")
+        raise GCError(f"a retained reference now protects GC candidate: {rendered}")
 
     pending = False
     for item in components:

@@ -396,6 +396,27 @@ class PreviewGCTest(unittest.TestCase):
             self.assertFalse(preview_gc.apply([candidate], {}))
             self.assertEqual(gh.call_count, 4)
 
+    def test_stable_go_dependency_tags_survive_collection_of_all_aggregates(self):
+        tags = ("v0.1.1-preview.20260826", "v0.1.13-preview.20261104.1",
+                "v0.1.14-preview.20261107.1")
+        collecting = {"release-v0.1.13-preview.20261107.1"}
+        with (
+            mock.patch.object(preview_gc.coordinator, "paginated", return_value=[]),
+            mock.patch.object(preview_gc, "tag_index", return_value={}),
+            mock.patch.object(preview_gc, "dispatch_component") as dispatch,
+        ):
+            protected = preview_gc.live_manifest_protection(collecting)
+            for tag in tags:
+                with self.subTest(tag=tag):
+                    self.assertIn(("sandboxer", tag), protected)
+                    self.assertNotIn(("connector", tag), protected)
+                    stale = preview_gc.Candidate("kuasar-sandbox/sandboxer", "sandboxer",
+                                                 tag, "5" * 40, 43, 2, 200)
+                    with self.assertRaisesRegex(preview_gc.GCError, "now protects"):
+                        preview_gc.apply([stale])
+            self.assertNotIn(("sandboxer", "v0.1.14-preview.20261107"), protected)
+            dispatch.assert_not_called()
+
     def test_apply_rechecks_live_manifest_protection_before_dispatch(self) -> None:
         candidate = preview_gc.Candidate(
             "kuasar-sandbox/connector",
@@ -667,13 +688,13 @@ class CanonicalSourceHistoryTest(unittest.TestCase):
         return self.run_git("rev-parse", "HEAD")
 
     def selection(self, component: str, *, legacy: bool = False,
-                  tag: str | None = None) -> str:
+                  tag: str | None = None, unit: str = "connector") -> str:
         tag = tag or self.preview
         version, suffix = tag.split("-preview.")
         units = preview_gc.coordinator.selection.UNITS
         components = {unit: (unit + "-" if unit in ("runtime", "vmlinux") else "") + "v1.0.0"
                       for unit in units}
-        components["connector"] = component
+        components[unit] = component
         text = f"version: {version}\npreview_version: preview.{suffix}\ncomponents:\n"
         text += "".join(f"  {unit}: {value}\n" for unit, value in components.items())
         if legacy:
@@ -716,6 +737,15 @@ class CanonicalSourceHistoryTest(unittest.TestCase):
             mock.patch.object(preview_gc, "active_release_titles", return_value=set()),
         ):
             yield
+
+    def test_go_dependency_is_retained_while_its_aggregate_can_be_collected(self):
+        source = self.selection("v0.1.13-preview.20261104.1", unit="sandboxer")
+        self.run_git("tag", self.preview, source)
+        stable = self.stable()
+        with self.public_state(stable, source):
+            candidates, _ = preview_gc.plan(self.version)
+        self.assertEqual([(row.unit, row.tag) for row in candidates],
+                         [("platform", self.preview)])
 
     def test_validation_titles_do_not_reserve_preview_gc_candidates(self) -> None:
         source = self.selection(self.old_component)
@@ -800,7 +830,7 @@ class CanonicalSourceHistoryTest(unittest.TestCase):
         self.assertEqual(candidate, retained)
         self.assertEqual(retained.commit, source)
         protected = preview_gc.protected_component_tags({self.preview: release}, tags, set())
-        self.assertEqual(protected, {("connector", self.old_component)})
+        self.assertEqual(protected, preview_gc.PUBLISHED_GO_DEPENDENCY_TAGS | {("connector", self.old_component)})
         with self.public_state(stable, source):
             candidates, _ = preview_gc.plan(self.version)
             self.assertEqual({row.tag for row in candidates}, {self.old_component, self.preview})
@@ -810,7 +840,7 @@ class CanonicalSourceHistoryTest(unittest.TestCase):
         with self.public_state(stable, source, (later, later_sha)):
             candidates, metadata = preview_gc.plan(self.version)
             self.assertEqual({row.tag for row in candidates}, {self.preview})
-            self.assertEqual(metadata["protected_component_count"], 1)
+            self.assertEqual(metadata["protected_component_count"], 1 + len(preview_gc.PUBLISHED_GO_DEPENDENCY_TAGS))
 
     def test_source_ownership_and_no_match_still_fail(self) -> None:
         source = self.selection(self.old_component)
