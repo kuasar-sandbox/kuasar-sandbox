@@ -158,9 +158,18 @@ def build(args):
         run(build_command + [context])
         try:
             raw_archive = context / "image.oci.tar"
-            transport = "docker-daemon:" if args.engine == "docker" else "containers-storage:"
-            run(["skopeo", "copy", "--format", "oci", "--dest-compress", transport + tag,
+            # Use the selected Docker CLI/context to reach the daemon. A distro
+            # skopeo may embed an API client too old for a newer Docker engine.
+            if args.engine == "docker":
+                engine_archive = context / "engine.docker.tar"
+                run(["docker", "image", "save", "--output", engine_archive, tag])
+                source = "docker-archive:" + str(engine_archive)
+            else:
+                source = "containers-storage:" + tag
+            run(["skopeo", "copy", "--format", "oci", "--dest-compress", source,
                  "oci-archive:" + str(raw_archive) + ":" + args.version])
+            if args.engine == "docker":
+                engine_archive.unlink()  # release the intermediate before the user-facing exports
             receipt.update(inspect_archive(raw_archive, arch, args.version, revision))
             with tempfile.NamedTemporaryFile(prefix=".node-infra-", dir=args.output, delete=False) as stream:
                 pending = Path(stream.name)
