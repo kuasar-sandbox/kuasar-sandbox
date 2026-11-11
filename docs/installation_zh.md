@@ -15,6 +15,11 @@ GNU tar 和 sha256sum。导入 Workbench 时才需要 Docker；仅下载并解�
 
 先检查 Release 的完整资产集合，再只下载本机架构及共享 platform 包。仅在采用该版本指南中的原生方案时设置 `DOWNLOAD_WORKBENCH=0`。下载固定 GitHub 资产 ID，并校验 GitHub 原生大小和 SHA-256 digest；摘要缺失或校验失败立即停止。历史正文机器块和 SHA256SUMS 均被忽略。
 
+`node-infra-v1` 的完整集合包含 18 项资产，其中包括两种原生架构的 node-infra OCI
+归档和共享部署包。本安装流程下载适用于本机架构的 8 项资产；设置
+`DOWNLOAD_WORKBENCH=0` 时下载 7 项。node-infra 的独立 OCI 归档与部署包，按所选版本
+platform 包内的 `guide/node-infra_zh.md` 指南下载和使用。
+
 `files.tsv` 仅在本地保存已下载文件的名称、大小和哈希，供离线复核；它不是发布资产或测试记录。每次使用新的下载和安装目录。
 
 内联 Python 校验使用 `-I` 隔离模式，防止继承的 `PYTHONOPTIMIZE` 关闭断言校验。
@@ -76,12 +81,13 @@ for unit, version in units.items():
     assert re.fullmatch(prefix + version_re, version), ('invalid component tag', unit)
     assert '-preview.' in tag or '-preview.' not in version, ('Stable requires stable component', unit)
 contract = fields.get('delivery', 'historical')
-assert contract in ('historical', 'workbench-v1')
-assert 'delivery' not in fields or contract == 'workbench-v1', 'unsupported explicit delivery contract'
+modern = contract in ('workbench-v1', 'node-infra-v1')
+assert contract == 'historical' or modern
+assert 'delivery' not in fields or modern, 'unsupported explicit delivery contract'
 arch = os.environ['ARCH']
 workbench = os.environ['DOWNLOAD_WORKBENCH']
 assert workbench in ('0', '1')
-assert workbench == '0' or contract == 'workbench-v1', 'selected version has no Workbench; use its native guide with DOWNLOAD_WORKBENCH=0'
+assert workbench == '0' or modern, 'selected version has no Workbench; use its native guide with DOWNLOAD_WORKBENCH=0'
 def names(architecture):
     result = set()
     for unit, version in units.items():
@@ -97,11 +103,15 @@ actual = {a['name'] for a in assets}
 assert len(actual) == len(assets), 'duplicate asset name'
 platform_name = f'platform-{tag}.tar.gz'
 expected = {platform_name} | names('x86_64')
-if contract == 'workbench-v1' or actual & names('aarch64'):
+if modern or actual & names('aarch64'):
     expected |= names('aarch64')
-if contract == 'workbench-v1':
+if modern:
     expected |= {f'workbench-{a}-{tag.removeprefix("release-")}.tar.gz' for a in ('x86_64', 'aarch64')}
+if contract == 'node-infra-v1':
+    expected |= {f'node-infra-{tag}-linux-{a}.oci.tar.gz' for a in ('amd64', 'arm64')}
+    expected.add(f'node-infra-deploy-{tag}.tar.gz')
 assert actual == expected, 'missing or unexpected aggregate asset'
+# Node-infra inputs use their separate guide, outside this native extraction set.
 selected = {platform_name} | names(arch)
 if workbench == '1':
     selected.add(f'workbench-{arch}-{tag.removeprefix("release-")}.tar.gz')

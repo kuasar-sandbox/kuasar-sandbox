@@ -16,6 +16,13 @@ Set `RELEASE_VERSION` to a published aggregate tag, or leave it empty to resolve
 
 The complete Release asset set is checked, then only the host architecture and shared platform package are downloaded. Set `DOWNLOAD_WORKBENCH=0` only for the native alternative in that version's guide. Downloads use fixed GitHub asset IDs and verify GitHub's native size and SHA-256 digest. Missing digests or failed checks stop the download. Historical body markers and SHA256SUMS are ignored.
 
+For `node-infra-v1`, the complete set contains 18 assets, including both native
+node-infra OCI archives and the shared deployment package. This installation
+downloads eight assets for the host architecture, or seven with
+`DOWNLOAD_WORKBENCH=0`. Download and use the separate node-infra OCI archives and
+deployment package according to `guide/node-infra.md` inside the selected
+version's platform package.
+
 `files.tsv` is a local list of downloaded filenames, sizes and hashes for offline rechecking. It is not a published asset or a test record. Use fresh download and installation directories.
 
 The inline Python checks use isolated mode (`-I`) so inherited `PYTHONOPTIMIZE` cannot disable their assertions.
@@ -77,12 +84,13 @@ for unit, version in units.items():
     assert re.fullmatch(prefix + version_re, version), ('invalid component tag', unit)
     assert '-preview.' in tag or '-preview.' not in version, ('Stable requires stable component', unit)
 contract = fields.get('delivery', 'historical')
-assert contract in ('historical', 'workbench-v1')
-assert 'delivery' not in fields or contract == 'workbench-v1', 'unsupported explicit delivery contract'
+modern = contract in ('workbench-v1', 'node-infra-v1')
+assert contract == 'historical' or modern
+assert 'delivery' not in fields or modern, 'unsupported explicit delivery contract'
 arch = os.environ['ARCH']
 workbench = os.environ['DOWNLOAD_WORKBENCH']
 assert workbench in ('0', '1')
-assert workbench == '0' or contract == 'workbench-v1', 'selected version has no Workbench; use its native guide with DOWNLOAD_WORKBENCH=0'
+assert workbench == '0' or modern, 'selected version has no Workbench; use its native guide with DOWNLOAD_WORKBENCH=0'
 def names(architecture):
     result = set()
     for unit, version in units.items():
@@ -98,11 +106,15 @@ actual = {a['name'] for a in assets}
 assert len(actual) == len(assets), 'duplicate asset name'
 platform_name = f'platform-{tag}.tar.gz'
 expected = {platform_name} | names('x86_64')
-if contract == 'workbench-v1' or actual & names('aarch64'):
+if modern or actual & names('aarch64'):
     expected |= names('aarch64')
-if contract == 'workbench-v1':
+if modern:
     expected |= {f'workbench-{a}-{tag.removeprefix("release-")}.tar.gz' for a in ('x86_64', 'aarch64')}
+if contract == 'node-infra-v1':
+    expected |= {f'node-infra-{tag}-linux-{a}.oci.tar.gz' for a in ('amd64', 'arm64')}
+    expected.add(f'node-infra-deploy-{tag}.tar.gz')
 assert actual == expected, 'missing or unexpected aggregate asset'
+# Node-infra inputs use their separate guide, outside this native extraction set.
 selected = {platform_name} | names(arch)
 if workbench == '1':
     selected.add(f'workbench-{arch}-{tag.removeprefix("release-")}.tar.gz')
