@@ -41,6 +41,22 @@ def host_output(command):
     return subprocess.check_output([*prefix, *map(str, command)], text=True, timeout=30)
 
 
+def prepare_node_infra(baseline, arch, assets, destination, records):
+    delivery = baseline.get('delivery')
+    if delivery not in selection.NODE_INFRA_DELIVERIES:
+        return False
+    version = baseline['version']
+    names = selection.delivery_assets(version, delivery, (arch,)) - {selection.workbench_archive(version, arch)}
+    for name in sorted(names):
+        path = assets / name
+        artifacts.require(path.stat().st_size == records[name]['size']
+                          and 'sha256:' + artifacts.digest(path) == records[name]['digest'],
+                          'node-infra release bytes differ from exact stage: ' + name)
+    node_infra_assets.install_inputs(assets, destination, version, arch,
+                                     revision=baseline['sha'], components=baseline['units'])
+    return True
+
+
 def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False, group="all"):
     artifacts.check_plan(plan)
     artifacts.require(plan['mode'] == 'exact-assets' and plan['baseline'].get('delivery') in selection.MODERN_DELIVERIES,
@@ -95,14 +111,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False, group="all
             artifacts.require(path.stat().st_size == records[name]['size'] and 'sha256:' + artifacts.digest(path) == records[name]['digest'],
                               'release input bytes differ from exact stage: ' + name)
             artifacts.unpack(path, release, owner, seen)
-        if plan['baseline'].get('delivery') == selection.NODE_INFRA_DELIVERY:
-            for name in (selection.node_infra_archive(version, arch), selection.node_infra_deploy_archive(version)):
-                path = stage / 'assets' / name
-                artifacts.require(path.stat().st_size == records[name]['size']
-                                  and 'sha256:' + artifacts.digest(path) == records[name]['digest'],
-                                  'node-infra release bytes differ from exact stage: ' + name)
-            node_infra_assets.install_inputs(stage / 'assets', release, version, arch,
-                                             revision=revision, components=plan['baseline']['units'])
+        has_node_infra = prepare_node_infra(plan['baseline'], arch, stage / 'assets', release, records)
         result['release_inputs_verified'] = True
         cases = artifacts.workbench_cases(plan['case_files'], arch, native_full=not artifact_only)
         prepared_cases = cases
@@ -141,7 +150,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False, group="all
             return subprocess.check_output(invocation, text=True, timeout=timeout)
         artifacts.require(execute('docker', 'image', 'ls', '-q').strip() == ''
                           and execute('docker', 'ps', '-aq').strip() == '', 'private Docker state was not empty')
-        if plan['baseline'].get('delivery') == selection.NODE_INFRA_DELIVERY:
+        if has_node_infra:
             artifacts.require(execute('podman', 'images', '-q').strip() == ''
                               and execute('podman', 'ps', '-aq').strip() == '', 'private Podman state was not empty')
             result['empty_private_podman'] = True

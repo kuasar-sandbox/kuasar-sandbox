@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 from pathlib import Path
+import runpy
 import sys
 import tarfile
 import tempfile
@@ -180,6 +181,34 @@ class DeliveryTests(unittest.TestCase):
         altered['connector']['sha'] = '3' * 40
         with self.assertRaisesRegex(ValueError, 'component selection'):
             subject.install_inputs(self.images, self.root / 'other', VERSION, 'x86_64', components=altered)
+
+    def test_workbench_prepares_all_node_infra_contracts_from_the_exact_stage(self):
+        prepare = runpy.run_path(str(ROOT / 'workbench/test-release.py'))['prepare_node_infra']
+        arch = 'x86_64'
+        baseline = {'version': VERSION, 'sha': REVISION, 'units': COMPONENTS, 'delivery': selection.DELIVERY}
+        self.assertFalse(prepare(baseline, arch, self.images, self.root / 'workbench-only', {}))
+        self.assertFalse((self.root / 'workbench-only').exists())
+        for contract in ('node-infra-v1', 'node-infra-v2'):
+            with self.subTest(contract=contract):
+                assets = self.images / contract
+                assets.mkdir()
+                record = archive(assets, arch)
+                if contract == 'node-infra-v2':
+                    docker_archive(assets, record, alias='valid')
+                subject.package(self.platform, assets, assets, VERSION, REVISION, arches=(arch,))
+                names = selection.delivery_assets(VERSION, contract, (arch,)) - {selection.workbench_archive(VERSION, arch)}
+                records = {name: {'size': (assets / name).stat().st_size,
+                                  'digest': 'sha256:' + subject.digest(assets / name)} for name in names}
+                destination = self.root / contract
+                baseline['delivery'] = contract
+                self.assertTrue(prepare(baseline, arch, assets, destination, records))
+                deployment = json.loads((destination / 'deploy/node-infra/release.json').read_text())
+                self.assertEqual(deployment['images'][arch]['id'], record['image_id'])
+                self.assertEqual({path.name for path in (destination / 'images').iterdir()},
+                                 names - {selection.node_infra_deploy_archive(VERSION)})
+                records[selection.node_infra_archive(VERSION, arch)]['digest'] = 'sha256:' + '0' * 64
+                with self.assertRaisesRegex(ValueError, 'release bytes differ'):
+                    prepare(baseline, arch, assets, self.root / 'tampered', records)
 
     def test_single_arch_candidate_does_not_satisfy_dual_release_gate(self):
         archive(self.images)
