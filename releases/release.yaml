@@ -1,63 +1,26 @@
 delivery: node-infra-v1
-version: release-v0.1.13
-previous_version: release-v0.1.12
+version: release-v0.1.14
+previous_version: release-v0.1.13
 components:
   accelerator: v0.1.12
   connector: v0.1.8
-  sandboxer: v0.1.14
-  orchestrator: v0.1.13
-  runtime: runtime-v0.1.13
+  sandboxer: v0.1.15
+  orchestrator: v0.1.14
+  runtime: runtime-v0.1.14
   vmlinux: vmlinux-v0.1.6
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.1.13
+    # Kuasar Sandbox release-v0.1.14
 
-    This Stable release updates the component set from `release-v0.1.12` and introduces the `node-infra-v1` delivery.
+    This maintenance release updates Sandboxer to v0.1.15, Orchestrator to v0.1.14, and the guest runtime to runtime-v0.1.14. Accelerator v0.1.12, Connector v0.1.8, and vmlinux-v0.1.6 are reused from release-v0.1.13.
 
-    Selection and editable release notes: [`releases/release.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13/releases/release.yaml).
+    ## Go integration
 
-    ## Highlights
+    External Go programs can import Orchestrator's telemetry package with the module dependencies declared by Orchestrator. Version-qualified installation of node-ctl works with `go install github.com/kuasar-sandbox/orchestrator/cmd/node-ctl@v0.1.14`. Orchestrator selects the published Sandboxer v0.1.15 and declares the OpenTelemetry xpdata version it uses. Orchestrator and Sandboxer declare the same Accelerator and Connector versions selected for this release. The guest runtime also declares Accelerator v0.1.12 and packages sandbox-init from Sandboxer v0.1.15. See [orchestrator #539](https://github.com/kuasar-sandbox/orchestrator/pull/539).
 
-    - **Node-infra deployment:** native x86_64 and aarch64 OCI images and a shared rootful Podman/Quadlet deployment tool run Connector, Conductor, Proxy and execution pools under an outer cgroup budget ([platform #378](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/378)). Applied image/tool identities and resource ownership are retained for recovery. This version requires administrator-prepared network namespaces, `net0` and transit `net1`; the host-network defaults proposed in [#379](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/379) are not included. External Cache/Store services and host network provisioning remain separate.
-    - **Resource pools and reservations:** named resource pools support capacity-aware placement, per-pool memory growth and pressure handling, and conservative restart recovery ([orchestrator #515](https://github.com/kuasar-sandbox/orchestrator/pull/515)). Runner and Builder pools gain stable identities, capacity and priority. Assignment now transfers each admission reservation atomically into the bound instance, avoiding temporary double accounting ([#521](https://github.com/kuasar-sandbox/orchestrator/pull/521)).
-    - **Writable-disk reclamation:** `resources.diff_cow.discard` defaults to `auto` for managed writable ext4 mounts on cold start. Select `manual` to disable automatic discard while retaining explicit Guest trim ([sandboxer #414](https://github.com/kuasar-sandbox/sandboxer/pull/414), [#416](https://github.com/kuasar-sandbox/sandboxer/pull/416), [orchestrator #518](https://github.com/kuasar-sandbox/orchestrator/pull/518)). Memory restore preserves the captured mount policy. Filesystem free space, active-payload reclamation and export size remain separate outcomes.
-    - **Disk-only import and runtime admission:** Import can explicitly select `memory=false`, retaining only the paired disk artifact E for later cold start. Memory-preserving Import and fresh snapshot-template Create check the runtime identity required by their source; cold boot identity is separated from memory-restore compatibility ([orchestrator #520](https://github.com/kuasar-sandbox/orchestrator/pull/520), [sandboxer #418](https://github.com/kuasar-sandbox/sandboxer/pull/418)). Disk-only Import does not validate a complete cold boot.
-    - **Configuration composition:** Connector accepts ordered JSON/YAML configuration files, and node services support ordered YAML overlays ([connector #111](https://github.com/kuasar-sandbox/connector/pull/111), [orchestrator #536](https://github.com/kuasar-sandbox/orchestrator/pull/536)). Maps merge recursively and later scalar/list values replace earlier values. Follow each component's null, validation and precedence rules; this does not introduce hot reload.
-    - **Cache and image preparation:** flattening aligns root-layer handling with containerd and Moby ([accelerator #222](https://github.com/kuasar-sandbox/accelerator/pull/222)). Slow EC peer initialization no longer holds the shared lookup mutex ([#226](https://github.com/kuasar-sandbox/accelerator/pull/226)). Clean cache misses can reuse successful bytes during an equivalent active Fill, while unfinished reads and cold misses remain independent ([#227](https://github.com/kuasar-sandbox/accelerator/pull/227)). These changes do not establish a workload-independent performance gain.
-    - **Journal congestion:** [sandboxer #431](https://github.com/kuasar-sandbox/sandboxer/pull/431) removes the reproduced native-journal busy-wait mechanism and isolates explicit journal diagnostics from control operations. Those diagnostics are best-effort under congestion; Guest and console streams retain backpressure.
+    ## Installation
 
-    ## Upgrade requirements
+    The bundled installation guide supports anonymous download and verification of the node-infra-v1 assets. It includes the corrections previously documented in the v0.1.13 installation erratum ([#385](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/385), [#386](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/386)). Use the deployment instructions for this maintenance line and prepare the same network namespaces and links as for v0.1.13.
 
-    - Upgrade Sandboxer, Orchestrator and the matching Runtime as a validated set. Conductor and node-ctl runners must support sandbox bootstrap version 7. Upgrade receiving nodes before using the new Import `memory` option; older HTTP Import receivers may ignore it. Disk-only Import from S permanently omits memory from the new local record, while leaving the original artifact unchanged. Cold resume restarts processes and does not preserve memory or connections.
-    - Discard mount behavior requires a runtime containing the matching sandbox-init and a new cold boot. Replacing only host binaries does not replace embedded init. Manual discard requires the Guest capability; older runtimes reject it rather than silently enabling automatic discard. Existing running instances and memory restores retain their mount state.
-    - Use explicit stable Runner/Builder pool names before reordering pools. Multiple resource pools require explicit net runtime-memory budgets. Drain legacy live instances whose shared template has ambiguous logical ownership before enabling finite capacity for that configuration. Keep live execution templates and resource identities configured.
-    - Preserve old binaries, runtime/kernel inputs, keys, databases and complete artifact dependencies until workload-specific upgrade and rollback checks pass. This release does not establish arbitrary mixed-version rolling upgrades or automatic migration of older database/artifact schemas. The existing checkpoint schema and Routesync v11 requirements still apply when upgrading from older releases. Follow the versioned [upgrade guide](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13/docs/upgrading.md).
-
-    ## Components
-
-    | Release unit | Version |
-    |---|---|
-    | accelerator | `v0.1.12` |
-    | connector | `v0.1.8` |
-    | sandboxer | `v0.1.14` |
-    | orchestrator | `v0.1.13` |
-    | runtime | `runtime-v0.1.13` |
-    | vmlinux | `vmlinux-v0.1.6` |
-
-    Runtime and VMLinux are independently versioned units from the guest-runtime repository. This release reuses `vmlinux-v0.1.6`: the kernel configuration, patches and production build inputs are unchanged. Documentation-only changes do not require a new kernel release. The Runtime incorporates the updated Accelerator and sandbox-init inputs.
-
-    ## Downloads and deployment
-
-    The complete aggregate contains 18 assets: twelve native component archives, one platform archive, two Workbench archives, two node-infra OCI archives and one shared node-infra deployment archive. Verify native GitHub asset sizes and SHA-256 digests using the [download guide](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13/docs/download.md). Follow the selected [node-infra guide](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.13/docs/node-infra.md) for host prerequisites, image identity, configuration and recovery.
-
-    Workbench and node-infra system containers are trusted-administrator privileged environments, not hostile-root confinement. Full node-infra instance shutdown stops its running VMs; preserve workload state through the documented Pause/Export procedure before replacement.
-
-    ## Known limits
-
-    - [Platform #347](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/347) and [#324](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/324) remain open. The journal fix does not establish the cause of every reported high-density symptom or resolve Guest RCU stalls. Qualify density, lifecycle operations and restore behavior on the intended hardware.
-    - [Platform #304](https://github.com/kuasar-sandbox/kuasar-sandbox/issues/304) remains open: Placer/Router do not support Registry-style SIGHUP reload. Use the documented restart procedure.
-    - Node-infra Builder coverage establishes warm-pool startup and cleanup, not a Build transaction or Builder VM. Physical host reboot and physical VF qualification are not claimed.
-    - The preceding Preview used the earlier platform selection without node-infra and skipped performance tests. Its results do not substitute for this aggregate's exact-asset acceptance or establish performance certification.
-
-    Stable identifies the release channel, not workload-specific production certification. Report security issues privately through [Report a vulnerability](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new).
+    [Component versions](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.14/releases/release.yaml) · [Installation](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.14/docs/installation.md) · [简体中文](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.1.14/docs/installation_zh.md)

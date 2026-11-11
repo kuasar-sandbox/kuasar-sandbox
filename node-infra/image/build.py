@@ -178,6 +178,7 @@ def build(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--version", required=True)
+    parser.add_argument("--delivery", choices=("node-infra-v1",), default="node-infra-v1")
     parser.add_argument("--arch", choices=ARCHES, required=True)
     parser.add_argument("--products", type=Path, required=True)
     parser.add_argument("--selection", type=Path, required=True)
