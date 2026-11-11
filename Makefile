@@ -41,10 +41,11 @@ BIN_INPUTS_MANIFEST := release/inputs/bin-inputs.yaml
 CI_TIMED       := ci/integration/ci-timed.sh
 GO_REPOS       := accelerator sandboxer guest-runtime connector orchestrator
 ZOT_VERSION    ?= v2.1.17
+NODE_INFRA_ENGINE ?= podman
 
 PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf-density perf-warmpool-dedup
 
-.PHONY: all build collect e2e-zot e2e-versitygw e2e-tools assemble-e2e release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
+.PHONY: all build node-infra-image collect e2e-zot e2e-versitygw e2e-tools assemble-e2e release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
 	        bench e2e-fixtures test-e2e perf dedup-report \
 	        $(PERF_TARGETS)
 
@@ -65,6 +66,9 @@ build:
 	$(CI_TIMED) build/connector $(MAKE) -C $(ORG)/connector build
 	$(CI_TIMED) build/orchestrator $(MAKE) -C $(ORG)/orchestrator build
 	@$(CI_TIMED) build/collect $(MAKE) collect
+
+node-infra-image:
+	python3 -B node-infra/image/build-workspace.py --arch "$(TARGET_ARCH)" --engine "$(NODE_INFRA_ENGINE)"
 
 e2e-zot:
 	$(CI_TIMED) tools/zot env BINDIR="$(abspath $(E2E_TOOL_DIR))" TARGET_ARCH="$(TARGET_ARCH)" ZOT_VERSION="$(ZOT_VERSION)" bash ci/integration/ensure-zot.sh
@@ -257,6 +261,7 @@ clean:
 help:
 	@echo "kuasar-sandbox — platform build entry. Targets:"
 	@echo "  build         build every sub-repo + assemble bin/\$$(TARGET_ARCH)/ (multi-min cold)"
+	@echo "  node-infra-image  build local node-infra image archives (native Linux; NODE_INFRA_ENGINE=podman|docker)"
 	@echo "  collect       re-assemble bin/\$$(TARGET_ARCH)/ from existing sub-repo outputs"
 	@echo "  e2e-tools     ensure local test environment tools under build/e2e-tools/\$$(TARGET_ARCH)/"
 	@echo "  release       publish a selected aggregate (RELEASE_VERSION=release-vX.Y.Z)"
