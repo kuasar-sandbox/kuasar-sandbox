@@ -617,6 +617,16 @@ class LauncherTests(unittest.TestCase):
                         launcher.stop_owned(self.state, self.data)
 
 
+class ReleaseDeliveryTests(unittest.TestCase):
+    def test_v1_and_v2_require_node_infra_input_installation_and_private_podman_check(self):
+        qualification = module('workbench_release_qualification', ROOT / 'test-release.py')
+        for contract, expected in [('workbench-v1', False), ('node-infra-v1', True),
+                                   ('node-infra-v2', True), ('historical', False)]:
+            with self.subTest(contract=contract):
+                self.assertEqual(qualification.requires_node_infra(
+                    {'baseline': {'delivery': contract}}), expected)
+
+
 class NativeSelectionTests(unittest.TestCase):
     def test_aggregate_selector_without_plan_passes_checked_out_path(self):
         hosted = module('hosted_selector_review', ROOT.parent / 'ci/hosted/workbench.py')
