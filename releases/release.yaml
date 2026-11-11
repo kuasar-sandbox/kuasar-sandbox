@@ -4,20 +4,20 @@ previous_version: release-v0.1.13
 components:
   accelerator: v0.1.12
   connector: v0.1.8
-  sandboxer: v0.1.14
+  sandboxer: v0.1.15
   orchestrator: v0.1.14
-  runtime: runtime-v0.1.13
+  runtime: runtime-v0.1.14
   vmlinux: vmlinux-v0.1.6
 notes:
   mode: auto
   body: |
     # Kuasar Sandbox release-v0.1.14
 
-    This maintenance release updates Orchestrator to v0.1.14. The other five release units retain their v0.1.13 aggregate selections.
+    This maintenance release updates Sandboxer to v0.1.15, Orchestrator to v0.1.14, and the guest runtime to runtime-v0.1.14. Accelerator v0.1.12, Connector v0.1.8, and vmlinux-v0.1.6 are reused from release-v0.1.13.
 
     ## Go integration
 
-    External Go programs can import Orchestrator's telemetry package with the module dependencies declared by Orchestrator. Version-qualified installation of node-ctl works with `go install github.com/kuasar-sandbox/orchestrator/cmd/node-ctl@v0.1.14`. Orchestrator now selects the published Sandboxer v0.1.14 and declares the OpenTelemetry xpdata version it uses. See [orchestrator #539](https://github.com/kuasar-sandbox/orchestrator/pull/539).
+    External Go programs can import Orchestrator's telemetry package with the module dependencies declared by Orchestrator. Version-qualified installation of node-ctl works with `go install github.com/kuasar-sandbox/orchestrator/cmd/node-ctl@v0.1.14`. Orchestrator selects the published Sandboxer v0.1.15 and declares the OpenTelemetry xpdata version it uses. Orchestrator and Sandboxer declare the same Accelerator and Connector versions selected for this release. The guest runtime also declares Accelerator v0.1.12 and packages sandbox-init from Sandboxer v0.1.15. See [orchestrator #539](https://github.com/kuasar-sandbox/orchestrator/pull/539).
 
     ## Installation
 
