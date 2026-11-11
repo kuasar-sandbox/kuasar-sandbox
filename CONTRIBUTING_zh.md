@@ -72,13 +72,27 @@ make -C kuasar-sandbox perf E2E_WORKDIR=/absolute/path/to/prepared-inputs
 make -C kuasar-sandbox demo PYTHON_BIN=/absolute/path/to/pinned-venv/bin/python
 ```
 
-产品 E2E 通过 `test/e2e/e2e prepare` 和 `run` 消费预构建制品。完整的 `<suite>.<case>.sh` 文件名标识九个 suite 中的用例；组件归属只决定源码维护位置。prepare 获取不可变镜像与固定 Demo SDK；执行使用预备制品、helper 和镜像，不发现源码、不编译、不自动拉取。unit/race/vet、UFFD 和性能门禁保持独立。详见[测试组织](test/README_zh.md)和[发布验证指南](test/QUICKSTART_zh.md)。
-
 单仓构建仍从组件仓执行.例如:
 
 ```bash
 GOWORK=off make -C sandboxer build
 ```
+
+### 从源码构建本地 node-infra 镜像
+
+在原生 Linux 主机（x86_64 或 aarch64）上，按[源码工作区](#source-workspace)的布局准备主仓和五个组件仓。六个仓库都应是干净的检出，有本地改动时，先提交或另存。安装组件构建和打包所需工具、`skopeo`，以及 Podman（默认）或 Docker；先将 [Containerfile](node-infra/image/Containerfile) 指定的基础镜像载入所选引擎，例如 `podman pull docker.io/library/ubuntu:24.04`。构建镜像时还需能访问配置的 Ubuntu 软件源。组件打包会读取原生依赖源码树及其许可证材料，仅拷贝 `bin/<arch>/` 不够。
+
+```bash
+make -C kuasar-sandbox node-infra-image
+# 如需改用 Docker 构建：
+make -C kuasar-sandbox node-infra-image NODE_INFRA_ENGINE=docker
+```
+
+该目标会先执行平台构建，再将 OCI 归档、Docker 归档和构建记录写入 `kuasar-sandbox/build/node-infra/<arch>/` 下的新目录，不会发布镜像。使用 Docker 测试时，执行 `docker load -i <Docker归档路径>`，然后使用输出中的镜像标签 `localhost/node-infra:local-<hash>`。
+
+### 验证构建
+
+产品 E2E 通过 `test/e2e/e2e prepare` 和 `run` 消费预构建制品。完整的 `<suite>.<case>.sh` 文件名标识九个 suite 中的用例；组件归属只决定源码维护位置。prepare 获取不可变镜像与固定 Demo SDK；执行使用预备制品、helper 和镜像，不发现源码、不编译、不自动拉取。unit/race/vet、UFFD 和性能门禁保持独立。详见[测试组织](test/README_zh.md)和[发布验证指南](test/QUICKSTART_zh.md)。
 
 本地发布工具测试不访问 GitHub,也不构建真实 native 依赖:
 

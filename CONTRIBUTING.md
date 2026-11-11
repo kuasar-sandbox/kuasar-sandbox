@@ -103,6 +103,20 @@ Runtime files are collected into `bin/<arch>/` according to [`release/inputs/bin
 GOWORK=off make -C sandboxer build
 ```
 
+### Build a local node-infra image
+
+On a native Linux host (x86_64 or aarch64), use the six clean checkouts in the [source workspace](#source-workspace): commit or set aside local source changes first. Install the component build and packaging prerequisites, `skopeo`, and either Podman (default) or Docker. Preload the base image named in the [Containerfile](node-infra/image/Containerfile) into the selected engine (for example, `podman pull docker.io/library/ubuntu:24.04`). The image build also needs access to the configured Ubuntu package mirrors. The component packagers use the native source trees and their license materials; a copy of `bin/<arch>/` alone is insufficient.
+
+```bash
+make -C kuasar-sandbox node-infra-image
+# To build with Docker instead:
+make -C kuasar-sandbox node-infra-image NODE_INFRA_ENGINE=docker
+```
+
+The target runs the platform build and writes an OCI archive, a Docker archive, and build records to a new directory under `kuasar-sandbox/build/node-infra/<arch>/`. It does not publish the image. For a Docker test, load the generated Docker archive with `docker load -i <path-to-docker.tar.gz>` and use the reported `localhost/node-infra:local-<hash>` tag.
+
+### Test the build
+
 Product E2E consumes prebuilt products through `test/e2e/e2e prepare` and `run`. Full `<suite>.<case>.sh` filenames identify cases across nine suites; component ownership only determines where source cases are maintained. Preparation acquires immutable images and the pinned Demo SDK; execution uses prepared products, helpers and images without source discovery, compilation or automatic pulls. Unit/race/vet, UFFD and performance gates stay independent. See [test organization](test/README.md) and the [release validation guide](test/QUICKSTART.md).
 
 Release-tool tests do not contact GitHub or build the real native dependencies:
