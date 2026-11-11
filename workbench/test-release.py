@@ -35,6 +35,11 @@ launcher = module('release_launcher', ROOT / 'workbench/workbench')
 lifecycle = module('release_lifecycle', ROOT / 'workbench/test-system.py')
 
 
+def requires_node_infra(plan):
+    """Both published node-infra contracts carry a host deployment payload."""
+    return plan['baseline'].get('delivery') in selection.NODE_INFRA_DELIVERIES
+
+
 def host_output(command):
     # CI-only read access to owned diagnostic files; deployment needs no sudo helper.
     prefix = [] if os.getuid() == 0 else ['sudo', '-n']
@@ -95,7 +100,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False, group="all
             artifacts.require(path.stat().st_size == records[name]['size'] and 'sha256:' + artifacts.digest(path) == records[name]['digest'],
                               'release input bytes differ from exact stage: ' + name)
             artifacts.unpack(path, release, owner, seen)
-        if plan['baseline'].get('delivery') == selection.NODE_INFRA_DELIVERY:
+        if requires_node_infra(plan):
             for name in (selection.node_infra_archive(version, arch), selection.node_infra_deploy_archive(version)):
                 path = stage / 'assets' / name
                 artifacts.require(path.stat().st_size == records[name]['size']
@@ -141,7 +146,7 @@ def qualify(plan, stage, root, cpus, memory_gib, artifact_only=False, group="all
             return subprocess.check_output(invocation, text=True, timeout=timeout)
         artifacts.require(execute('docker', 'image', 'ls', '-q').strip() == ''
                           and execute('docker', 'ps', '-aq').strip() == '', 'private Docker state was not empty')
-        if plan['baseline'].get('delivery') == selection.NODE_INFRA_DELIVERY:
+        if requires_node_infra(plan):
             artifacts.require(execute('podman', 'images', '-q').strip() == ''
                               and execute('podman', 'ps', '-aq').strip() == '', 'private Podman state was not empty')
             result['empty_private_podman'] = True
