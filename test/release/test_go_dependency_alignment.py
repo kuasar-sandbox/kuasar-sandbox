@@ -128,6 +128,31 @@ class AlignmentTests(unittest.TestCase):
             alignment.ensure_pr(coordinator, plan('sandboxer', OLD, BASE), BASE, {}, PRE, {}, Mock())
         write.assert_not_called()
 
+    def test_new_pr_preserves_executable_file_modes(self):
+        def write(path, method, payload):
+            if path.endswith('/git/trees'):
+                self.assertEqual(payload['tree'], [dict(path='go.mod', mode='100755', type='blob', content='new')])
+                return {'sha': 'new-tree'}
+            if path.endswith('/git/commits'):
+                self.assertEqual(payload['parents'], [BASE])
+                return {'sha': HEAD}
+            if path.endswith('/git/refs'):
+                self.assertEqual(payload, {'ref': 'refs/heads/automation/align-go/main', 'sha': HEAD})
+                return {}
+            if path.endswith('/pulls'):
+                self.assertEqual(payload['base'], 'main')
+                return {'html_url': 'pr/4'}
+            self.fail(path)
+        with (patch.dict(os.environ, GO_ALIGNMENT_TOKEN='test', GO_ALIGNMENT_BOT='app[bot]'),
+              patch.object(coordinator, 'paginated', return_value=[]),
+              patch.object(coordinator, 'branch_sha', side_effect=lambda repo, name: BASE if name=='main' else None),
+              patch.object(coordinator, 'api', return_value={'tree': {'sha': 'base-tree'}}),
+              patch.object(alignment, 'source_files', return_value={'go.mod': ('100755', 'old')}),
+              patch.object(alignment, 'writer', side_effect=write) as writer,
+              self.assertRaisesRegex(coordinator.Pending, 'opened pr/4')):
+            alignment.ensure_pr(coordinator, plan('sandboxer', OLD, BASE), BASE, {'go.mod':'new'}, PRE, {}, Mock())
+        self.assertEqual(writer.call_count, 4)
+
     def test_exact_native_checks_and_reviews_precede_protected_squash(self):
         p = pr()
         owncommit = {'author': p['user'], 'commit': {'message': alignment.TITLE, 'tree': {'sha': 'tree'}},
@@ -145,17 +170,17 @@ class AlignmentTests(unittest.TestCase):
         def branch(repo, name):
             if repo == coordinator.PLATFORM_REPOSITORY: return TRUSTED
             return BASE if name == 'main' else HEAD
+        newblob = hashlib.sha1(b'blob 3\0new').hexdigest()
+        def files(c, repo, sha):
+            return {'go.mod': ('100755', newblob if sha == HEAD else 'previous')}
         def write(path, method, payload):
-            if path.endswith('/git/trees'):
-                self.assertEqual(payload['tree'][0]['mode'], '100755')
-                return {'sha': 'tree'}
             if path.endswith('/merge'): return {'merged': True}
-            self.fail(path)
+            self.fail('unchanged PR must have no other writes: ' + path)
         confirm = Mock()
         with (patch.dict(os.environ, GO_ALIGNMENT_TOKEN='test', GO_ALIGNMENT_BOT='app[bot]'),
               patch.object(coordinator, 'api', side_effect=api), patch.object(coordinator, 'branch_sha', side_effect=branch),
               patch.object(coordinator, 'paginated', side_effect=pages),
-              patch.object(alignment, 'source_files', return_value={'go.mod': {'mode': '100755'}}),
+              patch.object(alignment, 'source_files', side_effect=files),
               patch.object(alignment, 'exact_combination', return_value=TRUSTED),
               patch.object(alignment, 'reviews_resolved', return_value=False) as reviews,
               patch.object(alignment, 'writer', side_effect=write) as writer):

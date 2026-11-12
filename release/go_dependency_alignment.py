@@ -40,7 +40,7 @@ def source_files(c, repo, sha):
     tree = c.api(f'repos/{repo}/git/trees/{sha}')
     if tree['truncated']:
         raise ValueError(f'incomplete tree for {repo}@{sha}')
-    return {row['path']: row for row in tree['tree'] if row['path'] in {'go.mod', 'go.sum'}}
+    return {row['path']: (row['mode'], row['sha']) for row in tree['tree']}
 
 
 @functools.lru_cache(maxsize=512)
@@ -48,10 +48,10 @@ def read_file(c, repo, sha, filename, *, optional=False):
     entry = source_files(c, repo, sha).get(filename)
     if entry is None and optional:
         return ''
-    if not entry or entry['mode'] not in {'100644', '100755'} or entry['type'] != 'blob':
+    if not entry or entry[0] not in {'100644', '100755'}:
         raise ValueError(f'{repo}@{sha}: missing regular {filename}')
-    data = c.api(f'repos/{repo}/git/blobs/{entry["sha"]}')
-    if data['sha'] != entry['sha'] or data.get('encoding') != 'base64':
+    data = c.api(f'repos/{repo}/git/blobs/{entry[1]}')
+    if data['sha'] != entry[1] or data.get('encoding') != 'base64':
         raise ValueError(f'{repo}@{sha}: unexpected {filename} content')
     return base64.b64decode(data['content'].replace('\n', ''), validate=True).decode()
 
@@ -188,15 +188,18 @@ def ensure_pr(c, plan, base, files, version, dependencies, confirm):
         commit = c.api(endpoint + '/commits/' + old)
         if ((commit.get('author') or {}).get('login') != bot or commit['commit']['message'].splitlines()[0] != TITLE):
             raise c.Deferred(f'{repo}:{branch} contains a commit outside the alignment workflow')
-    base_tree = c.api(endpoint + '/git/commits/' + base)['tree']['sha']
-    original = source_files(c, repo, base)
-    tree = writer(endpoint + '/git/trees', 'POST', {'base_tree': base_tree, 'tree': [
-        {'path': name, 'mode': original.get(name, {}).get('mode', '100644'), 'type': 'blob', 'content': value}
-        for name, value in files.items()]})['sha']
-    parents = [base]
-    if old and old != base:
-        parents.append(old)
-    if not old or commit['commit']['tree']['sha'] != tree or commit['parents'][0]['sha'] != base:
+    desired = source_files(c, repo, base).copy()
+    edits = []
+    for name, value in files.items():
+        mode = desired.get(name, ('100644', None))[0]
+        encoded = value.encode()
+        blob = hashlib.sha1(b'blob ' + str(len(encoded)).encode() + b'\0' + encoded).hexdigest()
+        desired[name] = (mode, blob)
+        edits.append({'path': name, 'mode': mode, 'type': 'blob', 'content': value})
+    if not old or commit['parents'][0]['sha'] != base or source_files(c, repo, old) != desired:
+        base_tree = c.api(endpoint + '/git/commits/' + base)['tree']['sha']
+        tree = writer(endpoint + '/git/trees', 'POST', {'base_tree': base_tree, 'tree': edits})['sha']
+        parents = [base] if not old or old == base else [base, old]
         new = writer(endpoint + '/git/commits', 'POST', {'message': TITLE, 'tree': tree, 'parents': parents})
         if c.branch_sha(repo, ref) != base or c.branch_sha(repo, branch) != old:
             raise c.Pending(f'{repo} changed while preparing the alignment')
