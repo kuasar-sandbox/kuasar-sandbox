@@ -12,6 +12,7 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 REPO = 'kuasar-sandbox/kuasar-sandbox'
 BASE, HEAD, MERGE = '1' * 40, '2' * 40, '3' * 40
+STALE_MERGE, OLD_HEAD = '4' * 40, '5' * 40
 
 
 class FinalizeTests(unittest.TestCase):
@@ -26,7 +27,8 @@ class FinalizeTests(unittest.TestCase):
         if os.environ.get('CI_FINALIZE_BASELINE') == '1':
             workflow = subprocess.check_output(
                 ['git', 'show', 'HEAD:.github/workflows/ci-entry.yml'], cwd=ROOT, text=True)
-        steps = yaml.safe_load(workflow)['jobs']['finalize']['steps']
+        self.jobs = yaml.safe_load(workflow)['jobs']
+        steps = self.jobs['finalize']['steps']
         self.script = next(step['run'] for step in steps
                            if step.get('name') == 'Finalize the exact integration status')
         self.pr = {'number': 7, 'state': 'open', 'draft': False,
@@ -60,11 +62,20 @@ if '--request' in sys.argv and sys.argv[sys.argv.index('--request') + 1] == 'POS
         out.write(json.dumps({'path': path, 'payload': json.load(sys.stdin)}) + '\\n')
     print('{}')
 else:
-    responses = json.loads((root / 'responses.json').read_text())
+    with (root / 'gets').open('a') as out:
+        print(path, file=out)
+    fixture = root / 'responses.json'
+    responses = json.loads(fixture.read_text())
     if path not in responses:
         print('offline fixture has no response for ' + path, file=sys.stderr)
         sys.exit(22)
     value = responses[path]
+    if '_sequence' in value:
+        sequence = value['_sequence']
+        value = sequence[0]
+        if len(sequence) > 1:
+            sequence.pop(0)
+            fixture.write_text(json.dumps(responses))
     if '--output' in sys.argv:
         output = pathlib.Path(sys.argv[sys.argv.index('--output') + 1])
         output.write_text(json.dumps(value.get('_body', value)))
@@ -73,6 +84,9 @@ else:
         print(json.dumps(value))
 ''')
         mock.chmod(0o755)
+        sleep = self.root / 'sleep'
+        sleep.write_text('#!/bin/sh\nexit 0\n')
+        sleep.chmod(0o755)
         self.env['PATH'] = str(self.root) + os.pathsep + self.env['PATH']
 
     def run_finalizer(self, **overrides):
@@ -186,7 +200,7 @@ else:
         event = self.root / 'event.json'
         event.write_text(json.dumps({'action': 'opened', 'pull_request': self.pr}))
         (self.root / 'responses.json').write_text(json.dumps(self.responses))
-        steps = yaml.safe_load((ROOT / '.github/workflows/ci-entry.yml').read_text())['jobs']['admission']['steps']
+        steps = self.jobs['admission']['steps']
         script = next(step['run'] for step in steps if step.get('id') == 'admission')
         env = dict(self.env, GITHUB_EVENT_NAME='pull_request_target', GITHUB_EVENT_PATH=str(event),
                    GITHUB_OUTPUT=str(self.root / 'outputs'), RUNNER_TEMP=str(self.root),
@@ -198,6 +212,94 @@ else:
         result = self.run_admission()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn('eligible=true', (self.root / 'outputs').read_text())
+
+    def merge_ref_sequence(self, first_sha, *later_snapshots):
+        self.responses[f'/repos/{REPO}/pulls/7'] = {
+            '_sequence': [dict(self.pr, merge_commit_sha=first_sha), *later_snapshots]}
+        self.responses[f'/repos/{REPO}/git/commits/{STALE_MERGE}'] = {
+            'sha': STALE_MERGE, 'parents': [{'sha': BASE}, {'sha': OLD_HEAD}]}
+
+    def pr_reads(self):
+        return (self.root / 'gets').read_text().splitlines().count(f'/repos/{REPO}/pulls/7')
+
+    def assert_admitted_exact_merge(self):
+        result = self.run_admission()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        outputs = (self.root / 'outputs').read_text().splitlines()
+        self.assertIn('eligible=true', outputs)
+        self.assertIn(f'candidate_sha={MERGE}', outputs)
+        self.assertEqual([(s['path'], s['payload']['state']) for s in self.statuses()],
+                         [(f'/repos/{REPO}/statuses/{MERGE}', 'pending')])
+
+    def test_admission_retries_stale_parents_until_exact_merge(self):
+        self.merge_ref_sequence(STALE_MERGE, self.pr)
+        self.assert_admitted_exact_merge()
+
+    def test_admission_retries_unavailable_merge_until_exact_merge(self):
+        self.merge_ref_sequence(None, self.pr)
+        self.assert_admitted_exact_merge()
+
+    def test_admission_stops_retrying_permanently_stale_merge(self):
+        self.merge_ref_sequence(STALE_MERGE)
+        self.assertNotEqual(self.run_admission().returncode, 0)
+        reads = self.pr_reads()
+        self.assertGreater(reads, 1)
+        self.assertLessEqual(reads, 5)
+        self.assertIn('eligible=false', (self.root / 'outputs').read_text().splitlines())
+        self.assertEqual(self.statuses(), [])
+
+    def test_admission_rejects_commit_api_error(self):
+        del self.responses[f'/repos/{REPO}/git/commits/{MERGE}']
+        self.assertNotEqual(self.run_admission().returncode, 0)
+        self.assertEqual(self.pr_reads(), 1)
+        self.assertEqual(self.statuses(), [])
+
+    def test_admission_rejects_conflict_without_retrying_stale_merge(self):
+        self.pr['mergeable'] = False
+        self.merge_ref_sequence(STALE_MERGE)
+        self.assertNotEqual(self.run_admission().returncode, 0)
+        self.assertEqual(self.pr_reads(), 1)
+        self.assertIn('eligible=false', (self.root / 'outputs').read_text().splitlines())
+        self.assertEqual(self.statuses(), [])
+
+    def test_admission_defers_verified_draft(self):
+        self.pr['draft'] = True
+        result = self.run_admission()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('eligible=false', (self.root / 'outputs').read_text().splitlines())
+        self.assertEqual([(s['path'], s['payload']['state']) for s in self.statuses()],
+                         [(f'/repos/{REPO}/statuses/{MERGE}', 'pending')])
+
+    def assert_draft_deferred_without_status(self, merge_sha):
+        self.pr['draft'] = True
+        self.merge_ref_sequence(merge_sha)
+        result = self.run_admission()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.pr_reads(), 1)
+        outputs = (self.root / 'outputs').read_text().splitlines()
+        self.assertIn('eligible=false', outputs)
+        self.assertIn('candidate_sha=', outputs)
+        self.assertEqual(self.statuses(), [])
+
+    def test_admission_defers_draft_with_stale_merge(self):
+        self.assert_draft_deferred_without_status(STALE_MERGE)
+
+    def test_admission_defers_draft_with_unavailable_merge(self):
+        self.assert_draft_deferred_without_status(None)
+
+    def assert_admission_rejects_changed_parent_during_retry(self, parent):
+        moved = {**self.pr, parent: {**self.pr[parent], 'sha': '6' * 40}}
+        self.merge_ref_sequence(STALE_MERGE, moved)
+        self.assertNotEqual(self.run_admission().returncode, 0)
+        self.assertEqual(self.pr_reads(), 2)
+        self.assertIn('eligible=false', (self.root / 'outputs').read_text().splitlines())
+        self.assertEqual(self.statuses(), [])
+
+    def test_admission_rejects_head_change_during_retry(self):
+        self.assert_admission_rejects_changed_parent_during_retry('head')
+
+    def test_admission_rejects_base_change_during_retry(self):
+        self.assert_admission_rejects_changed_parent_during_retry('base')
 
     def test_active_member_fork_admission(self):
         result = self.run_admission(fork=True, membership={'_http': 200,
