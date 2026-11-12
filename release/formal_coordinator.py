@@ -144,6 +144,8 @@ def main() -> None:
     # waits for the future component tags and every dispatch uses this exact
     # persisted source, including the complete editable release notes.
     if publication is PublicationState.NEW:
+        coordinator.go_dependency_alignment.check_plans(coordinator, plans)
+        coordinator.go_dependency_alignment.confirm_inputs(coordinator, plans)
         source_sha = coordinator.persist_manifest(path.read_text(encoding='utf-8'), version,
             channel='release', root=ROOT, source_ref=source_ref, source_sha=source_sha,
             source_shas={name: plan.source_sha for name, plan in plans.items()})
