@@ -97,10 +97,10 @@ def configure(root, owners, environment=None, *, adapt_requirements=False):
     return make_workspace(root, names, env, replacements)
 
 
-def make_workspace(root, names, env, replacements, *, scope=''):
+def make_workspace(root, names, env, replacements, *, scope='', go=None):
     root = root.resolve()
     env = dict(env)
-    go = shutil.which('go', path=env.get('PATH'))
+    go = go or shutil.which('go', path=env.get('PATH'))
     require(go is not None, 'selected Go compiler is missing')
     go = str(Path(go).resolve())
     modules = [root / owner for owner in names]
@@ -242,7 +242,12 @@ def configure_bound_release(root, owner, version, dependencies, environment=None
         changes = policy.declaration_changes(file.read_text(), expected, go=go)
         require(not changes, f'{name}/go.mod differs from aggregate selection: {changes}')
     if preview:
-        env = make_workspace(root, [owner], env, replacements, scope=version)
+        # The temporary workspace has no go.mod of its own. Start with the
+        # owner's selected toolchain so Go need not discover it again online.
+        goroot = subprocess.check_output([go, 'env', 'GOROOT'], cwd=root / owner,
+                                         env={**env, 'GOWORK': 'off'}, text=True).strip()
+        go = str(Path(goroot) / 'bin/go')
+        env = make_workspace(root, [owner], env, replacements, scope=version, go=go)
     else:
         env['GOWORK'] = 'off'
     validate_build_list(root / owner, expected, replacements, env, go)

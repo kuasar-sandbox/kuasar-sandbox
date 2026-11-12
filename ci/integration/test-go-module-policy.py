@@ -84,6 +84,24 @@ class PolicyTests(unittest.TestCase):
             (self.dep / 'dep.go').write_text('package accelerator\n')
             self.bound(tag, version)
 
+    def test_preview_creates_workspace_with_owners_selected_toolchain(self):
+        # A bootstrap Go can select the required toolchain from a module while
+        # the same binary in an empty directory would look it up on the proxy.
+        shim = self.root / 'launcher'
+        shim.mkdir()
+        launcher = shim / 'go'
+        (shim / 'go.real').symlink_to(shutil.which('go'))
+        launcher.write_text('#!/bin/sh\n'
+                            'if [ "$1 $2" = "work init" ]; then exit 88; fi\n'
+                            'if [ "$1 $2" = "env GOROOT" ]; then pwd -P > "$0.owner"; fi\n'
+                            'exec "$0.real" "$@"\n')
+        launcher.chmod(0o755)
+        tag = 'v0.2.0-preview.20261112'
+        env = dict(self.env, PATH=str(shim) + os.pathsep + self.env['PATH'])
+        bound = self.bound(tag, 'runtime-' + tag, env=env)
+        self.assertEqual((shim / 'go.owner').read_text().strip(), str(self.app))
+        subprocess.run(['go', 'build', '.'], cwd=self.app, env=bound, check=True)
+
     def test_preview_binary_is_identical_across_private_source_roots(self):
         tag = 'v0.2.0-preview.20261112'
         (self.app/'app.go').write_text('package main\nimport ("fmt"; "' + policy.PREFIX + 'accelerator")\n'
