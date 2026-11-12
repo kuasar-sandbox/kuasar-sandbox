@@ -1,4 +1,5 @@
 """Build the admitted owner inventories; never called by prepare or run."""
+import json
 from pathlib import Path
 import shutil
 import subprocess
@@ -21,10 +22,17 @@ def build_owner(root, arch, output, environment, row, run=None):
     artifacts.require(output.is_dir() and not output.is_symlink() and not list(output.iterdir()),
                       'helper recipe requires a fresh output directory')
     if declared['recipe'] is not None:
-        if root.name in ('sandboxer', 'orchestrator'):
+        release_version = environment.get('KUASAR_GO_RELEASE_VERSION')
+        if release_version and root.name in go_workspace.DEPENDENCIES:
+            selected = json.loads(Path(environment['KUASAR_GO_RELEASE_SELECTION']).read_text())
+            dependencies = {name: {'tag': selected[name]['version'], 'sha': selected[name]['sha']}
+                            for name in go_workspace.closure([root.name]) if name != root.name}
+            environment = go_workspace.bound_helper_environment(
+                root.parent, root.name, release_version, dependencies, environment)
+        elif root.name in ('sandboxer', 'orchestrator'):
             environment = go_workspace.helper_environment(root.parent, root.name, environment)
         elif (root / 'go.mod').is_file() and root.name != 'platform':
-            environment = go_workspace.configure(root.parent, [root.name], environment)
+            environment = go_workspace.configure(root.parent, [root.name], environment, adapt_requirements=True)
         command = ['bash', str(root / declared['recipe']), arch, str(output)]
         if run is None:
             subprocess.run(command, cwd=root, env=environment, check=True)

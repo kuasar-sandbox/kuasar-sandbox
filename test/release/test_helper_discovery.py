@@ -116,7 +116,7 @@ class OwnerDiscovery(unittest.TestCase):
         (orchestrator / 'go.mod').write_text('module github.com/kuasar-sandbox/orchestrator\n')
         workspace = platform_root / 'ci/integration/go_workspace.py'
         workspace.write_text('import os,sys\n'
-            'assert sys.argv[1:] == ["--root", os.environ["KUASAR_WORKSPACE_ROOT"], "--owners", "orchestrator"]\n'
+            'assert sys.argv[1:] == ["--root", os.environ["KUASAR_WORKSPACE_ROOT"], "--owners", "orchestrator", "--source-requirements"]\n'
             'print(os.environ["FIXTURE_GO_WORKSPACE"])\n')
         upstream = root / 'upstream'; upstream.mkdir()
         (upstream / 'helper.c').write_text('int main(void) { return 0; }\n')

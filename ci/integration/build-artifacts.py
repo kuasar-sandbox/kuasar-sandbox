@@ -60,7 +60,7 @@ def build_records(plan, arch):
 
 
 def configure_workspace(root, owners, environment):
-    return go_workspace.configure(root, owners, environment)
+    return go_workspace.configure(root, owners, environment, adapt_requirements=True)
 
 
 def helper_owners(plan, arch):

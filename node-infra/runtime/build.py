@@ -13,6 +13,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 
 
@@ -44,17 +45,25 @@ def build(args):
         module = Path(temporary)
         for path in Path(__file__).parent.glob("*.go"):
             shutil.copy2(path, module / path.name)
-        (module / "connector").symlink_to(source, target_is_directory=True)
-        (module / "go.mod").write_text(
-            "module github.com/kuasar-sandbox/kuasar-sandbox/node-infra/runtime\n\n"
-            f"go {go_version.group(1)}\n\n"
-            "require github.com/kuasar-sandbox/connector v0.0.0\n\n"
-            "replace github.com/kuasar-sandbox/connector => ./connector\n"
-        )
-        shutil.copy2(source / "go.sum", module / "go.sum")
-        env = os.environ.copy()
-        env.update(GOWORK="off", CGO_ENABLED="0", GOOS="linux", GOARCH=ARCHES[args.arch])
-        run(["go", "mod", "tidy"], cwd=module, env=env)
+        environment = dict(os.environ, CGO_ENABLED="0", GOOS="linux", GOARCH=ARCHES[args.arch])
+        version = environment.get("KUASAR_GO_RELEASE_VERSION")
+        if version:
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release"))
+            import go_release_consumer
+            env = go_release_consumer.prepare(module, "connector", args.sources.resolve(),
+                                              selection, version, environment)
+        else:
+            # Source-mode CI and local workspace images also support unpublished PR inputs.
+            env = dict(environment, GOWORK="off")
+            (module / "connector").symlink_to(source, target_is_directory=True)
+            (module / "go.mod").write_text(
+                "module github.com/kuasar-sandbox/kuasar-sandbox/node-infra/runtime\n\n"
+                f"go {go_version.group(1)}\n\n"
+                "require github.com/kuasar-sandbox/connector v0.0.0\n\n"
+                "replace github.com/kuasar-sandbox/connector => ./connector\n"
+            )
+            shutil.copy2(source / "go.sum", module / "go.sum")
+            run(["go", "mod", "tidy"], cwd=module, env=env)
         if args.test:
             run(["go", "test", "./..."], cwd=module, env=env)
         run(["go", "build", "-trimpath", "-ldflags=-s -w", "-o", args.output.resolve(), "."], cwd=module, env=env)

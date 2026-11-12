@@ -1,0 +1,102 @@
+#!/usr/bin/env python3
+"""Build temporary Go consumers using the aggregate's actual release channel."""
+import argparse
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci/integration'))
+import go_workspace
+import go_module_policy
+import tag_sources
+
+
+def prepare(module, owner, sources, selection, version, environment):
+    """Set up a disposable main module containing the actual consumer sources."""
+    go = shutil.which('go', path=environment.get('PATH'))
+    owner_source = sources / owner
+    owner_module = 'github.com/kuasar-sandbox/' + owner
+    env = dict(environment, GOWORK='off')
+    document = json.loads(subprocess.check_output(
+        [go, 'mod', 'edit', '-json', str(owner_source / 'go.mod')], cwd=module, env=env))
+    if document['Module']['Path'] != owner_module:
+        raise ValueError('selected SDK has a different module path')
+    modules = go_workspace.closure([owner])
+    tags = {name: selection[name]['version'] for name in modules}
+    expected = go_module_policy.expected_versions(tags)
+    (module / 'go.mod').write_text(
+        'module example.com/kuasar-release-consumer\n\ngo ' + document['Go'] + '\n\n'
+        + f'require {owner_module} {expected[owner_module]}\n')
+    sums = owner_source / 'go.sum'
+    if sums.is_file():
+        shutil.copyfile(sums, module / 'go.sum')
+    replacements = {}
+    preview = '-preview.' in version
+    if preview:
+        # The only workspace main module is the consumer. Stable dependencies
+        # still resolve normally, even when another SDK in the closure is a Preview.
+        subprocess.run([go, 'work', 'init', '.'], cwd=module, env=env, check=True)
+        env['GOWORK'] = str(module / 'go.work')
+    for name, tag in tags.items():
+        tag_sources.validate_tag(name, tag)
+        if '-preview.' not in tag:
+            continue
+        if not preview:
+            raise ValueError(f'Stable {version} selects Preview {name} {tag}')
+        directory = (sources / name).resolve()
+        if tag_sources.git(directory, 'rev-parse', 'HEAD') != selection[name]['sha']:
+            raise ValueError(f'{name} differs from selected Preview commit')
+        path = 'github.com/kuasar-sandbox/' + name
+        core = expected[path]
+        subprocess.run([go, 'work', 'edit', f'-replace={path}@{core}={directory}'],
+                       cwd=module, env=env, check=True)
+        replacements[path, core] = directory
+    if not preview:
+        # Materialize just the consumer's imports. Dependency test suites are not
+        # part of a user building this package.
+        subprocess.run([go, 'list', '-mod=mod', '-deps', './...'], cwd=module, env=env,
+                       stdout=subprocess.DEVNULL, check=True)
+    go_workspace.validate_build_list(module, expected, replacements, env, go)
+    return env
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('action', choices=('fixtures', 'published'))
+    parser.add_argument('--version', required=True)
+    parser.add_argument('--selection', type=Path, required=True)
+    parser.add_argument('--sources', type=Path, required=True)
+    parser.add_argument('--platform', type=Path)
+    parser.add_argument('--output', type=Path)
+    args = parser.parse_args()
+    selection = json.loads(args.selection.read_text())
+    with tempfile.TemporaryDirectory(prefix='aggregate-go-consumer-') as directory:
+        root = Path(directory)
+        if args.action == 'fixtures':
+            if args.platform is None or args.output is None:
+                parser.error('fixtures requires --platform and --output')
+            for fixture in ('xproxy', 'xconductor'):
+                shutil.copytree(args.platform / 'test/e2e/platform/helpers' / fixture, root / fixture)
+        else:
+            if '-preview.' in args.version:
+                parser.error('public module installation requires a Stable aggregate')
+            (root / 'consumer.go').write_text('package consumer\nimport _ "github.com/kuasar-sandbox/orchestrator/app/telemetry"\n')
+        env = prepare(root, 'orchestrator', args.sources.resolve(), selection, args.version, os.environ)
+        if args.action == 'fixtures':
+            for fixture in ('xproxy', 'xconductor'):
+                subprocess.run(['go', 'build', '-p', env['KUASAR_BUILD_JOBS'], '-trimpath',
+                                '-o', str((args.output / ('node-infra-' + fixture)).resolve()), './' + fixture],
+                               cwd=root, env=env, check=True)
+        else:
+            subprocess.run(['go', 'build', '-mod=readonly', '.'], cwd=root, env=env, check=True)
+            tag = selection['orchestrator']['version']
+            subprocess.run(['go', 'install', 'github.com/kuasar-sandbox/orchestrator/cmd/node-ctl@' + tag],
+                           cwd=root, env={**env, 'GOBIN': str(root / 'bin')}, check=True)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,45 @@
+name: Go module selection
+run-name: Go selection ${{ inputs.binding }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      consumer:
+        required: true
+        type: string
+      pr_number:
+        required: true
+        type: string
+      head_sha:
+        required: true
+        type: string
+      base_sha:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      dependencies:
+        description: Exact Go dependency tags and commits from the Daily plan
+        required: true
+        type: string
+      binding:
+        description: SHA-256 of the candidate and dependency tuple
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.repository == 'kuasar-sandbox/kuasar-sandbox' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ job.workflow_sha }}
+          persist-credentials: false
+      - name: Build the selected Go dependency combination
+        run: python3 -B release/check-go-selection-pr.py "$GITHUB_EVENT_PATH"

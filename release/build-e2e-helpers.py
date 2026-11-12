@@ -21,7 +21,7 @@ import build_demo_wheels
 import node_infra_assets
 
 
-def build(unit_sources, selected, output, wheels_output, platform_source, arch=None, node_infra_output=None, node_infra=False):
+def build(unit_sources, selected, output, wheels_output, platform_source, arch=None, node_infra_output=None, node_infra=False, release_version=None):
     artifacts.require(arch is None or platform.machine() == arch, 'helper package requires the selected native architecture')
     artifacts.require(not output.exists(), 'helper packages need a fresh output')
     source_records = tag_sources.inspect_sources(unit_sources, selected, owner_layout=True)
@@ -49,6 +49,15 @@ def build(unit_sources, selected, output, wheels_output, platform_source, arch=N
         # Keep private source copy paths out of binaries and cache identities.
         environment = {**os.environ, 'GOWORK': 'off',
                        'GOFLAGS': (os.environ.get('GOFLAGS', '') + ' -trimpath').strip()}
+        if release_version is not None:
+            binding = Path(directory) / 'go-selection.json'
+            binding.write_bytes(artifacts.canonical(component_selection))
+            environment.update(KUASAR_GO_RELEASE_VERSION=release_version,
+                               KUASAR_GO_RELEASE_SELECTION=str(binding))
+            if '-preview.' not in release_version and (arch is None or arch == 'x86_64'):
+                subprocess.run([sys.executable, '-B', str(ROOT / 'release/go_release_consumer.py'),
+                                'published', '--selection', str(binding), '--version', release_version,
+                                '--sources', str(sources)], env=environment, check=True)
         for arch in ((arch,) if arch else artifacts.ARCHES):
             build_demo_wheels.build(platform_source / 'test/demo', arch, wheels_output / arch)
             selected = dict(helpers)
@@ -90,4 +99,4 @@ if __name__ == '__main__':
     build(args.sources.resolve(), selection.resolve_new_selection(args.platform_source, args.version), args.output.resolve(),
           args.wheels_output.resolve(), args.platform_source.resolve(), args.arch, args.node_infra_output,
           selection.delivery(selection.resolve_config(args.platform_source, args.version), str(args.platform_source))
-          in selection.NODE_INFRA_DELIVERIES)
+          in selection.NODE_INFRA_DELIVERIES, args.version)
