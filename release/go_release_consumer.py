@@ -55,28 +55,24 @@ def prepare(module, owner, sources, selection, version, environment):
         subprocess.run([go, 'work', 'edit', f'-replace={path}@{core}={directory}'],
                        cwd=module, env=env, check=True)
         replacements[path, core] = directory
-    # Populate requirements for the actual fixture packages and their tests.
-    # Go forbids -mod=mod in a workspace. Reproduce the exact selected Preview
-    # substitutions in a disposable modfile while resolving these imports.
-    standalone = dict(env, GOWORK='off')
-    list_args = [go, 'list', '-mod=mod', '-deps', '-test']
-    if replacements:
-        draft = module / 'consumer-resolution.mod'
-        draft_sum = draft.with_suffix('.sum')
-        shutil.copyfile(module / 'go.mod', draft)
-        if (module / 'go.sum').exists():
-            shutil.copyfile(module / 'go.sum', draft_sum)
-        flags = [f'-replace={path}@{core}={source}' for (path, core), source in replacements.items()]
-        subprocess.run([go, 'mod', 'edit', *flags, str(draft)], cwd=module, env=standalone, check=True)
-        subprocess.run([*list_args, '-modfile=' + str(draft), './...'], cwd=module, env=standalone,
-                       stdout=subprocess.DEVNULL, check=True)
-        drops = [f'-dropreplace={path}@{core}' for path, core in replacements]
-        subprocess.run([go, 'mod', 'edit', *drops, str(draft)], cwd=module, env=standalone, check=True)
-        draft.replace(module / 'go.mod')
-        if draft_sum.exists():
-            draft_sum.replace(module / 'go.sum')
+    if preview:
+        # Discover the modules of the packages actually imported by the
+        # consumer (including its tests) inside the bound workspace. -e allows
+        # Go to report imports before those implicit requirements are recorded.
+        imports = subprocess.check_output(
+            [go, 'list', '-e', '-f', '{{range .Imports}}{{println .}}{{end}}'
+             '{{range .TestImports}}{{println .}}{{end}}{{range .XTestImports}}{{println .}}{{end}}', './...'],
+            cwd=module, env=env, text=True).split()
+        if imports:
+            rows = subprocess.check_output(
+                [go, 'list', '-e', '-find', '-f', '{{with .Module}}{{if not .Main}}{{.Path}}@{{.Version}}{{end}}{{end}}',
+                 *sorted(set(imports))], cwd=module, env=env, text=True).split()
+            if rows:
+                subprocess.run([go, 'mod', 'edit', *('-require=' + pin for pin in sorted(set(rows)))],
+                               cwd=module, env=env, check=True)
     else:
-        subprocess.run([*list_args, './...'], cwd=module, env=standalone, stdout=subprocess.DEVNULL, check=True)
+        subprocess.run([go, 'list', '-mod=mod', '-deps', '-test', './...'], cwd=module, env=env,
+                       stdout=subprocess.DEVNULL, check=True)
     go_workspace.validate_build_list(module, expected, replacements, env, go)
     return env
 
