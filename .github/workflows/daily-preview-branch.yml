@@ -71,7 +71,6 @@ jobs:
           owner: kuasar-sandbox
           repositories: accelerator,connector,guest-runtime,kuasar-sandbox,orchestrator,sandboxer
           permission-actions: write
-          permission-checks: read
           permission-pull-requests: read
           permission-contents: read
 

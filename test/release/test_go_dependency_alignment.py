@@ -49,6 +49,51 @@ class AlignmentTests(unittest.TestCase):
                 alignment.selected_files(root, {'sandboxer': PRE, 'connector': CORE})
             alignment.selected_files(root, {'sandboxer': PRE, 'connector': OLD})
 
+    def test_actual_v0113_v0114_and_daily_six_edge_selections(self):
+        # Captured from go.mod at the component tags of each named aggregate.
+        pseudo = 'v0.1.14-preview.20261107.1.0.20261107022758-3b3bff611621'
+        sand = 'github.com/kuasar-sandbox/sandboxer'
+        erofs = 'github.com/kuasar-sandbox/go-erofs v0.0.0-20261014160540-827da6f90114 // indirect'
+        release_args = [('release-v0.1.13', 'v0.1.14', 'v0.1.13', 'runtime-v0.1.13', 'v0.1.10', 'v0.1.6', pseudo),
+                        ('release-v0.1.14', 'v0.1.15', 'v0.1.14', 'runtime-v0.1.14', 'v0.1.12', 'v0.1.8', 'v0.1.15'),
+                        ('release-v0.2.0-preview.20261112', 'v0.1.15', 'v0.2.0-preview.20261112',
+                         'runtime-v0.2.0-preview.20261112', 'v0.1.12', 'v0.1.8', 'v0.1.15')]
+        for release, sandboxer, orchestrator, runtime, accel_req, conn_req, sand_req in release_args:
+            with self.subTest(release=release):
+                selected = dict(accelerator='v0.1.12', connector='v0.1.8', sandboxer=sandboxer,
+                                orchestrator=orchestrator, runtime=runtime, vmlinux='vmlinux-v0.1.6')
+                expected = alignment.policy.expected_versions(selected)
+                go_deps = {'sandboxer': {ACC: accel_req, CON: conn_req},
+                           'orchestrator': {ACC: accel_req, CON: conn_req, sand: sand_req},
+                           'runtime': {ACC: accel_req}}
+                differences = {}
+                for unit, requires in go_deps.items():
+                    lines = [f'  {name} {version}' for name, version in requires.items()]
+                    if unit in ('runtime', 'orchestrator'):
+                        lines.append('  ' + erofs)
+                    text = 'module example.test/' + unit + '\nrequire (\n' + '\n'.join(lines) + '\n)\n'
+                    changes = alignment.policy.declaration_changes(text, expected)
+                    for path, pair in changes.items():
+                        differences[unit, path] = pair
+                wanted = ({(unit, name): (before, expected[name]) for unit, requirements in go_deps.items()
+                           for name, before in requirements.items()} if release == 'release-v0.1.13' else {})
+                self.assertEqual(differences, wanted)
+                self.assertEqual(len(differences), 6 if release == 'release-v0.1.13' else 0)
+
+    def test_no_writer_grant_does_not_block_clean_selection_or_publish_drift(self):
+        plans = {'connector': plan('connector', CORE, HEAD), 'sandboxer': plan('sandboxer', CORE, BASE)}
+        contents = f'module example.test/consumer\nrequire {CON} {CORE}\n'
+        checksum = '\n'.join(sorted(sums(CON, CORE))) + '\n'
+        def read(c, repo, sha, filename, **kwargs):
+            if filename == 'go.sum': return checksum
+            return contents if repo.endswith('/sandboxer') else 'module connector\n'
+        with (patch.dict(os.environ, clear=True), patch.object(alignment, 'read_file', side_effect=read),
+              patch.object(alignment, 'writer', side_effect=AssertionError('unexpected mutation'))):
+            alignment.check_plans(coordinator, plans, date='20261112')
+            with self.assertRaisesRegex(coordinator.Deferred, 'Pull requests: Read and write'):
+                alignment.ensure_pr(coordinator, plans['sandboxer'], BASE, {'go.mod': 'new'},
+                                    PRE, {}, Mock())
+
     def test_one_daily_pr_aligns_both_edges_before_freeze(self):
         plans = {'accelerator': plan('accelerator', PRE, '1' * 40, action='publish'),
                  'connector': plan('connector', CORE, '2' * 40),
@@ -163,9 +208,12 @@ class AlignmentTests(unittest.TestCase):
             if '/commits/' in path: return owncommit
             if '/pulls/' in path: return p
             self.fail(path)
-        check = {'name': 'ci / finalize', 'head_sha': HEAD, 'app': {'slug': 'github-actions'},
+        check = {'name': 'ci / finalize', 'head_sha': HEAD,
                  'id': 7, 'status': 'completed', 'conclusion': 'success', 'html_url': 'check/7'}
         def pages(path, key=None):
+            if key == 'workflow_runs':
+                return [{'id': 8, 'event': 'pull_request_target', 'head_sha': HEAD, 'head_repository': p['head']['repo'],
+                         'pull_requests': [p], 'status': 'completed', 'conclusion': 'success', 'html_url': 'run/8'}]
             return [check] if key else [p]
         def branch(repo, name):
             if repo == coordinator.PLATFORM_REPOSITORY: return TRUSTED

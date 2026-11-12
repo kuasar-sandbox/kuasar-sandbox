@@ -224,6 +224,7 @@ test-ci-tools:
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
 
 test-release-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_go_dependency_alignment.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test-download-asset.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/release-source-set.py --sources "$(ORG)" --auto
 	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/test-release-source-set.py

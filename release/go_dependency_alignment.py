@@ -145,6 +145,29 @@ def exact_combination(c, plan, pr, version, dependencies):
     return trusted
 
 
+def normal_ci(c, repo, pr):
+    # The CI App has Actions read/write but no Checks API grant. Query the
+    # actual component PR workflow and its exact finalize job with Actions.
+    head, base = pr['head']['sha'], pr['base']['sha']
+    path = f'repos/{repo}/actions/workflows/integration-tests.yml/runs?' + urlencode({
+        'event': 'pull_request_target', 'head_sha': head, 'per_page': 100})
+    runs = [r for r in c.paginated(path, 'workflow_runs')
+            if r['head_sha'] == head and r['event'] == 'pull_request_target'
+            and r.get('head_repository', {}).get('full_name') == repo
+            and any(p['number'] == pr['number'] and p['head']['sha'] == head and p['base']['sha'] == base
+                    for p in r['pull_requests'])]
+    run = max(runs, key=lambda r: r['id'], default=None)
+    if run is None or run.get('status') != 'completed':
+        raise c.Pending(f'waiting for the normal PR workflow on {pr["html_url"]}')
+    if run.get('conclusion') != 'success':
+        raise c.Deferred(f'PR CI failed: {run["html_url"]}')
+    jobs = c.paginated(f'repos/{repo}/actions/runs/{run["id"]}/jobs?filter=all&per_page=100', 'jobs')
+    finalize = c.latest_actual_jobs(jobs).get('ci / finalize', {})
+    if (finalize.get('head_sha') != head or finalize.get('status') != 'completed'
+            or finalize.get('conclusion') != 'success'):
+        raise c.Deferred(f'missing successful ci / finalize for {head}: {run["html_url"]}')
+
+
 def reviews_resolved(c, repo, number):
     owner, name = repo.split('/')
     query = """query($owner:String!,$name:String!,$number:Int!,$after:String) {
@@ -174,8 +197,11 @@ def ensure_pr(c, plan, base, files, version, dependencies, confirm):
     endpoint = 'repos/' + repo
     bot = os.environ.get('GO_ALIGNMENT_BOT', '')
     if not os.environ.get('GO_ALIGNMENT_TOKEN') or not re.fullmatch(r'[A-Za-z0-9_-]+\[bot\]', bot):
-        raise c.Deferred(f'{repo}: Go alignment requires the component App contents/pull-requests writer')
+        raise c.Deferred(f'{repo}: cannot align go.mod without the component writer token; grant the CI App '
+                         'Pull requests: Read and write, approve the installation change and rerun Daily')
     branch = 'automation/align-go/' + ref
+    if c.PLATFORM_REF != ref:
+        branch += '/for-' + c.PLATFORM_REF.replace('/', '-')
     pulls = c.paginated(endpoint + '/pulls?' + urlencode({
         'head': repo.split('/')[0] + ':' + branch, 'base': ref, 'state': 'open', 'per_page': 100}))
     if len(pulls) > 1:
@@ -219,14 +245,7 @@ def ensure_pr(c, plan, base, files, version, dependencies, confirm):
             or pr['head']['ref'] != branch or pr['base']['ref'] != ref or pr['state'] != 'open'):
         raise c.Pending(f'{repo}: rescan changed PR or branch')
     trusted = exact_combination(c, plan, pr, version, dependencies)
-    checks = c.paginated(endpoint + '/commits/' + old + '/check-runs?check_name=ci%20%2F%20finalize&per_page=100',
-                         'check_runs')
-    finalize = max((r for r in checks if r['name'] == 'ci / finalize' and r['head_sha'] == old
-                    and r.get('app', {}).get('slug') == 'github-actions'), key=lambda r: r['id'], default=None)
-    if finalize is None or finalize.get('status') != 'completed':
-        raise c.Pending(f'waiting for ci / finalize on {pr["html_url"]}')
-    if finalize.get('conclusion') != 'success':
-        raise c.Deferred(f'ci / finalize failed on {pr["html_url"]}: {finalize["html_url"]}')
+    normal_ci(c, repo, pr)
     if (pr.get('mergeable_state') != 'clean' or pr.get('mergeable') is not True
             or not reviews_resolved(c, repo, pr['number'])):
         raise c.Pending(f'waiting for required checks and reviews on {pr["html_url"]}')
