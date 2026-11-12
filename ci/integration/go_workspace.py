@@ -116,12 +116,14 @@ def make_workspace(root, names, env, replacements, *, scope=''):
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / 'go.work'
     if not path.exists():
-        with tempfile.TemporaryDirectory(prefix='init-', dir=directory) as temporary:
+        # A sibling has the same relative path to each selected source as
+        # the final workspace. Keep temporary checkout roots out of build info.
+        with tempfile.TemporaryDirectory(prefix='init-', dir=directory.parent) as temporary:
             subprocess.run([go, 'work', 'init', *map(str, modules)], cwd=temporary,
                            env={**env, 'GOWORK': 'off'}, check=True)
             candidate = Path(temporary) / 'go.work'
             if replacements:
-                args = [f'-replace={module}@{version}={target}'
+                args = [f'-replace={module}@{version}={os.path.relpath(target, directory)}'
                         for (module, version), target in sorted(replacements.items())]
                 subprocess.run([go, 'work', 'edit', *args, str(candidate)], cwd=temporary,
                                env={**env, 'GOWORK': 'off'}, check=True)

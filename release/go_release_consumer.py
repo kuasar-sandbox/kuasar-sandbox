@@ -47,14 +47,22 @@ def prepare(module, owner, sources, selection, version, environment):
             continue
         if not preview:
             raise ValueError(f'Stable {version} selects Preview {name} {tag}')
-        directory = (sources / name).resolve()
-        if tag_sources.git(directory, 'rev-parse', 'HEAD') != selection[name]['sha']:
+        directory = sources / name
+        if (directory.is_symlink() or directory.resolve().parent != sources.resolve()
+                or tag_sources.git(directory, 'rev-parse', 'HEAD') != selection[name]['sha']):
             raise ValueError(f'{name} differs from selected Preview commit')
         path = 'github.com/kuasar-sandbox/' + name
         core = expected[path]
-        subprocess.run([go, 'work', 'edit', f'-replace={path}@{core}={directory}'],
+        # Go embeds the literal replacement in binaries, even with -trimpath.
+        # A private, verified relative link keeps identical builds reproducible.
+        links = module / '.selected-go-sources'
+        if not replacements:
+            links.mkdir()  # refuse a preexisting directory or symlink
+        link = links / name
+        link.symlink_to(directory.resolve(), target_is_directory=True)
+        subprocess.run([go, 'work', 'edit', f'-replace={path}@{core}=./{links.name}/{name}'],
                        cwd=module, env=env, check=True)
-        replacements[path, core] = directory
+        replacements[path, core] = directory.resolve()
     if preview:
         # Discover the modules of the packages actually imported by the
         # consumer (including its tests) inside the bound workspace. -e allows

@@ -2,6 +2,7 @@
 """Exercise aggregate Go declarations and publication channels without a network."""
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import tempfile
@@ -64,8 +65,11 @@ class PolicyTests(unittest.TestCase):
         env = self.bound(tag, version)
         doc = json.loads(subprocess.check_output(['go','work','edit','-json',env['GOWORK']], env=env))
         self.assertEqual([r['DiskPath'] for r in doc['Use']], [str(self.app)])
-        self.assertEqual(doc['Replace'], [{'Old': {'Path': policy.PREFIX + 'accelerator', 'Version': 'v0.2.0'},
-                                           'New': {'Path': str(self.dep)}}])
+        self.assertEqual(len(doc['Replace']), 1)
+        row = doc['Replace'][0]
+        self.assertEqual(row['Old'], {'Path': policy.PREFIX + 'accelerator', 'Version': 'v0.2.0'})
+        self.assertFalse(Path(row['New']['Path']).is_absolute())
+        self.assertEqual((Path(env['GOWORK']).parent / row['New']['Path']).resolve(), self.dep)
         for command in (['go','build','.'], ['go','list','-m','all']):
             subprocess.run(command, cwd=self.app, env=env, stdout=subprocess.DEVNULL, check=True)
         with self.assertRaisesRegex(ValueError, 'Stable release selected Preview'):
@@ -79,6 +83,24 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'uncommitted'):
             (self.dep / 'dep.go').write_text('package accelerator\n')
             self.bound(tag, version)
+
+    def test_preview_binary_is_identical_across_private_source_roots(self):
+        tag = 'v0.2.0-preview.20261112'
+        (self.app/'app.go').write_text('package main\nimport ("fmt"; "' + policy.PREFIX + 'accelerator")\n'
+                                       'func main(){fmt.Println(accelerator.V)}\n')
+        binaries = []
+        for phase in ('cold', 'warm'):
+            root = self.root / phase
+            shutil.copytree(self.app, root / self.app.name)
+            shutil.copytree(self.dep, root / self.dep.name)
+            env = workspace.configure_bound_release(root, self.app.name, 'runtime-' + tag,
+                        {'accelerator': {'tag':tag, 'sha':self.sha}}, self.env)
+            binary = root/'probe'
+            subprocess.run(['go','build','-trimpath','-o',str(binary),'.'], cwd=root/self.app.name, env=env, check=True)
+            info = subprocess.check_output(['go', 'version', '-m', binary], text=True)
+            self.assertNotIn(str(root), '\n'.join(info.splitlines()[1:]))
+            binaries.append(binary.read_bytes())
+        self.assertEqual(binaries[0], binaries[1])
 
     def test_stable_and_mixed_preview_resolve_formal_dependency_from_proxy(self):
         proxy = self.root / 'proxy'

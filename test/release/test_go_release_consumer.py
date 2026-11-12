@@ -1,5 +1,6 @@
 """Stable signatures resolve public modules; Preview fixtures consume their selected SHA."""
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -67,6 +68,28 @@ class ReleaseConsumer(unittest.TestCase):
         self.assertIn(self.path + ' v0.2.0 => ', Path(env['GOWORK']).read_text())
         self.assertNotIn('preview', (self.module / 'go.mod').read_text())
         self.assertNotIn('replace', (self.module / 'go.mod').read_text())
+
+    def test_preview_consumer_build_info_is_portable_and_links_cannot_be_injected(self):
+        tag = 'v0.2.0-preview.20261112'
+        selection = {'connector': {'version':tag, 'sha':self.sha}}
+        binaries = []
+        for phase in ('first', 'second'):
+            root = self.root / phase
+            sources, module = root / 'sdk', root / 'client'
+            shutil.copytree(self.connector, sources / 'connector')
+            shutil.copytree(self.module, module)
+            env = consumer.prepare(module, 'connector', sources, selection, 'release-' + tag, self.env)
+            binary = root / 'client-bin'
+            subprocess.run(['go','build','-trimpath','-o',str(binary),'.'], cwd=module, env=env, check=True)
+            body = subprocess.check_output(['go','version','-m',binary], text=True).splitlines()[1:]
+            self.assertNotIn(str(root), '\n'.join(body))
+            self.assertIn('./.selected-go-sources/connector', '\n'.join(body))
+            binaries.append(binary.read_bytes())
+        self.assertEqual(binaries[0], binaries[1])
+        (self.module / '.selected-go-sources').symlink_to(self.root, target_is_directory=True)
+        with self.assertRaises(FileExistsError):
+            consumer.prepare(self.module, 'connector', self.sources, selection, 'release-' + tag, self.env)
+        self.assertFalse((self.root/'connector').exists())
 
     def test_preview_fixture_can_directly_import_an_sdk_transitive_dependency(self):
         external = 'example.test/fixture-target'
