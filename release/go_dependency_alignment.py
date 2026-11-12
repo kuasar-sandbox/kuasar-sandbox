@@ -48,7 +48,7 @@ def read_file(c, repo, sha, filename, *, optional=False):
     entry = source_files(c, repo, sha).get(filename)
     if entry is None and optional:
         return ''
-    if not entry or entry['mode'] != '100644' or entry['type'] != 'blob':
+    if not entry or entry['mode'] not in {'100644', '100755'} or entry['type'] != 'blob':
         raise ValueError(f'{repo}@{sha}: missing regular {filename}')
     data = c.api(f'repos/{repo}/git/blobs/{entry["sha"]}')
     if data['sha'] != entry['sha'] or data.get('encoding') != 'base64':
@@ -189,8 +189,10 @@ def ensure_pr(c, plan, base, files, version, dependencies, confirm):
         if ((commit.get('author') or {}).get('login') != bot or commit['commit']['message'].splitlines()[0] != TITLE):
             raise c.Deferred(f'{repo}:{branch} contains a commit outside the alignment workflow')
     base_tree = c.api(endpoint + '/git/commits/' + base)['tree']['sha']
+    original = source_files(c, repo, base)
     tree = writer(endpoint + '/git/trees', 'POST', {'base_tree': base_tree, 'tree': [
-        {'path': name, 'mode': '100644', 'type': 'blob', 'content': value} for name, value in files.items()]})['sha']
+        {'path': name, 'mode': original.get(name, {}).get('mode', '100644'), 'type': 'blob', 'content': value}
+        for name, value in files.items()]})['sha']
     parents = [base]
     if old and old != base:
         parents.append(old)

@@ -146,13 +146,16 @@ class AlignmentTests(unittest.TestCase):
             if repo == coordinator.PLATFORM_REPOSITORY: return TRUSTED
             return BASE if name == 'main' else HEAD
         def write(path, method, payload):
-            if path.endswith('/git/trees'): return {'sha': 'tree'}
+            if path.endswith('/git/trees'):
+                self.assertEqual(payload['tree'][0]['mode'], '100755')
+                return {'sha': 'tree'}
             if path.endswith('/merge'): return {'merged': True}
             self.fail(path)
         confirm = Mock()
         with (patch.dict(os.environ, GO_ALIGNMENT_TOKEN='test', GO_ALIGNMENT_BOT='app[bot]'),
               patch.object(coordinator, 'api', side_effect=api), patch.object(coordinator, 'branch_sha', side_effect=branch),
               patch.object(coordinator, 'paginated', side_effect=pages),
+              patch.object(alignment, 'source_files', return_value={'go.mod': {'mode': '100755'}}),
               patch.object(alignment, 'exact_combination', return_value=TRUSTED),
               patch.object(alignment, 'reviews_resolved', return_value=False) as reviews,
               patch.object(alignment, 'writer', side_effect=write) as writer):
