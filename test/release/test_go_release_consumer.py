@@ -68,6 +68,29 @@ class ReleaseConsumer(unittest.TestCase):
         self.assertNotIn('preview', (self.module / 'go.mod').read_text())
         self.assertNotIn('replace', (self.module / 'go.mod').read_text())
 
+    def test_preview_fixture_can_directly_import_an_sdk_transitive_dependency(self):
+        external = 'example.test/fixture-target'
+        (self.connector / 'go.mod').write_text(self.manifest + f'require {external} v1.0.0\n')
+        subprocess.run(['git','-c','user.name=test','-c','user.email=test@example.com','commit','-qam','dependency'],
+                       cwd=self.connector, check=True)
+        self.sha = subprocess.check_output(['git','rev-parse','HEAD'], cwd=self.connector, text=True).strip()
+        versions = self.proxy / external / '@v'
+        versions.mkdir(parents=True)
+        external_mod = 'module ' + external + '\ngo 1.22\n'
+        (versions / 'v1.0.0.info').write_text('{"Version":"v1.0.0","Time":"2026-01-01T00:00:00Z"}')
+        (versions / 'v1.0.0.mod').write_text(external_mod)
+        with zipfile.ZipFile(versions / 'v1.0.0.zip', 'w') as archive:
+            archive.writestr(external + '@v1.0.0/go.mod', external_mod)
+            archive.writestr(external + '@v1.0.0/external.go', 'package ext\nconst Word = " direct"\n')
+        test = self.module / 'main.go'
+        test.write_text('package main\nimport ("fmt"; "' + self.path + '"; "' + external +
+                        '")\nfunc main(){fmt.Print(connector.Origin + ext.Word)}\n')
+        env, result = self.run_client('release-v0.2.0-preview.20261112', 'v0.2.0-preview.20261112')
+        self.assertEqual(result, 'checkout direct')
+        self.assertIn(external + ' v1.0.0', (self.module / 'go.mod').read_text())
+        self.assertNotIn('replace', (self.module / 'go.mod').read_text())
+        self.assertIn('/connector v0.2.0 => ', Path(env['GOWORK']).read_text())
+
     def test_historical_platform_recipe_redirects_only_the_two_selected_go_builds(self):
         platform = self.sources / 'platform'
         output = self.root / 'output'
