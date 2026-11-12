@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci/integration'))
 import go_workspace
 
 
-PACKAGES = {'sandboxer': './cmd/sandbox-ctl', 'orchestrator': './app/telemetry',
+PACKAGES = {'sandboxer': './cmd/sandbox-ctl', 'orchestrator': './cmd/node-ctl',
             'runtime': './cmd/flatten-ctl'}
 
 
