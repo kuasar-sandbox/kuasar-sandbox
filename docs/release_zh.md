@@ -117,6 +117,8 @@ Tag 尚不完整,Daily 同样在任何清单或组件变更前延后,不在残�
 
 Daily 在冻结清单前通过消费仓的正常 PR 对齐声明，依据实际合并提交重算下游选版。Preview 的构建及 consumer 测试使用临时工作区，把选中的预览依赖映射到确切源码。Stable 构建使用 `GOWORK=off`，按公开正式版本解析并校验模块图。正式组件 tag 就绪后，聚合工作流还会在独立 Go 项目中编译 telemetry 消费样例并按版本安装 `node-ctl`。既有组件资产和可恢复的已验阶段按原有身份复用。
 
+Daily 控制器通过现有 CI GitHub App 创建依赖对齐 PR。用于写入组件仓的令牌限定在 sandboxer、orchestrator 和 guest-runtime，需要 Contents 和 Pull requests 两项读写权限。扩大 App 权限后，组织所有者还需在安装记录中批准。依赖已对齐时可凭读权限继续。发现偏差但缺少写权限时，Daily 报告受影响组件并暂停发布。
+
 ## 3. 分支与版本线
 
 平台 `main` 发布最新主线版本。维护补丁使用平台 `release/vMAJOR.MINOR.x`。例如主线发布
