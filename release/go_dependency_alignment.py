@@ -203,12 +203,14 @@ def ensure_pr(c, plan, base, files, version, dependencies, confirm):
     if c.PLATFORM_REF != ref:
         branch += '/for-' + c.PLATFORM_REF.replace('/', '-')
     pulls = c.paginated(endpoint + '/pulls?' + urlencode({
-        'head': repo.split('/')[0] + ':' + branch, 'base': ref, 'state': 'open', 'per_page': 100}))
+        'head': repo.split('/')[0] + ':' + branch, 'state': 'open', 'per_page': 100}))
     if len(pulls) > 1:
         raise c.Deferred(f'multiple alignment PRs for {repo}:{ref}')
     pr = pulls[0] if pulls else None
     if pr and (pr['user']['login'] != bot or pr['head']['repo']['full_name'] != repo):
         raise c.Deferred(f'{repo}:{branch} is owned by another contributor')
+    if pr and (pr['base']['ref'] != ref or pr['base']['repo']['full_name'] != repo):
+        raise c.Deferred(f'{repo}:{branch} also targets another base; keep the existing PR untouched')
     old = c.branch_sha(repo, branch)
     if old:
         commit = c.api(endpoint + '/commits/' + old)

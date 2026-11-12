@@ -33,7 +33,7 @@ def plan(unit, selected, sha, *, action='reuse'):
 
 def pr(bot='app[bot]'):
     return {'number': 4, 'state': 'open', 'html_url': 'pr/4', 'user': {'login': bot},
-            'base': {'ref': 'main', 'sha': BASE}, 'head': {'sha': HEAD, 'ref': 'automation/align-go/main',
+            'base': {'ref': 'main', 'sha': BASE, 'repo': {'full_name': 'kuasar-sandbox/sandboxer'}}, 'head': {'sha': HEAD, 'ref': 'automation/align-go/main',
             'repo': {'full_name': 'kuasar-sandbox/sandboxer'}}, 'mergeable_state': 'clean', 'mergeable': True}
 
 
@@ -172,6 +172,19 @@ class AlignmentTests(unittest.TestCase):
               patch.object(alignment, 'writer') as write,
               self.assertRaisesRegex(coordinator.Deferred, 'another contributor')):
             alignment.ensure_pr(coordinator, plan('sandboxer', OLD, BASE), BASE, {}, PRE, {}, Mock())
+        write.assert_not_called()
+
+    def test_open_pr_for_other_base_is_not_changed_by_writing_its_head(self):
+        other = pr()
+        other['base']['ref'] = 'release/v0.1.x'
+        with (patch.dict(os.environ, GO_ALIGNMENT_TOKEN='test', GO_ALIGNMENT_BOT='app[bot]'),
+              patch.object(coordinator, 'paginated', return_value=[other]) as query,
+              patch.object(coordinator, 'branch_sha') as get_branch,
+              patch.object(alignment, 'writer') as write,
+              self.assertRaisesRegex(coordinator.Deferred, 'another base')):
+            alignment.ensure_pr(coordinator, plan('sandboxer', OLD, BASE), BASE, {}, PRE, {}, Mock())
+        self.assertNotIn('base=', query.call_args.args[0])
+        get_branch.assert_not_called()
         write.assert_not_called()
 
     def test_new_pr_preserves_executable_file_modes(self):
