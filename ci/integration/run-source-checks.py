@@ -215,7 +215,7 @@ def workspace(sources, owner, env):
     if owner in ('sandboxer', 'orchestrator'):
         return go_workspace.helper_environment(sources, owner, env, source_checks=True)
     if owner in go_workspace.DEPENDENCIES:
-        return go_workspace.configure(sources, [owner], env)
+        return go_workspace.configure(sources, [owner], env, adapt_requirements=True)
     return dict(env, GOWORK='off')
 
 

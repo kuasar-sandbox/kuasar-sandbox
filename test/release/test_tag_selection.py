@@ -28,6 +28,26 @@ def historical_manifest(preview=False):
         f'  {owner}: {index:040x}\n' for index, owner in enumerate(selection.TEST_OWNERS, 1))
 
 
+def module_files_at(expected_sha):
+    """A committed release tuple with all six managed requirements at v1.2.3."""
+    requirements = dict(accelerator=(), connector=(), sandboxer=('accelerator', 'connector'),
+                        orchestrator=('accelerator', 'connector', 'sandboxer'))
+    requirements['guest-runtime'] = ('accelerator',)
+    def read(controller, repository, sha, filename, *, optional=False):
+        if sha != expected_sha:
+            raise AssertionError(f'expected reads at selected tag {expected_sha}, got {sha}')
+        owner = repository.removeprefix('kuasar-sandbox/')
+        prefix = 'github.com/kuasar-sandbox/'
+        if filename == 'go.mod':
+            return 'module ' + prefix + owner + '\n' + ''.join(
+                f'require {prefix}{dep} v1.2.3\n' for dep in requirements[owner])
+        if filename == 'go.sum':
+            return ''.join(f'{prefix}{dep} v1.2.3{suffix} h1:{"A" * 43}=\n'
+                           for dep in requirements[owner] for suffix in ('', '/go.mod'))
+        raise AssertionError(filename)
+    return read
+
+
 class TagSelectionTests(unittest.TestCase):
     def test_daily_next_versions_are_separate_from_selected_tags(self):
         targets = {unit: ('runtime-' if unit == 'runtime' else '') + 'v2.0.0'
@@ -174,6 +194,7 @@ class TagSelectionTests(unittest.TestCase):
              mock.patch.object(coordinator, 'active_delete_run', return_value=None), \
              mock.patch.object(coordinator, 'active_release_run', return_value=None), \
              mock.patch.object(coordinator, 'RepositoryState') as repository_state, \
+             mock.patch.object(coordinator.go_dependency_alignment, 'read_file', side_effect=module_files_at('a' * 40)), \
              mock.patch.object(coordinator, 'gh', side_effect=AssertionError('unexpected network access')), \
              mock.patch.object(coordinator, 'plan_units', return_value=plans), \
              mock.patch.object(coordinator, 'platform_changed_since', return_value=False), \
@@ -199,6 +220,8 @@ class TagSelectionTests(unittest.TestCase):
                  mock.patch.object(formal.coordinator, 'branch_sha', return_value='a' * 40), \
                  mock.patch.object(formal.coordinator, 'platform_release', return_value=coordinator.ReleaseStatus(None, None, False)), \
                  mock.patch.object(formal.coordinator, 'RepositoryState') as state, \
+                 mock.patch.object(formal.coordinator.go_dependency_alignment, 'read_file', side_effect=module_files_at('c' * 40)), \
+                 mock.patch.object(formal.coordinator, 'tag_sha', return_value='c' * 40) as read_tag, \
                  mock.patch.object(formal.coordinator, 'has_arm_archive', return_value=True), \
                  mock.patch.object(formal.coordinator, 'active_aggregate_run', return_value=None), \
                  mock.patch.object(formal.coordinator, 'aggregate_runs', return_value=[]), \
@@ -207,6 +230,7 @@ class TagSelectionTests(unittest.TestCase):
                 state.return_value.status.return_value = coordinator.ReleaseStatus({}, 'c' * 40, True)
                 formal.main()
             plans, version, sha = converge.call_args.args
+            self.assertEqual(read_tag.call_args_list, [mock.call(p.unit.repository, p.selected) for p in plans.values()])
             self.assertEqual((version, sha), ('release-v1.2.3', 'b' * 40))
             self.assertEqual(persist.call_args.kwargs, dict(channel='release', root=root, source_ref='main',
                 source_sha='a' * 40, source_shas={name: 'c' * 40 for name in plans}))

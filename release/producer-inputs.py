@@ -13,6 +13,7 @@ import artifacts
 import source_inputs
 import transport
 import producer_sources
+import go_dependency_alignment
 
 
 def admit(unit, source_ref, source_sha, version, repository, output):
@@ -57,6 +58,12 @@ def freeze(unit, source_ref, source_sha, dependencies, output, admission=None, v
             artifacts.require(dependency_owner not in seen, 'duplicate producer source owner')
             seen.add(dependency_owner)
             records['src/' + dependency_owner] = tag_sources.fetch_unit(root / 'src' / dependency_owner, dependency, tag, sha)
+        if version is not None and unit != 'vmlinux':
+            selected = {dependency: tag for dependency, tag, _ in dependencies}
+            if '-preview.' not in version and any('-preview.' in tag for tag in selected.values()):
+                raise ValueError(f'{unit}: Stable producer cannot select Preview inputs')
+            go_dependency_alignment.validate(unit, (source / 'go.mod').read_text(),
+                                             go_dependency_alignment.policy.expected_versions(selected))
         receipt = {'unit': unit, 'sources': records}
         if evidence is not None:
             receipt['admission'] = evidence

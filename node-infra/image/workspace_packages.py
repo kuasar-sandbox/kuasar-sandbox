@@ -55,7 +55,7 @@ def build_env(sources, units):
     # invisible to its packager. Use one explicit kernel input for both steps.
     env.setdefault('LINUX_BUILD_SRC', str(sources / 'guest-runtime/native-deps/build/src/linux'))
     env['RELEASE_LINUX_SOURCE_DIR'] = env['LINUX_BUILD_SRC']
-    return go_workspace.configure(sources, owners, env)
+    return go_workspace.configure(sources, owners, env, adapt_requirements=True)
 
 
 def stage(sources, staging, arch, units, env=None):

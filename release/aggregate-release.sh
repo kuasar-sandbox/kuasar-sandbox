@@ -62,6 +62,7 @@ fetch_components() {
     # Human release prose is already committed in the selected manifest.
     # Fetching assets must not regenerate a different publication description.
   done < "$output/selection.tsv"
+  python3 -B "$ROOT/release/go_dependency_alignment.py" "$output/selection.tsv" "$output/sources"
   python3 -B "$ROOT/release/tag_sources.py" inspect "$PLATFORM_SOURCE_ROOT" "$version" "$output/sources" \
     > "$output/source-records.json"
 }

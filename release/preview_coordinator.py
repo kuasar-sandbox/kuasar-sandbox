@@ -47,6 +47,7 @@ def load_module(name: str, path: pathlib.Path) -> Any:
 selection = load_module("release_selection", CONTROL_ROOT / "release/selection.py")
 sys.path.insert(0, str(CONTROL_ROOT / 'release'))
 import prepare_notes  # noqa: E402
+import go_dependency_alignment  # noqa: E402
 preview_selection = load_module(
     "preview_selection", CONTROL_ROOT / "release/preview-selection.py"
 )
@@ -1097,7 +1098,8 @@ def count_publication(repository: str, unit: str, identity: str) -> None:
     _publication_resumes[key] = count + 1
 
 
-def resume_publish(repository: str, unit: str, version: str, exact: list[dict[str, Any]]) -> bool:
+def resume_publish(repository: str, unit: str, version: str, exact: list[dict[str, Any]],
+                   *, expected_title: str | None = None) -> bool:
     """Resume an unfinished publication, never qualify an already released asset."""
     if len(exact) > 20:
         raise Deferred('too many exact publication runs to resolve safely; retain their stages and select a fresh Preview')
@@ -1153,6 +1155,8 @@ def resume_publish(repository: str, unit: str, version: str, exact: list[dict[st
             if len(rows) != 1 or rows[0].get('expired') is not False:
                 raise Deferred(f"original publication artifact is missing or expired: {name}; "
                                "retain partial bytes and select a fresh Preview")
+        if expected_title is not None and state.get('display_title') != expected_title:
+            raise Deferred(f'{unit} {version} has a different validated source; recover its original publisher before Go alignment')
         candidates.append((state, publisher))
     if len(candidates) > 1:
         raise Deferred('multiple accepted stages could own this publication; retain them and resolve the conflict')
@@ -1323,6 +1327,25 @@ def main(deadline: float | None = None) -> str:
                 f"component cleanup is active; keep its manifest immutable: "
                 f"{active_cleanup.get('html_url')}"
             )
+    def retain_existing_publishers():
+        # A failed publisher may already own accepted bytes without a tag/Release.
+        # Recover that frozen tuple before opening a PR that changes its source.
+        if not current_status.complete:
+            runs = [run for run in aggregate_runs(current_aggregate)
+                    if aggregate_title_matches(run.get('display_title'), current_aggregate)]
+            if resume_publish(PLATFORM_REPOSITORY, 'platform', current_aggregate, runs,
+                              expected_title=aggregate_run_title(current_aggregate, PLATFORM_SHA)):
+                raise Pending(f'recover the original {current_aggregate} publisher before Go alignment')
+        for name, plan in plans.items():
+            if plan.action != 'publish' or plan.selected != configured[name]:
+                continue
+            runs = release_runs(plan.unit.repository, plan.unit.workflow, plan.selected)
+            if resume_publish(plan.unit.repository, name, plan.selected, runs,
+                              expected_title=release_run_title(plan, plans)):
+                raise Pending(f'recover the original {name} {plan.selected} publisher before Go alignment')
+
+    go_dependency_alignment.check_plans(sys.modules[__name__], plans, next_versions,
+                                       date=date, before_alignment=retain_existing_publishers)
     changed = any(plans[name].selected != configured[name] for name in configured)
     if current_status.complete:
         changed = changed or platform_changed_since(current_aggregate)
@@ -1334,6 +1357,7 @@ def main(deadline: float | None = None) -> str:
         print("==> selection exhausted the branch budget; resume before manifest mutation")
         return "pending"
     aggregate = f"{base}-preview.{date}"
+    go_dependency_alignment.confirm_inputs(sys.modules[__name__], plans)
     content = render_manifest(base, previous, date, next_previous_preview, plans, next_versions)
     PLATFORM_SHA = persist_manifest(content, aggregate,
                                     source_shas={name: plan.source_sha for name, plan in plans.items()})

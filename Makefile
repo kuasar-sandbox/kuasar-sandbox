@@ -224,6 +224,7 @@ test-ci-tools:
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
 
 test-release-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_go_dependency_alignment.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test-download-asset.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/release-source-set.py --sources "$(ORG)" --auto
 	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/test-release-source-set.py
@@ -232,6 +233,8 @@ test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/release -p 'test_node_infra_*.py'
 	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_e2e_package.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_helper_discovery.py
+	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_go_release_consumer.py
+	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_go_selection_pr_check.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test-environment-tools.py
 	bash test/demo/test_demo_safety.sh
 	PYTHONDONTWRITEBYTECODE=1 python3 test/demo/test_demo_state_assertions.py

@@ -46,10 +46,16 @@ orchestrator="$KUASAR_WORKSPACE_ROOT/orchestrator"
 export GOOS=linux GOARCH="$go_arch" CGO_ENABLED=0 GOMAXPROCS="$KUASAR_BUILD_JOBS"
 GOWORK=off go build -p "$KUASAR_BUILD_JOBS" -trimpath -o "$2/node-infra-guest" \
     "$ROOT/test/e2e/platform/helpers/guest/main.go"
+if [ -n "${KUASAR_GO_RELEASE_VERSION:-}" ]; then
+    python3 -B "$ROOT/release/go_release_consumer.py" fixtures \
+        --version "$KUASAR_GO_RELEASE_VERSION" --selection "$KUASAR_GO_RELEASE_SELECTION" \
+        --sources "$KUASAR_WORKSPACE_ROOT" --platform "$ROOT" --output "$2"
+    exit 0
+fi
 # Reuse the admitted local module closure; platform recipes enter with GOWORK
 # disabled and must not resolve a different SDK dependency through the network.
 GOWORK=$(python3 "$ROOT/ci/integration/go_workspace.py" \
-    --root "$KUASAR_WORKSPACE_ROOT" --owners orchestrator)
+    --root "$KUASAR_WORKSPACE_ROOT" --owners orchestrator --source-requirements)
 export GOWORK
 for component in xproxy xconductor; do
     go -C "$orchestrator" build -p "$KUASAR_BUILD_JOBS" -trimpath -o "$2/node-infra-$component" \

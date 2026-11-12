@@ -21,7 +21,7 @@ import build_demo_wheels
 import node_infra_assets
 
 
-def build(unit_sources, selected, output, wheels_output, platform_source, arch=None, node_infra_output=None, node_infra=False):
+def build(unit_sources, selected, output, wheels_output, platform_source, arch=None, node_infra_output=None, node_infra=False, release_version=None):
     artifacts.require(arch is None or platform.machine() == arch, 'helper package requires the selected native architecture')
     artifacts.require(not output.exists(), 'helper packages need a fresh output')
     source_records = tag_sources.inspect_sources(unit_sources, selected, owner_layout=True)
@@ -49,6 +49,15 @@ def build(unit_sources, selected, output, wheels_output, platform_source, arch=N
         # Keep private source copy paths out of binaries and cache identities.
         environment = {**os.environ, 'GOWORK': 'off',
                        'GOFLAGS': (os.environ.get('GOFLAGS', '') + ' -trimpath').strip()}
+        if release_version is not None:
+            binding = Path(directory) / 'go-selection.json'
+            binding.write_bytes(artifacts.canonical(component_selection))
+            environment.update(KUASAR_GO_RELEASE_VERSION=release_version,
+                               KUASAR_GO_RELEASE_SELECTION=str(binding))
+            if '-preview.' not in release_version and (arch is None or arch == 'x86_64'):
+                subprocess.run([sys.executable, '-B', str(ROOT / 'release/go_release_consumer.py'),
+                                'published', '--selection', str(binding), '--version', release_version,
+                                '--sources', str(sources)], env=environment, check=True)
         for arch in ((arch,) if arch else artifacts.ARCHES):
             build_demo_wheels.build(platform_source / 'test/demo', arch, wheels_output / arch)
             selected = dict(helpers)
@@ -66,7 +75,14 @@ def build(unit_sources, selected, output, wheels_output, platform_source, arch=N
                     selected_file = native / 'selection.json'
                     selected_file.write_bytes(artifacts.canonical(component_selection) + b'\n')
                     runtime = native / 'node-infra-runtime'
-                    subprocess.run(['python3', '-B', str(platform_source / 'node-infra/runtime/build.py'),
+                    driver = platform_source / 'node-infra/runtime/build.py'
+                    flags = []
+                    # This maintenance-line driver hardcodes v0.0.0 and a local
+                    # Connector replace. Retain its product's actual *.go files.
+                    if release_version and tag_sources.git(platform_source, 'rev-parse', 'HEAD:node-infra/runtime/build.py') == '450341f33cc5a8154a1fee8bace16d340c7e61e3':
+                        flags = ['--runtime-source', str(driver.parent)]
+                        driver = ROOT / 'node-infra/runtime/build.py'
+                    subprocess.run(['python3', '-B', str(driver), *flags,
                                     '--sources', str(sources), '--selection', str(selected_file), '--arch', arch,
                                     '--output', str(runtime)] + (['--test'] if arch == platform.machine() else []),
                                    env=environment, check=True)
@@ -90,4 +106,4 @@ if __name__ == '__main__':
     build(args.sources.resolve(), selection.resolve_new_selection(args.platform_source, args.version), args.output.resolve(),
           args.wheels_output.resolve(), args.platform_source.resolve(), args.arch, args.node_infra_output,
           selection.delivery(selection.resolve_config(args.platform_source, args.version), str(args.platform_source))
-          in selection.NODE_INFRA_DELIVERIES)
+          in selection.NODE_INFRA_DELIVERIES, args.version)

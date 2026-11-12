@@ -91,6 +91,14 @@ Advance `previous_preview_version` only after the current aggregate has a comple
 
 After Stable `V1` is published, continued development on the same branch must first advance Daily to `V2` and set `previous_version: V1`. Advance the Stable manifest when preparing `V2`. After `V2`, advance both toward `V3`, and so on. When Daily and Stable name the same version and that Stable aggregate has already been published, the line is closed: no new Preview and no repeated Stable publication. If the same-version Stable Release exists but its assets or tag are incomplete, Daily also defers before any manifest or component changes; it does not publish a Preview alongside an incomplete Stable.
 
+### Go dependencies across components
+
+A component that requires another selected Go module declares its Stable tag in `go.mod`. For a Daily dependency selected at `vX.Y.Z-preview.DATE[.N]`, the declaration is `vX.Y.Z`. The selected tag determines this value even when the manifest sets a different future version floor. The rule covers direct and indirect requirements on selected modules. The kernel and tools included as binaries remain release inputs.
+
+Daily aligns mismatched declarations on the corresponding consumer branches through ordinary pull requests before freezing the manifest. The controller uses the actual merge commits to recalculate downstream selections. Preview builds and consumer tests map only the selected prerelease dependencies to their exact checkouts through a temporary Go workspace. Stable builds run with `GOWORK=off`, resolve public versions and check the selected module graph. The aggregate verifies a clean telemetry consumer and a version-qualified `go install` for `node-ctl` after the Stable component tags are available. Published components and recoverable stages keep their existing identities.
+
+The Daily controller uses the existing CI GitHub App to open alignment PRs. Its component writer token is scoped to sandboxer, orchestrator and guest-runtime and needs Contents and Pull requests set to Read and write. The organization owner must approve any increase on the App installation. Already aligned selections can proceed with read access. If a declaration needs an edit and the grant is missing, Daily reports the affected component and waits before publishing.
+
 ## 3. Branches and version lines
 
 Platform `main` publishes the latest mainline version. Maintenance patches use platform `release/vMAJOR.MINOR.x`. For example, after publishing `release-v0.1.0`, a `release/v0.1.x` branch can be created from that tag. Maintenance then publishes `release-v0.1.1` and `release-v0.1.2`, while mainline can later publish `release-v0.2.0`.

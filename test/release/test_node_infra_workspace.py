@@ -116,9 +116,13 @@ class WorkspaceImageTests(unittest.TestCase):
             with mock.patch.object(sys, "argv", argv[2:]), mock.patch.object(assembler, "build", fake_image):
                 assembler.main()
 
+        def source_workspace(sources, owners, env, *, adapt_requirements):
+            self.assertTrue(adapt_requirements)
+            return env
+
         with mock.patch.object(workspace, "check_environment"), \
              mock.patch.object(workspace.workspace_packages.go_workspace, "configure",
-                               side_effect=lambda sources, owners, env: env), \
+                               side_effect=source_workspace), \
              mock.patch.object(workspace, "subprocess", wraps=subprocess) as external, \
              contextlib.redirect_stdout(io.StringIO()):
             external.run.side_effect = command
