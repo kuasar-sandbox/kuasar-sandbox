@@ -87,7 +87,8 @@ class AlignmentTests(unittest.TestCase):
         def read(c, repo, sha, filename, **kwargs):
             if filename == 'go.sum': return checksum
             return contents if repo.endswith('/sandboxer') else 'module connector\n'
-        with (patch.dict(os.environ, clear=True), patch.object(alignment, 'read_file', side_effect=read),
+        with (patch.dict(os.environ, GO_ALIGNMENT_TOKEN='', GO_ALIGNMENT_BOT=''),
+              patch.object(alignment, 'read_file', side_effect=read),
               patch.object(alignment, 'writer', side_effect=AssertionError('unexpected mutation'))):
             alignment.check_plans(coordinator, plans, date='20261112')
             with self.assertRaisesRegex(coordinator.Deferred, 'Pull requests: Read and write'):
