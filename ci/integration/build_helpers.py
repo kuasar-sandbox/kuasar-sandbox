@@ -1,4 +1,5 @@
 """Build the admitted owner inventories; never called by prepare or run."""
+from contextlib import ExitStack
 import json
 from pathlib import Path
 import shutil
@@ -12,6 +13,7 @@ import go_workspace
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'release'))
 import helper_inputs
+import go_release_consumer
 
 
 def build_owner(root, arch, output, environment, row, run=None):
@@ -34,10 +36,17 @@ def build_owner(root, arch, output, environment, row, run=None):
         elif (root / 'go.mod').is_file() and root.name != 'platform':
             environment = go_workspace.configure(root.parent, [root.name], environment, adapt_requirements=True)
         command = ['bash', str(root / declared['recipe']), arch, str(output)]
-        if run is None:
-            subprocess.run(command, cwd=root, env=environment, check=True)
-        else:
-            run(command, root, environment)
+        with ExitStack() as resources:
+            # v0.1.13, v0.1.14 and the first v0.2 Preview all selected this
+            # exact recipe. It sets GOWORK itself before two Go SDK builds.
+            if release_version and root.name == 'platform' and row['recipe_blob'] == '96c0397cf8e2920ceffda4135222433f2b29fd80':
+                work = Path(resources.enter_context(tempfile.TemporaryDirectory(prefix='platform-go-recipe-')))
+                selected = json.loads(Path(environment['KUASAR_GO_RELEASE_SELECTION']).read_text())
+                environment = go_release_consumer.legacy_platform_environment(work, root, output, selected, environment)
+            if run is None:
+                subprocess.run(command, cwd=root, env=environment, check=True)
+            else:
+                run(command, root, environment)
     artifacts.require({p.name for p in output.iterdir()} == {r['name'] for r in declared['helpers']},
                       'unexpected or missing built helper')
     return {r['name']: helper_inputs.contract.check_binary(output / r['name'], arch)

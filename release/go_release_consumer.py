@@ -64,6 +64,35 @@ def prepare(module, owner, sources, selection, version, environment):
     return env
 
 
+def legacy_platform_environment(work, platform, output, selection, environment):
+    """Run the historical platform recipe, binding only its two exact SDK builds."""
+    sources = platform.parent
+    module = work / 'consumer'
+    module.mkdir()
+    for fixture in ('xproxy', 'xconductor'):
+        shutil.copytree(platform / 'test/e2e/platform/helpers' / fixture, module / fixture)
+    env = prepare(module, 'orchestrator', sources, selection, environment['KUASAR_GO_RELEASE_VERSION'], environment)
+    go = str(Path(shutil.which('go', path=environment['PATH'])).resolve())
+    # Keep the admitted owner recipe and its Go sources intact. In particular
+    # its guest, versitygw and workspace discovery commands go to the real Go.
+    commands = {}
+    for fixture in ('xproxy', 'xconductor'):
+        args = ['build', '-p', environment['KUASAR_BUILD_JOBS'], '-trimpath', '-o',
+                str(output / ('node-infra-' + fixture))]
+        input_file = platform / 'test/e2e/platform/helpers' / fixture / 'main.go'
+        original = ('-C', str(sources / 'orchestrator'), *args, str(input_file))
+        commands[original] = [go, '-C', str(module), *args, './' + fixture]
+    driver = work / 'go'
+    driver.write_text('#!/usr/bin/env python3\nimport os, sys\n'
+                      f'go = {go!r}\ncommands = {commands!r}\n'
+                      'args = tuple(sys.argv[1:])\n'
+                      'if args in commands:\n'
+                      f'    os.execve(go, commands[args], dict(os.environ, GOWORK={env["GOWORK"]!r}))\n'
+                      'os.execv(go, [go, *args])\n')
+    driver.chmod(0o755)
+    return dict(environment, PATH=str(work) + os.pathsep + environment['PATH'])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('action', choices=('fixtures', 'published'))

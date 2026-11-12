@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -66,6 +67,38 @@ class ReleaseConsumer(unittest.TestCase):
         self.assertIn(self.path + ' v0.2.0 => ', Path(env['GOWORK']).read_text())
         self.assertNotIn('preview', (self.module / 'go.mod').read_text())
         self.assertNotIn('replace', (self.module / 'go.mod').read_text())
+
+    def test_historical_platform_recipe_redirects_only_the_two_selected_go_builds(self):
+        platform = self.sources / 'platform'
+        output = self.root / 'output'
+        output.mkdir()
+        work = self.root / 'driver'
+        work.mkdir()
+        for fixture in ('xproxy', 'xconductor'):
+            source = platform / 'test/e2e/platform/helpers' / fixture
+            source.mkdir(parents=True)
+            (source / 'main.go').write_text('package main\nimport "fmt"\nfunc main(){fmt.Print("' + fixture + '")}\n')
+        def prepare(module, owner, sources, selected, version, env):
+            self.assertEqual((owner, sources, version), ('orchestrator', self.sources, 'release-v0.1.14'))
+            (module / 'go.mod').write_text('module example.test/sdk-fixtures\ngo 1.22\n')
+            return dict(env, GOWORK='off')
+        env = dict(self.env, KUASAR_GO_RELEASE_VERSION='release-v0.1.14', KUASAR_BUILD_JOBS='2')
+        with patch.object(consumer, 'prepare', side_effect=prepare):
+            env = consumer.legacy_platform_environment(work, platform, output, {}, env)
+        # Simulate the independent workspace the old recipe explicitly exports.
+        env['GOWORK'] = str(self.root / 'inapplicable.work')
+        for fixture in ('xproxy', 'xconductor'):
+            binary = output / ('node-infra-' + fixture)
+            args = ['go', '-C', str(self.sources / 'orchestrator'), 'build', '-p', '2', '-trimpath',
+                    '-o', str(binary), str(platform / 'test/e2e/platform/helpers' / fixture / 'main.go')]
+            subprocess.run(args, cwd=platform, env=env, check=True)
+            self.assertEqual(subprocess.check_output([binary], text=True), fixture)
+            # An unrecognized build must still use Go's own cwd and workspace.
+            result = subprocess.run(args[:-2] + [str(output/'unrelated'), args[-1]], cwd=platform, env=env,
+                                    capture_output=True)
+            self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(subprocess.check_output(['go', 'env', 'GOWORK'], cwd=platform, env=env,
+                                                text=True).strip(), env['GOWORK'])
 
     def test_stable_rejects_preview_dependency(self):
         with self.assertRaisesRegex(ValueError, 'selects Preview'):

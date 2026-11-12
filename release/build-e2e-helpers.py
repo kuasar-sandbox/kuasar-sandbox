@@ -75,7 +75,14 @@ def build(unit_sources, selected, output, wheels_output, platform_source, arch=N
                     selected_file = native / 'selection.json'
                     selected_file.write_bytes(artifacts.canonical(component_selection) + b'\n')
                     runtime = native / 'node-infra-runtime'
-                    subprocess.run(['python3', '-B', str(platform_source / 'node-infra/runtime/build.py'),
+                    driver = platform_source / 'node-infra/runtime/build.py'
+                    flags = []
+                    # This maintenance-line driver hardcodes v0.0.0 and a local
+                    # Connector replace. Retain its product's actual *.go files.
+                    if release_version and tag_sources.git(platform_source, 'rev-parse', 'HEAD:node-infra/runtime/build.py') == '450341f33cc5a8154a1fee8bace16d340c7e61e3':
+                        flags = ['--runtime-source', str(driver.parent)]
+                        driver = ROOT / 'node-infra/runtime/build.py'
+                    subprocess.run(['python3', '-B', str(driver), *flags,
                                     '--sources', str(sources), '--selection', str(selected_file), '--arch', arch,
                                     '--output', str(runtime)] + (['--test'] if arch == platform.machine() else []),
                                    env=environment, check=True)

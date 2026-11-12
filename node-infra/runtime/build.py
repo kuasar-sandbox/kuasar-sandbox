@@ -43,7 +43,8 @@ def build(args):
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="node-infra-runtime-") as temporary:
         module = Path(temporary)
-        for path in Path(__file__).parent.glob("*.go"):
+        source_directory = getattr(args, 'runtime_source', None) or Path(__file__).parent
+        for path in source_directory.glob("*.go"):
             shutil.copy2(path, module / path.name)
         environment = dict(os.environ, CGO_ENABLED="0", GOOS="linux", GOARCH=ARCHES[args.arch])
         version = environment.get("KUASAR_GO_RELEASE_VERSION")
@@ -76,6 +77,7 @@ def main():
     parser.add_argument("--selection", type=Path, required=True)
     parser.add_argument("--arch", choices=ARCHES, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--runtime-source", type=Path, help="runtime Go sources from the selected platform")
     parser.add_argument("--test", action="store_true", help="run helper tests on the native target architecture")
     build(parser.parse_args())
 
