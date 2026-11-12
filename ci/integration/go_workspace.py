@@ -184,7 +184,9 @@ def require_clean_dependency(module):
 
 
 def validate_build_list(owner, expected, replacements, env, go):
-    raw = subprocess.check_output([go, 'list', '-mod=readonly', '-m', '-json', 'all'],
+    # Query the resolved managed namespace rather than fetching every third-party
+    # module's metadata, including modules unused by this build.
+    raw = subprocess.check_output([go, 'list', '-mod=readonly', '-m', '-json', policy.PREFIX + '...'],
                                  cwd=owner, env=env, text=True)
     decoder = json.JSONDecoder()
     while raw.strip():
