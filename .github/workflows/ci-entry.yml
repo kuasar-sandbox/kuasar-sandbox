@@ -163,13 +163,20 @@ jobs:
                   "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/statuses/$sha" >/dev/null
           }
 
+          matches_event() {
+            jq -e --slurpfile event "$GITHUB_EVENT_PATH" '
+              def identity: [.number, .user.login, .draft, .base.repo.full_name, .base.ref,
+                             .base.sha, .head.repo.full_name, .head.sha];
+              .state == "open" and identity == ($event[0].pull_request | identity)
+            ' <<< "$pr" >/dev/null
+          }
+
           event_pr=$(jq -er '.pull_request.number' "$GITHUB_EVENT_PATH")
           event_action=$(jq -er '.action' "$GITHUB_EVENT_PATH")
-          event_author=$(jq -er '.pull_request.user.login' "$GITHUB_EVENT_PATH")
           pr=$(api_get "/repos/$GITHUB_REPOSITORY/pulls/$event_pr")
 
           pull_request_number=$(jq -er '.number' <<< "$pr")
-          candidate_sha=$(jq -r '.merge_commit_sha // ""' <<< "$pr")
+          candidate_sha=""
           base_sha=$(jq -er '.base.sha' <<< "$pr")
           head_sha=$(jq -er '.head.sha' <<< "$pr")
           draft=$(jq -r '.draft' <<< "$pr")
@@ -198,51 +205,30 @@ jobs:
           if [ -z "$reason" ] && [ "$base_repository" != "$GITHUB_REPOSITORY" ]; then
             reason="base repository does not match the workflow repository"
           fi
-          if [ -z "$reason" ] && [ "$event_author" != "$author" ]; then
-            reason="pull request author changed during admission"
-          fi
-          if [ -z "$reason" ]; then
-            event_base_sha=$(jq -er '.pull_request.base.sha' "$GITHUB_EVENT_PATH")
-            event_base_ref=$(jq -er '.pull_request.base.ref' "$GITHUB_EVENT_PATH")
-            event_head_sha=$(jq -er '.pull_request.head.sha' "$GITHUB_EVENT_PATH")
-            event_base_repository=$(jq -er '.pull_request.base.repo.full_name' "$GITHUB_EVENT_PATH")
-            event_head_repository=$(jq -er '.pull_request.head.repo.full_name' "$GITHUB_EVENT_PATH")
-            event_author=$(jq -er '.pull_request.user.login' "$GITHUB_EVENT_PATH")
-            event_draft=$(jq -r '.pull_request.draft' "$GITHUB_EVENT_PATH")
-            if [ "$event_base_sha" != "$base_sha" ] \
-              || [ "$event_base_ref" != "$base_ref" ] \
-              || [ "$event_head_sha" != "$head_sha" ] \
-              || [ "$event_base_repository" != "$base_repository" ] \
-              || [ "$event_head_repository" != "$head_repository" ] \
-              || [ "$event_author" != "$author" ] \
-              || [ "$event_draft" != "$draft" ]; then
-              reason="pull request changed after this event"
-            fi
+          if [ -z "$reason" ] && ! matches_event; then
+            reason="pull request changed after this event"
           fi
 
           if [ -z "$reason" ] && [ "$draft" != false ]; then
             deferred=true
           fi
+          membership_reason=""
           if [ -z "$reason" ] && [ "$deferred" = false ] \
             && [ "$head_repository" != "$GITHUB_REPOSITORY" ]; then
             if [ -z "$MEMBERSHIP_TOKEN" ]; then
-              reason="organization membership token is unavailable"
+              membership_reason="organization membership token is unavailable"
             elif check_org_membership "$author"; then
               :
             else
               membership_result=$?
               if [ "$membership_result" -eq 1 ]; then
-                reason="fork author is not an active organization member"
+                membership_reason="fork author is not an active organization member"
               else
-                reason="organization membership verification failed"
+                membership_reason="organization membership verification failed"
               fi
             fi
           fi
-          if [ -z "$reason" ] && [ "$deferred" = false ] \
-            && ! [[ "$candidate_sha" =~ ^[0-9a-f]{40}$ ]]; then
-            reason="GitHub did not provide an integration commit"
-          fi
-          if [ -z "$reason" ] && [ "$deferred" = false ]; then
+          if [ -z "$reason" ]; then
             for value in "$base_sha" "$head_sha"; do
               if ! [[ "$value" =~ ^[0-9a-f]{40}$ ]]; then
                 reason="pull request parent SHA is invalid"
@@ -251,23 +237,60 @@ jobs:
             done
           fi
 
-          if [ -z "$reason" ] && [ "$deferred" = false ]; then
-            commit=$(api_get "/repos/$GITHUB_REPOSITORY/git/commits/$candidate_sha")
-            base_branch=$(api_get "/repos/$GITHUB_REPOSITORY/git/ref/heads/$base_ref")
-            if ! jq -e --arg base "$base_sha" '.object.sha == $base' <<< "$base_branch" >/dev/null; then
-              reason="base branch changed after this candidate was selected"
-            fi
-            if ! jq -e \
-              --arg candidate "$candidate_sha" \
-              --arg base "$base_sha" \
-              --arg head "$head_sha" '
-                .sha == $candidate
-                and (.parents | length) == 2
-                and .parents[0].sha == $base
-                and .parents[1].sha == $head
-              ' <<< "$commit" >/dev/null; then
-              reason="candidate is not the exact two-parent integration commit"
-            fi
+          if [ -z "$reason" ]; then
+            # GitHub can return the new PR head before its synthetic merge commit is ready.
+            for attempt in 1 2 3 4 5; do
+              if [ "$attempt" -gt 1 ]; then
+                sleep 5
+                pr=$(api_get "/repos/$GITHUB_REPOSITORY/pulls/$event_pr")
+                if ! matches_event; then
+                  reason="pull request changed after this event"
+                  break
+                fi
+              fi
+              base_branch=$(api_get "/repos/$GITHUB_REPOSITORY/git/ref/heads/$base_ref")
+              if ! jq -e --arg base "$base_sha" '.object.sha == $base' <<< "$base_branch" >/dev/null; then
+                reason="base branch changed after this candidate was selected"
+                break
+              fi
+              if jq -e '.mergeable == false' <<< "$pr" >/dev/null; then
+                if [ "$deferred" = false ]; then
+                  reason="pull request has merge conflicts"
+                fi
+                break
+              fi
+
+              merge_sha=$(jq -r '.merge_commit_sha // ""' <<< "$pr")
+              if [ -z "$merge_sha" ]; then
+                wait_reason="GitHub did not provide an integration commit"
+              elif ! [[ "$merge_sha" =~ ^[0-9a-f]{40}$ ]]; then
+                reason="integration commit SHA is invalid"
+                break
+              else
+                commit=$(api_get "/repos/$GITHUB_REPOSITORY/git/commits/$merge_sha")
+                if jq -e --arg candidate "$merge_sha" --arg base "$base_sha" --arg head "$head_sha" '
+                  .sha == $candidate
+                  and (.parents | length) == 2
+                  and .parents[0].sha == $base
+                  and .parents[1].sha == $head
+                ' <<< "$commit" >/dev/null; then
+                  candidate_sha=$merge_sha
+                  break
+                fi
+                wait_reason="candidate is not the exact two-parent integration commit"
+              fi
+              if [ "$deferred" = true ] || [ -n "$membership_reason" ]; then
+                break
+              fi
+              if [ "$attempt" -eq 5 ]; then
+                reason=$wait_reason
+                break
+              fi
+              echo "Waiting for GitHub to refresh the integration commit (attempt $attempt/5)" >&2
+            done
+          fi
+          if [ -n "$membership_reason" ]; then
+            reason=$membership_reason
           fi
 
           if [ -z "$reason" ] && [ "$deferred" = false ]; then
