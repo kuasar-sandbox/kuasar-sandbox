@@ -23,13 +23,21 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def closure(owners):
+def closure(owners, *, root=None, go='go'):
+    """Retain the pre-migration graph when the pinned Host has no Guest module."""
+
     result = set()
     def add(owner):
         require(owner in DEPENDENCIES, 'unknown Go workspace owner: ' + owner)
         if owner not in result:
             result.add(owner)
             for dependency in DEPENDENCIES[owner]:
+                if dependency == 'guest-runtime' and root is not None:
+                    path = root / owner / 'go.mod'
+                    require(path.is_file() and not path.is_symlink() and not path.parent.is_symlink(),
+                            'missing or linked selected owner module: ' + owner)
+                    if policy.PREFIX + dependency not in policy.managed_requires(path.read_text(), go=go):
+                        continue
                 add(dependency)
     for owner in owners:
         add(owner)
@@ -78,7 +86,7 @@ def verify(path, modules, go, env, replacements=None):
 
 def configure(root, owners, environment=None, *, adapt_requirements=False):
     env = dict(os.environ if environment is None else environment)
-    names = closure(owners)
+    names = closure(owners, root=root, go=shutil.which('go', path=env.get('PATH')) or 'go')
     replacements = {}
     if adapt_requirements:
         # PR builds exercise selected local sources, including unpublished
@@ -143,7 +151,7 @@ def configure_release(root, owners, selections, environment=None, *, version=Non
     require(len(owners) == 1, 'local release requires exactly one owner')
     root = root.resolve()
     owner = owners[0]
-    expected = set(closure(owners)) - {owner}
+    expected = set(closure(owners, root=root, go=shutil.which('go', path=(environment or os.environ).get('PATH')) or 'go')) - {owner}
     selected = {}
     for selection in selections:
         name, separator, tag = selection.partition('=')
@@ -214,7 +222,7 @@ def configure_bound_release(root, owner, version, dependencies, environment=None
     go = shutil.which('go', path=env.get('PATH'))
     require(go is not None, 'selected Go compiler is missing')
     _, preview = policy.tag_version('component', version.removeprefix('release-').removeprefix('runtime-'))
-    require(set(dependencies) == set(closure([owner])) - {owner},
+    require(set(dependencies) == set(closure([owner], root=root, go=go)) - {owner},
             'bound dependency set differs from the Go module closure')
     expected = {}
     replacements = {}
@@ -293,7 +301,7 @@ def bound_helper_environment(root, owner, version, dependencies, environment):
 def helper_launcher(root, owner, environment, *, source_checks=False):
     env = dict(environment)
     path = Path(env['GOWORK'])
-    modules = [str(root.resolve() / name) for name in closure([owner])]
+    modules = [str(root.resolve() / name) for name in closure([owner], root=root, go=shutil.which('go', path=env.get('PATH')) or 'go')]
     go = str(Path(shutil.which('go', path=environment.get('PATH'))).resolve())
     env['KUASAR_CONSUMER_GO'] = go
     document = go_json(go, ['work', 'edit', '-json', str(path)], env)

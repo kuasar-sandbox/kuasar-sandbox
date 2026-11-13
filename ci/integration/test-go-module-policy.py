@@ -15,6 +15,16 @@ import go_workspace as workspace
 
 
 class PolicyTests(unittest.TestCase):
+    def test_host_closure_follows_only_the_selected_source_declaration(self):
+        owner = self.root / 'sandboxer'
+        owner.mkdir()
+        module = owner / 'go.mod'
+        module.write_text('module '+policy.PREFIX+'sandboxer\ngo 1.22\n')
+        self.assertNotIn('guest-runtime', workspace.closure(['sandboxer'], root=self.root))
+        with module.open('a') as output:
+            output.write('require '+policy.PREFIX+'guest-runtime v0.2.0\n')
+        self.assertIn('guest-runtime', workspace.closure(['sandboxer'], root=self.root))
+
     def test_owner_selection_distinguishes_runtime_from_kernel(self):
         runtime = {'version': 'runtime-v0.2.0', 'sha': 'a' * 40}
         kernel = {'version': 'vmlinux-v0.1.6', 'sha': 'b' * 40}

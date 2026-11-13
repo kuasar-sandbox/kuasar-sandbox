@@ -105,7 +105,16 @@ def case_name(value):
     return value
 
 
-def changed_products(changes):
+def source_product_unit(name, init_unit):
+    require(init_unit in ('runtime', 'sandboxer'), 'invalid selected init source unit')
+    return init_unit if name == 'sandbox-init' else PRODUCTS[name]
+
+
+def planned_product_unit(plan, name):
+    return source_product_unit(name, plan.get('init_source_unit', 'runtime'))
+
+
+def changed_products(changes, *, init_unit='runtime'):
     """Small product closure; source libraries do not imply standalone rebuilds.
 
     Each caller selects broad suites from its owned case filenames. Linked flatten and embedded init/flatten
@@ -143,6 +152,8 @@ def changed_products(changes):
             # selected library, without selecting different orchestrator code.
             if touches("go.mod", "go.sum", "pkg", "internal"):
                 products.add("node-ctl")
+            if init_unit == "sandboxer" and touches("go.mod", "go.sum", "Makefile", "cmd/sandbox-init", "internal", "pkg"):
+                products.add("sandbox-init")
             if touches("native-deps"):
                 products.add("cloud-hypervisor")
         elif owner == "orchestrator" and (go or touches("app", "config")):
@@ -150,9 +161,9 @@ def changed_products(changes):
         elif owner == "guest-runtime":
             if touches("go.mod", "go.sum", "Makefile", "cmd/flatten-ctl", "internal"):
                 products.add("flatten-ctl")
-            if touches("go.mod", "go.sum", "Makefile", "cmd/sandbox-init", "internal", "pkg/guestabi"):
+            if init_unit == "runtime" and touches("go.mod", "go.sum", "Makefile", "cmd/sandbox-init", "internal", "pkg/guestabi"):
                 products.add("sandbox-init")
-            if touches("go.mod", "go.sum", "pkg/guestabi"):
+            if init_unit == "runtime" and touches("go.mod", "go.sum", "pkg/guestabi"):
                 products.update(("sandbox-ctl", "node-ctl"))
             if touches("Makefile", "cmd/runtime-bundle", "runtime", "native-deps/Makefile",
                        "native-deps/deps/common.sh", "native-deps/deps/build-envd.sh"):
@@ -175,7 +186,7 @@ DEFAULT_SUITES = {
 }
 
 
-def suite_selection(owners, arch, case_files, *, native_full=False, changes=None, source_pr=False):
+def suite_selection(owners, arch, case_files, *, native_full=False, changes=None, source_pr=False, init_unit='runtime'):
     """Select broad suites from exact source filenames, then apply lane limits."""
     require(arch in ARCHES and set(owners) <= set(OWNERS), "invalid suite selection request")
     require(isinstance(case_files, dict) and set(case_files) == set(OWNERS), "incomplete test case source set")
@@ -198,7 +209,7 @@ def suite_selection(owners, arch, case_files, *, native_full=False, changes=None
     if changes is not None:
         require(isinstance(changes, dict) and set(changes) <= set(owners),
                 'consumer changes differ from candidate owners')
-        affected = {owner: changed_products({owner: paths}) for owner, paths in changes.items()}
+        affected = {owner: changed_products({owner: paths}, init_unit=init_unit) for owner, paths in changes.items()}
         if 'sandbox-init' in affected.get('guest-runtime', []):
             # Moving PID 1 source must retain its existing host/guest coverage,
             # without changing case ownership or the accepted ARM capability set.
@@ -232,7 +243,7 @@ def plan_suite_selection(plan, arch, *, native_full=False):
     # Older source plans that staged a candidate image retain its original case selection.
     source_pr = plan['mode'] == 'source' and 'node_infra' not in plan
     return suite_selection(plan['owners'], arch, plan['case_files'], native_full=native_full,
-                           changes=plan.get('changes'), source_pr=source_pr)
+                           changes=plan.get('changes'), source_pr=source_pr, init_unit=plan.get('init_source_unit', 'runtime'))
 
 
 def compatible_suite_selection(observed, current):
@@ -744,7 +755,7 @@ def compose(plan, arch, assets, delta, output):
             candidate = name in lane["products"]
             require(actual == (metadata["products"][name]["sha256"] if candidate else originals[name]),
                     f"final product bytes differ from their origin: {name}")
-            origin_unit = unit if candidate else ownership["bin/" + name]
+            origin_unit = planned_product_unit(plan, name) if candidate else ownership["bin/" + name]
             products[name] = {"sha256": actual, "unit": origin_unit, "origin": "candidate" if candidate else "baseline",
                               "sources": plan["product_sources"][name] if candidate else baseline["units"][origin_unit]}
         # This is derived metadata, not a build product or a required legacy

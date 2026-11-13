@@ -37,7 +37,12 @@ def check(inputs, sources):
         raise ValueError('invalid PR or candidate identity')
     deps = json.loads(inputs['dependencies'])
     expected = {policy.OWNER_UNITS[name] for name in go_workspace.closure([owner]) if name != owner}
-    if set(deps) != expected:
+    # Old selected Host sources predate the runtime edge. Check the fixed source
+    # declaration after admitting the merge; still reject all unknown keys here.
+    allowed = [expected]
+    if consumer in ('sandboxer', 'orchestrator'):
+        allowed.append(expected - {'runtime'})
+    if set(deps) not in allowed:
         raise ValueError('selection differs from the consumer module closure')
     version = inputs['version']
     if '-preview.' not in version:
@@ -64,7 +69,7 @@ def check(inputs, sources):
     env = go_workspace.configure_bound_release(sources, owner, version, policy.owner_selection(deps))
     subprocess.run(['go', 'build', '-o', str(sources / 'compiled'), PACKAGES[consumer]],
                    cwd=sources / owner, env=env, check=True)
-    if consumer == 'runtime':
+    if consumer == 'runtime' and (sources / owner / 'cmd/sandbox-init/main.go').is_file():
         subprocess.run(['go', 'build', '-o', str(sources / 'compiled-init'), './cmd/sandbox-init'],
                        cwd=sources / owner, env=env, check=True)
 

@@ -30,7 +30,7 @@ def build_owner(root, arch, output, environment, row, run=None):
             selected = go_module_policy.owner_selection(
                 json.loads(Path(environment['KUASAR_GO_RELEASE_SELECTION']).read_text()))
             dependencies = {name: {'tag': selected[name]['version'], 'sha': selected[name]['sha']}
-                            for name in go_workspace.closure([root.name]) if name != root.name}
+                            for name in go_workspace.closure([root.name], root=root.parent, go=shutil.which('go', path=environment.get('PATH')) or 'go') if name != root.name}
             environment = go_workspace.bound_helper_environment(
                 root.parent, root.name, release_version, dependencies, environment)
         elif root.name in ('sandboxer', 'orchestrator'):

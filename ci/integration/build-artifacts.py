@@ -156,13 +156,14 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
     for name in lane["products"]:
         if name in ("cloud-hypervisor", "vmlinux", "sandbox-runtime.bundle"):
             continue
-        owner = "guest-runtime" if artifacts.PRODUCTS[name] == "runtime" else artifacts.PRODUCTS[name]
+        unit = artifacts.planned_product_unit(plan, name)
+        owner = "guest-runtime" if unit == "runtime" else unit
         selected = configure_workspace(sources, [owner], environment)
         run(["make", "-C", sources / owner, f"TARGET_ARCH={arch}", name], environment=selected)
     for name in lane["products"]:
         if name == "sandbox-runtime.bundle":
             continue
-        unit = artifacts.PRODUCTS[name]
+        unit = artifacts.planned_product_unit(plan, name)
         if name == "vmlinux":
             path = kernel_root / "guest-runtime/native-deps/bin" / arch / name
         elif name == "cloud-hypervisor":

@@ -25,7 +25,7 @@ def prepare(module, owner, sources, selection, version, environment):
         [go, 'mod', 'edit', '-json', str(owner_source / 'go.mod')], cwd=module, env=env))
     if document['Module']['Path'] != owner_module:
         raise ValueError('selected SDK has a different module path')
-    modules = go_workspace.closure([owner])
+    modules = go_workspace.closure([owner], root=sources, go=go)
     selected = go_module_policy.owner_selection(selection)
     tags = {name: selected[name]['version'] for name in modules}
     expected = go_module_policy.expected_versions(

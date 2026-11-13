@@ -185,6 +185,18 @@ class GuestSourceCutoverContracts(unittest.TestCase):
         self.assertNotIn('sandbox-init', subject.changed_products({'sandboxer': ['pkg/guestlink/pinger.go']}))
         self.assertEqual(subject.changed_products({'guest-runtime': ['pkg/guestabi/proto/proto_test.go']}), [])
 
+    def test_historical_source_still_builds_and_attributes_pid1_to_its_owner(self):
+        products = subject.changed_products({'sandboxer': ['cmd/sandbox-init/main.go']}, init_unit='sandboxer')
+        self.assertIn('sandbox-init', products)
+        self.assertIn('sandbox-runtime.bundle', products)
+        self.assertNotIn('sandbox-init', subject.changed_products({'guest-runtime': ['Makefile']},
+                                                                 init_unit='sandboxer'))
+        plan = {'init_source_unit': 'sandboxer'}
+        self.assertEqual(subject.planned_product_unit(plan, 'sandbox-init'), 'sandboxer')
+        self.assertEqual(subject.planned_product_unit(plan, 'flatten-ctl'), 'runtime')
+        with self.assertRaisesRegex(ValueError, 'invalid selected init'):
+            subject.planned_product_unit({'init_source_unit': 'connector'}, 'sandbox-init')
+
     def test_guest_changes_retain_host_case_coverage_without_expanding_arm_capabilities(self):
         changes = {'guest-runtime': ['cmd/sandbox-init/main.go']}
         selected = subject.suite_selection(['guest-runtime'], 'x86_64', CASES, changes=changes, source_pr=True)

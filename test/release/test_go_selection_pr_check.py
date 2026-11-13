@@ -88,6 +88,21 @@ class GoSelectionPR(unittest.TestCase):
         self.assertEqual(subprocess.check_output([self.sources/'compiled'], text=True), 'fixed')
         self.assertEqual(subprocess.check_output([self.sources/'compiled-init'], text=True), 'selected-init')
 
+    def test_historical_runtime_alignment_builds_its_actual_public_commands(self):
+        # Omit the new command in an actual admitted Git merge: this isn't a
+        # skipped build failure, it is the historical producer's inventory.
+        runtime = self.runtime
+        git(runtime, 'switch', 'pr')
+        git(runtime, 'rm', '-qr', 'cmd/sandbox-init')
+        git(runtime, 'commit', '-qm', 'historical runtime')
+        head = git(runtime, 'rev-parse', 'HEAD')
+        git(runtime, 'switch', '-qc', 'legacy-merge', self.base)
+        git(runtime, 'merge', '--no-ff', '-qm', 'legacy integration', head)
+        git(runtime, 'update-ref', 'refs/pull/77/merge', git(runtime, 'rev-parse', 'HEAD'))
+        check.check(sign({**self.inputs, 'head_sha': head}), self.sources)
+        self.assertEqual(subprocess.check_output([self.sources/'compiled'], text=True), 'fixed')
+        self.assertFalse((self.sources/'compiled-init').exists())
+
     def test_runtime_dependency_uses_unit_identity_and_owner_directory(self):
         for tag in ('runtime-v0.2.0', 'runtime-v0.2.0-preview.20261112'):
             with self.subTest(tag=tag):
