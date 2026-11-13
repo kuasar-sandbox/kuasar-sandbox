@@ -632,9 +632,9 @@ Workbench Preview 清理遵守同样的 canonical 版本/源码归属检查。�
 
 已准入 lane 选择的所有检查必须成功。常规 x86/ARM 产品 E2E job 只有在可信 `docs`、`manifest`、`tooling` 或 `source` lane 的资格及精确证据通过后，才可按该 lane 有意跳过。必需工作失败、取消或非预期跳过均不能产生验收；Draft 的控制 job 成功不能代替资格验证。不能用结果桥接或独立提供的成功状态替代。
 
-项目仓的分支保护以一个 repository ruleset 为准。当前已启用的 ruleset 只匹配
-`refs/heads/main` 与 `refs/heads/release/v*`。它要求 PR、所有讨论已解决、严格匹配
-`ci / finalize`、线性历史,并阻止 force push 与分支删除。不使用管理员默认绕过、签名
+主仓和五个组件仓都只允许以 squash 方式合入 PR。各仓的 ruleset 保护
+`refs/heads/main` 与 `refs/heads/release/v*`，要求通过 PR 以 squash 合入、解决所有讨论，
+并通过严格匹配的 `ci / finalize` 检查，同时阻止强制推送和删除分支。不使用管理员默认绕过、签名
 提交、CODEOWNERS 或 merge queue。
 
 当前 `required_approving_review_count` 为 0。GitHub 只计入拥有 write 权限且不是 PR 作者的
@@ -644,13 +644,13 @@ approval;仓库没有独立的 write reviewer 时,强制一个 approval 会让�
 启用前必须确认 `kuasar-sandbox-bms-ci` 的安装已获批 `Contents: write`。未满足此条件时
 不得激活 ruleset: Daily Preview 无法提交收敛后的清单,会被唯一的 bypass 设计反向阻断。
 
-状态检查规则对新建 branch 使用 `do_not_enforce_on_create: true`,因此可以从已经发布的
-Stable Tag 建立一条新的维护线;创建后的任何更新立即回到同一套 PR 与必需 CI 门禁，不能借此
-绕过后续提交检查。
+维护分支从已发布 Stable tag 的原始提交建立。六仓均关闭 `required_linear_history`，
+必需状态检查设置 `do_not_enforce_on_create: true`，建线时可完整保留该提交及其祖先中的
+历史 merge commit。此后合入的每个 PR 均须通过必需检查，在目标分支上产生一个 squash 提交。
 
-Daily Preview 必须直接把收敛后的清单提交到受保护目标分支,因此当前已启用的 ruleset 只为
-`kuasar-sandbox-bms-ci` GitHub App (ID `4283831`) 配置 `always` bypass。该 App 的唯一写入
-用途是上述本仓短期 token;人工维护、普通 `github-actions` 与所有其他 App 都不在 bypass
+Daily Preview 将收敛后的清单直接提交到主仓受保护目标分支，因此主仓 ruleset 只为
+`kuasar-sandbox-bms-ci` GitHub App (ID `4283831`) 配置 `always` bypass。它使用限定在主仓的短期 token 提交清单。
+五个组件仓的 ruleset 均未配置 bypass 主体。人工维护、普通 `github-actions` 与所有其他 App 都不在 bypass
 列表。CI 对 PR 始终重新验证精确 integration commit 与目标 branch,所以 bypass 不替代
 `ci / finalize` 门禁。App 名称是已有注册标识,不是一种验证方法。
 
