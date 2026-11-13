@@ -77,6 +77,143 @@ def runtime(root, arch, files, *, without_mkfs=False):
     return prefix + footer(hashlib.sha256(prefix).hexdigest())
 
 
+class BaselineInitOwnershipContracts(unittest.TestCase):
+    """Real archive admission checks; no image construction or payload execution."""
+
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.assets = self.root / "assets"
+        self.assets.mkdir()
+
+    def inputs(self, units):
+        selected, records = {}, []
+        for unit, files in units.items():
+            version = (unit + "-" if unit in ("runtime", "vmlinux") else "") + "v1.2.3"
+            name = subject.archive_name(unit, version, "x86_64")
+            selected[name] = unit
+            records.append(archive(self.assets / name, files))
+        return selected, records
+
+    def test_default_unpack_keeps_current_producer_ownership(self):
+        selected, _ = self.inputs({"sandboxer": {"bin/sandbox-init": b"init"}})
+        with self.assertRaisesRegex(ValueError, "sandboxer cannot own bin/sandbox-init"):
+            subject.unpack(self.assets / next(iter(selected)), self.root / "output", "sandboxer", {})
+        self.assertEqual(subject.PRODUCTS["sandbox-init"], "runtime")
+
+    def test_selected_baseline_retains_the_actual_init_owner(self):
+        for owner in ("sandboxer", "runtime"):
+            with self.subTest(owner=owner):
+                selected, records = self.inputs({owner: {"bin/sandbox-init": owner.encode()}})
+                output = self.root / owner
+                ownership = subject.unpack_baseline(self.assets, output, selected, records)
+                self.assertEqual(ownership["bin/sandbox-init"], owner)
+                self.assertEqual((output / "bin/sandbox-init").read_bytes(), owner.encode())
+
+    def test_duplicate_init_is_rejected_even_when_bytes_match(self):
+        selected, records = self.inputs({owner: {"bin/sandbox-init": b"same init"}
+                                         for owner in ("sandboxer", "runtime")})
+        with self.assertRaisesRegex(ValueError, "conflicting archive ownership: bin/sandbox-init"):
+            subject.unpack_baseline(self.assets, self.root / "output", selected, records)
+
+    def test_missing_init_cannot_be_hidden_by_other_products(self):
+        selected, records = self.inputs({"sandboxer": {"bin/sandbox-ctl": b"host"},
+                                         "runtime": {"bin/flatten-ctl": b"flatten"}})
+        with self.assertRaisesRegex(ValueError, "baseline is missing bin/sandbox-init"):
+            subject.unpack_baseline(self.assets, self.root / "output", selected, records)
+
+    def test_baseline_exception_is_limited_to_init_and_its_two_owners(self):
+        for owner, product in (("orchestrator", "sandbox-init"), ("runtime", "sandbox-ctl")):
+            with self.subTest(owner=owner, product=product):
+                selected, records = self.inputs({owner: {"bin/" + product: b"unexpected"}})
+                with self.assertRaisesRegex(ValueError, owner + " cannot own bin/" + product):
+                    subject.unpack_baseline(self.assets, self.root / (owner + product), selected, records)
+
+    def test_every_asset_is_verified_before_any_extraction(self):
+        selected, records = self.inputs({"sandboxer": {"bin/sandbox-init": b"init"},
+                                         "runtime": {"bin/flatten-ctl": b"flatten"}})
+        for field, value in (("size", records[-1]["size"] + 1), ("digest", "sha256:" + "0" * 64)):
+            with self.subTest(field=field):
+                invalid = copy.deepcopy(records)
+                invalid[-1][field] = value
+                output = self.root / field
+                with self.assertRaisesRegex(ValueError, "baseline asset digest mismatch"):
+                    subject.unpack_baseline(self.assets, output, selected, invalid)
+                self.assertFalse(output.exists())
+
+    def test_selected_asset_records_must_be_present_and_unique(self):
+        selected, records = self.inputs({"runtime": {"bin/sandbox-init": b"init"}})
+        for invalid in ([], records + records):
+            with self.subTest(records=len(invalid)):
+                with self.assertRaisesRegex(ValueError, "baseline lacks unique selected asset records"):
+                    subject.unpack_baseline(self.assets, self.root / "output", selected, invalid)
+
+    def test_matching_bytes_through_a_symlink_are_not_a_selected_asset(self):
+        selected, records = self.inputs({"runtime": {"bin/sandbox-init": b"init"}})
+        path = self.assets / next(iter(selected))
+        target = path.with_suffix(".real")
+        path.rename(target)
+        path.symlink_to(target)
+        with self.assertRaisesRegex(ValueError, "baseline asset digest mismatch"):
+            subject.unpack_baseline(self.assets, self.root / "output", selected, records)
+
+    def test_source_repack_reads_the_same_verified_baseline_contract(self):
+        spec = importlib.util.spec_from_file_location("build_artifacts", Path(__file__).with_name("build-artifacts.py"))
+        builder = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(builder)
+        _, records = self.inputs({"sandboxer": {"bin/sandbox-ctl": b"host"},
+                                  "runtime": {"bin/sandbox-init": b"runtime init"}})
+        plan = {"baseline": {"units": {"sandboxer": {"version": "v1.2.3"},
+                                       "runtime": {"version": "runtime-v1.2.3"}}, "assets": records}}
+        output = self.root / "build-baseline"
+        builder.baseline_tree(plan, "x86_64", self.assets, output)
+        self.assertEqual((output / "bin/sandbox-init").read_bytes(), b"runtime init")
+        plan["baseline"]["assets"][-1]["digest"] = "sha256:" + "0" * 64
+        rejected = self.root / "rejected-baseline"
+        with self.assertRaisesRegex(ValueError, "baseline asset digest mismatch"):
+            builder.baseline_tree(plan, "x86_64", self.assets, rejected)
+        self.assertEqual(list(rejected.iterdir()), [])
+
+
+class GuestSourceCutoverContracts(unittest.TestCase):
+    def test_pid1_and_protocol_changes_rebuild_their_actual_consumers(self):
+        self.assertEqual(set(subject.changed_products({'guest-runtime': ['cmd/sandbox-init/main.go']})),
+                         {'sandbox-init', 'sandbox-runtime.bundle'})
+        self.assertEqual(set(subject.changed_products({'guest-runtime': ['pkg/guestabi/proto/proto.go']})),
+                         {'sandbox-init', 'sandbox-runtime.bundle', 'sandbox-ctl', 'node-ctl'})
+        self.assertNotIn('sandbox-init', subject.changed_products({'sandboxer': ['pkg/guestlink/pinger.go']}))
+        self.assertEqual(subject.changed_products({'guest-runtime': ['pkg/guestabi/proto/proto_test.go']}), [])
+
+    def test_guest_changes_retain_host_case_coverage_without_expanding_arm_capabilities(self):
+        changes = {'guest-runtime': ['cmd/sandbox-init/main.go']}
+        selected = subject.suite_selection(['guest-runtime'], 'x86_64', CASES, changes=changes, source_pr=True)
+        host = subject.suite_selection(['sandboxer'], 'x86_64', CASES, source_pr=True)
+        self.assertLessEqual(set(host['cases']), set(selected['cases']))
+        arm = subject.suite_selection(['guest-runtime'], 'aarch64', CASES, changes=changes, source_pr=True)
+        self.assertFalse(set(arm['cases']) & set(CASES['sandboxer']))
+        flat = subject.suite_selection(['guest-runtime'], 'x86_64', CASES,
+                                       changes={'guest-runtime': ['cmd/flatten-ctl/main.go']}, source_pr=True)
+        self.assertFalse(any(name.startswith('snapshot.') for name in flat['cases']))
+
+    def test_resolver_and_helper_closures_use_guest_source_without_a_back_edge(self):
+        import go_workspace
+        spec = importlib.util.spec_from_file_location('cutover_resolver', Path(__file__).with_name('resolve-artifacts.py'))
+        resolver = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(resolver)
+        sources = {owner: {'sha': str(index) * 40} for index, owner in enumerate(subject.OWNERS, 1)}
+        products = resolver.product_source_map(
+            ['sandbox-init', 'sandbox-runtime.bundle', 'sandbox-ctl', 'node-ctl'], sources, 'f' * 40)
+        self.assertEqual(set(products['sandbox-init']), {'kuasar-sandbox/guest-runtime'})
+        self.assertEqual(set(products['sandbox-runtime.bundle']),
+                         {'kuasar-sandbox/guest-runtime', 'kuasar-sandbox/accelerator'})
+        for name in ('sandbox-ctl', 'node-ctl'):
+            self.assertIn('kuasar-sandbox/guest-runtime', products[name])
+        for owner in ('sandboxer', 'orchestrator'):
+            self.assertIn('guest-runtime', go_workspace.closure([owner]))
+        self.assertNotIn('sandboxer', go_workspace.closure(['guest-runtime']))
+
+
 class RuntimeGeneratorContract(unittest.TestCase):
     def test_only_a_linked_external_module_selects_the_go_contract(self):
         module = "github.com/kuasar-sandbox/go-erofs"
@@ -1176,10 +1313,12 @@ class ArtifactContracts(unittest.TestCase):
 
     def test_baseline_and_candidate_tampering_fail(self):
         delta = self.delta()
+        candidate = (delta / "bin/manifest-ctl").read_bytes()
         with (delta / "bin/manifest-ctl").open("ab") as file:
             file.write(b"tamper")
         with self.assertRaisesRegex(ValueError, "candidate digest"):
             self.compose(delta=delta)
+        (delta / "bin/manifest-ctl").write_bytes(candidate)
         asset = self.assets / self.plan["baseline"]["assets"][0]["name"]
         with asset.open("ab") as file:
             file.write(b"tamper")
@@ -1201,7 +1340,7 @@ class ArtifactContracts(unittest.TestCase):
 
     def test_candidate_init_must_reach_embedded_runtime(self):
         self.plan["lanes"]["x86_64"]["products"] = ["sandbox-init"]
-        self.plan["product_sources"]["sandbox-init"] = {"sandboxer": "f" * 40}
+        self.plan["product_sources"]["sandbox-init"] = {"guest-runtime": "f" * 40}
         with self.assertRaisesRegex(ValueError, "embedded init differs"):
             self.compose()
 
@@ -1274,11 +1413,13 @@ class ArtifactContracts(unittest.TestCase):
         # separately; execution must retain this baseline's embedded identity.
         files = dict(self.files["x86_64"])
         files["sandbox-init"] = elf("x86_64", "separately published init")
-        name = subject.archive_name("sandboxer", "v1.2.3", "x86_64")
-        record = archive(self.assets / name, {"bin/" + name: data for name, data in files.items()
-                                            if subject.PRODUCTS[name] == "sandboxer"})
-        self.plan["baseline"]["assets"] = [record if entry["name"] == name else entry
-                                           for entry in self.plan["baseline"]["assets"]]
+        for unit in ("sandboxer", "runtime"):
+            version = self.plan['baseline']['units'][unit]['version']
+            name = subject.archive_name(unit, version, "x86_64")
+            record = archive(self.assets / name, {"bin/" + key: data for key, data in files.items()
+                             if ("sandboxer" if key == "sandbox-init" else subject.PRODUCTS[key]) == unit})
+            self.plan["baseline"]["assets"] = [record if entry["name"] == name else entry
+                                               for entry in self.plan["baseline"]["assets"]]
         provenance = self.compose()
         self.assertNotEqual(provenance["embedded"]["init"], provenance["products"]["sandbox-init"]["sha256"])
         spec = importlib.util.spec_from_file_location("prepared_inputs", Path(__file__).resolve().parents[2] / "test/e2e/lib/workspace.py")
@@ -1310,14 +1451,14 @@ class ArtifactContracts(unittest.TestCase):
         products = subject.changed_products({"guest-runtime": [
             "Makefile", "native-deps/Makefile", "native-deps/deps/common.sh",
             "native-deps/deps/build-erofs.sh", "native-deps/deps/erofs-patches/series"]})
-        self.assertEqual(set(products), {"flatten-ctl", "sandbox-runtime.bundle", "vmlinux"})
+        self.assertEqual(set(products), {"sandbox-init", "flatten-ctl", "sandbox-runtime.bundle", "vmlinux"})
         self.assertEqual(subject.changed_products({"guest-runtime": [
             "native-deps/deps/erofs-patches/series"]}), [])
 
     def test_linked_product_closure_and_platform_test_only_change(self):
         self.assertEqual(subject.changed_products({"platform": ["test/e2e/run_all.sh"]}), [])
         self.assertEqual(subject.changed_products({"accelerator": ["docs/accelerator.md"]}), [])
-        products = subject.changed_products({"sandboxer": ["cmd/sandbox-init/main.go"]})
+        products = subject.changed_products({"guest-runtime": ["cmd/sandbox-init/main.go"]})
         self.assertIn("sandbox-runtime.bundle", products)
         self.assertNotIn("node-ctl", products)
         products = subject.changed_products({"accelerator": ["pkg/flatten/flatten.go"]})

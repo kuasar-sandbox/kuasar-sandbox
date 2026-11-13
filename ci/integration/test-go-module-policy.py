@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 import go_module_policy as policy
@@ -14,6 +15,30 @@ import go_workspace as workspace
 
 
 class PolicyTests(unittest.TestCase):
+    def test_owner_selection_distinguishes_runtime_from_kernel(self):
+        runtime = {'version': 'runtime-v0.2.0', 'sha': 'a' * 40}
+        kernel = {'version': 'vmlinux-v0.1.6', 'sha': 'b' * 40}
+        self.assertEqual(policy.owner_selection({'runtime': runtime, 'vmlinux': kernel}),
+                         {'guest-runtime': runtime})
+        self.assertEqual(policy.OWNER_UNITS['guest-runtime'], 'runtime')
+
+    def test_bound_runtime_dependency_validates_its_unit_tag(self):
+        owner = self.root / 'sandboxer'
+        owner.mkdir()
+        (owner / 'go.mod').write_text('module ' + policy.PREFIX + 'sandboxer\n')
+        bindings = {'guest-runtime': {'tag': 'runtime-v0.2.0', 'sha': self.sha}}
+        def document(go, args, env):
+            return {'Module': {'Path': policy.PREFIX + Path(args[1]).name}}
+        with (patch.object(workspace, 'closure', return_value=['sandboxer', 'guest-runtime']),
+              patch.object(workspace, 'git_output', return_value=self.sha),
+              patch.object(workspace, 'require_clean_dependency'),
+              patch.object(workspace, 'go_json', side_effect=document),
+              patch.object(policy, 'declaration_changes', return_value={}),
+              patch.object(workspace, 'validate_build_list') as validate):
+            env = workspace.configure_bound_release(self.root, 'sandboxer', 'v0.2.0', bindings, self.env)
+        self.assertEqual(env['GOWORK'], 'off')
+        self.assertEqual(validate.call_args.args[1:3], ({policy.PREFIX + 'guest-runtime': 'v0.2.0'}, {}))
+
     def test_declarations_apply_only_to_selected_go_modules(self):
         tags = {'accelerator': 'v0.1.12', 'connector': 'v0.2.0-preview.20261112.2',
                 'runtime': 'runtime-v0.2.1-preview.20261112', 'vmlinux': 'vmlinux-v0.1.6'}

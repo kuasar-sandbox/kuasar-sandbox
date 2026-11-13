@@ -197,7 +197,7 @@ class SourceChecksTests(unittest.TestCase):
              patch.object(SUBJECT.subprocess, "run") as run:
             SUBJECT.materialize(self.plan, self.sources, self.output)
         run.assert_not_called()
-        expected = {"platform", "orchestrator", "sandboxer", "connector", "accelerator"}
+        expected = {"platform", "orchestrator", "sandboxer", "connector", "accelerator", "guest-runtime"}
         checkout.assert_called_once()
         layout = checkout.call_args.args[1]
         self.assertEqual(set(layout), expected)

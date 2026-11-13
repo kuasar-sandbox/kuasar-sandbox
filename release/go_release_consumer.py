@@ -26,8 +26,10 @@ def prepare(module, owner, sources, selection, version, environment):
     if document['Module']['Path'] != owner_module:
         raise ValueError('selected SDK has a different module path')
     modules = go_workspace.closure([owner])
-    tags = {name: selection[name]['version'] for name in modules}
-    expected = go_module_policy.expected_versions(tags)
+    selected = go_module_policy.owner_selection(selection)
+    tags = {name: selected[name]['version'] for name in modules}
+    expected = go_module_policy.expected_versions(
+        {go_module_policy.OWNER_UNITS[name]: tag for name, tag in tags.items()})
     (module / 'go.mod').write_text(
         'module example.com/kuasar-release-consumer\n\ngo ' + document['Go'] + '\n\n'
         + f'require {owner_module} {expected[owner_module]}\n')
@@ -42,14 +44,14 @@ def prepare(module, owner, sources, selection, version, environment):
         subprocess.run([go, 'work', 'init', '.'], cwd=module, env=env, check=True)
         env['GOWORK'] = str(module / 'go.work')
     for name, tag in tags.items():
-        tag_sources.validate_tag(name, tag)
+        tag_sources.validate_tag(go_module_policy.OWNER_UNITS[name], tag)
         if '-preview.' not in tag:
             continue
         if not preview:
             raise ValueError(f'Stable {version} selects Preview {name} {tag}')
         directory = sources / name
         if (directory.is_symlink() or directory.resolve().parent != sources.resolve()
-                or tag_sources.git(directory, 'rev-parse', 'HEAD') != selection[name]['sha']):
+                or tag_sources.git(directory, 'rev-parse', 'HEAD') != selected[name]['sha']):
             raise ValueError(f'{name} differs from selected Preview commit')
         path = 'github.com/kuasar-sandbox/' + name
         core = expected[path]

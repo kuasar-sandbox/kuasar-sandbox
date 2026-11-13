@@ -108,6 +108,13 @@ def update_sums(current, stable):
     return '\n'.join(lines) + '\n'
 
 
+def stable_requirements(managed, dependencies):
+    """Select declared module versions from Stable release-unit bindings."""
+    selected = policy.expected_versions({unit: row['tag'] for unit, row in dependencies.items()
+                                         if not policy.tag_version(unit, row['tag'])[1]})
+    return {module: version for module, version in managed.items() if selected.get(module) == version}
+
+
 def writer(endpoint, method, payload):
     token = os.environ.get('GO_ALIGNMENT_TOKEN')
     if not token:
@@ -287,12 +294,10 @@ def check_plans(c, plans, next_versions=None, *, date=None, before_alignment=Non
         if not managed and source == updated:
             continue
         relevant = {name: {'tag': other.selected, 'sha': other.source_sha} for name, other in plans.items()
-                    if name in plan.unit.dependencies and (name != 'sandboxer' or unit != 'runtime')}
-        # Compute checksums for real Stable tags only. An unpublished future core
-        # has no canonical content; its eventual Stable producer supplies it.
-        stable = {path: ver for path, ver in managed.items()
-                  if any(item['tag'] == ver and path == 'github.com/kuasar-sandbox/' + name
-                         for name, item in relevant.items())}
+                    if name in plan.unit.dependencies}
+        # Preview cores have no canonical content. Acquire their checksums only
+        # after the Stable dependency is published and selected.
+        stable = stable_requirements(managed, relevant)
         old_sum = read_file(c, plan.unit.repository, plan.source_sha, 'go.sum', optional=True)
         new_sum = update_sums(old_sum, stable)
         if source == updated and old_sum == new_sum:

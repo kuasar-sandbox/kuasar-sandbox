@@ -36,6 +36,18 @@
   ],
   "fallbacks": [
     {
+      "from_owner": "guest-runtime",
+      "from": "docs/guest-abi.md",
+      "to_owner": "sandboxer",
+      "to": "docs/guest-abi.md"
+    },
+    {
+      "from_owner": "guest-runtime",
+      "from": "docs/guest-abi_zh.md",
+      "to_owner": "sandboxer",
+      "to": "docs/guest-abi_zh.md"
+    },
+    {
       "from_owner": "accelerator",
       "from": "README.md#choose-a-complete-task-or-contract",
       "to_owner": "accelerator",

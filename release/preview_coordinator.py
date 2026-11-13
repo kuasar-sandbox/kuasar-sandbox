@@ -66,22 +66,22 @@ UNITS = (
     Unit("connector", "kuasar-sandbox/connector", "release.yml"),
     Unit("vmlinux", "kuasar-sandbox/guest-runtime", "release-vmlinux.yml"),
     Unit(
+        "runtime",
+        "kuasar-sandbox/guest-runtime",
+        "release-runtime.yml",
+        ("accelerator",),
+    ),
+    Unit(
         "sandboxer",
         "kuasar-sandbox/sandboxer",
         "release.yml",
-        ("accelerator", "connector"),
+        ("accelerator", "connector", "runtime"),
     ),
     Unit(
         "orchestrator",
         "kuasar-sandbox/orchestrator",
         "component-release.yml",
-        ("accelerator", "connector", "sandboxer"),
-    ),
-    Unit(
-        "runtime",
-        "kuasar-sandbox/guest-runtime",
-        "release-runtime.yml",
-        ("accelerator", "sandboxer"),
+        ("accelerator", "connector", "sandboxer", "runtime"),
     ),
 )
 UNIT_BY_NAME = {unit.name: unit for unit in UNITS}
@@ -800,8 +800,8 @@ def has_arm_archive(unit: str, tag: str, status: ReleaseStatus) -> bool:
 
 def dependency_paths(dependency, consumer):
     paths = ["go.mod", "go.sum", "pkg", "internal"]
-    if consumer == "runtime" and dependency == "sandboxer":
-        paths = ["go.mod", "go.sum", "Makefile", "cmd/sandbox-init", "pkg", "internal"]
+    if dependency == "runtime" and consumer in ("sandboxer", "orchestrator"):
+        paths = ["go.mod", "go.sum", "pkg/guestabi"]
     elif consumer == "runtime" and dependency == "accelerator":
         paths = ["go.mod", "go.sum", "pkg/flatten", "pkg/image", "pkg/manifest", "pkg/remote", "pkg/sparse", "pkg/tailzip", "pkg/tarstream",
                  "pkg/tar", "pkg/cache", "pkg/store", "pkg/readerr", "internal/util"]

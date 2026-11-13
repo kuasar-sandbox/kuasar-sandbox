@@ -28,8 +28,8 @@ PLATFORM = "kuasar-sandbox/kuasar-sandbox"
 REPOSITORIES = {owner: f"kuasar-sandbox/{owner}" for owner in artifacts.OWNERS if owner != "platform"}
 REPOSITORIES["platform"] = PLATFORM
 LIBRARIES = {
-    "accelerator": (), "connector": (), "sandboxer": ("accelerator", "connector"),
-    "guest-runtime": ("accelerator",), "orchestrator": ("accelerator", "connector", "sandboxer"),
+    "accelerator": (), "connector": (), "sandboxer": ("accelerator", "connector", "guest-runtime"),
+    "guest-runtime": ("accelerator",), "orchestrator": ("accelerator", "connector", "sandboxer", "guest-runtime"),
 }
 
 
@@ -300,9 +300,7 @@ def product_source_map(products, sources, kernel_sha):
         owner = unit_owner(artifacts.PRODUCTS[name])
         dependencies = {owner, *LIBRARIES[owner]}
         if name == "sandbox-init":
-            dependencies = {"sandboxer"}
-        if name == "sandbox-runtime.bundle":
-            dependencies |= {"sandboxer"}
+            dependencies = {"guest-runtime"}
         if name in ("mkfs.erofs", "vmlinux"):
             dependencies = {"guest-runtime"}
         result[name] = {REPOSITORIES[dependency]: sources[dependency]["sha"] for dependency in sorted(dependencies)}

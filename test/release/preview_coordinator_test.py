@@ -978,7 +978,8 @@ components:
             names.update(coordinator.UNIT_BY_NAME["sandboxer"].dependencies)
         units = tuple(unit for unit in coordinator.UNITS if unit.name in names)
         configured_versions = {
-            unit.name: configured if unit == dependent else "v1.0.0"
+            unit.name: configured if unit == dependent else
+                (unit.name + "-" if unit.name in ("runtime", "vmlinux") else "") + "v1.0.0"
             for unit in units
         }
         plans = {}
@@ -1415,8 +1416,27 @@ notes:
     def test_runtime_dependency_binding_matches_embedded_payloads(self) -> None:
         self.assertEqual(
             coordinator.UNIT_BY_NAME["runtime"].dependencies,
-            ("accelerator", "sandboxer"),
+            ("accelerator",),
         )
+
+    def test_guest_runtime_precedes_host_producers_and_binds_their_inputs(self) -> None:
+        order = {unit.name: index for index, unit in enumerate(coordinator.UNITS)}
+        for unit in coordinator.UNITS:
+            self.assertTrue(all(order[dependency] < order[unit.name] for dependency in unit.dependencies))
+        self.assertEqual(coordinator.UNIT_BY_NAME['sandboxer'].dependencies,
+                         ('accelerator', 'connector', 'runtime'))
+        self.assertEqual(coordinator.UNIT_BY_NAME['orchestrator'].dependencies,
+                         ('accelerator', 'connector', 'sandboxer', 'runtime'))
+        plans = {unit.name: coordinator.Plan(unit, 'unused', 'main', 'a' * 40, 'unused',
+                    ('runtime-' if unit.name == 'runtime' else '') + 'v1.2.3', 'publish')
+                 for unit in coordinator.UNITS}
+        for consumer in ('sandboxer', 'orchestrator'):
+            values = coordinator.release_inputs(plans[consumer], plans, 'release-v1.2.3', 'b' * 40)
+            self.assertIn('runtime_version=runtime-v1.2.3', values)
+            self.assertEqual(coordinator.dependency_paths('runtime', consumer),
+                             ['go.mod', 'go.sum', 'pkg/guestabi'])
+        runtime = coordinator.release_inputs(plans['runtime'], plans, 'release-v1.2.3', 'b' * 40)
+        self.assertFalse(any(value.startswith('sandboxer_version=') for value in runtime))
 
     def test_release_run_title_pins_source_and_dependency_tuple(self) -> None:
         accelerator = coordinator.Plan(
@@ -1452,6 +1472,8 @@ notes:
                 "accelerator": accelerator,
                 "connector": connector,
                 "sandboxer": sandboxer,
+                "runtime": coordinator.replace(accelerator, unit=coordinator.UNIT_BY_NAME['runtime'],
+                                               selected='runtime-v1.0.1-preview.20260831'),
             },
         )
         self.assertEqual(
@@ -1459,7 +1481,7 @@ notes:
             "Release v2.0.1-preview.20260831 @"
             + "c" * 40
             + " [accelerator=v1.0.1-preview.20260831,"
-            "connector=v1.0.1-preview.20260831]",
+            "connector=v1.0.1-preview.20260831,runtime=runtime-v1.0.1-preview.20260831]",
         )
 
 

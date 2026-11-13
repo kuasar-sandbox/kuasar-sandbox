@@ -52,17 +52,17 @@ PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf
 all: build
 
 # Full platform build. Sub-repo order matters: guest-runtime/native-deps leads
-# (host mkfs.erofs packs the runtime bundle), sandboxer builds sandbox-init and
-# cloud-hypervisor, then guest-runtime packs the guest erofs and builds
-# flatten-ctl. Each sub-repo's `build` builds every binary it ships. After all
+# (host mkfs.erofs packs the runtime bundle), guest-runtime builds sandbox-init
+# and flatten-ctl and packs the guest erofs, then sandboxer builds host artifacts.
+# Each sub-repo's `build` builds every binary it ships. After all
 # sub-builds, `collect` assembles sub-repo artifacts under bin/$(TARGET_ARCH)/.
 # Environment tools used only by tests are kept under build/e2e-tools/ and are
 # packaged separately from product binaries in the platform E2E helper package.
 build:
 	$(CI_TIMED) build/guest-native $(MAKE) -C $(ORG)/guest-runtime/native-deps build
 	$(CI_TIMED) build/accelerator $(MAKE) -C $(ORG)/accelerator build
-	$(CI_TIMED) build/sandboxer $(MAKE) -C $(ORG)/sandboxer build
 	$(CI_TIMED) build/guest-runtime $(MAKE) -C $(ORG)/guest-runtime build
+	$(CI_TIMED) build/sandboxer $(MAKE) -C $(ORG)/sandboxer build
 	$(CI_TIMED) build/connector $(MAKE) -C $(ORG)/connector build
 	$(CI_TIMED) build/orchestrator $(MAKE) -C $(ORG)/orchestrator build
 	@$(CI_TIMED) build/collect $(MAKE) collect

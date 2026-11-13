@@ -13,8 +13,8 @@ import tempfile
 
 import go_module_policy as policy
 
-DEPENDENCIES = {'sandboxer': ('accelerator', 'connector'),
-                'orchestrator': ('sandboxer', 'accelerator', 'connector'),
+DEPENDENCIES = {'sandboxer': ('accelerator', 'connector', 'guest-runtime'),
+                'orchestrator': ('sandboxer', 'accelerator', 'connector', 'guest-runtime'),
                 'guest-runtime': ('accelerator',), 'accelerator': (), 'connector': ()}
 
 
@@ -149,8 +149,7 @@ def configure_release(root, owners, selections, environment=None, *, version=Non
         name, separator, tag = selection.partition('=')
         require(separator and name in expected and name not in selected,
                 'unknown or duplicate release dependency: ' + selection)
-        require(re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?', tag),
-                'invalid release dependency tag: ' + tag)
+        policy.tag_version(policy.OWNER_UNITS[name], tag)
         selected[name] = tag
     require(set(selected) == expected, 'release dependency tags differ from Go module closure')
     env = dict(os.environ if environment is None else environment)
@@ -223,7 +222,7 @@ def configure_bound_release(root, owner, version, dependencies, environment=None
         target = root / name
         require(not target.is_symlink() and target.is_dir(), 'missing local Go dependency: ' + name)
         tag, sha = binding['tag'], binding['sha']
-        core, is_preview = policy.tag_version(name, tag)
+        core, is_preview = policy.tag_version(policy.OWNER_UNITS[name], tag)
         require(re.fullmatch(r'[0-9a-f]{40}', sha) and git_output(target, 'rev-parse', 'HEAD') == sha,
                 'source differs from selected dependency SHA: ' + name)
         require_clean_dependency(target)

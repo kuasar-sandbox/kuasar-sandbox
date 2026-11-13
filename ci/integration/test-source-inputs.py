@@ -672,8 +672,11 @@ class MaintainedSelection(unittest.TestCase):
 
     def test_cutover_product_closure_and_independent_kernel(self):
         products = resolver.maintained_products({'connector': {}})
-        self.assertTrue({'connector-ctl', 'sandbox-ctl', 'sandbox-init', 'sandbox-runtime.bundle',
+        self.assertTrue({'connector-ctl', 'sandbox-ctl',
                          'node-ctl', 'cluster-ctl', 'node-stub-ctl', 'e2b-key-ctl'} <= products)
+        self.assertFalse({'sandbox-init', 'sandbox-runtime.bundle'} & products)
+        self.assertTrue({'sandbox-init', 'sandbox-runtime.bundle', 'sandbox-ctl', 'node-ctl'} <=
+                        resolver.maintained_products({'runtime': {}}))
         self.assertNotIn('vmlinux', products)
         self.assertEqual(resolver.maintained_products({'vmlinux': {}}), {'vmlinux'})
         self.assertNotIn('mkfs.erofs', resolver.maintained_products(dict.fromkeys(artifacts.UNITS)))

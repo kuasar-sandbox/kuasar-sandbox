@@ -10,6 +10,7 @@ import tempfile
 PREFIX = 'github.com/kuasar-sandbox/'
 UNITS = {'accelerator': 'accelerator', 'connector': 'connector', 'sandboxer': 'sandboxer',
          'orchestrator': 'orchestrator', 'runtime': 'guest-runtime'}
+OWNER_UNITS = {owner: unit for unit, owner in UNITS.items()}
 MODULES = frozenset(PREFIX + owner for owner in UNITS.values())
 NUMBER = r'(?:0|[1-9][0-9]*)'
 TAG = re.compile(rf'(v{NUMBER}\.{NUMBER}\.{NUMBER})(-preview\.[0-9]{{8}}(?:\.[1-9][0-9]*)?)?')
@@ -32,6 +33,11 @@ def expected_versions(components, component_next_versions=None):
     # A published/reused selection, including a Preview, names its own core.
     return {PREFIX + owner: tag_version(unit, components[unit])[0]
             for unit, owner in UNITS.items() if unit in components}
+
+
+def owner_selection(components):
+    """Map release-unit records to Go source owners; kernel is not a Go input."""
+    return {owner: components[unit] for unit, owner in UNITS.items() if unit in components}
 
 
 def _edit(go, text, arguments):

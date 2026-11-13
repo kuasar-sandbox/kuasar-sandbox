@@ -44,7 +44,7 @@ UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vm
 SUITES = frozenset(("basic", "storage", "image", "network", "sandbox", "snapshot", "orchestrator", "builder", "telemetry"))
 PRODUCTS = {
     "manifest-ctl": "accelerator", "store-ctl": "accelerator", "cache-ctl": "accelerator",
-    "connector-ctl": "connector", "sandbox-ctl": "sandboxer", "sandbox-init": "sandboxer",
+    "connector-ctl": "connector", "sandbox-ctl": "sandboxer", "sandbox-init": "runtime",
     "cloud-hypervisor": "sandboxer", "node-ctl": "orchestrator", "cluster-ctl": "orchestrator",
     "node-stub-ctl": "orchestrator", "e2b-key-ctl": "orchestrator",
     "flatten-ctl": "runtime", "mkfs.erofs": "runtime", "sandbox-runtime.bundle": "runtime",
@@ -143,15 +143,17 @@ def changed_products(changes):
             # selected library, without selecting different orchestrator code.
             if touches("go.mod", "go.sum", "pkg", "internal"):
                 products.add("node-ctl")
-            if touches("go.mod", "go.sum", "Makefile", "cmd/sandbox-init", "internal", "pkg"):
-                products.add("sandbox-init")
             if touches("native-deps"):
                 products.add("cloud-hypervisor")
         elif owner == "orchestrator" and (go or touches("app", "config")):
             products.update(name for name, unit in PRODUCTS.items() if unit == "orchestrator")
         elif owner == "guest-runtime":
-            if go:
+            if touches("go.mod", "go.sum", "Makefile", "cmd/flatten-ctl", "internal"):
                 products.add("flatten-ctl")
+            if touches("go.mod", "go.sum", "Makefile", "cmd/sandbox-init", "internal", "pkg/guestabi"):
+                products.add("sandbox-init")
+            if touches("go.mod", "go.sum", "pkg/guestabi"):
+                products.update(("sandbox-ctl", "node-ctl"))
             if touches("Makefile", "cmd/runtime-bundle", "runtime", "native-deps/Makefile",
                        "native-deps/deps/common.sh", "native-deps/deps/build-envd.sh"):
                 products.add("sandbox-runtime.bundle")
@@ -197,9 +199,15 @@ def suite_selection(owners, arch, case_files, *, native_full=False, changes=None
         require(isinstance(changes, dict) and set(changes) <= set(owners),
                 'consumer changes differ from candidate owners')
         affected = {owner: changed_products({owner: paths}) for owner, paths in changes.items()}
+        if 'sandbox-init' in affected.get('guest-runtime', []):
+            # Moving PID 1 source must retain its existing host/guest coverage,
+            # without changing case ownership or the accepted ARM capability set.
+            guest_suites = DEFAULT_SUITES['sandboxer'] | {
+                name.split('.')[0] for name in case_files['sandboxer']}
+            chosen.update(name for name in all_cases if name.split('.')[0] in guest_suites)
         if any('flatten-ctl' in affected.get(owner, []) for owner in ('accelerator', 'guest-runtime')):
             chosen.update(name for name in all_cases if name.startswith('telemetry.'))
-        if 'node-ctl' in affected.get('sandboxer', []):
+        if any('node-ctl' in affected.get(owner, []) for owner in ('sandboxer', 'guest-runtime')):
             chosen.update(name for name in all_cases if name.startswith('orchestrator.resource-'))
         suites.update(name.split('.')[0] for name in chosen)
     exclusions = []
@@ -444,7 +452,7 @@ def runtime_payloads(workspace, arch, expected_init=None, expected_envd=None):
         return result
 
 
-def unpack(archive, destination, unit, seen):
+def unpack(archive, destination, unit, seen, *, baseline_init=False):
     """Extract regular files only, with canonical names and fixed ownership."""
     with tarfile.open(archive, "r:gz") as source:
         members = source.getmembers()
@@ -468,6 +476,7 @@ def unpack(archive, destination, unit, seen):
                 require(name.startswith(("test/", "docs/", "guide/", "workbench/")), f"platform cannot own {name}")
             elif name.startswith("bin/"):
                 require(PRODUCTS.get(name[4:]) == unit or
+                        (baseline_init and name == "bin/sandbox-init" and unit in ("sandboxer", "runtime")) or
                         (unit == "vmlinux" and name == "bin/vmlinux.sha256"), f"{unit} cannot own {name}")
             elif name.startswith("share/"):
                 require(name.startswith((f"share/licenses/{unit}/", f"share/sources/{unit}/")),
@@ -488,6 +497,28 @@ def unpack(archive, destination, unit, seen):
             with source.extractfile(member) as data, target.open("xb") as output:
                 shutil.copyfileobj(data, output)
             target.chmod(member.mode & 0o777)
+
+
+def unpack_baseline(assets, destination, selected, asset_records):
+    """Read exact selected release assets, retaining their actual ownership.
+
+    Only this verified baseline path accepts either historical init location.
+    New producers and candidate products still use the current PRODUCTS map.
+    """
+    records = {record["name"]: record for record in asset_records}
+    require(len(records) == len(asset_records) and set(selected) <= set(records),
+            "baseline lacks unique selected asset records")
+    # Check every selected archive before extracting any of them. Never infer
+    # a release source from a member's contents or fall back to another asset.
+    for name in selected:
+        path = assets / name
+        require(path.is_file() and not path.is_symlink() and path.stat().st_size == records[name]["size"]
+                and "sha256:" + digest(path) == records[name]["digest"], f"baseline asset digest mismatch: {name}")
+    ownership = {}
+    for name, unit in selected.items():
+        unpack(assets / name, destination, unit, ownership, baseline_init=True)
+    require("bin/sandbox-init" in ownership, "baseline is missing bin/sandbox-init")
+    return ownership
 
 
 def validate_test_revisions(records):
@@ -608,12 +639,6 @@ def compose(plan, arch, assets, delta, output):
     records = {record["name"]: record for record in baseline["assets"]}
     require(len(records) == len(baseline["assets"]) and set(expected_assets) <= set(records),
             "aggregate lacks target assets; explicit ARM initialization is required")
-    # Validate everything before applying candidate overlays. No latest lookup or
-    # source-build fallback is available at this boundary.
-    for name in expected_assets:
-        path = assets / name
-        require(path.is_file() and not path.is_symlink() and path.stat().st_size == records[name]["size"]
-                and "sha256:" + digest(path) == records[name]["digest"], f"baseline asset digest mismatch: {name}")
     metadata = json.loads((delta / "outputs.json").read_text())
     require(metadata["plan_id"] == plan_id and metadata["arch"] == arch, "candidate input identity mismatch")
     require(metadata.get("test_revisions") == plan["test_revisions"], "build test pins differ from plan")
@@ -679,9 +704,7 @@ def compose(plan, arch, assets, delta, output):
     with tempfile.TemporaryDirectory(prefix=f".{arch}.", dir=output.parent) as temporary:
         stage = Path(temporary) / arch
         stage.mkdir()
-        ownership = {}
-        for name, unit in expected_assets.items():
-            unpack(assets / name, stage, unit, ownership)
+        ownership = unpack_baseline(assets, stage, expected_assets, baseline["assets"])
         originals = {name: digest(stage / "bin" / name) for name in PRODUCTS
                      if name not in OPTIONAL_LEGACY_PRODUCTS or (stage / "bin" / name).exists()}
         kernel_checksum = stage / "bin/vmlinux.sha256"
@@ -721,8 +744,9 @@ def compose(plan, arch, assets, delta, output):
             candidate = name in lane["products"]
             require(actual == (metadata["products"][name]["sha256"] if candidate else originals[name]),
                     f"final product bytes differ from their origin: {name}")
-            products[name] = {"sha256": actual, "unit": unit, "origin": "candidate" if candidate else "baseline",
-                              "sources": plan["product_sources"][name] if candidate else baseline["units"][unit]}
+            origin_unit = unit if candidate else ownership["bin/" + name]
+            products[name] = {"sha256": actual, "unit": origin_unit, "origin": "candidate" if candidate else "baseline",
+                              "sources": plan["product_sources"][name] if candidate else baseline["units"][origin_unit]}
         # This is derived metadata, not a build product or a required legacy
         # input. Never keep the old kernel's identity beside a selected delta.
         if kernel_checksum.exists() and "vmlinux" in lane["products"]:
