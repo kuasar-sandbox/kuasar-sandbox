@@ -301,6 +301,62 @@ class FrozenReleaseGates(unittest.TestCase):
         self.assertNotEqual(status,0); self.assertEqual(result['commands'],[])
         self.assertFalse((self.root/'executed').exists())
 
+    def test_host_source_receipts_before_and_after_guest_module_migration(self):
+        for owner in ('sandboxer', 'orchestrator'):
+            with self.subTest(owner=owner):
+                self.plan([owner])
+                _, _, selected, facts, _ = gate.validate(self.plan_path, self.sources, self.env)
+                self.assertEqual(selected, {owner})
+                self.assertNotIn('guest-runtime', facts)
+                marker = self.sources / '.source-checks.json'
+                receipt = json.loads(marker.read_text())
+                receipt['sources']['guest-runtime'] = self.document['test_revisions']['guest-runtime']
+                marker.write_text(json.dumps(receipt))
+                _, _, selected, facts, _ = gate.validate(self.plan_path, self.sources, self.env)
+                self.assertEqual(selected, {owner})
+                self.assertEqual(facts['guest-runtime'], self.document['source_records']['runtime'])
+
+    def test_host_source_receipt_requires_exact_guest_pin_and_complete_original_closure(self):
+        self.plan(['sandboxer'])
+        marker = self.sources / '.source-checks.json'
+        original = json.loads(marker.read_text())
+        for change in ('wrong-guest', 'missing-connector', 'extra-orchestrator'):
+            with self.subTest(change=change):
+                receipt = copy.deepcopy(original)
+                pins = receipt['sources']
+                pins['guest-runtime'] = dict(self.document['test_revisions']['guest-runtime'])
+                if change == 'wrong-guest':
+                    pins['guest-runtime']['sha'] = 'b' * 40
+                elif change == 'missing-connector':
+                    del pins['connector']
+                else:
+                    pins['orchestrator'] = self.document['test_revisions']['orchestrator']
+                marker.write_text(json.dumps(receipt))
+                with self.assertRaisesRegex(ValueError, 'receipt'):
+                    gate.validate(self.plan_path, self.sources, self.env)
+        self.plan(['connector'])
+        receipt = json.loads(marker.read_text())
+        receipt['sources']['guest-runtime'] = self.document['test_revisions']['guest-runtime']
+        marker.write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(ValueError, 'receipt'):
+            gate.validate(self.plan_path, self.sources, self.env)
+
+    def test_host_gate_rechecks_materialized_guest_after_owner_command(self):
+        owner = self.sources / 'sandboxer'
+        (owner / 'Makefile').write_text('test-release:\n\t@touch ../guest-runtime/unexpected\n')
+        git(owner, 'add', 'Makefile')
+        git(owner, 'commit', '-qm', 'Mutate extra guest checkout')
+        self.plan(['sandboxer'])
+        marker = self.sources / '.source-checks.json'
+        receipt = json.loads(marker.read_text())
+        receipt['sources']['guest-runtime'] = self.document['test_revisions']['guest-runtime']
+        marker.write_text(json.dumps(receipt))
+        status, result = self.run_gate()
+        self.assertNotEqual(status, 0)
+        self.assertEqual(len(result['commands']), 1)
+        self.assertEqual(result['commands'][0]['exit_code'], 0)
+        self.assertIn('modified inputs', result['error'])
+
     def test_plan_receipt_mismatch_rejected_before_any_command(self):
         self.document['framework_sha']='b'*40
         self.plan_path.write_bytes(artifacts.canonical(self.document))
