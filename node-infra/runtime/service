@@ -13,6 +13,9 @@ config_list() {
         [[ -f "$path" && "$path" != *:* ]] || { echo "Invalid configuration path: $path" >&2; return 1; }
         joined+=":$path"
     done
+    if [[ -f /run/node-infra/quickstart.enabled && ( $base == conductor.yaml || $base == proxy.yaml ) ]]; then
+        joined+=":/run/node-infra/quickstart/${base}"
+    fi
     printf '%s' "$joined"
 }
 

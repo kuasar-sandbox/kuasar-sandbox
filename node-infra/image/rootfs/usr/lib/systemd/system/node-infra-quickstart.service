@@ -1,0 +1,18 @@
+[Unit]
+Description=Initialize the private node-infra Quick Start volume
+DefaultDependencies=no
+RequiresMountsFor=/var/lib/node-infra
+After=local-fs.target
+Before=node-infra-network.service shutdown.target
+Conflicts=shutdown.target
+PartOf=node-infra.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+FileDescriptorStoreMax=1
+NotifyAccess=all
+Environment=PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=/usr/libexec/node-infra/quickstart prepare
+StandardError=journal+console
+TimeoutStartSec=180

@@ -1,0 +1,248 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: Apache-2.0
+"""Initialize the explicit Quick Start profile before any data-plane service starts."""
+import base64
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+import time
+
+DATA = Path('/var/lib/node-infra')
+STATE = DATA / 'quickstart'
+RUN = Path('/run/node-infra')
+SEED = Path('/usr/share/node-infra/quickstart')
+SYSTEM = Path('/run/systemd/system')
+HELPER = '/usr/libexec/node-infra/quickstart'
+LOCATION = 'ks-dev'
+# Incomplete initialization has no published credentials or consumers. A marked
+# staging directory and one rename allow retries without modifying existing state.
+PENDING = DATA / '.ks-quickstart-init'
+FORMAT = 'node-infra-quickstart-v1\n'
+
+
+def write(path, value):
+    with path.open('x', encoding='utf-8') as stream:
+        stream.write(value)
+
+
+def run(*args, env=None, **kwargs):
+    return subprocess.run(args, check=True, text=True, env=env, **kwargs)
+
+
+def enable():
+    # Ephemeral unit dependencies keep native-mode services and /etc untouched.
+    for service, directive in (
+        ('node-infra-network', '[Unit]\nRequires=node-infra-quickstart.service\nAfter=node-infra-quickstart.service'),
+        ('node-conductor', '[Service]\nExecStartPost=' + HELPER + ' register'),
+    ):
+        directory = SYSTEM / (service + '.service.d')
+        directory.mkdir(parents=True, exist_ok=True)
+        write(directory / '50-quickstart.conf', directive + '\n')
+
+
+def check_inputs():
+    if not os.path.ismount(DATA):
+        # os.path.ismount cannot recognize bind mounts on the same filesystem.
+        if not any(line.split()[4] == str(DATA) for line in Path('/proc/self/mountinfo').read_text().splitlines()):
+            raise ValueError(f'mount a private volume at {DATA}')
+    for device in ('/dev/kvm', '/dev/net/tun'):
+        if not Path(device).is_char_device():
+            raise ValueError(f'required device missing: {device}')
+    config_dirs = [Path('/etc') / name for name in
+                   ('node-conductor', 'node-proxy', 'node-telemetry', 'connector-vswitch', 'node-infra')]
+    # Reject even empty externally mounted site directories. A named volume at
+    # /var/lib/node-infra is the only input this profile needs.
+    mounts = [Path(line.split()[4]) for line in Path('/proc/self/mountinfo').read_text().splitlines()]
+    if any(m == Path('/etc') or m == d or m.is_relative_to(d) for m in mounts for d in config_dirs):
+        raise ValueError('explicit site configuration mounted; use native deployment')
+    if os.path.lexists('/etc/node-infra/manifest.yaml') or any(
+        any((d / 'conf.d').glob('*.yaml')) for d in config_dirs
+    ):
+        raise ValueError('existing native site configuration; use native deployment')
+
+
+def location_directory(state):
+    bucket = hashlib.sha256(LOCATION.encode()).hexdigest()
+    return state / 'publications' / bucket[:2] / bucket[2:4] / LOCATION
+
+
+def template_id(root):
+    ref = f'file://{root}.bundle@manifest:{root}@location:{LOCATION}'
+    return 'bare-img-' + base64.urlsafe_b64encode(ref.encode()).decode().rstrip('=')
+
+
+def write_seed(stage, key):
+    directory = location_directory(stage)
+    directory.mkdir(parents=True)
+    bundle = directory / 'seed.tmp'
+    flatten = ['flatten-ctl', 'export', '--no-progress', '--runtime-config', SEED / 'runtime.json',
+               '--output', '-', SEED / 'rootfs']
+    with subprocess.Popen(flatten, stdout=subprocess.PIPE) as producer:
+        try:
+            result = subprocess.run(
+                ['manifest-ctl', 'load', '--no-progress', '--manifest-config', stage / 'manifest.yaml',
+                 '--output-mode=bundle', '--output', bundle, '-'], stdin=producer.stdout,
+                env={**os.environ, 'MANIFEST_KEY': key}, text=True, stderr=subprocess.PIPE)
+        finally:
+            producer.stdout.close()
+        status = producer.wait()
+    if result.returncode:
+        # The manifest CLI's errors contain paths and format diagnostics. The
+        # key was provided through the environment, never arguments or YAML.
+        raise ValueError(f'Guest Bundle export failed: {result.stderr.strip()}')
+    if status:
+        raise ValueError(f'Guest rootfs export failed (flatten-ctl exit {status})')
+    match = re.search(r'^bundle root: ([0-9a-f]{64})$', result.stderr, re.MULTILINE)
+    if not match:
+        raise ValueError('manifest-ctl returned no Bundle root')
+    root = match[1]
+    bundle.rename(directory / (root + '.bundle'))
+    write(stage / 'template-id', template_id(root) + '\n')
+
+
+def new_state(stage):
+    write(stage / 'format', FORMAT)
+    manifest_key = run('e2b-key-ctl', 'gen-key', capture_output=True).stdout.strip()
+    write(stage / 'manifest-key', manifest_key + '\n')
+    secret = run('e2b-key-ctl', 'derive-api-secret', env={**os.environ, 'MANIFEST_KEY': manifest_key},
+                 capture_output=True).stdout.strip()
+    api_key = run('e2b-key-ctl', 'gen-apikey', env={**os.environ, 'API_SECRET': secret}, capture_output=True).stdout
+    write(stage / 'api-key', api_key)
+    write(stage / 'encryption-key', run('e2b-key-ctl', 'gen-key', capture_output=True).stdout)
+    write(stage / 'manifest.yaml', """manifest: {}
+store: {endpoint: ''}
+cache: {endpoint: ''}
+crypto: {local: 'off', chunk: aes, manifest: aes}
+chunker: {mode: cdc, cdc: {min: 128KiB, avg: 512KiB, max: 1MiB}}
+""")
+    with (stage / 'overlay.ext4').open('xb') as overlay:
+        overlay.truncate(256 * 1024 ** 2)
+    run('mkfs.ext4', '-F', '-q', '-b', '4096', '-O', '^has_journal', stage / 'overlay.ext4')
+    run('sha256sum', '--check', '--status', SEED / 'SHA256SUMS', cwd=SEED)
+    write_seed(stage, manifest_key)
+
+
+def initialize():
+    if os.path.lexists(STATE):
+        if STATE.is_symlink() or not STATE.is_dir() or (STATE / 'format').read_text() != FORMAT:
+            raise ValueError('unrecognized Quick Start state; preserving data volume')
+        return
+    entries = list(DATA.iterdir())
+    if entries:
+        if (entries != [PENDING] or PENDING.is_symlink() or not PENDING.is_dir()
+                or (any(PENDING.iterdir()) and (PENDING / 'format').read_text() != FORMAT)):
+            raise ValueError('Quick Start needs an empty volume; preserving existing contents')
+        shutil.rmtree(PENDING)
+    PENDING.mkdir()
+    new_state(PENDING)
+    PENDING.rename(STATE)
+
+
+def state_value(name, pattern):
+    path = STATE / name
+    if not stat.S_ISREG(path.lstat().st_mode):
+        raise ValueError(f'invalid Quick Start state file: {name}')
+    value = path.read_text().strip()
+    if not re.fullmatch(pattern, value):
+        raise ValueError(f'damaged Quick Start state file: {name}')
+    return value
+
+
+def configure():
+    key = state_value('manifest-key', '[0-9a-f]{64}')
+    encryption_key = state_value('encryption-key', '[0-9a-f]{64}')
+    state_value('api-key', 'e2b_[0-9a-f]{72}')
+    template = state_value('template-id', 'bare-img-[a-zA-Z0-9_-]+')
+    reference = base64.urlsafe_b64decode(template[len('bare-img-'):] + '===').decode()
+    match = re.fullmatch(r'file://([0-9a-f]{64})\.bundle@manifest:\1@location:ks-dev', reference)
+    if not match or template != template_id(match[1]):
+        raise ValueError('damaged Quick Start template reference')
+    with tempfile.TemporaryDirectory(dir=RUN) as temporary:
+        # Load the image's bounded OCI metadata tail through its authenticated
+        # root selector and the instance key. Normal VM I/O verifies chunks.
+        run('manifest-ctl', 'load', '--no-progress', '--manifest-config', STATE / 'manifest.yaml',
+            '--output-mode=none', '--extract-tail', Path(temporary) / 'runtime.zip',
+            '--ref-location', LOCATION + '=' + location_directory(STATE).as_uri(), reference,
+            env={**os.environ, 'MANIFEST_KEY': key})
+    overlay = STATE / 'overlay.ext4'
+    if overlay.is_symlink() or not overlay.is_file() or overlay.stat().st_size < 4096:
+        raise ValueError('missing or invalid Quick Start overlay template')
+    runtime = RUN / 'quickstart'
+    runtime.mkdir(exist_ok=True)
+    config = {
+        'api': {'listen': '127.0.0.1:3000', 'domain': 'ks-dev.test'},
+        'manifest_config': str(STATE / 'manifest.yaml'), 'encryption_key': encryption_key,
+        'checkpoint': {'mode': 'bundle', 'remote': {'manifest': True,
+                       'ref_location_parent': (STATE / 'publications').as_uri()}},
+        'sandbox': {'boot': {'overlay_diff_template': str(overlay)},
+                    'resources': {'capacity': {'cpu': 1, 'memory': '512MiB'}}},
+        'resource_listen': {'enabled': True, 'pools': [
+            {'name': 'default', 'allocatable': {'cpu': 2, 'memory': '3GiB'}}]},
+        'units': {'runner_pools': [{'name': 'r0', 'resource_pool': 'default', 'unit': 'sandbox-runner@.service',
+                                    'size': 1, 'capacity': 4}],
+                  'builder_pools': [{'name': 'b0', 'resource_pool': 'default', 'unit': 'sandbox-builder@.service',
+                                     'size': 0, 'capacity': 1}]},
+    }
+    (runtime / 'conductor.yaml').write_text(json.dumps(config))
+    (runtime / 'proxy.yaml').write_text(json.dumps({'data_listen': '127.0.0.1:3001'}))
+
+
+def prepare():
+    check_inputs()
+    # flock the directory inode itself. The oneshot hands this exact open
+    # description to systemd, retaining the lock without a resident process.
+    fd = os.open(DATA, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise ValueError('data volume is already in use by another Quick Start instance') from None
+        initialize()
+        configure()
+        run('systemd-notify', '--fd=' + str(fd), '--fdname=volume-lock', 'FDSTORE=1', pass_fds=(fd,))
+    finally:
+        os.close(fd)
+
+
+def register():
+    (RUN / 'quickstart.ready').unlink(missing_ok=True)
+    key = state_value('manifest-key', '[0-9a-f]{64}')
+    socket = '/run/sandbox/node-ctl.socket'
+    # Type=simple starts ExecStartPost as soon as the process exists. Wait for
+    # the native admin listener before sending a single registration request.
+    deadline = time.monotonic() + 60
+    while run_probe(socket) is False:
+        if time.monotonic() >= deadline:
+            raise ValueError('Conductor admin socket did not become ready')
+        time.sleep(0.25)
+    env = {k: v for k, v in os.environ.items() if k != 'API_SECRET'}
+    env['MANIFEST_KEY'] = key
+    run('node-ctl', 'manifest-key', 'add', '--socket', socket, env=env, stdout=subprocess.DEVNULL)
+    (RUN / 'quickstart.failed').unlink(missing_ok=True)
+    (RUN / 'quickstart.ready').touch()
+
+
+def run_probe(path):
+    return subprocess.run(['curl', '--disable', '--silent', '--fail', '--max-time', '2',
+                           '--noproxy', '*', '--unix-socket', path,
+                           'http://localhost/internal/admin/resource-pressure'],
+                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0
+
+
+if __name__ == '__main__':
+    os.umask(0o077)
+    action = sys.argv[1]
+    try:
+        {'enable': enable, 'prepare': prepare, 'register': register}[action]()
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        reason = f'{action}: {exc}'
+        (RUN / 'quickstart.failed').write_text(reason + '\n')
+        sys.exit('node-infra Quick Start: ' + reason)

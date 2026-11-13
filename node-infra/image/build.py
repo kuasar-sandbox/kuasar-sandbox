@@ -22,7 +22,7 @@ ARCHES = {"x86_64": "amd64", "aarch64": "arm64", "amd64": "amd64", "arm64": "arm
 sys.path.insert(0, str(ROOT / "release"))
 import node_infra_assets
 
-REQUIRED = ("node-ctl", "sandbox-ctl", "sandbox-init", "cloud-hypervisor", "connector-ctl", "vmlinux", "sandbox-runtime.bundle", "manifest-ctl", "cache-ctl", "store-ctl", "flatten-ctl")
+REQUIRED = ("node-ctl", "sandbox-ctl", "sandbox-init", "cloud-hypervisor", "connector-ctl", "vmlinux", "sandbox-runtime.bundle", "e2b-key-ctl", "manifest-ctl", "cache-ctl", "store-ctl", "flatten-ctl")
 
 
 def run(args, **kwargs):
@@ -140,7 +140,8 @@ def build(args):
                 shutil.copy2(ROOT / name, own_license / name)
         shutil.copytree(HERE / "rootfs", context / "rootfs")
         shutil.copy2(HERE / "Containerfile", context / "Containerfile")
-        for name in ("service", "entrypoint"):
+        shutil.copy2(HERE / "guest-rootfs", context / "guest-rootfs")
+        for name in ("service", "entrypoint", "node-infra-run"):
             shutil.copy2(HERE.parent / "runtime" / name, context / name)
         if helper.resolve() != (context / "node-infra-runtime").resolve():
             shutil.copy2(helper, context / "node-infra-runtime")

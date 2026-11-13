@@ -12,7 +12,7 @@ LABEL org.opencontainers.image.title="kuasar-sandbox node-infra" \
 ENV PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       systemd systemd-sysv dbus ca-certificates iproute2 iputils-ping \
-      util-linux procps curl jq nftables libnuma1 liburing2 libssl3t64 libzstd1 liblz4-1 \
+      util-linux procps curl jq nftables python3-minimal e2fsprogs libnuma1 liburing2 libssl3t64 libzstd1 liblz4-1 \
       libsnappy1v5 libbz2-1.0 libstdc++6 \
     && rm -rf /var/lib/apt/lists/* /etc/machine-id /var/lib/dbus/machine-id \
     && mkdir -p /run/netns /sys/fs/bpf /var/lib/node-infra \
@@ -22,7 +22,10 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
       systemd-resolved.service systemd-logind.service systemd-firstboot.service getty.target \
       systemd-remount-fs.service systemd-udevd.service systemd-udevd-control.socket \
       systemd-udevd-kernel.socket
+COPY guest-rootfs /usr/libexec/node-infra/guest-rootfs
+RUN /bin/sh /usr/libexec/node-infra/guest-rootfs
 COPY bin/ /opt/node-infra/bin/
+COPY node-infra-run /opt/node-infra/bin/node-infra-run
 COPY share/ /opt/node-infra/share/
 COPY node-infra-runtime /usr/libexec/node-infra/node-infra-runtime
 COPY service /usr/libexec/node-infra/service

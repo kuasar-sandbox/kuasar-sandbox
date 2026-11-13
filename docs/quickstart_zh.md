@@ -4,7 +4,9 @@
 
 完成一次真实沙箱运行，并确认命令、文件、网络、暂停恢复和清理均成功。
 
-使用匹配的聚合发布版与 workbench，通过未修改的 E2B Python SDK 运行真实 Kuasar
+使用一个节点镜像和一个空卷即可[用 Docker 运行第一个 Guest](node-infra_zh.md#用-docker-运行第一个-guest)。
+
+使用匹配的聚合发布版与 workbench，通过未修改的 E2B Python SDK 运行真实 kuasar-sandbox
 MicroVM。这是推荐的首次体验路径；原生生产部署不依赖 workbench，见
 [部署指南](deployment_zh.md)。
 
