@@ -108,6 +108,28 @@ class SourceChecksTests(unittest.TestCase):
                                             ['make', 'test-ci-tools', 'test-release-tools'], self.sources / 'platform'))
                 self.assertEqual(checks[1:], [(name, command, self.sources / owner) for name, command in commands])
 
+    def test_pid1_or_wire_changes_keep_guest_race_tests_in_full_and_source_lanes(self):
+        for path, source_only in (('cmd/sandbox-init/main.go', False),
+                                  ('pkg/guestabi/proto/proto.go', False),
+                                  ('internal/wireio/full_test.go', True)):
+            with self.subTest(path=path):
+                select_plan(self.plan, ['guest-runtime'])
+                self.plan['changes'] = {'guest-runtime': [path]}
+                if source_only:
+                    self.source_scope(self.plan['changes'])
+                rows = SUBJECT.checks_for(self.plan, self.sources)
+                self.assertEqual([(name, command) for name, command, cwd in rows
+                                  if cwd == self.sources / 'guest-runtime'],
+                                 [('guest-runtime-source-tests', ['make', 'test', 'vet']),
+                                  ('guest-runtime-race', ['env', 'CGO_ENABLED=1', 'go', 'test',
+                                                          '-race', '-count=1', './...'])])
+        # Neither a removed test-only scope nor a different owner's source change
+        # should accidentally schedule the extra Guest checks in a full run.
+        self.plan.pop('source_scope')
+        self.plan['changes'] = {'guest-runtime': ['docs/build.md', 'cmd/flatten-ctl/main.go']}
+        self.assertFalse(any(row[2] == self.sources / 'guest-runtime'
+                             for row in SUBJECT.checks_for(self.plan, self.sources)))
+
     def test_source_scope_requires_privileged_perf_contracts_only_for_perf_changes(self):
         self.source_scope({'platform': ['test/perf/working_set_tap_test.sh']})
         checks = SUBJECT.checks_for(self.plan, self.sources)
