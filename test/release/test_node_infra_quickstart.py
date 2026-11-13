@@ -1,21 +1,19 @@
 #!/usr/bin/env python3
 """Private volume ownership and interrupted Quick Start initialization."""
 import fcntl
-import importlib.machinery
-import importlib.util
 import json
 import os
 from pathlib import Path
 import secrets
 import subprocess
 import tempfile
+from types import ModuleType
 import unittest
 from unittest import mock
 
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'node-infra/image/rootfs/usr/libexec/node-infra/quickstart'
-loader = importlib.machinery.SourceFileLoader('quickstart', str(SCRIPT))
-qs = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+qs = ModuleType('quickstart')
 # Do not write test bytecode in the image build context.
 exec(compile(SCRIPT.read_bytes(), str(SCRIPT), 'exec'), qs.__dict__)
 
@@ -68,6 +66,25 @@ class QuickStartInitTests(unittest.TestCase):
         with mock.patch.object(qs, 'check_inputs'), self.assertRaisesRegex(ValueError, 'already in use'):
             qs.prepare()
         self.assertFalse(any(self.data.iterdir()))
+
+    def test_ready_requires_current_api_key_to_authenticate(self):
+        qs.STATE.mkdir()
+        qs.write(qs.STATE / 'manifest-key', 'a' * 64)
+        api_key = 'e2b_' + 'b' * 72
+        qs.write(qs.STATE / 'api-key', api_key)
+        ready = qs.RUN / 'quickstart.ready'
+        ready.touch()
+
+        def deny(*argv, **options):
+            self.assertNotIn(api_key, argv)
+            if argv[0] == 'curl':
+                self.assertEqual(options['input'], 'X-API-KEY: ' + api_key + '\n')
+                raise subprocess.CalledProcessError(22, argv)
+
+        with mock.patch.object(qs, 'run_probe', return_value=True), mock.patch.object(qs, 'run', side_effect=deny):
+            with self.assertRaises(subprocess.CalledProcessError):
+                qs.register()
+        self.assertFalse(ready.exists())
 
     def test_interrupted_seed_build_retains_keys_and_retries_locally(self):
         def native(*argv, **options):

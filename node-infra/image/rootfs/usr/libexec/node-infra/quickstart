@@ -257,6 +257,12 @@ def register():
     env = {k: v for k, v in os.environ.items() if k != 'API_SECRET'}
     env['MANIFEST_KEY'] = key
     run('node-ctl', 'manifest-key', 'add', '--socket', socket, env=env, stdout=subprocess.DEVNULL)
+    # A recovered, syntactically valid API key must still match the registered
+    # tenant. Ask the native API on this same socket without creating a Guest.
+    api_key = state_value('api-key', 'e2b_[0-9a-f]{72}')
+    run('curl', '--disable', '--silent', '--show-error', '--fail', '--max-time', '5', '--noproxy', '*',
+        '--unix-socket', socket, '--header', '@-', 'http://localhost/v2/sandboxes?limit=1',
+        input='X-API-KEY: ' + api_key + '\n', stdout=subprocess.DEVNULL)
     (RUN / 'quickstart.failed').unlink(missing_ok=True)
     (RUN / 'quickstart.ready').touch()
 

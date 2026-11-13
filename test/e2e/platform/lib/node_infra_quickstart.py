@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import select
 import subprocess
+import tempfile
 import time
 from types import SimpleNamespace
 import uuid
@@ -21,21 +22,26 @@ BUNDLE_REF = re.compile(r'file://[\da-f]{64}\.bundle@manifest:[\da-f]{64}@locati
 
 class QuickStartNode(DockerNode):
     """Reuse Docker execution and native admission probes, without fixture provisioning."""
-    def __init__(self, fixture, image, volume, network):
+    def __init__(self, fixture, image, volume, network, *, site_config=None):
         self.fixture = fixture
         self.image, self.volume, self.network = image, volume, network
+        self.site_config = site_config
         self.name = self.container = 'ks-dev-' + uuid.uuid4().hex
         self.engine_environment = os.environ.copy()
         self.identity = None
         self.failed_as_expected = False
 
     def __enter__(self):
+        mounts = []
+        if self.site_config is not None:
+            target = '/etc/node-conductor/conf.d/80-customer.yaml'
+            mounts = ['--mount', f'type=bind,src={self.site_config},dst={target}']
         self.identity = self.docker('run', '-d', '--tty', '--pull=never', '--name', self.container,
                                     '--privileged', '--cgroupns=private', '--cpus=4',
                                     '--memory=6g', '--memory-swap=6g', '--tmpfs=/run',
                                     '--tmpfs=/run/lock', '--tmpfs=/tmp:exec', '--stop-timeout=420',
                                     '--network=' + self.network, '-v', self.volume + ':' + DATA,
-                                    self.image, 'quickstart').stdout.strip()
+                                    *mounts, self.image, 'quickstart').stdout.strip()
         return self
 
     def __exit__(self, exc_type, exc, tb):
@@ -203,6 +209,19 @@ def fresh_volume():
         command('docker', 'volume', 'rm', volume)
 
 
+def reject_customer_config(fixture, image, volume):
+    content = 'api:\n  domain: customer.example\n'
+    with tempfile.TemporaryDirectory(dir=fixture.output) as directory:
+        config = Path(directory).resolve() / 'customer.yaml'
+        config.write_text(content)
+        with QuickStartNode(fixture, image, volume, 'none', site_config=config) as conflict:
+            conflict.assert_failed_init()
+            reason = conflict.execute('cat', '/run/node-infra/quickstart.failed').stdout
+            require('site configuration' in reason, 'startup failed for a reason unrelated to the customer config')
+            require(not conflict.execute('ls', '-A', DATA).stdout, 'rejected profile modified the empty data volume')
+        require(config.read_text() == content, 'rejected profile changed the mounted customer configuration')
+
+
 def run(image, output):
     fixture = SimpleNamespace(output=output)
     with fresh_volume() as first_volume:
@@ -228,19 +247,29 @@ def run(image, output):
                 competitor.assert_failed_init()
             require(node.instance_details() == (fingerprints, template, bundle),
                     'competing container changed active instance state')
-        with QuickStartNode(fixture, image, first_volume, 'none') as replacement:
-            result = replacement.run_guest('/bin/sh', '-c', 'printf ready')
-            require(result.stdout == 'ready' and replacement.instance_details() == (fingerprints, template, bundle),
-                    'container recreation lost instance credentials or template')
         with fresh_volume() as second_volume:
-            with QuickStartNode(fixture, image, second_volume, 'bridge') as other:
-                result = other.run_guest('/bin/sh', '-c', 'printf "hello from guest\\n"')
-                other_fingerprints, other_template, other_bundle = other.instance_details()
-                require(result.stdout == 'hello from guest\n', 'documented Guest command returned unexpected output')
-                require(all(a != b for a, b in zip(other_fingerprints, fingerprints)) and other_template != template,
-                        'independent Quick Start volumes share credentials or template root')
-                physical = other.execute('find', STATE + '/publications', '-type', 'f', '-name', other_bundle).stdout.splitlines()
-                require(len(physical) == 1, 'could not identify the published Guest Image')
+            reject_customer_config(fixture, image, second_volume)
+            with QuickStartNode(fixture, image, first_volume, 'none') as replacement:
+                result = replacement.run_guest('/bin/sh', '-c', 'printf ready')
+                require(result.stdout == 'ready' and replacement.instance_details() == (fingerprints, template, bundle),
+                        'container recreation lost instance credentials or template')
+                sid = replacement.create(template)
+                live_boot = replacement.guest_shell(sid, 'cat /proc/sys/kernel/random/boot_id')
+                uuid.UUID(live_boot.strip())
+                with QuickStartNode(fixture, image, second_volume, 'bridge') as other:
+                    result = other.run_guest('/bin/sh', '-c', 'printf "hello from guest\\n"')
+                    other_fingerprints, other_template, other_bundle = other.instance_details()
+                    require(result.stdout == 'hello from guest\n', 'documented Guest command returned unexpected output')
+                    require(all(a != b for a, b in zip(other_fingerprints, fingerprints)) and other_template != template,
+                            'independent Quick Start volumes share credentials or template root')
+                    other.api('GET', '/sandboxes/' + sid, expected=404)
+                    require(replacement.guest_shell(sid, 'cat /proc/sys/kernel/random/boot_id') == live_boot,
+                            'starting an independent node disrupted the first Guest')
+                    physical = other.execute('find', STATE + '/publications', '-type', 'f', '-name', other_bundle).stdout.splitlines()
+                    require(len(physical) == 1, 'could not identify the published Guest Image')
+                require(replacement.guest_shell(sid, 'cat /proc/sys/kernel/random/boot_id') == live_boot,
+                        'stopping an independent node disrupted the first Guest')
+                replacement.delete(sid)
             # Modify only our stopped, disposable second volume. Keep this
             # independent of init so it models an already damaged publication.
             command('docker', 'run', '--rm', '--pull=never', '--network=none', '--entrypoint', '/bin/sh',
@@ -252,7 +281,8 @@ def run(image, output):
                         'failed initialization silently replaced durable state')
     write_json(output / 'quickstart-result.json', {**evidence, 'fresh_volumes': 2,
                'same_volume_recreate': 'passed', 'shared_volume_rejection': 'passed',
-               'corrupt_bundle_rejection': 'passed', 'interrupted_guest_cleanup': 'passed'})
+               'corrupt_bundle_rejection': 'passed', 'interrupted_guest_cleanup': 'passed',
+               'concurrent_independent_nodes': 'passed', 'customer_config_rejection': 'passed'})
 
 
 if __name__ == '__main__':
