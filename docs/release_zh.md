@@ -329,6 +329,8 @@ gh workflow run aggregate-release.yml \
   -f source_sha="$(gh api "repos/$PLATFORM_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)"
 ```
 
+在本维护分支运行 `make release` 时，命令从平台受保护的 `main` 获取发布控制器到临时目录，并打印所用提交。控制器读取维护分支的源码和已提交清单，在新正式版本准入前校验所选组件的 Go 依赖。
+
 正式发布前先在目标分支提交 `release.yaml` 选定版本；`make release` 会先准备并持久化完整正文，再发布缺少的 Stable 组件并从该精确提交触发聚合。需要预先审阅时，先运行 `release/prepare_notes.py` 并编辑、提交正文。主线 Stable 成功后成为 Latest;维护分支 Stable 保留为可发现的正式版本,
 但不抢占主线 Latest。Stable 与 Preview 都必须由该 HEAD 当前清单直接选择;历史清单只
 用于解析已存在 Release 和 GC,不能通过手工 dispatch 回填成新的聚合发布。

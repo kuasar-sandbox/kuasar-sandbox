@@ -397,14 +397,12 @@ architecture-independent deployment package to the existing `workbench-v1`
 assets. Historical contracts keep their original asset sets. node-infra is a
 main-repository deliverable; the six component release units remain unchanged.
 
-Native build jobs compile the runtime and E2E helpers in the ordinary UID
-Workbench. A subsequent credential-free packaging step combines the admitted
-image recipe with the exact component products and compiled runtime helper.
-Source candidates use the same baseline plus affected product delta as other
-E2E cases; their image metadata records the admitted component and platform
-SHAs. Preparation verifies and installs the finished OCI/deployment inputs and
-never builds them. The existing `basic.node-infra-*` cases run through the same
-public prepare/run entry and capability routing as other platform cases.
+CI reserves `basic.node-infra-*` for aggregate release validation, including
+Daily Preview and Stable. Source PRs across all repositories skip these cases.
+For each architecture, the aggregate workflow packages the selected platform
+image recipe, component artifacts and Workbench-built runtime helper. The
+`exact-assets` E2E plan tests those staged artifacts through the public
+prepare/run entry and the existing capability routing.
 
 The deployment document binds the aggregate version, component tuple, native
 manifest/config identities, archive hashes and multi-architecture index digest.

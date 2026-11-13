@@ -7,7 +7,9 @@ from __future__ import annotations
 import base64
 import importlib.util
 import json
+import os
 import pathlib
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -28,14 +30,44 @@ assert SELECTION_TEST_SPEC is not None and SELECTION_TEST_SPEC.loader is not Non
 selection_fixtures = importlib.util.module_from_spec(SELECTION_TEST_SPEC)
 SELECTION_TEST_SPEC.loader.exec_module(selection_fixtures)
 
-FORMAL_PATH = pathlib.Path(__file__).resolve().parents[2] / "release/formal_coordinator.py"
-FORMAL_SPEC = importlib.util.spec_from_file_location(
-    "formal_coordinator_test_subject", FORMAL_PATH
-)
-assert FORMAL_SPEC is not None and FORMAL_SPEC.loader is not None
-formal = importlib.util.module_from_spec(FORMAL_SPEC)
-sys.modules[FORMAL_SPEC.name] = formal
-FORMAL_SPEC.loader.exec_module(formal)
+
+class MaintenanceStableEntryTest(unittest.TestCase):
+    def test_make_uses_canonical_main_and_keeps_the_maintenance_checkout(self):
+        platform = MODULE_PATH.parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            upstream = root / "upstream"
+            subprocess.run(["git", "init", "-q", "-b", "main", upstream], check=True)
+            (upstream / "release").mkdir()
+            entry = upstream / "release/formal_coordinator.py"
+            entry.write_text(
+                "import os, sys\nfrom pathlib import Path\n"
+                "print('selected', Path.cwd(), os.environ['PLATFORM_ROOT'], "
+                "os.environ['PLATFORM_REF'], os.environ['PLATFORM_SHA'], "
+                "os.environ['RELEASE_VERSION'])\n"
+                "sys.exit(0 if os.environ['RELEASE_VERSION'] == 'release-v0.1.15' else 23)\n"
+            )
+            git = ["git", "-C", upstream, "-c", "user.name=Fixture",
+                   "-c", "user.email=fixture@example.invalid"]
+            subprocess.run([*git, "add", "."], check=True)
+            subprocess.run([*git, "commit", "-qm", "trusted controller"], check=True)
+            controller_sha = subprocess.check_output([*git, "rev-parse", "HEAD"], text=True).strip()
+            config = root / "gitconfig"
+            subprocess.run(["git", "config", "--file", config, f"url.{upstream.as_uri()}.insteadOf",
+                            "https://github.com/kuasar-sandbox/kuasar-sandbox.git"], check=True)
+            env = {**os.environ, "GIT_CONFIG_GLOBAL": str(config), "GIT_CONFIG_NOSYSTEM": "1",
+                   "TMPDIR": directory, "PLATFORM_ROOT": str(upstream)}
+            for version, succeeds in (("release-v0.1.15", True), ("release-v0.1.16", False)):
+                with self.subTest(version=version):
+                    result = subprocess.run(["make", "--no-print-directory", "release",
+                                             f"RELEASE_VERSION={version}", "PLATFORM_REF=release/v0.1.x",
+                                             "PLATFORM_SHA=" + "a" * 40], cwd=platform, env=env,
+                                            text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                    self.assertIn(f"kuasar-sandbox/kuasar-sandbox@{controller_sha}", result.stdout)
+                    self.assertIn(f"selected {platform} {platform} release/v0.1.x "
+                                  + "a" * 40 + f" {version}", result.stdout)
+                    self.assertEqual(result.returncode == 0, succeeds, result.stdout)
+                    self.assertEqual(list(root.glob("kuasar-release-control-*")), [])
 
 
 class PreviewCoordinatorTest(unittest.TestCase):
@@ -184,28 +216,6 @@ class PreviewCoordinatorTest(unittest.TestCase):
             coordinator.main()
         plan_units.assert_not_called()
 
-    def test_formal_coordinator_rejects_stale_local_checkout(self) -> None:
-        selected = "a" * 40
-        with (
-            mock.patch.dict(
-                formal.os.environ,
-                {
-                    "RELEASE_VERSION": "release-v0.1.2",
-                    "PLATFORM_REF": "main",
-                    "PLATFORM_SHA": selected,
-                },
-            ),
-            mock.patch.object(
-                formal.coordinator,
-                "run",
-                return_value=mock.Mock(stdout="b" * 40 + "\n"),
-            ),
-            mock.patch.object(formal.coordinator, "branch_sha") as branch_sha,
-            self.assertRaisesRegex(SystemExit, "checkout does not match"),
-        ):
-            formal.main()
-        branch_sha.assert_not_called()
-
     def test_date_rollover_advances_only_a_published_update_baseline(self) -> None:
         base = "release-v1.2.3"
         current = "preview.20260908"
@@ -246,24 +256,6 @@ class PreviewCoordinatorTest(unittest.TestCase):
                 render.assert_called_once_with(
                     base, "release-v1.2.2", "20260909", current if complete else prior, {}
                 )
-
-    def test_formal_coordinator_polls_after_pending_api_convergence(self) -> None:
-        plans: dict[str, coordinator.Plan] = {}
-        with (
-            mock.patch.dict(
-                formal.os.environ,
-                {"RELEASE_WAIT_SECONDS": "60", "RELEASE_POLL_SECONDS": "1"},
-            ),
-            mock.patch.object(
-                formal.coordinator,
-                "converge",
-                side_effect=(coordinator.Pending("API convergence"), True),
-            ) as converge,
-            mock.patch.object(formal.time, "sleep") as sleep,
-        ):
-            formal.wait_for_convergence(plans, "release-v1.2.3", "a" * 40)
-        self.assertEqual(converge.call_count, 2)
-        sleep.assert_called_once_with(1)
 
     def test_revision_rollover_and_scheduled_resume_preserve_the_baseline(self) -> None:
         for current, requested, selected in (

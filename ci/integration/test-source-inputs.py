@@ -36,6 +36,19 @@ def declare_fixture(root, owner=None):
         recipe.write_text('fixture recipe')
 
 
+NODE_INFRA_CASE = 'basic.node-infra-config.sh'
+
+
+def add_node_infra_case(platform):
+    (platform / 'test/e2e/platform/cases' / NODE_INFRA_CASE).write_text(
+        '# e2e-requires: ["journald", "kvm", "podman", "quadlet", "systemd"]\necho node-infra\n')
+    declaration = platform / 'release/helper-inputs.json'
+    value = json.loads(declaration.read_text())
+    value['helpers'].extend({'name': name, 'env': name.upper().replace('-', '_') + '_BIN',
+                             'cases': [NODE_INFRA_CASE]}
+                            for name in ('node-infra-guest', 'node-infra-xproxy', 'node-infra-xconductor'))
+    declaration.write_text(json.dumps(value))
+
 
 class FixedInputs(unittest.TestCase):
     def setUp(self):
@@ -291,6 +304,8 @@ class FixedInputs(unittest.TestCase):
                 (platform / 'releases/release.yaml').write_text(manifest)
                 (platform / 'releases/daily-preview.yaml').write_text(manifest + 'preview_version: preview.20260101\n')
                 declare_fixture(platform, "platform")
+                if modern:
+                    add_node_infra_case(platform)
                 git(platform, 'add', '.'); git(platform, 'commit', '-qm', 'admitted selection')
                 sha = git(platform, 'rev-parse', 'HEAD')
                 stage = root / 'stage'; (stage / 'assets').mkdir(parents=True)
@@ -315,11 +330,14 @@ class FixedInputs(unittest.TestCase):
                 self.assertEqual(plan['schema'], 4 if modern else 3)
                 if modern:
                     contract = plan['case_requirements']['cases']
-                    self.assertEqual(set(contract), {name for names in CASES.values() for name in names})
+                    release_cases = CASES | {'platform': sorted([*CASES['platform'], NODE_INFRA_CASE])}
+                    self.assertEqual(set(contract), {name for names in release_cases.values() for name in names})
                     self.assertEqual(contract['basic.demo.sh']['requires'], ['kvm'])
-                    self.assertEqual(plan['lanes']['aarch64']['groups']['supplemental-arm--basic']['cases'], ['basic.demo.sh'])
+                    self.assertEqual(plan['lanes']['aarch64']['groups']['supplemental-arm--basic']['cases'], release_cases['platform'])
                     self.assertEqual(plan['lanes']['aarch64']['selection']['cases'],
-                                     artifacts.suite_selection(['platform'], 'aarch64', CASES, native_full=True)['cases'])
+                                     artifacts.suite_selection(['platform'], 'aarch64', release_cases, native_full=True)['cases'])
+                    for lane in plan['lanes'].values():
+                        self.assertIn(NODE_INFRA_CASE, lane['selection']['cases'])
                 self.assertEqual(plan['run_inputs']['platform'], subject.inspect_platform(platform, sha))
                 shutil.rmtree(inputs)  # Consumers have only the frozen archive.
                 with patch.object(subject, 'INPUT_ARCHIVE', capsule):
@@ -689,8 +707,10 @@ class MaintainedSelection(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'mixed E2E requirement generations'):
             self.run_cutover(complete_baseline=True, candidate_owner='connector', downgrade_candidate=True)
 
-    def test_node_infra_build_selection_uses_admitted_candidate_companion_and_kernel(self):
-        self.run_cutover(node_infra=True)
+    def test_source_prs_skip_node_infra_cases_and_helpers(self):
+        for owner in ('sandboxer', 'platform'):
+            with self.subTest(owner=owner):
+                self.run_cutover(candidate_owner=owner, node_infra=True)
 
     def run_cutover(self, legacy_owner=None, kernel_delta=True, base_ref='main', complete_baseline=True,
                     candidate_owner='platform', downgrade_candidate=False, node_infra=False):
@@ -756,20 +776,12 @@ class MaintainedSelection(unittest.TestCase):
             stable = 'version: release-v1.2.3\ncomponents:\n' + ''.join(f'  {unit}: {tag}\n' for unit, tag in maintained.items())
             (platform / 'releases/release.yaml').write_text(stable)
             (platform / 'releases/daily-preview.yaml').write_text(stable + 'preview_version: preview.20261019.1\n')
+            if node_infra:
+                add_node_infra_case(platform)
             git(platform, 'add', '.'); git(platform, 'commit', '-qm', 'trusted manifest')
             platform_base = git(platform, 'rev-parse', 'HEAD')
             # A valid but untrusted candidate manifest must not choose sources.
             (platform / 'releases/daily-preview.yaml').write_text((stable + 'preview_version: preview.20261019.1\n').replace('v1.2.4', 'v1.2.5'))
-            if node_infra:
-                (platform / 'test/e2e/platform/cases/basic.node-infra-config.sh').write_text(
-                    '# e2e-requires: ["journald", "kvm", "podman", "quadlet", "systemd"]\necho node-infra candidate\n')
-                declaration = platform / 'release/helper-inputs.json'
-                value = json.loads(declaration.read_text())
-                value['helpers'].extend({'name': name, 'env': name.upper().replace('-', '_') + '_BIN',
-                                         'cases': ['basic.node-infra-config.sh']}
-                                        for name in ('node-infra-guest', 'node-infra-xproxy', 'node-infra-xconductor'))
-                declaration.write_text(json.dumps(value))
-                git(platform, 'add', 'test/e2e/platform/cases/basic.node-infra-config.sh')
             git(platform, 'commit', '-qam', 'candidate manifest cannot redirect')
             candidate = git(platform, 'rev-parse', 'HEAD')
             git(platform, 'update-ref', 'refs/pull/23/merge', candidate)
@@ -842,22 +854,16 @@ class MaintainedSelection(unittest.TestCase):
                     self.assertEqual(row['tag'], baseline['units'][unit]['version'])
                     self.assertEqual(row['sha'], baseline['units'][unit]['sha'])
                 artifacts.check_plan(plan)
+                self.assertNotIn('node_infra', plan.keys())
                 if node_infra:
-                    node = plan['node_infra']
-                    self.assertEqual(node['source_revision'], candidate)
-                    self.assertEqual(node['version'], baseline['version'])
-                    self.assertEqual(set(node['components']), set(artifacts.UNITS))
-                    for unit, row in node['components'].items():
-                        source_sha = plan['kernel_sha'] if unit == 'vmlinux' else plan['sources'][resolver.unit_owner(unit)]['sha']
-                        self.assertEqual(row['sha'], source_sha)
-                        expected_version = baseline['units'][unit]['version'] if source_sha == baseline['units'][unit]['sha'] else 'source-' + source_sha
-                        self.assertEqual(row['version'], expected_version)
-                    changed = copy.deepcopy(plan)
-                    changed['node_infra']['components']['connector']['sha'] = '0' * 40
-                    with self.assertRaisesRegex(ValueError, 'component source differs'):
-                        artifacts.check_plan(changed)
-                else:
-                    self.assertNotIn('node_infra', plan)
+                    self.assertIn(NODE_INFRA_CASE, plan['case_files']['platform'])
+                    for lane in plan['lanes'].values():
+                        selection = lane['selection']
+                        self.assertIn('basic.demo.sh', selection['cases'])
+                        self.assertNotIn(NODE_INFRA_CASE, selection['cases'])
+                        helpers = artifacts.planned_helpers(selection, plan['helper_contract'])
+                        self.assertIn('zot', helpers)
+                        self.assertFalse(any(name.startswith('node-infra-') for name in helpers))
                 return
 
 
