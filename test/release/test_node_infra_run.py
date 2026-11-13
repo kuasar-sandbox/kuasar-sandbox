@@ -30,6 +30,8 @@ class QuickStartRunTests(unittest.TestCase):
         (state / 'template-id').write_text('local-template')
         self.patch('initialized', lambda: True)
         self.patch('has_capacity', lambda: True)
+        self.native_health = cli.proxy_ready
+        self.patch('proxy_ready', lambda: True)
         self.calls = []
         self.interrupt_create = False
         self.fail_session = False
@@ -78,6 +80,30 @@ class QuickStartRunTests(unittest.TestCase):
         self.assertEqual(self.calls, [('POST', '/sandboxes'), ('GET', '/sandboxes/' + self.sid),
                                       ('POST', '/sandboxes/' + self.sid + '/exec-sessions'),
                                       ('DELETE', '/sandboxes/' + self.sid)])
+
+    def test_delayed_native_proxy_readiness_precedes_a_single_create(self):
+        self.patch('proxy_ready', self.native_health)
+        probe = ['/usr/libexec/node-infra/node-infra-runtime', 'health']
+        statuses = iter((1, 0))
+
+        def health(command, **kwargs):
+            self.assertEqual(command, probe)
+            self.assertEqual(self.calls, [])
+            return subprocess.CompletedProcess(command, next(statuses))
+
+        with mock.patch.object(subprocess, 'run', side_effect=health) as check, \
+                mock.patch.object(subprocess, 'Popen', side_effect=self.exec_client):
+            self.assertEqual(cli.run(['/bin/true']), 0)
+        self.assertEqual(check.call_count, 2)
+        self.assertEqual(self.calls.count(('POST', '/sandboxes')), 1)
+
+    def test_proxy_readiness_timeout_leaves_no_guest(self):
+        self.patch('proxy_ready', self.native_health)
+        self.patch('START_TIMEOUT', 0)
+        with mock.patch.object(subprocess, 'run', side_effect=subprocess.TimeoutExpired('health', 10)):
+            with self.assertRaisesRegex(cli.RunError, 'timed out waiting for Proxy readiness'):
+                cli.run(['true'])
+        self.assertEqual(self.calls, [])
 
     def test_lost_create_reply_reconciles_only_owned_guest(self):
         self.lose_reply = True

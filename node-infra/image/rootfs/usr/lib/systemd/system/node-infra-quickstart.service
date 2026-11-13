@@ -11,6 +11,7 @@ PartOf=node-infra.target
 Type=oneshot
 RemainAfterExit=yes
 FileDescriptorStoreMax=1
+FileDescriptorStorePreserve=no
 NotifyAccess=all
 Environment=PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/usr/libexec/node-infra/quickstart prepare

@@ -56,6 +56,8 @@ docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
 
 `node-infra-run` 等待实例初始化和空闲 runner，在新的 MicroVM 里执行传入的命令，返回标准输出、错误和退出码，随后删除本次 Guest。命令使用节点内的 Conductor 和 Proxy，无需暴露宿主端口或配置 Guest 互联网出口。示例给整个节点分配 4 CPU、6 GiB 内存。
 
+若客户端收到 SIGKILL，它无法发出最后的删除请求。可用标准错误中打印的 sandbox ID 通过 Conductor 删除该 Guest。仍在运行的 Guest 遵循原生 TTL 和暂停策略。
+
 开箱模式首次启动时初始化专属空卷，生成实例凭据，用随镜像提供的 Linux shell 根文件系统离线生成 Image Manifest Bundle。仅磁盘导出和带内存快照也默认使用 Manifest Bundle，按原生 `@manifest` 引用读取。恢复时需保留卷和所引用的基础 Bundle。使用 `docker stop ks-dev` 正常停机，`docker start ks-dev` 复用同一卷。并行运行的节点各自使用独立卷。使用站点原生配置时，采用下文的部署方式。
 
 ## 准备默认宿主网络部署

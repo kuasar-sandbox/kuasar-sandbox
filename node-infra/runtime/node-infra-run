@@ -87,6 +87,17 @@ def has_capacity():
                and runner['states'].get('idle', 0) > 0 for runner in status['runner_pools'] or [])
 
 
+def proxy_ready():
+    # The in-container health check authenticates the effective /readyz
+    # listener against the live Proxy master and waits for its workers/routes.
+    try:
+        result = subprocess.run(['/usr/libexec/node-infra/node-infra-runtime', 'health'],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
 def initialized():
     failed = RUNTIME / 'quickstart.failed'
     if failed.exists():
@@ -130,6 +141,7 @@ def run(arguments):
     key = (STATE / 'api-key').read_text().strip()
     template = (STATE / 'template-id').read_text().strip()
     wait_for('available sandbox capacity and an idle runner', has_capacity)
+    wait_for('Proxy readiness (node-infra-runtime health)', proxy_ready)
     check_signal()
     sid = create_sandbox(key, template)
     path = '/sandboxes/' + sid

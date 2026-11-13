@@ -22,8 +22,8 @@ SEED = Path('/usr/share/node-infra/quickstart')
 SYSTEM = Path('/run/systemd/system')
 HELPER = '/usr/libexec/node-infra/quickstart'
 LOCATION = 'ks-dev'
-# Incomplete initialization has no published credentials or consumers. A marked
-# staging directory and one rename allow retries without modifying existing state.
+# Stage identity and its derived Bundle on the same volume. Only the final
+# rename publishes an instance to consumers.
 PENDING = DATA / '.ks-quickstart-init'
 FORMAT = 'node-infra-quickstart-v1\n'
 
@@ -49,10 +49,12 @@ def enable():
 
 
 def check_inputs():
-    if not os.path.ismount(DATA):
-        # os.path.ismount cannot recognize bind mounts on the same filesystem.
-        if not any(line.split()[4] == str(DATA) for line in Path('/proc/self/mountinfo').read_text().splitlines()):
-            raise ValueError(f'mount a private volume at {DATA}')
+    # mountinfo also identifies bind mounts on the same filesystem.
+    mounts = [Path(line.split()[4]) for line in Path('/proc/self/mountinfo').read_text().splitlines()]
+    if DATA not in mounts:
+        raise ValueError(f'mount a private volume at {DATA}')
+    if any(DATA in m.parents for m in mounts):
+        raise ValueError(f'nested mount inside Quick Start volume; preserving existing contents at {DATA}')
     for device in ('/dev/kvm', '/dev/net/tun'):
         if not Path(device).is_char_device():
             raise ValueError(f'required device missing: {device}')
@@ -60,7 +62,6 @@ def check_inputs():
                    ('node-conductor', 'node-proxy', 'node-telemetry', 'connector-vswitch', 'node-infra')]
     # Reject even empty externally mounted site directories. A named volume at
     # /var/lib/node-infra is the only input this profile needs.
-    mounts = [Path(line.split()[4]) for line in Path('/proc/self/mountinfo').read_text().splitlines()]
     if any(m == Path('/etc') or m == d or m.is_relative_to(d) for m in mounts for d in config_dirs):
         raise ValueError('explicit site configuration mounted; use native deployment')
     if os.path.lexists('/etc/node-infra/manifest.yaml') or any(
@@ -108,15 +109,37 @@ def write_seed(stage, key):
     write(stage / 'template-id', template_id(root) + '\n')
 
 
+def publish_value(stage, name, value):
+    # A kill while writing can leave the temporary file, never a torn identity.
+    temp = stage / (name + '.tmp')
+    with temp.open('w', encoding='ascii') as stream:
+        stream.write(value.strip() + '\n')
+        stream.flush()
+        os.fsync(stream.fileno())
+    temp.replace(stage / name)
+
+
 def new_state(stage):
-    write(stage / 'format', FORMAT)
-    manifest_key = run('e2b-key-ctl', 'gen-key', capture_output=True).stdout.strip()
-    write(stage / 'manifest-key', manifest_key + '\n')
-    secret = run('e2b-key-ctl', 'derive-api-secret', env={**os.environ, 'MANIFEST_KEY': manifest_key},
-                 capture_output=True).stdout.strip()
-    api_key = run('e2b-key-ctl', 'gen-apikey', env={**os.environ, 'API_SECRET': secret}, capture_output=True).stdout
-    write(stage / 'api-key', api_key)
-    write(stage / 'encryption-key', run('e2b-key-ctl', 'gen-key', capture_output=True).stdout)
+    if not (stage / 'format').exists():
+        publish_value(stage, 'format', FORMAT)
+    for name in ('manifest-key', 'encryption-key'):
+        if not (stage / name).exists():
+            publish_value(stage, name, run('e2b-key-ctl', 'gen-key', capture_output=True).stdout)
+    manifest_key = state_value('manifest-key', '[0-9a-f]{64}', stage)
+    state_value('encryption-key', '[0-9a-f]{64}', stage)
+    if not (stage / 'api-key').exists():
+        secret = run('e2b-key-ctl', 'derive-api-secret', env={**os.environ, 'MANIFEST_KEY': manifest_key},
+                     capture_output=True).stdout.strip()
+        api_key = run('e2b-key-ctl', 'gen-apikey', env={**os.environ, 'API_SECRET': secret}, capture_output=True)
+        publish_value(stage, 'api-key', api_key.stdout)
+    state_value('api-key', 'e2b_[0-9a-f]{72}', stage)
+
+    # These are unpublished build products. On retry rebuild them from the
+    # existing identity without rotating a key or touching an active volume.
+    for name in ('manifest.yaml', 'overlay.ext4', 'template-id'):
+        (stage / name).unlink(missing_ok=True)
+    if (stage / 'publications').exists():
+        shutil.rmtree(stage / 'publications')
     write(stage / 'manifest.yaml', """manifest: {}
 store: {endpoint: ''}
 cache: {endpoint: ''}
@@ -136,18 +159,26 @@ def initialize():
             raise ValueError('unrecognized Quick Start state; preserving data volume')
         return
     entries = list(DATA.iterdir())
-    if entries:
-        if (entries != [PENDING] or PENDING.is_symlink() or not PENDING.is_dir()
-                or (any(PENDING.iterdir()) and (PENDING / 'format').read_text() != FORMAT)):
-            raise ValueError('Quick Start needs an empty volume; preserving existing contents')
-        shutil.rmtree(PENDING)
-    PENDING.mkdir()
+    if not entries:
+        PENDING.mkdir(mode=0o700)
+    elif entries != [PENDING] or PENDING.is_symlink() or not PENDING.is_dir():
+        raise ValueError('Quick Start needs an empty volume; preserving existing contents')
+    else:
+        # The directory can be empty (or contain just format.tmp) if the
+        # process was interrupted before claiming it. Do not remove other data.
+        contents = {p.name for p in PENDING.iterdir()}
+        if contents - {'format.tmp'} and (
+                'format' not in contents or (PENDING / 'format').is_symlink() or
+                (PENDING / 'format').read_text() != FORMAT):
+            raise ValueError('unrecognized initialization directory; preserving existing contents')
+        if any(p.is_symlink() for p in PENDING.iterdir()):
+            raise ValueError('unexpected symlink in initialization directory; preserving existing contents')
     new_state(PENDING)
     PENDING.rename(STATE)
 
 
-def state_value(name, pattern):
-    path = STATE / name
+def state_value(name, pattern, directory=None):
+    path = (directory or STATE) / name
     if not stat.S_ISREG(path.lstat().st_mode):
         raise ValueError(f'invalid Quick Start state file: {name}')
     value = path.read_text().strip()
@@ -207,7 +238,7 @@ def prepare():
             raise ValueError('data volume is already in use by another Quick Start instance') from None
         initialize()
         configure()
-        run('systemd-notify', '--fd=' + str(fd), '--fdname=volume-lock', 'FDSTORE=1', pass_fds=(fd,))
+        run('systemd-notify', '--fd=' + str(fd), '--fdname=volume-lock', 'FDSTORE=1', 'FDPOLL=0', pass_fds=(fd,))
     finally:
         os.close(fd)
 
@@ -219,7 +250,7 @@ def register():
     # Type=simple starts ExecStartPost as soon as the process exists. Wait for
     # the native admin listener before sending a single registration request.
     deadline = time.monotonic() + 60
-    while run_probe(socket) is False:
+    while not run_probe(socket):
         if time.monotonic() >= deadline:
             raise ValueError('Conductor admin socket did not become ready')
         time.sleep(0.25)

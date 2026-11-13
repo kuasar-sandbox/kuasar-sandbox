@@ -16,10 +16,16 @@ for program in dash sleep cat tr; do
         install -D -m 0755 "$lib" "$root$lib"
     done
 done
+for package in dash coreutils libc6; do
+    file=/usr/share/doc/$package/copyright
+    install -D -m 0644 "$file" "$root$file"
+done
 ln -s dash "$root/bin/sh"
 printf '%s\n' 'root:x:0:0:root:/root:/bin/sh' > "$root/etc/passwd"
 printf '%s\n' 'root:x:0:' > "$root/etc/group"
 arch=$(dpkg --print-architecture)
 printf '{"os":"linux","architecture":"%s","config":{"Entrypoint":["/bin/sleep","infinity"],"User":"0:0","Env":["PATH=/bin"]}}\n' "$arch" > "$seed/runtime.json"
 chroot "$root" /bin/sh -c 'test "$(printf abc | /bin/tr a-z A-Z | /bin/cat)" = ABC && /bin/sleep 0'
-(cd "$seed" && find rootfs -type f -print0 | sort -z | xargs -0 sha256sum && sha256sum runtime.json) > "$seed/SHA256SUMS"
+# Record the exact distro packages used by the sample alongside its payload hashes.
+dpkg-query -W -f='${binary:Package}=${Version}\n' dash coreutils libc6 | sort > "$seed/packages"
+(cd "$seed" && find rootfs -type f -print0 | sort -z | xargs -0 sha256sum && sha256sum runtime.json packages) > "$seed/SHA256SUMS"

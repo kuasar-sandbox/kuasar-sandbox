@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import select
 import subprocess
+import time
 from types import SimpleNamespace
 import uuid
 
@@ -64,7 +65,7 @@ class QuickStartNode(DockerNode):
         data, code = self.execute('sh', '-ec', script, 'api', STATE + '/api-key', *args,
                                   timeout=180).stdout.rsplit('\n', 1)
         require(int(code) == expected, f'{method} {path}: HTTP {code}, expected {expected}')
-        return json.loads(data) if data else None
+        return json.loads(data) if data and expected not in (204, 404) else None
 
     def run_guest(self, *args, expected=0):
         result = self.execute('node-infra-run', '--', *args, check=False, timeout=270)
@@ -205,6 +206,7 @@ def fresh_volume():
 def run(image, output):
     fixture = SimpleNamespace(output=output)
     with fresh_volume() as first_volume:
+        start = time.monotonic()
         # No external interface or host fixture. Only the named volume and
         # already imported image are available when the first command runs.
         with QuickStartNode(fixture, image, first_volume, 'none') as node:
@@ -213,10 +215,13 @@ def run(image, output):
                 'printf "%s" "$1"; printf "%s\\n" err >&2; exit 7', 'guest', marker, expected=7)
             require(result.stdout == marker and 'err' in result.stderr.splitlines(),
                     'one-shot command lost Guest stdout/stderr or changed its argv')
+            cold_start = round(time.monotonic() - start, 3)
             inspected = json.loads(node.docker('inspect', node.identity).stdout)[0]
             require(inspected['Image'] == image, 'executed container differs from imported image')
             fingerprints, template, bundle = node.instance_details()
             evidence = {'image_id': image, 'architecture': node.execute('uname', '-m').stdout.strip(),
+                        'cold_start_and_first_exec_seconds': cold_start,
+                        'quickstart_seed_sha256': node.execute('sha256sum', '/usr/share/node-infra/quickstart/SHA256SUMS').stdout.split()[0],
                         'image_template': template, 'restored': restored_state(node, template)}
             interrupted_run(node)
             with QuickStartNode(fixture, image, first_volume, 'none') as competitor:
