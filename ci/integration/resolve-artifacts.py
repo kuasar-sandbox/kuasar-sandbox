@@ -458,7 +458,8 @@ def source_plan(framework_sha, input_root):
             "embedded_sources": {"envd": {REPOSITORIES["guest-runtime"]: sources["guest-runtime"]["sha"]}},
             "lanes": {arch: {"products": products, "embedded_products": embedded,
                              "performance": ["working-set-smoke"] if arch == "x86_64" and set(owners) & {"platform", "sandboxer"} else [],
-                             "selection": artifacts.suite_selection(owners, arch, selected_files, changes=changes)} for arch in artifacts.ARCHES}}
+                             "selection": artifacts.suite_selection(owners, arch, selected_files,
+                                                                   changes=changes, source_pr=True)} for arch in artifacts.ARCHES}}
     if cutover:
         plan['dependency_cutover'] = cutover
     import helper_inputs
@@ -470,18 +471,6 @@ def source_plan(framework_sha, input_root):
     plan['helper_contract'] = helper_inputs.discover(roots, identities)
     requirements = artifacts.capabilities_module().discover(roots, selected_files)
     capability_routing.apply(plan, requirements)
-    if any(name.startswith('basic.node-infra-') for lane in plan['lanes'].values()
-           for name in lane['selection']['cases']):
-        # Candidate images use the admitted platform recipe and the same
-        # baseline-plus-delta products as ordinary E2E. No component main lookup.
-        components = {}
-        for unit, record in selected['units'].items():
-            owner = unit_owner(unit)
-            sha = kernel_sha if unit == 'vmlinux' else sources[owner]['sha']
-            components[unit] = {'repository': record['repository'], 'sha': sha,
-                                'version': record['version'] if sha == record['sha'] else 'source-' + sha}
-        plan['node_infra'] = {'version': selected['version'], 'source_revision': sources['platform']['sha'],
-                              'components': components}
     artifacts.check_plan(plan)
     return plan
 

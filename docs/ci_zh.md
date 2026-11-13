@@ -265,11 +265,10 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 一个无架构区分的部署包。历史合同保留原有资产集合。node-infra 是主仓交付件，
 原有六个组件发布单元保持不变。
 
-原生 build 任务在普通 UID Workbench 内编译 runtime 及 E2E helper，随后独立的
-无凭据打包步骤将准入的镜像配方、精确组件产品和已编译 runtime helper 组合成镜像。
-源码候选使用与其他 E2E 相同的基线加受影响产品差异，镜像元数据记录已准入的组件
-及主仓 SHA。prepare 只核验、安装完成的 OCI 与部署输入，不构建镜像或部署工具。
-`basic.node-infra-*` 用例复用平台公开 prepare/run 入口和原有能力路由。
+CI 仅在聚合发布验收时运行 `basic.node-infra-*`，覆盖 Daily Preview 和 Stable。
+各仓库的源码 PR 均跳过这组用例。聚合流水线按架构使用选定的主仓镜像配方、
+组件制品和 Workbench 编译的 runtime helper 打包镜像。`exact-assets` E2E 计划
+通过公开的 prepare/run 入口和现有能力路由测试本轮暂存的制品。
 
 部署描述绑定聚合版本、组件组合、原生 manifest/config 身份、归档摘要与多架构
 index digest。发布保留这些 OCI 字节，验证匿名 registry 回读，并拒绝覆盖冲突标签。

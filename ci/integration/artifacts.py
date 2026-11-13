@@ -173,7 +173,7 @@ DEFAULT_SUITES = {
 }
 
 
-def suite_selection(owners, arch, case_files, *, native_full=False, changes=None):
+def suite_selection(owners, arch, case_files, *, native_full=False, changes=None, source_pr=False):
     """Select broad suites from exact source filenames, then apply lane limits."""
     require(arch in ARCHES and set(owners) <= set(OWNERS), "invalid suite selection request")
     require(isinstance(case_files, dict) and set(case_files) == set(OWNERS), "incomplete test case source set")
@@ -203,6 +203,10 @@ def suite_selection(owners, arch, case_files, *, native_full=False, changes=None
             chosen.update(name for name in all_cases if name.startswith('orchestrator.resource-'))
         suites.update(name.split('.')[0] for name in chosen)
     exclusions = []
+    if source_pr:
+        for name in sorted(name for name in chosen if name.startswith('basic.node-infra-')):
+            chosen.remove(name)
+            exclusions.append({'case': name, 'reason': 'node-infra is qualified with staged aggregate release assets'})
     if 'storage.obs.sh' in chosen:
         chosen.remove('storage.obs.sh')
         exclusions.append({'case': 'storage.obs.sh', 'reason': 'credentialed OBS case requires explicit opt-in'})
@@ -216,14 +220,20 @@ def suite_selection(owners, arch, case_files, *, native_full=False, changes=None
             'exclusions': exclusions}
 
 
-def compatible_suite_selection(observed, owners, arch, case_files, *, changes=None):
+def plan_suite_selection(plan, arch, *, native_full=False):
+    # Older source plans that staged a candidate image retain its original case selection.
+    source_pr = plan['mode'] == 'source' and 'node_infra' not in plan
+    return suite_selection(plan['owners'], arch, plan['case_files'], native_full=native_full,
+                           changes=plan.get('changes'), source_pr=source_pr)
+
+
+def compatible_suite_selection(observed, current):
     """Keep immutable native-generator evidence valid without changing it.
 
     Only the retired native prerequisite may differ. Cases, exclusions and all
     other products remain exact; runtime_payloads independently requires and
     matches mkfs for every selected legacy flatten binary.
     """
-    current = suite_selection(owners, arch, case_files, changes=changes)
     if observed == current:
         return True
     if "flatten-ctl" not in current["required_products"]:
@@ -545,8 +555,8 @@ def check_plan(plan):
                 "invalid affected product set")
         require(lane.get("embedded_products", []) in ([], ["envd"]), "unknown embedded product")
         if plan['schema'] < 4:
-            require(compatible_suite_selection(lane["selection"], plan["owners"], arch, case_files,
-                                              changes=plan.get('changes')), "suite selection differs from trusted source filenames")
+            require(compatible_suite_selection(lane["selection"], plan_suite_selection(plan, arch)),
+                    "suite selection differs from trusted source filenames")
         expected_perf = ["working-set-smoke"] if plan["mode"] == "source" and arch == "x86_64" and set(plan["owners"]) & {"platform", "sandboxer"} else []
         require(lane["performance"] == expected_perf, "performance checks differ from trusted mode/owner selection")
     validate_test_revisions(plan.get("test_revisions"))
