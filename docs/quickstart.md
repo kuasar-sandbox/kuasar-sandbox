@@ -4,7 +4,9 @@
 
 Complete one real sandbox run and verify commands, files, networking, pause/resume and cleanup.
 
-Run a real Kuasar MicroVM with the unmodified E2B Python SDK using a matching
+To run one Guest shell command using only the node image and an empty volume, see [Run your first Guest with Docker](node-infra.md#run-your-first-guest-with-docker).
+
+Run a real kuasar-sandbox MicroVM with the unmodified E2B Python SDK using a matching
 aggregate release and workbench. This is the recommended first-use path; native
 production deployment remains independent of workbench and is covered by
 [Deployment](deployment.md).

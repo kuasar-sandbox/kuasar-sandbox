@@ -22,7 +22,7 @@ ARCHES = {"x86_64": "amd64", "aarch64": "arm64", "amd64": "amd64", "arm64": "arm
 sys.path.insert(0, str(ROOT / "release"))
 import node_infra_assets
 
-REQUIRED = ("node-ctl", "sandbox-ctl", "sandbox-init", "cloud-hypervisor", "connector-ctl", "vmlinux", "sandbox-runtime.bundle", "manifest-ctl", "cache-ctl", "store-ctl", "flatten-ctl")
+REQUIRED = ("node-ctl", "sandbox-ctl", "sandbox-init", "cloud-hypervisor", "connector-ctl", "vmlinux", "sandbox-runtime.bundle", "e2b-key-ctl", "manifest-ctl", "cache-ctl", "store-ctl", "flatten-ctl")
 
 
 def run(args, **kwargs):
@@ -140,7 +140,8 @@ def build(args):
                 shutil.copy2(ROOT / name, own_license / name)
         shutil.copytree(HERE / "rootfs", context / "rootfs")
         shutil.copy2(HERE / "Containerfile", context / "Containerfile")
-        for name in ("service", "entrypoint"):
+        shutil.copy2(HERE / "guest-rootfs", context / "guest-rootfs")
+        for name in ("service", "entrypoint", "node-infra-run"):
             shutil.copy2(HERE.parent / "runtime" / name, context / name)
         if helper.resolve() != (context / "node-infra-runtime").resolve():
             shutil.copy2(helper, context / "node-infra-runtime")
@@ -157,6 +158,17 @@ def build(args):
             build_command += ["--network", args.build_network]
         run(build_command + [context])
         try:
+            base = args.base_image or re.search(r"^ARG BASE_IMAGE=(\S+)$",
+                                                 (HERE / "Containerfile").read_text(), re.MULTILINE)[1]
+            base_info, image_info = json.loads(run([args.engine, "image", "inspect", base, tag], capture_output=True).stdout)
+            base_layers = base_info["RootFS"]["Layers"]
+            if not base_layers or image_info["RootFS"]["Layers"][:len(base_layers)] != base_layers:
+                raise ValueError("candidate image layers differ from selected base")
+            receipt["base_image_id"] = "sha256:" + base_info["Id"].removeprefix("sha256:")
+            seed_checksum = run([args.engine, "run", "--rm", "--network=none",
+                                 "--entrypoint", "/usr/bin/sha256sum", tag,
+                                 "/usr/share/node-infra/quickstart/SHA256SUMS"], capture_output=True)
+            receipt["quickstart_seed_sha256"] = seed_checksum.stdout.split()[0]
             raw_archive = context / "image.oci.tar"
             # Use the selected Docker CLI/context to reach the daemon. A distro
             # skopeo may embed an API client too old for a newer Docker engine.

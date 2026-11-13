@@ -3,7 +3,8 @@
 set -euo pipefail
 fail() { echo "node-infra entrypoint: $*" >&2; exit 1; }
 [[ $$ == 1 && $EUID == 0 ]] || fail 'requires root and private PID namespace (PID 1)'
-[[ ${1:-} == /sbin/init ]] || fail 'use the systemd entry point; diagnostic helpers use --entrypoint'
+[[ ${1:-} == /sbin/init || ( $# == 1 && ${1:-} == quickstart ) ]] ||
+    fail 'use /sbin/init or quickstart; diagnostic helpers use --entrypoint'
 if [[ -f /run/.containerenv ]]; then
     export container=podman
 elif [[ -f /.dockerenv ]]; then
@@ -33,4 +34,9 @@ fi
 mount --bind /proc/sys /proc/sys
 mount -o remount,bind,ro /proc/sys
 mount -o remount,bind,ro /sys
+if [[ $1 == quickstart ]]; then
+    touch /run/node-infra/quickstart.enabled
+    /usr/libexec/node-infra/quickstart enable
+    set -- /sbin/init
+fi
 exec "$@"

@@ -42,6 +42,24 @@ sudo podman pull ghcr.io/kuasar-sandbox/node-infra@sha256:PLATFORM_MANIFEST_DIGE
 及其执行 units；Telemetry 使用原生 systemd 启用方式。Cache/Store 端点由节点级
 存储访问层提供，部署工具不启动这些外部服务。
 
+## 用 Docker 运行第一个 Guest
+
+在符合前置条件的开发机上，把 `IMAGE` 设为提供开箱模式的发布版 GHCR 镜像引用。离线使用时先导入对应的 Docker 归档，把 `IMAGE` 设为导入后的镜像 ID 或 `localhost/node-infra:<版本>`，并给 `docker run` 加 `--pull=never`。
+
+```sh
+docker run -d --tty --name ks-dev --privileged \
+  --cgroupns=private --cpus=4 --memory=6g --memory-swap=6g \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
+  --network=bridge -v ks-dev-data:/var/lib/node-infra "$IMAGE" quickstart
+docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
+```
+
+`node-infra-run` 等待实例初始化和空闲 runner，在新的 MicroVM 里执行传入的命令，返回标准输出、错误和退出码，随后删除本次 Guest。命令使用节点内的 Conductor 和 Proxy，无需暴露宿主端口或配置 Guest 互联网出口。示例给整个节点分配 4 CPU、6 GiB 内存。
+
+若客户端收到 SIGKILL，它无法发出最后的删除请求。可用标准错误中打印的 sandbox ID 通过 Conductor 删除该 Guest。仍在运行的 Guest 遵循原生 TTL 和暂停策略。
+
+开箱模式首次启动时初始化专属空卷，生成实例凭据，用随镜像提供的 Linux shell 根文件系统离线生成 Image Manifest Bundle。仅磁盘导出和带内存快照也默认使用 Manifest Bundle，按原生 `@manifest` 引用读取。恢复时需保留卷和所引用的基础 Bundle。使用 `docker stop ks-dev` 正常停机，`docker start ks-dev` 复用同一卷。并行运行的节点各自使用独立卷。使用站点原生配置时，采用下文的部署方式。
+
 ## 准备默认宿主网络部署
 
 一个宿主部署一个实例、无需专用 transit 出口时，保留模板的 `Network=host`。

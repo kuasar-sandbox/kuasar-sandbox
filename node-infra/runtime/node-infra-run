@@ -1,0 +1,195 @@
+#!/usr/bin/python3 -I
+# SPDX-License-Identifier: Apache-2.0
+"""Run one command in a fresh Quick Start guest using the native control and data APIs."""
+import json
+import os
+from pathlib import Path
+import signal
+import subprocess
+import sys
+import time
+
+STATE = Path('/var/lib/node-infra/quickstart')
+RUNTIME = Path('/run/node-infra')
+API = 'http://127.0.0.1:3000'
+PROXY = 'http://127.0.0.1:3001'
+START_TIMEOUT = 180
+
+
+class RunError(Exception):
+    pass
+
+
+class Rejected(RunError):
+    def __init__(self, method, path, status):
+        super().__init__(f'{method} {path}: Conductor returned HTTP {status}')
+        self.status = status
+
+
+def api(key, method, path, expected, body=None):
+    # Keep the long-lived credential off argv. A separate session lets curl
+    # finish receiving Create's ID when the caller's terminal sends Ctrl-C.
+    command = ['curl', '--disable', '--silent', '--show-error', '--noproxy', '*',
+               '--max-time', '15', '--request', method, '--header', '@-',
+               '--write-out', '\n%{http_code}']
+    if body is not None:
+        command += ['--json', json.dumps(body)]
+    result = subprocess.run(command + [API + path], input='X-API-Key: ' + key + '\n',
+                            stdout=subprocess.PIPE, text=True, start_new_session=True)
+    payload, _, status = result.stdout.rpartition('\n')
+    if result.returncode:
+        raise RunError(f'{method} {path}: Conductor request failed (curl {result.returncode})')
+    if status != str(expected):
+        raise Rejected(method, path, int(status))
+    return json.loads(payload) if payload else {}
+
+
+def create_sandbox(key, template):
+    # If Conductor accepts Create but its reply is lost, resolve only this
+    # invocation's requested ID and marker. A rejected duplicate is untouched.
+    sid = 'ks-' + os.urandom(16).hex()
+    path = '/sandboxes/' + sid
+    marker = os.urandom(16).hex()
+    metadata = {'kuasar-sandbox.identity': json.dumps({'id': sid}), 'node-infra-run': marker}
+    try:
+        created = api(key, 'POST', '/sandboxes', 201, {'templateID': template, 'metadata': metadata})
+        if created.get('sandboxID') != sid:
+            raise RunError('Conductor returned a different sandbox ID')
+    except (RunError, ValueError) as original:
+        if isinstance(original, Rejected) and original.status < 500:
+            raise
+        try:
+            detail = api(key, 'GET', path, 200)
+            if detail.get('metadata', {}).get('node-infra-run') == marker:
+                api(key, 'DELETE', path, 204)
+        except Rejected as lookup:
+            if lookup.status != 404:
+                raise
+        raise RunError(f'could not confirm creation of {sid}: {original}') from original
+    return sid
+
+
+def has_capacity():
+    result = subprocess.run(['node-ctl', 'resource', 'pressure', '--socket',
+                             '/run/sandbox/node-ctl.socket'], stdout=subprocess.PIPE, timeout=10)
+    if result.returncode:
+        raise RunError('could not read Conductor resource pressure')
+    status = json.loads(result.stdout)
+    # These are the CPU and memory reservations of the Quick Start template.
+    available = set()
+    for pool in status['pools'] or []:
+        if pool['pressure']['zone'] not in ('green', 'yellow'):
+            continue
+        if all(pool['capacity'][dim] == 0 or pool['available'][dim] >= request
+               for dim, request in [('cpu_milli', 1000), ('memory_bytes', 512 * 1024**2)]):
+            available.add(pool['name'])
+    return any(runner['kind'] == 'sandbox' and runner['resource_pool'] in available
+               and runner['states'].get('idle', 0) > 0 for runner in status['runner_pools'] or [])
+
+
+def proxy_ready():
+    # The in-container health check authenticates the effective /readyz
+    # listener against the live Proxy master and waits for its workers/routes.
+    try:
+        result = subprocess.run(['/usr/libexec/node-infra/node-infra-runtime', 'health'],
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10)
+    except subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
+def initialized():
+    failed = RUNTIME / 'quickstart.failed'
+    if failed.exists():
+        raise RunError('initialization failed at ' + failed.read_text().strip())
+    if (RUNTIME / 'quickstart.ready').is_file():
+        return True
+    # docker exec can run before the entrypoint creates its first marker.
+    if not (RUNTIME / 'quickstart.enabled').exists():
+        cmdline = Path('/proc/1/cmdline').read_bytes().split(b'\0')
+        if b'quickstart' not in cmdline:
+            raise RunError('start the node container with the quickstart argument')
+    return False
+
+
+def run(arguments):
+    interrupted = 0
+
+    def on_signal(signum, _frame):
+        # Defer interruption across Create until we have an ID to clean up.
+        nonlocal interrupted
+        interrupted = signum
+
+    def check_signal():
+        if interrupted:
+            raise SystemExit(128 + interrupted)
+
+    def wait_for(description, ready):
+        deadline = time.monotonic() + START_TIMEOUT
+        while True:
+            check_signal()
+            if ready():
+                return
+            if time.monotonic() >= deadline:
+                raise RunError('timed out waiting for ' + description)
+            time.sleep(0.25)
+
+    for signum in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+        signal.signal(signum, on_signal)
+
+    wait_for('Quick Start initialization', initialized)
+    key = (STATE / 'api-key').read_text().strip()
+    template = (STATE / 'template-id').read_text().strip()
+    wait_for('available sandbox capacity and an idle runner', has_capacity)
+    wait_for('Proxy readiness (node-infra-runtime health)', proxy_ready)
+    check_signal()
+    sid = create_sandbox(key, template)
+    path = '/sandboxes/' + sid
+    try:
+        print('node-infra-run: sandbox', sid, file=sys.stderr, flush=True)
+
+        def running():
+            state = api(key, 'GET', path, 200)['state']
+            if state not in ('starting', 'running'):
+                raise RunError(f'sandbox {sid} entered {state} during startup')
+            return state == 'running'
+
+        wait_for('sandbox ' + sid + ' to start', running)
+        session = api(key, 'POST', path + '/exec-sessions', 201, {})
+        check_signal()
+        command = ['sandbox-ctl', 'exec', '--proxy', PROXY, '--proxy-header',
+                   'E2b-Sandbox-Id: ' + sid, '--proxy-header', 'E2b-Sandbox-Service: exec',
+                   '--proxy-header', 'X-Access-Token: ' + session['execAccessToken']]
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            command.append('--stdin')
+        # Preserve the native client's terminal and stdio behavior. Only this
+        # child is stopped on cancellation; deletion below terminates its VM.
+        with subprocess.Popen(command + ['--', *arguments]) as child:
+            while child.poll() is None:
+                if interrupted:
+                    child.terminate()
+                    try:
+                        child.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        child.kill()
+                    check_signal()
+                try:
+                    child.wait(timeout=0.25)
+                except subprocess.TimeoutExpired:
+                    continue
+        status = child.returncode
+    finally:
+        api(key, 'DELETE', path, 204)
+    check_signal()
+    return 128 - status if status < 0 else status
+
+
+if __name__ == '__main__':
+    if len(sys.argv) < 3 or sys.argv[1] != '--':
+        print('usage: node-infra-run -- COMMAND [ARG ...]', file=sys.stderr)
+        sys.exit(2)
+    try:
+        sys.exit(run(sys.argv[2:]))
+    except (RunError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
+        print('node-infra-run:', error, file=sys.stderr)
+        sys.exit(1)

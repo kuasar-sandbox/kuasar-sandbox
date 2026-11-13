@@ -51,6 +51,24 @@ uses its native systemd enablement. Cache/Store endpoints come from the
 node-level storage access layer. The deployment tool does not start those
 external services.
 
+## Run your first Guest with Docker
+
+On a supported development host, set `IMAGE` to the GHCR reference for a release that includes Quick Start. For offline use, load that release's Docker archive, set `IMAGE` to its loaded image ID or `localhost/node-infra:<version>`, and add `--pull=never` to `docker run`.
+
+```sh
+docker run -d --tty --name ks-dev --privileged \
+  --cgroupns=private --cpus=4 --memory=6g --memory-swap=6g \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
+  --network=bridge -v ks-dev-data:/var/lib/node-infra "$IMAGE" quickstart
+docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
+```
+
+`node-infra-run` waits for initialization and an idle runner, executes the supplied argument vector in a fresh MicroVM, returns its output and exit code, and deletes that Guest. It uses the Conductor and Proxy inside the node. The example publishes no host ports and needs no Guest internet access. The 4 CPU and 6 GiB settings are an example for one node, not a minimum sizing rule.
+
+If the client receives SIGKILL, it cannot send the final Delete request. Use the sandbox ID printed on stderr to delete it through Conductor. A running Guest otherwise follows the native TTL and pause policy.
+
+Quick Start initializes an empty private volume once. It uses instance-specific credentials and the shipped native Linux shell filesystem to produce an offline Image Manifest Bundle. Disk-only exports and memory snapshots default to Manifest Bundles with native `@manifest` selectors. Keep the volume and its referenced base Bundles together for recovery. Use `docker stop ks-dev` for orderly shutdown and `docker start ks-dev` to reuse it. Use separate volumes for simultaneous nodes. For site-supplied native configuration, use the deployment path below.
+
 ## Prepare the default host deployment
 
 For one instance on a host without a dedicated transit exit, keep the delivered
