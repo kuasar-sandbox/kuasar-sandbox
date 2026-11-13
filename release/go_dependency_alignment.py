@@ -317,6 +317,7 @@ def check_plans(c, plans, next_versions=None, *, date=None, before_alignment=Non
             changed['go.sum'] = new_sum
         version = c.preview_selection.preview_candidate(unit, plan.winner, date, (next_versions or {}).get(unit),
                                                          plan.source_ref)
+        c.selection.validate_publication_source(version, plan.source_ref)
         if c.RepositoryState(plan.unit).status(version).partial:
             raise c.Deferred(f'{unit} {version} already has a tag or release; select a fresh Preview revision')
         def confirm():

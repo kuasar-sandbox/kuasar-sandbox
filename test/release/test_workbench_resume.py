@@ -1,8 +1,11 @@
 """Recover original accepted bytes; do not query Actions for completed releases."""
 import copy
+from pathlib import Path
+import sys
 import unittest
 from unittest.mock import patch, Mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release"))
 import preview_coordinator as subject
 
 VERSION = 'release-v1.2.3-preview.20260929'
@@ -186,6 +189,14 @@ class ResumeTests(unittest.TestCase):
                 self.artifacts[1]['name'] = self.artifacts[1]['name'].replace(name + '-release', 'component-release')
                 with self.assertRaisesRegex(subject.Deferred, 'artifact is missing'):
                     self.resume_component(plan, plans, subject.ReleaseStatus(None, SHA, False))
+
+    def test_maintenance_can_resume_previously_accepted_kernel_bytes(self):
+        plan, plans = self.component('vmlinux')
+        plan = subject.replace(plan, source_ref=None)
+        plans['vmlinux'] = plan
+        result, calls = self.resume_component(plan, plans, subject.ReleaseStatus(None, SHA, False))
+        self.assertFalse(result)
+        self.assertIn('/actions/jobs/20/rerun', calls[0].args[-2])
 
     def test_successful_component_publisher_with_failed_cleanup_never_rebuilds(self):
         plan, plans = self.component()

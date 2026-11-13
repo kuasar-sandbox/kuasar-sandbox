@@ -251,6 +251,24 @@ def require_stable(value: object, field: str, source: str) -> str:
     return value
 
 
+# New producers on the active 0.x lines. A later cut updates this ownership
+# without changing how historical releases or accepted stages are consumed.
+PUBLICATION_BRANCHES = {"0.1": "release/v0.1.x", "0.2": "main"}
+
+
+def validate_publication_source(version: str, source_ref: str) -> None:
+    """Validate a new build, never use current branch policy to read an old tag."""
+    core = re.sub(r"^(?:release-|runtime-|vmlinux-)?v", "", version)
+    if version == core or COMPONENT_RE.fullmatch("v" + core) is None:
+        raise ManifestError(f"invalid publication version: {version}")
+    line = ".".join(core.split(".")[:2])
+    owner = "main" if version.startswith("vmlinux-") else PUBLICATION_BRANCHES.get(line)
+    if owner is not None and source_ref != owner:
+        raise ManifestError(f"new {version} must be published from {owner}, got {source_ref}")
+    if source_ref not in ('main', f'release/v{line}.x'):
+        raise ManifestError(f"{version} does not belong to {source_ref}")
+
+
 def aggregate_version(value: str) -> AggregateVersion:
     match = re.fullmatch(r"release-v([0-9]+)\.([0-9]+)\.([0-9]+)", value)
     if match is None:
@@ -493,6 +511,12 @@ def resolve_new_selection(root: pathlib.Path, version: str) -> dict[str, str]:
 
 
 def main() -> None:
+    if len(sys.argv) == 4 and sys.argv[1] == "--validate-publication-source":
+        try:
+            validate_publication_source(sys.argv[2], sys.argv[3])
+        except ManifestError as error:
+            fail(str(error))
+        return
     if len(sys.argv) == 3 and sys.argv[2] == "--validate-current":
         try:
             validate_current_manifests(pathlib.Path(sys.argv[1]))

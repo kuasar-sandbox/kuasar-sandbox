@@ -51,6 +51,7 @@ def validate_checkout(root, record):
 
 def fetch(root, unit, source_ref, sha, version, repository):
     validate_request(unit, source_ref, sha, version, repository)
+    source_inputs.tag_sources.selection.validate_publication_source(version, source_ref)
     artifacts.require(not root.exists() and not root.is_symlink(), 'producer destination must be fresh')
     subprocess.run(['git', 'init', '--quiet', '--template=', str(root)], check=True)
     git(root, 'config', 'core.hooksPath', '/dev/null')

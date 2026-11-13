@@ -548,7 +548,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
         plan_units.assert_not_called()
 
     def test_aggregate_lookup_is_exact_for_selected_source(self) -> None:
-        version = "release-v0.1.2-preview.20260831"
+        version = "release-v0.2.2-preview.20260831"
         sha = "d" * 40
         empty = coordinator.ReleaseStatus(None, None, False)
         other = {
@@ -580,7 +580,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
         )
 
     def test_failed_aggregate_redispatches_a_fresh_exact_stage(self) -> None:
-        version = "release-v0.1.2-preview.20260831"
+        version = "release-v0.2.2-preview.20260831"
         sha = "d" * 40
         empty = coordinator.ReleaseStatus(None, None, False)
         failed = {
@@ -615,7 +615,7 @@ class PreviewCoordinatorTest(unittest.TestCase):
         )
 
     def test_aggregate_history_does_not_spend_current_invocation_budget(self):
-        version, sha = "release-v0.1.2-preview.20260831", "d" * 40
+        version, sha = "release-v0.2.2-preview.20260831", "d" * 40
         failed = dict(id=20, status="completed", conclusion="failure", run_attempt=99,
                       display_title=coordinator.aggregate_run_title(version, sha))
         with mock.patch.object(coordinator, "platform_release", return_value=coordinator.ReleaseStatus(None, None, False)), \
@@ -881,6 +881,65 @@ components:
         self.assertIsNone(plan.source_ref)
         self.assertEqual(plan.selected, "v0.3.5")
         self.assertEqual(plan.action, "fixed")
+
+    def test_maintenance_preview_pins_the_kernel_without_consulting_guest_branches(self):
+        unit = coordinator.UNIT_BY_NAME["vmlinux"]
+        tag = "vmlinux-v0.1.6"
+        with (
+            mock.patch.object(coordinator, "PLATFORM_REF", "release/v0.1.x"),
+            mock.patch.object(coordinator, "RepositoryState") as factory,
+            mock.patch.object(coordinator, "branch_sha") as branch,
+            mock.patch.object(coordinator, "clone_repository") as clone,
+        ):
+            state = factory.return_value
+            state.status.return_value = coordinator.ReleaseStatus({"tag_name": tag}, "a" * 40, True)
+            plan = coordinator.make_plan(unit, tag, "20261113", pathlib.Path("/unused"))
+            self.assertEqual((plan.action, plan.selected, plan.source_sha, plan.source_ref),
+                             ("fixed", tag, "a" * 40, None))
+            state.status.return_value = coordinator.ReleaseStatus(None, None, False)
+            with self.assertRaisesRegex(coordinator.Deferred, "requires a published kernel"):
+                coordinator.make_plan(unit, tag, "20261113", pathlib.Path("/unused"))
+            branch.assert_not_called()
+            clone.assert_not_called()
+
+    def test_formal_reads_maintenance_product_tree_and_requires_a_published_kernel(self):
+        repository = selection_fixtures.Repository()
+        self.addCleanup(repository.close)
+        source = coordinator.CONTROL_ROOT / "releases/release.yaml"
+        manifest = source.read_text().replace("version: release-v0.1.13", "version: release-v0.1.15", 1)
+        sha = repository.commit_files("maintenance selection", {
+            "releases/release.yaml": manifest,
+            "releases/daily-preview.yaml": (coordinator.CONTROL_ROOT / "releases/daily-preview.yaml").read_text(),
+        })
+        ref = "release/v0.1.x"
+        spec = importlib.util.spec_from_file_location("maintenance_formal", FORMAL_PATH)
+        controller = importlib.util.module_from_spec(spec)
+        with mock.patch.object(coordinator, "PLATFORM_ROOT", repository.root):
+            spec.loader.exec_module(controller)
+        with (
+            mock.patch.dict(controller.os.environ, RELEASE_VERSION="release-v0.1.15", PLATFORM_REF=ref, PLATFORM_SHA=sha),
+            mock.patch.object(coordinator, "branch_sha", return_value=sha) as branch,
+            mock.patch.object(controller, "existing_publication", return_value=controller.PublicationState.NEW),
+            mock.patch.object(coordinator, "UNITS", (coordinator.UNIT_BY_NAME["vmlinux"],)),
+            mock.patch.object(coordinator, "RepositoryState") as state,
+            mock.patch.object(coordinator, "persist_manifest") as persist,
+            mock.patch.object(controller, "wait_for_convergence") as converge,
+        ):
+            state.return_value.status.return_value = coordinator.ReleaseStatus(None, None, False)
+            with self.assertRaisesRegex(coordinator.Deferred, "requires a published kernel"):
+                controller.main()
+            branch.assert_called_once_with(coordinator.PLATFORM_REPOSITORY, ref)
+            persist.assert_not_called()
+            converge.assert_not_called()
+
+    def test_aggregate_cli_enforces_branch_ownership_for_stable_and_preview(self):
+        for suffix in ("", "-preview.20261113"):
+            for core, owner, other in (("0.1.15", "release/v0.1.x", "main"), ("0.2.0", "main", "release/v0.2.x")):
+                command = [sys.executable, str(coordinator.CONTROL_ROOT / "release/selection.py"),
+                           "--validate-publication-source", "release-v" + core + suffix]
+                with self.subTest(core=core, suffix=suffix):
+                    self.assertEqual(coordinator.run(command + [owner]).returncode, 0)
+                    self.assertNotEqual(coordinator.run(command + [other], check=False).returncode, 0)
 
     def test_vmlinux_selection_and_release_binding_use_actual_source_commit(self) -> None:
         unit = coordinator.UNIT_BY_NAME["vmlinux"]
