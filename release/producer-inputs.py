@@ -13,6 +13,7 @@ import artifacts
 import source_inputs
 import transport
 import producer_sources
+import producer_contract
 import go_dependency_alignment
 
 
@@ -51,6 +52,10 @@ def freeze(unit, source_ref, source_sha, dependencies, output, admission=None, v
             # Old workflows retain their strict branch-HEAD contract.
             artifacts.require(version is None, 'producer version requires admission evidence')
             row = source_inputs.fetch_named(source, tag_sources.repository(unit), 'refs/heads/' + source_ref, source_sha)
+        if version is not None and unit in producer_contract.LEGACY_INPUTS:
+            expected_inputs = producer_contract.checkout_dependencies(unit, source)
+            if {name for name, _, _ in dependencies} != set(expected_inputs):
+                raise ValueError(f'{unit}: producer inputs differ from the admitted source dependency contract')
         records = {'src/' + owner: row}
         seen = {owner}
         for dependency, tag, sha in dependencies:

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import base64
+import functools
 import importlib.util
 import json
 import os
@@ -48,6 +49,7 @@ selection = load_module("release_selection", CONTROL_ROOT / "release/selection.p
 sys.path.insert(0, str(CONTROL_ROOT / 'release'))
 import prepare_notes  # noqa: E402
 import go_dependency_alignment  # noqa: E402
+from producer_contract import LEGACY_INPUTS, RUNTIME_ABI_INPUTS  # noqa: E402
 preview_selection = load_module(
     "preview_selection", CONTROL_ROOT / "release/preview-selection.py"
 )
@@ -66,22 +68,22 @@ UNITS = (
     Unit("connector", "kuasar-sandbox/connector", "release.yml"),
     Unit("vmlinux", "kuasar-sandbox/guest-runtime", "release-vmlinux.yml"),
     Unit(
+        "runtime",
+        "kuasar-sandbox/guest-runtime",
+        "release-runtime.yml",
+        RUNTIME_ABI_INPUTS["runtime"],
+    ),
+    Unit(
         "sandboxer",
         "kuasar-sandbox/sandboxer",
         "release.yml",
-        ("accelerator", "connector"),
+        RUNTIME_ABI_INPUTS["sandboxer"],
     ),
     Unit(
         "orchestrator",
         "kuasar-sandbox/orchestrator",
         "component-release.yml",
-        ("accelerator", "connector", "sandboxer"),
-    ),
-    Unit(
-        "runtime",
-        "kuasar-sandbox/guest-runtime",
-        "release-runtime.yml",
-        ("accelerator", "sandboxer"),
+        RUNTIME_ABI_INPUTS["orchestrator"],
     ),
 )
 UNIT_BY_NAME = {unit.name: unit for unit in UNITS}
@@ -375,6 +377,13 @@ class RepositoryState:
                 and complete_assets(release, [{archive}, {archive, archive_name(self.unit.name, tag, "aarch64")}])
                 and sha is not None
             )
+        if (complete and self.unit.name == "runtime" and tag.startswith("runtime-v")
+                and not prerelease and source_dependencies(self.unit, sha) == RUNTIME_ABI_INPUTS["runtime"]):
+            module_tag = tag.removeprefix("runtime-")
+            if module_tag in self.invalid_tags or self.tag_shas.get(module_tag) not in (None, sha):
+                raise Deferred(f"{self.unit.repository} {module_tag} conflicts with the published Runtime source")
+            complete = (self.tag_shas.get(module_tag) == sha and
+                        complete_assets(release, [{archive, archive_name("runtime", tag, "aarch64")}]))
         status = ReleaseStatus(release, sha, complete)
         self._statuses[tag] = status
         return status
@@ -397,6 +406,100 @@ class RepositoryState:
             if status.complete:
                 usable.append(tag)
         return usable
+
+
+@functools.lru_cache(maxsize=128)
+def source_dependencies(unit: Unit, sha: str) -> tuple[str, ...]:
+    if unit.name not in LEGACY_INPUTS:
+        return unit.dependencies
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise Deferred(f"{unit.name}: producer contract needs an immutable source")
+    c = sys.modules[__name__]
+    if unit.name == "orchestrator":
+        manifest = go_dependency_alignment.read_file(c, unit.repository, sha, "go.mod")
+        policy = go_dependency_alignment.policy
+        modern = policy.PREFIX + "guest-runtime" in policy.managed_requires(manifest)
+    else:
+        tree = go_dependency_alignment.source_files
+        cmd = tree(c, unit.repository, sha).get("cmd")
+        if not cmd or cmd[0] != "040000":
+            raise Deferred(f"{unit.name}@{sha}: missing command tree")
+        commands = tree(c, unit.repository, cmd[1])
+        marker = "flatten-ctl" if unit.name == "runtime" else "sandbox-ctl"
+        if commands.get(marker, ("",))[0] != "040000":
+            raise Deferred(f"{unit.name}@{sha}: unexpected command inventory")
+        init = commands.get("sandbox-init")
+        if init is not None and (init[0] != "040000" or tree(c, unit.repository, init[1]).get("main.go", ("",))[0] not in {"100644", "100755"}):
+            raise Deferred(f"{unit.name}@{sha}: invalid sandbox-init command")
+        modern = (init is not None) == (unit.name == "runtime")
+    return UNIT_BY_NAME[unit.name].dependencies if modern else LEGACY_INPUTS[unit.name]
+
+
+@functools.lru_cache(maxsize=128)
+def producer_contracts(unit: Unit, sha: str) -> tuple[tuple[str, ...], ...]:
+    if unit.name not in LEGACY_INPUTS:
+        return (unit.dependencies,)
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        raise Deferred(f"{unit.name}: producer contract needs an immutable source")
+    record = api(f"repos/{unit.repository}/contents/.github/workflows/{unit.workflow}?ref={sha}")
+    if record.get("type") != "file" or record.get("encoding") != "base64":
+        raise Deferred(f"{unit.name}@{sha}: missing regular producer workflow")
+    workflow = base64.b64decode(record["content"].replace("\n", ""), validate=True).decode()
+    # Only the two exact dependency signatures supported by this coordinator
+    # are recognized. A changed/unknown producer is never silently guessed.
+    prefix = 'run-name: Release ${{ inputs.version }} @${{ inputs.source_sha }} ['
+    titles = [line for line in workflow.splitlines() if line.startswith("run-name:")]
+    # Check the dispatch interface as well as the immutable run identity used
+    # for publication recovery. Unknown workflow layouts defer release.
+    inputs = re.search(r"(?m)^  workflow_dispatch:\n    inputs:\n((?:[ \t]+[^\n]*\n|\n)+)", workflow)
+    fields = dict(re.findall(r"(?m)^      ([a-z][a-z0-9_]*)_version:[ \t]*\n((?:        [^\n]*\n?)*)", inputs[1])) if inputs else {}
+    fields.pop("aggregate", None)
+    old, new = LEGACY_INPUTS[unit.name], RUNTIME_ABI_INPUTS[unit.name]
+
+    def title(dependencies):
+        return prefix + ",".join(name + "=${{ inputs." + name + "_version }}" for name in dependencies)
+
+    for deps in (old, new):
+        if titles == [title(deps) + "]"] and set(fields) == set(deps):
+            return (deps,)
+    short, long = sorted((old, new), key=len)
+    extra = long[-1]
+    optional = "${{ inputs." + extra + "_version && format('," + extra + "={0}', inputs." + extra + "_version) || '' }}"
+    if (titles == [title(short) + optional + "]"] and set(fields) == set(long)
+            and re.search(r"(?m)^        required: false[ \t]*$", fields[extra])):
+        return old, new
+    raise Deferred(f"{unit.name}@{sha}: unrecognized release dependency contract")
+
+
+def release_source_plans(plans: dict[str, Plan]) -> dict[str, Plan]:
+    """Order an exact set of components by its own producer contract."""
+    rows = {name: replace(plan, unit=replace(plan.unit, dependencies=source_dependencies(plan.unit, plan.source_sha)))
+            for name, plan in plans.items()}
+    if "runtime" in rows and "sandboxer" in rows:
+        legacy = "sandboxer" in rows["runtime"].unit.dependencies
+        if legacy == ("runtime" in rows["sandboxer"].unit.dependencies):
+            raise Deferred("mixed sandbox-init producers: the selected archives would contain duplicate or missing init")
+        if ("orchestrator" in rows and rows["orchestrator"].action == "publish"
+                and legacy == ("runtime" in rows["orchestrator"].unit.dependencies)):
+            raise Deferred("orchestrator requires a different sandboxer/runtime Go source tuple")
+    ordered = {}
+    while len(ordered) != len(rows):
+        for name, plan in rows.items():
+            if name not in ordered and set(plan.unit.dependencies).issubset(ordered):
+                ordered[name] = plan
+                break
+        else:
+            raise Deferred("incomplete or cyclic selected release dependency set")
+    return ordered
+
+
+def confirm_producer(plan):
+    """Workflows dispatch on main even when their admitted source is older."""
+    unit = plan.unit
+    if plan.action == "publish" and unit.name in LEGACY_INPUTS:
+        tip = branch_sha(unit.repository, "main")
+        if not tip or unit.dependencies not in producer_contracts(unit, tip):
+            raise Deferred(f"{unit.name}: current release workflow cannot build the selected source contract; retain selection")
 
 
 def recoverable_source_sha(status: ReleaseStatus) -> str | None:
@@ -649,8 +752,10 @@ def recover_configured_components(configured: dict[str, str], aggregate: str, ag
             raise Deferred(f"configured {name} {tag} is unavailable; retain the channel and recover its original publication")
         source_ref = None if status.complete else preview_selection.component_source_ref(PLATFORM_REF, name, tag)
         plans[name] = Plan(unit, tag, source_ref, source, tag, tag, 'reuse' if status.complete else 'publish')
-    for unit in UNITS:
-        if unit.name in plans and not ensure_unit(plans[unit.name], plans, aggregate, aggregate_sha):
+    plans = release_source_plans(plans)
+    for plan in plans.values():
+        unit = plan.unit
+        if not ensure_unit(plan, plans, aggregate, aggregate_sha):
             raise Pending(f"recover configured {unit.name} before selecting new component versions")
 
 
@@ -755,9 +860,10 @@ def plan_units(
     plans: dict[str, Plan] = {}
     with tempfile.TemporaryDirectory(prefix="preview-source-") as directory:
         temporary = pathlib.Path(directory)
-        for unit in UNITS:
+        raw = {u.name: make_plan(u, configured[u.name], date, temporary, next_versions.get(u.name)) for u in UNITS}
+        for plan in release_source_plans(raw).values():
+            unit = plan.unit
             next_version = next_versions.get(unit.name)
-            plan = make_plan(unit, configured[unit.name], date, temporary, next_version)
             state = RepositoryState(unit)
             status = state.status(plan.selected)
             dependency_changed = any(dependency_inputs_changed(name, unit.name, plans, configured, temporary)
@@ -792,10 +898,12 @@ def plan_units(
                 status = state.status(plan.selected)
                 if status.complete and not has_arm_archive(unit.name, plan.selected, status):
                     raise Deferred("ARM initialization must choose a new unit version; historical assets cannot be amended")
+            if plan.source_sha != raw[unit.name].source_sha and source_dependencies(unit, plan.source_sha) != unit.dependencies:
+                raise Deferred(f"{unit.name}: dependency rebuild crosses the sandbox-init change; rescan compatible sources")
             plans[unit.name] = plan
             if status.complete:
                 validate_release_reuse(plan, status)
-    return plans
+    return release_source_plans(plans)
 
 
 def has_arm_archive(unit: str, tag: str, status: ReleaseStatus) -> bool:
@@ -805,8 +913,10 @@ def has_arm_archive(unit: str, tag: str, status: ReleaseStatus) -> bool:
 
 def dependency_paths(dependency, consumer):
     paths = ["go.mod", "go.sum", "pkg", "internal"]
-    if consumer == "runtime" and dependency == "sandboxer":
+    if dependency == "sandboxer" and consumer == "runtime":
         paths = ["go.mod", "go.sum", "Makefile", "cmd/sandbox-init", "pkg", "internal"]
+    elif dependency == "runtime" and consumer in ("sandboxer", "orchestrator"):
+        paths = ["go.mod", "go.sum", "pkg/guestabi"]
     elif consumer == "runtime" and dependency == "accelerator":
         paths = ["go.mod", "go.sum", "pkg/flatten", "pkg/image", "pkg/manifest", "pkg/remote", "pkg/sparse", "pkg/tailzip", "pkg/tarstream",
                  "pkg/tar", "pkg/cache", "pkg/store", "pkg/readerr", "internal/util"]
@@ -1046,6 +1156,7 @@ def ensure_unit(
     if plan.source_ref is None:
         raise Deferred(f"fixed selection is unavailable: {plan.unit.name} {plan.selected}")
     selection.validate_publication_source(plan.selected, plan.source_ref)
+    confirm_producer(plan)
     count_publication(plan.unit.repository, plan.unit.name, plan.selected + ":build")
     # No accepted stage or published bytes exist. A new run avoids replacing
     # successful architecture artifacts from an earlier failed build attempt.
@@ -1149,7 +1260,8 @@ def resume_publish(repository: str, unit: str, version: str, exact: list[dict[st
                     raise Deferred(f"original {unit} stage lacks an unambiguous {arch} build; retain it")
                 required.extend(names)
             prefix = unit + '-release' if unit in {'runtime', 'vmlinux'} else 'component-release'
-            expected = [f'workbench-selection-{state["id"]}'] + [
+            selection_name = unit + '-workbench' if unit in {'runtime', 'vmlinux'} else 'workbench-selection'
+            expected = [f'{selection_name}-{state["id"]}'] + [
                 f'{prefix}-{version}-{arch}-{state["id"]}' for arch in ('x86_64', 'aarch64')]
         for name in required:
             job = latest.get(name, {})
@@ -1177,7 +1289,7 @@ def resume_publish(repository: str, unit: str, version: str, exact: list[dict[st
     return True
 
 
-def ensure_aggregate(version: str, source_sha: str) -> bool:
+def ensure_aggregate(version: str, source_sha: str, *, resume_only=False) -> bool:
     status = platform_release(version)
     if status.complete:
         if status.tag_sha != source_sha:
@@ -1196,8 +1308,8 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
     exact = [item for item in runs if item.get('display_title') == aggregate_run_title(version, source_sha)]
     if resume_publish(PLATFORM_REPOSITORY, 'platform', version, exact):
         return False
-    if status.partial:
-        raise Deferred(f"incomplete aggregate {version} has no recoverable stage; retain it and select a fresh Preview")
+    if status.partial or resume_only:
+        raise Deferred(f"aggregate {version} has no recoverable stage with an eligible original publisher")
     selection.validate_publication_source(version, PLATFORM_REF)
     count_publication(PLATFORM_REPOSITORY, 'platform', version + ':build')
     dispatch_aggregate_run(version, source_sha)
@@ -1207,7 +1319,8 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
 
 def converge(plans: dict[str, Plan], aggregate: str, source_sha: str) -> bool:
     ready: dict[str, bool] = {}
-    for unit in UNITS:
+    for plan in plans.values():
+        unit = plan.unit
         if any(not ready.get(dependency, False) for dependency in unit.dependencies):
             ready[unit.name] = False
             continue
@@ -1360,6 +1473,8 @@ def main(deadline: float | None = None) -> str:
         retain_existing_publishers()
         raise Deferred(str(error)) from error
 
+    for plan in plans.values():
+        confirm_producer(plan)
     go_dependency_alignment.check_plans(sys.modules[__name__], plans, next_versions,
                                        date=date, before_alignment=retain_existing_publishers)
     changed = any(plans[name].selected != configured[name] for name in configured)

@@ -94,17 +94,24 @@ publish_bundle() {
     python3 -B "$ROOT/release/node_infra_registry.py" "$bundle" "$version" "$commit" --validate-only "${stage_inputs[@]}"
   fi
 
-  local tag_state="$TMP/tag"
+  # A new Stable root tag must not exist while its public assets are incomplete.
+  # GitHub binds a draft release's exact --target commit when it is published;
+  # only legacy/Preview publication uses the earlier explicit tag.
+  local tag_state="$TMP/tag" tag_exists=false
   if api_optional "repos/$REPOSITORY/git/ref/tags/$version" "$tag_state"; then
     local resolved_commit
     resolved_commit=$(gh api "repos/$REPOSITORY/commits/$version" --jq .sha)
     [ "$resolved_commit" = "$commit" ] \
       || release_fail "$version already points to another commit"
+    tag_exists=true
   else
     local rc=$?
     [ "$rc" -eq 4 ] || exit "$rc"
-    jq -n --arg ref "refs/tags/$version" --arg sha "$commit" '{ref: $ref, sha: $sha}' \
-      | gh api --method POST "repos/$REPOSITORY/git/refs" --input - >/dev/null
+    if is_preview "$version"; then
+      jq -n --arg ref "refs/tags/$version" --arg sha "$commit" '{ref: $ref, sha: $sha}' \
+        | gh api --method POST "repos/$REPOSITORY/git/refs" --input - >/dev/null
+      tag_exists=true
+    fi
   fi
 
   local release_state="$TMP/release"
@@ -112,6 +119,7 @@ publish_bundle() {
     if [ "$(jq -r .draft "$release_state")" = false ]; then
       # PATCH may have succeeded before the previous job lost its connection.
       # An accepted, unchanged stage can confirm completion without mutation.
+      [ "$tag_exists" = true ] || release_fail "published Release lacks its selected tag"
       local expected_preview=false
       is_preview "$version" && expected_preview=true
       verify_uploaded_assets "$release_state" "$bundle"
@@ -138,6 +146,12 @@ publish_bundle() {
     jq '.[0]' "$drafts" > "$release_state"
     [ "$(jq -er .tag_name "$release_state")" = "$version" ] \
       || release_fail "existing draft belongs to another version"
+    # An untagged Stable draft must be pinned to the admitted source before
+    # assets are resumed; publication will create its root tag from this value.
+    if [ "$tag_exists" = false ] && ! is_preview "$version"; then
+      [ "$(jq -er .target_commitish "$release_state")" = "$commit" ] \
+        || release_fail "existing Stable draft targets another commit"
+    fi
     # A retry may fill absent assets, but must never replace same-name bytes.
     while IFS= read -r name; do
       [ -f "$bundle/assets/$name" ] || release_fail "unexpected existing draft asset: $name"
@@ -171,7 +185,9 @@ publish_bundle() {
     jq -n --rawfile body "$bundle/release-notes.md" '{body: $body}' \
       | gh api --method PATCH "repos/$REPOSITORY/releases/$(jq -er .id "$release_state")" --input - >/dev/null
   else
-    gh release create "$version" "${files[@]}" --repo "$REPOSITORY" --draft --verify-tag \
+    local verify_tag=()
+    [ "$tag_exists" = false ] || verify_tag=(--verify-tag)
+    gh release create "$version" "${files[@]}" --repo "$REPOSITORY" --draft "${verify_tag[@]}" \
       --target "$commit" --title "$version" --notes-file "$bundle/release-notes.md" >/dev/null
   fi
 
@@ -199,6 +215,13 @@ publish_bundle() {
       and .prerelease == $prerelease
     ' "$release_state" >/dev/null || release_fail "$version was not published as requested"
   verify_uploaded_assets "$release_state" "$bundle"
+  # The public Release and its complete verified asset set must now identify
+  # the selected commit through the immutable Stable (or Preview) tag.
+  local published_tag_commit
+  published_tag_commit=$(gh api "repos/$REPOSITORY/commits/$version" --jq .sha) \
+    || release_fail "published $version has no resolvable tag"
+  [ "$published_tag_commit" = "$commit" ] \
+    || release_fail "published $version tag does not identify the admitted source"
   echo "==> published $REPOSITORY $version from $commit"
 }
 

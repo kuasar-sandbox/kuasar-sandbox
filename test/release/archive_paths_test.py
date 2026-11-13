@@ -45,6 +45,20 @@ class ArchiveSafetyTests(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(ValueError):
                 archive_paths.extract([first, second], self.root / 'install')
 
+    def test_aggregate_requires_exactly_one_executable_init_from_a_selected_producer(self):
+        init = self.archive([('./bin/sandbox-init', tarfile.REGTYPE, 0o755)], 'init.tar.gz')
+        other = self.archive([('bin/other', tarfile.REGTYPE, 0o755)], 'other.tar.gz')
+        for owner in ('runtime', 'sandboxer'):
+            archive_paths.validate_aggregate([(owner, init), ('platform', other)])
+        for owners in ((('platform', other),), (('connector', init),),
+                       (('sandboxer', init), ('runtime', init))):
+            with self.subTest(owners=owners), self.assertRaisesRegex(ValueError, 'sandbox-init'):
+                archive_paths.validate_aggregate(owners)
+        for kind, mode in ((tarfile.REGTYPE, 0o644), (tarfile.DIRTYPE, 0o755)):
+            broken = self.archive([('bin/sandbox-init', kind, mode)])
+            with self.subTest(kind=kind), self.assertRaisesRegex(ValueError, 'sandbox-init'):
+                archive_paths.validate_aggregate([('runtime', broken)])
+
     def test_regular_files_install_with_modes_without_overwriting_existing_tree(self):
         first = self.archive([('./bin/', tarfile.DIRTYPE, 0o755), ('./bin/tool', tarfile.REGTYPE, 0o755)])
         destination = self.root / 'install'

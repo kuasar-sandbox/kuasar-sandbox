@@ -9,6 +9,7 @@ import tempfile
 
 import artifacts
 import go_workspace
+import go_module_policy
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / 'release'))
@@ -26,9 +27,10 @@ def build_owner(root, arch, output, environment, row, run=None):
     if declared['recipe'] is not None:
         release_version = environment.get('KUASAR_GO_RELEASE_VERSION')
         if release_version and root.name in go_workspace.DEPENDENCIES:
-            selected = json.loads(Path(environment['KUASAR_GO_RELEASE_SELECTION']).read_text())
+            selected = go_module_policy.owner_selection(
+                json.loads(Path(environment['KUASAR_GO_RELEASE_SELECTION']).read_text()))
             dependencies = {name: {'tag': selected[name]['version'], 'sha': selected[name]['sha']}
-                            for name in go_workspace.closure([root.name]) if name != root.name}
+                            for name in go_workspace.closure([root.name], root=root.parent, go=shutil.which('go', path=environment.get('PATH')) or 'go') if name != root.name}
             environment = go_workspace.bound_helper_environment(
                 root.parent, root.name, release_version, dependencies, environment)
         elif root.name in ('sandboxer', 'orchestrator'):

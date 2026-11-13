@@ -20,7 +20,7 @@ def relative_name(member):
     return name
 
 
-def inspect(archive, seen):
+def inspect(archive, seen, *, on_member=None):
     local = set()
     with tarfile.open(archive, 'r:gz') as source:
         for member in source:
@@ -43,7 +43,24 @@ def inspect(archive, seen):
                     raise ValueError(f'archive path crosses a file: {name}')
                 seen[parent] = 'directory'
             seen[name] = kind
+            if on_member is not None:
+                on_member(name, member)
     return seen
+
+
+def validate_aggregate(selected):
+    """Validate one architecture, including reused historical component archives."""
+    seen = {}
+    init_path = 'bin/sandbox-init'
+    for unit, archive in selected:
+        def check_init(name, member):
+            if name == init_path and (unit not in ('runtime', 'sandboxer')
+                    or not member.isfile() or not member.mode & 0o111):
+                raise ValueError(f'{unit}: expected executable {init_path} from sandboxer or runtime')
+        inspect(archive, seen, on_member=check_init)
+    # inspect already rejects duplicates across archives and path collisions.
+    if seen.get(init_path) != 'file':
+        raise ValueError(f'aggregate lacks required executable {init_path}')
 
 
 def extract(archives, destination):
@@ -85,11 +102,18 @@ def extract(archives, destination):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('mode', choices=('validate', 'extract'))
-    parser.add_argument('output', type=Path)
-    parser.add_argument('archives', nargs='+', type=Path)
+    commands = parser.add_subparsers(dest='mode', required=True)
+    aggregate = commands.add_parser('validate-aggregate')
+    aggregate.add_argument('--unit', nargs=2, metavar=('NAME', 'ARCHIVE'), required=True,
+                           action='append')
+    for mode in ('validate', 'extract'):
+        command = commands.add_parser(mode)
+        command.add_argument('output', type=Path)
+        command.add_argument('archives', nargs='+', type=Path)
     args = parser.parse_args()
-    if args.mode == 'extract':
+    if args.mode == 'validate-aggregate':
+        validate_aggregate(args.unit)
+    elif args.mode == 'extract':
         extract(args.archives, args.output)
     else:
         seen = json.loads(args.output.read_text()) if args.output.exists() and args.output.stat().st_size else {}

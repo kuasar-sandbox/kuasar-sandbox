@@ -143,15 +143,21 @@ class DependencyCutover(unittest.TestCase):
         contract = {'schema': 1, 'cases': {name: {'sha256': 'b'*64, 'requires': []}
                     for names in CASES.values() for name in names}}
         contract['cases']['basic.demo.sh']['requires'] = ['kvm']
-        def named(root, repository, ref, sha):
+        def source_tree(root, repository):
             root.mkdir(parents=True)
+            if repository != resolver.PLATFORM:
+                (root / 'go.mod').write_text(f'module github.com/{repository}\n')
+
+        def named(root, repository, ref, sha):
+            source_tree(root, repository)
             if root.name == 'admission-platform':
                 path = root/resolver.CUTOVER_PATH; path.parent.mkdir(parents=True)
                 path.write_text(json.dumps(self.config))
             return dict(repository=repository, sha=sha, tree='3'*40, ref=ref)
         def unit_source(root, unit, tag, sha):
-            root.mkdir(parents=True)
-            return dict(repository=resolver.REPOSITORIES[resolver.unit_owner(unit)], tag=tag, sha=sha, tree='3'*40)
+            repository = resolver.REPOSITORIES[resolver.unit_owner(unit)]
+            source_tree(root, repository)
+            return dict(repository=repository, tag=tag, sha=sha, tree='3'*40)
         def discover(roots, identities):
             contract = helper_contract()
             for owner in artifacts.OWNERS: contract['owners'][owner]['source'] = identities[owner]
@@ -183,6 +189,9 @@ class DependencyCutover(unittest.TestCase):
         self.assertEqual(plan['test_revisions']['accelerator']['sha'], self.pin['sha'])
         self.assertEqual(plan['sources']['sandboxer']['sha'], self.candidate['candidate_sha'])
         self.assertEqual(plan['sources']['sandboxer']['role'], 'candidate')
+        for product in ('sandbox-ctl', 'node-ctl'):
+            self.assertEqual(plan['product_sources'][product]['kuasar-sandbox/accelerator'], self.pin['sha'])
+            self.assertNotIn('kuasar-sandbox/guest-runtime', plan['product_sources'][product])
         self.assertEqual(plan['dependency_cutover']['request'], self.request)
         self.assertIn('maintained/accelerator', plan['run_inputs'])
         for arch in artifacts.ARCHES:

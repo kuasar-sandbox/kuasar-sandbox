@@ -38,6 +38,20 @@ def pr(bot='app[bot]'):
 
 
 class AlignmentTests(unittest.TestCase):
+    def test_stable_runtime_checksums_use_the_guest_module_and_core(self):
+        runtime = alignment.policy.PREFIX + 'guest-runtime'
+        managed = {runtime: CORE, ACC: CORE, CON: OLD}
+        dependencies = {'runtime': {'tag': 'runtime-' + CORE, 'sha': HEAD},
+                        'accelerator': {'tag': PRE, 'sha': BASE},
+                        'connector': {'tag': CORE, 'sha': BASE}}
+        stable = alignment.stable_requirements(managed, dependencies)
+        self.assertEqual(stable, {runtime: CORE})
+        with patch.object(alignment, 'module_checksums', side_effect=sums) as download:
+            self.assertEqual(set(alignment.update_sums('', stable).splitlines()), sums(runtime, CORE))
+        download.assert_called_once_with(runtime, CORE)
+        dependencies['runtime']['tag'] = 'runtime-' + PRE
+        self.assertEqual(alignment.stable_requirements(managed, dependencies), {})
+
     def test_new_stable_and_aggregate_check_actual_declarations(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -68,6 +68,7 @@ release_state() {
   [ ! -s "$state/assets.ndjson" ] || assets="$(jq -s '.' "$state/assets.ndjson")"
   draft="$(cat "$state/release-draft")"
   prerelease="$(cat "$state/release-prerelease" 2>/dev/null || printf false)"
+  commit="$(cat "$state/draft-target" 2>/dev/null || printf '%s' "$commit")"
   jq -cn --arg tag "$tag" --arg commit "$commit" --argjson draft "$draft" \
     --argjson prerelease "$prerelease" --argjson assets "$assets" --rawfile body "$state/notes" \
     '{id: 77, tag_name: $tag, target_commitish: $commit, draft: $draft,
@@ -112,6 +113,7 @@ if [ "${1:-}" = api ]; then
       emit "$(jq -cn --arg sha "$(cat "$state/tag")" '{sha: $sha}')" "$filter"
       ;;
     "POST repos/$repository/git/refs")
+      [ "$FAKE_GH_EXPECTED_PRERELEASE" = true ] || { echo 'Stable root tag created before public assets' >&2; exit 2; }
       [ "$(jq -er '.ref' "$request")" = "refs/tags/$tag" ] || exit 2
       jq -er '.sha' "$request" > "$state/tag"
       emit '{"ref":"created"}' "$filter"
@@ -149,6 +151,12 @@ if [ "${1:-}" = api ]; then
         exit 0
       fi
       [ "$(jq -er '.draft' "$request")" = false ] || exit 2
+      if [ "$FAKE_GH_EXPECTED_PRERELEASE" = false ]; then
+        expected="$(jq '.baseline.assets | length' "$FAKE_GH_PLAN")"
+        actual="$(jq -s 'length' "$state/assets.ndjson")"
+        [ "$actual" -eq "$expected" ] || { echo 'Stable tag would be published before complete assets' >&2; exit 2; }
+        [ -f "$state/tag" ] || printf '%s\n' "$(cat "$state/draft-target")" > "$state/tag"
+      fi
       jq -r '.prerelease' "$request" > "$state/release-prerelease"
       jq -er '.make_latest' "$request" > "$state/make-latest"
       printf 'false\n' > "$state/release-draft"
@@ -186,14 +194,16 @@ fi
 
 if [ "${1:-}" = release ] && [ "${2:-}" = create ]; then
   [ "${3:-}" = "$tag" ] || exit 2
-  [ -f "$state/tag" ] || exit 2
   shift 3
   : > "$state/assets.ndjson"
+  : > "$state/draft-target"
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --notes-file) cp "$2" "$state/notes"; shift 2 ;;
-      --repo|--target|--title) shift 2 ;;
-      --draft|--verify-tag) shift ;;
+      --target) [ "$2" = "$commit" ] || exit 2; printf '%s\n' "$2" > "$state/draft-target"; shift 2 ;;
+      --repo|--title) shift 2 ;;
+      --draft) shift ;;
+      --verify-tag) [ -f "$state/tag" ] || { echo 'verify-tag without tag' >&2; exit 2; }; shift ;;
       *)
         file="$1"
         jq -cn --arg name "$(basename "$file")" \
@@ -206,6 +216,7 @@ if [ "${1:-}" = release ] && [ "${2:-}" = create ]; then
         ;;
     esac
   done
+  [ -s "$state/draft-target" ] || { echo 'missing exact draft target' >&2; exit 2; }
   printf 'true\n' > "$state/release-draft"
   printf 'false\n' > "$state/release-prerelease"
   if [ "${FAKE_GH_FAIL_CREATE_ONCE:-0}" = 1 ] && [ ! -f "$state/failed-once" ]; then
@@ -231,6 +242,8 @@ common_env=(
   FAKE_GH_REPOSITORY="$REPOSITORY"
   FAKE_GH_TAG="$TAG"
   FAKE_GH_COMMIT="$COMMIT"
+  FAKE_GH_EXPECTED_PRERELEASE="$EXPECTED_PRERELEASE"
+  FAKE_GH_PLAN="$TMP/plan.json"
 )
 
 env "${common_env[@]}" "$PUBLISHER" check "$TAG"
@@ -257,6 +270,18 @@ if env "${common_env[@]}" FAKE_GH_FAIL_CREATE_ONCE=1 \
 fi
 [ "$(cat "$TMP/state/release-draft")" = true ] \
   || { echo "test-publisher: interrupted publish did not leave a draft" >&2; exit 1; }
+if [ "$EXPECTED_PRERELEASE" = false ]; then
+  [ ! -e "$TMP/state/tag" ] \
+    || { echo "test-publisher: interrupted Stable publication exposed a root tag" >&2; exit 1; }
+  cp "$TMP/state/draft-target" "$TMP/accepted-draft-target"
+  printf '%040d\n' 0 > "$TMP/state/draft-target"
+  if env "${common_env[@]}" "$PUBLISHER" publish \
+    "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF" >"$TMP/mismatched-draft.log" 2>&1; then
+    echo "test-publisher: resumed a Stable draft with the wrong target" >&2; exit 1
+  fi
+  grep -Fq 'existing Stable draft targets another commit' "$TMP/mismatched-draft.log"
+  mv "$TMP/accepted-draft-target" "$TMP/state/draft-target"
+fi
 cp "$TMP/state/assets.ndjson" "$TMP/original-assets"
 registry_calls=$(grep -vc -- --validate-only "$TMP/state/registry-calls")
 jq -sc '.[0].digest = "sha256:wrong" | .[]' "$TMP/original-assets" > "$TMP/state/assets.ndjson"
@@ -267,6 +292,10 @@ fi
 grep -Fq 'existing draft asset differs' "$TMP/conflict.log"
 [ "$(grep -vc -- --validate-only "$TMP/state/registry-calls")" = "$registry_calls" ]
 [ "$(cat "$TMP/state/release-draft")" = true ]
+if [ "$EXPECTED_PRERELEASE" = false ]; then
+  [ ! -e "$TMP/state/tag" ] \
+    || { echo "test-publisher: rejected Stable asset mismatch exposed a root tag" >&2; exit 1; }
+fi
 missing=$(tail -n 1 "$TMP/original-assets" | jq -r .name)
 head -n -1 "$TMP/original-assets" > "$TMP/state/assets.ndjson"
 env "${common_env[@]}" "$PUBLISHER" publish \
@@ -285,6 +314,16 @@ env "${common_env[@]}" "$PUBLISHER" publish \
 if env "${common_env[@]}" "$PUBLISHER" check "$TAG" >/dev/null 2>&1; then
   echo "test-publisher: preflight accepted an already published release" >&2
   exit 1
+fi
+
+if [ "$EXPECTED_PRERELEASE" = false ]; then
+  mv "$TMP/state/tag" "$TMP/public-tag"
+  if env "${common_env[@]}" "$PUBLISHER" publish "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF" > "$TMP/public-tag.log" 2>&1; then
+    echo 'test-publisher: accepted a public Stable release with no tag' >&2; exit 1
+  fi
+  grep -Fq 'published Release lacks its selected tag' "$TMP/public-tag.log"
+  [ ! -e "$TMP/state/tag" ]
+  mv "$TMP/public-tag" "$TMP/state/tag"
 fi
 
 # A finalization response can be lost after the Release became public.

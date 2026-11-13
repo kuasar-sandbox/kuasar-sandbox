@@ -1,6 +1,10 @@
 import copy
 import importlib.util
 import io
+import hashlib
+import os
+import re
+import subprocess
 from pathlib import Path
 import tarfile
 import tempfile
@@ -68,6 +72,31 @@ class PublishedDownloadTests(unittest.TestCase):
                     self.assertIn('docker load --input', en)
                     self.assertIn('RELEASE_VERSION', en)
                     self.assertIn('files.tsv', en)
+
+    def test_installation_guide_only_installs_a_complete_executable_init(self):
+        for suffix in ('', '_zh'):
+            doc = (ROOT / 'docs' / f'installation{suffix}.md').read_text()
+            install = re.findall(r'(?ms)^```bash\n(.*?)^```', doc)[1]
+            for mode in (None, 0o644, 0o755):
+                with self.subTest(language=suffix, mode=mode), tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp); source = root / 'download'; source.mkdir()
+                    target = root / 'installed'
+                    archive = source / 'products.tar.gz'
+                    with tarfile.open(archive, 'w:gz') as out:
+                        items = [('test/demo/demo_common.sh', 0o644), ('test/demo/requirements.txt', 0o644),
+                                 ('bin/other', 0o755)]
+                        if mode is not None: items.append(('bin/sandbox-init', mode))
+                        for name, perm in items:
+                            entry = tarfile.TarInfo(name); entry.mode = perm
+                            out.addfile(entry)
+                    payload = archive.read_bytes()
+                    (source / 'files.tsv').write_text(
+                        f'{archive.name}\t{len(payload)}\tsha256:{hashlib.sha256(payload).hexdigest()}\n')
+                    result = subprocess.run(['bash','-c',install], cwd=root, capture_output=True,
+                        env={**os.environ, 'INSTALL_DIR':str(target), 'DOWNLOAD_DIR':str(source),
+                             'DOWNLOAD_WORKBENCH':'0'})
+                    self.assertEqual(result.returncode == 0, mode == 0o755, result.stderr)
+                    self.assertEqual(target.exists(), mode == 0o755)
 
     def test_reject_dangerous_or_duplicate_guide(self):
         for guide in ('installation', 'download'):

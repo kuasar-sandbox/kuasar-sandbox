@@ -18,8 +18,8 @@ import build_demo_wheels
 import go_workspace
 
 ROOT = Path(__file__).resolve().parents[2]
-LIBRARIES = {"sandboxer": ("accelerator", "connector"), "guest-runtime": ("accelerator",),
-             "orchestrator": ("accelerator", "connector", "sandboxer")}
+LIBRARIES = {"sandboxer": ("accelerator", "connector", "guest-runtime"), "guest-runtime": ("accelerator",),
+             "orchestrator": ("accelerator", "connector", "sandboxer", "guest-runtime")}
 NATIVE = {"cache-ctl": "rocksdb", "cloud-hypervisor": "cloud-hypervisor", "vmlinux": "vmlinux"}
 
 
@@ -117,12 +117,9 @@ def test_source(plan, arch, sources, owner):
 
 def baseline_tree(plan, arch, assets, output):
     output.mkdir()
-    seen = {}
-    for unit, record in plan["baseline"]["units"].items():
-        name = artifacts.archive_name(unit, record["version"], arch)
-        expected = next(item for item in plan["baseline"]["assets"] if item["name"] == name)
-        artifacts.require("sha256:" + artifacts.digest(assets / name) == expected["digest"], "build baseline bytes differ from plan")
-        artifacts.unpack(assets / name, output, unit, seen)
+    selected = {artifacts.archive_name(unit, record["version"], arch): unit
+                for unit, record in plan["baseline"]["units"].items()}
+    artifacts.unpack_baseline(assets, output, selected, plan["baseline"]["assets"])
 
 
 def build(plan, arch, assets, sources, output, *, materialized=False):
@@ -159,13 +156,14 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
     for name in lane["products"]:
         if name in ("cloud-hypervisor", "vmlinux", "sandbox-runtime.bundle"):
             continue
-        owner = "guest-runtime" if artifacts.PRODUCTS[name] == "runtime" else artifacts.PRODUCTS[name]
+        unit = artifacts.planned_product_unit(plan, name)
+        owner = "guest-runtime" if unit == "runtime" else unit
         selected = configure_workspace(sources, [owner], environment)
         run(["make", "-C", sources / owner, f"TARGET_ARCH={arch}", name], environment=selected)
     for name in lane["products"]:
         if name == "sandbox-runtime.bundle":
             continue
-        unit = artifacts.PRODUCTS[name]
+        unit = artifacts.planned_product_unit(plan, name)
         if name == "vmlinux":
             path = kernel_root / "guest-runtime/native-deps/bin" / arch / name
         elif name == "cloud-hypervisor":

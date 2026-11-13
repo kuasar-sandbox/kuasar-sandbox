@@ -748,9 +748,31 @@ class PreviewCoordinatorTest(unittest.TestCase):
             with self.subTest(unit=unit):
                 state = self.repository_state(unit, (other, own, "not-a-release"))
                 # Even apparently matching assets must not admit another unit.
-                with mock.patch.object(state, "status", wraps=state.status) as status:
+                with mock.patch.object(coordinator, "source_dependencies", return_value=coordinator.LEGACY_INPUTS["runtime"]), \
+                     mock.patch.object(state, "status", wraps=state.status) as status:
                     self.assertEqual(state.usable_tags(), [own])
                 status.assert_called_once_with(own)
+
+    def test_only_stable_runtime_owning_init_requires_its_published_module_tag(self):
+        tag = "runtime-v1.2.3"
+        state = self.repository_state("runtime", (tag,))
+        unit = state.unit
+        with mock.patch.object(coordinator, "source_dependencies", return_value=coordinator.LEGACY_INPUTS["runtime"]):
+            self.assertTrue(state.status(tag).complete)
+        state._statuses.clear()
+        with mock.patch.object(coordinator, "source_dependencies", return_value=unit.dependencies):
+            self.assertTrue(state.status(tag).partial)
+            self.assertFalse(state.status(tag).complete)
+            state.tag_shas["v1.2.3"] = "b" * 40
+            state._statuses.clear()
+            with self.assertRaisesRegex(coordinator.Deferred, "conflicts"):
+                state.status(tag)
+            state.tag_shas["v1.2.3"] = state.tag_shas[tag]
+            self.assertFalse(state.status(tag).complete)
+            state._statuses.clear()
+            x86 = state.releases[tag]["assets"][0]
+            state.releases[tag]["assets"].append(dict(x86, id=2, name=coordinator.archive_name("runtime", tag, "aarch64")))
+            self.assertTrue(state.status(tag).complete)
 
     def test_discovery_retains_legacy_metadata_without_admitting_it(self):
         current, legacy = "v1.2.3", "v1.0.0-preview.20260808"
@@ -784,7 +806,8 @@ class PreviewCoordinatorTest(unittest.TestCase):
                     state.invalid_tags.add(old)
                 else:
                     assets.clear()
-                with mock.patch("builtins.print"):
+                with mock.patch("builtins.print"), mock.patch.object(coordinator, "source_dependencies",
+                        return_value=coordinator.LEGACY_INPUTS["runtime"]):
                     self.assertEqual(state.usable_tags(), [current])
                 if problem == "incomplete":
                     self.assertFalse(state.status(old).complete)
@@ -1037,7 +1060,8 @@ components:
             names.update(coordinator.UNIT_BY_NAME["sandboxer"].dependencies)
         units = tuple(unit for unit in coordinator.UNITS if unit.name in names)
         configured_versions = {
-            unit.name: configured if unit == dependent else "v1.0.0"
+            unit.name: configured if unit == dependent else
+                (unit.name + "-" if unit.name in ("runtime", "vmlinux") else "") + "v1.0.0"
             for unit in units
         }
         plans = {}
@@ -1075,6 +1099,7 @@ components:
             states[unit.name] = state
         with (
             mock.patch.object(coordinator, "UNITS", units),
+            mock.patch.object(coordinator, "source_dependencies", side_effect=lambda unit, sha: unit.dependencies),
             mock.patch.object(
                 coordinator, "make_plan",
                 side_effect=lambda unit, *_: plans[unit.name],
@@ -1471,11 +1496,108 @@ notes:
         )
         self.assertIn("aggregate_sha=" + "b" * 40, values)
 
+    def test_selected_producer_contract_orders_old_and_new_sources(self):
+        def fixture(unit, sha):
+            return coordinator.LEGACY_INPUTS.get(unit.name, unit.dependencies) if sha == "1" * 40 else unit.dependencies
+
+        def rows(sha):
+            return {u.name: coordinator.Plan(u, "v1.0.0", "main", sha, "v1.0.0", "v1.0.0", "publish")
+                    for u in coordinator.UNITS}
+
+        with mock.patch.object(coordinator, "source_dependencies", side_effect=fixture):
+            for sha, legacy in (("1" * 40, True), ("2" * 40, False)):
+                plans = coordinator.release_source_plans(rows(sha))
+                order = list(plans)
+                self.assertEqual(order.index("sandboxer") < order.index("runtime"), legacy)
+                runtime = plans["runtime"]
+                self.assertEqual("sandboxer_version=v1.0.0" in coordinator.release_inputs(runtime, plans, "v1", sha), legacy)
+                self.assertEqual("sandboxer=v1.0.0" in coordinator.release_run_title(runtime, plans), legacy)
+                self.assertIn("cmd/sandbox-init", coordinator.dependency_paths("sandboxer", "runtime"))
+            old, new = rows("1" * 40), rows("2" * 40)
+            for selected in ({**old, "runtime": new["runtime"]}, {**new, "runtime": old["runtime"]},
+                             {**old, "orchestrator": new["orchestrator"]}):
+                with self.assertRaisesRegex(coordinator.Deferred, "mixed sandbox-init|different sandboxer/runtime"):
+                    coordinator.release_source_plans(selected)
+            # A byte-for-byte reused orchestrator has no build step.
+            selected = {**new, "orchestrator": coordinator.replace(old["orchestrator"], action="fixed")}
+            self.assertEqual(coordinator.release_source_plans(selected)["orchestrator"].action, "fixed")
+
+    def test_producer_contract_is_bound_to_exact_workflow_source(self):
+        unit = coordinator.UNIT_BY_NAME["runtime"]
+        sha = "4" * 40
+        text = ("name: Release\nrun-name: Release ${{ inputs.version }} @${{ inputs.source_sha }} "
+                "[accelerator=${{ inputs.accelerator_version }},sandboxer=${{ inputs.sandboxer_version }}]\n"
+                "on:\n  workflow_dispatch:\n    inputs:\n      accelerator_version:\n        type: string\n"
+                "      sandboxer_version:\n        type: string\n      aggregate_version:\n        type: string\n")
+        def data(value):
+            return {"type": "file", "encoding": "base64", "content": base64.b64encode(value.encode()).decode()}
+        with mock.patch.object(coordinator, "api", return_value=data(text)) as api:
+            self.assertEqual(coordinator.producer_contracts(unit, sha), (("accelerator", "sandboxer"),))
+            api.assert_called_once_with(f"repos/{unit.repository}/contents/.github/workflows/{unit.workflow}?ref={sha}")
+        with mock.patch.object(coordinator, "api", return_value=data(text + text)), self.assertRaisesRegex(coordinator.Deferred, "unrecognized"):
+            coordinator.producer_contracts(unit, "5" * 40)
+        with mock.patch.object(coordinator, "api", return_value=data(text.replace("      sandboxer_version:", "      other_version:"))), \
+             self.assertRaisesRegex(coordinator.Deferred, "unrecognized"):
+            coordinator.producer_contracts(unit, "6" * 40)
+
+    def test_dual_producer_accepts_both_immutable_run_identities(self):
+        for name, extra in (("runtime", "sandboxer"), ("sandboxer", "runtime"), ("orchestrator", "runtime")):
+            unit = coordinator.UNIT_BY_NAME[name]
+            old, new = coordinator.LEGACY_INPUTS[name], unit.dependencies
+            base, all_deps = sorted((old, new), key=len)
+            title = "run-name: Release ${{ inputs.version }} @${{ inputs.source_sha }} ["
+            title += ",".join(dep + "=${{ inputs." + dep + "_version }}" for dep in base)
+            title += "${{ inputs." + extra + "_version && format('," + extra + "={0}', inputs." + extra + "_version) || '' }}]"
+            fields = "".join("      " + dep + "_version:\n        required: " +
+                             ("false" if dep == extra else "true") + "\n        type: string\n" for dep in all_deps)
+            workflow = title + "\n'on':\n  workflow_dispatch:\n    inputs:\n" + fields
+            for dual, text in ((True, workflow), (False, workflow.replace("required: false", "required: true")),
+                               (False, workflow.replace("={0}", "={1}"))):
+                coordinator.producer_contracts.cache_clear()
+                obj = {"type": "file", "encoding": "base64", "content": base64.b64encode(text.encode()).decode()}
+                with self.subTest(name=name, dual=dual), mock.patch.object(coordinator, "api", return_value=obj):
+                    if dual:
+                        self.assertEqual(coordinator.producer_contracts(unit, "a" * 40), (old, new))
+                    else:
+                        with self.assertRaises(coordinator.Deferred):
+                            coordinator.producer_contracts(unit, "a" * 40)
+
+    def test_fresh_dispatch_checks_main_but_complete_reuse_needs_no_live_producer(self):
+        unit = coordinator.UNIT_BY_NAME["sandboxer"]
+        plan = coordinator.Plan(unit, "v1.0.0", "main", "a" * 40, "v1.0.0", "v1.0.0", "publish")
+        with mock.patch.object(coordinator, "branch_sha", return_value="b" * 40) as main, \
+             mock.patch.object(coordinator, "producer_contracts", return_value=(coordinator.LEGACY_INPUTS["sandboxer"],)):
+            with self.assertRaisesRegex(coordinator.Deferred, "cannot build"):
+                coordinator.confirm_producer(plan)
+            main.assert_called_once_with(unit.repository, "main")
+            main.reset_mock()
+            coordinator.confirm_producer(coordinator.replace(plan, action="fixed"))
+            main.assert_not_called()
+
     def test_runtime_dependency_binding_matches_embedded_payloads(self) -> None:
         self.assertEqual(
             coordinator.UNIT_BY_NAME["runtime"].dependencies,
-            ("accelerator", "sandboxer"),
+            ("accelerator",),
         )
+
+    def test_guest_runtime_precedes_host_producers_and_binds_their_inputs(self) -> None:
+        order = {unit.name: index for index, unit in enumerate(coordinator.UNITS)}
+        for unit in coordinator.UNITS:
+            self.assertTrue(all(order[dependency] < order[unit.name] for dependency in unit.dependencies))
+        self.assertEqual(coordinator.UNIT_BY_NAME['sandboxer'].dependencies,
+                         ('accelerator', 'connector', 'runtime'))
+        self.assertEqual(coordinator.UNIT_BY_NAME['orchestrator'].dependencies,
+                         ('accelerator', 'connector', 'sandboxer', 'runtime'))
+        plans = {unit.name: coordinator.Plan(unit, 'unused', 'main', 'a' * 40, 'unused',
+                    ('runtime-' if unit.name == 'runtime' else '') + 'v1.2.3', 'publish')
+                 for unit in coordinator.UNITS}
+        for consumer in ('sandboxer', 'orchestrator'):
+            values = coordinator.release_inputs(plans[consumer], plans, 'release-v1.2.3', 'b' * 40)
+            self.assertIn('runtime_version=runtime-v1.2.3', values)
+            self.assertEqual(coordinator.dependency_paths('runtime', consumer),
+                             ['go.mod', 'go.sum', 'pkg/guestabi'])
+        runtime = coordinator.release_inputs(plans['runtime'], plans, 'release-v1.2.3', 'b' * 40)
+        self.assertFalse(any(value.startswith('sandboxer_version=') for value in runtime))
 
     def test_release_run_title_pins_source_and_dependency_tuple(self) -> None:
         accelerator = coordinator.Plan(
@@ -1511,6 +1633,8 @@ notes:
                 "accelerator": accelerator,
                 "connector": connector,
                 "sandboxer": sandboxer,
+                "runtime": coordinator.replace(accelerator, unit=coordinator.UNIT_BY_NAME['runtime'],
+                                               selected='runtime-v1.0.1-preview.20260831'),
             },
         )
         self.assertEqual(
@@ -1518,7 +1642,7 @@ notes:
             "Release v2.0.1-preview.20260831 @"
             + "c" * 40
             + " [accelerator=v1.0.1-preview.20260831,"
-            "connector=v1.0.1-preview.20260831]",
+            "connector=v1.0.1-preview.20260831,runtime=runtime-v1.0.1-preview.20260831]",
         )
 
 

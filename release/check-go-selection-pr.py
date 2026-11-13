@@ -12,6 +12,7 @@ import tag_sources
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'ci/integration'))
 import go_workspace
+import go_module_policy as policy
 
 
 PACKAGES = {'sandboxer': './cmd/sandbox-ctl', 'orchestrator': './cmd/node-ctl',
@@ -29,13 +30,19 @@ def check(inputs, sources):
     consumer = inputs['consumer']
     if consumer not in PACKAGES:
         raise ValueError('invalid Go consumer')
-    owner = 'guest-runtime' if consumer == 'runtime' else consumer
+    owner = policy.UNITS[consumer]
     pr = int(inputs['pr_number'])
     head, base = inputs['head_sha'], inputs['base_sha']
     if pr <= 0 or not all(re.fullmatch(r'[0-9a-f]{40}', sha) for sha in (base, head)):
         raise ValueError('invalid PR or candidate identity')
     deps = json.loads(inputs['dependencies'])
-    if set(deps) != set(go_workspace.closure([owner])) - {owner}:
+    expected = {policy.OWNER_UNITS[name] for name in go_workspace.closure([owner]) if name != owner}
+    # Old selected Host sources predate the runtime edge. Check the fixed source
+    # declaration after admitting the merge; still reject all unknown keys here.
+    allowed = [expected]
+    if consumer in ('sandboxer', 'orchestrator'):
+        allowed.append(expected - {'runtime'})
+    if set(deps) not in allowed:
         raise ValueError('selection differs from the consumer module closure')
     version = inputs['version']
     if '-preview.' not in version:
@@ -50,17 +57,21 @@ def check(inputs, sources):
     if parents != [base, head]:
         raise ValueError('candidate moved after dependency selection')
     for unit, row in deps.items():
+        directory = sources / policy.UNITS[unit]
         tag_sources.validate_tag(unit, row['tag'])
         if not re.fullmatch(r'[0-9a-f]{40}', row['sha']):
             raise ValueError(f'invalid selected {unit} SHA')
         if '-preview.' in row['tag']:
             # An upstream Preview name may be selected before its tag exists.
-            checkout(sources / unit, unit, row['sha'])
+            checkout(directory, unit, row['sha'])
         else:
-            tag_sources.fetch_unit(sources / unit, unit, row['tag'], row['sha'])
-    env = go_workspace.configure_bound_release(sources, owner, version, deps)
+            tag_sources.fetch_unit(directory, unit, row['tag'], row['sha'])
+    env = go_workspace.configure_bound_release(sources, owner, version, policy.owner_selection(deps))
     subprocess.run(['go', 'build', '-o', str(sources / 'compiled'), PACKAGES[consumer]],
                    cwd=sources / owner, env=env, check=True)
+    if consumer == 'runtime' and (sources / owner / 'cmd/sandbox-init/main.go').is_file():
+        subprocess.run(['go', 'build', '-o', str(sources / 'compiled-init'), './cmd/sandbox-init'],
+                       cwd=sources / owner, env=env, check=True)
 
 
 if __name__ == '__main__':

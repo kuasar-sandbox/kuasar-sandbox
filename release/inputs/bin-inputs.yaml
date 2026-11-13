@@ -5,7 +5,7 @@ store-ctl: accelerator
 cache-ctl: accelerator
 flatten-ctl: guest-runtime
 sandbox-ctl: sandboxer
-sandbox-init: sandboxer
+sandbox-init: guest-runtime
 cloud-hypervisor: sandboxer
 sandbox-runtime.bundle: guest-runtime
 node-ctl: orchestrator

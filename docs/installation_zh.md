@@ -219,7 +219,9 @@ while IFS=$'\t' read -r name size digest; do
 done <"$DOWNLOAD_DIR/files.tsv"
 test -f "$STAGE_DIR/test/demo/demo_common.sh"
 test -f "$STAGE_DIR/test/demo/requirements.txt"
-test -d "$STAGE_DIR/bin" && test -d "$STAGE_DIR/test"
+test -f "$STAGE_DIR/bin/sandbox-init"
+test -x "$STAGE_DIR/bin/sandbox-init"
+test -d "$STAGE_DIR/test"
 if [ "$DOWNLOAD_WORKBENCH" = 1 ]; then
     test -f "$STAGE_DIR/workbench/workbench"
     test -d "$STAGE_DIR/guide"

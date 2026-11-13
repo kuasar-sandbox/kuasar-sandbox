@@ -15,6 +15,7 @@ import tempfile
 from urllib.parse import quote
 
 import artifacts
+import go_workspace
 import workbench_groups
 import capability_routing
 import source_inputs
@@ -28,8 +29,8 @@ PLATFORM = "kuasar-sandbox/kuasar-sandbox"
 REPOSITORIES = {owner: f"kuasar-sandbox/{owner}" for owner in artifacts.OWNERS if owner != "platform"}
 REPOSITORIES["platform"] = PLATFORM
 LIBRARIES = {
-    "accelerator": (), "connector": (), "sandboxer": ("accelerator", "connector"),
-    "guest-runtime": ("accelerator",), "orchestrator": ("accelerator", "connector", "sandboxer"),
+    "accelerator": (), "connector": (), "sandboxer": ("accelerator", "connector", "guest-runtime"),
+    "guest-runtime": ("accelerator",), "orchestrator": ("accelerator", "connector", "sandboxer", "guest-runtime"),
 }
 
 
@@ -265,7 +266,7 @@ def check_published_unit(unit, tag, state, sha):
     return sha
 
 
-def maintained_products(units):
+def maintained_products(units, *, init_unit='runtime'):
     """Rebuild changed tag products and every consumer of their source libraries.
 
     This deliberately conservative cutover closure avoids testing new owner
@@ -273,7 +274,7 @@ def maintained_products(units):
     the removed optional erofs tool is never introduced as a build target.
     """
     owners = {unit_owner(unit) for unit in units if unit != 'vmlinux'}
-    products = {name for name, unit in artifacts.PRODUCTS.items() if unit in units}
+    products = {name for name in artifacts.PRODUCTS if artifacts.source_product_unit(name, init_unit) in units}
     for name, unit in artifacts.PRODUCTS.items():
         owner = unit_owner(unit)
         if owners.intersection(LIBRARIES.get(owner, ())):
@@ -294,15 +295,17 @@ def tree_changes(before, after):
     return paths
 
 
-def product_source_map(products, sources, kernel_sha):
+def product_source_map(products, sources, kernel_sha, *, roots, init_unit='runtime'):
+    owners = {unit_owner(artifacts.source_product_unit(name, init_unit)) for name in products}
+    libraries = {owner: go_workspace.closure([owner], roots=roots) for owner in owners}
     result = {}
     for name in products:
-        owner = unit_owner(artifacts.PRODUCTS[name])
-        dependencies = {owner, *LIBRARIES[owner]}
+        owner = unit_owner(artifacts.source_product_unit(name, init_unit))
+        dependencies = set(libraries[owner])
         if name == "sandbox-init":
-            dependencies = {"sandboxer"}
-        if name == "sandbox-runtime.bundle":
-            dependencies |= {"sandboxer"}
+            dependencies = {unit_owner(init_unit)}
+        if name == "sandbox-runtime.bundle" and init_unit == "sandboxer":
+            dependencies.add("sandboxer")
         if name in ("mkfs.erofs", "vmlinux"):
             dependencies = {"guest-runtime"}
         result[name] = {REPOSITORIES[dependency]: sources[dependency]["sha"] for dependency in sorted(dependencies)}
@@ -422,7 +425,11 @@ def source_plan(framework_sha, input_root):
         if owner == "guest-runtime":
             kernel_sha = record["candidate_sha"]
             kernel_root = root
-    products = artifacts.changed_products(changes)
+    # The selected Runtime owns PID 1 once it actually carries the command.
+    # Both trees are admitted PR merges or authenticated unit tags, never an
+    # unselected branch. This also permits a new Runtime with a historical Host.
+    init_unit = 'runtime' if (roots['guest-runtime'] / 'cmd/sandbox-init/main.go').is_file() else 'sandboxer'
+    products = artifacts.changed_products(changes, init_unit=init_unit)
     # Reuse #150/#151's Makefile input projection instead of treating a change
     # to an unrelated native target as a kernel change.
     guest_changes = changes.get("guest-runtime", [])
@@ -442,7 +449,7 @@ def source_plan(framework_sha, input_root):
         new = (kernel_root / "native-deps/Makefile").read_text()
         if not other_kernel and release.preview_selection.vmlinux_make_inputs(old) == release.preview_selection.vmlinux_make_inputs(new):
             products.remove("vmlinux")
-    products = sorted(set(products) | maintained_products(tag_deltas))
+    products = sorted(set(products) | maintained_products(tag_deltas, init_unit=init_unit))
     embedded = ["envd"] if "runtime" in tag_deltas or any(path in ("native-deps/deps/build-envd.sh", "native-deps/deps/common.sh", "native-deps/Makefile") for path in guest_changes) else []
     selected_files = source_inputs.cases(roots)
     if cutover:
@@ -452,14 +459,14 @@ def source_plan(framework_sha, input_root):
     plan = {"schema": 3, "mode": "source", "run_inputs": run_inputs,
             "source_records": tag_records, "maintained_deltas": tag_deltas, "admission_changes": admission_changes, "framework_sha": exact_sha(framework_sha), "baseline": selected,
             "candidate_records": records, "owners": sorted(owners), "changes": changes,
-            "sources": sources, "kernel_sha": kernel_sha,
+            "sources": sources, "kernel_sha": kernel_sha, "init_source_unit": init_unit,
             "test_revisions": tests, "test_overlays": sorted(artifacts.OWNERS), "case_files": selected_files,
-            "product_sources": product_source_map(products, sources, kernel_sha),
+            "product_sources": product_source_map(products, sources, kernel_sha, roots=roots, init_unit=init_unit),
             "embedded_sources": {"envd": {REPOSITORIES["guest-runtime"]: sources["guest-runtime"]["sha"]}},
             "lanes": {arch: {"products": products, "embedded_products": embedded,
                              "performance": ["working-set-smoke"] if arch == "x86_64" and set(owners) & {"platform", "sandboxer"} else [],
                              "selection": artifacts.suite_selection(owners, arch, selected_files,
-                                                                   changes=changes, source_pr=True)} for arch in artifacts.ARCHES}}
+                                                                   changes=changes, source_pr=True, init_unit=init_unit)} for arch in artifacts.ARCHES}}
     if cutover:
         plan['dependency_cutover'] = cutover
     import helper_inputs

@@ -20,7 +20,7 @@ def helper_fixture(sources):
         if owner in build_helpers.go_workspace.DEPENDENCIES and not (root / 'go.mod').exists():
             (root / 'go.mod').write_text(f'module github.com/kuasar-sandbox/{owner}\ngo 1.22\n')
         recipe = 'release/build.sh' if owner == 'orchestrator' else None
-        declared = {'schema': 1, 'recipe': recipe, 'dependencies': ['accelerator'] if recipe else [],
+        declared = {'schema': 1, 'recipe': recipe, 'dependencies': ['accelerator', 'guest-runtime'] if recipe else [],
                     'helpers': [{'name': 'node-ctl-runner-test', 'env': 'NODE_CTL_RUNNER_TEST_BINARY',
                                  'cases': ['orchestrator.*.sh']}] if recipe else []}
         (root / c.DECLARATION).write_text(json.dumps(declared))
@@ -40,7 +40,7 @@ class SourceOwnerClosureTest(unittest.TestCase):
         r=run(c,o); self.assertEqual(r.returncode,0,r.stderr); return r.stdout.split()
     def test_bins(self):
         self.assertEqual(self.words("required-bins","connector"),["connector-ctl"])
-        self.assertEqual(set(self.words("required-bins","guest-runtime")),{"store-ctl","flatten-ctl"})
+        self.assertEqual(set(self.words("required-bins","guest-runtime")),{"store-ctl","flatten-ctl","sandbox-init"})
         self.assertEqual(set(self.words("required-bins","accelerator")),{"manifest-ctl","store-ctl","cache-ctl","flatten-ctl"})
         self.assertTrue({"vmlinux","sandbox-ctl","cloud-hypervisor","sandbox-runtime.bundle","cache-ctl","connector-ctl"} <= set(self.words("required-bins","sandboxer")))
         full=self.words("required-bins","orchestrator"); self.assertEqual(full,self.words("required-bins","kuasar-sandbox")); self.assertIn("connector-ctl",full); self.assertIn("node-ctl",full)
@@ -107,14 +107,21 @@ class PreparedHelperSelectionTest(unittest.TestCase):
             owner, sdk = sources / 'orchestrator', sources / 'accelerator'
             (owner / 'cmd/node-ctl').mkdir(parents=True)
             sdk.mkdir()
-            (owner / 'go.mod').write_text('module github.com/kuasar-sandbox/orchestrator\ngo 1.22\nrequire github.com/kuasar-sandbox/accelerator v0.0.0\n')
+            (owner / 'go.mod').write_text('module github.com/kuasar-sandbox/orchestrator\ngo 1.22\nrequire (\n'
+                                        'github.com/kuasar-sandbox/accelerator v0.0.0\n'
+                                        'github.com/kuasar-sandbox/guest-runtime v0.0.0\n)\n')
             (sdk / 'go.mod').write_text('module github.com/kuasar-sandbox/accelerator\ngo 1.22\n')
             (sdk / 'identity.go').write_text('package sdk\nconst Identity = "exact-test-pin"\n')
+            protocol = sources / 'guest-runtime/pkg/guestabi/proto'
+            protocol.mkdir(parents=True)
+            (protocol / 'identity.go').write_text('package proto\nconst Identity = "exact-guest-pin"\n')
             (sources / 'go.work').write_text('go 1.22\nuse (\n ./orchestrator\n ./accelerator\n)\n')
             (owner / 'cmd/node-ctl/main.go').write_text('package main\nfunc main() {}\n')
             (owner / 'cmd/node-ctl/main_test.go').write_text(
-                'package main\nimport ("testing"; "github.com/kuasar-sandbox/accelerator")\n'
-                'func TestPinnedRunner(t *testing.T) { if sdk.Identity != "exact-test-pin" { t.Fatal(sdk.Identity) } }\n')
+                'package main\nimport ("testing"; "github.com/kuasar-sandbox/accelerator"; '
+                '"github.com/kuasar-sandbox/guest-runtime/pkg/guestabi/proto")\n'
+                'func TestPinnedRunner(t *testing.T) { if sdk.Identity != "exact-test-pin" { t.Fatal(sdk.Identity) }; '
+                'if proto.Identity != "exact-guest-pin" { t.Fatal(proto.Identity) } }\n')
             contract = helper_fixture(sources)
             environment = {key: value for key, value in os.environ.items()
                            if key not in ('GH_TOKEN', 'GITHUB_TOKEN', 'CALLER_TOKEN', 'KUASAR_CI_APP_PRIVATE_KEY')}

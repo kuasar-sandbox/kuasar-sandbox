@@ -332,8 +332,18 @@ def checks_for(plan, sources, group="all"):
             checks.append(("accelerator-no-rocksdb-tests",
                            ["env", "CGO_ENABLED=0", "go", "test", "-count=1", "-tags", "no_rocksdb", "./..."],
                            sources / "accelerator"))
-    if scope is not None and "guest-runtime" in selected:
-        checks.append(("guest-runtime-source-tests", ["make", "test", "vet"], sources / "guest-runtime"))
+    guest = "guest-runtime"
+    paths = (scope or plan).get("changes", {}).get(guest, ())
+    # PID 1 and the wire ABI had normal/race/vet coverage in the host repo.
+    # Keep it for their selected source and tests, including a full product PR.
+    # ./... stays valid for an older selected Guest or when a package is removed.
+    guest_pid1 = any(path.endswith(".go") and path.startswith(
+        ("cmd/sandbox-init/", "pkg/guestabi/", "internal/wireio/")) for path in paths)
+    if guest in selected and (scope is not None or guest_pid1):
+        checks.append(("guest-runtime-source-tests", ["make", "test", "vet"], sources / guest))
+        if guest_pid1:
+            checks.append(("guest-runtime-race", ["env", "CGO_ENABLED=1", "go", "test", "-race",
+                                                   "-count=1", "./..."], sources / guest))
     if scope is None and selected & {"sandboxer", "platform"}:
         checks.append(("uffd-source-benchmark", ["bash", "test/perf/uffd-performance-gate.sh"], sources / "platform"))
     if scope is not None:

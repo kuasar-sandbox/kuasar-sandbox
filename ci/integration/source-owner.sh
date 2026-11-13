@@ -9,7 +9,7 @@ case "$HOST_ARCH" in amd64) HOST_ARCH=x86_64 ;; arm64) HOST_ARCH=aarch64 ;; esac
 die() { echo "source-owner: $*" >&2; exit 2; }
 required_bins() { case "$1" in
 connector) echo "connector-ctl" ;;
-guest-runtime) echo "store-ctl flatten-ctl" ;;
+guest-runtime) echo "store-ctl flatten-ctl sandbox-init" ;;
 accelerator) echo "manifest-ctl store-ctl cache-ctl flatten-ctl" ;;
 sandboxer) echo "vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ctl sandbox-init cloud-hypervisor sandbox-runtime.bundle connector-ctl" ;;
 orchestrator|kuasar-sandbox) awk '!/^($|#)/ {sub(/:$/, "", $1); print $1}' "$ROOT/release/inputs/bin-inputs.yaml" | xargs ;;
@@ -34,9 +34,9 @@ done
 }
 build_owner() { local owner=$1; case "$owner" in
 connector) make -C "$ORG/connector" build ;;
-guest-runtime) make -C "$ORG/accelerator" store-ctl; make -C "$ORG/guest-runtime" flatten-ctl; make -C "$ROOT" e2e-zot ;;
+guest-runtime) make -C "$ORG/accelerator" store-ctl; make -C "$ORG/guest-runtime" sandbox-init flatten-ctl; make -C "$ROOT" e2e-zot ;;
 accelerator) make -C "$ORG/accelerator" build; make -C "$ORG/guest-runtime" flatten-ctl ;;
-sandboxer) make -C "$ORG/accelerator" build; make -C "$ORG/sandboxer" build; make -C "$ORG/guest-runtime" build; make -C "$ORG/connector" build ;;
+sandboxer) make -C "$ORG/accelerator" build; make -C "$ORG/guest-runtime" build; make -C "$ORG/sandboxer" build; make -C "$ORG/connector" build ;;
 orchestrator|kuasar-sandbox) make -C "$ROOT" build; make -C "$ROOT" e2e-tools ;;
 *) die "unknown owner $owner" ;;
 esac; copy_required_bins "$owner"; make -C "$ROOT" assemble-e2e; }

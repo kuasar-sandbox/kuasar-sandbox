@@ -189,6 +189,7 @@ class StableRetryTests(unittest.TestCase):
                      patch.object(coordinator, 'active_aggregate_run', return_value=None), \
                      patch.object(coordinator, 'aggregate_runs', return_value=[{'display_title': f'Aggregate {VERSION} @{SHA}'}]), \
                      patch.object(formal, 'validated_stage', return_value=True), \
+                     patch.object(coordinator, 'source_dependencies', side_effect=AssertionError('requalified accepted stage')), \
                      patch.object(coordinator, 'persist_manifest') as persist, \
                      patch.object(coordinator, 'RepositoryState') as state, \
                      patch.object(coordinator, 'has_arm_archive', return_value=True), \
@@ -197,7 +198,39 @@ class StableRetryTests(unittest.TestCase):
                     formal.main()
                     persist.assert_not_called()
                     wait.assert_called_once()
-                    self.assertEqual(wait.call_args.args[1:], (VERSION, SHA))
+                    wait.assert_called_once_with({}, VERSION, SHA, resume_only=True)
+
+    def test_partial_stable_draft_uses_only_the_original_accepted_stage(self):
+        status = coordinator.ReleaseStatus({'draft': True, 'target_commitish': SHA}, None, False)
+        history = [{'display_title': f'Aggregate {VERSION} @{SHA}'}]
+        with patch.object(coordinator, 'platform_release', return_value=status), \
+             patch.object(coordinator, 'active_aggregate_run', return_value=None), \
+             patch.object(coordinator, 'aggregate_runs', return_value=history), \
+             patch.object(formal, 'validated_stage', return_value=True):
+            self.assertEqual(formal.existing_publication(VERSION, manifest(), SHA), formal.PublicationState.RESUME)
+            with self.assertRaisesRegex(coordinator.Deferred, 'another or ambiguous source'):
+                formal.existing_publication(VERSION, manifest(), NEXT)
+            with patch.object(formal, 'validated_stage', return_value=False), \
+                 self.assertRaisesRegex(coordinator.Deferred, 'no original validated stage'):
+                formal.existing_publication(VERSION, manifest(), SHA)
+
+    def test_partial_runtime_reuses_accepted_publish_job_with_frozen_sha(self):
+        unit = coordinator.UNIT_BY_NAME['runtime']
+        tag = "runtime-v1.2.3"
+        plan = coordinator.Plan(unit, tag, "main", SHA, tag, tag, "publish")
+        dep = coordinator.Plan(coordinator.UNIT_BY_NAME["accelerator"], "v1.2.3", None, NEXT, "v1.2.3", "v1.2.3", "fixed")
+        plans = {"runtime": plan, "accelerator": dep}
+        run = dict(id=20, status='completed', display_title=coordinator.release_run_title(plan, plans))
+        state = Mock()
+        state.status.side_effect = [coordinator.ReleaseStatus({}, SHA, False), coordinator.ReleaseStatus({}, SHA, True)]
+        with patch.object(coordinator, 'RepositoryState', return_value=state), \
+             patch.object(coordinator, 'has_arm_archive', return_value=True), \
+             patch.object(coordinator, 'release_runs', return_value=[run]), \
+             patch.object(coordinator, 'resume_publish', return_value=True) as resume, \
+             patch.object(coordinator, 'branch_sha', side_effect=AssertionError('selected a new source')), \
+             patch.object(formal.time, 'sleep'):
+            formal.resume_component(plan, plans)
+            resume.assert_called_once_with(unit.repository, "runtime", tag, [run])
 
     def test_mixed_retained_sources_reject_resume_in_either_history_order(self):
         absent = coordinator.ReleaseStatus(None, None, False)

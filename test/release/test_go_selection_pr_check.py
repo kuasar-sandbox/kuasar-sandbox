@@ -65,6 +65,9 @@ class GoSelectionPR(unittest.TestCase):
         cmd.mkdir(parents=True)
         (cmd / 'main.go').write_text('package main\nimport ("fmt"; "github.com/kuasar-sandbox/accelerator")\n'
                                     'func main(){fmt.Print(accelerator.Word)}\n')
+        init = runtime / 'cmd/sandbox-init'
+        init.mkdir(parents=True)
+        (init / 'main.go').write_text('package main\nimport "fmt"\nfunc main(){fmt.Print("selected-init")}\n')
         git(runtime, 'add', '.'); git(runtime, 'commit', '-qm', 'selected PR')
         self.head = git(runtime, 'rev-parse', 'HEAD')
         git(runtime, 'switch', '-q', 'main'); git(runtime, 'merge', '--no-ff', '-qm', 'candidate', 'pr')
@@ -83,6 +86,53 @@ class GoSelectionPR(unittest.TestCase):
         self.assertNotEqual(git(self.accel, 'rev-parse', 'HEAD'), self.dep)
         self.assertEqual(git(self.accel, 'tag'), '')
         self.assertEqual(subprocess.check_output([self.sources/'compiled'], text=True), 'fixed')
+        self.assertEqual(subprocess.check_output([self.sources/'compiled-init'], text=True), 'selected-init')
+
+    def test_historical_runtime_alignment_builds_its_actual_public_commands(self):
+        # Omit the new command in an actual admitted Git merge: this isn't a
+        # skipped build failure, it is the historical producer's inventory.
+        runtime = self.runtime
+        git(runtime, 'switch', 'pr')
+        git(runtime, 'rm', '-qr', 'cmd/sandbox-init')
+        git(runtime, 'commit', '-qm', 'historical runtime')
+        head = git(runtime, 'rev-parse', 'HEAD')
+        git(runtime, 'switch', '-qc', 'legacy-merge', self.base)
+        git(runtime, 'merge', '--no-ff', '-qm', 'legacy integration', head)
+        git(runtime, 'update-ref', 'refs/pull/77/merge', git(runtime, 'rev-parse', 'HEAD'))
+        check.check(sign({**self.inputs, 'head_sha': head}), self.sources)
+        self.assertEqual(subprocess.check_output([self.sources/'compiled'], text=True), 'fixed')
+        self.assertFalse((self.sources/'compiled-init').exists())
+
+    def test_runtime_dependency_uses_unit_identity_and_owner_directory(self):
+        for tag in ('runtime-v0.2.0', 'runtime-v0.2.0-preview.20261112'):
+            with self.subTest(tag=tag):
+                deps = {'runtime': {'tag': tag, 'sha': self.dep}}
+                inputs = sign({**self.inputs, 'consumer': 'sandboxer',
+                               'version': 'v0.2.0-preview.20261112', 'dependencies': json.dumps(deps)})
+                parents = f'parent {self.base}\nparent {self.head}\n\nselected merge'
+                with (patch.object(check.go_workspace, 'closure', return_value=['sandboxer', 'guest-runtime']),
+                      patch.object(check, 'checkout') as checkout,
+                      patch.object(check.tag_sources, 'git', return_value=parents),
+                      patch.object(check.tag_sources, 'fetch_unit') as fetch,
+                      patch.object(check.go_workspace, 'configure_bound_release', return_value={}) as bound,
+                      patch.object(check.subprocess, 'run')):
+                    check.check(inputs, self.sources)
+                bound.assert_called_once_with(self.sources, 'sandboxer', inputs['version'],
+                                              {'guest-runtime': deps['runtime']})
+                if '-preview.' in tag:
+                    checkout.assert_any_call(self.sources / 'guest-runtime', 'runtime', self.dep)
+                    fetch.assert_not_called()
+                else:
+                    fetch.assert_called_once_with(self.sources / 'guest-runtime', 'runtime', tag, self.dep)
+
+    def test_dependency_owner_key_cannot_replace_release_unit_key(self):
+        deps = {'guest-runtime': {'tag': 'runtime-v0.2.0', 'sha': self.dep}}
+        inputs = sign({**self.inputs, 'consumer': 'sandboxer', 'dependencies': json.dumps(deps)})
+        with (patch.object(check.go_workspace, 'closure', return_value=['sandboxer', 'guest-runtime']),
+              patch.object(check, 'checkout') as checkout,
+              self.assertRaisesRegex(ValueError, 'closure')):
+            check.check(inputs, self.sources)
+        checkout.assert_not_called()
 
     def test_invalid_input_or_binding_stops_before_checkout(self):
         inputs = sign(self.inputs)

@@ -326,21 +326,43 @@ class WorkspaceTests(unittest.TestCase):
         result = subprocess.run(['go','env','GOWORK'], cwd=external, env=env, capture_output=True)
         self.assertNotEqual(result.returncode, 0)
 
-    def release_repos(self):
+    def release_repos(self, *, runtime_consumer=False):
+        if runtime_consumer:
+            host = self.root / 'sandboxer/go.mod'
+            with host.open('a') as manifest:
+                manifest.write('require github.com/kuasar-sandbox/guest-runtime v0.1.10\n')
+            self.before[host] = host.read_bytes()
         for name in go_workspace.DEPENDENCIES:
             path = self.root / name
+            prefix = 'runtime-' if name == 'guest-runtime' else ''
             for args in (['init', '-q'], ['add', '.'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture'],
-                         ['tag', 'v0.1.10'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'tag', '-am', 'annotated', 'v0.1.11-preview.20261104.1']):
+                         ['tag', prefix + 'v0.1.10'], ['-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'tag', '-am', 'annotated', prefix + 'v0.1.11-preview.20261104.1']):
                 subprocess.run(['git', '-C', str(path), *args], check=True, capture_output=True)
 
-    def test_release_selection_accepts_exact_lightweight_and_annotated_tags(self):
-        self.release_repos()
-        for owner in ('sandboxer', 'orchestrator', 'guest-runtime'):
+    def assert_release_selections(self, *, runtime_consumer):
+        self.release_repos(runtime_consumer=runtime_consumer)
+        for owner, dependencies in [('sandboxer', ['accelerator', 'connector']),
+                                    ('orchestrator', ['accelerator', 'connector', 'sandboxer']),
+                                    ('guest-runtime', ['accelerator'])]:
+            if runtime_consumer and owner != 'guest-runtime':
+                dependencies.append('guest-runtime')
             for tag in ('v0.1.10', 'v0.1.11-preview.20261104.1'):
-                selections = [name+'='+tag for name in go_workspace.closure([owner]) if name != owner]
-                env = go_workspace.configure_release(self.root, [owner], selections, self.env)
-                self.assertTrue(Path(env['GOWORK']).is_file())
+                with self.subTest(owner=owner, tag=tag):
+                    selections = [name + '=' + ('runtime-' if name == 'guest-runtime' else '') + tag
+                                  for name in dependencies]
+                    env = go_workspace.configure_release(self.root, [owner], selections, self.env)
+                    doc = json.loads(subprocess.check_output(['go', 'work', 'edit', '-json', env['GOWORK']], env=env))
+                    self.assertEqual({Path(row['DiskPath']).name for row in doc['Use']}, {owner, *dependencies})
         self.assertEqual(list((self.root/'.ci').rglob('*.*')), list((self.root/'.ci').rglob('go.work')))
+
+    def test_release_selection_accepts_historical_host_tags_without_runtime(self):
+        self.assert_release_selections(runtime_consumer=False)
+
+    def test_release_selection_accepts_migrated_host_and_transitive_runtime_tags(self):
+        self.assert_release_selections(runtime_consumer=True)
+        with self.assertRaises(ValueError):
+            go_workspace.configure_release(self.root, ['sandboxer'],
+                ['accelerator=v0.1.10', 'connector=v0.1.10', 'guest-runtime=v0.1.10'], self.env)
 
     def test_release_selection_rejects_incomplete_duplicate_unknown_and_bad_tags(self):
         for selections in ([], ['accelerator=v0.1.10'], ['accelerator=v0.1.10']*2,

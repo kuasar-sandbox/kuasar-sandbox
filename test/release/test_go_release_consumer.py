@@ -1,4 +1,5 @@
 """Stable signatures resolve public modules; Preview fixtures consume their selected SHA."""
+import json
 import os
 import shutil
 from pathlib import Path
@@ -61,6 +62,45 @@ class ReleaseConsumer(unittest.TestCase):
         env, actual = self.run_client('release-v0.1.14', tag)
         self.assertEqual((env['GOWORK'], actual), ('off', 'published'))
         self.assertNotIn('replace', (self.module / 'go.mod').read_text())
+
+    def test_runtime_selection_maps_to_the_guest_module(self):
+        runtime = self.sources / 'guest-runtime'
+        runtime.mkdir()
+        module = consumer.go_module_policy.PREFIX + 'guest-runtime'
+        (runtime / 'go.mod').write_text('module ' + module + '\ngo 1.22\n')
+        document = json.dumps({'Module': {'Path': module}, 'Go': '1.22'}).encode()
+        selection = {'runtime': {'version': 'runtime-v0.2.0', 'sha': self.sha}}
+        with (patch.object(consumer.go_workspace, 'closure', return_value=['guest-runtime']),
+              patch.object(consumer.subprocess, 'check_output', return_value=document),
+              patch.object(consumer.subprocess, 'run'),
+              patch.object(consumer.go_workspace, 'validate_build_list') as validate):
+            env = consumer.prepare(self.module, 'guest-runtime', self.sources,
+                                   selection, 'release-v0.2.0', self.env)
+        self.assertEqual(env['GOWORK'], 'off')
+        self.assertIn('require ' + module + ' v0.2.0', (self.module / 'go.mod').read_text())
+        self.assertEqual(validate.call_args.args[1:3], ({module: 'v0.2.0'}, {}))
+
+    def test_helper_bindings_map_runtime_unit_to_guest_owner(self):
+        import build_helpers
+        owner = self.sources / 'sandboxer'
+        owner.mkdir()
+        output = self.root / 'helpers'
+        output.mkdir()
+        selection = self.root / 'selection.json'
+        row = {'version': 'runtime-v0.2.0', 'sha': self.sha}
+        selection.write_text(json.dumps({'runtime': row}))
+        env = {**self.env, 'KUASAR_GO_RELEASE_VERSION': 'release-v0.2.0',
+               'KUASAR_GO_RELEASE_SELECTION': str(selection)}
+        declaration = {'recipe': 'release/helpers.sh', 'helpers': []}
+        record = {'source': {}, 'declaration': {}}
+        with (patch.object(build_helpers.helper_inputs, 'owner', return_value=record),
+              patch.object(build_helpers.helper_inputs.contract, 'declaration', return_value=declaration),
+              patch.object(build_helpers.go_workspace, 'closure', return_value=['sandboxer', 'guest-runtime']),
+              patch.object(build_helpers.go_workspace, 'bound_helper_environment', return_value={}) as bound):
+            self.assertEqual(build_helpers.build_owner(owner, 'x86_64', output, env, record,
+                                                       run=lambda *args: None), {})
+        bound.assert_called_once_with(self.sources, 'sandboxer', 'release-v0.2.0',
+                                      {'guest-runtime': {'tag': row['version'], 'sha': self.sha}}, env)
 
     def test_preview_uses_selected_unpublished_source_for_consumer(self):
         env, actual = self.run_client('release-v0.2.0-preview.20261112', 'v0.2.0-preview.20261112')
