@@ -222,25 +222,39 @@ class ResumeTests(unittest.TestCase):
             self.assertEqual((actual.selected, actual.source_sha, actual.action), (plan.selected, SHA, 'publish'))
 
     def test_partial_component_keeps_all_configured_dependencies_before_reselection(self):
-        plan, plans = self.component()
-        configured = {name: item.selected for name, item in plans.items()}
-        statuses = {name: subject.ReleaseStatus(None, item.source_sha, name != plan.unit.name)
-                    for name, item in plans.items()}
-        def repository(unit):
-            state = Mock()
-            state.status.return_value = statuses[unit.name]
-            return state
-        calls = []
-        def ensure(item, original, aggregate, aggregate_sha):
-            calls.append(item.unit.name)
-            self.assertEqual({name: candidate.selected for name, candidate in original.items()}, configured)
-            return item.unit.name != plan.unit.name
-        with patch.object(subject, 'RepositoryState', side_effect=repository), \
-             patch.object(subject, 'ensure_unit', side_effect=ensure), \
-             patch.object(subject, 'branch_sha', side_effect=AssertionError('advanced dependency main')):
-            with self.assertRaisesRegex(subject.Pending, 'before selecting new component versions'):
-                subject.recover_configured_components(configured, VERSION, 'f' * 40)
-        self.assertEqual(calls, ['accelerator', 'connector', 'sandboxer'])
+        for legacy in (True, False):
+            with self.subTest(legacy=legacy):
+                plan, plans = self.component()
+                if legacy:
+                    del plans["runtime"]
+                    plan = subject.replace(plan, unit=subject.replace(plan.unit, dependencies=("accelerator", "connector")))
+                    plans["sandboxer"] = plan
+                configured = {name: item.selected for name, item in plans.items()}
+                statuses = {name: subject.ReleaseStatus(None, item.source_sha, name != plan.unit.name)
+                            for name, item in plans.items()}
+                def repository(unit):
+                    state = Mock()
+                    state.status.return_value = statuses[unit.name]
+                    return state
+                calls = []
+                def ensure(item, original, aggregate, aggregate_sha):
+                    calls.append(item.unit.name)
+                    self.assertEqual({name: candidate.selected for name, candidate in original.items()}, configured)
+                    if item.unit.name == "sandboxer":
+                        expected = "accelerator=v1.0.0,connector=v1.0.0" + ("" if legacy else ",runtime=v1.0.0")
+                        self.assertEqual(subject.release_run_title(item, original), f"Release {item.selected} @{SHA} [{expected}]")
+                        return False
+                    return True
+                def producer(unit, sha):
+                    self.assertEqual(sha, plans[unit.name].source_sha)
+                    return subject.LEGACY_INPUTS.get(unit.name, unit.dependencies) if legacy else unit.dependencies
+                with patch.object(subject, "RepositoryState", side_effect=repository), \
+                     patch.object(subject, "source_dependencies", side_effect=producer), \
+                     patch.object(subject, "ensure_unit", side_effect=ensure), \
+                     patch.object(subject, "branch_sha", side_effect=AssertionError("advanced dependency main")):
+                    with self.assertRaisesRegex(subject.Pending, "before selecting new component versions"):
+                        subject.recover_configured_components(configured, VERSION, "f" * 40)
+                self.assertEqual(calls, ["accelerator", "connector"] + ([] if legacy else ["runtime"]) + ["sandboxer"])
 
     def test_missing_configured_dependency_preserves_partial_component_and_channel(self):
         plan, plans = self.component()

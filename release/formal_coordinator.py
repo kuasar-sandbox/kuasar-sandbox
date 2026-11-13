@@ -143,7 +143,10 @@ def main() -> None:
     # Stable and Daily share one pre-freeze preparation transaction. It never
     # waits for the future component tags and every dispatch uses this exact
     # persisted source, including the complete editable release notes.
+    plans = coordinator.release_source_plans(plans)
     if publication is PublicationState.NEW:
+        for plan in plans.values():
+            coordinator.confirm_producer(plan)
         coordinator.go_dependency_alignment.check_plans(coordinator, plans)
         coordinator.go_dependency_alignment.confirm_inputs(coordinator, plans)
         source_sha = coordinator.persist_manifest(path.read_text(encoding='utf-8'), version,

@@ -294,7 +294,8 @@ def check_plans(c, plans, next_versions=None, *, date=None, before_alignment=Non
         if not managed and source == updated:
             continue
         relevant = {name: {'tag': other.selected, 'sha': other.source_sha} for name, other in plans.items()
-                    if name in plan.unit.dependencies and not (name == 'runtime' and policy.PREFIX + 'guest-runtime' not in managed)}
+                    if name in plan.unit.dependencies and not (unit == 'runtime' and name == 'sandboxer')
+                    and not (name == 'runtime' and policy.PREFIX + 'guest-runtime' not in managed)}
         # Preview cores have no canonical content. Acquire their checksums only
         # after the Stable dependency is published and selected.
         stable = stable_requirements(managed, relevant)

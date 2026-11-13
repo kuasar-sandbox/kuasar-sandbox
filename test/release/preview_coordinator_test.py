@@ -1017,6 +1017,7 @@ components:
             states[unit.name] = state
         with (
             mock.patch.object(coordinator, "UNITS", units),
+            mock.patch.object(coordinator, "source_dependencies", side_effect=lambda unit, sha: unit.dependencies),
             mock.patch.object(
                 coordinator, "make_plan",
                 side_effect=lambda unit, *_: plans[unit.name],
@@ -1412,6 +1413,62 @@ notes:
             "b" * 40,
         )
         self.assertIn("aggregate_sha=" + "b" * 40, values)
+
+    def test_selected_producer_contract_orders_old_and_new_sources(self):
+        def fixture(unit, sha):
+            return coordinator.LEGACY_INPUTS.get(unit.name, unit.dependencies) if sha == "1" * 40 else unit.dependencies
+
+        def rows(sha):
+            return {u.name: coordinator.Plan(u, "v1.0.0", "main", sha, "v1.0.0", "v1.0.0", "publish")
+                    for u in coordinator.UNITS}
+
+        with mock.patch.object(coordinator, "source_dependencies", side_effect=fixture):
+            for sha, legacy in (("1" * 40, True), ("2" * 40, False)):
+                plans = coordinator.release_source_plans(rows(sha))
+                order = list(plans)
+                self.assertEqual(order.index("sandboxer") < order.index("runtime"), legacy)
+                runtime = plans["runtime"]
+                self.assertEqual("sandboxer_version=v1.0.0" in coordinator.release_inputs(runtime, plans, "v1", sha), legacy)
+                self.assertEqual("sandboxer=v1.0.0" in coordinator.release_run_title(runtime, plans), legacy)
+                self.assertIn("cmd/sandbox-init", coordinator.dependency_paths("sandboxer", "runtime"))
+            old, new = rows("1" * 40), rows("2" * 40)
+            for selected in ({**old, "runtime": new["runtime"]}, {**new, "runtime": old["runtime"]},
+                             {**old, "orchestrator": new["orchestrator"]}):
+                with self.assertRaisesRegex(coordinator.Deferred, "mixed sandbox-init|different sandboxer/runtime"):
+                    coordinator.release_source_plans(selected)
+            # A byte-for-byte reused orchestrator has no build step.
+            selected = {**new, "orchestrator": coordinator.replace(old["orchestrator"], action="fixed")}
+            self.assertEqual(coordinator.release_source_plans(selected)["orchestrator"].action, "fixed")
+
+    def test_producer_contract_is_bound_to_exact_workflow_source(self):
+        unit = coordinator.UNIT_BY_NAME["runtime"]
+        sha = "4" * 40
+        text = ("name: Release\nrun-name: Release ${{ inputs.version }} @${{ inputs.source_sha }} "
+                "[accelerator=${{ inputs.accelerator_version }},sandboxer=${{ inputs.sandboxer_version }}]\n"
+                "on:\n  workflow_dispatch:\n    inputs:\n      accelerator_version:\n        type: string\n"
+                "      sandboxer_version:\n        type: string\n      aggregate_version:\n        type: string\n")
+        def data(value):
+            return {"type": "file", "encoding": "base64", "content": base64.b64encode(value.encode()).decode()}
+        with mock.patch.object(coordinator, "api", return_value=data(text)) as api:
+            self.assertEqual(coordinator.producer_dependencies(unit, sha), ("accelerator", "sandboxer"))
+            api.assert_called_once_with(f"repos/{unit.repository}/contents/.github/workflows/{unit.workflow}?ref={sha}")
+        with mock.patch.object(coordinator, "api", return_value=data(text + text)), self.assertRaisesRegex(coordinator.Deferred, "unrecognized"):
+            coordinator.producer_dependencies(unit, "5" * 40)
+        with mock.patch.object(coordinator, "api", return_value=data(text.replace("      sandboxer_version:", "      other_version:"))), \
+             self.assertRaisesRegex(coordinator.Deferred, "unrecognized"):
+            coordinator.producer_dependencies(unit, "6" * 40)
+
+    def test_fresh_dispatch_checks_main_but_complete_reuse_needs_no_live_producer(self):
+        unit = coordinator.UNIT_BY_NAME["sandboxer"]
+        plan = coordinator.Plan(unit, "v1.0.0", "main", "a" * 40, "v1.0.0", "v1.0.0", "publish")
+        with mock.patch.object(coordinator, "branch_sha", return_value="b" * 40) as main, \
+             mock.patch.object(coordinator, "producer_dependencies", return_value=coordinator.LEGACY_INPUTS["sandboxer"]):
+            with self.assertRaisesRegex(coordinator.Deferred, "cannot build"):
+                coordinator.confirm_producer(plan)
+            main.assert_called_once_with(unit.repository, "main")
+            main.reset_mock()
+            coordinator.confirm_producer(coordinator.replace(plan, action="fixed"))
+            main.assert_not_called()
 
     def test_runtime_dependency_binding_matches_embedded_payloads(self) -> None:
         self.assertEqual(
