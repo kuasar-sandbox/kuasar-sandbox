@@ -46,7 +46,7 @@ version: release-v0.5.7
 delivery: node-infra-v2
 previous_version: release-v0.5.6
 components:
-  accelerator: v0.2.1
+  accelerator: v0.1.12
   connector: v0.1.9
   sandboxer: v0.3.5
   orchestrator: v0.4.3
@@ -65,7 +65,7 @@ previous_version: release-v0.5.6
 preview_version: preview.20260831
 previous_preview_version: preview.20260830
 components:
-  accelerator: v0.2.2-preview.20260831
+  accelerator: v0.1.13-preview.20260831
   connector: v0.1.9
   sandboxer: v0.3.6-preview.20260831
   orchestrator: v0.4.3
@@ -222,11 +222,11 @@ Component workflows use packaging tools from the main workflow commit fixed by `
 
 ```bash
 OWNER_REPOSITORY=kuasar-sandbox/accelerator
-SOURCE_REF=release/v0.2.x
+SOURCE_REF=release/v0.1.x
 PLATFORM_REF=release/v0.5.x
 gh workflow run release.yml \
   --repo "$OWNER_REPOSITORY" --ref main \
-  -f version=v0.2.2-preview.20260831 \
+  -f version=v0.1.13-preview.20260831 \
   -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
   -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)"
@@ -240,7 +240,7 @@ gh workflow run release.yml \
   -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
   -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)" \
-  -f accelerator_version=v0.2.2-preview.20260831 \
+  -f accelerator_version=v0.1.13-preview.20260831 \
   -f connector_version=v0.1.9
 ```
 
