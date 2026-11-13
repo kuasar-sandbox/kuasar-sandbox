@@ -86,7 +86,15 @@ def validate(plan_path, sources, env):
     plan_id = artifacts.check_plan(plan)
     artifacts.require(plan['mode'] in ('source', 'exact-assets'), 'unsupported release source gate mode')
     selected, records = source_checks.source_records(plan)
-    artifacts.require(read(sources / '.source-checks.json') == {'plan_id': plan_id, 'sources': records},
+    receipt = read(sources / '.source-checks.json')
+    # Newer frameworks also stage the Guest module for Host source checks.
+    # Keep v0.1 owner selection intact, and authenticate that extra checkout
+    # against the same frozen plan as every required input.
+    if (plan['mode'] == 'source' and selected & {'sandboxer', 'orchestrator'} and
+            'guest-runtime' not in records and isinstance(receipt, dict) and
+            isinstance(receipt.get('sources'), dict) and 'guest-runtime' in receipt['sources']):
+        records['guest-runtime'] = plan['test_revisions']['guest-runtime']
+    artifacts.require(receipt == {'plan_id': plan_id, 'sources': records},
                       'source materialization receipt differs from original plan')
     if env.get('KUASAR_WORKBENCH_FRAMEWORK_SHA'):
         artifacts.require(env['KUASAR_WORKBENCH_FRAMEWORK_SHA'] == plan['framework_sha'], 'framework identity changed')
