@@ -771,6 +771,11 @@ def make_plan(
     source_ref = preview_selection.component_source_ref(
         PLATFORM_REF, unit.name, configured
     )
+    if source_ref is None:
+        fixed = state.status(configured)
+        if not fixed.complete or fixed.tag_sha is None:
+            raise Deferred(f"{PLATFORM_REF} requires a published kernel: {configured}; publish it from guest-runtime main")
+        return Plan(unit, configured, None, fixed.tag_sha, configured, configured, "fixed")
     preview_selection.validate_next_version(unit.name, next_version, source_ref)
     source_sha = branch_sha(unit.repository, source_ref)
     if recovery_sha is not None:
@@ -1134,8 +1139,6 @@ def ensure_unit(
     if active_release is not None:
         print(f"==> pending {active_release.get('html_url')}")
         return False
-    if plan.source_ref is None:
-        raise Deferred(f"fixed selection is unavailable: {plan.unit.name} {plan.selected}")
     if active_delete_run(plan.unit.repository, plan.selected) is not None:
         raise Pending(f"cleanup is active for {plan.unit.name} {plan.selected}")
     if status.partial and recoverable_source_sha(status) != plan.source_sha:
@@ -1150,6 +1153,9 @@ def ensure_unit(
                        "retain it and select a fresh Preview")
     if any(item.get("conclusion") == "success" for item in exact):
         raise Pending(f"successful run is waiting for Release API convergence: {title}")
+    if plan.source_ref is None:
+        raise Deferred(f"fixed selection is unavailable: {plan.unit.name} {plan.selected}")
+    selection.validate_publication_source(plan.selected, plan.source_ref)
     confirm_producer(plan)
     count_publication(plan.unit.repository, plan.unit.name, plan.selected + ":build")
     # No accepted stage or published bytes exist. A new run avoids replacing
@@ -1304,6 +1310,7 @@ def ensure_aggregate(version: str, source_sha: str, *, resume_only=False) -> boo
         return False
     if status.partial or resume_only:
         raise Deferred(f"aggregate {version} has no recoverable stage with an eligible original publisher")
+    selection.validate_publication_source(version, PLATFORM_REF)
     count_publication(PLATFORM_REPOSITORY, 'platform', version + ':build')
     dispatch_aggregate_run(version, source_sha)
     print(f"==> dispatched aggregate {version} with a fresh stage")
@@ -1456,6 +1463,15 @@ def main(deadline: float | None = None) -> str:
             if resume_publish(plan.unit.repository, name, plan.selected, runs,
                               expected_title=release_run_title(plan, plans)):
                 raise Pending(f'recover the original {name} {plan.selected} publisher before Go alignment')
+
+    try:
+        selection.validate_publication_source(base, PLATFORM_REF)
+        for plan in plans.values():
+            if plan.action == "publish":
+                selection.validate_publication_source(plan.selected, plan.source_ref)
+    except selection.ManifestError as error:
+        retain_existing_publishers()
+        raise Deferred(str(error)) from error
 
     for plan in plans.values():
         confirm_producer(plan)

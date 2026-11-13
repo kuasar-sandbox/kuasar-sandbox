@@ -57,7 +57,7 @@ version: release-v0.5.7
 delivery: node-infra-v2
 previous_version: release-v0.5.6
 components:
-  accelerator: v0.2.1
+  accelerator: v0.1.12
   connector: v0.1.9
   sandboxer: v0.3.5
   orchestrator: v0.4.3
@@ -77,7 +77,7 @@ previous_version: release-v0.5.6
 preview_version: preview.20260831
 previous_preview_version: preview.20260830
 components:
-  accelerator: v0.2.2-preview.20260831
+  accelerator: v0.1.13-preview.20260831
   connector: v0.1.9
   sandboxer: v0.3.6-preview.20260831
   orchestrator: v0.4.3
@@ -121,13 +121,9 @@ Daily 控制器通过现有 CI GitHub App 创建依赖对齐 PR。用于写入�
 
 ## 3. 分支与版本线
 
-平台 `main` 发布最新主线版本。维护补丁使用平台 `release/vMAJOR.MINOR.x`。例如主线发布
-`release-v0.1.0` 后,可以从该 Tag 建立 `release/v0.1.x`;维护分支发布
-`release-v0.1.1`、`release-v0.1.2`,主线随后可以发布 `release-v0.2.0`。
+平台及组件新发的 0.1 系列 Stable 和 Preview 使用各仓的 `release/v0.1.x`，0.2 系列使用各仓 `main`。平台各分支独立维护正式与 Daily 清单，聚合时均可按精确 tag 复用已发布的完整组件。
 
-若 `release-v0.2.0` 尚未规划而 `release-v0.1.0` 立即需要补丁,允许先在 `main` 发布 `release-v0.1.1`、
-`release-v0.1.2`,再从较晚的补丁点建立 `release/v0.1.x`。建立维护分支之后,主线与维护线各自
-维护自己的两个清单。
+vmlinux 单元的所有新内核（含 `vmlinux-v0.1.x`）均从 `guest-runtime/main` 发布。维护聚合固定使用清单中已发布的内核。维护线需要新内核时，先在 guest-runtime 主干完成该版本发布，再更新维护清单。runtime 使用通常的组件分支规则。
 
 平台仓的 GitHub Latest 只由平台 `main` 的 Stable 聚合发布更新。每个组件仓通过按仓串行的发布器独立维护自己的 Latest，版本与发布时间的比较规则见[组件发布](#6-组件发布-cli)。组件维护分支 Stable 和任何 Preview 不更新 Latest。平台聚合始终通过清单中的精确 Tag 选择组件，不依赖组件仓的 Latest。
 
@@ -156,8 +152,7 @@ GC 计划/派发不会重叠。scanner 按分支顺序派发并等待;被取消�
 - 平台 `main` 总是选择每个组件仓的 `main`;
 - 平台维护分支从 Daily 清单中该 unit 的版本派生组件分支。`v0.3.5`、
   `v0.3.6-preview.*` 都映射到组件 `release/v0.3.x`;
-- runtime 与 vmlinux 分别从 `runtime-vX.Y.Z`、`vmlinux-vX.Y.Z` 派生
-  `release/vX.Y.x`;
+- runtime 从 `runtime-vX.Y.Z` 派生维护分支。维护线固定选择已发布的 vmlinux，即使 guest-runtime 已有同名维护分支。
 - 派生分支不存在时,该 unit 固定复用清单指定的完整 Release,不自动修改版本。
   如果上游依赖在本轮改变而该 unit 必须重建,则整次选择 deferred,不会把旧下游二进制与
   新依赖版本写进同一个聚合清单。
@@ -279,11 +274,11 @@ Daily 自动观察源码 SHA。手动组件发布可选择精确的历史源码 
 
 ```bash
 OWNER_REPOSITORY=kuasar-sandbox/accelerator
-SOURCE_REF=release/v0.2.x
+SOURCE_REF=release/v0.1.x
 PLATFORM_REF=release/v0.5.x
 gh workflow run release.yml \
   --repo "$OWNER_REPOSITORY" --ref main \
-  -f version=v0.2.2-preview.20260831 \
+  -f version=v0.1.13-preview.20260831 \
   -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
   -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)"
@@ -297,7 +292,7 @@ gh workflow run release.yml \
   -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
   -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)" \
-  -f accelerator_version=v0.2.2-preview.20260831 \
+  -f accelerator_version=v0.1.13-preview.20260831 \
   -f connector_version=v0.1.9
 ```
 

@@ -14,9 +14,10 @@ import sys
 import time
 
 
-ROOT = pathlib.Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "release"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import preview_coordinator as coordinator  # noqa: E402
+
+ROOT = coordinator.PLATFORM_ROOT
 
 
 class PublicationState(Enum):
@@ -119,6 +120,7 @@ def main() -> None:
     if publication is PublicationState.RESUME:
         wait_for_convergence({}, version, source_sha, resume_only=True)
         return
+    coordinator.selection.validate_publication_source(version, source_ref)
     plans: dict[str, coordinator.Plan] = {}
     partial_units = []
     for unit in coordinator.UNITS:
@@ -147,6 +149,10 @@ def main() -> None:
         candidate_ref = coordinator.preview_selection.component_source_ref(
             source_ref, unit.name, tag
         )
+        if candidate_ref is None:
+            raise coordinator.Deferred(f"{source_ref} requires a published kernel: {tag}; publish it from guest-runtime main")
+        if publication is PublicationState.NEW:
+            coordinator.selection.validate_publication_source(tag, candidate_ref)
         candidate_sha = coordinator.branch_sha(unit.repository, candidate_ref)
         if candidate_sha is None:
             raise coordinator.Deferred(
@@ -227,5 +233,5 @@ if __name__ == "__main__":
         main()
     except coordinator.Deferred as error:
         coordinator.fail(f"deferred without mutation: {error}")
-    except RuntimeError as error:
+    except (RuntimeError, coordinator.selection.ManifestError) as error:
         coordinator.fail(str(error))

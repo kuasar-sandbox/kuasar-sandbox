@@ -46,7 +46,7 @@ version: release-v0.5.7
 delivery: node-infra-v2
 previous_version: release-v0.5.6
 components:
-  accelerator: v0.2.1
+  accelerator: v0.1.12
   connector: v0.1.9
   sandboxer: v0.3.5
   orchestrator: v0.4.3
@@ -65,7 +65,7 @@ previous_version: release-v0.5.6
 preview_version: preview.20260831
 previous_preview_version: preview.20260830
 components:
-  accelerator: v0.2.2-preview.20260831
+  accelerator: v0.1.13-preview.20260831
   connector: v0.1.9
   sandboxer: v0.3.6-preview.20260831
   orchestrator: v0.4.3
@@ -101,9 +101,9 @@ The Daily controller uses the existing CI GitHub App to open alignment PRs. Its 
 
 ## 3. Branches and version lines
 
-Platform `main` publishes the latest mainline version. Maintenance patches use platform `release/vMAJOR.MINOR.x`. For example, after publishing `release-v0.1.0`, a `release/v0.1.x` branch can be created from that tag. Maintenance then publishes `release-v0.1.1` and `release-v0.1.2`, while mainline can later publish `release-v0.2.0`.
+New platform and component Stable and Preview versions in the 0.1 line are published from each repository's `release/v0.1.x` branch. The 0.2 line is published from `main`. Each platform branch maintains its own Stable and Daily manifests. Both lines may select complete component Releases by their exact tags.
 
-If `release-v0.2.0` is not yet planned and `release-v0.1.0` immediately needs patches, `main` can first publish `release-v0.1.1` and `release-v0.1.2`, then create `release/v0.1.x` from a later patch point. Once that branch exists, mainline and maintenance each manage their own two manifests.
+The vmlinux release unit publishes every new kernel from `guest-runtime/main`, including `vmlinux-v0.1.x` versions. A maintenance aggregate pins a complete kernel Release. To select a new kernel in maintenance, publish it from guest-runtime main first, then update the maintenance manifest. Runtime follows the usual component branch rules.
 
 Platform GitHub Latest is updated only by a Stable aggregate published from platform `main`. Each component repository independently manages its own Latest through its serialized publisher, using the version and publication-time rules in [component publication](#6-component-publication-cli). Component maintenance Stable releases and all Previews do not update Latest. Platform aggregates always select components by exact manifest tags, not by component Latest.
 
@@ -122,7 +122,7 @@ The scanner pins each branch HEAD SHA, then loads the trusted controller from pl
 
 - Platform `main` always selects every component repository's `main`.
 - A platform maintenance branch derives the component branch from that unit's Daily-manifest version. Both `v0.3.5` and `v0.3.6-preview.*` map to component `release/v0.3.x`.
-- Runtime and vmlinux independently derive `release/vX.Y.x` from `runtime-vX.Y.Z` and `vmlinux-vX.Y.Z`.
+- Runtime derives its maintenance source branch from `runtime-vX.Y.Z`. On a maintenance branch, the vmlinux selection is fixed even if guest-runtime has a matching maintenance branch.
 - If the derived branch is absent, that unit reuses the manifest's complete Release without automatically changing its version. If an upstream dependency changes in the current round and the unit needs rebuilding, the entire selection is deferred. It does not write an aggregate manifest combining the old downstream binary with new dependency versions.
 
 The six units in one platform maintenance branch can therefore come from six different component version lines.
@@ -222,11 +222,11 @@ Component workflows use packaging tools from the main workflow commit fixed by `
 
 ```bash
 OWNER_REPOSITORY=kuasar-sandbox/accelerator
-SOURCE_REF=release/v0.2.x
+SOURCE_REF=release/v0.1.x
 PLATFORM_REF=release/v0.5.x
 gh workflow run release.yml \
   --repo "$OWNER_REPOSITORY" --ref main \
-  -f version=v0.2.2-preview.20260831 \
+  -f version=v0.1.13-preview.20260831 \
   -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
   -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)"
@@ -240,7 +240,7 @@ gh workflow run release.yml \
   -f source_ref="$SOURCE_REF" -f source_sha="$(gh api "repos/$OWNER_REPOSITORY/git/ref/heads/$SOURCE_REF" --jq .object.sha)" \
   -f aggregate_version=release-v0.5.7-preview.20260831 \
   -f aggregate_sha="$(gh api "repos/kuasar-sandbox/kuasar-sandbox/git/ref/heads/$PLATFORM_REF" --jq .object.sha)" \
-  -f accelerator_version=v0.2.2-preview.20260831 \
+  -f accelerator_version=v0.1.13-preview.20260831 \
   -f connector_version=v0.1.9
 ```
 
