@@ -1,8 +1,11 @@
 """Recover original accepted bytes; do not query Actions for completed releases."""
 import copy
+from pathlib import Path
+import sys
 import unittest
 from unittest.mock import patch, Mock
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "release"))
 import preview_coordinator as subject
 
 VERSION = 'release-v1.2.3-preview.20260929'
