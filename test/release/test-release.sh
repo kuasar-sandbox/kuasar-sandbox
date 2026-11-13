@@ -88,6 +88,7 @@ while IFS=$'\t' read -r unit tag; do
     "$stage/share/licenses/$unit/project" "$stage/share/sources/$unit"
   printf '%s %s\n' "$unit" "$tag" > "$stage/bin/$unit"
   chmod +x "$stage/bin/$unit"
+  if [ "$unit" = runtime ]; then cp -p "$stage/bin/$unit" "$stage/bin/sandbox-init"; fi
   printf '%s license fixture\n' "$unit" \
     > "$stage/share/licenses/$unit/project/LICENSE"
   printf 'payload\tname\n%s\t%s\n' "$unit" "$unit" \

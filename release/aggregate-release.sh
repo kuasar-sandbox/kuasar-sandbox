@@ -152,11 +152,6 @@ validate_component_download() {
   done
 }
 
-validate_tar_paths() {
-  local archive="$1" seen="$2"
-  python3 -B "$ROOT/release/archive_paths.py" validate "$seen" "$archive"
-}
-
 assemble_release() {
   [ "$#" -eq 3 ] || release_fail "usage: aggregate-release.sh assemble <release-version> <fetched-dir> <output-dir>"
   local version="$1" fetched="$2" output="$3"
@@ -356,17 +351,16 @@ validate_bundle() {
       --version "$version" --revision "$source_sha" --receipts "$bundle/node-infra" >/dev/null
   fi
 
-  local seen tag archive
-  seen="$(mktemp)"
+  local archive
+  local -a inputs
   for arch in "${arches[@]}"; do
-    : > "$seen"
-    validate_tar_paths "$bundle/assets/$(platform_archive "$version")" "$seen"
+    inputs=(--unit platform "$bundle/assets/$(platform_archive "$version")")
     while IFS=$'\t' read -r unit tag; do
       archive="$(component_archive "$unit" "$tag" "$arch")"
-      validate_tar_paths "$bundle/assets/$archive" "$seen"
+      inputs+=(--unit "$unit" "$bundle/assets/$archive")
     done < "$expected_selection"
+    python3 -B "$ROOT/release/archive_paths.py" validate-aggregate "${inputs[@]}"
   done
-  rm -f "$seen"
   rm -f "$expected_selection" "$expected_names" "$actual_names"
 }
 
