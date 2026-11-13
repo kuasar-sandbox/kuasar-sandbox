@@ -74,6 +74,56 @@ class FixedInputs(unittest.TestCase):
                            'kuasar-sandbox/connector', archive)
         return archive
 
+    def test_producer_freezes_exact_dependencies_for_both_init_owners(self):
+        producer = self.producer()
+        git = subject.tag_sources.git
+        for unit, command in (("runtime", "flatten-ctl"), ("sandboxer", "sandbox-ctl"), ("orchestrator", None)):
+            owner = "guest-runtime" if unit == "runtime" else unit
+            repository = "kuasar-sandbox/" + owner
+            remote = self.root / owner
+            tag = ("runtime-" if unit == "runtime" else "") + "v1.2.3"
+            fixture(remote, unit, tag)
+            git(remote, "branch", "-M", "main")
+            if command:
+                marker = remote / "cmd" / command
+                marker.mkdir(parents=True)
+                (marker / "main.go").write_text("package main\n")
+            init = remote / "cmd/sandbox-init/main.go"
+            for modern in (False, True):
+                if command:
+                    if modern == (unit == "runtime"):
+                        init.parent.mkdir(exist_ok=True)
+                        init.write_text("package main\n")
+                    else:
+                        shutil.rmtree(init.parent, ignore_errors=True)
+                else:
+                    (remote / "go.mod").write_text("module fixture\n" +
+                        ("require github.com/kuasar-sandbox/guest-runtime v1.2.3\n" if modern else ""))
+                git(remote, "add", ".")
+                git(remote, "commit", "--allow-empty", "-qm", "source layout")
+                sha = git(remote, "rev-parse", "HEAD")
+                archive = self.root / f"{unit}-{modern}.tar"
+                with patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1",
+                        "GIT_CONFIG_KEY_0": f"url.{remote}.insteadOf", "GIT_CONFIG_VALUE_0": f"https://github.com/{repository}.git"}):
+                    producer.admit(unit, "main", sha, tag, repository, archive)
+                graph = producer.producer_contract
+                names = (graph.RUNTIME_ABI_INPUTS if modern else graph.LEGACY_INPUTS)[unit]
+                opposite = (graph.LEGACY_INPUTS if modern else graph.RUNTIME_ABI_INPUTS)[unit]
+                def deps(keys):
+                    return [(key, ("runtime-" if key == "runtime" else "") + "v1.2.3", "a" * 40) for key in keys]
+                out = self.root / f"capsule-{unit}-{modern}.tar"
+                with self.subTest(unit=unit, modern=modern), patch.object(subject.tag_sources, "fetch_unit",
+                        return_value={"sha": "a" * 40}) as fetch:
+                    with self.assertRaisesRegex(ValueError, "admitted source dependency contract"):
+                        producer.freeze(unit, "main", sha, deps(opposite), out, archive, tag)
+                    fetch.assert_not_called()
+                    producer.freeze(unit, "main", sha, deps(names), out, archive, tag)
+                    with tarfile.open(out) as capsule:
+                        receipt = json.load(capsule.extractfile("producer-records.json"))
+                    self.assertEqual(receipt["admission"]["source"]["sha"], sha)
+                    self.assertEqual(set(receipt["sources"]), {"src/" + owner} |
+                        {"src/" + ("guest-runtime" if n == "runtime" else n) for n in names})
+
     def test_producer_historical_commit_survives_branch_advance_and_remote_removal(self):
         producer = self.producer(); git = subject.tag_sources.git
         before = git(self.remote, 'ls-tree', '-r', self.sha)

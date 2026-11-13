@@ -49,6 +49,7 @@ selection = load_module("release_selection", CONTROL_ROOT / "release/selection.p
 sys.path.insert(0, str(CONTROL_ROOT / 'release'))
 import prepare_notes  # noqa: E402
 import go_dependency_alignment  # noqa: E402
+from producer_contract import LEGACY_INPUTS, RUNTIME_ABI_INPUTS  # noqa: E402
 preview_selection = load_module(
     "preview_selection", CONTROL_ROOT / "release/preview-selection.py"
 )
@@ -70,19 +71,19 @@ UNITS = (
         "runtime",
         "kuasar-sandbox/guest-runtime",
         "release-runtime.yml",
-        ("accelerator",),
+        RUNTIME_ABI_INPUTS["runtime"],
     ),
     Unit(
         "sandboxer",
         "kuasar-sandbox/sandboxer",
         "release.yml",
-        ("accelerator", "connector", "runtime"),
+        RUNTIME_ABI_INPUTS["sandboxer"],
     ),
     Unit(
         "orchestrator",
         "kuasar-sandbox/orchestrator",
         "component-release.yml",
-        ("accelerator", "connector", "sandboxer", "runtime"),
+        RUNTIME_ABI_INPUTS["orchestrator"],
     ),
 )
 UNIT_BY_NAME = {unit.name: unit for unit in UNITS}
@@ -376,6 +377,13 @@ class RepositoryState:
                 and complete_assets(release, [{archive}, {archive, archive_name(self.unit.name, tag, "aarch64")}])
                 and sha is not None
             )
+        if (complete and self.unit.name == "runtime" and tag.startswith("runtime-v")
+                and not prerelease and source_dependencies(self.unit, sha) == RUNTIME_ABI_INPUTS["runtime"]):
+            module_tag = tag.removeprefix("runtime-")
+            if module_tag in self.invalid_tags or self.tag_shas.get(module_tag) not in (None, sha):
+                raise Deferred(f"{self.unit.repository} {module_tag} conflicts with the published Runtime source")
+            complete = (self.tag_shas.get(module_tag) == sha and
+                        complete_assets(release, [{archive, archive_name("runtime", tag, "aarch64")}]))
         status = ReleaseStatus(release, sha, complete)
         self._statuses[tag] = status
         return status
@@ -398,15 +406,6 @@ class RepositoryState:
             if status.complete:
                 usable.append(tag)
         return usable
-
-
-# Release graphs differ at one real boundary: which selected source owns the
-# init binary, and whether a Go consumer declares the Guest ABI module.
-LEGACY_INPUTS = {
-    "runtime": ("accelerator", "sandboxer"),
-    "sandboxer": ("accelerator", "connector"),
-    "orchestrator": ("accelerator", "connector", "sandboxer"),
-}
 
 
 @functools.lru_cache(maxsize=128)
@@ -437,9 +436,9 @@ def source_dependencies(unit: Unit, sha: str) -> tuple[str, ...]:
 
 
 @functools.lru_cache(maxsize=128)
-def producer_dependencies(unit: Unit, sha: str) -> tuple[str, ...]:
+def producer_contracts(unit: Unit, sha: str) -> tuple[tuple[str, ...], ...]:
     if unit.name not in LEGACY_INPUTS:
-        return unit.dependencies
+        return (unit.dependencies,)
     if not re.fullmatch(r"[0-9a-f]{40}", sha):
         raise Deferred(f"{unit.name}: producer contract needs an immutable source")
     record = api(f"repos/{unit.repository}/contents/.github/workflows/{unit.workflow}?ref={sha}")
@@ -453,11 +452,22 @@ def producer_dependencies(unit: Unit, sha: str) -> tuple[str, ...]:
     # Check the dispatch interface as well as the immutable run identity used
     # for publication recovery. Unknown workflow layouts defer release.
     inputs = re.search(r"(?m)^  workflow_dispatch:\n    inputs:\n((?:[ \t]+[^\n]*\n|\n)+)", workflow)
-    dependency_fields = set(re.findall(r"(?m)^      ([a-z][a-z0-9_]*)_version:\s*$", inputs[1])) - {"aggregate"} if inputs else None
-    for deps in (LEGACY_INPUTS[unit.name], UNIT_BY_NAME[unit.name].dependencies):
-        title = prefix + ",".join(name + "=${{ inputs." + name + "_version }}" for name in deps) + "]"
-        if titles == [title] and dependency_fields == set(deps):
-            return deps
+    fields = dict(re.findall(r"(?m)^      ([a-z][a-z0-9_]*)_version:[ \t]*\n((?:        [^\n]*\n?)*)", inputs[1])) if inputs else {}
+    fields.pop("aggregate", None)
+    old, new = LEGACY_INPUTS[unit.name], RUNTIME_ABI_INPUTS[unit.name]
+
+    def title(dependencies):
+        return prefix + ",".join(name + "=${{ inputs." + name + "_version }}" for name in dependencies)
+
+    for deps in (old, new):
+        if titles == [title(deps) + "]"] and set(fields) == set(deps):
+            return (deps,)
+    short, long = sorted((old, new), key=len)
+    extra = long[-1]
+    optional = "${{ inputs." + extra + "_version && format('," + extra + "={0}', inputs." + extra + "_version) || '' }}"
+    if (titles == [title(short) + optional + "]"] and set(fields) == set(long)
+            and re.search(r"(?m)^        required: false[ \t]*$", fields[extra])):
+        return old, new
     raise Deferred(f"{unit.name}@{sha}: unrecognized release dependency contract")
 
 
@@ -488,7 +498,7 @@ def confirm_producer(plan):
     unit = plan.unit
     if plan.action == "publish" and unit.name in LEGACY_INPUTS:
         tip = branch_sha(unit.repository, "main")
-        if not tip or producer_dependencies(unit, tip) != unit.dependencies:
+        if not tip or unit.dependencies not in producer_contracts(unit, tip):
             raise Deferred(f"{unit.name}: current release workflow cannot build the selected source contract; retain selection")
 
 
@@ -1244,7 +1254,8 @@ def resume_publish(repository: str, unit: str, version: str, exact: list[dict[st
                     raise Deferred(f"original {unit} stage lacks an unambiguous {arch} build; retain it")
                 required.extend(names)
             prefix = unit + '-release' if unit in {'runtime', 'vmlinux'} else 'component-release'
-            expected = [f'workbench-selection-{state["id"]}'] + [
+            selection_name = unit + '-workbench' if unit in {'runtime', 'vmlinux'} else 'workbench-selection'
+            expected = [f'{selection_name}-{state["id"]}'] + [
                 f'{prefix}-{version}-{arch}-{state["id"]}' for arch in ('x86_64', 'aarch64')]
         for name in required:
             job = latest.get(name, {})
@@ -1272,7 +1283,7 @@ def resume_publish(repository: str, unit: str, version: str, exact: list[dict[st
     return True
 
 
-def ensure_aggregate(version: str, source_sha: str) -> bool:
+def ensure_aggregate(version: str, source_sha: str, *, resume_only=False) -> bool:
     status = platform_release(version)
     if status.complete:
         if status.tag_sha != source_sha:
@@ -1291,8 +1302,8 @@ def ensure_aggregate(version: str, source_sha: str) -> bool:
     exact = [item for item in runs if item.get('display_title') == aggregate_run_title(version, source_sha)]
     if resume_publish(PLATFORM_REPOSITORY, 'platform', version, exact):
         return False
-    if status.partial:
-        raise Deferred(f"incomplete aggregate {version} has no recoverable stage; retain it and select a fresh Preview")
+    if status.partial or resume_only:
+        raise Deferred(f"aggregate {version} has no recoverable stage with an eligible original publisher")
     count_publication(PLATFORM_REPOSITORY, 'platform', version + ':build')
     dispatch_aggregate_run(version, source_sha)
     print(f"==> dispatched aggregate {version} with a fresh stage")

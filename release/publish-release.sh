@@ -119,6 +119,7 @@ publish_bundle() {
     if [ "$(jq -r .draft "$release_state")" = false ]; then
       # PATCH may have succeeded before the previous job lost its connection.
       # An accepted, unchanged stage can confirm completion without mutation.
+      [ "$tag_exists" = true ] || release_fail "published Release lacks its selected tag"
       local expected_preview=false
       is_preview "$version" && expected_preview=true
       verify_uploaded_assets "$release_state" "$bundle"

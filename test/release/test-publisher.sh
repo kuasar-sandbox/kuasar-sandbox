@@ -316,6 +316,16 @@ if env "${common_env[@]}" "$PUBLISHER" check "$TAG" >/dev/null 2>&1; then
   exit 1
 fi
 
+if [ "$EXPECTED_PRERELEASE" = false ]; then
+  mv "$TMP/state/tag" "$TMP/public-tag"
+  if env "${common_env[@]}" "$PUBLISHER" publish "$TAG" "$COMMIT" "$BUNDLE" "$SOURCE_REF" > "$TMP/public-tag.log" 2>&1; then
+    echo 'test-publisher: accepted a public Stable release with no tag' >&2; exit 1
+  fi
+  grep -Fq 'published Release lacks its selected tag' "$TMP/public-tag.log"
+  [ ! -e "$TMP/state/tag" ]
+  mv "$TMP/public-tag" "$TMP/state/tag"
+fi
+
 # A finalization response can be lost after the Release became public.
 # The original successful stage must converge by verification, without edits.
 cp "$TMP/state/assets.ndjson" "$TMP/public-assets"

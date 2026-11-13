@@ -156,7 +156,8 @@ class ResumeTests(unittest.TestCase):
                                                     'build (aarch64, ubuntu-24.04-arm)'), 1)]
         self.jobs.append(dict(id=20, name='publish', status='completed', conclusion='failure'))
         prefix = unit_name + '-release' if unit_name in {'runtime', 'vmlinux'} else 'component-release'
-        self.artifacts = [dict(name=artifact, expired=False) for artifact in ('workbench-selection-10',
+        selection = {'runtime': 'runtime-workbench-10', 'vmlinux': 'vmlinux-workbench-10'}.get(unit_name, 'workbench-selection-10')
+        self.artifacts = [dict(name=artifact, expired=False) for artifact in (selection,
                           f'{prefix}-{tag}-x86_64-10', f'{prefix}-{tag}-aarch64-10')]
         return plan, plans
 
@@ -183,6 +184,11 @@ class ResumeTests(unittest.TestCase):
             with self.subTest(unit=name):
                 self.assertIn('/actions/jobs/20/rerun', self.resume_component(
                     plan, plans, subject.ReleaseStatus(None, SHA, False))[1][0].args[-2])
+                selection = self.artifacts[0]['name']
+                self.artifacts[0]['name'] = 'workbench-selection-10'
+                with self.assertRaisesRegex(subject.Deferred, 'artifact is missing'):
+                    self.resume_component(plan, plans, subject.ReleaseStatus(None, SHA, False))
+                self.artifacts[0]['name'] = selection
                 self.artifacts[1]['name'] = self.artifacts[1]['name'].replace(name + '-release', 'component-release')
                 with self.assertRaisesRegex(subject.Deferred, 'artifact is missing'):
                     self.resume_component(plan, plans, subject.ReleaseStatus(None, SHA, False))
@@ -255,6 +261,19 @@ class ResumeTests(unittest.TestCase):
                     with self.assertRaisesRegex(subject.Pending, "before selecting new component versions"):
                         subject.recover_configured_components(configured, VERSION, "f" * 40)
                 self.assertEqual(calls, ["accelerator", "connector"] + ([] if legacy else ["runtime"]) + ["sandboxer"])
+
+    def test_stable_resume_without_original_publisher_cannot_dispatch_new_stage(self):
+        from formal_coordinator import wait_for_convergence
+        version = 'release-v1.2.3'
+        self.jobs[-1].update(conclusion='skipped')
+        self.run['display_title'] = subject.aggregate_run_title(version, SHA)
+        with patch.object(subject, 'platform_release', return_value=self.status), \
+             patch.object(subject, 'active_delete_run', return_value=None), \
+             patch.object(subject, 'aggregate_runs', return_value=[self.run]), \
+             patch.object(subject, 'paginated', side_effect=self.pages), \
+             patch.object(subject, 'gh', side_effect=AssertionError('dispatched a new stage')), \
+             self.assertRaisesRegex(subject.Deferred, 'eligible original publisher'):
+            wait_for_convergence({}, version, SHA, resume_only=True)
 
     def test_missing_configured_dependency_preserves_partial_component_and_channel(self):
         plan, plans = self.component()
