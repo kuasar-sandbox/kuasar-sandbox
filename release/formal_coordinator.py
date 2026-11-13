@@ -143,8 +143,10 @@ def main() -> None:
     # Stable and Daily share one pre-freeze preparation transaction. It never
     # waits for the future component tags and every dispatch uses this exact
     # persisted source, including the complete editable release notes.
-    plans = coordinator.release_source_plans(plans)
+    # A validated aggregate already owns its frozen stage. Recover its exact
+    # publisher without reconsidering how historical component assets were built.
     if publication is PublicationState.NEW:
+        plans = coordinator.release_source_plans(plans)
         for plan in plans.values():
             coordinator.confirm_producer(plan)
         coordinator.go_dependency_alignment.check_plans(coordinator, plans)

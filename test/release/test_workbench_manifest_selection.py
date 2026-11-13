@@ -189,6 +189,7 @@ class StableRetryTests(unittest.TestCase):
                      patch.object(coordinator, 'active_aggregate_run', return_value=None), \
                      patch.object(coordinator, 'aggregate_runs', return_value=[{'display_title': f'Aggregate {VERSION} @{SHA}'}]), \
                      patch.object(formal, 'validated_stage', return_value=True), \
+                     patch.object(coordinator, 'source_dependencies', side_effect=AssertionError('requalified accepted stage')), \
                      patch.object(coordinator, 'persist_manifest') as persist, \
                      patch.object(coordinator, 'RepositoryState') as state, \
                      patch.object(coordinator, 'has_arm_archive', return_value=True), \

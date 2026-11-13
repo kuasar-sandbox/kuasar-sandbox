@@ -222,6 +222,8 @@ class TagSelectionTests(unittest.TestCase):
                  mock.patch.object(formal.coordinator, 'RepositoryState') as state, \
                  mock.patch.object(formal.coordinator.go_dependency_alignment, 'read_file', side_effect=module_files_at('c' * 40)), \
                  mock.patch.object(formal.coordinator, 'tag_sha', return_value='c' * 40) as read_tag, \
+                 mock.patch.object(formal.coordinator, 'source_dependencies',
+                     side_effect=lambda u, sha: (self.assertEqual(sha, 'c' * 40) or u.dependencies)) as producers, \
                  mock.patch.object(formal.coordinator, 'has_arm_archive', return_value=True), \
                  mock.patch.object(formal.coordinator, 'active_aggregate_run', return_value=None), \
                  mock.patch.object(formal.coordinator, 'aggregate_runs', return_value=[]), \
@@ -230,6 +232,7 @@ class TagSelectionTests(unittest.TestCase):
                 state.return_value.status.return_value = coordinator.ReleaseStatus({}, 'c' * 40, True)
                 formal.main()
             plans, version, sha = converge.call_args.args
+            self.assertEqual({args.args[0].name for args in producers.call_args_list}, set(plans))
             self.assertEqual(read_tag.call_args_list, [mock.call(p.unit.repository, p.selected) for p in plans.values()])
             self.assertEqual((version, sha), ('release-v1.2.3', 'b' * 40))
             self.assertEqual(persist.call_args.kwargs, dict(channel='release', root=root, source_ref='main',
