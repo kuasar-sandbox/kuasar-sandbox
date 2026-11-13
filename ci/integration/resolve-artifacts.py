@@ -15,6 +15,7 @@ import tempfile
 from urllib.parse import quote
 
 import artifacts
+import go_workspace
 import workbench_groups
 import capability_routing
 import source_inputs
@@ -294,11 +295,13 @@ def tree_changes(before, after):
     return paths
 
 
-def product_source_map(products, sources, kernel_sha, *, init_unit='runtime'):
+def product_source_map(products, sources, kernel_sha, *, roots, init_unit='runtime'):
+    owners = {unit_owner(artifacts.source_product_unit(name, init_unit)) for name in products}
+    libraries = {owner: go_workspace.closure([owner], roots=roots) for owner in owners}
     result = {}
     for name in products:
         owner = unit_owner(artifacts.source_product_unit(name, init_unit))
-        dependencies = {owner, *LIBRARIES[owner]}
+        dependencies = set(libraries[owner])
         if name == "sandbox-init":
             dependencies = {unit_owner(init_unit)}
         if name == "sandbox-runtime.bundle" and init_unit == "sandboxer":
@@ -458,7 +461,7 @@ def source_plan(framework_sha, input_root):
             "candidate_records": records, "owners": sorted(owners), "changes": changes,
             "sources": sources, "kernel_sha": kernel_sha, "init_source_unit": init_unit,
             "test_revisions": tests, "test_overlays": sorted(artifacts.OWNERS), "case_files": selected_files,
-            "product_sources": product_source_map(products, sources, kernel_sha, init_unit=init_unit),
+            "product_sources": product_source_map(products, sources, kernel_sha, roots=roots, init_unit=init_unit),
             "embedded_sources": {"envd": {REPOSITORIES["guest-runtime"]: sources["guest-runtime"]["sha"]}},
             "lanes": {arch: {"products": products, "embedded_products": embedded,
                              "performance": ["working-set-smoke"] if arch == "x86_64" and set(owners) & {"platform", "sandboxer"} else [],

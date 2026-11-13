@@ -23,17 +23,19 @@ def require(condition, message):
         raise ValueError(message)
 
 
-def closure(owners, *, root=None, go='go'):
+def closure(owners, *, root=None, roots=None, go='go'):
     """Retain the pre-migration graph when the pinned Host has no Guest module."""
 
+    if root is not None:
+        roots = {owner: root / owner for owner in DEPENDENCIES}
     result = set()
     def add(owner):
         require(owner in DEPENDENCIES, 'unknown Go workspace owner: ' + owner)
         if owner not in result:
             result.add(owner)
             for dependency in DEPENDENCIES[owner]:
-                if dependency == 'guest-runtime' and root is not None:
-                    path = root / owner / 'go.mod'
+                if dependency == 'guest-runtime' and roots is not None:
+                    path = roots[owner] / 'go.mod'
                     require(path.is_file() and not path.is_symlink() and not path.parent.is_symlink(),
                             'missing or linked selected owner module: ' + owner)
                     if policy.PREFIX + dependency not in policy.managed_requires(path.read_text(), go=go):

@@ -258,8 +258,20 @@ class GuestSourceCutoverContracts(unittest.TestCase):
         resolver = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(resolver)
         sources = {owner: {'sha': str(index) * 40} for index, owner in enumerate(subject.OWNERS, 1)}
-        products = resolver.product_source_map(
-            ['sandbox-init', 'sandbox-runtime.bundle', 'sandbox-ctl', 'node-ctl'], sources, 'f' * 40)
+        products_to_build = ['sandbox-init', 'sandbox-runtime.bundle', 'sandbox-ctl', 'node-ctl']
+        with tempfile.TemporaryDirectory() as directory:
+            roots = {owner: Path(directory) / owner for owner in ('sandboxer', 'orchestrator')}
+            for owner, root in roots.items():
+                root.mkdir()
+                (root / 'go.mod').write_text(f'module github.com/kuasar-sandbox/{owner}\n')
+            historical = resolver.product_source_map(products_to_build, sources, 'f' * 40, roots=roots)
+            self.assertEqual(historical['sandbox-init'], {'kuasar-sandbox/guest-runtime': sources['guest-runtime']['sha']})
+            for name in ('sandbox-ctl', 'node-ctl'):
+                self.assertNotIn('kuasar-sandbox/guest-runtime', historical[name])
+            (roots['sandboxer'] / 'go.mod').write_text(
+                'module github.com/kuasar-sandbox/sandboxer\nrequire github.com/kuasar-sandbox/guest-runtime v0.2.0\n')
+            # An old orchestrator can use a new sandboxer that imports the Guest ABI.
+            products = resolver.product_source_map(products_to_build, sources, 'f' * 40, roots=roots)
         self.assertEqual(set(products['sandbox-init']), {'kuasar-sandbox/guest-runtime'})
         self.assertEqual(set(products['sandbox-runtime.bundle']),
                          {'kuasar-sandbox/guest-runtime', 'kuasar-sandbox/accelerator'})
