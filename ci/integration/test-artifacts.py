@@ -176,6 +176,50 @@ class BaselineInitOwnershipContracts(unittest.TestCase):
         self.assertEqual(list(rejected.iterdir()), [])
 
 
+class ReleasedSnapshotCaptureContracts(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        (self.root / 'bin').mkdir()
+        self.files = {name: elf('x86_64', 'released ' + name) for name in ('sandbox-ctl', 'cloud-hypervisor')}
+        self.files.update({'sandbox-runtime.bundle': b'released runtime', 'vmlinux': kernel('x86_64')})
+        for name, data in self.files.items():
+            path = self.root / 'bin' / name
+            path.write_bytes(data)
+            path.chmod(0o755)
+        self.sums = {name: subject.digest(self.root / 'bin' / name) for name in self.files}
+        self.lane = {'selection': {'cases': ['snapshot.restore.sh']},
+                     'products': ['sandbox-ctl', 'sandbox-init', 'sandbox-runtime.bundle']}
+        self.plan = {'mode': 'source', 'lanes': {'x86_64': self.lane}, 'baseline': {'version': 'release-v1.2.3'}}
+        self.ownership = {'bin/sandbox-init': 'sandboxer'}
+        self.fixture = self.root / 'fixtures/released-snapshot-capture'
+
+    def stage(self):
+        subject.stage_snapshot_capture(self.plan, 'x86_64', self.root, self.ownership, self.sums)
+
+    def test_old_capture_survives_replacement_of_every_selected_binary(self):
+        self.stage()
+        for name, old in self.files.items():
+            (self.root / 'bin' / name).write_bytes(b'candidate')
+            self.assertEqual((self.fixture / name).read_bytes(), old)
+        self.assertEqual((self.fixture / 'aggregate').read_text(), 'release-v1.2.3\n')
+        verify = ['sha256sum', '--check', '--strict', 'SHA256SUMS']
+        subprocess.run(verify, cwd=self.fixture, check=True, capture_output=True)
+        (self.fixture / 'sandbox-runtime.bundle').write_bytes(b'wrong runtime')
+        self.assertNotEqual(subprocess.run(verify, cwd=self.fixture, capture_output=True).returncode, 0)
+
+    def test_existing_case_selection_and_same_generation_do_not_activate_cutover(self):
+        for target, key, value in ((self.plan, 'mode', 'exact-assets'),
+                                   (self.lane, 'selection', {'cases': ['snapshot.capture.sh']}),
+                                   (self.lane, 'products', ['sandbox-ctl']),
+                                   (self.ownership, 'bin/sandbox-init', 'runtime'),
+                                   (self.plan, 'init_source_unit', 'sandboxer')):
+            with self.subTest(key=key), patch.dict(target, {key: value}):
+                self.stage()
+                self.assertFalse(self.fixture.exists())
+
+
 class GuestSourceCutoverContracts(unittest.TestCase):
     def test_pid1_and_protocol_changes_rebuild_their_actual_consumers(self):
         self.assertEqual(set(subject.changed_products({'guest-runtime': ['cmd/sandbox-init/main.go']})),

@@ -636,6 +636,30 @@ def check_plan(plan):
     return identity(plan)
 
 
+def stage_snapshot_capture(plan, arch, stage, ownership, originals):
+    """Keep the admitted release inputs for the existing cross-version restore case."""
+    lane = plan['lanes'][arch]
+    directory = stage / 'fixtures/released-snapshot-capture'
+    require(not directory.exists() and not directory.is_symlink(), 'unexpected released capture fixture')
+    if (plan['mode'] != 'source' or 'snapshot.restore.sh' not in lane['selection']['cases']
+            or not {'sandbox-ctl', 'sandbox-init', 'sandbox-runtime.bundle'} <= set(lane['products'])
+            or ownership['bin/sandbox-init'] != 'sandboxer' or planned_product_unit(plan, 'sandbox-init') != 'runtime'):
+        return
+    directory.mkdir(parents=True)
+    sums = []
+    for name in ('cloud-hypervisor', 'sandbox-ctl', 'sandbox-runtime.bundle', 'vmlinux'):
+        source = stage / 'bin' / name
+        if name != 'sandbox-runtime.bundle':
+            check_architecture(source, arch, kernel=name == 'vmlinux')
+        if name in ('sandbox-ctl', 'cloud-hypervisor'):
+            require(source.stat().st_mode & 0o111, 'baseline capture binary is not executable: ' + name)
+        # Do not hardlink: applying a delta overwrites the selected product in place.
+        shutil.copy2(source, directory / name)
+        sums.append(f'{originals[name]}  {name}\n')
+    (directory / 'SHA256SUMS').write_text(''.join(sums))
+    (directory / 'aggregate').write_text(plan['baseline']['version'] + '\n')
+
+
 def compose(plan, arch, assets, delta, output):
     plan_id = check_plan(plan)
     require(arch in ARCHES and output.name == arch and not output.exists(),
@@ -723,6 +747,7 @@ def compose(plan, arch, assets, delta, output):
             require(kernel_checksum.read_bytes() == (originals["vmlinux"] + "  vmlinux\n").encode(),
                     "baseline kernel checksum differs from its kernel")
         original_embedded = runtime_payloads(stage, arch)
+        stage_snapshot_capture(plan, arch, stage, ownership, originals)
         for name in lane["products"]:
             shutil.copy2(delta / "bin" / name, stage / "bin" / name)
         if plan["mode"] == "source":
