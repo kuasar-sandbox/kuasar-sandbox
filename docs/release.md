@@ -101,9 +101,9 @@ The Daily controller uses the existing CI GitHub App to open alignment PRs. Its 
 
 ## 3. Branches and version lines
 
-Platform `main` publishes the latest mainline version. Maintenance patches use platform `release/vMAJOR.MINOR.x`. For example, after publishing `release-v0.1.0`, a `release/v0.1.x` branch can be created from that tag. Maintenance then publishes `release-v0.1.1` and `release-v0.1.2`, while mainline can later publish `release-v0.2.0`.
+New platform and component Stable and Preview versions in the 0.1 line are published from each repository's `release/v0.1.x` branch. The 0.2 line is published from `main`. Each platform branch maintains its own Stable and Daily manifests. Both lines may select complete component Releases by their exact tags.
 
-If `release-v0.2.0` is not yet planned and `release-v0.1.0` immediately needs patches, `main` can first publish `release-v0.1.1` and `release-v0.1.2`, then create `release/v0.1.x` from a later patch point. Once that branch exists, mainline and maintenance each manage their own two manifests.
+The vmlinux release unit publishes every new kernel from `guest-runtime/main`, including `vmlinux-v0.1.x` versions. A maintenance aggregate pins a complete kernel Release. To select a new kernel in maintenance, publish it from guest-runtime main first, then update the maintenance manifest. Runtime follows the usual component branch rules.
 
 Platform GitHub Latest is updated only by a Stable aggregate published from platform `main`. Each component repository independently manages its own Latest through its serialized publisher, using the version and publication-time rules in [component publication](#6-component-publication-cli). Component maintenance Stable releases and all Previews do not update Latest. Platform aggregates always select components by exact manifest tags, not by component Latest.
 
@@ -122,7 +122,7 @@ The scanner pins each branch HEAD SHA, then loads the trusted controller from pl
 
 - Platform `main` always selects every component repository's `main`.
 - A platform maintenance branch derives the component branch from that unit's Daily-manifest version. Both `v0.3.5` and `v0.3.6-preview.*` map to component `release/v0.3.x`.
-- Runtime and vmlinux independently derive `release/vX.Y.x` from `runtime-vX.Y.Z` and `vmlinux-vX.Y.Z`.
+- Runtime derives its maintenance source branch from `runtime-vX.Y.Z`. On a maintenance branch, the vmlinux selection is fixed even if guest-runtime has a matching maintenance branch.
 - If the derived branch is absent, that unit reuses the manifest's complete Release without automatically changing its version. If an upstream dependency changes in the current round and the unit needs rebuilding, the entire selection is deferred. It does not write an aggregate manifest combining the old downstream binary with new dependency versions.
 
 The six units in one platform maintenance branch can therefore come from six different component version lines.

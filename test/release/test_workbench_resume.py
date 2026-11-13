@@ -187,6 +187,14 @@ class ResumeTests(unittest.TestCase):
                 with self.assertRaisesRegex(subject.Deferred, 'artifact is missing'):
                     self.resume_component(plan, plans, subject.ReleaseStatus(None, SHA, False))
 
+    def test_maintenance_can_resume_previously_accepted_kernel_bytes(self):
+        plan, plans = self.component('vmlinux')
+        plan = subject.replace(plan, source_ref=None)
+        plans['vmlinux'] = plan
+        result, calls = self.resume_component(plan, plans, subject.ReleaseStatus(None, SHA, False))
+        self.assertFalse(result)
+        self.assertIn('/actions/jobs/20/rerun', calls[0].args[-2])
+
     def test_successful_component_publisher_with_failed_cleanup_never_rebuilds(self):
         plan, plans = self.component()
         self.jobs[-1]['conclusion'] = 'success'

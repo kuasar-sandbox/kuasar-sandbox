@@ -189,6 +189,24 @@ class FixedInputs(unittest.TestCase):
         for request in invalid:
             with self.subTest(request=request), self.assertRaises(ValueError): validate(*request)
 
+    def test_new_component_builds_require_the_owning_branch(self):
+        producer = self.producer()
+        for suffix in ('', '-preview.20261113'):
+            for unit, version, source_ref in (
+                ('connector', 'v0.1.16', 'main'),
+                ('runtime', 'runtime-v0.2.0', 'release/v0.2.x'),
+                ('vmlinux', 'vmlinux-v0.1.7', 'release/v0.1.x'),
+            ):
+                with self.subTest(unit=unit, suffix=suffix), self.assertRaisesRegex(ValueError, 'must be published from'):
+                    producer.admit(unit, source_ref, self.sha, version + suffix,
+                                   subject.tag_sources.repository(unit), self.root / 'denied.tar')
+            for unit, version, source_ref in (
+                ('connector', 'v0.1.16', 'release/v0.1.x'),
+                ('runtime', 'runtime-v0.2.0', 'main'),
+                ('vmlinux', 'vmlinux-v0.1.7', 'main'),
+            ):
+                subject.tag_sources.selection.validate_publication_source(version + suffix, source_ref)
+
     def test_producer_missing_branch_does_not_fetch_raw_sha(self):
         producer = self.producer()
         with self.assertRaisesRegex(ValueError, 'git fetch failed'):

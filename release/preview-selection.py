@@ -111,12 +111,14 @@ def parse_tag(unit: str, value: str) -> UnitTag:
     )
 
 
-def component_source_ref(platform_ref: str, unit: str, configured: str) -> str:
+def component_source_ref(platform_ref: str, unit: str, configured: str) -> str | None:
     parsed = parse_tag(unit, configured)
     if platform_ref == "main":
         return "main"
     if PLATFORM_RELEASE_BRANCH_RE.fullmatch(platform_ref) is None:
         raise SelectionError(f"unsupported platform source ref: {platform_ref}")
+    if unit == "vmlinux":
+        return None  # Maintenance manifests pin a published kernel; only main builds it.
     return f"release/v{parsed.major}.{parsed.minor}.x"
 
 
@@ -369,7 +371,9 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.command == "source-ref":
-            print(component_source_ref(args.platform_ref, args.unit, args.configured))
+            source_ref = component_source_ref(args.platform_ref, args.unit, args.configured)
+            if source_ref is not None:
+                print(source_ref)
         elif args.command == "candidate":
             print(preview_candidate(args.unit, args.winner, args.date))
         else:
