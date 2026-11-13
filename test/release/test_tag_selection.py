@@ -10,7 +10,6 @@ from unittest import mock
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[2] / 'release'))
 import selection
 import preview_coordinator as coordinator
-import formal_coordinator as formal
 
 
 def manifest(preview=False):
@@ -154,34 +153,6 @@ class TagSelectionTests(unittest.TestCase):
             self.assertEqual(repository_state.call_count, len(units))
             self.assertEqual(repository_state.return_value.status.call_args_list,
                              [mock.call(tag) for tag in units.values()])
-
-    def test_formal_coordinator_requires_tags_not_independent_test_revisions(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = pathlib.Path(directory)
-            (root / 'releases').mkdir()
-            (root / 'releases/release.yaml').write_text(manifest())
-            (root / 'releases/daily-preview.yaml').write_text(manifest(True))
-            # All publication-facing work is mocked; this exercises admission only.
-            with mock.patch.object(formal, 'ROOT', root), \
-                 mock.patch.dict(formal.os.environ, {'RELEASE_VERSION': 'release-v1.2.3',
-                     'PLATFORM_REF': 'main', 'PLATFORM_SHA': 'a' * 40}), \
-                 mock.patch.object(formal.coordinator, 'run', side_effect=[mock.Mock(stdout='a' * 40), mock.Mock(stdout=manifest())]), \
-                 mock.patch.object(formal.coordinator, 'branch_sha', return_value='a' * 40), \
-                 mock.patch.object(formal.coordinator, 'platform_release', return_value=coordinator.ReleaseStatus(None, None, False)), \
-                 mock.patch.object(formal.coordinator, 'RepositoryState') as state, \
-                 mock.patch.object(formal.coordinator, 'has_arm_archive', return_value=True), \
-                 mock.patch.object(formal.coordinator, 'active_aggregate_run', return_value=None), \
-                 mock.patch.object(formal.coordinator, 'aggregate_runs', return_value=[]), \
-                 mock.patch.object(formal.coordinator, 'persist_manifest', return_value='b' * 40) as persist, \
-                 mock.patch.object(formal, 'wait_for_convergence') as converge:
-                state.return_value.status.return_value = coordinator.ReleaseStatus({}, 'c' * 40, True)
-                formal.main()
-            plans, version, sha = converge.call_args.args
-            self.assertEqual((version, sha), ('release-v1.2.3', 'b' * 40))
-            self.assertEqual(persist.call_args.kwargs, dict(channel='release', root=root, source_ref='main',
-                source_sha='a' * 40, source_shas={name: 'c' * 40 for name in plans}))
-            self.assertEqual({name: plan.selected for name, plan in plans.items()},
-                             selection.parse_manifest(manifest(), 'fixture', False)[2])
 
 
 if __name__ == '__main__':

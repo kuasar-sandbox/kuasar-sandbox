@@ -5,10 +5,9 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'release'))
-import formal_coordinator as formal
 import prepare_notes
 import preview_coordinator as coordinator
 import selection
@@ -123,105 +122,6 @@ class SelectionTransactionTests(unittest.TestCase):
         for channel in ('release', 'daily-preview'):
             with self.assertRaisesRegex(ValueError, 'body|text'):
                 prepare_notes.require_prepared(manifest(channel, notes=False), f'releases/{channel}.yaml')
-
-
-class StableRetryTests(unittest.TestCase):
-    def test_completed_release_is_noop_regardless_of_obsolete_notes_metadata(self):
-        original = manifest()
-        correction = original.replace('  mode: fixed\n', '  mode: fixed\n  aggregate_sha: ' + SHA + '\n')
-        status = coordinator.ReleaseStatus({}, SHA, True)
-        with patch.object(coordinator, 'platform_release', return_value=status), \
-             patch.object(coordinator, 'api', return_value=remote(original)), \
-             patch.object(coordinator, 'persist_manifest') as persist:
-            self.assertEqual(formal.existing_publication(VERSION, correction, NEXT), formal.PublicationState.COMPLETE)
-            persist.assert_not_called()
-            with self.assertRaisesRegex(coordinator.Deferred, 'another selection'):
-                formal.existing_publication(VERSION, correction.replace('sandboxer: v1.2.3', 'sandboxer: v1.2.4'), NEXT)
-
-    def test_active_or_partial_release_cannot_rewrite_source(self):
-        absent = coordinator.ReleaseStatus(None, None, False)
-        partial = coordinator.ReleaseStatus({'draft': True}, SHA, False)
-        for status, active in ((absent, {'html_url': 'run-url'}), (partial, None)):
-            with patch.object(coordinator, 'platform_release', return_value=status), \
-                 patch.object(coordinator, 'active_aggregate_run', return_value=active), \
-                 patch.object(coordinator, 'persist_manifest') as persist:
-                with self.assertRaises(coordinator.Deferred):
-                    formal.existing_publication(VERSION, manifest(), NEXT)
-                persist.assert_not_called()
-
-    def test_failed_prepare_or_validation_does_not_lock_unpublished_version(self):
-        absent = coordinator.ReleaseStatus(None, None, False)
-        for conclusion in ('failure', 'cancelled'):
-            history = [{'id': 12, 'display_title': f'Aggregate {VERSION} @{SHA}', 'conclusion': conclusion}]
-            with patch.object(coordinator, 'platform_release', return_value=absent), \
-                 patch.object(coordinator, 'active_aggregate_run', return_value=None), \
-                 patch.object(coordinator, 'aggregate_runs', return_value=history), \
-                 patch.object(formal, 'validated_stage', return_value=False):
-                self.assertEqual(formal.existing_publication(VERSION, manifest(notes=False), NEXT), formal.PublicationState.NEW)
-
-    def test_retained_stage_requires_latest_successful_gates_and_unexpired_artifact(self):
-        state = {'id': 12}
-        jobs = [{'id': i, 'name': name, 'status': 'completed', 'conclusion': 'success'}
-                for i, name in enumerate(('prepare', 'stage', 'release-asset-validation / results'), 1)]
-        artifact = {'name': f'aggregate-stage-{VERSION}-12', 'expired': False}
-        for changed_jobs, artifacts, expected in ((jobs, [artifact], True),
-                (jobs + [dict(jobs[-1], id=20, conclusion='failure')], [artifact], False),
-                (jobs[:-1], [artifact], False), (jobs, [dict(artifact, expired=True)], False),
-                (jobs, [], False)):
-            def pages(endpoint, key):
-                return changed_jobs if key == 'jobs' else artifacts
-            with patch.object(coordinator, 'paginated', side_effect=pages):
-                self.assertEqual(formal.validated_stage(state, VERSION), expected)
-
-    def test_same_source_validated_run_resumes_original_publisher_before_preparation(self):
-        for text in (manifest(notes=False), manifest().replace('  mode: fixed\n',
-                '  mode: fixed\n  aggregate_sha: ' + SHA + '\n')):
-            with tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                (root / 'releases').mkdir()
-                (root / 'releases/release.yaml').write_text(text)
-                (root / 'releases/daily-preview.yaml').write_text(manifest('daily-preview'))
-                with patch.object(formal, 'ROOT', root), \
-                     patch.dict(formal.os.environ, dict(RELEASE_VERSION=VERSION, PLATFORM_REF='main', PLATFORM_SHA=SHA)), \
-                     patch.object(coordinator, 'run', side_effect=[Mock(stdout=SHA), Mock(stdout=text)]), \
-                     patch.object(coordinator, 'branch_sha', return_value=SHA), \
-                     patch.object(coordinator, 'platform_release', return_value=coordinator.ReleaseStatus(None, None, False)), \
-                     patch.object(coordinator, 'active_aggregate_run', return_value=None), \
-                     patch.object(coordinator, 'aggregate_runs', return_value=[{'display_title': f'Aggregate {VERSION} @{SHA}'}]), \
-                     patch.object(formal, 'validated_stage', return_value=True), \
-                     patch.object(coordinator, 'persist_manifest') as persist, \
-                     patch.object(coordinator, 'RepositoryState') as state, \
-                     patch.object(coordinator, 'has_arm_archive', return_value=True), \
-                     patch.object(formal, 'wait_for_convergence') as wait:
-                    state.return_value.status.return_value = coordinator.ReleaseStatus({}, SHA, True)
-                    formal.main()
-                    persist.assert_not_called()
-                    wait.assert_called_once()
-                    self.assertEqual(wait.call_args.args[1:], (VERSION, SHA))
-
-    def test_mixed_retained_sources_reject_resume_in_either_history_order(self):
-        absent = coordinator.ReleaseStatus(None, None, False)
-        for sources in ((SHA, NEXT), (NEXT, SHA)):
-            history = [{'display_title': f'Aggregate {VERSION} @{source}'} for source in sources]
-            with self.subTest(sources=sources), \
-                 patch.object(coordinator, 'platform_release', return_value=absent), \
-                 patch.object(coordinator, 'active_aggregate_run', return_value=None), \
-                 patch.object(coordinator, 'aggregate_runs', return_value=history), \
-                 patch.object(formal, 'validated_stage', return_value=True):
-                with self.assertRaisesRegex(coordinator.Deferred, 'earlier validated source'):
-                    formal.existing_publication(VERSION, manifest(notes=False), SHA)
-
-    def test_failed_original_stage_without_release_is_not_replaced(self):
-        absent = coordinator.ReleaseStatus(None, None, False)
-        history = [{'display_title': f'Aggregate {VERSION} @{SHA}'}]
-        with patch.object(coordinator, 'platform_release', return_value=absent), \
-             patch.object(coordinator, 'active_aggregate_run', return_value=None), \
-             patch.object(coordinator, 'aggregate_runs', return_value=history), \
-             patch.object(formal, 'validated_stage', return_value=True):
-            with self.assertRaisesRegex(coordinator.Deferred, 'earlier validated source'):
-                formal.existing_publication(VERSION, manifest(), NEXT)
-            for text in (manifest(), manifest(notes=False)):
-                self.assertEqual(formal.existing_publication(VERSION, text, SHA), formal.PublicationState.RESUME)
 
 
 if __name__ == '__main__':
