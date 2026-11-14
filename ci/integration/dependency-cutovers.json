@@ -266,9 +266,9 @@
         "repository": "kuasar-sandbox/sandboxer",
         "pull_request_number": 445,
         "base_ref": "main",
-        "base_sha": "da749c52c4a310e0f52ac4fc30f54cd65cd384d6",
-        "head_sha": "702344785adbb413731c7f5e849004dee9d581ec",
-        "candidate_sha": "f13892beebb45d060f462e31694ac8f4aec3db6d"
+        "base_sha": "c2dce6c7e3b3deb287731d08a068bfc43c5fbbfe",
+        "head_sha": "52dd21463045798343785d1130ff9a626810efed",
+        "candidate_sha": "473c53bac365f227215b0df2b91149ef22bda4ef"
       },
       "units": {
         "accelerator": {
@@ -290,22 +290,60 @@
             }
           ]
         },
-        "runtime": {
-          "tag": "runtime-v0.2.0-preview.20261114",
-          "sha": "c5c1165b25a013d17d17bf9e6f6e6943731935ad",
-          "release_id": 445139293,
+        "connector": {
+          "tag": "v0.2.0-preview.20261114.1",
+          "sha": "909dc15a3e3512bf1ac8a4c3af57dcb78833a075",
+          "release_id": 445292963,
           "assets": [
             {
-              "name": "sandbox-runtime-aarch64-v0.2.0-preview.20261114.tar.gz",
-              "id": 746804551,
-              "size": 30053448,
-              "digest": "sha256:bc607a3c4a82cad84be6706f0f52d8c983612b26a0d2122b2f701d8a9ce15e2c"
+              "name": "connector-v0.2.0-preview.20261114.1-linux-aarch64.tar.gz",
+              "id": 747479701,
+              "size": 5105224,
+              "digest": "sha256:109e337bc9cbf86ae211aa73c3ad034de6a0d89faa9f901325e1eca9a82f5cfc"
             },
             {
-              "name": "sandbox-runtime-x86_64-v0.2.0-preview.20261114.tar.gz",
-              "id": 746804624,
-              "size": 32914663,
-              "digest": "sha256:0263d290044081fed551756dd3f60588c1ba508cab79cead1272ce6eb311b6cc"
+              "name": "connector-v0.2.0-preview.20261114.1-linux-x86_64.tar.gz",
+              "id": 747479810,
+              "size": 5576129,
+              "digest": "sha256:d7a58fd82b7dfb8dd18165d731c2e4bb28ca5f5b8c0c9bda748e6c4d265277d9"
+            }
+          ]
+        },
+        "runtime": {
+          "tag": "runtime-v0.2.0-preview.20261114.1",
+          "sha": "eba6d5facf6fa269a06cc114af7443c7dc307bb0",
+          "release_id": 445293586,
+          "assets": [
+            {
+              "name": "sandbox-runtime-aarch64-v0.2.0-preview.20261114.1.tar.gz",
+              "id": 747482388,
+              "size": 30111277,
+              "digest": "sha256:9d524866d048173cb7c0df6dfeb171b1e634736a1de88d355a5f1004577b82e8"
+            },
+            {
+              "name": "sandbox-runtime-x86_64-v0.2.0-preview.20261114.1.tar.gz",
+              "id": 747482485,
+              "size": 32986982,
+              "digest": "sha256:54b16415db685dfcc9ddfca65f8e97c6e9361eb0dded76709bf05d8ef281bfc4"
+            }
+          ]
+        },
+        "vmlinux": {
+          "tag": "vmlinux-v0.1.7-preview.20261114.1",
+          "sha": "eba6d5facf6fa269a06cc114af7443c7dc307bb0",
+          "release_id": 445297394,
+          "assets": [
+            {
+              "name": "vmlinux-aarch64-v0.1.7-preview.20261114.1.tar.gz",
+              "id": 747498794,
+              "size": 4402111,
+              "digest": "sha256:577af7720feafed1274bad094cfa7ce8b6e5191660cc4cac9164a3a8f27485bb"
+            },
+            {
+              "name": "vmlinux-x86_64-v0.1.7-preview.20261114.1.tar.gz",
+              "id": 747498849,
+              "size": 5657242,
+              "digest": "sha256:0e9261cb538fd045fdb8fb128eaa6a446d459eb487cf5bf5cab0c7152bb7b7cb"
             }
           ]
         }
