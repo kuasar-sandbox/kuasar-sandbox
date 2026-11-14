@@ -83,6 +83,11 @@ def http(method, url, *, headers=None, body=None, expected=200):
     return data
 
 
+def fixture_mac(name):
+    """Give a task-owned link a userspace-set, local unicast identity at birth."""
+    return '02:' + ':'.join(f'{byte:02x}' for byte in hashlib.sha256(name.encode()).digest()[:5])
+
+
 class Node:
     def __init__(self, fixture, index, *, extension=False, pools=False, host=False, transit=True, gateway=False):
         self.fixture, self.index = fixture, index
@@ -137,7 +142,12 @@ class Node:
             require(command('ip', 'link', 'show', peer, check=False).returncode != 0, 'interface already exists')
             block = self.fixture.subnet + self.index * 8 + plane * 4
             host, guest = str(ipaddress.IPv4Address(block + 1)), str(ipaddress.IPv4Address(block + 2))
-            command('ip', 'link', 'add', peer, 'type', 'veth', 'peer', 'name', inside)
+            # Set both identities in the creation request. A kernel-random MAC
+            # can otherwise be rewritten by host udev after our first snapshot.
+            # A later link-set command would still race the initial add event.
+            inside_mac = fixture_mac(inside)
+            command('ip', 'link', 'add', peer, 'address', fixture_mac(peer),
+                    'type', 'veth', 'peer', 'name', inside, 'address', inside_mac)
             self.peers.append(peer)
             if not self.host:
                 command('ip', 'link', 'set', inside, 'netns', self.netns)
@@ -157,7 +167,10 @@ class Node:
                 command(*self.network, 'route', 'add', 'default', 'via', host, 'dev', 'ingress0')
             else:
                 self.transit, self.transit_host = guest, host
-                self.original_transit = json.loads(command(*self.network, '-j', 'link', 'show', self.transit_name).stdout)[0]['address']
+                self.original_transit = inside_mac
+                actual = json.loads(command(*self.network, '-j', 'link', 'show', self.transit_name).stdout)[0]['address']
+                require(actual == self.original_transit,
+                        f'fixture transit MAC changed before handoff: expected {self.original_transit}, got {actual}')
 
     def _configuration(self):
         for component in ('node-conductor', 'node-proxy', 'node-telemetry', 'connector-vswitch'):
@@ -452,7 +465,9 @@ class Node:
     def assert_returned(self):
         if self.with_transit:
             link = json.loads(command(*self.network, '-j', 'link', 'show', self.transit_name).stdout)[0]
-            require(link['address'] == self.original_transit, 'original transit did not return to the main namespace')
+            require(link['address'] == self.original_transit,
+                    f'original transit did not return to the main namespace: expected {self.original_transit}, '
+                    f"got {link['address']}")
             require('UP' not in link['flags'], 'returned transit must be DOWN for the next native start')
         else:
             applied = json.loads((self.data / 'applied.json').read_text()) if (self.data / 'applied.json').exists() else {}
