@@ -29,6 +29,72 @@ def run(args, **kwargs):
     return subprocess.run([str(x) for x in args], check=True, text=True, **kwargs)
 
 
+def inspect_image(engine, reference):
+    try:
+        rows = json.loads(run([engine, "image", "inspect", reference], capture_output=True).stdout)
+    except subprocess.CalledProcessError as error:
+        # Preserve the engine diagnostic: captured stderr used to disappear from CI.
+        print(error.stderr or str(error), file=sys.stderr)
+        raise
+    if len(rows) != 1:
+        raise ValueError("image inspect must return exactly one image")
+    return rows[0]
+
+
+def remove_build_image(engine, reference):
+    try:
+        run([engine, "image", "rm", reference])
+    except subprocess.CalledProcessError as error:
+        # A failed build may not have created its output. Do not mask its error.
+        print(f"could not remove temporary build image {reference}: {error}", file=sys.stderr)
+
+
+def build_image(engine, base, arch, tag, command, context, *, allow_pull=False):
+    try:
+        base_info = inspect_image(engine, base)
+    except subprocess.CalledProcessError as error:
+        # Explicit local inputs retain their offline/preloaded contract. Only the
+        # Containerfile default can be fetched, and only for a missing image.
+        missing = any(message in (error.stderr or "").lower()
+                      for message in ("no such image", "image not known"))
+        if not allow_pull or not missing:
+            raise
+        run([engine, "pull", "--platform", "linux/" + arch, base])
+        base_info = inspect_image(engine, base)
+    image_id = "sha256:" + base_info["Id"].removeprefix("sha256:")
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+        raise ValueError("selected base has an invalid image ID")
+    if base_info.get("Os") != "linux" or base_info.get("Architecture") != arch:
+        raise ValueError("selected base platform differs from requested architecture")
+    base_layers = base_info.get("RootFS", {}).get("Layers", [])
+    if not base_layers:
+        raise ValueError("selected base has no filesystem layers")
+    # BuildKit cannot reliably use a bare config ID in FROM. Bind that ID to a
+    # private, per-build local alias instead of resolving the mutable input twice.
+    alias = tag + "-base"
+    try:
+        run([engine, "image", "tag", image_id, alias])
+        frozen = inspect_image(engine, alias)
+        if "sha256:" + frozen["Id"].removeprefix("sha256:") != image_id:
+            raise ValueError("temporary base alias differs from selected image")
+        run(command + ["--build-arg", "BASE_IMAGE=" + alias, context])
+        frozen = inspect_image(engine, alias)
+        image_info = inspect_image(engine, tag)
+        if ("sha256:" + frozen["Id"].removeprefix("sha256:") != image_id
+                or frozen.get("Os") != "linux" or frozen.get("Architecture") != arch):
+            raise ValueError("temporary base alias changed during build")
+        if image_info.get("Os") != "linux" or image_info.get("Architecture") != arch:
+            raise ValueError("candidate image platform differs from selected base")
+        if image_info.get("RootFS", {}).get("Layers", [])[:len(base_layers)] != base_layers:
+            raise ValueError("candidate image layers differ from selected base")
+        return image_id
+    except BaseException:
+        remove_build_image(engine, tag)
+        raise
+    finally:
+        remove_build_image(engine, alias)
+
+
 def validate_elf(path, arch):
     with path.open("rb") as stream:
         header = stream.read(20)
@@ -152,19 +218,14 @@ def build(args):
                          "--build-arg", "RELEASE_VERSION=" + args.version,
                          "--build-arg", "SOURCE_REVISION=" + revision,
                          "--tag", tag, "--file", context / "Containerfile"]
-        if args.base_image:
-            build_command += ["--build-arg", "BASE_IMAGE=" + args.base_image]
         if args.build_network:
             build_command += ["--network", args.build_network]
-        run(build_command + [context])
+        base = args.base_image or re.search(r"^ARG BASE_IMAGE=(\S+)$",
+                                             (HERE / "Containerfile").read_text(), re.MULTILINE)[1]
+        base_image_id = build_image(args.engine, base, arch, tag, build_command, context,
+                                    allow_pull=args.base_image is None)
         try:
-            base = args.base_image or re.search(r"^ARG BASE_IMAGE=(\S+)$",
-                                                 (HERE / "Containerfile").read_text(), re.MULTILINE)[1]
-            base_info, image_info = json.loads(run([args.engine, "image", "inspect", base, tag], capture_output=True).stdout)
-            base_layers = base_info["RootFS"]["Layers"]
-            if not base_layers or image_info["RootFS"]["Layers"][:len(base_layers)] != base_layers:
-                raise ValueError("candidate image layers differ from selected base")
-            receipt["base_image_id"] = "sha256:" + base_info["Id"].removeprefix("sha256:")
+            receipt["base_image_id"] = base_image_id
             seed_checksum = run([args.engine, "run", "--rm", "--network=none",
                                  "--entrypoint", "/usr/bin/sha256sum", tag,
                                  "/usr/share/node-infra/quickstart/SHA256SUMS"], capture_output=True)
