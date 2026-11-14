@@ -1,15 +1,15 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261114
+preview_version: preview.20261114.1
 previous_preview_version: preview.20261112
 components:
   accelerator: v0.2.0-preview.20261114
-  connector: v0.1.8
+  connector: v0.2.0-preview.20261114.1
   sandboxer: v0.1.15
   orchestrator: v0.2.0-preview.20261112
-  runtime: runtime-v0.2.0-preview.20261114
-  vmlinux: vmlinux-v0.1.6
+  runtime: runtime-v0.2.0-preview.20261114.1
+  vmlinux: vmlinux-v0.1.7-preview.20261114.1
 component_next_versions:
   accelerator: v0.2.0
   connector: v0.2.0
@@ -19,34 +19,36 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261114
+    # Kuasar Sandbox release-v0.2.0-preview.20261114.1
 
     This aggregate is a Preview selection for development and evaluation. It does not replace the current Stable release.
 
     Previous aggregate selection: `release-v0.2.0-preview.20261112`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261114/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261114.1/releases/daily-preview.yaml).
 
     ## Component versions
 
     | Release unit | Version |
     |---|---|
     | `accelerator` | `v0.2.0-preview.20261114` |
-    | `connector` | `v0.1.8` |
+    | `connector` | `v0.2.0-preview.20261114.1` |
     | `sandboxer` | `v0.1.15` |
     | `orchestrator` | `v0.2.0-preview.20261112` |
-    | `runtime` | `runtime-v0.2.0-preview.20261114` |
-    | `vmlinux` | `vmlinux-v0.1.6` |
+    | `runtime` | `runtime-v0.2.0-preview.20261114.1` |
+    | `vmlinux` | `vmlinux-v0.1.7-preview.20261114.1` |
 
     Six release units from five independently versioned repositories; `guest-runtime` supplies both `runtime` and `vmlinux`.
 
     ## Component updates
 
     - Accelerator selection advances from `v0.1.12` to `v0.2.0-preview.20261114`.
-    - Runtime selection advances from `runtime-v0.2.0-preview.20261112` to `runtime-v0.2.0-preview.20261114`.
-    - Connector, sandboxer, orchestrator and vmlinux retain their previously selected published versions.
+    - Connector selection advances from `v0.1.8` to `v0.2.0-preview.20261114.1`.
+    - Runtime selection advances from `runtime-v0.2.0-preview.20261112` to `runtime-v0.2.0-preview.20261114.1`.
+    - Kernel selection advances from `vmlinux-v0.1.6` to `vmlinux-v0.1.7-preview.20261114.1`.
+    - Sandboxer and orchestrator retain their previously selected published versions during producer preparation.
 
-    This preparation selects the Accelerator and Runtime tags before their normal component publication. Their source commits and published assets must be validated by the release workflows. Exact-assets integration E2E and aggregate delivery validation remain required before publication; this selection is not acceptance evidence.
+    This explicit same-day revision retains the already published Accelerator assets and prepares new Connector, Runtime and kernel tags through their normal component workflows. Runtime and kernel include the merged deferred-disk binding changes. Existing published tags and assets remain unchanged. Sandboxer and Orchestrator dependency alignment and publication follow after these producer releases are ready. Exact-assets integration E2E and aggregate delivery validation remain required before publication; this selection is not acceptance evidence.
 
     ## Download and use
 
@@ -54,7 +56,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261114/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261114/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261114.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261114.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
