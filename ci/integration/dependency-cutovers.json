@@ -348,6 +348,113 @@
           ]
         }
       }
+    },
+    {
+      "candidate": {
+        "repository": "kuasar-sandbox/orchestrator",
+        "pull_request_number": 548,
+        "base_ref": "main",
+        "base_sha": "a4ae4f876d5b35f2388a9c863e80bedd733a1364",
+        "head_sha": "c27ece40f750e8dbcffaa03a88e796f011fc5376",
+        "candidate_sha": "636680835958f2bd644d061e679fcc6d6b1e406c"
+      },
+      "units": {
+        "accelerator": {
+          "tag": "v0.2.0-preview.20261114",
+          "sha": "0fd72e30c146947d0f2eb4ba7d5b71dc58533ff2",
+          "release_id": 445136083,
+          "assets": [
+            {
+              "name": "accelerator-v0.2.0-preview.20261114-linux-aarch64.tar.gz",
+              "id": 746791376,
+              "size": 35480284,
+              "digest": "sha256:fe9c16f66bfe17bde9f24401cd9391431bfcbf7f247537bee2534c3f653d31e2"
+            },
+            {
+              "name": "accelerator-v0.2.0-preview.20261114-linux-x86_64.tar.gz",
+              "id": 746791468,
+              "size": 38838838,
+              "digest": "sha256:72849f1ae23eceb53776ba15926729c658f2283ea78f7a1fe17503810e382c8d"
+            }
+          ]
+        },
+        "connector": {
+          "tag": "v0.2.0-preview.20261114.1",
+          "sha": "909dc15a3e3512bf1ac8a4c3af57dcb78833a075",
+          "release_id": 445292963,
+          "assets": [
+            {
+              "name": "connector-v0.2.0-preview.20261114.1-linux-aarch64.tar.gz",
+              "id": 747479701,
+              "size": 5105224,
+              "digest": "sha256:109e337bc9cbf86ae211aa73c3ad034de6a0d89faa9f901325e1eca9a82f5cfc"
+            },
+            {
+              "name": "connector-v0.2.0-preview.20261114.1-linux-x86_64.tar.gz",
+              "id": 747479810,
+              "size": 5576129,
+              "digest": "sha256:d7a58fd82b7dfb8dd18165d731c2e4bb28ca5f5b8c0c9bda748e6c4d265277d9"
+            }
+          ]
+        },
+        "runtime": {
+          "tag": "runtime-v0.2.0-preview.20261114.1",
+          "sha": "eba6d5facf6fa269a06cc114af7443c7dc307bb0",
+          "release_id": 445293586,
+          "assets": [
+            {
+              "name": "sandbox-runtime-aarch64-v0.2.0-preview.20261114.1.tar.gz",
+              "id": 747482388,
+              "size": 30111277,
+              "digest": "sha256:9d524866d048173cb7c0df6dfeb171b1e634736a1de88d355a5f1004577b82e8"
+            },
+            {
+              "name": "sandbox-runtime-x86_64-v0.2.0-preview.20261114.1.tar.gz",
+              "id": 747482485,
+              "size": 32986982,
+              "digest": "sha256:54b16415db685dfcc9ddfca65f8e97c6e9361eb0dded76709bf05d8ef281bfc4"
+            }
+          ]
+        },
+        "vmlinux": {
+          "tag": "vmlinux-v0.1.7-preview.20261114.1",
+          "sha": "eba6d5facf6fa269a06cc114af7443c7dc307bb0",
+          "release_id": 445297394,
+          "assets": [
+            {
+              "name": "vmlinux-aarch64-v0.1.7-preview.20261114.1.tar.gz",
+              "id": 747498794,
+              "size": 4402111,
+              "digest": "sha256:577af7720feafed1274bad094cfa7ce8b6e5191660cc4cac9164a3a8f27485bb"
+            },
+            {
+              "name": "vmlinux-x86_64-v0.1.7-preview.20261114.1.tar.gz",
+              "id": 747498849,
+              "size": 5657242,
+              "digest": "sha256:0e9261cb538fd045fdb8fb128eaa6a446d459eb487cf5bf5cab0c7152bb7b7cb"
+            }
+          ]
+        },
+        "sandboxer": {
+          "tag": "v0.2.0-preview.20261114.1",
+          "sha": "87c26604c84773854e93f3ebfa08aab50764d877",
+          "release_id": 445375473,
+          "assets": [
+            {
+              "name": "sandboxer-v0.2.0-preview.20261114.1-linux-aarch64.tar.gz",
+              "id": 747829677,
+              "size": 14647087,
+              "digest": "sha256:8ff3d5408c9bcb7b004c4db45cc6cc1e946bea7b3a844edb11f96c0ebf47c670"
+            },
+            {
+              "name": "sandboxer-v0.2.0-preview.20261114.1-linux-x86_64.tar.gz",
+              "id": 747829769,
+              "size": 15735880,
+              "digest": "sha256:262c088e64fbab46a6b18ec2c37f1cf41db38408e4b5aecef164d489a357c7d6"
+            }
+          ]
+        }
+      }
     }
   ]
 }
