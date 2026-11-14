@@ -7,7 +7,7 @@ components:
   accelerator: v0.2.0-preview.20261114
   connector: v0.2.0-preview.20261114.1
   sandboxer: v0.2.0-preview.20261114.1
-  orchestrator: v0.2.0-preview.20261112
+  orchestrator: v0.2.0-preview.20261114.1
   runtime: runtime-v0.2.0-preview.20261114.1
   vmlinux: vmlinux-v0.1.7-preview.20261114.1
 component_next_versions:
@@ -21,7 +21,7 @@ notes:
   body: |
     # Kuasar Sandbox release-v0.2.0-preview.20261114.1
 
-    This aggregate is a Preview selection for development and evaluation. It does not replace the current Stable release.
+    This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
     Previous aggregate selection: `release-v0.2.0-preview.20261112`.
 
@@ -34,7 +34,7 @@ notes:
     | `accelerator` | `v0.2.0-preview.20261114` |
     | `connector` | `v0.2.0-preview.20261114.1` |
     | `sandboxer` | `v0.2.0-preview.20261114.1` |
-    | `orchestrator` | `v0.2.0-preview.20261112` |
+    | `orchestrator` | `v0.2.0-preview.20261114.1` |
     | `runtime` | `runtime-v0.2.0-preview.20261114.1` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261114.1` |
 
@@ -42,14 +42,74 @@ notes:
 
     ## Component updates
 
-    - Accelerator selection advances from `v0.1.12` to `v0.2.0-preview.20261114`.
-    - Connector selection advances from `v0.1.8` to `v0.2.0-preview.20261114.1`.
-    - Runtime selection advances from `runtime-v0.2.0-preview.20261112` to `runtime-v0.2.0-preview.20261114.1`.
-    - Kernel selection advances from `vmlinux-v0.1.6` to `vmlinux-v0.1.7-preview.20261114.1`.
-    - Sandboxer selection advances from `v0.1.15` to `v0.2.0-preview.20261114.1` after its required dependency alignment.
-    - Orchestrator retains its previously selected published version until its dependency alignment is complete.
+    ### accelerator
 
-    This explicit same-day revision retains the already published Accelerator, Connector, Runtime and kernel assets. Runtime and kernel include the merged deferred-disk binding changes. The Sandboxer tag is prepared for normal publication only after its dependency-alignment PR passes required checks and merges. Orchestrator dependency alignment and publication follow after the Sandboxer release is ready. Existing published tags and assets remain unchanged. Exact-assets integration E2E and aggregate delivery validation remain required before publication; this selection is not acceptance evidence.
+    Selected version: `v0.1.12` → `v0.2.0-preview.20261114`.
+
+    - release: isolate the Go workspace by publication channel ([#232](https://github.com/kuasar-sandbox/accelerator/pull/232), [commit a2454409a3fb](https://github.com/kuasar-sandbox/accelerator/commit/a2454409a3fb0feda234c27dc934de23f325d4ce)).
+    - release: keep the selected compiler for Preview workspace initialization ([#234](https://github.com/kuasar-sandbox/accelerator/pull/234), [commit 0fd72e30c146](https://github.com/kuasar-sandbox/accelerator/commit/0fd72e30c146947d0f2eb4ba7d5b71dc58533ff2)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/3bba5006bf531a9ebfb15c68da960054b84c8f25...0fd72e30c146947d0f2eb4ba7d5b71dc58533ff2)
+
+    ### connector
+
+    Selected version: `v0.1.8` → `v0.2.0-preview.20261114.1`.
+
+    - release: isolate the Go workspace by publication channel ([#112](https://github.com/kuasar-sandbox/connector/pull/112), [commit 942d44189a4b](https://github.com/kuasar-sandbox/connector/commit/942d44189a4b87ea75c71f1bcc61e6344fee01b3)).
+    - release: keep the selected Go toolchain during Preview workspace initialization ([#114](https://github.com/kuasar-sandbox/connector/pull/114), [commit 909dc15a3e35](https://github.com/kuasar-sandbox/connector/commit/909dc15a3e3512bf1ac8a4c3af57dcb78833a075)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/connector/compare/146b8dcd38eb12384ab11a31ba3ea054ca521011...909dc15a3e3512bf1ac8a4c3af57dcb78833a075)
+
+    ### sandboxer
+
+    Selected version: `v0.1.15` → `v0.2.0-preview.20261114.1`.
+
+    - fix(fwd): write frame header and payload in full ([#435](https://github.com/kuasar-sandbox/sandboxer/pull/435), [commit c4369529d241](https://github.com/kuasar-sandbox/sandboxer/commit/c4369529d24158be559afe6371c6223c0a53fcd7)).
+    - fix(io): preserve progress across short writes and handle guest socket EOF ([#437](https://github.com/kuasar-sandbox/sandboxer/pull/437), [commit 3aa622a72df1](https://github.com/kuasar-sandbox/sandboxer/commit/3aa622a72df14883d6a53a4812c775785ce22c19)).
+    - release: build Go consumers from the aggregate dependency selection ([#438](https://github.com/kuasar-sandbox/sandboxer/pull/438), [commit d7c255b425db](https://github.com/kuasar-sandbox/sandboxer/commit/d7c255b425db04317d7b472e896af323b72c50d9)).
+    - diffstore: retry interrupted checkpoint I/O without replaying short transfers ([#436](https://github.com/kuasar-sandbox/sandboxer/pull/436), [commit b6516e9a9b35](https://github.com/kuasar-sandbox/sandboxer/commit/b6516e9a9b354d9c43266ae06760e948c0ea260b)).
+    - refactor: 宿主通过 guest-runtime 的公共 ABI 消费 Guest 协议 ([#442](https://github.com/kuasar-sandbox/sandboxer/pull/442), [commit 4467612116d6](https://github.com/kuasar-sandbox/sandboxer/commit/4467612116d6fa2c4ad058bdb48c5b6f4ab9f9d8)).
+    - Keep materialized checkpoint Bundles in named locations ([#444](https://github.com/kuasar-sandbox/sandboxer/pull/444), [commit da749c52c4a3](https://github.com/kuasar-sandbox/sandboxer/commit/da749c52c4a310e0f52ac4fc30f54cd65cd384d6)).
+    - feat: support late-bound disks, subpath mounts and offline disk export ([#447](https://github.com/kuasar-sandbox/sandboxer/pull/447), [commit c2dce6c7e3b3](https://github.com/kuasar-sandbox/sandboxer/commit/c2dce6c7e3b3deb287731d08a068bfc43c5fbbfe)).
+    - release: align internal Go module versions ([#445](https://github.com/kuasar-sandbox/sandboxer/pull/445), [commit 87c26604c847](https://github.com/kuasar-sandbox/sandboxer/commit/87c26604c84773854e93f3ebfa08aab50764d877)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/40285f9c83a7da9b7ea35e5c62a60ed5ba66237e...87c26604c84773854e93f3ebfa08aab50764d877)
+
+    ### orchestrator
+
+    Selected version: `v0.2.0-preview.20261112` → `v0.2.0-preview.20261114.1`.
+
+    - Account for background sandbox work with a hold traffic service ([#541](https://github.com/kuasar-sandbox/orchestrator/pull/541), [commit f368645843bc](https://github.com/kuasar-sandbox/orchestrator/commit/f368645843bc6497cbd8410261d44e3f3b0cbbcb)).
+    - Keep hold traffic optional on routesync v11 during rolling upgrades ([#543](https://github.com/kuasar-sandbox/orchestrator/pull/543), [commit ec61b1fe0b06](https://github.com/kuasar-sandbox/orchestrator/commit/ec61b1fe0b0683d987d2919a5a347fdfb41ebae8)).
+    - release: build Go consumers from the aggregate dependency selection ([#542](https://github.com/kuasar-sandbox/orchestrator/pull/542), [commit 9de9b10d6e82](https://github.com/kuasar-sandbox/orchestrator/commit/9de9b10d6e8227a2c88042376495cc038b0f47f4)).
+    - build: 为宿主 SDK 的 Guest ABI 传递依赖绑定 Runtime 源码 ([#544](https://github.com/kuasar-sandbox/orchestrator/pull/544), [commit a4ae4f876d5b](https://github.com/kuasar-sandbox/orchestrator/commit/a4ae4f876d5b35f2388a9c863e80bedd733a1364)).
+    - release: align internal Go module versions ([#548](https://github.com/kuasar-sandbox/orchestrator/pull/548), [commit 1948b5166ea5](https://github.com/kuasar-sandbox/orchestrator/commit/1948b5166ea5a82ecfe78faea5688210a4424ae9)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/b2a3384959bfc545d01d38ff220438edb154d5df...1948b5166ea5a82ecfe78faea5688210a4424ae9)
+
+    ### runtime
+
+    Selected version: `runtime-v0.2.0-preview.20261112` → `runtime-v0.2.0-preview.20261114.1`.
+
+    The following repository history also includes shared guest-runtime and kernel changes; it is not limited to runtime-specific source changes.
+
+    - release: build Go consumers from the aggregate dependency selection ([#126](https://github.com/kuasar-sandbox/guest-runtime/pull/126), [commit 998e5ed5573a](https://github.com/kuasar-sandbox/guest-runtime/commit/998e5ed5573ab71fe9ed81ccddd562dc590eb0a3)).
+    - feat: 由 guest-runtime 构建和交付 sandbox-init 及共享协议 ([#129](https://github.com/kuasar-sandbox/guest-runtime/pull/129), [commit 54101d994e81](https://github.com/kuasar-sandbox/guest-runtime/commit/54101d994e816f0cd45ade0415027e267da41d60)).
+    - release: align internal Go module versions ([#131](https://github.com/kuasar-sandbox/guest-runtime/pull/131), [commit c5c1165b25a0](https://github.com/kuasar-sandbox/guest-runtime/commit/c5c1165b25a013d17d17bf9e6f6e6943731935ad)).
+    - feat: support deferred disk binding and subpath mounts in sandbox-init ([#132](https://github.com/kuasar-sandbox/guest-runtime/pull/132), [commit eba6d5facf6f](https://github.com/kuasar-sandbox/guest-runtime/commit/eba6d5facf6fa269a06cc114af7443c7dc307bb0)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/dcb75f6e5bb0c4317d89714e1f2e8ab678ec4ec4...eba6d5facf6fa269a06cc114af7443c7dc307bb0)
+
+    ### vmlinux
+
+    Selected version: `vmlinux-v0.1.6` → `vmlinux-v0.1.7-preview.20261114.1`.
+
+    Kernel release inputs: `native-deps/deps/vmlinux/*.config` and `native-deps/deps/linux-patches/`.
+
+    - docs: separate runtime consumption, delivery contracts and production ([#113](https://github.com/kuasar-sandbox/guest-runtime/pull/113), [commit cee6f4b575c3](https://github.com/kuasar-sandbox/guest-runtime/commit/cee6f4b575c30b48f9896a10557569402f35fbc8)).
+    - feat: support deferred disk binding and subpath mounts in sandbox-init ([#132](https://github.com/kuasar-sandbox/guest-runtime/pull/132), [commit eba6d5facf6f](https://github.com/kuasar-sandbox/guest-runtime/commit/eba6d5facf6fa269a06cc114af7443c7dc307bb0)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/f415d584b464f76426449f70534affbbf0726bb6...eba6d5facf6fa269a06cc114af7443c7dc307bb0)
 
     ## Download and use
 
