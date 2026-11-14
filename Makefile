@@ -213,6 +213,7 @@ test-ci-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 test/e2e/test_e2e_runner.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/e2e/test_offline_inputs.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/e2e/test_node_infra_inputs.py
+	PYTHONDONTWRITEBYTECODE=1 python3 test/e2e/test_node_infra_network.py
 	PYTHONDONTWRITEBYTECODE=1 python3 workbench/test_workbench.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/hosted/test-workbench-security.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/hosted/test-image-identity.py
