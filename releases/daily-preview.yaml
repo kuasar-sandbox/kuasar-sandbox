@@ -6,7 +6,7 @@ previous_preview_version: preview.20261112
 components:
   accelerator: v0.2.0-preview.20261114
   connector: v0.2.0-preview.20261114.1
-  sandboxer: v0.1.15
+  sandboxer: v0.2.0-preview.20261114.1
   orchestrator: v0.2.0-preview.20261112
   runtime: runtime-v0.2.0-preview.20261114.1
   vmlinux: vmlinux-v0.1.7-preview.20261114.1
@@ -33,7 +33,7 @@ notes:
     |---|---|
     | `accelerator` | `v0.2.0-preview.20261114` |
     | `connector` | `v0.2.0-preview.20261114.1` |
-    | `sandboxer` | `v0.1.15` |
+    | `sandboxer` | `v0.2.0-preview.20261114.1` |
     | `orchestrator` | `v0.2.0-preview.20261112` |
     | `runtime` | `runtime-v0.2.0-preview.20261114.1` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261114.1` |
@@ -46,9 +46,10 @@ notes:
     - Connector selection advances from `v0.1.8` to `v0.2.0-preview.20261114.1`.
     - Runtime selection advances from `runtime-v0.2.0-preview.20261112` to `runtime-v0.2.0-preview.20261114.1`.
     - Kernel selection advances from `vmlinux-v0.1.6` to `vmlinux-v0.1.7-preview.20261114.1`.
-    - Sandboxer and orchestrator retain their previously selected published versions during producer preparation.
+    - Sandboxer selection advances from `v0.1.15` to `v0.2.0-preview.20261114.1` after its required dependency alignment.
+    - Orchestrator retains its previously selected published version until its dependency alignment is complete.
 
-    This explicit same-day revision retains the already published Accelerator assets and prepares new Connector, Runtime and kernel tags through their normal component workflows. Runtime and kernel include the merged deferred-disk binding changes. Existing published tags and assets remain unchanged. Sandboxer and Orchestrator dependency alignment and publication follow after these producer releases are ready. Exact-assets integration E2E and aggregate delivery validation remain required before publication; this selection is not acceptance evidence.
+    This explicit same-day revision retains the already published Accelerator, Connector, Runtime and kernel assets. Runtime and kernel include the merged deferred-disk binding changes. The Sandboxer tag is prepared for normal publication only after its dependency-alignment PR passes required checks and merges. Orchestrator dependency alignment and publication follow after the Sandboxer release is ready. Existing published tags and assets remain unchanged. Exact-assets integration E2E and aggregate delivery validation remain required before publication; this selection is not acceptance evidence.
 
     ## Download and use
 
