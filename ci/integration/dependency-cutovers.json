@@ -455,6 +455,56 @@
           ]
         }
       }
+    },
+    {
+      "candidate": {
+        "repository": "kuasar-sandbox/sandboxer",
+        "pull_request_number": 451,
+        "base_ref": "main",
+        "base_sha": "87c26604c84773854e93f3ebfa08aab50764d877",
+        "head_sha": "2f8e592df95c7361c154204f62563161a60967aa",
+        "candidate_sha": "f54472f5dea61f64a0fd399ca81cf6b27fd1ee55"
+      },
+      "units": {
+        "runtime": {
+          "tag": "runtime-v0.2.0-preview.20261115.1",
+          "sha": "51a5aff9c875e0a7fc0a9efec8147cf729a6b84e",
+          "release_id": 446089782,
+          "assets": [
+            {
+              "name": "sandbox-runtime-aarch64-v0.2.0-preview.20261115.1.tar.gz",
+              "id": 751132030,
+              "size": 30104636,
+              "digest": "sha256:d425b4226291cdb4d89b0dd1b968b84357499dbf48104d03c1262b47ed43835e"
+            },
+            {
+              "name": "sandbox-runtime-x86_64-v0.2.0-preview.20261115.1.tar.gz",
+              "id": 751132175,
+              "size": 32982242,
+              "digest": "sha256:c161919b871328e7317061a44013e76880514fd8d5873b45e183c312c3c60a9e"
+            }
+          ]
+        },
+        "vmlinux": {
+          "tag": "vmlinux-v0.1.7-preview.20261115.1",
+          "sha": "51a5aff9c875e0a7fc0a9efec8147cf729a6b84e",
+          "release_id": 446093914,
+          "assets": [
+            {
+              "name": "vmlinux-aarch64-v0.1.7-preview.20261115.1.tar.gz",
+              "id": 751148932,
+              "size": 4402116,
+              "digest": "sha256:2feefd2d8a15a9621e149f67e077f9b68e0a6eb7f735174195525b6070a745ac"
+            },
+            {
+              "name": "vmlinux-x86_64-v0.1.7-preview.20261115.1.tar.gz",
+              "id": 751149027,
+              "size": 5657767,
+              "digest": "sha256:a2dc63c073de14284dcb13c0800696972549b0378ce52dd60864d960dfe52a18"
+            }
+          ]
+        }
+      }
     }
   ]
 }
