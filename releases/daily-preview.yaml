@@ -1,13 +1,13 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261115.1
+preview_version: preview.20261116
 previous_preview_version: preview.20261115
 components:
   accelerator: v0.2.0-preview.20261114
   connector: v0.2.0-preview.20261114.1
-  sandboxer: v0.2.0-preview.20261115.1
-  orchestrator: v0.2.0-preview.20261115.1
+  sandboxer: v0.2.0-preview.20261116
+  orchestrator: v0.2.0-preview.20261116
   runtime: runtime-v0.2.0-preview.20261115.1
   vmlinux: vmlinux-v0.1.7-preview.20261115.1
 component_next_versions:
@@ -19,13 +19,13 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261115.1
+    # Kuasar Sandbox release-v0.2.0-preview.20261116
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
     Previous aggregate selection: `release-v0.2.0-preview.20261115`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261115.1/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261116/releases/daily-preview.yaml).
 
     ## Component versions
 
@@ -33,8 +33,8 @@ notes:
     |---|---|
     | `accelerator` | `v0.2.0-preview.20261114` |
     | `connector` | `v0.2.0-preview.20261114.1` |
-    | `sandboxer` | `v0.2.0-preview.20261115.1` |
-    | `orchestrator` | `v0.2.0-preview.20261115.1` |
+    | `sandboxer` | `v0.2.0-preview.20261116` |
+    | `orchestrator` | `v0.2.0-preview.20261116` |
     | `runtime` | `runtime-v0.2.0-preview.20261115.1` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261115.1` |
 
@@ -52,15 +52,15 @@ notes:
 
     ### sandboxer
 
-    Selected version: `v0.2.0-preview.20261114.1` → `v0.2.0-preview.20261115.1`.
+    Selected version: `v0.2.0-preview.20261114.1` → `v0.2.0-preview.20261116`.
 
-    The version changed without additional repository commits.
+    - sandbox: complete disk binding on host publication and support on-demand capacity reads ([#451](https://github.com/kuasar-sandbox/sandboxer/pull/451), [commit 26027cf39e34](https://github.com/kuasar-sandbox/sandboxer/commit/26027cf39e34a5ba9c7f0e33d1832154a1abfb55)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/87c26604c84773854e93f3ebfa08aab50764d877...87c26604c84773854e93f3ebfa08aab50764d877)
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/87c26604c84773854e93f3ebfa08aab50764d877...26027cf39e34a5ba9c7f0e33d1832154a1abfb55)
 
     ### orchestrator
 
-    Selected version: `v0.2.0-preview.20261114.1` → `v0.2.0-preview.20261115.1`.
+    Selected version: `v0.2.0-preview.20261114.1` → `v0.2.0-preview.20261116`.
 
     The version changed without additional repository commits.
 
@@ -92,7 +92,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261115.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261115.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261116/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261116/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
