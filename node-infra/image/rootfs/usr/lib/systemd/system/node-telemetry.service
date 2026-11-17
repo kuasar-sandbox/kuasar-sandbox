@@ -6,6 +6,11 @@ PartOf=node-infra.target
 
 [Service]
 Type=simple
+# The Host OTLP receiver creates its Unix socket under the only trusted group.
+Group=kuasar-telemetry
+RuntimeDirectory=sandbox-telemetry
+RuntimeDirectoryMode=0770
+UMask=0007
 ExecStart=/usr/libexec/node-infra/service telemetry
 Environment=PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 TimeoutStopSec=30

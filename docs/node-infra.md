@@ -126,6 +126,16 @@ there is no separate `node.yaml` schema.
 | `node-telemetry.service` | `node-ctl telemetry serve` | `/etc/node-telemetry/telemetry.yaml` |
 | `connector-vswitch.service` | `connector-ctl vswitch serve` | `/etc/connector-vswitch/vswitch.yaml` |
 
+For Host metrics, enable `node-telemetry.service` and add the standard
+`otlp/host` receiver to the metrics pipeline in a Telemetry configuration
+overlay under `/etc/node-telemetry/conf.d/`. Configure its HTTP transport as
+`unix` and its endpoint as `/run/sandbox-telemetry/host.sock`, and select
+the desired exporter. The service creates the parent directory with access for
+the trusted `kuasar-telemetry` group. Host components inside this instance
+use the socket directly. External Cache/Store services need the same protected
+directory mounted with matching group permissions and `KS_HOST_OTLP_SOCKET`
+set to its path in their mount namespace.
+
 Each service starts with its image base file, followed by sorted
 `/etc/<component>/conf.d/*.yaml`. The launcher passes one explicit
 `--config PATH[:PATH...]` value to the native loader. Maps merge recursively;
