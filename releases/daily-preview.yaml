@@ -1,13 +1,13 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261116.1
-previous_preview_version: preview.20261116
+preview_version: preview.20261118
+previous_preview_version: preview.20261116.1
 components:
   accelerator: v0.2.0-preview.20261114
   connector: v0.2.0-preview.20261114.1
-  sandboxer: v0.2.0-preview.20261116
-  orchestrator: v0.2.0-preview.20261116.1
+  sandboxer: v0.2.0-preview.20261118
+  orchestrator: v0.2.0-preview.20261118
   runtime: runtime-v0.2.0-preview.20261115.1
   vmlinux: vmlinux-v0.1.7-preview.20261115.1
 component_next_versions:
@@ -19,13 +19,13 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261116.1
+    # Kuasar Sandbox release-v0.2.0-preview.20261118
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
-    Previous aggregate selection: `release-v0.2.0-preview.20261116`.
+    Previous aggregate selection: `release-v0.2.0-preview.20261116.1`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261116.1/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261118/releases/daily-preview.yaml).
 
     ## Component versions
 
@@ -33,8 +33,8 @@ notes:
     |---|---|
     | `accelerator` | `v0.2.0-preview.20261114` |
     | `connector` | `v0.2.0-preview.20261114.1` |
-    | `sandboxer` | `v0.2.0-preview.20261116` |
-    | `orchestrator` | `v0.2.0-preview.20261116.1` |
+    | `sandboxer` | `v0.2.0-preview.20261118` |
+    | `orchestrator` | `v0.2.0-preview.20261118` |
     | `runtime` | `runtime-v0.2.0-preview.20261115.1` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261115.1` |
 
@@ -52,15 +52,21 @@ notes:
 
     ### sandboxer
 
-    Selected version unchanged: `v0.2.0-preview.20261116`.
+    Selected version: `v0.2.0-preview.20261116` → `v0.2.0-preview.20261118`.
+
+    - docs: explain guest kernel requirements for late-bound disk slots ([#452](https://github.com/kuasar-sandbox/sandboxer/pull/452), [commit db3d6e3fb672](https://github.com/kuasar-sandbox/sandboxer/commit/db3d6e3fb6724e812b823ce0f20d6ec6da9ac234)).
+    - diff\_cow: elastic cache budget, aging and physical memory reclamation ([#454](https://github.com/kuasar-sandbox/sandboxer/pull/454), [commit e8ad76bbe4ac](https://github.com/kuasar-sandbox/sandboxer/commit/e8ad76bbe4ac2c8a95b5cdfd49c8ba7619206c43)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/26027cf39e34a5ba9c7f0e33d1832154a1abfb55...e8ad76bbe4ac2c8a95b5cdfd49c8ba7619206c43)
 
     ### orchestrator
 
-    Selected version: `v0.2.0-preview.20261116` → `v0.2.0-preview.20261116.1`.
+    Selected version: `v0.2.0-preview.20261116.1` → `v0.2.0-preview.20261118`.
 
-    - orchestrator: support named workspace disks across sandbox lifetimes ([#547](https://github.com/kuasar-sandbox/orchestrator/pull/547), [commit 5edceb184ecb](https://github.com/kuasar-sandbox/orchestrator/commit/5edceb184ecb854ca06c55e9fb35e38088c8a10b)).
+    - docs: explain guest kernel requirements for workspace slots ([#549](https://github.com/kuasar-sandbox/orchestrator/pull/549), [commit 5185dfd73bea](https://github.com/kuasar-sandbox/orchestrator/commit/5185dfd73bea7b31550a8f4d6f6f1e23df8ea926)).
+    - nodectl: coordinate diff\_cow elastic cache budgets in existing resource pools ([#551](https://github.com/kuasar-sandbox/orchestrator/pull/551), [commit 44597fa59ec9](https://github.com/kuasar-sandbox/orchestrator/commit/44597fa59ec9d6a7f080d0cde7306f2b42a854fd)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/1948b5166ea5a82ecfe78faea5688210a4424ae9...5edceb184ecb854ca06c55e9fb35e38088c8a10b)
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/5edceb184ecb854ca06c55e9fb35e38088c8a10b...44597fa59ec9d6a7f080d0cde7306f2b42a854fd)
 
     ### runtime
 
@@ -76,7 +82,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261116.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261116.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261118/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261118/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
