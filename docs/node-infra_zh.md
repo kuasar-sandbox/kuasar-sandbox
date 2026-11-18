@@ -105,6 +105,14 @@ Quadlet 管理镜像、网络空间、设备、挂载、实例资源额度及宿
 | `node-telemetry.service` | `node-ctl telemetry serve` | `/etc/node-telemetry/telemetry.yaml` |
 | `connector-vswitch.service` | `connector-ctl vswitch serve` | `/etc/connector-vswitch/vswitch.yaml` |
 
+启用 Host 指标时，启动 `node-telemetry.service`，在
+`/etc/node-telemetry/conf.d/` 的 Telemetry 配置中把标准 `otlp/host` 接收器
+接入指标管道，并选择所需的 exporter。HTTP transport 设为 `unix`，端点设为
+`/run/sandbox-telemetry/host.sock`。服务为可信组 `kuasar-telemetry` 创建
+受限目录。容器内的 Host 组件可以直接使用该 Socket。宿主机上的 Cache/Store
+若需接入，应共享该目录、对齐组权限，并将 `KS_HOST_OTLP_SOCKET` 设为各服务
+挂载空间内的 Socket 路径。
+
 每项服务先读取镜像主文件，再读取按名称排序的 `/etc/<component>/conf.d/*.yaml`。
 启动脚本向原生加载器传入一个明确的 `--config PATH[:PATH...]` 参数值。对象递归
 合并；后层标量和列表替换前层值，覆盖层 null 删除继承字段。文件发现仅在启动脚本中
