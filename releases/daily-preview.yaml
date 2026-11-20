@@ -1,13 +1,13 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261120
+preview_version: preview.20261120.1
 previous_preview_version: preview.20261118
 components:
   accelerator: v0.2.0-preview.20261119
   connector: v0.2.0-preview.20261119
-  sandboxer: v0.2.0-preview.20261120
-  orchestrator: v0.2.0-preview.20261120
+  sandboxer: v0.2.0-preview.20261120.1
+  orchestrator: v0.2.0-preview.20261120.1
   runtime: runtime-v0.2.0-preview.20261119
   vmlinux: vmlinux-v0.1.7-preview.20261115.1
 component_next_versions:
@@ -19,13 +19,13 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261120
+    # Kuasar Sandbox release-v0.2.0-preview.20261120.1
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
     Previous aggregate selection: `release-v0.2.0-preview.20261118`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120.1/releases/daily-preview.yaml).
 
     ## Component versions
 
@@ -33,8 +33,8 @@ notes:
     |---|---|
     | `accelerator` | `v0.2.0-preview.20261119` |
     | `connector` | `v0.2.0-preview.20261119` |
-    | `sandboxer` | `v0.2.0-preview.20261120` |
-    | `orchestrator` | `v0.2.0-preview.20261120` |
+    | `sandboxer` | `v0.2.0-preview.20261120.1` |
+    | `orchestrator` | `v0.2.0-preview.20261120.1` |
     | `runtime` | `runtime-v0.2.0-preview.20261119` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261115.1` |
 
@@ -60,7 +60,7 @@ notes:
 
     ### sandboxer
 
-    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261120`.
+    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261120.1`.
 
     - test: validate runtime consumers through the user environment ([#455](https://github.com/kuasar-sandbox/sandboxer/pull/455), [commit 5e3be153f06b](https://github.com/kuasar-sandbox/sandboxer/commit/5e3be153f06bbd444e900b2bd6c7718057842c43)).
     - perf(sandbox): avoid backend scans in periodic lazy stats ([#456](https://github.com/kuasar-sandbox/sandboxer/pull/456), [commit 87f10145fe20](https://github.com/kuasar-sandbox/sandboxer/commit/87f10145fe20be4df70108caa7197b8bdeb983a5)).
@@ -68,18 +68,20 @@ notes:
     - test: cover private contexts and correct E2E fixture lifetimes ([#458](https://github.com/kuasar-sandbox/sandboxer/pull/458), [commit f630b2707d75](https://github.com/kuasar-sandbox/sandboxer/commit/f630b2707d75bd27a0c909ca4402f9108d3c7820)).
     - feat: require node permits for coordinated cache reclaim ([#460](https://github.com/kuasar-sandbox/sandboxer/pull/460), [commit 10bc6a2f9e96](https://github.com/kuasar-sandbox/sandboxer/commit/10bc6a2f9e96bfb00634250385e8864dadb0c071)).
     - feat(storage): unify diff templates and generate deterministic ext4 ([#464](https://github.com/kuasar-sandbox/sandboxer/pull/464), [commit 38f8e00278e2](https://github.com/kuasar-sandbox/sandboxer/commit/38f8e00278e23653fac68a6825cebe526635b324)).
+    - feat: add shared and per-disk diffstore QoS ([#462](https://github.com/kuasar-sandbox/sandboxer/pull/462), [commit f48e4c52c0ae](https://github.com/kuasar-sandbox/sandboxer/commit/f48e4c52c0aeaa2c1e0cfdc9b19fa903993d42eb)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/e8ad76bbe4ac2c8a95b5cdfd49c8ba7619206c43...38f8e00278e23653fac68a6825cebe526635b324)
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/e8ad76bbe4ac2c8a95b5cdfd49c8ba7619206c43...f48e4c52c0aeaa2c1e0cfdc9b19fa903993d42eb)
 
     ### orchestrator
 
-    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261120`.
+    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261120.1`.
 
     - 由 Runner 上报退出用量，统一接收 Host OTLP 指标 ([#552](https://github.com/kuasar-sandbox/orchestrator/pull/552), [commit 229faa93657f](https://github.com/kuasar-sandbox/orchestrator/commit/229faa93657f55427a0726b4b7b0b409bbb61eae)).
     - feat: separate cache quotas and coordinate reclaim across pools ([#553](https://github.com/kuasar-sandbox/orchestrator/pull/553), [commit 1d82400e202d](https://github.com/kuasar-sandbox/orchestrator/commit/1d82400e202d894390e409b385233a8f1b7937e7)).
     - feat(workspace): unify template defaults and derive disks from slots ([#559](https://github.com/kuasar-sandbox/orchestrator/pull/559), [commit ab31684fbab4](https://github.com/kuasar-sandbox/orchestrator/commit/ab31684fbab499b13a6828a9ac77480577ea736d)).
+    - feat: propagate diffstore QoS and reject incompatible builders ([#556](https://github.com/kuasar-sandbox/orchestrator/pull/556), [commit c4a6f534ec41](https://github.com/kuasar-sandbox/orchestrator/commit/c4a6f534ec412710aaf0f24ef35815a449c8cdbe)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/44597fa59ec9d6a7f080d0cde7306f2b42a854fd...ab31684fbab499b13a6828a9ac77480577ea736d)
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/44597fa59ec9d6a7f080d0cde7306f2b42a854fd...c4a6f534ec412710aaf0f24ef35815a449c8cdbe)
 
     ### runtime
 
@@ -103,7 +105,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
