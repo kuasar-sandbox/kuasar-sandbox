@@ -455,6 +455,37 @@
           ]
         }
       }
+    },
+    {
+      "candidate": {
+        "repository": "kuasar-sandbox/guest-runtime",
+        "pull_request_number": 143,
+        "base_ref": "main",
+        "base_sha": "a6329f958319ebea4a389d99a34d3bb63f72ed1b",
+        "head_sha": "18691f7ff6d7bfee279687cf3b5b319f77205081",
+        "candidate_sha": "0893aedad47fff6c78cb2fc6414f15916ca4b6fb"
+      },
+      "units": {
+        "sandboxer": {
+          "tag": "v0.2.0-preview.20261120",
+          "sha": "38f8e00278e23653fac68a6825cebe526635b324",
+          "release_id": 452126395,
+          "assets": [
+            {
+              "name": "sandboxer-v0.2.0-preview.20261120-linux-aarch64.tar.gz",
+              "id": 769872580,
+              "size": 14777219,
+              "digest": "sha256:bdfb4f69b127c5e2df249577472b77c4debd188ccf29c9e30d129384c1efae76"
+            },
+            {
+              "name": "sandboxer-v0.2.0-preview.20261120-linux-x86_64.tar.gz",
+              "id": 769872698,
+              "size": 15878941,
+              "digest": "sha256:ea5063bdbc96d3dd40b47a2aab74f5e6aeb3dd6819d467005b75e0f7e9b06c86"
+            }
+          ]
+        }
+      }
     }
   ]
 }
