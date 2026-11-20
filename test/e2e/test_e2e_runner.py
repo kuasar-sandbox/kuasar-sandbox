@@ -327,6 +327,56 @@ class PreparedRunnerTests(unittest.TestCase):
         self.assertEqual(runner.cmd_prepare(self.args_with()), 0)
         self.assertNotIn('cgroup-fork-probe', runner.workspace.verify(self.work)['helpers'])
 
+    def test_prepare_preserves_private_native_runtime_bytes_and_modes(self):
+        for name, mode in (('bin/run-cluster-ctl', 0o755), ('lib/cluster-ctl/ld.so', 0o755),
+                           ('lib/cluster-ctl/libfdb_c.so', 0o644),
+                           ('share/licenses/orchestrator/native/runtime.json', 0o644)):
+            path = self.release / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture: ' + name)
+            path.chmod(mode)
+        runner.cmd_prepare(self.args_with())
+        for name in ('bin/run-cluster-ctl', 'lib/cluster-ctl/ld.so', 'lib/cluster-ctl/libfdb_c.so',
+                     'share/licenses/orchestrator/native/runtime.json'):
+            self.assertEqual((self.release / name).read_bytes(), (self.work / name).read_bytes())
+            self.assertEqual((self.release / name).stat().st_mode, (self.work / name).stat().st_mode)
+        provenance = runner.workspace.verify(self.work)
+        self.assertIn('lib/cluster-ctl/libfdb_c.so', provenance['files'])
+        (self.work / 'lib/cluster-ctl/libfdb_c.so').write_text('changed')
+        with self.assertRaisesRegex(ValueError, 'changed'):
+            runner.workspace.verify(self.work)
+
+    def test_source_collection_is_flattened_without_delivering_symlinks(self):
+        source = self.release / 'bin' / platform.machine()
+        bundle = source / 'cluster-runtime'
+        for name in ('bin/cluster-ctl', 'bin/run-cluster-ctl', 'lib/cluster-ctl/libfdb_c.so',
+                     'share/licenses/orchestrator/native/runtime.json'):
+            path = bundle / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('fixture: ' + name)
+        for name in ('cluster-ctl', 'run-cluster-ctl'):
+            (source / name).symlink_to('cluster-runtime/bin/' + name)
+        runner.cmd_prepare(self.args_with())
+        self.assertEqual((self.work / 'bin/cluster-ctl').read_bytes(), (bundle / 'bin/cluster-ctl').read_bytes())
+        self.assertEqual((self.work / 'lib/cluster-ctl/libfdb_c.so').read_bytes(),
+                         (bundle / 'lib/cluster-ctl/libfdb_c.so').read_bytes())
+        self.assertFalse((self.work / 'bin/cluster-runtime').exists())
+        self.assertFalse(any(path.is_symlink() for path in self.work.rglob('*')))
+        runner.workspace.verify(self.work)
+
+    def test_source_collection_rejects_links_outside_its_product_bundle(self):
+        source = self.root / 'source-bin'
+        for name in ('bin/cluster-ctl', 'bin/run-cluster-ctl', 'lib/cluster-ctl/libfdb_c.so',
+                     'share/licenses/orchestrator/native/runtime.json'):
+            path = source / 'cluster-runtime' / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name)
+        (source / 'cluster-ctl').symlink_to('/etc/passwd')
+        (source / 'run-cluster-ctl').symlink_to('cluster-runtime/bin/run-cluster-ctl')
+        self.work.mkdir()
+        with self.assertRaisesRegex(ValueError, 'unexpected source cluster-ctl link'):
+            runner.copy_products(source, self.work)
+
     def args_with(self, **values):
         return type('Args', (), self.args | values)()
 

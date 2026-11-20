@@ -29,6 +29,13 @@ repo="$(awk -v n="$name" '!/^($|#)/ && $1==n ":" {print $2; exit}' "$ROOT/releas
 src="$ORG/$repo/bin/$TARGET_ARCH/$name"
 [ -f "$src" ] || die "$owner closure did not build $repo/bin/$TARGET_ARCH/$name"
 cp -f "$src" "$ROOT/bin/$TARGET_ARCH/$name"
+if [ "$name" = cluster-ctl ]; then
+  python3 -B "$ROOT/release/cluster_native.py" collect --arch "$TARGET_ARCH" \
+    --root "$ORG/$repo/bin/$TARGET_ARCH" --destination "$ROOT/bin/$TARGET_ARCH"
+  if [ "$HOST_ARCH" = "$TARGET_ARCH" ] && [ -e "$ROOT/bin/$TARGET_ARCH/run-cluster-ctl" ]; then
+    ln -sfn "$TARGET_ARCH/run-cluster-ctl" "$ROOT/bin/run-cluster-ctl"
+  fi
+fi
 if [ "$HOST_ARCH" = "$TARGET_ARCH" ]; then ln -sfn "$TARGET_ARCH/$name" "$ROOT/bin/$name"; fi
 done
 }

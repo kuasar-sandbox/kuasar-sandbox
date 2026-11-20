@@ -16,7 +16,7 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 | Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行([Build 部署](#build-部署)) | `node-ctl conductor serve`(含可选 `resource_listen`)、独立 Proxy master + workers、`sandbox-ctl × N`;Manifest 数据路径按需部署 `cache-ctl`,来源访问、发布或配置的写入准入需要 Store 时部署 `store-ctl` |
 | Shared Storage | 为命名 `file://` location 提供跨节点原生文件访问 | 部署方提供的 NAS,NFS 或共享文件系统 |
 | L2 Cache Cluster(可选) | 为 Manifest 路径提供分布式 EC 缓存,未部署时 cache 可以本地命中或直接回源 | `cache-ctl serve` (`mode: shard`) |
-| Cluster Control Plane(可选) | E2B 兼容多节点控制面:registry 维护执行态,router 提供统一入口,placer 导入 group 并放置;生命周期仍由 node 执行 | `cluster-ctl registry`,`cluster-ctl router`,`cluster-ctl placer` |
+| Cluster Control Plane(可选) | E2B 兼容多节点控制面:registry 维护执行态,router 提供统一入口,placer 导入 group 并放置;生命周期仍由 node 执行 | `run-cluster-ctl registry`,`run-cluster-ctl router`,`run-cluster-ctl placer` |
 
 **外部共享资源**(由部署方运营,平台外)
 
@@ -24,6 +24,7 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 |---|---|
 | Local/NAS/NFS | 本地或跨节点原生文件工件,不要求转换为内容分片 |
 | FS 或 S3-compatible store | Manifest 与 chunk 的远程持久化后端 |
+| FoundationDB（集群部署） | Registry 的持久执行元数据、事务和复制；其冗余与故障域由部署方独立于 Registry 成员配置 |
 | 平台管理面 | 沙箱实例调度、配置、租户管控、模板构建凭据(registry 拉取令牌 / 客户密钥);通过 **cluster 控制面**向 placer/provider 导入 sandbox-group 配置,或在单机部署中直接调用 `node-ctl` e2b API |
 | 容器镜像仓库 | 租户镜像来源;构建沙箱内 `flatten-ctl` 按需拉取(OCI v1.1,支持 Referrers) |
 
@@ -234,7 +235,7 @@ S3-compatible 后端使用部署配置或 SDK 默认凭据链.凭据只进入可
 
 region 级、独立运营,平台外。与平台的接口:
 
-- 多节点部署:平台管理面向 `cluster-ctl placer` 的 provider/importer 侧导入
+- 多节点部署:平台管理面向 `run-cluster-ctl placer` 的 provider/importer 侧导入
   sandbox-group 配置、selector、客户密钥引用和模板构建凭据。
 - 单节点部署:平台管理面可直接调用 `node-ctl` e2b API,并按 [实例配置下发](#per-sandbox-配置下发) 的配置契约
   提供 per-sandbox 启动配置;使用 Manifest 路径时再提供对应内容保护配置.
@@ -275,20 +276,22 @@ flowchart TD
 
 | 进程 | 角色 | 数量 | 启停 | 归属 |
 |---|---|---|---|---|
-| `cluster-ctl registry` | registry 自聚簇成员;复制 `route_link` / `node_link` / `node_list` / `placer_link` 执行态,承载 node 长连接和 route/node owner RPC | 1 或 N 副本;每个 group/node 由 LocateN 选 owner set | systemd | 平台内,`cluster.md` |
-| `cluster-ctl router` | E2B 兼容统一入口（`api.<domain>` 控制面与数据面）及近期 route cache；按操作区分的解析、激活、鉴权和转发规则由 Router 规范维护 | N 副本(LB 后,无状态)| systemd | 平台内,`cluster-router.md` |
-| `cluster-ctl placer` | group provider/importer、WATCH_LIST 消费方与放置调度器;向 registry 提供 PlaceSandbox / PlaceBuild / verify-key | N 副本;按 placer memberlist ready 视图和 group 确定性 failover | systemd | 平台内,`cluster-placer.md` |
+| `run-cluster-ctl registry` | 通过类型化 FoundationDB repository 维护持久执行元数据，承载 node 长连接和 route/node owner RPC | 1 或 N 成员；LocateN 选择业务连接与服务候选，不决定数据库复制 | systemd | 平台内,`cluster.md` |
+| `run-cluster-ctl router` | E2B 兼容统一入口（`api.<domain>` 控制面与数据面）及近期 route cache；按操作区分的解析、激活、鉴权和转发规则由 Router 规范维护 | N 副本(LB 后,无状态)| systemd | 平台内,`cluster-router.md` |
+| `run-cluster-ctl placer` | group provider/importer、WATCH_LIST 消费方与放置调度器;向 registry 提供 PlaceSandbox / PlaceBuild / verify-key | N 副本;按 placer memberlist ready 视图和 group 确定性 failover | systemd | 平台内,`cluster-placer.md` |
 
 小规模可三角色同机共置;大规模按 registry 成员表、router 入口副本和 placer 副本分别扩展。
+
+安装完整原生产品包，保留 `bin/run-cluster-ctl`、`bin/cluster-ctl`、`lib/cluster-ctl` 及配套许可材料；通过启动器运行各角色，以加载固定的私有 loader 与运行库。Registry 需要可读的外部 FoundationDB 连接文件，所有成员使用同一元数据 prefix；Router 和 Placer 不打开 Registry 存储。数据库服务由部署方单独运营，客户端包不包含生产数据库服务。精确字段及宿主要求见[集群配置与原生运行契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#configuration)。
 
 ### 端口
 
 | 进程 | 监听 | 协议 | 用途 |
 |---|---|---|---|
-| `cluster-ctl router` | `:443` | HTTPS/h2 | **对外** e2b 控制面 + 数据面入口(机群唯一北向面)|
-| `cluster-ctl registry` | `member.listen`,如 `:7700` | JSONRPC over HTTP/h2c 或 HTTPS | 统一控制面;按 path 承载 `/node-link/*`、`/route-link/*`、`/placer-link/*`、`/cluster/membership`、`/internal/registry-member/*`、`/internal/memberlist/*` |
-| `cluster-ctl registry` | `node_link.listen`(可选) | JSONRPC over HTTP/h2c 或 HTTPS | 可选独立 node 长连接监听;为空时复用 `member.listen` |
-| `cluster-ctl placer` | `placer.listen`,如 `:7800` | JSONRPC over HTTP/h2c 或 HTTPS | placer Place / verify-key API;memberlist HTTP transport 复用同一监听 |
+| `run-cluster-ctl router` | `:443` | HTTPS/h2 | **对外** e2b 控制面 + 数据面入口(机群唯一北向面)|
+| `run-cluster-ctl registry` | `member.listen`,如 `:7700` | JSONRPC over HTTP/h2c 或 HTTPS | 统一控制面;按 path 承载 `/node-link/*`、`/route-link/*`、`/placer-link/*`、`/cluster/membership`、`/internal/registry-member/*`、`/internal/memberlist/*` |
+| `run-cluster-ctl registry` | `node_link.listen`(可选) | JSONRPC over HTTP/h2c 或 HTTPS | 可选独立 node 长连接监听;为空时复用 `member.listen` |
+| `run-cluster-ctl placer` | `placer.listen`,如 `:7800` | JSONRPC over HTTP/h2c 或 HTTPS | placer Place / verify-key API;memberlist HTTP transport 复用同一监听 |
 
 ### 与节点 / 平台管理面的关系
 
