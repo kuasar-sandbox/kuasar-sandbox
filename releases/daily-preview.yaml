@@ -1,12 +1,12 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261120.1
+preview_version: preview.20261120.3
 previous_preview_version: preview.20261118
 components:
-  accelerator: v0.2.0-preview.20261119
+  accelerator: v0.2.0-preview.20261120.3
   connector: v0.2.0-preview.20261119
-  sandboxer: v0.2.0-preview.20261120.1
+  sandboxer: v0.2.0-preview.20261120.2
   orchestrator: v0.2.0-preview.20261120.1
   runtime: runtime-v0.2.0-preview.20261119
   vmlinux: vmlinux-v0.1.7-preview.20261115.1
@@ -19,21 +19,21 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261120.1
+    # Kuasar Sandbox release-v0.2.0-preview.20261120.3
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
     Previous aggregate selection: `release-v0.2.0-preview.20261118`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120.1/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120.3/releases/daily-preview.yaml).
 
     ## Component versions
 
     | Release unit | Version |
     |---|---|
-    | `accelerator` | `v0.2.0-preview.20261119` |
+    | `accelerator` | `v0.2.0-preview.20261120.3` |
     | `connector` | `v0.2.0-preview.20261119` |
-    | `sandboxer` | `v0.2.0-preview.20261120.1` |
+    | `sandboxer` | `v0.2.0-preview.20261120.2` |
     | `orchestrator` | `v0.2.0-preview.20261120.1` |
     | `runtime` | `runtime-v0.2.0-preview.20261119` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261115.1` |
@@ -44,11 +44,12 @@ notes:
 
     ### accelerator
 
-    Selected version: `v0.2.0-preview.20261114` → `v0.2.0-preview.20261119`.
+    Selected version: `v0.2.0-preview.20261114` → `v0.2.0-preview.20261120.3`.
 
     - 通过 Host OTLP 上报 Cache 和 Store 节点指标 ([#235](https://github.com/kuasar-sandbox/accelerator/pull/235), [commit 3a7740e28327](https://github.com/kuasar-sandbox/accelerator/commit/3a7740e28327f0001c17d37b9c7da25fba53b65d)).
+    - test(e2e): allocate activation ports at each scenario boundary ([#237](https://github.com/kuasar-sandbox/accelerator/pull/237), [commit 00a1d87c22dd](https://github.com/kuasar-sandbox/accelerator/commit/00a1d87c22dd1f316484f0e317f13f83b68a381e)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/0fd72e30c146947d0f2eb4ba7d5b71dc58533ff2...3a7740e28327f0001c17d37b9c7da25fba53b65d)
+    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/0fd72e30c146947d0f2eb4ba7d5b71dc58533ff2...00a1d87c22dd1f316484f0e317f13f83b68a381e)
 
     ### connector
 
@@ -60,7 +61,7 @@ notes:
 
     ### sandboxer
 
-    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261120.1`.
+    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261120.2`.
 
     - test: validate runtime consumers through the user environment ([#455](https://github.com/kuasar-sandbox/sandboxer/pull/455), [commit 5e3be153f06b](https://github.com/kuasar-sandbox/sandboxer/commit/5e3be153f06bbd444e900b2bd6c7718057842c43)).
     - perf(sandbox): avoid backend scans in periodic lazy stats ([#456](https://github.com/kuasar-sandbox/sandboxer/pull/456), [commit 87f10145fe20](https://github.com/kuasar-sandbox/sandboxer/commit/87f10145fe20be4df70108caa7197b8bdeb983a5)).
@@ -69,8 +70,9 @@ notes:
     - feat: require node permits for coordinated cache reclaim ([#460](https://github.com/kuasar-sandbox/sandboxer/pull/460), [commit 10bc6a2f9e96](https://github.com/kuasar-sandbox/sandboxer/commit/10bc6a2f9e96bfb00634250385e8864dadb0c071)).
     - feat(storage): unify diff templates and generate deterministic ext4 ([#464](https://github.com/kuasar-sandbox/sandboxer/pull/464), [commit 38f8e00278e2](https://github.com/kuasar-sandbox/sandboxer/commit/38f8e00278e23653fac68a6825cebe526635b324)).
     - feat: add shared and per-disk diffstore QoS ([#462](https://github.com/kuasar-sandbox/sandboxer/pull/462), [commit f48e4c52c0ae](https://github.com/kuasar-sandbox/sandboxer/commit/f48e4c52c0aeaa2c1e0cfdc9b19fa903993d42eb)).
+    - feat(checkpoint): retire the runtime before saving frozen memory ([#466](https://github.com/kuasar-sandbox/sandboxer/pull/466), [commit 602a22682a11](https://github.com/kuasar-sandbox/sandboxer/commit/602a22682a119a34a8f0c6cb8691de8f8fabe9ad)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/e8ad76bbe4ac2c8a95b5cdfd49c8ba7619206c43...f48e4c52c0aeaa2c1e0cfdc9b19fa903993d42eb)
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/e8ad76bbe4ac2c8a95b5cdfd49c8ba7619206c43...602a22682a119a34a8f0c6cb8691de8f8fabe9ad)
 
     ### orchestrator
 
@@ -105,7 +107,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120.3/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261120.3/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
