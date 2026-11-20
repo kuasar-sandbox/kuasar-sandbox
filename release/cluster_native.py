@@ -17,7 +17,7 @@ import struct
 import subprocess
 import tempfile
 
-LOCK = json.loads((Path(__file__).parent / 'inputs/cluster-native-runtime.json').read_text())
+LOCK = json.loads((Path(__file__).resolve().parents[1] / 'ci/integration/cluster-native-runtime.json').read_text())
 PREFIXES = ('lib/cluster-ctl', 'share/licenses/orchestrator/native')
 LAUNCHER = 'bin/run-cluster-ctl'
 PROGRAM = 'bin/cluster-ctl'

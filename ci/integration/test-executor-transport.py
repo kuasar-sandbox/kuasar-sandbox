@@ -15,7 +15,7 @@ class ExecutorTransportTests(unittest.TestCase):
         self.write('release/node_infra_assets.py','verified delivery input reader\n')
         self.write('release/archive_paths.py','bounded archive reader\n')
         self.write('release/cluster_native.py','fixed native closure reader\n')
-        self.write('release/inputs/cluster-native-runtime.json','{"schema":1}\n')
+        self.write('ci/integration/cluster-native-runtime.json','{"schema":1}\n')
         self.write('workbench/storage.conf','private containers storage\n')
         self.write('outside/not-materialized.txt','object only\n')
         self.write('.gitattributes','ci/integration/ignored.py export-ignore\nci/integration/subst.txt export-subst\n')
@@ -53,7 +53,7 @@ class ExecutorTransportTests(unittest.TestCase):
         self.assertEqual((target/'ci/integration/executable.sh').stat().st_mode&0o777,0o755)
         self.assertFalse((target/'outside').exists())
         for path in ('release/node_infra_assets.py','release/archive_paths.py','release/cluster_native.py',
-                     'release/inputs/cluster-native-runtime.json','workbench/storage.conf'):
+                     'ci/integration/cluster-native-runtime.json','workbench/storage.conf'):
             self.assertEqual((target/path).read_bytes(),(self.source/path).read_bytes())
         self.assertEqual(transport.git(target,'rev-parse','HEAD').decode().strip(),self.sha)
         self.assertEqual(transport.git(target,'cat-file','commit','HEAD'),transport.git(self.source,'cat-file','commit','HEAD'))
