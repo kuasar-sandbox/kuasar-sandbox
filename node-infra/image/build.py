@@ -21,8 +21,17 @@ ROOT = HERE.parents[1]
 ARCHES = {"x86_64": "amd64", "aarch64": "arm64", "amd64": "amd64", "arm64": "arm64"}
 sys.path.insert(0, str(ROOT / "release"))
 import node_infra_assets
+import cluster_native
 
 REQUIRED = ("node-ctl", "sandbox-ctl", "sandbox-init", "cloud-hypervisor", "connector-ctl", "vmlinux", "sandbox-runtime.bundle", "e2b-key-ctl", "manifest-ctl", "cache-ctl", "store-ctl", "flatten-ctl")
+
+
+def copy_private_runtime(product_root, context, arch):
+    """Keep the selected cluster-ctl runtime beside the image's bin directory."""
+    native = cluster_native.validate(product_root, arch)
+    (context / 'lib').mkdir()
+    if native is not None:
+        shutil.copytree(product_root / 'lib/cluster-ctl', context / 'lib/cluster-ctl')
 
 
 def run(args, **kwargs):
@@ -193,6 +202,7 @@ def build(args):
                  "--selection", args.selection.resolve(), "--arch", args.arch, "--output", helper])
         validate_elf(helper, arch)
         shutil.copytree(products, context / "bin", symlinks=False)
+        copy_private_runtime(product_root, context, release_arch)
         # Component archives own their runtime support and redistribution
         # material. Preserve that exact tree, including bundled source offers.
         if not (product_root / "share/licenses").is_dir():

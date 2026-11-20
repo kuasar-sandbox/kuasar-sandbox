@@ -15,7 +15,7 @@ Select roles according to the data path and control-plane topology. Local files,
 | Compute Node | Hosts MicroVMs and node resource control; E2B template builds also run in build sandboxes on this node ([Build deployment](#build-deployment)). | `node-ctl conductor serve`, optionally with `resource_listen`; independent Proxy master and workers; `sandbox-ctl × N`. Deploy `cache-ctl` when selected for the Manifest path, and `store-ctl` when source access, publication or configured write admission requires it. |
 | Shared Storage | Native cross-node file access for named `file://` locations. | Operator-provided NAS, NFS or shared filesystem. |
 | L2 Cache Cluster (optional) | Distributed EC caching for the Manifest path; without it, cache can hit locally or read the origin. | `cache-ctl serve` (`mode: shard`). |
-| Cluster Control Plane (optional) | E2B-compatible multi-node control: registry maintains execution state, router supplies the common entry point, and placer imports groups and selects placement. Nodes still execute lifecycle operations. | `cluster-ctl registry`, `cluster-ctl router`, `cluster-ctl placer`. |
+| Cluster Control Plane (optional) | E2B-compatible multi-node control: registry maintains execution state, router supplies the common entry point, and placer imports groups and selects placement. Nodes still execute lifecycle operations. | `run-cluster-ctl registry`, `run-cluster-ctl router`, `run-cluster-ctl placer`. |
 
 **External shared resources**, operated outside the platform:
 
@@ -23,6 +23,7 @@ Select roles according to the data path and control-plane topology. Local files,
 |---|---|
 | Local/NAS/NFS | Local or shared native-file artifacts, without mandatory conversion to content chunks. |
 | FS or S3-compatible store | Durable backend for Manifests and chunks. |
+| FoundationDB (cluster deployment) | Durable execution metadata, transactions and replication for Registry. Operate its redundancy and failure domains independently of Registry members. |
 | Platform management plane | Instance scheduling, configuration, tenancy and template-build credentials (registry pull tokens/customer keys). Imports sandbox-group configuration through the cluster placer/provider, or calls the standalone `node-ctl` E2B API directly. |
 | Container registry | Tenant image source, pulled as needed by `flatten-ctl` in the build sandbox; supports OCI 1.1 Referrers. |
 
@@ -224,11 +225,13 @@ flowchart TD
 
 | Process | Role | Count | Lifecycle | Owner |
 |---|---|---|---|---|
-| `cluster-ctl registry` | Replicated `route_link`, `node_link`, `node_list`, `placer_link` execution state; node connections and route/node owner RPC. | One or more members; LocateN selects each group/node owner set. | systemd. | cluster.md. |
-| `cluster-ctl router` | E2B control/data entry (`api.<domain>`) and recent route cache; consult the Router specification for operation-specific resolution, activation, authorization and forwarding. | Multiple stateless replicas behind LB. | systemd. | [cluster-router.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#client-access). |
-| `cluster-ctl placer` | Group provider/importer, WATCH_LIST consumer and scheduler; PlaceSandbox/PlaceBuild/verify-key for registry. | Multiple replicas; deterministic group failover uses ready placer memberlist view. | systemd. | [cluster-placer.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#groups-and-placement). |
+| `run-cluster-ctl registry` | Typed FoundationDB repositories for durable execution metadata; node connections and route/node owner RPC. | One or more members; LocateN selects business connection/service candidates independently of database replication. | systemd. | cluster.md. |
+| `run-cluster-ctl router` | E2B control/data entry (`api.<domain>`) and recent route cache; consult the Router specification for operation-specific resolution, activation, authorization and forwarding. | Multiple stateless replicas behind LB. | systemd. | [cluster-router.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#client-access). |
+| `run-cluster-ctl placer` | Group provider/importer, WATCH_LIST consumer and scheduler; PlaceSandbox/PlaceBuild/verify-key for registry. | Multiple replicas; deterministic group failover uses ready placer memberlist view. | systemd. | [cluster-placer.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#groups-and-placement). |
 
 Small deployments can colocate all three. Larger ones scale registry membership, router entry replicas and placer replicas separately.
+
+Install the complete native product bundle, including `bin/run-cluster-ctl`, `bin/cluster-ctl`, `lib/cluster-ctl` and the accompanying license material. Use the launcher so every role resolves the pinned private loader and libraries. Registry requires a readable connection file for the external FoundationDB database and the same metadata prefix as its peers; Router and Placer do not open Registry storage. Database servers are operated separately from the client bundle. See the [cluster configuration and native runtime contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#configuration) for the exact fields and host requirements.
 
 ### Ports
 

@@ -109,6 +109,32 @@ def normalize_arch(value: str) -> str:
     return value
 
 
+def copy_products(source_bin, work):
+    bundle = source_bin / 'cluster-runtime'
+    if not bundle.exists():
+        workspace.files(source_bin)
+        shutil.copytree(source_bin, work / 'bin')
+        return
+    # Developer collection retains the owner's regular bundle and exactly two
+    # local convenience links. Flatten it into the link-free release layout.
+    workspace.files(bundle)
+    workspace.require({path.name for path in (bundle / 'bin').iterdir()} == {'cluster-ctl', 'run-cluster-ctl'},
+                      'unexpected products in cluster-runtime')
+    workspace.require({path.name for path in bundle.iterdir()} == {'bin', 'lib', 'share'},
+                      'unexpected cluster-runtime directories')
+    (work / 'bin').mkdir()
+    for path in source_bin.iterdir():
+        if path.name == 'cluster-runtime':
+            continue
+        if path.name in ('cluster-ctl', 'run-cluster-ctl'):
+            workspace.require(path.is_symlink() and os.readlink(path) == 'cluster-runtime/bin/' + path.name,
+                              'unexpected source cluster-ctl link')
+            continue
+        workspace.require(path.is_file() and not path.is_symlink(), 'unexpected source product: ' + path.name)
+        shutil.copy2(path, work / 'bin' / path.name)
+    shutil.copytree(bundle, work, dirs_exist_ok=True)
+
+
 def cmd_prepare(args: argparse.Namespace) -> int:
     release = Path(args.release_dir).resolve()
     work = Path(args.workdir).resolve()
@@ -136,13 +162,17 @@ def cmd_prepare(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix=f'.{destination.name}-prepare-', dir=destination.parent) as directory:
         work = Path(directory) / 'inputs'
         work.mkdir()
-        workspace.files(source_bin)
-        shutil.copytree(source_bin, work / "bin")
-        for name in ("test", "docs", "guide", "workbench", "share", "deploy", "fixtures", "images", "manifests"):
+        copy_products(source_bin, work)
+        for name in ("test", "docs", "guide", "workbench", "lib", "share", "deploy", "fixtures", "images", "manifests"):
             source = release / name
             if source.exists():
-                workspace.files(source)
-                shutil.copytree(source, work / name)
+                incoming = workspace.files(source)
+                if (work / name).exists():
+                    existing = workspace.files(work / name)
+                    workspace.require(all(incoming[path] == existing[path]
+                        and (source / path).stat().st_mode == (work / name / path).stat().st_mode
+                        for path in set(incoming) & set(existing)), 'conflicting native bundle input: ' + name)
+                shutil.copytree(source, work / name, dirs_exist_ok=True)
         if 'helper_contract' in provenance:
             contract = workspace.helper_contract.runtime(provenance['helper_contract'])
         else:

@@ -100,6 +100,8 @@ collect:
 	    echo "  ! missing: $$repo/bin/$(TARGET_ARCH)/$$name" >&2; \
 	  fi; \
 	done < $(BIN_INPUTS_MANIFEST)
+	@python3 -B release/cluster_native.py collect --arch "$(TARGET_ARCH)" \
+	  --root "$(ORG)/orchestrator/bin/$(TARGET_ARCH)" --destination "$(BINDIR)"
 	@if [ "$(HOST_ARCH)" = "$(TARGET_ARCH)" ]; then \
 	   find bin -maxdepth 1 -type l -delete 2>/dev/null || true; \
 	   while read name repo; do \
@@ -107,6 +109,7 @@ collect:
 	     [ -n "$$repo" ] || continue; \
 	     [ -e $(BINDIR)/$$name ] && ln -sfn $(TARGET_ARCH)/$$name bin/$$name; \
 	   done < $(BIN_INPUTS_MANIFEST); \
+	   if [ -e $(BINDIR)/run-cluster-ctl ]; then ln -sfn $(TARGET_ARCH)/run-cluster-ctl bin/run-cluster-ctl; fi; \
 	 fi
 	@echo "==> assembled $(BINDIR)/"
 
@@ -193,6 +196,7 @@ test:
 	@for r in $(GO_REPOS); do echo "== test $$r =="; $(MAKE) -C $(ORG)/$$r test || exit 1; done
 
 test-ci-tools:
+	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-cluster-native.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-dependency-cutover.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-framework-companions.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-capability-routing.py

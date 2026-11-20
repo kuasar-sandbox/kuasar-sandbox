@@ -171,6 +171,11 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
         else:
             owner = "guest-runtime" if unit == "runtime" else unit
             path = sources / owner / "bin" / arch / name
+        if name == 'cluster-ctl':
+            bundle = artifacts.cluster_native_module().source_bundle(path.parent, arch)
+            if bundle is not None:
+                artifacts.cluster_native_module().copy(bundle, output, arch)
+                continue
         artifacts.require(path.is_file(), f"owner recipe did not produce selected product: {name}")
         shutil.copy2(path, output / "bin" / name)
     if "envd" in lane.get("embedded_products", []):
@@ -257,6 +262,9 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
         metadata["build_context"]["workbench"] = workbench
     for name in lane["products"]:
         metadata["products"][name] = {"sha256": artifacts.digest(output / "bin" / name), "sources": plan["product_sources"][name]}
+    native_files = artifacts.cluster_native_module().validate(output, arch)
+    if native_files is not None:
+        metadata['cluster_native'] = {'files': native_files, 'sources': plan['product_sources']['cluster-ctl']}
     for name in lane.get("embedded_products", []):
         metadata["embedded"][name] = {"sha256": artifacts.digest(output / "embedded" / name), "sources": plan["embedded_sources"][name]}
     for owner in plan["test_overlays"]:

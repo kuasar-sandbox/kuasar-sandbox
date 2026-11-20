@@ -188,6 +188,8 @@ prepare 在组装前校验包路径/类型/权限/归属、摘要、必要产品
 exact-assets 模式直接消费 platform 包中的同一布局。两条路径都拒绝旧 owner runner 和重复用例 ID。
 按 owner 记录 test revision，与可信 framework SHA 分开。
 
+FoundationDB `cluster-ctl` 携带固定运行附件：`bin/run-cluster-ctl`、`lib/cluster-ctl` 下的十个私有文件，以及 `share/licenses/orchestrator/native` 下的八个许可与来源文件。可信框架在 `release/inputs/cluster-native-runtime.json` 固定两种架构各文件的 SHA-256 和权限；准入仅将 ELF 依赖和符号版本作为数据检查，不运行产品或候选校验器。源码构建从 owner 的 `bin/<arch>/cluster-runtime` 取普通文件，核验其中可执行文件与本次选中的 `cluster-ctl` 相同，并将全部附件绑定到该产品的源码身份。归档准入、差异组装、公开 prepare 和 node-infra 镜像保留相同附件。启动器不作为单独的 Go 产品。未依赖 FoundationDB 的历史产品仍可作为基线；链接 FoundationDB 却缺少完整运行附件的产品在准入时失败。
+
 新聚合清单只选择 owner/unit Tag。用例、运行库、helper 源码和指南均来自所选 Tag；guest-runtime 跟随 runtime Tag，kernel 保持独立的 vmlinux Tag。解析器对实际干净源码核验 repository、tag、commit 和 tree，并写入 `source-records.json`。SHA 仅是自动来源证据，不提供另一套选择入口。
 
 源码 CI 对现有 PR merge ref 和受信任分支 ref 核验自动观察到的身份，然后通过 `source-inputs.tar` 固定并传递 Git 源码树。构建、helper 和必需源码检查恢复同一输入。非候选 owner 使用所选单元 Tag；候选及 companion 测试即使没有产品差异、所有产品字节复用已发布聚合也仍执行。产品相关输入和独立 kernel 差异投影不变。

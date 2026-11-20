@@ -38,6 +38,12 @@ def node_infra_module():
     import node_infra_assets
     return node_infra_assets
 
+
+def cluster_native_module():
+    delivery_module()
+    import cluster_native
+    return cluster_native
+
 ARCHES = ("x86_64", "aarch64")
 OWNERS = ("accelerator", "connector", "guest-runtime", "sandboxer", "orchestrator", "platform")
 UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vmlinux")
@@ -156,8 +162,12 @@ def changed_products(changes, *, init_unit='runtime'):
                 products.add("sandbox-init")
             if touches("native-deps"):
                 products.add("cloud-hypervisor")
-        elif owner == "orchestrator" and (go or touches("app", "config")):
-            products.update(name for name, unit in PRODUCTS.items() if unit == "orchestrator")
+        elif owner == "orchestrator":
+            if go or touches("app", "config"):
+                products.update(name for name, unit in PRODUCTS.items() if unit == "orchestrator")
+            if touches("scripts/cluster-native.py", "scripts/cluster-native-lock.json", "scripts/run-cluster-ctl",
+                       "scripts/deb_extract.py", "scripts/native-licenses"):
+                products.add("cluster-ctl")
         elif owner == "guest-runtime":
             if touches("go.mod", "go.sum", "Makefile", "cmd/flatten-ctl", "internal"):
                 products.add("flatten-ctl")
@@ -465,6 +475,7 @@ def runtime_payloads(workspace, arch, expected_init=None, expected_envd=None):
 
 def unpack(archive, destination, unit, seen, *, baseline_init=False):
     """Extract regular files only, with canonical names and fixed ownership."""
+    native = cluster_native_module()
     with tarfile.open(archive, "r:gz") as source:
         members = source.getmembers()
         local = set()
@@ -483,7 +494,9 @@ def unpack(archive, destination, unit, seen, *, baseline_init=False):
             if member.isdir():
                 continue
             require(name not in seen, f"conflicting archive ownership: {name}")
-            if unit == "platform":
+            if native.attached(name):
+                require(unit == "orchestrator", f"{unit} cannot own {name}")
+            elif unit == "platform":
                 require(name.startswith(("test/", "docs/", "guide/", "workbench/")), f"platform cannot own {name}")
             elif name.startswith("bin/"):
                 require(PRODUCTS.get(name[4:]) == unit or
@@ -499,6 +512,7 @@ def unpack(archive, destination, unit, seen, *, baseline_init=False):
             seen[name] = unit
         if "bin/vmlinux.sha256" in local:
             require("bin/vmlinux" in local, "kernel checksum requires its kernel in the same archive")
+        native.validate_archive(source, members, unit)
         for member in members:
             name = member.name.removeprefix("./").rstrip("/")
             if not member.isfile():
@@ -695,6 +709,8 @@ def compose(plan, arch, assets, delta, output):
                 f"candidate digest mismatch: {name}")
         require(record["sources"] == plan["product_sources"][name], f"candidate source identity mismatch: {name}")
         expected_delta.add("bin/" + name)
+    native = cluster_native_module()
+    expected_delta.update(native.verify_delta(delta, arch, metadata, plan['product_sources']))
     for name, record in metadata.get("embedded", {}).items():
         file = delta / "embedded" / name
         require(file.is_file() and not file.is_symlink() and digest(file) == record["sha256"],
@@ -750,6 +766,10 @@ def compose(plan, arch, assets, delta, output):
         stage_snapshot_capture(plan, arch, stage, ownership, originals)
         for name in lane["products"]:
             shutil.copy2(delta / "bin" / name, stage / "bin" / name)
+        if 'cluster-ctl' in lane['products']:
+            native.remove(stage)
+            if 'cluster_native' in metadata:
+                native.copy(delta, stage, arch)
         if plan["mode"] == "source":
             shutil.rmtree(stage / "test/e2e")
             for owner in plan["test_overlays"]:
@@ -783,6 +803,7 @@ def compose(plan, arch, assets, delta, output):
             origin_unit = planned_product_unit(plan, name) if candidate else ownership["bin/" + name]
             products[name] = {"sha256": actual, "unit": origin_unit, "origin": "candidate" if candidate else "baseline",
                               "sources": plan["product_sources"][name] if candidate else baseline["units"][origin_unit]}
+        native.validate(stage, arch)
         # This is derived metadata, not a build product or a required legacy
         # input. Never keep the old kernel's identity beside a selected delta.
         if kernel_checksum.exists() and "vmlinux" in lane["products"]:

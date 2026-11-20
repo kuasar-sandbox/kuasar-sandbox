@@ -1,13 +1,50 @@
 """Small complete source sets for integration contract regressions."""
 import artifacts
+import copy
 import hashlib
 import json
+import struct
 import zipfile
 
 CASES = {'accelerator': ['image.manifest.sh', 'storage.cache.sh', 'storage.obs.sh'],
          'connector': ['network.tap.sh'], 'guest-runtime': ['image.guest-fixture.sh'],
          'sandboxer': ['sandbox.lifecycle.sh'], 'orchestrator': ['orchestrator.exec.sh'],
          'platform': ['basic.demo.sh']}
+
+
+def native_cluster_elf(arch, dependency='libfdb_c.so'):
+    """A data-only ELF with real program headers and one DT_NEEDED entry."""
+    data = bytearray(0x230)
+    data[:7] = b'\x7fELF\x02\x01\x01'
+    struct.pack_into('<H', data, 18, {'x86_64': 62, 'aarch64': 183}[arch])
+    struct.pack_into('<Q', data, 32, 64)
+    struct.pack_into('<HH', data, 54, 56, 2)
+    struct.pack_into('<IIQQQQQQ', data, 64, 1, 4, 0, 0x400000, 0, len(data), len(data), 4096)
+    struct.pack_into('<IIQQQQQQ', data, 120, 2, 4, 0x200, 0x400200, 0, 48, 48, 8)
+    value = dependency.encode() + b'\0'
+    data[0x180:0x180 + len(value)] = value
+    struct.pack_into('<QQQQQQ', data, 0x200, 1, 0, 5, 0x400180, 0, 0)
+    return bytes(data)
+
+
+def native_cluster_fixtures():
+    native = artifacts.cluster_native_module()
+    lock, fixtures = copy.deepcopy(native.LOCK), {}
+    for arch, config in lock['architectures'].items():
+        rows = {name: (native_cluster_elf(arch) if name.startswith('lib/') else (name + '\n').encode(), row['mode'])
+                for name, row in config['files'].items()}
+        rows[native.MANIFEST] = (json.dumps({'architecture': arch}).encode(), 0o644)
+        for name, (data, _) in rows.items():
+            config['files'][name]['sha256'] = hashlib.sha256(data).hexdigest()
+        rows[native.PROGRAM] = (native_cluster_elf(arch), 0o755)
+        fixtures[arch] = rows
+    return lock, fixtures
+
+
+def native_cluster_elf_record(path, arch):
+    return {'needed': ['libfdb_c.so', 'libc.so.6'] if path.name == 'cluster-ctl' else [],
+            'sonames': [], 'definitions': {'GLIBC_2.36'},
+            'requirements': {'libc.so.6': {'GLIBC_2.36'}} if path.name == 'cluster-ctl' else {}}
 
 
 def selection(owners, arch, updates=None):

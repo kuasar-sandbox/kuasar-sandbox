@@ -227,7 +227,9 @@ def unit_inputs_changed(root: pathlib.Path, base: str, head: str, unit: str) -> 
              "LICENSE", "LICENSES", "NOTICE", "THIRD_PARTY_NOTICES", "scripts/release.sh",
              "scripts/release-materials.sh", "scripts/release-materials.py", "scripts/release-archive-validator.go"]
     paths += {"accelerator": ["deps", "test/scripts"], "connector": ["deploy", "test/load"],
-              "sandboxer": ["native-deps"], "orchestrator": ["app", "config", "deploy", "test/load", "test/scale"],
+              "sandboxer": ["native-deps"], "orchestrator": ["app", "config", "deploy", "test/load", "test/scale",
+                "scripts/cluster-native.py", "scripts/cluster-native-lock.json", "scripts/run-cluster-ctl",
+                "scripts/deb_extract.py", "scripts/native-licenses"],
               "runtime": ["runtime", "scripts/prepare-sandbox-init.py", "scripts/release-runtime-payloads.py",
                           "native-deps/deps/build-envd.sh", "native-deps/deps/build-erofs.sh",
                           "native-deps/deps/erofs-recipe.sh", "native-deps/deps/erofs-patches", "native-deps/deps/common.sh",
