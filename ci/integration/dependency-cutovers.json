@@ -624,68 +624,6 @@
           ]
         }
       }
-    },
-    {
-      "candidate": {
-        "base_ref": "main",
-        "base_sha": "9c51f9b3d36cdec4beaf48426ce098575934f33e",
-        "candidate_sha": "3ea2c068188275185e21788d5d04e5a291688ae2",
-        "head_sha": "551529718435ce6caf5114a0f6eb40ec4f79a641",
-        "pull_request_number": 565,
-        "repository": "kuasar-sandbox/orchestrator"
-      },
-      "units": {
-        "sandboxer": {
-          "tag": "v0.2.0-preview.20261121.1",
-          "sha": "3a3ac60245d04a8e16c947df63dc9a4765232306",
-          "release_id": 453820551,
-          "assets": [
-            {
-              "name": "sandboxer-v0.2.0-preview.20261121.1-linux-aarch64.tar.gz",
-              "id": 776152711,
-              "size": 15267025,
-              "digest": "sha256:dc2d3f132e5131d50879970cddc539ceac5a6f97bd8d7775a901bbdef5f97d73"
-            },
-            {
-              "name": "sandboxer-v0.2.0-preview.20261121.1-linux-x86_64.tar.gz",
-              "id": 776152790,
-              "size": 16420726,
-              "digest": "sha256:98694507e1fcb8e8f20952057fe91a7a635e81fc5745f980d1db1770a523e1c3"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "candidate": {
-        "repository": "kuasar-sandbox/sandboxer",
-        "pull_request_number": 469,
-        "base_ref": "main",
-        "base_sha": "3a3ac60245d04a8e16c947df63dc9a4765232306",
-        "head_sha": "a63a8df3e5acdb156a8895da0ede4cc86ee99b92",
-        "candidate_sha": "7f22b43e12944bdb52c7e034b586f3e3e3055757"
-      },
-      "units": {
-        "orchestrator": {
-          "tag": "v0.2.0-preview.20261121.1",
-          "sha": "e1e34f99f7421bbb1ab3ff5226eeb8f7f1b45026",
-          "release_id": 453873456,
-          "assets": [
-            {
-              "name": "orchestrator-v0.2.0-preview.20261121.1-linux-aarch64.tar.gz",
-              "id": 776390571,
-              "size": 78867494,
-              "digest": "sha256:343aba88e42ef49852998f72a3447fc98c81e434ba838e302bf2a2c292b703a7"
-            },
-            {
-              "name": "orchestrator-v0.2.0-preview.20261121.1-linux-x86_64.tar.gz",
-              "id": 776390742,
-              "size": 85864895,
-              "digest": "sha256:4a207b22fe9ed38a8d0b2bed1ade2233f6f544eecaa5e4ebd77f31e06f703e2f"
-            }
-          ]
-        }
-      }
     }
   ]
 }
