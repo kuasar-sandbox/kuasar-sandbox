@@ -7,7 +7,7 @@ components:
   accelerator: v0.2.0-preview.20261120.3
   connector: v0.2.0-preview.20261119
   sandboxer: v0.2.0-preview.20261121.1
-  orchestrator: v0.2.0-preview.20261121
+  orchestrator: v0.2.0-preview.20261121.1
   runtime: runtime-v0.2.0-preview.20261121
   vmlinux: vmlinux-v0.1.7-preview.20261115.1
 component_next_versions:
@@ -34,7 +34,7 @@ notes:
     | `accelerator` | `v0.2.0-preview.20261120.3` |
     | `connector` | `v0.2.0-preview.20261119` |
     | `sandboxer` | `v0.2.0-preview.20261121.1` |
-    | `orchestrator` | `v0.2.0-preview.20261121` |
+    | `orchestrator` | `v0.2.0-preview.20261121.1` |
     | `runtime` | `runtime-v0.2.0-preview.20261121` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261115.1` |
 
@@ -72,13 +72,13 @@ notes:
     - feat: add shared and per-disk diffstore QoS ([#462](https://github.com/kuasar-sandbox/sandboxer/pull/462), [commit f48e4c52c0ae](https://github.com/kuasar-sandbox/sandboxer/commit/f48e4c52c0aeaa2c1e0cfdc9b19fa903993d42eb)).
     - feat(checkpoint): retire the runtime before saving frozen memory ([#466](https://github.com/kuasar-sandbox/sandboxer/pull/466), [commit 602a22682a11](https://github.com/kuasar-sandbox/sandboxer/commit/602a22682a119a34a8f0c6cb8691de8f8fabe9ad)).
 
-    - Unified exact disk/memory checkpoint management, source-graph protection and cancellation of unreferenced holders; retained-memory handoff uses the complete SID account ([#468](https://github.com/kuasar-sandbox/sandboxer/pull/468)). Bundle and tarstream retain the same background-save lifecycle.
+    - Unified exact disk/memory checkpoint management, source-graph protection and cancellation of unreferenced holders; retained-memory handoff uses the complete SID account ([#468](https://github.com/kuasar-sandbox/sandboxer/pull/468), [commit 3a3ac60245d0](https://github.com/kuasar-sandbox/sandboxer/commit/3a3ac60245d04a8e16c947df63dc9a4765232306)). Bundle and tarstream retain the same background-save lifecycle.
 
     [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v0.2.0-preview.20261118...v0.2.0-preview.20261121.1)
 
     ### orchestrator
 
-    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261121`.
+    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261121.1`.
 
     - 由 Runner 上报退出用量，统一接收 Host OTLP 指标 ([#552](https://github.com/kuasar-sandbox/orchestrator/pull/552), [commit 229faa93657f](https://github.com/kuasar-sandbox/orchestrator/commit/229faa93657f55427a0726b4b7b0b409bbb61eae)).
     - feat: separate cache quotas and coordinate reclaim across pools ([#553](https://github.com/kuasar-sandbox/orchestrator/pull/553), [commit 1d82400e202d](https://github.com/kuasar-sandbox/orchestrator/commit/1d82400e202d894390e409b385233a8f1b7937e7)).
@@ -87,7 +87,9 @@ notes:
     - feat(checkpoint): coordinate fast pause and retained memory ownership ([#560](https://github.com/kuasar-sandbox/orchestrator/pull/560), [commit 440d3e5cf125](https://github.com/kuasar-sandbox/orchestrator/commit/440d3e5cf125e1c2d5c3caa5f79c245b26c836c3)).
     - test(e2e): wait for the restored run's Snapshot budget journal ([#564](https://github.com/kuasar-sandbox/orchestrator/pull/564), [commit 9c51f9b3d36c](https://github.com/kuasar-sandbox/orchestrator/commit/9c51f9b3d36cdec4beaf48426ce098575934f33e)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/44597fa59ec9d6a7f080d0cde7306f2b42a854fd...9c51f9b3d36cdec4beaf48426ce098575934f33e)
+    - Account for every unsettled holder while admitting a new runtime; support named checkpoint quotas, exact-ID export, restart recovery and terminal cleanup for Bundle and tarstream ([#565](https://github.com/kuasar-sandbox/orchestrator/pull/565), [commit e1e34f99f742](https://github.com/kuasar-sandbox/orchestrator/commit/e1e34f99f7421bbb1ab3ff5226eeb8f7f1b45026)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/44597fa59ec9d6a7f080d0cde7306f2b42a854fd...e1e34f99f7421bbb1ab3ff5226eeb8f7f1b45026)
 
     ### runtime
 
@@ -112,7 +114,7 @@ notes:
 
     Upgrade sandboxer and orchestrator together. The retained-memory account and checkpoint management protocols require the paired versions; old controllers cannot safely accept the new collection handoff. Existing receipt/database migration preserves registrations and source identities. Downgrade requires drained instances/holders and an explicitly compatible state or backup; do not start older binaries on v2 receipts or the migrated database.
 
-    This SDK Preview is staged ahead of the matching orchestrator publication. Select the paired orchestrator in a follow-up aggregate selection before aggregate publication. The complete selected packages still require normal exact-assets E2E and Workbench validation.
+    This selection pairs the named-checkpoint SDK and orchestrator releases. The complete selected packages require the normal exact-assets E2E and Workbench qualification before aggregate publication. Functional coverage, performance comparisons and measurement limits are recorded in the [acceptance report](https://github.com/kuasar-sandbox/sandboxer/issues/467#issuecomment-7050517997).
 
     ## Download and use
 
