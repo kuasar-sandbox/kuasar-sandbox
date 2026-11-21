@@ -1,13 +1,13 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261121.1
+preview_version: preview.20261121.2
 previous_preview_version: preview.20261118
 components:
   accelerator: v0.2.0-preview.20261120.3
   connector: v0.2.0-preview.20261119
-  sandboxer: v0.2.0-preview.20261121.1
-  orchestrator: v0.2.0-preview.20261121.1
+  sandboxer: v0.2.0-preview.20261121.2
+  orchestrator: v0.2.0-preview.20261121.2
   runtime: runtime-v0.2.0-preview.20261121
   vmlinux: vmlinux-v0.1.7-preview.20261115.1
 component_next_versions:
@@ -19,13 +19,13 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261121.1
+    # Kuasar Sandbox release-v0.2.0-preview.20261121.2
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
     Previous aggregate selection: `release-v0.2.0-preview.20261118`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261121.1/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261121.2/releases/daily-preview.yaml).
 
     ## Component versions
 
@@ -33,8 +33,8 @@ notes:
     |---|---|
     | `accelerator` | `v0.2.0-preview.20261120.3` |
     | `connector` | `v0.2.0-preview.20261119` |
-    | `sandboxer` | `v0.2.0-preview.20261121.1` |
-    | `orchestrator` | `v0.2.0-preview.20261121.1` |
+    | `sandboxer` | `v0.2.0-preview.20261121.2` |
+    | `orchestrator` | `v0.2.0-preview.20261121.2` |
     | `runtime` | `runtime-v0.2.0-preview.20261121` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261115.1` |
 
@@ -61,7 +61,7 @@ notes:
 
     ### sandboxer
 
-    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261121.1`.
+    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261121.2`.
 
     - test: validate runtime consumers through the user environment ([#455](https://github.com/kuasar-sandbox/sandboxer/pull/455), [commit 5e3be153f06b](https://github.com/kuasar-sandbox/sandboxer/commit/5e3be153f06bbd444e900b2bd6c7718057842c43)).
     - perf(sandbox): avoid backend scans in periodic lazy stats ([#456](https://github.com/kuasar-sandbox/sandboxer/pull/456), [commit 87f10145fe20](https://github.com/kuasar-sandbox/sandboxer/commit/87f10145fe20be4df70108caa7197b8bdeb983a5)).
@@ -74,11 +74,13 @@ notes:
 
     - Unified exact disk/memory checkpoint management, source-graph protection and cancellation of unreferenced holders; retained-memory handoff uses the complete SID account ([#468](https://github.com/kuasar-sandbox/sandboxer/pull/468), [commit 3a3ac60245d0](https://github.com/kuasar-sandbox/sandboxer/commit/3a3ac60245d04a8e16c947df63dc9a4765232306)). Bundle and tarstream retain the same background-save lifecycle.
 
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v0.2.0-preview.20261118...v0.2.0-preview.20261121.1)
+    - Restore the active controller session before replaying a checkpoint Prepare after stream loss or controller restart; keep holder terminal replay independent of active B ([#469](https://github.com/kuasar-sandbox/sandboxer/pull/469)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v0.2.0-preview.20261118...v0.2.0-preview.20261121.2)
 
     ### orchestrator
 
-    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261121.1`.
+    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261121.2`.
 
     - 由 Runner 上报退出用量，统一接收 Host OTLP 指标 ([#552](https://github.com/kuasar-sandbox/orchestrator/pull/552), [commit 229faa93657f](https://github.com/kuasar-sandbox/orchestrator/commit/229faa93657f55427a0726b4b7b0b409bbb61eae)).
     - feat: separate cache quotas and coordinate reclaim across pools ([#553](https://github.com/kuasar-sandbox/orchestrator/pull/553), [commit 1d82400e202d](https://github.com/kuasar-sandbox/orchestrator/commit/1d82400e202d894390e409b385233a8f1b7937e7)).
@@ -88,6 +90,8 @@ notes:
     - test(e2e): wait for the restored run's Snapshot budget journal ([#564](https://github.com/kuasar-sandbox/orchestrator/pull/564), [commit 9c51f9b3d36c](https://github.com/kuasar-sandbox/orchestrator/commit/9c51f9b3d36cdec4beaf48426ce098575934f33e)).
 
     - Account for every unsettled holder while admitting a new runtime; support named checkpoint quotas, exact-ID export, restart recovery and terminal cleanup for Bundle and tarstream ([#565](https://github.com/kuasar-sandbox/orchestrator/pull/565), [commit e1e34f99f742](https://github.com/kuasar-sandbox/orchestrator/commit/e1e34f99f7421bbb1ab3ff5226eeb8f7f1b45026)).
+
+    - Rebuild the unchanged orchestrator source with the selected sandboxer session-recovery fix.
 
     [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/44597fa59ec9d6a7f080d0cde7306f2b42a854fd...e1e34f99f7421bbb1ab3ff5226eeb8f7f1b45026)
 
@@ -114,7 +118,7 @@ notes:
 
     Upgrade sandboxer and orchestrator together. The retained-memory account and checkpoint management protocols require the paired versions; old controllers cannot safely accept the new collection handoff. Existing receipt/database migration preserves registrations and source identities. Downgrade requires drained instances/holders and an explicitly compatible state or backup; do not start older binaries on v2 receipts or the migrated database.
 
-    This selection pairs the named-checkpoint SDK and orchestrator releases. The complete selected packages require the normal exact-assets E2E and Workbench qualification before aggregate publication. Functional coverage, performance comparisons and measurement limits are recorded in the [acceptance report](https://github.com/kuasar-sandbox/sandboxer/issues/467#issuecomment-7050517997).
+    This selection supersedes the unpublished 20261121.1 aggregate attempt after the active-session recovery defect was reproduced. The earlier component tags remain immutable; this revision publishes the corrected SDK and rebuilds its orchestrator consumers. The complete selected packages require the normal exact-assets E2E and Workbench qualification before aggregate publication. Functional coverage, performance comparisons and measurement limits are recorded in the [acceptance report](https://github.com/kuasar-sandbox/sandboxer/issues/467#issuecomment-7050517997).
 
     ## Download and use
 
@@ -122,7 +126,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261121.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261121.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261121.2/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261121.2/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
