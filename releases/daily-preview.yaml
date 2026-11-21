@@ -1,8 +1,8 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261121.2
-previous_preview_version: preview.20261118
+preview_version: preview.20261122
+previous_preview_version: preview.20261121.2
 components:
   accelerator: v0.2.0-preview.20261120.3
   connector: v0.2.0-preview.20261119
@@ -19,13 +19,13 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261121.2
+    # Kuasar Sandbox release-v0.2.0-preview.20261122
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
-    Previous aggregate selection: `release-v0.2.0-preview.20261118`.
+    Previous aggregate selection: `release-v0.2.0-preview.20261121.2`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261121.2/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261122/releases/daily-preview.yaml).
 
     ## Component versions
 
@@ -44,81 +44,27 @@ notes:
 
     ### accelerator
 
-    Selected version: `v0.2.0-preview.20261114` → `v0.2.0-preview.20261120.3`.
-
-    - 通过 Host OTLP 上报 Cache 和 Store 节点指标 ([#235](https://github.com/kuasar-sandbox/accelerator/pull/235), [commit 3a7740e28327](https://github.com/kuasar-sandbox/accelerator/commit/3a7740e28327f0001c17d37b9c7da25fba53b65d)).
-    - test(e2e): allocate activation ports at each scenario boundary ([#237](https://github.com/kuasar-sandbox/accelerator/pull/237), [commit 00a1d87c22dd](https://github.com/kuasar-sandbox/accelerator/commit/00a1d87c22dd1f316484f0e317f13f83b68a381e)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/0fd72e30c146947d0f2eb4ba7d5b71dc58533ff2...00a1d87c22dd1f316484f0e317f13f83b68a381e)
+    Selected version unchanged: `v0.2.0-preview.20261120.3`.
 
     ### connector
 
-    Selected version: `v0.2.0-preview.20261114.1` → `v0.2.0-preview.20261119`.
-
-    - feat(vswitch): publish native port and switch metrics over host OTLP ([#116](https://github.com/kuasar-sandbox/connector/pull/116), [commit 6b48c8f450da](https://github.com/kuasar-sandbox/connector/commit/6b48c8f450dac707b708a08980a463c1d66ff847)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/connector/compare/909dc15a3e3512bf1ac8a4c3af57dcb78833a075...6b48c8f450dac707b708a08980a463c1d66ff847)
+    Selected version unchanged: `v0.2.0-preview.20261119`.
 
     ### sandboxer
 
-    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261121.2`.
-
-    - test: validate runtime consumers through the user environment ([#455](https://github.com/kuasar-sandbox/sandboxer/pull/455), [commit 5e3be153f06b](https://github.com/kuasar-sandbox/sandboxer/commit/5e3be153f06bbd444e900b2bd6c7718057842c43)).
-    - perf(sandbox): avoid backend scans in periodic lazy stats ([#456](https://github.com/kuasar-sandbox/sandboxer/pull/456), [commit 87f10145fe20](https://github.com/kuasar-sandbox/sandboxer/commit/87f10145fe20be4df70108caa7197b8bdeb983a5)).
-    - perf(diffstore): track charged Zero pages per owner ([#457](https://github.com/kuasar-sandbox/sandboxer/pull/457), [commit 2a12ab9daf64](https://github.com/kuasar-sandbox/sandboxer/commit/2a12ab9daf647c1897a1837c9a121915bdc665d3)).
-    - test: cover private contexts and correct E2E fixture lifetimes ([#458](https://github.com/kuasar-sandbox/sandboxer/pull/458), [commit f630b2707d75](https://github.com/kuasar-sandbox/sandboxer/commit/f630b2707d75bd27a0c909ca4402f9108d3c7820)).
-    - feat: require node permits for coordinated cache reclaim ([#460](https://github.com/kuasar-sandbox/sandboxer/pull/460), [commit 10bc6a2f9e96](https://github.com/kuasar-sandbox/sandboxer/commit/10bc6a2f9e96bfb00634250385e8864dadb0c071)).
-    - feat(storage): unify diff templates and generate deterministic ext4 ([#464](https://github.com/kuasar-sandbox/sandboxer/pull/464), [commit 38f8e00278e2](https://github.com/kuasar-sandbox/sandboxer/commit/38f8e00278e23653fac68a6825cebe526635b324)).
-    - feat: add shared and per-disk diffstore QoS ([#462](https://github.com/kuasar-sandbox/sandboxer/pull/462), [commit f48e4c52c0ae](https://github.com/kuasar-sandbox/sandboxer/commit/f48e4c52c0aeaa2c1e0cfdc9b19fa903993d42eb)).
-    - feat(checkpoint): retire the runtime before saving frozen memory ([#466](https://github.com/kuasar-sandbox/sandboxer/pull/466), [commit 602a22682a11](https://github.com/kuasar-sandbox/sandboxer/commit/602a22682a119a34a8f0c6cb8691de8f8fabe9ad)).
-
-    - Unified exact disk/memory checkpoint management, source-graph protection and cancellation of unreferenced holders; retained-memory handoff uses the complete SID account ([#468](https://github.com/kuasar-sandbox/sandboxer/pull/468), [commit 3a3ac60245d0](https://github.com/kuasar-sandbox/sandboxer/commit/3a3ac60245d04a8e16c947df63dc9a4765232306)). Bundle and tarstream retain the same background-save lifecycle.
-
-    - Restore the active controller session before replaying a checkpoint Prepare after stream loss or controller restart; keep holder terminal replay independent of active B ([#469](https://github.com/kuasar-sandbox/sandboxer/pull/469)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/v0.2.0-preview.20261118...v0.2.0-preview.20261121.2)
+    Selected version unchanged: `v0.2.0-preview.20261121.2`.
 
     ### orchestrator
 
-    Selected version: `v0.2.0-preview.20261118` → `v0.2.0-preview.20261121.2`.
-
-    - 由 Runner 上报退出用量，统一接收 Host OTLP 指标 ([#552](https://github.com/kuasar-sandbox/orchestrator/pull/552), [commit 229faa93657f](https://github.com/kuasar-sandbox/orchestrator/commit/229faa93657f55427a0726b4b7b0b409bbb61eae)).
-    - feat: separate cache quotas and coordinate reclaim across pools ([#553](https://github.com/kuasar-sandbox/orchestrator/pull/553), [commit 1d82400e202d](https://github.com/kuasar-sandbox/orchestrator/commit/1d82400e202d894390e409b385233a8f1b7937e7)).
-    - feat(workspace): unify template defaults and derive disks from slots ([#559](https://github.com/kuasar-sandbox/orchestrator/pull/559), [commit ab31684fbab4](https://github.com/kuasar-sandbox/orchestrator/commit/ab31684fbab499b13a6828a9ac77480577ea736d)).
-    - feat: propagate diffstore QoS and reject incompatible builders ([#556](https://github.com/kuasar-sandbox/orchestrator/pull/556), [commit c4a6f534ec41](https://github.com/kuasar-sandbox/orchestrator/commit/c4a6f534ec412710aaf0f24ef35815a449c8cdbe)).
-    - feat(checkpoint): coordinate fast pause and retained memory ownership ([#560](https://github.com/kuasar-sandbox/orchestrator/pull/560), [commit 440d3e5cf125](https://github.com/kuasar-sandbox/orchestrator/commit/440d3e5cf125e1c2d5c3caa5f79c245b26c836c3)).
-    - test(e2e): wait for the restored run's Snapshot budget journal ([#564](https://github.com/kuasar-sandbox/orchestrator/pull/564), [commit 9c51f9b3d36c](https://github.com/kuasar-sandbox/orchestrator/commit/9c51f9b3d36cdec4beaf48426ce098575934f33e)).
-
-    - Account for every unsettled holder while admitting a new runtime; support named checkpoint quotas, exact-ID export, restart recovery and terminal cleanup for Bundle and tarstream ([#565](https://github.com/kuasar-sandbox/orchestrator/pull/565), [commit e1e34f99f742](https://github.com/kuasar-sandbox/orchestrator/commit/e1e34f99f7421bbb1ab3ff5226eeb8f7f1b45026)).
-
-    - Rebuild the unchanged orchestrator source with the selected sandboxer session-recovery fix.
-
-    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/44597fa59ec9d6a7f080d0cde7306f2b42a854fd...e1e34f99f7421bbb1ab3ff5226eeb8f7f1b45026)
+    Selected version unchanged: `v0.2.0-preview.20261121.2`.
 
     ### runtime
 
-    Selected version: `runtime-v0.2.0-preview.20261115.1` → `runtime-v0.2.0-preview.20261121`.
-
-    The following repository history also includes shared guest-runtime and kernel changes; it is not limited to runtime-specific source changes.
-
-    - docs: clarify Guest kernel requirements for reserved disk slots ([#135](https://github.com/kuasar-sandbox/guest-runtime/pull/135), [commit fb32783afd6a](https://github.com/kuasar-sandbox/guest-runtime/commit/fb32783afd6a59c4880ae3809e3f368e15c32363)).
-    - init: separate Guest management from user execution ([#137](https://github.com/kuasar-sandbox/guest-runtime/pull/137), [commit d9e38d0368ad](https://github.com/kuasar-sandbox/guest-runtime/commit/d9e38d0368ad17a5e721be8565097ac94288bd01)).
-    - fix(init): share the inner execution environment with plugins ([#138](https://github.com/kuasar-sandbox/guest-runtime/pull/138), [commit a6329f958319](https://github.com/kuasar-sandbox/guest-runtime/commit/a6329f958319ebea4a389d99a34d3bb63f72ed1b)).
-    - fix(init): scope quiesce sync to managed filesystems ([#143](https://github.com/kuasar-sandbox/guest-runtime/pull/143), [commit 92cb42f6b39f](https://github.com/kuasar-sandbox/guest-runtime/commit/92cb42f6b39fbf3a55ff219bef583245ab436d34)).
-    - fix(init): drain exec output before reporting command status ([#139](https://github.com/kuasar-sandbox/guest-runtime/pull/139), [commit 3bb00ef608c9](https://github.com/kuasar-sandbox/guest-runtime/commit/3bb00ef608c9b4fddc053334249bcd2b3ef7d520)).
-    - docs: keep disk-slot links compatible with older kernel releases ([#142](https://github.com/kuasar-sandbox/guest-runtime/pull/142), [commit 656f9f8b5c75](https://github.com/kuasar-sandbox/guest-runtime/commit/656f9f8b5c75f0909dd4417a1b780eed5233685f)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/51a5aff9c875e0a7fc0a9efec8147cf729a6b84e...656f9f8b5c75f0909dd4417a1b780eed5233685f)
+    Selected version unchanged: `runtime-v0.2.0-preview.20261121`.
 
     ### vmlinux
 
     Selected version unchanged: `vmlinux-v0.1.7-preview.20261115.1`.
-
-    ## Upgrade requirements
-
-    Upgrade sandboxer and orchestrator together. The retained-memory account and checkpoint management protocols require the paired versions; old controllers cannot safely accept the new collection handoff. Existing receipt/database migration preserves registrations and source identities. Downgrade requires drained instances/holders and an explicitly compatible state or backup; do not start older binaries on v2 receipts or the migrated database.
-
-    This selection supersedes the unpublished 20261121.1 aggregate attempt after the active-session recovery defect was reproduced. The earlier component tags remain immutable; this revision publishes the corrected SDK and rebuilds its orchestrator consumers. The complete selected packages require the normal exact-assets E2E and Workbench qualification before aggregate publication. Functional coverage, performance comparisons and measurement limits are recorded in the [acceptance report](https://github.com/kuasar-sandbox/sandboxer/issues/467#issuecomment-7050517997).
 
     ## Download and use
 
@@ -126,7 +72,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261121.2/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261121.2/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261122/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261122/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
