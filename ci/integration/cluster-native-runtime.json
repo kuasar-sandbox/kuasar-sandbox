@@ -1,0 +1,166 @@
+{
+  "architectures": {
+    "aarch64": {
+      "files": {
+        "bin/run-cluster-ctl": {
+          "mode": 493,
+          "sha256": "2392c6af26deb0420a23d876a9eeb986d27fff1504fbbf7f9161f212322f1e79"
+        },
+        "lib/cluster-ctl/ld.so": {
+          "mode": 493,
+          "sha256": "17538b8f9889a470c061f69a8fea8124da89627311cd16546c133a89f09056df"
+        },
+        "lib/cluster-ctl/libc.so.6": {
+          "mode": 420,
+          "sha256": "e4ac8ae1d81e4865e3aadedb962879cf9415903b3f2ba81ec75e9962b86ab8b0"
+        },
+        "lib/cluster-ctl/libdl.so.2": {
+          "mode": 420,
+          "sha256": "e5e9474a683596d59cc9e13246bc83878433e53c3befbabd73e3da9ccb5fe174"
+        },
+        "lib/cluster-ctl/libfdb_c.so": {
+          "mode": 420,
+          "sha256": "cd080617d5ba235aeb9916b258a6a840bee5cc21e54be3599614e2aca58d605d"
+        },
+        "lib/cluster-ctl/liblzma.so.5": {
+          "mode": 420,
+          "sha256": "530e774de0f3fd8754351f387f52db6a0cb134b350e43d80044dea7109400f17"
+        },
+        "lib/cluster-ctl/libm.so.6": {
+          "mode": 420,
+          "sha256": "3c4cb3be0b974edf05f023f85ab15107fb5afc2687163593d0d4cf8e80c17b39"
+        },
+        "lib/cluster-ctl/libpthread.so.0": {
+          "mode": 420,
+          "sha256": "434dcd27f22fc8bf236c0c00541a1e503d302aa796c333729a2cd15a4cfe4814"
+        },
+        "lib/cluster-ctl/libresolv.so.2": {
+          "mode": 420,
+          "sha256": "5f3769c75e5eca6ff14f2c7a22bcc8cfeeef31da9545434a281a5fdd1f66d6f0"
+        },
+        "lib/cluster-ctl/librt.so.1": {
+          "mode": 420,
+          "sha256": "41d135537fba3875ebccccace6e4bb5e546941877376504b3921e663f83e42e7"
+        },
+        "lib/cluster-ctl/libz.so.1": {
+          "mode": 420,
+          "sha256": "ffb1ab496e6eced03ab679075f9f2c415c7728a145cc7f63d614497102d73822"
+        },
+        "share/licenses/orchestrator/native/Apache-2.0": {
+          "mode": 420,
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        "share/licenses/orchestrator/native/GPL-2": {
+          "mode": 420,
+          "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6"
+        },
+        "share/licenses/orchestrator/native/LGPL-2.1": {
+          "mode": 420,
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        "share/licenses/orchestrator/native/foundationdb/LICENSE": {
+          "mode": 420,
+          "sha256": "2f841c1cd8c117763475eb8317f4a4afa0172212f8684a84c38fb937a8c1b220"
+        },
+        "share/licenses/orchestrator/native/libc6/copyright": {
+          "mode": 420,
+          "sha256": "40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987"
+        },
+        "share/licenses/orchestrator/native/liblzma5/copyright": {
+          "mode": 420,
+          "sha256": "a2dc8fac0f496e1c58aff67018cf0c6b88336316afa5642f9335b71642e28aa8"
+        },
+        "share/licenses/orchestrator/native/runtime.json": {
+          "mode": 420,
+          "sha256": "8e90aef03767801bddb6d4fbc02e5e5c70337fb52c5105aff0fc23e94361ee04"
+        },
+        "share/licenses/orchestrator/native/zlib1g/copyright": {
+          "mode": 420,
+          "sha256": "9e5b96d63773a5d177ba264254390f792be07e41748ebd94730981c6cac31cc6"
+        }
+      }
+    },
+    "x86_64": {
+      "files": {
+        "bin/run-cluster-ctl": {
+          "mode": 493,
+          "sha256": "2392c6af26deb0420a23d876a9eeb986d27fff1504fbbf7f9161f212322f1e79"
+        },
+        "lib/cluster-ctl/ld.so": {
+          "mode": 493,
+          "sha256": "02bcda52c1a5dfc236f94d9e5255b4a0e26347d8a372a5223b650e31f291ce3c"
+        },
+        "lib/cluster-ctl/libc.so.6": {
+          "mode": 420,
+          "sha256": "6b4a45352fd0c540a9c7c718f35ce8c8e46a4e482f9d3885a910c32d1a0e1421"
+        },
+        "lib/cluster-ctl/libdl.so.2": {
+          "mode": 420,
+          "sha256": "95d521b2c39fd0333271b6fdcdddff878ae82001a304313a837b8e728ebe3cb1"
+        },
+        "lib/cluster-ctl/libfdb_c.so": {
+          "mode": 420,
+          "sha256": "e4ad7fed7b7580bf5f7b38f0a4279d37e698f69d534182e5de0b8beeef6cd1b1"
+        },
+        "lib/cluster-ctl/liblzma.so.5": {
+          "mode": 420,
+          "sha256": "983464a4e0e840f85b519cb7b6153b60c75d6473f4d4c32a5a37b3f9894c52c3"
+        },
+        "lib/cluster-ctl/libm.so.6": {
+          "mode": 420,
+          "sha256": "7f2ca87f652f56b094462474b076749e90e689d0ecb9cb63c7679820b271b4e7"
+        },
+        "lib/cluster-ctl/libpthread.so.0": {
+          "mode": 420,
+          "sha256": "b93a680da8a05b939b235c1533572e7a2f6d3d8808bf70209997edc64ea5fedc"
+        },
+        "lib/cluster-ctl/libresolv.so.2": {
+          "mode": 420,
+          "sha256": "ac3924c6cdb26cdfff10fec2ab2748705c83931b39c7f6e638a2b31ae34d420b"
+        },
+        "lib/cluster-ctl/librt.so.1": {
+          "mode": 420,
+          "sha256": "41c72def458b8cfb6aab96a7dbada7454dd216d89aac65fb085eb52bead51def"
+        },
+        "lib/cluster-ctl/libz.so.1": {
+          "mode": 420,
+          "sha256": "7e2a72b4c4b38c61e6962de6e3f4a5e9ae692e732c68deead10a7ce2135a7f68"
+        },
+        "share/licenses/orchestrator/native/Apache-2.0": {
+          "mode": 420,
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        "share/licenses/orchestrator/native/GPL-2": {
+          "mode": 420,
+          "sha256": "edaef632cbb643e4e7a221717a6c441a4c1a7c918e6e4d56debc3d8739b233f6"
+        },
+        "share/licenses/orchestrator/native/LGPL-2.1": {
+          "mode": 420,
+          "sha256": "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
+        },
+        "share/licenses/orchestrator/native/foundationdb/LICENSE": {
+          "mode": 420,
+          "sha256": "2f841c1cd8c117763475eb8317f4a4afa0172212f8684a84c38fb937a8c1b220"
+        },
+        "share/licenses/orchestrator/native/libc6/copyright": {
+          "mode": 420,
+          "sha256": "40c7e1f2118531f038ca22999bd976901254e1bc5cd1b0f0211bdd064c599987"
+        },
+        "share/licenses/orchestrator/native/liblzma5/copyright": {
+          "mode": 420,
+          "sha256": "a2dc8fac0f496e1c58aff67018cf0c6b88336316afa5642f9335b71642e28aa8"
+        },
+        "share/licenses/orchestrator/native/runtime.json": {
+          "mode": 420,
+          "sha256": "15066c5ca7710338138dbc705f752b8ffeff2aaa17f11c1cb60033b11f314e67"
+        },
+        "share/licenses/orchestrator/native/zlib1g/copyright": {
+          "mode": 420,
+          "sha256": "9e5b96d63773a5d177ba264254390f792be07e41748ebd94730981c6cac31cc6"
+        }
+      }
+    }
+  },
+  "foundationdb_version": "7.3.77",
+  "schema": 1
+}

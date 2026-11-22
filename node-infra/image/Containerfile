@@ -25,6 +25,7 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
 COPY guest-rootfs /usr/libexec/node-infra/guest-rootfs
 RUN /bin/sh /usr/libexec/node-infra/guest-rootfs
 COPY bin/ /opt/node-infra/bin/
+COPY lib/ /opt/node-infra/lib/
 COPY node-infra-run /opt/node-infra/bin/node-infra-run
 COPY share/ /opt/node-infra/share/
 COPY node-infra-runtime /usr/libexec/node-infra/node-infra-runtime

@@ -21,6 +21,7 @@ import artifacts as subject
 from test_fixtures import restore_using, helper_contract
 import transport
 from test_fixtures import CASES, WORKBENCH_CASES, selection, select_plan, architecture_result, workbench_results, registry_binding
+from test_fixtures import native_cluster_fixtures, native_cluster_elf_record
 
 
 def test_revisions(sha="d" * 40):
@@ -1029,6 +1030,57 @@ class ArtifactContracts(unittest.TestCase):
         record = archive(self.assets / name, {"bin/" + key: data for key, data in files.items()
                                              if subject.PRODUCTS[key] == "runtime"})
         next(item for item in self.plan["baseline"]["assets"] if item["name"] == name).update(record)
+
+    def test_native_cluster_candidate_composes_and_seals_all_attachments(self):
+        native = subject.cluster_native_module()
+        lock, fixtures = native_cluster_fixtures()
+        self.plan['product_sources']['cluster-ctl'] = {'orchestrator': 'e' * 40}
+        for arch in subject.ARCHES:
+            self.plan['lanes'][arch]['products'] = sorted([*self.plan['lanes'][arch]['products'], 'cluster-ctl'])
+        with patch.object(native, 'LOCK', lock), patch.object(native, 'inspect_elf', side_effect=native_cluster_elf_record):
+            for arch in subject.ARCHES:
+                with self.subTest(arch=arch):
+                    delta = self.delta(arch)
+                    for name, (data, mode) in fixtures[arch].items():
+                        target = delta / name
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        target.write_bytes(data)
+                        target.chmod(mode)
+                    self.metadata['products']['cluster-ctl']['sha256'] = subject.digest(delta / native.PROGRAM)
+                    self.metadata['cluster_native'] = {'files': native.validate(delta, arch),
+                        'sources': self.plan['product_sources']['cluster-ctl']}
+                    (delta / 'outputs.json').write_text(json.dumps(self.metadata))
+                    provenance = self.compose(arch, delta)
+                    work = self.root / 'workspaces' / arch
+                    for name, record in lock['architectures'][arch]['files'].items():
+                        self.assertEqual(provenance['files'][name], record['sha256'])
+                        self.assertEqual(provenance['modes'][name], record['mode'])
+                    self.assertNotIn('run-cluster-ctl', provenance['products'])
+                    subject.verify_workspace(work, self.plan, arch)
+                    (work / 'lib/cluster-ctl/libfdb_c.so').write_bytes(b'changed')
+                    with self.assertRaisesRegex(ValueError, 'changed after composition'):
+                        subject.verify_workspace(work, self.plan, arch)
+
+    def test_legacy_cluster_candidate_removes_the_whole_previous_native_closure(self):
+        native = subject.cluster_native_module()
+        lock, fixtures = native_cluster_fixtures()
+        arch = 'x86_64'
+        name = subject.archive_name('orchestrator', self.plan['baseline']['units']['orchestrator']['version'], arch)
+        rows = {**{f'bin/{name}': (data, 0o755) for name, data in self.files[arch].items()
+                   if subject.PRODUCTS[name] == 'orchestrator'}, **fixtures[arch]}
+        with tarfile.open(self.assets / name, 'w:gz') as output:
+            for path, (data, mode) in rows.items():
+                entry = tarfile.TarInfo(path)
+                entry.size, entry.mode = len(data), mode
+                output.addfile(entry, io.BytesIO(data))
+        next(row for row in self.plan['baseline']['assets'] if row['name'] == name).update(
+            size=(self.assets / name).stat().st_size, digest='sha256:' + subject.digest(self.assets / name))
+        self.plan['product_sources']['cluster-ctl'] = {'orchestrator': 'e' * 40}
+        self.plan['lanes'][arch]['products'] = sorted([*self.plan['lanes'][arch]['products'], 'cluster-ctl'])
+        with patch.object(native, 'LOCK', lock), patch.object(native, 'inspect_elf', side_effect=native_cluster_elf_record):
+            result = self.compose(arch)
+        self.assertFalse(set(lock['architectures'][arch]['files']) & set(result['files']))
+        self.assertEqual(result['products']['cluster-ctl']['sha256'], self.metadata['products']['cluster-ctl']['sha256'])
 
     def test_go_runtime_composes_without_a_native_product(self):
         for arch in subject.ARCHES:
