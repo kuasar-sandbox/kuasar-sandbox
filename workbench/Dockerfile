@@ -6,14 +6,14 @@ RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && chmod 0755 /usr/sbin/policy-rc.d \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-       acl autoconf automake bc binutils bison build-essential ca-certificates \
+       acl autoconf automake bc binutils bison build-essential busybox-static ca-certificates \
        clang cmake containerd cpio curl dbus diffutils docker.io e2fsprogs erofs-utils \
        file findutils flex gawk git gperf gzip iproute2 iptables iputils-ping jq kmod \
-       libaio-dev libbpf-dev libbz2-dev libcap-dev libclang-dev libelf-dev libfuse3-dev \
+       libacl1-dev libaio-dev libblkid-dev libbpf-dev libbz2-dev libcap-dev libclang-dev libelf-dev libexpat1-dev libfuse3-dev \
        libgcrypt20-dev libgflags-dev libgpg-error-dev liblz4-dev libncurses-dev \
-       libnuma-dev libseccomp-dev libsnappy-dev libssl-dev libtool libtool-bin \
-       liburing-dev libzstd-dev lld llvm lz4 make netcat-openbsd nftables ninja-build \
-       openssl patch pkg-config podman crun conmon fuse-overlayfs procps psmisc python3 python3-pip python3-venv \
+       liblzma-dev libmount-dev libnuma-dev libpcre2-dev libseccomp-dev libsnappy-dev libssl-dev libsystemd-dev libtool libtool-bin \
+       liburing-dev libzstd-dev lld llvm lz4 make meson netcat-openbsd nftables ninja-build \
+       openssl patch patchelf pkg-config podman crun conmon fuse-overlayfs procps psmisc python3 python3-jinja2 python3-pip python3-venv \
        python3-yaml redis-server rsync shellcheck skopeo socat sqlite3 strace sudo \
        systemd systemd-sysv tar tcpdump time udev unzip util-linux uuid-dev \
        xz-utils zip zlib1g-dev zstd \
