@@ -38,6 +38,44 @@ make -C {platform_source} build
 '''
 
 
+def qualify_products(root, arch, owner_bin):
+    """Verify the platform's collected products and fixed native attachment."""
+    artifacts.require(root.is_dir() and not root.is_symlink(), f'missing artifact directory: {root}')
+    expected = {line.split()[0].removesuffix(':')
+                for line in (ROOT / 'release/inputs/bin-inputs.yaml').read_text().splitlines()
+                if line.strip() and not line.startswith('#')}
+    actual = {path.name for path in root.iterdir()}
+    native_layout = 'cluster-runtime' in actual
+    artifacts.require(actual == expected | ({'cluster-runtime', 'run-cluster-ctl'} if native_layout else set()),
+                      'full native build product set differs from the platform manifest')
+    for name in sorted(expected - ({'cluster-ctl'} if native_layout else set())):
+        path = root / name
+        artifacts.require(path.is_file() and not path.is_symlink(), f'non-regular platform product: {name}')
+    if native_layout:
+        for name in ('cluster-ctl', 'run-cluster-ctl'):
+            link = root / name
+            artifacts.require(link.is_symlink() and os.readlink(link) == 'cluster-runtime/bin/' + name,
+                              'invalid collected native link: ' + name)
+    native = artifacts.cluster_native_module()
+    selected_bundle = native.source_bundle(owner_bin, arch)
+    artifacts.require((selected_bundle is not None) == native_layout,
+                      'collected cluster-ctl layout differs from the selected owner product')
+    result = {}
+    if native_layout:
+        bundle = root / 'cluster-runtime'
+        attachments = native.validate(bundle, arch)
+        artifacts.require(attachments is not None, 'collected native product lacks its runtime attachment')
+        files = artifacts.tree_files(bundle)
+        artifacts.require(set(files) == {native.PROGRAM, *attachments},
+                          'collected native bundle contains undeclared files')
+        result['cluster_native'] = {'files': files}
+    result['products'] = {name: artifacts.digest(root / name) for name in sorted(expected)}
+    selected = owner_bin / 'cluster-ctl'
+    artifacts.require(selected.is_file() and artifacts.digest(selected) == result['products']['cluster-ctl'],
+                      'collected cluster-ctl differs from the selected owner product')
+    return result
+
+
 def qualify(plan, root):
     artifacts.check_plan(plan)
     artifacts.require(os.getuid() != 0, 'native build qualification must run as an ordinary UID')
@@ -84,10 +122,8 @@ go version
 rustc --version
 ''' + source_build_program(Path('/src'))
         subprocess.run([*launcher, 'exec', '--', 'bash', '-ceu', program], check=True, timeout=9000)
-        result['products'] = artifacts.tree_files(sources / 'platform/bin' / platform.machine())
-        expected = [line.split()[0].removesuffix(":") for line in (ROOT / 'release/inputs/bin-inputs.yaml').read_text().splitlines()
-                    if line.strip() and not line.startswith('#')]
-        artifacts.require(set(result['products']) == set(expected), 'full native build did not produce every platform binary')
+        arch = platform.machine()
+        result.update(qualify_products(sources / 'platform/bin' / arch, arch, sources / 'orchestrator/bin' / arch))
         result['conclusion'] = 'success'
     finally:
         result['wall_seconds'] = time.monotonic() - started
