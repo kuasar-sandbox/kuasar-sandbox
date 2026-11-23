@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 ROOT = Path(__file__).resolve().parent
 
@@ -32,6 +33,226 @@ launcher = module('workbench_launcher', ROOT / 'workbench')
 fixtures = module('offline_test_images', ROOT.parent / 'test/e2e/test_offline_inputs.py')
 diagnostics = module('workbench_diagnostics', ROOT / 'collect-diagnostics.py')
 systems = module('workbench_system_tests', ROOT / 'test-system.py')
+native = module('workbench_native_build', ROOT / 'test-build.py')
+native_fixtures = module('workbench_native_fixtures', ROOT.parent / 'ci/integration/test_fixtures.py')
+
+
+@unittest.skipUnless(shutil.which('go'), 'Go compiler required')
+class NativeWorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='native-workspace-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.owners = ('accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator')
+        for owner in self.owners:
+            path = self.root / owner
+            path.mkdir()
+            text = f'module github.com/kuasar-sandbox/{owner}\ngo 1.22\n'
+            if owner != 'accelerator':
+                text += 'require github.com/kuasar-sandbox/accelerator v0.2.0\n'
+            (path / 'go.mod').write_text(text)
+        # An external import loads the graph and exposes the plain go.work
+        # lookup of the unpublished managed version, as in the native CI job.
+        (self.root / 'accelerator/go.mod').write_text(
+            'module github.com/kuasar-sandbox/accelerator\ngo 1.22\n'
+            'require example.test/external v1.0.0\n')
+        (self.root / 'accelerator/main.go').write_text(
+            'package main\nimport ("fmt"; "example.test/external")\n'
+            'func main() { fmt.Println(external.Value) }\n')
+        proxy = self.root / 'proxy/example.test/external/@v'
+        proxy.mkdir(parents=True)
+        files = {'go.mod': 'module example.test/external\ngo 1.22\n',
+                 'external.go': 'package external\nconst Value = "selected-local-source"\n'}
+        (proxy / 'v1.0.0.mod').write_text(files['go.mod'])
+        (proxy / 'v1.0.0.info').write_text(json.dumps({'Version': 'v1.0.0', 'Time': '2026-11-01T00:00:00Z'}))
+        with zipfile.ZipFile(proxy / 'v1.0.0.zip', 'w') as archive:
+            for name, content in files.items():
+                archive.writestr('example.test/external@v1.0.0/' + name, content)
+        tools = self.root / 'platform/ci/integration'
+        tools.mkdir(parents=True)
+        for name in ('go_workspace.py', 'go_module_policy.py'):
+            shutil.copy2(ROOT.parent / 'ci/integration' / name, tools / name)
+        (self.root / 'platform/Makefile').write_text(
+            'build:\n\tcd ../accelerator && go build -o ../probe .\n')
+        self.env = dict(os.environ, GOWORK='off', GOTOOLCHAIN='local', GOSUMDB='off',
+                        GOPROXY=(self.root / 'proxy').as_uri(), GOMODCACHE=str(self.root / 'modcache'))
+        self.manifests = {p: p.read_bytes() for p in self.root.glob('*/go.mod')}
+
+    def run_program(self, program):
+        return subprocess.run(['bash', '-ceu', program], cwd=self.root, env=self.env,
+                              capture_output=True, text=True)
+
+    def test_native_driver_builds_selected_sources_without_unpublished_remote_tag(self):
+        subprocess.run(['go', 'work', 'init', *('./' + owner for owner in self.owners)],
+                       cwd=self.root, env=self.env, check=True, capture_output=True)
+        old = self.run_program(f'export GOWORK="{self.root / "go.work"}"\nmake -C platform build')
+        self.assertNotEqual(old.returncode, 0)
+        self.assertIn('accelerator@v0.2.0', old.stderr)
+        selected = self.run_program(native.source_build_program(self.root))
+        self.assertEqual(selected.returncode, 0, selected.stdout + selected.stderr)
+        self.assertEqual(subprocess.check_output([self.root / 'probe'], text=True).strip(), 'selected-local-source')
+        self.assertEqual({p: p.read_bytes() for p in self.manifests}, self.manifests)
+
+    def test_workspace_failure_stops_before_make(self):
+        (self.root / 'accelerator/go.mod').write_text('module example.test/wrong\ngo 1.22\n')
+        (self.root / 'platform/Makefile').write_text('build:\n\ttouch ../unexpected-build\n')
+        result = self.run_program(native.source_build_program(self.root))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('local Go module path differs', result.stderr)
+        self.assertFalse((self.root / 'unexpected-build').exists())
+
+
+class NativeProductTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='native-products-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.native = native.artifacts.cluster_native_module()
+        self.lock, self.fixtures = native_fixtures.native_cluster_fixtures()
+        self.products = {'vmlinux', 'manifest-ctl', 'store-ctl', 'cache-ctl', 'flatten-ctl', 'sandbox-ctl',
+                         'sandbox-init', 'cloud-hypervisor', 'sandbox-runtime.bundle', 'node-ctl',
+                         'cluster-ctl', 'node-stub-ctl', 'connector-ctl', 'e2b-key-ctl'}
+        # Reuse the existing admission fixtures. Only ELF inspection data is
+        # replaced; links, files, fixed digests, modes and completeness are real.
+        for attribute, value in [('LOCK', self.lock), ('inspect_elf', native_fixtures.native_cluster_elf_record)]:
+            mock = patch.object(self.native, attribute, value)
+            mock.start()
+            self.addCleanup(mock.stop)
+
+    def tree(self, name, arch=None):
+        root = self.root / name
+        root.mkdir()
+        for product in self.products:
+            (root / product).write_bytes(('built ' + product).encode())
+        source = self.root / (name + '-owner')
+        source.mkdir()
+        if arch is not None:
+            for path, (data, mode) in self.fixtures[arch].items():
+                target = source / 'cluster-runtime' / path
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(data)
+                target.chmod(mode)
+            (source / 'cluster-ctl').symlink_to('cluster-runtime/bin/cluster-ctl')
+            self.native.collect(source, root, arch)
+        else:
+            shutil.copy2(root / 'cluster-ctl', source / 'cluster-ctl')
+        return root
+
+    def qualify(self, root, arch):
+        return native.qualify_products(root, arch, self.root / (root.name + '-owner'))
+
+    def test_legacy_products_remain_exact_and_cannot_omit_a_required_native_closure(self):
+        root = self.tree('legacy')
+        self.assertEqual(self.qualify(root, 'x86_64'),
+                         {'products': native.artifacts.tree_files(root)})
+        (root / 'cluster-ctl').write_bytes(native_fixtures.native_cluster_elf('x86_64'))
+        (self.root / 'legacy-owner/cluster-ctl').write_bytes(native_fixtures.native_cluster_elf('x86_64'))
+        with self.assertRaisesRegex(ValueError, 'lacks cluster-runtime'):
+            self.qualify(root, 'x86_64')
+        (root / 'sandbox-init').unlink()
+        with self.assertRaisesRegex(ValueError, 'product set differs'):
+            self.qualify(root, 'x86_64')
+
+    def test_native_collector_layout_keeps_all_products_and_the_complete_attachment(self):
+        for arch in ('x86_64', 'aarch64'):
+            with self.subTest(arch=arch):
+                root = self.tree(arch, arch)
+                with self.assertRaisesRegex(ValueError, 'symlink in artifact'):
+                    native.artifacts.tree_files(root)  # The previous gate rejects the actual collect layout.
+                result = self.qualify(root, arch)
+                self.assertEqual(set(result['products']), self.products)
+                self.assertEqual(result['products']['cluster-ctl'],
+                                 native.artifacts.digest(root / 'cluster-runtime' / self.native.PROGRAM))
+                self.assertEqual(result['cluster_native']['files'],
+                                 native.artifacts.tree_files(root / 'cluster-runtime'))
+                self.assertEqual(set(result['cluster_native']['files']),
+                                 {self.native.PROGRAM, *self.lock['architectures'][arch]['files']})
+                with self.assertRaisesRegex(ValueError, 'architecture mismatch'):
+                    self.qualify(root, 'aarch64' if arch == 'x86_64' else 'x86_64')
+
+    def test_collected_program_must_match_the_selected_owner_and_its_own_bundle(self):
+        root = self.tree('stale-collected', 'x86_64')
+        program = self.root / 'stale-collected-owner/cluster-runtime' / self.native.PROGRAM
+        program.write_bytes(program.read_bytes() + b'new owner build')
+        with self.assertRaisesRegex(ValueError, 'collected cluster-ctl differs from the selected owner product'):
+            self.qualify(root, 'x86_64')
+        root = self.tree('stale-owner-bundle', 'x86_64')
+        selected = self.root / 'stale-owner-bundle-owner/cluster-ctl'
+        selected.unlink()
+        selected.write_bytes(b'owner product differs from its old bundle')
+        with self.assertRaisesRegex(ValueError, 'native source bundle differs from the selected cluster-ctl product'):
+            self.qualify(root, 'x86_64')
+
+    def test_collected_products_reject_unexpected_entries_or_changed_links(self):
+        mutations = ('extra', 'missing', 'ordinary-link', 'absolute-link', 'escaping-link',
+                     'noncanonical-link', 'wrong-link', 'regular-launcher', 'bundle-link', 'root-link')
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                root = self.tree(mutation, 'x86_64')
+                if mutation == 'extra':
+                    (root / 'extra').write_text('unplanned')
+                elif mutation == 'missing':
+                    (root / 'sandbox-init').unlink()
+                elif mutation == 'ordinary-link':
+                    (root / 'sandbox-init').unlink()
+                    (root / 'sandbox-init').symlink_to('sandbox-ctl')
+                elif mutation in ('bundle-link', 'root-link'):
+                    path = root / 'cluster-runtime' if mutation == 'bundle-link' else root
+                    target = self.root / (mutation + '-external')
+                    path.rename(target)
+                    path.symlink_to(target, target_is_directory=True)
+                else:
+                    link = root / 'run-cluster-ctl'
+                    link.unlink()
+                    if mutation == 'regular-launcher':
+                        link.write_bytes((root / 'cluster-runtime' / self.native.LAUNCHER).read_bytes())
+                    else:
+                        target = {'absolute-link': str(root / 'cluster-runtime' / self.native.LAUNCHER),
+                                  'escaping-link': '../outside',
+                                  'noncanonical-link': './cluster-runtime/bin/run-cluster-ctl',
+                                  'wrong-link': 'cluster-runtime/bin/cluster-ctl'}[mutation]
+                        link.symlink_to(target)
+                with self.assertRaises(ValueError):
+                    self.qualify(root, 'x86_64')
+
+    def test_native_attachment_rejects_missing_corrupt_extra_or_linked_files(self):
+        mutations = ('missing-library', 'corrupt-library', 'wrong-mode', 'internal-link',
+                     'bin-link', 'extra-root', 'extra-bin', 'extra-library', 'extra-directory')
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                root = self.tree(mutation, 'x86_64')
+                bundle = root / 'cluster-runtime'
+                library = bundle / 'lib/cluster-ctl/libfdb_c.so'
+                if mutation == 'missing-library':
+                    library.unlink()
+                elif mutation == 'corrupt-library':
+                    library.write_bytes(library.read_bytes() + b'corrupt')
+                elif mutation == 'wrong-mode':
+                    library.chmod(0o755)
+                elif mutation == 'internal-link':
+                    library.unlink()
+                    library.symlink_to('libc.so.6')
+                elif mutation == 'bin-link':
+                    (bundle / 'bin').rename(self.root / (mutation + '-bin'))
+                    (bundle / 'bin').symlink_to(self.root / (mutation + '-bin'), target_is_directory=True)
+                else:
+                    extra = {'extra-root': 'extra', 'extra-bin': 'bin/extra',
+                             'extra-library': 'lib/cluster-ctl/extra.so',
+                             'extra-directory': 'undeclared/nested/extra'}[mutation]
+                    (bundle / extra).parent.mkdir(parents=True, exist_ok=True)
+                    (bundle / extra).write_text('unplanned')
+                with self.assertRaises(ValueError):
+                    self.qualify(root, 'x86_64')
+
+    def test_native_attachment_still_requires_the_canonical_abi_validation(self):
+        root = self.tree('wrong-abi', 'x86_64')
+        def future(path, arch):
+            record = native_fixtures.native_cluster_elf_record(path, arch)
+            if path.name == 'cluster-ctl':
+                record['requirements']['libc.so.6'] = {'GLIBC_99.0'}
+            return record
+        with patch.object(self.native, 'inspect_elf', future), self.assertRaisesRegex(ValueError, 'ABI not supplied'):
+            self.qualify(root, 'x86_64')
 
 
 
