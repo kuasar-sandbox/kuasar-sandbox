@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import shlex
 import subprocess
 import sys
 import time
@@ -21,6 +22,20 @@ def module(name, path):
     result = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(result)
     return result
+
+
+def source_build_program(root):
+    # PR sources can require release cores whose Stable tags are not published.
+    # Use the same selected-source binding as the ordinary component build lane.
+    script = shlex.quote(str(root / 'platform/ci/integration/go_workspace.py'))
+    source = shlex.quote(str(root))
+    platform_source = shlex.quote(str(root / 'platform'))
+    return f'''
+GOWORK="$(python3 -B {script} --root {source} \\
+  --owners accelerator connector guest-runtime sandboxer orchestrator --source-requirements)"
+export GOWORK
+make -C {platform_source} build
+'''
 
 
 def qualify(plan, root):
@@ -67,9 +82,7 @@ fi
 test ! -e /dev/kvm && test ! -e /dev/net/tun && test ! -S /run/docker.sock
 go version
 rustc --version
-go work init ./accelerator ./connector ./guest-runtime ./sandboxer ./orchestrator
-make -C /src/platform build
-'''
+''' + source_build_program(Path('/src'))
         subprocess.run([*launcher, 'exec', '--', 'bash', '-ceu', program], check=True, timeout=9000)
         result['products'] = artifacts.tree_files(sources / 'platform/bin' / platform.machine())
         expected = [line.split()[0].removesuffix(":") for line in (ROOT / 'release/inputs/bin-inputs.yaml').read_text().splitlines()

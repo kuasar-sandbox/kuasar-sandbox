@@ -15,6 +15,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 ROOT = Path(__file__).resolve().parent
 
@@ -32,6 +33,72 @@ launcher = module('workbench_launcher', ROOT / 'workbench')
 fixtures = module('offline_test_images', ROOT.parent / 'test/e2e/test_offline_inputs.py')
 diagnostics = module('workbench_diagnostics', ROOT / 'collect-diagnostics.py')
 systems = module('workbench_system_tests', ROOT / 'test-system.py')
+native = module('workbench_native_build', ROOT / 'test-build.py')
+
+
+@unittest.skipUnless(shutil.which('go'), 'Go compiler required')
+class NativeWorkspaceTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix='native-workspace-')
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.owners = ('accelerator', 'connector', 'guest-runtime', 'sandboxer', 'orchestrator')
+        for owner in self.owners:
+            path = self.root / owner
+            path.mkdir()
+            text = f'module github.com/kuasar-sandbox/{owner}\ngo 1.22\n'
+            if owner != 'accelerator':
+                text += 'require github.com/kuasar-sandbox/accelerator v0.2.0\n'
+            (path / 'go.mod').write_text(text)
+        # An external import loads the graph and exposes the plain go.work
+        # lookup of the unpublished managed version, as in the native CI job.
+        (self.root / 'accelerator/go.mod').write_text(
+            'module github.com/kuasar-sandbox/accelerator\ngo 1.22\n'
+            'require example.test/external v1.0.0\n')
+        (self.root / 'accelerator/main.go').write_text(
+            'package main\nimport ("fmt"; "example.test/external")\n'
+            'func main() { fmt.Println(external.Value) }\n')
+        proxy = self.root / 'proxy/example.test/external/@v'
+        proxy.mkdir(parents=True)
+        files = {'go.mod': 'module example.test/external\ngo 1.22\n',
+                 'external.go': 'package external\nconst Value = "selected-local-source"\n'}
+        (proxy / 'v1.0.0.mod').write_text(files['go.mod'])
+        (proxy / 'v1.0.0.info').write_text(json.dumps({'Version': 'v1.0.0', 'Time': '2026-11-01T00:00:00Z'}))
+        with zipfile.ZipFile(proxy / 'v1.0.0.zip', 'w') as archive:
+            for name, content in files.items():
+                archive.writestr('example.test/external@v1.0.0/' + name, content)
+        tools = self.root / 'platform/ci/integration'
+        tools.mkdir(parents=True)
+        for name in ('go_workspace.py', 'go_module_policy.py'):
+            shutil.copy2(ROOT.parent / 'ci/integration' / name, tools / name)
+        (self.root / 'platform/Makefile').write_text(
+            'build:\n\tcd ../accelerator && go build -o ../probe .\n')
+        self.env = dict(os.environ, GOWORK='off', GOTOOLCHAIN='local', GOSUMDB='off',
+                        GOPROXY=(self.root / 'proxy').as_uri(), GOMODCACHE=str(self.root / 'modcache'))
+        self.manifests = {p: p.read_bytes() for p in self.root.glob('*/go.mod')}
+
+    def run_program(self, program):
+        return subprocess.run(['bash', '-ceu', program], cwd=self.root, env=self.env,
+                              capture_output=True, text=True)
+
+    def test_native_driver_builds_selected_sources_without_unpublished_remote_tag(self):
+        subprocess.run(['go', 'work', 'init', *('./' + owner for owner in self.owners)],
+                       cwd=self.root, env=self.env, check=True, capture_output=True)
+        old = self.run_program(f'export GOWORK="{self.root / "go.work"}"\nmake -C platform build')
+        self.assertNotEqual(old.returncode, 0)
+        self.assertIn('accelerator@v0.2.0', old.stderr)
+        selected = self.run_program(native.source_build_program(self.root))
+        self.assertEqual(selected.returncode, 0, selected.stdout + selected.stderr)
+        self.assertEqual(subprocess.check_output([self.root / 'probe'], text=True).strip(), 'selected-local-source')
+        self.assertEqual({p: p.read_bytes() for p in self.manifests}, self.manifests)
+
+    def test_workspace_failure_stops_before_make(self):
+        (self.root / 'accelerator/go.mod').write_text('module example.test/wrong\ngo 1.22\n')
+        (self.root / 'platform/Makefile').write_text('build:\n\ttouch ../unexpected-build\n')
+        result = self.run_program(native.source_build_program(self.root))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('local Go module path differs', result.stderr)
+        self.assertFalse((self.root / 'unexpected-build').exists())
 
 
 
