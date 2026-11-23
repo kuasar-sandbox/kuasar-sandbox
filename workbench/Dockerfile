@@ -5,6 +5,9 @@ ARG DEBIAN_FRONTEND=noninteractive
 RUN printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d \
     && chmod 0755 /usr/sbin/policy-rc.d \
     && apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && sed -i 's|http://|https://|g' /etc/apt/sources.list.d/ubuntu.sources \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
        acl autoconf automake bc binutils bison build-essential busybox-static ca-certificates \
        clang cmake containerd cpio curl dbus diffutils docker.io e2fsprogs erofs-utils \
