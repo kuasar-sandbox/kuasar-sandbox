@@ -137,8 +137,11 @@ exec sandbox-ctl exec --proxy http://127.0.0.1:3001 \
         report = self.api('POST', f'/sandboxes/{sid}/export', {'toTemplate': True, 'keepSource': True})
         require(BUNDLE_REF.fullmatch(report['sandboxRef']), 'disk export lacks located Bundle selector')
         if memory:
-            require(BUNDLE_REF.fullmatch(report['snapshotRef']), 'memory export lacks located Bundle selector')
-            require(report['snapshotRef'] != report['sandboxRef'], 'memory and disk use the same Manifest selector')
+            # Check carrier identity separately from runtime scheduling metadata.
+            # The complete ref remains in the TemplateID used for the cold restore.
+            snapshot_carrier = report['snapshotRef'].split('@runtime:', 1)[0]
+            require(BUNDLE_REF.fullmatch(snapshot_carrier), 'memory export lacks located Bundle selector')
+            require(snapshot_carrier != report['sandboxRef'], 'memory and disk use the same Manifest selector')
         else:
             require(not report.get('snapshotRef'), 'disk-only export unexpectedly returned a memory root')
         root = report['snapshotRef'] if memory else report['sandboxRef']
