@@ -205,7 +205,7 @@ OOM 和有效工作丢失.应用仍可能因为自身资源声明,内存上限�
 单节点由 `node-ctl conductor serve` 管理本机沙箱、构建和可选 Reservation Controller。独立 Proxy 承载数据转发，并向 Conductor 注册以接收受信路由与策略更新。
 集群由三个独立 `cluster-ctl` 角色组成:
 
-- `registry`:通过类型化 FoundationDB repository 维护 node、route 与放置执行元数据，管理活动 node 连接及命令分发;
+- `registry`:通过类型化 repository 访问配置的存储后端，维护 node、route 与放置执行元数据，管理活动 node 连接及命令分发;
 - `router`:提供 E2B 兼容统一入口,按 sandbox-group 路由;
 - `placer`:可选地导入和条件维护 Node Group 定义与凭据租期；请求选点由 Registry 负责，执行由 Node 负责。
 

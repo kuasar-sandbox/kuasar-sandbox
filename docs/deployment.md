@@ -226,7 +226,7 @@ flowchart TD
 
 | Process | Role | Count | Lifecycle | Owner |
 |---|---|---|---|---|
-| `run-cluster-ctl registry` | Typed FoundationDB repositories for durable execution metadata; node connections and route/node owner RPC. | One or more members; LocateN selects business connection/service candidates independently of database replication. | systemd. | cluster.md. |
+| `run-cluster-ctl registry` | Typed repositories over the selected database for durable execution metadata; node connections and route/node owner RPC. | One or more members; LocateN selects business connection/service candidates independently of database replication. | systemd. | cluster.md. |
 | `run-cluster-ctl router` | E2B control/data entry (`api.<domain>`) and recent route cache; consult the Router specification for operation-specific resolution, activation, authorization and forwarding. | Multiple stateless replicas behind LB. | systemd. | [cluster-router.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#client-access). |
 | `run-cluster-ctl placer` | Optional Group importer, Node-directory consumer and credential renewer. Create/Build selection and request authentication run in Registry. | Multiple importers coordinate per-source leases through the ready memberlist view. | systemd. | [cluster-placer.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#groups-and-placement). |
 

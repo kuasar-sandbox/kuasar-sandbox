@@ -203,7 +203,7 @@ This overview defines those functional goals. Network-locator encoding, encapsul
 
 On a standalone node, `node-ctl conductor serve` manages local sandboxes, builds and the optional Reservation Controller. The independent Proxy owns data-plane forwarding and registers with conductor for trusted route/policy updates. A cluster consists of three independent `cluster-ctl` roles:
 
-- `registry`: maintains node, route and placement execution metadata through typed FoundationDB repositories, and owns live node connections and command dispatch;
+- `registry`: maintains node, route and placement execution metadata through typed repositories over the configured storage backend, and owns live node connections and command dispatch;
 - `router`: provides the E2B-compatible unified entry point and routes by sandbox-group;
 - `placer`: optionally imports and conditionally maintains Node Group definitions and credential leases. Registry owns request-time Node selection; Node owns execution.
 
