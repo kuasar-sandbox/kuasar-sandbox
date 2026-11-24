@@ -1,13 +1,13 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261124.3
+preview_version: preview.20261124.4
 previous_preview_version: preview.20261124.2
 components:
   accelerator: v0.2.0-preview.20261124
   connector: v0.2.0-preview.20261119
   sandboxer: v0.2.0-preview.20261124.3
-  orchestrator: v0.2.0-preview.20261124.3
+  orchestrator: v0.2.0-preview.20261124.4
   runtime: runtime-v0.2.0-preview.20261124
   vmlinux: vmlinux-v0.1.7-preview.20261124
 component_next_versions:
@@ -19,13 +19,13 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261124.3
+    # Kuasar Sandbox release-v0.2.0-preview.20261124.4
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
     Previous aggregate selection: `release-v0.2.0-preview.20261124.2`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261124.3/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261124.4/releases/daily-preview.yaml).
 
     ## Component versions
 
@@ -34,7 +34,7 @@ notes:
     | `accelerator` | `v0.2.0-preview.20261124` |
     | `connector` | `v0.2.0-preview.20261119` |
     | `sandboxer` | `v0.2.0-preview.20261124.3` |
-    | `orchestrator` | `v0.2.0-preview.20261124.3` |
+    | `orchestrator` | `v0.2.0-preview.20261124.4` |
     | `runtime` | `runtime-v0.2.0-preview.20261124` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261124` |
 
@@ -60,12 +60,14 @@ notes:
 
     ### orchestrator
 
-    Selected version: `v0.2.0-preview.20261124.2` → `v0.2.0-preview.20261124.3`.
+    Selected version: `v0.2.0-preview.20261124.2` → `v0.2.0-preview.20261124.4`.
 
     - Add registration-fenced Group support repository ([#573](https://github.com/kuasar-sandbox/orchestrator/pull/573), [commit caa007de10fc](https://github.com/kuasar-sandbox/orchestrator/commit/caa007de10fcf156e239af7c820f952d9945c2f6)).
     - feat(cluster): activate Node-owned Groups and Registry placement ([#574](https://github.com/kuasar-sandbox/orchestrator/pull/574), [commit b5217cde782c](https://github.com/kuasar-sandbox/orchestrator/commit/b5217cde782c145e0611b0a5c807d82ddb4b09ba)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/d9626893d02b7754dcd1542bc021146c24a58371...b5217cde782c145e0611b0a5c807d82ddb4b09ba)
+    - Preserve runtime declarations in Builder and Snapshot E2E assertions ([#575](https://github.com/kuasar-sandbox/orchestrator/pull/575)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/v0.2.0-preview.20261124.2...v0.2.0-preview.20261124.4)
 
     ### runtime
 
@@ -75,13 +77,18 @@ notes:
 
     Selected version unchanged: `vmlinux-v0.1.7-preview.20261124`.
 
+    ## Platform acceptance
+
+    - Accept runtime-declared memory exports in Quick Start while retaining the complete TemplateID for cold restore ([#438](https://github.com/kuasar-sandbox/kuasar-sandbox/pull/438)).
+    - This selection supersedes the unpublished `.20261124.3` aggregate, whose final combination exposed stale E2E reference assertions. The last complete aggregate `.20261124.2` remains the update baseline.
+
     ## Download and use
 
     - Choose native Linux x86_64 or aarch64 assets. Follow the download guide to verify GitHub asset sizes and SHA-256 digests before use.
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261124.3/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261124.3/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261124.4/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261124.4/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
