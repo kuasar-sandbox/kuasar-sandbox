@@ -277,13 +277,13 @@ flowchart TD
 
 | 进程 | 角色 | 数量 | 启停 | 归属 |
 |---|---|---|---|---|
-| `run-cluster-ctl registry` | 通过类型化 FoundationDB repository 维护持久执行元数据，承载 node 长连接和 route/node owner RPC | 1 或 N 成员；LocateN 选择业务连接与服务候选，不决定数据库复制 | systemd | 平台内,`cluster.md` |
+| `run-cluster-ctl registry` | 通过类型化 repository 访问所选数据库、维护持久执行元数据，承载 node 长连接和 route/node owner RPC | 1 或 N 成员；LocateN 选择业务连接与服务候选，不决定数据库复制 | systemd | 平台内,`cluster.md` |
 | `run-cluster-ctl router` | E2B 兼容统一入口（`api.<domain>` 控制面与数据面）及近期 route cache；按操作区分的解析、激活、鉴权和转发规则由 Router 规范维护 | N 副本(LB 后,无状态)| systemd | 平台内,`cluster-router.md` |
 | `run-cluster-ctl placer` | 可选 Group 导入器、Node 目录消费方与凭据续期方；Create/Build 选点和请求鉴权由 Registry 执行 | 多个 importer 按 ready memberlist 视图协调各 source 的 lease | systemd | 平台内,`cluster-placer.md` |
 
 小规模可三角色同机共置;大规模按 registry 成员表、router 入口副本和 placer 副本分别扩展。
 
-安装完整原生产品包，保留 `bin/run-cluster-ctl`、`bin/cluster-ctl`、`lib/cluster-ctl` 及配套许可材料；通过启动器运行各角色，以加载固定的私有 loader 与运行库。Registry 需要可读的外部 FoundationDB 连接文件，所有成员使用同一元数据 prefix；Router 和 Placer 不打开 Registry 存储。数据库服务由部署方单独运营，客户端包不包含生产数据库服务。精确字段及宿主要求见[集群配置与原生运行契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#configuration)。
+安装完整原生产品包，保留 `bin/run-cluster-ctl`、`bin/cluster-ctl`、`lib/cluster-ctl` 及配套许可材料；通过启动器运行各角色，以加载固定的私有 loader 与运行库。Registry 通过存储配置选择 SQLite、PostgreSQL 或 FoundationDB。SQLite 只支持单 Registry；共享 PostgreSQL/FDB peer 使用同一数据库和元数据 namespace；选择 FDB 时提供可读的连接文件。Router 和 Placer 不打开 Registry 存储。数据库服务由部署方单独运营，客户端包不包含生产数据库服务。精确字段及宿主要求见[集群配置与原生运行契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#configuration)。
 
 ### 端口
 

@@ -51,9 +51,9 @@ journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pag
 
 | 故障 | 影响 | 恢复方式 |
 |---|---|---|
-| 单个 `registry` 成员崩溃 | 其参与的逻辑分片降一格;quorum 仍满足时继续服务,不足时该分片停写 | 成员恢复后通过 quorum read / read-repair catch-up;已路由会话可在无需新 registry lookup 时继续,仍取决于既有 node/transport 连接 |
-| registry 整集群完全下电但 shard 数据保留 | 下电期间新的调度决定不能提交 | registry quorum 恢复后读取原 shard 数据,node-link 重连并继续收敛 |
-| registry 执行 shard 不可恢复地丢失 | 不得从备份构造 sandbox/build 节点执行态 | provider 数据按其持久化流程恢复。不支持从存活 node 投影或 migration-token 持久 route 重建丢失的执行 ownership。[orchestrator #34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33) 是历史提案，不是已实现的恢复流程；须明确报告这一限制 |
+| 单个 Registry 成员崩溃 | 其 Node 连接和在途请求中断；PostgreSQL/FDB peer 仍可访问共享元数据，SQLite 需要单 Registry 重启 | Node 重连到可用的连接 owner，通过 registration 与 ownership fence 收敛；既有数据会话仍取决于 Node 和 transport 连接 |
+| 所有 Registry 进程停止但数据库数据保留 | Registry 控制请求和新的调度决定不可用 | 使用原数据库和 namespace 重启 Registry，由 NodeLink 重连收敛；数据库恢复由所选后端负责，不依赖 Registry quorum |
+| 集群执行元数据不可恢复地丢失 | 不得从备份构造 sandbox/build 节点执行态 | provider 数据按其持久化流程恢复。不支持从存活 node 投影或 migration-token 持久 route 重建丢失的执行 ownership。[orchestrator #34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33) 是历史提案，不是已实现的恢复流程；须明确报告这一限制 |
 | `router` 崩溃 | 该副本连接断 | 无状态,LB 改路由其余副本 |
 | `placer` 崩溃 | Group 导入与凭据续期暂停，直到其他 ready importer 取得 source lease；已有 Node Group 保留 | Registry 继续从已发布支持选点，不调用 Placer。有限凭据租期到期前恢复维护；移除 Group 不撤销已有对象保留的凭据 |
 | 单 compute 节点 node-link 失联 | node owner 立即拒绝向该节点提交新请求；route owner 排除该节点并重新选择 | 重连后重报状态。Registry 清理 node profile/list 与相关执行投影要求节点仍未连接，且有效的最后心跳记录距今已超过 `node_dead_after`；这不是精确清理期限。孤儿清理比较完整 ownership、generation 和凭据绑定，见[集群恢复](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#registry-reliability) |

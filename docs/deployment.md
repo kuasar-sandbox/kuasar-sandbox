@@ -232,7 +232,7 @@ flowchart TD
 
 Small deployments can colocate all three. Larger ones scale registry membership, router entry replicas and placer replicas separately.
 
-Install the complete native product bundle, including `bin/run-cluster-ctl`, `bin/cluster-ctl`, `lib/cluster-ctl` and the accompanying license material. Use the launcher so every role resolves the pinned private loader and libraries. Registry requires a readable connection file for the external FoundationDB database and the same metadata prefix as its peers; Router and Placer do not open Registry storage. Database servers are operated separately from the client bundle. See the [cluster configuration and native runtime contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#configuration) for the exact fields and host requirements.
+Install the complete native product bundle, including `bin/run-cluster-ctl`, `bin/cluster-ctl`, `lib/cluster-ctl` and the accompanying license material. Use the launcher so every role resolves the pinned private loader and libraries. Registry selects SQLite, PostgreSQL or FoundationDB through its storage configuration. SQLite supports one Registry; shared PostgreSQL/FDB peers use the same database and metadata namespace. FDB requires its readable connection file. Router and Placer do not open Registry storage. Database servers are operated separately from the client bundle. See the [cluster configuration and native runtime contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#configuration) for the exact fields and host requirements.
 
 ### Ports
 
