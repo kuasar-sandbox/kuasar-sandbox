@@ -147,3 +147,5 @@ A nonzero Demo or cleanup exit is a failure, not a successful skipped check.
 ## After the first successful run
 
 Build your own application with the [template guide](templates.md), then manage instances with the [sandbox guide](sandboxes.md). See [deployment](deployment.md), [operations](operations.md) and [upgrades](upgrading.md) for the corresponding platform tasks.
+
+For a first multi-node deployment, continue with the [minimum SQLite Registry + Router + two Nodes](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#minimum-cluster). It starts without Placer and includes Group provisioning, Build and SDK acceptance.

@@ -28,6 +28,7 @@ HELPERS = helper_contract.LEGACY_ALIASES
 IMAGE_VARIABLES = {
     "prometheus": "TELEMETRY_PROMETHEUS_IMAGE", "clickhouse": "TELEMETRY_CLICKHOUSE_IMAGE",
     "orchestrator-base": "ORCHESTRATOR_BASE_IMAGE", "orchestrator-execute": "ORCHESTRATOR_EXECUTE_IMAGE",
+    "orchestrator-postgres": "ORCHESTRATOR_POSTGRES_IMAGE",
     "busybox": "KUASAR_BUSYBOX_IMAGE",
     "node-infra-copy": "NODE_INFRA_COPY_IMAGE",
 }
@@ -35,6 +36,7 @@ BACKENDS = {
     "prometheus": "prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996",
     "clickhouse": "clickhouse/clickhouse-server:25.8@sha256:0152dd511befe6a2c2ef53e930726179669b08116da78500b37c51c96ff5ee77",
 }
+POSTGRES_IMAGE = "postgres:17-bookworm@sha256:1eff563f6c868b9b433566e9f3cf6e5c79fbd3b95bf70ec7277d376cdbfc50d7"
 
 
 def require(condition, message):
@@ -212,6 +214,8 @@ def external_image_requests(cases, arch):
         references['busybox'] = 'busybox:latest'
     if 'telemetry.backends.sh' in names:
         references.update(BACKENDS)
+    if 'orchestrator.cluster-lifecycle-postgres.sh' in names:
+        references['orchestrator-postgres'] = POSTGRES_IMAGE
     return {label: {'reference': reference, 'platform': target} for label, reference in references.items()}
 
 

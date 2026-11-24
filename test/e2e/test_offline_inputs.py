@@ -57,7 +57,7 @@ class SelectedImageLoadTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.images = {label: image_fixture(self.root, label=label) for label in (
             'python', 'busybox', 'prometheus', 'clickhouse', 'orchestrator-base',
-            'orchestrator-execute', 'guest-runtime')}
+            'orchestrator-execute', 'orchestrator-postgres', 'guest-runtime')}
         self.provenance = {'arch': 'x86_64', 'images': self.images}
 
     def load(self, cases=None, architecture='amd64'):
@@ -72,7 +72,10 @@ class SelectedImageLoadTests(unittest.TestCase):
             ('snapshot.restore.sh',): {'python', 'busybox'},
             ('image.flatten.sh', 'image.registry.sh'): {'guest-runtime'},
             ('orchestrator.exec.sh',): {'python', 'orchestrator-base', 'orchestrator-execute'},
-            ('telemetry.backends.sh',): set(self.images) - {'guest-runtime'},
+            ('telemetry.backends.sh',): set(self.images) - {'guest-runtime', 'orchestrator-postgres'},
+            ('orchestrator.cluster-lifecycle-postgres.sh',): {
+                'python', 'orchestrator-base', 'orchestrator-execute', 'orchestrator-postgres'},
+            ('orchestrator.cluster-lifecycle-sqlite.sh',): {'python', 'orchestrator-base', 'orchestrator-execute'},
             ('storage.cache.sh',): set(),
         }
         for cases, labels in expected.items():
@@ -92,6 +95,23 @@ class SelectedImageLoadTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'missing prepared images: busybox'):
                 workspace.load_images(self.root, self.provenance, {}, cases=['snapshot.restore.sh'])
             load.assert_not_called()
+
+    def test_postgres_is_required_only_for_its_case_and_uses_prepared_identity(self):
+        case = 'orchestrator.cluster-lifecycle-postgres.sh'
+        for arch in ('x86_64', 'aarch64'):
+            requested = workspace.external_image_requests([case], arch)
+            self.assertEqual(requested['orchestrator-postgres']['reference'], workspace.POSTGRES_IMAGE)
+            self.assertRegex(workspace.POSTGRES_IMAGE, r'@sha256:[0-9a-f]{64}$')
+        environment = workspace.case_environment(self.root, {**self.provenance,
+                                                  'helper_contract': {'schema': 3, 'helpers': {}}}, case)
+        self.assertEqual(environment['ORCHESTRATOR_POSTGRES_IMAGE'], self.images['orchestrator-postgres']['image_id'])
+        del self.images['orchestrator-postgres']
+        with patch.object(workspace.subprocess, 'run') as load:
+            with self.assertRaisesRegex(ValueError, 'missing prepared images: orchestrator-postgres'):
+                workspace.load_images(self.root, self.provenance, {}, cases=[case])
+            load.assert_not_called()
+        self.assertEqual(set(self.load(['orchestrator.cluster-lifecycle-sqlite.sh'])),
+                         {'python', 'orchestrator-base', 'orchestrator-execute'})
 
     def test_selected_digest_and_native_architecture_still_fail_closed(self):
         with self.assertRaisesRegex(ValueError, 'loaded image differs'):
@@ -137,6 +157,8 @@ class InputTests(unittest.TestCase):
         cases = {'storage.cache.sh': [], 'network.tap.sh': [], 'image.manifest.sh': [],
                  'image.flatten.sh': [], 'image.registry.sh': [], 'basic.demo.sh': ['python'],
                  'orchestrator.exec.sh': ['python'], 'builder.copy.sh': ['python'],
+                 'orchestrator.cluster-lifecycle-postgres.sh': ['python', 'orchestrator-postgres'],
+                 'orchestrator.cluster-lifecycle-sqlite.sh': ['python'],
                  'sandbox.lifecycle.sh': ['python', 'busybox'], 'snapshot.restore.sh': ['python', 'busybox'],
                  'network.tapfd.sh': ['python', 'busybox'], 'image.manifest-boot.sh': ['python', 'busybox'],
                  'image.sandbox-assembly.sh': ['python', 'busybox'],

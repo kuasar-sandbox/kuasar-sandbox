@@ -141,7 +141,7 @@ This glossary aligns documentation wording; it does not introduce a new API or r
 | Headroom | The policy-defined guest memory margin. Use the exact `resources.allocatable.memory` semantics in the owning specification. |
 | Node reservation | Node-accounted resources granted to a sandbox; distinct from sandbox-local balloon/cgroup execution and diagnostic host usage. |
 | Conductor / Proxy | Lifecycle/control-plane authority versus the independent node data-plane role; describe current deployment modes from the owning source. |
-| Registry / Router / Placer | Cluster state, unified ingress/routing, and placement roles; do not assign node lifecycle execution to the placer. |
+| Registry / Router / Placer | Registry owns authentication, execution ownership and Node selection; Router owns unified ingress; optional Placer imports/renews Node Groups. Node owns local Group context and lifecycle execution; the selected database owns metadata durability/transactions. |
 | Trusted sandbox network identity | Identity established by the host network infrastructure rather than trusting guest-supplied addresses. |
 | Policy gateway | An external or separately deployed policy execution plane; network integration infrastructure does not imply every gateway feature is implemented. |
 | Security domain | The configured scope of permitted sharing and protection; not unconditional sharing across all tenants. |

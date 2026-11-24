@@ -10,11 +10,24 @@ import sys
 import tempfile
 import time
 
+CLUSTER_CASES = (
+    "orchestrator.cluster-lifecycle.sh", "orchestrator.cluster-lifecycle-sqlite.sh",
+    "orchestrator.cluster-lifecycle-postgres.sh", "orchestrator.cluster-recovery.sh",
+    "orchestrator.cluster-reset.sh", "orchestrator.cluster-faults.sh",
+    "orchestrator.cluster-migration.sh", "orchestrator.cluster-legacy-runtime.sh",
+)
+# Capabilities, API responses and Group/config JSON are deliberately not inputs.
+# These are the real fixture log names; private content still passes only through
+# the closed-vocabulary projection below, never directly into CI artifacts.
+CLUSTER_LOGS = ("router.log", "cluster-node.log", "cluster-proxy.log", "build-node.log",
+                "placer.log", "registry-1.log", "registry-2.log", "registry-3.log",
+                "store-serve.log", "fdb-server.log", "fdb-status.log", "postgres.log",
+                "group-readiness.log", "fault-relay.log", "cluster-faults.log",
+                "cluster-migration.log", "cluster-legacy-runtime.log", "cluster-build.log")
 FILES = {
     "snapshot.read-recovery.sh": ("seed.snapshot.log", "recovered.snapshot.log", "fatal.snapshot.log",
                       "cow.log", "seed.log", "recovered.log", "verified.log", "cache.log", "proxy.log", "store.log"),
-    "orchestrator.cluster-recovery.sh": ("create.response", "router.log", "node.log", "placer-1.log",
-                    "registry-1.log", "registry-2.log", "registry-3.log"),
+    **dict.fromkeys(CLUSTER_CASES, CLUSTER_LOGS),
     "sandbox.cgroup.sh": tuple(f"{control}-{mode}{suffix}.log" for control in ("false", "true")
                               for mode in ("shared", "private") for suffix in ("", "-exec")),
     "orchestrator.resource-startup.sh": ("low-allocatable-1.journal", "low-allocatable-2.journal"),
@@ -38,6 +51,8 @@ SIGNALS = (
     "leaked-fd", "immediate-fork", "cannot-see-sandbox-init-pid1", "did-not-join-primary-pidns",
     "controller-not-enabled", "missing-controller-file", "real-app-root-not-empty",
     "missing-real-app-init", "missing-real-app",
+    "GroupVersionConflict", "support_unavailable", "node_unavailable", "runtime_unavailable",
+    "group_expired", "group_context_not_found", "source_lease_expired",
 )
 LIMIT = 64 * 1024
 UNIT_PROPERTIES = ("ActiveState", "SubState", "MainPID", "Result", "ExecMainCode", "ExecMainStatus",
@@ -180,7 +195,7 @@ def collect(case, phase, source, line, status, work, output, http_status, unit="
     record = {"case": case, "phase": phase, "source": source, "line": int(line),
               "exit_code": int(status), "command": command, "observed_ns": time.time_ns(), "logs": {},
               "redaction": "fixed error vocabulary and selected terminal fields only"}
-    if case == "orchestrator.cluster-recovery.sh" and re.fullmatch(r"[1-5][0-9]{2}", http_status):
+    if case in CLUSTER_CASES and re.fullmatch(r"[1-5][0-9]{2}", http_status):
         record["http_status"] = int(http_status)
     if work:
         try:

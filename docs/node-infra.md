@@ -181,6 +181,60 @@ source/publication dependencies. Named file artifacts use the native
 `checkpoint.remote.ref_location_parent` mapping and corresponding directory
 mounts. Boot asset discovery and snapshot compatibility remain native behavior.
 
+<a id="cluster-attachment"></a>
+
+### Attach this instance to a cluster
+
+The packaged `examples/cluster/conductor.yaml` and `proxy.yaml` are native
+configuration overlays. Mount or COPY them to
+`/etc/node-conductor/conf.d/90-cluster.yaml` and
+`/etc/node-proxy/conf.d/90-cluster.yaml`, preserving the image's base files.
+Replace the Node ID, public domain, Registry endpoint and advertised addresses
+for every instance. Keep the two endpoints distinct: Router reaches Conductor's
+private plaintext API on 3000 and Proxy's private plaintext data listener on
+3001. NodeLink has separate mTLS credentials. Restrict API/data access to trusted
+infrastructure; public TLS terminates at Router or its load balancer.
+
+Mount a root-owned private certificate directory read-only, in addition to the
+delivered configuration mounts. For Quadlet, with the actual host path:
+
+```ini
+[Container]
+Volume=/etc/kuasar/node-a/tls:/etc/node-conductor/tls:ro
+```
+
+For Docker, the equivalent binding is
+`-v /etc/kuasar/node-a/tls:/etc/node-conductor/tls:ro`. The directory contains
+`node.pem`, `node.key` and `ca.pem` from the cluster's trust configuration. Use
+reachable advertised host addresses/forwarded ports when the container uses
+bridge networking; a container-private address or unexposed default port cannot
+serve an external Router. Do not mount credentials at a host-only path that the
+Conductor process cannot read.
+
+Keep a separate persistent `/var/lib/node-infra` for each Node and retain its
+Node DB/encryption key. Share only the artifact backend or explicitly configured
+named file locations required by portable templates. Configure the normal
+per-instance encryption key and source/publication paths before startup; the
+cluster overlay does not provision them. Registry/Router and optional Placer
+run outside this node-infra container, with independently persisted Registry
+metadata and their normal native role configs.
+
+After starting the instance, check NodeLink attachment, install the tenant root
+pair through its local admin socket, and apply the Group using `E2B_API_KEY`.
+Connecting a Node alone does not install roots or Groups. Run native admin
+commands inside this instance, for example `podman exec node-infra-node-a
+node-ctl manifest-key list --socket /run/sandbox/node-ctl.socket`. Do not put
+root secrets in command arguments or shared logs; use the trusted environment
+or secret delivery already used for administration.
+
+The [minimum two-node cluster walkthrough](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#minimum-cluster)
+provides the complete root installation, direct `group apply`, exact Group
+revision/current-registration publication check, Build and SDK acceptance.
+`node-infra-ctl status` covers instance health; it does not certify a Group's
+publication or template runtime eligibility. For runtime inventory changes,
+follow the native [runtime selection diagnostics](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#runtime-inventory-and-selection-diagnostics)
+and perform the normal node maintenance/restart before reopening admission.
+
 ### Resource pools and custom applications
 
 Outer `CPUQuota`/`MemoryMax` bound the entire instance and all VM descendants.

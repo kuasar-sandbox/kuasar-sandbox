@@ -127,3 +127,5 @@ python3 "$WB" --root "$STATE" --name "$NAME" cleanup
 ## 首次成功之后
 
 继续[模板指南](templates_zh.md)构建自己的应用，再按[沙箱指南](sandboxes_zh.md)管理实例。生产装配、日常运行和版本变化分别见[部署](deployment_zh.md)、[运维](operations_zh.md)和[升级](upgrading_zh.md)。
+
+首次多节点部署继续使用[最小 SQLite Registry + Router + 两个 Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#minimum-cluster)；该路径不需要 Placer，并包含 Group 配置、Build 和 SDK 验收。

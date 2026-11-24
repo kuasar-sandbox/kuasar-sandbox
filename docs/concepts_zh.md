@@ -156,7 +156,7 @@ flowchart TD
 | Headroom | 策略定义的 Guest 内存余量；采用归属规范中 `resources.allocatable.memory` 的精确语义。 |
 | 节点预留 | 节点为沙箱记账并授予的资源，区别于沙箱内部 Balloon/Cgroup 执行及诊断性宿主用量。 |
 | Conductor / Proxy | 生命周期/控制面权威与独立节点数据面角色；部署模式按归属来源描述。 |
-| Registry / Router / Placer | 集群状态、统一入口及路由、放置角色；不把节点生命周期执行职责归给 Placer。 |
+| Registry / Router / Placer | Registry 负责鉴权、执行所有权与 Node 选点；Router 负责统一入口；可选 Placer 导入/续期 Node Group。Node 持有本地 Group 上下文并执行生命周期；所选数据库负责元数据持久化和事务。 |
 | 可信沙箱网络身份 | 由宿主网络基础设施建立的身份，而非信任 Guest 自报的地址。 |
 | 策略网关 | 外部或单独部署的策略执行平面；网络集成基础不表示所有网关功能均已实现。 |
 | 安全域 | 配置的共享与保护范围，不是无条件跨所有租户共享。 |

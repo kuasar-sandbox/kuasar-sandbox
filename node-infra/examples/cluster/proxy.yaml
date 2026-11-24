@@ -1,0 +1,4 @@
+# Mount as /etc/node-proxy/conf.d/90-cluster.yaml.
+# Router reaches this private listener independently of Conductor's API port.
+data_listen: 0.0.0.0:3001
+tls: null
