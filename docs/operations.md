@@ -24,7 +24,7 @@ journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pag
 - `sandbox-ctl`, the VMM, node, registry, router and placer are independently observable and recoverable processes/fault domains.
 - Durable node records and runtime Inventory support restart recovery and orphan cleanup. A host socket's existence alone does not prove guest readiness; recovery must be confirmed through an actual health check or execution operation.
 - Local artifacts support node-affine recovery. Shared-file or Manifest roots support cross-node recovery only when the complete referenced graph and required location/key bindings are available at the destination; publishing the root does not establish that condition. Recovery still requires existing ownership, compatible inputs and target admission. Cluster recovery after the original node is declared gone also requires a caller-held valid MigrationToken and [restore eligibility](upgrading.md#restore-eligibility); readable snapshot data does not imply automatic migration.
-- Registry stores cluster execution state; the node is authoritative for a running sandbox. Placer only recommends placement, and node admission still performs final resource confirmation.
+- Registry stores cluster execution state and selects from Node Group support; the node is authoritative for a running sandbox. Optional Placer maintains Groups, and Node admission still performs final resource confirmation.
 - Group is the cluster partition key. Routing, placement, credential verification and operations remain group-scoped.
 
 ## Failure domains
@@ -50,10 +50,10 @@ Use `node-ctl resource pressure` to distinguish raw pool pressure, outstanding r
 | Failure | Impact | Recovery |
 |---|---|---|
 | One registry member crashes. | Its logical shards lose one replica; writes continue only with quorum. | Quorum reads/read-repair catch up after recovery. Already routed sessions can continue without a fresh registry lookup, subject to their existing node/transport connections. |
-| Entire registry is powered off, shard data retained. | Reserve/Place unavailable during outage. | Read retained data after quorum returns; node-link reconnects and converges. |
+| Entire registry is powered off, shard data retained. | New scheduling decisions cannot commit during the database outage. | Read retained data after quorum returns; node-link reconnects and converges. |
 | Execution shards are irrecoverably lost. | Do not reconstruct live sandbox/build node execution state from a stale backup. | Recover provider data through its durability process. Rebuilding lost execution ownership from live-node projections or migration-token durable routes is not supported. [#34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33) are historical proposals, not implemented recovery procedures; report this limitation explicitly. |
 | Router crashes. | Connections through that replica break. | LB selects another stateless replica. |
-| Placer crashes. | It leaves the ready set; cold placement fails over to another placer for the same group. | Hot routing is unaffected; Registry tries another candidate after Place timeout. |
+| Placer crashes. | Group import and credential renewal pause until another ready importer acquires the source lease. Existing Node Groups are retained. | Registry continues selecting from published support without calling Placer. Restore import maintenance before finite credential leases expire; group removal does not revoke retained object credentials. |
 | A compute node loses node-link. | The node owner immediately rejects new submissions to that node; the route owner excludes/reselects it. | Reconnection reports state. Registry cleanup of node profile/list and associated execution projections requires the node to remain disconnected with a valid recorded last heartbeat older than `node_dead_after`; this is not an exact cleanup deadline. Orphan cleanup compares complete ownership, generation and credential bindings; see [cluster recovery](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#registry-reliability). |
 
 ## Acceptance after recovery

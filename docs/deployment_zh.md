@@ -16,7 +16,7 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 | Compute Node | 承载 MicroVM 和节点资源控制;e2b 模板构建也在本节点的构建沙箱内进行([Build 部署](#build-部署)) | `node-ctl conductor serve`(含可选 `resource_listen`)、独立 Proxy master + workers、`sandbox-ctl × N`;Manifest 数据路径按需部署 `cache-ctl`,来源访问、发布或配置的写入准入需要 Store 时部署 `store-ctl` |
 | Shared Storage | 为命名 `file://` location 提供跨节点原生文件访问 | 部署方提供的 NAS,NFS 或共享文件系统 |
 | L2 Cache Cluster(可选) | 为 Manifest 路径提供分布式 EC 缓存,未部署时 cache 可以本地命中或直接回源 | `cache-ctl serve` (`mode: shard`) |
-| Cluster Control Plane(可选) | E2B 兼容多节点控制面:registry 维护执行态,router 提供统一入口,placer 导入 group 并放置;生命周期仍由 node 执行 | `run-cluster-ctl registry`,`run-cluster-ctl router`,`run-cluster-ctl placer` |
+| Cluster Control Plane(可选) | E2B 兼容多节点控制面:Registry 维护执行态并选点，Router 提供统一入口，可选 Placer 维护 Node Group;生命周期仍由 node 执行 | `run-cluster-ctl registry`,`run-cluster-ctl router`,`run-cluster-ctl placer` |
 
 **外部共享资源**(由部署方运营,平台外)
 
@@ -260,7 +260,7 @@ Registry 拉取和工件发布使用独立作用域凭据；宿主内容保护�
 ## Cluster Control Plane (cluster-ctl)
 
 多 compute 节点部署由三个角色组成 cluster 层:**registry** 是状态集群与节点通道枢纽,
-**router** 是 E2B 控制/数据公共入口,**placer** 负责 group provider/importer 与放置调度。
+**router** 是 E2B 控制/数据公共入口,**placer** 是可选的 Group 导入器，负责 Node Group 的条件维护与凭据续期。
 路由、激活和鉴权由各自契约维护,见 [cluster_zh.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md)。
 单 compute 节点独立直供 E2B SDK 时不需要 cluster 层。
 
@@ -269,7 +269,8 @@ flowchart TD
   C["Client / SDK"] --> R["cluster-ctl router"]
   R -->|"route_link Reserve / Resolve"| G["cluster-ctl registry"]
   G <-->|"node_link"| N["node-ctl conductor on compute nodes"]
-  P["cluster-ctl placer"] <-->|"placer_link Place / verify-key"| G
+  P["cluster-ctl placer (optional)"] -->|"Conditional Group maintenance"| G
+  G -->|"node_list directory"| P
 ```
 
 ### 进程
@@ -278,7 +279,7 @@ flowchart TD
 |---|---|---|---|---|
 | `run-cluster-ctl registry` | 通过类型化 FoundationDB repository 维护持久执行元数据，承载 node 长连接和 route/node owner RPC | 1 或 N 成员；LocateN 选择业务连接与服务候选，不决定数据库复制 | systemd | 平台内,`cluster.md` |
 | `run-cluster-ctl router` | E2B 兼容统一入口（`api.<domain>` 控制面与数据面）及近期 route cache；按操作区分的解析、激活、鉴权和转发规则由 Router 规范维护 | N 副本(LB 后,无状态)| systemd | 平台内,`cluster-router.md` |
-| `run-cluster-ctl placer` | group provider/importer、WATCH_LIST 消费方与放置调度器;向 registry 提供 PlaceSandbox / PlaceBuild / verify-key | N 副本;按 placer memberlist ready 视图和 group 确定性 failover | systemd | 平台内,`cluster-placer.md` |
+| `run-cluster-ctl placer` | 可选 Group 导入器、Node 目录消费方与凭据续期方；Create/Build 选点和请求鉴权由 Registry 执行 | 多个 importer 按 ready memberlist 视图协调各 source 的 lease | systemd | 平台内,`cluster-placer.md` |
 
 小规模可三角色同机共置;大规模按 registry 成员表、router 入口副本和 placer 副本分别扩展。
 
@@ -291,11 +292,11 @@ flowchart TD
 | `run-cluster-ctl router` | `:443` | HTTPS/h2 | **对外** e2b 控制面 + 数据面入口(机群唯一北向面)|
 | `run-cluster-ctl registry` | `member.listen`,如 `:7700` | JSONRPC over HTTP/h2c 或 HTTPS | 统一控制面;按 path 承载 `/node-link/*`、`/route-link/*`、`/placer-link/*`、`/cluster/membership`、`/internal/registry-member/*`、`/internal/memberlist/*` |
 | `run-cluster-ctl registry` | `node_link.listen`(可选) | JSONRPC over HTTP/h2c 或 HTTPS | 可选独立 node 长连接监听;为空时复用 `member.listen` |
-| `run-cluster-ctl placer` | `placer.listen`,如 `:7800` | JSONRPC over HTTP/h2c 或 HTTPS | placer Place / verify-key API;memberlist HTTP transport 复用同一监听 |
+| `run-cluster-ctl placer` | `placer.listen`,如 `:7800` | JSONRPC over HTTP/h2c 或 HTTPS | Importer memberlist HTTP transport；不提供创建请求的 Place/verify-key API |
 
 ### 与节点 / 平台管理面的关系
 
-节点与 Registry 建立已认证的 node-link 会话，并显式通告 API 与数据端点。Router 向 Registry 获取按 group 分区的状态，再向选定节点转发控制/数据请求。Placer 从所配置 Provider 导入 group 并提出放置建议，节点准入仍是资源确认方。
+节点与 Registry 建立已认证的 node-link 会话，并显式通告 API 与数据端点。Router 向 Registry 获取按 group 分区的状态，再向选定节点转发控制/数据请求。Node 保存 Group 上下文，并通过 node-link 上报最小支持目录。Registry 从目录选点，在同一 Node 上复验鉴权、runtime 兼容性和请求 Placement。Placer 可选地导入期望定义、续期等价绑定；资源准入仍由 Node 确认。直接维护 Group 时无需 Placer。
 
 当前 Router→node 使用明文 HTTP/CONNECT：`APIEndpoint` 与 `DataEndpoint` 必须登记两个不同、可达的内部明文 listener，不能填入启用 TLS 的节点 listener。应保护该内部网络，并在 Router 或其前置负载均衡器终止公网入口 TLS。Node-link 独立使用其配置的 mTLS。独立部署可以在两个不同的节点 API/data 入口终止 TLS，不能把这种 listener 配置直接照搬到集群注册。
 
@@ -408,7 +409,7 @@ L2 cluster 的关闭与 compute node 关闭无强序——每个 compute node �
 Compute:           scale by peak working set, active ratio, restore cost, and safety margin
 Storage:           Local NVMe / NAS / NFS / FS or S3-compatible store
 Optional cache:    local cache or an L2 shard cluster sized by hit rate and failure domain
-Control plane:     node-ctl standalone or registry + router + placer
+Control plane:     node-ctl standalone or Registry + Router, optional Placer importer
 ```
 
 每个 compute 节点运行 Conductor、独立 Proxy master/workers 和当前沙箱对应的 `sandbox-ctl`;使用 Manifest

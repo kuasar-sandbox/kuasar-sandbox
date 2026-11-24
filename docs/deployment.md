@@ -15,7 +15,7 @@ Select roles according to the data path and control-plane topology. Local files,
 | Compute Node | Hosts MicroVMs and node resource control; E2B template builds also run in build sandboxes on this node ([Build deployment](#build-deployment)). | `node-ctl conductor serve`, optionally with `resource_listen`; independent Proxy master and workers; `sandbox-ctl × N`. Deploy `cache-ctl` when selected for the Manifest path, and `store-ctl` when source access, publication or configured write admission requires it. |
 | Shared Storage | Native cross-node file access for named `file://` locations. | Operator-provided NAS, NFS or shared filesystem. |
 | L2 Cache Cluster (optional) | Distributed EC caching for the Manifest path; without it, cache can hit locally or read the origin. | `cache-ctl serve` (`mode: shard`). |
-| Cluster Control Plane (optional) | E2B-compatible multi-node control: registry maintains execution state, router supplies the common entry point, and placer imports groups and selects placement. Nodes still execute lifecycle operations. | `run-cluster-ctl registry`, `run-cluster-ctl router`, `run-cluster-ctl placer`. |
+| Cluster Control Plane (optional) | E2B-compatible multi-node control: Registry maintains execution state and selects Nodes, Router supplies the common entry point, and optional Placer maintains Node Groups. Nodes still execute lifecycle operations. | `run-cluster-ctl registry`, `run-cluster-ctl router`, `run-cluster-ctl placer`. |
 
 **External shared resources**, operated outside the platform:
 
@@ -211,14 +211,15 @@ Use independently scoped registry-pull and artifact-publication credentials. Kee
 
 ## Cluster Control Plane (cluster-ctl)
 
-For multiple compute nodes, three roles compose the cluster layer: **registry**, a state cluster and node-channel hub; **router**, the common E2B control/data entry; and **placer**, the group provider/importer and placement scheduler. Their independent contracts own routing, activation and authentication. See [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md). A standalone node directly serving the E2B SDK does not require this layer.
+For multiple compute nodes, three roles compose the cluster layer: **registry**, a state cluster and node-channel hub; **router**, the common E2B control/data entry; and **placer**, an optional importer that conditionally maintains Node-owned Groups and credential leases. Their independent contracts own routing, activation and authentication. See [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md). A standalone node directly serving the E2B SDK does not require this layer.
 
 ```mermaid
 flowchart TD
   C["Client / SDK"] --> R["cluster-ctl router"]
   R -->|"route_link Reserve / Resolve"| G["cluster-ctl registry"]
   G <-->|"node_link"| N["node-ctl conductor on compute nodes"]
-  P["cluster-ctl placer"] <-->|"placer_link Place / verify-key"| G
+  P["cluster-ctl placer (optional)"] -->|"Conditional Group maintenance"| G
+  G -->|"node_list directory"| P
 ```
 
 ### Processes
@@ -227,7 +228,7 @@ flowchart TD
 |---|---|---|---|---|
 | `run-cluster-ctl registry` | Typed FoundationDB repositories for durable execution metadata; node connections and route/node owner RPC. | One or more members; LocateN selects business connection/service candidates independently of database replication. | systemd. | cluster.md. |
 | `run-cluster-ctl router` | E2B control/data entry (`api.<domain>`) and recent route cache; consult the Router specification for operation-specific resolution, activation, authorization and forwarding. | Multiple stateless replicas behind LB. | systemd. | [cluster-router.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#client-access). |
-| `run-cluster-ctl placer` | Group provider/importer, WATCH_LIST consumer and scheduler; PlaceSandbox/PlaceBuild/verify-key for registry. | Multiple replicas; deterministic group failover uses ready placer memberlist view. | systemd. | [cluster-placer.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#groups-and-placement). |
+| `run-cluster-ctl placer` | Optional Group importer, Node-directory consumer and credential renewer. Create/Build selection and request authentication run in Registry. | Multiple importers coordinate per-source leases through the ready memberlist view. | systemd. | [cluster-placer.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#groups-and-placement). |
 
 Small deployments can colocate all three. Larger ones scale registry membership, router entry replicas and placer replicas separately.
 
@@ -240,11 +241,11 @@ Install the complete native product bundle, including `bin/run-cluster-ctl`, `bi
 | Router | `:443` | HTTPS/h2 | Public E2B control/data entry for the cluster. |
 | Registry | `member.listen`, e.g. `:7700` | JSONRPC over HTTP/h2c or HTTPS | Unified control plane with `/node-link/*`, `/route-link/*`, `/placer-link/*`, `/cluster/membership`, `/internal/registry-member/*`, `/internal/memberlist/*`. |
 | Registry | Optional `node_link.listen` | JSONRPC over HTTP/h2c or HTTPS | Separate node-connection listener; empty reuses member.listen. |
-| Placer | `placer.listen`, e.g. `:7800` | JSONRPC over HTTP/h2c or HTTPS | Place/verify-key API; memberlist HTTP transport shares the listener. |
+| Placer | `placer.listen`, e.g. `:7800` | JSONRPC over HTTP/h2c or HTTPS | Importer memberlist HTTP transport; no create-time Place or verify-key API. |
 
 ### Relationship to nodes and external management
 
-Nodes establish authenticated node-link sessions with Registry and advertise their API and data endpoints explicitly. Router connects to Registry for group-scoped state and to the chosen node for control/data forwarding. Placer imports groups from its configured Provider and proposes placement; node admission remains authoritative for resources.
+Nodes establish authenticated node-link sessions with Registry and advertise their API and data endpoints explicitly. Router connects to Registry for group-scoped state and to the chosen node for control/data forwarding. Nodes own Group context and report minimal support through node-link. Registry selects from that support and rechecks authentication, runtime compatibility and request Placement on the same Node. Placer optionally imports desired definitions and renews unchanged bindings; Node admission remains authoritative for resources. Direct Group maintenance can be used without Placer.
 
 Current Router-to-node forwarding uses plaintext HTTP/CONNECT: register two distinct, reachable internal plaintext listeners as `APIEndpoint` and `DataEndpoint`, not TLS-enabled node listeners. Protect this internal network and terminate public ingress TLS at Router or its fronting load balancer. Node-link independently uses its configured mTLS. Standalone deployments can instead terminate TLS on both distinct node API/data entries; do not copy that listener configuration directly into cluster registration.
 
@@ -350,7 +351,7 @@ This example uses no L2, remote object store or separate resource-controller dae
 | Compute | Peak working set, active ratio, restore cost and safety margin. |
 | Storage | Local NVMe / NAS / NFS / FS or S3-compatible store. |
 | Optional cache | Local cache or L2 shards sized by hit rate and failure domain. |
-| Control plane | Standalone node-ctl or registry + router + placer. |
+| Control plane | Standalone node-ctl, or Registry + Router with optional Placer import maintenance. |
 
 Each compute node runs Conductor, the independent Proxy master/workers and one sandbox-ctl per active sandbox. Add store and optional cache for Manifest data. Measure node count, per-node concurrency and cache capacity using the target versions, hardware, sandbox specifications and workload; architecture diagrams do not establish fixed capacity. For cluster mode, choose registry membership and LB-backed router/placer replicas according to availability and load.
 
