@@ -627,56 +627,6 @@
     },
     {
       "candidate": {
-        "repository": "kuasar-sandbox/sandboxer",
-        "pull_request_number": 478,
-        "base_ref": "main",
-        "base_sha": "4cdc3ff7ec0923b87a99f5c40b9f71226d6501e6",
-        "head_sha": "9e037b1b1fbf948d89e603b0294f3b3c025d098e",
-        "candidate_sha": "3be8ddacd70bcd544a89b02451e11c666f684276"
-      },
-      "units": {
-        "runtime": {
-          "tag": "runtime-v0.2.0-preview.20261124.6",
-          "sha": "7bfcecf8e519d9c28fa688f58022d03cc814091e",
-          "release_id": 456715219,
-          "assets": [
-            {
-              "name": "sandbox-runtime-aarch64-v0.2.0-preview.20261124.6.tar.gz",
-              "id": 787053952,
-              "size": 50302276,
-              "digest": "sha256:c1a643d6ebdcf12ab987b807f4dedee36cef8fbc4cc8ebba974d36e43c2b73e0"
-            },
-            {
-              "name": "sandbox-runtime-x86_64-v0.2.0-preview.20261124.6.tar.gz",
-              "id": 787054265,
-              "size": 54553470,
-              "digest": "sha256:5042feaa0aace56b92784ce2b451e6628495ba3e642b1341b27e123f37d4aa44"
-            }
-          ]
-        },
-        "orchestrator": {
-          "tag": "v0.2.0-preview.20261124.6",
-          "sha": "51e8540aa1820503b6578d90621392afd524f70f",
-          "release_id": 456737025,
-          "assets": [
-            {
-              "name": "orchestrator-v0.2.0-preview.20261124.6-linux-aarch64.tar.gz",
-              "id": 787119188,
-              "size": 101939394,
-              "digest": "sha256:dcb22b9f43016206644218b1fea0ecf156998fc32305a3c1b854ba3f3bd2731e"
-            },
-            {
-              "name": "orchestrator-v0.2.0-preview.20261124.6-linux-x86_64.tar.gz",
-              "id": 787119529,
-              "size": 111030529,
-              "digest": "sha256:af39e521e19fad15afda8eb50b990a11e2e108fbf39dba77a6c38af6202a823b"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "candidate": {
         "repository": "kuasar-sandbox/orchestrator",
         "pull_request_number": 576,
         "base_ref": "main",
