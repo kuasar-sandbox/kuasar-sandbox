@@ -627,37 +627,6 @@
     },
     {
       "candidate": {
-        "repository": "kuasar-sandbox/orchestrator",
-        "pull_request_number": 576,
-        "base_ref": "main",
-        "base_sha": "718354a07e5e35ee4f9175a45a94387bf5b649c3",
-        "head_sha": "2ca2a3e63f9bd9d1375bb1b7b1ddaddd25cacfdf",
-        "candidate_sha": "09007859509eb435c5b082f4676c1987a152b938"
-      },
-      "units": {
-        "sandboxer": {
-          "tag": "v0.2.0-preview.20261124.5",
-          "sha": "cf410be062014f78398b4a9d37143a6be7cb95d6",
-          "release_id": 456577974,
-          "assets": [
-            {
-              "name": "sandboxer-v0.2.0-preview.20261124.5-linux-aarch64.tar.gz",
-              "id": 786633579,
-              "size": 15349950,
-              "digest": "sha256:fecfb58aa1e969deae0251a787063557208323807b734ae8b683cdf130ae809b"
-            },
-            {
-              "name": "sandboxer-v0.2.0-preview.20261124.5-linux-x86_64.tar.gz",
-              "id": 786633702,
-              "size": 16509658,
-              "digest": "sha256:b13a3d2e91339238262bf20c5bf4184e69c23c79e30f4d32f9f735dae7f6907a"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "candidate": {
         "repository": "kuasar-sandbox/sandboxer",
         "pull_request_number": 478,
         "base_ref": "main",
@@ -682,6 +651,75 @@
               "id": 787054265,
               "size": 54553470,
               "digest": "sha256:5042feaa0aace56b92784ce2b451e6628495ba3e642b1341b27e123f37d4aa44"
+            }
+          ]
+        },
+        "orchestrator": {
+          "tag": "v0.2.0-preview.20261124.6",
+          "sha": "51e8540aa1820503b6578d90621392afd524f70f",
+          "release_id": 456737025,
+          "assets": [
+            {
+              "name": "orchestrator-v0.2.0-preview.20261124.6-linux-aarch64.tar.gz",
+              "id": 787119188,
+              "size": 101939394,
+              "digest": "sha256:dcb22b9f43016206644218b1fea0ecf156998fc32305a3c1b854ba3f3bd2731e"
+            },
+            {
+              "name": "orchestrator-v0.2.0-preview.20261124.6-linux-x86_64.tar.gz",
+              "id": 787119529,
+              "size": 111030529,
+              "digest": "sha256:af39e521e19fad15afda8eb50b990a11e2e108fbf39dba77a6c38af6202a823b"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "candidate": {
+        "repository": "kuasar-sandbox/orchestrator",
+        "pull_request_number": 576,
+        "base_ref": "main",
+        "base_sha": "51e8540aa1820503b6578d90621392afd524f70f",
+        "head_sha": "746b1e6576cc0181a40876a2d731495b07656b7d",
+        "candidate_sha": "afbf63c1d18fcbaf988cf8951696bad1dd0d5a21"
+      },
+      "units": {
+        "runtime": {
+          "tag": "runtime-v0.2.0-preview.20261124.6",
+          "sha": "7bfcecf8e519d9c28fa688f58022d03cc814091e",
+          "release_id": 456715219,
+          "assets": [
+            {
+              "name": "sandbox-runtime-aarch64-v0.2.0-preview.20261124.6.tar.gz",
+              "id": 787053952,
+              "size": 50302276,
+              "digest": "sha256:c1a643d6ebdcf12ab987b807f4dedee36cef8fbc4cc8ebba974d36e43c2b73e0"
+            },
+            {
+              "name": "sandbox-runtime-x86_64-v0.2.0-preview.20261124.6.tar.gz",
+              "id": 787054265,
+              "size": 54553470,
+              "digest": "sha256:5042feaa0aace56b92784ce2b451e6628495ba3e642b1341b27e123f37d4aa44"
+            }
+          ]
+        },
+        "sandboxer": {
+          "tag": "v0.2.0-preview.20261124.6",
+          "sha": "4cdc3ff7ec0923b87a99f5c40b9f71226d6501e6",
+          "release_id": 456724098,
+          "assets": [
+            {
+              "name": "sandboxer-v0.2.0-preview.20261124.6-linux-aarch64.tar.gz",
+              "id": 787080272,
+              "size": 15380891,
+              "digest": "sha256:269f34931b653f2745a773d5e04051f4f3aac2e7d141c18b5ba53d1c78897719"
+            },
+            {
+              "name": "sandboxer-v0.2.0-preview.20261124.6-linux-x86_64.tar.gz",
+              "id": 787080347,
+              "size": 16548875,
+              "digest": "sha256:16df0222f97cf0e1a24f51e4e1149b3686112748cca68da8724b047d1d6a8cc6"
             }
           ]
         }
