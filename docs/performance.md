@@ -183,18 +183,18 @@ On 2026-10-08 the local **matched** BMS study used 8C16G, a 12GiB node pool, 1C4
 Cluster performance must distinguish hot and cold paths:
 
 ```text
-hot path:
+data hot path:
 client ──► router READY route cache ──► node/proxy/envd
 
 cold path:
-router ──► registry route_link ──► node/placer
-node   ──► registry node_link/node_list
-placer ──► group import and placement
+router ──► registry route_link / Group selection ──► node
+node   ──► registry node_link / Group support
+placer ──► conditional Group import / credential renewal
 ```
 
-Hot-path validation checks that a route-cache hit does not enter Resolve/Reserve. Measure create, connect, exec-session, data activation, node-state changes, group import and membership changes separately on cold paths. Every result must record registry replica/owner configuration, sandbox-group count, route-cache state, node count, request-completion conditions and failure rate.
+Data hot-path validation checks that a route-cache hit does not enter Resolve/Reserve. Control requests still revalidate authorization through Registry. Measure create, connect, exec-session, data activation, node-state changes, group import and membership changes separately on cold paths. Every result must record registry replica/owner configuration, sandbox-group count, route-cache state, node count, request-completion conditions and failure rate.
 
-Placer only imports groups and recommends placement. Node admission performs final resource confirmation. Placer throughput must not be described as the throughput of completed MicroVM creation.
+Measure Registry selection and authorization separately from Placer import and credential renewal. Control requests revalidate through Registry; a data-route cache hit has a different cost. Node admission performs final resource confirmation. Import throughput does not measure completed MicroVM creation.
 
 ## Release and CI evidence
 

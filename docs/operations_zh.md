@@ -25,8 +25,8 @@ journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pag
 - 节点持久记录与运行态 Inventory 用于重启恢复和孤儿清理;host socket 存在本身不是
   Guest ready 证据,恢复必须通过实际健康或执行操作确认.
 - 本地工件支持节点亲和恢复。共享文件或 Manifest 根只有在完整引用图及所需 location/密钥绑定在目标端可用时，才能支持跨节点恢复；仅发布根不能证明满足此条件。恢复仍要求已有 ownership、兼容输入与目标准入。原节点已被判断为 gone 的集群恢复还要求调用方持有有效 MigrationToken，并满足[恢复资格](upgrading_zh.md#restore-eligibility)，不能仅凭快照可读推断会自动迁移。
-- registry 保存集群执行态,node 是运行中 sandbox 的事实来源;placer 只给出放置建议,
-  最终资源确认仍在 node admission.
+- Registry 保存集群执行态，并从 Node Group 支持目录选点；Node 是运行中 Sandbox 的事实来源。
+  Placer 可选地维护 Group，最终资源确认仍在 Node admission。
 - group 是集群分区键,路由,放置,凭据验证和操作保持 group-scoped.
 
 ## 故障域
@@ -51,11 +51,11 @@ journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pag
 
 | 故障 | 影响 | 恢复方式 |
 |---|---|---|
-| 单个 `registry` 成员崩溃 | 其参与的逻辑分片降一格;quorum 仍满足时继续服务,不足时该分片停写 | 成员恢复后通过 quorum read / read-repair catch-up;已路由会话可在无需新 registry lookup 时继续,仍取决于既有 node/transport 连接 |
-| registry 整集群完全下电但 shard 数据保留 | 下电期间 Reserve/Place 不可用 | registry quorum 恢复后读取原 shard 数据,node-link 重连并继续收敛 |
-| registry 执行 shard 不可恢复地丢失 | 不得从备份构造 sandbox/build 节点执行态 | provider 数据按其持久化流程恢复。不支持从存活 node 投影或 migration-token 持久 route 重建丢失的执行 ownership。[orchestrator #34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33) 是历史提案，不是已实现的恢复流程；须明确报告这一限制 |
+| 单个 Registry 成员崩溃 | 其 Node 连接和在途请求中断；PostgreSQL/FDB peer 仍可访问共享元数据，SQLite 需要单 Registry 重启 | Node 重连到可用的连接 owner，通过 registration 与 ownership fence 收敛；既有数据会话仍取决于 Node 和 transport 连接 |
+| 所有 Registry 进程停止但数据库数据保留 | Registry 控制请求和新的调度决定不可用 | 使用原数据库和 namespace 重启 Registry，由 NodeLink 重连收敛；数据库恢复由所选后端负责，不依赖 Registry quorum |
+| 集群执行元数据不可恢复地丢失 | 不得从备份构造 sandbox/build 节点执行态 | provider 数据按其持久化流程恢复。不支持从存活 node 投影或 migration-token 持久 route 重建丢失的执行 ownership。[orchestrator #34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33) 是历史提案，不是已实现的恢复流程；须明确报告这一限制 |
 | `router` 崩溃 | 该副本连接断 | 无状态,LB 改路由其余副本 |
-| `placer` 崩溃 | 该 placer 不再作为 ready 候选;冷放置 failover 到同 group 的其他 placer | 热路径不受影响;Place 超时后 registry 换下一个候选 |
+| `placer` 崩溃 | Group 导入与凭据续期暂停，直到其他 ready importer 取得 source lease；已有 Node Group 保留 | Registry 继续从已发布支持选点，不调用 Placer。有限凭据租期到期前恢复维护；移除 Group 不撤销已有对象保留的凭据 |
 | 单 compute 节点 node-link 失联 | node owner 立即拒绝向该节点提交新请求；route owner 排除该节点并重新选择 | 重连后重报状态。Registry 清理 node profile/list 与相关执行投影要求节点仍未连接，且有效的最后心跳记录距今已超过 `node_dead_after`；这不是精确清理期限。孤儿清理比较完整 ownership、generation 和凭据绑定，见[集群恢复](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#registry-reliability) |
 
 ## 恢复后的验收

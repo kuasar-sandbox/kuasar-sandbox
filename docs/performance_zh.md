@@ -211,22 +211,23 @@ Balloon 不是唯一弹性来源.空闲 CPU 调度,非活跃内存回收,Cgroup 
 cluster 性能必须区分热路径和冷路径:
 
 ```text
-hot path:
+data hot path:
 client ──► router READY route cache ──► node/proxy/envd
 
 cold path:
-router ──► registry route_link ──► node/placer
-node   ──► registry node_link/node_list
-placer ──► group import and placement
+router ──► registry route_link / Group selection ──► node
+node   ──► registry node_link / Group support
+placer ──► conditional Group import / credential renewal
 ```
 
-热路径验证 route cache 命中后不进入 Resolve/Reserve.冷路径分别测量 create,connect,
+数据热路径验证 route cache 命中后不进入 Resolve/Reserve；控制请求仍通过 Registry 复验鉴权。冷路径分别测量 create,connect,
 exec-session,data activation,node 状态变化,group import 和成员切换.每个结果必须记录
 registry 副本/owner 配置,sandbox-group 数量,route cache 状态,node 数量,请求完成条件
 和失败率.
 
-placer 只做 group 导入和放置建议,最终资源确认在 node admission.测量不能把 placer
-吞吐解释为已创建 MicroVM 的吞吐.
+Registry 的选点、鉴权与 Placer 的 Group 导入、凭据续期应分别测量。控制请求通过 Registry
+复验，不能用数据 route cache 命中的成本代替。最终资源确认在 Node admission；导入吞吐
+不能解释为已创建 MicroVM 的吞吐。
 
 ## Release 与 CI 证据
 

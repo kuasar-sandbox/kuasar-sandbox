@@ -108,7 +108,7 @@ Envd 和 `flatten-ctl`。Guest kernel 则是独立的原生构建与发布单元
 3. **数据路径可选择**:本地文件,共享文件存储和 Manifest/对象存储/缓存都是有效
    后端,部署方按可移植性,规模和基础设施选择.
 4. **控制与执行分层**:节点控制器负责准入和配置的资源池，sandboxer 负责单沙箱资源执行;
-   集群 placer 负责放置,不接管沙箱生命周期.
+   Registry 从 Node 已发布的 Group 支持中选点；可选 Placer 维护 Group 定义，Node 负责执行。
 5. **事实与目标分离**:实现状态,测试结果和设计目标分别标注;性能数字必须携带可复现
    的测试口径.
 6. **组件独立**:五个组件仓可独立演进,部署和发布,主仓只承载系统设计,跨组件验证和
@@ -205,9 +205,9 @@ OOM 和有效工作丢失.应用仍可能因为自身资源声明,内存上限�
 单节点由 `node-ctl conductor serve` 管理本机沙箱、构建和可选 Reservation Controller。独立 Proxy 承载数据转发，并向 Conductor 注册以接收受信路由与策略更新。
 集群由三个独立 `cluster-ctl` 角色组成:
 
-- `registry`:通过类型化 FoundationDB repository 维护 node、route 与放置执行元数据，管理活动 node 连接及命令分发;
+- `registry`:通过类型化 repository 访问配置的存储后端，维护 node、route 与放置执行元数据，管理活动 node 连接及命令分发;
 - `router`:提供 E2B 兼容统一入口,按 sandbox-group 路由;
-- `placer`:导入 group 配置并选择候选节点,不拥有沙箱生命周期.
+- `placer`:可选地导入和条件维护 Node Group 定义与凭据租期；请求选点由 Registry 负责，执行由 Node 负责。
 
 生命周期仍由目标 node 和 sandboxer 执行。在集群中，公开 Sandbox ID 在同节点恢复,跨节点迁移和
 重新放置时保持稳定;节点内部执行 ID 可以随 placement generation 变化.

@@ -114,7 +114,7 @@ combination; separate repositories do not imply arbitrary versions are compatibl
 1. **Isolation first:** each sandbox has its own guest kernel. Sharing takes place through explicit read-only layers, trusted host data paths and configured security domains.
 2. **Stable user semantics:** distinguish creating a new instance from a template from resuming the same instance. An upper-level capacity-preparation policy is not another snapshot format.
 3. **Selectable data paths:** local files, shared file storage and Manifest/object-storage/cache paths are all valid backends. Operators choose based on portability, scale and infrastructure.
-4. **Separate control and execution:** the node controller owns admission and configured resource pools; sandboxer executes resource operations for an individual sandbox. The cluster placer owns placement, not sandbox lifecycle.
+4. **Separate control and execution:** the node controller owns admission and configured resource pools; sandboxer executes resource operations for an individual sandbox. Registry selects Nodes from their published Group support. Optional Placer import maintains Group definitions; Node owns sandbox execution.
 5. **Separate facts from goals:** identify implementation status, test results and design targets separately. Performance numbers require reproducible measurement definitions.
 6. **Independent components:** the five component repositories can evolve, deploy and release independently. The project repository owns system design, cross-component validation and aggregate releases.
 
@@ -203,9 +203,9 @@ This overview defines those functional goals. Network-locator encoding, encapsul
 
 On a standalone node, `node-ctl conductor serve` manages local sandboxes, builds and the optional Reservation Controller. The independent Proxy owns data-plane forwarding and registers with conductor for trusted route/policy updates. A cluster consists of three independent `cluster-ctl` roles:
 
-- `registry`: maintains node, route and placement execution metadata through typed FoundationDB repositories, and owns live node connections and command dispatch;
+- `registry`: maintains node, route and placement execution metadata through typed repositories over the configured storage backend, and owns live node connections and command dispatch;
 - `router`: provides the E2B-compatible unified entry point and routes by sandbox-group;
-- `placer`: imports group configuration and selects candidate nodes, without owning sandbox lifecycle.
+- `placer`: optionally imports and conditionally maintains Node Group definitions and credential leases. Registry owns request-time Node selection; Node owns execution.
 
 The target node and sandboxer still execute the lifecycle. In a cluster, the public Sandbox ID remains stable through same-node restoration, cross-node migration and replacement placement. The node-internal execution ID can change with the placement generation.
 
