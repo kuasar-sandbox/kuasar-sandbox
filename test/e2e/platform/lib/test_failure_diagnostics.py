@@ -77,7 +77,8 @@ fail() { exit 19; }
         self.assertNotIn(secret, json.dumps(reports) + result.stdout + result.stderr)
 
     def test_explicit_cluster_fail_retains_call_line_phase_and_http_status(self):
-        (self.work / "create.response").write_text('{"error":"Bad Gateway","api_secret":"raw-secret"}')
+        (self.work / "cluster-node.log").write_text('Bad Gateway api_secret=raw-secret')
+        (self.work / "create.credentials").write_text('{"api_secret":"never-read-capability"}')
         body = 'run_redirect_flow\ncode=502\n[ "$code" = 200 ] || fail "private argument"\n'
         result, reports, lines = self.run_case(body, case="orchestrator.cluster-recovery.sh")
         self.assertEqual(result.returncode, 19, result.stderr)
@@ -86,7 +87,54 @@ fail() { exit 19; }
         self.assertEqual((report["phase"], report["http_status"]), ("registry-recovery", 502))
         self.assertEqual(report["line"], lines.index('[ "$code" = 200 ] || fail "private argument"') + 1)
         self.assertNotIn("raw-secret", json.dumps(reports))
+        self.assertNotIn("create.credentials", report["logs"])
+        self.assertEqual(report["logs"]["cluster-node.log"]["excerpts"][0]["error_terms"], ["Bad Gateway"])
         self.assertNotIn("private argument", result.stderr)
+
+    def test_each_cluster_variant_projects_real_fixture_logs_before_cleanup(self):
+        secret = "private-group-context-and-token"
+        for case in diagnostics.CLUSTER_CASES:
+            with self.subTest(case=case):
+                self.work.mkdir(exist_ok=True)
+                (self.work / "placer.log").write_text("GroupVersionConflict " + secret)
+                (self.work / "cluster-node.log").write_text("runtime_unavailable " + secret)
+                scenario_logs = ("cluster-faults.log", "cluster-migration.log",
+                                 "cluster-legacy-runtime.log", "cluster-build.log")
+                for name in scenario_logs:
+                    (self.work / name).write_text("connection refused " + secret)
+                (self.work / "private.json").write_text("context deadline exceeded " + secret)
+                result, reports, _ = self.run_case("code=409\nexit 29\n", case=case)
+                self.assertEqual(result.returncode, 29, result.stderr)
+                report = next(r for r in reports if r["case"] == case)
+                self.assertEqual(report["http_status"], 409)
+                self.assertEqual(set(report["logs"]), {"placer.log", "cluster-node.log", *scenario_logs})
+                for name in scenario_logs:
+                    self.assertEqual(report["logs"][name]["excerpts"][0]["error_terms"], ["connection refused"])
+                self.assertNotIn(secret, json.dumps(reports) + result.stdout + result.stderr)
+                self.assertFalse(self.work.exists())
+
+    def test_sourced_cluster_lifecycle_preserves_variant_and_real_failure_source(self):
+        # Match the actual wrapper -> shared setup -> lifecycle function path.
+        # ERR tracing retains the function's failing source without enabling
+        # global DEBUG/functrace or instrumenting every guest/process command.
+        flow = self.root / "cluster_lifecycle_flow.sh"
+        flow.write_text('run_cluster_flow() {\n    code=503\n    false\n}\n')
+        scenario = self.root / "cluster_direct_lifecycle.sh"
+        scenario.write_text('. "${BASH_SOURCE[0]%/*}/cluster_lifecycle_flow.sh"\nrun_cluster_flow\n')
+        result, reports, _ = self.run_case('. "${BASH_SOURCE[0]%/*}/cluster_direct_lifecycle.sh"\n',
+                                         case="orchestrator.cluster-lifecycle-sqlite.sh")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        report = reports[0]
+        self.assertEqual(report["case"], "orchestrator.cluster-lifecycle-sqlite.sh")
+        self.assertEqual(report["source"], "cluster_lifecycle_flow.sh")
+        self.assertEqual((report["phase"], report["line"], report["http_status"]), ("cluster-lifecycle", 3, 503))
+
+    def test_cluster_explicit_helper_failure_reports_safe_actual_source(self):
+        body = ('CLUSTER_FAILURE_SOURCE=cluster_http.sh\nCLUSTER_FAILURE_LINE=42\n'
+                'exit 19\n')
+        result, reports, _ = self.run_case(body, case="orchestrator.cluster-lifecycle-sqlite.sh")
+        self.assertEqual(result.returncode, 19, result.stderr)
+        self.assertEqual((reports[0]["source"], reports[0]["line"]), ("cluster_http.sh", 42))
 
     def test_cleanup_failure_cannot_replace_original_failure(self):
         result, reports, _ = self.run_case("exit 17\n", cleanup="    return 23\n")

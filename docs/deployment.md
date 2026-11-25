@@ -23,16 +23,17 @@ Select roles according to the data path and control-plane topology. Local files,
 |---|---|
 | Local/NAS/NFS | Local or shared native-file artifacts, without mandatory conversion to content chunks. |
 | FS or S3-compatible store | Durable backend for Manifests and chunks. |
-| FoundationDB (cluster deployment) | Durable execution metadata, transactions and replication for Registry. Operate its redundancy and failure domains independently of Registry members. |
-| Platform management plane | Instance scheduling, configuration, tenancy and template-build credentials (registry pull tokens/customer keys). Imports sandbox-group configuration through the cluster placer/provider, or calls the standalone `node-ctl` E2B API directly. |
+| Registry metadata storage (cluster deployment) | SQLite for one Registry, or shared PostgreSQL/FoundationDB for one or more peers. The selected database owns durable metadata/transactions; operate its persistence and redundancy independently of Registry membership. |
+| Platform management plane | Instance scheduling, configuration, tenancy and template-build credentials (registry pull tokens/customer keys). Maintains Node Groups directly, optionally imports them through Placer, or calls the standalone `node-ctl` E2B API. |
 | Container registry | Tenant image source, pulled as needed by `flatten-ctl` in the build sandbox; supports OCI 1.1 Referrers. |
 
 ## Packaged system container
 
 The [node-infra deployment guide](node-infra.md) describes the complete OCI
 node image, rootful Podman/Quadlet host service, fixed native configuration
-paths and instance stop/recovery. The host supplies a dedicated namespace and
-two allocated interfaces; node-level Cache/Store remain externally operated.
+paths and instance stop/recovery. The default uses the host network; a separate
+namespace or borrowed transit device is configured only when the deployment
+needs it. Node-level Cache/Store remain externally operated.
 Use that guide when deploying the aggregated system container. The role and
 component relationships below also apply to those contained services.
 
@@ -193,7 +194,7 @@ S3-compatible access uses deployment configuration or the SDK default credential
 
 The region-level management plane is independently operated outside this project:
 
-- In multi-node deployments, it imports sandbox-group configuration, selectors, customer-key references and template-build credentials through placer/provider.
+- In multi-node deployments, it installs tenant roots through the protected Node admin interface and maintains Groups through their authenticated CAS API, or provides complete records to the optional Placer importer. Node owns the applied definition; Registry authenticates and selects from completed support.
 - In standalone deployments, it can call the node-ctl E2B API and supply the configuration contract in [per-sandbox configuration](#per-sandbox-configuration-delivery), adding content-protection configuration when using Manifest data.
 - An externally supplied node bridge/agent is not part of these release assets and does not redefine this guide's processes, configuration or dependencies.
 
@@ -211,7 +212,7 @@ Use independently scoped registry-pull and artifact-publication credentials. Kee
 
 ## Cluster Control Plane (cluster-ctl)
 
-For multiple compute nodes, three roles compose the cluster layer: **registry**, a state cluster and node-channel hub; **router**, the common E2B control/data entry; and **placer**, an optional importer that conditionally maintains Node-owned Groups and credential leases. Their independent contracts own routing, activation and authentication. See [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md). A standalone node directly serving the E2B SDK does not require this layer.
+For multiple compute nodes, three roles compose the cluster layer: **registry**, the execution-ownership, authentication, selection and node-channel service; **router**, the common E2B control/data entry; and **placer**, an optional importer that conditionally maintains Node-owned Groups and credential leases. Their independent contracts own routing, activation and authentication. See [cluster.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md). A standalone node directly serving the E2B SDK does not require this layer.
 
 ```mermaid
 flowchart TD
@@ -227,12 +228,14 @@ flowchart TD
 | Process | Role | Count | Lifecycle | Owner |
 |---|---|---|---|---|
 | `run-cluster-ctl registry` | Typed repositories over the selected database for durable execution metadata; node connections and route/node owner RPC. | One or more members; LocateN selects business connection/service candidates independently of database replication. | systemd. | cluster.md. |
-| `run-cluster-ctl router` | E2B control/data entry (`api.<domain>`) and recent route cache; consult the Router specification for operation-specific resolution, activation, authorization and forwarding. | Multiple stateless replicas behind LB. | systemd. | [cluster-router.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#client-access). |
-| `run-cluster-ctl placer` | Optional Group importer, Node-directory consumer and credential renewer. Create/Build selection and request authentication run in Registry. | Multiple importers coordinate per-source leases through the ready memberlist view. | systemd. | [cluster-placer.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#groups-and-placement). |
+| `run-cluster-ctl router` | E2B control/data entry (`api.<domain>`) and recent route cache; consult the Router specification for operation-specific resolution, activation, authorization and forwarding. | Multiple stateless replicas behind LB. | systemd. | [Router contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#client-access). |
+| `run-cluster-ctl placer` | Optional Group importer, Node-directory consumer and credential renewer. Create/Build selection and request authentication run in Registry. | Multiple importers coordinate per-source leases through the ready memberlist view. | systemd. | [Optional Placer contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#groups-and-placement). |
 
 Small deployments can colocate all three. Larger ones scale registry membership, router entry replicas and placer replicas separately.
 
 Install the complete native product bundle, including `bin/run-cluster-ctl`, `bin/cluster-ctl`, `lib/cluster-ctl` and the accompanying license material. Use the launcher so every role resolves the pinned private loader and libraries. Registry selects SQLite, PostgreSQL or FoundationDB through its storage configuration. SQLite supports one Registry; shared PostgreSQL/FDB peers use the same database and metadata namespace. FDB requires its readable connection file. Router and Placer do not open Registry storage. Database servers are operated separately from the client bundle. See the [cluster configuration and native runtime contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#configuration) for the exact fields and host requirements.
+
+For a complete first deployment, follow [one SQLite Registry + Router + two Nodes](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#minimum-cluster). It covers root installation, direct Group apply, exact publication checks, a real Build and SDK lifecycle without Placer. [Storage setup](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-storage.md) also covers PostgreSQL service credentials and rebuild/restore boundaries.
 
 ### Ports
 
@@ -249,7 +252,7 @@ Nodes establish authenticated node-link sessions with Registry and advertise the
 
 Current Router-to-node forwarding uses plaintext HTTP/CONNECT: register two distinct, reachable internal plaintext listeners as `APIEndpoint` and `DataEndpoint`, not TLS-enabled node listeners. Protect this internal network and terminate public ingress TLS at Router or its fronting load balancer. Node-link independently uses its configured mTLS. Standalone deployments can instead terminate TLS on both distinct node API/data entries; do not copy that listener configuration directly into cluster registration.
 
-Deploy Router and Placer behind the appropriate ingress/discovery configuration, and keep their Registry bootstrap and advertised endpoints reachable. The [Registry protocol](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md), [Router behavior](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#client-access), and [Placer contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#groups-and-placement) own Resolve/Reserve schemas, caching, activation and retry semantics. This deployment guide does not duplicate those state machines.
+Deploy Router and, when used, Placer with the appropriate ingress/discovery configuration, and keep their Registry bootstrap and advertised endpoints reachable. The [Registry protocol](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md), [Router behavior](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#client-access), and [Placer contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#groups-and-placement) own Resolve/Reserve schemas, caching, activation and retry semantics. This deployment guide does not duplicate those state machines.
 
 
 
@@ -308,6 +311,8 @@ Before the service order below, verify readable, architecture-matching sandbox-c
 
 1. Mount and verify local/shared-file paths. Make the selected source and publication backends available ([Build deployment](#build-deployment)), including FS/S3-compatible Store where configured.
 
+For cluster mode, also prepare the selected metadata backend before Nodes attach: make the persistent SQLite directory available, or start/verify PostgreSQL/FDB. Start Registry with its matching backend/namespace/TLS and verify membership and metadata access. Registry service membership does not initialize database replication.
+
 **Optional L2, before its compute consumers**
 
 2. Start and health-check the configured shard members.
@@ -319,6 +324,8 @@ Before the service order below, verify readable, architecture-matching sandbox-c
 5. If selected, start local/tiered cache. For tiered mode verify configured L2 peers and store origin reachability.
 6. Start Conductor, including configured resource_listen, and finish node recovery/reconciliation. Start the independent Proxy master/workers and verify trusted registration, listeners and route synchronization. Only then open sandbox admission through standalone E2B or the configured Registry/Router entry. Every new Create must pass the Proxy route barrier; a listening control API alone is not readiness.
 
+For cluster admission, additionally wait for NodeLink registration/full sync, install the tenant pair and Group on each intended Node (directly or through the optional importer), and compare local Group revisions with Registry's completed support publication. Start/verify Router DNS/TLS and distinct Node API/data paths, then perform a real Build/Create/exec/files/pause/connect/delete acceptance. A process active state, successful key verification or a local Group write alone does not open admission; see [cluster readiness](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#minimum-cluster).
+
 Tiered cache does not need every L2 peer online to start: clean misses may fall through, while backend/protocol failures retain the Cache contract's explicit error behavior. The write path, manifest-ctl directly using store-ctl, fails when the selected durable backend/store is unavailable.
 
 Builds reuse conductor. Accept builds after conductor, the selected source/publication backends and any configured Store write-admission endpoint are ready ([Build deployment](#build-deployment)).
@@ -329,6 +336,8 @@ Builds reuse conductor. Accept builds after conductor, the selected source/publi
 2. Drain existing work and explicitly wait for exit or complete requested snapshots before stopping conductor. SQLite preserves recorded lifecycle state; resource accounting is reconstructed after restart, not saved as resource state.json. Sending SIGTERM alone is not an instruction to snapshot every guest.
 3. If deployed, stop cache-ctl with SIGTERM and allow its normal in-flight handling and RocksDB shutdown to complete.
 4. Stop store-ctl last.
+
+For a whole-cluster shutdown, keep Registry and management access available while Nodes finish requested lifecycle operations and report their final ownership. Stop the optional Placer maintenance loop, finish Node shutdown, then stop Router/Registry and finally their external metadata database. Preserve each database and encryption/key/artifact dependency; stopping processes is not a coordinated database backup or a cluster recovery procedure.
 
 L2 shutdown has no strict ordering against compute shutdown; each tiered client handles L2 unavailability according to the Cache error/fallback contract; an arbitrary failure is not automatically a clean miss.
 
@@ -353,7 +362,7 @@ This example uses no L2, remote object store or separate resource-controller dae
 | Optional cache | Local cache or L2 shards sized by hit rate and failure domain. |
 | Control plane | Standalone node-ctl, or Registry + Router with optional Placer import maintenance. |
 
-Each compute node runs Conductor, the independent Proxy master/workers and one sandbox-ctl per active sandbox. Add store and optional cache for Manifest data. Measure node count, per-node concurrency and cache capacity using the target versions, hardware, sandbox specifications and workload; architecture diagrams do not establish fixed capacity. For cluster mode, choose registry membership and LB-backed router/placer replicas according to availability and load.
+Each compute node runs Conductor, the independent Proxy master/workers and one sandbox-ctl per active sandbox. Add store and optional cache for Manifest data. Measure node count, per-node concurrency and cache capacity using the target versions, hardware, sandbox specifications and workload; architecture diagrams do not establish fixed capacity. For cluster mode, choose Registry membership and Router replicas according to availability and load; add Placer replicas only for configured import sources. Database replication is configured independently. SQLite remains a single-Registry option.
 
 ### Multiple AZs
 
@@ -371,7 +380,7 @@ Components own complete fields and defaults; this table locates the configuratio
 | Proxy | `/etc/node-ctl/proxy.yaml` | [Data ingress, workers and trusted MMDS projection](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md) |
 | Node resources | `resource_listen` | [Admission, grants and watermarks](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md) |
 | Build | `builder` | [Phase resources, inputs and publication dependencies](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md) |
-| Registry / Router / Placer | `--config <path>` | [Role configuration, Group/provider and routing](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md) |
+| Registry / Router / Placer | `--config <path>` | [Role configuration, Node Groups and routing](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md) |
 | Telemetry | `node-ctl telemetry` | [Selected collection, export and query-service configuration](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md) |
 | sandbox-ctl | `--config <path>` / `SANDBOX_CONFIG` | [Single-runtime declaration, defaults and overrides](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/configuration.md) |
 | manifest-ctl | `--manifest-config <path>` / `MANIFEST_CONFIG` | [Data processing and Store/Cache connections](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/transfer.md) |
@@ -398,7 +407,7 @@ For workload onboarding continue with [your first application](templates.md#firs
 | Named shared file location | Multiple eligible nodes need the same native artifacts | Consistent location names, mount/access/identity checks, shared filesystem availability/latency and backups. Reachability alone does not prove restore eligibility ([restore eligibility](upgrading.md#restore-eligibility)). |
 | Manifest + durable Store | Remote persistence, large distribution or lazy object access is needed | Customer keys, generations, full parent closure, object integrity and origin availability; introduce local cache only with a memory/disk budget. |
 | Optional L2 | Measured repeated remote misses/working-set distribution justify it | Peer failure domains, membership rollout, shard disk/memory and effective EC geometry. L2 is reconstructible acceleration, not the durable artifact copy. |
-| Registry/Router/Placer cluster | Placement across multiple nodes and a common entry are needed | Provider/credential durability, Registry ownership, private internal listeners, admission and recovery testing. Cluster mode does not turn incompatible nodes into restore targets. |
+| Registry/Router/Placer cluster | Placement across multiple nodes and a common entry are needed | Group-input/credential durability, Node and Registry ownership, private internal listeners, admission and recovery testing. Cluster mode does not turn incompatible nodes into restore targets. |
 
 Before opening admission: pin one aggregate and record its native GitHub asset digests; use that release's
 native products and packaged guides, verify effective configurations, then test one

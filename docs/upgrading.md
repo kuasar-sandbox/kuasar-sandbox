@@ -20,12 +20,43 @@ On a paused instance, `connect(memory=false)` explicitly gives up old process me
 1. Record the current aggregate tag, component/Runtime/VMLinux versions, configurations, live instances, paused roots, templates and rollback deadlines. Decide which workloads require process continuity and which tolerate a restart.
 2. Prepare the complete target combination in a new directory using [installation](installation.md). Keep old directories, keys, artifacts and immutable runtime/kernel inputs. Do not overwrite files referenced by live or retained state.
 3. On an isolated node, test new creates, Build, commands/files/ports, pause, S restore and any required E cold start using the actual network, storage, architecture and CPU pair.
-4. Use the existing Group/provider/selector mechanisms to manage eligible cluster destinations. Stop new placements on a node before maintenance; an online node is not automatically compatible with all old snapshots.
+4. Use the Node Group, optional importer and request-selector mechanisms to manage eligible cluster destinations. Stop new placements on a node before maintenance; an online node is not automatically compatible with all old snapshots.
 5. Complete the supported pause/export/import or in-place retention workflow for preserved instances. Verify commit success and the dependency closure before stopping services from consumers to providers. SIGTERM is not an instruction to snapshot every VM.
 6. Activate the target combination, verify business paths and reopen admission gradually. Record failures, skipped checks and remaining old-version dependencies.
 7. On failed acceptance, stop new placements and restore still-compatible old configuration and program inputs. Never assume an old reader accepts formats written by a newer version; use retained old roots or supported export/migration procedures where needed.
 
 Retire old dependencies only after migration and the rollback retention period, using [retention](operations.md#retention-runbook). This is an operating procedure, not a claim of automatic rolling upgrades or arbitrary live migration between versions.
+
+## Cluster refactor state boundary
+
+The shared Registry backend uses **record schema v2**. SQLite, PostgreSQL and
+FoundationDB share its business implementation; choosing a new backend does not
+copy data. The Node-owned Group/Registry-selection protocol also changes the
+participating binary contract. Qualify the selected matching release as a whole;
+there is no promised mixed-version rolling transition for these experimental
+states. Snapshot readers must accept the produced runtime annotation and format
+before new artifacts are created.
+
+For disposable pre-release clusters, use a deliberate rebuild: stop admission,
+finish/remove test-owned work with the old version, stop old roles and retain
+needed evidence, then use new Registry/Node state with the matching release.
+Reinstall tenant roots and Groups and create new instances from compatible
+retained canonical artifacts. New instances receive new identities. Do not treat
+an empty namespace as migrated ownership, and do not edit SID/ready rows.
+
+| State | Backup/restore boundary |
+|---|---|
+| Registry database | Use the selected backend's consistent backup procedure; record schema and namespace. No API exports/imports execution rows or reconstructs them from Node reports. |
+| Node DB and encryption key | Retain each Node's own durable lifecycle/Group/credential state and its matching key. Restoring Registry alone does not rewind running Nodes. |
+| Tenant roots and Group inputs | Retain roots and explicit Group/import-source definitions independently; importer input alone does not recover running execution ownership. |
+| Artifacts/runtime | Retain canonical IDs, full dependency closure, content keys and exact immutable runtime bundles needed by those snapshots. |
+
+For a same-schema database restore, keep admission closed, stop processes that
+can write/cache the restored history, and demonstrate consistent Node/Registry
+ownership before reopening. If required ownership is lost, do not promise
+same-ID recovery. The [backend schema and restore guide](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-storage.md#schema-and-upgrade-boundary)
+provides the exact supported boundary; no automatic old-schema converter or
+execution-state import tool is available.
 
 ## Versions and validation
 
@@ -54,7 +85,11 @@ Before allowing a target node, the deployment owner must validate all of:
   configured runtime may have any basename; the captured basename is only the
   single-sibling fallback hint, not content identity or a directory-search rule.
   Keep runtime bytes immutable while referenced, retain kernel inputs needed for
-  cold starts/rollback, and follow [runtime selection](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime.md#node-upgrades).
+  cold starts/rollback, and follow [runtime selection](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime.md#node-upgrades). In cluster
+  mode, annotated SNP placement additionally requires the captured basename and
+  digest in that same Node's published runtime inventory. This is stricter than
+  the lower-level configured-runtime check; retain and publish the required
+  bundle before permitting selection.
 - **Complete durable closure:** S, referenced E, memory/disk parents and their
   immutable objects remain resolvable with the same canonical identities and
   named locations. Test from the destination without relying on warm cache hits.

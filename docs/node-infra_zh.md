@@ -152,6 +152,27 @@ Build 工作负载单独配置原生 `builder.diff_template` 及源/发布依赖
 使用原生 `checkpoint.remote.ref_location_parent` 映射和对应目录挂载。引导资产
 查找与快照兼容性继续使用原生行为。
 
+<a id="cluster-attachment"></a>
+
+### 将实例接入集群
+
+交付的 `examples/cluster/conductor.yaml` 和 `proxy.yaml` 是原生配置 overlay。将它们挂载或 COPY 到 `/etc/node-conductor/conf.d/90-cluster.yaml` 和 `/etc/node-proxy/conf.d/90-cluster.yaml`，保留镜像 base 文件。为每个实例替换 Node ID、公共 domain、Registry endpoint 与通告地址。Router 分别访问 Conductor 的私网明文 API 3000 和 Proxy 的私网明文 data 3001，两个 endpoint 必须独立；NodeLink 另配 mTLS 凭据。API/data 仅对可信基础设施开放，公共 TLS 在 Router 或前置 LB 终止。
+
+除已交付的配置挂载外，将 root 所有的私有证书目录只读挂载进去。Quadlet 使用实际宿主路径，例如：
+
+```ini
+[Container]
+Volume=/etc/kuasar/node-a/tls:/etc/node-conductor/tls:ro
+```
+
+Docker 对应 `-v /etc/kuasar/node-a/tls:/etc/node-conductor/tls:ro`。目录包含集群信任配置中的 `node.pem`、`node.key` 和 `ca.pem`。bridge 网络下，通告 Router 真正可达的宿主地址/转发端口；容器私有地址或未发布默认端口不能服务外部 Router。不能将凭据配置为仅宿主可读、Conductor 挂载空间内不存在的路径。
+
+每个 Node 使用独立持久 `/var/lib/node-infra`，保留其 Node DB/加密密钥。只共享可移植模板需要的 artifact 后端或明确配置的命名文件位置。启动前按普通实例流程配置加密密钥和来源/发布路径；cluster overlay 不负责创建它们。Registry/Router 和可选 Placer 在 node-infra 容器外运行，使用独立持久的 Registry 元数据和原生角色配置。
+
+实例启动后检查 NodeLink 接入，通过该实例的本地 admin socket 安装租户根凭据对，再用 `E2B_API_KEY` 执行 Group apply。连接 Registry 不会自动安装根凭据或 Group。原生 admin 命令在该实例内执行，例如 `podman exec node-infra-node-a node-ctl manifest-key list --socket /run/sandbox/node-ctl.socket`。根密钥不放在命令行参数或共享日志中，沿用管理侧可信环境/秘密交付方式。
+
+[最小双 Node 集群示例](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#minimum-cluster)给出完整根凭据安装、直接 `group apply`、精确 Group revision/当前 registration 发布检查、Build 与 SDK 验收。`node-infra-ctl status` 检查实例健康，不认证 Group 发布或模板 runtime 资格。runtime inventory 改动遵循原生 [runtime 排查说明](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#runtime-目录与选点诊断)，通过正常节点维护/重启后再开放准入。
+
 ### 资源池与自定义应用
 
 外层 `CPUQuota`/`MemoryMax` 约束整个实例及其 VM 后代。原生资源池描述可分配的

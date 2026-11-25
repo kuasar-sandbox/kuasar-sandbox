@@ -24,15 +24,15 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 |---|---|
 | Local/NAS/NFS | 本地或跨节点原生文件工件,不要求转换为内容分片 |
 | FS 或 S3-compatible store | Manifest 与 chunk 的远程持久化后端 |
-| FoundationDB（集群部署） | Registry 的持久执行元数据、事务和复制；其冗余与故障域由部署方独立于 Registry 成员配置 |
-| 平台管理面 | 沙箱实例调度、配置、租户管控、模板构建凭据(registry 拉取令牌 / 客户密钥);通过 **cluster 控制面**向 placer/provider 导入 sandbox-group 配置,或在单机部署中直接调用 `node-ctl` e2b API |
+| Registry 元数据存储（集群部署） | 单 Registry 可用 SQLite；一个或多个 peer 可用共享 PostgreSQL/FoundationDB。所选数据库负责持久元数据与事务，其持久性和冗余独立于 Registry membership 配置。 |
+| 平台管理面 | 沙箱实例调度、配置、租户管控、模板构建凭据(registry 拉取令牌 / 客户密钥);直接维护 Node Group、按需通过 Placer 导入，或在单机部署中调用 `node-ctl` e2b API |
 | 容器镜像仓库 | 租户镜像来源;构建沙箱内 `flatten-ctl` 按需拉取(OCI v1.1,支持 Referrers) |
 
 ## 系统容器交付
 
 [node-infra 部署指南](node-infra_zh.md)说明完整 OCI 节点镜像、rootful Podman/Quadlet
-宿主服务、固定原生配置路径及实例停止/恢复。宿主提供独立网络空间和两块已分配接口，
-节点级 Cache/Store 由外部维护。使用聚合系统容器时按该指南部署；下文角色与组件关系
+宿主服务、固定原生配置路径及实例停止/恢复。默认使用宿主网络；独立 namespace 或借用 transit
+设备按部署需要配置。节点级 Cache/Store 由外部维护。使用聚合系统容器时按该指南部署；下文角色与组件关系
 同样适用于其中的服务。
 
 ## Compute Node
@@ -235,8 +235,7 @@ S3-compatible 后端使用部署配置或 SDK 默认凭据链.凭据只进入可
 
 region 级、独立运营,平台外。与平台的接口:
 
-- 多节点部署:平台管理面向 `run-cluster-ctl placer` 的 provider/importer 侧导入
-  sandbox-group 配置、selector、客户密钥引用和模板构建凭据。
+- 多节点部署：平台管理面通过受保护的 Node admin 接口安装租户根凭据，通过已认证 CAS API 维护 Group，或向可选 Placer importer 提供完整记录。Node 持有已应用定义，Registry 根据完整发布的 support 鉴权和选点。
 - 单节点部署:平台管理面可直接调用 `node-ctl` e2b API,并按 [实例配置下发](#per-sandbox-配置下发) 的配置契约
   提供 per-sandbox 启动配置;使用 Manifest 路径时再提供对应内容保护配置.
 - 节点侧桥接进程若由外部系统提供,不属于本发布件,也不改变本页列出的进程、
@@ -259,7 +258,7 @@ Registry 拉取和工件发布使用独立作用域凭据；宿主内容保护�
 
 ## Cluster Control Plane (cluster-ctl)
 
-多 compute 节点部署由三个角色组成 cluster 层:**registry** 是状态集群与节点通道枢纽,
+多 compute 节点部署由三个角色组成 cluster 层:**registry** 负责执行所有权、鉴权、选点与节点通道,
 **router** 是 E2B 控制/数据公共入口,**placer** 是可选的 Group 导入器，负责 Node Group 的条件维护与凭据续期。
 路由、激活和鉴权由各自契约维护,见 [cluster_zh.md](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md)。
 单 compute 节点独立直供 E2B SDK 时不需要 cluster 层。
@@ -278,12 +277,14 @@ flowchart TD
 | 进程 | 角色 | 数量 | 启停 | 归属 |
 |---|---|---|---|---|
 | `run-cluster-ctl registry` | 通过类型化 repository 访问所选数据库、维护持久执行元数据，承载 node 长连接和 route/node owner RPC | 1 或 N 成员；LocateN 选择业务连接与服务候选，不决定数据库复制 | systemd | 平台内,`cluster.md` |
-| `run-cluster-ctl router` | E2B 兼容统一入口（`api.<domain>` 控制面与数据面）及近期 route cache；按操作区分的解析、激活、鉴权和转发规则由 Router 规范维护 | N 副本(LB 后,无状态)| systemd | 平台内,`cluster-router.md` |
-| `run-cluster-ctl placer` | 可选 Group 导入器、Node 目录消费方与凭据续期方；Create/Build 选点和请求鉴权由 Registry 执行 | 多个 importer 按 ready memberlist 视图协调各 source 的 lease | systemd | 平台内,`cluster-placer.md` |
+| `run-cluster-ctl router` | E2B 兼容统一入口（`api.<domain>` 控制面与数据面）及近期 route cache；按操作区分的解析、激活、鉴权和转发规则由 Router 规范维护 | N 副本(LB 后,无状态)| systemd | [Router 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#client-access) |
+| `run-cluster-ctl placer` | 可选 Group 导入器、Node 目录消费方与凭据续期方；Create/Build 选点和请求鉴权由 Registry 执行 | 多个 importer 按 ready memberlist 视图协调各 source 的 lease | systemd | [可选 Placer 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#groups-and-placement) |
 
-小规模可三角色同机共置;大规模按 registry 成员表、router 入口副本和 placer 副本分别扩展。
+小规模可将 Registry 与 Router 同机共置；Placer 仅在需要导入维护时启用。按 Registry 成员表、Router 入口负载和实际 import source 分别扩展，数据库冗余独立配置。
 
 安装完整原生产品包，保留 `bin/run-cluster-ctl`、`bin/cluster-ctl`、`lib/cluster-ctl` 及配套许可材料；通过启动器运行各角色，以加载固定的私有 loader 与运行库。Registry 通过存储配置选择 SQLite、PostgreSQL 或 FoundationDB。SQLite 只支持单 Registry；共享 PostgreSQL/FDB peer 使用同一数据库和元数据 namespace；选择 FDB 时提供可读的连接文件。Router 和 Placer 不打开 Registry 存储。数据库服务由部署方单独运营，客户端包不包含生产数据库服务。精确字段及宿主要求见[集群配置与原生运行契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#configuration)。
+
+首次部署按[一个 SQLite Registry + Router + 两个 Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#minimum-cluster)完成根凭据安装、直接 Group apply、精确发布检查、真实 Build 和 SDK 生命周期，无需 Placer。[存储配置](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-storage_zh.md)同时说明 PostgreSQL 服务凭据与重建/恢复边界。
 
 ### 端口
 
@@ -300,7 +301,7 @@ flowchart TD
 
 当前 Router→node 使用明文 HTTP/CONNECT：`APIEndpoint` 与 `DataEndpoint` 必须登记两个不同、可达的内部明文 listener，不能填入启用 TLS 的节点 listener。应保护该内部网络，并在 Router 或其前置负载均衡器终止公网入口 TLS。Node-link 独立使用其配置的 mTLS。独立部署可以在两个不同的节点 API/data 入口终止 TLS，不能把这种 listener 配置直接照搬到集群注册。
 
-按入口和发现配置部署 Router/Placer，保证 Registry bootstrap 与通告端点可达。[Registry 协议](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md)、[Router 行为](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#client-access) 与 [Placer 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#groups-and-placement) 分别维护 Resolve/Reserve schema、缓存、激活和重试语义；部署指南不复制这些状态机。
+按入口和发现配置部署 Router 及按需启用的 Placer，保证 Registry bootstrap 与通告端点可达。[Registry 协议](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md)、[Router 行为](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#client-access) 与 [Placer 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#groups-and-placement) 分别维护 Resolve/Reserve schema、缓存、激活和重试语义；部署指南不复制这些状态机。
 
 
 
@@ -359,6 +360,8 @@ flowchart TD
 
 1. 本地/共享文件路径已挂载并可访问;所选来源与发布后端已就绪([Build 部署](#build-部署)),包括已配置的 FS/S3-compatible Store
 
+集群模式还需在 Node 接入前准备元数据后端：挂载持久 SQLite 目录，或启动并验证 PostgreSQL/FDB。以匹配的 backend/namespace/TLS 启动 Registry，确认 membership 和元数据访问。Registry 服务 membership 不会初始化数据库复制。
+
 **L2 Cache Cluster(可选,在使用它的 compute 之前)**
 
 2. 配置的 `cache-ctl serve` (`mode: shard`) 成员启动并健康
@@ -371,6 +374,8 @@ flowchart TD
 5. 使用 cache 时启动 `cache-ctl serve`，在 YAML 中选择 `local` 或 `tiered`;tiered 模式确认 L2 peer 和 store
    origin 可达
 6. 启动 Conductor 及配置的 resource_listen，完成节点恢复/对账；启动独立 Proxy master/workers，核验受信 registration、监听与路由同步。此后才通过 standalone E2B 或配置的 Registry/Router 入口开放沙箱准入。每个新 Create 都必须通过 Proxy route barrier，控制 API 已监听本身不代表已就绪。
+
+集群准入还需等待 NodeLink registration/full sync，通过本地管理或可选 importer 为各目标 Node 安装租户凭据对和 Group，并将本地 Group revision 与 Registry 完整发布逐一对应。检查 Router DNS/TLS 和两个 Node API/data 路径，再执行真实 Build/Create/exec/files/pause/connect/delete。进程 active、key verification 成功或本地 Group 写入都不能单独作为开放准入条件，见[集群就绪检查](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#minimum-cluster)。
 
 注：`cache-ctl serve` (`mode: tiered`) 启动不要求 L2 全员在线。clean miss 可下穿，后端或协议错误则保持 Cache 契约的显式错误语义，不能把任意失败当作 miss(详见 [docs/cache_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md) 错误模型)。**写**路径
 (`manifest-ctl store` 直连 `store-ctl`)在所选持久化后端 / store-ctl 不可达时会失败.
@@ -386,6 +391,8 @@ Build 复用 Conductor;待 Conductor、所选来源/发布后端及配置的 Sto
    单独发送 SIGTERM 不是为所有 Guest 自动打快照的指令
 3. 若部署 cache-ctl,则 SIGTERM,等待正常在途请求处理和 RocksDB 关闭完成
 4. 若部署 `store-ctl`,则最后停止该服务
+
+整集群关闭时，在 Node 完成明确请求的生命周期操作并报告最终所有权前保持 Registry 和管理入口可用。停止可选 Placer 的维护循环，完成 Node 关闭，再停止 Router/Registry，最后停止其外部元数据数据库。保留各数据库与加密密钥/凭据/artifact 依赖；停止进程不是协调数据库备份或集群恢复流程。
 
 L2 cluster 的关闭与 compute node 关闭无强序——每个 compute node 的 tiered cache 按 Cache 错误/回退契约处理 L2 不可达，不把任意错误自动当作 clean miss。
 
@@ -415,8 +422,7 @@ Control plane:     node-ctl standalone or Registry + Router, optional Placer imp
 每个 compute 节点运行 Conductor、独立 Proxy master/workers 和当前沙箱对应的 `sandbox-ctl`;使用 Manifest
 数据路径时再部署 `store-ctl` 与可选 `cache-ctl`.节点数量,单节点并发和 cache
 容量必须用目标版本,硬件,沙箱规格与 workload 实测,不能由架构图中的固定值推导.
-Cluster Control Plane 由 registry 自聚簇,LB 后的 router 和 placer 组成,副本数按
-可用性与负载选择.
+Cluster Control Plane 由 Registry 服务成员与 LB 后的 Router 组成；按配置的导入源选择可选 Placer 副本。副本数按可用性和负载决定，数据库复制独立配置；SQLite 仍只允许一个 Registry。
 
 ### 多 AZ
 
@@ -437,7 +443,7 @@ S3-compatible store.使用 tiered cache 时,compute 节点通常优先连接本 
 | Proxy | `/etc/node-ctl/proxy.yaml` | [数据入口、worker、MMDS 受信投影](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy_zh.md) |
 | Node resources | `resource_listen` | [准入、grant 和水位](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource_zh.md) |
 | Build | `builder` | [阶段资源、输入与发布依赖](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md) |
-| Registry / Router / Placer | `--config <path>` | [角色配置、Group/provider 与路由](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md) |
+| Registry / Router / Placer | `--config <path>` | [角色配置、Node Group 与路由](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md) |
 | Telemetry | `node-ctl telemetry` | [采集、导出和查询服务的选定配置](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md) |
 | sandbox-ctl | `--config <path>` / `SANDBOX_CONFIG` | [单实例声明、默认值与覆盖](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/configuration_zh.md) |
 | manifest-ctl | `--manifest-config <path>` / `MANIFEST_CONFIG` | [通用数据处理及 Store/Cache 连接](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/transfer_zh.md) |
@@ -461,7 +467,7 @@ HA 或自动灾备。前面的清单与依赖章节已给出进程、端口、�
 | 命名共享文件位置 | 多个合格节点需读取相同原生工件 | 一致 location 名、挂载/访问/身份检查、共享文件系统可用性/延迟和备份。可达不等于可恢复（[恢复资格](upgrading_zh.md#restore-eligibility)）。 |
 | Manifest + 持久 Store | 需要远端持久化、大规模分发或对象按需读取 | 客户密钥、generation、完整父链、完整性和源站可用性；引入本地 cache 需内存/磁盘预算。 |
 | 可选 L2 | 实测重复远端 miss/工作集分布值得增加缓存层 | peer 故障域、成员变更、shard 资源及有效 EC 几何。L2 是可重建加速层，不是持久工件副本。 |
-| Registry/Router/Placer 集群 | 需要跨节点放置和公共入口 | provider/凭据持久化、Registry 所有权、内部私有 listener、准入与恢复验证；不会令不兼容节点可恢复。 |
+| Registry/Router/Placer 集群 | 需要跨节点放置和公共入口 | Group 输入/凭据持久化、Node 和 Registry 所有权、内部私有 listener、准入与恢复验证；不会令不兼容节点可恢复。 |
 
 开放准入前固定 aggregate/checksum，使用配套原生产物和打包文档，检查有效配置，
 执行真实 build/create/命令/文件/pause/resume/kill。使用实际网关 allow/deny

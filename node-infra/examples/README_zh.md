@@ -6,6 +6,10 @@
 [部署指南](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/docs/node-infra_zh.md)说明宿主前置条件、安装、运维与恢复。
 使用展开的部署包时，请阅读随包提供的部署指南。完整配置 schema 由组件仓库维护。
 
+## 集群接入
+
+将 `cluster/conductor.yaml` 和 `cluster/proxy.yaml` 挂载为对应组件的 `90-cluster.yaml` overlay。逐实例替换 Node ID/labels、通告 API/data 地址、Registry endpoint 和 TLS 材料；添加私有只读证书挂载，保留独立数据卷/Node 加密密钥。Registry/Router 与可选 Placer 仍在 node-infra 外运行；示例不安装租户根凭据或 Group。[集群接入指南](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/docs/node-infra_zh.md#cluster-attachment)连接原生配置、发布检查与 SDK 验收。
+
 ## 默认宿主网络与可选 transit
 
 从交付的 `Network=host` 模板开始，省略 transit 字段。按部署指南提供原生组件配置、

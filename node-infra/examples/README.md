@@ -7,6 +7,16 @@ These files extend one delivered kuasar-sandbox node-infra instance. The
 installation, operation and recovery. In an extracted deployment package, use
 the accompanying deployment guide. Component repositories own complete schemas.
 
+## Cluster attachment
+
+Mount `cluster/conductor.yaml` and `cluster/proxy.yaml` as the respective
+`90-cluster.yaml` overlays. Replace the Node ID/labels, advertised API/data
+addresses, Registry endpoint and TLS material for each instance. Add the private
+read-only certificate mount and retain a separate data volume/Node encryption
+key. These examples keep Registry/Router and optional Placer outside node-infra;
+they do not install tenant roots or Groups. The [cluster attachment guide](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/docs/node-infra.md#cluster-attachment)
+connects the native configuration to publication and SDK acceptance.
+
 ## Default host network and optional transit
 
 Start with the delivered `Network=host` template and omit transit fields. Supply

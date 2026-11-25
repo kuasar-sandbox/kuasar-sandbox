@@ -1,0 +1,18 @@
+# Mount as /etc/node-conductor/conf.d/90-cluster.yaml.
+# Replace node-a, addresses, domain and certificates for each instance.
+# Preserve the image base configuration and the instance's private persistent data.
+api:
+  domain: sandboxes.example.com
+  listen: 0.0.0.0:3000
+  tls: null                     # Router uses this private plaintext upstream
+cluster:
+  node_id: node-a
+  node_link:
+    endpoint: registry-1.example:7700
+    tls:
+      cert: /etc/node-conductor/tls/node.pem
+      key: /etc/node-conductor/tls/node.key
+      ca: /etc/node-conductor/tls/ca.pem
+  api_endpoint: node-a.example:3000
+  data_endpoint: node-a.example:3001
+  labels: {pool: first-cluster, node: node-a}

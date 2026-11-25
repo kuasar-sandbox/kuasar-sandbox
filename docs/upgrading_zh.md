@@ -20,12 +20,27 @@
 1. 记录当前聚合 Tag、组件/Runtime/VMLinux 版本、配置、运行实例、paused 根、模板与回退保留期限；明确每项业务需要内存继续还是允许进程重启。
 2. 在新目录按[安装指南](installation_zh.md)准备完整目标组合，保留旧目录、密钥、制品和不可变 runtime/kernel 输入。不要覆盖仍被活跃或保留状态引用的文件。
 3. 在隔离节点验证新建实例、Build、命令/文件/端口、暂停、S 恢复和需要的 E 冷启动；同时验证实际网络、存储、架构和 CPU 组合。
-4. 集群通过现有 Group/provider/selector 管理目标节点资格。先停止向待维护节点分配新工作，再处理其已有实例；“节点在线”不等于“兼容所有旧快照”。
+4. 集群通过Node Group、可选 importer 和请求 selector 管理目标节点资格。先停止向待维护节点分配新工作，再处理其已有实例；“节点在线”不等于“兼容所有旧快照”。
 5. 对需保留状态的实例完成受支持的 pause/export/import 或原地保留流程，确认成功提交与完整依赖，再按消费者到提供者的顺序停服务。SIGTERM 不等于自动为所有 VM 保存快照。
 6. 启用目标组合并按业务路径验证，逐步恢复准入。记录失败、跳过检查和剩余旧版本依赖。
 7. 若验证失败，停止新放置，恢复仍兼容的旧配置和程序输入。新版本已写出的格式不能假定旧版本可读；不兼容数据需使用保留的旧根或受支持的导出/迁移流程。
 
 完成迁移和回退保留期之后，才按[保留流程](operations_zh.md#retention-runbook)回收旧依赖。该顺序是操作指导，不宣称当前系统具有自动滚动升级或任意版本间实时迁移能力。
+
+## Cluster 重构的状态边界
+
+共享 Registry 存储使用 **record schema v2**。SQLite、PostgreSQL、FoundationDB 共用业务实现；选择新后端不会复制数据。Node 持有 Group、Registry 选点的协议也改变了参与方二进制契约，应整体验证同一交付组合；对这些实验状态没有承诺混版本滚动切换。产生新 artifact 前，reader 必须支持其 runtime 注解与格式。
+
+可丢弃的预发布集群应明确重建：停止准入，用旧版本完成/删除测试所有的工作，停止旧角色并保留必要证据，再以匹配版本和全新 Registry/Node 状态启动。重新安装租户根凭据和 Group，从兼容的 retained canonical artifacts 创建新实例。新实例使用新身份；不能把空 namespace 当成所有权迁移，也不能修改 SID/ready 行。
+
+| 状态 | 备份/恢复边界 |
+|---|---|
+| Registry 数据库 | 使用所选后端的一致备份流程，记录 schema 和 namespace。没有导出/导入执行行或从 Node reports 重建执行归属的 API。 |
+| Node DB 与加密密钥 | 保留每个 Node 自己的持久 lifecycle/Group/凭据状态及匹配密钥。只恢复 Registry 不能回滚正在运行的 Node。 |
+| 租户根凭据与 Group 输入 | 分别保留根凭据和显式 Group/import source 定义；仅有 importer 输入不能恢复执行所有权。 |
+| Artifact/runtime | 保留 canonical ID、完整依赖闭包、内容密钥和快照所需的精确不可变 runtime bundle。 |
+
+同 schema 数据库恢复时，保持准入关闭，停止可能写入/缓存所恢复历史的进程，在验证 Node/Registry 所有权一致后才重新开放。缺失所需所有权时不承诺同 ID 恢复。[后端 schema 与恢复指南](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster-storage_zh.md#schema-与升级边界)定义准确支持范围；当前没有自动旧 schema 转换器或执行状态导入工具。
 
 ## 版本与验证
 
@@ -51,7 +66,7 @@ portable ref 描述内容，不认证任意目标。部署方放置前必须验�
   backing 必须匹配 E 的 digest scheme 与 Bundle footer 声明的 digest，不扫描完整 payload。
   匹配的配置 runtime 可以使用任意 basename；捕获 basename 仅是单一同目录候选的
   fallback 提示，不是内容身份，也不表示扫描目录。被引用期间保持 runtime 字节不可变，
-  保留冷启动/回退所需 kernel 输入，遵循[runtime 选择](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime_zh.md#节点升级)。
+  保留冷启动/回退所需 kernel 输入，遵循[runtime 选择](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime_zh.md#节点升级)。集群中带注解 SNP 的选点还要求同一个 Node 的已发布 runtime inventory 包含 captured basename 与 digest；这比底层配置 runtime 校验更严格。允许选点前必须保留并发布所需 bundle。
 - **完整持久闭包**：S、E、memory/disk 父链及不可变对象能按原 canonical identity/
   命名 location 解析。须从目标节点验证，不依赖热 cache。
 - **密钥/所有权**：保留每个加密层的客户密钥及 Node/集群要求的凭据/所有权状态。

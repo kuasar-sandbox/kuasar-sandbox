@@ -219,7 +219,11 @@ def cmd_prepare(args: argparse.Namespace) -> int:
 
 
 def case_diagnostics(work, case, output):
-    if case not in {'snapshot.read-recovery.sh', 'orchestrator.cluster-recovery.sh',
+    if case not in {'snapshot.read-recovery.sh', 'orchestrator.cluster-lifecycle.sh',
+                    'orchestrator.cluster-lifecycle-sqlite.sh', 'orchestrator.cluster-lifecycle-postgres.sh',
+                    'orchestrator.cluster-recovery.sh', 'orchestrator.cluster-reset.sh',
+                    'orchestrator.cluster-faults.sh', 'orchestrator.cluster-migration.sh',
+                    'orchestrator.cluster-legacy-runtime.sh',
                     'sandbox.cgroup.sh', 'orchestrator.resource-startup.sh',
                     'orchestrator.proxy-inplace-restart.sh'}:
         return {}
