@@ -1,12 +1,12 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261125
-previous_preview_version: preview.20261124.6
+preview_version: preview.20261125.1
+previous_preview_version: preview.20261125
 components:
   accelerator: v0.2.0-preview.20261124
   connector: v0.2.0-preview.20261119
-  sandboxer: v0.2.0-preview.20261125
+  sandboxer: v0.2.0-preview.20261125.1
   orchestrator: v0.2.0-preview.20261125
   runtime: runtime-v0.2.0-preview.20261124.6
   vmlinux: vmlinux-v0.1.7-preview.20261124
@@ -19,13 +19,13 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261125
+    # Kuasar Sandbox release-v0.2.0-preview.20261125.1
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
-    Previous aggregate selection: `release-v0.2.0-preview.20261124.6`.
+    Previous aggregate selection: `release-v0.2.0-preview.20261125`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261125/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261125.1/releases/daily-preview.yaml).
 
     ## Component versions
 
@@ -33,7 +33,7 @@ notes:
     |---|---|
     | `accelerator` | `v0.2.0-preview.20261124` |
     | `connector` | `v0.2.0-preview.20261119` |
-    | `sandboxer` | `v0.2.0-preview.20261125` |
+    | `sandboxer` | `v0.2.0-preview.20261125.1` |
     | `orchestrator` | `v0.2.0-preview.20261125` |
     | `runtime` | `runtime-v0.2.0-preview.20261124.6` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261124` |
@@ -52,20 +52,16 @@ notes:
 
     ### sandboxer
 
-    Selected version: `v0.2.0-preview.20261124.6` → `v0.2.0-preview.20261125`.
+    Selected version: `v0.2.0-preview.20261125` → `v0.2.0-preview.20261125.1`.
 
-    - fix: retain successful completion of standalone short commands ([#478](https://github.com/kuasar-sandbox/sandboxer/pull/478), [commit 449e9777b752](https://github.com/kuasar-sandbox/sandboxer/commit/449e9777b7529d30447e10f1d66b219a107e55fc)).
+    - test(sandbox): synchronize cancellation in shutdown reply fixture ([#479](https://github.com/kuasar-sandbox/sandboxer/pull/479), [commit 7cc1d0f21b2a](https://github.com/kuasar-sandbox/sandboxer/commit/7cc1d0f21b2a512cb567fc06964996a92e3e7d4a)).
+    - fix: retain published dependencies in single-disk export ([#480](https://github.com/kuasar-sandbox/sandboxer/pull/480), [commit e956c2ae9f56](https://github.com/kuasar-sandbox/sandboxer/commit/e956c2ae9f56bf6cba951ff4f57e6ecbab043717)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/4cdc3ff7ec0923b87a99f5c40b9f71226d6501e6...449e9777b7529d30447e10f1d66b219a107e55fc)
+    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/449e9777b7529d30447e10f1d66b219a107e55fc...e956c2ae9f56bf6cba951ff4f57e6ecbab043717)
 
     ### orchestrator
 
-    Selected version: `v0.2.0-preview.20261124.6` → `v0.2.0-preview.20261125`.
-
-    - Negotiate deferred VMM retirement and recover exact retained ownership (#476) ([#576](https://github.com/kuasar-sandbox/orchestrator/pull/576), [commit 8dea59af8465](https://github.com/kuasar-sandbox/orchestrator/commit/8dea59af8465c57e376bac1926f6e0e65262d0ec)).
-    - fix(registry): join node-link response writes before handler return ([#577](https://github.com/kuasar-sandbox/orchestrator/pull/577), [commit aeceec0fdafd](https://github.com/kuasar-sandbox/orchestrator/commit/aeceec0fdafd444d298558df395e6610b9a781dd)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/51e8540aa1820503b6578d90621392afd524f70f...aeceec0fdafd444d298558df395e6610b9a781dd)
+    Selected version unchanged: `v0.2.0-preview.20261125`.
 
     ### runtime
 
@@ -81,7 +77,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261125/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261125/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261125.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261125.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
