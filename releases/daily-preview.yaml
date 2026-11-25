@@ -57,6 +57,8 @@ notes:
     - test(sandbox): synchronize cancellation in shutdown reply fixture ([#479](https://github.com/kuasar-sandbox/sandboxer/pull/479), [commit 7cc1d0f21b2a](https://github.com/kuasar-sandbox/sandboxer/commit/7cc1d0f21b2a512cb567fc06964996a92e3e7d4a)).
     - fix: retain published dependencies in single-disk export ([#480](https://github.com/kuasar-sandbox/sandboxer/pull/480), [commit e956c2ae9f56](https://github.com/kuasar-sandbox/sandboxer/commit/e956c2ae9f56bf6cba951ff4f57e6ecbab043717)).
 
+    **Single-disk export compatibility:** the `DiskV1` schema is unchanged, and the previous sandboxer reader already supports ordered `base`/`base_from_refs` references, including Manifest and located file references. The exporter now retains published immutable parent references instead of copying them into every new output Bundle. Therefore, copying only the new output directory to another host is no longer sufficient when the disk graph contains retained parents. The receiver must also be able to resolve the original parent locations and use their corresponding keys. A fully retained graph may produce no new Bundle at all. Existing scripts that assumed the output directory was self-contained must be updated; this is a delivery-semantics change, not a DiskV1 wire-format change.
+
     [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/449e9777b7529d30447e10f1d66b219a107e55fc...e956c2ae9f56bf6cba951ff4f57e6ecbab043717)
 
     ### orchestrator
