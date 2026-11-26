@@ -22,8 +22,8 @@ class BootstrapTests(unittest.TestCase):
             "control": {"curl", "git", "jq", "python3", "python3-yaml", "util-linux"},
             "release-control": {"curl", "git", "jq"},
             "artifact-prepare": {"python3-pip"},
-            "artifact-arm": {"iproute2", "python3-venv", "redis-server", "systemd", "strace"},
-            "artifact-x86": {"iproute2", "kmod", "acl", "e2fsprogs", "redis-server", "systemd", "strace"},
+            "artifact-arm": {"ethtool", "iproute2", "python3-venv", "redis-server", "systemd", "strace"},
+            "artifact-x86": {"ethtool", "iproute2", "kmod", "acl", "e2fsprogs", "redis-server", "systemd", "strace"},
         }
         compilers = {"build-essential", "gcc", "g++", "clang", "rustc", "cargo", "golang", "libclang-dev"}
         for profile, expected in required.items():
