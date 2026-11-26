@@ -727,7 +727,8 @@ validate_outputs() {
     done < <(component_required_files "$component")
     if [ "$component" = vpp ]; then
         python3 "$SCRIPT_DIR/../../release/egress_runtime.py" validate --arch "$TARGET_ARCH" \
-            --runtime "$WORKSPACE_ROOT/connector/bin/$TARGET_ARCH"
+            --runtime "$WORKSPACE_ROOT/connector/bin/$TARGET_ARCH" \
+            --licenses "$WORKSPACE_ROOT/connector/native-deps/build/$TARGET_ARCH/vpp/licenses"
     fi
 }
 

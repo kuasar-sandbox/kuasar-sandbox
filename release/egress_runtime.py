@@ -109,15 +109,23 @@ def inspect(runtime, arch=None):
 
 def license_files(licenses):
     require(licenses.is_dir() and not licenses.is_symlink(), 'missing VPP license materials')
-    require(all((licenses / name).is_file() for name in LICENSE_FILES), 'incomplete VPP license materials')
+    require(all((licenses / name).is_file() and (licenses / name).stat().st_size > 0
+                for name in LICENSE_FILES), 'incomplete VPP license materials')
     files = {}
+    system_notices = False
     for path in licenses.rglob('*'):
         require(not path.is_symlink(), 'VPP license materials may not contain links')
         if path.is_dir():
             continue
         regular(path, licenses)
         require(path.stat().st_mode & 0o7777 == 0o644, 'invalid VPP license mode')
-        files[path.relative_to(licenses).as_posix()] = digest(path)
+        relative = path.relative_to(licenses)
+        name = path.name.lower()
+        if (relative.parts[0] == 'system' and path.stat().st_size > 0
+                and ('copyright' in name or 'license' in name or name.startswith('copying'))):
+            system_notices = True
+        files[relative.as_posix()] = digest(path)
+    require(system_notices, 'missing statically linked system library license materials')
     return files
 
 
@@ -222,10 +230,13 @@ if __name__ == '__main__':
     parser.add_argument('command', choices=('validate', 'collect-bin'))
     parser.add_argument('--arch', required=True, choices=ARCHES)
     parser.add_argument('--runtime', required=True, type=Path)
+    parser.add_argument('--licenses', type=Path, help='also validate retained native license materials')
     parser.add_argument('--output', type=Path)
     args = parser.parse_args()
     if args.command == 'validate':
         inspect(args.runtime, args.arch)
+        if args.licenses is not None:
+            license_files(args.licenses)
     else:
         require(args.output is not None, '--output is required')
         collect_bin(args.runtime, args.output, args.arch)

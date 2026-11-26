@@ -40,6 +40,7 @@ def native_egress_files(arch):
     rows['bin/' + native.MANIFEST] = (json.dumps(manifest).encode(), 0o644)
     rows.update({native.LICENSES + '/' + name: (('license ' + name).encode(), 0o644)
                  for name in native.LICENSE_FILES})
+    rows[native.LICENSES + '/system/libc6-dev/copyright'] = (b'statically linked system license', 0o644)
     return rows
 
 

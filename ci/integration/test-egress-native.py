@@ -110,6 +110,35 @@ class EgressNativeContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'cannot own'):
             archive_paths.validate_aggregate([('sandboxer', archive)])
 
+    def test_static_system_notices_must_be_regular_nonempty_license_files(self):
+        notice = native.LICENSES + '/system/libc6-dev/copyright'
+        for variant in ('missing', 'empty', 'other-name'):
+            with self.subTest(variant=variant):
+                rows = self.fixture()
+                content = rows.pop(notice)
+                if variant == 'empty':
+                    rows[notice] = (b'', 0o644)
+                elif variant == 'other-name':
+                    rows[native.LICENSES + '/system/libc6-dev/README'] = content
+                with self.assertRaisesRegex(ValueError, 'system library license materials'):
+                    artifacts.unpack(self.archive(rows), self.root / 'rejected', 'connector', {})
+                self.assertFalse((self.root / 'rejected').exists())
+                source = self.tree(rows, variant)
+                with self.assertRaisesRegex(ValueError, 'system library license materials'):
+                    native.collect(source / 'bin', source / native.LICENSES,
+                                   self.root / (variant + '-overlay'), 'x86_64')
+        for name in ('LICENSE.txt', 'COPYING.LIB', 'vendor-COPYRIGHT.txt'):
+            with self.subTest(name=name):
+                rows = self.fixture()
+                rows[native.LICENSES + '/system/libc6-dev/' + name] = rows.pop(notice)
+                self.assertIsNotNone(native.validate(self.tree(rows, name), 'x86_64'))
+        source = self.tree(self.fixture(), 'symlink')
+        path = source / notice
+        path.unlink()
+        path.symlink_to(source / native.LICENSES / 'VPP-LICENSE')
+        with self.assertRaisesRegex(ValueError, 'may not contain links'):
+            native.validate(source, 'x86_64')
+
     def test_static_elf_rejects_interpreter_needed_and_malformed_segments(self):
         for arch in native.ARCHES:
             variants = [native_egress_elf(arch, kind) for kind in ('interpreter', 'needed')]

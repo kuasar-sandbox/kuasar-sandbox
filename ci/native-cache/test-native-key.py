@@ -306,7 +306,7 @@ else: print('fixture compiler 1')
         (alternate / 'libc.a').write_bytes(b'changed selected override')
         self.assertNotEqual(before, self.key(**environment))
 
-    def test_restore_preserves_complete_vpp_and_sibling_cli_without_building_again(self):
+    def fixture_recipe(self):
         # A tiny owner recipe emits ELF headers and manifests as data. The
         # actual native cache pack/restore/reader paths remain unchanged.
         builder = self.native / 'fixture-build.py'
@@ -330,11 +330,25 @@ manifest=dict(schema=1,product='connector-egress-native-runtime',architecture=ar
 licenses=root/'build'/arch/'vpp/licenses';licenses.mkdir(parents=True,exist_ok=True)
 for name in ('CONNECTOR-LICENSE','VPP-LICENSE','VPP-EMBEDDED-NOTICES'):
  (licenses/name).write_text(name+' license\\n')
+system=licenses/'system/libc6-dev';system.mkdir(parents=True)
+(system/'copyright').write_text('statically linked system license\\n')
 (licenses.parent/'static-libraries.json').write_text('{}\\n')
 (root/'build/src/vpp').mkdir(parents=True,exist_ok=True)
 with (root/'build-count').open('a') as stream:stream.write('build\\n')
 ''')
         (self.native / 'Makefile').write_text('vpp:\n\t@python3 fixture-build.py\n')
+
+    def test_cache_rejects_missing_static_system_license_materials(self):
+        self.fixture_recipe()
+        builder = self.native / 'fixture-build.py'
+        builder.write_text(builder.read_text() + "(system/'copyright').unlink()\n")
+        result = self.invoke('restore-or-build')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('statically linked system library license materials', result.stderr)
+        self.assertFalse(any((self.root / 'cache').rglob('payload.tar')))
+
+    def test_restore_preserves_complete_vpp_and_sibling_cli_without_building_again(self):
+        self.fixture_recipe()
         bindir = self.connector / 'bin' / platform.machine()
         bindir.mkdir(parents=True)
         sibling = bindir / 'connector-ctl'
@@ -356,6 +370,7 @@ with (root/'build-count').open('a') as stream:stream.write('build\\n')
         manifest = json.loads((bindir / 'vpp-runtime.json').read_text())
         self.assertTrue(all((bindir / name).is_file() for name in manifest['files']))
         self.assertTrue((self.native / 'build' / platform.machine() / 'vpp/licenses/VPP-LICENSE').is_file())
+        self.assertTrue((self.native / 'build' / platform.machine() / 'vpp/licenses/system/libc6-dev/copyright').is_file())
         self.assertTrue((self.native / 'build' / platform.machine() / 'vpp/static-libraries.json').is_file())
 
 
