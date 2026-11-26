@@ -38,9 +38,9 @@ case "${1:-}" in
         /usr/libexec/node-infra/node-infra-runtime check --config "$(config_list /etc/connector-vswitch vswitch.yaml)"
         if [[ -f /etc/connector-egress/link.json ]]; then
             gateway_ns=$(jq -er '.gateway_netns' /etc/connector-egress/link.json)
-            exec ip netns exec "$gateway_ns" connector-ctl egress serve --config /etc/connector-egress/gateway.json
+            exec ip netns exec "$gateway_ns" connector-ctl egress serve --config /etc/connector-egress/gateway.yaml
         fi
-        exec connector-ctl egress serve --config /etc/connector-egress/gateway.json
+        exec connector-ctl egress serve --config /etc/connector-egress/gateway.yaml
         ;;
     connector)
         configs="$(config_list /etc/connector-vswitch vswitch.yaml)"

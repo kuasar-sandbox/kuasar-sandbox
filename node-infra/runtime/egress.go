@@ -2,9 +2,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/kuasar-sandbox/connector/pkg/egress"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"os"
@@ -17,7 +19,7 @@ import (
 	"time"
 )
 
-var egressConfigPath = "/etc/connector-egress/gateway.json"
+var egressConfigPath = "/etc/connector-egress/gateway.yaml"
 var egressLinkPath = "/etc/connector-egress/link.json"
 
 type egressLink struct {
@@ -41,7 +43,7 @@ func describeEgress(r *record) (*egressRecord, error) {
 	data, err := os.ReadFile(egressConfigPath)
 	if errors.Is(err, os.ErrNotExist) {
 		if _, err := os.Stat(egressLinkPath); !errors.Is(err, os.ErrNotExist) {
-			return nil, errors.New("local Egress link requires gateway.json")
+			return nil, errors.New("local Egress link requires gateway.yaml")
 		}
 		return nil, nil
 	}
@@ -52,11 +54,8 @@ func describeEgress(r *record) (*egressRecord, error) {
 	if output, err := exec.Command(connector, "egress", "validate", "--config", egressConfigPath).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("Egress configuration: %w: %s", err, output)
 	}
-	var gateway struct {
-		Name       string `json:"name"`
-		RuntimeDir string `json:"runtime_dir"`
-	}
-	if err := json.Unmarshal(data, &gateway); err != nil {
+	var gateway egress.Config
+	if err := egress.Decode(bytes.NewReader(data), &gateway); err != nil {
 		return nil, err
 	}
 	if gateway.RuntimeDir == "" {

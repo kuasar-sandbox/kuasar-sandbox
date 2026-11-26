@@ -8,6 +8,8 @@ from node_infra_egress import ExternalEgress
 
 
 def native_case(fixture, node_type):
+    def write_policy(path, value):
+        path.write_text('# Egress YAML configuration\n'+''.join(key+': '+json.dumps(item)+'\n' for key,item in value.items()))
     provider = ExternalEgress(fixture, native=True)
     node = None
     clean = False
@@ -23,8 +25,8 @@ def native_case(fixture, node_type):
                                     'max_connections': 1024}],
                 'acl': [{'destination': '192.0.2.1/32', 'protocol': 'any', 'action': 'allow'}],
                 'routes': [{'destination': '0.0.0.0/0', 'pool': 'public'}]}
-        write_json(config / 'area.json', area)
-        write_json(config / 'gateway.json', {
+        write_policy(config / 'area.yaml', area)
+        write_policy(config / 'gateway.yaml', {
             'name': 'local', 'runtime_dir': '/run/connector-egress/local',
             'vpp': native + '/bin/vpp', 'plugin_path': native + '/lib/' + triplet + '/vpp_plugins',
             'library_path': native + '/lib/' + triplet,
@@ -32,7 +34,7 @@ def native_case(fixture, node_type):
                            {'name': 'out0', 'address': '192.0.2.2/30', 'mtu': 1500}],
             'attachments': [{'name': 'sw0', 'interface': 'egress-rx', 'peer': ['198.18.0.2'],
                              'locator': 'port', 'inner_mtu': 1500}],
-            'area_files': ['area.json']})
+            'area_files': ['area.yaml']})
         write_json(config / 'link.json', {
             'name': 'local', 'owner_netns': '', 'gateway_netns': 'egress',
             'switch_netns': 'sw0-switch', 'switch': 'sw0', 'transit': 'egress-tx',
@@ -69,7 +71,7 @@ def native_case(fixture, node_type):
         provider.traffic(node, guest)
         initial = status()
         area['pools'][0]['max_connections'] = 2048
-        write_json(config / 'area.json', area)
+        write_policy(config / 'area.yaml', area)
         node.execute('systemctl', 'reload', 'connector-egress.service')
         wait_for('Area-file SIGHUP reload', lambda: status()['configuration_generation'] > initial['configuration_generation'])
         require(status()['pid'] == initial['pid'], 'reload replaced the gateway process')

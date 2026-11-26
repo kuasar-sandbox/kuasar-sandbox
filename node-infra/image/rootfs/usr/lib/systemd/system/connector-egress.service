@@ -1,6 +1,6 @@
 [Unit]
 Description=Connector Geneve Egress gateway
-ConditionPathExists=/etc/connector-egress/gateway.json
+ConditionPathExists=/etc/connector-egress/gateway.yaml
 Requires=node-infra-network.service
 After=node-infra-network.service
 Before=connector-vswitch.service node-conductor.service node-proxy.service

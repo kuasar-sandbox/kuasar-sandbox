@@ -86,6 +86,6 @@ nftables，其他工具在派生镜像构建时安装。
 
 ### 受管理的本地 Geneve Egress
 
-`local-egress` 将 Connector 网关纳入现有节点部署。把 `90-transit.yaml` 放入 `/etc/connector-vswitch/conf.d`，其余 JSON 挂载到 `/etc/connector-egress`。示例库路径为 x86_64；ARM64 将 `x86_64-linux-gnu` 改为 `aarch64-linux-gnu`。根据部署调整地址、Area 策略、NAT 容量及 CPU/内存预算。
+`local-egress` 将 Connector 网关纳入现有节点部署。把 `90-transit.yaml` 放入 `/etc/connector-vswitch/conf.d`，网关/Area YAML 与 link.json 挂载到 `/etc/connector-egress`。示例库路径为 x86_64；ARM64 将 `x86_64-linux-gnu` 改为 `aarch64-linux-gnu`。根据部署调整地址、Area 策略、NAT 容量及 CPU/内存预算。
 
 通过既有 namespace input 提供 `egress` 命名空间，提前接通并启用外部所有者管理的 `egress-uplink`。Linux 不重复持有 VPP 网关/SNAT 地址。节点只管理专用 transit pair，保留外部 namespace 和出口设备。节点准备使用其保留的主 namespace 作为 owner；不要在节点 vSwitch 服务之外再调用 `egress link start/stop`。修改主配置/Area 文件后执行 `systemctl reload connector-egress` 发送 SIGHUP。reload 被拒绝时保留最后接受的配置，并在本地状态文件记录错误。
