@@ -6,9 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/kuasar-sandbox/connector/pkg/egress"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
+	"gopkg.in/yaml.v3"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,6 +39,28 @@ type egressRecord struct {
 	Link       *egressLink `json:"link,omitempty"`
 }
 
+type egressMetadata struct {
+	Name       string `json:"name"`
+	RuntimeDir string `json:"runtime_dir"`
+}
+
+// Read only deployment metadata after the selected Connector CLI validates the
+// entire policy. This helper also builds against older releases without the
+// Egress Go package; it does not maintain another policy schema.
+func readEgressMetadata(data []byte) (egressMetadata, error) {
+	var values map[string]any
+	var result egressMetadata
+	if err := yaml.NewDecoder(bytes.NewReader(data)).Decode(&values); err != nil {
+		return result, err
+	}
+	normalized, err := json.Marshal(values)
+	if err != nil {
+		return result, err
+	}
+	err = json.Unmarshal(normalized, &result)
+	return result, err
+}
+
 func describeEgress(r *record) (*egressRecord, error) {
 	data, err := os.ReadFile(egressConfigPath)
 	if errors.Is(err, os.ErrNotExist) {
@@ -54,8 +76,8 @@ func describeEgress(r *record) (*egressRecord, error) {
 	if output, err := exec.Command(connector, "egress", "validate", "--config", egressConfigPath).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("Egress configuration: %w: %s", err, output)
 	}
-	var gateway egress.Config
-	if err := egress.Decode(bytes.NewReader(data), &gateway); err != nil {
+	gateway, err := readEgressMetadata(data)
+	if err != nil {
 		return nil, err
 	}
 	if gateway.RuntimeDir == "" {
