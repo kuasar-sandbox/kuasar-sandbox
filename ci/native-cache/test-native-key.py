@@ -230,6 +230,32 @@ class VppKeyTests(unittest.TestCase):
         archive.write_bytes(b'changed archive')
         self.assertNotEqual(before, self.key(VPP_TARBALL=str(archive)))
 
+    def test_default_clang_and_explicit_cc_use_selected_compiler_bytes(self):
+        tools = self.root / 'tools'
+        tools.mkdir()
+        clang, gcc = tools / 'clang', tools / 'gcc'
+
+        def compiler(path, revision):
+            # Identical version strings still need distinct compiler keys.
+            path.write_text(f'#!/bin/sh\n# revision {revision}\necho fixture-compiler\n')
+            path.chmod(0o755)
+
+        compiler(clang, 1)
+        compiler(gcc, 1)
+        environment = {'PATH': str(tools) + os.pathsep + self.environment['PATH']}
+        default = self.key(**environment)
+        compiler(gcc, 2)
+        self.assertEqual(default, self.key(**environment))
+        compiler(clang, 2)
+        self.assertNotEqual(default, self.key(**environment))
+
+        environment['CC'] = str(gcc)
+        explicit = self.key(**environment)
+        compiler(clang, 3)
+        self.assertEqual(explicit, self.key(**environment))
+        compiler(gcc, 3)
+        self.assertNotEqual(explicit, self.key(**environment))
+
     def test_restore_preserves_complete_vpp_and_sibling_cli_without_building_again(self):
         # A tiny owner recipe emits ELF headers and manifests as data. The
         # actual native cache pack/restore/reader paths remain unchanged.

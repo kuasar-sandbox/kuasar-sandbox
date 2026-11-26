@@ -489,7 +489,16 @@ component_toolchain() {
             package_identities 'rust cargo gcc binutils glibc-devel' 'rustc cargo gcc binutils libc6-dev'
             ;;
         vpp)
-            cc=${CC:-gcc}
+            cc=${CC:-}
+            if [ -z "$cc" ]; then
+                # Match VPP's CMAKE_C_COMPILER_NAMES order. A Clang upgrade
+                # must invalidate native output when CMake selects Clang.
+                for cc in clang gcc cc; do
+                    if command -v "$cc" >/dev/null 2>&1; then
+                        break
+                    fi
+                done
+            fi
             cxx=${CXX:-g++}
             tool_identity cc "$cc" --version
             tool_identity cxx "$cxx" --version
