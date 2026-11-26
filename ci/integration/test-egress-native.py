@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import shutil
 import struct
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -52,6 +53,65 @@ class EgressNativeContracts(unittest.TestCase):
                 entry.size, entry.mode = len(data), mode
                 archive.addfile(entry, io.BytesIO(data))
         return path
+
+    def prebuilt_tree(self, rows, name):
+        required = {line.split()[0].removesuffix(':')
+                    for line in (artifacts.ROOT / 'release/inputs/bin-inputs.yaml').read_text().splitlines()
+                    if line.strip() and not line.startswith('#')}
+        files = {'bin/' + name: (b'prebuilt product\n', 0o755)
+                 for name in required - {native.PROGRAM}}
+        return self.tree(files | rows, name)
+
+    def verify_prebuilt(self, root, arch='x86_64'):
+        return subprocess.run(['make', '--no-print-directory', 'verify-prebuilt',
+                               'BINDIR=' + str(root / 'bin'), 'TARGET_ARCH=' + arch],
+                              cwd=artifacts.ROOT, capture_output=True, text=True)
+
+    def test_verify_prebuilt_accepts_legacy_and_both_native_architectures(self):
+        legacy = self.verify_prebuilt(self.prebuilt_tree({}, 'legacy-prebuilt'))
+        self.assertEqual(legacy.returncode, 0, legacy.stdout + legacy.stderr)
+        for arch in native.ARCHES:
+            with self.subTest(arch=arch):
+                root = self.prebuilt_tree(self.fixture(arch), arch + '-prebuilt')
+                result = self.verify_prebuilt(root, arch)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_verify_prebuilt_still_requires_other_products(self):
+        for layout, rows in (('legacy', {}), ('native', self.fixture())):
+            with self.subTest(layout=layout):
+                root = self.prebuilt_tree(rows, layout + '-missing-control')
+                (root / 'bin/connector-ctl').unlink()
+                result = self.verify_prebuilt(root)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('missing prebuilt release input: connector-ctl', result.stderr)
+
+    def test_verify_prebuilt_rejects_incomplete_damaged_and_dynamic_native_files(self):
+        for variant in ('missing-program', 'missing-manifest', 'modified-program', 'interpreter',
+                        'broken-program-link', 'broken-manifest-link'):
+            with self.subTest(variant=variant):
+                rows = self.fixture()
+                program, manifest = 'bin/' + native.PROGRAM, 'bin/' + native.MANIFEST
+                if variant == 'missing-program':
+                    del rows[program]
+                elif variant == 'missing-manifest':
+                    del rows[manifest]
+                elif variant == 'modified-program':
+                    rows[program] = (rows[program][0] + b'changed', 0o755)
+                elif variant == 'interpreter':
+                    data = native_egress_elf('x86_64', 'interpreter')
+                    rows[program] = (data, 0o755)
+                    receipt = json.loads(rows[manifest][0])
+                    receipt['files'][native.PROGRAM] = hashlib.sha256(data).hexdigest()
+                    rows[manifest] = (json.dumps(receipt).encode(), 0o644)
+                else:
+                    rows = {}
+                root = self.prebuilt_tree(rows, variant)
+                if variant.startswith('broken-'):
+                    path = program if variant == 'broken-program-link' else manifest
+                    (root / path).symlink_to('missing-native-file')
+                result = self.verify_prebuilt(root)
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('VPP', result.stderr)
 
     def test_both_architectures_keep_direct_files_through_component_and_aggregate_readers(self):
         for arch in native.ARCHES:

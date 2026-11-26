@@ -145,11 +145,16 @@ test-e2e:
 
 # Aggregate releases validate the already-published archives. This target never
 # invokes a component build; bin/<arch>/ must be populated by the release fetcher.
+# Historical releases may omit VPP; validate any present native attachment.
 verify-prebuilt:
 	@while read name repo; do \
-		name=$${name%:}; case "$$name" in ''|\#*) continue ;; esac; \
+		name=$${name%:}; case "$$name" in ''|\#*|connector-vpp) continue ;; esac; \
 		[ -f "$(SBIN)/$$name" ] || { echo "missing prebuilt release input: $$name" >&2; exit 1; }; \
 	done < $(BIN_INPUTS_MANIFEST)
+	@if [ -e "$(SBIN)/connector-vpp" ] || [ -L "$(SBIN)/connector-vpp" ] || \
+	    [ -e "$(SBIN)/vpp-runtime.json" ] || [ -L "$(SBIN)/vpp-runtime.json" ]; then \
+		python3 -B release/egress_runtime.py validate --arch "$(TARGET_ARCH)" --runtime "$(SBIN)"; \
+	fi
 
 # perf harnesses living in this repo (cross-repo binary use).
 perf-sandbox:
