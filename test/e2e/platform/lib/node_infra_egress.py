@@ -60,6 +60,12 @@ class ExternalEgress:
                 if not native or device != 'out0':
                     command('ip', '-n', name, 'address', 'add', address, 'dev', device)
                 command('ip', '-n', name, 'link', 'set', device, 'up')
+                if native and device == 'target0':
+                    # This veth emulates an external wire: no physical NIC
+                    # completes CHECKSUM_PARTIAL/GSO before AF_PACKET receives
+                    # the reply. Normalize only our controlled target endpoint.
+                    command('ip', 'netns', 'exec', name, 'ethtool', '-K', device,
+                            'tx', 'off', 'rx', 'off', 'gso', 'off', 'gro', 'off', 'tso', 'off')
             if not native:
                 command('ip', '-n', self.name, 'route', 'add', 'default', 'via', '192.0.2.1')
                 command('ip', 'netns', 'exec', self.name, 'sysctl', '-w', 'net.ipv4.ip_forward=1')

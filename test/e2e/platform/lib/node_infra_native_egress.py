@@ -64,7 +64,9 @@ def native_case(fixture, node_type):
         require(initial['configuration_generation'] > 0 and links()['pair_valid'], 'native gateway was not ready')
         command('ip', '-n', provider.name, 'link', 'set', 'out0', 'mtu', '1490')
         wait_for('gateway disables invalid Pool interface', lambda: status()['disabled_interfaces'].get('out0'))
-        command('ip', '-n', provider.name, 'link', 'set', 'out0', 'mtu', '1500')
+        # AF_PACKET admin-down also brings its Linux device down. Restore
+        # the provider-owned link explicitly before controlled service recovery.
+        command('ip', '-n', provider.name, 'link', 'set', 'out0', 'mtu', '1500', 'up')
         require(not node.status()['ready'], 'restored Linux link hid a disabled native interface')
         node.execute('systemctl', 'restart', 'connector-egress.service')
         wait_for('controlled gateway recovery', lambda: node.status()['ready'])
