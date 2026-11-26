@@ -1,4 +1,4 @@
-"""Admit Connector's VPP files directly beside its CLI without executing them."""
+"""Admit Connector's static VPP executable without executing candidate code."""
 import argparse
 import hashlib
 import json
@@ -8,9 +8,9 @@ import shutil
 import struct
 import tempfile
 
-PLUGINS = {'nat', 'af_packet', 'ping', 'egress_policy', 'egress_geneve', 'egress_packet'}
 ARCHES = {'x86_64': (62, 'x86_64-linux-gnu'), 'aarch64': (183, 'aarch64-linux-gnu')}
 BASELINES = {'x86_64': 'x86-64-v2', 'aarch64': 'armv8-a+crc'}
+PROGRAM = 'connector-vpp'
 MANIFEST = 'vpp-runtime.json'
 LICENSES = 'share/licenses/connector/native'
 LICENSE_FILES = {'CONNECTOR-LICENSE', 'VPP-LICENSE', 'VPP-EMBEDDED-NOTICES'}
@@ -31,8 +31,7 @@ def digest(path):
 
 def attached(name):
     """Paths owned by VPP within a component or aggregate release root."""
-    return (name in ('bin/vpp', 'bin/' + MANIFEST, 'bin/lib', LICENSES)
-            or name.startswith(('bin/lib/', LICENSES + '/')))
+    return name in ('bin/' + PROGRAM, 'bin/' + MANIFEST, LICENSES) or name.startswith(LICENSES + '/')
 
 
 def regular(path, root):
@@ -51,6 +50,34 @@ def unique_object(pairs):
     return result
 
 
+def static_elf(data, machine):
+    require(len(data) >= 64 and data[:6] == b'\x7fELF\x02\x01'
+            and struct.unpack_from('<H', data, 18)[0] == machine, 'wrong native ELF')
+    require(struct.unpack_from('<H', data, 16)[0] in (2, 3), 'VPP ELF is not executable')
+    offset = struct.unpack_from('<Q', data, 32)[0]
+    header_size, entry_size, count = struct.unpack_from('<HHH', data, 52)
+    require(header_size == 64 and entry_size == 56 and 0 < count < 0xffff
+            and offset >= 64 and offset + entry_size * count <= len(data),
+            'invalid VPP ELF program headers')
+    load = False
+    for index in range(count):
+        kind, _, start, _, _, size, _, _ = struct.unpack_from('<IIQQQQQQ', data, offset + index * entry_size)
+        require(start <= len(data) and size <= len(data) - start, 'invalid VPP ELF segment range')
+        require(kind != 3, 'VPP ELF requires a dynamic interpreter')
+        load = load or kind == 1
+        if kind == 2:
+            require(size % 16 == 0, 'invalid VPP ELF dynamic entries')
+            terminated = False
+            for entry in range(start, start + size, 16):
+                tag = struct.unpack_from('<Q', data, entry)[0]
+                require(tag != 1, 'VPP ELF requires a shared library')
+                if tag == 0:
+                    terminated = True
+                    break
+            require(terminated, 'unterminated VPP ELF dynamic entries')
+    require(load, 'VPP ELF has no loadable segment')
+
+
 def inspect(runtime, arch=None):
     """Validate a bin directory and return its native manifest."""
     runtime = Path(runtime)
@@ -64,42 +91,18 @@ def inspect(runtime, arch=None):
     require(manifest.get('schema') == 1 and manifest.get('product') == 'connector-egress-native-runtime'
             and selected in ARCHES and (arch is None or selected == arch), 'VPP runtime identity mismatch')
     require(manifest.get('cpu_baseline') == BASELINES[selected], 'VPP CPU baseline mismatch')
-    machine, triplet = ARCHES[selected]
+    machine, _ = ARCHES[selected]
+    require(manifest.get('required_system_libraries') == [], 'VPP runtime requires system libraries')
     files = manifest.get('files')
-    require(isinstance(files, dict) and len(files) < 4096, 'invalid VPP file manifest')
-    required = {'vpp', *('lib/' + triplet + '/vpp_plugins/' + name + '_plugin.so' for name in PLUGINS)}
-    require(required <= set(files), 'incomplete VPP runtime')
-    actual = {'vpp'} if (runtime / 'vpp').exists() else set()
-    lib = runtime / 'lib'
-    require(lib.is_dir() and not lib.is_symlink(), 'missing VPP libraries')
-    for path in lib.rglob('*'):
-        require(not path.is_symlink(), 'VPP runtime may not contain links')
-        if not path.is_dir():
-            require(path.is_file(), 'VPP runtime contains a special file')
-            actual.add(path.relative_to(runtime).as_posix())
-    require(actual == set(files), 'VPP manifest file set mismatch')
-    total = 0
-    for name, expected in files.items():
-        path = PurePosixPath(name)
-        require(not path.is_absolute() and '..' not in path.parts and str(path) == name and '\\' not in name,
-                'unsafe VPP file path')
-        allowed = (name == 'vpp'
-                   or re.fullmatch(r'lib/' + triplet + r'/lib[A-Za-z0-9_.+-]+\.so(?:\.[0-9.]+)?', name)
-                   or name in required)
-        require(allowed, 'undeclared VPP file: ' + name)
-        require(isinstance(expected, str) and re.fullmatch('[0-9a-f]{64}', expected), 'invalid VPP digest')
-        source = runtime / name
-        regular(source, runtime)
-        require(source.stat().st_mode & 0o7777 == (0o755 if name == 'vpp' else 0o644),
-                'invalid VPP file mode: ' + name)
-        total += source.stat().st_size
-        require(source.stat().st_size <= 256 * 1024 * 1024 and total <= 1024 * 1024 * 1024,
-                'invalid VPP runtime size')
-        with source.open('rb') as stream:
-            header = stream.read(20)
-        require(len(header) == 20 and header[:6] == b'\x7fELF\x02\x01'
-                and struct.unpack_from('<H', header, 18)[0] == machine, 'wrong native ELF: ' + name)
-        require(digest(source) == expected, 'VPP digest mismatch: ' + name)
+    require(isinstance(files, dict) and set(files) == {PROGRAM}, 'invalid VPP file manifest')
+    expected = files[PROGRAM]
+    require(isinstance(expected, str) and re.fullmatch('[0-9a-f]{64}', expected), 'invalid VPP digest')
+    source = runtime / PROGRAM
+    regular(source, runtime)
+    require(source.stat().st_mode & 0o7777 == 0o755, 'invalid VPP executable mode')
+    require(source.stat().st_size <= 256 * 1024 * 1024, 'invalid VPP runtime size')
+    static_elf(source.read_bytes(), machine)
+    require(digest(source) == expected, 'VPP digest mismatch')
     require(manifest_path.stat().st_mode & 0o7777 == 0o644, 'invalid VPP manifest mode')
     return manifest
 
@@ -123,7 +126,7 @@ def validate(root, arch=None):
     root = Path(root)
     runtime = root / 'bin'
     if not any((root / name).exists() or (root / name).is_symlink()
-               for name in ('bin/vpp', 'bin/' + MANIFEST, 'bin/lib', LICENSES)):
+               for name in ('bin/' + PROGRAM, 'bin/' + MANIFEST, LICENSES)):
         return None
     manifest = inspect(runtime, arch)
     files = {'bin/' + name: sha for name, sha in manifest['files'].items()}
@@ -161,12 +164,11 @@ def validate_archive(source, members, unit=None):
 
 def remove(root):
     root = Path(root)
-    for name in ('bin/vpp', 'bin/' + MANIFEST):
+    for name in ('bin/' + PROGRAM, 'bin/' + MANIFEST):
         (root / name).unlink(missing_ok=True)
-    for name in ('bin/lib', LICENSES):
-        path = root / name
-        if path.exists():
-            shutil.rmtree(path)
+    path = root / LICENSES
+    if path.exists():
+        shutil.rmtree(path)
 
 
 def copy(source, destination, arch):
@@ -193,7 +195,7 @@ def collect(runtime, licenses, destination, arch):
 
 def collect_bin(runtime, output, arch):
     """Retain the normal bin layout in a developer's platform collection."""
-    if not (runtime / 'vpp').exists() and not (runtime / MANIFEST).exists():
+    if not (runtime / PROGRAM).exists() and not (runtime / MANIFEST).exists():
         return
     manifest = inspect(runtime, arch)
     for name in [*manifest['files'], MANIFEST]:
@@ -208,9 +210,9 @@ def verify_delta(root, arch, metadata, sources):
     if files is None:
         require('egress_native' not in metadata, 'VPP receipt has no payload')
         return set()
-    require('vpp' in metadata['products'], 'unplanned VPP native overlay')
+    require(PROGRAM in metadata['products'], 'unplanned VPP native overlay')
     require(isinstance(receipt, dict) and set(receipt) == {'files', 'sources'}
-            and receipt['files'] == files and receipt['sources'] == sources.get('vpp'),
+            and receipt['files'] == files and receipt['sources'] == sources.get(PROGRAM),
             'VPP overlay identity differs from its product')
     return set(files)
 

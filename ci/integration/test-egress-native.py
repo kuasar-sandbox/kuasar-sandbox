@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Exercise flat VPP delivery through the real product and archive readers."""
+"""Exercise static VPP delivery through the real product and archive readers."""
 import copy
+import hashlib
 import importlib.util
 import io
 import json
@@ -12,7 +13,7 @@ import tempfile
 import unittest
 
 import artifacts
-from test_fixtures import native_egress_files
+from test_fixtures import native_egress_elf, native_egress_files
 
 native = artifacts.egress_native_module()
 import archive_paths
@@ -67,7 +68,7 @@ class EgressNativeContracts(unittest.TestCase):
                 aggregate = self.root / (arch + '-aggregate')
                 archive_paths.extract([archive], aggregate)
                 self.assertEqual(artifacts.tree_files(aggregate), artifacts.tree_files(output))
-                self.assertFalse((aggregate / 'lib/connector-egress').exists())
+                self.assertFalse((aggregate / 'bin/lib').exists())
 
     def test_legacy_connector_without_vpp_still_extracts(self):
         archive = self.archive({'bin/connector-ctl': (elf('x86_64', 'legacy'), 0o755)})
@@ -78,20 +79,20 @@ class EgressNativeContracts(unittest.TestCase):
 
     def test_incomplete_modified_extra_and_wrong_architecture_payloads_fail_before_extraction(self):
         rows = self.fixture()
-        plugin = next(name for name in rows if name.endswith('_plugin.so'))
+        program = 'bin/' + native.PROGRAM
         variants = []
-        for name in ('bin/' + native.MANIFEST, plugin, native.LICENSES + '/VPP-LICENSE'):
+        for name in ('bin/' + native.MANIFEST, program, native.LICENSES + '/VPP-LICENSE'):
             altered = copy.deepcopy(rows)
             del altered[name]
             variants.append(altered)
         altered = copy.deepcopy(rows)
-        altered[plugin] = (rows[plugin][0] + b'changed', 0o644)
+        altered[program] = (rows[program][0] + b'changed', 0o755)
         variants.append(altered)
         altered = copy.deepcopy(rows)
         altered['bin/lib/x86_64-linux-gnu/extra.so'] = (elf('x86_64', 'extra'), 0o644)
         variants.append(altered)
         altered = copy.deepcopy(rows)
-        altered['bin/vpp'] = (elf('aarch64', 'wrong architecture'), 0o755)
+        altered['bin/connector-vpp'] = (elf('aarch64', 'wrong architecture'), 0o755)
         variants.append(altered)
         for index, altered in enumerate(variants):
             with self.subTest(index=index):
@@ -109,19 +110,69 @@ class EgressNativeContracts(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'cannot own'):
             archive_paths.validate_aggregate([('sandboxer', archive)])
 
-    def test_overlay_receipt_binds_libraries_licenses_and_source(self):
+    def test_static_elf_rejects_interpreter_needed_and_malformed_segments(self):
+        for arch in native.ARCHES:
+            variants = [native_egress_elf(arch, kind) for kind in ('interpreter', 'needed')]
+            for offset, format_, value in ((56, '<H', 0), (32, '<Q', 4096), (96, '<Q', 4096)):
+                data = bytearray(native_egress_elf(arch))
+                struct.pack_into(format_, data, offset, value)
+                variants.append(bytes(data))
+            data = bytearray(native_egress_elf(arch, 'needed'))
+            struct.pack_into('<Q', data, 176, 5)
+            struct.pack_into('<Q', data, 192, 5)
+            variants.append(bytes(data))
+            for index, data in enumerate(variants):
+                with self.subTest(arch=arch, index=index):
+                    rows = self.fixture(arch)
+                    rows['bin/' + native.PROGRAM] = (data, 0o755)
+                    manifest = json.loads(rows['bin/' + native.MANIFEST][0])
+                    manifest['files'][native.PROGRAM] = hashlib.sha256(data).hexdigest()
+                    rows['bin/' + native.MANIFEST] = (json.dumps(manifest).encode(), 0o644)
+                    archive = self.archive(rows)
+                    with self.assertRaises(ValueError):
+                        artifacts.unpack(archive, self.root / 'rejected', 'connector', {})
+                    self.assertFalse((self.root / 'rejected').exists())
+
+    def test_static_pie_is_admitted_without_system_libraries(self):
+        rows = self.fixture()
+        data = bytearray(rows['bin/' + native.PROGRAM][0])
+        struct.pack_into('<H', data, 16, 3)
+        rows['bin/' + native.PROGRAM] = (bytes(data), 0o755)
+        manifest = json.loads(rows['bin/' + native.MANIFEST][0])
+        manifest['files'][native.PROGRAM] = hashlib.sha256(data).hexdigest()
+        rows['bin/' + native.MANIFEST] = (json.dumps(manifest).encode(), 0o644)
+        root = self.tree(rows)
+        self.assertEqual(native.inspect(root / 'bin')['required_system_libraries'], [])
+
+    def test_manifest_requires_one_executable_and_no_system_dependencies(self):
+        for libraries in (None, ['libc.so.6'], {}):
+            with self.subTest(libraries=libraries):
+                rows = self.fixture()
+                manifest = json.loads(rows['bin/' + native.MANIFEST][0])
+                manifest['required_system_libraries'] = libraries
+                rows['bin/' + native.MANIFEST] = (json.dumps(manifest).encode(), 0o644)
+                with self.assertRaisesRegex(ValueError, 'system libraries'):
+                    artifacts.unpack(self.archive(rows), self.root / 'rejected', 'connector', {})
+        rows = self.fixture()
+        manifest = json.loads(rows['bin/' + native.MANIFEST][0])
+        manifest['files']['lib/libvppinfra.so'] = 'a' * 64
+        rows['bin/' + native.MANIFEST] = (json.dumps(manifest).encode(), 0o644)
+        with self.assertRaisesRegex(ValueError, 'file manifest'):
+            artifacts.unpack(self.archive(rows), self.root / 'rejected', 'connector', {})
+
+    def test_overlay_receipt_binds_executable_licenses_and_source(self):
         root = self.tree(self.fixture())
         source = {'kuasar-sandbox/connector': 'a' * 40}
-        metadata = {'products': {'vpp': {}},
+        metadata = {'products': {'connector-vpp': {}},
                     'egress_native': {'files': native.validate(root, 'x86_64'), 'sources': source}}
-        files = native.verify_delta(root, 'x86_64', metadata, {'vpp': source})
+        files = native.verify_delta(root, 'x86_64', metadata, {'connector-vpp': source})
         self.assertIn('bin/vpp-runtime.json', files)
         self.assertIn(native.LICENSES + '/VPP-LICENSE', files)
         with self.assertRaisesRegex(ValueError, 'identity differs'):
-            native.verify_delta(root, 'x86_64', metadata, {'vpp': {'kuasar-sandbox/connector': 'b' * 40}})
+            native.verify_delta(root, 'x86_64', metadata, {'connector-vpp': {'kuasar-sandbox/connector': 'b' * 40}})
         (root / native.LICENSES / 'VPP-LICENSE').write_text('changed license')
         with self.assertRaisesRegex(ValueError, 'identity differs'):
-            native.verify_delta(root, 'x86_64', metadata, {'vpp': source})
+            native.verify_delta(root, 'x86_64', metadata, {'connector-vpp': source})
 
     def test_collect_and_replace_preserve_sibling_cli(self):
         source = self.tree(self.fixture(), 'build')
@@ -131,11 +182,15 @@ class EgressNativeContracts(unittest.TestCase):
         (selected / 'bin').mkdir(parents=True)
         sibling = selected / 'bin/connector-ctl'
         sibling.write_bytes(b'selected connector')
+        unrelated = selected / 'bin/lib/other-product/library.so'
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_bytes(b'owned by another product')
         native.copy(output, selected, 'x86_64')
         self.assertEqual(native.validate(selected), native.validate(output))
         self.assertFalse((selected / 'bin/share').exists())
         native.remove(selected)
         self.assertEqual(sibling.read_bytes(), b'selected connector')
+        self.assertEqual(unrelated.read_bytes(), b'owned by another product')
         self.assertIsNone(native.validate(selected))
 
     def test_node_image_keeps_vpp_in_the_existing_bin_copy(self):
@@ -147,7 +202,7 @@ class EgressNativeContracts(unittest.TestCase):
         shutil.copytree(root / 'bin', context / 'bin')
         module.copy_private_runtime(root, context, 'x86_64')
         self.assertEqual(artifacts.tree_files(context / 'bin'), artifacts.tree_files(root / 'bin'))
-        self.assertFalse((context / 'lib/connector-egress').exists())
+        self.assertFalse((context / 'bin/lib').exists())
 
 
 if __name__ == '__main__':

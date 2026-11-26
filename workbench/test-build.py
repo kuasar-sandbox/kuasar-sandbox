@@ -46,7 +46,7 @@ def qualify_products(root, arch, owner_bin, connector_bin):
                 if line.strip() and not line.startswith('#')}
     actual = {path.name for path in root.iterdir()}
     native_layout = 'cluster-runtime' in actual
-    artifacts.require(actual == expected | {'lib', 'vpp-runtime.json'}
+    artifacts.require(actual == expected | {'vpp-runtime.json'}
                       | ({'cluster-runtime', 'run-cluster-ctl'} if native_layout else set()),
                       'full native build product set differs from the platform manifest')
     for name in sorted(expected - ({'cluster-ctl'} if native_layout else set())):

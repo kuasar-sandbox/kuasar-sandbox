@@ -124,6 +124,7 @@ component_input_paths() {
             required_file connector/native-deps/deps/common.sh
             required_file connector/native-deps/deps/build-vpp.sh
             required_file connector/native-deps/deps/stage-vpp.py
+            required_file connector/native-deps/deps/static-libraries.py
             required_file connector/native-deps/deps/vpp-source.json
             required_file connector/scripts/vpp-runtime.py
             find "$WORKSPACE_ROOT/connector/native-deps/deps/vpp-patches" -type f \
@@ -440,6 +441,111 @@ effective_cross_prefix() {
     fi
 }
 
+vpp_static_toolchain_identities() {
+    local cc=$1 flags_text linker_name=ld linker path name candidate trace records kind label
+    local flags=() search_dirs=() libraries=(
+        libc.a libc_nonshared.a libm.a libmvec.a libdl.a librt.a libpthread.a
+        libgcc.a libgcc_eh.a crt1.o Scrt1.o rcrt1.o crti.o crtn.o
+        crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o
+    )
+    flags_text=$(python3 - "${CFLAGS:-}" "${LDFLAGS:-}" <<'PY'
+import shlex, sys
+for value in sys.argv[1:]:
+    for flag in shlex.split(value):
+        print(flag)
+PY
+    ) || die 'cannot parse VPP compiler/linker flags'
+    if [ -n "$flags_text" ]; then mapfile -t flags <<< "$flags_text"; fi
+    # -print-prog-name=ld ignores -fuse-ld on GCC and Clang. Query the
+    # explicitly selected linker name instead of hashing only the default ld.
+    for name in "${flags[@]}"; do
+        case "$name" in
+            -fuse-ld=*)
+                linker_name=${name#*=}
+                [[ "$linker_name" = /* ]] || linker_name="ld.$linker_name"
+                ;;
+            --ld-path=*) linker_name=${name#*=} ;;
+        esac
+    done
+    linker=$("$cc" "${flags[@]}" -print-prog-name="$linker_name" 2>/dev/null || true)
+    tool_identity ld "${linker:-$linker_name}" --version
+    # The IPO link uses a compiler driver. Its dry run identifies compiler
+    # helpers and LTO plugins without compiling or linking candidate code.
+    trace=$("$cc" "${flags[@]}" -flto -### -static -x c /dev/null -o /dev/null 2>&1 || true)
+    records=$(python3 -c '
+import pathlib, shlex, sys
+for line in sys.stdin:
+    try:
+        words = shlex.split(line)
+    except ValueError:
+        continue
+    if not words:
+        continue
+    executable = pathlib.Path(words[0])
+    linking = (executable.name in ("ld", "ld.bfd", "ld.gold", "ld.lld", "ld.mold", "collect2")
+               or str(executable) == sys.argv[1])
+    if linking:
+        print("tool\tlink-driver:" + executable.name + "\t" + str(executable))
+    sysroot = next((value.split("=", 1)[1] for value in words if value.startswith("--sysroot=")), "")
+    for index, word in enumerate(words):
+        if word in ("-plugin", "--plugin") and index + 1 < len(words):
+            print("file\tlto-plugin\t" + words[index + 1])
+        elif word.startswith(("-plugin=", "--plugin=")):
+            print("file\tlto-plugin\t" + word.split("=", 1)[1])
+        if not linking:
+            continue
+        directory = None
+        if word in ("-L", "--library-path") and index + 1 < len(words):
+            directory = words[index + 1]
+        elif word.startswith("-L"):
+            directory = word[2:]
+        elif word.startswith("--library-path="):
+            directory = word.split("=", 1)[1]
+        if directory:
+            if directory.startswith("="):
+                directory = sysroot + directory[1:]
+            print("search\tlibrary-directory\t" + directory)
+        if word.startswith("-l:"):
+            print("archive\tlibrary\t" + word[3:])
+        elif word.startswith("-l") and len(word) > 2:
+            print("archive\tlibrary\tlib" + word[2:] + ".a")
+        # Drivers invent a temporary object name even under -###. It has no
+        # bytes yet and is not a toolchain input; including it breaks hits.
+        elif word.startswith("/") and word.endswith((".a", ".o")) and pathlib.Path(word).is_file():
+            print("file\tlink-input\t" + word)
+' "$linker" <<< "$trace") || die 'cannot identify the VPP link driver'
+    while IFS=$'\t' read -r kind label path; do
+        case "$kind" in
+            tool) tool_identity "$label" "$path" --version ;;
+            file) file_identity "$label" "$path" ;;
+            search)
+                [[ "$path" = /* ]] || path="$WORKSPACE_ROOT/connector/native-deps/build/$TARGET_ARCH/vpp/obj/$path"
+                search_dirs+=("$path")
+                ;;
+            archive) libraries+=("$path") ;;
+        esac
+    done <<< "$records"
+    # Include archive contents, not just package versions. libm.a can itself
+    # be a linker script that selects a versioned archive and libmvec.a.
+    for name in "${libraries[@]}"; do
+        path=$("$cc" "${flags[@]}" -print-file-name="$name" 2>/dev/null || true)
+        for candidate in "${search_dirs[@]}"; do
+            if [ -f "$candidate/$name" ]; then
+                path="$candidate/$name"
+                break
+            fi
+        done
+        file_identity "vpp-static:$name" "${path:-$name}"
+        if [ "$name" = libm.a ] && [ -f "$path" ]; then
+            for candidate in "$(dirname "$path")"/libm-*.a; do
+                [ ! -f "$candidate" ] || file_identity vpp-static:libm-archive "$candidate"
+            done
+        fi
+    done
+    path=$("$cc" "${flags[@]}" -print-libgcc-file-name 2>/dev/null || true)
+    file_identity vpp-static:compiler-runtime "${path:-compiler-runtime}"
+}
+
 component_toolchain() {
     local component=$1 cross_prefix cc cxx ar ld pkg_config
     cross_prefix="$(effective_cross_prefix)"
@@ -502,15 +608,15 @@ component_toolchain() {
             cxx=${CXX:-g++}
             tool_identity cc "$cc" --version
             tool_identity cxx "$cxx" --version
-            tool_identity ld "$ld" --version
+            vpp_static_toolchain_identities "$cc"
             tool_identity cmake cmake --version
             tool_identity ninja ninja --version
             tool_identity python python3 --version
             tool_identity pkg-config "$pkg_config" --version
             tool_identity glibc ldd --version
             package_identities \
-                'gcc gcc-c++ binutils cmake ninja-build python3 glibc-devel openssl-devel numactl-devel libunwind-devel libelf-devel' \
-                'gcc g++ binutils cmake ninja-build python3 libc6-dev libssl-dev libnuma-dev libunwind-dev libelf-dev'
+                'gcc gcc-c++ clang binutils cmake ninja-build python3 glibc-devel glibc-static openssl-devel numactl-devel libunwind-devel libelf-devel' \
+                'gcc g++ clang binutils cmake ninja-build python3 libc6-dev libssl-dev libnuma-dev libunwind-dev libelf-dev'
             pkg_config_module_identity openssl
             pkg_config_module_identity numa
             pkg_config_module_identity libunwind
@@ -572,10 +678,10 @@ component_outputs() {
             printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/link.map\n' "$TARGET_ARCH"
             ;;
         vpp)
-            printf 'connector/bin/%s/vpp\n' "$TARGET_ARCH"
+            printf 'connector/bin/%s/connector-vpp\n' "$TARGET_ARCH"
             printf 'connector/bin/%s/vpp-runtime.json\n' "$TARGET_ARCH"
-            printf 'connector/bin/%s/lib/%s-linux-gnu\n' "$TARGET_ARCH" "$TARGET_ARCH"
             printf 'connector/native-deps/build/%s/vpp/licenses\n' "$TARGET_ARCH"
+            printf 'connector/native-deps/build/%s/vpp/static-libraries.json\n' "$TARGET_ARCH"
             ;;
     esac
 }
@@ -595,6 +701,7 @@ component_required_files() {
             printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/link.map\n' "$TARGET_ARCH"
             ;;
         vpp)
+            printf 'connector/native-deps/build/%s/vpp/static-libraries.json\n' "$TARGET_ARCH"
             for name in CONNECTOR-LICENSE VPP-LICENSE VPP-EMBEDDED-NOTICES; do
                 printf 'connector/native-deps/build/%s/vpp/licenses/%s\n' "$TARGET_ARCH" "$name"
             done

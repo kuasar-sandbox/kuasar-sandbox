@@ -31,7 +31,7 @@ def copy_private_runtime(product_root, context, arch):
     """Keep the selected cluster-ctl runtime beside the image's bin directory."""
     native = cluster_native.validate(product_root, arch)
     (context / 'lib').mkdir()
-    # VPP and its libraries already travel with the ordinary bin tree.
+    # The static Connector VPP executable travels with the ordinary bin tree.
     egress_runtime.validate(product_root, arch)
     if native is not None:
         shutil.copytree(product_root / 'lib/cluster-ctl', context / 'lib/cluster-ctl')

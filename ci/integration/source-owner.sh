@@ -8,10 +8,10 @@ HOST_ARCH="$(uname -m)"
 case "$HOST_ARCH" in amd64) HOST_ARCH=x86_64 ;; arm64) HOST_ARCH=aarch64 ;; esac
 die() { echo "source-owner: $*" >&2; exit 2; }
 required_bins() { case "$1" in
-connector) echo "connector-ctl vpp" ;;
+connector) echo "connector-ctl connector-vpp" ;;
 guest-runtime) echo "store-ctl flatten-ctl sandbox-init" ;;
 accelerator) echo "manifest-ctl store-ctl cache-ctl flatten-ctl" ;;
-sandboxer) echo "vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ctl sandbox-init cloud-hypervisor sandbox-runtime.bundle connector-ctl vpp" ;;
+sandboxer) echo "vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ctl sandbox-init cloud-hypervisor sandbox-runtime.bundle connector-ctl connector-vpp" ;;
 orchestrator|kuasar-sandbox) awk '!/^($|#)/ {sub(/:$/, "", $1); print $1}' "$ROOT/release/inputs/bin-inputs.yaml" | xargs ;;
 *) die "unknown owner $1" ;;
 esac; }
@@ -36,7 +36,7 @@ if [ "$name" = cluster-ctl ]; then
     ln -sfn "$TARGET_ARCH/run-cluster-ctl" "$ROOT/bin/run-cluster-ctl"
   fi
 fi
-if [ "$name" = vpp ]; then
+if [ "$name" = connector-vpp ]; then
   python3 -B "$ROOT/release/egress_runtime.py" collect-bin --arch "$TARGET_ARCH" \
     --runtime "$ORG/$repo/bin/$TARGET_ARCH" --output "$ROOT/bin/$TARGET_ARCH"
 fi

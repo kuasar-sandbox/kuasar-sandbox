@@ -111,7 +111,7 @@ class NativeProductTests(unittest.TestCase):
         self.lock, self.fixtures = native_fixtures.native_cluster_fixtures()
         self.products = {'vmlinux', 'manifest-ctl', 'store-ctl', 'cache-ctl', 'flatten-ctl', 'sandbox-ctl',
                          'sandbox-init', 'cloud-hypervisor', 'sandbox-runtime.bundle', 'node-ctl',
-                         'cluster-ctl', 'node-stub-ctl', 'connector-ctl', 'vpp', 'e2b-key-ctl'}
+                         'cluster-ctl', 'node-stub-ctl', 'connector-ctl', 'connector-vpp', 'e2b-key-ctl'}
         # Reuse the existing admission fixtures. Only ELF inspection data is
         # replaced; links, files, fixed digests, modes and completeness are real.
         for attribute, value in [('LOCK', self.lock), ('inspect_elf', native_fixtures.native_cluster_elf_record)]:
@@ -155,7 +155,7 @@ class NativeProductTests(unittest.TestCase):
         root = self.tree('legacy')
         result = self.qualify(root, 'x86_64')
         self.assertEqual(set(result['products']), self.products)
-        self.assertIn('lib/x86_64-linux-gnu/vpp_plugins/egress_policy_plugin.so', result['egress_native']['files'])
+        self.assertEqual(set(result['egress_native']['files']), {'connector-vpp', 'vpp-runtime.json'})
         (root / 'cluster-ctl').write_bytes(native_fixtures.native_cluster_elf('x86_64'))
         (self.root / 'legacy-owner/cluster-ctl').write_bytes(native_fixtures.native_cluster_elf('x86_64'))
         with self.assertRaisesRegex(ValueError, 'lacks cluster-runtime'):

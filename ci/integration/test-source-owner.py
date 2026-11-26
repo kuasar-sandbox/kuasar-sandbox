@@ -39,7 +39,7 @@ class SourceOwnerClosureTest(unittest.TestCase):
     def words(self,c,o):
         r=run(c,o); self.assertEqual(r.returncode,0,r.stderr); return r.stdout.split()
     def test_bins(self):
-        self.assertEqual(self.words("required-bins","connector"),["connector-ctl", "vpp"])
+        self.assertEqual(self.words("required-bins","connector"),["connector-ctl", "connector-vpp"])
         self.assertEqual(set(self.words("required-bins","guest-runtime")),{"store-ctl","flatten-ctl","sandbox-init"})
         self.assertEqual(set(self.words("required-bins","accelerator")),{"manifest-ctl","store-ctl","cache-ctl","flatten-ctl"})
         self.assertTrue({"vmlinux","sandbox-ctl","cloud-hypervisor","sandbox-runtime.bundle","cache-ctl","connector-ctl"} <= set(self.words("required-bins","sandboxer")))
@@ -57,7 +57,7 @@ class SourceOwnerClosureTest(unittest.TestCase):
             for line in manifest.read_text().splitlines():
                 if not line.strip() or line.lstrip().startswith("#"): continue
                 name,repo=line.split(); name=name.removesuffix(":")
-                if name in required and name not in ('connector-ctl', 'vpp'):
+                if name in required and name not in ('connector-ctl', 'connector-vpp'):
                     path=org/repo/"bin/x86_64"/name
                     path.parent.mkdir(parents=True,exist_ok=True); path.write_text(name)
             for name, (data, mode) in native_egress_files('x86_64').items():
@@ -76,7 +76,7 @@ class SourceOwnerClosureTest(unittest.TestCase):
             self.assertIn("connector build",log.read_text().splitlines())
             self.assertEqual((platform/"bin/x86_64/connector-ctl").read_text(),"built connector")
             self.assertTrue((platform/'bin/x86_64/vpp-runtime.json').is_file())
-            self.assertTrue((platform/'bin/x86_64/lib/x86_64-linux-gnu/vpp_plugins/egress_policy_plugin.so').is_file())
+            self.assertTrue((platform/'bin/x86_64/connector-vpp').is_file())
             self.assertNotIn("orchestrator build",log.read_text().splitlines())
     def test_native(self):
         self.assertEqual(self.words("native-components","connector"),["vpp"])

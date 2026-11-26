@@ -1,8 +1,5 @@
 name: local
 runtime_dir: /run/connector-egress/local
-vpp: /opt/node-infra/bin/vpp
-plugin_path: /opt/node-infra/bin/lib/x86_64-linux-gnu/vpp_plugins
-library_path: /opt/node-infra/bin/lib/x86_64-linux-gnu
 interfaces:
 - name: egress-rx
   address: 198.18.0.1/24

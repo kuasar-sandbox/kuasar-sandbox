@@ -20,7 +20,7 @@ import go_workspace
 ROOT = Path(__file__).resolve().parents[2]
 LIBRARIES = {"sandboxer": ("accelerator", "connector", "guest-runtime"), "guest-runtime": ("accelerator",),
              "orchestrator": ("accelerator", "connector", "sandboxer", "guest-runtime")}
-NATIVE = {"cache-ctl": "rocksdb", "cloud-hypervisor": "cloud-hypervisor", "vmlinux": "vmlinux", "vpp": "vpp"}
+NATIVE = {"cache-ctl": "rocksdb", "cloud-hypervisor": "cloud-hypervisor", "vmlinux": "vmlinux", "connector-vpp": "vpp"}
 
 
 def run(command, *, cwd=None, environment=None):
@@ -154,7 +154,7 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
             selected["KUASAR_WORKSPACE_ROOT"] = str(kernel_root)
         run([ROOT / "ci/native-cache/native-cache.sh", "restore-or-build", component], environment=selected)
     for name in lane["products"]:
-        if name in ("cloud-hypervisor", "vmlinux", "vpp", "sandbox-runtime.bundle"):
+        if name in ("cloud-hypervisor", "vmlinux", "connector-vpp", "sandbox-runtime.bundle"):
             continue
         unit = artifacts.planned_product_unit(plan, name)
         owner = "guest-runtime" if unit == "runtime" else unit
@@ -176,7 +176,7 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
             if bundle is not None:
                 artifacts.cluster_native_module().copy(bundle, output, arch)
                 continue
-        if name == 'vpp':
+        if name == 'connector-vpp':
             artifacts.egress_native_module().collect(
                 path.parent, sources / 'connector/native-deps/build' / arch / 'vpp/licenses', output, arch)
             continue
@@ -271,7 +271,7 @@ def build(plan, arch, assets, sources, output, *, materialized=False):
         metadata['cluster_native'] = {'files': native_files, 'sources': plan['product_sources']['cluster-ctl']}
     egress_files = artifacts.egress_native_module().validate(output, arch)
     if egress_files is not None:
-        metadata['egress_native'] = {'files': egress_files, 'sources': plan['product_sources']['vpp']}
+        metadata['egress_native'] = {'files': egress_files, 'sources': plan['product_sources']['connector-vpp']}
     for name in lane.get("embedded_products", []):
         metadata["embedded"][name] = {"sha256": artifacts.digest(output / "embedded" / name), "sources": plan["embedded_sources"][name]}
     for owner in plan["test_overlays"]:

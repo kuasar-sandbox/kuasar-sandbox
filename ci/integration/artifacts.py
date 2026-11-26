@@ -56,15 +56,15 @@ UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vm
 SUITES = frozenset(("basic", "storage", "image", "network", "sandbox", "snapshot", "orchestrator", "builder", "telemetry"))
 PRODUCTS = {
     "manifest-ctl": "accelerator", "store-ctl": "accelerator", "cache-ctl": "accelerator",
-    "connector-ctl": "connector", "vpp": "connector", "sandbox-ctl": "sandboxer", "sandbox-init": "runtime",
+    "connector-ctl": "connector", "connector-vpp": "connector", "sandbox-ctl": "sandboxer", "sandbox-init": "runtime",
     "cloud-hypervisor": "sandboxer", "node-ctl": "orchestrator", "cluster-ctl": "orchestrator",
     "node-stub-ctl": "orchestrator", "e2b-key-ctl": "orchestrator",
     "flatten-ctl": "runtime", "mkfs.erofs": "runtime", "sandbox-runtime.bundle": "runtime",
     "vmlinux": "vmlinux",
 }
 # Legacy archives may carry this tool; it is not required by the Go generator.
-OPTIONAL_LEGACY_PRODUCTS = {"mkfs.erofs", "vpp"}
-GO_PRODUCTS = set(PRODUCTS) - {"vpp", "cloud-hypervisor", "mkfs.erofs", "sandbox-runtime.bundle", "vmlinux"}
+OPTIONAL_LEGACY_PRODUCTS = {"mkfs.erofs", "connector-vpp"}
+GO_PRODUCTS = set(PRODUCTS) - {"connector-vpp", "cloud-hypervisor", "mkfs.erofs", "sandbox-runtime.bundle", "vmlinux"}
 REQUIRED = {
     "connector": {"connector-ctl"},
     "guest-runtime": {"store-ctl", "flatten-ctl"},
@@ -158,7 +158,7 @@ def changed_products(changes, *, init_unit='runtime'):
             if go:
                 products.add("connector-ctl")
             if go or touches("egress", "native-deps", "scripts/vpp-runtime.py"):
-                products.add("vpp")
+                products.add("connector-vpp")
         elif owner == "sandboxer":
             if go:
                 products.add("sandbox-ctl")
@@ -255,7 +255,7 @@ def suite_selection(owners, arch, case_files, *, native_full=False, changes=None
         chosen &= supported
     required = set().union(*(REQUIRED[all_cases[name]] for name in chosen))
     if 'network.egress.sh' in chosen:
-        required.add('vpp')
+        required.add('connector-vpp')
     return {'suites': sorted(suites), 'cases': sorted(chosen), 'required_products': sorted(required),
             'exclusions': exclusions}
 
@@ -787,7 +787,7 @@ def compose(plan, arch, assets, delta, output):
             native.remove(stage)
             if 'cluster_native' in metadata:
                 native.copy(delta, stage, arch)
-        if 'vpp' in lane['products']:
+        if 'connector-vpp' in lane['products']:
             egress.remove(stage)
             egress.copy(delta, stage, arch)
         if plan["mode"] == "source":

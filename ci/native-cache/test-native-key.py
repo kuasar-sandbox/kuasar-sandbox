@@ -185,6 +185,7 @@ class VppKeyTests(unittest.TestCase):
         self.native = self.connector / 'native-deps'
         for name in ('LICENSE', 'native-deps/Makefile', 'native-deps/deps/common.sh',
                      'native-deps/deps/build-vpp.sh', 'native-deps/deps/stage-vpp.py',
+                     'native-deps/deps/static-libraries.py',
                      'native-deps/deps/vpp-source.json', 'scripts/vpp-runtime.py',
                      'native-deps/deps/vpp-patches/0001-policy.patch',
                      'native-deps/deps/vpp-patches/0001-policy.patch.license',
@@ -212,6 +213,7 @@ class VppKeyTests(unittest.TestCase):
         for name in ('native-deps/deps/vpp-patches/0001-policy.patch',
                      'egress/vpp/plugins/egress_policy/policy.c',
                      'native-deps/deps/vpp-source.json', 'native-deps/deps/stage-vpp.py',
+                     'native-deps/deps/static-libraries.py',
                      'scripts/vpp-runtime.py'):
             with self.subTest(name=name):
                 before = self.key()
@@ -256,6 +258,54 @@ class VppKeyTests(unittest.TestCase):
         compiler(gcc, 3)
         self.assertNotEqual(explicit, self.key(**environment))
 
+    def test_static_linker_archives_startup_objects_and_lto_plugin_change_key(self):
+        tools = self.root / 'static-tools'
+        tools.mkdir()
+        compiler = tools / 'cc'
+        compiler.write_text('''#!/usr/bin/env python3
+from pathlib import Path
+import shlex,sys
+root=Path(__file__).parent
+linker='ld.lld' if '-fuse-ld=lld' in sys.argv else 'ld'
+for value in sys.argv[1:]:
+ if value.startswith('-print-prog-name=') or value.startswith('-print-file-name='):
+  print(root/value.split('=',1)[1]);break
+ elif value == '-print-libgcc-file-name':
+  print(root/'libgcc.a');break
+ elif value == '-###':
+  words=[str(root/linker),'-plugin',str(root/'lto.so')]+[flag for flag in sys.argv if flag.startswith('-L')]
+  print(' '.join(map(shlex.quote,words)),file=sys.stderr);break
+else: print('fixture compiler 1')
+''')
+        compiler.chmod(0o755)
+        for name in ('ld', 'ld.lld'):
+            path = tools / name
+            path.write_text('#!/bin/sh\necho fixture linker 1\n')
+            path.chmod(0o755)
+        for name in ('libc.a', 'libgcc.a', 'crt1.o', 'lto.so', 'libc.so.6'):
+            (tools / name).write_bytes(b'original selected input')
+        environment = {'CC': str(compiler), 'LDFLAGS': '-fuse-ld=lld'}
+        before = self.key(**environment)
+        for name in ('ld', 'libc.so.6'):
+            path = tools / name
+            path.write_bytes(path.read_bytes() + b'\n# unrelated input\n')
+        self.assertEqual(before, self.key(**environment))
+        for name in ('ld.lld', 'libc.a', 'libgcc.a', 'crt1.o', 'lto.so'):
+            with self.subTest(name=name):
+                before = self.key(**environment)
+                path = tools / name
+                path.write_bytes(path.read_bytes() + b'\n# changed bytes, same package/version\n')
+                self.assertNotEqual(before, self.key(**environment))
+        alternate = tools / 'alternate'
+        alternate.mkdir()
+        (alternate / 'libc.a').write_bytes(b'overridden static libc')
+        environment['LDFLAGS'] += ' -L' + str(alternate)
+        before = self.key(**environment)
+        (tools / 'libc.a').write_bytes(b'no longer selected')
+        self.assertEqual(before, self.key(**environment))
+        (alternate / 'libc.a').write_bytes(b'changed selected override')
+        self.assertNotEqual(before, self.key(**environment))
+
     def test_restore_preserves_complete_vpp_and_sibling_cli_without_building_again(self):
         # A tiny owner recipe emits ELF headers and manifests as data. The
         # actual native cache pack/restore/reader paths remain unchanged.
@@ -263,23 +313,24 @@ class VppKeyTests(unittest.TestCase):
         builder.write_text('''import hashlib,json,os,pathlib,struct
 root=pathlib.Path.cwd()
 arch=os.environ['TARGET_ARCH']
-triplet=arch+'-linux-gnu'
 output=root.parent/'bin'/arch
 output.mkdir(parents=True,exist_ok=True)
-rows={'vpp':0o755,'lib/'+triplet+'/libvppinfra.so':0o644}
-for name in ('nat','af_packet','ping','egress_policy','egress_geneve','egress_packet'):
- rows['lib/'+triplet+'/vpp_plugins/'+name+'_plugin.so']=0o644
+rows={'connector-vpp':0o755}
 files={}
 for name,mode in rows.items():
- data=bytearray(64);data[:6]=b'\\x7fELF\\x02\\x01';struct.pack_into('<H',data,18,62 if arch=='x86_64' else 183)
+ data=bytearray(120);data[:7]=b'\\x7fELF\\x02\\x01\\x01'
+ struct.pack_into('<HHI',data,16,2,62 if arch=='x86_64' else 183,1)
+ struct.pack_into('<Q',data,32,64);struct.pack_into('<HHH',data,52,64,56,1)
+ struct.pack_into('<IIQQQQQQ',data,64,1,5,0,0x400000,0,len(data),len(data),4096)
  path=output/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(data);path.chmod(mode)
  files[name]=hashlib.sha256(data).hexdigest()
 manifest=dict(schema=1,product='connector-egress-native-runtime',architecture=arch,files=files,
- cpu_baseline='x86-64-v2' if arch=='x86_64' else 'armv8-a+crc')
+ cpu_baseline='x86-64-v2' if arch=='x86_64' else 'armv8-a+crc',required_system_libraries=[])
 (output/'vpp-runtime.json').write_text(json.dumps(manifest))
 licenses=root/'build'/arch/'vpp/licenses';licenses.mkdir(parents=True,exist_ok=True)
 for name in ('CONNECTOR-LICENSE','VPP-LICENSE','VPP-EMBEDDED-NOTICES'):
  (licenses/name).write_text(name+' license\\n')
+(licenses.parent/'static-libraries.json').write_text('{}\\n')
 (root/'build/src/vpp').mkdir(parents=True,exist_ok=True)
 with (root/'build-count').open('a') as stream:stream.write('build\\n')
 ''')
@@ -288,19 +339,24 @@ with (root/'build-count').open('a') as stream:stream.write('build\\n')
         bindir.mkdir(parents=True)
         sibling = bindir / 'connector-ctl'
         sibling.write_bytes(b'keep the separately selected Go product')
+        unrelated = bindir / 'lib/other-product/library.so'
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_bytes(b'not owned by the VPP cache')
         first = self.invoke('restore-or-build')
         self.assertEqual(first.returncode, 0, first.stdout + first.stderr)
-        expected = (bindir / 'vpp').read_bytes()
-        (bindir / 'vpp').write_bytes(b'old output')
+        expected = (bindir / 'connector-vpp').read_bytes()
+        (bindir / 'connector-vpp').write_bytes(b'old output')
         second = self.invoke('restore-or-build')
         self.assertEqual(second.returncode, 0, second.stdout + second.stderr)
         self.assertIn('vpp hit ', second.stderr)
         self.assertEqual((self.native / 'build-count').read_text(), 'build\n')
-        self.assertEqual((bindir / 'vpp').read_bytes(), expected)
+        self.assertEqual((bindir / 'connector-vpp').read_bytes(), expected)
         self.assertEqual(sibling.read_bytes(), b'keep the separately selected Go product')
+        self.assertEqual(unrelated.read_bytes(), b'not owned by the VPP cache')
         manifest = json.loads((bindir / 'vpp-runtime.json').read_text())
         self.assertTrue(all((bindir / name).is_file() for name in manifest['files']))
         self.assertTrue((self.native / 'build' / platform.machine() / 'vpp/licenses/VPP-LICENSE').is_file())
+        self.assertTrue((self.native / 'build' / platform.machine() / 'vpp/static-libraries.json').is_file())
 
 
 if __name__ == "__main__":

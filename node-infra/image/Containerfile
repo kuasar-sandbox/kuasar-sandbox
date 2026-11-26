@@ -12,7 +12,7 @@ LABEL org.opencontainers.image.title="kuasar-sandbox node-infra" \
 ENV PATH=/opt/node-infra/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       systemd systemd-sysv dbus ca-certificates iproute2 iputils-ping \
-      util-linux procps ethtool libunwind8 curl jq nftables python3 e2fsprogs libnuma1 liburing2 libssl3t64 libzstd1 liblz4-1 \
+      util-linux procps ethtool curl jq nftables python3 e2fsprogs libnuma1 liburing2 libssl3t64 libzstd1 liblz4-1 \
       libsnappy1v5 libbz2-1.0 libstdc++6 \
     && rm -rf /var/lib/apt/lists/* /etc/machine-id /var/lib/dbus/machine-id \
     && mkdir -p /run/netns /sys/fs/bpf /var/lib/node-infra \
