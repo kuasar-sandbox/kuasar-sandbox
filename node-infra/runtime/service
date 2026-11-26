@@ -34,6 +34,14 @@ case "${1:-}" in
     conductor) exec node-ctl conductor serve --config "$(config_list /etc/node-conductor conductor.yaml)" ;;
     proxy) exec node-ctl proxy serve --config "$(config_list /etc/node-proxy proxy.yaml)" ;;
     telemetry) exec node-ctl telemetry serve --config "$(config_list /etc/node-telemetry telemetry.yaml)" ;;
+    egress)
+        /usr/libexec/node-infra/node-infra-runtime check --config "$(config_list /etc/connector-vswitch vswitch.yaml)"
+        if [[ -f /etc/connector-egress/link.json ]]; then
+            gateway_ns=$(jq -er '.gateway_netns' /etc/connector-egress/link.json)
+            exec ip netns exec "$gateway_ns" connector-ctl egress serve --config /etc/connector-egress/gateway.json
+        fi
+        exec connector-ctl egress serve --config /etc/connector-egress/gateway.json
+        ;;
     connector)
         configs="$(config_list /etc/connector-vswitch vswitch.yaml)"
         /usr/libexec/node-infra/node-infra-runtime check --config "$configs"
@@ -43,5 +51,5 @@ case "${1:-}" in
     ready) exec /usr/libexec/node-infra/node-infra-runtime ready ;;
     cleanup) exec /usr/libexec/node-infra/node-infra-runtime cleanup --internal --force ;;
     drain) exec /usr/libexec/node-infra/node-infra-runtime drain --timeout=120s ;;
-    *) echo 'usage: service conductor|proxy|telemetry|connector|prepare|ready|cleanup' >&2; exit 2 ;;
+    *) echo 'usage: service conductor|proxy|telemetry|connector|egress|prepare|ready|cleanup' >&2; exit 2 ;;
 esac

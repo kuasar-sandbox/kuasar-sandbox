@@ -22,6 +22,7 @@ ARCHES = {"x86_64": "amd64", "aarch64": "arm64", "amd64": "amd64", "arm64": "arm
 sys.path.insert(0, str(ROOT / "release"))
 import node_infra_assets
 import cluster_native
+import egress_runtime
 
 REQUIRED = ("node-ctl", "sandbox-ctl", "sandbox-init", "cloud-hypervisor", "connector-ctl", "vmlinux", "sandbox-runtime.bundle", "e2b-key-ctl", "manifest-ctl", "cache-ctl", "store-ctl", "flatten-ctl")
 
@@ -30,6 +31,9 @@ def copy_private_runtime(product_root, context, arch):
     """Keep the selected cluster-ctl runtime beside the image's bin directory."""
     native = cluster_native.validate(product_root, arch)
     (context / 'lib').mkdir()
+    bundle = product_root / 'bin/connector-egress.bundle'
+    if bundle.exists():
+        egress_runtime.extract(bundle, context / 'lib/connector-egress', arch)
     if native is not None:
         shutil.copytree(product_root / 'lib/cluster-ctl', context / 'lib/cluster-ctl')
 

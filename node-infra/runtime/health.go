@@ -93,6 +93,13 @@ func proxyReady(pid int) error {
 }
 
 func health() error {
+	r, err := readRecord()
+	if err != nil {
+		return err
+	}
+	if err := egressReady(r); err != nil {
+		return err
+	}
 	for _, unit := range []string{"node-infra-network.service", "node-infra-consumers.service", "connector-vswitch.service", "node-conductor.service", "node-proxy.service"} {
 		if err := exec.Command("systemctl", "is-active", "--quiet", unit).Run(); err != nil {
 			return fmt.Errorf("%s is not active: %w", unit, err)

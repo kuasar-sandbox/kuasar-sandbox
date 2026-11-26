@@ -106,3 +106,9 @@ The deployment guide also provides direct Docker host/bridge commands with the
 same native files, private cgroups, normal internal cleanup and distinct ports
 for three instances. Optional borrowed transit uses retained recovery handles;
 the default Docker path needs no host install or prepare helper.
+
+### Managed local Geneve Egress
+
+`local-egress` adds the Connector gateway to the existing node deployment. Copy `90-transit.yaml` to `/etc/connector-vswitch/conf.d`; mount the remaining JSON files at `/etc/connector-egress`. The examples use x86_64 library paths; on ARM64 replace `x86_64-linux-gnu` with `aarch64-linux-gnu`. Adapt addresses, Area policy, NAT capacity and CPU/memory budgets to the deployment.
+
+Supply the gateway namespace as the existing `egress` namespace input, with the Pool-owned `egress-uplink` already connected and UP. Linux must not hold the VPP gateway/SNAT addresses. The node owns only the dedicated transit pair, and preserves the provider's namespace and exit devices. The node preparation uses its retained primary namespace as owner; do not call `egress link start/stop` alongside the node's vSwitch service. `systemctl reload connector-egress` sends SIGHUP after editing main/Area files. A rejected reload leaves the last accepted configuration active and records its error in the local status file.
