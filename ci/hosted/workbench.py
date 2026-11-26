@@ -181,12 +181,14 @@ def cache_key(args):
     # image at the same fixed paths as the build. Daily labels/task IDs are not
     # compiler inputs. Restored entries still undergo native-cache verification.
     components = {'vmlinux': 'guest-runtime', 'envd': 'guest-runtime',
-                  'rocksdb': 'accelerator', 'cloud-hypervisor': 'sandboxer'}
+                  'rocksdb': 'accelerator', 'cloud-hypervisor': 'sandboxer', 'vpp': 'connector'}
     records = {}
     workspaces = [args.sources] + [args.sources / name for name in ('kernel-unit', 'test-helpers', 'test-overlays')
                                   if (args.sources / name).is_dir()]
     for workspace in workspaces:
         for name, owner in components.items():
+            if name == 'vpp' and not (workspace / owner / 'native-deps/deps/build-vpp.sh').is_file():
+                continue  # Published Connector sources before native Egress.
             if (workspace / owner / 'Makefile').is_file():
                 label = str(workspace.relative_to(args.sources)) + '/' + name
                 records[label] = output([ROOT / 'ci/native-cache/native-cache.sh', 'key', name],

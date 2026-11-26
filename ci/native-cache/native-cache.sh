@@ -118,6 +118,19 @@ component_input_paths() {
             required_file sandboxer/native-deps/deps/build-cloud-hypervisor.sh
             find "$WORKSPACE_ROOT/sandboxer/native-deps/deps/ch-patches" -type f -name '*.patch' -print0
             ;;
+        vpp)
+            required_file connector/LICENSE
+            required_file connector/native-deps/Makefile
+            required_file connector/native-deps/deps/common.sh
+            required_file connector/native-deps/deps/build-vpp.sh
+            required_file connector/native-deps/deps/stage-vpp.py
+            required_file connector/native-deps/deps/static-libraries.py
+            required_file connector/native-deps/deps/vpp-source.json
+            required_file connector/scripts/vpp-runtime.py
+            find "$WORKSPACE_ROOT/connector/native-deps/deps/vpp-patches" -type f \
+                \( -name '*.patch' -o -name '*.license' \) -print0
+            find "$WORKSPACE_ROOT/connector/egress/vpp/plugins" -type f -print0
+            ;;
         *) die "unknown component: $component" ;;
     esac
 }
@@ -341,6 +354,14 @@ component_environment() {
                 CC CXX CFLAGS CXXFLAGS LDFLAGS
             )
             ;;
+        vpp)
+            names+=(
+                VPP_TARBALL VPP_TARBALL_SHA256 VPP_BASE_TAG
+                CC CXX CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+                CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH LD_LIBRARY_PATH
+                PYTHONPATH CMAKE_PREFIX_PATH
+            )
+            ;;
         cloud-hypervisor)
             # Cargo package IDs in the real build report and manifests use
             # absolute source paths. Workbench always mounts this at /src;
@@ -378,7 +399,7 @@ component_environment() {
         fi
         print_env_input "$name"
     done
-    case "$component" in vmlinux|cloud-hypervisor)
+    case "$component" in vmlinux|cloud-hypervisor|vpp)
         # These are applied only by the recipes' synthetic git commit/git am
         # commands, never exported into a user's repository-wide environment.
         printf 'env\tGIT_AUTHOR_DATE\t%q\n' "${GIT_AUTHOR_DATE-@${SOURCE_DATE_EPOCH:-0} +0000}"
@@ -394,6 +415,7 @@ local_archive_identity() {
         envd) variable=ENVD_TARBALL; directory=guest-runtime/native-deps ;;
         rocksdb) variable=ROCKSDB_TARBALL; directory=accelerator ;;
         cloud-hypervisor) variable=CLOUD_HYPERVISOR_TARBALL; directory=sandboxer/native-deps ;;
+        vpp) variable=VPP_TARBALL; directory=connector/native-deps ;;
     esac
     specifier=${!variable-}
     case "$specifier" in
@@ -416,6 +438,111 @@ effective_cross_prefix() {
             aarch64) printf 'aarch64-linux-gnu-' ;;
         esac
     fi
+}
+
+vpp_static_toolchain_identities() {
+    local cc=$1 flags_text linker_name=ld linker path name candidate trace records kind label
+    local flags=() search_dirs=() libraries=(
+        libc.a libc_nonshared.a libm.a libmvec.a libdl.a librt.a libpthread.a
+        libgcc.a libgcc_eh.a crt1.o Scrt1.o rcrt1.o crti.o crtn.o
+        crtbegin.o crtbeginS.o crtbeginT.o crtend.o crtendS.o
+    )
+    flags_text=$(python3 - "${CFLAGS:-}" "${LDFLAGS:-}" <<'PY'
+import shlex, sys
+for value in sys.argv[1:]:
+    for flag in shlex.split(value):
+        print(flag)
+PY
+    ) || die 'cannot parse VPP compiler/linker flags'
+    if [ -n "$flags_text" ]; then mapfile -t flags <<< "$flags_text"; fi
+    # -print-prog-name=ld ignores -fuse-ld on GCC and Clang. Query the
+    # explicitly selected linker name instead of hashing only the default ld.
+    for name in "${flags[@]}"; do
+        case "$name" in
+            -fuse-ld=*)
+                linker_name=${name#*=}
+                [[ "$linker_name" = /* ]] || linker_name="ld.$linker_name"
+                ;;
+            --ld-path=*) linker_name=${name#*=} ;;
+        esac
+    done
+    linker=$("$cc" "${flags[@]}" -print-prog-name="$linker_name" 2>/dev/null || true)
+    tool_identity ld "${linker:-$linker_name}" --version
+    # The IPO link uses a compiler driver. Its dry run identifies compiler
+    # helpers and LTO plugins without compiling or linking candidate code.
+    trace=$("$cc" "${flags[@]}" -flto -### -static -x c /dev/null -o /dev/null 2>&1 || true)
+    records=$(python3 -c '
+import pathlib, shlex, sys
+for line in sys.stdin:
+    try:
+        words = shlex.split(line)
+    except ValueError:
+        continue
+    if not words:
+        continue
+    executable = pathlib.Path(words[0])
+    linking = (executable.name in ("ld", "ld.bfd", "ld.gold", "ld.lld", "ld.mold", "collect2")
+               or str(executable) == sys.argv[1])
+    if linking:
+        print("tool\tlink-driver:" + executable.name + "\t" + str(executable))
+    sysroot = next((value.split("=", 1)[1] for value in words if value.startswith("--sysroot=")), "")
+    for index, word in enumerate(words):
+        if word in ("-plugin", "--plugin") and index + 1 < len(words):
+            print("file\tlto-plugin\t" + words[index + 1])
+        elif word.startswith(("-plugin=", "--plugin=")):
+            print("file\tlto-plugin\t" + word.split("=", 1)[1])
+        if not linking:
+            continue
+        directory = None
+        if word in ("-L", "--library-path") and index + 1 < len(words):
+            directory = words[index + 1]
+        elif word.startswith("-L"):
+            directory = word[2:]
+        elif word.startswith("--library-path="):
+            directory = word.split("=", 1)[1]
+        if directory:
+            if directory.startswith("="):
+                directory = sysroot + directory[1:]
+            print("search\tlibrary-directory\t" + directory)
+        if word.startswith("-l:"):
+            print("archive\tlibrary\t" + word[3:])
+        elif word.startswith("-l") and len(word) > 2:
+            print("archive\tlibrary\tlib" + word[2:] + ".a")
+        # Drivers invent a temporary object name even under -###. It has no
+        # bytes yet and is not a toolchain input; including it breaks hits.
+        elif word.startswith("/") and word.endswith((".a", ".o")) and pathlib.Path(word).is_file():
+            print("file\tlink-input\t" + word)
+' "$linker" <<< "$trace") || die 'cannot identify the VPP link driver'
+    while IFS=$'\t' read -r kind label path; do
+        case "$kind" in
+            tool) tool_identity "$label" "$path" --version ;;
+            file) file_identity "$label" "$path" ;;
+            search)
+                [[ "$path" = /* ]] || path="$WORKSPACE_ROOT/connector/native-deps/build/$TARGET_ARCH/vpp/obj/$path"
+                search_dirs+=("$path")
+                ;;
+            archive) libraries+=("$path") ;;
+        esac
+    done <<< "$records"
+    # Include archive contents, not just package versions. libm.a can itself
+    # be a linker script that selects a versioned archive and libmvec.a.
+    for name in "${libraries[@]}"; do
+        path=$("$cc" "${flags[@]}" -print-file-name="$name" 2>/dev/null || true)
+        for candidate in "${search_dirs[@]}"; do
+            if [ -f "$candidate/$name" ]; then
+                path="$candidate/$name"
+                break
+            fi
+        done
+        file_identity "vpp-static:$name" "${path:-$name}"
+        if [ "$name" = libm.a ] && [ -f "$path" ]; then
+            for candidate in "$(dirname "$path")"/libm-*.a; do
+                [ ! -f "$candidate" ] || file_identity vpp-static:libm-archive "$candidate"
+            done
+        fi
+    done
+    path=$("$cc" "${flags[@]}" -print-libgcc-file-name 2>/dev/null || true)
+    file_identity vpp-static:compiler-runtime "${path:-compiler-runtime}"
 }
 
 component_toolchain() {
@@ -465,6 +592,29 @@ component_toolchain() {
             tool_identity ld "$ld" --version
             tool_identity glibc ldd --version
             package_identities 'rust cargo gcc binutils glibc-devel' 'rustc cargo gcc binutils libc6-dev'
+            ;;
+        vpp)
+            cc=${CC:-}
+            if [ -z "$cc" ]; then
+                # Match VPP's CMAKE_C_COMPILER_NAMES order. A Clang upgrade
+                # must invalidate native output when CMake selects Clang.
+                for cc in clang gcc cc; do
+                    if command -v "$cc" >/dev/null 2>&1; then
+                        break
+                    fi
+                done
+            fi
+            cxx=${CXX:-g++}
+            tool_identity cc "$cc" --version
+            tool_identity cxx "$cxx" --version
+            vpp_static_toolchain_identities "$cc"
+            tool_identity cmake cmake --version
+            tool_identity ninja ninja --version
+            tool_identity python python3 --version
+            tool_identity glibc ldd --version
+            package_identities \
+                'gcc gcc-c++ clang binutils cmake ninja-build python3 glibc-devel glibc-static' \
+                'gcc g++ clang binutils cmake ninja-build python3 libc6-dev'
             ;;
     esac
 }
@@ -522,6 +672,12 @@ component_outputs() {
             printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/build-report.jsonl\n' "$TARGET_ARCH"
             printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/link.map\n' "$TARGET_ARCH"
             ;;
+        vpp)
+            printf 'connector/bin/%s/connector-vpp\n' "$TARGET_ARCH"
+            printf 'connector/bin/%s/vpp-runtime.json\n' "$TARGET_ARCH"
+            printf 'connector/native-deps/build/%s/vpp/licenses\n' "$TARGET_ARCH"
+            printf 'connector/native-deps/build/%s/vpp/static-libraries.json\n' "$TARGET_ARCH"
+            ;;
     esac
 }
 
@@ -538,6 +694,12 @@ component_required_files() {
                 sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md
             printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/build-report.jsonl\n' "$TARGET_ARCH"
             printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/link.map\n' "$TARGET_ARCH"
+            ;;
+        vpp)
+            printf 'connector/native-deps/build/%s/vpp/static-libraries.json\n' "$TARGET_ARCH"
+            for name in CONNECTOR-LICENSE VPP-LICENSE VPP-EMBEDDED-NOTICES; do
+                printf 'connector/native-deps/build/%s/vpp/licenses/%s\n' "$TARGET_ARCH" "$name"
+            done
             ;;
     esac
 }
@@ -563,6 +725,11 @@ validate_outputs() {
     while IFS= read -r relative; do
         [ -s "$WORKSPACE_ROOT/$relative" ] || die "$component lacks required build material $relative"
     done < <(component_required_files "$component")
+    if [ "$component" = vpp ]; then
+        python3 "$SCRIPT_DIR/../../release/egress_runtime.py" validate --arch "$TARGET_ARCH" \
+            --runtime "$WORKSPACE_ROOT/connector/bin/$TARGET_ARCH" \
+            --licenses "$WORKSPACE_ROOT/connector/native-deps/build/$TARGET_ARCH/vpp/licenses"
+    fi
 }
 
 assert_clean_source_tree() {
@@ -572,6 +739,7 @@ assert_clean_source_tree() {
         envd) source_dir="$WORKSPACE_ROOT/guest-runtime/native-deps/build/src/e2b-infra" ;;
         rocksdb) source_dir="$WORKSPACE_ROOT/accelerator/build/src/rocksdb" ;;
         cloud-hypervisor) source_dir="$WORKSPACE_ROOT/sandboxer/native-deps/build/src/cloud-hypervisor" ;;
+        vpp) source_dir="$WORKSPACE_ROOT/connector/native-deps/build/src/vpp" ;;
     esac
     if [ -e "$source_dir" ]; then
         die "$component cache miss requires a clean assembled workspace; refusing to remove existing source tree $source_dir"
@@ -588,6 +756,7 @@ build_component() {
         envd) make -C "$WORKSPACE_ROOT/guest-runtime/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" envd ;;
         rocksdb) make -C "$WORKSPACE_ROOT/accelerator" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" deps-rocksdb ;;
         cloud-hypervisor) make -C "$WORKSPACE_ROOT/sandboxer/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" cloud-hypervisor ;;
+        vpp) make -C "$WORKSPACE_ROOT/connector/native-deps" TARGET_ARCH="$TARGET_ARCH" vpp ;;
     esac
     validate_outputs "$component"
 }
@@ -824,7 +993,7 @@ usage() {
 usage: native-cache.sh restore-or-build [component ...]
        native-cache.sh key [component ...]
 
-components: vmlinux envd rocksdb cloud-hypervisor
+components: vmlinux envd rocksdb cloud-hypervisor vpp
 EOF
 }
 
@@ -834,7 +1003,7 @@ main() {
     shift
     local components=("$@") component
     if [ "${#components[@]}" -eq 0 ]; then
-        components=(vmlinux envd rocksdb cloud-hypervisor)
+        components=(vmlinux envd rocksdb cloud-hypervisor vpp)
     fi
     case "$command" in
         restore-or-build)

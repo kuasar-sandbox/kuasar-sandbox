@@ -6,7 +6,7 @@ HELPER=INTEGRATION/"source-owner.sh"
 import artifacts
 import build_helpers
 from unittest.mock import patch
-from test_fixtures import CASES, selection
+from test_fixtures import CASES, selection, native_egress_files
 
 def run(cmd,owner): return subprocess.run(["bash",str(HELPER),cmd,owner],text=True,capture_output=True)
 
@@ -39,7 +39,7 @@ class SourceOwnerClosureTest(unittest.TestCase):
     def words(self,c,o):
         r=run(c,o); self.assertEqual(r.returncode,0,r.stderr); return r.stdout.split()
     def test_bins(self):
-        self.assertEqual(self.words("required-bins","connector"),["connector-ctl"])
+        self.assertEqual(self.words("required-bins","connector"),["connector-ctl", "connector-vpp"])
         self.assertEqual(set(self.words("required-bins","guest-runtime")),{"store-ctl","flatten-ctl","sandbox-init"})
         self.assertEqual(set(self.words("required-bins","accelerator")),{"manifest-ctl","store-ctl","cache-ctl","flatten-ctl"})
         self.assertTrue({"vmlinux","sandbox-ctl","cloud-hypervisor","sandbox-runtime.bundle","cache-ctl","connector-ctl"} <= set(self.words("required-bins","sandboxer")))
@@ -52,13 +52,20 @@ class SourceOwnerClosureTest(unittest.TestCase):
             shutil.copy2(HELPER,platform/"ci/integration/source-owner.sh")
             manifest=ROOT/"release/inputs/bin-inputs.yaml"
             shutil.copy2(manifest,platform/"release/inputs/bin-inputs.yaml")
+            shutil.copy2(ROOT/'release/egress_runtime.py', platform/'release/egress_runtime.py')
             required=set(self.words("required-bins","sandboxer"))
             for line in manifest.read_text().splitlines():
                 if not line.strip() or line.lstrip().startswith("#"): continue
                 name,repo=line.split(); name=name.removesuffix(":")
-                if name in required and name!="connector-ctl":
+                if name in required and name not in ('connector-ctl', 'connector-vpp'):
                     path=org/repo/"bin/x86_64"/name
                     path.parent.mkdir(parents=True,exist_ok=True); path.write_text(name)
+            for name, (data, mode) in native_egress_files('x86_64').items():
+                if not name.startswith('bin/'):
+                    continue
+                path = org/'connector/bin/x86_64'/name.removeprefix('bin/')
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data); path.chmod(mode)
             tools=org/"tools";tools.mkdir();log=org/"make.log"
             make=tools/"make"
             make.write_text("#!/usr/bin/env python3\nimport os,pathlib,sys\na=sys.argv[1:]\nrepo=pathlib.Path(a[a.index('-C')+1])\nwith open(os.environ['MAKE_LOG'],'a') as f:f.write(repo.name+' '+a[-1]+'\\n')\nif repo.name=='connector' and a[-1]=='build':\n p=repo/'bin/x86_64/connector-ctl'\n p.parent.mkdir(parents=True,exist_ok=True)\n p.write_text('built connector')\n")
@@ -68,12 +75,14 @@ class SourceOwnerClosureTest(unittest.TestCase):
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertIn("connector build",log.read_text().splitlines())
             self.assertEqual((platform/"bin/x86_64/connector-ctl").read_text(),"built connector")
+            self.assertTrue((platform/'bin/x86_64/vpp-runtime.json').is_file())
+            self.assertTrue((platform/'bin/x86_64/connector-vpp').is_file())
             self.assertNotIn("orchestrator build",log.read_text().splitlines())
     def test_native(self):
-        self.assertEqual(self.words("native-components","connector"),[])
+        self.assertEqual(self.words("native-components","connector"),["vpp"])
         self.assertEqual(self.words("native-components","guest-runtime"),[])
         self.assertEqual(set(self.words("native-components","accelerator")),{"rocksdb"})
-        self.assertEqual(set(self.words("native-components","sandboxer")),{"vmlinux","envd","rocksdb","cloud-hypervisor"})
+        self.assertEqual(set(self.words("native-components","sandboxer")),{"vmlinux","envd","rocksdb","cloud-hypervisor","vpp"})
     def test_images(self):
         self.assertEqual(self.words("images","connector"),[]); self.assertEqual(self.words("images","guest-runtime"),[])
         self.assertEqual(set(self.words("images","accelerator")),{"python:3.12-slim","python:3.12-alpine"})

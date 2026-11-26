@@ -12,6 +12,38 @@ CASES = {'accelerator': ['image.manifest.sh', 'storage.cache.sh', 'storage.obs.s
          'platform': ['basic.demo.sh']}
 
 
+def native_egress_elf(arch, dynamic=None):
+    """Data-only static ELF, optionally carrying a real forbidden segment."""
+    count = 1 if dynamic is None else 2
+    data = bytearray(64 + 56 * count + (32 if dynamic == 'needed' else 0))
+    data[:7] = b'\x7fELF\x02\x01\x01'
+    struct.pack_into('<HHI', data, 16, 2, {'x86_64': 62, 'aarch64': 183}[arch], 1)
+    struct.pack_into('<Q', data, 32, 64)
+    struct.pack_into('<HHH', data, 52, 64, 56, count)
+    struct.pack_into('<IIQQQQQQ', data, 64, 1, 5, 0, 0x400000, 0, len(data), len(data), 4096)
+    if dynamic == 'interpreter':
+        struct.pack_into('<IIQQQQQQ', data, 120, 3, 4, 0, 0, 0, 0, 0, 1)
+    elif dynamic == 'needed':
+        struct.pack_into('<IIQQQQQQ', data, 120, 2, 4, 176, 0x4000b0, 0, 32, 32, 8)
+        struct.pack_into('<QQQQ', data, 176, 1, 0, 0, 0)
+    return bytes(data)
+
+
+def native_egress_files(arch):
+    """Non-executable native bytes for static directory admission tests."""
+    native = artifacts.egress_native_module()
+    rows = {'bin/' + native.PROGRAM: (native_egress_elf(arch), 0o755)}
+    manifest = {'schema': 1, 'product': 'connector-egress-native-runtime', 'architecture': arch,
+                'cpu_baseline': native.BASELINES[arch], 'required_system_libraries': [],
+                'files': {name.removeprefix('bin/'): hashlib.sha256(content).hexdigest()
+                          for name, (content, _) in rows.items()}}
+    rows['bin/' + native.MANIFEST] = (json.dumps(manifest).encode(), 0o644)
+    rows.update({native.LICENSES + '/' + name: (('license ' + name).encode(), 0o644)
+                 for name in native.LICENSE_FILES})
+    rows[native.LICENSES + '/system/libc6-dev/copyright'] = (b'statically linked system license', 0o644)
+    return rows
+
+
 def native_cluster_elf(arch, dependency='libfdb_c.so'):
     """A data-only ELF with real program headers and one DT_NEEDED entry."""
     data = bytearray(0x230)

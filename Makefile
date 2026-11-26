@@ -102,6 +102,8 @@ collect:
 	done < $(BIN_INPUTS_MANIFEST)
 	@python3 -B release/cluster_native.py collect --arch "$(TARGET_ARCH)" \
 	  --root "$(ORG)/orchestrator/bin/$(TARGET_ARCH)" --destination "$(BINDIR)"
+	@python3 -B release/egress_runtime.py collect-bin --arch "$(TARGET_ARCH)" \
+	  --runtime "$(ORG)/connector/bin/$(TARGET_ARCH)" --output "$(BINDIR)"
 	@if [ "$(HOST_ARCH)" = "$(TARGET_ARCH)" ]; then \
 	   find bin -maxdepth 1 -type l -delete 2>/dev/null || true; \
 	   while read name repo; do \
@@ -143,11 +145,16 @@ test-e2e:
 
 # Aggregate releases validate the already-published archives. This target never
 # invokes a component build; bin/<arch>/ must be populated by the release fetcher.
+# Historical releases may omit VPP; validate any present native attachment.
 verify-prebuilt:
 	@while read name repo; do \
-		name=$${name%:}; case "$$name" in ''|\#*) continue ;; esac; \
+		name=$${name%:}; case "$$name" in ''|\#*|connector-vpp) continue ;; esac; \
 		[ -f "$(SBIN)/$$name" ] || { echo "missing prebuilt release input: $$name" >&2; exit 1; }; \
 	done < $(BIN_INPUTS_MANIFEST)
+	@if [ -e "$(SBIN)/connector-vpp" ] || [ -L "$(SBIN)/connector-vpp" ] || \
+	    [ -e "$(SBIN)/vpp-runtime.json" ] || [ -L "$(SBIN)/vpp-runtime.json" ]; then \
+		python3 -B release/egress_runtime.py validate --arch "$(TARGET_ARCH)" --runtime "$(SBIN)"; \
+	fi
 
 # perf harnesses living in this repo (cross-repo binary use).
 perf-sandbox:
@@ -197,6 +204,7 @@ test:
 
 test-ci-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-cluster-native.py
+	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-egress-native.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-dependency-cutover.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-framework-companions.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-capability-routing.py

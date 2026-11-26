@@ -419,6 +419,25 @@ class CacheKeyTests(TemporaryFiles):
         self.assertEqual(calls, ['vmlinux', 'envd'])
         self.assertRegex(stream.getvalue().strip(), r'^[0-9a-f]{64}$')
 
+    def test_vpp_keys_are_selected_only_for_connector_sources_that_build_it(self):
+        sources = self.root / 'sources'
+        connector = sources / 'connector'
+        connector.mkdir(parents=True)
+        (connector / 'Makefile').write_text('build: connector-ctl\n')
+        calls = []
+        def output(argv, **kwargs):
+            if str(argv[0]).endswith('native-cache.sh'):
+                calls.append(argv[-1])
+            return 'selected input identity'
+        with patch.object(ci, 'output', side_effect=output), redirect_stdout(io.StringIO()):
+            ci.cache_key(argparse.Namespace(sources=sources))
+            self.assertEqual(calls, [])
+            recipe = connector / 'native-deps/deps/build-vpp.sh'
+            recipe.parent.mkdir(parents=True)
+            recipe.write_text('# selected VPP recipe\n')
+            ci.cache_key(argparse.Namespace(sources=sources))
+            self.assertEqual(calls, ['vpp'])
+
     def test_exact_helper_dependency_changes_miss_the_actions_cache(self):
         for container in ('test-helpers', 'test-overlays'):
             with self.subTest(container=container):

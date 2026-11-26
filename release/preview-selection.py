@@ -226,7 +226,8 @@ def unit_inputs_changed(root: pathlib.Path, base: str, head: str, unit: str) -> 
     paths = ["go.mod", "go.sum", "Makefile", "cmd", "pkg", "internal", "api", "proto",
              "LICENSE", "LICENSES", "NOTICE", "THIRD_PARTY_NOTICES", "scripts/release.sh",
              "scripts/release-materials.sh", "scripts/release-materials.py", "scripts/release-archive-validator.go"]
-    paths += {"accelerator": ["deps", "test/scripts"], "connector": ["deploy", "test/load"],
+    paths += {"accelerator": ["deps", "test/scripts"],
+              "connector": ["deploy", "dist", "egress", "native-deps", "scripts/vpp-runtime.py", "test/load"],
               "sandboxer": ["native-deps"], "orchestrator": ["app", "config", "deploy", "test/load", "test/scale",
                 "scripts/cluster-native.py", "scripts/cluster-native-lock.json", "scripts/run-cluster-ctl",
                 "scripts/deb_extract.py", "scripts/native-licenses"],

@@ -22,6 +22,7 @@ from test_fixtures import restore_using, helper_contract
 import transport
 from test_fixtures import CASES, WORKBENCH_CASES, selection, select_plan, architecture_result, workbench_results, registry_binding
 from test_fixtures import native_cluster_fixtures, native_cluster_elf_record
+from test_fixtures import native_egress_files
 
 
 def test_revisions(sha="d" * 40):
@@ -80,10 +81,16 @@ def runtime(root, arch, files, *, without_mkfs=False):
 
 class EgressProductContracts(unittest.TestCase):
     def test_native_and_control_changes_select_the_paired_product(self):
-        self.assertEqual(subject.changed_products({'connector':['egress/vpp/plugins/egress_geneve/geneve.c']}), ['connector-egress.bundle'])
-        self.assertEqual(subject.changed_products({'connector':['pkg/egress/config.go']}), ['connector-ctl','connector-egress.bundle'])
-        self.assertNotIn('connector-egress.bundle',subject.GO_PRODUCTS)
-        self.assertIn('connector-egress.bundle',subject.OPTIONAL_LEGACY_PRODUCTS)
+        self.assertEqual(subject.changed_products({'connector':['egress/vpp/plugins/egress_geneve/geneve.c']}), ['connector-vpp'])
+        self.assertEqual(subject.changed_products({'connector':['pkg/egress/config.go']}), ['connector-ctl','connector-vpp'])
+        self.assertNotIn('connector-vpp',subject.GO_PRODUCTS)
+        self.assertIn('connector-vpp',subject.OPTIONAL_LEGACY_PRODUCTS)
+
+    def test_native_recipe_patch_and_reader_inputs_select_vpp(self):
+        for path in ('native-deps/Makefile', 'native-deps/deps/vpp-source.json',
+                     'native-deps/deps/vpp-patches/0001-policy.patch', 'scripts/vpp-runtime.py'):
+            with self.subTest(path=path):
+                self.assertEqual(subject.changed_products({'connector': [path]}), ['connector-vpp'])
 
     def test_native_network_acceptance_is_selected_on_both_architectures(self):
         cases=copy.deepcopy(CASES)
@@ -91,7 +98,7 @@ class EgressProductContracts(unittest.TestCase):
         for arch in subject.ARCHES:
             selected=subject.suite_selection(['connector'],arch,cases)
             self.assertIn('network.egress.sh',selected['cases'])
-            self.assertIn('connector-egress.bundle',selected['required_products'])
+            self.assertIn('connector-vpp',selected['required_products'])
 
 class BaselineInitOwnershipContracts(unittest.TestCase):
     """Real archive admission checks; no image construction or payload execution."""
@@ -958,7 +965,7 @@ class ArtifactContracts(unittest.TestCase):
         self.plan['run_inputs'] = {owner: row['source'] for owner, row in self.plan['helper_contract']['owners'].items()}
         self.files = {}
         for arch in subject.ARCHES:
-            files = {name: elf(arch, name) for name in subject.PRODUCTS if name != "connector-egress.bundle"}
+            files = {name: elf(arch, name) for name in subject.PRODUCTS if name != "connector-vpp"}
             files["vmlinux"] = kernel(arch)
             files["sandbox-runtime.bundle"] = runtime(self.root, arch, files)
             self.files[arch] = files
@@ -1045,6 +1052,30 @@ class ArtifactContracts(unittest.TestCase):
         record = archive(self.assets / name, {"bin/" + key: data for key, data in files.items()
                                              if subject.PRODUCTS[key] == "runtime"})
         next(item for item in self.plan["baseline"]["assets"] if item["name"] == name).update(record)
+
+    def test_native_vpp_candidate_composes_and_seals_the_flat_directory(self):
+        native = subject.egress_native_module()
+        self.plan['product_sources']['connector-vpp'] = {'connector': 'e' * 40}
+        for arch in subject.ARCHES:
+            self.plan['lanes'][arch]['products'] = sorted([*self.plan['lanes'][arch]['products'], 'connector-vpp'])
+        for arch in subject.ARCHES:
+            with self.subTest(arch=arch):
+                delta = self.delta(arch)
+                rows = native_egress_files(arch)
+                for name, (data, mode) in rows.items():
+                    path = delta / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(data)
+                    path.chmod(mode)
+                self.metadata['products']['connector-vpp']['sha256'] = subject.digest(delta / 'bin/connector-vpp')
+                self.metadata['egress_native'] = {'files': native.validate(delta, arch),
+                                                 'sources': self.plan['product_sources']['connector-vpp']}
+                (delta / 'outputs.json').write_text(json.dumps(self.metadata))
+                result = self.compose(arch, delta)
+                self.assertTrue(set(rows) <= set(result['files']))
+                prepared = self.root / 'workspaces' / arch
+                self.assertEqual(native.validate(prepared, arch), native.validate(delta, arch))
+                subject.verify_workspace(prepared, self.plan, arch)
 
     def test_native_cluster_candidate_composes_and_seals_all_attachments(self):
         native = subject.cluster_native_module()
