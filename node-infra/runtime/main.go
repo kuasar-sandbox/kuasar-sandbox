@@ -58,21 +58,22 @@ type management struct {
 // Record is also the read-only describe output. It is written before namespace
 // creation or transit handoff, and survives destruction of the container layer.
 type record struct {
-	Schema         int          `json:"schema"`
-	Generation     string       `json:"generation,omitempty"`
-	BootID         string       `json:"boot_id,omitempty"`
-	Retained       bool         `json:"retained,omitempty"`
-	ConsumerUnits  []string     `json:"consumer_units,omitempty"`
-	State          string       `json:"state"`
-	SwitchName     string       `json:"switch_name"`
-	SwitchNetNS    string       `json:"switch_netns"`
-	PortNetNS      string       `json:"port_netns"`
-	Namespaces     []namespace  `json:"namespaces"`
-	Transit        transit      `json:"transit"`
-	Management     []management `json:"management"`
-	MainNetNSInode uint64       `json:"main_netns_inode"`
-	ConfigPaths    []string     `json:"config_paths"`
-	ConfigSHA256   string       `json:"config_sha256"`
+	Egress         *egressRecord `json:"egress,omitempty"`
+	Schema         int           `json:"schema"`
+	Generation     string        `json:"generation,omitempty"`
+	BootID         string        `json:"boot_id,omitempty"`
+	Retained       bool          `json:"retained,omitempty"`
+	ConsumerUnits  []string      `json:"consumer_units,omitempty"`
+	State          string        `json:"state"`
+	SwitchName     string        `json:"switch_name"`
+	SwitchNetNS    string        `json:"switch_netns"`
+	PortNetNS      string        `json:"port_netns"`
+	Namespaces     []namespace   `json:"namespaces"`
+	Transit        transit       `json:"transit"`
+	Management     []management  `json:"management"`
+	MainNetNSInode uint64        `json:"main_netns_inode"`
+	ConfigPaths    []string      `json:"config_paths"`
+	ConfigSHA256   string        `json:"config_sha256"`
 }
 
 func main() {
@@ -209,7 +210,14 @@ func describe(explicit string) (*record, error) {
 		return nil, err
 	}
 	r := &record{Schema: 2, State: "described", SwitchName: cfg.Name, SwitchNetNS: cfg.SwitchNetNS, PortNetNS: cfg.PortNetNS, Transit: transit{Name: cfg.TransitDev}, ConfigPaths: paths}
+	r.Egress, err = describeEgress(r)
+	if err != nil {
+		return nil, err
+	}
 	names := map[string]bool{}
+	if localEgress(r) {
+		names[r.Egress.Link.GatewayNS] = true
+	}
 	for _, name := range []string{cfg.SwitchNetNS, cfg.PortNetNS} {
 		if name != "" {
 			names[name] = true
@@ -261,6 +269,10 @@ func describe(explicit string) (*record, error) {
 		hash.Write([]byte{0})
 		hash.Write(data)
 		hash.Write([]byte{0})
+	}
+	if r.Egress != nil {
+		data, _ := json.Marshal(r.Egress)
+		hash.Write(data)
 	}
 	r.ConfigSHA256 = hex.EncodeToString(hash.Sum(nil))
 	return r, nil
@@ -328,6 +340,9 @@ func checkConfiguration(explicit string) error {
 	wanted, err := describe(explicit)
 	if err != nil {
 		return err
+	}
+	if !sameEgress(r.Egress, wanted.Egress) {
+		return errors.New("Egress deployment identities changed; replace the instance after cleanup")
 	}
 	// Ordinary component restart keeps its switch. Changing the resource
 	// identities requires an instance replacement so old resources are not
@@ -479,7 +494,7 @@ func prepare(explicit string, retained bool) error {
 	if err := preflight(r); err != nil {
 		return err
 	}
-	if r.Transit.Name != "" {
+	if r.Transit.Name != "" && !localEgress(r) {
 		link, err := netlink.LinkByName(r.Transit.Name)
 		if err != nil {
 			return fmt.Errorf("transit input: %w", err)
@@ -524,6 +539,16 @@ func prepare(explicit string, retained bool) error {
 			return err
 		}
 	}
+	if localEgress(r) {
+		if err := egressLinkCommand(r, "prepare"); err != nil {
+			return err
+		}
+		link, err := netlink.LinkByName(r.Transit.Name)
+		if err != nil {
+			return err
+		}
+		r.Transit.MAC, r.Transit.OriginalIfindex = link.Attrs().HardwareAddr.String(), link.Attrs().Index
+	}
 	r.State = "prepared"
 	return writeRecord(r)
 }
@@ -563,6 +588,11 @@ func ready(timeout time.Duration) error {
 					}
 				}
 				if healthy && status.PortsAvailable+status.PortsUsed > 0 {
+					if err := egressReady(r); err != nil {
+						last = err
+						time.Sleep(200 * time.Millisecond)
+						continue
+					}
 					if err := validateNamespaces(r); err != nil {
 						return err
 					}
@@ -696,6 +726,9 @@ func lookupTransit(r *record) (netlink.Link, netlink.Link, *netlink.Handle, erro
 }
 
 func verifyTransit(r *record, restore bool) error {
+	if localEgress(r) {
+		return verifyEgressLink(r)
+	}
 	if r.Transit.Name == "" {
 		return nil
 	}
@@ -830,6 +863,18 @@ func cleanup(force, internal bool) error {
 		}
 		fmt.Println("node-infra: network cleanup complete (outer handles retained)")
 		return nil
+	}
+	if localEgress(r) {
+		r.State = "releasing"
+		if err := writeRecord(r); err != nil {
+			return err
+		}
+		if err := egressLinkCommand(r, "uninstall"); err != nil {
+			return err
+		}
+		if err := egressNamespaceEmpty(r); err != nil {
+			return err
+		}
 	}
 	for i := len(r.Namespaces) - 1; i >= 0; i-- {
 		name := r.Namespaces[i].Name

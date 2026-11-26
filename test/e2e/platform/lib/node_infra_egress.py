@@ -38,7 +38,7 @@ def target(ready):
 
 
 class ExternalEgress:
-    def __init__(self, fixture):
+    def __init__(self, fixture, *, native=False):
         self.fixture = fixture
         self.name, self.target = fixture.key + '-egress', fixture.key + '-target'
         self.management = fixture.key + '-mgmt'
@@ -57,15 +57,17 @@ class ExternalEgress:
                     'peer', 'name', 'target0', 'netns', self.target)
             for name, device, address in ((self.name, 'out0', '192.0.2.2/30'),
                                           (self.target, 'target0', '192.0.2.1/30')):
-                command('ip', '-n', name, 'address', 'add', address, 'dev', device)
+                if not native or device != 'out0':
+                    command('ip', '-n', name, 'address', 'add', address, 'dev', device)
                 command('ip', '-n', name, 'link', 'set', device, 'up')
-            command('ip', '-n', self.name, 'route', 'add', 'default', 'via', '192.0.2.1')
-            command('ip', 'netns', 'exec', self.name, 'sysctl', '-w', 'net.ipv4.ip_forward=1')
-            rules = fixture.work / 'provider-egress.nft'
-            rules.write_text('table ip provider {\n chain postrouting {\n'
-                             '  type nat hook postrouting priority srcnat;\n'
-                             '  oifname "out0" snat to 192.0.2.2;\n }\n}\n')
-            command('ip', 'netns', 'exec', self.name, 'nft', '-f', rules)
+            if not native:
+                command('ip', '-n', self.name, 'route', 'add', 'default', 'via', '192.0.2.1')
+                command('ip', 'netns', 'exec', self.name, 'sysctl', '-w', 'net.ipv4.ip_forward=1')
+                rules = fixture.work / 'provider-egress.nft'
+                rules.write_text('table ip provider {\n chain postrouting {\n'
+                                 '  type nat hook postrouting priority srcnat;\n'
+                                 '  oifname "out0" snat to 192.0.2.2;\n }\n}\n')
+                command('ip', 'netns', 'exec', self.name, 'nft', '-f', rules)
             ready = fixture.work / 'egress-target.ready'
             self.process = subprocess.Popen(['ip', 'netns', 'exec', self.target, sys.executable,
                                              str(Path(__file__)), str(ready)])

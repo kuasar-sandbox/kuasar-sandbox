@@ -1,0 +1,7 @@
+transit_dev: egress-tx
+transit_dev_addr: "198.18.0.2/24:198.18.0.1"
+transit_dev_mtu: auto
+geneve_locator: port
+geneve_port_base: 50000
+geneve_encap_eth: true
+generation_bits: 4

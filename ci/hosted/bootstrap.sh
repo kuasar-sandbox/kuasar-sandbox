@@ -34,7 +34,7 @@ select_profile() {
         *) die "unknown profile: $profile" ;;
     esac
     if $with_vm || [ "$profile" = artifact-arm ]; then
-        packages+=(python3-venv python3-pip iproute2 iptables nftables kmod acl
+        packages+=(python3-venv python3-pip iproute2 iptables nftables kmod acl ethtool
             e2fsprogs procps psmisc socat redis-server rsync cpio zstd lz4
             systemd podman crun conmon fuse-overlayfs udev dbus iputils-ping netcat-openbsd openssl sqlite3 zip strace)
     fi

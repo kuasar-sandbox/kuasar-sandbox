@@ -50,15 +50,15 @@ UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vm
 SUITES = frozenset(("basic", "storage", "image", "network", "sandbox", "snapshot", "orchestrator", "builder", "telemetry"))
 PRODUCTS = {
     "manifest-ctl": "accelerator", "store-ctl": "accelerator", "cache-ctl": "accelerator",
-    "connector-ctl": "connector", "sandbox-ctl": "sandboxer", "sandbox-init": "runtime",
+    "connector-ctl": "connector", "connector-egress.bundle": "connector", "sandbox-ctl": "sandboxer", "sandbox-init": "runtime",
     "cloud-hypervisor": "sandboxer", "node-ctl": "orchestrator", "cluster-ctl": "orchestrator",
     "node-stub-ctl": "orchestrator", "e2b-key-ctl": "orchestrator",
     "flatten-ctl": "runtime", "mkfs.erofs": "runtime", "sandbox-runtime.bundle": "runtime",
     "vmlinux": "vmlinux",
 }
 # Legacy archives may carry this tool; it is not required by the Go generator.
-OPTIONAL_LEGACY_PRODUCTS = {"mkfs.erofs"}
-GO_PRODUCTS = set(PRODUCTS) - {"cloud-hypervisor", "mkfs.erofs", "sandbox-runtime.bundle", "vmlinux"}
+OPTIONAL_LEGACY_PRODUCTS = {"mkfs.erofs", "connector-egress.bundle"}
+GO_PRODUCTS = set(PRODUCTS) - {"connector-egress.bundle", "cloud-hypervisor", "mkfs.erofs", "sandbox-runtime.bundle", "vmlinux"}
 REQUIRED = {
     "connector": {"connector-ctl"},
     "guest-runtime": {"store-ctl", "flatten-ctl"},
@@ -148,8 +148,11 @@ def changed_products(changes, *, init_unit='runtime'):
             # sandbox/node binaries cannot read, even with unchanged Go APIs.
             if touches("pkg/tarstream"):
                 products.update(("sandbox-ctl", "node-ctl"))
-        elif owner == "connector" and go:
-            products.add("connector-ctl")
+        elif owner == "connector":
+            if go:
+                products.add("connector-ctl")
+            if go or touches("egress", "scripts/egress-bundle.py"):
+                products.add("connector-egress.bundle")
         elif owner == "sandboxer":
             if go:
                 products.add("sandbox-ctl")
@@ -240,11 +243,13 @@ def suite_selection(owners, arch, case_files, *, native_full=False, changes=None
         chosen.remove('storage.obs.sh')
         exclusions.append({'case': 'storage.obs.sh', 'reason': 'credentialed OBS case requires explicit opt-in'})
     if arch == 'aarch64' and not native_full:
-        supported = by_owner['accelerator'] | by_owner['guest-runtime']
+        supported = by_owner['accelerator'] | by_owner['guest-runtime'] | by_owner['connector']
         for name in sorted(chosen - supported):
             exclusions.append({'case': name, 'reason': 'outside the accepted native ARM non-KVM subset'})
         chosen &= supported
     required = set().union(*(REQUIRED[all_cases[name]] for name in chosen))
+    if 'network.egress.sh' in chosen:
+        required.add('connector-egress.bundle')
     return {'suites': sorted(suites), 'cases': sorted(chosen), 'required_products': sorted(required),
             'exclusions': exclusions}
 
@@ -791,11 +796,15 @@ def compose(plan, arch, assets, delta, output):
             if name in OPTIONAL_LEGACY_PRODUCTS and name not in originals and name not in lane["products"]:
                 continue
             require(path.is_file(), f"missing final product: {name}")
-            if name not in ("vmlinux", "sandbox-runtime.bundle"):
+            if name not in ("vmlinux", "sandbox-runtime.bundle", "connector-egress.bundle"):
                 require(path.stat().st_mode & 0o111 and path.stat().st_mode & 0o7022 == 0,
                         f"selected product has unsafe or non-executable permissions: {name}")
-            if name != "sandbox-runtime.bundle":
+            if name not in ("sandbox-runtime.bundle", "connector-egress.bundle"):
                 check_architecture(path, arch, kernel=name == "vmlinux")
+            if name == 'connector-egress.bundle':
+                delivery_module()
+                import egress_runtime
+                egress_runtime.inspect(path, arch)
             actual = digest(path)
             candidate = name in lane["products"]
             require(actual == (metadata["products"][name]["sha256"] if candidate else originals[name]),

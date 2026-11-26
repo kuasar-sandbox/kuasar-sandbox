@@ -455,6 +455,9 @@ def run_cases(fixture):
             node.remove()
         copy_case(fixture)
         external_case(fixture)
+        if (fixture.bin / "connector-egress.bundle").is_file():
+            from node_infra_native_egress import native_case
+            native_case(fixture, DockerNode)
         cgroupfs_case(fixture)
         retained = RetainedDockerNode(fixture, 0)
         for hard in (False, True):

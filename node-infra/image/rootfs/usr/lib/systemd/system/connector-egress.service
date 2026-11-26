@@ -1,0 +1,20 @@
+[Unit]
+Description=Connector Geneve Egress gateway
+ConditionPathExists=/etc/connector-egress/gateway.yaml
+Requires=node-infra-network.service
+After=node-infra-network.service
+Before=connector-vswitch.service node-conductor.service node-proxy.service
+PartOf=node-infra.target
+
+[Service]
+Type=exec
+ExecStart=/usr/libexec/node-infra/service egress
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=10
+KillMode=control-group
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=node-infra.target

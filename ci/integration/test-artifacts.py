@@ -78,6 +78,21 @@ def runtime(root, arch, files, *, without_mkfs=False):
     return prefix + footer(hashlib.sha256(prefix).hexdigest())
 
 
+class EgressProductContracts(unittest.TestCase):
+    def test_native_and_control_changes_select_the_paired_product(self):
+        self.assertEqual(subject.changed_products({'connector':['egress/vpp/plugins/egress_geneve/geneve.c']}), ['connector-egress.bundle'])
+        self.assertEqual(subject.changed_products({'connector':['pkg/egress/config.go']}), ['connector-ctl','connector-egress.bundle'])
+        self.assertNotIn('connector-egress.bundle',subject.GO_PRODUCTS)
+        self.assertIn('connector-egress.bundle',subject.OPTIONAL_LEGACY_PRODUCTS)
+
+    def test_native_network_acceptance_is_selected_on_both_architectures(self):
+        cases=copy.deepcopy(CASES)
+        cases['connector']=sorted(cases['connector']+['network.egress.sh'])
+        for arch in subject.ARCHES:
+            selected=subject.suite_selection(['connector'],arch,cases)
+            self.assertIn('network.egress.sh',selected['cases'])
+            self.assertIn('connector-egress.bundle',selected['required_products'])
+
 class BaselineInitOwnershipContracts(unittest.TestCase):
     """Real archive admission checks; no image construction or payload execution."""
 
@@ -943,7 +958,7 @@ class ArtifactContracts(unittest.TestCase):
         self.plan['run_inputs'] = {owner: row['source'] for owner, row in self.plan['helper_contract']['owners'].items()}
         self.files = {}
         for arch in subject.ARCHES:
-            files = {name: elf(arch, name) for name in subject.PRODUCTS}
+            files = {name: elf(arch, name) for name in subject.PRODUCTS if name != "connector-egress.bundle"}
             files["vmlinux"] = kernel(arch)
             files["sandbox-runtime.bundle"] = runtime(self.root, arch, files)
             self.files[arch] = files

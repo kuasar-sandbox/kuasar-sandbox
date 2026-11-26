@@ -1,0 +1,12 @@
+{
+  "name": "local",
+  "owner_netns": "",
+  "gateway_netns": "egress",
+  "switch_netns": "sw0-switch",
+  "switch": "sw0",
+  "transit": "egress-tx",
+  "gateway": "egress-rx",
+  "mtu": 9000,
+  "state_dir": "/run/node-infra/recovery/egress-link",
+  "gateway_runtime_dir": "/run/connector-egress/local"
+}

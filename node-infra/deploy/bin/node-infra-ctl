@@ -523,7 +523,9 @@ class Instance:
                 'Podman and node-infra-ctl selected different primary namespaces; use the local runner context')
         transit = descriptor['transit']['name']
         matches = [x for x in links if x['ifname'] == transit]
-        if transit:
+        if descriptor.get('egress', {}).get('link'):
+            require(not matches, 'managed Egress transit conflicts with an existing device')
+        elif transit:
             require(len(matches) == 1 and 'UP' not in matches[0]['flags'] and matches[0].get('address'),
                     'transit input is missing, UP, or lacks a MAC identity')
         budget = json.loads(run(self.runtime, 'run', '--rm', '--pull=never', '--network=none',
@@ -533,7 +535,7 @@ class Instance:
         cpu_limit = float(quota[:-1]) / 100 if re.fullmatch(r'\d+(?:\.\d+)?%', quota) else None
         report = check_budget(budget, cpu_limit, memory_bytes(one(limits, 'Service', 'MemoryMax', '')))
         selected['budget'] = report
-        return selected, descriptor, matches[0] if transit else None
+        return selected, descriptor, matches[0] if matches else None
 
     def prepare(self):
         if self.applied.exists() and json_file(self.applied)['state'] != 'cleaned':
@@ -903,15 +905,18 @@ class DockerInstance(Instance):
         require(any(x['ifname'] == 'lo' and 'UP' in x['flags'] for x in links), 'primary loopback is not UP')
         transit = descriptor['transit']['name']
         matches = [x for x in links if x['ifname'] == transit]
-        require(not transit or len(matches) == 1 and 'UP' not in matches[0]['flags'] and matches[0].get('address'),
-                'transit is missing, UP or lacks a MAC identity')
+        if descriptor.get('egress', {}).get('link'):
+            require(not matches, 'managed Egress transit conflicts with an existing device')
+        else:
+            require(not transit or len(matches) == 1 and 'UP' not in matches[0]['flags'] and matches[0].get('address'),
+                    'transit is missing, UP or lacks a MAC identity')
         budget = json.loads(run('docker', 'run', '--rm', '--pull=never', '--network=none',
             '--entrypoint=' + RUNTIME, *volumes, installed['image'], 'budget').stdout)
         host = container['HostConfig']
         cpu = host.get('NanoCpus', 0) / 1e9 or (host['CpuQuota'] / host['CpuPeriod']
               if host.get('CpuQuota', 0) > 0 and host.get('CpuPeriod', 0) > 0 else None)
         selected['budget'] = check_budget(budget, cpu, host.get('Memory') or None)
-        return selected, descriptor, matches[0] if transit else None
+        return selected, descriptor, matches[0] if matches else None
 
     def helper_arguments(self, arguments):
         primary = self.run / 'primary'

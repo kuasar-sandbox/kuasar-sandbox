@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# e2e-requires: ["bpf-map","bpf-tc","cgroup-v2","docker","journald","kvm","netns","podman","quadlet","systemd","tun","userfaultfd"]
+# e2e-requires: ["bpf-map","bpf-tc","cgroup-v2","docker","geneve","journald","kvm","netns","podman","quadlet","systemd","tun","userfaultfd"]
 set -euo pipefail
 umask 077
 source "${E2E_LIB:?}/common.sh"

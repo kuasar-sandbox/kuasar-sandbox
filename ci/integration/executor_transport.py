@@ -2,7 +2,7 @@
 import argparse,hashlib,json,os,pathlib,re,shutil,subprocess,tarfile,tempfile
 SPARSE=('/.github/actions/download-artifact/','/ci/hosted/','/ci/integration/',
         '/release/tag_sources.py','/release/selection.py','/release/archive_paths.py',
-        '/release/cluster_native.py','/ci/integration/cluster-native-runtime.json',
+        '/release/cluster_native.py','/release/egress_runtime.py','/ci/integration/cluster-native-runtime.json',
         '/release/node_infra_assets.py','/test/e2e/package_inputs.py',
         '/test/e2e/lib/','/workbench/')
 ENV={'PATH':os.environ.get('PATH','/usr/bin:/bin'),'LC_ALL':'C','GIT_CONFIG_GLOBAL':'/dev/null',
