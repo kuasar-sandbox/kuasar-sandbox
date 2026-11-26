@@ -144,9 +144,10 @@ func egressReady(r *record) error {
 		return nil
 	}
 	var status struct {
-		PID        int    `json:"pid"`
-		NativePID  int    `json:"native_pid"`
-		Generation uint64 `json:"configuration_generation"`
+		PID        int             `json:"pid"`
+		NativePID  int             `json:"native_pid"`
+		Generation uint64          `json:"configuration_generation"`
+		Disabled   map[string]bool `json:"disabled_interfaces"`
 		Interfaces []struct {
 			Up      bool `json:"up"`
 			Carrier bool `json:"carrier"`
@@ -177,6 +178,11 @@ func egressReady(r *record) error {
 	}
 	if err = syscall.Kill(status.NativePID, 0); err != nil {
 		return err
+	}
+	for name, disabled := range status.Disabled {
+		if disabled {
+			return fmt.Errorf("Egress interface %s requires controlled recovery", name)
+		}
 	}
 	for _, port := range status.Interfaces {
 		if !port.Up || !port.Carrier {

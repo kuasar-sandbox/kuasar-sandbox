@@ -62,6 +62,14 @@ def native_case(fixture, node_type):
         pair = json.loads(command('ip', '-n', provider.name, '-j', 'link', 'show', 'egress-rx').stdout)[0]
         initial = status()
         require(initial['configuration_generation'] > 0 and links()['pair_valid'], 'native gateway was not ready')
+        command('ip', '-n', provider.name, 'link', 'set', 'out0', 'mtu', '1490')
+        wait_for('gateway disables invalid Pool interface', lambda: status()['disabled_interfaces'].get('out0'))
+        command('ip', '-n', provider.name, 'link', 'set', 'out0', 'mtu', '1500')
+        require(not node.status()['ready'], 'restored Linux link hid a disabled native interface')
+        node.execute('systemctl', 'restart', 'connector-egress.service')
+        wait_for('controlled gateway recovery', lambda: node.status()['ready'])
+        provider.traffic(node, guest)
+        initial = status()
         area['pools'][0]['max_connections'] = 2048
         write_json(config / 'area.json', area)
         node.execute('systemctl', 'reload', 'connector-egress.service')
