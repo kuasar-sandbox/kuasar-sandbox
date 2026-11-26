@@ -19,10 +19,10 @@ def native_case(fixture, node_type):
         node.extra_mounts.append((config, '/etc/connector-egress'))
         triplet = {'x86_64': 'x86_64-linux-gnu', 'aarch64': 'aarch64-linux-gnu'}[os.environ['E2E_ARCH']]
         native = '/opt/node-infra/lib/connector-egress'
-        area = {'vni': 100, 'pools': [{'id': 0, 'exit': 'public', 'addresses': ['192.0.2.2'],
+        area = {'vni': 100, 'pools': [{'name': 'public', 'interface': 'out0', 'next_hop': '192.0.2.1', 'addresses': ['192.0.2.2'],
                                     'max_connections': 1024}],
                 'acl': [{'destination': '192.0.2.1/32', 'protocol': 'any', 'action': 'allow'}],
-                'routes': [{'destination': '0.0.0.0/0', 'pool': 0}]}
+                'routes': [{'destination': '0.0.0.0/0', 'pool': 'public'}]}
         write_json(config / 'area.json', area)
         write_json(config / 'gateway.json', {
             'name': 'local', 'runtime_dir': '/run/connector-egress/local',
@@ -30,12 +30,8 @@ def native_case(fixture, node_type):
             'library_path': native + '/lib/' + triplet,
             'interfaces': [{'name': 'egress-rx', 'address': '198.18.0.1/24', 'mtu': 9000},
                            {'name': 'out0', 'address': '192.0.2.2/30', 'mtu': 1500}],
-            'exits': [{'name': 'public', 'interface': 'out0', 'next_hop': '192.0.2.1',
-                       'addresses': ['192.0.2.2']}],
-            'attachments': [{'name': 'sw0-area100', 'interface': 'egress-rx', 'peer': '198.18.0.2',
-                             'area': 100, 'locator': 'port', 'port_base': 50000,
-                             'encapsulation': 'ether', 'generation_bits': 4,
-                             'gateway': '10.231.0.1', 'inner_mtu': 1500}],
+            'attachments': [{'name': 'sw0', 'interface': 'egress-rx', 'peer': ['198.18.0.2'],
+                             'locator': 'port', 'inner_mtu': 1500}],
             'area_files': ['area.json']})
         write_json(config / 'link.json', {
             'name': 'local', 'owner_netns': '', 'gateway_netns': 'egress',
