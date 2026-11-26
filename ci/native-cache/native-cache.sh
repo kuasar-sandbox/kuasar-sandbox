@@ -360,7 +360,6 @@ component_environment() {
                 CC CXX CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
                 CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH LD_LIBRARY_PATH
                 PYTHONPATH CMAKE_PREFIX_PATH
-                PKG_CONFIG PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
             )
             ;;
         cloud-hypervisor)
@@ -612,14 +611,10 @@ component_toolchain() {
             tool_identity cmake cmake --version
             tool_identity ninja ninja --version
             tool_identity python python3 --version
-            tool_identity pkg-config "$pkg_config" --version
             tool_identity glibc ldd --version
             package_identities \
-                'gcc gcc-c++ clang binutils cmake ninja-build python3 glibc-devel glibc-static openssl-devel numactl-devel libunwind-devel libelf-devel' \
-                'gcc g++ clang binutils cmake ninja-build python3 libc6-dev libssl-dev libnuma-dev libunwind-dev libelf-dev'
-            pkg_config_module_identity openssl
-            pkg_config_module_identity numa
-            pkg_config_module_identity libunwind
+                'gcc gcc-c++ clang binutils cmake ninja-build python3 glibc-devel glibc-static' \
+                'gcc g++ clang binutils cmake ninja-build python3 libc6-dev'
             ;;
     esac
 }
