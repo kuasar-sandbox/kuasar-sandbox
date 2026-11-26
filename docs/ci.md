@@ -498,3 +498,5 @@ Accelerator, connector, sandboxer and orchestrator are Public; visibility and an
 - [Deployment](deployment.md): runtime services and capabilities.
 - [Runner operations](../ci/runner/README.md): existing persistent infrastructure.
 - [Test quick start](../test/QUICKSTART.md): developer E2E prerequisites.
+
+Connector Egress is a same-version native product, `connector-egress.bundle`. Selected Connector Go or native changes rebuild it on each native architecture. The trusted reader admits its exact file set, architecture and hashes without executing candidate code; release packaging also binds the native input receipt to selected source files. `network.egress.sh` consumes the prepared bundle for the complete local/remote, locator, reload, automatic reclamation and 12288-context/196608-connection acceptance. Node-infra images extract that same product and the existing Docker deployment case exercises its managed service when the selected Connector includes it. Historical archives without the native product keep their existing contract.

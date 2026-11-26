@@ -376,3 +376,5 @@ accelerator、connector、sandboxer、orchestrator 已切为 Public，并读回�
 - [部署](deployment_zh.md)：运行能力与服务。
 - [Runner 运维](../ci/runner/README_zh.md)：既有持久基础设施。
 - [测试快速开始](../test/QUICKSTART_zh.md)：开发者 E2E 条件。
+
+Connector Egress 作为同版本原生产物 `connector-egress.bundle` 交付。所选 Connector Go 或原生源码变化在两个原生架构重建该产物。可信 reader 不执行候选代码，只校验文件集合、架构与摘要；组件打包还将原生输入收据绑定到所选源码。`network.egress.sh` 从 prepared bundle 验证本地/远端、locator、文件 reload、自动回收及 12288 接入/196608 连接。node-infra 镜像解压同一产物，既有 Docker 部署用例在所选 Connector 提供它时验证受管理的网关服务。没有此原生产物的历史归档保留原有合同。
