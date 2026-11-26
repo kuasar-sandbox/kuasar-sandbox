@@ -112,7 +112,8 @@ class PathAndQualificationTests(unittest.TestCase):
             'kuasar-sandbox/orchestrator': ('test/e2e/lib/test_lifecycle_helpers.py', 'scripts/test-telemetry-image-pull.py'),
             'kuasar-sandbox/sandboxer': ('test/source/diffstore_test.py', 'scripts/test_e2e_memory.py'),
             'kuasar-sandbox/accelerator': ('test/scripts/test_flatten.py',),
-            'kuasar-sandbox/connector': ('scripts/test-notify-helpers.sh',),
+            'kuasar-sandbox/connector': ('scripts/test-notify-helpers.sh',
+                                        'native-deps/tests/test_vpp_workflow.py', 'native-deps/tests/test_vpp_staging.py'),
             'kuasar-sandbox/guest-runtime': ('test/e2e/test_scripts.py', 'native-deps/deps/test-common.sh'),
         }
         for repository, paths in examples.items():

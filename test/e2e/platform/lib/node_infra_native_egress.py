@@ -20,7 +20,7 @@ def native_case(fixture, node_type):
         config.mkdir()
         node.extra_mounts.append((config, '/etc/connector-egress'))
         triplet = {'x86_64': 'x86_64-linux-gnu', 'aarch64': 'aarch64-linux-gnu'}[os.environ['E2E_ARCH']]
-        native = '/opt/node-infra/lib/connector-egress'
+        native = '/opt/node-infra/bin'
         area = {'vni': 100, 'pools': [{'name': 'public', 'interface': 'out0', 'next_hop': '192.0.2.1', 'addresses': ['192.0.2.2'],
                                     'max_connections': 1024}],
                 'acl': [{'destination': '192.0.2.1/32', 'protocol': 'any', 'action': 'allow'}],
@@ -28,7 +28,7 @@ def native_case(fixture, node_type):
         write_policy(config / 'area.yaml', area)
         write_policy(config / 'gateway.yaml', {
             'name': 'local', 'runtime_dir': '/run/connector-egress/local',
-            'vpp': native + '/bin/vpp', 'plugin_path': native + '/lib/' + triplet + '/vpp_plugins',
+            'vpp': native + '/vpp', 'plugin_path': native + '/lib/' + triplet + '/vpp_plugins',
             'library_path': native + '/lib/' + triplet,
             'interfaces': [{'name': 'egress-rx', 'address': '198.18.0.1/24', 'mtu': 9000},
                            {'name': 'out0', 'address': '192.0.2.2/30', 'mtu': 1500}],

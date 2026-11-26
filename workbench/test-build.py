@@ -38,7 +38,7 @@ make -C {platform_source} build
 '''
 
 
-def qualify_products(root, arch, owner_bin):
+def qualify_products(root, arch, owner_bin, connector_bin):
     """Verify the platform's collected products and fixed native attachment."""
     artifacts.require(root.is_dir() and not root.is_symlink(), f'missing artifact directory: {root}')
     expected = {line.split()[0].removesuffix(':')
@@ -46,7 +46,8 @@ def qualify_products(root, arch, owner_bin):
                 if line.strip() and not line.startswith('#')}
     actual = {path.name for path in root.iterdir()}
     native_layout = 'cluster-runtime' in actual
-    artifacts.require(actual == expected | ({'cluster-runtime', 'run-cluster-ctl'} if native_layout else set()),
+    artifacts.require(actual == expected | {'lib', 'vpp-runtime.json'}
+                      | ({'cluster-runtime', 'run-cluster-ctl'} if native_layout else set()),
                       'full native build product set differs from the platform manifest')
     for name in sorted(expected - ({'cluster-ctl'} if native_layout else set())):
         path = root / name
@@ -73,6 +74,12 @@ def qualify_products(root, arch, owner_bin):
     selected = owner_bin / 'cluster-ctl'
     artifacts.require(selected.is_file() and artifacts.digest(selected) == result['products']['cluster-ctl'],
                       'collected cluster-ctl differs from the selected owner product')
+    egress = artifacts.egress_native_module()
+    manifest = egress.inspect(root, arch)
+    artifacts.require(manifest == egress.inspect(connector_bin, arch),
+                      'collected VPP differs from the selected Connector product')
+    result['egress_native'] = {'files': {name: artifacts.digest(root / name)
+                                       for name in [*manifest['files'], egress.MANIFEST]}}
     return result
 
 
@@ -123,7 +130,8 @@ rustc --version
 ''' + source_build_program(Path('/src'))
         subprocess.run([*launcher, 'exec', '--', 'bash', '-ceu', program], check=True, timeout=9000)
         arch = platform.machine()
-        result.update(qualify_products(sources / 'platform/bin' / arch, arch, sources / 'orchestrator/bin' / arch))
+        result.update(qualify_products(sources / 'platform/bin' / arch, arch,
+                                       sources / 'orchestrator/bin' / arch, sources / 'connector/bin' / arch))
         result['conclusion'] = 'success'
     finally:
         result['wall_seconds'] = time.monotonic() - started

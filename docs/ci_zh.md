@@ -292,7 +292,8 @@ Hosted ARM 的 artifact-only 证据仍只代表原有产物范围。补充执行
 - guest `vmlinux`;
 - guest `envd`;
 - RocksDB headers 与 `librocksdb.a`;
-- patched `cloud-hypervisor`。
+- patched `cloud-hypervisor`；
+- Connector 的 patched `vpp`、共享库、插件及许可证材料。
 
 缓存路径为 `$KUASAR_NATIVE_CACHE_ROOT/v3/<arch>/<component>/<input-hash>/`. Workbench action 通过 Actions cache 传输 native、Go modules/build cache、Cargo registry/Git/material 下载, 实际操作受调用者的 runtime cache 权限限制. key 区分架构、精确候选来源和声明的构建覆盖范围. candidate namespace 绑定实际 PR、companion、产品、测试/helper 与内核输入. 精确 key 和 restore 前缀都区分 helper、已选择的产品集合及各发布单元, 防止不可变的部分缓存占用另一构建范围的 key.
 
@@ -377,4 +378,4 @@ accelerator、connector、sandboxer、orchestrator 已切为 Public，并读回�
 - [Runner 运维](../ci/runner/README_zh.md)：既有持久基础设施。
 - [测试快速开始](../test/QUICKSTART_zh.md)：开发者 E2E 条件。
 
-Connector Egress 作为同版本原生产物 `connector-egress.bundle` 交付。所选 Connector Go 或原生源码变化在两个原生架构重建该产物。可信 reader 不执行候选代码，只校验文件集合、架构与摘要；组件打包还将原生输入收据绑定到所选源码。`network.egress.sh` 从 prepared bundle 验证本地/远端、locator、文件 reload、自动回收及 12288 接入/196608 连接。node-infra 镜像解压同一产物，既有 Docker 部署用例在所选 Connector 提供它时验证受管理的网关服务。没有此原生产物的历史归档保留原有合同。
+Connector Egress 使用 `vpp` 原生产物。组件直接构建到 `bin/<arch>/`，包含 `connector-ctl`、`vpp`、`vpp-runtime.json` 和 `lib/<triplet>/`；组件发布包及 prepared 产品在 `bin/` 下保留相同结构。许可证材料位于 `share/licenses/connector/native/`。VPP 遵循既有 `native-deps` 的源码归档获取、摘要校验、补丁序列和构建阶段，完整原生产物通过 `native-cache` 缓存和恢复。所选 Connector Go 或原生源码变化在两个原生架构选择匹配的 VPP 产品。可信 reader 不执行候选代码，校验全部运行文件及摘要；组件打包将原生输入记录绑定到所选源码。`network.egress.sh` 直接从 prepared 目录验证本地/远端、locator、文件 reload、自动回收及 12288 接入/196608 连接。node-infra 原样复制这些文件，既有 Docker 部署用例在所选 Connector 提供 VPP 时验证受管理的网关服务。不包含 VPP 的历史 Connector 归档保留原有合同。

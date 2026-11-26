@@ -6,6 +6,7 @@ import shutil
 import tarfile
 
 import cluster_native
+import egress_runtime
 
 
 def relative_name(member):
@@ -48,6 +49,7 @@ def inspect(archive, seen, *, on_member=None):
             if on_member is not None:
                 on_member(name, member)
         cluster_native.validate_archive(source, source.getmembers())
+        egress_runtime.validate_archive(source, source.getmembers())
     return seen
 
 
@@ -59,6 +61,8 @@ def validate_aggregate(selected):
         def check_init(name, member):
             if cluster_native.attached(name) and unit != 'orchestrator':
                 raise ValueError(f'{unit}: cannot own cluster-ctl native payload {name}')
+            if egress_runtime.attached(name) and unit != 'connector':
+                raise ValueError(f'{unit}: cannot own VPP native payload {name}')
             if name == init_path and (unit not in ('runtime', 'sandboxer')
                     or not member.isfile() or not member.mode & 0o111):
                 raise ValueError(f'{unit}: expected executable {init_path} from sandboxer or runtime')

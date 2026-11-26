@@ -44,21 +44,27 @@ def cluster_native_module():
     import cluster_native
     return cluster_native
 
+
+def egress_native_module():
+    delivery_module()
+    import egress_runtime
+    return egress_runtime
+
 ARCHES = ("x86_64", "aarch64")
 OWNERS = ("accelerator", "connector", "guest-runtime", "sandboxer", "orchestrator", "platform")
 UNITS = ("accelerator", "connector", "sandboxer", "orchestrator", "runtime", "vmlinux")
 SUITES = frozenset(("basic", "storage", "image", "network", "sandbox", "snapshot", "orchestrator", "builder", "telemetry"))
 PRODUCTS = {
     "manifest-ctl": "accelerator", "store-ctl": "accelerator", "cache-ctl": "accelerator",
-    "connector-ctl": "connector", "connector-egress.bundle": "connector", "sandbox-ctl": "sandboxer", "sandbox-init": "runtime",
+    "connector-ctl": "connector", "vpp": "connector", "sandbox-ctl": "sandboxer", "sandbox-init": "runtime",
     "cloud-hypervisor": "sandboxer", "node-ctl": "orchestrator", "cluster-ctl": "orchestrator",
     "node-stub-ctl": "orchestrator", "e2b-key-ctl": "orchestrator",
     "flatten-ctl": "runtime", "mkfs.erofs": "runtime", "sandbox-runtime.bundle": "runtime",
     "vmlinux": "vmlinux",
 }
 # Legacy archives may carry this tool; it is not required by the Go generator.
-OPTIONAL_LEGACY_PRODUCTS = {"mkfs.erofs", "connector-egress.bundle"}
-GO_PRODUCTS = set(PRODUCTS) - {"connector-egress.bundle", "cloud-hypervisor", "mkfs.erofs", "sandbox-runtime.bundle", "vmlinux"}
+OPTIONAL_LEGACY_PRODUCTS = {"mkfs.erofs", "vpp"}
+GO_PRODUCTS = set(PRODUCTS) - {"vpp", "cloud-hypervisor", "mkfs.erofs", "sandbox-runtime.bundle", "vmlinux"}
 REQUIRED = {
     "connector": {"connector-ctl"},
     "guest-runtime": {"store-ctl", "flatten-ctl"},
@@ -151,8 +157,8 @@ def changed_products(changes, *, init_unit='runtime'):
         elif owner == "connector":
             if go:
                 products.add("connector-ctl")
-            if go or touches("egress", "scripts/egress-bundle.py"):
-                products.add("connector-egress.bundle")
+            if go or touches("egress", "native-deps", "scripts/vpp-runtime.py"):
+                products.add("vpp")
         elif owner == "sandboxer":
             if go:
                 products.add("sandbox-ctl")
@@ -249,7 +255,7 @@ def suite_selection(owners, arch, case_files, *, native_full=False, changes=None
         chosen &= supported
     required = set().union(*(REQUIRED[all_cases[name]] for name in chosen))
     if 'network.egress.sh' in chosen:
-        required.add('connector-egress.bundle')
+        required.add('vpp')
     return {'suites': sorted(suites), 'cases': sorted(chosen), 'required_products': sorted(required),
             'exclusions': exclusions}
 
@@ -481,6 +487,7 @@ def runtime_payloads(workspace, arch, expected_init=None, expected_envd=None):
 def unpack(archive, destination, unit, seen, *, baseline_init=False):
     """Extract regular files only, with canonical names and fixed ownership."""
     native = cluster_native_module()
+    egress = egress_native_module()
     with tarfile.open(archive, "r:gz") as source:
         members = source.getmembers()
         local = set()
@@ -501,6 +508,8 @@ def unpack(archive, destination, unit, seen, *, baseline_init=False):
             require(name not in seen, f"conflicting archive ownership: {name}")
             if native.attached(name):
                 require(unit == "orchestrator", f"{unit} cannot own {name}")
+            elif egress.attached(name):
+                require(unit == "connector", f"{unit} cannot own {name}")
             elif unit == "platform":
                 require(name.startswith(("test/", "docs/", "guide/", "workbench/")), f"platform cannot own {name}")
             elif name.startswith("bin/"):
@@ -518,6 +527,7 @@ def unpack(archive, destination, unit, seen, *, baseline_init=False):
         if "bin/vmlinux.sha256" in local:
             require("bin/vmlinux" in local, "kernel checksum requires its kernel in the same archive")
         native.validate_archive(source, members, unit)
+        egress.validate_archive(source, members, unit)
         for member in members:
             name = member.name.removeprefix("./").rstrip("/")
             if not member.isfile():
@@ -716,6 +726,8 @@ def compose(plan, arch, assets, delta, output):
         expected_delta.add("bin/" + name)
     native = cluster_native_module()
     expected_delta.update(native.verify_delta(delta, arch, metadata, plan['product_sources']))
+    egress = egress_native_module()
+    expected_delta.update(egress.verify_delta(delta, arch, metadata, plan['product_sources']))
     for name, record in metadata.get("embedded", {}).items():
         file = delta / "embedded" / name
         require(file.is_file() and not file.is_symlink() and digest(file) == record["sha256"],
@@ -775,6 +787,9 @@ def compose(plan, arch, assets, delta, output):
             native.remove(stage)
             if 'cluster_native' in metadata:
                 native.copy(delta, stage, arch)
+        if 'vpp' in lane['products']:
+            egress.remove(stage)
+            egress.copy(delta, stage, arch)
         if plan["mode"] == "source":
             shutil.rmtree(stage / "test/e2e")
             for owner in plan["test_overlays"]:
@@ -796,15 +811,11 @@ def compose(plan, arch, assets, delta, output):
             if name in OPTIONAL_LEGACY_PRODUCTS and name not in originals and name not in lane["products"]:
                 continue
             require(path.is_file(), f"missing final product: {name}")
-            if name not in ("vmlinux", "sandbox-runtime.bundle", "connector-egress.bundle"):
+            if name not in ("vmlinux", "sandbox-runtime.bundle"):
                 require(path.stat().st_mode & 0o111 and path.stat().st_mode & 0o7022 == 0,
                         f"selected product has unsafe or non-executable permissions: {name}")
-            if name not in ("sandbox-runtime.bundle", "connector-egress.bundle"):
+            if name != "sandbox-runtime.bundle":
                 check_architecture(path, arch, kernel=name == "vmlinux")
-            if name == 'connector-egress.bundle':
-                delivery_module()
-                import egress_runtime
-                egress_runtime.inspect(path, arch)
             actual = digest(path)
             candidate = name in lane["products"]
             require(actual == (metadata["products"][name]["sha256"] if candidate else originals[name]),
@@ -813,6 +824,7 @@ def compose(plan, arch, assets, delta, output):
             products[name] = {"sha256": actual, "unit": origin_unit, "origin": "candidate" if candidate else "baseline",
                               "sources": plan["product_sources"][name] if candidate else baseline["units"][origin_unit]}
         native.validate(stage, arch)
+        egress.validate(stage, arch)
         # This is derived metadata, not a build product or a required legacy
         # input. Never keep the old kernel's identity beside a selected delta.
         if kernel_checksum.exists() and "vmlinux" in lane["products"]:

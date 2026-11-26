@@ -64,6 +64,17 @@ class PreviewSelectionTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.repository.close()
 
+    def test_connector_native_inputs_and_shipped_config_select_a_new_preview(self) -> None:
+        before = self.repository.commit('initial control product')
+        for path in ('native-deps/deps/vpp-source.json',
+                     'native-deps/deps/vpp-patches/0001-policy.patch',
+                     'egress/vpp/plugins/egress_policy/policy.c',
+                     'scripts/vpp-runtime.py', 'dist/egress/gateway.yaml'):
+            with self.subTest(path=path):
+                after = self.repository.commit_files('changed VPP input', {path: 'new input\n'})
+                self.assertTrue(preview_selection.unit_inputs_changed(self.repository.root, before, after, 'connector'))
+                before = after
+
     def resolve(
         self,
         source_ref: str,

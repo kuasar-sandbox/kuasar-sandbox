@@ -12,6 +12,27 @@ CASES = {'accelerator': ['image.manifest.sh', 'storage.cache.sh', 'storage.obs.s
          'platform': ['basic.demo.sh']}
 
 
+def native_egress_files(arch):
+    """Non-executable native bytes for flat directory admission tests."""
+    native = artifacts.egress_native_module()
+    triplet = native.ARCHES[arch][1]
+    data = bytearray(64)
+    data[:7] = b'\x7fELF\x02\x01\x01'
+    struct.pack_into('<H', data, 18, native.ARCHES[arch][0])
+    rows = {'bin/vpp': (bytes(data), 0o755),
+            'bin/lib/' + triplet + '/libvppinfra.so': (bytes(data), 0o644)}
+    rows.update({'bin/lib/' + triplet + '/vpp_plugins/' + name + '_plugin.so':
+                 (bytes(data), 0o644) for name in native.PLUGINS})
+    manifest = {'schema': 1, 'product': 'connector-egress-native-runtime', 'architecture': arch,
+                'cpu_baseline': native.BASELINES[arch],
+                'files': {name.removeprefix('bin/'): hashlib.sha256(content).hexdigest()
+                          for name, (content, _) in rows.items()}}
+    rows['bin/' + native.MANIFEST] = (json.dumps(manifest).encode(), 0o644)
+    rows.update({native.LICENSES + '/' + name: (('license ' + name).encode(), 0o644)
+                 for name in native.LICENSE_FILES})
+    return rows
+
+
 def native_cluster_elf(arch, dependency='libfdb_c.so'):
     """A data-only ELF with real program headers and one DT_NEEDED entry."""
     data = bytearray(0x230)

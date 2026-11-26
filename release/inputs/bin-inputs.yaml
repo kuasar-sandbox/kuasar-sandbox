@@ -12,4 +12,5 @@ node-ctl: orchestrator
 cluster-ctl: orchestrator
 node-stub-ctl: orchestrator
 connector-ctl: connector
+vpp: connector
 e2b-key-ctl: orchestrator

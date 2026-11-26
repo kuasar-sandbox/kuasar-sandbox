@@ -111,7 +111,7 @@ class NativeProductTests(unittest.TestCase):
         self.lock, self.fixtures = native_fixtures.native_cluster_fixtures()
         self.products = {'vmlinux', 'manifest-ctl', 'store-ctl', 'cache-ctl', 'flatten-ctl', 'sandbox-ctl',
                          'sandbox-init', 'cloud-hypervisor', 'sandbox-runtime.bundle', 'node-ctl',
-                         'cluster-ctl', 'node-stub-ctl', 'connector-ctl', 'e2b-key-ctl'}
+                         'cluster-ctl', 'node-stub-ctl', 'connector-ctl', 'vpp', 'e2b-key-ctl'}
         # Reuse the existing admission fixtures. Only ELF inspection data is
         # replaced; links, files, fixed digests, modes and completeness are real.
         for attribute, value in [('LOCK', self.lock), ('inspect_elf', native_fixtures.native_cluster_elf_record)]:
@@ -136,15 +136,26 @@ class NativeProductTests(unittest.TestCase):
             self.native.collect(source, root, arch)
         else:
             shutil.copy2(root / 'cluster-ctl', source / 'cluster-ctl')
+        connector = self.root / (name + '-connector')
+        for path, (data, mode) in native_fixtures.native_egress_files(arch or 'x86_64').items():
+            if not path.startswith('bin/'):
+                continue
+            target = connector / path.removeprefix('bin/')
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            target.chmod(mode)
+        native.artifacts.egress_native_module().collect_bin(connector, root, arch or 'x86_64')
         return root
 
     def qualify(self, root, arch):
-        return native.qualify_products(root, arch, self.root / (root.name + '-owner'))
+        return native.qualify_products(root, arch, self.root / (root.name + '-owner'),
+                                       self.root / (root.name + '-connector'))
 
     def test_legacy_products_remain_exact_and_cannot_omit_a_required_native_closure(self):
         root = self.tree('legacy')
-        self.assertEqual(self.qualify(root, 'x86_64'),
-                         {'products': native.artifacts.tree_files(root)})
+        result = self.qualify(root, 'x86_64')
+        self.assertEqual(set(result['products']), self.products)
+        self.assertIn('lib/x86_64-linux-gnu/vpp_plugins/egress_policy_plugin.so', result['egress_native']['files'])
         (root / 'cluster-ctl').write_bytes(native_fixtures.native_cluster_elf('x86_64'))
         (self.root / 'legacy-owner/cluster-ctl').write_bytes(native_fixtures.native_cluster_elf('x86_64'))
         with self.assertRaisesRegex(ValueError, 'lacks cluster-runtime'):

@@ -55,6 +55,9 @@ class Coverage(unittest.TestCase):
         record = SUBJECT.identity("release-runtime-build", self.sources, "x86_64")
         self.assertEqual(record["native"], ["envd"])
 
+    def test_connector_release_covers_its_vpp_native_output(self):
+        self.assertEqual(SUBJECT.identity('release-connector', self.sources, 'x86_64')['native'], ['vpp'])
+
     def test_every_concrete_producer_has_a_distinct_coverage(self):
         values = [self.coverage(name) for name in SUBJECT.KINDS]
         self.assertEqual(len(set(values)), len(SUBJECT.KINDS))

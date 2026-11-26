@@ -102,6 +102,8 @@ collect:
 	done < $(BIN_INPUTS_MANIFEST)
 	@python3 -B release/cluster_native.py collect --arch "$(TARGET_ARCH)" \
 	  --root "$(ORG)/orchestrator/bin/$(TARGET_ARCH)" --destination "$(BINDIR)"
+	@python3 -B release/egress_runtime.py collect-bin --arch "$(TARGET_ARCH)" \
+	  --runtime "$(ORG)/connector/bin/$(TARGET_ARCH)" --output "$(BINDIR)"
 	@if [ "$(HOST_ARCH)" = "$(TARGET_ARCH)" ]; then \
 	   find bin -maxdepth 1 -type l -delete 2>/dev/null || true; \
 	   while read name repo; do \
@@ -197,6 +199,7 @@ test:
 
 test-ci-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-cluster-native.py
+	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-egress-native.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-dependency-cutover.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-framework-companions.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-capability-routing.py

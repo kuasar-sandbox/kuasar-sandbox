@@ -429,7 +429,8 @@ Publish verifies successful current architecture and Workbench results against t
 - guest `vmlinux`;
 - guest `envd`;
 - RocksDB headers and `librocksdb.a`;
-- patched `cloud-hypervisor`.
+- patched `cloud-hypervisor`;
+- Connector's patched `vpp`, shared libraries, plugins and license materials.
 
 Cache entries live at `$KUASAR_NATIVE_CACHE_ROOT/v3/<arch>/<component>/<input-hash>/`. The Workbench action transfers native entries, Go modules/build cache and Cargo registry/Git/material downloads through Actions cache, subject to the caller's runtime cache permissions. Keys include architecture, exact candidate producer identity and declared build coverage. The candidate namespace binds the actual PR, companion, product, test/helper and kernel inputs. Both exact keys and restore prefixes separate helper builds, selected product sets and release units, so an immutable partial entry cannot occupy another build coverage key.
 
@@ -499,4 +500,4 @@ Accelerator, connector, sandboxer and orchestrator are Public; visibility and an
 - [Runner operations](../ci/runner/README.md): existing persistent infrastructure.
 - [Test quick start](../test/QUICKSTART.md): developer E2E prerequisites.
 
-Connector Egress is a same-version native product, `connector-egress.bundle`. Selected Connector Go or native changes rebuild it on each native architecture. The trusted reader admits its exact file set, architecture and hashes without executing candidate code; release packaging also binds the native input receipt to selected source files. `network.egress.sh` consumes the prepared bundle for the complete local/remote, locator, reload, automatic reclamation and 12288-context/196608-connection acceptance. Node-infra images extract that same product and the existing Docker deployment case exercises its managed service when the selected Connector includes it. Historical archives without the native product keep their existing contract.
+Connector Egress uses the `vpp` native product. The component builds directly into `bin/<arch>/`, with `connector-ctl`, `vpp`, `vpp-runtime.json` and `lib/<triplet>/`; component archives and prepared products retain the same layout under `bin/`. License materials are delivered under `share/licenses/connector/native/`. VPP follows the existing `native-deps` tarball, checksum, patch-series and build stages, and its complete native output is restored through `native-cache`. Selected Connector Go or native changes select the matching VPP product on each native architecture. The trusted reader admits every runtime attachment and its hashes without executing candidate code; release packaging binds the native input record to selected source files. `network.egress.sh` consumes the prepared directory for local/remote, locator, reload, automatic reclamation and 12288-context/196608-connection acceptance. Node-infra copies the same files directly, and its existing Docker deployment case exercises the managed service when the selected Connector includes VPP. Historical Connector archives without VPP keep their existing contract.

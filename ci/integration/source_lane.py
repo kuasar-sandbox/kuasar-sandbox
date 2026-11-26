@@ -74,6 +74,8 @@ def test_script(repository, path):
     named_test = name.startswith(('test_', 'test-')) or name.endswith(('_test.py', '_test.sh'))
     if path.startswith('scripts/') and len(parts) == 2:
         return named_test
+    if repository == 'kuasar-sandbox/connector' and path.startswith('native-deps/tests/'):
+        return len(parts) == 3 and name.startswith('test_') and name.endswith('.py')
     if path.startswith('test/e2e/'):
         if repository == PLATFORM and name.startswith('test_') and name.endswith('.py'):
             return len(parts) == 3 or 'lib' in parts[2:-1]

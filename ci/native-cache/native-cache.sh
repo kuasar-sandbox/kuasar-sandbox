@@ -118,6 +118,18 @@ component_input_paths() {
             required_file sandboxer/native-deps/deps/build-cloud-hypervisor.sh
             find "$WORKSPACE_ROOT/sandboxer/native-deps/deps/ch-patches" -type f -name '*.patch' -print0
             ;;
+        vpp)
+            required_file connector/LICENSE
+            required_file connector/native-deps/Makefile
+            required_file connector/native-deps/deps/common.sh
+            required_file connector/native-deps/deps/build-vpp.sh
+            required_file connector/native-deps/deps/stage-vpp.py
+            required_file connector/native-deps/deps/vpp-source.json
+            required_file connector/scripts/vpp-runtime.py
+            find "$WORKSPACE_ROOT/connector/native-deps/deps/vpp-patches" -type f \
+                \( -name '*.patch' -o -name '*.license' \) -print0
+            find "$WORKSPACE_ROOT/connector/egress/vpp/plugins" -type f -print0
+            ;;
         *) die "unknown component: $component" ;;
     esac
 }
@@ -341,6 +353,15 @@ component_environment() {
                 CC CXX CFLAGS CXXFLAGS LDFLAGS
             )
             ;;
+        vpp)
+            names+=(
+                VPP_TARBALL VPP_TARBALL_SHA256 VPP_BASE_TAG
+                CC CXX CFLAGS CXXFLAGS CPPFLAGS LDFLAGS
+                CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH LD_LIBRARY_PATH
+                PYTHONPATH CMAKE_PREFIX_PATH
+                PKG_CONFIG PKG_CONFIG_PATH PKG_CONFIG_LIBDIR PKG_CONFIG_SYSROOT_DIR
+            )
+            ;;
         cloud-hypervisor)
             # Cargo package IDs in the real build report and manifests use
             # absolute source paths. Workbench always mounts this at /src;
@@ -378,7 +399,7 @@ component_environment() {
         fi
         print_env_input "$name"
     done
-    case "$component" in vmlinux|cloud-hypervisor)
+    case "$component" in vmlinux|cloud-hypervisor|vpp)
         # These are applied only by the recipes' synthetic git commit/git am
         # commands, never exported into a user's repository-wide environment.
         printf 'env\tGIT_AUTHOR_DATE\t%q\n' "${GIT_AUTHOR_DATE-@${SOURCE_DATE_EPOCH:-0} +0000}"
@@ -394,6 +415,7 @@ local_archive_identity() {
         envd) variable=ENVD_TARBALL; directory=guest-runtime/native-deps ;;
         rocksdb) variable=ROCKSDB_TARBALL; directory=accelerator ;;
         cloud-hypervisor) variable=CLOUD_HYPERVISOR_TARBALL; directory=sandboxer/native-deps ;;
+        vpp) variable=VPP_TARBALL; directory=connector/native-deps ;;
     esac
     specifier=${!variable-}
     case "$specifier" in
@@ -466,6 +488,24 @@ component_toolchain() {
             tool_identity glibc ldd --version
             package_identities 'rust cargo gcc binutils glibc-devel' 'rustc cargo gcc binutils libc6-dev'
             ;;
+        vpp)
+            cc=${CC:-gcc}
+            cxx=${CXX:-g++}
+            tool_identity cc "$cc" --version
+            tool_identity cxx "$cxx" --version
+            tool_identity ld "$ld" --version
+            tool_identity cmake cmake --version
+            tool_identity ninja ninja --version
+            tool_identity python python3 --version
+            tool_identity pkg-config "$pkg_config" --version
+            tool_identity glibc ldd --version
+            package_identities \
+                'gcc gcc-c++ binutils cmake ninja-build python3 glibc-devel openssl-devel numactl-devel libunwind-devel libelf-devel' \
+                'gcc g++ binutils cmake ninja-build python3 libc6-dev libssl-dev libnuma-dev libunwind-dev libelf-dev'
+            pkg_config_module_identity openssl
+            pkg_config_module_identity numa
+            pkg_config_module_identity libunwind
+            ;;
     esac
 }
 
@@ -522,6 +562,12 @@ component_outputs() {
             printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/build-report.jsonl\n' "$TARGET_ARCH"
             printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/link.map\n' "$TARGET_ARCH"
             ;;
+        vpp)
+            printf 'connector/bin/%s/vpp\n' "$TARGET_ARCH"
+            printf 'connector/bin/%s/vpp-runtime.json\n' "$TARGET_ARCH"
+            printf 'connector/bin/%s/lib/%s-linux-gnu\n' "$TARGET_ARCH" "$TARGET_ARCH"
+            printf 'connector/native-deps/build/%s/vpp/licenses\n' "$TARGET_ARCH"
+            ;;
     esac
 }
 
@@ -538,6 +584,11 @@ component_required_files() {
                 sandboxer/native-deps/build/src/cloud-hypervisor/CREDITS.md
             printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/build-report.jsonl\n' "$TARGET_ARCH"
             printf 'sandboxer/native-deps/build/%s/cloud-hypervisor/link.map\n' "$TARGET_ARCH"
+            ;;
+        vpp)
+            for name in CONNECTOR-LICENSE VPP-LICENSE VPP-EMBEDDED-NOTICES; do
+                printf 'connector/native-deps/build/%s/vpp/licenses/%s\n' "$TARGET_ARCH" "$name"
+            done
             ;;
     esac
 }
@@ -563,6 +614,10 @@ validate_outputs() {
     while IFS= read -r relative; do
         [ -s "$WORKSPACE_ROOT/$relative" ] || die "$component lacks required build material $relative"
     done < <(component_required_files "$component")
+    if [ "$component" = vpp ]; then
+        python3 "$SCRIPT_DIR/../../release/egress_runtime.py" validate --arch "$TARGET_ARCH" \
+            --runtime "$WORKSPACE_ROOT/connector/bin/$TARGET_ARCH"
+    fi
 }
 
 assert_clean_source_tree() {
@@ -572,6 +627,7 @@ assert_clean_source_tree() {
         envd) source_dir="$WORKSPACE_ROOT/guest-runtime/native-deps/build/src/e2b-infra" ;;
         rocksdb) source_dir="$WORKSPACE_ROOT/accelerator/build/src/rocksdb" ;;
         cloud-hypervisor) source_dir="$WORKSPACE_ROOT/sandboxer/native-deps/build/src/cloud-hypervisor" ;;
+        vpp) source_dir="$WORKSPACE_ROOT/connector/native-deps/build/src/vpp" ;;
     esac
     if [ -e "$source_dir" ]; then
         die "$component cache miss requires a clean assembled workspace; refusing to remove existing source tree $source_dir"
@@ -588,6 +644,7 @@ build_component() {
         envd) make -C "$WORKSPACE_ROOT/guest-runtime/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" envd ;;
         rocksdb) make -C "$WORKSPACE_ROOT/accelerator" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" deps-rocksdb ;;
         cloud-hypervisor) make -C "$WORKSPACE_ROOT/sandboxer/native-deps" TARGET_ARCH="$TARGET_ARCH" CROSS_PREFIX="$cross_prefix" cloud-hypervisor ;;
+        vpp) make -C "$WORKSPACE_ROOT/connector/native-deps" TARGET_ARCH="$TARGET_ARCH" vpp ;;
     esac
     validate_outputs "$component"
 }
@@ -824,7 +881,7 @@ usage() {
 usage: native-cache.sh restore-or-build [component ...]
        native-cache.sh key [component ...]
 
-components: vmlinux envd rocksdb cloud-hypervisor
+components: vmlinux envd rocksdb cloud-hypervisor vpp
 EOF
 }
 
@@ -834,7 +891,7 @@ main() {
     shift
     local components=("$@") component
     if [ "${#components[@]}" -eq 0 ]; then
-        components=(vmlinux envd rocksdb cloud-hypervisor)
+        components=(vmlinux envd rocksdb cloud-hypervisor vpp)
     fi
     case "$command" in
         restore-or-build)

@@ -8,14 +8,14 @@ HOST_ARCH="$(uname -m)"
 case "$HOST_ARCH" in amd64) HOST_ARCH=x86_64 ;; arm64) HOST_ARCH=aarch64 ;; esac
 die() { echo "source-owner: $*" >&2; exit 2; }
 required_bins() { case "$1" in
-connector) echo "connector-ctl" ;;
+connector) echo "connector-ctl vpp" ;;
 guest-runtime) echo "store-ctl flatten-ctl sandbox-init" ;;
 accelerator) echo "manifest-ctl store-ctl cache-ctl flatten-ctl" ;;
-sandboxer) echo "vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ctl sandbox-init cloud-hypervisor sandbox-runtime.bundle connector-ctl" ;;
+sandboxer) echo "vmlinux manifest-ctl store-ctl cache-ctl flatten-ctl sandbox-ctl sandbox-init cloud-hypervisor sandbox-runtime.bundle connector-ctl vpp" ;;
 orchestrator|kuasar-sandbox) awk '!/^($|#)/ {sub(/:$/, "", $1); print $1}' "$ROOT/release/inputs/bin-inputs.yaml" | xargs ;;
 *) die "unknown owner $1" ;;
 esac; }
-native_components() { case "$1" in connector) ;; guest-runtime) ;; accelerator) echo "rocksdb" ;; sandboxer|orchestrator|kuasar-sandbox) echo "vmlinux envd rocksdb cloud-hypervisor" ;; *) die "unknown owner $1" ;; esac; }
+native_components() { case "$1" in connector) echo "vpp" ;; guest-runtime) ;; accelerator) echo "rocksdb" ;; sandboxer|orchestrator|kuasar-sandbox) echo "vmlinux envd rocksdb cloud-hypervisor vpp" ;; *) die "unknown owner $1" ;; esac; }
 images() { case "$1" in connector|guest-runtime) ;; accelerator) echo "python:3.12-slim python:3.12-alpine" ;; sandboxer) echo "python:3.12-slim busybox:latest" ;; orchestrator|kuasar-sandbox) echo "python:3.12-slim" ;; *) die "unknown owner $1" ;; esac; }
 needs_uffd() { case "$1" in sandboxer|kuasar-sandbox) return 0 ;; *) return 1 ;; esac; }
 needs_working_set() { case "$1" in sandboxer|kuasar-sandbox) return 0 ;; *) return 1 ;; esac; }
@@ -35,6 +35,10 @@ if [ "$name" = cluster-ctl ]; then
   if [ "$HOST_ARCH" = "$TARGET_ARCH" ] && [ -e "$ROOT/bin/$TARGET_ARCH/run-cluster-ctl" ]; then
     ln -sfn "$TARGET_ARCH/run-cluster-ctl" "$ROOT/bin/run-cluster-ctl"
   fi
+fi
+if [ "$name" = vpp ]; then
+  python3 -B "$ROOT/release/egress_runtime.py" collect-bin --arch "$TARGET_ARCH" \
+    --runtime "$ORG/$repo/bin/$TARGET_ARCH" --output "$ROOT/bin/$TARGET_ARCH"
 fi
 if [ "$HOST_ARCH" = "$TARGET_ARCH" ]; then ln -sfn "$TARGET_ARCH/$name" "$ROOT/bin/$name"; fi
 done

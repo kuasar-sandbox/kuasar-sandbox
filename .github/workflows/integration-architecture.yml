@@ -300,6 +300,7 @@ jobs:
             /release/selection.py
             /release/archive_paths.py
             /release/cluster_native.py
+            /release/egress_runtime.py
             /ci/integration/cluster-native-runtime.json
             /release/node_infra_assets.py
             /test/e2e/package_inputs.py
@@ -451,6 +452,7 @@ jobs:
             /release/selection.py
             /release/archive_paths.py
             /release/cluster_native.py
+            /release/egress_runtime.py
             /ci/integration/cluster-native-runtime.json
             /release/node_infra_assets.py
             /test/e2e/package_inputs.py
