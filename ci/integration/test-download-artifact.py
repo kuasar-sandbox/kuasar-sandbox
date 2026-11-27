@@ -697,7 +697,7 @@ class DownloadTests(unittest.TestCase):
         self.assertIn('EXECUTOR_DIGEST: ${{ inputs.executor_digest }}', restore)
         self.assertIn('[ "$FRAMEWORK_SHA" = "$TRUSTED_WORKFLOW_SHA" ]', restore)
         self.assertLess(restore.index('hashlib.sha256'), restore.index('tarfile.open'))
-        self.assertEqual(workflow.count('uses: ./framework/.github/actions/download-artifact'), 13)
+        self.assertEqual(workflow.count('uses: ./framework/.github/actions/download-artifact'), 14)
         self.assertEqual(workflow.count('uses: ./framework/.github/actions/download-artifact'),
                          workflow.count('timeout-minutes: 35'))
         self.assertEqual(workflow.count('sparse-checkout: |'),
