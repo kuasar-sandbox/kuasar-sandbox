@@ -661,9 +661,9 @@
         "repository": "kuasar-sandbox/orchestrator",
         "pull_request_number": 583,
         "base_ref": "main",
-        "base_sha": "cfcc9bda49309403ae56308365161fecab5ad798",
-        "head_sha": "85a324830d47f49f57c1e33af868610c0b77adc8",
-        "candidate_sha": "182f8175234a645b143c7a50b11f7030259f6312"
+        "base_sha": "bad66fe84b4e5412f783037ad5f10065ab28a8f7",
+        "head_sha": "084efbba71602b34dee0d7d98c3626736ef7f2fe",
+        "candidate_sha": "60981f75b698df485ad35dc10b763c8209b451f6"
       },
       "units": {
         "sandboxer": {
