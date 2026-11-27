@@ -30,6 +30,12 @@ TEST_DRIVERS = {
     **{('kuasar-sandbox/' + owner, 'scripts/test-publisher.sh'): 'scripts/test-release.sh'
        for owner in OWNERS if owner != 'platform'},
 }
+# These exact paths are exercised by the owner's mandatory source gate. A
+# helper is not a standalone test, and arbitrary scripts remain outside this
+# allowlist so runtime/build changes retain their product qualification.
+GATE_INPUTS = {('kuasar-sandbox/' + owner, 'scripts/ci-source-checks.sh')
+               for owner in ('connector', 'orchestrator', 'sandboxer')} | {
+    ('kuasar-sandbox/orchestrator', 'test/source/builder_state.py')}
 GO_OSES = {'aix', 'android', 'darwin', 'dragonfly', 'freebsd', 'hurd', 'illumos',
            'ios', 'js', 'linux', 'netbsd', 'openbsd', 'plan9', 'solaris', 'wasip1', 'windows'}
 GO_ARCHES = {'386', 'amd64', 'amd64p32', 'arm', 'arm64', 'loong64', 'mips', 'mipsle',
@@ -117,6 +123,10 @@ def test_driver(repository, path):
     return TEST_DRIVERS.get((repository, path), path)
 
 
+def gate_input(repository, path):
+    return (repository, path) in GATE_INPUTS
+
+
 def fixture(repository, path):
     if repository not in REPOSITORIES or not safe_path(path):
         return False
@@ -140,7 +150,8 @@ def fixture(repository, path):
 
 def allowed(repository, path):
     return (metadata(repository, path) or test_script(repository, path) or go_test(repository, path)
-            or fixture(repository, path) or repository == PLATFORM and path in DOCUMENTATION_TOOLS)
+            or gate_input(repository, path) or fixture(repository, path)
+            or repository == PLATFORM and path in DOCUMENTATION_TOOLS)
 
 
 def e2e_input(repository, path):
@@ -151,7 +162,8 @@ def e2e_input(repository, path):
         return True
     if '/cases/' in '/' + path:
         return path.startswith('test/e2e/') and not path.endswith('.md')
-    if go_test(repository, path) or test_script(repository, path) or fixture(repository, path):
+    if (go_test(repository, path) or test_script(repository, path) or gate_input(repository, path)
+            or fixture(repository, path)):
         return False
     parts = PurePosixPath(path).parts
     if path.startswith('test/e2e/') and 'lib' in parts[2:-1] and not path.endswith('.md'):
@@ -171,7 +183,9 @@ def supported(repository, tree, changed, read_blob):
         if row is None:
             continue
         module = tree['entries'].get('go.mod', {})
-        if module.get('type') != 'blob' or module.get('mode') != '100644':
+        # Go reads go.mod as data. A regular file's executable bit does not
+        # affect which root-module tests the source gate can execute.
+        if module.get('type') != 'blob' or module.get('mode') not in {'100644', '100755'}:
             return False
         if any((parent / 'go.mod').as_posix() in tree['entries']
                for parent in PurePosixPath(path).parents if parent != PurePosixPath('.')):

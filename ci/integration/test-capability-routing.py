@@ -10,6 +10,8 @@ import unittest
 import subprocess
 from unittest.mock import Mock, patch
 
+import yaml
+
 import artifacts
 import capability_routing as routing
 from test_fixtures import CASES, helper_contract
@@ -243,6 +245,81 @@ class Allocation(unittest.TestCase):
 
 
 class RuntimeTransport(unittest.TestCase):
+    def test_only_clean_runtime_groups_download_the_separate_archive(self):
+        jobs = yaml.safe_load((artifacts.ROOT / '.github/workflows/integration-architecture.yml').read_text())['jobs']
+        uploads = {step['with']['name']: step for step in jobs['prepare']['steps']
+                   if 'actions/upload-artifact@' in step.get('uses', '')}
+        prepared = uploads['integration-prepared-${{ inputs.arch }}-${{ github.run_id }}']
+        runtime = uploads['integration-runtime-${{ inputs.arch }}-${{ github.run_id }}']
+        self.assertEqual(prepared['with']['path'], 'prepared.tar.gz')
+        self.assertEqual(runtime['with']['path'], 'runtime.tar.gz')
+        self.assertEqual(runtime['if'], "needs.build.outputs.product_cases == 'true'")
+        for upload in (prepared, runtime):
+            self.assertEqual(upload['with']['if-no-files-found'], 'error')
+            self.assertEqual(upload['with']['compression-level'], 0)
+        downloads = [step for step in jobs['e2e']['steps']
+                     if step.get('with', {}).get('name', '').startswith('integration-runtime-')]
+        self.assertEqual(len(downloads), 1)
+        self.assertEqual(downloads[0]['if'], "matrix.group.runtime == 'runtime-only'")
+        self.assertEqual(downloads[0]['with']['name'], runtime['with']['name'])
+        self.assertEqual(downloads[0]['with']['path'], '${{ env.E2E_WORKSPACE }}/runtime-transport')
+        prepared_download = next(step for step in jobs['e2e']['steps']
+                                 if step.get('with', {}).get('name', '').startswith('integration-prepared-'))
+        self.assertNotEqual(downloads[0]['with']['path'], prepared_download['with']['path'])
+        self.assertFalse(any(step.get('with', {}).get('name', '').startswith('integration-runtime-')
+                             for step in jobs['performance']['steps']))
+        release = yaml.safe_load((artifacts.ROOT / '.github/workflows/aggregate-release.yml').read_text())
+        cleanup = next(step['run'] for step in release['jobs']['cleanup']['steps']
+                       if step.get('name') == 'Delete release workflow artifacts')
+        query = cleanup.split("--jq '", 1)[1].split("'", 1)[0]
+        rows = [{'id': index, 'name': name} for index, name in enumerate((
+            'integration-prepared-x86_64-123', 'integration-runtime-x86_64-123',
+            'integration-runtime-aarch64-123', 'integration-workbench-result-x86_64-A-123-1',
+            'integration-shard-x86_64-snapshot-123', 'unrelated-artifact'))]
+        deleted = subprocess.check_output(['jq', '-r', query], input=json.dumps({'artifacts': rows}), text=True)
+        self.assertEqual(deleted.splitlines(), ['0', '1', '2'])
+        plan = fixture()
+        legacy = copy.deepcopy(plan)
+        legacy['schema'] = 3
+        legacy.pop('case_requirements')
+        legacy.pop('runner_configuration')
+        for arch, lane in legacy['lanes'].items():
+            lane.pop('groups')
+            lane['selection'] = artifacts.plan_suite_selection(legacy, arch)
+        for candidate in (plan, legacy):
+            for arch in artifacts.ARCHES:
+                for group in routing.matrix(candidate, arch):
+                    suite = group['id'].split('--')[-1]
+                    self.assertEqual(group['runtime'] == 'runtime-only',
+                                     artifacts.requires_clean_runtime(arch, suite))
+
+    def test_system_execution_needs_no_runtime_archive_but_clean_execution_requires_it(self):
+        spec = importlib.util.spec_from_file_location('runtime_selection', Path(__file__).with_name('run-capability-group.py'))
+        driver = importlib.util.module_from_spec(spec); spec.loader.exec_module(driver)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = fixture()
+            args = argparse.Namespace(plan=root / 'plan.json', workspace=root / 'prepared', arch='x86_64',
+                group='hosted-x86--basic', runtime=root / 'absent-runtime.tar.gz', result=root / 'result.json')
+            args.plan.write_text(json.dumps(plan))
+            provenance = {'arch': 'x86_64', 'preparation_environment': {
+                'kind': 'clean-container', 'verified': True, 'image_id': 'sha256:' + 'f' * 64,
+                'archive_sha256': '0' * 64, 'compilers': [], 'component_source_trees': []}}
+            execution = Mock()
+            with patch.object(driver.artifacts, 'verify_workspace', return_value=provenance), \
+                 patch.object(driver.platform, 'machine', return_value='x86_64'), \
+                 patch.object(driver.routing, 'runner_identity', return_value={}), \
+                 patch.object(driver, 'run_module', return_value=execution), \
+                 patch.object(driver.runtime_archive.subprocess, 'run') as docker:
+                driver.execute(args)
+                self.assertIsNone(execution.execute.call_args.args[5])
+                execution.reset_mock()
+                args.group = 'hosted-x86--storage'
+                with self.assertRaisesRegex(ValueError, 'archive identity'):
+                    driver.execute(args)
+                execution.execute.assert_not_called()
+                docker.assert_not_called()
+
     def test_changed_runtime_is_rejected_before_docker(self):
         import runtime_archive
         with tempfile.TemporaryDirectory() as directory:

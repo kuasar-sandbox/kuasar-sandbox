@@ -356,7 +356,7 @@ node_exec connector-ctl egress status \
 
 将 CLI 结果的 `snapshot.configuration_generation` 与 reload 前的值比较，并检查
 `snapshot.reload_error`。等待新的观察被保存；发送 SIGHUP 成功不等于策略激活成功。
-generation 前进且没有 reload 错误，表示配置已被接受，随后还应验证受影响的 allow/deny 流量。拒绝 reload 时保留最后接受的策略；接口恢复可能需要受控操作。状态文件提供接口、context 与 NAT 观察。只读 [egress status CLI](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md#通过-cli-读取保存的快照)，展示保存的快照、文件修改时间及其年龄，不代表网关实时健康。正向流量自动创建转发状态，协议空闲回收 mapping/context，不需要为每个沙箱调用注册接口。pool 容量、超时、reload 和失败行为见原生 [egress 契约](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md)。
+generation 前进且没有 reload 错误，表示配置已被接受，随后还应验证受影响的 allow/deny 流量。拒绝 reload 时保留最后接受的策略；接口恢复可能需要受控操作。状态文件提供接口、context 与 NAT 观察。只读 [egress status CLI](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md#诊断与恢复)，展示保存的快照、文件修改时间及其年龄，不代表网关实时健康。正向流量自动创建转发状态，协议空闲回收 mapping/context，不需要为每个沙箱调用注册接口。pool 容量、超时、reload 和失败行为见原生 [egress 契约](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md)。
 
 共享远端网关由独立所有者运行，按 [Connector egress](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md)配置真实专用 transit 路径。节点不拥有本地 pair 时，不配置本地 `link.json` 所有权。已有站点 Linux 网关仍可按下方显式集成方式接入，但普通原生出口不再以这类自建方案为前提。
 

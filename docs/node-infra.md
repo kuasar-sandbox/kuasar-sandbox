@@ -490,7 +490,7 @@ SIGHUP submission alone is not confirmation of policy activation. An advanced
 generation with no reload error shows that the configuration was accepted;
 verify the affected allow/deny traffic afterward. Rejected reload keeps the last accepted policy; interface recovery
 can require controlled intervention. The status file exposes interface, context
-and NAT observations. The read-only [egress status CLI](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md#read-a-saved-snapshot-with-the-cli)
+and NAT observations. The read-only [egress status CLI](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md#diagnostics-and-recovery)
 reports the saved snapshot, its file modification time and age; it does not
 establish live gateway health. Forward traffic
 creates forwarding state automatically and protocol inactivity reclaims mappings/contexts; an API registration call per

@@ -128,6 +128,25 @@ class PathAndQualificationTests(unittest.TestCase):
         self.assertFalse(subject.test_script(PLATFORM, path))
         self.assert_source(qualify({path: 'def fixture():\n    return {}\n'}))
 
+    def test_explicit_source_gate_inputs_are_checked_without_becoming_standalone_tests(self):
+        for repository, path in sorted(subject.GATE_INPUTS):
+            with self.subTest(repository=repository, path=path):
+                self.assertTrue(subject.gate_input(repository, path))
+                self.assertFalse(subject.test_script(repository, path))
+                self.assertFalse(subject.e2e_input(repository, path))
+                content = 'def validate(rows):\n    return rows\n' if path.endswith('.py') else 'set -eu\nexit 0\n'
+                self.assert_source(qualify({path: content}, repository=repository))
+        for repository, path in (
+                ('kuasar-sandbox/connector', 'test/source/builder_state.py'),
+                ('kuasar-sandbox/orchestrator', 'test/source/unknown_helper.py'),
+                ('kuasar-sandbox/orchestrator', 'scripts/build.sh')):
+            with self.subTest(repository=repository, path=path):
+                self.assertFalse(subject.gate_input(repository, path))
+                self.assertEqual(qualify({path: 'exit 0\n' if path.endswith('.sh') else 'pass\n'},
+                                         repository=repository)['lane'], 'full')
+        self.assertFalse(subject.gate_input(PLATFORM, 'scripts/ci-source-checks.sh'))
+        self.assertFalse(subject.test_script(PLATFORM, 'scripts/ci-source-checks.sh'))
+
     def test_documentation_delivery_checker_reaches_actual_source_execution(self):
         path = 'ci/integration/check-source-documentation.py'
         self.assertFalse(subject.test_script(PLATFORM, path))
@@ -162,6 +181,43 @@ class PathAndQualificationTests(unittest.TestCase):
         self.assertEqual(qualify({'ci/source_test.go': GO_TEST})['lane'], 'full')
         common = {**GO_MODULE, 'tools/go.mod': 'module example.com/tools\n'}
         self.assertEqual(qualify({**common, 'tools/fixture_test.go': GO_TEST}, before=common,
+                                 repository=repository)['lane'], 'full')
+
+    def test_regular_root_module_modes_qualify_go_test_changes(self):
+        with without_host_go():
+            for repository in sorted(subject.REPOSITORIES - {PLATFORM}):
+                for mode in ('100644', '100755'):
+                    with self.subTest(repository=repository, mode=mode):
+                        common = {'go.mod': ('module example.com/fixture\n', mode, 'blob')}
+                        self.assert_source(qualify({**common, 'pkg/state_test.go': GO_TEST},
+                                                   before=common, repository=repository))
+
+    def test_nonregular_root_module_entries_remain_full(self):
+        for mode, kind in (('120000', 'blob'), ('160000', 'commit'), ('040000', 'tree'),
+                           ('100664', 'blob')):
+            with self.subTest(mode=mode, kind=kind):
+                common = {'go.mod': ('module example.com/fixture\n', mode, kind)}
+                result = qualify({**common, 'pkg/state_test.go': GO_TEST}, before=common,
+                                 repository='kuasar-sandbox/accelerator')
+                self.assertEqual(result['lane'], 'full', result)
+
+    def test_executable_root_module_keeps_build_tag_and_nested_module_boundaries(self):
+        repository = 'kuasar-sandbox/accelerator'
+        common = {'go.mod': ('module example.com/fixture\n', '100755', 'blob')}
+        with without_host_go():
+            for constraint in ('no_rocksdb', '!no_rocksdb'):
+                with self.subTest(accepted=constraint):
+                    self.assert_source(qualify(
+                        {**common, 'app/cache/tiered_build_test.go': '//go:build ' + constraint + '\n\n' + GO_TEST},
+                        before=common, repository=repository))
+        for constraint in ('integration', 'darwin', 'custom_feature'):
+            with self.subTest(rejected=constraint):
+                result = qualify(
+                    {**common, 'pkg/state_test.go': '//go:build ' + constraint + '\n\n' + GO_TEST},
+                    before=common, repository=repository)
+                self.assertEqual(result['lane'], 'full', result)
+        nested = {**common, 'tools/go.mod': 'module example.com/tools\n'}
+        self.assertEqual(qualify({**nested, 'tools/fixture_test.go': GO_TEST}, before=nested,
                                  repository=repository)['lane'], 'full')
 
     def test_uncovered_go_architectures_and_custom_build_tags_remain_full(self):
