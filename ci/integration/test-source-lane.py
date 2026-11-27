@@ -128,6 +128,25 @@ class PathAndQualificationTests(unittest.TestCase):
         self.assertFalse(subject.test_script(PLATFORM, path))
         self.assert_source(qualify({path: 'def fixture():\n    return {}\n'}))
 
+    def test_explicit_source_gate_inputs_are_checked_without_becoming_standalone_tests(self):
+        for repository, path in sorted(subject.GATE_INPUTS):
+            with self.subTest(repository=repository, path=path):
+                self.assertTrue(subject.gate_input(repository, path))
+                self.assertFalse(subject.test_script(repository, path))
+                self.assertFalse(subject.e2e_input(repository, path))
+                content = 'def validate(rows):\n    return rows\n' if path.endswith('.py') else 'set -eu\nexit 0\n'
+                self.assert_source(qualify({path: content}, repository=repository))
+        for repository, path in (
+                ('kuasar-sandbox/connector', 'test/source/builder_state.py'),
+                ('kuasar-sandbox/orchestrator', 'test/source/unknown_helper.py'),
+                ('kuasar-sandbox/orchestrator', 'scripts/build.sh')):
+            with self.subTest(repository=repository, path=path):
+                self.assertFalse(subject.gate_input(repository, path))
+                self.assertEqual(qualify({path: 'exit 0\n' if path.endswith('.sh') else 'pass\n'},
+                                         repository=repository)['lane'], 'full')
+        self.assertFalse(subject.gate_input(PLATFORM, 'scripts/ci-source-checks.sh'))
+        self.assertFalse(subject.test_script(PLATFORM, 'scripts/ci-source-checks.sh'))
+
     def test_documentation_delivery_checker_reaches_actual_source_execution(self):
         path = 'ci/integration/check-source-documentation.py'
         self.assertFalse(subject.test_script(PLATFORM, path))

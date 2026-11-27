@@ -104,6 +104,7 @@ def source_records(plan):
         selected = {owner for owner, paths in plan["source_scope"]["changes"].items()
                     if any(source_lane.go_test(plan["test_revisions"][owner]["repository"], path) or
                            source_lane.test_script(plan["test_revisions"][owner]["repository"], path) or
+                           source_lane.gate_input(plan["test_revisions"][owner]["repository"], path) or
                            source_lane.fixture(plan["test_revisions"][owner]["repository"], path)
                            for path in paths)}
         # The platform contracts use fixed component readers and guide inputs.
