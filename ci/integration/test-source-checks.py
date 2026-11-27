@@ -87,6 +87,7 @@ class SourceChecksTests(unittest.TestCase):
         self.assertEqual(source_results.groups_for(self.plan, True), ['A'])
 
     def test_source_scope_covers_each_changed_go_owner_and_no_unrelated_gates(self):
+        self.plan['test_revisions']['platform']['sha'] = self.plan['framework_sha']
         original = copy.deepcopy(self.plan)
         expected = {
             'connector': [('connector-go-tests', ['env', 'CGO_ENABLED=0', 'go', 'test', '-count=1', './...']),
@@ -104,8 +105,9 @@ class SourceChecksTests(unittest.TestCase):
                 self.source_scope({owner: ['pkg/example/example_test.go']})
                 artifacts.check_plan(self.plan)
                 checks = SUBJECT.checks_for(self.plan, self.sources)
-                self.assertEqual(checks[0], ('platform-contracts',
-                                            ['make', 'test-ci-tools', 'test-release-tools'], self.sources / 'platform'))
+                self.assertEqual(checks[0], ('platform-source-compatibility',
+                                            ['make', 'test-ci-compatibility', 'test-release-compatibility'],
+                                            self.sources / 'platform'))
                 self.assertEqual(checks[1:], [(name, command, self.sources / owner) for name, command in commands])
 
     def test_full_product_changes_keep_the_same_basic_gates_as_source_only(self):
@@ -124,6 +126,98 @@ class SourceChecksTests(unittest.TestCase):
                                SUBJECT.checks_for(self.plan, self.sources) if cwd == self.sources / owner]
                 self.assertTrue(source_only)
                 self.assertEqual(full, source_only)
+
+    def test_platform_companions_and_different_framework_trees_keep_full_contracts(self):
+        original = copy.deepcopy(self.plan)
+        for source_only, platform_path, same_framework in itertools.product(
+                (False, True), (None, 'docs/README.md', 'ci/integration/test-new.py'), (False, True)):
+            with self.subTest(source_only=source_only, platform_path=platform_path,
+                              same_framework=same_framework):
+                self.plan = copy.deepcopy(original)
+                if same_framework:
+                    self.plan['test_revisions']['platform']['sha'] = self.plan['framework_sha']
+                owners = ['connector'] + (['platform'] if platform_path else [])
+                select_plan(self.plan, owners)
+                if source_only:
+                    changes = {'connector': ['pkg/vswitch/new_test.go']}
+                    if platform_path:
+                        changes['platform'] = [platform_path]
+                    self.source_scope(changes)
+                row = SUBJECT.checks_for(self.plan, self.sources)[0]
+                if platform_path or not same_framework:
+                    self.assertEqual(row[:2], ('platform-contracts',
+                        ['make', 'test-ci-tools', 'test-release-tools']))
+                else:
+                    self.assertEqual(row[:2], ('platform-source-compatibility',
+                        ['make', 'test-ci-compatibility', 'test-release-compatibility']))
+
+    def test_platform_workspace_binds_security_fixture_to_the_selected_tree(self):
+        env = {'GOWORK': '/different/go.work', 'MAIN_WORKBENCH_ROOT': '/different/platform',
+               'KUASAR_RUNTIME_READER': '/fixed-admitted-reader.py'}
+        actual = SUBJECT.workspace(self.sources, 'platform', env)
+        self.assertEqual(actual, dict(env, GOWORK='off',
+                                     MAIN_WORKBENCH_ROOT=str(self.sources / 'platform')))
+        self.assertEqual(env['MAIN_WORKBENCH_ROOT'], '/different/platform')
+
+    def test_component_compatibility_failure_stops_the_owner_and_is_required_evidence(self):
+        self.plan['test_revisions']['platform']['sha'] = self.plan['framework_sha']
+        self.source_scope({'connector': ['pkg/vswitch/new_test.go']})
+        command = ['make', 'test-ci-compatibility', 'test-release-compatibility']
+        with self.assertRaisesRegex(ValueError, 'platform-source-compatibility'):
+            self.run_checks(failure=(command, 39))
+        self.assertEqual(self.result()['exit_code'], 39)
+        self.assertEqual([row['name'] for row in self.result()['checks']],
+                         ['platform-source-compatibility'])
+        good = self.grouped_evidence(('A',))
+        self.assertEqual(self.validate_evidence(good, ('A',))['conclusion'], 'success')
+        for mutation in ('missing', 'substituted', 'failed'):
+            bad = copy.deepcopy(good)
+            checks = bad[3][1]['result']['checks']
+            if mutation == 'missing':
+                checks.pop(0)
+            elif mutation == 'substituted':
+                checks[0]['command'] = ['true']
+            else:
+                checks[0]['exit_code'] = 39
+            with self.assertRaises(ValueError):
+                self.validate_evidence(bad, ('A',))
+
+    def test_compatibility_make_entries_preserve_selected_sources_reader_and_failure(self):
+        directory = self.root / 'make-probe'
+        directory.mkdir()
+        shim = directory / 'python3'
+        shim.write_text('#!' + sys.executable + '\n' + '''import json, os, sys
+with open(os.environ['COMPAT_RECORD'], 'a') as stream:
+    stream.write(json.dumps({'argv': sys.argv[1:], 'reader': os.getenv('KUASAR_RUNTIME_READER')}) + '\\n')
+if os.environ.get('COMPAT_FAIL') in sys.argv[1:]:
+    sys.exit(41)
+''')
+        shim.chmod(0o755)
+        record = directory / 'commands.jsonl'
+        root = Path(SUBJECT.__file__).resolve().parents[2]
+        sources = directory / 'selected-sources'
+        base = dict(os.environ, PATH=str(directory) + os.pathsep + os.environ['PATH'],
+                    COMPAT_RECORD=str(record))
+        targets = ['make', '-s', 'test-ci-compatibility', 'test-release-compatibility', 'ORG=' + str(sources)]
+        for reader in ('', '/fixed-admitted-reader.py'):
+            env = dict(base, KUASAR_RUNTIME_READER=reader)
+            result = subprocess.run(targets, cwd=root, env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rows = [json.loads(line) for line in record.read_text().splitlines()]
+            self.assertEqual(rows, [
+                {'argv': ['ci/integration/test-artifacts.py'],
+                 'reader': reader or str(sources / 'guest-runtime/scripts/release-runtime-payloads.py')},
+                {'argv': ['-B', 'ci/integration/release-source-set.py', '--sources', str(sources), '--auto'],
+                 'reader': reader},
+            ])
+            record.unlink()
+        for failure in ('ci/integration/test-artifacts.py', 'ci/integration/release-source-set.py'):
+            env = dict(base, COMPAT_FAIL=failure)
+            result = subprocess.run(targets, cwd=root, env=env, capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            rows = [json.loads(line) for line in record.read_text().splitlines()]
+            self.assertEqual(len(rows), 1 if failure.endswith('test-artifacts.py') else 2)
+            record.unlink()
 
     def test_explicit_gate_input_selects_its_complete_owner_gate(self):
         original = copy.deepcopy(self.plan)
@@ -235,6 +329,7 @@ class SourceChecksTests(unittest.TestCase):
             self.validate_evidence(evidence, ('A',))
 
     def test_source_scope_mixed_fixtures_tests_and_metadata_select_only_test_owners(self):
+        self.plan['test_revisions']['platform']['sha'] = self.plan['framework_sha']
         self.source_scope({'accelerator': ['pkg/tarstream/testdata/legacy-byte-holes.tar'],
                            'connector': ['pkg/vswitch/new_test.go'],
                            'guest-runtime': ['release/guide-migrations.json'],
@@ -242,7 +337,7 @@ class SourceChecksTests(unittest.TestCase):
         selected, _ = SUBJECT.source_records(self.plan)
         self.assertEqual(selected, {'accelerator', 'connector'})
         self.assertEqual([row[0] for row in SUBJECT.checks_for(self.plan, self.sources)],
-                         ['platform-contracts', 'source-documentation-package', 'connector-go-tests',
+                         ['platform-source-compatibility', 'source-documentation-package', 'connector-go-tests',
                           'connector-unit-race-vet', 'accelerator-source-tests', 'accelerator-no-rocksdb-tests'])
         self.assertEqual(source_results.groups_for(self.plan, True), ['A'])
 
@@ -322,6 +417,7 @@ class SourceChecksTests(unittest.TestCase):
             source_results.validate(self.plan, [], {}, [], [], lambda _: None)
 
     def test_groups_preserve_all_commands_conditions_and_dependencies(self):
+        self.plan['test_revisions']['platform']['sha'] = self.plan['framework_sha']
         owners = list(artifacts.OWNERS)
         for mode in ('source', 'exact-assets'):
             for count in range(1, len(owners) + 1):
@@ -335,7 +431,9 @@ class SourceChecksTests(unittest.TestCase):
                         self.assertEqual(a, [row for row in all_checks if row[0] != 'orchestrator-unit-race-vet'])
                         self.assertEqual(b, [row for row in all_checks if row[0] == 'orchestrator-unit-race-vet'])
                         self.assertEqual(len(a) + len(b), len(all_checks))
-                        self.assertEqual(a[0][1], ['make', 'test-ci-tools', 'test-release-tools'])
+                        expected = (['make', 'test-ci-tools', 'test-release-tools'] if 'platform' in selected else
+                                    ['make', 'test-ci-compatibility', 'test-release-compatibility'])
+                        self.assertEqual(a[0][1], expected)
                         self.assertEqual(a[1][1], ['sudo', '-n', '-E', 'make', 'test-perf-tools'])
                         self.assertEqual(source_results.groups_for(self.plan, True), [] if mode == 'exact-assets' else ['A', 'B'] if b else ['A'])
                         self.assertEqual(source_results.groups_for(self.plan), [] if mode == 'exact-assets' else ['all'])
@@ -494,10 +592,11 @@ class SourceChecksTests(unittest.TestCase):
         self.assertEqual(self.result()["checks"][-1]["exit_code"], 33)
 
     def test_owner_scope_does_not_expand_into_unrelated_checks(self):
+        self.plan['test_revisions']['platform']['sha'] = self.plan['framework_sha']
         select_plan(self.plan, ["connector"])
         self.run_checks()
         self.assertEqual([row["name"] for row in self.result()["checks"]],
-                         ["platform-contracts", "platform-privileged-perf-contracts", "connector-go-tests",
+                         ["platform-source-compatibility", "platform-privileged-perf-contracts", "connector-go-tests",
                           "connector-unit-race-vet"])
         self.assertEqual(set(self.result()["sources"]), {"connector", "platform"})
 

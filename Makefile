@@ -46,6 +46,7 @@ NODE_INFRA_ENGINE ?= podman
 PERF_TARGETS := perf-sandbox perf-sandbox-manifest perf-sandbox-working-set perf-density perf-warmpool-dedup
 
 .PHONY: all build node-infra-image collect e2e-zot e2e-versitygw e2e-tools assemble-e2e release verify-prebuilt vet test test-ci-tools test-release-tools test-perf-tools test-uffd-performance-gate clean help demo \
+	        test-ci-compatibility test-release-compatibility \
 	        bench e2e-fixtures test-e2e perf dedup-report \
 	        $(PERF_TARGETS)
 
@@ -233,13 +234,21 @@ test-ci-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/hosted/test-cache-scope.py
 	PYTHONDONTWRITEBYTECODE=1 python3 ci/hosted/test-cache-coverage.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/e2e/platform/lib/test_failure_diagnostics.py
+	$(MAKE) test-ci-compatibility
+
+# These two gates consume the actual selected component inputs. Keep them on
+# component-only PRs even when unchanged platform fixture suites are not needed.
+test-ci-compatibility:
 	KUASAR_RUNTIME_READER="$${KUASAR_RUNTIME_READER:-$(ORG)/guest-runtime/scripts/release-runtime-payloads.py}" \
 		PYTHONDONTWRITEBYTECODE=1 python3 ci/integration/test-artifacts.py
+
+test-release-compatibility:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/release-source-set.py --sources "$(ORG)" --auto
 
 test-release-tools:
 	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test_go_dependency_alignment.py
 	PYTHONDONTWRITEBYTECODE=1 python3 test/release/test-download-asset.py
-	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/release-source-set.py --sources "$(ORG)" --auto
+	$(MAKE) test-release-compatibility
 	PYTHONDONTWRITEBYTECODE=1 python3 -B ci/integration/test-release-source-set.py
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/release -p 'test_tag_*.py'
 	PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test/release -p 'test_workbench_*.py'

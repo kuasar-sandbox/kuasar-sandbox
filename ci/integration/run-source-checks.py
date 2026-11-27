@@ -217,6 +217,10 @@ def workspace(sources, owner, env):
         return go_workspace.helper_environment(sources, owner, env, source_checks=True)
     if owner in go_workspace.DEPENDENCIES:
         return go_workspace.configure(sources, [owner], env, adapt_requirements=True)
+    if owner == 'platform':
+        # The security fixture supports a developer checkout override. Source
+        # qualification must inspect this plan's frozen platform checkout.
+        return dict(env, GOWORK='off', MAIN_WORKBENCH_ROOT=str(sources / 'platform'))
     return dict(env, GOWORK='off')
 
 
@@ -304,7 +308,18 @@ def checks_for(plan, sources, group="all"):
     artifacts.require(group in ("all", "A", "B"), "unknown source check group")
     selected, _ = source_records(plan)
     scope = plan.get("source_scope")
+    # Platform fixtures depend on the platform tree, not a changed component's
+    # product implementation. A platform companion (including documentation)
+    # still selects the complete suite. Mixed runtime-reader and owner-release
+    # gates continue to inspect the actual selected inputs in every source run.
+    platform_changed = "platform" in (scope["changes"] if scope is not None else selected)
     checks = [("platform-contracts", ["make", "test-ci-tools", "test-release-tools"], sources / "platform")]
+    # Older maintained platform trees may predate the split Make targets. A
+    # different tree also has not been checked by this framework's own PR.
+    platform_is_framework = plan["test_revisions"]["platform"]["sha"] == plan["framework_sha"]
+    if not platform_changed and platform_is_framework:
+        checks = [("platform-source-compatibility",
+                   ["make", "test-ci-compatibility", "test-release-compatibility"], sources / "platform")]
     if source_documentation.required(plan):
         checks.append(("source-documentation-package",
                        ["python3", "-B", "/inputs/release/ci/integration/check-source-documentation.py",
