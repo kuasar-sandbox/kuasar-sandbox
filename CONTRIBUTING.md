@@ -134,6 +134,13 @@ Tests requiring KVM, root, eBPF, systemd, external storage, or the complete sour
 
 Organize documentation around one complete user task or component contract. Merge fix-specific notes into their owning specification; remove obsolete one-off reports instead of relocating them to a new archive hierarchy. Add or split a document only when it has a genuinely independent responsibility; a feature, fix, package or flag alone does not justify a separate file. Historical evidence does not require retaining one-off report files; original Git/PR/Issue history can preserve it. Record moved sections and removed duplication in the PR, preserve both language editions, and validate source and packaged navigation.
 
+Write maintained guides, examples, CLI help and code comments as the contract of
+the resulting project state, for the people using that interface. Keep the
+change's review status, pending merge/release timing, temporary development
+workarounds and validation narrative in its PR description or comments. Retain
+lasting compatibility and upgrade requirements, and the exact inputs and scope
+of historical measurements, when users need them to operate the product.
+
 <a id="documentation-organization"></a>
 ### Organization and authoritative ownership
 

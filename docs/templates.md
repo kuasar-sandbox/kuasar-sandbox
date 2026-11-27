@@ -40,19 +40,15 @@ for the [local gateway](node-infra.md#native-egress). This is an example environ
 variable consumed by this client recipe, not a new Node setting. Match the image
 registry's reachability and DNS/ACL to the Build execution network.
 
-**Version boundary:** current source accepts repeated identical Network and
-Builder target headers as assertions of registered values, so the SDK flow below
-can carry its Network header through Register and Trigger. The published
-`release-v0.2.0-preview.20261127` predates this compatibility fix: when network or
-explicit target headers are needed there, use the complete
+The SDK sends its Network header to both Register and Trigger. Trigger accepts
+an identical Network header or a Builder header containing only the identical
+registered `target` as an assertion; it cannot change the registered values.
+Other register-only inputs use the
 [separate Register/Trigger recipe](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md#client-workflow).
-Other register-only headers still require the separate flow. A Trigger cannot
-change a registered network or target.
 
 This recipe targets the repository-pinned **e2b==2.25.1** and current
 [Build contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md).
-Use the SDK pin and guide shipped with your selected aggregate if different;
-a current-source example does not certify an older Release. Set `APP_IMAGE` to
+Use the SDK pin and guide shipped with your selected aggregate. Set `APP_IMAGE` to
 your own digest-pinned, architecture-matching registry image containing Python 3,
 `/bin/bash`, `id` and a writable `/tmp`. If the `user` account is absent, it also
 needs `useradd`. Build RUN/start/ready commands use Bash, not an arbitrary shell.
@@ -72,8 +68,8 @@ runs start/ready commands as `user` in `/home/user`, so Python and a writable
 The remaining build command prepares files; the start command runs the application;
 the readiness command checks its HTTP response before snapshot publication. A fixed
 sleep alone does not prove your application is ready. Nonempty start/ready commands
-select the auto memory target. The optional Network header is repeated unchanged by the SDK; current-source
-Trigger validates equality with registration before any Build side effects.
+select the auto memory target. The optional Network header is repeated unchanged by the SDK; Trigger validates
+equality with registration before any Build side effects.
 
 ```python
 if not __debug__:

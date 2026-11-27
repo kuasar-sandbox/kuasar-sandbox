@@ -7,6 +7,38 @@ code execution and reinforcement-learning environments. Each sandbox has an
 independent Guest kernel. The platform combines reusable templates, stateful
 pause/resume, on-demand data loading and node resource governance.
 
+## Run a sandbox with Docker
+
+Use a native Linux x86_64 or aarch64 host with a local rootful Docker Engine,
+cgroup v2, KVM/TUN and the [required kernel capabilities](docs/node-infra.md#prerequisites-and-release-inputs).
+Replace `<aggregate-tag>` below with the exact tag from your selected
+[Release](https://github.com/kuasar-sandbox/kuasar-sandbox/releases), retaining
+`release-`. Use an unused container name and a new dedicated volume.
+
+```bash
+RELEASE_VERSION='<aggregate-tag>'
+IMAGE="ghcr.io/kuasar-sandbox/node-infra:$RELEASE_VERSION"
+docker pull "$IMAGE"
+docker run -d --tty --name ks-dev --pull=never --privileged \
+  --cgroupns=private --cpus=4 --memory=6g --memory-swap=6g \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
+  --network=bridge -v ks-dev-data:/var/lib/node-infra "$IMAGE" quickstart
+docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
+```
+
+Expect `hello from guest` from a real MicroVM. The image supplies the node,
+Guest boot inputs and a small shell filesystem. First startup generates private
+credentials for the dedicated volume.
+`node-infra-run` waits for readiness and deletes the Guest after the command;
+the node stays running for the next command. To open an interactive Guest shell,
+use `docker exec -it ks-dev node-infra-run -- /bin/sh` and type `exit` to finish.
+
+The 4 CPU/6 GiB budget is for this trial. Public API/data ports and ordinary
+Guest Internet access are not enabled by the profile. Follow
+[Quick Start](docs/quickstart.md) for host checks, health, stop/restart and cleanup;
+use [site deployment](docs/deployment.md#production-start) for your own images,
+SDK clients and network policy.
+
 ## Start here
 
 | Goal | Guide |
@@ -76,8 +108,8 @@ and aarch64 inputs; historical releases retain their published architecture set.
 
 Stable/Preview describe release channels. Production deployments still qualify
 capacity and configure TLS, durable storage, network policy and credentials.
-Source features, proposals and measured results are distinguished in the
-[architecture](docs/architecture.md) and [performance](docs/performance.md) guides.
+The [architecture](docs/architecture.md) guide defines supported capabilities;
+[performance](docs/performance.md) records measurements and their conditions.
 See [release maintenance](docs/release.md) for selection and publication, and
 [upgrades](docs/upgrading.md) for the effect on retained workloads.
 

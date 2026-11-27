@@ -17,10 +17,10 @@ guides for that version's capabilities.
 | Registry/Router, separately operated Store/Cache or native components | Selected native component archives and platform guides | Native installation below, then [deployment](deployment.md) |
 | Development, Demo or full release validation | Native products/platform plus the matching Workbench image | Set `DOWNLOAD_WORKBENCH=1` below, then [release validation](../test/QUICKSTART.md) |
 
-For the workflows newly delivered in node-infra, cluster and native egress, this
-revision uses the published [release-v0.2.0-preview.20261127](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.2.0-preview.20261127).
-This is an explicit Preview choice. Stable can select an older feature set;
-selecting Stable is not a promise that current-main examples are available.
+For first use, start with **`docker pull` + `docker run`** in
+[Quick Start](quickstart.md). The image contains the coordinated node services and
+Guest boot inputs. Host tools and native component archives serve the other
+installation paths below.
 
 ## Node image and deployment package
 
@@ -44,18 +44,18 @@ and disable implicit pulls at service startup. The source package, Workbench
 image and separate native component archives are not prerequisites for running
 the node image. See [release inputs and host requirements](node-infra.md#prerequisites-and-release-inputs).
 
-### Download with node-infra-ctl
+### Optional repeat and offline downloads
 
-Current source adds `node-infra-ctl download`, which needs Python 3.9+ and no root,
-Docker, Podman, GitHub login or compiler. In a checkout use
-`python3 node-infra/deploy/bin/node-infra-ctl`; an extracted deployment package
-containing this command uses `./bin/node-infra-ctl`. Check `--help` first:
-**the already published 20261127 package predates this downloader** and still uses
-the asset-download procedure above. The new tool can download that older package.
+`node-infra-ctl download` retrieves another deployment package and optional image
+archive. From an extracted deployment package, run `./bin/node-infra-ctl` with
+Python 3.9+. The download command does not require root, Docker, Podman, GitHub
+login or a compiler. The source-workspace entry is
+`python3 node-infra/deploy/bin/node-infra-ctl`.
 
 ```sh
-python3 node-infra/deploy/bin/node-infra-ctl download \
-  --release release-v0.2.0-preview.20261127 --output "$PWD/node-download" --json
+: "${RELEASE_VERSION:?Set the exact aggregate tag to download}"
+./bin/node-infra-ctl download \
+  --release "$RELEASE_VERSION" --output "$PWD/node-download" --json
 # For offline Docker, use a new directory and add --image-format docker.
 # For offline Podman, add --image-format oci; --arch accepts amd64 or arm64.
 ```

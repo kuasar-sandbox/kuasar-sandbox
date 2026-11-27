@@ -56,11 +56,10 @@ Before opening admission: pin one aggregate and record its native GitHub asset d
 native products and packaged guides, verify effective configurations, then test one
 real build/create/command/file/pause/resume/kill cycle. Run the same checks with the
 actual gateway allow/deny policy and cold artifact reads. Validate exporter/query
-behavior separately if [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md#telemetry-release-scope)
-is included in that version. Current source `TARGET_ARCH` support is not proof of
-cross-build/emulation or historical release assets; follow [download selection](installation.md)
-and [native Workbench builds](../workbench/README.md). Open release-selection,
-download-verifier or WSL proposals do not change the selected published contract.
+behavior separately for [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md#telemetry-release-scope)
+when configured. Match native build and release inputs to the host architecture;
+`TARGET_ARCH` selects a native architecture, not cross-build or emulation support.
+See [download selection](installation.md) and [native Workbench builds](../workbench/README.md).
 
 In a staging fault exercise, stop only owned processes and isolate only test
 sources: observe readiness, first failure cause, admission stopping, artifact

@@ -26,18 +26,16 @@ journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pag
 | First-command node will not start | Container log and internal health, host KVM/cgroup capabilities, dedicated volume and profile/configuration mismatch; preserve the failed volume before changing inputs. |
 | API Create succeeds but commands/files fail | Proxy route registration, data listener/DNS/TLS, token and saved Group/route context, then Guest/Envd readiness. The accepted launch may still be starting. |
 | Command works but image Build or Guest outbound traffic fails | Check Build/Create network specification, gateway/VNI selection, transit and uplink MTU, Area ACL/DNS destinations, next hop and NAT mapping capacity. Proxy success does not validate egress. |
-| Gateway policy edit appears ineffective | Compare `configuration_generation` and `reload_error` in `/run/connector-egress/<name>/status.json`; inspect the gateway journal. A failed reload leaves the accepted policy active. |
+| Gateway policy edit appears ineffective | Use `egress status` to compare `snapshot.configuration_generation` with the pre-reload value and inspect `snapshot.reload_error` plus the journal. Wait for an updated snapshot, then verify traffic. A failed reload leaves the accepted policy active. |
 | Cluster Node is connected but Group has no eligible target | Verify tenant roots, exact local Group revision, `storage_readable`, completed publication/current registration, and compatible runtime inventory on the same Node. |
 | A template works on one Node only | Verify canonical artifact/parent access, keys, runtime identity, destination admission and reachable network policy on every selected Node. A canonical ID is not a portability certificate. |
 | Cache starts only after removing part of an example | Validate the selected mode and current `origin.type`/backend fields; compare the selected release's schema. Keep durable Store readable independently of optional cache. |
 
 For node-infra, use its [health and recovery commands](node-infra.md#install-and-operate)
-and inspect the service journal inside the instance. For egress, the 20261127
-release exposes the status file; newer current-source `egress status` reads that
-same snapshot with its timestamp/age, not an active health probe. For current-source
-Cache, `cache-ctl config validate --config FILE` checks configuration before
-startup without connecting to backends; older versions still need their native
-configuration/startup checks. See the owning [Cache CLI](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md#cache-ctl-config)
+and inspect the service journal inside the instance. `connector-ctl egress status`
+reads the gateway's saved snapshot with its timestamp and age; it does not run
+an active health probe. `cache-ctl config validate --config FILE` checks Cache
+configuration before startup without connecting to backends. See the owning [Cache CLI](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md#cache-ctl-config)
 and [Egress operations](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md).
 
 ## Recovery and fault domains
@@ -72,7 +70,7 @@ Use `node-ctl resource pressure` to distinguish raw pool pressure, outstanding r
 |---|---|---|
 | One Registry member crashes. | Its Node streams and in-flight requests are interrupted. PostgreSQL/FDB peers retain access to the shared metadata; SQLite requires the single Registry to restart. | Nodes reconnect to eligible stream owners. Registration and ownership fences protect reconciliation. Existing data sessions remain subject to their Node and transport connections. |
 | All Registry processes stop while database data is retained. | Registry control requests and new scheduling decisions are unavailable. | Restart Registry against the same database and namespace, then let NodeLink reconnect and reconcile. Database recovery belongs to the selected backend, not a Registry quorum. |
-| Execution metadata is irrecoverably lost. | Do not reconstruct live sandbox/build node execution state from a stale backup. | Recover provider data through its durability process. Rebuilding lost execution ownership from live-node projections or migration-token durable routes is not supported. [#34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33) are historical proposals, not implemented recovery procedures; report this limitation explicitly. |
+| Execution metadata is irrecoverably lost. | A stale backup alone cannot establish the current sandbox/build execution state. | Recover provider data through its durability process. Rebuilding lost execution ownership from live-node projections or migration-token durable routes is not supported. Preserve surviving data and diagnose the metadata loss before admitting new work. |
 | Router crashes. | Connections through that replica break. | LB selects another stateless replica. |
 | Placer crashes. | Group import and credential renewal pause until another ready importer acquires the source lease. Existing Node Groups are retained. | Registry continues selecting from published support without calling Placer. Restore import maintenance before finite credential leases expire; group removal does not revoke retained object credentials. |
 | A compute node loses node-link. | The node owner immediately rejects new submissions to that node; the route owner excludes/reselects it. | Reconnection reports state. Registry cleanup of node profile/list and associated execution projections requires the node to remain disconnected with a valid recorded last heartbeat older than `node_dead_after`; this is not an exact cleanup deadline. Orphan cleanup compares complete ownership, generation and credential bindings; see [cluster recovery](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#registry-reliability). |

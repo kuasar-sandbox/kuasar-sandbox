@@ -6,7 +6,7 @@ Choose an entry by the task you need to complete. Platform guides retain complet
 
 ## Recommended path
 
-[Run one Guest](quickstart.md) → [deploy a persistent node](deployment.md#production-start)
+[Run one Guest with Docker](quickstart.md) → [deploy a persistent node](deployment.md#production-start)
 → [build your template](templates.md) → [manage instances](sandboxes.md).
 Add [native egress](node-infra.md#native-egress) for outbound traffic and the
 [minimum cluster](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#minimum-cluster)
@@ -52,4 +52,4 @@ need. Workbench and the full validation runner are development tools.
 - [CI runner operation](../ci/runner/README.md)
 - [Vulnerability reporting policy](../SECURITY.md)
 
-Runtime and user guides are packaged with the selected version; omitted developer material links to the selected source revision. Check the actual release capabilities before applying current-source guidance to a historical release.
+Runtime and user guides are packaged with the selected version; omitted developer material links to the selected source revision. Use each release's matching guides and artifacts.

@@ -2,9 +2,43 @@
 
 # 部署与运维 node-infra 系统容器
 
-本指南使用 **node-infra** 镜像和对应部署包交付一个 kuasar-sandbox 数据面节点，
-负责宿主与容器绑定、安装及实例生命周期。组件原生配置和 API 的完整契约仍由组件仓库
+本指南使用 **node-infra** 镜像交付一个 kuasar-sandbox 数据面节点，对应部署包提供
+宿主服务工具和示例。本指南负责宿主与容器绑定、安装及实例生命周期。组件原生配置和 API 的完整契约仍由组件仓库
 维护。平台节点池路由、宿主设备分配和外部 Cache/Store 服务部署各有其责任方。
+
+## 选择使用入口
+
+| 任务 | 入口 | 额外输入 |
+| --- | --- | --- |
+| 执行第一个 Guest 命令 | 下方 Docker 命令 | 专用空卷；profile 初始化原生输入。 |
+| 使用自己的站点配置 | [直接使用 Docker 开发](#直接使用-docker-开发) | 原生配置、凭据、持久路径及资源预算。 |
+| 通过停止/恢复钩子管理宿主服务 | [安装与日常操作](#安装与日常操作) | 匹配的部署包与 rootful Podman/Quadlet。 |
+
+## 用 Docker 运行第一个 Guest
+
+使用满足[主机要求](#前置条件与发布输入)的原生 Linux 主机。从
+[Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 选择已发布的聚合版本，
+替换下方 `<aggregate-tag>`，保留 `release-` 前缀。使用未占用的容器名和专用空卷。
+镜像提供节点服务和 Guest 启动输入，`quickstart` 初始化私有凭据及 shell 工作负载。
+离线使用时，先导入对应 Docker 归档，把 `IMAGE` 设为导入后的镜像 ID，替代前三条命令。
+
+```sh
+RELEASE_VERSION='<aggregate-tag>'
+IMAGE="ghcr.io/kuasar-sandbox/node-infra:$RELEASE_VERSION"
+docker pull "$IMAGE"
+docker run -d --tty --name ks-dev --pull=never --privileged \
+  --cgroupns=private --cpus=4 --memory=6g --memory-swap=6g \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
+  --network=bridge -v ks-dev-data:/var/lib/node-infra "$IMAGE" quickstart
+docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
+```
+
+`node-infra-run` 等待实例初始化和空闲 runner，在新的 MicroVM 里执行传入的命令，返回标准输出、错误和退出码，随后删除本次 Guest。命令使用节点内的 Conductor 和 Proxy，无需暴露宿主端口或配置 Guest 互联网出口。示例给整个节点分配 4 CPU、6 GiB 内存。
+
+若客户端收到 SIGKILL，它无法发出最后的删除请求。可用标准错误中打印的 sandbox ID 通过 Conductor 删除该 Guest。仍在运行的 Guest 遵循原生 TTL 和暂停策略。
+
+Quick Start 使用随镜像提供的 shell 输入，并拒绝挂载外部站点配置；E2B 服务、自有模板和集群应使用独立的配置化实例。
+开箱模式首次启动时初始化专属空卷，生成实例凭据，用随镜像提供的 Linux shell 根文件系统离线生成 Image Manifest Bundle。仅磁盘导出和带内存快照也默认使用 Manifest Bundle，按原生 `@manifest` 引用读取。恢复时需保留卷和所引用的基础 Bundle。使用 `docker stop ks-dev` 正常停机，`docker start ks-dev` 复用同一卷。并行运行的节点各自使用独立卷。使用站点原生配置时，采用下文的部署方式。
 
 ## 前置条件与发布输入
 
@@ -14,7 +48,7 @@ BPF/TC 与 userfaultfd。生产使用宿主 systemd 和 rootful Podman/Quadlet�
 两种路径均使用同一镜像，由 systemd 担任容器 PID 1。部署包 `release.json` 记录所选支持基线；随包平台 E2E 验证实际模板。
 systemd 启动或 generator 检查成功，不能单独作为 VM 与恢复验收通过的证据。
 
-获取同一聚合版本的以下输入：
+按所选路径，从同一聚合版本获取需要的输入：
 
 | 输入 | 用途 |
 |---|---|
@@ -29,7 +63,7 @@ index/平台 manifest、镜像配置 ID 与离线归档的对应关系。归档�
 和 manifest digest 分别标识不同对象。镜像的组件身份也记录在
 `/usr/share/node-infra/image.json`。
 
-启动服务前获取或导入镜像，核对平台与镜像身份，保留实例模板中的 `Pull=never`。
+使用受管宿主服务时，在启动前获取或导入镜像，核对平台与镜像身份，保留 Quadlet 模板中的 `Pull=never`。
 例如：
 
 ```sh
@@ -41,24 +75,6 @@ sudo podman pull ghcr.io/kuasar-sandbox/node-infra@sha256:PLATFORM_MANIFEST_DIGE
 镜像包含全部节点二进制及默认引导资产。正常启动链包括 Conductor、Proxy、Connector
 及其执行 units；Telemetry 使用原生 systemd 启用方式。Cache/Store 端点由节点级
 存储访问层提供，部署工具不启动这些外部服务。
-
-## 用 Docker 运行第一个 Guest
-
-在符合前置条件的开发机上，把 `IMAGE` 设为提供开箱模式的发布版 GHCR 镜像引用。离线使用时先导入对应的 Docker 归档，把 `IMAGE` 设为导入后的镜像 ID 或 `localhost/node-infra:<版本>`，并给 `docker run` 加 `--pull=never`。
-
-```sh
-docker run -d --tty --name ks-dev --privileged \
-  --cgroupns=private --cpus=4 --memory=6g --memory-swap=6g \
-  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
-  --network=bridge -v ks-dev-data:/var/lib/node-infra "$IMAGE" quickstart
-docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
-```
-
-`node-infra-run` 等待实例初始化和空闲 runner，在新的 MicroVM 里执行传入的命令，返回标准输出、错误和退出码，随后删除本次 Guest。命令使用节点内的 Conductor 和 Proxy，无需暴露宿主端口或配置 Guest 互联网出口。示例给整个节点分配 4 CPU、6 GiB 内存。
-
-若客户端收到 SIGKILL，它无法发出最后的删除请求。可用标准错误中打印的 sandbox ID 通过 Conductor 删除该 Guest。仍在运行的 Guest 遵循原生 TTL 和暂停策略。
-
-开箱模式首次启动时初始化专属空卷，生成实例凭据，用随镜像提供的 Linux shell 根文件系统离线生成 Image Manifest Bundle。仅磁盘导出和带内存快照也默认使用 Manifest Bundle，按原生 `@manifest` 引用读取。恢复时需保留卷和所引用的基础 Bundle。使用 `docker stop ks-dev` 正常停机，`docker start ks-dev` 复用同一卷。并行运行的节点各自使用独立卷。使用站点原生配置时，采用下文的部署方式。
 
 ## 准备默认宿主网络部署
 
@@ -226,7 +242,6 @@ Quadlet 从源文件 `[Install]` 段生成开机启动关系。`install` 将宿�
 四个 `conf.d` 目录和 `manifest.yaml`：
 
 ```sh
-docker load --input node-infra-VERSION-linux-amd64.docker.tar.gz
 docker run -d --tty --name node-infra-dev --pull=never --privileged \
   --cgroupns=private --network=host --cpus=4 --memory=6g --memory-swap=6g \
   --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
@@ -299,7 +314,10 @@ Volume=/run/netns/node-a-egress:/run/node-infra/netns-inputs/egress:ro
 --mount type=bind,source=/run/netns/node-a-egress,target=/run/node-infra/netns-inputs/egress,readonly
 ```
 
-宿主 namespace 句柄必须预先存在。不要将此本地 transit 示例与独立的 `external-egress` catch-all 提取示例混搭。节点准备流程创建并记录专用 transit pair，不要在节点之外独立运行 `connector-ctl egress link start/stop`。外部网络提供者继续拥有借入的 namespace 和 uplink。按正常节点 install/check/start 流程启用；存在 `/etc/connector-egress/gateway.yaml` 时选中网关服务。
+宿主 namespace 句柄必须预先存在。不要将此本地 transit 示例与独立的 `external-egress` catch-all 提取示例混搭。节点准备流程创建并记录专用 transit pair，不要在节点之外独立运行 `connector-ctl egress link start/stop`。外部网络提供者继续拥有借入的 namespace 和 uplink。Quadlet 按正常的[安装/检查/启动流程](#安装与日常操作)启用；Docker 将挂载参数加到
+[站点配置的 Docker 命令](#直接使用-docker-开发)，并在该容器中检查 health。若容器已运行，
+先停止，再使用原有专用数据目录和额外挂载重新创建；不要让第二个节点同时使用该目录。
+存在 `/etc/connector-egress/gateway.yaml` 时启动网关服务。
 
 ### 3. 为工作负载选择 Area
 
@@ -309,21 +327,36 @@ Volume=/run/netns/node-a-egress:/run/node-infra/netns-inputs/egress:ro
 {"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}
 ```
 
-[模板教程](templates_zh.md#first-application) 用 `KUASAR_NETWORK_JSON` 保存该值。已发布 20261127 版本应通过独立 HTTP 配方只在 Build 注册时发送；SDK 还会将头发送给 Trigger，该旧版本会拒绝。当前源码 Trigger 接受相同 Network/Builder target 的等值断言，支持 SDK 流程但不允许改变注册值；其他仅注册阶段可用的配置头仍不支持重复发送。[创建实例](sandboxes_zh.md#outbound-network)说明普通 Create 的传法。E/S 模板可以保留网络输入，显式当前输入可覆盖它；Image-only 制品不携带此类 Sandbox 网络元数据。Node 默认配置中没有对应这些请求字段的 `sandbox.network.transit_*` 键。
+[模板教程](templates_zh.md#first-application) 用 `KUASAR_NETWORK_JSON` 保存该值。
+SDK 在 Trigger 阶段原样重复发送 Network 头，由 Trigger 校验与注册网络相同；
+只包含已注册 `target` 的 Builder 头遵循相同的断言规则。其他仅注册阶段可用的输入
+使用独立 Register/Trigger 配方。[创建实例](sandboxes_zh.md#outbound-network)说明普通
+Create 的传法。E/S 模板可以保留网络输入，显式当前输入可覆盖它；Image-only 制品不携带
+此类 Sandbox 网络元数据。Node 默认配置中没有对应这些请求字段的 `sandbox.network.transit_*` 键。
 
 ### 4. 验证真实流量并运维网关
 
 检查节点 ready 与原生网关状态，再在真实 Guest 中分别访问一个允许目的和一个拒绝目的，验证应用使用的协议、DNS 路径和 MTU。Proxy 命令成功证明管理访问可用，不代表出口 NAT 已成功。
 
+在已经配置的实例中操作：下方前缀选择 Docker 的 `node-infra-dev`。使用 Quadlet
+`node-a` 实例时，改用注释中的前缀；其余命令在两种容器中相同。
+
 ```sh
-sudo podman exec node-infra-node-a cat /run/connector-egress/local/status.json
-sudo podman exec node-infra-node-a journalctl -u connector-egress.service --no-pager
+node_exec() { docker exec node-infra-dev "$@"; }
+# Quadlet: node_exec() { sudo podman exec node-infra-node-a "$@"; }
+node_exec /usr/libexec/node-infra/node-infra-runtime health
+node_exec connector-ctl egress status \
+  --runtime-dir /run/connector-egress/local
+node_exec journalctl -u connector-egress.service --no-pager
 # 修改挂载的 gateway/Area 文件后：
-sudo podman exec node-infra-node-a systemctl reload connector-egress
-sudo podman exec node-infra-node-a cat /run/connector-egress/local/status.json
+node_exec systemctl reload connector-egress
+node_exec connector-ctl egress status \
+  --runtime-dir /run/connector-egress/local
 ```
 
-通过 `configuration_generation` 与 `reload_error` 区分已接受配置和被拒绝的 reload。发送 SIGHUP 成功不等于策略激活成功。拒绝 reload 时保留最后接受的策略；接口恢复可能需要受控操作。状态文件提供接口、context 与 NAT 观察，20261127 发布版直接读取该文件。当前源码还提供只读 [egress status CLI](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md#通过-cli-读取保存的快照)，展示保存的观察及其时间，不代表实时健康。正向流量自动创建转发状态，协议空闲回收 mapping/context，不需要为每个沙箱调用注册接口。pool 容量、超时、reload 和失败行为见原生 [egress 契约](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md)。
+将 CLI 结果的 `snapshot.configuration_generation` 与 reload 前的值比较，并检查
+`snapshot.reload_error`。等待新的观察被保存；发送 SIGHUP 成功不等于策略激活成功。
+generation 前进且没有 reload 错误，表示配置已被接受，随后还应验证受影响的 allow/deny 流量。拒绝 reload 时保留最后接受的策略；接口恢复可能需要受控操作。状态文件提供接口、context 与 NAT 观察。只读 [egress status CLI](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md#通过-cli-读取保存的快照)，展示保存的快照、文件修改时间及其年龄，不代表网关实时健康。正向流量自动创建转发状态，协议空闲回收 mapping/context，不需要为每个沙箱调用注册接口。pool 容量、超时、reload 和失败行为见原生 [egress 契约](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md)。
 
 共享远端网关由独立所有者运行，按 [Connector egress](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md)配置真实专用 transit 路径。节点不拥有本地 pair 时，不配置本地 `link.json` 所有权。已有站点 Linux 网关仍可按下方显式集成方式接入，但普通原生出口不再以这类自建方案为前提。
 

@@ -100,12 +100,13 @@ run it through the [public E2E runner](../QUICKSTART.md) for those assertions.
 
 Quick Start mode (`DEMO_QUICKSTART=1`) stops after build, create, execution/data access, pause/resume, and kill. Complete mode requires VersityGW and continues through fan-out and migration.
 
-The SDK forwards `Template.build(headers=...)` to both registration and trigger,
-and older releases reject repeated Builder headers. The Demo keeps the target
-automatic and supplies start/ready commands for compatibility, then strictly
-checks the snapshot result. Current source also accepts identical Network and
-Builder-target assertions; it still does not allow Trigger to modify registration. The pinned SDK returns its registration handle after waiting;
-the Demo reads the published, creatable template ID from that exact build's status.
+The Demo uses automatic target selection with start/ready commands and checks
+that the exact Build result is a memory snapshot. The SDK forwards
+`Template.build(headers=...)` to both Register and Trigger. Trigger accepts
+identical Network headers or a Builder header containing only the registered
+target as assertions; it cannot change registration. The SDK returns its
+registration handle after waiting. The Demo reads the published, creatable
+template ID from that exact Build's status.
 
 
 ## 3. Repeated runs, logs and cleanup

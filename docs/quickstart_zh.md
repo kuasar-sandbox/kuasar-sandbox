@@ -10,17 +10,17 @@
 
 使用原生 Linux x86_64 或 aarch64、本地 rootful Docker Engine、cgroup v2、可用的 `/dev/kvm` 和 `/dev/net/tun`，以及网络命名空间、BPF/TC 和 userfaultfd。[主机要求](node-infra_zh.md#前置条件与发布输入) 说明系统容器路径所需条件。Docker Desktop、架构模拟和远程 Docker daemon 不能代替这些主机能力。WSL 2 用户先检查 [Linux 主机与资源要求](../workbench/README_zh.md#主机与镜像)。
 
-此例明确选择已发布、包含当前 node-infra、cluster 和原生 egress 流程的 Preview。Stable 可能选择更早的功能集合，应使用所选版本附带的指南。不要混搭各组件的 Latest。[安装指南](installation_zh.md) 也说明离线归档和原生工具的获取方法。
+从 [Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 选择一个已发布的聚合 tag，
+替换下方 `<aggregate-tag>`。使用其配套指南，并保留精确 tag 供后续运行复用。
+[安装指南](installation_zh.md)说明离线归档及独立原生组件的获取方法。
 
 ```bash
-RELEASE_VERSION=release-v0.2.0-preview.20261127
+RELEASE_VERSION='<aggregate-tag>'
 IMAGE="ghcr.io/kuasar-sandbox/node-infra:$RELEASE_VERSION"
 docker pull "$IMAGE"
-docker image inspect --format '{{.Id}} {{.Os}}/{{.Architecture}}' "$IMAGE"
-IMAGE="$(docker image inspect --format '{{.Id}}' "$IMAGE")"
 ```
 
-保存版本及实际解析出的镜像身份。node-infra 的镜像 tag 包含 `release-`。离线使用时，按 [node-infra 输入](node-infra_zh.md#前置条件与发布输入) 校验并导入匹配的 `.docker.tar.gz`，再将 `IMAGE` 设为导入后的镜像 ID。Docker 导入 Docker 归档；Podman 也可导入独立 OCI 归档。
+保存版本以及 `docker pull` 输出的镜像身份。node-infra 的镜像 tag 包含 `release-`。离线使用时，按 [node-infra 输入](node-infra_zh.md#前置条件与发布输入) 校验并导入匹配的 `.docker.tar.gz`，再将 `IMAGE` 设为导入后的镜像 ID。Docker 导入 Docker 归档；Podman 也可导入独立 OCI 归档。
 
 ## 2. 启动节点并执行命令
 
@@ -34,7 +34,19 @@ docker run -d --tty --name ks-dev --pull=never --privileged \
 docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
 ```
 
-预期输出 `hello from guest`，退出码为 0。`node-infra-run` 等待节点初始化和空闲 Runner，创建新的 MicroVM，在 Guest 内执行参数向量，返回输出及退出码，然后删除该 Guest。打印的 sandbox ID 标识这一次运行。再次执行第二条命令会创建另一个独立 Guest，前一次调用写入的文件不会成为下一次调用的保留会话。
+预期输出 `hello from guest`，退出码为 0。`node-infra-run` 等待节点初始化和空闲 Runner，创建新的 MicroVM，在 Guest 内执行参数向量，返回输出及退出码，然后删除该 Guest。启动、控制请求或清理失败时，即使 Guest 命令已结束，也返回非零状态。打印的 sandbox ID 标识这一次运行。再次执行第二条命令会创建另一个独立 Guest，前一次调用写入的文件不会成为下一次调用的保留会话。
+
+等待初始化、容量或 Proxy 就绪时，helper 为每个等待阶段向 stderr 输出一次提示；
+Guest stdout 和退出码仍可供脚本使用。交互 shell 和标准输入示例：
+
+```bash
+docker exec -it ks-dev node-infra-run -- /bin/sh
+printf 'input to guest\n' | docker exec -i ks-dev node-infra-run -- /bin/cat
+docker exec ks-dev node-infra-run --help
+```
+
+输入 `exit` 会结束交互 shell 并删除该 Guest。管道输入使用 `-i`，交互终端使用 `-it`。
+Shell 和管道命令分别使用独立 Guest；`--help` 只显示用法。
 
 节点持续运行，专用卷保存节点身份、凭证和被引用的基础 Bundle。profile 根据随镜像提供的输入初始化一次，不会在启动时下载工作负载镜像。将卷直接挂载至 `/var/lib/node-infra`，不要增加嵌套挂载。不同节点使用不同卷，恢复时保留对应的制品依赖。
 
@@ -43,6 +55,7 @@ docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
 ```bash
 docker exec ks-dev /usr/libexec/node-infra/node-infra-runtime health
 docker exec ks-dev node-ctl --version
+docker inspect --format '{{.Image}}' ks-dev
 docker logs ks-dev
 docker exec ks-dev journalctl -u node-conductor.service --no-pager
 
@@ -51,7 +64,7 @@ docker start ks-dev
 docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "guest after restart\n"'
 ```
 
-停止节点会结束运行中的 VM，不会自动捕获所有 Guest 的内存。重启会复用节点的持久输入。命令客户端被强制杀死时无法发送 Delete，应保留其打印的 sandbox ID，通过节点生命周期 API 检查并删除；普通执行完成会自行清理。
+停止节点会结束运行中的 VM，不会自动捕获所有 Guest 的内存。重启会复用节点的持久输入。命令客户端被 SIGKILL 强制杀死时无法发送 Delete，应保留其打印的 sandbox ID，通过节点生命周期 API 检查并删除；普通执行完成会自行清理。
 
 结束体验时，先停止并删除容器。仍需数据或日志时保留卷；确定丢弃本次体验后再删除：
 
@@ -70,7 +83,6 @@ docker volume rm ks-dev-data
 | profile 拒绝配置或数据 | 首次初始化使用专用空卷；不要为该 profile 挂载站点 `/etc` 配置，也不要清空现有节点数据来绕过检查。 |
 | Guest 命令等待或失败 | 检查内部 health、Conductor/Runner journal 和节点容量；保留第一次错误再重试。 |
 | Guest 不能访问互联网 | 此 profile 的预期行为。Docker bridge 连接属于节点网络，不等于 Guest SNAT；在站点部署中显式配置网关。 |
-| 旧版本缺少 helper/profile | 使用该版本指南，或明确选择已经交付此流程的版本。 |
 
 ## 继续部署自己的应用
 

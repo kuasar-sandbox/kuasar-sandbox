@@ -13,7 +13,8 @@
 | Registry/Router、独立 Store/Cache 或原生组件 | 所选原生组件归档与 platform 指南 | 下方原生安装流程，再按[部署指南](deployment_zh.md)配置 |
 | 开发、Demo 或完整发布验证 | 原生产品/platform，加匹配的 Workbench 镜像 | 下方显式设 `DOWNLOAD_WORKBENCH=1`，再按[发布验证](../test/QUICKSTART_zh.md)操作 |
 
-本次指南中近期交付的 node-infra、cluster 和原生 egress 流程选用已发布的 [release-v0.2.0-preview.20261127](https://github.com/kuasar-sandbox/kuasar-sandbox/releases/tag/release-v0.2.0-preview.20261127)。这是显式 Preview 选择。Stable 可能选择更早的功能集合，选择 Stable 不代表当前主干示例已经可用。
+首次使用从[快速开始](quickstart_zh.md)的 **`docker pull` + `docker run`** 进入。
+镜像包含配套的节点服务及 Guest 启动输入；宿主工具和独立原生组件包用于下方其他安装路径。
 
 ## 节点镜像与部署包
 
@@ -23,13 +24,16 @@
 
 离线 Docker 使用 `node-infra-<tag>-linux-<amd64|arm64>.docker.tar.gz`，Podman 也支持对应 `.oci.tar.gz`。在 `docker load` 或 `podman load` 前校验所选资产大小和摘要。使用导入后的镜像身份，在服务启动时禁用隐式拉取。运行节点镜像不以源码包、Workbench 镜像或独立原生组件包为前提。详见[发布输入与主机要求](node-infra_zh.md#前置条件与发布输入)。
 
-### 使用 node-infra-ctl 下载
+### 可选的后续下载与离线归档获取
 
-当前源码新增 `node-infra-ctl download`，只需要 Python 3.9+，无需 root、Docker、Podman、GitHub 登录或编译器。在源码检出目录使用 `python3 node-infra/deploy/bin/node-infra-ctl`；包含此命令的部署包使用 `./bin/node-infra-ctl`。先检查 `--help`：**已经发布的 20261127 部署包尚无此下载命令**，仍按上方资产下载流程获取；新增工具可以下载该旧包。
+`node-infra-ctl download` 获取其他版本的部署包及可选镜像归档。在已解压的部署包内，
+通过 Python 3.9+ 运行 `./bin/node-infra-ctl`。下载命令不需要 root、Docker、Podman、
+GitHub 登录或编译器；源码工作区入口是 `python3 node-infra/deploy/bin/node-infra-ctl`。
 
 ```sh
-python3 node-infra/deploy/bin/node-infra-ctl download \
-  --release release-v0.2.0-preview.20261127 --output "$PWD/node-download" --json
+: "${RELEASE_VERSION:?Set the exact aggregate tag to download}"
+./bin/node-infra-ctl download \
+  --release "$RELEASE_VERSION" --output "$PWD/node-download" --json
 # 离线 Docker：使用新目录，并添加 --image-format docker。
 # 离线 Podman：添加 --image-format oci；--arch 接受 amd64 或 arm64。
 ```

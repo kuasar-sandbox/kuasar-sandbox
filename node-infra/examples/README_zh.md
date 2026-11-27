@@ -90,4 +90,4 @@ nftables，其他工具在派生镜像构建时安装。
 
 通过既有 namespace input 提供 `egress` 命名空间，提前接通并启用外部所有者管理的 `egress-uplink`。Linux 不重复持有 VPP 网关/SNAT 地址。节点只管理专用 transit pair，保留外部 namespace 和出口设备。节点准备使用其保留的主 namespace 作为 owner；不要在节点 vSwitch 服务之外再调用 `egress link start/stop`。修改主配置/Area 文件后执行 `systemctl reload connector-egress` 发送 SIGHUP。reload 被拒绝时保留最后接受的配置，并在本地状态文件记录错误。
 
-完整的[原生 egress 部署](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/docs/node-infra_zh.md#native-egress)还将工作负载请求与 Area 选择连接起来。本例在 Create/Build 注册的网络规格 中使用 `{"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}`。仅安装 `area7.yaml` 不会选择 VNI 7。20261127 发布版的网络头应使用独立注册/触发流程。当前源码接受 SDK 原样重发 Network/Builder target 的等值断言，其他仅注册阶段可用的输入仍需分步流程。
+完整的[原生 egress 部署](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/docs/node-infra_zh.md#native-egress)还将工作负载请求与 Area 选择连接起来。本例在 Create/Build 注册的网络规格 中使用 `{"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}`。仅安装 `area7.yaml` 不会选择 VNI 7。Trigger 接受 SDK 原样重发的 Network 头，或仅包含已注册 target 的 Builder 头，作为等值断言；其他仅注册阶段可用的输入使用独立 Register/Trigger 流程。

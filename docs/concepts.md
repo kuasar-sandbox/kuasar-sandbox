@@ -145,7 +145,7 @@ This glossary aligns documentation wording; it does not introduce a new API or r
 | Trusted sandbox network identity | Identity established by the host network infrastructure rather than trusting guest-supplied addresses. |
 | Policy gateway | The native Geneve egress service or an operator-provided gateway applying outbound policy; distinct from API/Proxy ingress and MMDS management access. |
 | Security domain | The configured scope of permitted sharing and protection; not unconditional sharing across all tenants. |
-| Stable / Preview / Proposed | Public release channel status and proposed-design status are separate from production deployment capability. A proposal is not a delivered feature. |
+| Stable / Preview | Release channels for aggregate version selection. Production deployments still qualify the selected inputs, workload and host configuration. |
 
 ## Continue with a task
 

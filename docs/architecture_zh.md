@@ -58,9 +58,9 @@ Proxy 到 Guest 的箭头概括不同后端，包括本地 Exec/Envd 桥接与�
 | Guest 交付 | Runtime bundle、内核能力与补丁、flatten CLI、原生构建和打包 | [Guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README_zh.md#按流程或交付契约阅读) |
 | 运行与交付保障 | 日志、原生 usage、Telemetry 指标、诊断和保留；兼容升级；测量、CI、聚合发布 | [运维](operations_zh.md)、[升级](upgrading_zh.md)、[性能](performance_zh.md)、[CI](ci_zh.md)、[发布](release_zh.md) |
 
-本轮审查的 Orchestrator 源码已实现独立 OpenTelemetry 指标服务和原生 Collector pipeline；
-应核对所选发行版的[观测范围](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md)。
-Connector 原生 Geneve egress 已交付，并与内核 vSwitch 分离：`connector-ctl egress serve` 运行随包交付的静态 `connector-vpp`，使用 gateway/Area 文件执行 ACL/NAT，按流量建立转发状态。node-infra 可以管理本地网关，也可选择共享远端或已有站点网关。详见[完整出口流程](node-infra_zh.md#native-egress)。Proxy 路径可用不等于普通 Guest 已能出网；当前源码能力仍须与所选聚合版本核对。
+Orchestrator 提供独立 OpenTelemetry 指标服务和原生 Collector pipeline；
+详见[观测范围](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md)。
+Connector 原生 Geneve egress 已交付，并与内核 vSwitch 分离：`connector-ctl egress serve` 运行随包交付的静态 `connector-vpp`，使用 gateway/Area 文件执行 ACL/NAT，按流量建立转发状态。node-infra 可以管理本地网关，也可选择共享远端或已有站点网关。详见[完整出口流程](node-infra_zh.md#native-egress)。Proxy 路径可用不等于普通 Guest 已能出网。
 
 ## 组件职责
 
@@ -119,8 +119,7 @@ Kuasar Sandbox 提供 MicroVM 生命周期,数据访问,节点网络和单节点
 
 - 外部身份系统,租户计费,业务工作流和全局容量规划;
 - 对象存储、共享文件系统、OCI Registry 或站点上游网络基础设施；
-- 应用内部的内存限制,错误处理和数据分级;
-- 由 Issue 或 RFC 描述但尚未合入并发布的能力.
+- 应用内部的内存限制、错误处理和数据分级。
 
 ## 配置与契约归属
 

@@ -5,6 +5,33 @@
 Kuasar Sandbox 是面向 AI Agent、Serverless、代码执行和强化学习环境的 MicroVM 沙箱平台。
 每个沙箱拥有独立 Guest 内核，平台结合可复用模板、有状态暂停恢复、按需数据加载和节点资源治理。
 
+## 用 Docker 运行沙箱
+
+使用原生 Linux x86_64 或 aarch64 主机、本地 rootful Docker Engine、cgroup v2、
+KVM/TUN 及[所需内核能力](docs/node-infra_zh.md#前置条件与发布输入)。将下方
+`<aggregate-tag>` 替换为所选 [Release](https://github.com/kuasar-sandbox/kuasar-sandbox/releases)
+的完整 tag，保留 `release-` 前缀。使用未占用的容器名和新的专用卷。
+
+```bash
+RELEASE_VERSION='<aggregate-tag>'
+IMAGE="ghcr.io/kuasar-sandbox/node-infra:$RELEASE_VERSION"
+docker pull "$IMAGE"
+docker run -d --tty --name ks-dev --pull=never --privileged \
+  --cgroupns=private --cpus=4 --memory=6g --memory-swap=6g \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
+  --network=bridge -v ks-dev-data:/var/lib/node-infra "$IMAGE" quickstart
+docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
+```
+
+预期从真实 MicroVM 输出 `hello from guest`。镜像提供节点、Guest 启动输入和小型 shell 文件系统；
+首次启动为专用卷生成私有凭据。`node-infra-run` 等待就绪，命令结束后删除 Guest，节点继续运行，
+供下一次调用使用。交互操作使用 `docker exec -it ks-dev node-infra-run -- /bin/sh`，
+输入 `exit` 结束该 Guest。
+
+4 CPU/6 GiB 是本地体验的预算。此 profile 不公开 API/data 端口，也不配置普通 Guest
+互联网出口。[快速开始](docs/quickstart_zh.md)说明主机检查、健康、停止重启和清理；
+自有镜像、SDK 客户端与网络策略按[站点部署](docs/deployment_zh.md#production-start)配置。
+
 ## 快速导航
 
 | 目标 | 指南 |
@@ -56,7 +83,7 @@ Runtime 和 VMLinux，它们的版本可以不同。新聚合版本提供原生 
 历史版本保留其已经发布的架构集合。
 
 Stable/Preview 表示发行通道。生产部署仍需验收容量，并配置 TLS、可靠存储、网络策略与凭据。
-源码能力、提案和测量结果在[架构](docs/architecture_zh.md)与[性能](docs/performance_zh.md)中分别说明。
+[架构](docs/architecture_zh.md)说明支持的能力，[性能](docs/performance_zh.md)记录实测结果及其条件。
 [发布维护](docs/release_zh.md)说明版本选择与发布，[升级](docs/upgrading_zh.md)说明对保留工作负载的影响。
 
 ## 文档

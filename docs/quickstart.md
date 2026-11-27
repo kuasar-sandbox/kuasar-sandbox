@@ -24,21 +24,19 @@ system-container path. Docker Desktop, architecture emulation and a remote
 Docker daemon do not substitute for these host capabilities. On WSL 2, first
 check the [Linux host and resource requirements](../workbench/README.md#windows-and-wsl-2-development-hosts).
 
-This example explicitly selects the published Preview containing the current
-node-infra, cluster and native-egress workflows. A Stable release may select an
-older feature set; use the guide bundled with that version. Do not mix component
-Latest releases. [Installation](installation.md) also covers offline archives
-and native tools.
+Choose one published aggregate tag from
+[Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) and replace
+`<aggregate-tag>` below. Use its matching packaged guide and keep the exact tag
+for later runs. [Installation](installation.md) covers offline archives and
+separately operated native components.
 
 ```bash
-RELEASE_VERSION=release-v0.2.0-preview.20261127
+RELEASE_VERSION='<aggregate-tag>'
 IMAGE="ghcr.io/kuasar-sandbox/node-infra:$RELEASE_VERSION"
 docker pull "$IMAGE"
-docker image inspect --format '{{.Id}} {{.Os}}/{{.Architecture}}' "$IMAGE"
-IMAGE="$(docker image inspect --format '{{.Id}}' "$IMAGE")"
 ```
 
-Record the release and resolved image identity. The node-infra image tag includes
+Record the release and the image identity reported by `docker pull`. The node-infra image tag includes
 `release-`. For offline use, verify and load the matching `.docker.tar.gz` archive
 as described in [node-infra inputs](node-infra.md#prerequisites-and-release-inputs),
 then set `IMAGE` to the loaded image ID. Docker imports the Docker archive;
@@ -61,9 +59,23 @@ docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
 Expect `hello from guest` and exit status zero. `node-infra-run` waits for node
 initialization and an idle Runner, creates a fresh MicroVM, executes the argument
 vector inside that Guest, returns its output and exit status, and deletes it.
-The printed sandbox ID identifies that one run. Repeat the second command for
+Startup, control-request or cleanup failures return a nonzero status even if the
+Guest command completed. The printed sandbox ID identifies that one run. Repeat the second command for
 another independent Guest; files written by one invocation are not the next
 invocation's retained session.
+
+While initialization, capacity or Proxy readiness is pending, the helper prints
+one waiting message per stage to stderr. Guest stdout and its exit status remain
+available to scripts. To use an interactive shell, or supply standard input:
+
+```bash
+docker exec -it ks-dev node-infra-run -- /bin/sh
+printf 'input to guest\n' | docker exec -i ks-dev node-infra-run -- /bin/cat
+docker exec ks-dev node-infra-run --help
+```
+
+`exit` ends the interactive shell and deletes that Guest. Use `-i` for piped
+input and `-it` for a terminal. The shell and piped command each use a separate Guest. `--help` only displays usage.
 
 The node stays running. Its dedicated volume retains node identity, credentials
 and referenced base Bundles. The profile creates these once from shipped inputs;
@@ -76,6 +88,7 @@ nodes, and retain their referenced artifacts for recovery.
 ```bash
 docker exec ks-dev /usr/libexec/node-infra/node-infra-runtime health
 docker exec ks-dev node-ctl --version
+docker inspect --format '{{.Image}}' ks-dev
 docker logs ks-dev
 docker exec ks-dev journalctl -u node-conductor.service --no-pager
 
@@ -86,7 +99,7 @@ docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "guest after restart\n"'
 
 Stopping the node ends running VMs; it does not automatically capture every
 Guest's memory. Restarting reuses the node's durable inputs. If the command client
-is forcibly killed, it cannot send Delete: retain its printed sandbox ID and
+is killed with SIGKILL, it cannot send Delete: retain its printed sandbox ID and
 inspect/delete it through the node lifecycle API. Ordinary completion performs
 that cleanup itself.
 
@@ -108,7 +121,6 @@ docker volume rm ks-dev-data
 | Profile rejects configuration or data | Use a dedicated empty volume for first initialization; do not mount site `/etc` configuration into this profile or erase an existing node's data to make it pass. |
 | Guest command waits or fails | Internal health and Conductor/Runner journal; confirm node capacity and preserve the first error before retrying. |
 | Guest cannot reach the Internet | Expected for this profile. Docker bridge access is the node's network, not Guest SNAT. Configure an explicit gateway in a site deployment. |
-| Old release lacks the helper/profile | Use that release's own guide, or explicitly choose a version that delivers this workflow. |
 
 ## Continue with your own application
 

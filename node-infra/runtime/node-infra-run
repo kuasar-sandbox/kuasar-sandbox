@@ -14,6 +14,28 @@ RUNTIME = Path('/run/node-infra')
 API = 'http://127.0.0.1:3000'
 PROXY = 'http://127.0.0.1:3001'
 START_TIMEOUT = 180
+USAGE = 'usage: node-infra-run -- COMMAND [ARG ...]'
+HELP = f'''{USAGE}
+
+Run a command in a fresh MicroVM on a node started with the quickstart profile.
+Wait for node readiness, create the Guest, forward its output and exit status,
+then delete that Guest. Each invocation uses a new Guest; its files are not
+retained for the next invocation. The node stays running and its volume is kept.
+Startup, control or cleanup errors return a nonzero status even if the command
+finished; argument errors return 2.
+
+Examples (replace ks-dev with your container name):
+  docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\\n"'
+  docker exec -it ks-dev node-infra-run -- /bin/sh
+  printf 'hello\\n' | docker exec -i ks-dev node-infra-run -- /bin/cat
+
+Use -it for an interactive terminal, or -i to forward piped standard input.
+Startup progress and the sandbox ID are written to standard error. A client
+killed with SIGKILL cannot delete its Guest; keep the ID for lifecycle-API cleanup.
+
+Options:
+  -h, --help  Show this help without connecting to a node.
+'''
 
 
 class RunError(Exception):
@@ -126,10 +148,15 @@ def run(arguments):
 
     def wait_for(description, ready):
         deadline = time.monotonic() + START_TIMEOUT
+        announced = False
         while True:
             check_signal()
             if ready():
                 return
+            if not announced:
+                print('node-infra-run: waiting for ' + description,
+                      file=sys.stderr, flush=True)
+                announced = True
             if time.monotonic() >= deadline:
                 raise RunError('timed out waiting for ' + description)
             time.sleep(0.25)
@@ -184,12 +211,20 @@ def run(arguments):
     return 128 - status if status < 0 else status
 
 
-if __name__ == '__main__':
-    if len(sys.argv) < 3 or sys.argv[1] != '--':
-        print('usage: node-infra-run -- COMMAND [ARG ...]', file=sys.stderr)
-        sys.exit(2)
+def main(arguments):
+    if arguments in (['-h'], ['--help']):
+        print(HELP, end='')
+        return 0
+    if len(arguments) < 2 or arguments[0] != '--':
+        print(USAGE, file=sys.stderr)
+        print('Use node-infra-run --help for Docker and interactive examples.', file=sys.stderr)
+        return 2
     try:
-        sys.exit(run(sys.argv[2:]))
+        return run(arguments[1:])
     except (RunError, OSError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
         print('node-infra-run:', error, file=sys.stderr)
-        sys.exit(1)
+        return 1
+
+
+if __name__ == '__main__':
+    sys.exit(main(sys.argv[1:]))

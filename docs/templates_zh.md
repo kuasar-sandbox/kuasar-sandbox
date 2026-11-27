@@ -29,11 +29,13 @@ python3 -m pip install 'e2b==2.25.1'
 
 使用原生 egress 时，将 `KUASAR_NETWORK_JSON` 设为管理员允许的网络规格；例如[本地网关](node-infra_zh.md#native-egress)使用 `{"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}`。这是此客户端示例读取的环境变量，不是新增 Node 配置。Build 执行网络的 DNS/ACL 应允许访问所选镜像仓库。
 
-**版本边界：** 当前源码允许将重复且相同的 Network 和 Builder target 头作为注册值的断言，因此下方 SDK 流程可将 Network 头随 Register 和 Trigger 一起发送。已发布的 `release-v0.2.0-preview.20261127` 尚无此兼容修正；在该版本需要网络或显式 target 头时，使用完整的[独立 Register/Trigger 配方](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md#client-workflow)。其他仅注册阶段可用的配置头仍需分步流程。Trigger 不能更改已注册网络或目标。
+SDK 将 Network 头同时发送给 Register 与 Trigger。Trigger 接受与注册值相同的
+Network 头，或仅含相同已注册 `target` 的 Builder 头，作为等值断言，不能改变注册值。
+其他仅注册阶段可用的输入使用[独立 Register/Trigger 配方](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md#client-workflow)。
 
 本配方面向仓库固定的 **e2b==2.25.1** 和当前
 [Build 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md)。
-若所选 aggregate 不同，使用其打包指南和 SDK pin；当前源码示例不能认证旧 Release。
+使用所选 aggregate 的配套指南和 SDK pin。
 把 `APP_IMAGE` 设为自己的 digest 固定、架构匹配的 registry 镜像，需包含 Python 3、
 `/bin/bash`、`id` 和可写 `/tmp`。若尚无 `user` 账户，还需要 `useradd`。
 Build 的 RUN/start/ready 命令使用 Bash，不是任意 shell。
@@ -50,7 +52,7 @@ start/ready，因此只有 Python 和可写 `/tmp` 还不够。
 
 后续 build 命令准备文件，start 命令运行应用，ready 命令在快照发布前检查应用 HTTP
 响应。固定 sleep 本身不能证明应用就绪。非空 start/ready 选择 auto 内存目标。
-可选 Network 头会由 SDK 原样重复发送；当前源码 Trigger 在 Build 副作用前校验其与注册值相同，其他仅注册阶段可用的头仍需分步流程。
+可选 Network 头会由 SDK 原样重复发送；Trigger 在 Build 副作用前校验其与注册值相同，其他仅注册阶段可用的头仍需分步流程。
 
 ```python
 if not __debug__:

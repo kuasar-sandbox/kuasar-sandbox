@@ -117,6 +117,6 @@ The end-to-end [native-egress deployment](https://github.com/kuasar-sandbox/kuas
 also connects the workload request to Area selection. For this example, use
 `{"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}` in the
 Create/Build-registration network specification. Installing `area7.yaml` alone does
-not select VNI 7. On the 20261127 release use separate registration/trigger for network headers.
-Current source accepts the SDK's identical Network/Builder-target assertions;
-other register-only inputs still need the separate workflow.
+not select VNI 7. Trigger accepts the SDK's identical Network header or a Builder
+header containing only the registered target as assertions; other register-only
+inputs use the separate Register/Trigger workflow.

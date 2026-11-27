@@ -30,10 +30,10 @@
 
 开放准入前固定 aggregate/checksum，使用配套原生产物和打包文档，检查有效配置，
 执行真实 build/create/命令/文件/pause/resume/kill。使用实际网关 allow/deny
-策略及冷工件读取复验。如所选版本包含 [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md#telemetry-release-scope)，
-独立验证 exporter/query。源码支持 `TARGET_ARCH` 不证明交叉构建/仿真或历史
-Release 资产；遵循[下载选择](installation_zh.md)和[原生 Workbench 构建](../workbench/README_zh.md)。
-未合入版本选择、下载验证器或 WSL 提案不改变所选发布契约。
+策略及冷工件读取复验。配置 [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md#telemetry-release-scope)
+时，独立验证 exporter/query。原生构建和发行输入必须匹配宿主架构；`TARGET_ARCH`
+选择原生架构，不提供交叉构建或仿真。详见[下载选择](installation_zh.md)和
+[原生 Workbench 构建](../workbench/README_zh.md)。
 
 在预发布故障演练中只停止自有进程、隔离测试源，观察 readiness、首因、停止准入、
 工件保留与恢复，测量 [容量验收](performance_zh.md#capacity-example) 容量场景。全部必需检查通过才开放准入；失败则保留上次

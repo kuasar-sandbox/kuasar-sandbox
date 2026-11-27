@@ -83,8 +83,11 @@ Internet 出站检查。Workbench 成功启动或诊断运行不等于 Demo 成�
 
 Quick Start 模式(`DEMO_QUICKSTART=1`)在 build、create、执行/数据访问、pause/resume 和 kill 后结束。完整模式要求 VersityGW,并继续执行扇出与迁移。
 
-SDK 会把 `Template.build(headers=...)` 同时传给注册和触发请求，旧发布版拒绝重复 Builder 头。因此 Demo 保持自动目标，通过 start/ready command 选择快照以兼容旧版，再严格检查最终结果。当前源码也支持相同 Network 和 Builder target 的等值断言，但仍不允许 Trigger 修改注册值。固定版本 SDK 等待结束后仍返回注册 handle;Demo 从该精确
-Build 的状态中读取已发布、可供 create 使用的 Template ID。
+Demo 使用自动目标与 start/ready command，严格检查精确 Build 的结果为内存快照。
+SDK 将 `Template.build(headers=...)` 同时发送给 Register 和 Trigger。Trigger 接受相同的
+Network 头，或仅含已注册 target 的 Builder 头，作为等值断言，不能修改注册值。
+SDK 等待结束后返回注册 handle；Demo 从该精确 Build 的状态中读取已发布、可供 create
+使用的 Template ID。
 
 
 ## 3. 重复运行、日志与清理

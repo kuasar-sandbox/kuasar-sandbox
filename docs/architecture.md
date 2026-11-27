@@ -63,15 +63,14 @@ memory can fault in from layered sources on demand, as described in
 | Guest delivery | Runtime bundle, kernel capabilities and patches, flatten CLI, native builds and packaging | [Guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README.md#choose-a-workflow-or-delivery-contract) |
 | Operation and delivery | Logs/native usage/Telemetry metrics, diagnosis and retention; compatible upgrades; measurements, CI and aggregate releases | [Operations](operations.md), [upgrades](upgrading.md), [performance](performance.md), [CI](ci.md), [release](release.md) |
 
-OpenTelemetry metrics service and native Collector pipelines are implemented in the
-reviewed Orchestrator source; check the selected release's [observability scope](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md).
+Orchestrator provides an OpenTelemetry metrics service and native Collector
+pipelines; see the [observability scope](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md).
 Connector's native Geneve egress is delivered separately from its in-kernel
 vSwitch: `connector-ctl egress serve` runs the packaged static `connector-vpp`,
 uses gateway/Area files for ACL/NAT and creates forwarding state from traffic.
 node-infra can manage a local gateway; a shared remote or existing site gateway
 is another deployment choice. See [the complete egress workflow](node-infra.md#native-egress).
-A working Proxy path does not supply ordinary Guest outbound access. Current
-source features must still be checked against the selected aggregate version.
+A working Proxy path does not supply ordinary Guest outbound access.
 
 ## Component responsibilities
 
@@ -127,8 +126,7 @@ Kuasar Sandbox provides MicroVM lifecycle, data access, node networking and stan
 
 - external identity systems, tenant billing, business workflows or global capacity planning;
 - object storage, shared filesystems, OCI registries or the site's upstream network infrastructure;
-- application-level memory limits, error handling or data classification;
-- capabilities described in issues or RFCs that have not yet been merged and released.
+- application-level memory limits, error handling or data classification.
 
 ## Configuration and contract ownership
 
