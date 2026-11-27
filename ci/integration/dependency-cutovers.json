@@ -684,6 +684,25 @@
               "digest": "sha256:d210e979aab052832dd5abec1b2ec4334e831620b8c6eb11bf0bd0c6f2e0bdb2"
             }
           ]
+        },
+        "accelerator": {
+          "tag": "v0.2.0-preview.20261127.1",
+          "sha": "aed33d7fde940921d2ff0bf2b2a3ac78804cfe1e",
+          "release_id": 460681107,
+          "assets": [
+            {
+              "name": "accelerator-v0.2.0-preview.20261127.1-linux-aarch64.tar.gz",
+              "id": 800743503,
+              "size": 35861742,
+              "digest": "sha256:c2397b64c9a3b251820f2e3ea0ffeca7917e236a504c9aa6b274d35e32457c18"
+            },
+            {
+              "name": "accelerator-v0.2.0-preview.20261127.1-linux-x86_64.tar.gz",
+              "id": 800743708,
+              "size": 39260673,
+              "digest": "sha256:78fa83cd733271cabdc51675bd51a77686d4580628429b3cb6de92de28a8cab3"
+            }
+          ]
         }
       }
     }
