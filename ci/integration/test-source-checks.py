@@ -108,6 +108,23 @@ class SourceChecksTests(unittest.TestCase):
                                             ['make', 'test-ci-tools', 'test-release-tools'], self.sources / 'platform'))
                 self.assertEqual(checks[1:], [(name, command, self.sources / owner) for name, command in commands])
 
+    def test_full_product_changes_keep_the_same_basic_gates_as_source_only(self):
+        original = copy.deepcopy(self.plan)
+        for owner, path in (('accelerator', 'pkg/manifest/ingest/zero.go'),
+                            ('connector', 'cmd/connector-ctl/main.go'),
+                            ('guest-runtime', 'cmd/flatten-ctl/main.go')):
+            with self.subTest(owner=owner):
+                self.plan = copy.deepcopy(original)
+                select_plan(self.plan, [owner])
+                self.plan['changes'] = {owner: [path]}
+                full = [(name, command) for name, command, cwd in
+                        SUBJECT.checks_for(self.plan, self.sources) if cwd == self.sources / owner]
+                self.source_scope({owner: [path.removesuffix('.go') + '_test.go']})
+                source_only = [(name, command) for name, command, cwd in
+                               SUBJECT.checks_for(self.plan, self.sources) if cwd == self.sources / owner]
+                self.assertTrue(source_only)
+                self.assertEqual(full, source_only)
+
     def test_pid1_or_wire_changes_keep_guest_race_tests_in_full_and_source_lanes(self):
         for path, source_only in (('cmd/sandbox-init/main.go', False),
                                   ('pkg/guestabi/proto/proto.go', False),
@@ -123,12 +140,17 @@ class SourceChecksTests(unittest.TestCase):
                                  [('guest-runtime-source-tests', ['make', 'test', 'vet']),
                                   ('guest-runtime-race', ['env', 'CGO_ENABLED=1', 'go', 'test',
                                                           '-race', '-count=1', './...'])])
-        # Neither a removed test-only scope nor a different owner's source change
-        # should accidentally schedule the extra Guest checks in a full run.
+        # Ordinary Guest product changes still need the basic checks, but only
+        # PID 1/wire changes select the additional race pass.
         self.plan.pop('source_scope')
         self.plan['changes'] = {'guest-runtime': ['docs/build.md', 'cmd/flatten-ctl/main.go']}
-        self.assertFalse(any(row[2] == self.sources / 'guest-runtime'
-                             for row in SUBJECT.checks_for(self.plan, self.sources)))
+        self.assertEqual([(name, command) for name, command, cwd in
+                          SUBJECT.checks_for(self.plan, self.sources)
+                          if cwd == self.sources / 'guest-runtime'],
+                         [('guest-runtime-source-tests', ['make', 'test', 'vet'])])
+        select_plan(self.plan, ['connector'])
+        self.assertFalse(any(cwd == self.sources / 'guest-runtime'
+                             for _, _, cwd in SUBJECT.checks_for(self.plan, self.sources)))
 
     def test_source_scope_requires_privileged_perf_contracts_only_for_perf_changes(self):
         self.source_scope({'platform': ['test/perf/working_set_tap_test.sh']})
@@ -259,11 +281,13 @@ class SourceChecksTests(unittest.TestCase):
         commands = self.run_checks()
         result = self.result()
         self.assertEqual([row["name"] for row in result["checks"]],
-                         ["platform-contracts", "platform-privileged-perf-contracts", "connector-unit-race-vet", "sandboxer-unit-race-vet",
-                          "orchestrator-unit-race-vet", "accelerator-fixtures", "uffd-source-benchmark"])
+                         ["platform-contracts", "platform-privileged-perf-contracts", "connector-go-tests",
+                          "connector-unit-race-vet", "sandboxer-unit-race-vet", "orchestrator-unit-race-vet",
+                          "accelerator-source-tests", "accelerator-no-rocksdb-tests", "guest-runtime-source-tests",
+                          "uffd-source-benchmark"])
         self.assertEqual(commands[0][0], ["make", "test-ci-tools", "test-release-tools"])
         self.assertEqual(commands[1][0], ["sudo", "-n", "-E", "make", "test-perf-tools"])
-        for command, _, _ in commands[2:5]:
+        for command, _, _ in commands[3:6]:
             self.assertEqual(command, ["bash", "scripts/ci-source-checks.sh"])
         for _, directory, env in commands:
             self.assertEqual(env["TMPDIR"], "/build/t")
@@ -455,7 +479,8 @@ class SourceChecksTests(unittest.TestCase):
         select_plan(self.plan, ["connector"])
         self.run_checks()
         self.assertEqual([row["name"] for row in self.result()["checks"]],
-                         ["platform-contracts", "platform-privileged-perf-contracts", "connector-unit-race-vet"])
+                         ["platform-contracts", "platform-privileged-perf-contracts", "connector-go-tests",
+                          "connector-unit-race-vet"])
         self.assertEqual(set(self.result()["sources"]), {"connector", "platform"})
 
     def test_real_privileged_perf_failure_is_required(self):

@@ -318,20 +318,19 @@ def checks_for(plan, sources, group="all"):
     # checks. Published pins need no new CLI or reconstructed command list.
     for owner in ("connector", "sandboxer", "orchestrator"):
         if owner in selected:
-            if scope is not None and owner == "connector":
+            if owner == "connector":
                 # Its existing source entry covers selected race/BPF packages;
-                # the source-only lane must also exercise changed cmd tests.
+                # both lanes also need the remaining product package tests.
                 checks.append(("connector-go-tests", ["env", "CGO_ENABLED=0", "go", "test", "-count=1", "./..."],
                                sources / owner))
             checks.append((owner + "-unit-race-vet", ["bash", "scripts/ci-source-checks.sh"], sources / owner))
     if "accelerator" in selected:
-        if scope is None:
-            checks.append(("accelerator-fixtures", ["make", "test-e2e-scripts"], sources / "accelerator"))
-        else:
-            checks.append(("accelerator-source-tests", ["make", "test", "vet"], sources / "accelerator"))
-            checks.append(("accelerator-no-rocksdb-tests",
-                           ["env", "CGO_ENABLED=0", "go", "test", "-count=1", "-tags", "no_rocksdb", "./..."],
-                           sources / "accelerator"))
+        # The owner's test target includes its E2E script fixtures as well as
+        # the real RocksDB package tests. Artifact builds do not run these.
+        checks.append(("accelerator-source-tests", ["make", "test", "vet"], sources / "accelerator"))
+        checks.append(("accelerator-no-rocksdb-tests",
+                       ["env", "CGO_ENABLED=0", "go", "test", "-count=1", "-tags", "no_rocksdb", "./..."],
+                       sources / "accelerator"))
     guest = "guest-runtime"
     paths = (scope or plan).get("changes", {}).get(guest, ())
     # PID 1 and the wire ABI had normal/race/vet coverage in the host repo.
@@ -339,7 +338,7 @@ def checks_for(plan, sources, group="all"):
     # ./... stays valid for an older selected Guest or when a package is removed.
     guest_pid1 = any(path.endswith(".go") and path.startswith(
         ("cmd/sandbox-init/", "pkg/guestabi/", "internal/wireio/")) for path in paths)
-    if guest in selected and (scope is not None or guest_pid1):
+    if guest in selected:
         checks.append(("guest-runtime-source-tests", ["make", "test", "vet"], sources / guest))
         if guest_pid1:
             checks.append(("guest-runtime-race", ["env", "CGO_ENABLED=1", "go", "test", "-race",
