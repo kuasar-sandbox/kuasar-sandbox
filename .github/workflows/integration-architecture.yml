@@ -252,9 +252,17 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}
-          path: |
-            prepared.tar.gz
-            runtime.tar.gz
+          path: prepared.tar.gz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+      - name: Upload the separate clean execution runtime
+        if: needs.build.outputs.product_cases == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: integration-runtime-${{ inputs.arch }}-${{ github.run_id }}
+          path: runtime.tar.gz
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
@@ -379,6 +387,13 @@ jobs:
         timeout-minutes: 35
         with:
           name: integration-prepared-${{ inputs.arch }}-${{ github.run_id }}
+          path: ${{ env.E2E_WORKSPACE }}/transport
+      - name: Download the clean execution runtime only when selected
+        if: matrix.group.runtime == 'runtime-only'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: integration-runtime-${{ inputs.arch }}-${{ github.run_id }}
           path: ${{ env.E2E_WORKSPACE }}/transport
       - name: Bootstrap declared native execution profile
         if: matrix.group.executor == 'native'

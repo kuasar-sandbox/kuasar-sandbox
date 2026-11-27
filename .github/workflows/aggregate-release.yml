@@ -564,7 +564,7 @@ jobs:
           set -euo pipefail
           artifact_id_lines=$(gh api --paginate \
             "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" \
-            --jq '.artifacts[] | select(.name | test("^(aggregate-stage-|aggregate-inputs-|aggregate-sources-|aggregate-helpers-|workbench-inputs-|workbench-image-|node-infra-image-|integration-build-|integration-readers-|integration-prepared-)")) | .id')
+            --jq '.artifacts[] | select(.name | test("^(aggregate-stage-|aggregate-inputs-|aggregate-sources-|aggregate-helpers-|workbench-inputs-|workbench-image-|node-infra-image-|integration-build-|integration-readers-|integration-prepared-|integration-runtime-)")) | .id')
           artifact_ids=()
           if [[ -n "$artifact_id_lines" ]]; then
             mapfile -t artifact_ids <<< "$artifact_id_lines"
