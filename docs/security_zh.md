@@ -32,6 +32,47 @@
 凭据更新只影响之后创建并复制凭据的业务记录.已持久化到现有沙箱记录的凭据保持其
 原 binding,不会因 key-distribution 表更新自动重绑.
 
+## Secret plugin
+
+可信宿主组件通过 Secret plugin 从部署提供的本地 secret broker 获取实际密钥。
+在启动各消费服务前设置 `KUASAR_SECRET_PLUGINS`，并在支持的配置字段中使用
+`@<plugin>/<key>`：
+
+```bash
+export KUASAR_SECRET_PLUGINS='kms::/run/secret-broker1.sock:cache_ttl=30s:cache_size=4k enc::/run/secret-broker2.sock:cache_ttl=30s'
+export MANIFEST_KEY='@kms/tenant-a/manifest-v1'
+export NODE_CONFIG_ENCRYPTION_KEY='@enc/node-key-v2:@enc/node-key-v1'
+```
+
+| 字段 | 普通值的含义 | 插件返回内容 |
+| --- | --- | --- |
+| ManifestKey，包括 `MANIFEST_KEY` 和 `manifest.key` | 64 字符 hex 密钥 | 原始 32 字节密钥 |
+| EncryptionKey ring 的各个条目 | 64 字符 hex 密钥 | 原始 32 字节密钥 |
+| TLS 配置的 `key` | 私钥文件路径 | PEM 私钥内容 |
+| 已配置的静态 S3 `access_key` / `secret_key` | 凭据原文 | 凭据原文字节 |
+
+YAML 引用需要加引号。每个插件声明指定一个绝对 Unix socket 路径，多个声明使用
+空白分隔。引用中第一个 `/` 后的 key 原样保留，不能含冒号或空白。上述字段保留
+前导 `@`：以 `@` 开头的 TLS 文件名使用 `./@filename` 或绝对路径表达；同类 S3
+字面值改用插件引用。
+
+宿主服务必须能访问配置的 socket。容器化服务需将 broker 的 socket 目录挂载到
+对应路径，并在容器内提供环境变量。Node task 接收可信节点的插件配置；独立启动
+的存储或 proxy 服务需配置各自环境。broker socket 不应向任意 Guest 开放。
+
+各插件使用独立 LRU 缓存，默认 TTL 为 30 秒、容量为 4096 条；TTL 或容量为零时
+禁用缓存。缓存过期只影响之后的解析，不会替换存储对象、TLS certificate 或静态
+S3 client 已持有的密钥。使用稳定、带版本的引用。EncryptionKey ring 的第一项
+用于新记录加密，仍需解密旧记录时保留对应的旧项。
+
+应用已注入的凭据 provider 保留优先级。Secret plugin 只解析实际字节，不执行
+远程签名、密钥解封或 STS 刷新；APISecret、ServiceSecret 保持原配置语义。插件
+失败不会回退到其他凭据来源。HTTP over UDS 协议、解析规则和 SDK 接口见
+accelerator 的 [Secret plugin 契约](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/secret-plugins_zh.md)。
+
+引用使环境变量和配置字段无需保存实际密钥字节；解析后的字节仍存在于消费进程
+内存。普通 hex 值保持原有行为，制品加密格式及密文与实际密钥的对应关系保持不变。
+
 ## MMDS Route 安全与部署边界
 
 Conductor 配置拥有 `mmds.listen`、路由准入策略与本地服务注册。具体沙箱或 Build 路由由受支持请求提交，经 Conductor 按策略校验并投影。租户路由还须启用 `mmds.routes.enabled`，且不能在 MMDS 关闭时启用。
