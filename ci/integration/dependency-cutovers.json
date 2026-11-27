@@ -655,6 +655,37 @@
           ]
         }
       }
+    },
+    {
+      "candidate": {
+        "repository": "kuasar-sandbox/orchestrator",
+        "pull_request_number": 583,
+        "base_ref": "main",
+        "base_sha": "cfcc9bda49309403ae56308365161fecab5ad798",
+        "head_sha": "85a324830d47f49f57c1e33af868610c0b77adc8",
+        "candidate_sha": "182f8175234a645b143c7a50b11f7030259f6312"
+      },
+      "units": {
+        "sandboxer": {
+          "tag": "v0.2.0-preview.20261127.1",
+          "sha": "33bdf223f6d88a836d866fc000af33277ed11247",
+          "release_id": 460592632,
+          "assets": [
+            {
+              "name": "sandboxer-v0.2.0-preview.20261127.1-linux-aarch64.tar.gz",
+              "id": 800467773,
+              "size": 15444611,
+              "digest": "sha256:7b5b5fd8d35fc5f18a5175cd83b08edf1ecdf611926c9375f67f973d3f1bbb9b"
+            },
+            {
+              "name": "sandboxer-v0.2.0-preview.20261127.1-linux-x86_64.tar.gz",
+              "id": 800467946,
+              "size": 16620134,
+              "digest": "sha256:d210e979aab052832dd5abec1b2ec4334e831620b8c6eb11bf0bd0c6f2e0bdb2"
+            }
+          ]
+        }
+      }
     }
   ]
 }
