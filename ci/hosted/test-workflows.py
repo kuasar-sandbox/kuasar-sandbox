@@ -133,6 +133,77 @@ def check_persistent_workspace_isolation():
         assert (root / 'prepared/stale').read_text() == 'prior job'
 
 
+def check_e2e_artifact_destinations():
+    """Use the real exclusive downloader and workflow consumer with offline bytes."""
+    import importlib.util
+    import io
+    import tarfile
+    spec = importlib.util.spec_from_file_location('workflow_download', ROOT / 'ci/integration/download_artifact.py')
+    download = importlib.util.module_from_spec(spec); spec.loader.exec_module(download)
+    steps = load('integration-architecture.yml')['jobs']['e2e']['steps']
+    transfers = [step for step in steps if step.get('with', {}).get('name', '').startswith(
+        ('integration-prepared-', 'integration-runtime-'))]
+    assert len(transfers) == 2
+    consumer = next(step['run'] for step in steps
+                    if step.get('name') == 'Run the selected capability group from immutable inputs')
+    with tempfile.TemporaryDirectory(prefix='e2e-artifact-destinations-') as directory:
+        root = Path(directory)
+        (root / 'framework').symlink_to(ROOT, target_is_directory=True)
+        validator = root / 'validate.py'
+        validator.write_text('''from pathlib import Path
+import os, sys
+args = sys.argv[1:]
+workspace = Path(args[args.index('--workspace') + 1])
+runtime = Path(args[args.index('--runtime') + 1])
+assert (workspace / 'payload').read_bytes() == b'prepared product fixture'
+if os.environ['TEST_RUNTIME'] == 'runtime-only':
+    assert runtime.read_bytes() == b'exact runtime fixture'
+else:
+    assert not runtime.exists()
+Path(os.environ['CONSUMER_MARKER']).write_text('checked')
+''')
+        # Intercept only the product launcher. The actual workflow shell and
+        # transport extractor still consume the downloaded fixture paths.
+        prefix = '''python3() {
+  if [ "$2" = framework/ci/integration/run-capability-group.py ]; then
+    command python3 "$CONSUMER_VALIDATOR" "${@:3}"
+  else
+    command python3 "$@"
+  fi
+}
+'''
+        for arch in ('x86_64', 'aarch64'):
+            for runtime in ('runtime-only', 'system'):
+                workspace = root / (arch + '-' + runtime)
+                workspace.mkdir()
+                prepared = io.BytesIO()
+                with tarfile.open(fileobj=prepared, mode='w:gz') as archive:
+                    body = b'prepared product fixture'
+                    member = tarfile.TarInfo(arch + '/payload')
+                    member.size, member.mode = len(body), 0o644
+                    archive.addfile(member, io.BytesIO(body))
+                def offline_artifact(selected, frozen, staging, send):
+                    payload = staging / 'payload'; payload.mkdir()
+                    name, body = ('prepared.tar.gz', prepared.getvalue()) if selected['name'].startswith(
+                        'integration-prepared-') else ('runtime.tar.gz', b'exact runtime fixture')
+                    (payload / name).write_bytes(body)
+                for step in transfers:
+                    if 'if' in step and not expression(step['if'], {'matrix': {'group': {'runtime': runtime}}}):
+                        continue
+                    name = step['with']['name'].replace('${{ inputs.arch }}', arch).replace('${{ github.run_id }}', '42')
+                    destination = step['with']['path'].replace('${{ env.E2E_WORKSPACE }}', str(workspace))
+                    download.download({'name': name, 'pattern': ''}, destination,
+                                      seconds=5, delays=(), operation=offline_artifact)
+                marker = workspace / 'consumer-checked'
+                env = dict(os.environ, E2E_WORKSPACE=str(workspace), TARGET_ARCH=arch,
+                           TEST_SHARD='fixture', TEST_RUNTIME=runtime,
+                           CONSUMER_VALIDATOR=str(validator), CONSUMER_MARKER=str(marker))
+                subprocess.run(['bash', '-ceu', prefix + consumer], cwd=root, env=env,
+                               check=True, capture_output=True, text=True, timeout=10)
+                assert marker.read_text() == 'checked'
+        print('e2e artifact destinations: both architectures, runtime-only and system consumers passed')
+
+
 def check_helper_materialization():
     """Execute the real artifact transport/layout and validate exact tag inputs."""
     import importlib.util
@@ -456,6 +527,7 @@ def check():
     assert "GH_TOKEN" not in helper["with"]["run"]
     check_helper_materialization()
     check_persistent_workspace_isolation()
+    check_e2e_artifact_destinations()
     assert integration["results"]["needs"] == ["resolve", "x86_64", "aarch64", "source-checks", "workbench-native", "workbench-release"]
     native = integration['workbench-native']
     assert native['needs'] == 'resolve'

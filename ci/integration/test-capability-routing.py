@@ -262,7 +262,10 @@ class RuntimeTransport(unittest.TestCase):
         self.assertEqual(len(downloads), 1)
         self.assertEqual(downloads[0]['if'], "matrix.group.runtime == 'runtime-only'")
         self.assertEqual(downloads[0]['with']['name'], runtime['with']['name'])
-        self.assertEqual(downloads[0]['with']['path'], '${{ env.E2E_WORKSPACE }}/transport')
+        self.assertEqual(downloads[0]['with']['path'], '${{ env.E2E_WORKSPACE }}/runtime-transport')
+        prepared_download = next(step for step in jobs['e2e']['steps']
+                                 if step.get('with', {}).get('name', '').startswith('integration-prepared-'))
+        self.assertNotEqual(downloads[0]['with']['path'], prepared_download['with']['path'])
         self.assertFalse(any(step.get('with', {}).get('name', '').startswith('integration-runtime-')
                              for step in jobs['performance']['steps']))
         release = yaml.safe_load((artifacts.ROOT / '.github/workflows/aggregate-release.yml').read_text())
