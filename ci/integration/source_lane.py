@@ -183,7 +183,9 @@ def supported(repository, tree, changed, read_blob):
         if row is None:
             continue
         module = tree['entries'].get('go.mod', {})
-        if module.get('type') != 'blob' or module.get('mode') != '100644':
+        # Go reads go.mod as data. A regular file's executable bit does not
+        # affect which root-module tests the source gate can execute.
+        if module.get('type') != 'blob' or module.get('mode') not in {'100644', '100755'}:
             return False
         if any((parent / 'go.mod').as_posix() in tree['entries']
                for parent in PurePosixPath(path).parents if parent != PurePosixPath('.')):
