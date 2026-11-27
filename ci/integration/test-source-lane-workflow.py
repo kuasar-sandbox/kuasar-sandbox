@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """Source-only scheduling keeps real source tests and exact final evidence."""
+import copy
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -7,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 import yaml
 
@@ -14,6 +17,9 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = yaml.safe_load((ROOT / '.github/workflows/integration-tests.yml').read_text())
 JOBS = WORKFLOW['jobs']
+SPEC = importlib.util.spec_from_file_location('source_recheck', ROOT / 'ci/integration/recheck-source-set.py')
+RECHECK = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(RECHECK)
 
 
 def step(job, name):
@@ -85,6 +91,40 @@ class StageGateTests(unittest.TestCase):
 
 
 class SchedulingTests(unittest.TestCase):
+    def test_current_source_barriers_precede_queued_expensive_stages(self):
+        architecture = yaml.safe_load((ROOT / '.github/workflows/integration-architecture.yml').read_text())
+        self.assertEqual(architecture['permissions'], {'contents': 'read', 'pull-requests': 'read'})
+        build_names = [row.get('name') for row in architecture['jobs']['build']['steps']]
+        self.assertLess(build_names.index('Validate trusted architecture and shard selection'),
+                        build_names.index('Recheck exact source set before expensive work'))
+        # Keep the source-check job's stronger whole-job credential-free
+        # contract; its existing resolve admission remains authoritative.
+        self.assertNotIn('GH_TOKEN', json.dumps(JOBS['source-checks']))
+        selections = [(JOBS['workbench-native'], 'Qualify the complete native toolchain with ordinary UID builds')]
+        selections += [(architecture['jobs'][name], target) for name, target in (
+            ('build', 'Build trusted native archive readers in Workbench'),
+            ('prepare', 'Bootstrap archive execution prerequisites'),
+            ('e2e', 'Run the selected capability group from immutable inputs'),
+            ('performance', 'Bootstrap declared native execution profile'))]
+        for job, target in selections:
+            steps = job['steps']
+            index = next(i for i, row in enumerate(steps)
+                         if row.get('name') == 'Recheck exact source set before expensive work')
+            barrier = steps[index]
+            with self.subTest(target=target):
+                self.assertLess(index, next(i for i, row in enumerate(steps) if row.get('name') == target))
+                # Failures must stop the ordinary following steps. Tokens stay
+                # in this control step, outside all candidate build commands.
+                self.assertNotIn('continue-on-error', barrier)
+                self.assertEqual(barrier['env'], {'GH_TOKEN': '${{ github.token }}'})
+                self.assertIn('recheck-source-set.py', barrier['run'])
+                self.assertIn('--framework-sha', barrier['run'])
+                self.assertNotIn('GH_TOKEN', job.get('env', {}))
+                for row in steps[index + 1:]:
+                    if 'integration-build-' in str(row.get('with', {}).get('name', '')) or \
+                       'integration-prepared-' in str(row.get('with', {}).get('name', '')):
+                        self.assertNotIn('always()', row.get('if', ''))
+
     def test_only_source_jobs_expand_to_the_new_lane(self):
         condition = JOBS['source-checks']['if']
         self.assertIn("(needs.resolve.outputs.lane == 'full' || needs.resolve.outputs.lane == 'source')", condition)
@@ -223,6 +263,92 @@ def verify_plan_scope(plan, evidence):
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual([event[0] for event in events], ['docs'])
                 self.assertTrue(validation.exists())
+
+
+class EarlyAdmissionTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.primary = dict(repository='kuasar-sandbox/orchestrator', pull_request_number=1,
+                            candidate_sha='a' * 40, base_sha='b' * 40, head_sha='c' * 40, base_ref='main')
+        self.companion = dict(repository='kuasar-sandbox/connector', pull_request_number=2,
+                              candidate_sha='d' * 40, base_sha='e' * 40, head_sha='f' * 40, base_ref='main')
+        self.plan = dict(mode='source', framework_sha='1' * 40,
+                         candidate_records=[self.primary, self.companion])
+        self.responses = {}
+        for row in self.plan['candidate_records']:
+            prefix = '/repos/' + row['repository']
+            pr = dict(number=row['pull_request_number'], state='open', draft=False,
+                      base=dict(ref=row['base_ref'], sha=row['base_sha'], repo={'full_name': row['repository']}),
+                      head={'sha': row['head_sha']}, merge_commit_sha=row['candidate_sha'], body='')
+            self.responses[prefix + '/pulls/' + str(row['pull_request_number'])] = pr
+            self.responses[prefix + '/git/commits/' + row['candidate_sha']] = {
+                'sha': row['candidate_sha'], 'parents': [{'sha': row['base_sha']}, {'sha': row['head_sha']}]}
+            self.responses[prefix + '/git/ref/heads/main'] = {'object': {'sha': row['base_sha']}}
+            for kind, sha in [('merge', row['candidate_sha']), ('head', row['head_sha'])]:
+                ref = f'pull/{row["pull_request_number"]}/{kind}'
+                self.responses[prefix + '/git/ref/' + ref] = {'ref': 'refs/' + ref, 'object': {'sha': sha}}
+            self.responses[prefix + '/commits/' + row['head_sha'] + '/branches-where-head'] = [{'name': 'candidate'}]
+        self.responses['/repos/kuasar-sandbox/orchestrator/pulls/1']['body'] = (
+            '<!-- kuasar-ci-companions\nkuasar-sandbox/connector#2\n-->')
+        self.payload = self.root / 'responses.json'
+        binary = self.root / 'bin'
+        binary.mkdir()
+        curl = binary / 'curl'
+        curl.write_text('#!' + sys.executable + '\nimport json, os, sys, urllib.parse\n'
+                        'with open(os.environ["SOURCE_RECHECK_FIXTURE"]) as source: rows=json.load(source)\n'
+                        'print(json.dumps(rows[urllib.parse.urlsplit(sys.argv[-1]).path]))\n')
+        curl.chmod(0o755)
+        environment = patch.dict(os.environ, PATH=str(binary) + os.pathsep + os.environ['PATH'],
+                                 GH_TOKEN='fixture-read-only', SOURCE_RECHECK_FIXTURE=str(self.payload))
+        environment.start()
+        self.addCleanup(environment.stop)
+
+    def execute(self):
+        self.payload.write_text(json.dumps(self.responses))
+        # These focused fixtures exercise the real existing Bash admission,
+        # including jq/body parsing. Plan schema validation has its own suite.
+        with patch.object(RECHECK.artifacts, 'check_plan') as validate:
+            result = RECHECK.recheck(self.plan, self.plan['framework_sha'])
+        validate.assert_called_once_with(self.plan)
+        return result
+
+    def test_unchanged_primary_and_companion_admission_passes(self):
+        self.assertEqual(self.execute(), 0)
+
+    def test_moved_closed_draft_or_redeclared_source_set_stops_the_stage(self):
+        original = copy.deepcopy(self.responses)
+        mutations = [
+            ('/repos/kuasar-sandbox/orchestrator/pulls/1', lambda row: row.update(state='closed')),
+            ('/repos/kuasar-sandbox/orchestrator/pulls/1', lambda row: row.update(body='')),
+            ('/repos/kuasar-sandbox/connector/pulls/2', lambda row: row.update(draft=True)),
+            ('/repos/kuasar-sandbox/connector/pulls/2', lambda row: row['head'].update(sha='9' * 40)),
+            ('/repos/kuasar-sandbox/connector/git/ref/heads/main', lambda row: row['object'].update(sha='8' * 40)),
+            ('/repos/kuasar-sandbox/connector/git/ref/pull/2/merge', lambda row: row['object'].update(sha='7' * 40)),
+        ]
+        for path, mutate in mutations:
+            self.responses = copy.deepcopy(original)
+            mutate(self.responses[path])
+            with self.subTest(path=path):
+                self.assertNotEqual(self.execute(), 0)
+
+    def test_release_mode_needs_no_pr_or_control_credentials(self):
+        plan = dict(self.plan, mode='exact-assets', candidate_records=[])
+        with patch.object(RECHECK.artifacts, 'check_plan'), patch.object(RECHECK.subprocess, 'run') as run, \
+             patch.dict(os.environ, GH_TOKEN=''):
+            self.assertEqual(RECHECK.recheck(plan, plan['framework_sha']), 0)
+        run.assert_not_called()
+
+    def test_invalid_plan_or_framework_is_rejected_before_admission_io(self):
+        with patch.object(RECHECK.subprocess, 'run') as run:
+            with patch.object(RECHECK.artifacts, 'check_plan', side_effect=ValueError('invalid plan')):
+                with self.assertRaisesRegex(ValueError, 'invalid plan'):
+                    RECHECK.recheck(self.plan, self.plan['framework_sha'])
+            with patch.object(RECHECK.artifacts, 'check_plan'):
+                with self.assertRaisesRegex(ValueError, 'framework differs'):
+                    RECHECK.recheck(self.plan, '2' * 40)
+        run.assert_not_called()
 
 
 if __name__ == '__main__':

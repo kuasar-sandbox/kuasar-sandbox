@@ -27,6 +27,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 # Each invocation has its own build -> prepare -> native E2E lifecycle.
 concurrency:
@@ -79,6 +80,12 @@ jobs:
               output.write('performance=' + json.dumps(bool(plan['lanes'][os.environ['TARGET_ARCH']]['performance'])) + '\n')
               output.write('product_cases=' + json.dumps(bool(plan['lanes'][os.environ['TARGET_ARCH']]['selection']['cases'])) + '\n')
           PYTHON
+      - name: Recheck exact source set before expensive work
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 -B framework/ci/integration/recheck-source-set.py
+          --plan plan/plan.json --framework-sha '${{ inputs.framework_sha }}'
       - name: Build trusted native archive readers in Workbench
         uses: ./framework/.github/actions/workbench
         with:
@@ -196,6 +203,12 @@ jobs:
         with:
           name: ${{ inputs.plan_artifact }}
           path: plan
+      - name: Recheck exact source set before expensive work
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 -B framework/ci/integration/recheck-source-set.py
+          --plan plan/plan.json --framework-sha '${{ inputs.framework_sha }}'
       - uses: ./framework/.github/actions/download-artifact
         timeout-minutes: 35
         with:
@@ -356,6 +369,12 @@ jobs:
         with:
           name: ${{ inputs.plan_artifact }}
           path: ${{ env.E2E_WORKSPACE }}/plan
+      - name: Recheck exact source set before expensive work
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 -B framework/ci/integration/recheck-source-set.py
+          --plan "$E2E_WORKSPACE/plan/plan.json" --framework-sha '${{ inputs.framework_sha }}'
       - uses: ./framework/.github/actions/download-artifact
         timeout-minutes: 35
         with:
@@ -462,6 +481,12 @@ jobs:
         with:
           name: ${{ inputs.plan_artifact }}
           path: plan
+      - name: Recheck exact source set before expensive work
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          python3 -B framework/ci/integration/recheck-source-set.py
+          --plan plan/plan.json --framework-sha '${{ inputs.framework_sha }}'
       - uses: ./framework/.github/actions/download-artifact
         timeout-minutes: 35
         with:
