@@ -125,6 +125,24 @@ class SourceChecksTests(unittest.TestCase):
                 self.assertTrue(source_only)
                 self.assertEqual(full, source_only)
 
+    def test_explicit_gate_input_selects_its_complete_owner_gate(self):
+        original = copy.deepcopy(self.plan)
+        for repository, path in sorted(SUBJECT.source_lane.GATE_INPUTS):
+            owner = SUBJECT.source_lane.owner(repository)
+            with self.subTest(repository=repository, path=path):
+                self.plan = copy.deepcopy(original)
+                self.source_scope({owner: [path]})
+                artifacts.check_plan(self.plan)
+                selected, _ = SUBJECT.source_records(self.plan)
+                self.assertEqual(selected, {owner})
+                checks = SUBJECT.checks_for(self.plan, self.sources)
+                matching = [row for row in checks if row[0] == owner + '-unit-race-vet']
+                self.assertEqual(matching, [(owner + '-unit-race-vet',
+                    ['bash', 'scripts/ci-source-checks.sh'], self.sources / owner)])
+                self.assertFalse(any('-test-script:' in row[0] for row in checks))
+                group = 'B' if owner == 'orchestrator' else 'A'
+                self.assertIn(matching[0], SUBJECT.checks_for(self.plan, self.sources, group))
+
     def test_pid1_or_wire_changes_keep_guest_race_tests_in_full_and_source_lanes(self):
         for path, source_only in (('cmd/sandbox-init/main.go', False),
                                   ('pkg/guestabi/proto/proto.go', False),
