@@ -17,14 +17,37 @@ Select explicit targets with the [Build target recipe](https://github.com/kuasar
 <a id="first-application"></a>
 ## Your first template and application
 
-After the Demo, use a running Node with the existing [Node connection and API-key
-contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md#sdk-configuration).
-Reuse its `E2B_API_KEY`, `E2B_API_URL`, `E2B_DOMAIN`, data ingress/DNS and trusted TLS
-CA settings. The Demo stops its services at completion: its temporary credentials
-and container localhost addresses do not configure an independent host client.
-For exploration, keep the documented Demo `--pause` session alive, or provision
-your Node through [Deployment](deployment.md). Never copy Demo credentials into a
-production deployment.
+Use a running site-configured Node with a Builder pool, admitted phase capacity,
+source-image access and durable publication storage. The Quick Start profile
+only sets up the shipped shell workflow; prepare your own Build inputs and pool
+budgets in the site configuration. The [Node connection contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md#sdk-configuration)
+provides `E2B_API_KEY`, `E2B_API_URL`, `E2B_DOMAIN`, data ingress/DNS and trusted TLS
+CA settings. Obtain these from the platform operator; they are not derived from
+the Demo or the first-command trial.
+
+Install the selected SDK in an application environment, independently of
+Workbench's validation wheelhouse:
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install 'e2b==2.25.1'
+```
+
+For native egress, set `KUASAR_NETWORK_JSON` to the operator-approved network
+specification, for example `{"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}`
+for the [local gateway](node-infra.md#native-egress). This is an example environment
+variable consumed by this client recipe, not a new Node setting. Match the image
+registry's reachability and DNS/ACL to the Build execution network.
+
+**Version boundary:** current source accepts repeated identical Network and
+Builder target headers as assertions of registered values, so the SDK flow below
+can carry its Network header through Register and Trigger. The published
+`release-v0.2.0-preview.20261127` predates this compatibility fix: when network or
+explicit target headers are needed there, use the complete
+[separate Register/Trigger recipe](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md#client-workflow).
+Other register-only headers still require the separate flow. A Trigger cannot
+change a registered network or target.
 
 This recipe targets the repository-pinned **e2b==2.25.1** and current
 [Build contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md).
@@ -34,7 +57,8 @@ your own digest-pinned, architecture-matching registry image containing Python 3
 `/bin/bash`, `id` and a writable `/tmp`. If the `user` account is absent, it also
 needs `useradd`. Build RUN/start/ready commands use Bash, not an arbitrary shell.
 Configure registry credentials through Node's existing credential mechanism. First check [image and kernel adaptation](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/flatten-cli.md#decide-whether-your-workload-needs-adaptation).
-The 2 CPU/6 GiB build budget follows the Demo, not a sizing recommendation.
+The 2 CPU/6 GiB phase budget is an example: ensure the Builder pool and the
+whole-node budget can admit it alongside the required services.
 
 The recipe prepares the E2B `user` account inside the image before application
 steps, following the Demo's UID/GID `1000:1000` convention. It creates the account
@@ -48,8 +72,8 @@ runs start/ready commands as `user` in `/home/user`, so Python and a writable
 The remaining build command prepares files; the start command runs the application;
 the readiness command checks its HTTP response before snapshot publication. A fixed
 sleep alone does not prove your application is ready. Nonempty start/ready commands
-select the auto memory target. No register-only configuration headers are passed
-to `Template.build`, because this SDK forwards them to trigger too.
+select the auto memory target. The optional Network header is repeated unchanged by the SDK; current-source
+Trigger validates equality with registration before any Build side effects.
 
 ```python
 if not __debug__:
@@ -61,6 +85,12 @@ from e2b import Sandbox, Template
 api = os.environ["E2B_API_URL"].rstrip("/")
 key = os.environ["E2B_API_KEY"]
 image = os.environ["APP_IMAGE"]  # registry/repository@sha256:...
+build_headers = {}
+if os.environ.get("KUASAR_NETWORK_JSON"):
+    network = json.loads(os.environ["KUASAR_NETWORK_JSON"])
+    if not isinstance(network, dict):
+        raise ValueError("KUASAR_NETWORK_JSON must contain an object")
+    build_headers["X-Kuasar-Sandbox-Network"] = json.dumps(network)
 start = "python3 -m http.server 8080 --directory /tmp/my-app"
 ready = "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=2)\""
 tpl = (Template().from_image(image)
@@ -76,7 +106,7 @@ tpl = (Template().from_image(image)
        .run_cmd("mkdir -p /tmp/my-app && printf 'my application\\n' > /tmp/my-app/index.html")
        .set_start_cmd(start, ready))
 info = Template.build(
-    tpl, name="my-first-app", cpu_count=2, memory_mb=6144,
+    tpl, name="my-first-app", cpu_count=2, memory_mb=6144, headers=build_headers,
     on_build_logs=lambda entry: print(entry.message, flush=True),
 )
 request = urllib.request.Request(

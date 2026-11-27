@@ -4,6 +4,73 @@
 
 For operators assembling production nodes or clusters. Acquire matching inputs through [installation](installation.md); use [Quick Start](quickstart.md) for first use. Workbench is a development/test environment, while production runs independently. Components own complete CLI/configuration/internal contracts; this guide owns process placement, connections and dependency order.
 
+<a id="production-start"></a>
+## A production starting point and acceptance path
+
+Start with a configured **node-infra** instance on one native KVM host when
+one failure domain meets the application's availability needs. Use the selected
+image and matching deployment package, site TLS/API credentials, durable
+artifacts and backed-up node state. The image owns the coordinated Conductor,
+Proxy, vSwitch and execution-unit lifecycle. Configure outbound access only when
+the workload needs it; native egress is available in the node image.
+
+Follow this sequence before adding optional roles:
+
+1. [Acquire the selected image and deployment package](installation.md). A local
+   trial uses [Quick Start](quickstart.md); application deployments use native
+   site configuration with no `quickstart` argument.
+2. [Configure and install the node](node-infra.md): set the domain, separate
+   API/data listeners, authentication/TLS, node encryption key, durable paths and
+   Runner/Builder pools. Use `mkfs://ext4` for an ordinary new writable upper.
+   Keep outer instance limits larger than the net allocatable pools and services.
+3. Select the smallest storage path that meets retention and portability needs
+   from the table below. For a Store path start with direct Store; add local
+   tiered cache only when useful and add EC L2 only after measurement.
+4. [Enable native egress](node-infra.md#native-egress) for image retrieval and
+   workload outbound access when required. Match gateway/Area policy to Build
+   registration and Create network input, then test actual allowed/denied traffic.
+5. Install the tenant root pair using the protected Node admin interface, issue
+   the user's API key through the [credential workflow](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md#credential-model),
+   then [build a template](templates.md#first-application) and verify the complete
+   [instance lifecycle](sandboxes.md). Keep management credentials outside Guests.
+6. For a shared multi-node entry, add [Registry + Router and a second Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#minimum-cluster).
+   Start with one persisted SQLite Registry and direct Group maintenance when
+   appropriate. Provision roots/Groups on each Node and verify exact publication;
+   a connected Node alone is not ready for Group traffic. Add Placer for importer
+   maintenance, and PostgreSQL/FDB for the deployment's metadata topology.
+
+The role inventory below remains useful for native-component deployments and
+larger installations. Deploying every listed role is not a prerequisite. A
+single node has one failure domain; shared artifacts alone do not create HA or
+recover lost execution ownership.
+
+| Choice | Use when | Additional operating responsibility |
+|---|---|---|
+| Local files | Artifacts fit locally and node affinity/rebuild time is acceptable | Disk capacity, backups, immutable runtime/kernel retention; node loss may remove the only copy. |
+| Named shared file location | Multiple eligible nodes need the same native artifacts | Consistent location names, mount/access/identity checks, shared filesystem availability/latency and backups. Reachability alone does not prove restore eligibility ([restore eligibility](upgrading.md#restore-eligibility)). |
+| Manifest + durable Store | Remote persistence, large distribution or lazy object access is needed | Customer keys, generations, full parent closure, object integrity and origin availability; introduce local cache only with a memory/disk budget. |
+| Optional L2 | Measured repeated remote misses/working-set distribution justify it | Peer failure domains, membership rollout, shard disk/memory and effective EC geometry. L2 is reconstructible acceleration, not the durable artifact copy. |
+| Registry/Router cluster; optional Placer | Placement across multiple nodes and a common entry are needed | Group-input/credential durability, Node and Registry ownership, private internal listeners, admission and recovery testing. Cluster mode does not turn incompatible nodes into restore targets. |
+
+Before opening admission: pin one aggregate and record its native GitHub asset digests; use that release's
+native products and packaged guides, verify effective configurations, then test one
+real build/create/command/file/pause/resume/kill cycle. Run the same checks with the
+actual gateway allow/deny policy and cold artifact reads. Validate exporter/query
+behavior separately if [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md#telemetry-release-scope)
+is included in that version. Current source `TARGET_ARCH` support is not proof of
+cross-build/emulation or historical release assets; follow [download selection](installation.md)
+and [native Workbench builds](../workbench/README.md). Open release-selection,
+download-verifier or WSL proposals do not change the selected published contract.
+
+In a staging fault exercise, stop only owned processes and isolate only test
+sources: observe readiness, first failure cause, admission stopping, artifact
+preservation and recovery. Measure the [capacity cases](performance.md#capacity-example). Release admission
+only when all required checks pass; on a failed gate retain the previous qualified
+configuration and stop new placements. End tests by killing test instances through
+the owner, not deleting shared files. Record the exact release, workload, limits,
+failed/skipped probes and rollback inputs as the deployment's acceptance record.
+
+
 ## Role overview
 
 Select roles according to the data path and control-plane topology. Local files, shared files and Manifest/store/cache are separate choices; Manifest and caching are not prerequisites for either standalone or cluster deployment.
@@ -49,6 +116,7 @@ component relationships below also apply to those contained services.
 | `store-ctl` (optional) | Node-side read/write service for FS/S3-compatible Manifest storage. | Commonly one sidecar per node/storage configuration. | systemd; required when selected source access, publication or configured write admission uses Store ([Build deployment](#build-deployment)). | [accelerator/store](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md). |
 | `sandbox-ctl run` | Controls one sandbox, similar in lifecycle to `runc run`; not a shared daemon. | One per sandbox. | Assigned by node-ctl through `sandbox-runner@<run-id>` and its `run-sandbox` launcher. | [Sandboxer Runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime.md). |
 | `cloud-hypervisor` | Patched VMM, child of sandbox-ctl. | One per sandbox. | Spawned by sandbox-ctl. | [Sandboxer VMM](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/vmm.md). |
+| `connector-ctl egress serve` (optional) | Geneve gateway with Area ACL/NAT and traffic-driven forwarding state | One per selected gateway deployment | Native node-infra unit for local gateways, or independently owned service for remote gateways | [Egress operations](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md) |
 | `connector-ctl vswitch start/serve` | Pre-established kernel data plane, trusted port identity and optional TAPFD service | One data plane per selected switch; serve is an optional resident control process | Start and check readiness before Conductor allocates network resources; kernel forwarding does not relay each packet through userspace | [Network operations](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations.md) |
 | `node-ctl telemetry serve` (optional) | Native metric collection, export and history queries | Selected by observability configuration | Deploy independently with the selected version's Collector, storage and query settings | [Observability](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md) |
 
@@ -117,9 +185,8 @@ Maintain named shared inputs instead of provisioning a private copy for each san
 |---|---|
 | `/opt/sandbox/kernel/<ver>/vmlinux` | Coexisting kernel versions selected through sandbox configuration. |
 | `/opt/sandbox/runtime/<ver>/sandbox-runtime.bundle` | Coexisting runtime versions. |
-| `/opt/sandbox/overlay-templates/overlay-1g.ext4` | Preformatted 1 GiB ext4 template. |
-| `/opt/sandbox/overlay-templates/overlay-4g.ext4` | Preformatted 4 GiB ext4 template. |
-| `/opt/sandbox/overlay-templates/overlay-16g.ext4` | Preformatted 16 GiB ext4 template. |
+| `mkfs://ext4?size=4GiB` | Built-in source for an ordinary empty writable upper; no shared template file to prepare. |
+| `/opt/sandbox/overlay-templates/custom.ext4` (optional) | Explicit preformatted filesystem when custom features are needed. |
 
 Example `SANDBOX_CONFIG`:
 
@@ -130,12 +197,13 @@ boot:
   root:
     overlay:
       # Omitted diff uses the effective base root and PathID; see Persistent and runtime directories.
-      diff_template: file:///opt/sandbox/overlay-templates/overlay-1g.ext4
+      diff_template: "mkfs://ext4?size=4GiB"
 ```
 
 **Provisioning:** the configured runtime/kernel files are shared inputs, not per-sandbox copies. Runtime virtio-pmem/DAX can share immutable backing pages through host page cache. Loading one shared kernel file does not mean all guests share one resident kernel working set; each guest has its own execution state.
 
-The overlay is a private writable disk. If `diff` is omitted, sandbox-ctl owns a new diff under its effective disk-backed base directory. A `diff_template` seeds it from the template's logical sparse contents, applying configured active-diff encryption when enabled; node-ctl need not `cp` the template. An existing nonempty explicit diff is opened according to its format/policy and remains caller-owned. An absent explicit path can also be provisioned from the configured template/base; an existing empty diff is rejected. See [PrepareDiff](https://github.com/kuasar-sandbox/sandboxer/blob/main/pkg/sandbox/overlaydiff.go) and [active-diff storage](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/block-storage.md).
+The overlay is a private writable disk. The built-in `mkfs://` source formats it
+when needed; a custom preformatted template remains an explicit alternative. If `diff` is omitted, sandbox-ctl owns a new diff under its effective disk-backed base directory. A `diff_template` seeds it from the template's logical sparse contents, applying configured active-diff encryption when enabled; node-ctl need not `cp` the template. An existing nonempty explicit diff is opened according to its format/policy and remains caller-owned. An absent explicit path can also be provisioned from the configured template/base; an existing empty diff is rejected. See [PrepareDiff](https://github.com/kuasar-sandbox/sandboxer/blob/main/pkg/sandbox/overlaydiff.go) and [active-diff storage](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/block-storage.md).
 
 ### Per-sandbox configuration delivery
 
@@ -304,7 +372,8 @@ This is a deployment relationship, not a fixed phase-count or publication algori
 
 ### Startup order
 
-Before the service order below, verify readable, architecture-matching sandbox-ctl, Cloud Hypervisor, kernel and runtime-bundle inputs from the selected composition. Prestart the switch using [network operations](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations.md) and check TAPFD, management and gateway paths. Conductor allocates ports; it does not replace host-switch initialization.
+node-infra installs the contained service ordering; do not start duplicate host
+services beside it. For native component assembly, before the service order below, verify readable, architecture-matching sandbox-ctl, Cloud Hypervisor, kernel and runtime-bundle inputs from the selected composition. Prestart the switch using [network operations](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations.md) and check TAPFD, management and gateway paths. Conductor allocates ports; it does not replace host-switch initialization.
 
 
 **External dependencies, according to the deployment**
@@ -345,13 +414,15 @@ L2 shutdown has no strict ordering against compute shutdown; each tiered client 
 
 ### Development / PoC (one host)
 
-| Process | Example configuration |
-|---|---|
-| store-ctl | FS backend at `/var/store`. |
-| cache-ctl | `mode: tiered`, embedded local tier and Store origin, no EC/L2. |
-| sandbox-ctl × N | Manual runs may omit conductor. |
+For an application PoC, start with [node-infra](node-infra.md), local durable
+artifacts and the needed native egress. No cluster, separate cache or L2 is
+required. A first shell-only trial uses [Quick Start](quickstart.md); an SDK/Build
+PoC uses explicit site configuration and a Builder pool.
 
-This example uses no L2, remote object store or separate resource-controller daemon. Resource arbitration is integrated into conductor; without resource_listen, use static cgroup limits. Manifest-ctl uses local store/cache; see [Cache configuration](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md). For an unmodified E2B SDK, run Conductor as the standalone API together with the independent Proxy master/workers and verify their route barrier; Conductor alone is not a complete SDK deployment. The cluster layer remains unnecessary.
+When testing individual components, native `sandbox-ctl` can run without
+Conductor, and direct Store can be used before adding tiered cache. That is a
+component integration workflow, not an E2B service: SDK use needs Conductor and
+the independent Proxy together. Workbench remains the isolated test environment.
 
 ### Production in one AZ
 
@@ -389,43 +460,6 @@ Components own complete fields and defaults; this table locates the configuratio
 
 Conductor configuration owns MMDS listeners, route admission policy and the local-service registry. Concrete sandbox/Build routes arrive through supported requests; Conductor validates them and sends the trusted projection to Proxy. Native-file data paths do not require Manifest/Store/Cache: select dependencies from the actual source and publication paths.
 
-<a id="production-start"></a>
-## A production starting point and acceptance path
-
-Assume one small team, a measured finite concurrency limit, one native-architecture
-KVM node, an operator-managed network gateway, and applications that can tolerate
-node unavailability. Start with the existing standalone Conductor/Proxy roles,
-production TLS/API credentials and local immutable artifacts plus an explicitly
-backed-up checkpoint directory. This is a **single failure domain**, not HA or
-automatic disaster recovery. The preceding inventory and dependency sections define processes, ports, paths and
-startup order; use those inventories rather than deploying every optional service.
-For workload onboarding continue with [your first application](templates.md#first-application).
-
-| Choice | Use when | Additional operating responsibility |
-|---|---|---|
-| Local files | Artifacts fit locally and node affinity/rebuild time is acceptable | Disk capacity, backups, immutable runtime/kernel retention; node loss may remove the only copy. |
-| Named shared file location | Multiple eligible nodes need the same native artifacts | Consistent location names, mount/access/identity checks, shared filesystem availability/latency and backups. Reachability alone does not prove restore eligibility ([restore eligibility](upgrading.md#restore-eligibility)). |
-| Manifest + durable Store | Remote persistence, large distribution or lazy object access is needed | Customer keys, generations, full parent closure, object integrity and origin availability; introduce local cache only with a memory/disk budget. |
-| Optional L2 | Measured repeated remote misses/working-set distribution justify it | Peer failure domains, membership rollout, shard disk/memory and effective EC geometry. L2 is reconstructible acceleration, not the durable artifact copy. |
-| Registry/Router/Placer cluster | Placement across multiple nodes and a common entry are needed | Group-input/credential durability, Node and Registry ownership, private internal listeners, admission and recovery testing. Cluster mode does not turn incompatible nodes into restore targets. |
-
-Before opening admission: pin one aggregate and record its native GitHub asset digests; use that release's
-native products and packaged guides, verify effective configurations, then test one
-real build/create/command/file/pause/resume/kill cycle. Run the same checks with the
-actual gateway allow/deny policy and cold artifact reads. Validate exporter/query
-behavior separately if [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md#telemetry-release-scope)
-is included in that version. Current source `TARGET_ARCH` support is not proof of
-cross-build/emulation or historical release assets; follow [download selection](installation.md)
-and [native Workbench builds](../workbench/README.md). Open release-selection,
-download-verifier or WSL proposals do not change the selected published contract.
-
-In a staging fault exercise, stop only owned processes and isolate only test
-sources: observe readiness, first failure cause, admission stopping, artifact
-preservation and recovery. Measure the [capacity cases](performance.md#capacity-example). Release admission
-only when all required checks pass; on a failed gate retain the previous qualified
-configuration and stop new placements. End tests by killing test instances through
-the owner, not deleting shared files. Record the exact release, workload, limits,
-failed/skipped probes and rollback inputs as the deployment's acceptance record.
 
 ## Ongoing operation
 

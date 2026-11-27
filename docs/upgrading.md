@@ -27,6 +27,22 @@ On a paused instance, `connect(memory=false)` explicitly gives up old process me
 
 Retire old dependencies only after migration and the rollback retention period, using [retention](operations.md#retention-runbook). This is an operating procedure, not a claim of automatic rolling upgrades or arbitrary live migration between versions.
 
+## Adopt the delivered Guest runtime behavior
+
+New runtime bundles include their private systemd/executor paths and restore
+notification support. Keep each referenced runtime immutable: pointing an old S
+at a new bundle does not upgrade the processes already captured in memory. To
+adopt a new runtime or initialization policy, qualify an E cold start or rebuild,
+then capture new S state and retain the old bundle for any remaining old roots.
+
+Use the native direct/systemd launch choice and application restore notification
+from the [Guest runtime guide](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime.md).
+Do not replace the shipped Guest init flow with image-wide service disabling or
+ad hoc address-flush scripts as a default. The platform restores its owned NIC
+state; applications still need to reconnect external services, refresh time-based
+credentials and handle their own restart/restore semantics. Test these application
+steps before enabling traffic on the new template.
+
 ## Cluster refactor state boundary
 
 The shared Registry backend uses **record schema v2**. SQLite, PostgreSQL and

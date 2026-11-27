@@ -54,14 +54,13 @@ Proxy 到 Guest 的箭头概括不同后端，包括本地 Exec/Envd 桥接与�
 | Runtime 执行 | Runtime SDK 与薄封装 CLI、冷启动和内存恢复、捕获协调、Guest 与 VMM 边界 | [Runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime_zh.md)、configuration、guest-abi、vmm |
 | Runtime 状态 | E/S 逻辑制品、内存缺页加载/预取/脏页捕获、块 COW/checkpoint/pin/GC、本地资源执行和用量 | Sandboxer artifacts/memory/block-storage/resources |
 | 数据访问与生产 | 稀疏引用和载体、完整性/加密、入库读取、持久 Store、分层 Cache、OCI 到 EROFS 生产 | [Accelerator](https://github.com/kuasar-sandbox/accelerator/blob/main/README_zh.md#按完整任务或契约阅读) |
-| 网络 | 可信端口身份、隔离与转发、管理路由、网关集成及 TAPFD 所有权 | [Connector](https://github.com/kuasar-sandbox/connector/blob/main/README_zh.md#按任务阅读) |
+| 网络 | 可信端口身份、隔离与转发、管理路由、原生 Geneve egress ACL/NAT 及 TAPFD 所有权 | [Connector](https://github.com/kuasar-sandbox/connector/blob/main/README_zh.md#按任务阅读) |
 | Guest 交付 | Runtime bundle、内核能力与补丁、flatten CLI、原生构建和打包 | [Guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README_zh.md#按流程或交付契约阅读) |
 | 运行与交付保障 | 日志、原生 usage、Telemetry 指标、诊断和保留；兼容升级；测量、CI、聚合发布 | [运维](operations_zh.md)、[升级](upgrading_zh.md)、[性能](performance_zh.md)、[CI](ci_zh.md)、[发布](release_zh.md) |
 
 本轮审查的 Orchestrator 源码已实现独立 OpenTelemetry 指标服务和原生 Collector pipeline；
 应核对所选发行版的[观测范围](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md)。
-外部策略网关属于集成边界，节点本地轻量 Egress 仍是[提案](https://github.com/kuasar-sandbox/connector/issues/9)，
-不能当作 vSwitch 已交付策略引擎。当前源码存在某能力，不代表旧聚合版本已经包含。
+Connector 原生 Geneve egress 已交付，并与内核 vSwitch 分离：`connector-ctl egress serve` 运行随包交付的静态 `connector-vpp`，使用 gateway/Area 文件执行 ACL/NAT，按流量建立转发状态。node-infra 可以管理本地网关，也可选择共享远端或已有站点网关。详见[完整出口流程](node-infra_zh.md#native-egress)。Proxy 路径可用不等于普通 Guest 已能出网；当前源码能力仍须与所选聚合版本核对。
 
 ## 组件职责
 
@@ -70,7 +69,7 @@ Proxy 到 Guest 的箭头概括不同后端，包括本地 Exec/Envd 桥接与�
 | `orchestrator` | `node-ctl` 提供单节点 E2B 兼容服务,节点准入和恢复;`cluster-ctl` 的 registry,router,placer 提供 group-scoped 集群控制面 |
 | `sandboxer` | 驱动 Cloud Hypervisor 和 Guest,执行 MicroVM 创建,运行,快照,恢复,销毁和单沙箱资源闭环 |
 | `accelerator` | 为镜像,快照和稀疏工件提供本地/远程引用,Manifest,store,cache,OCI 拉取与 EROFS 展平能力 |
-| `connector` | 提供 eBPF/TC vSwitch,TAP 交接,网络资源生命周期,沙箱隔离和外部网关集成基础 |
+| `connector` | 提供 eBPF/TC vSwitch,TAP 交接,网络资源生命周期,沙箱隔离及原生 Geneve egress 网关 |
 | `guest-runtime` | 构建并发布 Guest runtime 镜像和 Guest kernel 两个发布单元 |
 
 主仓不复制这些实现.它维护系统级设计,跨组件真实 MicroVM E2E,公共执行环境和精确
@@ -119,7 +118,7 @@ Envd 和 `flatten-ctl`。Guest kernel 则是独立的原生构建与发布单元
 Kuasar Sandbox 提供 MicroVM 生命周期,数据访问,节点网络和单节点/集群编排.它不替代:
 
 - 外部身份系统,租户计费,业务工作流和全局容量规划;
-- 对象存储,共享文件系统,OCI Registry 或外部策略网关本身;
+- 对象存储、共享文件系统、OCI Registry 或站点上游网络基础设施；
 - 应用内部的内存限制,错误处理和数据分级;
 - 由 Issue 或 RFC 描述但尚未合入并发布的能力.
 
@@ -194,11 +193,13 @@ OOM 和有效工作丢失.应用仍可能因为自身资源声明,内存上限�
 - eBPF/TC 内核态高速转发;
 - 沙箱之间默认隔离,不提供任意端口间直通;
 - 平台生成并验证可信沙箱网络身份,不信任 Guest 自报身份;
-- 将可信身份传递给外部策略网关;
+- 将可信身份传递给原生或站点提供的策略网关；
 - 为沙箱级公网,私网,DNS,代理和审计策略提供集成基础.
 
 顶层系统只定义这些功能目的.网络位置编码,封装字段和 option 布局属于 connector
 组件文档,不是用户首要接口.
+
+原生 egress 通过独立网关进程提供配置化 Area ACL、SNAT 与 DNAT，vSwitch 不因此变为用户态逐包转发器。[部署流程](node-infra_zh.md#native-egress)将 transit、uplink、策略和 Create/Build 网络输入接通。
 
 ## 单节点和集群
 

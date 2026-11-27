@@ -158,7 +158,7 @@ flowchart TD
 | Conductor / Proxy | 生命周期/控制面权威与独立节点数据面角色；部署模式按归属来源描述。 |
 | Registry / Router / Placer | Registry 负责鉴权、执行所有权与 Node 选点；Router 负责统一入口；可选 Placer 导入/续期 Node Group。Node 持有本地 Group 上下文并执行生命周期；所选数据库负责元数据持久化和事务。 |
 | 可信沙箱网络身份 | 由宿主网络基础设施建立的身份，而非信任 Guest 自报的地址。 |
-| 策略网关 | 外部或单独部署的策略执行平面；网络集成基础不表示所有网关功能均已实现。 |
+| 策略网关 | 执行出口策略的原生 Geneve egress 服务或部署方网关，与 API/Proxy 入口及 MMDS 管理访问分离。 |
 | 安全域 | 配置的共享与保护范围，不是无条件跨所有租户共享。 |
 | Stable / Preview / Proposed | 公开发行通道及设计提案状态与生产部署能力分别描述；提案不是已交付功能。 |
 

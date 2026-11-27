@@ -8,9 +8,25 @@
 
 ## 1. 发布版与 workbench 流程（推荐）
 
-完成[快速开始](../../docs/quickstart_zh.md)直至离线准备，保留宿主变量 `WB`、`STATE`、
-`NAME`、`IMAGE`、`RELEASE` 和 `ARCH`。所选版本须包含本文的 `prepared.py` 适配器；
-不要从 `main` 将它复制到旧发布版，应使用旧版本自身指南。
+按[安装指南](../../docs/installation_zh.md)获取精确聚合版本，**下载前显式设置 `DOWNLOAD_WORKBENCH=1`**。在同一宿主 Bash 会话保留 `IMAGE`、`RELEASE` 和 `ARCH`。此处镜像是 Workbench，不是 node-infra。所选版本须包含 `prepared.py`；旧版本应使用其自身指南，不要把当前脚本复制到旧包。
+
+先满足 [Workbench](../../workbench/README_zh.md) 的原生主机要求。将状态放在 release 树外，全程使用同一调用 UID。4 CPU/12 GiB 示例为 Demo 的 2 CPU/6 GiB Builder 留出空间；完整所选负载仍应验证实际容量。
+
+```bash
+STATE="$PWD/kuasar-workbench-state"
+NAME="demo-$(date +%s)"
+WB="$RELEASE/workbench/workbench"
+python3 "$WB" check --image "$IMAGE" --mode system
+python3 "$WB" --root "$STATE" --name "$NAME" start \
+  --image "$IMAGE" --mode system --inputs "$RELEASE" \
+  --cpus 4 --memory-gib 12 --network bridge
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /inputs/release/test/e2e/e2e prepare \
+  --release-dir /inputs/release --workdir /work/prepared --arch "$ARCH" \
+  --include basic.demo.sh --deps-dir /opt/workbench/deps --offline
+```
+
+准备流程消费所选产品、原生镜像、helper 和 hash-locked SDK wheelhouse，不从互联网安装替代依赖。使用新的 `/work/prepared` 目录；cleanup 后使用新实例名。node-infra 的[首个 Guest 教程](../../docs/quickstart_zh.md)是独立流程，不会创建这些 Workbench 变量或输入。
 
 宿主调用 `workbench exec`，`exec --` 之后的内容在同一个系统实例内执行。
 `/inputs/release` 只读；`/work/prepared` 是封存输入，不用于安装依赖或存放可变
@@ -67,9 +83,7 @@ Internet 出站检查。Workbench 成功启动或诊断运行不等于 Demo 成�
 
 Quick Start 模式(`DEMO_QUICKSTART=1`)在 build、create、执行/数据访问、pause/resume 和 kill 后结束。完整模式要求 VersityGW,并继续执行扇出与迁移。
 
-SDK 会把 `Template.build(headers=...)` 同时传给注册和触发请求,而 Kuasar Builder
-配置只允许在注册时提供。因此 Demo 保持自动目标,通过 start/ready command 选择快照,
-再严格检查最终快照结果。固定版本 SDK 等待结束后仍返回注册 handle;Demo 从该精确
+SDK 会把 `Template.build(headers=...)` 同时传给注册和触发请求，旧发布版拒绝重复 Builder 头。因此 Demo 保持自动目标，通过 start/ready command 选择快照以兼容旧版，再严格检查最终结果。当前源码也支持相同 Network 和 Builder target 的等值断言，但仍不允许 Trigger 修改注册值。固定版本 SDK 等待结束后仍返回注册 handle;Demo 从该精确
 Build 的状态中读取已发布、可供 create 使用的 Template ID。
 
 

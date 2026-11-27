@@ -26,28 +26,27 @@ Kuasar Sandbox 是面向 AI Agent、Serverless、代码执行和强化学习环�
 
 数据可采用本地文件、命名共享文件系统和 Manifest/对象存储路径。Cache 加速访问，
 不能替代持久制品保留。宿主建立的网络身份与不同作用域的凭据隔离平台使用者和 Guest 工作负载，
-外部网关负责所选策略。
+原生 egress 或部署方网关负责出口策略，API 与应用入口仍为独立路径。
 
 | 组件 | 职责 |
 | --- | --- |
 | [orchestrator](https://github.com/kuasar-sandbox/orchestrator) | 受管生命周期、Build、访问、节点准入、观测、扩展及 Registry/Router/Placer 控制 |
 | [sandboxer](https://github.com/kuasar-sandbox/sandboxer) | Runtime、E/S 制品、内存、块存储、本地资源执行与 Guest/VMM 集成 |
 | [accelerator](https://github.com/kuasar-sandbox/accelerator) | 通用数据契约、传输处理、持久 Store、Cache 和镜像生产库 |
-| [connector](https://github.com/kuasar-sandbox/connector) | eBPF/TC 网络、隔离、可信身份、网关集成及 TAPFD 交接 |
+| [connector](https://github.com/kuasar-sandbox/connector) | eBPF/TC 网络、隔离、可信身份、原生 Geneve egress 及 TAPFD 交接 |
 | [guest-runtime](https://github.com/kuasar-sandbox/guest-runtime) | Guest Runtime bundle、独立版本化的 VMLinux、flatten CLI 和原生交付输入 |
 
 主仓维护跨组件设计、验证、开发基础设施和聚合发布，各组件仍可独立使用。
 [功能树](docs/architecture_zh.md#功能树与权威主题)列明各能力的权威文档与实现边界。
 
-## 第一个应用
+## 从第一个 Guest 到自己的应用
 
-按[快速开始](docs/quickstart_zh.md)取得并校验一个聚合版本，在匹配 Workbench 中运行真实 Demo。
-Workbench 提供私有开发和测试环境，原生生产部署独立运行。Demo 完成后会停止临时节点；
-继续使用时，应保留明确运行的服务和连接设置，再按完整的[模板](docs/templates_zh.md)与
-[实例](docs/sandboxes_zh.md)示例操作。
+1. 用已发布的 node-infra 镜像和空的私有卷[执行 Guest 命令](docs/quickstart_zh.md)。节点持续运行，可反复执行；每条命令创建新的 MicroVM，执行后删除该实例。
+2. 配置站点凭证、持久数据、资源池和 API/data 入口，[部署自己的服务](docs/deployment_zh.md#production-start)。Guest 或 Build 需要出网时，启用原生 [egress 网关](docs/node-infra_zh.md#native-egress)。体验 profile 不会配置公共 E2B 服务。
+3. [构建应用模板](docs/templates_zh.md)，保存 canonical ID，再[创建、访问和恢复实例](docs/sandboxes_zh.md)。
+4. 需要统一入口和多节点选择时，部署 [Registry + Router + 两个 Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#minimum-cluster)。起步可直接维护 Group，Placer 和分布式缓存按需添加。
 
-成功要求真实完成模板、创建、命令、文件、暂停恢复和删除流程。下载完成、进程启动或跳过
-特权测试均不能证明该结果。[完整验证指南](test/QUICKSTART_zh.md)覆盖 Demo 之外的聚合 E2E。
+Workbench 提供开发和验证环境。[Demo](test/demo/DEMO_zh.md) 和[发布验证](test/QUICKSTART_zh.md) 用于检验匹配版本，不是运行系统容器的前提。
 
 ## 版本与支持范围
 

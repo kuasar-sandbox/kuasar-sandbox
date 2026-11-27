@@ -27,6 +27,13 @@
 
 完成迁移和回退保留期之后，才按[保留流程](operations_zh.md#retention-runbook)回收旧依赖。该顺序是操作指导，不宣称当前系统具有自动滚动升级或任意版本间实时迁移能力。
 
+## 采用已交付的 Guest runtime 行为
+
+新的 runtime bundle 包含私有 systemd/executor 路径和恢复通知支持。保持被引用 runtime 不可变：把旧 S 指向新 bundle 不会升级内存中已捕获的进程。采用新 runtime 或初始化策略时，先验证 E 冷启动或重建，再捕获新 S；仍有旧根引用时保留旧 bundle。
+
+按 [Guest runtime 指南](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime_zh.md)选择原生 direct/systemd 启动和应用恢复通知。不要默认通过全镜像禁用服务或临时地址清理脚本替代交付的 Guest init 流程。平台恢复自己拥有的 NIC 状态，应用仍需重连外部服务、刷新有时效的凭据，并处理自己的重启/恢复语义。新模板开放流量前验证这些应用步骤。
+
+
 ## Cluster 重构的状态边界
 
 共享 Registry 存储使用 **record schema v2**。SQLite、PostgreSQL、FoundationDB 共用业务实现；选择新后端不会复制数据。Node 持有 Group、Registry 选点的协议也改变了参与方二进制契约，应整体验证同一交付组合；对这些实验状态没有承诺混版本滚动切换。产生新 artifact 前，reader 必须支持其 runtime 注解与格式。

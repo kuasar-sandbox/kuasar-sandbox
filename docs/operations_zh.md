@@ -19,6 +19,21 @@ RUN_ID="<current-run-id>"
 journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pager
 ```
 
+## 沿用户失败的路径诊断
+
+| 现象 | 优先检查与处理 |
+| --- | --- |
+| 首次命令节点无法启动 | 容器日志、内部 health、主机 KVM/cgroup 能力、专用卷以及 profile/配置是否冲突；更改输入前保留失败卷。 |
+| API Create 成功，命令/文件失败 | Proxy route 注册、data listener/DNS/TLS、token、保存的 Group/route 上下文，再查 Guest/Envd readiness；已接受的启动可能仍在进行。 |
+| 命令成功，镜像 Build 或 Guest 出网失败 | Build/Create 网络规格、gateway/VNI、transit 与 uplink MTU、Area ACL/DNS 目的、next hop 与 NAT mapping 容量；Proxy 成功不能验证出口。 |
+| 网关策略编辑似乎无效 | 比较 `/run/connector-egress/<name>/status.json` 中的 `configuration_generation` 与 `reload_error`，检查网关 journal；失败 reload 保留最后接受的策略。 |
+| cluster Node 已连接，但 Group 没有合格目标 | 核对租户根凭据、本地 Group 精确 revision、`storage_readable`、完成发布/当前 registration，以及同一 Node 的兼容 runtime inventory。 |
+| 模板只在一个 Node 可用 | 逐目标核对 canonical 制品/父链可达性、密钥、runtime 身份、准入与网络策略；canonical ID 本身不证明可移植。 |
+| 删除部分示例字段后 cache 才启动 | 校验所选 mode、当前 `origin.type`/backend 字段及该发布版 schema；持久 Store 应独立于可选 cache 保持可读。 |
+
+node-infra 使用[健康与恢复命令](node-infra_zh.md#安装与日常操作)，在实例内查看服务 journal。Egress 的 20261127 发布版提供状态文件；当前源码新增的 `egress status` 读取同一快照及其时间/年龄，不执行主动健康探测。当前源码的 Cache 可用 `cache-ctl config validate --config FILE` 在启动前检查配置，不连接后端；旧版本仍按自己的原生配置/启动检查处理。详见 [Cache CLI](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md) 与 [Egress 运维](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md)。
+
+
 ## 恢复与故障域
 
 - `sandbox-ctl`,VMM,node,registry,router 和 placer 是可独立观察和恢复的进程/故障域.

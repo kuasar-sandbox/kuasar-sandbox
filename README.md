@@ -31,14 +31,15 @@ keys, network ownership and resource admission at the destination.
 Local files, named shared filesystems and Manifest/object storage are supported
 data paths. Cache accelerates access; it does not replace durable artifact
 retention. Host-established network identity and scoped credentials separate
-platform users and Guest workloads. External gateways own their selected policy.
+platform users and Guest workloads. The native egress gateway or an operator-provided gateway owns outbound policy;
+API and application ingress remain separate paths.
 
 | Component | Responsibility |
 | --- | --- |
 | [orchestrator](https://github.com/kuasar-sandbox/orchestrator) | Managed lifecycle, Build, access, node admission, observability, extensions and Registry/Router/Placer control |
 | [sandboxer](https://github.com/kuasar-sandbox/sandboxer) | Runtime, E/S artifacts, memory, block storage, local resource execution and Guest/VMM integration |
 | [accelerator](https://github.com/kuasar-sandbox/accelerator) | Generic data contracts, transfer, durable Store, Cache and image-production libraries |
-| [connector](https://github.com/kuasar-sandbox/connector) | eBPF/TC networking, isolation, trusted identity, gateway integration and TAPFD handoff |
+| [connector](https://github.com/kuasar-sandbox/connector) | eBPF/TC networking, isolation, trusted identity, native Geneve egress and TAPFD handoff |
 | [guest-runtime](https://github.com/kuasar-sandbox/guest-runtime) | Guest Runtime bundle, independently versioned VMLinux, flatten CLI and native delivery inputs |
 
 This project repository owns cross-component design, validation, development
@@ -46,18 +47,24 @@ infrastructure and aggregate releases. Components remain independently usable.
 The [feature tree](docs/architecture.md#capability-tree-and-authoritative-topics)
 records each capability's authoritative documentation and implementation boundary.
 
-## First application
+## From the first Guest to your application
 
-Follow [Quick Start](docs/quickstart.md) to acquire and verify one aggregate and run
-the actual Demo in a matching Workbench. Workbench supplies the private development
-and test environment; native production deployment is independent of it. A
-completed Demo stops its temporary node. For continued use, retain an explicitly
-running service and its connection settings, then use the complete
-[template](docs/templates.md) and [instance](docs/sandboxes.md) examples.
+1. [Run a Guest command](docs/quickstart.md) with the published node-infra image
+   and an empty private volume. The node remains available for repeated commands;
+   each command runs in a fresh MicroVM and then removes that instance.
+2. [Deploy your service](docs/deployment.md#production-start) with site credentials,
+   durable data, resource pools and API/data ingress. Enable the native
+   [egress gateway](docs/node-infra.md#native-egress) when Guests or Builds need
+   outbound connectivity. The trial profile does not configure a public E2B service.
+3. [Build an application template](docs/templates.md), keep its canonical ID, and
+   [create, access and resume instances](docs/sandboxes.md).
+4. Add [Registry + Router + two Nodes](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#minimum-cluster)
+   when you need a shared entry and placement. Direct Group maintenance is enough
+   to start; Placer and distributed cache are optional.
 
-Success is a real template/create/command/file/pause/resume/delete cycle. A
-download, process start or skipped privileged test does not establish that result.
-The [full validation guide](test/QUICKSTART.md) covers aggregate E2E beyond the Demo.
+Workbench provides the development and validation environment. The
+[Demo](test/demo/DEMO.md) and [release validation](test/QUICKSTART.md) exercise a
+matching release; they are not prerequisites for operating the system container.
 
 ## Versions and support scope
 

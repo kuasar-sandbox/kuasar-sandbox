@@ -4,6 +4,43 @@
 
 面向准备安装生产节点或集群的运维者。先按[安装](installation_zh.md)取得匹配交付物；首次体验可走[快速开始](quickstart_zh.md)。Workbench 是测试和开发环境，生产部署独立运行。各组件维护完整 CLI、配置 schema 和内部行为，本篇维护进程位置、连接关系与依赖顺序。
 
+<a id="production-start"></a>
+## 生产参考起点与上线验证
+
+应用允许单一故障域时，从一台原生 KVM 主机上的配置化 **node-infra** 实例开始。使用所选镜像和匹配部署包、站点 TLS/API 凭据、持久制品以及有备份的节点状态。镜像统一管理 Conductor、Proxy、vSwitch 与执行 unit 的生命周期。工作负载需要出网时再配置出口；节点镜像已提供原生 egress。
+
+添加可选角色前，按以下顺序完成应用路径：
+
+1. [获取所选镜像和部署包](installation_zh.md)。本地体验用[快速开始](quickstart_zh.md)，应用部署使用原生站点配置，启动时不传 `quickstart`。
+2. [配置并安装节点](node-infra_zh.md)：设置域名、分离的 API/data listener、鉴权/TLS、节点加密密钥、持久路径和 Runner/Builder 池。普通新 upper 用 `mkfs://ext4`；外层实例额度要覆盖净 allocatable 池和各服务。
+3. 按下表选择满足保留与可移植性要求的最小存储路径。Store 路径先直接使用 Store，需要时添加本地 tiered cache，经测量后再添加 EC L2。
+4. 镜像拉取和工作负载需要出网时，[启用原生 egress](node-infra_zh.md#native-egress)。让 gateway/Area 策略与 Build 注册和 Create 的网络输入匹配，再验证真实允许/拒绝流量。
+5. 通过受保护的 Node admin 接口安装租户根凭据对，按[凭据流程](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy_zh.md#credential-model)签发用户 API key，再[构建模板](templates_zh.md#first-application)并验证完整[实例生命周期](sandboxes_zh.md)。管理凭据留在 Guest 外。
+6. 需要统一多节点入口时，添加 [Registry + Router 与第二个 Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#minimum-cluster)。适合的起步方式是单个持久化 SQLite Registry 和直接 Group 维护。逐 Node 配置根凭据/Group 并验证精确发布；Node 已连接不等于 Group 流量可用。按 importer 维护需要添加 Placer，按元数据拓扑需要选择 PostgreSQL/FDB。
+
+下方角色清单继续用于原生组件部署和更大规模装配，无需部署所有条目。单节点只有一个故障域；共享制品本身不提供 HA，也不能恢复丢失的执行所有权。
+
+| 选择 | 何时使用 | 新增运维责任 |
+|---|---|---|
+| 本地文件 | 工件放得下，允许节点亲和与重建时间 | 磁盘容量、备份、不可变 runtime/kernel 保留；节点损失可能丢唯一副本。 |
+| 命名共享文件位置 | 多个合格节点需读取相同原生工件 | 一致 location 名、挂载/访问/身份检查、共享文件系统可用性/延迟和备份。可达不等于可恢复（[恢复资格](upgrading_zh.md#restore-eligibility)）。 |
+| Manifest + 持久 Store | 需要远端持久化、大规模分发或对象按需读取 | 客户密钥、generation、完整父链、完整性和源站可用性；引入本地 cache 需内存/磁盘预算。 |
+| 可选 L2 | 实测重复远端 miss/工作集分布值得增加缓存层 | peer 故障域、成员变更、shard 资源及有效 EC 几何。L2 是可重建加速层，不是持久工件副本。 |
+| Registry/Router 集群，Placer 可选 | 需要跨节点放置和公共入口 | Group 输入/凭据持久化、Node 和 Registry 所有权、内部私有 listener、准入与恢复验证；不会令不兼容节点可恢复。 |
+
+开放准入前固定 aggregate/checksum，使用配套原生产物和打包文档，检查有效配置，
+执行真实 build/create/命令/文件/pause/resume/kill。使用实际网关 allow/deny
+策略及冷工件读取复验。如所选版本包含 [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md#telemetry-release-scope)，
+独立验证 exporter/query。源码支持 `TARGET_ARCH` 不证明交叉构建/仿真或历史
+Release 资产；遵循[下载选择](installation_zh.md)和[原生 Workbench 构建](../workbench/README_zh.md)。
+未合入版本选择、下载验证器或 WSL 提案不改变所选发布契约。
+
+在预发布故障演练中只停止自有进程、隔离测试源，观察 readiness、首因、停止准入、
+工件保留与恢复，测量 [容量验收](performance_zh.md#capacity-example) 容量场景。全部必需检查通过才开放准入；失败则保留上次
+合格配置并停止新放置。测试结束通过 owner kill，不删共享文件。验收记录包括
+准确 Release、负载、限制、失败/跳过探针及回滚输入。
+
+
 ## 角色概览
 
 部署角色按数据路径和控制面拓扑选择.本地文件,共享文件存储与
@@ -47,6 +84,7 @@ Manifest/store/cache 可以分别使用,后两者不是单节点或集群部署�
 | `store-ctl`(可选) | Manifest store 的节点侧 FS/S3-compatible 读写服务 | 通常每个节点/所选配置一个实例;独立域可分实例 | systemd,所选来源访问、发布或配置的写入准入使用 Store 时启动([Build 部署](#build-部署)) | 平台内,[docs/store_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store_zh.md) |
 | `sandbox-ctl`(`run`) | 单个沙箱的控制平面(类 `runc run`);非 daemon | 每沙箱一个 | 由 node-ctl 经 `sandbox-runner@<run-id>` 单元(`run-sandbox`)assignment 后启动 | 平台内,[Sandbox Runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime_zh.md) |
 | `cloud-hypervisor` | VMM(patched);`sandbox-ctl` 子进程 | 每沙箱一个 | `sandbox-ctl` 派生 | 平台内,[VMM 契约](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/vmm_zh.md) |
+| `connector-ctl egress serve`（可选） | Geneve 网关、Area ACL/NAT 与流量驱动的转发状态 | 每个选定网关部署一个 | 本地网关由 node-infra unit 管理，远端网关由独立所有者运行 | [Egress 运维](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md) |
 | `connector-ctl vswitch start/serve` | 预先建立内核数据面、可信端口身份及按需 TAPFD 服务 | 每个所选 switch 一套数据面；serve 为可选常驻控制进程 | 在 Conductor 分配网络前启动并检查 ready；内核转发不依赖逐包用户态中继 | [网络运维](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations_zh.md) |
 | `node-ctl telemetry serve`（可选） | 原生指标采集、导出与历史查询 | 由所选观测配置决定 | 使用该版本的 Collector、存储和查询配置独立部署 | [观测](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md) |
 
@@ -135,9 +173,8 @@ checkpoint 路径选择。权威实现见 [nodepath](https://github.com/kuasar-s
 |---|---|
 | `/opt/sandbox/kernel/<ver>/vmlinux` | 多内核版本并存,由 sandbox 配置选择。 |
 | `/opt/sandbox/runtime/<ver>/sandbox-runtime.bundle` | 多 runtime 版本并存。 |
-| `/opt/sandbox/overlay-templates/overlay-1g.ext4` | 预格式化 1 GiB ext4。 |
-| `/opt/sandbox/overlay-templates/overlay-4g.ext4` | 预格式化 4 GiB ext4。 |
-| `/opt/sandbox/overlay-templates/overlay-16g.ext4` | 预格式化 16 GiB ext4。 |
+| `mkfs://ext4?size=4GiB` | 普通空 upper 的内建来源，无需预备共享模板文件。 |
+| `/opt/sandbox/overlay-templates/custom.ext4`（可选） | 需要自定义文件系统特性时显式提供预格式化文件。 |
 
 SANDBOX_CONFIG 示例:
 
@@ -148,7 +185,7 @@ boot:
   root:
     overlay:
       # 省略 diff 时使用有效 base root 与 PathID,见 持久化与运行时目录。
-      diff_template: file:///opt/sandbox/overlay-templates/overlay-1g.ext4
+      diff_template: "mkfs://ext4?size=4GiB"
 ```
 
 **初始化约定**:runtime/kernel 文件是共享输入,不逐沙箱复制。Runtime 的
@@ -353,7 +390,7 @@ flowchart TD
 
 ### 启动顺序
 
-在下面的服务顺序之前，验证同一交付组合中的 sandbox-ctl、Cloud Hypervisor、kernel 和 runtime bundle 均可读且架构匹配。按[网络运维](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations_zh.md)预先启动 switch，检查 TAPFD/管理服务/网关路径。Conductor 负责端口分配，不替代宿主 switch 初始化。
+node-infra 已安装内部服务顺序，不要在其旁边另起重复宿主服务。原生组件装配时，在下面的服务顺序之前，验证同一交付组合中的 sandbox-ctl、Cloud Hypervisor、kernel 和 runtime bundle 均可读且架构匹配。按[网络运维](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations_zh.md)预先启动 switch，检查 TAPFD/管理服务/网关路径。Conductor 负责端口分配，不替代宿主 switch 初始化。
 
 
 **外部依赖(按部署选择)**
@@ -398,17 +435,11 @@ L2 cluster 的关闭与 compute node 关闭无强序——每个 compute node �
 
 ## 部署规模示例
 
-### 开发 / PoC(单机)
+### 开发 / PoC（单机）
 
-```
-单机:  store-ctl       (fs backend, /var/store)
-       cache-ctl       (mode: tiered,embedded 本地层 + Store origin,无 EC/L2)
-       sandbox-ctl × N (node-ctl 可省,手工 run)
-```
+应用 PoC 从 [node-infra](node-infra_zh.md)、本地持久制品及所需原生出口开始，无需 cluster、独立 cache 或 L2。首次 shell 体验用[快速开始](quickstart_zh.md)，SDK/Build PoC 使用显式站点配置和 Builder 池。
 
-无 L2 cluster,无远程对象存储,无独立资源控制器(资源仲裁随 `node-ctl conductor serve` 内置,`resource_listen`
-未配则静态 cgroup);`manifest-ctl` 走本机 `store-ctl` + `cache-ctl`。对应 [docs/cache_zh.md](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md)
-中的 tiered 配置。单机直供未修改的 E2B SDK 时，需同时运行作为独立 API 的 Conductor 与独立 Proxy master/workers，并核验 route barrier；仅有 Conductor 不构成完整 SDK 部署，仍无需 cluster 层。
+测试单个组件时，原生 `sandbox-ctl` 可脱离 Conductor 运行，Store 也可在添加 tiered cache 前直接使用。这是组件集成流程；E2B 服务需要 Conductor 与独立 Proxy 一起运行。Workbench 仍作为隔离测试环境。
 
 ### 生产单 AZ
 
@@ -452,34 +483,6 @@ S3-compatible store.使用 tiered cache 时,compute 节点通常优先连接本 
 
 Conductor 配置拥有 MMDS 监听、路由准入策略与本地服务注册。具体沙箱/Build 路由由受支持请求提交，经 Conductor 校验后向 Proxy 投影。原生文件数据路径不要求配置 Manifest/Store/Cache；按实际来源与发布路径选择依赖。
 
-<a id="production-start"></a>
-## 生产参考起点与上线验证
-
-假设服务一个小团队、有测量后的有限并发、一台原生架构 KVM 节点、部署方管理的
-网络网关，且应用允许节点不可用。先使用现有独立 Conductor/Proxy、生产 TLS/API
-凭据、本地不可变工件和明确备份的 checkpoint 目录。这是**单一故障域**，不是
-HA 或自动灾备。前面的清单与依赖章节已给出进程、端口、目录和启动顺序，不要因此部署所有可选服务。
-工作负载接入见[自己的首个应用](templates_zh.md#first-application)。
-
-| 选择 | 何时使用 | 新增运维责任 |
-|---|---|---|
-| 本地文件 | 工件放得下，允许节点亲和与重建时间 | 磁盘容量、备份、不可变 runtime/kernel 保留；节点损失可能丢唯一副本。 |
-| 命名共享文件位置 | 多个合格节点需读取相同原生工件 | 一致 location 名、挂载/访问/身份检查、共享文件系统可用性/延迟和备份。可达不等于可恢复（[恢复资格](upgrading_zh.md#restore-eligibility)）。 |
-| Manifest + 持久 Store | 需要远端持久化、大规模分发或对象按需读取 | 客户密钥、generation、完整父链、完整性和源站可用性；引入本地 cache 需内存/磁盘预算。 |
-| 可选 L2 | 实测重复远端 miss/工作集分布值得增加缓存层 | peer 故障域、成员变更、shard 资源及有效 EC 几何。L2 是可重建加速层，不是持久工件副本。 |
-| Registry/Router/Placer 集群 | 需要跨节点放置和公共入口 | Group 输入/凭据持久化、Node 和 Registry 所有权、内部私有 listener、准入与恢复验证；不会令不兼容节点可恢复。 |
-
-开放准入前固定 aggregate/checksum，使用配套原生产物和打包文档，检查有效配置，
-执行真实 build/create/命令/文件/pause/resume/kill。使用实际网关 allow/deny
-策略及冷工件读取复验。如所选版本包含 [Telemetry](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability_zh.md#telemetry-release-scope)，
-独立验证 exporter/query。源码支持 `TARGET_ARCH` 不证明交叉构建/仿真或历史
-Release 资产；遵循[下载选择](installation_zh.md)和[原生 Workbench 构建](../workbench/README_zh.md)。
-未合入版本选择、下载验证器或 WSL 提案不改变所选发布契约。
-
-在预发布故障演练中只停止自有进程、隔离测试源，观察 readiness、首因、停止准入、
-工件保留与恢复，测量 [容量验收](performance_zh.md#capacity-example) 容量场景。全部必需检查通过才开放准入；失败则保留上次
-合格配置并停止新放置。测试结束通过 owner kill，不删共享文件。验收记录包括
-准确 Release、负载、限制、失败/跳过探针及回滚输入。
 
 ## 后续运维
 

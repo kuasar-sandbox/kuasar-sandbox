@@ -1,151 +1,126 @@
 [English](quickstart.md) | [简体中文](quickstart_zh.md)
 
-# Quick Start
+# Run your first Guest
 
-Complete one real sandbox run and verify commands, files, networking, pause/resume and cleanup.
+Start a persistent node with the published **node-infra** image, run a command in
+an actual MicroVM, and inspect or stop the node. This first run needs neither a
+source build nor Workbench, a separate Store/Cache service, a container-image
+registry inside the Guest, or a hand-created overlay filesystem.
 
-To run one Guest shell command using only the node image and an empty volume, see [Run your first Guest with Docker](node-infra.md#run-your-first-guest-with-docker).
+The `quickstart` profile supplies a small Linux shell filesystem and private
+credentials. It is a local trial: public API/data ports are not exposed, ordinary Guest
+Internet access is not configured, and it supplies the shipped shell workload
+rather than a complete site-specific Build/SDK setup. For your own
+images, E2B SDK clients or a cluster, continue with the explicit site deployment
+below. The full [SDK Demo](../test/demo/DEMO.md) remains available for development
+and release validation.
 
-Run a real kuasar-sandbox MicroVM with the unmodified E2B Python SDK using a matching
-aggregate release and workbench. This is the recommended first-use path; native
-production deployment remains independent of workbench and is covered by
-[Deployment](deployment.md).
+## 1. Select a matching published image
 
-The short Demo builds a snapshot template, creates a sandbox, executes commands,
-reads/writes files, checks network access, pauses/resumes and destroys the sandbox.
-It is a first-use demonstration, **not full E2E or release qualification**.
+Use native Linux x86_64 or aarch64 with a local rootful Docker Engine, cgroup v2,
+usable `/dev/kvm` and `/dev/net/tun`, network namespaces, BPF/TC and userfaultfd.
+The [host requirements](node-infra.md#prerequisites-and-release-inputs) cover the
+system-container path. Docker Desktop, architecture emulation and a remote
+Docker daemon do not substitute for these host capabilities. On WSL 2, first
+check the [Linux host and resource requirements](../workbench/README.md#windows-and-wsl-2-development-hosts).
 
-## Acquire one supported release
-
-Use native Linux x86_64 or aarch64, a local rootful Docker Engine, Python 3.9+ and
-Docker access. This is a trusted administrator environment. Docker Desktop,
-remote Docker endpoints and architecture emulation are not supported. Actual
-MicroVM execution needs readable/writable KVM and the required kernel features;
-workbench does not emulate missing hardware or change host kernel policy.
-
-For Windows development, first establish the [WSL host prerequisites and resource
-boundaries](../workbench/README.md#windows-and-wsl-2-development-hosts). Run the
-commands below inside that qualified Linux distribution, with its local Engine.
-
-The image supplies systemd, private Docker/containerd, product user-space
-libraries, Python 3.12 and ordinary tools. The host does **not** need the Demo SDK,
-product glibc version, Go/Rust, or systemd as PID 1 just to launch workbench.
-Keep CPU, memory and disk headroom for the host and other workloads. The example
-uses a 4-CPU/12-GiB workbench budget, not a universal minimum or a full-suite
-capacity guarantee; the Demo builder alone requests 2 vCPUs and 6 GiB capacity.
-
-Follow [Acquire a matching aggregate release](installation.md) once. It selects a
-concrete published version, validates its delivery contract and native assets,
-extracts products/materials and separately imports workbench. It returns
-`RELEASE` (absolute extracted directory), `IMAGE` and `ARCH`. Keep these in the
-same **host Bash shell** for the commands below. Use only that version's launcher,
-Demo, helpers, wheelhouse and products; old releases without the prepared Demo
-adapter must use their own bundled guide, not scripts from `main`.
-
-## Start a private system environment
-
-These commands run on the **host**. State must be outside the release tree and
-owned by the invoking UID. Do not alternate users or prepend `sudo` to only some
-launcher commands. Choose a new instance name if a previous instance was cleaned.
+This example explicitly selects the published Preview containing the current
+node-infra, cluster and native-egress workflows. A Stable release may select an
+older feature set; use the guide bundled with that version. Do not mix component
+Latest releases. [Installation](installation.md) also covers offline archives
+and native tools.
 
 ```bash
-STATE="$PWD/kuasar-workbench-state"
-NAME="demo-$(date +%s)"
-WB="$RELEASE/workbench/workbench"
-python3 "$WB" check --image "$IMAGE" --mode system
-python3 "$WB" --root "$STATE" --name "$NAME" start \
-  --image "$IMAGE" --mode system --inputs "$RELEASE" \
-  --cpus 4 --memory-gib 12 --network bridge
+RELEASE_VERSION=release-v0.2.0-preview.20261127
+IMAGE="ghcr.io/kuasar-sandbox/node-infra:$RELEASE_VERSION"
+docker pull "$IMAGE"
+docker image inspect --format '{{.Id}} {{.Os}}/{{.Architecture}}' "$IMAGE"
+IMAGE="$(docker image inspect --format '{{.Id}}' "$IMAGE")"
 ```
 
-`check` checks host/image compatibility; `start` checks private systemd/daemons and
-reports hardware capabilities. Neither proves the Demo passed. The instance has
-private networking and services: host `127.0.0.1` is not workbench `127.0.0.1`.
-Do not expose the host Docker socket or use host networking to work around this.
+Record the release and resolved image identity. The node-infra image tag includes
+`release-`. For offline use, verify and load the matching `.docker.tar.gz` archive
+as described in [node-infra inputs](node-infra.md#prerequisites-and-release-inputs),
+then set `IMAGE` to the loaded image ID. Docker imports the Docker archive;
+Podman can also import the separate OCI archive.
 
-## Prepare local inputs
+## 2. Start the node and run a command
 
-The outer command runs on the **host**; the command after `exec --` runs inside
-**workbench**. `/inputs/release` is read-only. The public prepare command creates
-a new immutable `/work/prepared`, using only the selected image archives, helper
-binaries and hash-locked SDK wheels. Do not create a virtual environment under
-`/inputs/release` or install a substitute SDK from the network.
+Use an unused container name and a new dedicated volume. The example reserves
+4 CPUs and 6 GiB for the whole node, including its management services and Guest;
+it is a trial budget, not a general sizing recommendation.
 
 ```bash
-python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
-  python3 -B /inputs/release/test/e2e/e2e prepare \
-  --release-dir /inputs/release --workdir /work/prepared --arch "$ARCH" \
-  --include basic.demo.sh --deps-dir /opt/workbench/deps --offline
+docker run -d --tty --name ks-dev --pull=never --privileged \
+  --cgroupns=private --cpus=4 --memory=6g --memory-swap=6g \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
+  --network=bridge -v ks-dev-data:/var/lib/node-infra "$IMAGE" quickstart
+docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
 ```
 
-`--offline` prohibits dependency downloads after artifacts are acquired. It does
-not disable local Registry/Store/Proxy traffic, and does not make the subsequent
-Demo an offline workload. **Keep `--network bridge`: even the short Demo checks
-real Internet egress.** Do not use `DEMO_NETDIAG` to turn a failed assertion into
-success. A missing input fails preparation; it is not silently replaced.
+Expect `hello from guest` and exit status zero. `node-infra-run` waits for node
+initialization and an idle Runner, creates a fresh MicroVM, executes the argument
+vector inside that Guest, returns its output and exit status, and deletes it.
+The printed sandbox ID identifies that one run. Repeat the second command for
+another independent Guest; files written by one invocation are not the next
+invocation's retained session.
 
-## Run the first sandbox
+The node stays running. Its dedicated volume retains node identity, credentials
+and referenced base Bundles. The profile creates these once from shipped inputs;
+it does not download a workload image at startup. Mount the volume directly at
+`/var/lib/node-infra` without nested mounts. Keep separate volumes for separate
+nodes, and retain their referenced artifacts for recovery.
+
+## 3. Inspect, stop and restart
 
 ```bash
-python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
-  python3 -B /work/prepared/test/demo/prepared.py run \
-  --workdir /work/prepared --data-dir /work/kuasar-demo-first --quick
+docker exec ks-dev /usr/libexec/node-infra/node-infra-runtime health
+docker exec ks-dev node-ctl --version
+docker logs ks-dev
+docker exec ks-dev journalctl -u node-conductor.service --no-pager
+
+docker stop ks-dev
+docker start ks-dev
+docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "guest after restart\n"'
 ```
 
-The adapter verifies the prepared inputs, loads the exact native image and uses
-the existing Demo scripts with the local SDK/helper environment. Sandbox
-commands execute inside the **Guest**. Mutable state and retained logs live at
-`/work/kuasar-demo-first`, separate from the prepared input tree.
+Stopping the node ends running VMs; it does not automatically capture every
+Guest's memory. Restarting reuses the node's durable inputs. If the command client
+is forcibly killed, it cannot send Delete: retain its printed sandbox ID and
+inspect/delete it through the node lifecycle API. Ordinary completion performs
+that cleanup itself.
 
-Success requires the actual template, MicroVM, command/file, network,
-pause/resume and destruction assertions and a zero exit status. The Demo prints
-its stages; it does not leave a production node serving after completion. Run the
-same command again to reuse persistent preparation with a new run identity.
-
-For full COPY, template fan-out, migration or interactive observation, see
-[Demo](../test/demo/DEMO.md). For the complete ordinary case selection and result
-JSON, see [Release validation](../test/QUICKSTART.md).
-
-## Inspect and clean up
-
-The adapter retains Demo logs under `/work/kuasar-demo-first/results/` when safe
-to retain, and preparation logs under its `logs/`. Private diagnostic files may
-contain sensitive state; inspect them locally before sharing. They map to
-`$STATE/$NAME/work/kuasar-demo-first` on the host. Startup diagnostics are under
-`$STATE/$NAME/output`. Use the same workbench instance to inspect root-owned data.
-
-Stop the owned Demo preparation, stop workbench, then remove its container,
-network and daemon data:
+To finish the trial, stop and remove the container. Keep the volume while you
+need its data or logs. Delete it only after deciding to discard that trial:
 
 ```bash
-python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
-  python3 -B /work/prepared/test/demo/prepared.py stop \
-  --workdir /work/prepared --data-dir /work/kuasar-demo-first
-python3 "$WB" --root "$STATE" --name "$NAME" stop
-python3 "$WB" --root "$STATE" --name "$NAME" cleanup
+docker stop ks-dev
+docker rm ks-dev
+# Optional: permanently discard this trial's persistent data.
+docker volume rm ks-dev-data
 ```
 
-`cleanup` keeps work/build/home/journal/output directories. `cleanup
---delete-output` explicitly deletes them; use it only after retaining needed
-results. Demo `reset` also deletes that Demo's retained logs and data, so it is
-not the default failure-recovery step. A stopped instance can restart with its
-original image/mode/mounts/budgets; a cleaned instance needs a new name. Full
-lifecycle semantics are in [Workbench](../workbench/README.md).
+## If a step fails
 
-## Troubleshooting
+| Symptom | Next check |
+| --- | --- |
+| Container or preflight fails | Host KVM/TUN, cgroup v2 delegation, kernel capabilities and `docker logs`; use a capable native host. |
+| Profile rejects configuration or data | Use a dedicated empty volume for first initialization; do not mount site `/etc` configuration into this profile or erase an existing node's data to make it pass. |
+| Guest command waits or fails | Internal health and Conductor/Runner journal; confirm node capacity and preserve the first error before retrying. |
+| Guest cannot reach the Internet | Expected for this profile. Docker bridge access is the node's network, not Guest SNAT. Configure an explicit gateway in a site deployment. |
+| Old release lacks the helper/profile | Use that release's own guide, or explicitly choose a version that delivers this workflow. |
 
-A historical-contract or missing-adapter error means the selected version does
-not supply this workflow. Explicitly choose a suitable published version or its
-historical native guide. Do not silently switch channels or mix script versions.
+## Continue with your own application
 
-For missing KVM/kernel capabilities, choose a native host that supplies the
-required features. For a failed prepare, fix its stated missing/corrupt input and
-use a fresh prepared directory. For listener/unit/network conflicts inside a
-workbench, inspect that instance's prior Demo; do not kill unrelated host services.
-A nonzero Demo or cleanup exit is a failure, not a successful skipped check.
+Create a separate [site deployment](deployment.md#production-start) using the
+same selected release's image and deployment package. Configure API/data ingress,
+credentials, artifact retention, Runner/Builder pools and optional
+[native egress](node-infra.md#native-egress). Omit the `quickstart` argument and
+supply the native configuration paths. The trial profile rejects site configuration
+mounts; adding overlays to it is not an in-place application deployment procedure.
 
-## After the first successful run
-
-Build your own application with the [template guide](templates.md), then manage instances with the [sandbox guide](sandboxes.md). See [deployment](deployment.md), [operations](operations.md) and [upgrades](upgrading.md) for the corresponding platform tasks.
-
-For a first multi-node deployment, continue with the [minimum SQLite Registry + Router + two Nodes](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#minimum-cluster). It starts without Placer and includes Group provisioning, Build and SDK acceptance.
+Then [build a template](templates.md) and [use the E2B SDK](sandboxes.md). For
+multiple nodes follow the [minimum cluster](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#minimum-cluster)
+and keep Group/route identity with each instance. Workbench's
+[full validation workflow](../test/QUICKSTART.md) is a separate task for qualifying
+those deployment choices.

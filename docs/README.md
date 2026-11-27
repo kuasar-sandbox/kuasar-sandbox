@@ -4,6 +4,15 @@
 
 Choose an entry by the task you need to complete. Platform guides retain complete workflows; component specifications own exact behavior and implementation boundaries.
 
+## Recommended path
+
+[Run one Guest](quickstart.md) → [deploy a persistent node](deployment.md#production-start)
+→ [build your template](templates.md) → [manage instances](sandboxes.md).
+Add [native egress](node-infra.md#native-egress) for outbound traffic and the
+[minimum cluster](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md#minimum-cluster)
+for a shared multi-node entry. Storage/cache tiers and Placer are selected by
+need. Workbench and the full validation runner are development tools.
+
 ## Platform guides
 
 | Guide | Reading goal |
@@ -30,7 +39,7 @@ Choose an entry by the task you need to complete. Platform guides retain complet
 | orchestrator | [node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node.md), [sandbox-lifecycle](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/sandbox-lifecycle.md), [node-build](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build.md), [node-proxy](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy.md), [node-resource](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-resource.md), [observability](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md), [cluster](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md), [extensions](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/extensions.md) |
 | sandboxer | [runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime.md), [configuration](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/configuration.md), [artifacts](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/artifacts.md), [memory](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/memory.md), [block-storage](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/block-storage.md), [resources](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/resources.md), [guest-abi](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/guest-abi.md), [vmm](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/vmm.md) |
 | accelerator | [artifacts](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/artifacts.md), [transfer](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/transfer.md), [store](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/store.md), [cache](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md), [image-preparation](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/image-preparation.md) |
-| connector | [vswitch-operations](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations.md), [vswitch](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch.md), [tapfd](https://github.com/kuasar-sandbox/connector/blob/main/docs/tapfd.md) |
+| connector | [vswitch-operations](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch-operations.md), [vswitch](https://github.com/kuasar-sandbox/connector/blob/main/docs/vswitch.md), [tapfd](https://github.com/kuasar-sandbox/connector/blob/main/docs/tapfd.md), [egress](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md) |
 | guest-runtime | [using-guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime.md), [runtime-bundle](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/runtime-bundle.md), [vmlinux](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/vmlinux.md), [flatten-cli](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/flatten-cli.md), [build](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/build.md) |
 
 ## Development, validation and examples

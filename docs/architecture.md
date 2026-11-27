@@ -59,16 +59,19 @@ memory can fault in from layered sources on demand, as described in
 | Runtime execution | Runtime SDK and thin CLI, cold launch and memory restore, capture coordination, Guest and VMM boundaries | [Runtime](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/runtime.md), configuration, guest-abi and vmm |
 | Runtime state | E/S logical artifacts, memory fault-in/prefetch/dirty capture, block COW/checkpoint/pin/GC, local resource execution and usage | Sandboxer artifacts/memory/block-storage/resources |
 | Data access and production | Sparse references and carriers, integrity/encryption, ingest/fetch, durable Store, tiered Cache and OCI-to-EROFS production | [Accelerator](https://github.com/kuasar-sandbox/accelerator/blob/main/README.md#choose-a-complete-task-or-contract) |
-| Networking | Trusted port identity, isolation and forwarding, management routes, gateway integration, TAPFD ownership | [Connector](https://github.com/kuasar-sandbox/connector/blob/main/README.md#choose-a-task) |
+| Networking | Trusted port identity, isolation and forwarding, management routes, native Geneve egress ACL/NAT, TAPFD ownership | [Connector](https://github.com/kuasar-sandbox/connector/blob/main/README.md#choose-a-task) |
 | Guest delivery | Runtime bundle, kernel capabilities and patches, flatten CLI, native builds and packaging | [Guest-runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/README.md#choose-a-workflow-or-delivery-contract) |
 | Operation and delivery | Logs/native usage/Telemetry metrics, diagnosis and retention; compatible upgrades; measurements, CI and aggregate releases | [Operations](operations.md), [upgrades](upgrading.md), [performance](performance.md), [CI](ci.md), [release](release.md) |
 
 OpenTelemetry metrics service and native Collector pipelines are implemented in the
 reviewed Orchestrator source; check the selected release's [observability scope](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/observability.md).
-The external policy gateway is an integration boundary. Node-local lightweight
-Egress remains a [proposal](https://github.com/kuasar-sandbox/connector/issues/9),
-not a delivered vSwitch policy engine. Source availability does not certify that
-an older aggregate contains a feature.
+Connector's native Geneve egress is delivered separately from its in-kernel
+vSwitch: `connector-ctl egress serve` runs the packaged static `connector-vpp`,
+uses gateway/Area files for ACL/NAT and creates forwarding state from traffic.
+node-infra can manage a local gateway; a shared remote or existing site gateway
+is another deployment choice. See [the complete egress workflow](node-infra.md#native-egress).
+A working Proxy path does not supply ordinary Guest outbound access. Current
+source features must still be checked against the selected aggregate version.
 
 ## Component responsibilities
 
@@ -77,7 +80,7 @@ an older aggregate contains a feature.
 | `orchestrator` | `node-ctl` provides standalone E2B-compatible service, node admission and recovery; the `cluster-ctl` registry, router and placer provide the group-scoped cluster control plane |
 | `sandboxer` | Drives Cloud Hypervisor and the guest, implementing MicroVM creation, execution, snapshots, restoration, destruction and the individual sandbox resource loop |
 | `accelerator` | Provides local/remote references, Manifest, store, cache, OCI retrieval and EROFS flattening for images, snapshots and sparse artifacts |
-| `connector` | Provides the eBPF/TC vSwitch, TAP handoff, network-resource lifecycle, sandbox isolation and foundations for external-gateway integration |
+| `connector` | Provides the eBPF/TC vSwitch, TAP handoff, network-resource lifecycle, sandbox isolation and the native Geneve egress gateway |
 | `guest-runtime` | Builds and publishes two release units: the guest runtime image and guest kernel |
 
 The project repository does not duplicate these implementations. It maintains system-level design, real MicroVM cross-component E2E tests, the shared execution environment and aggregate releases selecting exact version combinations.
@@ -123,7 +126,7 @@ combination; separate repositories do not imply arbitrary versions are compatibl
 Kuasar Sandbox provides MicroVM lifecycle, data access, node networking and standalone/cluster orchestration. It does not replace:
 
 - external identity systems, tenant billing, business workflows or global capacity planning;
-- object storage, shared filesystems, OCI registries or external policy gateways themselves;
+- object storage, shared filesystems, OCI registries or the site's upstream network infrastructure;
 - application-level memory limits, error handling or data classification;
 - capabilities described in issues or RFCs that have not yet been merged and released.
 
@@ -142,7 +145,7 @@ The component that implements a behavior owns its precise fields and defaults.
 | Generic identity, sparse data and immutable carriers | Accelerator artifacts; processing commands in transfer |
 | Durable content versus reconstructible cache | Accelerator store versus cache |
 | Host/Guest wire contract versus delivered Guest files | Sandboxer guest-abi versus Guest-runtime runtime-bundle/vmlinux |
-| Network behavior versus FD handoff | Connector vswitch versus tapfd |
+| Network behavior, gateway policy and FD handoff | Connector vswitch, egress and tapfd respectively |
 
 Guides retain complete examples. Exact state tables, wire versions and format
 layouts are maintained once at these boundaries. Public Go symbols remain in the
@@ -194,10 +197,13 @@ High density results from better node-resource utilization, not from pursuing in
 - fast in-kernel eBPF/TC forwarding;
 - isolation between sandboxes by default, without arbitrary direct port-to-port forwarding;
 - platform-generated and verified trusted sandbox network identity, without trusting guest-provided identity;
-- propagation of trusted identity to an external policy gateway;
+- propagation of trusted identity to the native or site-provided policy gateway;
 - integration foundations for per-sandbox public/private network access, DNS, proxy and audit policies.
 
-This overview defines those functional goals. Network-locator encoding, encapsulation fields and option layouts belong to connector's detailed documentation and are not the primary user interface.
+Native egress supplies configured Area ACL, SNAT and DNAT through a separate
+gateway process; it does not turn vSwitch into a userspace packet relay.
+[Deployment](node-infra.md#native-egress) connects transit, uplink, policy and
+Create/Build network input. This overview defines those functional boundaries. Network-locator encoding, encapsulation fields and option layouts belong to connector's detailed documentation and are not the primary user interface.
 
 ## Standalone and cluster operation
 

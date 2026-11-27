@@ -9,10 +9,36 @@ production deployment requirement or a hostile-root security boundary.
 
 ## 1. Release/workbench workflow (recommended)
 
-Complete [Quick Start](../../docs/quickstart.md) through offline preparation.
-Keep its host variables `WB`, `STATE`, `NAME`, `IMAGE`, `RELEASE` and `ARCH`.
-The selected release must include this `prepared.py` adapter. Do not copy it from
-`main` into an older release. Use that version's own guide instead.
+Acquire one exact aggregate through [Installation](../../docs/installation.md)
+with **`DOWNLOAD_WORKBENCH=1` explicitly set before downloading**. Keep `IMAGE`,
+`RELEASE` and `ARCH` in the same host Bash shell. This image is Workbench, not
+node-infra. The selected release must include `prepared.py`; use an older
+release's own guide instead of copying current scripts into it.
+
+Use the native host requirements in [Workbench](../../workbench/README.md).
+Keep state outside the release tree and use the same invoking UID throughout.
+The 4 CPU/12 GiB example leaves room for the Demo's 2 CPU/6 GiB Builder; qualify
+actual capacity for the full selected workload.
+
+```bash
+STATE="$PWD/kuasar-workbench-state"
+NAME="demo-$(date +%s)"
+WB="$RELEASE/workbench/workbench"
+python3 "$WB" check --image "$IMAGE" --mode system
+python3 "$WB" --root "$STATE" --name "$NAME" start \
+  --image "$IMAGE" --mode system --inputs "$RELEASE" \
+  --cpus 4 --memory-gib 12 --network bridge
+python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
+  python3 -B /inputs/release/test/e2e/e2e prepare \
+  --release-dir /inputs/release --workdir /work/prepared --arch "$ARCH" \
+  --include basic.demo.sh --deps-dir /opt/workbench/deps --offline
+```
+
+Preparation consumes the selected products, native image, helpers and hash-locked
+SDK wheelhouse. It does not install replacement dependencies from the Internet.
+Use a new `/work/prepared` directory and a new instance name after cleanup.
+The node-infra [first Guest walkthrough](../../docs/quickstart.md) is independent
+of this workflow and does not create these Workbench variables or inputs.
 
 The host invokes `workbench exec`; everything after `exec --` runs inside the
 same system instance. `/inputs/release` is read-only; `/work/prepared` is sealed
@@ -75,9 +101,10 @@ run it through the [public E2E runner](../QUICKSTART.md) for those assertions.
 Quick Start mode (`DEMO_QUICKSTART=1`) stops after build, create, execution/data access, pause/resume, and kill. Complete mode requires VersityGW and continues through fan-out and migration.
 
 The SDK forwards `Template.build(headers=...)` to both registration and trigger,
-but Kuasar Builder configuration is register-only. The Demo therefore leaves the
-target automatic and supplies start/ready commands, then strictly checks the
-snapshot result. The pinned SDK returns its registration handle after waiting;
+and older releases reject repeated Builder headers. The Demo keeps the target
+automatic and supplies start/ready commands for compatibility, then strictly
+checks the snapshot result. Current source also accepts identical Network and
+Builder-target assertions; it still does not allow Trigger to modify registration. The pinned SDK returns its registration handle after waiting;
 the Demo reads the published, creatable template ID from that exact build's status.
 
 

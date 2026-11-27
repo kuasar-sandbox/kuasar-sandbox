@@ -168,7 +168,7 @@ does not create physical capacity. Retain the node's documented bounds and
 measure actual peak memory/OOM events before increasing concurrency. Guest
 capacity, current allocation and startup reservation are separate quantities.
 
-Run the matching [Demo](../docs/quickstart.md) to verify actual creation, exec,
+Run the matching [Demo](../test/demo/DEMO.md) to verify actual creation, exec,
 file operations, DNS/Internet access, snapshot/resume and cleanup, then the
 [ordinary full selection](../test/QUICKSTART.md) on the same native architecture.
 Retain versions, case selection, exit codes, logs and peak resource observations.

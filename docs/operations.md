@@ -19,6 +19,27 @@ RUN_ID="<current-run-id>"
 journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pager
 ```
 
+## Diagnose the user's failing path
+
+| Symptom | First checks and action |
+| --- | --- |
+| First-command node will not start | Container log and internal health, host KVM/cgroup capabilities, dedicated volume and profile/configuration mismatch; preserve the failed volume before changing inputs. |
+| API Create succeeds but commands/files fail | Proxy route registration, data listener/DNS/TLS, token and saved Group/route context, then Guest/Envd readiness. The accepted launch may still be starting. |
+| Command works but image Build or Guest outbound traffic fails | Check Build/Create network specification, gateway/VNI selection, transit and uplink MTU, Area ACL/DNS destinations, next hop and NAT mapping capacity. Proxy success does not validate egress. |
+| Gateway policy edit appears ineffective | Compare `configuration_generation` and `reload_error` in `/run/connector-egress/<name>/status.json`; inspect the gateway journal. A failed reload leaves the accepted policy active. |
+| Cluster Node is connected but Group has no eligible target | Verify tenant roots, exact local Group revision, `storage_readable`, completed publication/current registration, and compatible runtime inventory on the same Node. |
+| A template works on one Node only | Verify canonical artifact/parent access, keys, runtime identity, destination admission and reachable network policy on every selected Node. A canonical ID is not a portability certificate. |
+| Cache starts only after removing part of an example | Validate the selected mode and current `origin.type`/backend fields; compare the selected release's schema. Keep durable Store readable independently of optional cache. |
+
+For node-infra, use its [health and recovery commands](node-infra.md#install-and-operate)
+and inspect the service journal inside the instance. For egress, the 20261127
+release exposes the status file; newer current-source `egress status` reads that
+same snapshot with its timestamp/age, not an active health probe. For current-source
+Cache, `cache-ctl config validate --config FILE` checks configuration before
+startup without connecting to backends; older versions still need their native
+configuration/startup checks. See the owning [Cache CLI](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache.md#cache-ctl-config)
+and [Egress operations](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md).
+
 ## Recovery and fault domains
 
 - `sandbox-ctl`, the VMM, node, registry, router and placer are independently observable and recoverable processes/fault domains.

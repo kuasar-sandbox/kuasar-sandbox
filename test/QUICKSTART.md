@@ -12,6 +12,8 @@ environment, not another runner, product bundle or case selector.
 
 Use [Acquire a matching release](../docs/installation.md) to obtain one explicit
 aggregate's native products, platform materials and matching workbench image.
+Set `DOWNLOAD_WORKBENCH=1` explicitly before the installation commands; the
+ordinary native installation omits this optional development image.
 The recipe validates every selected required file even when other architecture
 assets are intentionally not downloaded. Do not run a blanket checksum command
 that requires all unselected files, or ignore missing required files. Import the

@@ -13,14 +13,34 @@ owns exact API fields, state transitions, errors and retention behavior.
 Obtain the selected release's SDK, `E2B_API_URL`, `E2B_API_KEY`, `E2B_DOMAIN`, trusted
 TLS CA settings and a usable canonical `TEMPLATE_ID` from the platform operator.
 The examples below use the repository-pinned **e2b==2.25.1**. Follow your selected
-release's pin when it differs. A completed Demo normally stops its temporary node;
-use its documented interactive session or a separately deployed service.
+release's pin when it differs. Use the [SDK installation](templates.md#first-application)
+and a site-configured service. The first-command Quick Start profile is not an
+external SDK service and does not provide an application template catalog.
 
 For a cluster, also retain `KUASAR_GROUP` and the caller-chosen route key used for
 that instance. They must accompany later control and data requests. A Group's port
 constraints must allow the intended service. The [cluster client contract](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster.md)
 owns provider setup, routing and header requirements. A sandbox ID alone is not
 the complete cluster routing context.
+
+<a id="outbound-network"></a>
+
+## Choose outbound access
+
+API/Proxy access to a Guest does not supply its ordinary outbound network. Use
+the operator's [native-egress deployment](node-infra.md#native-egress) or a
+separately configured gateway. E/S templates can retain a logical network
+specification; explicit Create input overrides it. Image-only templates need
+Create input when nondefault network policy is required.
+
+Set optional `KUASAR_NETWORK_JSON` for this example to a JSON object such as
+`{"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}`. The gateway and Area
+must exist and be reachable from every eligible Node. Each Node may use its own
+isolated local gateway at the same logical addresses, with appropriate independent
+uplink/SNAT ownership; do not assume a single Node's private exit is reachable
+from all Nodes. The request field is a network specification, not a Linux
+namespace path. Send it at Create; preserve ordinary Group/route identity for
+later operations.
 
 ## Create, execute, save state and clean up
 
@@ -33,7 +53,7 @@ the route key when reconnecting to that instance.
 if not __debug__:
     raise RuntimeError("Run this recipe without Python optimization (-O/-OO or PYTHONOPTIMIZE).")
 
-import os, uuid
+import json, os, uuid
 from e2b import Sandbox
 
 headers = {}
@@ -45,7 +65,14 @@ if os.environ.get("KUASAR_GROUP"):
 options = dict(api_url=os.environ["E2B_API_URL"],
                api_key=os.environ["E2B_API_KEY"],
                domain=os.environ["E2B_DOMAIN"], headers=headers)
-sandbox = Sandbox.create(os.environ["TEMPLATE_ID"], timeout=300, **options)
+create_headers = dict(headers)
+if os.environ.get("KUASAR_NETWORK_JSON"):
+    network = json.loads(os.environ["KUASAR_NETWORK_JSON"])
+    if not isinstance(network, dict):
+        raise ValueError("KUASAR_NETWORK_JSON must contain an object")
+    create_headers["X-Kuasar-Sandbox-Network"] = json.dumps(network)
+sandbox = Sandbox.create(os.environ["TEMPLATE_ID"], timeout=300,
+                         **{**options, "headers": create_headers})
 sid = sandbox.sandbox_id
 print("Retain routing identity:", headers, sid)
 try:
