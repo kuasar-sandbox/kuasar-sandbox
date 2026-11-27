@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import socket
 import struct
 import subprocess
 import tarfile
@@ -633,7 +634,66 @@ class ArtifactExecutionContracts(unittest.TestCase):
         self.assertEqual([row['exit_code'] for row in result['timings']], [0, 0])
         self.assertFalse(Path(self.marker.read_text()).parent.exists())
         self.assertEqual(unrelated.read_text(), 'do not remove')
+        self.assertFalse((self.result.parent / 'case-diagnostics').exists())
         self.inputs.verify(self.root)
+
+    def test_failed_logs_survive_scratch_cleanup_and_the_outer_artifact_export(self):
+        names = self.case_sequence()
+        first = self.root / 'test/e2e/cases' / names[0]
+        first.write_text('set -eu\nprintf "%s" "$TMPDIR" > "' + str(self.marker) + '"\n'
+            'echo "cache: bind address already in use" > "$OUT/cache.log"\n'
+            'echo "store: serving" > "$OUT/store.log"\n'
+            'truncate -s 1073741824 "$OUT/ram.bin"\n'
+            'printf "mode: tiered\\nlisten: 127.0.0.1:12345\\nhealth_listen: 127.0.0.1:12345\\n'
+            'password: never-export-this-secret\\nrocks: {path: /private/secret, mem_ratio: 0.1}\\n" > "$WORK/cache.yaml"\n'
+            'echo "manifest: {key: never-export-this-secret}" > "$WORK/manifest.yaml"\n'
+            'mkdir "$OUT/../snapshot.not-run.sh"\n'
+            'echo not-executed > "$OUT/../snapshot.not-run.sh/cache.log"\nexit 23\n')
+        second = self.root / 'test/e2e/cases' / names[1]
+        second.write_text(second.read_text() + 'echo successful-case > "$OUT/cache.log"\n')
+        with self.assertRaisesRegex(ValueError, 'public runner reported failure'):
+            self.execute()
+        result = json.loads(self.result.read_text())
+        self.assertEqual([row['exit_code'] for row in result['timings']], [23, 0])
+        self.assertFalse(Path(self.marker.read_text()).parent.exists())
+        retained = self.result.parent / 'case-diagnostics'
+        self.assertEqual({p.name for p in retained.iterdir()}, {'index.json', names[0]})
+        summary = json.loads((retained / 'index.json').read_text())
+        self.assertEqual(summary['cases'][0]['exit_code'], 23)
+        scalars = summary['cases'][0]['configs']['cache.yaml']['literal_scalars']
+        self.assertIn({'key': 'listen', 'value': '127.0.0.1:12345'}, scalars)
+        self.assertIn({'key': 'health_listen', 'value': '127.0.0.1:12345'}, scalars)
+        self.assertNotIn('never-export', (retained / 'index.json').read_text())
+        self.assertNotIn('/private/secret', (retained / 'index.json').read_text())
+        self.assertEqual({p.name for p in (retained / names[0]).iterdir()}, {'cache.log', 'store.log'})
+
+        spec = importlib.util.spec_from_file_location('retained_group', Path(__file__).with_name('run-capability-group.py'))
+        group = importlib.util.module_from_spec(spec); spec.loader.exec_module(group)
+        task = self.result.parent / 'host-task'
+        state = group.instance(task); state.mkdir(parents=True)
+        (state / 'instance.json').write_text('{}')
+        output = state / 'output'; output.mkdir()
+        shutil.move(retained, output / 'case-diagnostics')
+        (output / 'result.json').write_bytes(self.result.read_bytes())
+        artifact = self.result.parent / 'upload'
+        group.diagnostics(task, artifact)
+        shutil.rmtree(task)  # The workflow can now delete only its owned state.
+        self.assertFalse(task.exists())
+        exported = artifact / 'case-diagnostics'
+        self.assertEqual((exported / names[0] / 'cache.log').read_text(), 'cache: bind address already in use\n')
+        self.assertEqual(json.loads((exported / 'index.json').read_text())['cases'][0]['exit_code'], 23)
+        self.inputs.verify(self.root)
+
+    def test_diagnostic_write_failure_cannot_hide_the_case_exit_or_prevent_scratch_cleanup(self):
+        self.case_sequence('exit 23')
+        with patch.object(self.executor, 'diagnostic_write', side_effect=PermissionError('private-output-secret')), \
+                self.assertRaisesRegex(ValueError, 'public runner reported failure'):
+            self.execute()
+        result = json.loads(self.result.read_text())
+        self.assertEqual([row['exit_code'] for row in result['timings']], [23, 0])
+        self.assertEqual(result['diagnostic_errors'], {'PermissionError': 1})
+        self.assertNotIn('private-output-secret', self.result.read_text())
+        self.assertFalse(Path(self.marker.read_text()).parent.exists())
 
     def test_failed_and_timed_out_cases_keep_diagnostics_and_do_not_poison_next_case(self):
         original_run = subprocess.run
@@ -1764,6 +1824,236 @@ class ArtifactContracts(unittest.TestCase):
             self.assertEqual(record["conclusion"], "failure")
             self.assertEqual(record["checks"][-1]["name"], "connector-unit-race-vet")
             self.assertEqual(record["checks"][-1]["exit_code"], 33)
+
+
+class FailureDiagnosticContracts(unittest.TestCase):
+    def setUp(self):
+        spec = importlib.util.spec_from_file_location('bounded_case_diagnostics', Path(__file__).with_name('run-artifact-tests.py'))
+        self.driver = importlib.util.module_from_spec(spec); spec.loader.exec_module(self.driver)
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.state = self.root / 'scratch'
+        self.case = 'snapshot.fixture.sh'
+        self.out = self.state / 'out' / self.case; self.out.mkdir(parents=True)
+        self.work = self.state / 'cases' / self.case; self.work.mkdir(parents=True)
+        self.public = {'cases': [self.case], 'timings': [
+            {'case': self.case, 'exit_code': 23, 'wall_seconds': 0.25}]}
+
+    def capture(self, public=None, destination=None):
+        public = self.public if public is None else public
+        destination = destination or self.root / 'retained'
+        budget = self.driver.diagnostic_budget(destination)
+        try:
+            self.driver.capture_failed_diagnostics(self.state, public, public['cases'], budget)
+        finally:
+            if budget['fd'] is not None:
+                os.close(budget['fd'])
+        return destination
+
+    def test_links_special_files_binary_disks_and_unselected_cases_are_not_retained(self):
+        (self.out / 'cache.log').write_text('owned failure\n')
+        (self.out / 'phases.jsonl').write_text('{"exit_code":23}\n')
+        outside = self.root / 'outside'; outside.write_text('never-copy-private')
+        (self.out / 'linked.log').symlink_to(outside)
+        os.link(outside, self.out / 'hard-linked.log')
+        os.mkfifo(self.out / 'pipe.log')
+        stream = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.addCleanup(stream.close)
+        stream.bind(str(self.out / 'socket.log'))
+        (self.out / 'directory.log').mkdir()
+        (self.out / 'binary.log').write_bytes(b'\0never-copy-private')
+        (self.out / 'disk.img').write_bytes(b'never-copy-private')
+        (self.work / 'cache.yaml').symlink_to(outside)
+        for name in ('snapshot.success.sh', 'snapshot.not-run.sh'):
+            directory = self.state / 'out' / name; directory.mkdir()
+            (directory / 'cache.log').write_text('never-copy-private')
+        self.public['cases'] += ['snapshot.success.sh', 'snapshot.not-run.sh']
+        self.public['timings'].append({'case': 'snapshot.success.sh', 'exit_code': 0, 'wall_seconds': 0.1})
+        retained = self.capture()
+        self.assertEqual({p.name for p in (retained / self.case).iterdir()}, {'cache.log', 'phases.jsonl'})
+        self.assertEqual({p.name for p in retained.iterdir()}, {self.case, 'index.json'})
+        index = json.loads((retained / 'index.json').read_text())
+        self.assertGreaterEqual(index['skipped']['unsafe_or_unreadable_file'], 6)
+        self.assertEqual(index['cases'][0]['configs'], {})
+        self.assertEqual(outside.read_text(), 'never-copy-private')
+
+    def test_output_and_work_directory_links_cannot_escape_the_owned_state(self):
+        for part in ('out', 'cases'):
+            directory = self.state / part
+            shutil.rmtree(directory)
+            outside = self.root / ('outside-' + part)
+            (outside / self.case).mkdir(parents=True)
+            (outside / self.case / 'cache.log').write_text('outside-secret')
+            (outside / self.case / 'cache.yaml').write_text('listen: 127.0.0.1:12345\n')
+            directory.symlink_to(outside, target_is_directory=True)
+        retained = self.capture()
+        index = json.loads((retained / 'index.json').read_text())
+        self.assertEqual(index['cases'][0]['logs'], [])
+        self.assertEqual(index['cases'][0]['configs'], {})
+        self.assertEqual(list((retained / self.case).iterdir()), [])
+
+    def test_utf8_tail_boundaries_preserve_complete_characters_and_empty_logs(self):
+        (self.out / 'unicode.log').write_text('界' * 10 + 'END\n')
+        (self.out / 'partial.log').write_bytes(b'begin' + '界'.encode()[:2])
+        (self.out / 'empty.log').touch()
+        with patch.object(self.driver, 'DIAGNOSTIC_FILE_BYTES', 9):
+            retained = self.capture()
+        self.assertEqual((retained / self.case / 'unicode.log').read_text(), '界END\n')
+        self.assertEqual((retained / self.case / 'partial.log').read_text(), 'begin')
+        self.assertEqual((retained / self.case / 'empty.log').read_bytes(), b'')
+        rows = {row['name']: row for row in json.loads((retained / 'index.json').read_text())['cases'][0]['logs']}
+        self.assertTrue(rows['unicode.log']['truncated'])
+        self.assertLessEqual(rows['unicode.log']['retained_bytes'], 9)
+
+    def test_file_and_byte_limits_include_the_index_and_replacement_reserve(self):
+        for i in range(6):
+            (self.out / f'{i}.log').write_bytes(b'x' * 1024)
+        with patch.object(self.driver, 'DIAGNOSTIC_FILES', 4):
+            retained = self.capture(destination=self.root / 'file-limited')
+        self.assertEqual(len(list((retained / self.case).iterdir())), 2)
+        self.assertLessEqual(len([p for p in retained.rglob('*') if p.is_file()]), 4)
+        total = 2 * self.driver.DIAGNOSTIC_INDEX_BYTES + 257
+        with patch.object(self.driver, 'DIAGNOSTIC_BYTES', total):
+            retained = self.capture(destination=self.root / 'byte-limited')
+        self.assertEqual(sum(p.stat().st_size for p in (retained / self.case).iterdir()), 257)
+        self.assertLessEqual(sum(p.stat().st_size for p in retained.rglob('*') if p.is_file()), total)
+        self.assertLessEqual((retained / 'index.json').stat().st_size, self.driver.DIAGNOSTIC_INDEX_BYTES)
+
+    def test_directory_enumeration_and_rejection_metadata_are_bounded(self):
+        for i in range(80):
+            (self.out / (str(i) + 'x' * 180 + '.log')).touch()
+        with patch.object(self.driver, 'DIAGNOSTIC_ENTRIES', 7):
+            retained = self.capture()
+        index = json.loads((retained / 'index.json').read_text())
+        self.assertEqual(index['skipped']['entry_limit'], 1)
+        self.assertEqual(index['cases'][0]['logs'], [])
+        self.assertLess((retained / 'index.json').stat().st_size, 2048)
+        self.assertNotIn('x' * 180, (retained / 'index.json').read_text())
+
+    def test_case_limit_and_config_summary_never_export_raw_or_arbitrary_values(self):
+        names = [f'snapshot.{i:02d}.' + 'x' * 100 + '.sh' for i in range(12)]
+        for name in names:
+            (self.state / 'out' / name).mkdir()
+            work = self.state / 'cases' / name; work.mkdir()
+            (work / 'cache.yaml').write_text('mode: tiered\nlisten: 127.0.0.1:12345\n'
+                'health_listen: 127.0.0.1:23456\nendpoint: https://user:private-secret@example.test\n'
+                'rocks: {path: /private-secret/path, disk_bytes: 2GiB, mem_ratio: 0.1, direct_reads: false}\n'
+                'password: private-secret\napi_key: private-secret\n')
+        public = {'cases': names, 'timings': [{'case': name, 'exit_code': 23, 'wall_seconds': 0.1} for name in names]}
+        retained = self.capture(public)
+        text = (retained / 'index.json').read_text(); index = json.loads(text)
+        self.assertEqual(len(index['cases']), self.driver.DIAGNOSTIC_CASES)
+        self.assertEqual(index['skipped']['case_limit'], 4)
+        self.assertNotIn('private-secret', text)
+        self.assertIn('127.0.0.1:23456', text)
+        self.assertLessEqual(len(text.encode()), self.driver.DIAGNOSTIC_INDEX_BYTES)
+
+    def test_outer_export_rechecks_links_budgets_and_config_scalar_allowlist(self):
+        (self.out / 'cache.log').write_text('owned cache log')
+        retained = self.capture()
+        index_path = retained / 'index.json'; index = json.loads(index_path.read_text())
+        index['cases'][0]['configs']['cache.yaml'] = {'size': 12, 'sha256': 'a' * 64,
+            'literal_scalars': [{'key': 'api_key', 'value': 'private-secret'},
+                               {'key': 'listen', 'value': '127.0.0.1:12345'}], 'raw': 'private-secret'}
+        index_path.write_text(json.dumps(index))
+        outside = self.root / 'outside-export'; outside.mkdir()
+        (outside / 'cache.log').write_text('private-secret')
+        shutil.rmtree(retained / self.case)
+        (retained / self.case).symlink_to(outside, target_is_directory=True)
+        destination = self.root / 'artifact'
+        self.driver.export_failed_diagnostics(retained, destination, self.public)
+        exported = (destination / 'index.json').read_text()
+        self.assertNotIn('private-secret', exported)
+        self.assertEqual(list((destination / self.case).iterdir()), [])
+        self.assertIn('127.0.0.1:12345', exported)
+
+    def test_outer_export_preserves_collection_truncation_and_bounded_omission_counts(self):
+        original_size = self.driver.DIAGNOSTIC_FILE_BYTES + 123
+        (self.out / 'cache.log').write_bytes(b'x' * original_size)
+        (self.out / 'unsafe.log').symlink_to(self.root / 'missing-private-target')
+        retained = self.capture()
+        index_path = retained / 'index.json'; index = json.loads(index_path.read_text())
+        index['skipped'].update({'private-secret': 123, 'payload_limit': True, 'case_limit': 10**1000})
+        index['limits']['private-secret'] = 'never-export'
+        index['cases'][0]['logs'].append({'name': '../private-secret.log', 'observed_size': 12,
+            'retained_bytes': 12, 'truncated': False})
+        index_path.write_text(json.dumps(index))
+        destination = self.root / 'artifact'
+        self.driver.export_failed_diagnostics(retained, destination, self.public)
+        text = (destination / 'index.json').read_text(); exported = json.loads(text)
+        self.assertEqual(exported['stage'], 'export')
+        self.assertEqual(exported['collection']['skipped']['unsafe_or_unreadable_file'], 1)
+        self.assertNotIn('payload_limit', exported['collection']['skipped'])
+        self.assertNotIn('case_limit', exported['collection']['skipped'])
+        self.assertNotIn('private-secret', text)
+        self.assertNotIn('never-export', text)
+        self.assertEqual(exported['cases'][0]['collection_logs'], [{'name': 'cache.log',
+            'observed_size': original_size, 'retained_bytes': self.driver.DIAGNOSTIC_FILE_BYTES,
+            'truncated': True}])
+        self.assertEqual(exported['cases'][0]['logs'][0]['observed_size'], self.driver.DIAGNOSTIC_FILE_BYTES)
+        self.assertFalse(exported['cases'][0]['logs'][0]['truncated'])
+        self.assertEqual((destination / self.case / 'cache.log').stat().st_size, self.driver.DIAGNOSTIC_FILE_BYTES)
+
+    def test_runtime_logs_and_journals_survive_both_stages_without_recursive_or_linked_export(self):
+        runtime = self.out / 'runtime'; runtime.mkdir()
+        (runtime / 'low-allocatable-2.journal').write_text('owned CH journal\n')
+        (runtime / 'master.log').write_text('owned Master log\n')
+        (self.out / 'case.journal').write_text('owned top-level journal\n')
+        deeper = runtime / 'nested'; deeper.mkdir()
+        (deeper / 'private.log').write_text('never-export-private')
+        (runtime / 'manifest.yaml').write_text('secret: never-export-private')
+        retained = self.capture()
+        destination = self.root / 'artifact'
+        self.driver.export_failed_diagnostics(retained, destination, self.public)
+        self.assertEqual((destination / self.case / 'runtime/low-allocatable-2.journal').read_text(), 'owned CH journal\n')
+        self.assertEqual((destination / self.case / 'runtime/master.log').read_text(), 'owned Master log\n')
+        self.assertEqual((destination / self.case / 'case.journal').read_text(), 'owned top-level journal\n')
+        self.assertEqual({p.name for p in (destination / self.case / 'runtime').iterdir()},
+                         {'low-allocatable-2.journal', 'master.log'})
+        index = json.loads((destination / 'index.json').read_text())
+        self.assertEqual({row['name'] for row in index['cases'][0]['collection_logs']},
+                         {'runtime/low-allocatable-2.journal', 'runtime/master.log', 'case.journal'})
+        self.assertEqual({row['name'] for row in index['cases'][0]['logs']},
+                         {'runtime/low-allocatable-2.journal', 'runtime/master.log', 'case.journal'})
+        outside = self.root / 'outside-runtime'; outside.mkdir()
+        (outside / 'secret.journal').write_text('never-export-private')
+        shutil.rmtree(runtime); runtime.symlink_to(outside, target_is_directory=True)
+        linked = self.capture(destination=self.root / 'linked-runtime')
+        self.assertFalse((linked / self.case / 'runtime').exists())
+        shutil.rmtree(retained / self.case / 'runtime')
+        (retained / self.case / 'runtime').symlink_to(outside, target_is_directory=True)
+        rejected = self.root / 'rejected-runtime-export'
+        self.driver.export_failed_diagnostics(retained, rejected, self.public)
+        self.assertFalse((rejected / self.case / 'runtime').exists())
+        self.assertEqual(json.loads((rejected / 'index.json').read_text())['skipped']['unsafe_or_missing_output'], 1)
+
+    def test_runtime_files_share_the_top_level_payload_and_entry_budgets(self):
+        (self.out / 'top.log').write_bytes(b'x' * 10)
+        runtime = self.out / 'runtime'; runtime.mkdir()
+        for name in ('first.log', 'second.journal'):
+            (runtime / name).write_bytes(b'x' * 10)
+        with patch.object(self.driver, 'DIAGNOSTIC_FILES', 4):
+            retained = self.capture(destination=self.root / 'file-limited')
+        self.assertEqual(len([p for p in (retained / self.case).rglob('*') if p.is_file()]), 2)
+        total = 2 * self.driver.DIAGNOSTIC_INDEX_BYTES + 15
+        with patch.object(self.driver, 'DIAGNOSTIC_BYTES', total):
+            retained = self.capture(destination=self.root / 'byte-limited')
+        self.assertEqual(sum(p.stat().st_size for p in (retained / self.case).rglob('*') if p.is_file()), 15)
+        with patch.object(self.driver, 'DIAGNOSTIC_ENTRIES', 1):
+            retained = self.capture(destination=self.root / 'entry-limited')
+        index = json.loads((retained / 'index.json').read_text())
+        self.assertLessEqual(len(index['cases'][0]['logs']), 1)
+        self.assertGreaterEqual(index['skipped']['entry_limit'], 1)
+
+    def test_invalid_or_unexecuted_timing_rows_do_not_authorize_collection(self):
+        (self.out / 'cache.log').write_text('not authorized')
+        for i, row in enumerate(({'case': '../escape.sh', 'exit_code': 23, 'wall_seconds': 1},
+                                 {'case': self.case, 'exit_code': 23, 'wall_seconds': 10**1000},
+                                 {'case': self.case, 'exit_code': True, 'wall_seconds': 1})):
+            public = {'cases': [self.case], 'timings': [row]}
+            destination = self.capture(public, self.root / f'invalid-{i}')
+            self.assertFalse(destination.exists())
 
 
 if __name__ == "__main__":

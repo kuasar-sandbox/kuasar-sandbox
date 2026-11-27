@@ -177,6 +177,12 @@ def diagnostics(root, destination):
     for path in paths:
         artifacts.require(path.parent.resolve() in {instance(root), instance(root) / 'output'}, 'escaping diagnostic directory')
         (destination / path.name).write_bytes(read_owned(path))
+    output = instance(root) / 'output'
+    retained = output / 'case-diagnostics'
+    if retained.exists() or retained.is_symlink():
+        artifacts.require(output.resolve() == output, 'escaping diagnostic directory')
+        public = json.loads(read_owned(output / 'result.json'))
+        run_module().export_failed_diagnostics(retained, destination / 'case-diagnostics', public)
 
 
 def execute(args):
