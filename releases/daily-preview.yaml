@@ -4,7 +4,7 @@ previous_version: release-v0.1.13
 preview_version: preview.20261127.1
 previous_preview_version: preview.20261127
 components:
-  accelerator: v0.2.0-preview.20261127
+  accelerator: v0.2.0-preview.20261127.1
   connector: v0.2.0-preview.20261127
   sandboxer: v0.2.0-preview.20261127.1
   orchestrator: v0.2.0-preview.20261127
@@ -31,7 +31,7 @@ notes:
 
     | Release unit | Version |
     |---|---|
-    | `accelerator` | `v0.2.0-preview.20261127` |
+    | `accelerator` | `v0.2.0-preview.20261127.1` |
     | `connector` | `v0.2.0-preview.20261127` |
     | `sandboxer` | `v0.2.0-preview.20261127.1` |
     | `orchestrator` | `v0.2.0-preview.20261127` |
@@ -44,7 +44,11 @@ notes:
 
     ### accelerator
 
-    Selected version unchanged: `v0.2.0-preview.20261127`.
+    Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261127.1`.
+
+    - test(cache): separate native and no-RocksDB tiered assembly checks ([#247](https://github.com/kuasar-sandbox/accelerator/pull/247), [commit aed33d7fde94](https://github.com/kuasar-sandbox/accelerator/commit/aed33d7fde940921d2ff0bf2b2a3ac78804cfe1e)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/160a2cd6959d7e9b40876fee229dca8dc8679b97...aed33d7fde940921d2ff0bf2b2a3ac78804cfe1e)
 
     ### connector
 
