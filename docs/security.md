@@ -29,6 +29,56 @@ Current cluster Router-to-node APIEndpoint/DataEndpoint use internal plaintext H
 
 Credential updates affect only later business records that are created with copied credentials. Credentials already persisted in existing sandbox records retain their original binding; updating a key-distribution table does not automatically rebind those records.
 
+## Secret plugins
+
+Secret plugins let trusted host components obtain key bytes from a deployment's
+local secret broker. Set `KUASAR_SECRET_PLUGINS` before starting each consuming
+service, then use `@<plugin>/<key>` in the supported configuration fields:
+
+```bash
+export KUASAR_SECRET_PLUGINS='kms::/run/secret-broker1.sock:cache_ttl=30s:cache_size=4k enc::/run/secret-broker2.sock:cache_ttl=30s'
+export MANIFEST_KEY='@kms/tenant-a/manifest-v1'
+export NODE_CONFIG_ENCRYPTION_KEY='@enc/node-key-v2:@enc/node-key-v1'
+```
+
+| Field | Ordinary value | Plugin result |
+| --- | --- | --- |
+| ManifestKey, including `MANIFEST_KEY` and `manifest.key` | 64-character hex key | Raw 32-byte key |
+| Each EncryptionKey ring entry | 64-character hex key | Raw 32-byte key |
+| Configured TLS `key` | Private-key file path | PEM private-key bytes |
+| Configured static S3 `access_key` / `secret_key` | Literal credential | Credential bytes |
+
+Quote references in YAML. Each plugin declaration names an absolute Unix socket;
+multiple declarations are separated by whitespace. Plugin keys keep their text
+after the first `/` and cannot contain colons or whitespace. A leading `@` is
+reserved in the listed fields: use `./@filename` or an absolute path for a TLS
+filename starting with `@`, and a plugin reference for such an S3 literal value.
+
+The host service must be able to reach the configured socket. For containerized
+services, mount the broker's socket directory at that path and provide the
+environment variable inside the container. Node tasks receive the trusted node
+plugin configuration; independently launched storage or proxy services need
+their own environment. Do not expose the broker socket to arbitrary Guests.
+
+Each plugin has an independent LRU cache, defaulting to 30 seconds and 4096
+entries. A zero TTL or capacity disables caching. Cache expiry affects later
+resolutions; it does not replace keys already held by storage objects, TLS
+certificates or static S3 clients. Use stable, versioned references. Keep old
+EncryptionKey ring entries while their records need decryption; the first
+entry encrypts new records.
+
+Existing application-injected credential providers retain precedence. Secret
+plugins resolve bytes only: they do not perform remote signing, unwrap keys or
+refresh STS credentials. APISecret and ServiceSecret keep their existing
+configuration semantics. Plugin errors do not fall back to another credential
+source. See the accelerator [Secret plugin contract](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/secret-plugins.md)
+for the HTTP-over-UDS protocol, parser rules and SDK interface.
+
+References keep actual key bytes out of environment values and configuration
+fields. Resolved bytes still exist in the consuming process's memory; ordinary
+hex values keep their existing behavior. Artifact encryption formats and the
+relationship between ciphertext and its actual key remain unchanged.
+
 ## MMDS route security and deployment boundaries
 
 Conductor configuration owns `mmds.listen`, route admission policy and the local-service registry. Supported sandbox/Build requests supply concrete MMDS routes; Conductor validates and projects those routes under that policy. Tenant routes additionally require `mmds.routes.enabled` and cannot be enabled while MMDS is disabled.
