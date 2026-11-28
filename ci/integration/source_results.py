@@ -32,7 +32,7 @@ def groups_for(plan, grouped=False):
     owners = owner_groups_for(plan)
     if 'owner-orchestrator' in owners and source_stages.contract(plan) is not None:
         return [stage for group in owners for stage in
-                (source_stages.GROUPS if group == 'owner-orchestrator' else (group,))]
+                (source_stages.groups_for(plan) if group == 'owner-orchestrator' else (group,))]
     return owners
 
 
@@ -88,7 +88,7 @@ def validate(plan, groups, run, jobs, available, read):
     complete = checks.checks_for(plan, Path('/src'))
     staged = any(source_stages.stage_for(group) is not None for group in groups)
     if staged:
-        complete = source_stages.expand(complete, Path('/src'))
+        complete = source_stages.expand(complete, Path('/src'), plan)
     proofs = {}
     require(len({name for name, _, _ in complete}) == len(complete), 'duplicate source check family')
     expected_coverage = Counter((name, tuple(command), str(directory)) for name, command, directory in complete)

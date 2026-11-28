@@ -287,6 +287,16 @@ Source/helper build derives the complete helper inventory and recipes from the a
 
 The E2E job checks out only the trusted executor, downloads its prepared target and verifies all files/modes before and after execution. It does not check out component sources or invoke product Go/Cargo/kernel builds. Each shard owns a short disk-backed mutable directory; Unix sockets, direct I/O, Docker configuration and performance output stay outside immutable inputs. Source-dependent connector/sandboxer/orchestrator unit/race/vet, real pinned-BPF stats, ENOSPC, Collector/usage harness regressions and UFFD source benchmarks run in a separate required source job. Source-mode x86 sandboxer/platform also retain the existing A/B/C/D `off/auto × cold/warm` working-set smoke in an independent performance job using the same prepared product bytes.
 
+Orchestrator source protocol v2 uses five independent stages: ordinary tests,
+explicit race cases, databases, services, and vet/helpers. The race stage calls
+the frozen owner entry once and compiles only packages containing `TestRace...`
+cases. Ordinary and race test filters are disjoint; real database functional
+checks do not imply race instrumentation. The platform retains the historical
+v1 reader for older selected sources without reinterpreting their evidence.
+Source-gate selection helpers remain source-only inputs and do not select
+product builds. The complete stage set and current successful producers remain
+required at finalization.
+
 The complete source gate runs in an independent Workbench system instance on native x86, including the compilers used by its mixed unit/race/vet and real privileged checks. The trusted host restores the sources bound to `plan.test_revisions` from the admitted run artifact; the instance receives a private copy at `/src` and no host Docker socket, credentials or ordinary build cache. Existing owner scripts and Make targets remain authoritative at each exact test pin, including published older layouts. They execute as an ordinary user inside that instance so unreadable-file and privilege-refusal checks still run. The source process and its children retain the Hosted affinity policy: select allowed CPUs using the declared `KUASAR_BUILD_JOBS` budget, within the instance CPU quota. Its private sudo configuration preserves the original explicit privilege transitions; only the existing TAP/netns performance fixtures run through `sudo make test-perf-tools`. The user can access only the instance's Docker socket, and no host account or policy is changed. Real `sudo`, systemd, BPF, mount namespaces, UFFD and private Docker retain their original flags and assertions. TAP and network namespaces are required before the gate starts. Results retain framework/test/image identities, individual commands, exits and timings; failure evidence is collected through the owned-instance cleanup. Product, independent helper and release builds use ordinary-UID build mode. Host bootstrap retains orchestration and product-execution prerequisites, while the Workbench producer builds directly on its native runner.
 
 CI supplies root privileges and the trusted tool path directly when launching selected prepared cases. Only explicit prepared inputs cross `sudo`, including the private state directory; execution does not consult a generated owner-runner registry.
