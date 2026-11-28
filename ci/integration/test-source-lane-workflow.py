@@ -91,6 +91,32 @@ class StageGateTests(unittest.TestCase):
 
 
 class SchedulingTests(unittest.TestCase):
+    def test_owner_schedule_uses_one_exact_candidate_framework_without_a_second_job_path(self):
+        entry = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['jobs']
+        self.assertIn("github.event_name == 'pull_request'", entry['ci']['if'])
+        self.assertIn('github.event.pull_request.head.repo.full_name == github.repository', entry['ci']['if'])
+        self.assertEqual(entry['ci']['uses'], './.github/workflows/integration-tests.yml')
+        self.assertTrue(entry['ci']['with']['source_check_groups'])
+        self.assertEqual(entry['ci']['with']['candidate_sha'], '${{ github.sha }}')
+        self.assertTrue(entry['trusted-fork']['uses'].endswith('/ci-entry.yml@main'))
+        self.assertEqual(step('resolve', 'Check out exact trusted framework')['with']['ref'], '${{ job.workflow_sha }}')
+        self.assertEqual(step('resolve', 'Resolve exact immutable plan')['env']['FRAMEWORK_SHA'], '${{ job.workflow_sha }}')
+        self.assertEqual(JOBS['source-checks']['strategy']['matrix'],
+                         {'group': '${{ fromJSON(needs.resolve.outputs.source_groups) }}'})
+        self.assertFalse(JOBS['source-checks']['strategy']['fail-fast'])
+        for job in ('source-checks', 'results'):
+            checkout = next(row for row in JOBS[job]['steps'] if row.get('with', {}).get('path') == 'framework')
+            self.assertEqual(checkout['with']['ref'], '${{ needs.resolve.outputs.framework_sha }}')
+            self.assertFalse(checkout['with']['persist-credentials'])
+        worker = step('source-checks', 'Run the complete required source gate in Workbench system mode')['run']
+        self.assertIn('--cpus 2 --memory-gib 8', worker)
+        self.assertIn('--group "$(cat /src/.source-group)"', worker)
+        self.assertIn('id -u nobody', worker)
+        self.assertIn('--inh-caps=-all --ambient-caps=-all', worker)
+        collector = step('results', 'Bind every source result to its current successful producer')
+        self.assertEqual(collector['env']['SOURCE_GROUPS'], '${{ needs.resolve.outputs.source_groups }}')
+        self.assertIn('--groups "$SOURCE_GROUPS"', collector['run'])
+
     def test_current_source_barriers_precede_queued_expensive_stages(self):
         architecture = yaml.safe_load((ROOT / '.github/workflows/integration-architecture.yml').read_text())
         self.assertEqual(architecture['permissions'], {'contents': 'read', 'pull-requests': 'read'})
@@ -176,7 +202,7 @@ if script.endswith('/resolve-artifacts.py'):
     if '--source-scope' in args:
         assert pathlib.Path(args[args.index('--source-scope') + 1]).is_file()
 elif script.endswith('/source_results.py'):
-    print('["A"]')
+    print('["owner-platform", "owner-connector"]')
 elif script.endswith('/workbench.py') or script.endswith('/capability_routing.py'):
     pass
 else:
@@ -205,7 +231,10 @@ else:
                 self.assertEqual('--stage' in resolve, mode == 'exact-assets')
                 values = dict(line.split('=', 1) for line in output.read_text().splitlines())
                 self.assertEqual(values['workbench'], 'false' if lane == 'source' else 'true')
-                self.assertEqual(json.loads(values['source_groups']), ['A'])
+                self.assertEqual(json.loads(values['source_groups']), ['owner-platform', 'owner-connector'])
+                schedule = next(args for args in commands if args[0].endswith('/source_results.py'))
+                self.assertEqual(schedule, ['framework/ci/integration/source_results.py', '--plan', 'plan.json',
+                                            '--schedule', 'grouped'])
                 self.assertTrue(any(args[0].endswith('/workbench.py') for args in commands))
 
 

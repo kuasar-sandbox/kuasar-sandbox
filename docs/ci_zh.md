@@ -236,7 +236,7 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 `run-source-checks.py --group all` 仍是默认完整入口。A 组保留平台工具契约（完整的 `make test-ci-tools test-release-tools` 调用）、特权性能工具契约、按原条件选择的 connector/sandboxer 脚本、accelerator fixture 和原有 UFFD 检查。B 组执行所选 orchestrator 脚本。选择条件、命令参数、工作目录与依赖闭包均与 `all` 相同；未选择 orchestrator 时不调度 B。每组使用独立 Hosted 机器和新的 Workbench system 实例，保持原 2 CPU/8 GiB 预算，独占源码、Go workspace、临时目录、构建和模块缓存。组间不恢复或共享源码缓存。
 
-可复用工作流仍以 `source_check_groups: false` 作为兼容默认值。PR 调用入口 `ci.yml` 和 `ci-entry.yml` 在 rollout 验收后选择 A/B；聚合调用方在独立证明整条工作流收益与成本前继续使用 `all`。将任一 PR 入口恢复为 false 即可回退 `all`，不改变检查目标、资源预算或必需检查。
+可复用工作流仍以 `source_check_groups: false` 作为兼容默认值。PR 调用入口 `ci.yml` 和 `ci-entry.yml` 启用独立的 `owner-platform`、`owner-connector`、`owner-sandboxer`、`owner-accelerator`、`owner-guest-runtime` 和 `owner-orchestrator` 组，仅调度非空组。每组保留原命令顺序；平台文档与 UFFD 检查仍归入 `owner-platform`。完整的 `all` 和 A/B 调度继续兼容。下方测量描述先前的 all 与 A/B rollout，不代表 owner 分组的实测结果。聚合调用方保留既有兼容设置。将任一 PR 入口恢复为 false 即可回退 `all`，不改变检查目标、资源预算或必需检查。
 
 两轮真实 Actions 对照在每轮内使用相同的已选组件源码、用例清单、完整命令和不可变 Workbench 镜像，候选文件树仅调用入口的分组开关不同。两轮都是没有恢复可写源码缓存的全新冷构建，重复运行也不宣称暖缓存。这些首次执行轮次的观测记录最终工作流反馈和总任务分钟，不使用历史命令模型或后续故障/重跑成本。
 
@@ -247,7 +247,7 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 第二轮分组运行后来的取消属于单独的负向测试，不能用该 run 当前结论覆盖首次轮次的成功测量。完成 rollout 前须重新验证当前源码正确性和全部六仓入口，包括失败与局部重跑。这些 SOURCE 数据不证明聚合流程或 Workbench 分组收益。
 
-两种调度均将结果绑定精确 plan、原始命令覆盖、Workbench 镜像、成功清理，以及当前 Actions 生产任务和产物 ID。产物名包含 run、attempt 和 group，不覆盖其他轮次。生产任务失败、取消、缺失或重复均阻止最终通过。较早轮次的成功结果仅在仍为该组最新生产任务且匹配当前 plan 时可复用；重跑生产任务后，其旧产物失效。A/B 不得共享实例或机器。回退选择 `all`，保留这些检查，不改变发布选择和必需检查规则。
+所有支持的调度均将结果绑定精确 plan、完整原始命令覆盖、Workbench 镜像、成功清理，以及当前 Actions 生产任务和产物 ID。各组命令的并集必须恰好覆盖每条已选命令一次。产物名包含 run、attempt 和 group，不覆盖其他轮次。生产任务失败、取消、缺失或重复均阻止最终通过。较早轮次的成功结果仅在仍为该组最新生产任务且匹配当前 plan 时可复用；重跑生产任务后，其旧产物失效。已调度的各组不得共享实例或机器。回退选择 `all`，保留这些检查，不改变发布选择和必需检查规则。
 
 部分重跑时，Actions 可能为沿用的成功任务分配新 ID，但保留原执行时间、runner 和步骤。共享读取器仅在完整执行身份匹配时追溯到最近的前序成功生产者；真正较新的运行中、失败或取消任务仍使旧证据失效。此规则同时覆盖源码组、Workbench 运行组、ARM、暂存输入和验证任务。
 
