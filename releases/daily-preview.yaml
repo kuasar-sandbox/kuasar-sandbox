@@ -1,13 +1,13 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261128.1
+preview_version: preview.20261128.2
 previous_preview_version: preview.20261128
 components:
   accelerator: v0.2.0-preview.20261128
   connector: v0.2.0-preview.20261128
   sandboxer: v0.2.0-preview.20261127.1
-  orchestrator: v0.2.0-preview.20261127.1
+  orchestrator: v0.2.0-preview.20261128.2
   runtime: runtime-v0.2.0-preview.20261128.1
   vmlinux: vmlinux-v0.1.7-preview.20261124
 component_next_versions:
@@ -19,13 +19,13 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261128.1
+    # Kuasar Sandbox release-v0.2.0-preview.20261128.2
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
-    Previous aggregate selection: `release-v0.2.0-preview.20261127`.
+    Previous aggregate selection: `release-v0.2.0-preview.20261128`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128.1/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128.2/releases/daily-preview.yaml).
 
     ## Component versions
 
@@ -34,7 +34,7 @@ notes:
     | `accelerator` | `v0.2.0-preview.20261128` |
     | `connector` | `v0.2.0-preview.20261128` |
     | `sandboxer` | `v0.2.0-preview.20261127.1` |
-    | `orchestrator` | `v0.2.0-preview.20261127.1` |
+    | `orchestrator` | `v0.2.0-preview.20261128.2` |
     | `runtime` | `runtime-v0.2.0-preview.20261128.1` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261124` |
 
@@ -44,58 +44,24 @@ notes:
 
     ### accelerator
 
-    Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261128`.
-
-    - test(cache): separate native and no-RocksDB tiered assembly checks ([#247](https://github.com/kuasar-sandbox/accelerator/pull/247), [commit aed33d7fde94](https://github.com/kuasar-sandbox/accelerator/commit/aed33d7fde940921d2ff0bf2b2a3ac78804cfe1e)).
-    - test(e2e): isolate activation start-limit budgets ([#246](https://github.com/kuasar-sandbox/accelerator/pull/246), [commit 6db281d9950e](https://github.com/kuasar-sandbox/accelerator/commit/6db281d9950e5494ecb48f00e24f7d0214395351)).
-    - test(e2e): make cache readiness observations precise ([#248](https://github.com/kuasar-sandbox/accelerator/pull/248), [commit 15e304e00803](https://github.com/kuasar-sandbox/accelerator/commit/15e304e00803673490fbdff231f63516f9abd620)).
-    - test(e2e): assert manifest diff and sparse encoding contracts ([#249](https://github.com/kuasar-sandbox/accelerator/pull/249), [commit 85770a7924f5](https://github.com/kuasar-sandbox/accelerator/commit/85770a7924f55ccb32c31cbdc07d4e0e899d04cf)).
-    - test(obs): isolate remote cleanup and preserve failures ([#250](https://github.com/kuasar-sandbox/accelerator/pull/250), [commit e8cfdf61097e](https://github.com/kuasar-sandbox/accelerator/commit/e8cfdf61097ea775d4e5994d1cf43d3ab2064cf8)).
-    - test(cache): verify store wire chunk and blob hits ([#252](https://github.com/kuasar-sandbox/accelerator/pull/252), [commit 964c5d04b5fc](https://github.com/kuasar-sandbox/accelerator/commit/964c5d04b5fc5b04bbe848a493ce9e01b8efc639)).
-    - feat: add unified Secret plugin resolution ([#251](https://github.com/kuasar-sandbox/accelerator/pull/251), [commit 55f9278bcc7a](https://github.com/kuasar-sandbox/accelerator/commit/55f9278bcc7a882a4ed0b031cd2be2908f726c17)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/160a2cd6959d7e9b40876fee229dca8dc8679b97...55f9278bcc7a882a4ed0b031cd2be2908f726c17)
+    Selected version unchanged: `v0.2.0-preview.20261128`.
 
     ### connector
 
-    Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261128`.
-
-    - test(e2e): verify a live peer in management isolation case ([#122](https://github.com/kuasar-sandbox/connector/pull/122), [commit da33f8c13d48](https://github.com/kuasar-sandbox/connector/commit/da33f8c13d488af189af592a662e94d54539ccdc)).
-    - test(e2e): make TAP admission checks assert their setup ([#124](https://github.com/kuasar-sandbox/connector/pull/124), [commit c8c2a9f70181](https://github.com/kuasar-sandbox/connector/commit/c8c2a9f70181ada00f82ae381fe36706380ff27b)).
-    - test(egress): stop keepalive after observed reclamation ([#125](https://github.com/kuasar-sandbox/connector/pull/125), [commit 0019c26ee49e](https://github.com/kuasar-sandbox/connector/commit/0019c26ee49eb5f347a0348d84af6869f09df912)).
-    - test(network): wait for Geneve readiness and retain packet coverage ([#126](https://github.com/kuasar-sandbox/connector/pull/126), [commit 31b9611735a9](https://github.com/kuasar-sandbox/connector/commit/31b9611735a990106e73c15ecaab6230b68f9d26)).
-    - test(network): observe management listener readiness ([#127](https://github.com/kuasar-sandbox/connector/pull/127), [commit 18430d7ca2da](https://github.com/kuasar-sandbox/connector/commit/18430d7ca2daa4581ebed3fed2d6eff08a96ddf5)).
-    - test(network): require precise provision failures ([#128](https://github.com/kuasar-sandbox/connector/pull/128), [commit 434196cf17f7](https://github.com/kuasar-sandbox/connector/commit/434196cf17f73e7f1d62af5d1411b210af49ae48)).
-    - feat: make native egress status and operations actionable ([#123](https://github.com/kuasar-sandbox/connector/pull/123), [commit 156cab32369b](https://github.com/kuasar-sandbox/connector/commit/156cab32369b11eb4a026dc60c9760962b74e87c)).
-    - test(network): bound and reap owned TAP receivers ([#129](https://github.com/kuasar-sandbox/connector/pull/129), [commit 6464872139c6](https://github.com/kuasar-sandbox/connector/commit/6464872139c6316ae5a0f95e35ac7763c5b70350)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/connector/compare/811ae365e522e9c3413ae650515acd17692e1306...6464872139c6316ae5a0f95e35ac7763c5b70350)
+    Selected version unchanged: `v0.2.0-preview.20261128`.
 
     ### sandboxer
 
-    Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261127.1`.
-
-    - test(e2e): reap encrypted-diff store on success ([#488](https://github.com/kuasar-sandbox/sandboxer/pull/488), [commit 1eb36443b585](https://github.com/kuasar-sandbox/sandboxer/commit/1eb36443b58563b8efd11dbdc2cde05aeacc0423)).
-    - test(e2e): require process continuity across snapshot restores ([#490](https://github.com/kuasar-sandbox/sandboxer/pull/490), [commit 837445f79a2f](https://github.com/kuasar-sandbox/sandboxer/commit/837445f79a2f39d278d1c1cc02c8ef5d05d13bb3)).
-    - test(e2e): fail bundle lineage checks at the first guest error ([#491](https://github.com/kuasar-sandbox/sandboxer/pull/491), [commit 81d4286fedc0](https://github.com/kuasar-sandbox/sandboxer/commit/81d4286fedc07783d863dc1b6542e3c86522ffef)).
-    - test(e2e): verify placeholder restarts in the same VM ([#492](https://github.com/kuasar-sandbox/sandboxer/pull/492), [commit fc3d3a83d367](https://github.com/kuasar-sandbox/sandboxer/commit/fc3d3a83d367a4d8a91a237fd6259d350f94a8b1)).
-    - test(e2e): record checkpoint proof phase durations ([#493](https://github.com/kuasar-sandbox/sandboxer/pull/493), [commit 7872e4956450](https://github.com/kuasar-sandbox/sandboxer/commit/7872e4956450e2e70f816a5ade4999764e3d882d)).
-    - test(e2e): wait for restored usage first-round samples ([#494](https://github.com/kuasar-sandbox/sandboxer/pull/494), [commit 5a6c75bda48e](https://github.com/kuasar-sandbox/sandboxer/commit/5a6c75bda48eb0a807d19575869064fddddef781)).
-    - test(e2e): report owned cache startup failures promptly ([#495](https://github.com/kuasar-sandbox/sandboxer/pull/495), [commit 44ea7873fedb](https://github.com/kuasar-sandbox/sandboxer/commit/44ea7873fedba33e695304cd9b671774c039a864)).
-    - feat: report complete export and publication references ([#485](https://github.com/kuasar-sandbox/sandboxer/pull/485), [commit 33bdf223f6d8](https://github.com/kuasar-sandbox/sandboxer/commit/33bdf223f6d88a836d866fc000af33277ed11247)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/fa5ea8316aa02abb6b1a5138be1e7589aa626646...33bdf223f6d88a836d866fc000af33277ed11247)
+    Selected version unchanged: `v0.2.0-preview.20261127.1`.
 
     ### orchestrator
 
-    Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261127.1`.
+    Selected version: `v0.2.0-preview.20261127.1` → `v0.2.0-preview.20261128.2`.
 
-    - ci: validate Builder contracts without duplicate test runs ([#585](https://github.com/kuasar-sandbox/orchestrator/pull/585), [commit 5581e76315fc](https://github.com/kuasar-sandbox/orchestrator/commit/5581e76315fcee0b3be74633b91f0fca2b523bf4)).
-    - test(nodectl): restore the retention failure fixture atomically ([#589](https://github.com/kuasar-sandbox/orchestrator/pull/589), [commit cfcc9bda4930](https://github.com/kuasar-sandbox/orchestrator/commit/cfcc9bda49309403ae56308365161fecab5ad798)).
-    - test(e2e): bind resource shutdown proof to the actual CH result ([#590](https://github.com/kuasar-sandbox/orchestrator/pull/590), [commit bad66fe84b4e](https://github.com/kuasar-sandbox/orchestrator/commit/bad66fe84b4e5412f783037ad5f10065ab28a8f7)).
-    - feat: expose export reference reports through platform APIs ([#583](https://github.com/kuasar-sandbox/orchestrator/pull/583), [commit 24abd95386fd](https://github.com/kuasar-sandbox/orchestrator/commit/24abd95386fde39cc365d2f2987d963272bced17)).
+    - Improve user workflows and preserve repeated SDK Build assertions ([#586](https://github.com/kuasar-sandbox/orchestrator/pull/586), [commit db702c9c17d0](https://github.com/kuasar-sandbox/orchestrator/commit/db702c9c17d0cc8a2733bab4f87a23577e337ef6)).
+    - fix(cluster): recheck eligibility and observe Runtime rejection ([#592](https://github.com/kuasar-sandbox/orchestrator/pull/592), [commit 5cfcf4043e89](https://github.com/kuasar-sandbox/orchestrator/commit/5cfcf4043e89ea83e64c5f2f7290f8a6565c6e08)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/7b20e505e221c5ed447ebe601b55e9ca649e1e99...24abd95386fde39cc365d2f2987d963272bced17)
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/24abd95386fde39cc365d2f2987d963272bced17...5cfcf4043e89ea83e64c5f2f7290f8a6565c6e08)
 
     ### runtime
 
@@ -120,7 +86,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128.2/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128.2/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
