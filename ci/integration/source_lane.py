@@ -36,7 +36,8 @@ TEST_DRIVERS = {
 GATE_INPUTS = {('kuasar-sandbox/' + owner, 'scripts/ci-source-checks.sh')
                for owner in ('connector', 'orchestrator', 'sandboxer')} | {
     ('kuasar-sandbox/orchestrator', 'test/source/builder_state.py'),
-    ('kuasar-sandbox/orchestrator', 'test/source/source_gate.py')}
+    ('kuasar-sandbox/orchestrator', 'test/source/source_gate.py'),
+    ('kuasar-sandbox/orchestrator', 'test/source/race_cases.py')}
 GO_OSES = {'aix', 'android', 'darwin', 'dragonfly', 'freebsd', 'hurd', 'illumos',
            'ios', 'js', 'linux', 'netbsd', 'openbsd', 'plan9', 'solaris', 'wasip1', 'windows'}
 GO_ARCHES = {'386', 'amd64', 'amd64p32', 'arm', 'arm64', 'loong64', 'mips', 'mipsle',

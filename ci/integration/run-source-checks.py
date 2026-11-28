@@ -31,7 +31,7 @@ TEST_SCRIPT_EXECUTOR = "/inputs/release/ci/integration/run-source-checks.py"
 
 SOURCE_OWNERS = ("platform", "connector", "sandboxer", "accelerator", "guest-runtime", "orchestrator")
 OWNER_GROUPS = tuple("owner-" + owner for owner in SOURCE_OWNERS)
-SOURCE_GROUPS = ("all", "A", "B", *OWNER_GROUPS, *source_stages.GROUPS)
+SOURCE_GROUPS = ("all", "A", "B", *OWNER_GROUPS, *source_stages.ALL_GROUPS)
 
 # Run unittest modules in a fresh interpreter: the executor's trusted imports
 # must not replace the candidate modules the regression intends to exercise.
@@ -368,7 +368,7 @@ def checks_for(plan, sources, group="all"):
     stage = source_stages.stage_for(group)
     if stage is not None:
         artifacts.require(source_stages.contract(plan) is not None, 'stage lacks an admitted owner declaration')
-        expanded = source_stages.expand(checks, sources)
+        expanded = source_stages.expand(checks, sources, plan)
         return [row for row in expanded if row[0] == 'orchestrator-source-stage:' + stage or
                 stage == 'vet-and-helpers' and row[2] == sources / 'orchestrator' and
                 not row[0].startswith('orchestrator-source-stage:')]
@@ -423,7 +423,7 @@ def execute(plan, sources, output, *, materialized=False, group="all"):
 if __name__ == "__main__":
     if sys.argv[1:2] == ['--source-stage']:
         parser = argparse.ArgumentParser(description='Execute one declared source stage inside Workbench')
-        parser.add_argument('--source-stage', choices=source_stages.STAGES, required=True)
+        parser.add_argument('--source-stage', choices=source_stages.ALL_STAGES, required=True)
         parser.add_argument('--plan', type=Path, required=True)
         parser.add_argument('--sources', type=Path, required=True)
         parser.add_argument('--output', type=Path, required=True)

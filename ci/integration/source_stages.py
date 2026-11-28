@@ -1,8 +1,12 @@
 """Closed, opt-in Orchestrator source stages; discovery never executes owner code.
 
-The owner entry declares v1 in its leading comments and still owns the complete
-no-argument gate. A supported declaration permits eight isolated Workbench jobs.
-The platform runs the four race partitions itself so their literal commands and
+v2 runs five owner gates, including one explicitly selected race-case gate.
+It avoids four cold instrumented compilations. v1 keeps its original evidence
+meaning for already selected historical sources; it is not reinterpreted as v2.
+
+For historical v1, the owner entry declares the protocol in leading comments
+and owns the complete no-argument gate. That protocol has eight stages.
+The platform runs its four race partitions itself so their literal commands and
 complete package results can be checked independently at finalization. Other
 stages call the same frozen owner entry; no arbitrary command is accepted in a
 declaration. Missing/unknown versions retain the complete historical gate.
@@ -26,6 +30,12 @@ RACE_POLICY = 'orchestrator-race-four-v1'
 RACE_STAGES = ('race-1', 'race-2', 'race-3', 'race-4')
 STAGES = ('normal', *RACE_STAGES, 'databases', 'services', 'vet-and-helpers')
 GROUPS = tuple('owner-orchestrator--' + stage for stage in STAGES)
+CASE_PROTOCOL = 'orchestrator-source-v2'
+CASE_STAGES = ('normal', 'race', 'databases', 'services', 'vet-and-helpers')
+CASE_POLICY = 'orchestrator-race-cases-v2'
+PROTOCOLS = {PROTOCOL: (STAGES, RACE_POLICY), CASE_PROTOCOL: (CASE_STAGES, CASE_POLICY)}
+ALL_STAGES = tuple(dict.fromkeys((*STAGES, *CASE_STAGES)))
+ALL_GROUPS = tuple('owner-orchestrator--' + stage for stage in ALL_STAGES)
 EXECUTOR = '/inputs/release/ci/integration/run-source-checks.py'
 ENTRY_LIMIT = 128 * 1024
 JSON_LIMIT = 32 * 1024 * 1024
@@ -188,8 +198,10 @@ def discover(roots, identities):
         data, mode = read_regular(root, ENTRY, ENTRY_LIMIT)
     except FileNotFoundError:
         return None
-    if declaration(data) != PROTOCOL:
+    protocol = declaration(data)
+    if protocol not in PROTOCOLS:
         return None
+    stages, policy = PROTOCOLS[protocol]
     source = {key: identities[OWNER][key] for key in ('repository', 'sha', 'tree')}
     require(source['repository'] == REPOSITORY and all(isinstance(source[key], str) and
             HEX40.fullmatch(source[key]) for key in ('sha', 'tree')), 'invalid discovery identity')
@@ -198,8 +210,8 @@ def discover(roots, identities):
     record = entry_record(data, mode)
     require(tree == (mode + ' blob ' + record['git_blob'] + '\t' + ENTRY + '\0').encode(),
             'declaration is not the admitted regular Git blob')
-    return dict(protocol=PROTOCOL, owner=OWNER, source=source, entry=record,
-                stages=list(STAGES), race_partition=RACE_POLICY)
+    return dict(protocol=protocol, owner=OWNER, source=source, entry=record,
+                stages=list(stages), race_partition=policy)
 
 
 def contract(plan):
@@ -209,8 +221,10 @@ def contract(plan):
     require(plan.get('mode') == 'source' and isinstance(value, dict) and
             set(value) == {'protocol', 'owner', 'source', 'entry', 'stages', 'race_partition'},
             'invalid stage contract')
-    require(value['protocol'] == PROTOCOL and value['owner'] == OWNER and value['stages'] == list(STAGES)
-            and value['race_partition'] == RACE_POLICY, 'unknown stage protocol or incomplete stage set')
+    require(isinstance(value['protocol'], str) and value['protocol'] in PROTOCOLS, 'unknown stage protocol')
+    stages, policy = PROTOCOLS[value['protocol']]
+    require(value['owner'] == OWNER and value['stages'] == list(stages)
+            and value['race_partition'] == policy, 'unknown stage protocol or incomplete stage set')
     source, entry = value['source'], value['entry']
     require(isinstance(source, dict) and set(source) == {'repository', 'sha', 'tree'} and
             source['repository'] == REPOSITORY and all(isinstance(source[k], str) and HEX40.fullmatch(source[k])
@@ -231,29 +245,38 @@ def verify_entry(plan, root):
     frozen = contract(plan)
     require(frozen is not None, 'stage requested without a supported declaration')
     data, mode = read_regular(root, ENTRY, ENTRY_LIMIT)
-    require(entry_record(data, mode) == frozen['entry'] and declaration(data) == PROTOCOL,
+    require(entry_record(data, mode) == frozen['entry'] and declaration(data) == frozen['protocol'],
             'owner stage entry differs from the plan')
     return frozen
 
 
+def stages_for(plan):
+    frozen = contract(plan)
+    return tuple(frozen['stages']) if frozen else STAGES
+
+
+def groups_for(plan):
+    return tuple('owner-orchestrator--' + stage for stage in stages_for(plan))
+
+
 def stage_for(group):
-    return STAGES[GROUPS.index(group)] if group in GROUPS else None
+    return ALL_STAGES[ALL_GROUPS.index(group)] if group in ALL_GROUPS else None
 
 
 def check(stage, sources):
-    require(stage in STAGES, 'unknown stage')
+    require(stage in ALL_STAGES, 'unknown stage')
     return ('orchestrator-source-stage:' + stage,
             ['python3', '-B', EXECUTOR, '--source-stage', stage, '--plan', '/src/.source-plan.json',
              '--sources', '/src', '--output', '/output/source-stage.json'], sources / OWNER)
 
 
-def expand(checks, sources):
+def expand(checks, sources, plan=None):
     """Replace only the declared whole owner gate; retain all extra checks."""
     result, count = [], 0
     for row in checks:
         if row[0] == 'orchestrator-unit-race-vet':
             require(row == (row[0], ['bash', ENTRY], sources / OWNER), 'unknown whole owner gate')
-            result.extend(check(stage, sources) for stage in STAGES)
+            result.extend(check(stage, sources) for stage in (stages_for(plan) if plan is not None else STAGES))
             count += 1
         else:
             result.append(row)
@@ -360,9 +383,10 @@ def go_context(value, root):
 
 
 def execute(plan, sources, stage, output, env):
-    require(stage in STAGES, 'unknown execution stage')
+    frozen = contract(plan)
+    require(frozen is not None and stage in stages_for(plan), 'unknown execution stage')
     root = sources / OWNER
-    proof = dict(schema=1, plan_id=digest(plan), protocol=PROTOCOL, stage=stage,
+    proof = dict(schema=1, plan_id=digest(plan), protocol=frozen['protocol'], stage=stage,
                  source_contract=contract(plan), commands=[], conclusion='failure', exit_code=1)
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -399,11 +423,11 @@ def execute(plan, sources, stage, output, env):
 
 def validate_proof(plan, stage, proof, *, directory='/src/orchestrator'):
     frozen = contract(plan)
-    require(stage in STAGES and isinstance(proof, dict) and frozen is not None and
+    require(stage in stages_for(plan) and isinstance(proof, dict) and frozen is not None and
             set(proof) == {'schema', 'plan_id', 'protocol', 'stage', 'source_contract', 'commands',
                            'conclusion', 'exit_code'} | ({'race'} if stage in RACE_STAGES else set()) and
             type(proof['schema']) is int and proof['schema'] == 1 and
-            proof['plan_id'] == digest(plan) and proof['protocol'] == PROTOCOL and
+            proof['plan_id'] == digest(plan) and proof['protocol'] == frozen['protocol'] and
             proof['stage'] == stage and proof['source_contract'] == frozen and
             proof['conclusion'] == 'success' and type(proof['exit_code']) is int and proof['exit_code'] == 0,
             'stage proof identity or success mismatch')
@@ -438,9 +462,11 @@ def validate_proof(plan, stage, proof, *, directory='/src/orchestrator'):
 
 
 def validate_set(plan, proofs):
-    require(set(proofs) == set(STAGES), 'missing or unexpected owner stage')
+    require(set(proofs) == set(stages_for(plan)), 'missing or unexpected owner stage')
     for stage, proof in proofs.items():
         validate_proof(plan, stage, proof)
+    if contract(plan)['protocol'] == CASE_PROTOCOL:
+        return
     races = [proofs[stage]['race'] for stage in RACE_STAGES]
     first = races[0]
     require(all(row['inventory'] == first['inventory'] and row['context'] == first['context'] for row in races),

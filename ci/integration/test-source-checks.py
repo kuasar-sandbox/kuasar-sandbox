@@ -1009,7 +1009,7 @@ class SourceStageTests(unittest.TestCase):
                        for i, name in enumerate(names[:count])], key=lambda row: row['import_path'])
 
     def proof(self, stage, rows=None, directory='/src/orchestrator'):
-        result = dict(schema=1, plan_id=artifacts.identity(self.plan), protocol=source_stages.PROTOCOL,
+        result = dict(schema=1, plan_id=artifacts.identity(self.plan), protocol=self.plan['source_stages']['protocol'],
                       stage=stage, source_contract=copy.deepcopy(self.plan['source_stages']),
                       conclusion='success', exit_code=0)
         argv = [['bash', source_stages.ENTRY, '--ci-stage', stage]]
@@ -1036,6 +1036,31 @@ class SourceStageTests(unittest.TestCase):
             if stage:
                 item['result']['source_stage'] = self.proof(stage)
         return groups, data
+
+    def test_v2_uses_one_owner_race_gate_and_rejects_legacy_partitions(self):
+        self.enable('#!/bin/bash\n# kuasar-source-stages: orchestrator-source-v2\nexit 0\n')
+        stages = source_stages.CASE_STAGES
+        self.assertEqual(source_stages.stages_for(self.plan), stages)
+        groups, data = self.evidence()
+        self.assertEqual([source_stages.stage_for(g) for g in groups if source_stages.stage_for(g)], list(stages))
+        source_stages.validate_set(self.plan, {stage: self.proof(stage) for stage in stages})
+        proof = source_stages.execute(self.plan, self.sources, 'race', self.output, os.environ.copy())
+        self.assertEqual([r['command'] for r in proof['commands']], [['bash', source_stages.ENTRY, '--ci-stage', 'race']])
+        source_stages.validate_proof(self.plan, 'race', proof, directory=str(self.sources / 'orchestrator'))
+        with self.assertRaisesRegex(ValueError, 'unknown execution stage'):
+            source_stages.execute(self.plan, self.sources, 'race-1', self.output, os.environ.copy())
+        with self.assertRaisesRegex(ValueError, 'missing or unexpected'):
+            source_stages.validate_set(self.plan, {stage: self.proof(stage) for stage in stages if stage != 'race'})
+        self.validate_evidence(data, groups)
+
+    def test_v2_failed_case_gate_cannot_produce_success(self):
+        self.enable('#!/bin/bash\n# kuasar-source-stages: orchestrator-source-v2\nexit 17\n')
+        with self.assertRaises(subprocess.CalledProcessError):
+            source_stages.execute(self.plan, self.sources, 'race', self.output, os.environ.copy())
+        proof = json.loads(self.output.read_text())
+        self.assertEqual(proof['exit_code'], 17)
+        with self.assertRaisesRegex(ValueError, 'identity or success'):
+            source_stages.validate_proof(self.plan, 'race', proof)
 
     def test_static_declaration_is_bound_to_admitted_tree_and_never_executes_owner(self):
         entry = self.enable()
