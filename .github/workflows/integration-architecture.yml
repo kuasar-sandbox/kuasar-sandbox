@@ -222,8 +222,8 @@ jobs:
             .ci/build-time.txt
             .ci/node-infra-build
           arch: ${{ inputs.arch }}
-          cpus: '2'
-          memory-gib: '8'
+          cpus: '4'
+          memory-gib: '12'
           run: |
             export PATH="/src/.ci/readers:$PATH"
             export KUASAR_RUNTIME_READER=/src/.ci/readers/runtime-payloads.py
