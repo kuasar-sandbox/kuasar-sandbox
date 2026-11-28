@@ -755,56 +755,6 @@
           ]
         }
       }
-    },
-    {
-      "candidate": {
-        "repository": "kuasar-sandbox/sandboxer",
-        "pull_request_number": 489,
-        "base_ref": "main",
-        "base_sha": "6eb5bee2ebdbf66b4e64dc8fc7ea0f5f3817d6ca",
-        "head_sha": "0310e30032322c2dc3e79f2f89ca2a7394a594b5",
-        "candidate_sha": "32ee1b169b2ed6fec80ee9b42f7a14d999f1630e"
-      },
-      "units": {
-        "orchestrator": {
-          "tag": "v0.2.0-preview.20261128.2",
-          "sha": "5cfcf4043e89ea83e64c5f2f7290f8a6565c6e08",
-          "release_id": 461341553,
-          "assets": [
-            {
-              "name": "orchestrator-v0.2.0-preview.20261128.2-linux-aarch64.tar.gz",
-              "id": 803452244,
-              "size": 102119183,
-              "digest": "sha256:eed18489350fd1a12a19bb1e39a63fd23bcbfc52944520e28c4e9be617671b25"
-            },
-            {
-              "name": "orchestrator-v0.2.0-preview.20261128.2-linux-x86_64.tar.gz",
-              "id": 803452416,
-              "size": 111245580,
-              "digest": "sha256:8b070a6383bb2c6e877bbac334d92b44b436c92d591d5e5004a887634c51a509"
-            }
-          ]
-        },
-        "runtime": {
-          "tag": "runtime-v0.2.0-preview.20261128.1",
-          "sha": "1288ae492fe90114a047172e000b5396aea3c298",
-          "release_id": 461248129,
-          "assets": [
-            {
-              "name": "sandbox-runtime-aarch64-v0.2.0-preview.20261128.1.tar.gz",
-              "id": 802922794,
-              "size": 50371975,
-              "digest": "sha256:2452e4ae1d017d4a80939605eacb568e0ba89d119cf85c27638a7c50e57d5637"
-            },
-            {
-              "name": "sandbox-runtime-x86_64-v0.2.0-preview.20261128.1.tar.gz",
-              "id": 802922885,
-              "size": 54624146,
-              "digest": "sha256:77139012ef544cacd5cd997557e30ba9310017c13981afb5a15a61de87ec896e"
-            }
-          ]
-        }
-      }
     }
   ]
 }
