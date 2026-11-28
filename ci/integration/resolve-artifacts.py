@@ -476,6 +476,10 @@ def source_plan(framework_sha, input_root):
         identities[owner] = {key: row[key] for key in ('repository', 'sha', 'tree', 'tag', 'ref') if key in row}
         if 'tag' in identities[owner]: identities[owner].pop('ref', None)
     plan['helper_contract'] = helper_inputs.discover(roots, identities)
+    import source_stages
+    stages = source_stages.discover(roots, identities)
+    if stages is not None:
+        plan['source_stages'] = stages
     requirements = artifacts.capabilities_module().discover(roots, selected_files)
     capability_routing.apply(plan, requirements)
     artifacts.check_plan(plan)

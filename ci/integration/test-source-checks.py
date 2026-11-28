@@ -18,6 +18,7 @@ from unittest.mock import patch
 
 import artifacts
 import source_results
+import source_stages
 from test_fixtures import restore_using
 from test_fixtures import CASES, select_plan
 
@@ -964,6 +965,431 @@ class ChangedTestScriptTests(unittest.TestCase):
              patch.object(SUBJECT.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)) as run:
             self.assertEqual(SUBJECT.run_test_script('kuasar-sandbox/kuasar-sandbox', path, self.root), 0)
         run.assert_called_once_with(['sudo', '-n', '-E', 'bash', path], cwd=self.root)
+
+
+class SourceStageTests(unittest.TestCase):
+    setUp = SourceChecksTests.setUp
+    source_scope = SourceChecksTests.source_scope
+    grouped_evidence = SourceChecksTests.grouped_evidence
+    validate_evidence = SourceChecksTests.validate_evidence
+
+    def enable(self, text=None):
+        owner = self.sources / 'orchestrator'
+        owner.mkdir(parents=True, exist_ok=True)
+        entry = owner / source_stages.ENTRY
+        entry.parent.mkdir(parents=True, exist_ok=True)
+        entry.write_text(text or '#!/bin/bash\n# kuasar-source-stages: orchestrator-source-v1\n'
+                         'set -eu\n[ "$1" = --ci-stage ]\nprintf "%s\\n" "$2" > observed-stage\n'
+                         'exit "${FIXTURE_STAGE_EXIT:-0}"\n')
+        entry.chmod(0o644)
+        for argv in (['init', '--quiet'], ['config', 'user.name', 'Stage Fixture'],
+                     ['config', 'user.email', 'stage@example.invalid'], ['config', 'commit.gpgsign', 'false'],
+                     ['add', source_stages.ENTRY], ['commit', '--quiet', '--allow-empty', '-m', 'stage fixture']):
+            subprocess.run(['git', *argv], cwd=owner, check=True, capture_output=True)
+        self.identity = dict(repository=source_stages.REPOSITORY,
+                             sha=subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=owner, text=True).strip(),
+                             tree=subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], cwd=owner, text=True).strip())
+        self.plan['test_revisions']['orchestrator']['sha'] = self.identity['sha']
+        self.plan['run_inputs'] = {'candidates/orchestrator': self.identity}
+        real_run = subprocess.run
+        def git_only(command, **kwargs):
+            self.assertEqual(command[:3], ['git', 'ls-tree', '-z'])
+            return real_run(command, **kwargs)
+        with patch.object(source_stages.subprocess, 'run', side_effect=git_only) as run:
+            selected = source_stages.discover({'orchestrator': owner}, {'orchestrator': self.identity})
+        self.assertLessEqual(run.call_count, 1)
+        if selected is not None:
+            self.plan['source_stages'] = selected
+        return entry
+
+    @staticmethod
+    def packages(count=102):
+        names = ['internal/orch', 'internal/proxyapp'] + [f'pkg/p{i:03}' for i in range(max(0, count - 2))]
+        return sorted([dict(import_path=source_stages.MODULE + '/' + name, has_tests=i < 82)
+                       for i, name in enumerate(names[:count])], key=lambda row: row['import_path'])
+
+    def proof(self, stage, rows=None, directory='/src/orchestrator'):
+        result = dict(schema=1, plan_id=artifacts.identity(self.plan), protocol=source_stages.PROTOCOL,
+                      stage=stage, source_contract=copy.deepcopy(self.plan['source_stages']),
+                      conclusion='success', exit_code=0)
+        argv = [['bash', source_stages.ENTRY, '--ci-stage', stage]]
+        if stage in source_stages.RACE_STAGES:
+            rows = self.packages() if rows is None else rows
+            names = source_stages.partition(rows)[stage]
+            test_flags = {row['import_path']: row['has_tests'] for row in rows}
+            result['race'] = dict(policy=source_stages.RACE_POLICY,
+                context=dict(GOVERSION='go1.26.11', GOOS='linux', GOARCH='amd64', CGO_ENABLED='1',
+                             GOFLAGS='', workspace_sha256='a' * 64), inventory=rows, selected=names,
+                results=[dict(import_path=name, action='pass' if test_flags[name] else 'skip') for name in names])
+            argv = [source_stages.ENV_COMMAND, source_stages.LIST_COMMAND]
+            if names:
+                argv.append(source_stages.RACE_COMMAND + names)
+        result['commands'] = [dict(command=command, directory=directory, exit_code=0, wall_seconds=0.1)
+                              for command in argv]
+        return result
+
+    def evidence(self):
+        groups = source_results.groups_for(self.plan, True)
+        data = self.grouped_evidence(groups)
+        for item in data[3].values():
+            stage = source_stages.stage_for(item['result']['group'])
+            if stage:
+                item['result']['source_stage'] = self.proof(stage)
+        return groups, data
+
+    def test_static_declaration_is_bound_to_admitted_tree_and_never_executes_owner(self):
+        entry = self.enable()
+        artifacts.check_plan(self.plan)
+        self.assertFalse((entry.parent.parent / 'observed-stage').exists())
+        self.assertEqual(self.plan['source_stages']['entry']['sha256'], hashlib.sha256(entry.read_bytes()).hexdigest())
+        for field in ('sha', 'tree'):
+            wrong = dict(self.identity, **{field: 'a' * 40})
+            if field == 'tree':
+                with self.assertRaises(subprocess.CalledProcessError):
+                    source_stages.discover({'orchestrator': entry.parent.parent}, {'orchestrator': wrong})
+            else:
+                changed = copy.deepcopy(self.plan)
+                changed['source_stages']['source'][field] = wrong[field]
+                with self.assertRaisesRegex(ValueError, 'owner identity'):
+                    artifacts.check_plan(changed)
+
+    def test_absent_and_unknown_protocol_keep_every_whole_owner_command(self):
+        original = SUBJECT.checks_for(self.plan, self.sources)
+        groups = source_results.groups_for(self.plan, True)
+        for header in ('#!/bin/bash\n', '# kuasar-source-stages: orchestrator-source-v99\n'):
+            self.enable(header + 'echo do-not-execute > touched\n')
+            self.assertNotIn('source_stages', self.plan)
+            self.assertEqual(SUBJECT.checks_for(self.plan, self.sources), original)
+            self.assertEqual(source_results.groups_for(self.plan, True), groups)
+            self.assertFalse((self.sources / 'orchestrator/touched').exists())
+
+    def test_duplicate_malformed_and_linked_declarations_are_rejected(self):
+        headers = ['# kuasar-source-stages: orchestrator-source-v1\n' * 2,
+                   '# kuasar-source-stages: orchestrator-source-v1 extra\n',
+                   '# kuasar-source-stages: $(touch injected)\n']
+        for header in headers:
+            with self.subTest(header=header), self.assertRaises(ValueError):
+                self.enable(header + 'exit 0\n')
+        entry = self.enable()
+        entry.unlink()
+        entry.symlink_to('/dev/null')
+        with self.assertRaises(OSError):
+            source_stages.discover({'orchestrator': entry.parent.parent}, {'orchestrator': self.identity})
+        entry.unlink()
+        entry.parent.rename(entry.parent.with_name('real-scripts'))
+        entry.parent.symlink_to('real-scripts', target_is_directory=True)
+        with self.assertRaises(OSError):
+            source_stages.discover({'orchestrator': entry.parent.parent}, {'orchestrator': self.identity})
+
+    def test_untracked_oversized_or_changed_declared_entry_cannot_activate(self):
+        entry = self.enable()
+        entry.write_text(entry.read_text() + '# changed\n')
+        with self.assertRaisesRegex(ValueError, 'Git blob'):
+            source_stages.discover({'orchestrator': entry.parent.parent}, {'orchestrator': self.identity})
+        with self.assertRaisesRegex(ValueError, 'differs from the plan'):
+            source_stages.verify_entry(self.plan, entry.parent.parent)
+        entry.write_bytes(b'#' * (source_stages.ENTRY_LIMIT + 1))
+        with self.assertRaisesRegex(ValueError, 'bounded regular'):
+            source_stages.discover({'orchestrator': entry.parent.parent}, {'orchestrator': self.identity})
+
+    def test_contract_has_closed_stage_policy_identity_and_no_commands(self):
+        self.enable()
+        for mutate in (lambda v: v.update(commands=['true']), lambda v: v['stages'].pop(),
+                       lambda v: v.update(race_partition='future'), lambda v: v.update(protocol='future'),
+                       lambda v: v['entry'].update(path='../other.sh'),
+                       lambda v: v['source'].update(tree='c' * 40), lambda v: v.update(owner='sandboxer')):
+            plan = copy.deepcopy(self.plan)
+            mutate(plan['source_stages'])
+            with self.assertRaises(ValueError):
+                artifacts.check_plan(plan)
+        for value in (None, {}, []):
+            with self.assertRaises(ValueError):
+                artifacts.check_plan(dict(self.plan, source_stages=value))
+        with self.assertRaises(ValueError):
+            source_stages.contract(dict(self.plan, mode='exact-assets'))
+
+    def test_staged_projection_keeps_other_owners_and_extra_checks_exactly_once(self):
+        self.enable()
+        self.source_scope({'orchestrator': ['test/source/test-new.sh'], 'connector': ['pkg/new_test.go']})
+        groups = source_results.groups_for(self.plan, True)
+        self.assertEqual(groups, ['owner-platform', 'owner-connector', *source_stages.GROUPS])
+        actual = [row for group in groups for row in SUBJECT.checks_for(self.plan, self.sources, group)]
+        expected = source_stages.expand(SUBJECT.checks_for(self.plan, self.sources), self.sources)
+        self.assertEqual(Counter((n, tuple(c), str(d)) for n, c, d in actual),
+                         Counter((n, tuple(c), str(d)) for n, c, d in expected))
+        self.assertEqual(actual[-1][0], 'orchestrator-test-script:test/source/test-new.sh')
+        self.assertEqual(sum(name.endswith('test-new.sh') for name, _, _ in actual), 1)
+        self.assertEqual(SUBJECT.checks_for(self.plan, self.sources, 'owner-orchestrator')[0][1],
+                         ['bash', 'scripts/ci-source-checks.sh'])
+        self.assertEqual(source_results.groups_for(self.plan, False), ['all'])
+        self.source_scope({'platform': ['ci/integration/test-new.py']})
+        self.assertEqual(source_results.groups_for(self.plan, True), ['owner-platform'])
+
+    def test_every_complete_historical_or_declared_schedule_is_accepted(self):
+        self.enable()
+        for groups in (['all'], ['A', 'B'], list(SUBJECT.OWNER_GROUPS)):
+            self.assertEqual(self.validate_evidence(self.grouped_evidence(groups), groups)['conclusion'], 'success')
+        groups, data = self.evidence()
+        self.assertEqual(self.validate_evidence(data, groups)['conclusion'], 'success')
+
+    def test_missing_mixed_duplicate_and_unknown_stage_schedules_are_rejected(self):
+        self.enable()
+        groups, data = self.evidence()
+        for wrong in (groups[:-1], groups + ['owner-orchestrator'], groups + [source_stages.GROUPS[0]],
+                      ['owner-platform', source_stages.GROUPS[0]]):
+            with self.subTest(groups=wrong), self.assertRaises(ValueError):
+                self.validate_evidence(data, wrong)
+        for label in ('source-checks (owner-orchestrator--unknown)', 'source-checks (race-1)'):
+            bad = copy.deepcopy(data)
+            bad[1][0]['name'] = label
+            with self.assertRaisesRegex(ValueError, 'unknown source producer'):
+                self.validate_evidence(bad, groups)
+
+    def test_102_package_union_includes_all_twenty_no_test_and_future_packages(self):
+        rows = self.packages()
+        self.assertEqual(len(rows), 102)
+        self.assertEqual(sum(not row['has_tests'] for row in rows), 20)
+        groups = source_stages.partition(rows)
+        self.assertEqual(groups['race-1'], [source_stages.MODULE + '/internal/orch'])
+        self.assertEqual(groups['race-2'], [source_stages.MODULE + '/internal/proxyapp'])
+        self.assertEqual(Counter(name for names in groups.values() for name in names),
+                         Counter(row['import_path'] for row in rows))
+        future = dict(import_path=source_stages.MODULE + '/future/new', has_tests=False)
+        updated = source_stages.partition(sorted([*rows, future], key=lambda row: row['import_path']))
+        self.assertEqual(sum(future['import_path'] in names for names in updated.values()), 1)
+        for count in (1, 2, 3):
+            tiny = source_stages.partition(self.packages(count))
+            self.assertEqual(sum(map(len, tiny.values())), count)
+
+    def test_inventory_rejects_duplicates_errors_dependencies_and_unsafe_operands(self):
+        rows = self.packages(4)
+        invalid = [[], rows + [rows[0]], list(reversed(rows)),
+                   [dict(import_path='-run=NoTests', has_tests=True)],
+                   [dict(import_path=source_stages.MODULE + '/../outside', has_tests=True)],
+                   [dict(import_path=source_stages.MODULE + '/pkg', has_tests=1)]]
+        for value in invalid:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                source_stages.partition(value)
+        for field in ('Error', 'DepsErrors', 'Incomplete', 'ForTest'):
+            with self.assertRaises(ValueError):
+                source_stages.decode_inventory(json.dumps({'ImportPath': source_stages.MODULE + '/p', field: True}))
+
+    def test_real_go_discovery_includes_race_only_packages_and_same_goflags(self):
+        # Package discovery is a real Go invocation, without compiling or
+        # executing product code. The race tag is implicit in the old gate.
+        root = self.root / 'tagged-module'
+        root.mkdir()
+        (root / 'go.mod').write_text('module ' + source_stages.MODULE + '\n\ngo 1.22\n')
+        for name, tag in (('base', ''), ('raceonly', 'race'), ('customtag', 'stagefixture')):
+            directory = root / name
+            directory.mkdir()
+            header = '//go:build ' + tag + '\n\n' if tag else ''
+            (directory / 'package.go').write_text(header + 'package ' + name + '\n')
+            if tag == 'race':
+                (directory / 'package_test.go').write_text(
+                    header + 'package ' + name + '\nimport "testing"\nfunc TestRaceOnly(t *testing.T) {}\n')
+        env = dict(os.environ, CGO_ENABLED='1', GOFLAGS='-tags=stagefixture', GOWORK='off',
+                   GOPROXY='off', GOSUMDB='off', GOTOOLCHAIN='local', GOCACHE=str(self.root / 'go-list-cache'))
+        rows = source_stages.decode_inventory(subprocess.check_output(
+            source_stages.LIST_COMMAND, cwd=root, env=env, text=True))
+        self.assertEqual(rows, [dict(import_path=source_stages.MODULE + '/' + name, has_tests=name == 'raceonly')
+                                for name in ('base', 'customtag', 'raceonly')])
+        plain = source_stages.decode_inventory(subprocess.check_output(
+            [arg for arg in source_stages.LIST_COMMAND if arg != '-race'], cwd=root, env=env, text=True))
+        self.assertEqual([row['import_path'] for row in plain],
+                         [source_stages.MODULE + '/base', source_stages.MODULE + '/customtag'])
+        self.assertEqual(Counter(name for names in source_stages.partition(rows).values() for name in names),
+                         Counter(row['import_path'] for row in rows))
+
+    def test_collector_rejects_different_inventory_context_flags_results_or_entry(self):
+        self.enable()
+        groups, data = self.evidence()
+        index = next(key for key, value in data[3].items() if value['result']['group'].endswith('--race-1'))
+        mutations = [lambda p: p['source_contract']['entry'].update(sha256='b' * 64),
+                     lambda p: p.update(stage='normal'), lambda p: p.update(exit_code=17),
+                     lambda p: p.update(schema=True),
+                     lambda p: p['commands'][1]['command'].remove('-race'),
+                     lambda p: p['commands'][-1]['command'].remove('-race'),
+                     lambda p: p['race']['results'].pop(),
+                     lambda p: p['race']['results'].append(p['race']['results'][0]),
+                     lambda p: p['race']['results'][0].update(action='skip'),
+                     lambda p: p['race']['context'].update(GOVERSION='go1.26.12'),
+                     lambda p: p['race']['context'].update(workspace_sha256='f' * 64)]
+        for mutate in mutations:
+            bad = copy.deepcopy(data)
+            mutate(bad[3][index]['result']['source_stage'])
+            with self.assertRaises(ValueError):
+                self.validate_evidence(bad, groups)
+        bad = copy.deepcopy(data)
+        del bad[3][index]['result']['source_stage']
+        with self.assertRaises(ValueError):
+            self.validate_evidence(bad, groups)
+        bad = copy.deepcopy(data)
+        race = bad[3][index]['result']['source_stage']['race']
+        # This package remains in another partition, so this worker alone can
+        # look consistent. The cross-worker complete-inventory check must fail.
+        race['inventory'][-1]['has_tests'] = not race['inventory'][-1]['has_tests']
+        with self.assertRaisesRegex(ValueError, 'different package inventories'):
+            self.validate_evidence(bad, groups)
+
+    def test_terminal_parser_distinguishes_individual_skip_and_no_test_package(self):
+        rows = self.packages(3)
+        rows[-1]['has_tests'] = False
+        selected = [row['import_path'] for row in rows]
+        events = [dict(Action='build-output', ImportPath='dependency.invalid/pkg', Output='warning\n'),
+                  dict(Action='skip', Package=selected[0], Test='TestOptional'),
+                  *[dict(Action='pass' if row['has_tests'] else 'skip', Package=row['import_path']) for row in rows]]
+        path = self.root / 'events.jsonl'
+        path.write_text(''.join(json.dumps(row) + '\n' for row in events))
+        self.assertEqual(len(source_stages.terminals(path, selected, rows)), 3)
+        for bad in (events[:-1], events + [events[-1]],
+                    events[:2] + [dict(Action='skip', Package=selected[0]), *events[3:]],
+                    events + [dict(Action='pass', Package=source_stages.MODULE + '/unexpected')]):
+            path.write_text(''.join(json.dumps(row) + '\n' for row in bad))
+            with self.assertRaises(ValueError):
+                source_stages.terminals(path, selected, rows)
+
+    def test_real_stage_entry_failure_and_post_execution_mutation_stay_failure(self):
+        entry = self.enable()
+        output = self.root / 'stage-output/proof.json'
+        for exit_code in (0, 23):
+            env = {**os.environ, 'FIXTURE_STAGE_EXIT': str(exit_code)}
+            if exit_code:
+                with self.assertRaises(subprocess.CalledProcessError) as error:
+                    source_stages.execute(self.plan, self.sources, 'normal', output, env)
+                self.assertEqual(error.exception.returncode, exit_code)
+            else:
+                source_stages.execute(self.plan, self.sources, 'normal', output, env)
+            proof = json.loads(output.read_text())
+            self.assertEqual(proof['exit_code'], exit_code)
+            self.assertEqual(proof['conclusion'], 'failure' if exit_code else 'success')
+            self.assertEqual((entry.parent.parent / 'observed-stage').read_text(), 'normal\n')
+        entry = self.enable('#!/bin/bash\n# kuasar-source-stages: orchestrator-source-v1\n'
+                            'printf "# mutate\\n" >> scripts/ci-source-checks.sh\n')
+        with self.assertRaisesRegex(ValueError, 'differs from the plan'):
+            source_stages.execute(self.plan, self.sources, 'normal', output, os.environ)
+        self.assertEqual(json.loads(output.read_text())['conclusion'], 'failure')
+
+    def fake_go(self):
+        binary = self.root / 'bin'
+        binary.mkdir()
+        executable = binary / 'go'
+        executable.write_text('#!' + sys.executable + '\n' + '''
+import json, os, pathlib, sys
+args = sys.argv[1:]
+with open(os.environ['FIXTURE_COMMANDS'], 'a') as log: log.write(json.dumps(args) + '\\n')
+rows = json.loads(pathlib.Path(os.environ['FIXTURE_PACKAGES']).read_text())
+assert os.environ['CGO_ENABLED'] == '1'
+if args[:2] == ['env', '-json']:
+    assert args[2:] == ['GOVERSION', 'GOOS', 'GOARCH', 'CGO_ENABLED', 'GOFLAGS', 'GOWORK']
+    print(json.dumps(dict(GOVERSION='go1.26.11', GOOS='linux', GOARCH='amd64', CGO_ENABLED='1', GOFLAGS='', GOWORK='off')))
+elif args == ['list', '-race', '-json', './...']:
+    for row in rows:
+        print(json.dumps(dict(ImportPath=row['import_path'], TestGoFiles=['real_test.go'] if row['has_tests'] else [])))
+elif args[:6] == ['test', '-json', '-race', '-p=1', '-count=1', '-timeout=5m']:
+    assert args[6:] and len(set(args[6:])) == len(args[6:])
+    flags={row['import_path']: row['has_tests'] for row in rows}
+    for name in args[6:]: print(json.dumps(dict(Action='pass' if flags[name] else 'skip', Package=name)))
+    raise SystemExit(int(os.environ.get('FIXTURE_GO_EXIT', '0')))
+else:
+    raise SystemExit('unexpected fixture argv: ' + repr(args))
+''')
+        executable.chmod(0o755)
+        packages = self.root / 'packages.json'
+        packages.write_text(json.dumps(self.packages()))
+        return {**os.environ, 'PATH': str(binary) + os.pathsep + os.environ['PATH'],
+                'FIXTURE_PACKAGES': str(packages), 'FIXTURE_COMMANDS': str(self.root / 'commands.jsonl')}
+
+    def test_four_real_fixture_workers_execute_literal_race_commands_and_full_union(self):
+        self.enable()
+        env = self.fake_go()
+        proofs = {}
+        for stage in source_stages.RACE_STAGES:
+            output = self.root / stage / 'proof.json'
+            proof = source_stages.execute(self.plan, self.sources, stage, output, env)
+            source_stages.validate_proof(self.plan, stage, proof, directory=str(self.sources / 'orchestrator'))
+            proofs[stage] = proof
+        rows = [json.loads(line) for line in (self.root / 'commands.jsonl').read_text().splitlines()]
+        tests = [row for row in rows if row[0] == 'test']
+        self.assertEqual(len(tests), 4)
+        self.assertEqual(Counter(name for command in tests for name in command[6:]),
+                         Counter(row['import_path'] for row in self.packages()))
+        self.assertEqual(sum(len(p['race']['results']) for p in proofs.values()), 102)
+
+    def test_success_shaped_race_json_does_not_hide_real_nonzero_exit(self):
+        self.enable()
+        env = dict(self.fake_go(), FIXTURE_GO_EXIT='19')
+        output = self.root / 'race-failure/proof.json'
+        with self.assertRaises(subprocess.CalledProcessError) as error:
+            source_stages.execute(self.plan, self.sources, 'race-1', output, env)
+        self.assertEqual(error.exception.returncode, 19)
+        proof = json.loads(output.read_text())
+        self.assertEqual((proof['conclusion'], proof['exit_code']), ('failure', 19))
+        self.assertTrue((output.parent / 'source-race-1.events.jsonl').is_file())
+        with self.assertRaises(ValueError):
+            source_stages.validate_proof(self.plan, 'race-1', proof)
+
+    def test_real_worker_cli_preserves_original_exit_and_frozen_plan(self):
+        self.enable()
+        plan_path, output = self.root / 'plan.json', self.root / 'cli/proof.json'
+        plan_path.write_text(json.dumps(self.plan))
+        argv = [sys.executable, '-B', SUBJECT.__file__, '--source-stage', 'normal',
+                '--plan', str(plan_path), '--sources', str(self.sources), '--output', str(output)]
+        for exit_code in (0, 27):
+            completed = subprocess.run(argv, env={**os.environ, 'FIXTURE_STAGE_EXIT': str(exit_code)},
+                                       capture_output=True, text=True, timeout=10)
+            self.assertEqual(completed.returncode, exit_code, completed.stderr)
+            proof = json.loads(output.read_text())
+            self.assertEqual(proof['exit_code'], exit_code)
+            self.assertEqual(proof['plan_id'], artifacts.identity(self.plan))
+
+    def test_outer_executor_requires_fresh_proof_and_preserves_worker_failure(self):
+        self.enable()
+        group = 'owner-orchestrator--normal'
+        proof_path = self.output.parent / 'source-stage.json'
+        for mutation in ('missing', 'failure', 'success', 'stale'):
+            proof_path.unlink(missing_ok=True)
+            if mutation == 'stale':
+                proof_path.write_text('{}')
+            def child(command, *, cwd, env):
+                self.assertEqual(command, source_stages.check('normal', self.sources)[1])
+                if mutation != 'missing':
+                    proof = self.proof('normal', directory=str(cwd))
+                    if mutation == 'failure':
+                        proof.update(conclusion='failure', exit_code=29)
+                    proof_path.write_text(json.dumps(proof))
+                return subprocess.CompletedProcess(command, 29 if mutation == 'failure' else 0)
+            with self.subTest(mutation=mutation), \
+                 patch.object(SUBJECT, 'verify_sources', side_effect=lambda p, s, r, e:
+                              r.update(sources=SUBJECT.source_records(p)[1])), \
+                 patch.object(SUBJECT, 'workspace', side_effect=lambda s, o, e: e), \
+                 patch.object(SUBJECT.subprocess, 'run', side_effect=child) as run:
+                if mutation == 'success':
+                    SUBJECT.execute(self.plan, self.sources, self.output, materialized=True, group=group)
+                else:
+                    with self.assertRaises(ValueError):
+                        SUBJECT.execute(self.plan, self.sources, self.output, materialized=True, group=group)
+                result = json.loads(self.output.read_text())
+                self.assertEqual(result['conclusion'], 'success' if mutation == 'success' else 'failure')
+                if mutation == 'failure':
+                    self.assertEqual(result['exit_code'], 29)
+                    self.assertEqual(result['source_stage']['exit_code'], 29)
+                if mutation == 'stale':
+                    run.assert_not_called()
+
+    def test_stage_artifact_group_round_trips_without_splitting_its_suffix(self):
+        self.enable()
+        group = 'owner-orchestrator--vet-and-helpers'
+        name = source_results.artifact_name(123, 2, group)
+        directory = self.root / 'artifact'
+        for relative in ('source-system-evidence/output/source-result.json',
+                         'source-system-evidence/receipt.json', 'source-system-evidence/instance.json'):
+            path = directory / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{}')
+        actual = source_results.read_artifact(directory, [{'id': 1, 'name': name}], 1)
+        self.assertEqual(actual, dict(result={}, receipt={}, instance={}))
+        self.assertEqual(source_results.producer_group('ci / source-checks (' + group + ')'), group)
 
 
 if __name__ == "__main__":

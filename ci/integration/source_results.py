@@ -11,6 +11,7 @@ import subprocess
 
 import artifacts
 import actions_jobs
+import source_stages
 
 spec = importlib.util.spec_from_file_location('source_checks', Path(__file__).with_name('run-source-checks.py'))
 checks = importlib.util.module_from_spec(spec)
@@ -28,6 +29,14 @@ def groups_for(plan, grouped=False):
     require(plan['mode'] == 'source', 'unknown source scheduling mode')
     if not grouped:
         return ['all']
+    owners = owner_groups_for(plan)
+    if 'owner-orchestrator' in owners and source_stages.contract(plan) is not None:
+        return [stage for group in owners for stage in
+                (source_stages.GROUPS if group == 'owner-orchestrator' else (group,))]
+    return owners
+
+
+def owner_groups_for(plan):
     return [group for group in checks.OWNER_GROUPS if checks.checks_for(plan, Path('/src'), group)]
 
 
@@ -51,7 +60,8 @@ def validate(plan, groups, run, jobs, available, read):
     evidence. Never choose the newest *successful* job or merge ZIP directories.
     """
     require(plan['mode'] == 'source', 'source checks are not executed for exact-assets; report skipped')
-    require(groups in (['all'], legacy_groups_for(plan), groups_for(plan, True)), 'unexpected source group plan')
+    require(groups in (['all'], legacy_groups_for(plan), owner_groups_for(plan), groups_for(plan, True)),
+            'unexpected source group plan')
     require(type(run.get('id')) is int and run['id'] > 0 and
             type(run.get('run_attempt')) is int and run['run_attempt'] > 0 and
             re.fullmatch('[0-9a-f]{40}', run.get('head_sha', '')), 'missing Actions run identity')
@@ -76,6 +86,10 @@ def validate(plan, groups, run, jobs, available, read):
     require(set(selected) == set(groups), 'missing source producer')
     results, instances, containers, runners = [], set(), set(), set()
     complete = checks.checks_for(plan, Path('/src'))
+    staged = any(source_stages.stage_for(group) is not None for group in groups)
+    if staged:
+        complete = source_stages.expand(complete, Path('/src'))
+    proofs = {}
     require(len({name for name, _, _ in complete}) == len(complete), 'duplicate source check family')
     expected_coverage = Counter((name, tuple(command), str(directory)) for name, command, directory in complete)
     observed_coverage = Counter()
@@ -108,6 +122,12 @@ def validate(plan, groups, run, jobs, available, read):
         require([(row.get('name'), row.get('command'), row.get('directory')) for row in observed] ==
                 [(name, command, str(directory)) for name, command, directory in expected] and
                 all(row.get('exit_code') == 0 for row in observed), 'source command coverage mismatch')
+        stage = source_stages.stage_for(group)
+        if stage is not None:
+            source_stages.validate_proof(plan, stage, result.get('source_stage'))
+            proofs[stage] = result['source_stage']
+        else:
+            require('source_stage' not in result, 'whole owner result contains unexpected stage evidence')
         observed_coverage.update((row['name'], tuple(row['command']), row['directory']) for row in observed)
         require(receipt.get('conclusion') == 'success' and receipt.get('cleanup_exit_code') == 0 and
                 receipt.get('delete_output_exit_code') == 0 and receipt.get('mode') == 'system' and
@@ -132,6 +152,8 @@ def validate(plan, groups, run, jobs, available, read):
                         'instance_id': iid, 'container_id': cid, 'result_sha256': artifacts.identity(result)})
     require(observed_coverage == expected_coverage and all(count == 1 for count in observed_coverage.values()),
             'source schedules must cover every command exactly once')
+    if staged:
+        source_stages.validate_set(plan, proofs)
     return {'plan_id': artifacts.identity(plan), 'run_id': run['id'], 'run_attempt': run['run_attempt'],
             'head_sha': run['head_sha'], 'conclusion': 'success', 'groups': results}
 
