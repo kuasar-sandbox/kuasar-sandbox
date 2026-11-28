@@ -13,9 +13,23 @@ This guide defines deployment trust boundaries and protection responsibilities. 
 | Business access and remote execution | Issue and forward capabilities for their intended purpose; do not give the Guest an API root credential as an application-port token |
 | Node and cluster services | Authenticate node-link as specified and protect Router-to-node networking; public HTTPS does not secure other hops automatically |
 | Content-sharing domain | Scope sharing through keys, named locations and backend permissions; equal bytes do not authorize cross-tenant access |
-| Guest egress and management services | vSwitch establishes trusted port identity, the external gateway applies selected policy, and MMDS exposes Conductor-authorized routes and registered local services |
+| Guest egress and management services | vSwitch establishes trusted port identity, the native egress or operator-provided gateway applies selected policy, and MMDS exposes Conductor-authorized routes and registered local services |
 
 Current cluster Router-to-node APIEndpoint/DataEndpoint use internal plaintext HTTP/CONNECT. Isolate that network and terminate public TLS at Router or its load balancer. Node-link mTLS is configured independently. Standalone direct TLS listeners cannot simply be reused as cluster plaintext endpoints; see [deployment](deployment.md).
+
+## Native egress policy
+
+Configure the trusted transit attachment, Area/VNI, ordered ACL and NAT pool as
+one deployment. Validate allowed and denied destinations from a real Guest;
+an operator's host connectivity or a successful Proxy command is not that test.
+Do not expose the gateway runtime directory or control sockets to Guests. The
+node's attach path establishes identity; Guest-supplied addresses do not authorize
+a different Area. Keep uplink/SNAT address ownership and return routing explicit.
+
+Use the [native egress procedure](node-infra.md#native-egress) for same-node
+placement and the component's reload contract. Check accepted configuration
+rather than assuming that a successful SIGHUP changed policy. A historical status
+snapshot alone is not proof that enforcement is currently healthy.
 
 ## Tenant security
 

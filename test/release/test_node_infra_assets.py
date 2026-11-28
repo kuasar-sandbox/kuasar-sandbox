@@ -167,6 +167,111 @@ class DeliveryTests(unittest.TestCase):
             self.assertTrue(all(member.uid == member.gid == 0 for member in stream))
             self.assertNotIn(deploy.name, json.dumps(document))
 
+    def test_deploy_guides_rebase_navigation_without_changing_literals_or_payloads(self):
+        record = archive(self.images)
+        record['components'] = copy.deepcopy(COMPONENTS)
+        record['components']['runtime']['sha'] = '3' * 40
+        record['components']['vmlinux']['sha'] = '4' * 40
+        (self.images / 'node-infra-x86_64.json').write_text(json.dumps(record))
+        command = ('````bash\r\n# [literal](node-infra.md)\r\n'
+                   '```\r\nprintf "[literal](templates.md)\\n"\r\n````\r\n')
+        tilde = '~~~text\n[literal](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md)\n~~~\n'
+        inline = '`[literal](templates.md)` and ``[literal](node-infra.md)``\n'
+        historical = 'https://github.com/kuasar-sandbox/connector/blob/v1.0.0/docs/egress.md#old'
+        source = ('[English](node-infra.md) | [中文](node-infra_zh.md#section)\n'
+                  '# Node\n\n## Section\n'
+                  '[Self](#section) [Query](?plain=1#section)\n'
+                  '[Templates](templates.md?plain=1#application)\n'
+                  '[Examples](../node-infra/examples/)\n'
+                  '[Config](../node-infra/examples/connector-vswitch/vswitch.yaml)\n'
+                  '[Template](../node-infra/deploy/templates/node-infra.container)\n'
+                  '[Example directory](../node-infra/examples/connector-vswitch/)\n'
+                  '[Network](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md#status)\n'
+                  '[Runtime](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/using-guest-runtime.md)\n'
+                  '[Kernel](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/vmlinux.md)\n'
+                  '[Kernel 中文](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/vmlinux_zh.md)\n'
+                  '[History](' + historical + ')\n'
+                  '[External](https://docs.docker.com/engine/)\n'
+                  '[Target][template]\n[template]: <templates.md#application> "Application"\n'
+                  '<a href="templates.md#application">Template</a>\n'
+                  '<img src="../node-infra/examples/logo.svg">\n' + inline + command + tilde)
+        translated = ('[English](node-infra.md#section) | [中文](node-infra_zh.md)\n'
+                      '# 节点\n\n## Section\n[示例](../node-infra/examples/)\n'
+                      '[模板](templates_zh.md#application)\n')
+        files = {
+            'docs/node-infra.md': source,
+            'docs/node-infra_zh.md': translated,
+            'docs/templates.md': '# Templates\n\n## Application\n',
+            'docs/templates_zh.md': '# 模板\n\n## Application\n',
+            'node-infra/examples/README.md':
+                '[English](README.md) | [中文](README_zh.md)\n'
+                '[Deploy](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/docs/node-infra.md#section)\n'
+                '[Selected](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/' + REVISION + '/docs/node-infra.md)\n'
+                '[Templates](../../docs/templates.md#application)\n',
+            'node-infra/examples/README_zh.md':
+                '[English](README.md) | [中文](README_zh.md)\n'
+                '[部署](../../docs/node-infra_zh.md#section)\n',
+            'node-infra/examples/logo.svg': '<svg>unchanged</svg>\n',
+            'node-infra/examples/LICENSE.md': '# License\n[literal](../not-in-package.md)\n',
+        }
+        for relative, text in files.items():
+            path = self.platform / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(text.encode())
+        document = subject.package(self.platform, self.images, self.images, VERSION, REVISION, arches=('x86_64',))
+        deploy = self.images / selection.node_infra_deploy_archive(VERSION)
+        with tarfile.open(deploy) as stream:
+            contents = {member.name: stream.extractfile(member).read() for member in stream}
+        guide = contents['README.md'].decode()
+        self.assertIn('[English](README.md) | [中文](README_zh.md#section)', guide)
+        self.assertIn('[Self](#section) [Query](?plain=1#section)', guide)
+        self.assertIn('[Examples](examples/README.md)', guide)
+        self.assertIn('[Config](examples/connector-vswitch/vswitch.yaml)', guide)
+        self.assertIn('[Template](templates/node-infra.container)', guide)
+        self.assertIn('[Example directory](examples/connector-vswitch)', guide)
+        self.assertIn('[示例](examples/README_zh.md)', contents['README_zh.md'].decode())
+        platform_url = 'https://github.com/kuasar-sandbox/kuasar-sandbox/blob/' + REVISION + '/docs/'
+        self.assertIn('[Templates](' + platform_url + 'templates.md?plain=1#application)', guide)
+        self.assertIn('[template]: <' + platform_url + 'templates.md#application> "Application"', guide)
+        self.assertIn('<a href="' + platform_url + 'templates.md#application">', guide)
+        self.assertIn('<img src="examples/logo.svg">', guide)
+        self.assertIn('[Network](https://github.com/kuasar-sandbox/connector/blob/' + '2' * 40 + '/docs/egress.md#status)', guide)
+        self.assertIn('/guest-runtime/blob/' + '3' * 40 + '/docs/using-guest-runtime.md)', guide)
+        for name in ('vmlinux.md', 'vmlinux_zh.md'):
+            self.assertIn('/guest-runtime/blob/' + '4' * 40 + '/docs/' + name + ')', guide)
+        self.assertIn(historical, guide)
+        self.assertIn('[External](https://docs.docker.com/engine/)', guide)
+        for literal in (inline, command, tilde):
+            self.assertIn(literal.encode(), contents['README.md'])
+        self.assertIn('[Deploy](../README.md#section)', contents['examples/README.md'].decode())
+        self.assertIn('[Selected](../README.md)', contents['examples/README.md'].decode())
+        self.assertIn('[Templates](' + platform_url + 'templates.md#application)', contents['examples/README.md'].decode())
+        self.assertIn('[部署](../README_zh.md#section)', contents['examples/README_zh.md'].decode())
+        for relative in ('bin/node-infra-ctl', 'templates/node-infra.container'):
+            self.assertEqual(contents[relative], (self.platform / 'node-infra/deploy' / relative).read_bytes())
+        for name in ('logo.svg', 'LICENSE.md', 'connector-vswitch/vswitch.yaml'):
+            self.assertEqual(contents['examples/' + name], (self.platform / 'node-infra/examples' / name).read_bytes())
+        self.assertEqual(contents['release.json'], subject.canonical(document) + b'\n')
+        for relative, text in files.items():
+            self.assertEqual((self.platform / relative).read_bytes(), text.encode())
+        # A later packaging attempt cannot replace an already assembled asset.
+        before = deploy.read_bytes()
+        (self.platform / 'docs/node-infra.md').write_text('# Changed source\n')
+        with self.assertRaisesRegex(ValueError, 'already exists'):
+            subject.package(self.platform, self.images, self.images, VERSION, REVISION, arches=('x86_64',))
+        self.assertEqual(deploy.read_bytes(), before)
+
+    def test_broken_or_escaping_guide_link_fails_before_creating_archive(self):
+        archive(self.images)
+        (self.root / 'outside.md').write_text('# Private external file\n')
+        for link, message in (('missing.md', 'missing deployment guide source link'),
+                              ('../../outside.md', 'escapes platform')):
+            with self.subTest(link=link):
+                (self.platform / 'docs/node-infra.md').write_text('[Target](' + link + ')\n')
+                with self.assertRaisesRegex(ValueError, message):
+                    subject.package(self.platform, self.images, self.images, VERSION, REVISION, arches=('x86_64',))
+                self.assertFalse((self.images / selection.node_infra_deploy_archive(VERSION)).exists())
+
     def test_preparation_copies_only_the_requested_native_image_and_deploy(self):
         for arch in subject.ARCHES:
             archive(self.images, arch)

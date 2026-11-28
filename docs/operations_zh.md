@@ -19,6 +19,21 @@ RUN_ID="<current-run-id>"
 journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pager
 ```
 
+## 沿用户失败的路径诊断
+
+| 现象 | 优先检查与处理 |
+| --- | --- |
+| 首次命令节点无法启动 | 容器日志、内部 health、主机 KVM/cgroup 能力、专用卷以及 profile/配置是否冲突；更改输入前保留失败卷。 |
+| API Create 成功，命令/文件失败 | Proxy route 注册、data listener/DNS/TLS、token、保存的 Group/route 上下文，再查 Guest/Envd readiness；已接受的启动可能仍在进行。 |
+| 命令成功，镜像 Build 或 Guest 出网失败 | Build/Create 网络规格、gateway/VNI、transit 与 uplink MTU、Area ACL/DNS 目的、next hop 与 NAT mapping 容量；Proxy 成功不能验证出口。 |
+| 网关策略编辑似乎无效 | 比较 `/run/connector-egress/<name>/status.json` 中的 `configuration_generation` 与 `reload_error`，检查网关 journal；失败 reload 保留最后接受的策略。 |
+| cluster Node 已连接，但 Group 没有合格目标 | 核对租户根凭据、本地 Group 精确 revision、`storage_readable`、完成发布/当前 registration，以及同一 Node 的兼容 runtime inventory。 |
+| 模板只在一个 Node 可用 | 逐目标核对 canonical 制品/父链可达性、密钥、runtime 身份、准入与网络策略；canonical ID 本身不证明可移植。 |
+| 删除部分示例字段后 cache 才启动 | 校验所选 mode、当前 `origin.type`/backend 字段及该发布版 schema；持久 Store 应独立于可选 cache 保持可读。 |
+
+node-infra 使用[健康与恢复命令](node-infra_zh.md#安装与日常操作)，在实例内查看服务 journal。`connector-ctl egress status` 读取网关保存的快照及其时间/年龄，不执行主动健康探测。`cache-ctl config validate --config FILE` 在启动前检查 Cache 配置，不连接后端。详见 [Cache CLI](https://github.com/kuasar-sandbox/accelerator/blob/main/docs/cache_zh.md) 与 [Egress 运维](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress_zh.md)。
+
+
 ## 恢复与故障域
 
 - `sandbox-ctl`,VMM,node,registry,router 和 placer 是可独立观察和恢复的进程/故障域.
@@ -53,7 +68,7 @@ journalctl --unit "sandbox-runner@$RUN_ID.service" --since "15 min ago" --no-pag
 |---|---|---|
 | 单个 Registry 成员崩溃 | 其 Node 连接和在途请求中断；PostgreSQL/FDB peer 仍可访问共享元数据，SQLite 需要单 Registry 重启 | Node 重连到可用的连接 owner，通过 registration 与 ownership fence 收敛；既有数据会话仍取决于 Node 和 transport 连接 |
 | 所有 Registry 进程停止但数据库数据保留 | Registry 控制请求和新的调度决定不可用 | 使用原数据库和 namespace 重启 Registry，由 NodeLink 重连收敛；数据库恢复由所选后端负责，不依赖 Registry quorum |
-| 集群执行元数据不可恢复地丢失 | 不得从备份构造 sandbox/build 节点执行态 | provider 数据按其持久化流程恢复。不支持从存活 node 投影或 migration-token 持久 route 重建丢失的执行 ownership。[orchestrator #34](https://github.com/kuasar-sandbox/orchestrator/issues/34)/[#33](https://github.com/kuasar-sandbox/orchestrator/issues/33) 是历史提案，不是已实现的恢复流程；须明确报告这一限制 |
+| 集群执行元数据不可恢复地丢失 | 旧备份不能单独证明当前 sandbox/build 节点执行态 | provider 数据按其持久化流程恢复。不支持从存活 node 投影或 migration-token 持久 route 重建丢失的执行 ownership。保留仍可用的数据，诊断元数据丢失原因后再开放新任务准入 |
 | `router` 崩溃 | 该副本连接断 | 无状态,LB 改路由其余副本 |
 | `placer` 崩溃 | Group 导入与凭据续期暂停，直到其他 ready importer 取得 source lease；已有 Node Group 保留 | Registry 继续从已发布支持选点，不调用 Placer。有限凭据租期到期前恢复维护；移除 Group 不撤销已有对象保留的凭据 |
 | 单 compute 节点 node-link 失联 | node owner 立即拒绝向该节点提交新请求；route owner 排除该节点并重新选择 | 重连后重报状态。Registry 清理 node profile/list 与相关执行投影要求节点仍未连接，且有效的最后心跳记录距今已超过 `node_dead_after`；这不是精确清理期限。孤儿清理比较完整 ownership、generation 和凭据绑定，见[集群恢复](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#registry-reliability) |

@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Install and recover trusted, rootful kuasar-sandbox node-infra instances.
+"""Download release inputs and manage trusted, rootful node-infra instances.
+
+Download needs no root or container runtime; instance management requires root.
 
 Quadlet and native component files remain the configuration interfaces. JSON
 files below the instance data directory are ownership/recovery journals only.
@@ -20,6 +22,7 @@ import sys
 import tempfile
 import time
 import uuid
+from urllib.request import Request, urlopen
 
 RELEASES = Path('/opt/node-infra/releases')
 STATE = Path('/var/lib/node-infra/instances')
@@ -30,6 +33,86 @@ LABEL = 'io.kuasar-sandbox.node-infra.instance'
 RUNTIME = '/usr/libexec/node-infra/node-infra-runtime'
 DIGEST = re.compile(r'sha256:[0-9a-f]{64}')
 NAME = re.compile(r'[a-z0-9][a-z0-9-]{0,39}')
+
+
+
+GITHUB = 'https://api.github.com/repos/kuasar-sandbox/kuasar-sandbox'
+RELEASE_TAG = re.compile(r'release-v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)'
+                         r'(?:-preview\.[0-9]{8}(?:\.[1-9][0-9]*)?)?')
+
+
+def github_request(url, accept='application/vnd.github+json'):
+    return Request(url, headers={'Accept': accept, 'X-GitHub-Api-Version': '2022-11-28',
+                                 'User-Agent': 'kuasar-node-infra-download'})
+
+
+def download_plan(version, architecture, image_format):
+    """Select public release assets without consulting a moving source manifest."""
+    require(RELEASE_TAG.fullmatch(version or ''), 'download requires a concrete --release release-v... tag')
+    aliases = {'x86_64': 'amd64', 'amd64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}
+    require(architecture in aliases, 'unsupported architecture: ' + architecture)
+    require(image_format in ('none', 'docker', 'oci'), 'unsupported image format')
+    architecture = aliases[architecture]
+    with urlopen(github_request(GITHUB + '/releases/tags/' + version), timeout=60) as response:
+        release = json.load(response)
+    require(isinstance(release, dict), 'GitHub release response must be an object')
+    require(release.get('tag_name') == version and release.get('draft') is False and
+            release.get('prerelease') is ('-preview.' in version), 'release identity/channel mismatch')
+    names = [f'node-infra-deploy-{version}.tar.gz']
+    if image_format != 'none':
+        names.append(f'node-infra-{version}-linux-{architecture}.{image_format}.tar.gz')
+    assets = release.get('assets')
+    require(isinstance(assets, list), 'release has no asset list')
+    selected = []
+    for name in names:
+        matches = [asset for asset in assets if isinstance(asset, dict) and asset.get('name') == name]
+        require(len(matches) == 1, 'release must contain exactly one asset: ' + name)
+        asset = matches[0]
+        require(type(asset.get('id')) is int and asset['id'] > 0 and asset.get('state') == 'uploaded' and
+                type(asset.get('size')) is int and asset['size'] > 0 and
+                DIGEST.fullmatch(asset.get('digest') or ''), 'asset lacks published identity/size/digest: ' + name)
+        selected.append({key: asset[key] for key in ('id', 'name', 'size', 'digest')})
+    require(len({asset['id'] for asset in selected}) == len(selected), 'duplicate selected asset ID')
+    return {'release': version, 'architecture': architecture, 'image_format': image_format,
+            'image_reference': 'ghcr.io/kuasar-sandbox/node-infra:' + version, 'assets': selected}
+
+
+def download_release(version, output, architecture, image_format):
+    """Download only requested inputs; never import images or change host services.
+
+    A fresh directory prevents accidental overwrite. Only verified assets are
+    renamed to their final names; download.json is written after the full set.
+    Failed runs preserve verified downloads for inspection, never a success receipt.
+    """
+    require(output is not None, 'download requires --output')
+    output = Path(output).absolute()
+    require(not output.exists() and not output.is_symlink(), 'download requires a new output directory')
+    plan = download_plan(version, architecture, image_format)
+    output.mkdir(mode=0o700)
+    for asset in plan['assets']:
+        destination = output / asset['name']
+        temporary = output / (asset['name'] + '.part')
+        try:
+            request = github_request(GITHUB + '/releases/assets/' + str(asset['id']), 'application/octet-stream')
+            digest, size = hashlib.sha256(), 0
+            with urlopen(request, timeout=60) as response, temporary.open('xb') as stream:
+                while True:
+                    block = response.read(1024 * 1024)
+                    if not block:
+                        break
+                    size += len(block)
+                    require(size <= asset['size'], 'download exceeds published size: ' + asset['name'])
+                    digest.update(block)
+                    stream.write(block)
+                stream.flush()
+                os.fsync(stream.fileno())
+            require(size == asset['size'], 'download size mismatch: ' + asset['name'])
+            require('sha256:' + digest.hexdigest() == asset['digest'], 'download digest mismatch: ' + asset['name'])
+            temporary.rename(destination)
+        finally:
+            temporary.unlink(missing_ok=True)
+    save(output / 'download.json', plan)
+    return {**plan, 'output': str(output)}
 
 
 def require(value, message):
@@ -990,14 +1073,28 @@ def locked(instance):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=('install', 'check', 'status', 'prepare', 'started', 'recover', 'describe', 'health', 'cleanup'))
+    parser.add_argument('command', choices=('download', 'install', 'check', 'status', 'prepare', 'started', 'recover', 'describe', 'health', 'cleanup'))
     parser.add_argument('--name')
     parser.add_argument('--runtime', choices=('podman', 'docker'))
     parser.add_argument('--container', help='query a running container, or explicitly prepare a never-started Docker ID')
     parser.add_argument('--unit', type=Path)
     parser.add_argument('--json', action='store_true')
+    parser.add_argument('--release', help='download: concrete aggregate release-v... tag')
+    parser.add_argument('--output', type=Path, help='download: new directory for verified assets and receipt')
+    parser.add_argument('--arch', help='download: amd64/x86_64 or arm64/aarch64 (default: native host)')
+    parser.add_argument('--image-format', choices=('none', 'docker', 'oci'), default=None,
+                        help='download: optional offline image format (default: deployment package only)')
     args = parser.parse_args()
     try:
+        if args.command == 'download':
+            require(not (args.name or args.runtime or args.container or args.unit),
+                    'download does not accept instance/runtime bindings')
+            result = download_release(args.release, args.output, args.arch or platform.machine(),
+                                      args.image_format or 'none')
+            print(json.dumps(result, indent=2))
+            return 0
+        require(not (args.release or args.output or args.arch or args.image_format),
+                'release/output/arch/image-format options require download')
         require(os.geteuid() == 0, 'node-infra-ctl requires root')
         if args.command == 'prepare' and args.runtime == 'docker':
             require(args.name and args.container, 'Docker prepare requires --name and the complete --container ID')

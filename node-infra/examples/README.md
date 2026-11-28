@@ -107,8 +107,16 @@ same native files, private cgroups, normal internal cleanup and distinct ports
 for three instances. Optional borrowed transit uses retained recovery handles;
 the default Docker path needs no host install or prepare helper.
 
-### Managed local Geneve Egress
+## Managed local Geneve Egress
 
 `local-egress` adds the Connector gateway to the existing node deployment. Copy `90-transit.yaml` to `/etc/connector-vswitch/conf.d`; mount the gateway/Area YAML files and link.json at `/etc/connector-egress`. The gateway uses the static `connector-vpp` beside `connector-ctl` in `/opt/node-infra/bin`; the example omits `vpp` on both architectures. Adapt addresses, Area policy, NAT capacity and CPU/memory budgets to the deployment.
 
 Supply the gateway namespace as the existing `egress` namespace input, with the Pool-owned `egress-uplink` already connected and UP. Linux must not hold the VPP gateway/SNAT addresses. The node owns only the dedicated transit pair, and preserves the provider's namespace and exit devices. The node preparation uses its retained primary namespace as owner; do not call `egress link start/stop` alongside the node's vSwitch service. `systemctl reload connector-egress` sends SIGHUP after editing main/Area files. A rejected reload leaves the last accepted configuration active and records its error in the local status file.
+
+The end-to-end [native-egress deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/main/docs/node-infra.md#native-egress)
+also connects the workload request to Area selection. For this example, use
+`{"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}` in the
+Create/Build-registration network specification. Installing `area7.yaml` alone does
+not select VNI 7. Trigger accepts the SDK's identical Network header or a Builder
+header containing only the registered target as assertions; other register-only
+inputs use the separate Register/Trigger workflow.

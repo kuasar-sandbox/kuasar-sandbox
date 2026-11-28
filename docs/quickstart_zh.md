@@ -1,131 +1,91 @@
 [English](quickstart.md) | [简体中文](quickstart_zh.md)
 
-# 快速开始
+# 运行第一个 Guest
 
-完成一次真实沙箱运行，并确认命令、文件、网络、暂停恢复和清理均成功。
+使用已发布的 **node-infra** 镜像启动持续运行的节点，在真实 MicroVM 中执行命令，再检查或停止节点。首次运行不需要源码构建、Workbench、独立 Store/Cache 服务、Guest 内的镜像仓库访问，也不需要手工制作 overlay 文件系统。
 
-使用一个节点镜像和一个空卷即可[用 Docker 运行第一个 Guest](node-infra_zh.md#用-docker-运行第一个-guest)。
+`quickstart` profile 提供小型 Linux shell 文件系统和私有凭证。它面向本地体验：不公开 API/data 端口，也未配置普通 Guest 互联网出口；它提供随包 shell 工作负载，不是完整的站点 Build/SDK 配置。使用自己的镜像、E2B SDK 客户端或集群时，请继续下方的显式站点部署流程。完整 [SDK Demo](../test/demo/DEMO_zh.md) 仍用于开发和发布验证。
 
-使用匹配的聚合发布版与 workbench，通过未修改的 E2B Python SDK 运行真实 kuasar-sandbox
-MicroVM。这是推荐的首次体验路径；原生生产部署不依赖 workbench，见
-[部署指南](deployment_zh.md)。
+## 1. 选择匹配的已发布镜像
 
-短 Demo 构建快照模板、创建沙箱、执行命令、读写文件、检查网络、暂停恢复并销毁沙箱。
-这是首次体验演示，**不是完整 E2E 或发布验收**。
+使用原生 Linux x86_64 或 aarch64、本地 rootful Docker Engine、cgroup v2、可用的 `/dev/kvm` 和 `/dev/net/tun`，以及网络命名空间、BPF/TC 和 userfaultfd。[主机要求](node-infra_zh.md#前置条件与发布输入) 说明系统容器路径所需条件。Docker Desktop、架构模拟和远程 Docker daemon 不能代替这些主机能力。WSL 2 用户先检查 [Linux 主机与资源要求](../workbench/README_zh.md#主机与镜像)。
 
-## 获取一个支持该流程的发布版
-
-需要原生 Linux x86_64 或 aarch64、本机 rootful Docker Engine、Python 3.9+ 及
-Docker 访问权限。这是可信管理员环境，不支持 Docker Desktop、远端 Docker 端点
-或架构模拟。真正运行 MicroVM 还需要可读写的 KVM 与所需内核功能；workbench
-不会模拟缺失硬件或修改宿主内核策略。
-
-Windows 开发请先核验 [WSL 宿主前提和资源边界](../workbench/README_zh.md#windows-与-wsl-2-开发宿主)。
-以下命令在符合条件的 Linux 发行版内执行，使用该发行版的本机 Engine。
-
-镜像提供 systemd、私有 Docker/containerd、产品用户态依赖库、Python 3.12 和普通
-工具。仅启动 workbench 时，宿主**不需要** Demo SDK、产品所需 glibc 版本、Go/Rust，
-也不要求 systemd 为宿主 PID 1。为宿主和其他工作负载保留 CPU、内存及磁盘余量。
-示例为 workbench 分配 4 CPU、12 GiB，不代表通用最小值或完整测试容量保证；
-Demo Builder 本身请求 2 vCPU 和 6 GiB capacity。
-
-先执行一次[获取匹配的聚合发布版](installation_zh.md)：选择具体已发布版本，验证交付合同
-及本机架构资产，解包产品和材料，再单独导入 workbench。完成后得到 `RELEASE`
-（绝对发布目录）、`IMAGE` 和 `ARCH`。下面继续使用同一个**宿主 Bash shell**中的
-这些变量。只使用该版本配套的启动器、Demo、helper、wheelhouse 和产品；缺少预备
-Demo 适配器的旧版本应使用其包内指南，不得从 `main` 补脚本。
-
-## 启动私有系统环境
-
-以下命令在**宿主机**执行。状态目录应位于发布树之外，并由调用 UID 拥有。
-不要切换调用用户，也不要只为部分启动器命令添加 `sudo`。已 cleanup 的实例应换新名称。
+从 [Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases) 选择一个已发布的聚合 tag，
+替换下方 `<aggregate-tag>`。使用其配套指南，并保留精确 tag 供后续运行复用。
+[安装指南](installation_zh.md)说明离线归档及独立原生组件的获取方法。
 
 ```bash
-STATE="$PWD/kuasar-workbench-state"
-NAME="demo-$(date +%s)"
-WB="$RELEASE/workbench/workbench"
-python3 "$WB" check --image "$IMAGE" --mode system
-python3 "$WB" --root "$STATE" --name "$NAME" start \
-  --image "$IMAGE" --mode system --inputs "$RELEASE" \
-  --cpus 4 --memory-gib 12 --network bridge
+RELEASE_VERSION='<aggregate-tag>'
+IMAGE="ghcr.io/kuasar-sandbox/node-infra:$RELEASE_VERSION"
+docker pull "$IMAGE"
 ```
 
-`check` 检查宿主和镜像兼容性；`start` 检查私有 systemd/daemon 并报告硬件能力。
-它们均不能证明 Demo 已通过。实例使用私有网络及服务：宿主 `127.0.0.1` 不等于
-workbench 的 `127.0.0.1`。不要用宿主网络或挂载宿主 Docker socket 来规避此区别。
+保存版本以及 `docker pull` 输出的镜像身份。node-infra 的镜像 tag 包含 `release-`。离线使用时，按 [node-infra 输入](node-infra_zh.md#前置条件与发布输入) 校验并导入匹配的 `.docker.tar.gz`，再将 `IMAGE` 设为导入后的镜像 ID。Docker 导入 Docker 归档；Podman 也可导入独立 OCI 归档。
 
-## 准备本地输入
+## 2. 启动节点并执行命令
 
-外层命令在**宿主机**运行，`exec --` 之后的命令在 **workbench 内**执行。
-`/inputs/release` 只读；公共 prepare 使用所选镜像归档、helper 和 hash-locked SDK
-wheel 创建全新的不可变 `/work/prepared`。不要在 `/inputs/release` 下创建虚拟环境，
-也不要在线安装另一套 SDK。
+使用未占用的容器名和新的专用卷。示例为整个节点分配 4 CPU 和 6 GiB，包括管理服务和 Guest；这是体验预算，不是通用容量建议。
 
 ```bash
-python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
-  python3 -B /inputs/release/test/e2e/e2e prepare \
-  --release-dir /inputs/release --workdir /work/prepared --arch "$ARCH" \
-  --include basic.demo.sh --deps-dir /opt/workbench/deps --offline
+docker run -d --tty --name ks-dev --pull=never --privileged \
+  --cgroupns=private --cpus=4 --memory=6g --memory-swap=6g \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
+  --network=bridge -v ks-dev-data:/var/lib/node-infra "$IMAGE" quickstart
+docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
 ```
 
-`--offline` 在获取制品之后禁止依赖下载，不禁止本地 Registry/Store/Proxy 通信，
-也不代表随后的 Demo 不需要网络。**保留 `--network bridge`：短 Demo 同样检查真实
-Internet 出站。** 不得用 `DEMO_NETDIAG` 把断言失败转成成功。缺少输入时准备失败，
-不会静默替换。
+预期输出 `hello from guest`，退出码为 0。`node-infra-run` 等待节点初始化和空闲 Runner，创建新的 MicroVM，在 Guest 内执行参数向量，返回输出及退出码，然后删除该 Guest。启动、控制请求或清理失败时，即使 Guest 命令已结束，也返回非零状态。打印的 sandbox ID 标识这一次运行。再次执行第二条命令会创建另一个独立 Guest，前一次调用写入的文件不会成为下一次调用的保留会话。
 
-## 运行第一个沙箱
+等待初始化、容量或 Proxy 就绪时，helper 为每个等待阶段向 stderr 输出一次提示；
+Guest stdout 和退出码仍可供脚本使用。交互 shell 和标准输入示例：
 
 ```bash
-python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
-  python3 -B /work/prepared/test/demo/prepared.py run \
-  --workdir /work/prepared --data-dir /work/kuasar-demo-first --quick
+docker exec -it ks-dev node-infra-run -- /bin/sh
+printf 'input to guest\n' | docker exec -i ks-dev node-infra-run -- /bin/cat
+docker exec ks-dev node-infra-run --help
 ```
 
-适配器验证预备输入、加载精确原生镜像，使用本地 SDK/helper 环境调用现有 Demo 脚本。
-沙箱命令在 **Guest 内**执行；可变状态和保留日志位于 `/work/kuasar-demo-first`，
-不写入预备输入树。
+输入 `exit` 会结束交互 shell 并删除该 Guest。管道输入使用 `-i`，交互终端使用 `-it`。
+Shell 和管道命令分别使用独立 Guest；`--help` 只显示用法。
 
-成功要求真实模板、MicroVM、命令/文件、网络、暂停恢复及销毁断言全部通过，且退出码
-为零。Demo 会打印阶段，但结束后不保留生产节点服务。重复执行同一命令，可复用持久
-准备层并生成新的运行身份。
+节点持续运行，专用卷保存节点身份、凭证和被引用的基础 Bundle。profile 根据随镜像提供的输入初始化一次，不会在启动时下载工作负载镜像。将卷直接挂载至 `/var/lib/node-infra`，不要增加嵌套挂载。不同节点使用不同卷，恢复时保留对应的制品依赖。
 
-完整 COPY、模板扇出、迁移及交互观察见 [Demo](../test/demo/DEMO_zh.md)；完整常规
-用例选择和结果 JSON 见[发布验证](../test/QUICKSTART_zh.md)。
-
-## 查看结果并清理
-
-适配器将可安全保留的 Demo 日志放在 `/work/kuasar-demo-first/results/`，准备日志
-位于其 `logs/`。私有诊断可能包含敏感状态，分享前应在本机检查。它们映射到宿主
-`$STATE/$NAME/work/kuasar-demo-first`；启动诊断位于 `$STATE/$NAME/output`。
-通过同一个 workbench 实例查看 root 所属的数据。
-
-先停止所属 Demo 准备服务，再停止 workbench，最后移除容器、网络与 daemon 数据：
+## 3. 检查、停止和重启
 
 ```bash
-python3 "$WB" --root "$STATE" --name "$NAME" exec -- \
-  python3 -B /work/prepared/test/demo/prepared.py stop \
-  --workdir /work/prepared --data-dir /work/kuasar-demo-first
-python3 "$WB" --root "$STATE" --name "$NAME" stop
-python3 "$WB" --root "$STATE" --name "$NAME" cleanup
+docker exec ks-dev /usr/libexec/node-infra/node-infra-runtime health
+docker exec ks-dev node-ctl --version
+docker inspect --format '{{.Image}}' ks-dev
+docker logs ks-dev
+docker exec ks-dev journalctl -u node-conductor.service --no-pager
+
+docker stop ks-dev
+docker start ks-dev
+docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "guest after restart\n"'
 ```
 
-`cleanup` 保留 work/build/home/journal/output；`cleanup --delete-output` 才会显式
-删除它们，执行前应保存所需结果。Demo 的 `reset` 也会删除该 Demo 的日志和数据，
-因此不作为默认故障恢复步骤。停止但未清理的实例可以按原镜像、模式、挂载和预算重启；
-已清理的实例需要新名称。完整生命周期语义见 [Workbench](../workbench/README_zh.md)。
+停止节点会结束运行中的 VM，不会自动捕获所有 Guest 的内存。重启会复用节点的持久输入。命令客户端被 SIGKILL 强制杀死时无法发送 Delete，应保留其打印的 sandbox ID，通过节点生命周期 API 检查并删除；普通执行完成会自行清理。
 
-## 故障排查
+结束体验时，先停止并删除容器。仍需数据或日志时保留卷；确定丢弃本次体验后再删除：
 
-历史合同或缺少适配器的报错表示所选版本尚不提供此流程。应显式选择符合要求的已发布
-版本，或按历史原生指南执行；不要静默切换通道或混用脚本版本。
+```bash
+docker stop ks-dev
+docker rm ks-dev
+# 可选：永久删除本次体验的持久数据。
+docker volume rm ks-dev-data
+```
 
-缺少 KVM/内核能力时，选择满足要求的原生主机。prepare 失败时修复其明确报告的
-缺失/损坏输入，再使用全新的预备目录。workbench 内监听器、unit 或网络冲突时，
-检查该实例先前的 Demo，不要停止无关宿主服务。Demo 或清理非零退出表示失败，
-不是成功跳过。
+## 步骤失败时
 
-## 首次成功之后
+| 现象 | 下一步检查 |
+| --- | --- |
+| 容器或预检失败 | 检查主机 KVM/TUN、cgroup v2 delegation、内核能力及 `docker logs`，使用满足条件的原生主机。 |
+| profile 拒绝配置或数据 | 首次初始化使用专用空卷；不要为该 profile 挂载站点 `/etc` 配置，也不要清空现有节点数据来绕过检查。 |
+| Guest 命令等待或失败 | 检查内部 health、Conductor/Runner journal 和节点容量；保留第一次错误再重试。 |
+| Guest 不能访问互联网 | 此 profile 的预期行为。Docker bridge 连接属于节点网络，不等于 Guest SNAT；在站点部署中显式配置网关。 |
 
-继续[模板指南](templates_zh.md)构建自己的应用，再按[沙箱指南](sandboxes_zh.md)管理实例。生产装配、日常运行和版本变化分别见[部署](deployment_zh.md)、[运维](operations_zh.md)和[升级](upgrading_zh.md)。
+## 继续部署自己的应用
 
-首次多节点部署继续使用[最小 SQLite Registry + Router + 两个 Node](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#minimum-cluster)；该路径不需要 Placer，并包含 Group 配置、Build 和 SDK 验收。
+使用同一所选版本的镜像和部署包，创建独立的[站点部署](deployment_zh.md#production-start)。配置 API/data 入口、凭证、制品保留、Runner/Builder 池及可选的[原生 egress](node-infra_zh.md#native-egress)。启动时不传 `quickstart`，改为提供原生配置路径。体验 profile 会拒绝站点配置挂载，给它追加 overlay 不是原地升级为应用部署的流程。
+
+接着[构建模板](templates_zh.md)并[使用 E2B SDK](sandboxes_zh.md)。多节点场景按[最小集群](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md#minimum-cluster)操作，并为每个实例保存 Group/route 身份。Workbench 的[完整验证流程](../test/QUICKSTART_zh.md)是检验这些部署选择的独立任务。

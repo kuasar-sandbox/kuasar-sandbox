@@ -303,13 +303,69 @@ class DocumentedCommandTests(unittest.TestCase):
                                            if line.strip() and not line.lstrip().startswith('#')) for snippet in code])
             self.assertEqual(*blocks, stem)
 
-    def test_quickstart_uses_readonly_inputs_and_the_prepared_adapter(self):
+    def test_quickstart_runs_the_container_helper_from_one_published_image(self):
+        def option(arguments, name):
+            for index, argument in enumerate(arguments):
+                if argument == name:
+                    return arguments[index + 1]
+                if argument.startswith(name + '='):
+                    return argument[len(name) + 1:]
+            self.fail(f'missing {name}: {arguments}')
+
         for suffix in ('', '_zh'):
             text = (ROOT / f'docs/quickstart{suffix}.md').read_text()
+            self.assertNotIn('pip install', text)
+            self.assertNotIn('--network host', text)
+            self.assertNotIn('test "$(uname -m)" = x86_64', text)
+            blocks = re.findall(r'```bash\n(.*?)\n```', text, re.S)
+            commands = '\n'.join(blocks[:2])
+            self.assertEqual(commands.count('<aggregate-tag>'), 1)
+            self.assertNotIn('node-infra-ctl', commands)
+            with self.subTest(language=suffix or 'en'), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                log = root / 'docker.jsonl'
+                docker = root / 'docker'
+                docker.write_text(
+                    f'#!{sys.executable}\n'
+                    'import json, os, sys\n'
+                    'with open(os.environ["KUASAR_DOCUMENTED_DOCKER_LOG"], "a") as log:\n'
+                    '    log.write(json.dumps(sys.argv[1:]) + "\\n")\n')
+                docker.chmod(0o755)
+                result = subprocess.run(
+                    ['bash', '--noprofile', '--norc', '-eu', '-c', commands.replace('<aggregate-tag>', TAG, 1)],
+                    env=os.environ | {'PATH': str(root) + os.pathsep + os.environ['PATH'],
+                                      'BASH_ENV': '/dev/null', 'KUASAR_DOCUMENTED_DOCKER_LOG': str(log)},
+                    text=True, capture_output=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                calls = [json.loads(line) for line in log.read_text().splitlines()]
+                self.assertEqual([call[0] for call in calls], ['pull', 'run', 'exec'])
+                image = f'ghcr.io/kuasar-sandbox/node-infra:{TAG}'
+                self.assertEqual(calls[0], ['pull', image])
+                self.assertEqual(calls[1][-2:], [image, 'quickstart'])
+                self.assertTrue(any(argument in ('-d', '--detach') for argument in calls[1]))
+                self.assertEqual(option(calls[1], '--pull'), 'never')
+                self.assertEqual(option(calls[1], '--network'), 'bridge')
+                self.assertRegex(option(calls[1], '-v'), r'^[^/:]+:/var/lib/node-infra$')
+                self.assertEqual(calls[2][1], option(calls[1], '--name'))
+                self.assertEqual(calls[2][2:6], ['node-infra-run', '--', '/bin/sh', '-c'])
+                self.assertEqual(calls[2][6:], ['printf "hello from guest\\n"'])
+
+    def test_release_demo_uses_readonly_inputs_and_the_prepared_adapter(self):
+        for suffix in ('', '_zh'):
+            text = (ROOT / f'test/demo/DEMO{suffix}.md').read_text().split('\n## 2.', 1)[0]
             self.assertIn('--network bridge', text)
+            self.assertIn('--inputs "$RELEASE"', text)
+            self.assertIn('/inputs/release/test/e2e/e2e prepare', text)
+            self.assertIn('--release-dir /inputs/release --workdir /work/prepared', text)
             self.assertIn('--include basic.demo.sh', text)
+            self.assertIn('--deps-dir /opt/workbench/deps --offline', text)
             self.assertIn('prepared.py run', text)
-            self.assertIn('--data-dir /work/kuasar-demo-first --quick', text)
+            self.assertIn('--workdir /work/prepared --data-dir /work/kuasar-demo-first', text)
+            default_run = next(block for block in re.findall(r'```bash\n(.*?)\n```', text, re.S)
+                               if 'prepared.py run' in block)
+            self.assertNotIn('--quick', default_run)
+            self.assertNotIn('--pause', default_run)
+            self.assertIn('`--quick`', text)
             self.assertNotIn('pip install', text)
             self.assertNotIn('--network host', text)
             self.assertNotIn('test "$(uname -m)" = x86_64', text)

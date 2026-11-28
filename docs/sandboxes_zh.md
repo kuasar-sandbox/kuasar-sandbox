@@ -11,13 +11,20 @@
 
 向平台运维者取得所选发行版的 SDK、`E2B_API_URL`、`E2B_API_KEY`、`E2B_DOMAIN`、
 可信 TLS CA 设置和可用的规范 `TEMPLATE_ID`。下例使用仓库固定的 **e2b==2.25.1**；
-发行版使用不同版本时，遵循该版本自带的 pin。完成的 Demo 通常会停止临时节点，
-应使用其文档支持的交互会话或另行部署的服务。
+发行版使用不同版本时，遵循该版本自带的 pin。使用[SDK 安装流程](templates_zh.md#first-application)和站点配置服务。首次命令 Quick Start profile 不是外部 SDK 服务，也不提供应用模板目录。
 
 集群还需要保存该实例的 `KUASAR_GROUP` 和调用者选择的 route key，后续控制与数据请求
 都要携带。Group 的端口约束必须允许目标服务。
 [集群客户端契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/cluster_zh.md)
 维护 provider 设置、路由和 header 要求。仅有 Sandbox ID 不能构成完整集群路由上下文。
+
+<a id="outbound-network"></a>
+
+## 选择出口访问
+
+通过 API/Proxy 访问 Guest，不等于提供普通出网能力。使用管理员配置的[原生 egress](node-infra_zh.md#native-egress)或独立网关。E/S 模板可以保留逻辑网络规格，显式 Create 输入会覆盖它；Image-only 模板需要非默认网络策略时，应在 Create 中提供输入。
+
+可为此例设置 `KUASAR_NETWORK_JSON`，值为 JSON 对象，例如 `{"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}`。网关和 Area 必须存在，并能从所有合格 Node 到达。各 Node 可在隔离的本地网关使用相同逻辑地址，但需有合法、独立所有的 uplink/SNAT；不要假设一个 Node 的私有出口对所有 Node 可达。该请求字段是网络规格，不是 Linux namespace 路径。在 Create 时传入，后续操作继续保留普通 Group/route 身份。
 
 ## 创建、执行、保存状态并清理
 
@@ -29,7 +36,7 @@
 if not __debug__:
     raise RuntimeError("Run this recipe without Python optimization (-O/-OO or PYTHONOPTIMIZE).")
 
-import os, uuid
+import json, os, uuid
 from e2b import Sandbox
 
 headers = {}
@@ -41,7 +48,14 @@ if os.environ.get("KUASAR_GROUP"):
 options = dict(api_url=os.environ["E2B_API_URL"],
                api_key=os.environ["E2B_API_KEY"],
                domain=os.environ["E2B_DOMAIN"], headers=headers)
-sandbox = Sandbox.create(os.environ["TEMPLATE_ID"], timeout=300, **options)
+create_headers = dict(headers)
+if os.environ.get("KUASAR_NETWORK_JSON"):
+    network = json.loads(os.environ["KUASAR_NETWORK_JSON"])
+    if not isinstance(network, dict):
+        raise ValueError("KUASAR_NETWORK_JSON must contain an object")
+    create_headers["X-Kuasar-Sandbox-Network"] = json.dumps(network)
+sandbox = Sandbox.create(os.environ["TEMPLATE_ID"], timeout=300,
+                         **{**options, "headers": create_headers})
 sid = sandbox.sandbox_id
 print("Retain routing identity:", headers, sid)
 try:

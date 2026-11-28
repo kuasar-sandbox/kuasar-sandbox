@@ -2,23 +2,56 @@
 
 # 安装与版本选择
 
-目标是得到可校验、版本匹配的本地安装目录。安装后按[快速开始](quickstart_zh.md)首次运行，或按[部署](deployment_zh.md)装配生产节点。
+选择一个已发布的聚合版本，再获取当前任务需要的输入。聚合固定六个发布单元，Runtime 与 VMLinux 的组件 tag 独立。不要混搭组件 Latest，也不要用 `main` 文件替换旧包中的工具。保存聚合 tag，并按该版本附带的指南使用其实际能力。
 
-在原生 Linux 主机的同一个 Bash 会话中运行以下命令，需要 Python 3.9+、curl、
-GNU tar 和 sha256sum。导入 Workbench 时才需要 Docker；仅下载并解压原生产品不依赖它。
-此安装任务不需要 GitHub 登录、源码检出或编译器。运行产品还有额外前提，
-以所选版本的部署指南为准。
+## 选择安装路径
 
-将 `RELEASE_VERSION` 设为已发布的聚合 tag，或留空以一次性解析 Stable。该聚合 tag 下的 manifest 决定全部六个发布单元和精确包名；runtime 与 vmlinux 使用独立 tag。不要混用组件 Latest 或从 main 替换文件。旧版本应遵循其包内指南。
+| 任务 | 输入 | 下一步 |
+| --- | --- | --- |
+| 首次本地 Guest 命令 | 已发布的 node-infra 镜像和空的私有卷 | [快速开始](quickstart_zh.md) |
+| 具有站点配置的持久节点 | 同版本 node-infra 镜像与 `node-infra-deploy-<version>.tar.gz` | [node-infra 部署](node-infra_zh.md) |
+| Registry/Router、独立 Store/Cache 或原生组件 | 所选原生组件归档与 platform 指南 | 下方原生安装流程，再按[部署指南](deployment_zh.md)配置 |
+| 开发、Demo 或完整发布验证 | 原生产品/platform，加匹配的 Workbench 镜像 | 下方显式设 `DOWNLOAD_WORKBENCH=1`，再按[发布验证](../test/QUICKSTART_zh.md)操作 |
+
+首次使用从[快速开始](quickstart_zh.md)的 **`docker pull` + `docker run`** 进入。
+镜像包含配套的节点服务及 Guest 启动输入；宿主工具和独立原生组件包用于下方其他安装路径。
+
+## 节点镜像与部署包
+
+在线首次运行按[快速开始](quickstart_zh.md)选择镜像。GHCR 引用是 `ghcr.io/kuasar-sandbox/node-infra:<aggregate-tag>`，**保留 `release-` 前缀**。记录实际解析出的平台 manifest/镜像身份。Docker 或 Podman 提供容器运行环境，镜像提供产品二进制、systemd 和启动输入。
+
+部署配置化服务时，从该精确聚合版本的 GitHub Release 下载 `node-infra-deploy-<aggregate-tag>.tar.gz`。按 Release API 中资产的原生 size 和 `sha256:` digest 校验，再解压到新目录。包中包含 `bin/node-infra-ctl`、`templates/`、`examples/`、`release.json` 和双语 `README` 指南。`release.json` 绑定平台 manifest、镜像配置与离线归档；这些不同摘要标识不同对象。
+
+离线 Docker 使用 `node-infra-<tag>-linux-<amd64|arm64>.docker.tar.gz`，Podman 也支持对应 `.oci.tar.gz`。在 `docker load` 或 `podman load` 前校验所选资产大小和摘要。使用导入后的镜像身份，在服务启动时禁用隐式拉取。运行节点镜像不以源码包、Workbench 镜像或独立原生组件包为前提。详见[发布输入与主机要求](node-infra_zh.md#前置条件与发布输入)。
+
+### 可选的后续下载与离线归档获取
+
+`node-infra-ctl download` 获取其他版本的部署包及可选镜像归档。在已解压的部署包内，
+通过 Python 3.9+ 运行 `./bin/node-infra-ctl`。下载命令不需要 root、Docker、Podman、
+GitHub 登录或编译器；源码工作区入口是 `python3 node-infra/deploy/bin/node-infra-ctl`。
+
+```sh
+: "${RELEASE_VERSION:?Set the exact aggregate tag to download}"
+./bin/node-infra-ctl download \
+  --release "$RELEASE_VERSION" --output "$PWD/node-download" --json
+# 离线 Docker：使用新目录，并添加 --image-format docker。
+# 离线 Podman：添加 --image-format oci；--arch 接受 amd64 或 arm64。
+```
+
+默认只下载匹配部署包；在线用户按输出中的精确 GHCR 引用拉取镜像。显式指定镜像格式时，只增加所选架构的镜像归档。工具固定 GitHub asset ID，流式校验发布大小与 SHA-256，全部所选文件通过后才写 `download.json`。它不导入镜像，也不安装或启动服务。已有输出目录会被拒绝。下载失败时保留此前已验证文件供检查，删除部分下载文件，不生成成功记录；重试使用新目录。下方完整原生组件安装器继续用于独立运行的角色。
+
+## 原生组件与可选 Workbench
+
+在原生 Linux 的同一 Bash 会话中依次执行下方三个命令块，需要 Python 3.9+、curl、GNU tar 和 sha256sum。只有可选的 Workbench 导入需要 Docker，不需要 GitHub 登录、源码检出或编译器。运行时主机条件仍以所选组件部署指南为准。将 `RELEASE_VERSION` 设为显式聚合 tag，留空则只解析一次 Stable。需要 Demo/开发/验证时，在第一块命令前显式设置 `DOWNLOAD_WORKBENCH=1`；默认只下载原生产品和指南。
 
 ## 选版并下载本机架构的输入
 
-先检查 Release 的完整资产集合，再只下载本机架构及共享 platform 包。仅在采用该版本指南中的原生方案时设置 `DOWNLOAD_WORKBENCH=0`。下载固定 GitHub 资产 ID，并校验 GitHub 原生大小和 SHA-256 digest；摘要缺失或校验失败立即停止。历史正文机器块和 SHA256SUMS 均被忽略。
+先检查 Release 的完整资产集合，再只下载本机架构及共享 platform 包。Workbench 为可选项，按验证指南操作时设 `DOWNLOAD_WORKBENCH=1`。下载固定 GitHub 资产 ID，并校验 GitHub 原生大小和 SHA-256 digest；摘要缺失或校验失败立即停止。历史正文机器块和 SHA256SUMS 均被忽略。
 
 `node-infra-v2` 的完整集合包含 20 项资产，新增从相同 node-infra 镜像转换的两种
 架构 Docker 归档。历史 `node-infra-v1` 保持 18 项资产契约，其中包括两种原生架构的 node-infra OCI
-归档和共享部署包。本安装流程下载适用于本机架构的 8 项资产；设置
-`DOWNLOAD_WORKBENCH=0` 时下载 7 项。node-infra 的独立 OCI 归档与部署包，按所选版本
+归档和共享部署包。本安装流程下载适用于本机架构的 7 项资产；设置
+`DOWNLOAD_WORKBENCH=1` 时下载 8 项。node-infra 的独立 OCI 归档与部署包，按所选版本
 platform 包内的 `guide/node-infra_zh.md` 指南下载和使用。
 
 `files.tsv` 仅在本地保存已下载文件的名称、大小和哈希，供离线复核；它不是发布资产或测试记录。每次使用新的下载和安装目录。
@@ -30,7 +63,7 @@ set -euo pipefail
 RELEASE_VERSION="${RELEASE_VERSION:-}"
 ARCH="$(uname -m)"
 case "$ARCH" in x86_64|aarch64) ;; *) echo "unsupported native architecture: $ARCH" >&2; exit 1 ;; esac
-DOWNLOAD_WORKBENCH="${DOWNLOAD_WORKBENCH:-1}"
+DOWNLOAD_WORKBENCH="${DOWNLOAD_WORKBENCH:-0}"
 export ARCH DOWNLOAD_WORKBENCH
 ASSETS_TSV="$(mktemp)"
 trap 'rm -f -- "$ASSETS_TSV"' EXIT
@@ -237,7 +270,7 @@ trap - EXIT
 
 ## 单独导入 Workbench
 
-默认 `DOWNLOAD_WORKBENCH=1` 时，导入已下载归档，检查本机架构与版本，
+显式设置 `DOWNLOAD_WORKBENCH=1` 时，导入已下载归档，检查本机架构与版本，
 再保留本地 image ID 用于启动。`DOWNLOAD_WORKBENCH=0` 时，下方命令只设置
 `RELEASE` 并将 `IMAGE` 留空，不调用 Docker，也不寻找未下载的归档。
 
@@ -259,10 +292,10 @@ printf 'Release directory: %s\n' "$RELEASE"
 根据实际下载的输入选择下一步：
 
 - **Workbench：** 在当前会话保留 `RELEASE`、`IMAGE` 和 `ARCH`，继续
-  [快速开始](quickstart_zh.md#启动私有系统环境)。启动器来自
+  [发布验证](../test/QUICKSTART_zh.md)。启动器来自
   `$RELEASE/workbench/workbench`。复用已验证安装时，使用其发布目录和本地 image ID。
 - **仅原生产品：** 使用 `RELEASE` 和 `ARCH`，按该版本包内的部署或原生指南继续。
-  此时没有可启动的 Workbench 镜像，不要执行 Workbench 快速开始命令。
+  此时没有可启动的 Workbench 镜像，不要执行 Workbench 启动命令。
 
 缺文件、架构不符、摘要、权限或路径检查失败时停止，不要从其他版本获取替代文件。
 

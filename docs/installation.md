@@ -2,26 +2,94 @@
 
 # Installation and version selection
 
-This task produces a verified local installation with a matching version set. Continue with [Quick Start](quickstart.md) for a first run or [deployment](deployment.md) for production assembly.
+Choose one published aggregate and the inputs for the task you will run. The
+aggregate fixes six release units; Runtime and VMLinux have independent component
+tags. Do not combine component Latest releases or replace an old package's tools
+with files from `main`. Record the selected aggregate tag and use its packaged
+guides for that version's capabilities.
 
-Run these commands in one Bash shell on a native Linux host with Python 3.9+,
-curl, GNU tar and sha256sum. Docker is needed when importing Workbench; downloading
-and extracting native products alone does not require it. No GitHub login, source
-checkout or compiler is needed for this installation task. Running the products
-has additional prerequisites in the selected version's deployment guide.
+## Choose the installation path
 
-Set `RELEASE_VERSION` to a published aggregate tag, or leave it empty to resolve Stable once. The manifest at that aggregate tag selects all six release units and exact package names; runtime and vmlinux have independent tags. Never combine component Latest releases or substitute files from main. Use the selected version's bundled guides for older releases.
+| Task | Inputs | Continue with |
+| --- | --- | --- |
+| First local Guest command | Published node-infra image and an empty private volume | [Quick Start](quickstart.md) |
+| Persistent node with site configuration | Same-version node-infra image and `node-infra-deploy-<version>.tar.gz` | [node-infra deployment](node-infra.md) |
+| Registry/Router, separately operated Store/Cache or native components | Selected native component archives and platform guides | Native installation below, then [deployment](deployment.md) |
+| Development, Demo or full release validation | Native products/platform plus the matching Workbench image | Set `DOWNLOAD_WORKBENCH=1` below, then [release validation](../test/QUICKSTART.md) |
+
+For first use, start with **`docker pull` + `docker run`** in
+[Quick Start](quickstart.md). The image contains the coordinated node services and
+Guest boot inputs. Host tools and native component archives serve the other
+installation paths below.
+
+## Node image and deployment package
+
+For an online first run, use the image-selection commands in [Quick Start](quickstart.md).
+The GHCR reference is `ghcr.io/kuasar-sandbox/node-infra:<aggregate-tag>`;
+**retain the `release-` prefix**. Record the resolved platform manifest/image
+identity. Docker or Podman supplies the container runtime, while the image
+supplies product binaries, systemd and boot inputs.
+
+For a configured service, download `node-infra-deploy-<aggregate-tag>.tar.gz`
+from that exact aggregate's GitHub Release. Verify the asset's native size and
+`sha256:` digest from the Release API, then extract to a new directory. It contains
+`bin/node-infra-ctl`, `templates/`, `examples/`, `release.json` and bilingual
+`README` guides. `release.json` binds the platform manifest, image configuration
+and offline archives; their different digests refer to different objects.
+
+Offline Docker uses `node-infra-<tag>-linux-<amd64|arm64>.docker.tar.gz`;
+Podman also supports the corresponding `.oci.tar.gz`. Verify the selected asset
+size/digest before `docker load` or `podman load`. Use the loaded image identity
+and disable implicit pulls at service startup. The source package, Workbench
+image and separate native component archives are not prerequisites for running
+the node image. See [release inputs and host requirements](node-infra.md#prerequisites-and-release-inputs).
+
+### Optional repeat and offline downloads
+
+`node-infra-ctl download` retrieves another deployment package and optional image
+archive. From an extracted deployment package, run `./bin/node-infra-ctl` with
+Python 3.9+. The download command does not require root, Docker, Podman, GitHub
+login or a compiler. The source-workspace entry is
+`python3 node-infra/deploy/bin/node-infra-ctl`.
+
+```sh
+: "${RELEASE_VERSION:?Set the exact aggregate tag to download}"
+./bin/node-infra-ctl download \
+  --release "$RELEASE_VERSION" --output "$PWD/node-download" --json
+# For offline Docker, use a new directory and add --image-format docker.
+# For offline Podman, add --image-format oci; --arch accepts amd64 or arm64.
+```
+
+The default downloads only the matching deployment package; online users pull
+the image from the printed exact GHCR reference. An explicit image format adds
+only the selected architecture's archive. The tool fixes each GitHub asset ID,
+checks its published size and SHA-256 while streaming, and writes `download.json`
+only after all requested files pass. It neither imports images nor installs or
+starts services. Existing output directories are refused. If a download fails,
+verified earlier files remain for inspection, partial files are removed and no
+success receipt is written; retry in a new directory. The complete native
+component installer below remains available for separately operated roles.
+
+## Native components and optional Workbench
+
+Run the following three command blocks in one Bash shell on native Linux with
+Python 3.9+, curl, GNU tar and sha256sum. Docker is required only for the optional
+Workbench import. No GitHub login, source checkout or compiler is needed.
+Runtime host requirements remain in the selected component's deployment guide.
+Set `RELEASE_VERSION` to an explicit aggregate tag; leaving it empty resolves
+Stable once. Set `DOWNLOAD_WORKBENCH=1` before the first block only when you need
+Demo/development/validation. The default downloads native products and guides.
 
 ## Select and download native inputs
 
-The complete Release asset set is checked, then only the host architecture and shared platform package are downloaded. Set `DOWNLOAD_WORKBENCH=0` only for the native alternative in that version's guide. Downloads use fixed GitHub asset IDs and verify GitHub's native size and SHA-256 digest. Missing digests or failed checks stop the download. Historical body markers and SHA256SUMS are ignored.
+The complete Release asset set is checked, then only the host architecture and shared platform package are downloaded. Workbench is optional; use `DOWNLOAD_WORKBENCH=1` when following the validation guide. Downloads use fixed GitHub asset IDs and verify GitHub's native size and SHA-256 digest. Missing digests or failed checks stop the download. Historical body markers and SHA256SUMS are ignored.
 
 For `node-infra-v2`, the complete set contains 20 assets, including two Docker
 archives from the same node-infra images. Historical `node-infra-v1` keeps its
 18-asset contract, including both native
 node-infra OCI archives and the shared deployment package. This installation
-downloads eight assets for the host architecture, or seven with
-`DOWNLOAD_WORKBENCH=0`. Download and use the separate node-infra OCI archives and
+downloads seven assets for the host architecture, or eight with
+`DOWNLOAD_WORKBENCH=1`. Download and use the separate node-infra OCI archives and
 deployment package according to `guide/node-infra.md` inside the selected
 version's platform package.
 
@@ -34,7 +102,7 @@ set -euo pipefail
 RELEASE_VERSION="${RELEASE_VERSION:-}"
 ARCH="$(uname -m)"
 case "$ARCH" in x86_64|aarch64) ;; *) echo "unsupported native architecture: $ARCH" >&2; exit 1 ;; esac
-DOWNLOAD_WORKBENCH="${DOWNLOAD_WORKBENCH:-1}"
+DOWNLOAD_WORKBENCH="${DOWNLOAD_WORKBENCH:-0}"
 export ARCH DOWNLOAD_WORKBENCH
 ASSETS_TSV="$(mktemp)"
 trap 'rm -f -- "$ASSETS_TSV"' EXIT
@@ -241,7 +309,7 @@ trap - EXIT
 
 ## Import Workbench separately
 
-With the default `DOWNLOAD_WORKBENCH=1`, import the downloaded archive, check its
+With explicit `DOWNLOAD_WORKBENCH=1`, import the downloaded archive, check its
 native architecture and version, and retain its local image ID for startup. With
 `DOWNLOAD_WORKBENCH=0`, this block sets `RELEASE` and leaves `IMAGE` empty without
 invoking Docker or looking for an archive that was not downloaded.
@@ -264,12 +332,12 @@ printf 'Release directory: %s\n' "$RELEASE"
 Choose the next step that matches the downloaded inputs:
 
 - **Workbench:** keep `RELEASE`, `IMAGE` and `ARCH` in this shell and continue with
-  [Quick Start](quickstart.md#start-a-private-system-environment). The launcher
+  [Release validation](../test/QUICKSTART.md). The launcher
   comes from `$RELEASE/workbench/workbench`. For an existing verified installation,
   use its release directory and local image ID.
 - **Native products only:** use `RELEASE` and `ARCH` with that version's bundled
   deployment or native guide. There is no Workbench image to start; do not continue
-  with the Workbench Quick Start commands.
+  with Workbench startup commands.
 
 Stop on missing files, wrong architecture, digest, permission or path errors;
 do not fetch replacements from another version.

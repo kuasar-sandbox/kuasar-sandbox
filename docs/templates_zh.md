@@ -17,21 +17,31 @@
 <a id="first-application"></a>
 ## 自己的第一个模板和应用
 
-Demo 之后使用运行中的 Node，复用 [Node 接入与 API key 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy_zh.md#sdk-configuration)
-已有的 `E2B_API_KEY`、`E2B_API_URL`、`E2B_DOMAIN`、数据入口/DNS 和可信 TLS CA。
-Demo 完成时会停止服务；临时凭据和容器 localhost 不会配置独立主机客户端。
-交互探索可保留文档中的 Demo `--pause` 会话，或按[部署](deployment_zh.md)准备
-自己的 Node。不要把 Demo 凭据用于生产。
+使用已完成站点配置、具备 Builder 池、阶段准入容量、源镜像访问及持久发布存储的 Node。Quick Start profile 只设置随包 shell 流程，自有 Build 输入及池预算应在站点配置中准备。[Node 接入契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-proxy_zh.md#sdk-configuration)说明 `E2B_API_KEY`、`E2B_API_URL`、`E2B_DOMAIN`、data 入口/DNS 与可信 TLS CA 设置。这些输入由平台管理员提供，不从 Demo 或首次命令体验中推导。
+
+在应用环境安装所选 SDK，与 Workbench 的验证 wheelhouse 独立：
+
+```sh
+python3 -m venv .venv
+. .venv/bin/activate
+python3 -m pip install 'e2b==2.25.1'
+```
+
+使用原生 egress 时，将 `KUASAR_NETWORK_JSON` 设为管理员允许的网络规格；例如[本地网关](node-infra_zh.md#native-egress)使用 `{"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}`。这是此客户端示例读取的环境变量，不是新增 Node 配置。Build 执行网络的 DNS/ACL 应允许访问所选镜像仓库。
+
+SDK 将 Network 头同时发送给 Register 与 Trigger。Trigger 接受与注册值相同的
+Network 头，或仅含相同已注册 `target` 的 Builder 头，作为等值断言，不能改变注册值。
+其他仅注册阶段可用的输入使用[独立 Register/Trigger 配方](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md#client-workflow)。
 
 本配方面向仓库固定的 **e2b==2.25.1** 和当前
 [Build 契约](https://github.com/kuasar-sandbox/orchestrator/blob/main/docs/node-build_zh.md)。
-若所选 aggregate 不同，使用其打包指南和 SDK pin；当前源码示例不能认证旧 Release。
+使用所选 aggregate 的配套指南和 SDK pin。
 把 `APP_IMAGE` 设为自己的 digest 固定、架构匹配的 registry 镜像，需包含 Python 3、
 `/bin/bash`、`id` 和可写 `/tmp`。若尚无 `user` 账户，还需要 `useradd`。
 Build 的 RUN/start/ready 命令使用 Bash，不是任意 shell。
 按 Node 现有凭据机制配置 registry 认证。先检查
 [镜像和内核适配](https://github.com/kuasar-sandbox/guest-runtime/blob/main/docs/flatten-cli_zh.md)。
-2 CPU/6 GiB 构建预算沿用 Demo，不是容量推荐。
+2 CPU/6 GiB 阶段预算是示例，应确认 Builder 池与整节点预算能在各服务运行时容纳它。
 
 本配方先在镜像内部准备 E2B 的 `user` 账户，沿用 Demo 的 UID/GID `1000:1000`
 约定。仅在账户不存在时创建；已有账户的 ID 不符则失败，不重命名或重编号。
@@ -42,7 +52,7 @@ start/ready，因此只有 Python 和可写 `/tmp` 还不够。
 
 后续 build 命令准备文件，start 命令运行应用，ready 命令在快照发布前检查应用 HTTP
 响应。固定 sleep 本身不能证明应用就绪。非空 start/ready 选择 auto 内存目标。
-不要向 `Template.build` 传 register-only 配置头；此 SDK 也会把头传给 trigger。
+可选 Network 头会由 SDK 原样重复发送；Trigger 在 Build 副作用前校验其与注册值相同，其他仅注册阶段可用的头仍需分步流程。
 
 ```python
 if not __debug__:
@@ -54,6 +64,12 @@ from e2b import Sandbox, Template
 api = os.environ["E2B_API_URL"].rstrip("/")
 key = os.environ["E2B_API_KEY"]
 image = os.environ["APP_IMAGE"]  # registry/repository@sha256:...
+build_headers = {}
+if os.environ.get("KUASAR_NETWORK_JSON"):
+    network = json.loads(os.environ["KUASAR_NETWORK_JSON"])
+    if not isinstance(network, dict):
+        raise ValueError("KUASAR_NETWORK_JSON must contain an object")
+    build_headers["X-Kuasar-Sandbox-Network"] = json.dumps(network)
 start = "python3 -m http.server 8080 --directory /tmp/my-app"
 ready = "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/', timeout=2)\""
 tpl = (Template().from_image(image)
@@ -69,7 +85,7 @@ tpl = (Template().from_image(image)
        .run_cmd("mkdir -p /tmp/my-app && printf 'my application\\n' > /tmp/my-app/index.html")
        .set_start_cmd(start, ready))
 info = Template.build(
-    tpl, name="my-first-app", cpu_count=2, memory_mb=6144,
+    tpl, name="my-first-app", cpu_count=2, memory_mb=6144, headers=build_headers,
     on_build_logs=lambda entry: print(entry.message, flush=True),
 )
 request = urllib.request.Request(

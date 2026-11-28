@@ -9,11 +9,13 @@ import gzip
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import re
 import shutil
 import sys
 import tarfile
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import archive_paths
 import selection
@@ -216,6 +218,108 @@ def release_document(version, revision, records):
             'host': {'podman_min_version': '4.9.3', 'cgroup_version': 2}}
 
 
+def rewrite_deployment_guides(platform, entries, sources, document):
+    """Keep shipped navigation local and pin omitted guides to selected sources."""
+    # Only assembly needs the Markdown parser; readers in the sparse executor
+    # retain their existing dependencies. Reuse the aggregate's literal rules.
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'test/e2e'))
+    import assemble_docs as navigation
+
+    platform = platform.resolve()
+    mapping = {source.as_posix(): Path(dest) for dest, source in sources.items()}
+    refs = {'kuasar-sandbox': document['source_revision']}
+    refs.update({row['repository'].split('/')[1]: row['sha']
+                 for unit, row in document['components'].items() if unit != 'vmlinux'})
+
+    def rewrite_url(raw, source, dest):
+        angle = raw.startswith('<') and raw.endswith('>')
+        url = urlsplit(raw[1:-1] if angle else raw)
+        repo, kind = 'kuasar-sandbox', 'blob'
+        if url.scheme or url.netloc:
+            match = re.fullmatch(r'/kuasar-sandbox/([^/]+)/(blob|tree)/([^/]+)/(.*)', url.path)
+            if url.scheme != 'https' or url.netloc != 'github.com' or not match:
+                return raw
+            repo, kind, ref, path = match.groups()
+            if repo not in refs:
+                return raw
+            target_path = Path(unquote(path))
+            revision = (document['components']['vmlinux']['sha']
+                        if repo == 'guest-runtime' and target_path.as_posix() in
+                        {'docs/vmlinux.md', 'docs/vmlinux_zh.md'} else refs[repo])
+            if ref not in {'main', revision}:
+                return raw  # Explicit historical versions keep their identity.
+        else:
+            if not url.path:
+                return raw  # Preserve self anchors and query-only references.
+            original = (platform / source.parent / unquote(url.path)).resolve()
+            require(original.is_relative_to(platform), 'deployment guide link escapes platform: ' + raw)
+            target_path = original.relative_to(platform)
+            revision = refs[repo]
+        require(not target_path.is_absolute() and '..' not in target_path.parts,
+                'unsafe deployment guide link: ' + raw)
+        target = None
+        if repo == 'kuasar-sandbox':
+            original = platform / target_path
+            require(original.exists(), 'missing deployment guide source link: ' + raw)
+            target = mapping.get(target_path.as_posix())
+            if original.is_dir():
+                kind = 'tree'
+                readme = 'README_zh.md' if source.stem.endswith('_zh') and not url.fragment else 'README.md'
+                target = (mapping.get((target_path / readme).as_posix()) or
+                          mapping.get((target_path / 'README.md').as_posix()))
+                if target is None:
+                    for prefix, root in (('bin', 'node-infra/deploy/bin'),
+                                         ('templates', 'node-infra/deploy/templates'),
+                                         ('examples', 'node-infra/examples')):
+                        if target_path.is_relative_to(root):
+                            candidate = Path(prefix) / target_path.relative_to(root)
+                            if any(Path(name).is_relative_to(candidate) for name in entries):
+                                target = candidate
+                            break
+        if target is not None:
+            value = urlunsplit(('', '', quote(os.path.relpath(target, dest.parent), safe='/._-'),
+                                url.query, url.fragment))
+        else:
+            value = urlunsplit(('https', 'github.com', f'/kuasar-sandbox/{repo}/{kind}/{revision}/' +
+                                quote(target_path.as_posix(), safe='/._-'), url.query, url.fragment))
+        return '<' + value + '>' if angle else value
+
+    for name, source in sources.items():
+        if (source.suffix.lower() != '.md' or 'LICENSES' in source.parts or
+                source.name in {'LICENSE', 'NOTICE', 'COPYING', 'COPYRIGHT'} or
+                source.name.startswith(('LICENSE.', 'LICENSE_'))):
+            continue
+        data, mode = entries[name]
+        text = data.decode('utf-8')
+        result, fence = [], None
+        masked = navigation.mask_inline_code(text).splitlines(keepends=True)
+        for line, searchable in zip(text.splitlines(keepends=True), masked):
+            mark = navigation.FENCE.match(line)
+            if mark:
+                token = mark.group(1)
+                if fence is None:
+                    fence = token
+                elif token[0] == fence[0] and len(token) >= len(fence) and not line.strip()[len(token):].strip():
+                    fence = None
+                result.append(line)
+                continue
+            if fence is not None:
+                result.append(line)
+                continue
+            matches = list(navigation.INLINE.finditer(searchable))
+            reference = navigation.REFERENCE.match(searchable)
+            if reference:
+                matches.append(reference)
+            replacements = [(match.start(2), match.end(2), rewrite_url(match.group(2), source, Path(name)))
+                            for match in matches]
+            replacements += [(match.start(3), match.end(3), rewrite_url(match.group(3), source, Path(name)))
+                             for match in navigation.HTML_LINK.finditer(searchable)]
+            for start, end, value in sorted(set(replacements), reverse=True):
+                line = line[:start] + value + line[end:]
+            result.append(line)
+        entries[name] = (''.join(result).encode('utf-8'), mode)
+
+
 def package(platform, directory, output, version, revision, *, arches=tuple(ARCHES)):
     """Create one architecture-independent deployment archive from exact sources."""
     records = {arch: validate(directory, version, arch, revision) for arch in arches}
@@ -223,7 +327,7 @@ def package(platform, directory, output, version, revision, *, arches=tuple(ARCH
     output.mkdir(parents=True, exist_ok=True)
     target = output / selection.node_infra_deploy_archive(version)
     require(not target.exists(), 'node-infra deployment stage already exists')
-    entries = {}
+    entries, sources = {}, {}
     for prefix, root in [('bin', platform / 'node-infra/deploy/bin'),
                          ('templates', platform / 'node-infra/deploy/templates'),
                          ('examples', platform / 'node-infra/examples')]:
@@ -231,14 +335,17 @@ def package(platform, directory, output, version, revision, *, arches=tuple(ARCH
         for path in root.rglob('*'):
             require(not path.is_symlink(), 'deployment package cannot include symlinks')
             if path.is_file():
-                entries[prefix + '/' + str(path.relative_to(root))] = (path.read_bytes(), 0o755 if path.stat().st_mode & 0o111 else 0o644)
+                name = prefix + '/' + str(path.relative_to(root))
+                entries[name] = (path.read_bytes(), 0o755 if path.stat().st_mode & 0o111 else 0o644)
+                sources[name] = path.relative_to(platform)
     for target_name, source in [('README.md', 'docs/node-infra.md'), ('README_zh.md', 'docs/node-infra_zh.md')]:
         path = platform / source
         require(path.is_file() and not path.is_symlink(), 'missing node-infra deployment guide: ' + source)
-        text = path.read_text().replace('(node-infra.md)', '(README.md)').replace('(node-infra_zh.md)', '(README_zh.md)')
-        entries[target_name] = (text.encode(), 0o644)
+        entries[target_name] = (path.read_bytes(), 0o644)
+        sources[target_name] = Path(source)
     require('bin/node-infra-ctl' in entries and 'templates/node-infra.container' in entries,
             'incomplete node-infra deployment payload')
+    rewrite_deployment_guides(platform, entries, sources, document)
     entries['release.json'] = (canonical(document) + b'\n', 0o644)
     with target.open('xb') as raw, gzip.GzipFile(fileobj=raw, filename='', mode='wb', mtime=0) as compressed:
         with tarfile.open(fileobj=compressed, mode='w') as archive:

@@ -13,9 +13,16 @@
 | 业务访问与远程执行 | 按目的签发和传递数据/exec 能力；API 根凭据不能用作发给 Guest 的应用端口 token |
 | 节点与集群内部服务 | 使用规定的 node-link 身份验证，并保护 Router 到节点的内部网络；公开 HTTPS 不自动保护其他连接 |
 | 内容共享域 | 由内容密钥、命名位置和后端访问权限确定共享范围；相同字节不构成跨租户授权 |
-| Guest 出站与管理服务 | vSwitch 建立可信端口身份，外部网关执行所选策略，MMDS 仅暴露 Conductor 授权的路由与已注册本地服务 |
+| Guest 出站与管理服务 | vSwitch 建立可信端口身份，原生 egress 或部署方网关执行所选策略，MMDS 仅暴露 Conductor 授权的路由与已注册本地服务 |
 
 当前集群 Router 到节点的 APIEndpoint/DataEndpoint 使用内部明文 HTTP/CONNECT；应隔离该网络，公开 TLS 在 Router 或前置负载均衡处终止。node-link 的 mTLS 独立配置。单节点直接 TLS 监听与集群内部监听不能直接混用，见[部署](deployment_zh.md)。
+
+## 原生出口策略
+
+将可信 transit attachment、Area/VNI、有序 ACL 与 NAT pool 作为同一部署关系配置。在真实 Guest 中验证允许和拒绝的目的；管理员宿主网络连通或 Proxy 命令成功不能代替该验证。不要把网关 runtime 目录或控制 socket 暴露给 Guest。节点 attach 路径建立可信身份，Guest 自报地址不构成切换 Area 的授权。明确 uplink/SNAT 地址所有权及回程路由。
+
+同节点部署按[原生 egress 流程](node-infra_zh.md#native-egress)及组件 reload 契约操作。检查已接受的配置，不能仅因 SIGHUP 发送成功就认为策略已更换；历史状态快照本身也不能证明当前策略执行健康。
+
 
 ## 多租安全
 

@@ -3,11 +3,49 @@
 # Deploy and operate a node-infra system container
 
 This guide deploys one kuasar-sandbox data-plane node from the **node-infra**
-image and its matching deployment archive. It owns the host/container binding,
+image. The matching deployment archive supplies host service tools and examples.
+This guide owns the host/container binding,
 installation and instance lifecycle. Component repositories remain authoritative
 for their native configurations and APIs. Platform node-pool routing, host
 device allocation and external Cache/Store service deployment have their own
 owners.
+
+## Choose an entry point
+
+| Task | Entry | Additional inputs |
+| --- | --- | --- |
+| Run the first Guest command | Docker commands below | Dedicated empty volume; the profile initializes native inputs. |
+| Run with your own site configuration | [Direct Docker development](#direct-docker-development) | Native configuration, credentials, durable paths and resource budgets. |
+| Manage a host service with stop/recovery hooks | [Install and operate](#install-and-operate) | Matching deployment archive and rootful Podman/Quadlet. |
+
+## Run your first Guest with Docker
+
+Use a native Linux host meeting the [host requirements](#prerequisites-and-release-inputs).
+Choose a published aggregate from [Releases](https://github.com/kuasar-sandbox/kuasar-sandbox/releases)
+and replace `<aggregate-tag>` below, preserving `release-`. Use an unused container
+name and an empty dedicated volume. The image supplies the node services and
+Guest boot inputs; `quickstart` initializes private credentials and a shell workload.
+For offline use, load that release's Docker archive and set `IMAGE` to its loaded
+image ID instead of running the first three commands.
+
+```sh
+RELEASE_VERSION='<aggregate-tag>'
+IMAGE="ghcr.io/kuasar-sandbox/node-infra:$RELEASE_VERSION"
+docker pull "$IMAGE"
+docker run -d --tty --name ks-dev --pull=never --privileged \
+  --cgroupns=private --cpus=4 --memory=6g --memory-swap=6g \
+  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
+  --network=bridge -v ks-dev-data:/var/lib/node-infra "$IMAGE" quickstart
+docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
+```
+
+`node-infra-run` waits for initialization and an idle runner, executes the supplied argument vector in a fresh MicroVM, returns its output and exit code, and deletes that Guest. It uses the Conductor and Proxy inside the node. The example publishes no host ports and needs no Guest internet access. The 4 CPU and 6 GiB settings are an example for one node, not a minimum sizing rule.
+
+If the client receives SIGKILL, it cannot send the final Delete request. Use the sandbox ID printed on stderr to delete it through Conductor. A running Guest otherwise follows the native TTL and pause policy.
+
+Quick Start uses the shipped shell inputs and rejects externally mounted site configuration;
+use a separate configured instance for an E2B service, own templates or cluster.
+It initializes an empty private volume once. It uses instance-specific credentials and the shipped native Linux shell filesystem to produce an offline Image Manifest Bundle. Disk-only exports and memory snapshots default to Manifest Bundles with native `@manifest` selectors. Keep the volume and its referenced base Bundles together for recovery. Use `docker stop ks-dev` for orderly shutdown and `docker start ks-dev` to reuse it. Use separate volumes for simultaneous nodes. For site-supplied native configuration, use the deployment path below.
 
 ## Prerequisites and release inputs
 
@@ -20,7 +58,7 @@ records the selected support baseline; the shipped platform E2E exercises the
 actual template. A successful systemd or generator probe alone is not VM or
 recovery acceptance.
 
-Acquire the same aggregate version of:
+Choose the inputs needed for your path from the same aggregate version:
 
 | Input | Use |
 |---|---|
@@ -28,7 +66,7 @@ Acquire the same aggregate version of:
 | `node-infra-<version>-linux-<amd64|arm64>.oci.tar.gz` | Offline alternative for the same platform image, imported with `podman load`. |
 | `node-infra-<version>-linux-<amd64|arm64>.docker.tar.gz` | Docker-compatible offline archive from the same OCI image; import with `docker load`. Available with `node-infra-v2`. |
 | `node-infra-deploy-<version>.tar.gz` | Host tool, complete Quadlet template, runtime hooks, examples and this guide. |
-| Matching workbench and `platform-<version>.tar.gz` | Repeatable acceptance environment and corresponding tests. |
+| Matching workbench and `platform-<version>.tar.gz` (optional) | Development/acceptance environment and corresponding tests. |
 
 Verify downloads through the existing GitHub Release asset size/digest fields.
 `release.json` maps the image index/platform manifests, image configuration ID
@@ -36,8 +74,8 @@ and offline archives. The archive checksum, image configuration ID and manifest
 digest identify different objects. Image component identities are also recorded
 at `/usr/share/node-infra/image.json`.
 
-Load or pull before service startup, verify the resulting platform/image
-identity, and keep `Pull=never` in the instance template. For example:
+For a managed host service, load or pull before startup, verify the resulting
+platform/image identity, and keep `Pull=never` in the Quadlet template. For example:
 
 ```sh
 sudo podman load --input node-infra-VERSION-linux-amd64.oci.tar.gz
@@ -50,24 +88,6 @@ Connector and their execution units form the normal startup chain; Telemetry
 uses its native systemd enablement. Cache/Store endpoints come from the
 node-level storage access layer. The deployment tool does not start those
 external services.
-
-## Run your first Guest with Docker
-
-On a supported development host, set `IMAGE` to the GHCR reference for a release that includes Quick Start. For offline use, load that release's Docker archive, set `IMAGE` to its loaded image ID or `localhost/node-infra:<version>`, and add `--pull=never` to `docker run`.
-
-```sh
-docker run -d --tty --name ks-dev --privileged \
-  --cgroupns=private --cpus=4 --memory=6g --memory-swap=6g \
-  --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
-  --network=bridge -v ks-dev-data:/var/lib/node-infra "$IMAGE" quickstart
-docker exec ks-dev node-infra-run -- /bin/sh -c 'printf "hello from guest\n"'
-```
-
-`node-infra-run` waits for initialization and an idle runner, executes the supplied argument vector in a fresh MicroVM, returns its output and exit code, and deletes that Guest. It uses the Conductor and Proxy inside the node. The example publishes no host ports and needs no Guest internet access. The 4 CPU and 6 GiB settings are an example for one node, not a minimum sizing rule.
-
-If the client receives SIGKILL, it cannot send the final Delete request. Use the sandbox ID printed on stderr to delete it through Conductor. A running Guest otherwise follows the native TTL and pause policy.
-
-Quick Start initializes an empty private volume once. It uses instance-specific credentials and the shipped native Linux shell filesystem to produce an offline Image Manifest Bundle. Disk-only exports and memory snapshots default to Manifest Bundles with native `@manifest` selectors. Keep the volume and its referenced base Bundles together for recovery. Use `docker stop ks-dev` for orderly shutdown and `docker start ks-dev` to reuse it. Use separate volumes for simultaneous nodes. For site-supplied native configuration, use the deployment path below.
 
 ## Prepare the default host deployment
 
@@ -111,7 +131,7 @@ container. Host networking does not expose them automatically either.
 
 The default Connector configuration omits transit. Proxy ingress, guest Exec and
 MMDS/management communication remain available; ordinary guest internet egress
-is not supplied. This deployment does not install NAT or a GENEVE gateway.
+is not supplied. Enable the packaged native gateway through [Guest egress](#native-egress) when needed.
 
 ## Configure using native paths
 
@@ -125,6 +145,7 @@ there is no separate `node.yaml` schema.
 | `node-proxy.service` | `node-ctl proxy serve` | `/etc/node-proxy/proxy.yaml` |
 | `node-telemetry.service` | `node-ctl telemetry serve` | `/etc/node-telemetry/telemetry.yaml` |
 | `connector-vswitch.service` | `connector-ctl vswitch serve` | `/etc/connector-vswitch/vswitch.yaml` |
+| `connector-egress.service` (optional) | `connector-ctl egress serve` | `/etc/connector-egress/gateway.yaml` |
 
 For Host metrics, enable `node-telemetry.service` and add the standard
 `otlp/host` receiver to the metrics pipeline in a Telemetry configuration
@@ -136,13 +157,14 @@ use the socket directly. External Cache/Store services need the same protected
 directory mounted with matching group permissions and `KS_HOST_OTLP_SOCKET`
 set to its path in their mount namespace.
 
-Each service starts with its image base file, followed by sorted
+Conductor, Proxy, Telemetry and vSwitch start with their image base file, followed by sorted
 `/etc/<component>/conf.d/*.yaml`. The launcher passes one explicit
 `--config PATH[:PATH...]` value to the native loader. Maps merge recursively;
 later scalars and lists replace earlier values, and overlay null removes an
 inherited key. Discovery happens only in the launcher. All delivered Connector
 files use YAML. Manifest retains `/etc/node-infra/manifest.yaml` as its native
-single-file entry.
+single-file entry. Egress uses `gateway.yaml` plus its explicit `area_files`;
+it does not participate in the `conf.d` merge.
 
 Keep site policy in `50-platform.yaml` and instance bindings in
 `90-instance.yaml`. Mount individual files or the `conf.d` directory, preserving
@@ -163,18 +185,14 @@ api:
 # Add the deployment's native encryption_key and API TLS/authentication settings.
 sandbox:
   boot:
-    overlay_diff_template: /var/lib/node-infra/overlay.ext4
+    overlay_diff_template: "mkfs://ext4?size=4G"
 ```
 
-For image cold starts, create a new sparse ext4 overlay template in the
-instance's persistent data directory and reference its container path. For
-example, with `DATA` set to the host directory bound to `/var/lib/node-infra`:
-
-```sh
-test ! -e "$DATA/overlay.ext4"
-truncate -s 4G "$DATA/overlay.ext4"
-mkfs.ext4 -F -q -b 4096 -O ^has_journal "$DATA/overlay.ext4"
-```
+For ordinary image cold starts, the built-in `mkfs://ext4?size=4G` source creates
+an independent writable overlay when needed; no pre-created filesystem file or
+external `mkfs.ext4` command is required. Size it for the application. Use a
+preformatted file only when explicitly choosing custom filesystem features, and
+check its journaling/recovery tradeoffs in the [block-storage guide](https://github.com/kuasar-sandbox/sandboxer/blob/main/docs/block-storage.md).
 
 Build workloads separately configure their native `builder.diff_template` and
 source/publication dependencies. Named file artifacts use the native
@@ -306,7 +324,6 @@ With `IMAGE`, `CONFIG_ROOT` and `DATA_ROOT` set to the selected image and prepar
 absolute paths (including all four `conf.d` directories and `manifest.yaml`):
 
 ```sh
-docker load --input node-infra-VERSION-linux-amd64.docker.tar.gz
 docker run -d --tty --name node-infra-dev --pull=never --privileged \
   --cgroupns=private --network=host --cpus=4 --memory=6g --memory-swap=6g \
   --tmpfs /run --tmpfs /run/lock --tmpfs /tmp:exec --stop-timeout=420 \
@@ -338,6 +355,153 @@ from normal internal cleanup.
 `node-infra-ctl health --runtime docker --container node-infra-dev` is a thin
 adapter to the internal health entry; `describe` and `check` work the same way.
 No `node-infra-ctl install` is required for this Docker path.
+
+<a id="native-egress"></a>
+
+## Enable native Guest egress
+
+Use this path when this node's Guests or image Builds need outbound traffic and
+you want Connector to own Geneve decapsulation, ACL and NAT. The image includes
+`connector-ctl` and its static sibling `connector-vpp`; no separate VPP installation,
+plugin path or per-sandbox registration service is needed. Keep the default
+management extraction for MMDS/Proxy traffic. Egress is a separate traffic path.
+
+### 1. Prepare the site network and capacity
+
+Use a configured site instance, not the `quickstart` profile. Start from the
+matching deployment package's `examples/local-egress/`. The network owner must
+provide a retained `egress` namespace containing a dedicated, connected and UP
+`egress-uplink`, and a reachable upstream next hop. Keep the VPP gateway/SNAT
+addresses out of Linux address configuration; do not also apply Linux SNAT to
+those addresses. This prerequisite is the site's network allocation, not a
+request to move its management or host-default-route interface.
+
+Size the instance for the gateway as well as Node pools and management. The
+example gateway declares `heap_size: 4G` and `stats_size: 1G`; the Quick Start's
+6 GiB whole-node trial budget is not a gateway/Builder sizing recommendation.
+Set each Area/Pool's `max_connections` per outer access, plus CPU and memory,
+for the intended workload. Set the external uplink MTU to the exact value in
+`gateway.yaml`; startup checks that it matches.
+
+### 2. Install the matching configuration
+
+Copy `90-transit.yaml` into the existing site Connector `conf.d` directory.
+Mount `gateway.yaml`, `area7.yaml` and `link.json` together at
+`/etc/connector-egress`. Relative `area_files` resolve beside `gateway.yaml`.
+The following values in the shipped example describe **one relationship**:
+
+| Side | Matching value |
+| --- | --- |
+| vSwitch transit | `egress-tx`, `198.18.0.2/24:198.18.0.1` |
+| Gateway attachment | `egress-rx`, `198.18.0.1/24`, peer `198.18.0.2`, locator `port` |
+| Encapsulation | `geneve_locator: port`, `geneve_encap_eth: true`; switch `generation_bits: 4` |
+| Policy selection | Area file `vni: 7`; Create/Build network request selects VNI 7 and gateway `198.18.0.1` |
+| Uplink policy | `egress-uplink`, pool address `192.0.2.1`, next hop `192.0.2.2` |
+| Node-owned pair | `link.json` uses empty `owner_netns`, `gateway_netns: egress` and the retained node recovery directory |
+
+For multiple Nodes, the logical transit/gateway addresses can be reused inside
+independent network namespaces, while each gateway has legitimate uplink/SNAT
+resources and return routing. If several instances share one host primary
+namespace, give each transit pair unique interface names in both the vSwitch and
+link configuration, or use separate primary namespaces; fixed example names can
+conflict when a device returns during cleanup.
+
+Replace documentation addresses, destination allow rules, DNAT targets and pool
+capacity with the site's actual policy. The example ends with deny; it is not a
+permit-all Internet configuration. Keep transit and gateway attachment values
+consistent. The generation setting belongs to vSwitch; there is no gateway
+`generation_bits` option or separate `TransitMACFencing` configuration switch.
+
+Add these bindings to the existing configured instance's Quadlet, using actual
+host paths; retain its normal configuration, data and recovery mounts:
+
+```ini
+[Container]
+Volume=/etc/kuasar/node-a/connector-egress:/etc/connector-egress:ro
+Volume=/run/netns/node-a-egress:/run/node-infra/netns-inputs/egress:ro
+```
+
+For direct Docker, add the equivalent arguments to the configured instance:
+
+```sh
+-v "$CONFIG_ROOT/connector-egress:/etc/connector-egress:ro" \
+--mount type=bind,source=/run/netns/node-a-egress,target=/run/node-infra/netns-inputs/egress,readonly
+```
+
+The host namespace handle must already exist. Do not combine this local transit
+example with the separate `external-egress` catch-all extraction example. Node
+preparation creates and records its dedicated transit pair; do not run
+`connector-ctl egress link start/stop` independently beside this node. The
+provided namespace and uplink remain owned by the external network provider.
+For Quadlet, follow the normal [install/check/start sequence](#install-and-operate).
+For Docker, add the mounts to the [site-configured Docker command](#direct-docker-development)
+and check health inside that container. If it is already running, stop it before
+recreating it with the same owned data directory and the additional mounts;
+never start a second node against that directory. The gateway service starts
+when `/etc/connector-egress/gateway.yaml` exists.
+
+### 3. Select the Area in each workload
+
+Installing Area 7 alone does not choose it for a Guest. At Create or Build
+**registration**, supply the network specification through
+`X-Kuasar-Sandbox-Network`, or JSON in metadata key `kuasar-sandbox.network`:
+
+```json
+{"transit_gateway_ip":"198.18.0.1","transit_geneve_vni":7}
+```
+
+The [template walkthrough](templates.md#first-application) uses
+`KUASAR_NETWORK_JSON` for this value. The SDK repeats the Network header on
+Trigger, which verifies equality with the registered network. A Builder header
+containing only the registered `target` follows the same assertion rule; other
+register-only inputs use the separate Register/Trigger recipe.
+[Sandbox creation](sandboxes.md#outbound-network) shows the ordinary Create path.
+E/S templates can retain network input; explicit current input can override it.
+Image-only artifacts do not carry that Sandbox network metadata.
+There are no `sandbox.network.transit_*` Node-default keys for these request fields.
+
+### 4. Verify real traffic and operate the gateway
+
+Check node readiness and the native gateway status, then run an actual Guest
+request to an allowed destination and another to a denied destination. Test the
+application's protocols, DNS path and MTU. A successful Proxy command proves
+management access, not successful outbound NAT.
+
+Use the instance you configured: the following prefix selects Docker's
+`node-infra-dev`. For a Quadlet `node-a` instance, use the commented prefix
+instead. The remaining commands are the same in both containers.
+
+```sh
+node_exec() { docker exec node-infra-dev "$@"; }
+# Quadlet: node_exec() { sudo podman exec node-infra-node-a "$@"; }
+node_exec /usr/libexec/node-infra/node-infra-runtime health
+node_exec connector-ctl egress status \
+  --runtime-dir /run/connector-egress/local
+node_exec journalctl -u connector-egress.service --no-pager
+# After editing the mounted gateway/Area files:
+node_exec systemctl reload connector-egress
+node_exec connector-ctl egress status \
+  --runtime-dir /run/connector-egress/local
+```
+
+Compare `snapshot.configuration_generation` with the pre-reload value and read
+`snapshot.reload_error` in the CLI result. Wait for a newly saved observation:
+SIGHUP submission alone is not confirmation of policy activation. An advanced
+generation with no reload error shows that the configuration was accepted;
+verify the affected allow/deny traffic afterward. Rejected reload keeps the last accepted policy; interface recovery
+can require controlled intervention. The status file exposes interface, context
+and NAT observations. The read-only [egress status CLI](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md#diagnostics-and-recovery)
+reports the saved snapshot, its file modification time and age; it does not
+establish live gateway health. Forward traffic
+creates forwarding state automatically and protocol inactivity reclaims mappings/contexts; an API registration call per
+sandbox is not part of this workflow. See the native [egress contract](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md)
+for pool capacity, timeouts, reload and failure behavior.
+
+For a shared remote gateway, operate that gateway independently and configure a
+real dedicated transit path according to [Connector egress](https://github.com/kuasar-sandbox/connector/blob/main/docs/egress.md).
+Omit local `link.json` ownership when the node does not own a local pair. An
+existing site-managed Linux gateway remains the explicit integration option
+below; it is no longer required just to supply an ordinary native exit.
 
 ## Explicit external management and egress
 
@@ -416,6 +580,7 @@ Use a dedicated native cgroup parent so recovery can prove that all old consumer
 have ended even when the caller dies immediately after `docker start`:
 
 ```sh
+# Reuse IMAGE and CONFIG_ROOT from the configured Docker example above.
 name=node-a
 run=/run/node-infra/instances/$name
 state=/var/lib/node-infra/instances/$name
@@ -430,13 +595,13 @@ id=$(docker create --tty --name node-infra-$name --pull=never --privileged \
   --network=host --cgroupns=private --cgroup-parent="$parent" \
   --cpus=4 --memory=6g --memory-swap=6g --stop-timeout=420 \
   --tmpfs=/run --tmpfs=/run/lock --tmpfs=/tmp:exec \
-  -v "$CONFIG/node-conductor/conf.d:/etc/node-conductor/conf.d:ro" \
-  -v "$CONFIG/node-proxy/conf.d:/etc/node-proxy/conf.d:ro" \
-  -v "$CONFIG/connector-vswitch/conf.d:/etc/connector-vswitch/conf.d:ro" \
-  -v "$CONFIG/manifest.yaml:/etc/node-infra/manifest.yaml:ro" \
+  -v "$CONFIG_ROOT/node-conductor/conf.d:/etc/node-conductor/conf.d:ro" \
+  -v "$CONFIG_ROOT/node-proxy/conf.d:/etc/node-proxy/conf.d:ro" \
+  -v "$CONFIG_ROOT/connector-vswitch/conf.d:/etc/connector-vswitch/conf.d:ro" \
+  -v "$CONFIG_ROOT/manifest.yaml:/etc/node-infra/manifest.yaml:ro" \
   -v "$state/data:/var/lib/node-infra:rw" \
   -v "$state/recovery:/run/node-infra/recovery:rw" \
-  -v "$run/netns:/run/netns:rw,rslave" -v "$run/bpf:/sys/fs/bpf:rw" "$IMAGE_ID")
+  -v "$run/netns:/run/netns:rw,rslave" -v "$run/bpf:/sys/fs/bpf:rw" "$IMAGE")
 sudo ./bin/node-infra-ctl prepare --runtime docker --name "$name" --container "$id"
 docker start "$id"
 sudo ./bin/node-infra-ctl started --runtime docker --name "$name"

@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Exercise the Quick Start client's process, cancellation and ownership boundaries."""
+import contextlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
@@ -91,11 +93,33 @@ class QuickStartRunTests(unittest.TestCase):
             self.assertEqual(self.calls, [])
             return subprocess.CompletedProcess(command, next(statuses))
 
-        with mock.patch.object(subprocess, 'run', side_effect=health) as check, \
+        progress = io.StringIO()
+        with contextlib.redirect_stderr(progress), \
+                mock.patch.object(subprocess, 'run', side_effect=health) as check, \
                 mock.patch.object(subprocess, 'Popen', side_effect=self.exec_client):
             self.assertEqual(cli.run(['/bin/true']), 0)
         self.assertEqual(check.call_count, 2)
         self.assertEqual(self.calls.count(('POST', '/sandboxes')), 1)
+        self.assertEqual(progress.getvalue().count('waiting for Proxy readiness'), 1)
+        self.assertIn('node-infra-run: sandbox ' + self.sid, progress.getvalue())
+
+    def test_help_and_invalid_arguments_do_not_connect_to_a_node(self):
+        for arguments, expected in [(['--help'], 0), (['-h'], 0), ([], 2),
+                                    (['--'], 2), (['/bin/sh'], 2),
+                                    (['--help', 'extra'], 2)]:
+            with self.subTest(arguments=arguments):
+                output, error = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(error), \
+                        mock.patch.object(cli, 'run') as run:
+                    self.assertEqual(cli.main(arguments), expected)
+                    run.assert_not_called()
+                if expected == 0:
+                    self.assertIn('docker exec -it ks-dev', output.getvalue())
+                    self.assertIn('Each invocation uses a new Guest', output.getvalue())
+                    self.assertEqual(error.getvalue(), '')
+                else:
+                    self.assertEqual(output.getvalue(), '')
+                    self.assertIn('--help', error.getvalue())
 
     def test_proxy_readiness_timeout_leaves_no_guest(self):
         self.patch('proxy_ready', self.native_health)
