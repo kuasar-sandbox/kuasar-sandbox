@@ -755,6 +755,56 @@
           ]
         }
       }
+    },
+    {
+      "candidate": {
+        "repository": "kuasar-sandbox/sandboxer",
+        "pull_request_number": 496,
+        "base_ref": "main",
+        "base_sha": "33bdf223f6d88a836d866fc000af33277ed11247",
+        "head_sha": "7068dc7a65a00ab35f710600305e378b4f70cb56",
+        "candidate_sha": "84e5b76306195cdebd496a6cc2a5839dea8e11c0"
+      },
+      "units": {
+        "accelerator": {
+          "tag": "v0.2.0-preview.20261128",
+          "sha": "55f9278bcc7a882a4ed0b031cd2be2908f726c17",
+          "release_id": 461212654,
+          "assets": [
+            {
+              "name": "accelerator-v0.2.0-preview.20261128-linux-aarch64.tar.gz",
+              "id": 802734960,
+              "size": 36795225,
+              "digest": "sha256:5bd141ded9f22a3f06b967a665d0ca953c19695ecc86d6e91aa1db5a592f2cf6"
+            },
+            {
+              "name": "accelerator-v0.2.0-preview.20261128-linux-x86_64.tar.gz",
+              "id": 802735056,
+              "size": 40293837,
+              "digest": "sha256:b6a5577be8860071166c89e0f2e1eefa29b4c00ccba344a547aeeaf20d057eea"
+            }
+          ]
+        },
+        "orchestrator": {
+          "tag": "v0.2.0-preview.20261127.1",
+          "sha": "24abd95386fde39cc365d2f2987d963272bced17",
+          "release_id": 461189400,
+          "assets": [
+            {
+              "name": "orchestrator-v0.2.0-preview.20261127.1-linux-aarch64.tar.gz",
+              "id": 802609754,
+              "size": 102083887,
+              "digest": "sha256:55061e1f2fc5cbae2860b1b426aa6cf37d83c3420516482c68652a113ba72327"
+            },
+            {
+              "name": "orchestrator-v0.2.0-preview.20261127.1-linux-x86_64.tar.gz",
+              "id": 802609969,
+              "size": 111199671,
+              "digest": "sha256:bb38882635e9b4eaa87a12f25c56f4e3d4a2be24981b679d241fa06aa6c79e39"
+            }
+          ]
+        }
+      }
     }
   ]
 }
