@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import gzip
+import io
 import json
 import os
 from pathlib import Path
@@ -14,6 +15,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import zlib
 import importlib.util
 
 _spec = importlib.util.spec_from_file_location('demo_wheels', Path(__file__).with_name('demo_wheels.py'))
@@ -254,10 +256,117 @@ def sha256_bytes(data):
     return 'sha256:' + hashlib.sha256(data).hexdigest()
 
 
-def verify_image_archive(path, target):
+# Retain bounded small members for metadata discovered after the scan. Large
+# layers retain only digests. These are optimization limits, not input limits.
+IMAGE_METADATA_MEMBER_LIMIT = 4 * 1024**2
+IMAGE_METADATA_TOTAL_LIMIT = 16 * 1024**2
+_IMAGE_READ_SIZE = 1024**2
+
+
+class _ImageMemberStream:
+    """Hash the raw bytes while an optional gzip reader hashes their expansion."""
+    def __init__(self, source, capture):
+        self.source, self.capture = source, capture
+        self.hash = hashlib.sha256()
+        self.source_error = None
+
+    def read(self, size=-1):
+        try:
+            data = self.source.read(size)
+        except Exception as error:
+            self.source_error = error
+            raise
+        self.hash.update(data)
+        if self.capture is not None:
+            self.capture.extend(data)
+        return data
+
+
+class _ImageArchiveReader:
+    """Forward gzip summaries, bounded metadata and the strict legacy fallback."""
+    def __init__(self, archive, members):
+        self.archive, self.members = archive, members
+        self.forward = isinstance(archive.fileobj, gzip.GzipFile)
+        self.metadata, self.summaries = {}, {}
+        self.metadata_size = 0
+
+    def observe(self, member):
+        if not self.forward or not member.isfile():
+            return
+        capture = (bytearray() if member.size <= IMAGE_METADATA_MEMBER_LIMIT and
+                   self.metadata_size + member.size <= IMAGE_METADATA_TOTAL_LIMIT else None)
+        with self.archive.extractfile(member) as source:
+            compressed = source.peek(2)[:2] == b'\x1f\x8b'
+            stream = _ImageMemberStream(source, capture)
+            expanded, error = None, None
+            # Standard Docker layers and OCI blobs can be recognized before a
+            # late manifest. Other gzip members are read only if selected.
+            layer_name = (member.name.endswith(('.tar', '.tar.gz')) or
+                          re.fullmatch(r'blobs/sha256/[0-9a-f]{64}', member.name))
+            if compressed and layer_name:
+                try:
+                    with gzip.GzipFile(fileobj=stream) as decoded:
+                        expanded = 'sha256:' + hashlib.file_digest(decoded, 'sha256').hexdigest()
+                except (gzip.BadGzipFile, EOFError, zlib.error) as failure:
+                    if stream.source_error is not None:
+                        raise  # Outer archive/read failures are never deferred.
+                    error = failure
+            while stream.read(_IMAGE_READ_SIZE):
+                pass
+            raw = 'sha256:' + stream.hash.hexdigest()
+            self.summaries[member.name] = (raw, expanded if compressed else raw, error)
+        if capture is not None:
+            self.metadata[member.name] = bytes(capture)
+            self.metadata_size += len(capture)
+
+    def finish(self):
+        if self.forward:
+            # tar stops at its end marker; consume the gzip trailer as well.
+            while self.archive.fileobj.read(_IMAGE_READ_SIZE):
+                pass
+
+    def member(self, name):
+        relative_input(name)
+        require(name in self.members and self.members[name].isfile(), f'missing image archive member: {name}')
+        return self.members[name]
+
+    def regular(self, name):
+        member = self.member(name)
+        if name in self.metadata:
+            return io.BytesIO(self.metadata[name])
+        return self.archive.extractfile(member)
+
+    def raw_digest(self, name):
+        self.member(name)
+        if name in self.summaries:
+            return self.summaries[name][0]
+        with self.regular(name) as stream:
+            return 'sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest()
+
+    def layer_digest(self, name):
+        self.member(name)
+        if name in self.summaries:
+            _, expanded, error = self.summaries[name]
+            if error is not None:
+                raise error
+            if expanded is not None:
+                return expanded
+        # Uncompressed outer archives, oversized metadata and nonstandard gzip
+        # layer names keep the original strict reader; failures are not retried.
+        with self.regular(name) as stream:
+            compressed = stream.read(2) == b'\x1f\x8b'
+            stream.seek(0)
+            if compressed:
+                with gzip.GzipFile(fileobj=stream) as expanded:
+                    return 'sha256:' + hashlib.file_digest(expanded, 'sha256').hexdigest()
+            return 'sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def verify_image_archive(path, target, *, include_metadata=False):
     """Verify a Docker-save archive without loading it or extracting its layers."""
     with tarfile.open(path) as archive:
         members = {}
+        reader = _ImageArchiveReader(archive, members)
         for member in archive:
             name = member.name.rstrip('/') if member.isdir() else member.name
             relative_input(name)
@@ -270,14 +379,13 @@ def verify_image_archive(path, target):
             require(member.isfile() or member.isdir() or legacy_alias, f'unsafe image archive member: {name}')
             require(not member.mode & 0o7022, f'unsafe image archive permissions: {name}')
             members[name] = member
+            reader.observe(member)
+        reader.finish()
         for name in members:
             require(all(str(parent) not in members or members[str(parent)].isdir()
                         for parent in Path(name).parents), f'conflicting image archive path: {name}')
 
-        def regular(name):
-            relative_input(name)
-            require(name in members and members[name].isfile(), f'missing image archive member: {name}')
-            return archive.extractfile(members[name])
+        regular = reader.regular
 
         with regular('manifest.json') as stream:
             manifests = json.load(stream)
@@ -292,14 +400,7 @@ def verify_image_archive(path, target):
         require(rootfs['type'] == 'layers' and isinstance(layers, list) and
                 len(layers) == len(rootfs['diff_ids']), 'image archive layer count differs from config')
         for name, expected in zip(layers, rootfs['diff_ids']):
-            with regular(name) as stream:
-                compressed = stream.read(2) == b'\x1f\x8b'
-                stream.seek(0)
-                if compressed:
-                    with gzip.GzipFile(fileobj=stream) as expanded:
-                        actual = 'sha256:' + hashlib.file_digest(expanded, 'sha256').hexdigest()
-                else:
-                    actual = 'sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest()
+            actual = reader.layer_digest(name)
             require(actual == expected, f'image archive layer differs from config: {name}')
         verified_layers = dict(zip(layers, rootfs['diff_ids']))
         for member in members.values():
@@ -315,10 +416,8 @@ def verify_image_archive(path, target):
                 identity = descriptor['digest']
                 require(re.fullmatch(r'sha256:[0-9a-f]{64}', identity), 'unsupported archive blob digest')
                 name = 'blobs/sha256/' + identity.split(':')[1]
-                with regular(name) as stream:
-                    require(members[name].size == descriptor['size'] and
-                            'sha256:' + hashlib.file_digest(stream, 'sha256').hexdigest() == identity,
-                            'archive OCI descriptor mismatch')
+                require(reader.member(name).size == descriptor['size'] and reader.raw_digest(name) == identity,
+                        'archive OCI descriptor mismatch')
                 return name
 
             def manifests_from(index, seen):
@@ -348,7 +447,10 @@ def verify_image_archive(path, target):
                     blob(oci[0]['config']) == manifest['Config'] and
                     [blob(layer) for layer in oci[0]['layers']] == layers,
                     'archive OCI and Docker manifests disagree')
-        return {'image_id': sha256_bytes(data), 'config_size': len(data), 'layers': len(layers)}
+        result = {'image_id': sha256_bytes(data), 'config_size': len(data), 'layers': len(layers)}
+        if include_metadata:
+            result.update(manifest=manifest, config=config)
+        return result
 
 
 def verify_registry_identity(record, image):

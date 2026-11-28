@@ -1,9 +1,11 @@
 """Local dependency verification; Docker calls are mocked only in call-contract tests."""
+import builtins
 import copy
 import gzip
 import io
 import json
 import os
+import random
 from pathlib import Path
 import shutil
 import subprocess
@@ -11,6 +13,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import zlib
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parent / 'lib'))
@@ -508,6 +511,233 @@ class InputTests(unittest.TestCase):
                             for record in result['images'].values()))
         self.assertEqual([call.args[0][-1] for call in run.call_args_list
                           if call.args[0][:3] == ['docker', 'image', 'save']], list(records))
+
+
+
+class ImageArchiveForwardReadTests(unittest.TestCase):
+    """Real small gzip archives exercise physical order and strict fallback."""
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.path = self.root / 'image.tar.gz'
+
+    def contents(self, *, oci=False, legacy=False, unusual=False, compressed_layers=False,
+                 layer_transform=None, oci_mutation=None):
+        physical, diff_ids = {}, {}
+        for number in range(4):
+            layer = io.BytesIO()
+            with tarfile.open(fileobj=layer, mode='w') as archive:
+                data = random.Random(number).randbytes(16 * 1024)
+                member = tarfile.TarInfo('payload')
+                member.size, member.mode = len(data), 0o644
+                archive.addfile(member, io.BytesIO(data))
+            raw = layer.getvalue()
+            data = gzip.compress(raw, mtime=0) if oci or compressed_layers else raw
+            if layer_transform and number == 0:
+                data = layer_transform(data)
+            name = ('blobs/sha256/' + workspace.sha256_bytes(data).split(':')[1] if oci else
+                    workspace.sha256_bytes(raw).split(':')[1] + '.tar' if legacy else
+                    f'payload-{number}' if unusual else f'layers/{number}/layer.tar')
+            physical[name], diff_ids[name] = data, workspace.sha256_bytes(raw)
+        # Deliberately disagree with physical archive order.
+        layers = list(reversed(physical))
+        config = {'os': 'linux', 'architecture': 'amd64',
+                  'rootfs': {'type': 'layers', 'diff_ids': [diff_ids[name] for name in layers]}}
+        config_data = json.dumps(config).encode()
+        config_name = ('blobs/sha256/' + workspace.sha256_bytes(config_data).split(':')[1]
+                       if oci else 'config.json')
+        manifest = {'Config': config_name, 'Layers': layers, 'RepoTags': ['example:test']}
+        metadata = {config_name: config_data}
+        if oci:
+            def descriptor(data):
+                return {'digest': workspace.sha256_bytes(data), 'size': len(data)}
+            document = {'schemaVersion': 2, 'config': descriptor(config_data),
+                        'layers': [descriptor(physical[name]) for name in layers]}
+            if oci_mutation:
+                oci_mutation(document)
+            data = json.dumps(document).encode()
+            metadata['blobs/sha256/' + descriptor(data)['digest'].split(':')[1]] = data
+            nested = json.dumps({'schemaVersion': 2, 'manifests': [descriptor(data)]}).encode()
+            metadata['blobs/sha256/' + descriptor(nested)['digest'].split(':')[1]] = nested
+            metadata['index.json'] = json.dumps({'schemaVersion': 2, 'manifests': [descriptor(nested)]}).encode()
+            metadata['oci-layout'] = b'{"imageLayoutVersion":"1.0.0"}'
+        metadata['manifest.json'] = json.dumps([manifest]).encode()
+        items = list(physical.items()) + list(metadata.items())
+        if legacy:
+            member = tarfile.TarInfo('a' * 64 + '/layer.tar')
+            member.type, member.linkname, member.mode = tarfile.SYMTYPE, '../' + layers[0], 0
+            items.append((member, b''))
+        return items, config, manifest
+
+    def write(self, items, *, compressed=True):
+        with tarfile.open(self.path, 'w:gz' if compressed else 'w') as archive:
+            for name, data in items:
+                if isinstance(name, tarfile.TarInfo):
+                    member = name
+                else:
+                    member = tarfile.TarInfo(name)
+                    member.size, member.mode = len(data), 0o644
+                archive.addfile(member, io.BytesIO(data))
+
+    def counted_verify(self, *, no_rewind=True, **options):
+        metrics = {'read_bytes': 0, 'backward_seeks': 0, 'opens': 0}
+        real_open = builtins.open
+        path = str(self.path)
+
+        class CountedFile:
+            def __init__(self, source):
+                self.source = source
+            def read(self, size=-1):
+                data = self.source.read(size)
+                metrics['read_bytes'] += len(data)
+                return data
+            def seek(self, offset, whence=0):
+                previous = self.source.tell()
+                position = self.source.seek(offset, whence)
+                if position < previous:
+                    metrics['backward_seeks'] += 1
+                    if no_rewind:
+                        raise AssertionError('backward read of compressed archive')
+                return position
+            def __getattr__(self, name):
+                return getattr(self.source, name)
+
+        def counted_open(name, *args, **kwargs):
+            source = real_open(name, *args, **kwargs)
+            if not isinstance(name, int) and os.fspath(name) == path:
+                metrics['opens'] += 1
+                return CountedFile(source)
+            return source
+
+        with patch.object(builtins, 'open', side_effect=counted_open):
+            result = workspace.verify_image_archive(self.path, 'linux/amd64', **options)
+        return result, metrics
+
+    def test_docker_legacy_and_nested_oci_are_one_forward_gzip_pass(self):
+        for layout in ({}, {'legacy': True}, {'oci': True}):
+            for early_metadata in (False, True):
+                items, config, manifest = self.contents(**layout)
+                if early_metadata:
+                    items = items[4:] + items[:4]
+                self.write(items)
+                with self.subTest(layout=layout, early_metadata=early_metadata):
+                    result, metrics = self.counted_verify(include_metadata=True)
+                    self.assertEqual(result['config'], config)
+                    self.assertEqual(result['manifest'], manifest)
+                    self.assertEqual(result['layers'], 4)
+                    self.assertEqual(metrics['backward_seeks'], 0)
+                    self.assertEqual(metrics['opens'], 1)
+                    self.assertEqual(metrics['read_bytes'], self.path.stat().st_size)
+
+    def test_default_result_and_uncompressed_outer_archive_remain_compatible(self):
+        items, config, _ = self.contents(oci=True)
+        self.write(items)
+        compressed = workspace.verify_image_archive(self.path, 'linux/amd64')
+        self.assertEqual(set(compressed), {'image_id', 'config_size', 'layers'})
+        self.assertEqual(compressed['image_id'], workspace.sha256_bytes(json.dumps(config).encode()))
+        self.write(items, compressed=False)
+        self.assertEqual(workspace.verify_image_archive(self.path, 'linux/amd64'), compressed)
+
+    def test_metadata_limits_fall_back_without_weakening_validation(self):
+        items, _, _ = self.contents(oci=True)
+        self.write(items)
+        expected = workspace.verify_image_archive(self.path, 'linux/amd64')
+        for member_limit, total_limit in ((0, 16 * 1024**2), (4 * 1024**2, 0), (4 * 1024**2, 512)):
+            with self.subTest(member_limit=member_limit, total_limit=total_limit), patch.object(
+                    workspace, 'IMAGE_METADATA_MEMBER_LIMIT', member_limit), patch.object(
+                    workspace, 'IMAGE_METADATA_TOTAL_LIMIT', total_limit):
+                actual, metrics = self.counted_verify(no_rewind=False)
+                self.assertEqual(actual, expected)
+                self.assertGreater(metrics['backward_seeks'], 0)
+                with self.assertRaisesRegex(ValueError, 'wrong image platform'):
+                    workspace.verify_image_archive(self.path, 'linux/arm64')
+                damaged = list(items)
+                name, data = damaged[0]
+                # Change only gzip header mtime: same expanded layer, wrong OCI raw digest.
+                damaged[0] = (name, data[:4] + bytes([data[4] ^ 1]) + data[5:])
+                self.write(damaged)
+                with self.assertRaisesRegex(ValueError, 'OCI descriptor mismatch'):
+                    workspace.verify_image_archive(self.path, 'linux/amd64')
+                self.write(items)
+
+    def test_nonstandard_gzip_layer_names_use_strict_reader(self):
+        items, _, _ = self.contents(unusual=True, compressed_layers=True)
+        self.write(items)
+        expected = workspace.verify_image_archive(self.path, 'linux/amd64')
+        with patch.object(workspace, 'IMAGE_METADATA_TOTAL_LIMIT', 0):
+            result, metrics = self.counted_verify(no_rewind=False)
+            self.assertEqual(result, expected)
+            self.assertGreater(metrics['backward_seeks'], 0)
+
+    def test_raw_oci_digest_size_and_cross_manifest_identity_still_bind(self):
+        for mutation in ('raw', 'size', 'config'):
+            mutate = None
+            if mutation == 'size':
+                mutate = lambda document: document['layers'][0].update(size=document['layers'][0]['size'] + 1)
+            elif mutation == 'config':
+                mutate = lambda document: document.update(config=document['layers'][0])
+            items, _, _ = self.contents(oci=True, oci_mutation=mutate)
+            if mutation == 'raw':
+                name, data = items[0]
+                items[0] = (name, data[:4] + bytes([data[4] ^ 1]) + data[5:])
+            self.write(items)
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ValueError, 'descriptor mismatch|manifests disagree'):
+                self.counted_verify()
+
+    def test_selected_bad_gzip_never_becomes_a_fallback_success(self):
+        transforms = {
+            'crc': lambda data: data[:-8] + bytes([data[-8] ^ 1]) + data[-7:],
+            'truncated': lambda data: data[:-6],
+            'invalid': lambda data: b'\x1f\x8b' + b'not a gzip layer',
+        }
+        for unusual in (False, True):
+            for label, transform in transforms.items():
+                items, _, _ = self.contents(unusual=unusual, compressed_layers=True, layer_transform=transform)
+                self.write(items)
+                with self.subTest(unusual=unusual, fault=label), self.assertRaises((OSError, EOFError, zlib.error)):
+                    workspace.verify_image_archive(self.path, 'linux/amd64')
+        items, _, _ = self.contents()
+        items.append(('unused.tar', b'\x1f\x8bnot a selected layer'))
+        self.write(items)
+        self.assertEqual(workspace.verify_image_archive(self.path, 'linux/amd64')['layers'], 4)
+
+    def test_outer_gzip_crc_and_truncated_trailer_are_checked(self):
+        items, _, _ = self.contents()
+        self.write(items)
+        data = self.path.read_bytes()
+        for damaged in (data[:-8] + bytes([data[-8] ^ 1]) + data[-7:], data[:-6]):
+            self.path.write_bytes(damaged)
+            with self.assertRaises((OSError, EOFError, tarfile.TarError)):
+                workspace.verify_image_archive(self.path, 'linux/amd64')
+
+    def test_gzip_member_safety_and_legacy_alias_rules_are_not_bypassed(self):
+        for fault in ('path', 'duplicate', 'permissions', 'hardlink', 'parent', 'alias'):
+            items, _, _ = self.contents(legacy=True)
+            if fault == 'alias':
+                items[-1][0].linkname = '../config.json'
+            elif fault == 'parent':
+                items.append(('a' * 64, b'not a directory'))
+            else:
+                name = '../escape' if fault == 'path' else 'manifest.json' if fault == 'duplicate' else 'extra'
+                member = tarfile.TarInfo(name)
+                member.mode = 0o666 if fault == 'permissions' else 0o644
+                if fault == 'hardlink':
+                    member.type, member.linkname = tarfile.LNKTYPE, 'config.json'
+                items.append((member, b''))
+            self.write(items)
+            with self.subTest(fault=fault), self.assertRaises(ValueError):
+                self.counted_verify()
+
+    def test_changed_expanded_layer_is_rejected_with_metadata_budget_exhausted(self):
+        items, _, _ = self.contents()
+        name, data = items[0]
+        items[0] = (name, data + b'changed layer')
+        self.write(items)
+        for budget in (16 * 1024**2, 0):
+            with patch.object(workspace, 'IMAGE_METADATA_TOTAL_LIMIT', budget), self.assertRaisesRegex(
+                    ValueError, 'layer differs from config'):
+                workspace.verify_image_archive(self.path, 'linux/amd64')
 
 
 if __name__ == '__main__':
