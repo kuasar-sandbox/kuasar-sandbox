@@ -24,6 +24,12 @@ on:
       stage_artifact:
         default: ""
         type: string
+      stage_format:
+        default: "full"
+        type: string
+      stage_identity:
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -119,13 +125,77 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           overwrite: true
-      - name: Download exact aggregate stage
+      - name: Validate stage transport format
         if: inputs.stage_artifact != ''
+        env:
+          STAGE_FORMAT: ${{ inputs.stage_format }}
+        run: |
+          case "$STAGE_FORMAT" in full|partitioned-v1) ;; *) echo "unsupported stage transport" >&2; exit 1 ;; esac
+      - name: Download exact aggregate stage
+        if: inputs.stage_artifact != '' && inputs.stage_format == 'full'
         uses: ./framework/.github/actions/download-artifact
         timeout-minutes: 35
         with:
           name: ${{ inputs.stage_artifact }}
           path: aggregate-stage
+      - name: Bind the exact stage metadata upload
+        if: inputs.stage_artifact != '' && inputs.stage_format == 'partitioned-v1'
+        env:
+          STAGE_IDENTITY: ${{ inputs.stage_identity }}
+          STAGE_ARTIFACT: ${{ inputs.stage_artifact }}
+        run: >-
+          python3 -B framework/ci/integration/stage_transport.py request-metadata --artifact "$STAGE_ARTIFACT" --output stage-identity.json
+      - name: Download verified stage metadata
+        if: inputs.stage_artifact != '' && inputs.stage_format == 'partitioned-v1'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ inputs.stage_artifact }}
+          expected-identity: stage-identity.json
+          path: stage-parts/metadata
+      - name: Bind the required stage parts
+        if: inputs.stage_artifact != '' && inputs.stage_format == 'partitioned-v1'
+        id: stage_parts
+        env:
+          STAGE_ARTIFACT: ${{ inputs.stage_artifact }}
+          FRAMEWORK_SHA: ${{ inputs.framework_sha }}
+          TARGET_ARCH: ${{ inputs.arch }}
+        run: >-
+          python3 -B framework/ci/integration/stage_transport.py requests --metadata stage-parts/metadata --output stage-requests
+          --scope core --arch "$TARGET_ARCH" --artifact "$STAGE_ARTIFACT" --framework-sha "$FRAMEWORK_SHA" --plan plan/plan.json
+      - name: Download common stage part
+        if: inputs.stage_artifact != '' && inputs.stage_format == 'partitioned-v1'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.common }}
+          expected-identity: stage-requests/common.json
+          path: stage-parts/common
+      - name: Download core-x86_64 stage part
+        if: inputs.stage_artifact != '' && inputs.stage_format == 'partitioned-v1' && inputs.arch == 'x86_64'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.core_x86_64 }}
+          expected-identity: stage-requests/core-x86_64.json
+          path: stage-parts/core-x86_64
+      - name: Download core-aarch64 stage part
+        if: inputs.stage_artifact != '' && inputs.stage_format == 'partitioned-v1' && inputs.arch == 'aarch64'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.core_aarch64 }}
+          expected-identity: stage-requests/core-aarch64.json
+          path: stage-parts/core-aarch64
+      - name: Reconstruct the existing stage layout
+        if: inputs.stage_artifact != '' && inputs.stage_format == 'partitioned-v1'
+        env:
+          STAGE_ARTIFACT: ${{ inputs.stage_artifact }}
+          FRAMEWORK_SHA: ${{ inputs.framework_sha }}
+          TARGET_ARCH: ${{ inputs.arch }}
+        run: >-
+          python3 -B framework/ci/integration/stage_transport.py restore --parts stage-parts --output aggregate-stage
+          --scope core --arch "$TARGET_ARCH" --artifact "$STAGE_ARTIFACT" --framework-sha "$FRAMEWORK_SHA" --plan plan/plan.json
       - name: Obtain only this target's exact assets
         env:
           GH_TOKEN: ${{ github.token }}
