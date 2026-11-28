@@ -762,8 +762,8 @@
         "pull_request_number": 592,
         "base_ref": "main",
         "base_sha": "db702c9c17d0cc8a2733bab4f87a23577e337ef6",
-        "head_sha": "d9d8428e91fa11254f163255812d4585c17f4a0f",
-        "candidate_sha": "f431b13a0824ecf1fa7364409a7bdc0549295184"
+        "head_sha": "a562fe078348b05ead7ac99013019e48cb3f4cb3",
+        "candidate_sha": "54c60c2673ec67177f2ccc4567a1f3e0492391f6"
       },
       "units": {
         "sandboxer": {
