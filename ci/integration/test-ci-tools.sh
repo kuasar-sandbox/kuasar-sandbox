@@ -295,6 +295,7 @@ set -e
 
 python3 - "$SCRIPT_DIR/../.." "$workflow" <<'PY'
 import pathlib
+import re
 import sys
 
 root = pathlib.Path(sys.argv[1])
@@ -311,7 +312,11 @@ assert "previous-required-check" not in caller
 assert "bms / finalize" not in caller
 aggregate = (root / ".github/workflows/aggregate-release.yml").read_text()
 assert "uses: ./.github/workflows/integration-tests.yml" in aggregate
-assert "needs: [prepare, release-asset-validation]" in aggregate
+publish = re.search(r"(?ms)^  publish:\n(.*?)(?=^  [a-z][a-z0-9_-]*:\n|\Z)", aggregate)
+assert publish, "aggregate publish job is missing"
+assert "    needs: [prepare, stage, release-asset-validation]\n" in publish[1]
+assert "    if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository\n" in publish[1]
+assert "          STAGE_IDENTITY: ${{ needs.stage.outputs.artifact_identity }}\n" in publish[1]
 assert "bms-e2e.yml" not in aggregate
 assert (root / ".github/workflows/ci-entry.yml").is_file()
 assert 'create-github-app-token' not in execution
