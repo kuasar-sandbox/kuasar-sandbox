@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Publish the tested OCI bytes with their precomputed immutable index identity."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import base64
 import importlib.util
 import json
@@ -72,7 +73,10 @@ def publish(bundle, version, revision, plan, validation, workbench, *, read_only
         anonymous.write_text('{"auths":{}}\n')
         layout = root / 'oci'
         layout_from_archives(bundle, document, layout)
-        for arch, image in document['images'].items():
+
+        def publish_architecture(arch, image):
+            destination = root / arch
+            destination.mkdir()
             tag = reference + '-' + node.ARCHES[arch]
             raw = registry.inspect_raw(tag, auth, missing=True)
             if raw is None:
@@ -87,13 +91,21 @@ def publish(bundle, version, revision, plan, validation, workbench, *, read_only
             config = registry.inspect_raw(immutable, anonymous, config=True)
             node.require(registry.digest(config) == image['config_digest'], 'published node-infra config differs from tested image')
             # Read all referenced layer bytes, not only an index/config receipt.
-            readback = root / 'readback.tar'
+            readback = destination / 'readback.tar'
             subprocess.run(['skopeo', 'copy', '--preserve-digests', '--authfile', str(anonymous),
                             'docker://' + immutable, 'oci-archive:' + str(readback)], check=True, timeout=1800)
             observed = node.inspect_oci(readback, arch, version=version, revision=revision)
             node.require(observed['manifest_digest'] == image['manifest_digest']
                          and observed['image_id'] == image['id'], 'public node-infra layer/config identity differs')
             readback.unlink()
+
+        # The completed OCI layout and auth files are read-only to both
+        # workers. Join them, including on failure, before index publication.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = [pool.submit(publish_architecture, arch, image)
+                       for arch, image in document['images'].items()]
+            for future in futures:
+                future.result()
         raw = registry.inspect_raw(reference, auth, missing=True)
         if raw is None:
             node.require(not read_only, 'published aggregate is missing its node-infra index')
