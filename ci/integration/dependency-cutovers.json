@@ -708,56 +708,6 @@
     },
     {
       "candidate": {
-        "repository": "kuasar-sandbox/orchestrator",
-        "pull_request_number": 586,
-        "base_ref": "main",
-        "base_sha": "24abd95386fde39cc365d2f2987d963272bced17",
-        "head_sha": "8ea541762e918c3c06b87dbe3989d082857f20cd",
-        "candidate_sha": "422bb77273c0491b98757a2ff9b993b5594e7e0a"
-      },
-      "units": {
-        "sandboxer": {
-          "tag": "v0.2.0-preview.20261127.1",
-          "sha": "33bdf223f6d88a836d866fc000af33277ed11247",
-          "release_id": 460592632,
-          "assets": [
-            {
-              "name": "sandboxer-v0.2.0-preview.20261127.1-linux-aarch64.tar.gz",
-              "id": 800467773,
-              "size": 15444611,
-              "digest": "sha256:7b5b5fd8d35fc5f18a5175cd83b08edf1ecdf611926c9375f67f973d3f1bbb9b"
-            },
-            {
-              "name": "sandboxer-v0.2.0-preview.20261127.1-linux-x86_64.tar.gz",
-              "id": 800467946,
-              "size": 16620134,
-              "digest": "sha256:d210e979aab052832dd5abec1b2ec4334e831620b8c6eb11bf0bd0c6f2e0bdb2"
-            }
-          ]
-        },
-        "accelerator": {
-          "tag": "v0.2.0-preview.20261127.1",
-          "sha": "aed33d7fde940921d2ff0bf2b2a3ac78804cfe1e",
-          "release_id": 460681107,
-          "assets": [
-            {
-              "name": "accelerator-v0.2.0-preview.20261127.1-linux-aarch64.tar.gz",
-              "id": 800743503,
-              "size": 35861742,
-              "digest": "sha256:c2397b64c9a3b251820f2e3ea0ffeca7917e236a504c9aa6b274d35e32457c18"
-            },
-            {
-              "name": "accelerator-v0.2.0-preview.20261127.1-linux-x86_64.tar.gz",
-              "id": 800743708,
-              "size": 39260673,
-              "digest": "sha256:78fa83cd733271cabdc51675bd51a77686d4580628429b3cb6de92de28a8cab3"
-            }
-          ]
-        }
-      }
-    },
-    {
-      "candidate": {
         "repository": "kuasar-sandbox/sandboxer",
         "pull_request_number": 496,
         "base_ref": "main",
