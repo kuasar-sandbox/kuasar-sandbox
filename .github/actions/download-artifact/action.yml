@@ -10,6 +10,12 @@ inputs:
   path:
     description: New destination directory
     required: true
+  expected-identity:
+    description: Optional schema-1 JSON file binding repository/run and exact artifact names, IDs and ZIP digests
+    default: ''
+outputs:
+  artifacts:
+    description: Frozen same-run metadata for the verified downloaded archives
 runs:
   using: node24
   main: index.js
