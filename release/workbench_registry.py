@@ -1,5 +1,6 @@
 """Publish verified workbench archives without rebuilding or replacing image tags."""
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import publication_body
 import base64
@@ -111,13 +112,15 @@ def publish(bundle, version, revision, plan, validation, workbench, *, read_only
         auth.chmod(0o600)
         anonymous = root / 'anonymous.json'
         anonymous.write_text('{"auths":{}}\n')
-        children = {}
-        for arch, receipt in receipts.items():
+
+        def publish_architecture(arch, receipt):
+            destination = root / arch
+            destination.mkdir()
             tag = reference + '-' + arch
             raw = inspect_raw(tag, auth, missing=True)
             if raw is None:
                 require(not read_only, 'published Release is missing its Workbench image; refusing to alter completed publication')
-                archive = root / 'image.tar'
+                archive = destination / 'image.tar'
                 # skopeo consumes the saved image, never a rebuilt Dockerfile.
                 with gzip.open(bundle / 'assets' / receipt['archive'], 'rb') as source, archive.open('wb') as output:
                     shutil.copyfileobj(source, output, 1024 * 1024)
@@ -125,16 +128,24 @@ def publish(bundle, version, revision, plan, validation, workbench, *, read_only
                                 'docker://' + tag], check=True, timeout=1800)
                 archive.unlink()
                 raw = inspect_raw(tag, auth)
-            children[arch] = check_manifest(raw, inspect_raw(tag, auth, config=True), receipt)
+            child = check_manifest(raw, inspect_raw(tag, auth, config=True), receipt)
             # No private-only image is a public delivery. This also verifies
             # the content-addressed reference independently of mutable tags.
-            immutable = REPOSITORY + '@' + children[arch]['digest']
+            immutable = REPOSITORY + '@' + child['digest']
             public = inspect_raw(immutable, anonymous)
             require(public == raw, 'public registry manifest differs from the published bytes')
             check_manifest(public, inspect_raw(immutable, anonymous, config=True), receipt)
             # Config/index identities alone do not prove readable layer bytes.
             # This also checks reused tags on a resumed publication.
-            verify_public_layers(immutable, receipt, anonymous, root / 'public-image.tar')
+            verify_public_layers(immutable, receipt, anonymous, destination / 'public-image.tar')
+            return child
+
+        # The context waits for both workers even when one fails; no index
+        # is published until both anonymous full-layer readbacks succeed.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            futures = {arch: pool.submit(publish_architecture, arch, receipt)
+                       for arch, receipt in receipts.items()}
+            children = {arch: future.result() for arch, future in futures.items()}
         raw = inspect_raw(reference, auth, missing=True)
         if raw is None:
             require(not read_only, 'published Release is missing its Workbench index; refusing to alter completed publication')

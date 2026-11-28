@@ -1,5 +1,7 @@
 import copy
 import json
+import gzip
+import threading
 import io
 import tarfile
 import os
@@ -198,6 +200,155 @@ class RegistryTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'missing its Workbench image'):
                     subject.publish(Path(directory), VERSION, REVISION, {}, {}, {}, read_only=True)
                 command.assert_not_called()
+
+
+    def test_parallel_uploads_and_readbacks_use_private_paths_before_index(self):
+        images = {arch: image(arch) for arch in subject.PLATFORMS}
+        children = {arch: subject.check_manifest(raw, config, receipt)
+                    for arch, (config, raw, receipt) in images.items()}
+        index = json.dumps({'schemaVersion': 2, 'manifests': [
+            {'digest': row['digest'], 'size': row['size'],
+             'platform': {'os': 'linux', 'architecture': subject.PLATFORMS[arch]}}
+            for arch, row in children.items()]}).encode()
+        reference = subject.REPOSITORY + ':' + VERSION.removeprefix('release-')
+        uploads, readbacks = threading.Barrier(2, timeout=5), threading.Barrier(2, timeout=5)
+        lock = threading.Lock()
+        tags, completed, paths = {}, set(), {}
+
+        def inspect(ref, auth, *, config=False, missing=False):
+            credentials = json.loads(auth.read_text())
+            self.assertEqual(credentials, {'auths': {}} if auth.name == 'anonymous.json' else {
+                'auths': {'ghcr.io': {'auth': 'Zml4dHVyZTpmaXh0dXJlLW9ubHk='}}})
+            if auth.name == 'config.json':
+                self.assertEqual(auth.stat().st_mode & 0o777, 0o600)
+            with lock:
+                if ref == reference:
+                    self.assertEqual(completed, set(images))
+                    return tags.get(ref)
+                for arch, (image_config, raw, _) in images.items():
+                    if ref in (reference + '-' + arch, subject.REPOSITORY + '@' + subject.digest(raw)):
+                        if config:
+                            return image_config
+                        return tags.get(ref) if '@' not in ref else raw
+            self.fail('unexpected reference: ' + ref)
+
+        def transfer(command, **kwargs):
+            if command[:2] == ['skopeo', 'copy']:
+                archive = Path(command[-2].removeprefix('docker-archive:'))
+                arch = archive.parent.name
+                self.assertEqual(archive.read_bytes(), arch.encode())
+                self.assertEqual(command[-1], 'docker://' + reference + '-' + arch)
+                uploads.wait()  # Serial implementations cannot pass this rendezvous.
+                with lock:
+                    tags[reference + '-' + arch] = images[arch][1]
+                    paths[arch] = archive.parent
+            else:
+                self.assertEqual(command[:2], ['docker', 'manifest'])
+                self.assertEqual(completed, set(images))
+                if command[2] == 'create':
+                    self.assertEqual(command[4:], [subject.REPOSITORY + '@' + row['digest']
+                                                  for row in children.values()])
+                else:
+                    self.assertEqual(command[2:], ['push', reference])
+                    tags[reference] = index
+
+        def read_layers(ref, receipt, auth, destination):
+            arch = receipt['arch']
+            self.assertEqual(destination.parent.name, arch)
+            self.assertEqual(auth.name, 'anonymous.json')
+            self.assertFalse(destination.exists())
+            destination.write_bytes(arch.encode())
+            readbacks.wait()
+            self.assertEqual(destination.read_bytes(), arch.encode())
+            destination.unlink()
+            with lock:
+                completed.add(arch)
+
+        with tempfile.TemporaryDirectory() as directory:
+            bundle = Path(directory)
+            (bundle / 'assets').mkdir()
+            for arch, (_, _, receipt) in images.items():
+                (bundle / 'assets' / receipt['archive']).write_bytes(gzip.compress(arch.encode()))
+            with patch.object(subject, 'validate_stage', return_value={a: row[2] for a, row in images.items()}), \
+                 patch.dict(os.environ, GH_TOKEN='fixture-only', GITHUB_ACTOR='fixture'), \
+                 patch.object(subject, 'inspect_raw', side_effect=inspect), \
+                 patch.object(subject, 'verify_public_layers', side_effect=read_layers), \
+                 patch.object(subject.subprocess, 'run', side_effect=transfer):
+                result = subject.publish(bundle, VERSION, REVISION, {}, {}, {})
+        self.assertEqual(result['architectures'], children)
+        self.assertEqual(result['digest'], subject.digest(index))
+        self.assertEqual(set(paths), set(images))
+        self.assertEqual(len(set(paths.values())), 2)
+        self.assertTrue(all(not path.exists() for path in paths.values()))
+
+    def test_failed_readback_joins_other_worker_before_temporary_cleanup(self):
+        images = {arch: image(arch) for arch in subject.PLATFORMS}
+        reference = subject.REPOSITORY + ':' + VERSION.removeprefix('release-')
+        held, failed, release, finished, returned = (threading.Event() for _ in range(5))
+        errors, index_reads, roots = [], [], []
+
+        def inspect(ref, auth, *, config=False, missing=False):
+            if ref == reference:
+                index_reads.append(ref)
+                self.fail('index inspected after a failed architecture')
+            for arch, (image_config, raw, _) in images.items():
+                if ref in (reference + '-' + arch, subject.REPOSITORY + '@' + subject.digest(raw)):
+                    return image_config if config else raw
+            self.fail('unexpected reference: ' + ref)
+
+        def read_layers(ref, receipt, auth, destination):
+            if receipt['arch'] == 'x86_64':
+                self.assertTrue(held.wait(5))
+                failed.set()
+                raise ValueError('controlled public readback failure')
+            roots.append(destination.parent)
+            held.set()
+            self.assertTrue(release.wait(5))
+            self.assertTrue(auth.exists())
+            self.assertTrue(destination.parent.is_dir())
+            finished.set()
+
+        with tempfile.TemporaryDirectory() as directory:
+            def publish():
+                try:
+                    subject.publish(Path(directory), VERSION, REVISION, {}, {}, {})
+                except BaseException as error:
+                    errors.append(error)
+                finally:
+                    returned.set()
+            with patch.object(subject, 'validate_stage', return_value={a: row[2] for a, row in images.items()}), \
+                 patch.dict(os.environ, GH_TOKEN='fixture-only', GITHUB_ACTOR='fixture'), \
+                 patch.object(subject, 'inspect_raw', side_effect=inspect), \
+                 patch.object(subject, 'verify_public_layers', side_effect=read_layers), \
+                 patch.object(subject.subprocess, 'run') as command:
+                worker = threading.Thread(target=publish)
+                worker.start()
+                try:
+                    self.assertTrue(failed.wait(5))
+                    self.assertFalse(returned.wait(0.1))
+                    self.assertTrue(roots[0].is_dir())
+                finally:
+                    release.set()
+                    worker.join(6)
+                self.assertFalse(worker.is_alive())
+                self.assertTrue(finished.is_set())
+                command.assert_not_called()
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], ValueError)
+        self.assertIn('controlled public readback failure', str(errors[0]))
+        self.assertFalse(index_reads)
+        self.assertTrue(all(not path.exists() for path in roots))
+
+    def test_failed_complete_preflight_never_starts_workers_or_transport(self):
+        with patch.object(subject, 'validate_stage', side_effect=ValueError('stage rejected')), \
+             patch.object(subject, 'ThreadPoolExecutor') as pool, \
+             patch.object(subject, 'inspect_raw') as inspect, \
+             patch.object(subject.subprocess, 'run') as command:
+            with self.assertRaisesRegex(ValueError, 'stage rejected'):
+                subject.publish(Path('/unused'), VERSION, REVISION, {}, {}, {})
+            pool.assert_not_called()
+            inspect.assert_not_called()
+            command.assert_not_called()
 
 
 if __name__ == '__main__':

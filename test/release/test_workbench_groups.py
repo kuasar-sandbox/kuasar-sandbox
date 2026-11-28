@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 import sys
 import unittest
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / 'ci/integration'), str(ROOT / 'release')]
@@ -111,7 +111,14 @@ class GroupTests(unittest.TestCase):
                     with self.assertRaisesRegex(RuntimeError, 'mock registry transport'):
                         workbench_registry.publish(self.fixture.root, self.fixture.version, self.fixture.sha,
                                                    self.plan, self.fixture.validation, grouped)
-                    transport.assert_called_once()
+                    self.assertEqual(transport.call_count, 2)
+                    auth = transport.call_args_list[0].args[1]
+                    self.assertEqual(auth.name, 'config.json')
+                    reference = workbench_registry.REPOSITORY + ':' + self.fixture.version.removeprefix('release-')
+                    self.assertCountEqual(transport.call_args_list, [
+                        call(reference + '-x86_64', auth, missing=True),
+                        call(reference + '-aarch64', auth, missing=True),
+                    ])
 
     def test_registry_validation_only_consumes_groups_without_transport_or_writes(self):
         # Read-only grouped evidence consumers remain valid for the new identity;

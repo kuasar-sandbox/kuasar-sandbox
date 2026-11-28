@@ -1,6 +1,7 @@
 """Registry transfer uses the accepted OCI bytes and preserves immutable tags."""
 import importlib.util
 import json
+import threading
 import os
 from pathlib import Path
 import shutil
@@ -133,6 +134,125 @@ class RegistryTests(unittest.TestCase):
                 download.check_node_infra({'assets': [{'name': selection.node_infra_archive(VERSION, 'x86_64')}]},
                                          self.root, VERSION, 'x86_64', {})
             transfer.assert_not_called()
+
+
+    def test_parallel_native_io_uses_frozen_layout_and_private_readbacks(self):
+        inspect, transfer, transfers = self.transfer_fixture(fresh=True)
+        uploads, readbacks = threading.Barrier(2, timeout=5), threading.Barrier(2, timeout=5)
+        lock = threading.Lock()
+        completed, paths, layouts = set(), {}, []
+        original_inspect = node.inspect_oci
+
+        def inspect_archive(path, arch, **kwargs):
+            result = original_inspect(path, arch, **kwargs)
+            with lock:
+                completed.add(arch)
+            return result
+
+        def run(command, **kwargs):
+            source, target = command[-2:]
+            if target.startswith('oci-archive:'):
+                path = Path(target.removeprefix('oci-archive:'))
+                self.assertIn(path.parent.name, node.ARCHES)
+                self.assertFalse(path.exists())
+                transfer(command, **kwargs)
+                paths[path.parent.name] = path
+                readbacks.wait()
+                self.assertTrue(path.is_file())
+            elif source.endswith(':aggregate'):
+                self.assertEqual(completed, set(node.ARCHES))
+                transfer(command, **kwargs)
+            else:
+                layout = Path(source.removeprefix('oci:').rsplit(':', 1)[0])
+                before = {p.relative_to(layout).as_posix(): node.digest(p)
+                          for p in layout.rglob('*') if p.is_file()}
+                with lock:
+                    layouts.append((layout, before))
+                uploads.wait()  # Both native uploads must overlap.
+                transfer(command, **kwargs)
+                self.assertEqual(before, {p.relative_to(layout).as_posix(): node.digest(p)
+                                          for p in layout.rglob('*') if p.is_file()})
+
+        with patch.object(node, 'inspect_oci', side_effect=inspect_archive):
+            result = self.publish(inspect, run)
+        self.assertEqual(result['digest'], self.document['index_digest'])
+        self.assertEqual(len(layouts), 2)
+        self.assertEqual(layouts[0], layouts[1])
+        self.assertEqual(set(paths), set(node.ARCHES))
+        self.assertEqual(len(set(paths.values())), 2)
+        self.assertTrue(all(not path.exists() for path in paths.values()))
+
+    def test_failed_readback_waits_for_other_architecture_and_never_writes_index(self):
+        inspect, transfer, transfers = self.transfer_fixture()
+        held, failed, release, finished, returned = (threading.Event() for _ in range(5))
+        errors, roots, index_reads = [], [], []
+        original_inspect = node.inspect_oci
+        reference = node.REPOSITORY + ':' + VERSION
+
+        def inspect_reference(ref, auth, **kwargs):
+            if ref == reference:
+                index_reads.append(ref)
+                self.fail('index inspected after a failed architecture')
+            return inspect(ref, auth, **kwargs)
+
+        def inspect_archive(path, arch, **kwargs):
+            result = original_inspect(path, arch, **kwargs)
+            finished.set()
+            return result
+
+        def run(command, **kwargs):
+            self.assertTrue(command[-1].startswith('oci-archive:'))
+            path = Path(command[-1].removeprefix('oci-archive:'))
+            if path.parent.name == 'x86_64':
+                self.assertTrue(held.wait(5))
+                failed.set()
+                raise ValueError('controlled node readback failure')
+            roots.append(path.parent)
+            held.set()
+            self.assertTrue(release.wait(5))
+            auth = Path(command[command.index('--authfile') + 1])
+            self.assertEqual(json.loads(auth.read_text()), {'auths': {}})
+            self.assertTrue(path.parent.is_dir())
+            transfer(command, **kwargs)
+
+        def publish():
+            try:
+                self.publish(inspect_reference, run)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                returned.set()
+
+        with patch.object(node, 'inspect_oci', side_effect=inspect_archive):
+            worker = threading.Thread(target=publish)
+            worker.start()
+            try:
+                self.assertTrue(failed.wait(5))
+                self.assertFalse(returned.wait(0.1))
+                self.assertTrue(roots[0].is_dir())
+            finally:
+                release.set()
+                worker.join(6)
+            self.assertFalse(worker.is_alive())
+        self.assertTrue(finished.is_set())
+        self.assertEqual(len(errors), 1)
+        self.assertIsInstance(errors[0], ValueError)
+        self.assertIn('controlled node readback failure', str(errors[0]))
+        self.assertFalse(index_reads)
+        self.assertTrue(all(not path.exists() for path in roots))
+
+    def test_failed_complete_preflight_never_builds_layout_or_starts_transport(self):
+        with patch.object(subject, 'validate_stage', side_effect=ValueError('stage rejected')), \
+             patch.object(subject, 'layout_from_archives') as layout, \
+             patch.object(subject, 'ThreadPoolExecutor') as pool, \
+             patch.object(subject.registry, 'inspect_raw') as inspect, \
+             patch.object(subject.subprocess, 'run') as command:
+            with self.assertRaisesRegex(ValueError, 'stage rejected'):
+                subject.publish(self.root, VERSION, REVISION, {}, {}, {})
+            layout.assert_not_called()
+            pool.assert_not_called()
+            inspect.assert_not_called()
+            command.assert_not_called()
 
 
 if __name__ == '__main__':
