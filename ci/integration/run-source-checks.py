@@ -15,6 +15,7 @@ import artifacts
 import source_inputs
 import go_workspace
 import source_lane
+import source_stages
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("artifact_build", Path(__file__).with_name("build-artifacts.py"))
@@ -30,7 +31,7 @@ TEST_SCRIPT_EXECUTOR = "/inputs/release/ci/integration/run-source-checks.py"
 
 SOURCE_OWNERS = ("platform", "connector", "sandboxer", "accelerator", "guest-runtime", "orchestrator")
 OWNER_GROUPS = tuple("owner-" + owner for owner in SOURCE_OWNERS)
-SOURCE_GROUPS = ("all", "A", "B", *OWNER_GROUPS)
+SOURCE_GROUPS = ("all", "A", "B", *OWNER_GROUPS, *source_stages.GROUPS)
 
 # Run unittest modules in a fresh interpreter: the executor's trusted imports
 # must not replace the candidate modules the regression intends to exercise.
@@ -364,6 +365,13 @@ def checks_for(plan, sources, group="all"):
         return checks
     if group in OWNER_GROUPS:
         return [check for check, owner in owned if owner == group]
+    stage = source_stages.stage_for(group)
+    if stage is not None:
+        artifacts.require(source_stages.contract(plan) is not None, 'stage lacks an admitted owner declaration')
+        expanded = source_stages.expand(checks, sources)
+        return [row for row in expanded if row[0] == 'orchestrator-source-stage:' + stage or
+                stage == 'vet-and-helpers' and row[2] == sources / 'orchestrator' and
+                not row[0].startswith('orchestrator-source-stage:')]
     # Historical all/A/B receipts remain readable as complete schedules.
     return [check for check in checks
             if ((check[0].startswith("orchestrator-") if scope is not None else
@@ -391,7 +399,19 @@ def execute(plan, sources, output, *, materialized=False, group="all"):
         for name, command, directory in checks_for(plan, sources, group):
             owner = "sandboxer" if name == "uffd-source-benchmark" else directory.name
             selected = workspace(sources, owner, env)
-            action(result, "checks", name, command, directory, selected)
+            stage = source_stages.stage_for(group)
+            if stage is not None and name == 'orchestrator-source-stage:' + stage:
+                proof = output.parent / 'source-stage.json'
+                artifacts.require(not proof.exists() and not proof.is_symlink(), 'stale source stage output')
+                try:
+                    action(result, "checks", name, command, directory, selected)
+                finally:
+                    if proof.exists():
+                        result['source_stage'] = json.loads(source_stages.read_regular(
+                            proof.parent, proof.name, source_stages.JSON_LIMIT)[0])
+                source_stages.validate_proof(plan, stage, result.get('source_stage'), directory=str(directory))
+            else:
+                action(result, "checks", name, command, directory, selected)
         result.update(conclusion="success", exit_code=0)
     except (OSError, ValueError, subprocess.CalledProcessError) as error:
         result["error"] = str(error)
@@ -401,6 +421,22 @@ def execute(plan, sources, output, *, materialized=False, group="all"):
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ['--source-stage']:
+        parser = argparse.ArgumentParser(description='Execute one declared source stage inside Workbench')
+        parser.add_argument('--source-stage', choices=source_stages.STAGES, required=True)
+        parser.add_argument('--plan', type=Path, required=True)
+        parser.add_argument('--sources', type=Path, required=True)
+        parser.add_argument('--output', type=Path, required=True)
+        args = parser.parse_args()
+        try:
+            plan = json.loads(args.plan.read_text())
+            artifacts.check_plan(plan)
+            source_stages.execute(plan, args.sources, args.source_stage, args.output, environment())
+        except (OSError, ValueError, subprocess.CalledProcessError) as error:
+            print(f'source stage: {error}', file=sys.stderr)
+            status = getattr(error, 'returncode', 1) or 1
+            sys.exit(status if status >= 0 else 128 - status)
+        sys.exit(0)
     if sys.argv[1:2] == ["--test-script"]:
         parser = argparse.ArgumentParser(description="Run a changed source test from the selected Git tree")
         parser.add_argument("--test-script", nargs=2, metavar=("REPOSITORY", "PATH"), required=True)
