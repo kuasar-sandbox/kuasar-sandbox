@@ -5,7 +5,6 @@ import math
 from pathlib import Path
 import re
 import sys
-import tarfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'test/e2e/lib'))
@@ -38,19 +37,17 @@ def validate(directory, version, arch, revision, *, receipt_directory=None):
     workspace.require(record['size'] == size and record['sha256'] == workspace.digest(path), 'workbench archive bytes differ from stage')
     with path.open('rb') as stream:
         workspace.require(stream.read(2) == b'\x1f\x8b', 'workbench must be a gzip-compressed Docker image archive')
-    verified = workspace.verify_image_archive(path, 'linux/' + {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch])
+    verified = workspace.verify_image_archive(path, 'linux/' + {'x86_64': 'amd64', 'aarch64': 'arm64'}[arch],
+                                               include_metadata=True)
     workspace.require(verified['image_id'] == record['image_id'], 'workbench image ID differs from verified archive config')
-    with tarfile.open(path, 'r:gz') as archive:
-        manifest = json.load(archive.extractfile('manifest.json'))
-        workspace.require(len(manifest) == 1 and manifest[0]['RepoTags'] ==
-                          ['ghcr.io/kuasar-sandbox/workbench:' + version.removeprefix('release-')],
-                          'workbench archive must import the same aggregate registry tag')
-        config = json.load(archive.extractfile(manifest[0]['Config']))
-        labels = config.get('config', {}).get('Labels', {})
-        workspace.require(labels.get('org.opencontainers.image.version') == version
-                          and labels.get('org.opencontainers.image.revision') == revision
-                          and labels.get('org.opencontainers.image.source') == 'https://github.com/kuasar-sandbox/kuasar-sandbox',
-                          'workbench config labels differ from selected release source')
+    manifest, config = verified['manifest'], verified['config']
+    workspace.require(manifest['RepoTags'] == ['ghcr.io/kuasar-sandbox/workbench:' + version.removeprefix('release-')],
+                      'workbench archive must import the same aggregate registry tag')
+    labels = config.get('config', {}).get('Labels', {})
+    workspace.require(labels.get('org.opencontainers.image.version') == version
+                      and labels.get('org.opencontainers.image.revision') == revision
+                      and labels.get('org.opencontainers.image.source') == 'https://github.com/kuasar-sandbox/kuasar-sandbox',
+                      'workbench config labels differ from selected release source')
     workspace.require(type(record.get('compression_seconds')) in (int, float)
                       and math.isfinite(record['compression_seconds']) and record['compression_seconds'] >= 0,
                       'missing actual workbench compression timing')

@@ -8,6 +8,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'release'))
 import selection
@@ -85,6 +86,41 @@ class WorkbenchAssetTests(unittest.TestCase):
         with self.path.open('wb') as stream:
             stream.truncate(subject.ASSET_LIMIT - 1)
         self.assertEqual(subject.check_size(self.path), subject.ASSET_LIMIT - 1)
+
+
+    def test_verified_metadata_avoids_a_second_archive_open(self):
+        original = subject.workspace.tarfile.open
+        verify = subject.workspace.verify_image_archive
+        with patch.object(subject.workspace.tarfile, 'open', wraps=original) as opened, patch.object(
+                subject.workspace, 'verify_image_archive', wraps=verify) as verified:
+            self.assertEqual(self.validate(), self.record)
+        self.assertEqual(opened.call_count, 1)
+        self.assertEqual(verified.call_args.kwargs, {'include_metadata': True})
+
+    def test_verified_metadata_still_binds_registry_tag(self):
+        with tarfile.open(self.path) as archive:
+            contents = [(member.name, archive.extractfile(member).read()) for member in archive]
+        contents = [(name, json.dumps([dict(json.loads(data)[0], RepoTags=['example:wrong'])]).encode()
+                     if name == 'manifest.json' else data) for name, data in contents]
+        with tarfile.open(self.path, 'w:gz') as archive:
+            for name, data in contents:
+                member = tarfile.TarInfo(name)
+                member.size, member.mode = len(data), 0o644
+                archive.addfile(member, io.BytesIO(data))
+        self.record.update(size=self.path.stat().st_size, sha256=subject.workspace.digest(self.path))
+        self.receipt.write_text(json.dumps(self.record))
+        with self.assertRaisesRegex(ValueError, 'same aggregate registry tag'):
+            self.validate()
+
+    def test_verified_metadata_still_binds_every_source_label(self):
+        original = copy.deepcopy(self.config)
+        for key in ('org.opencontainers.image.version', 'org.opencontainers.image.revision',
+                    'org.opencontainers.image.source'):
+            self.config = copy.deepcopy(original)
+            self.config['config']['Labels'][key] = 'wrong'
+            self.write()
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, 'config labels'):
+                self.validate()
 
     def test_history_is_selected_by_committed_contract(self):
         self.assertEqual(selection.delivery({}, 'old exact source'), 'historical')
