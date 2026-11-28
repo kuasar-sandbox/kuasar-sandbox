@@ -356,6 +356,8 @@ jobs:
     needs: [prepare, helper-build, workbench-build, node-infra-build]
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      artifact_identity: ${{ steps.stage_identity.outputs.identity }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -371,11 +373,13 @@ jobs:
           pattern: aggregate-helpers-*-${{ github.run_id }}
           path: helpers
           merge-multiple: true
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Download original Workbench producer archives
+        id: workbench_images
+        uses: ./control/.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           pattern: workbench-image-*-${{ github.run_id }}
           path: workbench-images
-          merge-multiple: true
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: contains(fromJSON('["node-infra-v1","node-infra-v2"]'), needs.prepare.outputs.delivery)
         with:
@@ -402,13 +406,65 @@ jobs:
           export SOURCE_DATE_EPOCH=$(git -C platform show -s --format=%ct HEAD)
           control/release/aggregate-release.sh assemble "$VERSION" inputs/fetched aggregate-stage
           tar -cf aggregate-stage/source-inputs.tar platform -C inputs/fetched sources
+      - name: Partition validated bytes without another Workbench upload
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+          FRAMEWORK_SHA: ${{ needs.prepare.outputs.framework_sha }}
+          DELIVERY: ${{ needs.prepare.outputs.delivery }}
+          WORKBENCH_ARTIFACTS: ${{ steps.workbench_images.outputs.artifacts }}
+        run: >-
+          python3 -B control/ci/integration/stage_transport.py prepare --stage aggregate-stage --output stage-upload
+          --version "$VERSION" --source-sha "$SOURCE_SHA" --framework-sha "$FRAMEWORK_SHA" --delivery "$DELIVERY"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: common
         with:
-          name: ${{ needs.prepare.outputs.artifact }}
-          path: aggregate-stage
+          name: aggregate-stage-common-${{ needs.prepare.outputs.version }}-${{ github.run_id }}
+          path: stage-upload/common
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: core_x86_64
+        with:
+          name: aggregate-stage-core-x86_64-${{ needs.prepare.outputs.version }}-${{ github.run_id }}
+          path: stage-upload/core-x86_64
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: core_aarch64
+        with:
+          name: aggregate-stage-core-aarch64-${{ needs.prepare.outputs.version }}-${{ github.run_id }}
+          path: stage-upload/core-aarch64
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - name: Seal exact uploaded part IDs and ZIP digests
+        env:
+          COMMON_ID: ${{ steps.common.outputs.artifact-id }}
+          COMMON_DIGEST: ${{ steps.common.outputs.artifact-digest }}
+          CORE_X86_64_ID: ${{ steps.core_x86_64.outputs.artifact-id }}
+          CORE_X86_64_DIGEST: ${{ steps.core_x86_64.outputs.artifact-digest }}
+          CORE_AARCH64_ID: ${{ steps.core_aarch64.outputs.artifact-id }}
+          CORE_AARCH64_DIGEST: ${{ steps.core_aarch64.outputs.artifact-digest }}
+        run: python3 -B control/ci/integration/stage_transport.py seal --root stage-upload
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        id: stage_metadata
+        with:
+          name: ${{ needs.prepare.outputs.artifact }}
+          path: stage-upload/metadata
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
+      - name: Publish the exact metadata identity to dependent jobs
+        id: stage_identity
+        env:
+          STAGE_ARTIFACT: ${{ needs.prepare.outputs.artifact }}
+          STAGE_ID: ${{ steps.stage_metadata.outputs.artifact-id }}
+          STAGE_DIGEST: ${{ steps.stage_metadata.outputs.artifact-digest }}
+        run: >-
+          python3 -B control/ci/integration/stage_transport.py metadata-identity --artifact "$STAGE_ARTIFACT"
 
   release-asset-validation:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
@@ -422,12 +478,14 @@ jobs:
       workbench_runtime_groups: ${{ inputs.workbench_runtime_groups }}
       release_version: ${{ needs.prepare.outputs.version }}
       release_bundle_artifact: ${{ needs.prepare.outputs.artifact }}
+      release_bundle_format: partitioned-v1
+      release_bundle_identity: ${{ needs.stage.outputs.artifact_identity }}
       platform_source_sha: ${{ needs.prepare.outputs.source_sha }}
       workbench_selection_artifact: aggregate-sources-${{ github.run_id }}
 
   publish:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: [prepare, release-asset-validation]
+    needs: [prepare, stage, release-asset-validation]
     runs-on: ubuntu-latest
     permissions:
       actions: read
@@ -448,11 +506,73 @@ jobs:
           gh_help="$(gh api --help)"
           [[ "$gh_help" == *--slurp* ]] || { echo "environment gh must support api --slurp" >&2; exit 1; }
 
-      - name: Download validated aggregate stage
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Bind the exact stage metadata upload
+        env:
+          STAGE_IDENTITY: ${{ needs.stage.outputs.artifact_identity }}
+          STAGE_ARTIFACT: ${{ needs.prepare.outputs.artifact }}
+        run: >-
+          python3 -B ci/integration/stage_transport.py request-metadata --artifact "$STAGE_ARTIFACT" --output stage-identity.json
+      - name: Download verified stage metadata
+        uses: ./.github/actions/download-artifact
+        timeout-minutes: 35
         with:
           name: ${{ needs.prepare.outputs.artifact }}
-          path: aggregate-stage
+          expected-identity: stage-identity.json
+          path: stage-parts/metadata
+      - name: Bind the required stage parts
+        id: stage_parts
+        env:
+          STAGE_ARTIFACT: ${{ needs.prepare.outputs.artifact }}
+          FRAMEWORK_SHA: ${{ needs.prepare.outputs.framework_sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: >-
+          python3 -B ci/integration/stage_transport.py requests --metadata stage-parts/metadata --output stage-requests
+          --scope full --artifact "$STAGE_ARTIFACT" --framework-sha "$FRAMEWORK_SHA" --version "$VERSION" --source-sha "$SOURCE_SHA"
+      - name: Download common stage part
+        uses: ./.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.common }}
+          expected-identity: stage-requests/common.json
+          path: stage-parts/common
+      - name: Download core-x86_64 stage part
+        uses: ./.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.core_x86_64 }}
+          expected-identity: stage-requests/core-x86_64.json
+          path: stage-parts/core-x86_64
+      - name: Download core-aarch64 stage part
+        uses: ./.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.core_aarch64 }}
+          expected-identity: stage-requests/core-aarch64.json
+          path: stage-parts/core-aarch64
+      - name: Download workbench-x86_64 stage part
+        uses: ./.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.workbench_x86_64 }}
+          expected-identity: stage-requests/workbench-x86_64.json
+          path: stage-parts/workbench-x86_64
+      - name: Download workbench-aarch64 stage part
+        uses: ./.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.workbench_aarch64 }}
+          expected-identity: stage-requests/workbench-aarch64.json
+          path: stage-parts/workbench-aarch64
+      - name: Reconstruct the existing stage layout
+        env:
+          STAGE_ARTIFACT: ${{ needs.prepare.outputs.artifact }}
+          FRAMEWORK_SHA: ${{ needs.prepare.outputs.framework_sha }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
+        run: >-
+          python3 -B ci/integration/stage_transport.py restore --parts stage-parts --output aggregate-stage
+          --scope full --artifact "$STAGE_ARTIFACT" --framework-sha "$FRAMEWORK_SHA" --version "$VERSION" --source-sha "$SOURCE_SHA"
 
       - name: Download exact profile validation
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
