@@ -96,7 +96,8 @@ Stable/Preview 表示发行通道。生产部署仍需验收容量，并配置 T
 
 ## 贡献与安全
 
-阅读[贡献指南](CONTRIBUTING_zh.md)，选择拥有该行为的仓库。跨仓变更使用明确 companion 引用协调。
+阅读[贡献指南](CONTRIBUTING_zh.md)，选择拥有该行为的仓库。各仓可以独立完成检查并合入。
+只有变更确需联合验证多个仓的未发布源码时，才按 [CI 指南](docs/ci_zh.md)声明互相引用的 companion。
 安全漏洞通过 [SECURITY](SECURITY_zh.md) 中的私有渠道报告。
 
 ## 许可证

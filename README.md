@@ -126,8 +126,10 @@ Benchmark methods and versioned evidence are in [performance](docs/performance.m
 ## Contributing and security
 
 Read [CONTRIBUTING](CONTRIBUTING.md) and choose the repository that owns the
-behavior. Keep cross-repository changes coordinated through explicit companion
-references. Report vulnerabilities privately through [SECURITY](SECURITY.md).
+behavior. Each repository can complete its own checks and merge independently.
+Declare reciprocal companions as described in [CI](docs/ci.md) only when a change
+requires joint validation of unpublished source from multiple repositories.
+Report vulnerabilities privately through [SECURITY](SECURITY.md).
 
 ## License
 

@@ -675,9 +675,9 @@ tpl = (tpl
     .set_workdir("/home/user/site")                    # B: WORKDIR
     .set_start_cmd("python3 -m http.server 8000 --directory /home/user/site",   # C: startCmd → snapshot
                    wait_for_timeout(2000)))                                  # C: SDK readyCmd without extra image tools
-# The SDK forwards build headers to both registration and trigger. Builder
-# configuration is register-only, so use the existing auto target: these
-# nonempty start/ready commands select a memory Sandbox (snapshot) output.
+# The Demo uses automatic target selection: nonempty start/ready commands select
+# a memory Sandbox (snapshot) output. The exact Build's canonical published result
+# is checked below.
 info = Template.build(
     tpl,
     name="demo-app-" + run_key,
