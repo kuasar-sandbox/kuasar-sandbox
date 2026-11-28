@@ -63,6 +63,16 @@ on:
         required: false
         default: ""
         type: string
+      release_bundle_format:
+        description: full (legacy) or partitioned-v1 stage transport
+        required: false
+        default: "full"
+        type: string
+      release_bundle_identity:
+        description: Exact same-run metadata artifact identity for partitioned-v1
+        required: false
+        default: ""
+        type: string
       workbench_selection_artifact:
         description: Already frozen Workbench selection from this aggregate run
         required: false
@@ -242,12 +252,94 @@ jobs:
           if-no-files-found: error
           retention-days: 1
           compression-level: 0
-      - name: Download staged aggregate
+      - name: Validate stage transport format
         if: inputs.mode == 'exact-assets'
+        env:
+          STAGE_FORMAT: ${{ inputs.release_bundle_format }}
+        run: |
+          case "$STAGE_FORMAT" in full|partitioned-v1) ;; *) echo "unsupported stage transport" >&2; exit 1 ;; esac
+      - name: Download staged aggregate
+        if: inputs.mode == 'exact-assets' && inputs.release_bundle_format == 'full'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.release_bundle_artifact }}
           path: aggregate-stage
+      - name: Bind the exact stage metadata upload
+        if: inputs.mode == 'exact-assets' && inputs.release_bundle_format == 'partitioned-v1'
+        env:
+          STAGE_IDENTITY: ${{ inputs.release_bundle_identity }}
+          STAGE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
+        run: >-
+          python3 -B framework/ci/integration/stage_transport.py request-metadata --artifact "$STAGE_ARTIFACT" --output stage-identity.json
+      - name: Download verified stage metadata
+        if: inputs.mode == 'exact-assets' && inputs.release_bundle_format == 'partitioned-v1'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ inputs.release_bundle_artifact }}
+          expected-identity: stage-identity.json
+          path: stage-parts/metadata
+      - name: Bind the required stage parts
+        if: inputs.mode == 'exact-assets' && inputs.release_bundle_format == 'partitioned-v1'
+        id: stage_parts
+        env:
+          STAGE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
+          FRAMEWORK_SHA: ${{ job.workflow_sha }}
+          VERSION: ${{ inputs.release_version }}
+          SOURCE_SHA: ${{ inputs.platform_source_sha }}
+        run: >-
+          python3 -B framework/ci/integration/stage_transport.py requests --metadata stage-parts/metadata --output stage-requests
+          --scope full --artifact "$STAGE_ARTIFACT" --framework-sha "$FRAMEWORK_SHA" --version "$VERSION" --source-sha "$SOURCE_SHA"
+      - name: Download common stage part
+        if: inputs.mode == 'exact-assets' && inputs.release_bundle_format == 'partitioned-v1'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.common }}
+          expected-identity: stage-requests/common.json
+          path: stage-parts/common
+      - name: Download core-x86_64 stage part
+        if: inputs.mode == 'exact-assets' && inputs.release_bundle_format == 'partitioned-v1'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.core_x86_64 }}
+          expected-identity: stage-requests/core-x86_64.json
+          path: stage-parts/core-x86_64
+      - name: Download core-aarch64 stage part
+        if: inputs.mode == 'exact-assets' && inputs.release_bundle_format == 'partitioned-v1'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.core_aarch64 }}
+          expected-identity: stage-requests/core-aarch64.json
+          path: stage-parts/core-aarch64
+      - name: Download workbench-x86_64 stage part
+        if: inputs.mode == 'exact-assets' && inputs.release_bundle_format == 'partitioned-v1'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.workbench_x86_64 }}
+          expected-identity: stage-requests/workbench-x86_64.json
+          path: stage-parts/workbench-x86_64
+      - name: Download workbench-aarch64 stage part
+        if: inputs.mode == 'exact-assets' && inputs.release_bundle_format == 'partitioned-v1'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.workbench_aarch64 }}
+          expected-identity: stage-requests/workbench-aarch64.json
+          path: stage-parts/workbench-aarch64
+      - name: Reconstruct the existing stage layout
+        if: inputs.mode == 'exact-assets' && inputs.release_bundle_format == 'partitioned-v1'
+        env:
+          STAGE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
+          FRAMEWORK_SHA: ${{ job.workflow_sha }}
+          VERSION: ${{ inputs.release_version }}
+          SOURCE_SHA: ${{ inputs.platform_source_sha }}
+        run: >-
+          python3 -B framework/ci/integration/stage_transport.py restore --parts stage-parts --output aggregate-stage
+          --scope full --artifact "$STAGE_ARTIFACT" --framework-sha "$FRAMEWORK_SHA" --version "$VERSION" --source-sha "$SOURCE_SHA"
       - name: Obtain the run's existing Workbench selection
         if: ${{ !contains(fromJSON('["docs", "manifest", "tooling"]'), steps.docs.outputs.lane) && inputs.workbench_selection_artifact != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
@@ -319,6 +411,8 @@ jobs:
       executor_tree: ${{ needs.resolve.outputs.executor_tree }}
       plan_artifact: ${{ needs.resolve.outputs.artifact }}
       stage_artifact: ${{ inputs.release_bundle_artifact }}
+      stage_format: ${{ inputs.release_bundle_format }}
+      stage_identity: ${{ inputs.release_bundle_identity }}
 
   aarch64:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.resolve.outputs.lane == 'full'
@@ -332,6 +426,8 @@ jobs:
       executor_tree: ${{ needs.resolve.outputs.executor_tree }}
       plan_artifact: ${{ needs.resolve.outputs.artifact }}
       stage_artifact: ${{ inputs.release_bundle_artifact }}
+      stage_format: ${{ inputs.release_bundle_format }}
+      stage_identity: ${{ inputs.release_bundle_identity }}
 
   source-checks:
     name: source-checks (${{ matrix.group }})
@@ -513,10 +609,91 @@ jobs:
         with:
           name: ${{ needs.resolve.outputs.artifact }}
           path: plan
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - name: Validate stage transport format
+        env:
+          STAGE_FORMAT: ${{ inputs.release_bundle_format }}
+        run: |
+          case "$STAGE_FORMAT" in full|partitioned-v1) ;; *) echo "unsupported stage transport" >&2; exit 1 ;; esac
+      - name: Download exact aggregate stage
+        if: inputs.release_bundle_format == 'full'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.release_bundle_artifact }}
           path: aggregate-stage
+      - name: Bind the exact stage metadata upload
+        if: inputs.release_bundle_format == 'partitioned-v1'
+        env:
+          STAGE_IDENTITY: ${{ inputs.release_bundle_identity }}
+          STAGE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
+        run: >-
+          python3 -B framework/ci/integration/stage_transport.py request-metadata --artifact "$STAGE_ARTIFACT" --output stage-identity.json
+      - name: Download verified stage metadata
+        if: inputs.release_bundle_format == 'partitioned-v1'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ inputs.release_bundle_artifact }}
+          expected-identity: stage-identity.json
+          path: stage-parts/metadata
+      - name: Bind the required stage parts
+        if: inputs.release_bundle_format == 'partitioned-v1'
+        id: stage_parts
+        env:
+          STAGE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
+          FRAMEWORK_SHA: ${{ needs.resolve.outputs.framework_sha }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: >-
+          python3 -B framework/ci/integration/stage_transport.py requests --metadata stage-parts/metadata --output stage-requests
+          --scope workbench --arch "$TARGET_ARCH" --artifact "$STAGE_ARTIFACT" --framework-sha "$FRAMEWORK_SHA" --plan plan/plan.json
+      - name: Download common stage part
+        if: inputs.release_bundle_format == 'partitioned-v1'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.common }}
+          expected-identity: stage-requests/common.json
+          path: stage-parts/common
+      - name: Download core-x86_64 stage part
+        if: inputs.release_bundle_format == 'partitioned-v1' && matrix.arch == 'x86_64'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.core_x86_64 }}
+          expected-identity: stage-requests/core-x86_64.json
+          path: stage-parts/core-x86_64
+      - name: Download core-aarch64 stage part
+        if: inputs.release_bundle_format == 'partitioned-v1' && matrix.arch == 'aarch64'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.core_aarch64 }}
+          expected-identity: stage-requests/core-aarch64.json
+          path: stage-parts/core-aarch64
+      - name: Download workbench-x86_64 stage part
+        if: inputs.release_bundle_format == 'partitioned-v1' && matrix.arch == 'x86_64'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.workbench_x86_64 }}
+          expected-identity: stage-requests/workbench-x86_64.json
+          path: stage-parts/workbench-x86_64
+      - name: Download workbench-aarch64 stage part
+        if: inputs.release_bundle_format == 'partitioned-v1' && matrix.arch == 'aarch64'
+        uses: ./framework/.github/actions/download-artifact
+        timeout-minutes: 35
+        with:
+          name: ${{ steps.stage_parts.outputs.workbench_aarch64 }}
+          expected-identity: stage-requests/workbench-aarch64.json
+          path: stage-parts/workbench-aarch64
+      - name: Reconstruct the existing stage layout
+        if: inputs.release_bundle_format == 'partitioned-v1'
+        env:
+          STAGE_ARTIFACT: ${{ inputs.release_bundle_artifact }}
+          FRAMEWORK_SHA: ${{ needs.resolve.outputs.framework_sha }}
+          TARGET_ARCH: ${{ matrix.arch }}
+        run: >-
+          python3 -B framework/ci/integration/stage_transport.py restore --parts stage-parts --output aggregate-stage
+          --scope workbench --arch "$TARGET_ARCH" --artifact "$STAGE_ARTIFACT" --framework-sha "$FRAMEWORK_SHA" --plan plan/plan.json
       - name: Qualify staged image isolation and the public offline selection
         run: |
           extra=()

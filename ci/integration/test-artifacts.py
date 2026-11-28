@@ -2056,5 +2056,352 @@ class FailureDiagnosticContracts(unittest.TestCase):
             self.assertFalse(destination.exists())
 
 
+
+class StageTransportContracts(unittest.TestCase):
+    """Real small ZIP/filesystem controls; payload bytes are never executed."""
+    def setUp(self):
+        import stage_transport
+        import download_artifact
+        self.stage_transport, self.downloader = stage_transport, download_artifact
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.stage = self.root / 'stage'; self.stage.mkdir()
+        self.version = 'release-v1.2.3'
+        self.source_sha, self.framework_sha = 'b' * 40, 'a' * 40
+        self.units = {u: (u + '-' if u in ('runtime', 'vmlinux') else '') + 'v1.2.3'
+                      for u in subject.UNITS}
+        environment = patch.dict(os.environ, {'GITHUB_REPOSITORY': 'kuasar-sandbox/kuasar-sandbox',
+                                               'GITHUB_RUN_ID': '123', 'GITHUB_RUN_ATTEMPT': '1'})
+        environment.start(); self.addCleanup(environment.stop)
+        self.expected = stage_transport.layout(self.version, self.units, 'node-infra-v2')
+        for relative in self.expected:
+            path = self.stage / relative; path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(('exact fixture file: ' + relative).encode()); path.chmod(0o644)
+        (self.stage / 'selection.tsv').write_text(''.join(u + '\t' + self.units[u] + '\n'
+                                                        for u in stage_transport.selection.UNITS))
+        self.original = {name: stage_transport.file_record(path)
+                         for name, path in stage_transport.regular_files(self.stage).items()}
+        self.zips = {}
+        workbench_rows = []
+        for number, arch in enumerate(subject.ARCHES, 1):
+            role = 'workbench-' + arch
+            directory = self.root / role; directory.mkdir()
+            for relative, (owned, member) in self.expected.items():
+                if owned == role:
+                    shutil.copyfile(self.stage / relative, directory / member)
+            self.zips[role] = self.zip(directory, role)
+            workbench_rows.append({'name': stage_transport.part_name(role, self.version, '123'),
+                                   'database_id': str(number), 'digest': subject.digest(self.zips[role])})
+        self.upload = self.root / 'upload'
+        self.draft = stage_transport.prepare(self.stage, self.upload, self.version, self.source_sha,
+                                            self.framework_sha, 'node-infra-v2', workbench_rows)
+        uploaded = {}
+        for number, role in enumerate(('common', 'core-x86_64', 'core-aarch64'), 3):
+            self.zips[role] = self.zip(self.upload / role, role)
+            uploaded[role] = {'id': str(number), 'digest': subject.digest(self.zips[role])}
+        self.index = stage_transport.seal(self.upload, uploaded)
+        self.zips['metadata'] = self.zip(self.upload / 'metadata', 'metadata')
+        self.artifact = stage_transport.metadata_name(self.version, '123')
+        self.plan = {
+            'schema': 2, 'mode': 'exact-assets', 'framework_sha': self.framework_sha,
+            'owners': ['platform'], 'case_files': CASES, 'test_overlays': [], 'test_revisions': test_revisions(),
+            'baseline': {'version': self.version, 'sha': self.source_sha, 'delivery': 'node-infra-v2',
+                         'staged': True, 'units': {u: {'version': tag, 'sha': 'c' * 40}
+                                                  for u, tag in self.units.items()},
+                         'assets': [{'name': name.removeprefix('assets/'), 'size': row['size'],
+                                     'digest': 'sha256:' + row['sha256']}
+                                    for name, row in self.original.items() if name.startswith('assets/')]},
+            'lanes': {arch: {'products': [], 'performance': [], 'selection': selection(['platform'], arch)}
+                      for arch in subject.ARCHES}}
+        subject.check_plan(self.plan)
+
+    def zip(self, directory, label):
+        target = self.root / (label + '.zip')
+        with zipfile.ZipFile(target, 'w', compression=zipfile.ZIP_STORED) as output:
+            for path in sorted(directory.rglob('*')):
+                if path.is_file():
+                    output.write(path, path.relative_to(directory).as_posix())
+        return target
+
+    def inputs(self, scope='full', arch=None, suffix=''):
+        parts = self.root / ('downloaded-' + scope + (arch or '') + suffix)
+        parts.mkdir()
+        for role in ('metadata', *self.stage_transport.selected_roles(scope, arch)):
+            destination = parts / role; destination.mkdir()
+            self.extract(self.zips[role], destination)
+        return parts
+
+    def extract(self, archive, destination):
+        # Match the existing downloader worker's explicit umask. The unit test
+        # invokes its extractor directly; the SSH user's umask is unrelated.
+        previous = os.umask(0o022)
+        try:
+            self.downloader.extract_archive(archive, destination)
+        finally:
+            os.umask(previous)
+
+    def restore(self, parts, output, scope='full', arch=None, plan=None):
+        return self.stage_transport.restore(parts, output, scope, arch, self.artifact,
+                                            self.version, self.source_sha, self.framework_sha,
+                                            self.plan if plan is None else plan)
+
+    def test_full_reconstruction_preserves_all_twenty_assets_and_metadata(self):
+        parts = self.inputs()
+        output = self.root / 'restored'
+        receipt = self.restore(parts, output)
+        self.assertEqual(receipt['asset_files'], 20)
+        self.assertEqual({name: self.stage_transport.file_record(path)
+                          for name, path in self.stage_transport.regular_files(output).items()}, self.original)
+        self.assertEqual({name: self.stage_transport.file_record(path)
+                          for name, path in self.stage_transport.regular_files(self.stage).items()}, self.original)
+
+    def test_core_and_workbench_scopes_keep_both_node_formats_and_one_architecture(self):
+        for scope, count in (('core', 10), ('workbench', 11)):
+            for arch in subject.ARCHES:
+                with self.subTest(scope=scope, arch=arch):
+                    parts = self.inputs(scope, arch)
+                    output = self.root / ('restored-' + scope + arch)
+                    receipt = self.restore(parts, output, scope, arch)
+                    self.assertEqual(receipt['asset_files'], count)
+                    expected = {'platform-' + self.version + '.tar.gz',
+                                self.stage_transport.selection.node_infra_deploy_archive(self.version),
+                                self.stage_transport.selection.node_infra_archive(self.version, arch),
+                                self.stage_transport.selection.node_infra_docker_archive(self.version, arch)}
+                    expected |= {subject.archive_name(unit, tag, arch) for unit, tag in self.units.items()}
+                    if scope == 'workbench':
+                        expected.add(self.stage_transport.selection.workbench_archive(self.version, arch))
+                    self.assertEqual(set(subject.tree_files(output / 'assets')), expected)
+                    self.assertEqual((output / 'source-inputs.tar').read_bytes(),
+                                     (self.stage / 'source-inputs.tar').read_bytes())
+
+    def test_no_workbench_reupload_and_exact_part_identity_requests(self):
+        self.assertEqual({p.name for p in self.upload.iterdir()},
+                         {'metadata', 'common', 'core-x86_64', 'core-aarch64', 'draft-index.json'})
+        rows = {row['role']: row for row in self.index['parts']}
+        self.assertEqual([rows['workbench-' + arch]['id'] for arch in subject.ARCHES], ['1', '2'])
+        parts = self.inputs()
+        output = self.root / 'requests'
+        names = self.stage_transport.requests(parts / 'metadata', output, 'full', None, self.artifact,
+                                             self.version, self.source_sha, self.framework_sha, self.plan)
+        self.assertEqual(len(names), 5)
+        for role, row in rows.items():
+            expected = json.loads((output / (role + '.json')).read_text())
+            self.assertEqual(expected['run_id'], '123')
+            self.assertEqual(expected['repository'], 'kuasar-sandbox/kuasar-sandbox')
+            self.assertEqual(expected['artifacts'],
+                             [{'name': row['name'], 'id': row['id'], 'digest': subject.digest(self.zips[role])}])
+        new_files = sum(path.stat().st_size for role in ('common', 'core-x86_64', 'core-aarch64', 'metadata')
+                        for path in (self.upload / role).rglob('*') if path.is_file())
+        wb_files = sum(row['size'] for row in self.index['files'] if row['role'].startswith('workbench-'))
+        self.assertEqual(new_files, sum(row['size'] for row in self.index['files']) - wb_files
+                         + (self.upload / 'metadata/stage-index.json').stat().st_size)
+
+    def test_real_metadata_identity_cli_and_legacy_full_layout(self):
+        output = self.root / 'step-output'
+        environment = dict(os.environ, STAGE_ID='9', STAGE_DIGEST=subject.digest(self.zips['metadata']),
+                           GITHUB_OUTPUT=str(output))
+        tool = str(Path(self.stage_transport.__file__))
+        run = subprocess.run(['python3', '-B', tool, 'metadata-identity', '--artifact', self.artifact],
+                             env=environment, capture_output=True, text=True, timeout=10)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        identity = output.read_text().strip().removeprefix('identity=')
+        expected = self.root / 'metadata-request.json'
+        run = subprocess.run(['python3', '-B', tool, 'request-metadata', '--artifact', self.artifact,
+                              '--output', str(expected)], env=dict(environment, STAGE_IDENTITY=identity),
+                             capture_output=True, text=True, timeout=10)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(expected.read_text())['artifacts'][0],
+                         {'name': self.artifact, 'id': '9', 'digest': subject.digest(self.zips['metadata'])})
+        # The default reusable-workflow format still takes the original full ZIP
+        # straight to aggregate-stage; no index or synthetic stage is required.
+        legacy = self.root / 'legacy'; legacy.mkdir()
+        self.extract(self.zip(self.stage, 'legacy-full'), legacy)
+        self.assertEqual({name: self.stage_transport.file_record(path)
+                          for name, path in self.stage_transport.regular_files(legacy).items()}, self.original)
+
+    def test_index_rejects_wrong_run_source_attempt_schema_duplicate_or_mixed_architecture(self):
+        changes = [
+            lambda d: d.update(schema=2),
+            lambda d: d.update(repository='kuasar-sandbox/other'),
+            lambda d: d.update(run_id='124'),
+            lambda d: d.update(producer_attempt=2),
+            lambda d: d.update(framework_sha='f' * 40),
+            lambda d: d.update(source_sha='f' * 40),
+            lambda d: d['parts'].pop(),
+            lambda d: d['parts'].__setitem__(1, copy.deepcopy(d['parts'][0])),
+            lambda d: d['parts'][1].update(id=d['parts'][0]['id']),
+            lambda d: d['files'].__setitem__(1, copy.deepcopy(d['files'][0])),
+            lambda d: d['files'][0].update(path='../outside'),
+            lambda d: d['files'][0].update(member='../outside'),
+            lambda d: d['files'][0].update(role='metadata'),
+            lambda d: d['parts'][1].update(name=d['parts'][2]['name']),
+        ]
+        for number, change in enumerate(changes):
+            document = copy.deepcopy(self.index); change(document)
+            with self.subTest(number=number), self.assertRaises(ValueError):
+                self.stage_transport.validate_index(document, self.artifact, self.version,
+                                                    self.source_sha, self.framework_sha, self.plan)
+        with patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2'}):
+            self.assertEqual(self.stage_transport.validate_index(self.index, self.artifact, self.version,
+                              self.source_sha, self.framework_sha, self.plan)['producer_attempt'], 1)
+
+    def test_changed_missing_extra_linked_payload_or_wrong_part_blocks_restore(self):
+        for number, mutation in enumerate(('bytes', 'missing', 'extra', 'link', 'part', 'foreign', 'metadata-link')):
+            parts = self.inputs('workbench', 'x86_64', str(number))
+            core = parts / 'core-x86_64'
+            target = next(p for p in sorted(core.rglob('*')) if p.is_file())
+            if mutation == 'bytes':
+                old = target.read_bytes(); target.write_bytes(b'!' + old[1:])
+            elif mutation == 'missing':
+                target.unlink()
+            elif mutation == 'extra':
+                (core / 'foreign').write_text('unselected')
+            elif mutation == 'link':
+                target.unlink(); target.symlink_to(self.stage / 'selection.tsv')
+            elif mutation == 'part':
+                shutil.rmtree(core)
+            elif mutation == 'foreign':
+                (parts / 'core-aarch64').mkdir()
+            else:
+                meta = parts / 'metadata'; meta.rename(parts.parent / ('metadata-real-' + str(number)))
+                meta.symlink_to(parts.parent / ('metadata-real-' + str(number)), target_is_directory=True)
+            output = self.root / ('failed-' + str(number))
+            with self.subTest(mutation=mutation), self.assertRaises((ValueError, OSError)):
+                self.restore(parts, output, 'workbench', 'x86_64')
+            self.assertFalse(output.exists())
+
+    def test_plan_asset_digest_or_unit_change_does_not_authorize_restore(self):
+        for number, mutate in enumerate((lambda p: p['baseline']['assets'][0].update(digest='sha256:' + '0' * 64),
+                                        lambda p: p['baseline'].update(sha='f' * 40))):
+            plan = copy.deepcopy(self.plan); mutate(plan)
+            parts = self.inputs(suffix='bad-plan-' + str(number))
+            output = self.root / ('bad-plan-' + str(number))
+            with self.subTest(number=number), self.assertRaises(ValueError):
+                self.restore(parts, output, plan=plan)
+            self.assertFalse(output.exists())
+
+
+    def test_existing_modern_deliveries_restore_their_original_complete_sets(self):
+        for delivery, count in (('workbench-v1', 15), ('node-infra-v1', 18)):
+            with self.subTest(delivery=delivery):
+                layout = self.stage_transport.layout(self.version, self.units, delivery)
+                stage = self.root / ('stage-' + delivery); stage.mkdir()
+                for relative in layout:
+                    target = stage / relative; target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(self.stage / relative, target)
+                workbench = [{'name': row['name'], 'database_id': row['id'], 'digest': row['digest']}
+                             for row in self.index['parts'] if row['role'].startswith('workbench-')]
+                upload = self.root / ('upload-' + delivery)
+                self.stage_transport.prepare(stage, upload, self.version, self.source_sha,
+                                             self.framework_sha, delivery, workbench)
+                part_zips = {}
+                uploaded = {}
+                for number, role in enumerate(('common', 'core-x86_64', 'core-aarch64'), 3):
+                    part_zips[role] = self.zip(upload / role, delivery + role)
+                    uploaded[role] = {'id': str(number), 'digest': subject.digest(part_zips[role])}
+                self.stage_transport.seal(upload, uploaded)
+                part_zips['metadata'] = self.zip(upload / 'metadata', delivery + 'metadata')
+                for arch in subject.ARCHES:
+                    part_zips['workbench-' + arch] = self.zips['workbench-' + arch]
+                parts = self.root / ('parts-' + delivery); parts.mkdir()
+                for role, archive in part_zips.items():
+                    dest = parts / role; dest.mkdir(); self.extract(archive, dest)
+                output = self.root / ('restored-' + delivery)
+                receipt = self.stage_transport.restore(parts, output, 'full', None, self.artifact,
+                                                       self.version, self.source_sha, self.framework_sha)
+                self.assertEqual(receipt['asset_files'], count)
+                self.assertEqual({name: self.stage_transport.file_record(path)
+                                  for name, path in self.stage_transport.regular_files(output).items()},
+                                 {name: self.stage_transport.file_record(path)
+                                  for name, path in self.stage_transport.regular_files(stage).items()})
+
+    def test_actual_workflow_conditions_select_only_one_transport_and_needed_architecture(self):
+        import yaml
+        root = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location('stage_workflow_expression',
+                                                       root / 'ci/hosted/test-workflows.py')
+        workflow = importlib.util.module_from_spec(spec); spec.loader.exec_module(workflow)
+        integration = yaml.safe_load((root / '.github/workflows/integration-tests.yml').read_text())['jobs']
+        architecture = yaml.safe_load((root / '.github/workflows/integration-architecture.yml').read_text())['jobs']
+        for job, scope in ((integration['resolve'], 'full'), (integration['workbench-release'], 'workbench'),
+                           (architecture['build'], 'core')):
+            for fmt in ('full', 'partitioned-v1', 'unknown'):
+                for arch in subject.ARCHES:
+                    context = {'true': True, 'inputs': {'mode': 'exact-assets', 'stage_artifact': 'owned',
+                               'stage_format': fmt, 'release_bundle_format': fmt, 'arch': arch},
+                               'matrix': {'arch': arch}}
+                    targets = [s['with']['path'] for s in job['steps']
+                               if 'download-artifact' in s.get('uses', '')
+                               and (s.get('with', {}).get('path') == 'aggregate-stage'
+                                    or s.get('with', {}).get('path', '').startswith('stage-parts/'))
+                               and workflow.expression(s['if'], context)]
+                    if fmt == 'full':
+                        self.assertEqual(targets, ['aggregate-stage'])
+                    elif fmt == 'partitioned-v1':
+                        expected = {'stage-parts/metadata', 'stage-parts/common'}
+                        arches = subject.ARCHES if scope == 'full' else (arch,)
+                        expected |= {'stage-parts/core-' + a for a in arches}
+                        if scope != 'core':
+                            expected |= {'stage-parts/workbench-' + a for a in arches}
+                        self.assertEqual(set(targets), expected)
+                        self.assertEqual(len(targets), len(expected))
+                    else:
+                        self.assertEqual(targets, [])
+                        guard = next(s for s in job['steps'] if s.get('name') == 'Validate stage transport format')
+                        result = subprocess.run(['bash', '-euc', guard['run']], env=dict(os.environ, STAGE_FORMAT=fmt),
+                                                capture_output=True, timeout=5)
+                        self.assertNotEqual(result.returncode, 0)
+
+    def test_workflows_pass_the_exact_metadata_binding_and_keep_legacy_defaults(self):
+        import yaml
+        root = Path(__file__).resolve().parents[2]
+        load = lambda name: yaml.safe_load((root / '.github/workflows' / name).read_text())
+        aggregate = load('aggregate-release.yml')['jobs']
+        integration = load('integration-tests.yml')
+        architecture = load('integration-architecture.yml')
+        inputs = lambda value: value[True]['workflow_call']['inputs']
+        self.assertEqual(inputs(integration)['release_bundle_format']['default'], 'full')
+        self.assertEqual(inputs(architecture)['stage_format']['default'], 'full')
+        self.assertEqual(aggregate['release-asset-validation']['with']['release_bundle_format'], 'partitioned-v1')
+        self.assertEqual(aggregate['release-asset-validation']['with']['release_bundle_identity'],
+                         '${{ needs.stage.outputs.artifact_identity }}')
+        self.assertEqual(aggregate['stage']['outputs']['artifact_identity'],
+                         '${{ steps.stage_identity.outputs.identity }}')
+        stage = aggregate['stage']['steps']
+        producer = next(step for step in stage if step.get('id') == 'workbench_images')
+        self.assertEqual(producer['uses'], './control/.github/actions/download-artifact')
+        self.assertEqual(producer['with'],
+                         {'pattern': 'workbench-image-*-${{ github.run_id }}', 'path': 'workbench-images'})
+        self.assertTrue(any('aggregate-release.sh assemble "$VERSION" inputs/fetched aggregate-stage' in s.get('run', '')
+                            for s in stage))
+        self.assertTrue(any('release/bind-validation.py aggregate-stage' in s.get('run', '')
+                            for s in aggregate['publish']['steps']))
+        uploads = [s for s in stage if s.get('uses', '').startswith('actions/upload-artifact@')]
+        self.assertEqual({s['with']['path'] for s in uploads},
+                         {'stage-upload/common', 'stage-upload/core-x86_64', 'stage-upload/core-aarch64',
+                          'stage-upload/metadata'})
+        for job, scope in ((integration['jobs']['resolve'], 'full'),
+                           (integration['jobs']['workbench-release'], 'workbench'),
+                           (architecture['jobs']['build'], 'core')):
+            restore = next(s for s in job['steps'] if s.get('name') == 'Reconstruct the existing stage layout')
+            self.assertIn('--scope ' + scope, restore['run'])
+            self.assertIn("== 'partitioned-v1'", restore['if'])
+            legacy = [s for s in job['steps'] if s.get('with', {}).get('path') == 'aggregate-stage'
+                      and 'download-artifact' in s.get('uses', '')]
+            self.assertEqual(len(legacy), 1)
+            self.assertIn("== 'full'", legacy[0]['if'])
+            for step in job['steps']:
+                if step.get('with', {}).get('path', '').startswith('stage-parts/'):
+                    self.assertTrue(step['uses'].endswith('/.github/actions/download-artifact'))
+                    self.assertIn('expected-identity', step['with'])
+        # Neither the public Workbench execution contract nor source-owner/CI
+        # selection is rewritten by this transport-only change.
+        qualify = next(s for s in integration['jobs']['workbench-release']['steps']
+                       if s.get('name') == 'Qualify staged image isolation and the public offline selection')['run']
+        self.assertIn('--cpus 2 --memory-gib 8 --group', qualify)
+        self.assertIn('extra+=(--artifact-only)', qualify)
+
+
 if __name__ == "__main__":
     unittest.main()

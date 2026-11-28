@@ -8,6 +8,7 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import re
 import signal
 import socket
 import ssl
@@ -799,9 +800,45 @@ class DownloadTests(unittest.TestCase):
         self.assertIn('EXECUTOR_DIGEST: ${{ inputs.executor_digest }}', restore)
         self.assertIn('[ "$FRAMEWORK_SHA" = "$TRUSTED_WORKFLOW_SHA" ]', restore)
         self.assertLess(restore.index('hashlib.sha256'), restore.index('tarfile.open'))
-        self.assertEqual(workflow.count('uses: ./framework/.github/actions/download-artifact'), 14)
-        self.assertEqual(workflow.count('uses: ./framework/.github/actions/download-artifact'),
-                         workflow.count('timeout-minutes: 35'))
+        local_action = 'uses: ./framework/.github/actions/download-artifact'
+        jobs = re.split(r'(?m)^  ([a-z][a-z0-9_-]*):\n', workflow.split('\njobs:\n', 1)[1])
+        downloads = {
+            name: [step for step in body.split('\n      - ') if local_action in step]
+            for name, body in zip(jobs[1::2], jobs[2::2])
+        }
+        # The original fourteen calls remain; only build adds four bound parts.
+        self.assertEqual({name: len(steps) for name, steps in downloads.items()},
+                         {'build': 6, 'prepare': 3, 'e2e': 4, 'performance': 3, 'result': 2})
+        self.assertEqual(workflow.count(local_action), 18)
+        for name, steps in downloads.items():
+            for step in steps:
+                with self.subTest(job=name, step=step.splitlines()[0]):
+                    self.assertEqual(step.count(local_action), 1)
+                    self.assertIn('\n        timeout-minutes: 35\n', step)
+        partitioned = "inputs.stage_artifact != '' && inputs.stage_format == 'partitioned-v1'"
+        bound_parts = {
+            'Download verified stage metadata': ('${{ inputs.stage_artifact }}',
+                'stage-identity.json', 'stage-parts/metadata', partitioned),
+            'Download common stage part': ('${{ steps.stage_parts.outputs.common }}',
+                'stage-requests/common.json', 'stage-parts/common', partitioned),
+            'Download core-x86_64 stage part': ('${{ steps.stage_parts.outputs.core_x86_64 }}',
+                'stage-requests/core-x86_64.json', 'stage-parts/core-x86_64',
+                partitioned + " && inputs.arch == 'x86_64'"),
+            'Download core-aarch64 stage part': ('${{ steps.stage_parts.outputs.core_aarch64 }}',
+                'stage-requests/core-aarch64.json', 'stage-parts/core-aarch64',
+                partitioned + " && inputs.arch == 'aarch64'"),
+        }
+        for name, (artifact, identity, destination, condition) in bound_parts.items():
+            with self.subTest(part=name):
+                steps = [step for step in downloads['build'] if step.startswith('name: ' + name + '\n')]
+                self.assertEqual(len(steps), 1)
+                lines = steps[0].splitlines()
+                self.assertIn('        if: ' + condition, lines)
+                self.assertIn('          name: ' + artifact, lines)
+                self.assertIn('          expected-identity: ' + identity, lines)
+                self.assertIn('          path: ' + destination, lines)
+        self.assertEqual(workflow.count('expected-identity:'), len(bound_parts))
+        self.assertEqual(workflow.count(local_action), workflow.count('timeout-minutes: 35'))
         self.assertEqual(workflow.count('sparse-checkout: |'),
                          workflow.count('/.github/actions/download-artifact/'))
         action = (root / '.github/actions/download-artifact/action.yml').read_text()
