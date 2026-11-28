@@ -7,7 +7,7 @@ components:
   accelerator: v0.2.0-preview.20261127.1
   connector: v0.2.0-preview.20261127
   sandboxer: v0.2.0-preview.20261127.1
-  orchestrator: v0.2.0-preview.20261127
+  orchestrator: v0.2.0-preview.20261127.1
   runtime: runtime-v0.2.0-preview.20261127
   vmlinux: vmlinux-v0.1.7-preview.20261124
 component_next_versions:
@@ -34,7 +34,7 @@ notes:
     | `accelerator` | `v0.2.0-preview.20261127.1` |
     | `connector` | `v0.2.0-preview.20261127` |
     | `sandboxer` | `v0.2.0-preview.20261127.1` |
-    | `orchestrator` | `v0.2.0-preview.20261127` |
+    | `orchestrator` | `v0.2.0-preview.20261127.1` |
     | `runtime` | `runtime-v0.2.0-preview.20261127` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261124` |
 
@@ -71,7 +71,14 @@ notes:
 
     ### orchestrator
 
-    Selected version unchanged: `v0.2.0-preview.20261127`.
+    Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261127.1`.
+
+    - Validate required Builder contracts without duplicate execution ([#585](https://github.com/kuasar-sandbox/orchestrator/pull/585)).
+    - Restore the retention failure fixture atomically ([#589](https://github.com/kuasar-sandbox/orchestrator/pull/589)).
+    - Bind resource shutdown proof to the actual Cloud Hypervisor result ([#590](https://github.com/kuasar-sandbox/orchestrator/pull/590)).
+    - Expose complete export reference reports through sandbox and Workspace APIs, preserving local capture and default CLI output ([#583](https://github.com/kuasar-sandbox/orchestrator/pull/583)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/7b20e505e221c5ed447ebe601b55e9ca649e1e99...24abd95386fde39cc365d2f2987d963272bced17)
 
     ### runtime
 
@@ -94,3 +101,4 @@ notes:
     Workbench system mode is a trusted administrator environment with Docker privileged access. Private namespaces/data and owned cleanup do not provide hostile-root confinement.
 
     Report vulnerabilities privately through [Report a vulnerability](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new), not public issues.
+
