@@ -7,10 +7,13 @@ import tarfile
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
 
+ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "release"))
 import workbench_registry as subject
 
 VERSION = 'release-v1.2.3-preview.20260928.2'
