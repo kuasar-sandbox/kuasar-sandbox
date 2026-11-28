@@ -1,10 +1,10 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261127.1
+preview_version: preview.20261128
 previous_preview_version: preview.20261127
 components:
-  accelerator: v0.2.0-preview.20261127.1
+  accelerator: v0.2.0-preview.20261128
   connector: v0.2.0-preview.20261127
   sandboxer: v0.2.0-preview.20261127.1
   orchestrator: v0.2.0-preview.20261127.1
@@ -19,19 +19,19 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261127.1
+    # Kuasar Sandbox release-v0.2.0-preview.20261128
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
     Previous aggregate selection: `release-v0.2.0-preview.20261127`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261127.1/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128/releases/daily-preview.yaml).
 
     ## Component versions
 
     | Release unit | Version |
     |---|---|
-    | `accelerator` | `v0.2.0-preview.20261127.1` |
+    | `accelerator` | `v0.2.0-preview.20261128` |
     | `connector` | `v0.2.0-preview.20261127` |
     | `sandboxer` | `v0.2.0-preview.20261127.1` |
     | `orchestrator` | `v0.2.0-preview.20261127.1` |
@@ -44,11 +44,17 @@ notes:
 
     ### accelerator
 
-    Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261127.1`.
+    Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261128`.
 
     - test(cache): separate native and no-RocksDB tiered assembly checks ([#247](https://github.com/kuasar-sandbox/accelerator/pull/247), [commit aed33d7fde94](https://github.com/kuasar-sandbox/accelerator/commit/aed33d7fde940921d2ff0bf2b2a3ac78804cfe1e)).
+    - test(e2e): isolate activation start-limit budgets ([#246](https://github.com/kuasar-sandbox/accelerator/pull/246), [commit 6db281d9950e](https://github.com/kuasar-sandbox/accelerator/commit/6db281d9950e5494ecb48f00e24f7d0214395351)).
+    - test(e2e): make cache readiness observations precise ([#248](https://github.com/kuasar-sandbox/accelerator/pull/248), [commit 15e304e00803](https://github.com/kuasar-sandbox/accelerator/commit/15e304e00803673490fbdff231f63516f9abd620)).
+    - test(e2e): assert manifest diff and sparse encoding contracts ([#249](https://github.com/kuasar-sandbox/accelerator/pull/249), [commit 85770a7924f5](https://github.com/kuasar-sandbox/accelerator/commit/85770a7924f55ccb32c31cbdc07d4e0e899d04cf)).
+    - test(obs): isolate remote cleanup and preserve failures ([#250](https://github.com/kuasar-sandbox/accelerator/pull/250), [commit e8cfdf61097e](https://github.com/kuasar-sandbox/accelerator/commit/e8cfdf61097ea775d4e5994d1cf43d3ab2064cf8)).
+    - test(cache): verify store wire chunk and blob hits ([#252](https://github.com/kuasar-sandbox/accelerator/pull/252), [commit 964c5d04b5fc](https://github.com/kuasar-sandbox/accelerator/commit/964c5d04b5fc5b04bbe848a493ce9e01b8efc639)).
+    - feat: add unified Secret plugin resolution ([#251](https://github.com/kuasar-sandbox/accelerator/pull/251), [commit 55f9278bcc7a](https://github.com/kuasar-sandbox/accelerator/commit/55f9278bcc7a882a4ed0b031cd2be2908f726c17)).
 
-    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/160a2cd6959d7e9b40876fee229dca8dc8679b97...aed33d7fde940921d2ff0bf2b2a3ac78804cfe1e)
+    [Full comparison](https://github.com/kuasar-sandbox/accelerator/compare/160a2cd6959d7e9b40876fee229dca8dc8679b97...55f9278bcc7a882a4ed0b031cd2be2908f726c17)
 
     ### connector
 
@@ -94,11 +100,10 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261127.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261127.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
     Workbench system mode is a trusted administrator environment with Docker privileged access. Private namespaces/data and owned cleanup do not provide hostile-root confinement.
 
     Report vulnerabilities privately through [Report a vulnerability](https://github.com/kuasar-sandbox/kuasar-sandbox/security/advisories/new), not public issues.
-
