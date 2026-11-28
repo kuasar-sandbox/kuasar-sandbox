@@ -215,7 +215,7 @@ jobs:
 
   collect:
     if: github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository
-    needs: [prepare, helper-build]
+    needs: prepare
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
@@ -228,52 +228,33 @@ jobs:
         with:
           name: aggregate-sources-${{ github.run_id }}
           path: transport
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: aggregate-helpers-*-${{ github.run_id }}
-          path: helpers
-          merge-multiple: true
-      - name: Combine the two exact native helper packages
+      - name: Materialize the exact collection sources
         run: |
           python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
           mv inputs/fetched fetched
           cp -a fetched/platform platform
-          mkdir -p fetched/e2e-helpers fetched/e2e-wheels
-          for arch in x86_64 aarch64; do
-            python3 -B control/ci/integration/transport.py extract "helpers/helpers-$arch.tar" "helpers/$arch"
-            mv "helpers/$arch/e2e-helpers/$arch" fetched/e2e-helpers/
-            mv "helpers/$arch/e2e-wheels/$arch" fetched/e2e-wheels/
-          done
-          python3 -B control/test/e2e/lib/helper_contract.py fetched/e2e-helpers
       - name: Collect the shared external inputs once for both native images
         env:
           PLATFORM_SOURCE_ROOT: ${{ github.workspace }}/platform
           VERSION: ${{ needs.prepare.outputs.version }}
-          E2E_HELPER_ROOT: ${{ github.workspace }}/fetched/e2e-helpers
-          E2E_WHEEL_ROOT: ${{ github.workspace }}/fetched/e2e-wheels
         run: |
           set -euo pipefail
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends skopeo
-          export SOURCE_DATE_EPOCH=$(git -C platform show -s --format=%ct HEAD)
-          control/release/package-platform.sh package "$VERSION" fetched/sources platform-input
-          mkdir collected-platform
-          tar -xzf "platform-input/assets/platform-$VERSION.tar.gz" -C collected-platform
+          cp fetched/selection.tsv collection-docs-refs.tsv
+          printf 'platform\t%s\n' "$VERSION" >> collection-docs-refs.tsv
+          E2E_SOURCE_ROOT= E2E_HELPER_ROOT= E2E_WHEEL_ROOT= \
+            DOCS_SOURCE_REFS="$PWD/collection-docs-refs.tsv" DOCS_VMLINUX_SOURCE="$PWD/fetched/sources/vmlinux" \
+            control/test/e2e/assemble.sh collected-platform platform \
+            fetched/sources/accelerator fetched/sources/connector fetched/sources/runtime \
+            fetched/sources/sandboxer fetched/sources/orchestrator
           python3 -B platform/workbench/collect-inputs.py --cases collected-platform/test/e2e/cases \
             --arch x86_64 --arch aarch64 --output collected-inputs
           tar -cf workbench-inputs.tar platform collected-inputs collected-platform/test/e2e/cases
-          tar -cf fetched.tar fetched
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: workbench-inputs-${{ github.run_id }}
           path: workbench-inputs.tar
-          compression-level: 0
-          if-no-files-found: error
-          retention-days: 1
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: aggregate-inputs-${{ github.run_id }}
-          path: fetched.tar
           compression-level: 0
           if-no-files-found: error
           retention-days: 1
@@ -371,8 +352,8 @@ jobs:
           retention-days: 1
 
   stage:
-    if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.workbench-build.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.node-infra-build.result)
-    needs: [prepare, workbench-build, node-infra-build]
+    if: always() && github.event.repository.visibility == 'public' && github.event.repository.full_name == github.repository && needs.helper-build.result == 'success' && needs.workbench-build.result == 'success' && contains(fromJSON('["success","skipped"]'), needs.node-infra-build.result)
+    needs: [prepare, helper-build, workbench-build, node-infra-build]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -383,8 +364,13 @@ jobs:
           persist-credentials: false
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: aggregate-inputs-${{ github.run_id }}
+          name: aggregate-sources-${{ github.run_id }}
           path: transport
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: aggregate-helpers-*-${{ github.run_id }}
+          path: helpers
+          merge-multiple: true
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: workbench-image-*-${{ github.run_id }}
@@ -404,6 +390,13 @@ jobs:
           set -euo pipefail
           python3 -B control/ci/integration/transport.py extract transport/fetched.tar inputs
           cp -a inputs/fetched/platform platform
+          mkdir -p inputs/fetched/e2e-helpers inputs/fetched/e2e-wheels
+          for arch in x86_64 aarch64; do
+            python3 -B control/ci/integration/transport.py extract "helpers/helpers-$arch.tar" "helpers/$arch"
+            mv "helpers/$arch/e2e-helpers/$arch" inputs/fetched/e2e-helpers/
+            mv "helpers/$arch/e2e-wheels/$arch" inputs/fetched/e2e-wheels/
+          done
+          python3 -B control/test/e2e/lib/helper_contract.py inputs/fetched/e2e-helpers
           mv workbench-images inputs/fetched/workbench
           if [ -d node-infra-images ]; then mv node-infra-images inputs/fetched/node-infra; fi
           export SOURCE_DATE_EPOCH=$(git -C platform show -s --format=%ct HEAD)
