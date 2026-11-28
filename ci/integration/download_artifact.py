@@ -171,6 +171,70 @@ def normalize(row):
     return result
 
 
+def expected_identity(value):
+    """Bind an optional caller-frozen manifest to this same logical run.
+
+    Numeric run identity comes from the runner environment; ListArtifacts still
+    authorizes the actual artifact backend IDs. A failed-job rerun may consume
+    an earlier attempt of this run. This does not infer an attempt number from
+    backend UUIDs.
+    """
+    if value is None:
+        return None
+    require(isinstance(value, dict) and set(value) == {'schema', 'repository', 'run_id', 'artifacts'}
+            and type(value['schema']) is int and value['schema'] == 1, 'invalid_expected_identity')
+    repository, run_id = value['repository'], value['run_id']
+    require(isinstance(repository, str) and re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository)
+            and repository == os.environ.get('GITHUB_REPOSITORY'), 'expected_repository_mismatch')
+    require(isinstance(run_id, str) and re.fullmatch(r'[1-9][0-9]*', run_id)
+            and run_id == os.environ.get('GITHUB_RUN_ID'), 'expected_run_mismatch')
+    rows = value['artifacts']
+    require(isinstance(rows, list) and 0 < len(rows) <= 100, 'invalid_expected_artifacts')
+    ids, names = set(), set()
+    for row in rows:
+        require(isinstance(row, dict) and set(row) == {'name', 'id', 'digest'},
+                'invalid_expected_artifact')
+        require(isinstance(row['name'], str) and 0 < len(row['name']) <= 256
+                and not any(ord(c) < 32 for c in row['name']), 'invalid_expected_name')
+        require(isinstance(row['id'], str) and re.fullmatch(r'[1-9][0-9]*', row['id']),
+                'invalid_expected_id')
+        require(isinstance(row['digest'], str) and re.fullmatch(r'[0-9a-f]{64}', row['digest']),
+                'invalid_expected_digest')
+        require(row['id'] not in ids and row['name'] not in names, 'duplicate_expected_artifact')
+        ids.add(row['id']); names.add(row['name'])
+    return value
+
+
+def read_expected(path):
+    if not path:
+        return None
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    except OSError:
+        raise Failure('expected_identity_missing_or_unsafe') from None
+    with os.fdopen(fd, 'rb') as stream:
+        info = os.fstat(stream.fileno())
+        require(stat.S_ISREG(info.st_mode) and info.st_size <= 65536, 'invalid_expected_identity_file')
+        raw = stream.read(65537)
+        require(len(raw) <= 65536, 'invalid_expected_identity_file')
+    try:
+        value = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise Failure('invalid_expected_identity_json') from None
+    # An explicit file must bind identity. Only an omitted input may use None.
+    require(isinstance(value, dict), 'invalid_expected_identity')
+    return expected_identity(value)
+
+
+def check_expected(selected, value):
+    value = expected_identity(value)
+    if value is not None:
+        observed = [{'name': row['name'], 'id': row['database_id'], 'digest': row['digest']}
+                    for row in selected]
+        require(sorted(observed, key=lambda row: row['id']) ==
+                sorted(value['artifacts'], key=lambda row: row['id']), 'expected_artifact_mismatch')
+
+
 def select_artifacts(response, spec):
     rows = response.get('artifacts')
     require(isinstance(rows, list), 'invalid_metadata')
@@ -324,6 +388,7 @@ def attempt(spec, frozen, directory, send):
     token, service, identity = runtime_identity()
     send({'phase': 'metadata'})
     selected = select_artifacts(rpc(service, token, 'ListArtifacts', identity), spec)
+    check_expected(selected, spec.get('expected_identity'))
     if frozen is not None:
         require(selected == frozen, 'artifact_identity_changed')
     else:
@@ -396,6 +461,7 @@ def log_event(number, started, **values):
 def download(spec, destination, *, seconds=ATTEMPT_SECONDS, delays=BACKOFF_SECONDS,
              operation=attempt, sleep=time.sleep):
     require(bool(spec['name']) != bool(spec['pattern']), 'select_name_or_pattern')
+    expected_identity(spec.get('expected_identity'))
     destination = Path(destination).absolute()
     require(destination.name not in ('', '.', '..') and not os.path.lexists(destination),
             'destination_must_be_new')
@@ -459,7 +525,7 @@ def download(spec, destination, *, seconds=ATTEMPT_SECONDS, delays=BACKOFF_SECON
                 require(not os.path.lexists(destination), 'destination_must_be_new')
                 os.rename(directory / 'payload', destination)
                 log_event(number, started, phase='complete')
-                return
+                return frozen
             log_event(number, started, phase='failed', reason=result['reason'])
             shutil.rmtree(directory)
             if not result['retryable'] or number > len(delays):
@@ -479,9 +545,13 @@ def main():
     signal.signal(signal.SIGTERM, cancel)
     signal.signal(signal.SIGINT, cancel)
     try:
-        download({'name': os.environ.get('INPUT_NAME', ''),
-                  'pattern': os.environ.get('INPUT_PATTERN', '')},
-                 os.environ.get('INPUT_PATH', ''))
+        spec = {'name': os.environ.get('INPUT_NAME', ''), 'pattern': os.environ.get('INPUT_PATTERN', '')}
+        if os.environ.get('INPUT_EXPECTED-IDENTITY'):
+            spec['expected_identity'] = read_expected(os.environ['INPUT_EXPECTED-IDENTITY'])
+        identity = download(spec, os.environ.get('INPUT_PATH', ''))
+        if os.environ.get('GITHUB_OUTPUT'):
+            with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                output.write('artifacts=' + json.dumps(identity, sort_keys=True, separators=(',', ':')) + '\n')
     except KeyboardInterrupt:
         print('artifact: canceled', flush=True)
         return 130
