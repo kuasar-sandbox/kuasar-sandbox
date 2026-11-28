@@ -86,8 +86,12 @@ listed test fixtures in `ci/integration/source_lane.py`. This includes top-level
 `test/e2e/test_*.py` contracts and `test_*` library tests excluded from delivered
 runtime inputs. Changed scripts execute their real entry point or discovered
 unittest suite; an unregistered new test is not accepted on syntax alone, and a
-missing tracked script is not treated as a deletion. Platform CI/release contracts
-always run. Changed component tests select their component source gates, including
+missing tracked script is not treated as a deletion. Platform CI/release fixture
+suites run when the platform changes or its selected source differs from the
+validated framework. Otherwise, component changes retain the artifact-reader
+and release-source compatibility checks that consume the selected component
+inputs, without repeating unchanged platform fixtures.
+Changed component tests select their component source gates, including
 Go test coverage; documentation-only companions do not select unrelated Go gates.
 Privileged performance contracts run only for affected performance test inputs.
 
@@ -312,8 +316,7 @@ Standalone `make test-release-tools` keeps its platform tooling scope and explic
 ### Source check groups
 
 `run-source-checks.py --group all` remains the default complete entry. Group `A`
-retains platform contracts (the full `make test-ci-tools test-release-tools`
-invocation), privileged performance contracts, selected connector/sandboxer
+retains the platform checks selected above, privileged performance contracts, selected connector/sandboxer
 scripts, accelerator fixtures and the existing UFFD check. Group `B` contains
 the selected orchestrator script. Selection, command arguments, working
 directories and dependency closure are identical to `all`; B is not scheduled

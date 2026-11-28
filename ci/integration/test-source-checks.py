@@ -71,6 +71,39 @@ class SourceChecksTests(unittest.TestCase):
         self.plan['source_scope'] = dict(schema=1, sources=copy.deepcopy(records),
                                         changes={owner: sorted(set(paths)) for owner, paths in changes.items()})
 
+    def test_component_scope_retains_input_compatibility_without_unchanged_platform_fixtures(self):
+        self.source_scope({'orchestrator': ['internal/router/route_test.go']})
+        self.plan['test_revisions']['platform']['sha'] = self.plan['framework_sha']
+        checks = SUBJECT.checks_for(self.plan, self.sources, 'owner-platform')
+        self.assertEqual([row[0] for row in checks],
+                         ['platform-artifact-compatibility', 'platform-release-compatibility'])
+        self.assertIn('KUASAR_RUNTIME_READER=' + str(self.sources / 'guest-runtime/scripts/release-runtime-payloads.py'),
+                      checks[0][1])
+        self.assertEqual(checks[1][1][-3:], ['--sources', str(self.sources), '--auto'])
+        groups = source_results.groups_for(self.plan, True)
+        data = self.grouped_evidence(groups)
+        self.assertEqual(self.validate_evidence(data, groups)['conclusion'], 'success')
+        platform = next(row for row in data[3].values() if row['result']['group'] == 'owner-platform')
+        platform['result']['checks'].pop()
+        with self.assertRaises(ValueError):
+            self.validate_evidence(data, groups)
+
+    def test_platform_changes_and_older_platform_pins_keep_complete_fixtures(self):
+        self.source_scope({'orchestrator': ['internal/router/route_test.go']})
+        self.assertEqual(SUBJECT.checks_for(self.plan, self.sources)[0][0], 'platform-contracts')
+        self.plan['test_revisions']['platform']['sha'] = self.plan['framework_sha']
+        self.source_scope({'platform': ['docs/ci.md'], 'orchestrator': ['internal/router/route_test.go']})
+        self.assertEqual(SUBJECT.checks_for(self.plan, self.sources)[0][0], 'platform-contracts')
+
+    def test_full_component_change_also_reuses_unchanged_framework_fixtures(self):
+        select_plan(self.plan, ['connector'])
+        self.plan['test_revisions']['platform']['sha'] = self.plan['framework_sha']
+        checks = SUBJECT.checks_for(self.plan, self.sources)
+        self.assertEqual([row[0] for row in checks[:2]],
+                         ['platform-artifact-compatibility', 'platform-release-compatibility'])
+        self.assertIn('connector-go-tests', [row[0] for row in checks])
+        self.assertIn('connector-unit-race-vet', [row[0] for row in checks])
+
     def test_source_scope_uses_pr_owners_without_release_delta_expansion(self):
         self.source_scope({'platform': ['ci/integration/test-new.py']})
         selected, records = SUBJECT.source_records(self.plan)
