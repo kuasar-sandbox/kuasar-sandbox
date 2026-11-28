@@ -152,6 +152,43 @@ class PathAndQualificationTests(unittest.TestCase):
         self.assertFalse(subject.test_script(PLATFORM, path))
         self.assert_source(qualify({path: 'def check():\n    return {}\n'}))
 
+    def test_orchestrator_stage_catalog_keeps_the_complete_activation_in_source_lane(self):
+        repository = 'kuasar-sandbox/orchestrator'
+        path = 'test/source/source_gate.py'
+        self.assertTrue(subject.gate_input(repository, path))
+        self.assertFalse(subject.test_script(repository, path))
+        self.assertFalse(subject.e2e_input(repository, path))
+        files = {
+            'scripts/ci-source-checks.sh': '#!/usr/bin/env bash\nset -euo pipefail\n'
+                'source_gate_program="$(python3 -B test/source/source_gate.py "$@")"\n'
+                'eval "$source_gate_program"\n',
+            path: 'def program():\n    return "set -euo pipefail\\n"\n',
+            'test/e2e/lib/test_source_gate_stages.py': PYTHON_TEST,
+        }
+        result = qualify(files, repository=repository)
+        self.assert_source(result)
+        for revision in ('head', 'candidate'):
+            checks = result['repositories'][0]['source'][revision]['checks']
+            self.assertEqual([row['path'] for row in checks], sorted(files))
+            self.assertEqual(next(row['parser'] for row in checks if row['path'] == path), 'python-compile')
+
+    def test_stage_catalog_allowlist_does_not_cover_other_helpers_or_repositories(self):
+        for repository, path in (
+                ('kuasar-sandbox/orchestrator', 'test/source/source_gate_extra.py'),
+                ('kuasar-sandbox/orchestrator', 'test/source/nested/source_gate.py'),
+                ('kuasar-sandbox/orchestrator', 'test/e2e/lib/source_gate.py'),
+                ('kuasar-sandbox/connector', 'test/source/source_gate.py'),
+                ('kuasar-sandbox/sandboxer', 'test/source/source_gate.py')):
+            with self.subTest(repository=repository, path=path):
+                self.assertFalse(subject.gate_input(repository, path))
+                self.assertEqual(qualify({path: 'def program():\n    return "true"\n'},
+                                         repository=repository)['lane'], 'full')
+        for mode, kind in (('120000', 'blob'), ('160000', 'commit'), ('100664', 'blob')):
+            with self.subTest(mode=mode, kind=kind):
+                result = qualify({'test/source/source_gate.py': ('pass\n', mode, kind)},
+                                 repository='kuasar-sandbox/orchestrator')
+                self.assertEqual(result['lane'], 'full')
+
     def test_parameterized_test_helpers_select_their_real_fixture_suites(self):
         for (repository, path), driver in subject.TEST_DRIVERS.items():
             with self.subTest(repository=repository, path=path):
