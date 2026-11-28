@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       source_check_groups:
-        description: Experimental two-group source schedule; enable only after measured acceptance
+        description: Schedule complete source gates as independent owner groups
         required: false
         default: false
         type: boolean

@@ -313,10 +313,15 @@ budget, private sources, Go workspace, temporary directories and build/module
 caches. No source cache is restored or shared between groups.
 
 The reusable workflow keeps `source_check_groups: false` as its compatibility
-default. The PR callers in `ci.yml` and `ci-entry.yml` select A/B after rollout
-acceptance; the aggregate caller retains `all` until its own final-workflow
-benefit and cost are measured. Set either PR caller back to false to restore
-`all`; no target, resource budget or required check changes.
+default. The PR callers in `ci.yml` and `ci-entry.yml` enable separate
+`owner-platform`, `owner-connector`, `owner-sandboxer`, `owner-accelerator`,
+`owner-guest-runtime` and `owner-orchestrator` groups, scheduling only nonempty
+groups. Each group keeps its original command order; platform documentation and
+UFFD checks remain in `owner-platform`. Complete `all` and A/B schedules remain
+compatible. The measurements below describe the earlier all versus A/B rollout,
+not measurements of owner groups. The aggregate caller retains its existing
+compatibility setting. Set either PR caller back to false to restore `all`;
+no target, resource budget or required check changes.
 
 Two paired real Actions measurements used identical selected component sources,
 case inventories, complete commands and immutable Workbench image within each
@@ -336,14 +341,15 @@ measurement. Revalidate current-source correctness and all six caller paths,
 including failure and partial reruns, before completing rollout. These SOURCE
 measurements do not establish aggregate or Workbench-group savings.
 
-Both schedules bind results to the exact plan, original command coverage,
-Workbench image, successful cleanup, and current Actions producer job and
-artifact IDs. Artifact names include run, attempt and group; they never
+Every supported schedule binds results to the exact plan, complete original
+command coverage, Workbench image, successful cleanup, and current Actions
+producer job and artifact IDs. The union of group commands must cover every
+selected command exactly once. Artifact names include run, attempt and group; they never
 overwrite another attempt. A failed, cancelled, missing or duplicate producer
 blocks finalization. A successful earlier attempt is reusable only while it
 is the latest producer for that group and still matches the current plan;
-rerunning that producer invalidates its older artifact. A/B cannot share an
-instance or machine. Rollback selects `all` without removing these checks or
+rerunning that producer invalidates its older artifact. Scheduled groups cannot
+share an instance or machine. Rollback selects `all` without removing these checks or
 altering release selection and required-check rules.
 
 Actions may give a carried successful job a new ID in a partial rerun while retaining its original execution timestamps, runner and steps. The shared reader traces such a view back only to the matching latest preceding successful execution; a genuinely newer running, failed or cancelled producer still invalidates old evidence. The same rule covers source groups and Workbench runtime groups, ARM, staged inputs and the validation job.

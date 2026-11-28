@@ -2,6 +2,7 @@
 """Complete source gates, exact-test pins and failure-propagation regressions."""
 
 import importlib.util
+from collections import Counter
 import hashlib
 import itertools
 import copy
@@ -84,7 +85,7 @@ class SourceChecksTests(unittest.TestCase):
                          ['platform-contracts', 'platform-test-script:ci/integration/test-new.py'])
         self.assertTrue(all(row[2] == self.sources / 'platform' for row in checks))
         self.assertEqual(SUBJECT.checks_for(self.plan, self.sources, 'B'), [])
-        self.assertEqual(source_results.groups_for(self.plan, True), ['A'])
+        self.assertEqual(source_results.groups_for(self.plan, True), ['owner-platform'])
 
     def test_source_scope_covers_each_changed_go_owner_and_no_unrelated_gates(self):
         original = copy.deepcopy(self.plan)
@@ -142,6 +143,7 @@ class SourceChecksTests(unittest.TestCase):
                 self.assertFalse(any('-test-script:' in row[0] for row in checks))
                 group = 'B' if owner == 'orchestrator' else 'A'
                 self.assertIn(matching[0], SUBJECT.checks_for(self.plan, self.sources, group))
+                self.assertIn(matching[0], SUBJECT.checks_for(self.plan, self.sources, 'owner-' + owner))
 
     def test_pid1_or_wire_changes_keep_guest_race_tests_in_full_and_source_lanes(self):
         for path, source_only in (('cmd/sandbox-init/main.go', False),
@@ -191,6 +193,10 @@ class SourceChecksTests(unittest.TestCase):
                          ['orchestrator-unit-race-vet', 'orchestrator-test-script:test/source/test-new.sh'])
         self.assertEqual(b[-1][1], ['python3', '-B', SUBJECT.TEST_SCRIPT_EXECUTOR, '--test-script',
                                   'kuasar-sandbox/orchestrator', 'test/source/test-new.sh'])
+        self.assertEqual(SUBJECT.checks_for(self.plan, self.sources, 'owner-orchestrator'), b)
+        owner_groups = source_results.groups_for(self.plan, True)
+        self.assertEqual(owner_groups, ['owner-platform', 'owner-connector', 'owner-orchestrator'])
+        self.assertEqual(self.validate_evidence(self.grouped_evidence(owner_groups), owner_groups)['conclusion'], 'success')
         self.assertEqual(self.validate_evidence(self.grouped_evidence())['conclusion'], 'success')
         for mutation in ('missing', 'substituted', 'failed'):
             with self.subTest(mutation=mutation):
@@ -227,7 +233,9 @@ class SourceChecksTests(unittest.TestCase):
                          ['python3', '-B', '/inputs/release/ci/integration/check-source-documentation.py',
                           '--plan', '/src/.source-plan.json', '--sources', '/src',
                           '--output', '/output/source-documentation.json'])
-        self.assertEqual(source_results.groups_for(self.plan, True), ['A'])
+        self.assertEqual(source_results.groups_for(self.plan, True), ['owner-platform'])
+        self.assertEqual(self.validate_evidence(self.grouped_evidence(('owner-platform',)),
+                                               ('owner-platform',))['conclusion'], 'success')
         self.assertEqual(self.validate_evidence(self.grouped_evidence(('A',)), ('A',))['conclusion'], 'success')
         evidence = self.grouped_evidence(('A',))
         evidence[3][1]['result']['checks'].pop()
@@ -244,7 +252,8 @@ class SourceChecksTests(unittest.TestCase):
         self.assertEqual([row[0] for row in SUBJECT.checks_for(self.plan, self.sources)],
                          ['platform-contracts', 'source-documentation-package', 'connector-go-tests',
                           'connector-unit-race-vet', 'accelerator-source-tests', 'accelerator-no-rocksdb-tests'])
-        self.assertEqual(source_results.groups_for(self.plan, True), ['A'])
+        self.assertEqual(source_results.groups_for(self.plan, True),
+                         ['owner-platform', 'owner-connector', 'owner-accelerator'])
 
     def test_source_scope_documentation_package_failure_is_required(self):
         self.source_scope({'platform': ['test/e2e/assemble_docs.py']})
@@ -290,7 +299,7 @@ class SourceChecksTests(unittest.TestCase):
             return subprocess.CompletedProcess(command, failure[1] if failure and command == failure[0] else 0)
         with patch.object(SUBJECT.source_inputs, "copy_run_inputs", side_effect=restore_using(self.checkout)), \
              patch.object(SUBJECT.subprocess, "run", side_effect=run), \
-             patch.object(SUBJECT, "workspace", side_effect=lambda root, owner, env: dict(env, GOWORK="off")), \
+             patch.object(SUBJECT, "workspace", side_effect=lambda root, owner, env: dict(env, GOWORK="off", TEST_WORKSPACE=owner)), \
              patch.dict(os.environ, {"TMPDIR": "/build/t"}):
             SUBJECT.execute(self.plan, self.sources, self.output, group=group)
         return commands
@@ -337,10 +346,58 @@ class SourceChecksTests(unittest.TestCase):
                         self.assertEqual(len(a) + len(b), len(all_checks))
                         self.assertEqual(a[0][1], ['make', 'test-ci-tools', 'test-release-tools'])
                         self.assertEqual(a[1][1], ['sudo', '-n', '-E', 'make', 'test-perf-tools'])
-                        self.assertEqual(source_results.groups_for(self.plan, True), [] if mode == 'exact-assets' else ['A', 'B'] if b else ['A'])
+                        self.assertEqual(source_results.legacy_groups_for(self.plan), ['A', 'B'] if b else ['A'])
+                        owner_groups, owned = [], []
+                        for group in SUBJECT.OWNER_GROUPS:
+                            part = SUBJECT.checks_for(self.plan, self.sources, group)
+                            self.assertEqual(part, [row for row in all_checks if 'owner-' + row[2].name == group])
+                            if part:
+                                owner_groups.append(group)
+                                owned.extend(part)
+                        identity = lambda rows: Counter((name, tuple(command), str(cwd)) for name, command, cwd in rows)
+                        self.assertEqual(identity(owned), identity(all_checks))
+                        self.assertTrue(all(count == 1 for count in identity(owned).values()))
+                        self.assertEqual(source_results.groups_for(self.plan, True), [] if mode == 'exact-assets' else owner_groups)
                         self.assertEqual(source_results.groups_for(self.plan), [] if mode == 'exact-assets' else ['all'])
         with self.assertRaises(ValueError):
             SUBJECT.checks_for(self.plan, self.sources, 'unknown')
+
+    def test_owner_projection_fails_closed_for_unknown_or_nested_directories(self):
+        for directory in (self.sources / 'unknown', self.sources / 'platform' / 'ci', self.root / 'elsewhere'):
+            with self.subTest(directory=str(directory)), self.assertRaises(ValueError):
+                SUBJECT.owner_group(('unexpected', ['true'], directory), self.sources)
+        self.plan['mode'] = 'unknown'
+        with self.assertRaisesRegex(ValueError, 'unknown source scheduling mode'):
+            source_results.groups_for(self.plan, True)
+
+    def test_schedule_cli_emits_complete_owner_or_legacy_all_schedule(self):
+        plan_path = self.root / 'plan.json'
+        plan_path.write_text(json.dumps(self.plan))
+        for schedule, expected in (('grouped', list(SUBJECT.OWNER_GROUPS)), ('all', ['all'])):
+            with self.subTest(schedule=schedule):
+                result = subprocess.run([sys.executable, '-B', source_results.__file__,
+                                         '--plan', str(plan_path), '--schedule', schedule],
+                                        capture_output=True, text=True, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout), expected)
+
+    def test_owner_projection_keeps_scoped_race_scripts_and_documentation(self):
+        self.source_scope({'guest-runtime': ['internal/wireio/full_test.go', 'release/guide-migrations.json'],
+                           'connector': ['scripts/test-new.py'],
+                           'orchestrator': ['test/source/test-new.sh'],
+                           'accelerator': ['pkg/tarstream/testdata/legacy-byte-holes.tar'],
+                           'platform': ['docs/contributing.md']})
+        groups = source_results.groups_for(self.plan, True)
+        self.assertEqual(groups, ['owner-platform', 'owner-connector', 'owner-accelerator',
+                                  'owner-guest-runtime', 'owner-orchestrator'])
+        rows = SUBJECT.checks_for(self.plan, self.sources)
+        for group in groups:
+            self.assertEqual(SUBJECT.checks_for(self.plan, self.sources, group),
+                             [row for row in rows if 'owner-' + row[2].name == group])
+        self.assertIn('guest-runtime-race', [row[0] for row in rows])
+        self.assertIn('source-documentation-package', [row[0] for row in
+                      SUBJECT.checks_for(self.plan, self.sources, 'owner-platform')])
+        self.assertEqual(self.validate_evidence(self.grouped_evidence(groups), groups)['conclusion'], 'success')
 
     def grouped_evidence(self, groups=('A', 'B')):
         run = dict(id=123, run_attempt=2, head_sha='a' * 40)
@@ -368,7 +425,7 @@ class SourceChecksTests(unittest.TestCase):
         return source_results.validate(self.plan, list(groups), run, jobs, available, documents.__getitem__)
 
     def test_current_source_results_and_legal_earlier_attempt_reuse(self):
-        for groups in (('all',), ('A', 'B')):
+        for groups in (('all',), ('A', 'B'), SUBJECT.OWNER_GROUPS):
             result = self.validate_evidence(self.grouped_evidence(groups), groups)
             self.assertEqual(result['conclusion'], 'success')
             self.assertEqual(result['run_attempt'], 2)
@@ -408,26 +465,64 @@ class SourceChecksTests(unittest.TestCase):
             change([3, 2, 'instance', 'id'], 'instance-1'),
             change([3, 2, 'instance', 'container_id'], 'container-1'),
         ]
-        for index, mutate in enumerate(mutations):
-            with self.subTest(mutation=index):
-                data = self.grouped_evidence()
-                mutate(data)
-                with self.assertRaises(ValueError):
-                    self.validate_evidence(data)
+        for groups in (('A', 'B'), SUBJECT.OWNER_GROUPS):
+            for index, mutate in enumerate(mutations):
+                with self.subTest(groups=groups, mutation=index):
+                    data = self.grouped_evidence(groups)
+                    mutate(data)
+                    with self.assertRaises(ValueError):
+                        self.validate_evidence(data, groups)
 
     def test_new_producer_attempt_invalidates_old_artifact(self):
-        for conclusion in ('success', 'failure', 'cancelled', None):
-            with self.subTest(conclusion=conclusion):
-                data = self.grouped_evidence()
-                latest = dict(data[1][0], id=301, run_attempt=2, conclusion=conclusion)
-                data[1].append(latest)
-                with self.assertRaises(ValueError):
-                    self.validate_evidence(data)
-        data = self.grouped_evidence()
-        data[1].append(dict(data[1][0], id=301, run_attempt=2))
-        data[2].append(dict(data[2][0], id=3, name=source_results.artifact_name(123, 2, 'A')))
-        data[3][3] = copy.deepcopy(data[3][1])
-        self.assertEqual([row['run_attempt'] for row in self.validate_evidence(data)['groups']], [2, 1])
+        for groups in (('A', 'B'), SUBJECT.OWNER_GROUPS):
+            for conclusion in ('success', 'failure', 'cancelled', None):
+                with self.subTest(groups=groups, conclusion=conclusion):
+                    data = self.grouped_evidence(groups)
+                    latest = dict(data[1][0], id=301, run_attempt=2, conclusion=conclusion,
+                                  status='in_progress' if conclusion is None else 'completed')
+                    data[1].append(latest)
+                    with self.assertRaises(ValueError):
+                        self.validate_evidence(data, groups)
+            data = self.grouped_evidence(groups)
+            data[1].append(dict(data[1][0], id=301, run_attempt=2))
+            data[2].append(dict(data[2][0], id=1000, name=source_results.artifact_name(123, 2, groups[0])))
+            data[3][1000] = copy.deepcopy(data[3][1])
+            self.assertEqual([row['run_attempt'] for row in self.validate_evidence(data, groups)['groups']],
+                             [2] + [1] * (len(groups) - 1))
+
+    def test_owner_results_reject_partial_mixed_and_unknown_schedules(self):
+        groups = SUBJECT.OWNER_GROUPS
+        for incomplete in (groups[:-1], groups[1:], ('A',) + groups, ('all',) + groups,
+                           ('owner-platform', 'B'), groups + (groups[0],)):
+            with self.subTest(groups=incomplete), self.assertRaisesRegex(ValueError, 'unexpected source group plan'):
+                self.validate_evidence(self.grouped_evidence(incomplete), incomplete)
+        for name in ('source-checks (owner-unknown)', 'source-checks (C)', 'source-checks',
+                     'source-checks (owner-platform) extra', 'source-checks-unknown'):
+            with self.subTest(name=name):
+                data = self.grouped_evidence(groups)
+                data[1].append(dict(data[1][0], name='ci / ' + name, id=800))
+                with self.assertRaisesRegex(ValueError, 'unknown source producer'):
+                    self.validate_evidence(data, groups)
+
+    def test_collector_independently_rejects_command_union_omissions_and_duplicates(self):
+        # Make every per-group result agree with a broken projection; the
+        # independent complete command multiset must still reject the union.
+        groups = SUBJECT.OWNER_GROUPS
+        original = source_results.checks.checks_for
+        for mutation in ('omission', 'duplicate'):
+            data = self.grouped_evidence(groups)
+            target = 'owner-platform' if mutation == 'omission' else 'owner-connector'
+            def broken(plan, sources, group='all'):
+                rows = original(plan, sources, group)
+                if group == target:
+                    return rows[1:] if mutation == 'omission' else rows + [original(plan, sources)[0]]
+                return rows
+            document = data[3][groups.index(target) + 1]['result']
+            document['checks'] = [dict(name=n, command=c, directory=str(d), exit_code=0)
+                                  for n, c, d in broken(self.plan, Path('/src'), target)]
+            with self.subTest(mutation=mutation), patch.object(source_results.checks, 'checks_for', side_effect=broken):
+                with self.assertRaisesRegex(ValueError, 'every command exactly once'):
+                    self.validate_evidence(data, groups)
 
     def test_duplicate_older_attempt_rejected_in_unsorted_history(self):
         data = self.grouped_evidence()
@@ -439,13 +534,16 @@ class SourceChecksTests(unittest.TestCase):
             self.validate_evidence(data)
 
     def test_each_group_executes_original_commands_and_propagates_failure(self):
-        for group in ('A', 'B'):
+        for group in ('A', 'B', *SUBJECT.OWNER_GROUPS):
             with self.subTest(group=group):
                 self.sources = self.root / group
                 commands = self.run_checks(group=group)
                 self.assertEqual([(command, directory) for command, directory, _ in commands],
                                  [(c, d) for _, c, d in SUBJECT.checks_for(self.plan, self.sources, group)])
                 self.assertEqual(self.result()['group'], group)
+                for row, (_, directory, env) in zip(self.result()['checks'], commands):
+                    self.assertEqual(env['TEST_WORKSPACE'],
+                                     'sandboxer' if row['name'] == 'uffd-source-benchmark' else directory.name)
                 self.sources = self.root / (group + '-failure')
                 first = SUBJECT.checks_for(self.plan, self.sources, group)[0]
                 with self.assertRaisesRegex(ValueError, first[0]):
@@ -465,8 +563,8 @@ class SourceChecksTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             source_results.read_artifact(self.root, available, 1)
 
-    def test_single_pattern_match_is_flattened_for_all_or_a(self):
-        for group in ('all', 'A'):
+    def test_single_pattern_match_is_flattened_for_legacy_or_owner(self):
+        for group in ('all', 'A', 'owner-platform', 'owner-guest-runtime'):
             with self.subTest(group=group), tempfile.TemporaryDirectory() as temp:
                 root = Path(temp)
                 available = [dict(id=1, name=source_results.artifact_name(123, 2, group)),
