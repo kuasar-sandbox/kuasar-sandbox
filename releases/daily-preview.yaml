@@ -1,14 +1,14 @@
 version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
-preview_version: preview.20261127.1
-previous_preview_version: preview.20261127
+preview_version: preview.20261128.2
+previous_preview_version: preview.20261128
 components:
-  accelerator: v0.2.0-preview.20261127
-  connector: v0.2.0-preview.20261127
+  accelerator: v0.2.0-preview.20261128
+  connector: v0.2.0-preview.20261128
   sandboxer: v0.2.0-preview.20261127.1
-  orchestrator: v0.2.0-preview.20261127
-  runtime: runtime-v0.2.0-preview.20261127
+  orchestrator: v0.2.0-preview.20261128.2
+  runtime: runtime-v0.2.0-preview.20261128.1
   vmlinux: vmlinux-v0.1.7-preview.20261124
 component_next_versions:
   accelerator: v0.2.0
@@ -19,23 +19,23 @@ component_next_versions:
 notes:
   mode: auto
   body: |
-    # Kuasar Sandbox release-v0.2.0-preview.20261127.1
+    # Kuasar Sandbox release-v0.2.0-preview.20261128.2
 
     This aggregate is a Preview GitHub prerelease for development and evaluation. It does not replace the current Stable release.
 
-    Previous aggregate selection: `release-v0.2.0-preview.20261127`.
+    Previous aggregate selection: `release-v0.2.0-preview.20261128`.
 
-    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261127.1/releases/daily-preview.yaml).
+    Selection and editable release notes: [`releases/daily-preview.yaml`](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128.2/releases/daily-preview.yaml).
 
     ## Component versions
 
     | Release unit | Version |
     |---|---|
-    | `accelerator` | `v0.2.0-preview.20261127` |
-    | `connector` | `v0.2.0-preview.20261127` |
+    | `accelerator` | `v0.2.0-preview.20261128` |
+    | `connector` | `v0.2.0-preview.20261128` |
     | `sandboxer` | `v0.2.0-preview.20261127.1` |
-    | `orchestrator` | `v0.2.0-preview.20261127` |
-    | `runtime` | `runtime-v0.2.0-preview.20261127` |
+    | `orchestrator` | `v0.2.0-preview.20261128.2` |
+    | `runtime` | `runtime-v0.2.0-preview.20261128.1` |
     | `vmlinux` | `vmlinux-v0.1.7-preview.20261124` |
 
     Six release units from five independently versioned repositories; `guest-runtime` supplies both `runtime` and `vmlinux`.
@@ -44,34 +44,37 @@ notes:
 
     ### accelerator
 
-    Selected version unchanged: `v0.2.0-preview.20261127`.
+    Selected version unchanged: `v0.2.0-preview.20261128`.
 
     ### connector
 
-    Selected version unchanged: `v0.2.0-preview.20261127`.
+    Selected version unchanged: `v0.2.0-preview.20261128`.
 
     ### sandboxer
 
-    Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261127.1`.
-
-    - test(e2e): reap encrypted-diff store on success ([#488](https://github.com/kuasar-sandbox/sandboxer/pull/488), [commit 1eb36443b585](https://github.com/kuasar-sandbox/sandboxer/commit/1eb36443b58563b8efd11dbdc2cde05aeacc0423)).
-    - test(e2e): require process continuity across snapshot restores ([#490](https://github.com/kuasar-sandbox/sandboxer/pull/490), [commit 837445f79a2f](https://github.com/kuasar-sandbox/sandboxer/commit/837445f79a2f39d278d1c1cc02c8ef5d05d13bb3)).
-    - test(e2e): fail bundle lineage checks at the first guest error ([#491](https://github.com/kuasar-sandbox/sandboxer/pull/491), [commit 81d4286fedc0](https://github.com/kuasar-sandbox/sandboxer/commit/81d4286fedc07783d863dc1b6542e3c86522ffef)).
-    - test(e2e): verify placeholder restarts in the same VM ([#492](https://github.com/kuasar-sandbox/sandboxer/pull/492), [commit fc3d3a83d367](https://github.com/kuasar-sandbox/sandboxer/commit/fc3d3a83d367a4d8a91a237fd6259d350f94a8b1)).
-    - test(e2e): record checkpoint proof phase durations ([#493](https://github.com/kuasar-sandbox/sandboxer/pull/493), [commit 7872e4956450](https://github.com/kuasar-sandbox/sandboxer/commit/7872e4956450e2e70f816a5ade4999764e3d882d)).
-    - test(e2e): wait for restored usage first-round samples ([#494](https://github.com/kuasar-sandbox/sandboxer/pull/494), [commit 5a6c75bda48e](https://github.com/kuasar-sandbox/sandboxer/commit/5a6c75bda48eb0a807d19575869064fddddef781)).
-    - test(e2e): report owned cache startup failures promptly ([#495](https://github.com/kuasar-sandbox/sandboxer/pull/495), [commit 44ea7873fedb](https://github.com/kuasar-sandbox/sandboxer/commit/44ea7873fedba33e695304cd9b671774c039a864)).
-    - feat: report complete export and publication references ([#485](https://github.com/kuasar-sandbox/sandboxer/pull/485), [commit 33bdf223f6d8](https://github.com/kuasar-sandbox/sandboxer/commit/33bdf223f6d88a836d866fc000af33277ed11247)).
-
-    [Full comparison](https://github.com/kuasar-sandbox/sandboxer/compare/fa5ea8316aa02abb6b1a5138be1e7589aa626646...33bdf223f6d88a836d866fc000af33277ed11247)
+    Selected version unchanged: `v0.2.0-preview.20261127.1`.
 
     ### orchestrator
 
-    Selected version unchanged: `v0.2.0-preview.20261127`.
+    Selected version: `v0.2.0-preview.20261127.1` → `v0.2.0-preview.20261128.2`.
+
+    - Improve user workflows and preserve repeated SDK Build assertions ([#586](https://github.com/kuasar-sandbox/orchestrator/pull/586), [commit db702c9c17d0](https://github.com/kuasar-sandbox/orchestrator/commit/db702c9c17d0cc8a2733bab4f87a23577e337ef6)).
+    - fix(cluster): recheck eligibility and observe Runtime rejection ([#592](https://github.com/kuasar-sandbox/orchestrator/pull/592), [commit 5cfcf4043e89](https://github.com/kuasar-sandbox/orchestrator/commit/5cfcf4043e89ea83e64c5f2f7290f8a6565c6e08)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/24abd95386fde39cc365d2f2987d963272bced17...5cfcf4043e89ea83e64c5f2f7290f8a6565c6e08)
 
     ### runtime
 
-    Selected version unchanged: `runtime-v0.2.0-preview.20261127`.
+    Selected version: `runtime-v0.2.0-preview.20261127` → `runtime-v0.2.0-preview.20261128.1`.
+
+    The following repository history also includes shared guest-runtime and kernel changes; it is not limited to runtime-specific source changes.
+
+    - ci: remove unused release cleanup preparation ([#153](https://github.com/kuasar-sandbox/guest-runtime/pull/153), [commit e486139dce6f](https://github.com/kuasar-sandbox/guest-runtime/commit/e486139dce6fca57b2e097ee095a72c393916e08)).
+    - ci: remove unused preparation from preview cleanup ([#154](https://github.com/kuasar-sandbox/guest-runtime/pull/154), [commit d52021812f93](https://github.com/kuasar-sandbox/guest-runtime/commit/d52021812f93c3d41a5ebe67e793d009f436f6ee)).
+    - docs: rebuild guest runtime installation and recovery guidance ([#152](https://github.com/kuasar-sandbox/guest-runtime/pull/152), [commit 2b15be7270e2](https://github.com/kuasar-sandbox/guest-runtime/commit/2b15be7270e2c05b66c245f5d269a3ea26cd8284)).
+    - fix: keep systemd peer read errors from crashing the guest ([#155](https://github.com/kuasar-sandbox/guest-runtime/pull/155), [commit 1288ae492fe9](https://github.com/kuasar-sandbox/guest-runtime/commit/1288ae492fe90114a047172e000b5396aea3c298)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/guest-runtime/compare/ff524b73115101c9ada859faa15d8f04ace06d46...1288ae492fe90114a047172e000b5396aea3c298)
 
     ### vmlinux
 
@@ -83,7 +86,7 @@ notes:
     - Extract the six product archives and `platform-release` together. The platform archive contains guides, Demo, tests, helpers and locked wheels.
     - Workbench is a separate compressed Docker image archive: import it with `docker load -i`; do not extract it into products.
 
-    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261127.1/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261127.1/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
+    See [Quick Start](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128.2/docs/quickstart.md) for host prerequisites and sandbox lifecycle examples, and [Deployment](https://github.com/kuasar-sandbox/kuasar-sandbox/blob/release-v0.2.0-preview.20261128.2/docs/deployment.md) for TLS, storage, network policy, credentials and recovery. Demo credentials and self-signed certificates are for evaluation only.
 
     ## Security
 
