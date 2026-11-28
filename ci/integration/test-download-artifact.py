@@ -243,6 +243,108 @@ class DownloadTests(unittest.TestCase):
         self.assertNotIn('test-token', output.getvalue())
         self.assertFalse(list(self.root.glob('.kuasar-artifact-*')))
 
+
+    def bound_manifest(self):
+        return {'schema': 1, 'repository': 'kuasar-sandbox/kuasar-sandbox', 'run_id': '123',
+                'artifacts': [{'name': 'wanted', 'id': '1',
+                               'digest': hashlib.sha256(self.server.archive).hexdigest()}]}
+
+    def bound_download(self, expected, destination='bound'):
+        with mock.patch.dict(os.environ, {'GITHUB_REPOSITORY': 'kuasar-sandbox/kuasar-sandbox',
+                                         'GITHUB_RUN_ID': '123'}), \
+             contextlib.redirect_stdout(io.StringIO()):
+            return d.download({'name': 'wanted', 'pattern': '', 'expected_identity': expected},
+                              self.root / destination, seconds=2, delays=(), operation=local_operation)
+
+    def test_expected_identity_downloads_exact_payload_and_returns_frozen_metadata(self):
+        observed = self.bound_download(self.bound_manifest())
+        self.assertEqual((self.root / 'bound/payload.txt').read_bytes(), b'complete verified content')
+        self.assertEqual([(r['name'], r['database_id'], r['digest']) for r in observed],
+                         [('wanted', '1', hashlib.sha256(self.server.archive).hexdigest())])
+        self.assertEqual(observed[0]['workflow_run_backend_id'], RUN)
+        self.assertEqual(observed[0]['workflow_job_run_backend_id'], JOB)
+
+    def test_expected_wrong_id_digest_name_or_missing_member_stops_before_blob(self):
+        for number, mutate in enumerate((
+                lambda v: v['artifacts'][0].update(id='2'),
+                lambda v: v['artifacts'][0].update(digest='0' * 64),
+                lambda v: v['artifacts'][0].update(name='other'),
+                lambda v: v['artifacts'].append({'name': 'missing', 'id': '9', 'digest': 'a' * 64}))):
+            expected = self.bound_manifest(); mutate(expected)
+            with self.subTest(number=number), self.assertRaisesRegex(d.Failure, 'expected_artifact_mismatch'):
+                self.bound_download(expected, 'bad-' + str(number))
+            self.assertFalse((self.root / ('bad-' + str(number))).exists())
+        self.assertEqual(self.server.state['lists'], 4)
+        self.assertEqual(self.server.state['urls'], 0)
+        self.assertEqual(self.server.state['requests'], [])
+
+    def test_wrong_run_repository_and_duplicate_manifest_stop_before_metadata(self):
+        for number, mutate in enumerate((
+                lambda v: v.update(run_id='124'),
+                lambda v: v.update(repository='kuasar-sandbox/another'),
+                lambda v: v['artifacts'].append(dict(v['artifacts'][0])),
+                lambda v: v.update(schema=2),
+                lambda v: v.update(artifacts=[]))):
+            expected = self.bound_manifest(); mutate(expected)
+            with self.subTest(number=number), self.assertRaises(d.Failure):
+                self.bound_download(expected, 'invalid-' + str(number))
+        self.assertEqual(self.server.state['lists'], 0)
+        self.assertEqual(self.server.state['requests'], [])
+
+    def test_expected_manifest_allows_verified_earlier_attempt_backend_in_same_run(self):
+        self.server.state['artifact_overrides'] = {
+            'workflow_run_backend_id': PRIOR_RUN, 'workflow_job_run_backend_id': PRIOR_JOB}
+        with mock.patch.dict(os.environ, {'GITHUB_RUN_ATTEMPT': '2'}):
+            observed = self.bound_download(self.bound_manifest())
+        self.assertEqual(observed[0]['workflow_run_backend_id'], PRIOR_RUN)
+        self.assertEqual(observed[0]['workflow_job_run_backend_id'], PRIOR_JOB)
+        self.assertEqual((self.root / 'bound/payload.txt').read_bytes(), b'complete verified content')
+
+    def test_expected_identity_file_missing_link_or_bad_json_never_fetches(self):
+        target = self.root / 'expected.json'; target.write_text('{')
+        link = self.root / 'link.json'; link.symlink_to(target)
+        for path in (self.root / 'absent.json', link, target):
+            with self.subTest(path=path.name), self.assertRaises(d.Failure):
+                d.read_expected(str(path))
+        self.assertEqual(self.server.state['lists'], 0)
+
+    def test_explicit_null_action_input_never_fetches(self):
+        expected = self.root / 'null.json'; expected.write_text('null')
+        output = self.root / 'null-output'
+        with mock.patch.dict(os.environ, {
+                'GITHUB_REPOSITORY': 'kuasar-sandbox/kuasar-sandbox', 'GITHUB_RUN_ID': '123',
+                'INPUT_NAME': 'wanted', 'INPUT_PATTERN': '', 'INPUT_PATH': str(self.root / 'null-result'),
+                'INPUT_EXPECTED-IDENTITY': str(expected), 'GITHUB_OUTPUT': str(output)}), \
+             mock.patch.object(d.signal, 'signal'), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(d.main(), 1)
+        self.assertEqual(self.server.state['lists'], 0)
+        self.assertEqual(self.server.state['urls'], 0)
+        self.assertEqual(self.server.state['requests'], [])
+        self.assertFalse(output.exists())
+        self.assertFalse((self.root / 'null-result').exists())
+
+    def test_action_input_and_output_bind_the_real_download(self):
+        expected = self.root / 'expected.json'
+        expected.write_text(json.dumps(self.bound_manifest()))
+        output = self.root / 'action-output'
+        original_download = d.download
+        def controlled_download(spec, destination):
+            return original_download(spec, destination, seconds=2, delays=(), operation=local_operation)
+        with mock.patch.dict(os.environ, {
+                'GITHUB_REPOSITORY': 'kuasar-sandbox/kuasar-sandbox', 'GITHUB_RUN_ID': '123',
+                'INPUT_NAME': 'wanted', 'INPUT_PATTERN': '', 'INPUT_PATH': str(self.root / 'action'),
+                'INPUT_EXPECTED-IDENTITY': str(expected), 'GITHUB_OUTPUT': str(output)}), \
+             mock.patch.object(d, 'download', side_effect=controlled_download), \
+             mock.patch.object(d.signal, 'signal'), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(d.main(), 0)
+        name, encoded = output.read_text().strip().split('=', 1)
+        self.assertEqual(name, 'artifacts')
+        rows = json.loads(encoded)
+        self.assertEqual(rows[0]['database_id'], '1')
+        self.assertEqual(rows[0]['digest'], hashlib.sha256(self.server.archive).hexdigest())
+        self.assertEqual((self.root / 'action/payload.txt').read_bytes(), b'complete verified content')
+        self.assertNotIn('test-token', encoded)
+
     def test_success_is_verified_and_published_once(self):
         self.run_download('ok')
         self.assertEqual((self.root / 'out/payload.txt').read_bytes(), b'complete verified content')

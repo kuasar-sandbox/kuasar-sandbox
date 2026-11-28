@@ -264,6 +264,142 @@ def check_helper_materialization():
 
 
 
+
+def check_aggregate_collection_before_helpers():
+    """Execute source-only collection and the moved native-helper join offline."""
+    import hashlib
+    import shutil
+    import struct
+    import tarfile
+    sys.path.insert(0, str(ROOT / 'test/release'))
+    from test_documentation_package import DocumentationPackageTest, OWNERS
+
+    jobs = load('aggregate-release.yml')['jobs']
+    collect, stage = jobs['collect'], jobs['stage']
+    assert collect['needs'] == 'prepare'
+    assert stage['needs'] == ['prepare', 'helper-build', 'workbench-build', 'node-infra-build']
+    assert "needs.helper-build.result == 'success'" in stage['if']
+    assert 'aggregate-helpers-' not in json.dumps(collect)
+    assert 'aggregate-inputs-' not in json.dumps((collect, stage))
+    assert any(row.get('with', {}).get('name') == 'aggregate-sources-' + '$' + '{{ github.run_id }}'
+               for row in stage['steps'])
+    assert any(row.get('with', {}).get('pattern') == 'aggregate-helpers-*-' + '$' + '{{ github.run_id }}'
+               for row in stage['steps'])
+    materialize = next(row['run'] for row in collect['steps']
+                       if row.get('name') == 'Materialize the exact collection sources')
+    gather = next(row['run'] for row in collect['steps']
+                  if row.get('name') == 'Collect the shared external inputs once for both native images')
+    join = next(row['run'] for row in stage['steps']
+                if row.get('name') == 'Assemble the complete declared set without repackaging products')
+    assert 'package-platform.sh' not in gather and 'tar -xzf' not in gather
+    assert 'control/release/aggregate-release.sh assemble "$VERSION" inputs/fetched aggregate-stage' in join
+    # Only the changed materialization prefix runs here. Final package/validation
+    # remains the existing aggregate-release entry, not a replacement fixture.
+    join = join.split('export SOURCE_DATE_EPOCH=', 1)[0]
+
+    fixture = DocumentationPackageTest()
+    fixture.setUp()
+    try:
+        base = fixture.root
+        executable = base / 'bin'; executable.mkdir()
+        sudo = executable / 'sudo'
+        sudo.write_text('#!/bin/sh\n[ "$1" = apt-get ]\n')
+        sudo.chmod(0o755)
+        environment = dict(os.environ, PATH=str(executable) + os.pathsep + os.environ['PATH'],
+                           VERSION='release-v1.2.3', E2E_SOURCE_ROOT='/missing-source',
+                           E2E_HELPER_ROOT='/missing-helpers', E2E_WHEEL_ROOT='/missing-wheels')
+        collector = ('import argparse, json\nfrom pathlib import Path\n'
+                     'p=argparse.ArgumentParser(); p.add_argument("--cases", type=Path); '
+                     'p.add_argument("--arch", action="append"); p.add_argument("--output", type=Path)\n'
+                     'a=p.parse_args(); a.output.mkdir(); '
+                     '(a.output/"observed.json").write_text(json.dumps('
+                     '{"cases": sorted(x.name for x in a.cases.iterdir()), "arches": a.arch}))\n')
+
+        def sources(case, fault=None):
+            original = case / 'original/fetched'
+            shutil.copytree(base / 'platform', original / 'platform')
+            # Only OCI acquisition is replaced: the production assembler, transport,
+            # owner declarations, case bytes and output tar command all execute.
+            (original / 'platform/workbench/collect-inputs.py').write_text(collector)
+            for owner in (*OWNERS[1:], 'vmlinux'):
+                name = 'runtime' if owner == 'guest-runtime' else owner
+                shutil.copytree(base / owner, original / 'sources' / name)
+            selected = ''.join(name + '\tv1.2.3\n'
+                               for name in ('accelerator', 'connector', 'runtime', 'sandboxer', 'orchestrator', 'vmlinux'))
+            (original / 'selection.tsv').write_text(selected)
+            if fault == 'missing-owner':
+                shutil.rmtree(original / 'sources/connector')
+            if fault == 'duplicate-case':
+                shutil.copy2(original / 'sources/accelerator/test/e2e/cases/basic.accelerator-fixture.sh',
+                             original / 'sources/connector/test/e2e/cases/basic.accelerator-fixture.sh')
+            (case / 'transport').mkdir(parents=True)
+            with tarfile.open(case / 'transport/fetched.tar', 'w') as archive:
+                archive.add(original, arcname='fetched')
+            (case / 'control').symlink_to(ROOT, target_is_directory=True)
+            return selected
+
+        expected = {f'basic.{owner}-fixture.sh':
+                    (base / owner / ('test/e2e/platform/cases' if owner == 'platform'
+                                     else 'test/e2e/cases') / f'basic.{owner}-fixture.sh').read_bytes()
+                    for owner in OWNERS}
+        for fault in (None, 'missing-owner', 'duplicate-case'):
+            case = base / ('collect-' + (fault or 'valid'))
+            selected = sources(case, fault)
+            subprocess.run(['bash', '-euo', 'pipefail', '-c', materialize],
+                           cwd=case, env=environment, check=True, capture_output=True)
+            result = subprocess.run(['bash', '-euo', 'pipefail', '-c', gather],
+                                    cwd=case, env=environment, capture_output=True, text=True)
+            assert (result.returncode == 0) == (fault is None), (fault, result.stderr)
+            if fault:
+                assert not (case / 'workbench-inputs.tar').exists(), fault
+                continue
+            assert not (case / 'fetched/e2e-helpers').exists()
+            assert (case / 'collection-docs-refs.tsv').read_text() == selected + 'platform\trelease-v1.2.3\n'
+            observed = json.loads((case / 'collected-inputs/observed.json').read_text())
+            assert observed == {'cases': sorted(expected), 'arches': ['x86_64', 'aarch64']}
+            with tarfile.open(case / 'workbench-inputs.tar') as archive:
+                actual = {Path(item.name).name: archive.extractfile(item).read()
+                          for item in archive.getmembers()
+                          if item.isfile() and item.name.startswith('collected-platform/test/e2e/cases/')}
+            assert actual == expected
+
+        for fault in (None, 'missing-arm', 'corrupt-arm'):
+            case = base / ('stage-' + (fault or 'valid'))
+            sources(case)
+            (case / 'helpers').mkdir()
+            (case / 'workbench-images').mkdir()
+            (case / 'workbench-images/preserved').write_text('original image receipt')
+            for arch, machine in [('x86_64', 62), ('aarch64', 183)]:
+                if fault == 'missing-arm' and arch == 'aarch64':
+                    continue
+                payload = case / ('payload-' + arch)
+                helper = payload / 'e2e-helpers' / arch; helper.mkdir(parents=True)
+                wheel = payload / 'e2e-wheels' / arch; wheel.mkdir(parents=True)
+                (wheel / 'fixture.whl').write_bytes(b'wheel bytes')
+                binary = bytearray(64); binary[:7] = b'\x7fELF\x02\x01\x01'
+                struct.pack_into('<H', binary, 18, machine)
+                (helper / 'probe').write_bytes(binary); (helper / 'probe').chmod(0o755)
+                row = {'owner': 'platform', 'env': None, 'cases': ['*'],
+                       'sha256': hashlib.sha256(binary).hexdigest(), 'size': len(binary), 'mode': 0o755}
+                (helper / 'helpers.json').write_text(json.dumps({'schema': 2, 'arch': arch, 'helpers': {'probe': row}}))
+                if fault == 'corrupt-arm' and arch == 'aarch64':
+                    (helper / 'probe').write_bytes(binary + b'changed')
+                with tarfile.open(case / f'helpers/helpers-{arch}.tar', 'w') as archive:
+                    for name in ('e2e-helpers', 'e2e-wheels'):
+                        archive.add(payload / name, arcname=name)
+            result = subprocess.run(['bash', '-euo', 'pipefail', '-c', join],
+                                    cwd=case, env=environment, capture_output=True, text=True)
+            assert (result.returncode == 0) == (fault is None), (fault, result.stderr)
+            if not fault:
+                for arch in ('x86_64', 'aarch64'):
+                    assert (case / f'inputs/fetched/e2e-helpers/{arch}/probe').is_file()
+                    assert (case / f'inputs/fetched/e2e-wheels/{arch}/fixture.whl').read_bytes() == b'wheel bytes'
+                assert (case / 'inputs/fetched/workbench/preserved').read_text() == 'original image receipt'
+    finally:
+        fixture.doCleanups()
+    print('aggregate collection: exact cases before helpers; missing/colliding sources and missing/corrupt helpers rejected')
+
+
 def check_validation_only_identity():
     definition = load('aggregate-release.yml')
     deletion = load('delete-preview.yml')
@@ -516,7 +652,7 @@ def check():
     assert final_source['env']['COMPANION_CANDIDATES'] == '${{ needs.resolve.outputs.companions }}'
     aggregate = load("aggregate-release.yml")["jobs"]
     assert aggregate["helper-build"]["needs"] == "prepare"
-    assert aggregate["collect"]["needs"] == ["prepare", "helper-build"]
+    assert aggregate["collect"]["needs"] == "prepare"
     assert aggregate["workbench-build"]["needs"] == ["prepare", "collect"]
     assert aggregate["helper-build"]["strategy"]["matrix"]["include"] == [
         {"arch": "x86_64", "runner": "ubuntu-24.04"}, {"arch": "aarch64", "runner": "ubuntu-24.04-arm"}]
@@ -526,6 +662,7 @@ def check():
     assert '--arch "$TARGET_ARCH"' in helper["with"]["run"]
     assert "GH_TOKEN" not in helper["with"]["run"]
     check_helper_materialization()
+    check_aggregate_collection_before_helpers()
     check_persistent_workspace_isolation()
     check_e2e_artifact_destinations()
     assert integration["results"]["needs"] == ["resolve", "x86_64", "aarch64", "source-checks", "workbench-native", "workbench-release"]
