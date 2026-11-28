@@ -13,6 +13,75 @@ import artifacts
 CONFIG = Path(__file__).with_name('runner-capabilities.json')
 STATES = {'supported', 'unsupported', 'unknown'}
 
+# The framework owns this policy; owner files cannot alter placement or coverage.
+# Keep an absent marker as the original schema-4 interpretation. New policy
+# revisions must retain existing interpretations for saved plans and receipts.
+GROUPING_POLICY = 'orchestrator-four-v1'
+# Conservative scheduling hints from two recorded complete runs, rounded to 5s.
+# They never select tests or change their timeouts. Future cases remain included.
+ORCHESTRATOR_COST = {
+    'orchestrator.api.sh': 5,
+    'orchestrator.checkpoint-holders.sh': 330,
+    'orchestrator.checkpoint.sh': 50,
+    'orchestrator.cluster-faults.sh': 45,
+    'orchestrator.cluster-legacy-runtime.sh': 25,
+    'orchestrator.cluster-lifecycle-postgres.sh': 45,
+    'orchestrator.cluster-lifecycle-sqlite.sh': 25,
+    'orchestrator.cluster-lifecycle.sh': 30,
+    'orchestrator.cluster-migration.sh': 25,
+    'orchestrator.cluster-recovery.sh': 20,
+    'orchestrator.cluster-reset.sh': 25,
+    'orchestrator.exec.sh': 40,
+    'orchestrator.idle-condition.sh': 15,
+    'orchestrator.idle-timeout.sh': 145,
+    'orchestrator.launch-recovery.sh': 215,
+    'orchestrator.lifecycle.sh': 85,
+    'orchestrator.mmds-recovery.sh': 20,
+    'orchestrator.mmds.sh': 25,
+    'orchestrator.pause-wake.sh': 45,
+    'orchestrator.proxy-auth.sh': 20,
+    'orchestrator.proxy-inplace-restart.sh': 135,
+    'orchestrator.proxy-restart.sh': 20,
+    'orchestrator.proxy-wake.sh': 130,
+    'orchestrator.proxy.sh': 35,
+    'orchestrator.reset.sh': 65,
+    'orchestrator.resource-admission.sh': 15,
+    'orchestrator.resource-control.sh': 30,
+    'orchestrator.resource-recovery.sh': 65,
+    'orchestrator.resource-reservation.sh': 30,
+    'orchestrator.resource-startup.sh': 220,
+    'orchestrator.runtask.sh': 5,
+    'orchestrator.snapshot.sh': 105,
+    'orchestrator.static-startup.sh': 40,
+    'orchestrator.systemd.sh': 45,
+    'orchestrator.workspace.sh': 190,
+}
+
+
+def partition_groups(groups, requirements, policy):
+    artifacts.require(policy is None or policy == GROUPING_POLICY, 'unsupported grouping policy')
+    if policy is None:
+        return dict(sorted(groups.items()))
+    result = {}
+    for key, group in groups.items():
+        if group['suite'] != 'orchestrator' or len(group['cases']) <= 8:
+            result[key] = group
+            continue
+        buckets, loads = [[] for _ in range(4)], [0] * 4
+        for case in sorted(group['cases'], key=lambda case: (-ORCHESTRATOR_COST.get(case, 60), case)):
+            index = min(range(4), key=lambda index: (loads[index], index))
+            buckets[index].append(case)
+            loads[index] += ORCHESTRATOR_COST.get(case, 60)
+        for index, cases in enumerate(buckets, 1):
+            if not cases:
+                continue
+            name = group['profile'] + '--' + str(index) + '--' + group['suite']
+            result[name] = dict(group, cases=sorted(cases),
+                requires=sorted({cap for case in cases for cap in requirements['cases'][case]['requires']}),
+                public_gaps={case: group['public_gaps'][case] for case in sorted(cases)
+                             if case in group['public_gaps']})
+    return dict(sorted(result.items()))
+
 
 def validate_config(config):
     require = artifacts.require
@@ -64,7 +133,7 @@ def effective(profile, capability, runtime):
     return profile['capabilities'][capability]['state']
 
 
-def allocate(arch, selection, requirements, config):
+def allocate(arch, selection, requirements, config, policy=None):
     validate_config(config)
     profiles = {name: profile for name, profile in config['profiles'].items()
                 if profile['arch'] == arch and profile['enabled']}
@@ -95,7 +164,7 @@ def allocate(arch, selection, requirements, config):
         group['requires'] = sorted(set(group['requires']) | set(required))
         if not profiles[name]['public']:
             group['public_gaps'][case] = missing
-    return dict(sorted(groups.items()))
+    return partition_groups(groups, requirements, policy)
 
 
 def apply(plan, contract):
@@ -104,11 +173,11 @@ def apply(plan, contract):
         # historical inputs. New inputs cannot opt out of the contract.
         return plan
     config = read_config()
-    plan.update(schema=4, case_requirements=contract,
+    plan.update(schema=4, case_requirements=contract, grouping_policy=GROUPING_POLICY,
                 runner_configuration={'sha256': artifacts.identity(config), 'value': config})
     for arch, lane in plan['lanes'].items():
         lane['selection'] = artifacts.plan_suite_selection(plan, arch, native_full=True)
-        lane['groups'] = allocate(arch, lane['selection'], contract, config)
+        lane['groups'] = allocate(arch, lane['selection'], contract, config, plan['grouping_policy'])
     return plan
 
 
@@ -120,10 +189,12 @@ def validate(plan):
     artifacts.require(frozen['sha256'] == artifacts.identity(config), 'runner configuration digest changed')
     if 'execution_run' in plan or 'execution_images' in plan:
         check_execution_inputs(plan)
+    artifacts.require('grouping_policy' not in plan or plan['grouping_policy'] == GROUPING_POLICY,
+                      'unsupported grouping policy')
     for arch, lane in plan['lanes'].items():
         expected = artifacts.plan_suite_selection(plan, arch, native_full=True)
         artifacts.require(lane['selection'] == expected, 'required coverage differs from selected suites')
-        artifacts.require(lane['groups'] == allocate(arch, expected, contract, config),
+        artifacts.require(lane['groups'] == allocate(arch, expected, contract, config, plan.get('grouping_policy')),
                           'execution groups differ from deterministic capability allocation')
 
 

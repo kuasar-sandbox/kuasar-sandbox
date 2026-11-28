@@ -244,6 +244,183 @@ class Allocation(unittest.TestCase):
                 artifacts.collect_shard_results(plan, 'aarch64', changed)
 
 
+# Independent selected case inventory from both recorded plans; this is not
+# generated from the implementation's optional cost hints.
+ORCHESTRATOR_CASES = (
+    'orchestrator.api.sh',
+    'orchestrator.checkpoint-holders.sh',
+    'orchestrator.checkpoint.sh',
+    'orchestrator.cluster-faults.sh',
+    'orchestrator.cluster-legacy-runtime.sh',
+    'orchestrator.cluster-lifecycle-postgres.sh',
+    'orchestrator.cluster-lifecycle-sqlite.sh',
+    'orchestrator.cluster-lifecycle.sh',
+    'orchestrator.cluster-migration.sh',
+    'orchestrator.cluster-recovery.sh',
+    'orchestrator.cluster-reset.sh',
+    'orchestrator.exec.sh',
+    'orchestrator.idle-condition.sh',
+    'orchestrator.idle-timeout.sh',
+    'orchestrator.launch-recovery.sh',
+    'orchestrator.lifecycle.sh',
+    'orchestrator.mmds-recovery.sh',
+    'orchestrator.mmds.sh',
+    'orchestrator.pause-wake.sh',
+    'orchestrator.proxy-auth.sh',
+    'orchestrator.proxy-inplace-restart.sh',
+    'orchestrator.proxy-restart.sh',
+    'orchestrator.proxy-wake.sh',
+    'orchestrator.proxy.sh',
+    'orchestrator.reset.sh',
+    'orchestrator.resource-admission.sh',
+    'orchestrator.resource-control.sh',
+    'orchestrator.resource-recovery.sh',
+    'orchestrator.resource-reservation.sh',
+    'orchestrator.resource-startup.sh',
+    'orchestrator.runtask.sh',
+    'orchestrator.snapshot.sh',
+    'orchestrator.static-startup.sh',
+    'orchestrator.systemd.sh',
+    'orchestrator.workspace.sh',
+)
+
+
+def partition_fixture():
+    plan = fixture()
+    plan['case_files']['orchestrator'] = list(ORCHESTRATOR_CASES)
+    contract = copy.deepcopy(plan['case_requirements'])
+    for name in ORCHESTRATOR_CASES:
+        contract['cases'][name] = {
+            'sha256': 'e' * 64,
+            'requires': [] if name in (
+                'orchestrator.api.sh', 'orchestrator.proxy.sh', 'orchestrator.runtask.sh') else ['kvm'],
+        }
+    routing.apply(plan, contract)
+    return plan
+
+
+class CompleteCasePartitions(unittest.TestCase):
+    def test_complete_cases_keep_their_capable_profile_and_exact_once_coverage(self):
+        plan = partition_fixture()
+        artifacts.check_plan(plan)
+        for arch, lane in plan['lanes'].items():
+            legacy = routing.allocate(arch, lane['selection'], plan['case_requirements'],
+                                      plan['runner_configuration']['value'])
+            expected = {case: group['profile'] for group in legacy.values() for case in group['cases']}
+            observed = [(case, group['profile']) for group in lane['groups'].values() for case in group['cases']]
+            self.assertEqual(len(observed), len(expected))
+            self.assertEqual(dict(observed), expected)
+            orch = [group for group in lane['groups'].values() if group['suite'] == 'orchestrator']
+            self.assertEqual(len(orch), 4 if arch == 'x86_64' else 5)
+            for group in orch:
+                self.assertEqual(group['cases'], sorted(group['cases']))
+                self.assertEqual(group['requires'], sorted({
+                    cap for case in group['cases'] for cap in plan['case_requirements']['cases'][case]['requires']}))
+                for case, gaps in group['public_gaps'].items():
+                    self.assertEqual(gaps, next(old['public_gaps'][case] for old in legacy.values()
+                                                if case in old['public_gaps']))
+
+    def test_small_hosted_group_is_not_multiplied(self):
+        plan = partition_fixture()
+        groups = plan['lanes']['aarch64']['groups']
+        self.assertEqual(groups['hosted-arm--orchestrator']['cases'], [
+            'orchestrator.api.sh', 'orchestrator.proxy.sh', 'orchestrator.runtask.sh'])
+        self.assertEqual(sum(g['profile'] == 'supplemental-arm' and g['suite'] == 'orchestrator'
+                             for g in groups.values()), 4)
+
+    def test_unknown_case_is_selected_once_without_a_timing_hint(self):
+        plan = partition_fixture()
+        name = 'orchestrator.future-case.sh'
+        self.assertNotIn(name, routing.ORCHESTRATOR_COST)
+        plan['case_files']['orchestrator'].append(name)
+        plan['case_files']['orchestrator'].sort()
+        contract = copy.deepcopy(plan['case_requirements'])
+        contract['cases'][name] = {'sha256': 'f' * 64, 'requires': ['kvm']}
+        routing.apply(plan, contract)
+        artifacts.check_plan(plan)
+        for lane in plan['lanes'].values():
+            self.assertEqual(sum(name in group['cases'] for group in lane['groups'].values()), 1)
+
+    def test_future_case_cannot_bypass_missing_capability(self):
+        plan = partition_fixture()
+        config = copy.deepcopy(plan['runner_configuration']['value'])
+        config['profiles']['hosted-arm']['capabilities']['kvm']['state'] = 'unknown'
+        with self.assertRaisesRegex(ValueError, 'unresolved'):
+            routing.allocate('aarch64', plan['lanes']['aarch64']['selection'],
+                             plan['case_requirements'], config, routing.GROUPING_POLICY)
+
+    def test_grouping_is_deterministic_for_selected_input_order(self):
+        plan = partition_fixture()
+        selected = {'cases': list(ORCHESTRATOR_CASES)}
+        config = plan['runner_configuration']['value']
+        expected = routing.allocate('x86_64', selected, plan['case_requirements'], config, routing.GROUPING_POLICY)
+        selected['cases'].reverse()
+        self.assertEqual(routing.allocate('x86_64', selected, plan['case_requirements'],
+                                          config, routing.GROUPING_POLICY), expected)
+
+    def test_legacy_schema4_interpretation_and_collection_remain_valid(self):
+        plan = partition_fixture()
+        plan.pop('grouping_policy')
+        for arch, lane in plan['lanes'].items():
+            lane['groups'] = routing.allocate(arch, lane['selection'], plan['case_requirements'],
+                                             plan['runner_configuration']['value'])
+        artifacts.check_plan(plan)
+        self.assertIn('hosted-x86--orchestrator', plan['lanes']['x86_64']['groups'])
+        results = result_set(plan, 'aarch64')
+        self.assertEqual(artifacts.expand_shards(
+            plan, 'aarch64', artifacts.collect_shard_results(plan, 'aarch64', results)), results)
+
+    def test_policy_cannot_be_stripped_or_changed_on_partitioned_plan(self):
+        for mutate in (lambda p: p.pop('grouping_policy'),
+                       lambda p: p.update(grouping_policy=None),
+                       lambda p: p.update(grouping_policy=True),
+                       lambda p: p.update(grouping_policy='unknown-v2')):
+            plan = partition_fixture()
+            mutate(plan)
+            with self.assertRaises(ValueError):
+                artifacts.check_plan(plan)
+
+    def test_collector_requires_every_partition_and_its_exact_cases(self):
+        plan = partition_fixture()
+        complete = result_set(plan, 'aarch64')
+        artifacts.collect_shard_results(plan, 'aarch64', complete)
+        parts = [name for name, group in plan['lanes']['aarch64']['groups'].items()
+                 if group['suite'] == 'orchestrator' and group['profile'] == 'supplemental-arm']
+        self.assertEqual(len(parts), 4)
+        for mutate in (lambda r: r.pop(parts[0]),
+                       lambda r: r[parts[0]].update(cases=[]),
+                       lambda r: r[parts[1]]['cases'].append(r[parts[0]]['cases'][0]),
+                       lambda r: r[parts[0]].update(conclusion='cancelled'),
+                       lambda r: r[parts[0]]['execution'].update(profile='hosted-arm')):
+            changed = copy.deepcopy(complete)
+            mutate(changed)
+            with self.assertRaises(ValueError):
+                artifacts.collect_shard_results(plan, 'aarch64', changed)
+
+    def test_matrix_keeps_existing_resources_executor_and_runtime(self):
+        plan = partition_fixture()
+        for arch in artifacts.ARCHES:
+            matrix = routing.matrix(plan, arch)
+            self.assertEqual({item['id'] for item in matrix}, set(plan['lanes'][arch]['groups']))
+            for item in matrix:
+                group = plan['lanes'][arch]['groups'][item['id']]
+                profile = plan['runner_configuration']['value']['profiles'][group['profile']]
+                self.assertEqual(item['runs_on'], profile['runs_on'])
+                self.assertEqual(item['executor'], profile['executor'])
+                self.assertEqual(item['timeout_minutes'], profile['resources']['timeout_minutes'])
+                self.assertEqual(item['runtime'], group['runtime'])
+
+    def test_forged_group_assignment_is_rejected_even_with_same_total_cases(self):
+        plan = partition_fixture()
+        groups = plan['lanes']['x86_64']['groups']
+        parts = [name for name, group in groups.items() if group['suite'] == 'orchestrator']
+        groups[parts[0]]['cases'][0], groups[parts[1]]['cases'][0] = (
+            groups[parts[1]]['cases'][0], groups[parts[0]]['cases'][0])
+        with self.assertRaisesRegex(ValueError, 'execution groups'):
+            artifacts.check_plan(plan)
+
+
+
 class RuntimeTransport(unittest.TestCase):
     def test_only_clean_runtime_groups_download_the_separate_archive(self):
         jobs = yaml.safe_load((artifacts.ROOT / '.github/workflows/integration-architecture.yml').read_text())['jobs']
