@@ -317,6 +317,20 @@ def checks_for(plan, sources, group="all"):
     selected, _ = source_records(plan)
     scope = plan.get("source_scope")
     checks = [("platform-contracts", ["make", "test-ci-tools", "test-release-tools"], sources / "platform")]
+    # A component change does not change the framework's fixture implementations.
+    # Keep the two checks that consume the selected component inputs. An older
+    # platform pin or any platform change retains its complete historical gate.
+    platform_changed = "platform" in (scope["changes"] if scope is not None else selected)
+    platform_is_framework = plan["test_revisions"]["platform"]["sha"] == plan["framework_sha"]
+    if not platform_changed and platform_is_framework:
+        checks = [
+            ("platform-artifact-compatibility",
+             ["env", "KUASAR_RUNTIME_READER=" + str(sources / "guest-runtime/scripts/release-runtime-payloads.py"),
+              "python3", "-B", "ci/integration/test-artifacts.py"], sources / "platform"),
+            ("platform-release-compatibility",
+             ["python3", "-B", "ci/integration/release-source-set.py", "--sources", str(sources), "--auto"],
+             sources / "platform"),
+        ]
     if source_documentation.required(plan):
         checks.append(("source-documentation-package",
                        ["python3", "-B", "/inputs/release/ci/integration/check-source-documentation.py",

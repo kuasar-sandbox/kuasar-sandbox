@@ -91,7 +91,7 @@ sandboxer 库变更同样会重建 `node-ctl`，因为其管理和发布路径�
 
 文档范围包括根目录指导、贡献/安全说明、workflow 模板，以及源码、示例和构建工具旁的 Markdown。`fixtures`、`testdata` 下的 Markdown 作为测试输入，仅说明性的 `README{,_zh}.md` 除外。orchestrator/runtime 固定 rootless-containers NOTICE 仍属于人类归属说明，任意 notice 路径和上游许可证载荷不属于文档。文档必须是普通 `100644` blob。未知仓库、不安全路径、symlink、截断树和空差异不能获得轻量资格，缺失精确身份则失败。
 
-`source` 的独立 Python/Shell 测试入口和明确夹具范围由 `ci/integration/source_lane.py` 维护，包括顶层 `test/e2e/test_*.py` 契约测试，以及不会进入交付运行输入的 `test_*` 库测试。修改的脚本实际执行入口或发现到的 unittest；未登记的新测试不会仅凭语法通过，在册脚本缺失也不能伪装成删除。platform CI/发布契约始终执行；组件测试修改选择该组件的源码 gate，并补齐 Go 测试覆盖。仅改文档的 companion 不会选择无关 Go gate。只有性能测试输入发生变化时才执行相应特权契约。
+`source` 的独立 Python/Shell 测试入口和明确夹具范围由 `ci/integration/source_lane.py` 维护，包括顶层 `test/e2e/test_*.py` 契约测试，以及不会进入交付运行输入的 `test_*` 库测试。修改的脚本实际执行入口或发现到的 unittest；未登记的新测试不会仅凭语法通过，在册脚本缺失也不能伪装成删除。platform 变化或其所选源码不同于已验证框架时，执行完整 CI/发布夹具；否则组件改动只保留消费所选组件输入的制品读取器及发布源码兼容性检查，不重复未变化的平台夹具。组件测试修改选择该组件的源码 gate，并补齐 Go 测试覆盖。仅改文档的 companion 不会选择无关 Go gate。只有性能测试输入发生变化时才执行相应特权契约。
 
 五个组件根模块的普通 Go 单测，只有当前 Linux/amd64 源码环境能够实际选择时才走 `source`。不支持的架构后缀/构建约束、Go 忽略的目录、嵌套模块及执行真实产品验收的测试保留完整流程，例如 `workbench/test-release.py`。需要参数的源码测试 helper 通过既有上层 suite 创建并传入真实夹具。普通产品 `.go` 文件即使看起来只改注释，仍作为产品输入。
 
@@ -240,7 +240,7 @@ CI 启动已选 prepared case 时直接提供 root 权限和可信工具路径�
 
 ### 源码检查分组
 
-`run-source-checks.py --group all` 仍是默认完整入口。A 组保留平台工具契约（完整的 `make test-ci-tools test-release-tools` 调用）、特权性能工具契约、按原条件选择的 connector/sandboxer 脚本、accelerator fixture 和原有 UFFD 检查。B 组执行所选 orchestrator 脚本。选择条件、命令参数、工作目录与依赖闭包均与 `all` 相同；未选择 orchestrator 时不调度 B。每组使用独立 Hosted 机器和新的 Workbench system 实例，保持原 2 CPU/8 GiB 预算，独占源码、Go workspace、临时目录、构建和模块缓存。组间不恢复或共享源码缓存。
+`run-source-checks.py --group all` 仍是默认完整入口。A 组保留按上述规则选择的平台检查、特权性能工具契约、按原条件选择的 connector/sandboxer 脚本、accelerator fixture 和原有 UFFD 检查。B 组执行所选 orchestrator 脚本。选择条件、命令参数、工作目录与依赖闭包均与 `all` 相同；未选择 orchestrator 时不调度 B。每组使用独立 Hosted 机器和新的 Workbench system 实例，保持原 2 CPU/8 GiB 预算，独占源码、Go workspace、临时目录、构建和模块缓存。组间不恢复或共享源码缓存。
 
 可复用工作流仍以 `source_check_groups: false` 作为兼容默认值。PR 调用入口 `ci.yml` 和 `ci-entry.yml` 启用独立的 `owner-platform`、`owner-connector`、`owner-sandboxer`、`owner-accelerator`、`owner-guest-runtime` 和 `owner-orchestrator` 组，仅调度非空组。每组保留原命令顺序；平台文档与 UFFD 检查仍归入 `owner-platform`。完整的 `all` 和 A/B 调度继续兼容。下方测量描述先前的 all 与 A/B rollout，不代表 owner 分组的实测结果。聚合调用方保留既有兼容设置。将任一 PR 入口恢复为 false 即可回退 `all`，不改变检查目标、资源预算或必需检查。
 
