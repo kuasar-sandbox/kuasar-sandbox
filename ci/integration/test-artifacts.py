@@ -1826,6 +1826,118 @@ class ArtifactContracts(unittest.TestCase):
             self.assertEqual(record["checks"][-1]["exit_code"], 33)
 
 
+class StreamingTransportContracts(unittest.TestCase):
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+
+    def archive(self, name, rows, mode="w:gz"):
+        path = self.root / name
+        with tarfile.open(path, mode) as output:
+            for name, content, kind, permissions in rows:
+                item = tarfile.TarInfo(name)
+                item.type, item.mode = kind, permissions
+                item.size = len(content) if kind == tarfile.REGTYPE else 0
+                item.linkname = "before" if kind in (tarfile.SYMTYPE, tarfile.LNKTYPE) else ""
+                output.addfile(item, io.BytesIO(content) if item.isfile() else None)
+        return path
+
+    def test_plain_and_compressed_layouts_keep_contents_and_modes(self):
+        rows = [("aarch64", b"", tarfile.DIRTYPE, 0o755),
+                ("aarch64/bin/tool", b"executable", tarfile.REGTYPE, 0o755),
+                ("aarch64/share/data", b"read only", tarfile.REGTYPE, 0o444),
+                ("aarch64/empty", b"", tarfile.REGTYPE, 0o644)]
+        for suffix, mode in (("tar", "w"), ("gz", "w:gz"), ("bz2", "w:bz2"), ("xz", "w:xz")):
+            with self.subTest(compression=suffix):
+                path = self.archive("input." + suffix, rows, mode)
+                target = self.root / ("out-" + suffix)
+                transport.extract(path, target)
+                self.assertEqual({str(p.relative_to(target)) for p in target.rglob("*") if p.is_file()},
+                                 {row[0] for row in rows if row[2] == tarfile.REGTYPE})
+                for name, content, kind, permissions in rows:
+                    if kind == tarfile.REGTYPE:
+                        self.assertEqual((target / name).read_bytes(), content)
+                        self.assertEqual((target / name).stat().st_mode & 0o777, permissions)
+
+    def test_gzip_contents_are_read_without_backward_decompression(self):
+        import gzip
+        body = bytes(range(256)) * 1024
+        path = self.archive("input.gz", [("first", body, tarfile.REGTYPE, 0o644),
+                                       ("last", body[::-1], tarfile.REGTYPE, 0o755)])
+        original = gzip.GzipFile.seek
+        seeks = []
+
+        def forward_only(stream, offset, whence=0):
+            position = original(stream, 0, 1)
+            destination = offset if whence == 0 else position + offset
+            self.assertGreaterEqual(destination, position, "compressed input rewound")
+            seeks.append((position, destination))
+            return original(stream, offset, whence)
+
+        with patch.object(gzip.GzipFile, "seek", forward_only):
+            transport.extract(path, self.root / "out")
+        self.assertTrue(seeks)
+        self.assertEqual((self.root / "out/first").read_bytes(), body)
+        self.assertEqual((self.root / "out/last").read_bytes(), body[::-1])
+
+    def test_late_invalid_members_never_publish_partial_output(self):
+        first = ("before", b"copied before a later error", tarfile.REGTYPE, 0o644)
+        for name, kind, permissions in (
+                ("../escape", tarfile.REGTYPE, 0o644),
+                ("/absolute", tarfile.REGTYPE, 0o644),
+                ("parent/../escape", tarfile.REGTYPE, 0o644),
+                ("before", tarfile.REGTYPE, 0o644),
+                ("link", tarfile.SYMTYPE, 0o644),
+                ("hardlink", tarfile.LNKTYPE, 0o644),
+                ("device", tarfile.CHRTYPE, 0o644),
+                ("fifo", tarfile.FIFOTYPE, 0o644),
+                ("writable", tarfile.REGTYPE, 0o666),
+                ("setuid", tarfile.REGTYPE, 0o4755)):
+            with self.subTest(name=name):
+                path = self.archive("bad.gz", [first, (name, b"", kind, permissions)])
+                before = set(self.root.iterdir())
+                with self.assertRaises(ValueError):
+                    transport.extract(path, self.root / "rejected")
+                self.assertEqual(set(self.root.iterdir()), before)
+                self.assertFalse((self.root / "rejected").exists())
+                self.assertFalse((self.root / "escape").exists())
+
+    def test_truncated_payload_header_and_gzip_trailer_leave_no_destination(self):
+        import gzip
+        path = self.archive("full.tar", [("before", b"good", tarfile.REGTYPE, 0o644),
+                                        ("large", b"payload" * 2048, tarfile.REGTYPE, 0o644)], "w")
+        plain = path.read_bytes()
+        compressed = gzip.compress(plain)
+        damaged = bytearray(plain); damaged[0] ^= 1  # Invalid first header, as rejected by tarfile.
+        variants = {"payload": plain[:1600], "header": bytes(damaged),
+                    "gzip-body": compressed[:len(compressed) // 2],
+                    "gzip-footer": compressed[:-4],
+                    "gzip-crc": compressed[:-8] + bytes([compressed[-8] ^ 1]) + compressed[-7:]}
+        for name, content in variants.items():
+            with self.subTest(damage=name):
+                path = self.root / name; path.write_bytes(content)
+                before = set(self.root.iterdir())
+                destination = self.root / ("rejected-" + name)
+                with self.assertRaises((tarfile.TarError, OSError, EOFError)):
+                    transport.extract(path, destination)
+                self.assertEqual(set(self.root.iterdir()), before)
+                self.assertFalse(destination.exists())
+
+    def test_existing_directory_file_or_dangling_link_is_untouched(self):
+        path = self.archive("input.tar", [("input", b"data", tarfile.REGTYPE, 0o644)], "w")
+        directory = self.root / "directory"; directory.mkdir()
+        (directory / "sentinel").write_bytes(b"keep")
+        file = self.root / "file"; file.write_bytes(b"keep")
+        link = self.root / "link"; link.symlink_to(self.root / "absent")
+        for target in (directory, file, link):
+            with self.subTest(target=target.name), self.assertRaises(ValueError):
+                transport.extract(path, target)
+        self.assertEqual((directory / "sentinel").read_bytes(), b"keep")
+        self.assertEqual(file.read_bytes(), b"keep")
+        self.assertTrue(link.is_symlink())
+
+
 class FailureDiagnosticContracts(unittest.TestCase):
     def setUp(self):
         spec = importlib.util.spec_from_file_location('bounded_case_diagnostics', Path(__file__).with_name('run-artifact-tests.py'))
