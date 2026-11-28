@@ -2,7 +2,7 @@ version: release-v0.2.0
 delivery: node-infra-v2
 previous_version: release-v0.1.13
 preview_version: preview.20261128.1
-previous_preview_version: preview.20261127
+previous_preview_version: preview.20261128
 components:
   accelerator: v0.2.0-preview.20261128
   connector: v0.2.0-preview.20261128
