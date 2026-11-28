@@ -141,7 +141,7 @@ factor 为 0.50，得到约 8.1 GiB 可分配池和 4.05 GiB 启动准入池。6
 提高并发前测量真实内存峰值和 OOM 事件。Guest capacity、当前 allocation 和 startup
 reservation 是不同数量。
 
-运行匹配版本的 [Demo](../test/demo/DEMO_zh.md)，验证真实创建、exec、文件操作、
+运行匹配版本的 [Demo](../docs/quickstart_zh.md)，验证真实创建、exec、文件操作、
 DNS/出网、快照/恢复及清理，再在相同原生架构执行
 [普通全量选择](../test/QUICKSTART_zh.md)。保留版本、用例选择、退出码、日志及资源
 峰值。缺少必需能力即验收失败，不能缩减工作负载断言以宣称支持更小机器。OBS 需要
