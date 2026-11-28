@@ -5,7 +5,7 @@ preview_version: preview.20261128
 previous_preview_version: preview.20261127
 components:
   accelerator: v0.2.0-preview.20261128
-  connector: v0.2.0-preview.20261127
+  connector: v0.2.0-preview.20261128
   sandboxer: v0.2.0-preview.20261127.1
   orchestrator: v0.2.0-preview.20261127.1
   runtime: runtime-v0.2.0-preview.20261127
@@ -32,7 +32,7 @@ notes:
     | Release unit | Version |
     |---|---|
     | `accelerator` | `v0.2.0-preview.20261128` |
-    | `connector` | `v0.2.0-preview.20261127` |
+    | `connector` | `v0.2.0-preview.20261128` |
     | `sandboxer` | `v0.2.0-preview.20261127.1` |
     | `orchestrator` | `v0.2.0-preview.20261127.1` |
     | `runtime` | `runtime-v0.2.0-preview.20261127` |
@@ -58,7 +58,18 @@ notes:
 
     ### connector
 
-    Selected version unchanged: `v0.2.0-preview.20261127`.
+    Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261128`.
+
+    - test(e2e): verify a live peer in management isolation case ([#122](https://github.com/kuasar-sandbox/connector/pull/122), [commit da33f8c13d48](https://github.com/kuasar-sandbox/connector/commit/da33f8c13d488af189af592a662e94d54539ccdc)).
+    - test(e2e): make TAP admission checks assert their setup ([#124](https://github.com/kuasar-sandbox/connector/pull/124), [commit c8c2a9f70181](https://github.com/kuasar-sandbox/connector/commit/c8c2a9f70181ada00f82ae381fe36706380ff27b)).
+    - test(egress): stop keepalive after observed reclamation ([#125](https://github.com/kuasar-sandbox/connector/pull/125), [commit 0019c26ee49e](https://github.com/kuasar-sandbox/connector/commit/0019c26ee49eb5f347a0348d84af6869f09df912)).
+    - test(network): wait for Geneve readiness and retain packet coverage ([#126](https://github.com/kuasar-sandbox/connector/pull/126), [commit 31b9611735a9](https://github.com/kuasar-sandbox/connector/commit/31b9611735a990106e73c15ecaab6230b68f9d26)).
+    - test(network): observe management listener readiness ([#127](https://github.com/kuasar-sandbox/connector/pull/127), [commit 18430d7ca2da](https://github.com/kuasar-sandbox/connector/commit/18430d7ca2daa4581ebed3fed2d6eff08a96ddf5)).
+    - test(network): require precise provision failures ([#128](https://github.com/kuasar-sandbox/connector/pull/128), [commit 434196cf17f7](https://github.com/kuasar-sandbox/connector/commit/434196cf17f73e7f1d62af5d1411b210af49ae48)).
+    - feat: make native egress status and operations actionable ([#123](https://github.com/kuasar-sandbox/connector/pull/123), [commit 156cab32369b](https://github.com/kuasar-sandbox/connector/commit/156cab32369b11eb4a026dc60c9760962b74e87c)).
+    - test(network): bound and reap owned TAP receivers ([#129](https://github.com/kuasar-sandbox/connector/pull/129), [commit 6464872139c6](https://github.com/kuasar-sandbox/connector/commit/6464872139c6316ae5a0f95e35ac7763c5b70350)).
+
+    [Full comparison](https://github.com/kuasar-sandbox/connector/compare/811ae365e522e9c3413ae650515acd17692e1306...6464872139c6316ae5a0f95e35ac7763c5b70350)
 
     ### sandboxer
 
@@ -79,10 +90,10 @@ notes:
 
     Selected version: `v0.2.0-preview.20261127` → `v0.2.0-preview.20261127.1`.
 
-    - Validate required Builder contracts without duplicate execution ([#585](https://github.com/kuasar-sandbox/orchestrator/pull/585)).
-    - Restore the retention failure fixture atomically ([#589](https://github.com/kuasar-sandbox/orchestrator/pull/589)).
-    - Bind resource shutdown proof to the actual Cloud Hypervisor result ([#590](https://github.com/kuasar-sandbox/orchestrator/pull/590)).
-    - Expose complete export reference reports through sandbox and Workspace APIs, preserving local capture and default CLI output ([#583](https://github.com/kuasar-sandbox/orchestrator/pull/583)).
+    - ci: validate Builder contracts without duplicate test runs ([#585](https://github.com/kuasar-sandbox/orchestrator/pull/585), [commit 5581e76315fc](https://github.com/kuasar-sandbox/orchestrator/commit/5581e76315fcee0b3be74633b91f0fca2b523bf4)).
+    - test(nodectl): restore the retention failure fixture atomically ([#589](https://github.com/kuasar-sandbox/orchestrator/pull/589), [commit cfcc9bda4930](https://github.com/kuasar-sandbox/orchestrator/commit/cfcc9bda49309403ae56308365161fecab5ad798)).
+    - test(e2e): bind resource shutdown proof to the actual CH result ([#590](https://github.com/kuasar-sandbox/orchestrator/pull/590), [commit bad66fe84b4e](https://github.com/kuasar-sandbox/orchestrator/commit/bad66fe84b4e5412f783037ad5f10065ab28a8f7)).
+    - feat: expose export reference reports through platform APIs ([#583](https://github.com/kuasar-sandbox/orchestrator/pull/583), [commit 24abd95386fd](https://github.com/kuasar-sandbox/orchestrator/commit/24abd95386fde39cc365d2f2987d963272bced17)).
 
     [Full comparison](https://github.com/kuasar-sandbox/orchestrator/compare/7b20e505e221c5ed447ebe601b55e9ca649e1e99...24abd95386fde39cc365d2f2987d963272bced17)
 
