@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Collect source gates using current Actions jobs and immutable artifact IDs."""
 import argparse
+from collections import Counter
 import importlib.util
 import json
 import os
@@ -17,10 +18,26 @@ spec.loader.exec_module(checks)
 require = artifacts.require
 
 
+def legacy_groups_for(plan):
+    return ['A', 'B'] if checks.checks_for(plan, Path('/src'), 'B') else ['A']
+
+
 def groups_for(plan, grouped=False):
     if plan['mode'] == 'exact-assets':
         return []
-    return ['A', 'B'] if grouped and checks.checks_for(plan, Path('/src'), 'B') else ['A'] if grouped else ['all']
+    require(plan['mode'] == 'source', 'unknown source scheduling mode')
+    if not grouped:
+        return ['all']
+    return [group for group in checks.OWNER_GROUPS if checks.checks_for(plan, Path('/src'), group)]
+
+
+def producer_group(name):
+    label = name.rsplit(' / ', 1)[-1]
+    if not label.startswith('source-checks'):
+        return None
+    match = re.fullmatch(r'source-checks \(([^()]*)\)', label)
+    require(match is not None and match[1] in checks.SOURCE_GROUPS, 'unknown source producer')
+    return match[1]
 
 
 def artifact_name(run_id, attempt, group):
@@ -34,16 +51,15 @@ def validate(plan, groups, run, jobs, available, read):
     evidence. Never choose the newest *successful* job or merge ZIP directories.
     """
     require(plan['mode'] == 'source', 'source checks are not executed for exact-assets; report skipped')
-    require(groups in (['all'], groups_for(plan, True)), 'unexpected source group plan')
+    require(groups in (['all'], legacy_groups_for(plan), groups_for(plan, True)), 'unexpected source group plan')
     require(type(run.get('id')) is int and run['id'] > 0 and
             type(run.get('run_attempt')) is int and run['run_attempt'] > 0 and
             re.fullmatch('[0-9a-f]{40}', run.get('head_sha', '')), 'missing Actions run identity')
     source_jobs, seen = [], set()
     for job in jobs:
-        match = re.search(r'(?:^| / )source-checks \((all|A|B)\)$', job.get('name', ''))
-        if not match:
+        group = producer_group(job.get('name', ''))
+        if group is None:
             continue
-        group = match[1]
         require(group in groups, 'unexpected source producer')
         require(job.get('run_id') == run['id'] and type(job.get('run_attempt')) is int
                 and 0 < job['run_attempt'] <= run['run_attempt'], 'source job run/attempt mismatch')
@@ -54,11 +70,15 @@ def validate(plan, groups, run, jobs, available, read):
     selected = {}
     for job in actions_jobs.latest_producers(source_jobs, run_id=run['id'],
                                             run_attempt=run['run_attempt']).values():
-        group = re.search(r'source-checks \((all|A|B)\)$', job['name'])[1]
+        group = producer_group(job['name'])
         require(group not in selected, 'ambiguous source producer name')
         selected[group] = job
     require(set(selected) == set(groups), 'missing source producer')
     results, instances, containers, runners = [], set(), set(), set()
+    complete = checks.checks_for(plan, Path('/src'))
+    require(len({name for name, _, _ in complete}) == len(complete), 'duplicate source check family')
+    expected_coverage = Counter((name, tuple(command), str(directory)) for name, command, directory in complete)
+    observed_coverage = Counter()
     for group in groups:
         job = selected[group]
         require(job.get('status') == 'completed' and job.get('conclusion') == 'success',
@@ -88,6 +108,7 @@ def validate(plan, groups, run, jobs, available, read):
         require([(row.get('name'), row.get('command'), row.get('directory')) for row in observed] ==
                 [(name, command, str(directory)) for name, command, directory in expected] and
                 all(row.get('exit_code') == 0 for row in observed), 'source command coverage mismatch')
+        observed_coverage.update((row['name'], tuple(row['command']), row['directory']) for row in observed)
         require(receipt.get('conclusion') == 'success' and receipt.get('cleanup_exit_code') == 0 and
                 receipt.get('delete_output_exit_code') == 0 and receipt.get('mode') == 'system' and
                 receipt.get('framework_sha') == plan['framework_sha'] and
@@ -109,6 +130,8 @@ def validate(plan, groups, run, jobs, available, read):
         results.append({'group': group, 'job_id': job['id'], 'run_attempt': job['run_attempt'],
                         'artifact_id': archive['id'], 'artifact_name': name,
                         'instance_id': iid, 'container_id': cid, 'result_sha256': artifacts.identity(result)})
+    require(observed_coverage == expected_coverage and all(count == 1 for count in observed_coverage.values()),
+            'source schedules must cover every command exactly once')
     return {'plan_id': artifacts.identity(plan), 'run_id': run['id'], 'run_attempt': run['run_attempt'],
             'head_sha': run['head_sha'], 'conclusion': 'success', 'groups': results}
 
@@ -129,7 +152,9 @@ def read_artifact(root, available, artifact_id):
     rows = [row for row in available if row['id'] == artifact_id]
     require(len(rows) == 1, 'ambiguous artifact ID')
     name = rows[0]['name']
-    require(re.fullmatch(r'integration-source-result-\d+-\d+-(all|A|B)', name), 'invalid source artifact name')
+    group_pattern = '|'.join(re.escape(group) for group in checks.SOURCE_GROUPS)
+    require(re.fullmatch(r'integration-source-result-\d+-\d+-(' + group_pattern + ')', name),
+            'invalid source artifact name')
     prefix = 'integration-source-result-' + name.split('-')[3] + '-'
     matched = [row for row in available if row.get('name', '').startswith(prefix)]
     directory = root if len(matched) == 1 else root / name

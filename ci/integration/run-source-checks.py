@@ -28,6 +28,10 @@ spec.loader.exec_module(source_documentation)
 SOURCE_RECORD = ".source-checks.json"
 TEST_SCRIPT_EXECUTOR = "/inputs/release/ci/integration/run-source-checks.py"
 
+SOURCE_OWNERS = ("platform", "connector", "sandboxer", "accelerator", "guest-runtime", "orchestrator")
+OWNER_GROUPS = tuple("owner-" + owner for owner in SOURCE_OWNERS)
+SOURCE_GROUPS = ("all", "A", "B", *OWNER_GROUPS)
+
 # Run unittest modules in a fresh interpreter: the executor's trusted imports
 # must not replace the candidate modules the regression intends to exercise.
 # importlib also handles maintained test names containing '-', which unittest
@@ -300,8 +304,15 @@ def run_test_script(repository, path, root=None):
     return subprocess.run(command, cwd=root).returncode
 
 
+def owner_group(check, sources):
+    relative = check[2].relative_to(sources)
+    artifacts.require(len(relative.parts) == 1 and relative.name in SOURCE_OWNERS,
+                      "source check has an unknown owner directory")
+    return "owner-" + relative.name
+
+
 def checks_for(plan, sources, group="all"):
-    artifacts.require(group in ("all", "A", "B"), "unknown source check group")
+    artifacts.require(group in SOURCE_GROUPS, "unknown source check group")
     selected, _ = source_records(plan)
     scope = plan.get("source_scope")
     checks = [("platform-contracts", ["make", "test-ci-tools", "test-release-tools"], sources / "platform")]
@@ -348,8 +359,12 @@ def checks_for(plan, sources, group="all"):
         checks.append(("uffd-source-benchmark", ["bash", "test/perf/uffd-performance-gate.sh"], sources / "platform"))
     if scope is not None:
         checks.extend(changed_test_checks(plan, sources))
+    owned = [(check, owner_group(check, sources)) for check in checks]
     if group == "all":
         return checks
+    if group in OWNER_GROUPS:
+        return [check for check, owner in owned if owner == group]
+    # Historical all/A/B receipts remain readable as complete schedules.
     return [check for check in checks
             if ((check[0].startswith("orchestrator-") if scope is not None else
                  check[0] == "orchestrator-unit-race-vet")) == (group == "B")]
@@ -400,7 +415,7 @@ if __name__ == "__main__":
     parser.add_argument("--plan", type=Path, required=True)
     parser.add_argument("--sources", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--group", choices=("all", "A", "B"), default="all")
+    parser.add_argument("--group", choices=SOURCE_GROUPS, default="all")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--materialize-only", action="store_true", help="fetch exact test sources on the trusted host, without compilers")
     mode.add_argument("--materialized", action="store_true", help="verify and use the task's existing exact test sources")
