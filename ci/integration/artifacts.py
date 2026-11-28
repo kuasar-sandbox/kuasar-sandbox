@@ -581,6 +581,9 @@ def release_test_revisions(pins, platform_sha):
 
 
 def check_plan(plan):
+    if 'source_stages' in plan:
+        import source_stages
+        source_stages.contract(plan)
     if 'source_scope' in plan:
         import source_lane
         source_lane.validate_plan_scope(plan)

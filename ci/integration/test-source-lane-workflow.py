@@ -91,6 +91,30 @@ class StageGateTests(unittest.TestCase):
 
 
 class SchedulingTests(unittest.TestCase):
+    def test_declared_stages_use_existing_isolated_matrix_and_final_collector(self):
+        # Stage activation changes only trusted plan/groups, not execution
+        # privileges, the image, per-job instance, or final success conditions.
+        job = JOBS['source-checks']
+        self.assertEqual(job['strategy']['matrix'],
+                         {'group': '${{ fromJSON(needs.resolve.outputs.source_groups) }}'})
+        self.assertFalse(job['strategy']['fail-fast'])
+        fetch = step('source-checks', 'Fetch exact test sources without a compiler')['run']
+        self.assertIn("'${{ matrix.group }}' > source-checks/.source-group", fetch)
+        execute = step('source-checks', 'Run the complete required source gate in Workbench system mode')['run']
+        self.assertIn('--cpus 2 --memory-gib 8', execute)
+        self.assertIn('--materialized --group "$(cat /src/.source-group)"', execute)
+        self.assertIn('--reuid "$source_uid"', execute)
+        self.assertIn('install_readers', execute)
+        self.assertIn('install_runtime_reader', execute)
+        self.assertEqual(step('source-checks', 'Upload source checks and system diagnostics')['with']['name'],
+                         'integration-source-result-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.group }}')
+        final = step('results', 'Bind every source result to its current successful producer')['run']
+        self.assertIn('source_results.py', final)
+        self.assertIn('--groups', final)
+        self.assertIn('"$SOURCE_GROUPS"', final)
+        self.assertEqual(step('results', 'Bind every source result to its current successful producer')['env']['SOURCE_GROUPS'],
+                         '${{ needs.resolve.outputs.source_groups }}')
+
     def test_owner_schedule_uses_one_exact_candidate_framework_without_a_second_job_path(self):
         entry = yaml.safe_load((ROOT / '.github/workflows/ci.yml').read_text())['jobs']
         self.assertIn("github.event_name == 'pull_request'", entry['ci']['if'])
